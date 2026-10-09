@@ -44,5 +44,52 @@ end
 From a library you call `parse`, keep the module, and call `emit`; on the
 command line, `powerio convert` does both in one call.
 
+## Merging buses
+
+A closed switch or a zero impedance branch joins two buses into one
+electrical node, which no finite admittance describes. `merge_buses` resolves
+them explicitly: each set of joined buses becomes one bus, every element moves
+onto it, and the joining elements are removed. The rule states what joins
+buses, and no threshold applies unless the rule names it.
+
+| Rule | Merges |
+|---|---|
+| closed switches | the two buses of every closed switch |
+| exact | branches with `r = 0` and `x = 0` (a transformer only at nominal ratio with no shift) |
+| PSS/E threshold | non-transformer branches with `r = 0` and `abs(x)` at most the threshold, by default the `THRSHZ` the case states |
+| impedance magnitude | non-transformer branches with `abs(r + jx)` at most the threshold |
+
+Every rule considers in-service branches only. The surviving bus of a set is
+its reference bus, else a bus with an in-service generator, else a bus a
+generator regulates, with the smallest id breaking each tie. Loads, shunts,
+generators and their regulated buses, storage, branch, switch, and HVDC ends,
+three winding transformer windings, control buses, and area swing buses all
+follow the survivor. The result lists every removed element with its source
+row, identity, and ratings, and maps each source branch and switch row to its
+merged row. A removed branch's line charging and line shunts become a fixed
+shunt at the survivor, so the merged network draws the reactive power the
+unmerged one did; `charging="drop"` discards them instead. A branch the merge shorts, such as a line in parallel with a
+jumper, is removed and reported. A jumper whose merge would join two windings
+of one three winding transformer stays, also reported. Merging the result
+again changes nothing.
+
+The removed elements' flows are not variables of the merged network.
+`calc_removed_flows` recovers their active power from a solution of the merged
+network. Kirchhoff's current law fixes the flows where the removed elements
+form a tree, the elements' reactances split a loop, and a loop of zero
+reactance elements, such as a ring of closed switches, gets the minimum norm
+split and a diagnostic.
+
+```python
+merge = network.merge_buses(zero_impedance="psse")
+merged = merge.network                 # solve this network
+flows = merge.calc_removed_flows(p_from, p_to)
+```
+
+```sh
+powerio summary case.raw --merge-buses psse
+powerio convert case.raw --merge-buses psse=0.0001 --to matpower -o merged.m
+```
+
 Building matrices from a balanced network has its own chapter,
 [Matrices and graphs](matrices.md).

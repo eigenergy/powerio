@@ -337,20 +337,94 @@ fn zero_impedance_branches_are_preserved_until_the_explicit_merge() {
     // merged network projects.
     let (merged, mapping, diagnostics) = merge_zero_impedance_buses(&net).unwrap();
     assert_eq!(mapping.merged_buses.get(&BusId(6)), Some(&BusId(5)));
-    assert_eq!(mapping.removed_branches, vec!["tie-5-6".to_owned()]);
+    // The case's own 5-6 line is in parallel with the tie, so the merge
+    // shorts it and removes it rather than leaving a self loop.
+    assert_eq!(
+        mapping.removed_branches,
+        vec!["5-6".to_owned(), "tie-5-6".to_owned()]
+    );
     assert!(
         diagnostics
             .iter()
             .any(|d| d.code() == "CANONICALIZE.MERGE.ZERO_IMPEDANCE")
     );
-    assert_eq!(merged.buses().len(), net.buses().len() - 1);
-    assert_eq!(merged.branches().len(), branch_count - 1);
     assert!(
-        merged
-            .branches()
+        diagnostics
             .iter()
-            .all(|branch| { branch.from != BusId(6) && branch.to != BusId(6) })
+            .any(|d| d.code() == "CANONICALIZE.MERGE.ELEMENT_SHORTED")
     );
+    assert_eq!(merged.buses().len(), net.buses().len() - 1);
+    assert_eq!(merged.branches().len(), branch_count - 2);
+    assert!(merged.branches().iter().all(|branch| {
+        branch.from != BusId(6) && branch.to != BusId(6) && branch.from != branch.to
+    }));
     // The untouched input network still carries the branch.
     assert_eq!(net.branches().len(), branch_count);
+}
+
+#[test]
+fn the_zero_impedance_merge_moves_every_element_on_a_merged_bus() {
+    use powerio_tx::{
+        Generator, Hvdc, Impedance, Shunt, ShuntBlock, StaticVarCompensator, Storage, Switch,
+        SwitchedShuntControl, SwitchedShuntMode, Transformer3W, Winding,
+    };
+    let mut net = case9();
+    // A zero impedance tie folds bus 6 into bus 5, and bus 6 carries one of
+    // each element that names a bus.
+    let mut tie = net.branches()[0].clone();
+    tie.from = BusId(5);
+    tie.to = BusId(6);
+    tie.r = 0.0;
+    tie.x = 0.0;
+    tie.uid = Some("tie-5-6".to_owned());
+    net.branches_mut().push(tie);
+    net.transformers_3w_mut().push(Transformer3W::new(
+        [6, 7, 8].map(|bus| Winding::new(BusId(bus))),
+        [Impedance::new(0.0, 0.1, 100.0); 3],
+    ));
+    net.hvdc_mut().push(Hvdc::new(BusId(6), BusId(9)));
+    net.switches_mut()
+        .push(Switch::new(BusId(6), BusId(4), false));
+    net.static_var_compensators_mut()
+        .push(StaticVarCompensator::new(BusId(6), -0.01, 0.01));
+    net.storage_mut().push(Storage::new(BusId(6)));
+    let mut shunt = Shunt::new(BusId(4), 0.0, 10.0);
+    let mut control = SwitchedShuntControl::new(
+        SwitchedShuntMode::Discrete,
+        1.05,
+        0.95,
+        Vec::<ShuntBlock>::new(),
+    );
+    control.control_bus = Some(BusId(6));
+    shunt.control = Some(control);
+    net.shunts_mut().push(shunt);
+    // Out of service, so the regulated bus does not make bus 6 the survivor.
+    let mut regulating = Generator::new(BusId(9));
+    regulating.regulated_bus = Some(BusId(6));
+    regulating.in_service = false;
+    net.generators_mut().push(regulating);
+    net.validate().unwrap();
+
+    let (merged, mapping, _) = merge_zero_impedance_buses(&net).unwrap();
+    assert_eq!(mapping.merged_buses.get(&BusId(6)), Some(&BusId(5)));
+    merged.validate().unwrap();
+    assert_eq!(merged.transformers_3w()[0].windings[0].bus, BusId(5));
+    assert_eq!(merged.hvdc()[0].from, BusId(5));
+    assert_eq!(merged.switches()[0].from, BusId(5));
+    assert_eq!(merged.static_var_compensators()[0].bus, BusId(5));
+    assert_eq!(merged.storage()[0].bus, BusId(5));
+    let shunt = merged
+        .shunts()
+        .iter()
+        .find(|shunt| shunt.control.is_some())
+        .unwrap();
+    assert_eq!(shunt.control.as_ref().unwrap().control_bus, Some(BusId(5)));
+    assert_eq!(
+        merged.generators().last().unwrap().regulated_bus,
+        Some(BusId(5))
+    );
+    // Every reference resolves, so the derived views build.
+    let view = powerio_tx::IndexedNetwork::new(&merged);
+    view.check_reference_coverage().unwrap();
+    DcPfInstance::from_network(merged).unwrap();
 }

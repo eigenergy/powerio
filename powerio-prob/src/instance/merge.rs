@@ -5,15 +5,17 @@
 //! [`merge_zero_impedance_buses`] is the explicit resolution: buses joined by
 //! an in service branch with zero series impedance merge into one electrical
 //! node, and the transformation returns the complete mapping plus diagnostics
-//! for the branch behavior the merge removes.
+//! for the branch behavior the merge removes. It is
+//! [`BalancedNetwork::merge_buses`] under
+//! [`ZeroImpedanceRule::Exact`](powerio_tx::ZeroImpedanceRule::Exact) with
+//! closed switches left alone.
 
 use std::collections::BTreeMap;
 
 use powerio_core::{Diagnostic, Error};
-use powerio_tx::{BalancedNetwork, BusId};
+use powerio_tx::{BalancedNetwork, BusId, BusMergeRule, RemovalReason, ZeroImpedanceRule};
 
 use crate::diagnostics::codes;
-use crate::operating::row_identity;
 
 /// What one merge did: which buses now name which surviving bus, and which
 /// branches the merge removed.
@@ -23,168 +25,69 @@ pub struct ZeroImpedanceMerge {
     /// Every merged bus to the bus that now carries it. Buses that survived
     /// unchanged are absent.
     pub merged_buses: BTreeMap<BusId, BusId>,
-    /// The removed zero impedance branches, by stable identity
-    /// (`uid`, else `branches:{row}` of the source network).
+    /// The removed branches, by stable identity (`uid`, else
+    /// `branches:{row}` of the source network): the zero impedance branches
+    /// and any branch whose two buses the merge joined through them.
     pub removed_branches: Vec<String>,
 }
 
 /// Merge every group of buses joined by in service branches with zero series
-/// impedance (`r == 0` and `x == 0`, self loops excluded) into that group's
-/// smallest bus id, rewriting every element reference and dropping the merged
-/// buses and the zero impedance branches.
+/// impedance (`r == 0` and `x == 0`, self loops and off-nominal transformers
+/// excluded) into one surviving bus, rewriting every element reference and
+/// dropping the merged buses and the zero impedance branches.
+///
+/// The survivor is the group's reference bus, else a bus hosting an
+/// in-service generator, else a bus a generator regulates, with the smallest
+/// id breaking each tie. A branch whose two buses the merge joined through
+/// other branches is removed as well, and a removed branch's line charging
+/// becomes a fixed shunt at the survivor.
 ///
 /// The flow through a removed branch is no longer a variable of any derived
 /// calculation, and merged buses may have stated different attributes; both
-/// are reported as diagnostics. The input network is never mutated.
+/// are reported as diagnostics, one per removed branch and one per group whose
+/// base voltages differ. The input network is never mutated.
+/// [`BalancedNetwork::merge_buses`] is the general form, which also merges
+/// closed switches, applies a stated threshold, and recovers removed flows.
 ///
 /// # Errors
 /// A zero impedance branch naming a bus the network does not declare.
-fn find(parent: &mut [usize], node: usize) -> usize {
-    let mut root = node;
-    while parent[root] != root {
-        root = parent[root];
-    }
-    let mut walk = node;
-    while parent[walk] != root {
-        let next = parent[walk];
-        parent[walk] = root;
-        walk = next;
-    }
-    root
-}
-
-#[allow(clippy::too_many_lines)] // one pass per element table, stated in full
 pub fn merge_zero_impedance_buses(
     network: &BalancedNetwork,
 ) -> Result<(BalancedNetwork, ZeroImpedanceMerge, Vec<Diagnostic>), Error> {
-    let mut diagnostics = Vec::new();
+    let rule = BusMergeRule::new(false, Some(ZeroImpedanceRule::Exact));
+    let merge = network
+        .merge_buses(&rule)
+        .map_err(|error| Error::new(error.code(), error.to_string()))?;
 
-    // Union-find over bus ids, keyed by table index.
-    let index_of: BTreeMap<BusId, usize> = network
-        .buses()
-        .iter()
-        .enumerate()
-        .map(|(index, bus)| (bus.id, index))
-        .collect();
-    let mut parent: Vec<usize> = (0..network.buses().len()).collect();
-
-    let mut removed_rows = Vec::new();
-    for (row, branch) in network.branches().iter().enumerate() {
-        let zero = branch.r == 0.0 && branch.x == 0.0;
-        if !zero || !branch.in_service || branch.from == branch.to {
-            continue;
-        }
-        let (Some(&from), Some(&to)) = (index_of.get(&branch.from), index_of.get(&branch.to))
-        else {
-            return Err(Error::new(
-                &codes::BUILD_INSTANCE_SHAPE_MISMATCH,
-                format!(
-                    "zero impedance branch row {row} names bus {} or {} the network does not declare",
-                    branch.from, branch.to
-                ),
-            ));
-        };
-        let (from_root, to_root) = (find(&mut parent, from), find(&mut parent, to));
-        if from_root != to_root {
-            parent[from_root.max(to_root)] = from_root.min(to_root);
-        }
-        removed_rows.push(row);
-        let identity = row_identity(branch.uid.as_deref(), "branches", row);
-        diagnostics.push(Diagnostic::of(
-            &codes::CANONICALIZE_MERGE_ZERO_IMPEDANCE,
-            format!(
-                "zero impedance branch `{identity}` between buses {} and {} was merged; its flow is not a variable of any derived calculation",
-                branch.from, branch.to
-            ),
-        ));
-    }
-
-    if removed_rows.is_empty() {
-        return Ok((network.clone(), ZeroImpedanceMerge::default(), diagnostics));
-    }
-
-    // The surviving bus of each group is the smallest bus id in it, which is
-    // the root after unioning toward the smaller table index of an id-sorted
-    // bus table; resolve ids directly so the rule holds for any table order.
-    let mut survivor_of_root: BTreeMap<usize, BusId> = BTreeMap::new();
-    for index in 0..network.buses().len() {
-        let root = find(&mut parent, index);
-        let id = network.buses()[index].id;
-        let entry = survivor_of_root.entry(root).or_insert(id);
-        if id < *entry {
-            *entry = id;
-        }
-    }
-    let mut merged_buses = BTreeMap::new();
-    for index in 0..network.buses().len() {
-        let root = find(&mut parent, index);
-        let id = network.buses()[index].id;
-        let survivor = survivor_of_root[&root];
-        if id != survivor {
-            merged_buses.insert(id, survivor);
-        }
-    }
-
-    let resolve = |bus: BusId| merged_buses.get(&bus).copied().unwrap_or(bus);
-
-    let mut merged = network.clone();
-    // Attribute conflicts between a merged bus and its survivor are reported;
-    // the survivor's values are kept.
-    for (&gone, &kept) in &merged_buses {
-        let gone_bus = &network.buses()[index_of[&gone]];
-        let kept_bus = &network.buses()[index_of[&kept]];
-        // Bit inequality on purpose: any stated difference is worth a note,
-        // and the values come from one document, so equal bases agree
-        // exactly.
-        if gone_bus.base_kv.to_bits() != kept_bus.base_kv.to_bits() {
+    let mut diagnostics = Vec::with_capacity(merge.removed_branches.len());
+    for removed in &merge.removed_branches {
+        if removed.reason == RemovalReason::ZeroImpedance {
             diagnostics.push(Diagnostic::of(
-                &codes::CANONICALIZE_MERGE_ATTRIBUTE_CONFLICT,
+                &codes::CANONICALIZE_MERGE_ZERO_IMPEDANCE,
                 format!(
-                    "bus {gone} (base {} kV) merged into bus {kept} (base {} kV); the surviving base was kept",
-                    gone_bus.base_kv, kept_bus.base_kv
+                    "zero impedance branch `{}` between buses {} and {} was merged; its flow is not a variable of any derived calculation",
+                    removed.identity, removed.from, removed.to
                 ),
             ));
         }
-        if gone_bus.kind != kept_bus.kind && gone_bus.kind == powerio_tx::BusType::Ref {
-            // A reference designation must survive the merge.
-            let survivor = &mut merged.buses_mut()[index_of[&kept]];
-            survivor.kind = powerio_tx::BusType::Ref;
-        }
     }
-
-    let removed: std::collections::BTreeSet<usize> = removed_rows.iter().copied().collect();
-    let removed_branches = removed_rows
+    // The per branch findings above replace the merge's one summary finding.
+    diagnostics.extend(
+        merge
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code() != codes::CANONICALIZE_MERGE_ZERO_IMPEDANCE.code)
+            .cloned(),
+    );
+    let removed_branches = merge
+        .removed_branches
         .iter()
-        .map(|&row| row_identity(network.branches()[row].uid.as_deref(), "branches", row))
+        .map(|removed| removed.identity.clone())
         .collect();
-
-    merged
-        .buses_mut()
-        .retain(|bus| !merged_buses.contains_key(&bus.id));
-    let mut row = 0usize;
-    merged.branches_mut().retain(|_| {
-        let keep = !removed.contains(&row);
-        row += 1;
-        keep
-    });
-    for branch in merged.branches_mut() {
-        branch.from = resolve(branch.from);
-        branch.to = resolve(branch.to);
-    }
-    for load in merged.loads_mut() {
-        load.bus = resolve(load.bus);
-    }
-    for generator in merged.generators_mut() {
-        generator.bus = resolve(generator.bus);
-    }
-    for shunt in merged.shunts_mut() {
-        shunt.bus = resolve(shunt.bus);
-    }
-
     Ok((
-        merged,
+        merge.network,
         ZeroImpedanceMerge {
-            merged_buses,
+            merged_buses: merge.merged_buses,
             removed_branches,
         },
         diagnostics,

@@ -134,6 +134,8 @@ between produces none of these findings.
   \\(r^2 + x^2\\); DC incidence and reactance only FDPF forms use \\(x\\).
   The gridfm export still zeros its admittance and flow columns for these rows
   and records `dropped_zero_impedance` in `gridfm_meta.json`.
+  `BalancedNetwork::merge_buses` resolves them explicitly instead, together
+  with closed switches (see [Merging buses](transmission.md#merging-buses)).
 - **Reference coverage.** `IndexedNetwork::check_reference_coverage` verifies that
   every in service island has a reference bus.
 - **Branch susceptance formulas.** `BranchSusceptanceFormula` selects the

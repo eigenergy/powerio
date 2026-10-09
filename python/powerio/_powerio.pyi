@@ -88,6 +88,37 @@ class PowerIODataError(PowerIOError):
 
     diagnostics: List[Dict[str, Any]]
 
+class _BusMerge:
+    @property
+    def network(self) -> _BalancedNetwork: ...
+    @property
+    def rule(self) -> str: ...
+    @property
+    def merged_buses(self) -> dict[int, int]: ...
+    @property
+    def groups(self) -> list[dict[str, Any]]: ...
+    @property
+    def removed_branches(self) -> list[dict[str, Any]]: ...
+    @property
+    def removed_switches(self) -> list[dict[str, Any]]: ...
+    @property
+    def branch_rows(self) -> list[Optional[int]]: ...
+    @property
+    def switch_rows(self) -> list[Optional[int]]: ...
+    @property
+    def charging_shunts(self) -> list[int]: ...
+    @property
+    def diagnostics(self) -> list[Diagnostic]: ...
+    def survivor(self, bus: int) -> int: ...
+    def calc_removed_flows(
+        self,
+        branch_p_from: list[float],
+        branch_p_to: list[float],
+        *,
+        generator_p: Optional[list[float]] = ...,
+        transformer_3w_p: Optional[list[tuple[float, float, float]]] = ...,
+    ) -> dict[str, Any]: ...
+
 class _BalancedNetwork:
     @property
     def name(self) -> str: ...
@@ -190,6 +221,14 @@ class _BalancedNetwork:
         clamp_angle_bounds: bool = ...,
         angle_bound_pad: Optional[float] = ...,
     ) -> _BalancedNetwork: ...
+    def merge_buses(
+        self,
+        *,
+        closed_switches: bool = ...,
+        zero_impedance: Optional[str] = ...,
+        threshold: Optional[float] = ...,
+        charging: str = ...,
+    ) -> _BusMerge: ...
     # Matrix builders return COO triplets `(data, row, col, (nrows, ncols))` as
     # plain Python lists, except `incidence`/`ybus_parts` which nest them.
     def bprime(

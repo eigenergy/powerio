@@ -24,6 +24,15 @@ case in a directory, `gen`, which writes synthetic cases, `geo apply` and
 [format table](format-fidelity.md); `iidm` and `rawx` are accepted as
 input spellings only.
 
+`convert`, `summary`, and `verify` take `--merge-buses SPEC`, which merges
+buses before the command runs (see
+[Merging buses](transmission.md#merging-buses)). `SPEC` is `switches` for
+closed switches, `exact` for those and branches with `r = 0` and `x = 0`,
+`psse` for those and PSS/E zero impedance lines at the case's `THRSHZ`,
+`psse=<x>` for the same at threshold `x`, or `impedance=<z>` for closed
+switches and non-transformer branches whose impedance magnitude is at most
+`z`. `summary` adds a `bus_merge` block with the counts.
+
 Format names, structural value types, and diagnostic codes are the same
 strings the language APIs use. Diagnostics print one per line on stderr as
 `CODE: message`.

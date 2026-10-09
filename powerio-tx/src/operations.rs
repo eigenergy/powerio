@@ -5,7 +5,7 @@
 //! [`subset`](BalancedNetwork::subset) selects a subnetwork from a larger case;
 //! [`merge_bus`](BalancedNetwork::merge_bus) collapses two buses into one (re-homing the
 //! incident elements), and [`reduce_zero_impedance`](BalancedNetwork::reduce_zero_impedance)
-//! builds on it to remove jumper branches.
+//! removes jumper branches through [`merge_buses`](BalancedNetwork::merge_buses).
 //! [`reduce_passthrough_buses`](BalancedNetwork::reduce_passthrough_buses) folds dummy-bus
 //! line sections back into one equivalent branch.
 
@@ -13,6 +13,7 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
+use crate::merge::{BusMergeRule, ZeroImpedanceRule, kind_priority};
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, Generator, Shunt,
     SourceFormat,
@@ -31,18 +32,6 @@ fn combine_rate(a: f64, b: f64) -> f64 {
         (true, _) => b,
         (_, true) => a,
         _ => a.min(b),
-    }
-}
-
-/// Bus-kind importance, so a [`merge_bus`](BalancedNetwork::merge_bus) keeps the stronger
-/// designation (a slack outranks a PV bus, which outranks PQ, which outranks an
-/// isolated stub).
-fn kind_priority(kind: BusType) -> u8 {
-    match kind {
-        BusType::Ref => 3,
-        BusType::Pv => 2,
-        BusType::Pq => 1,
-        BusType::Isolated => 0,
     }
 }
 
@@ -284,78 +273,23 @@ impl BalancedNetwork {
 
     /// Merge bus `from` into bus `into`: re-home every element on `from` (loads,
     /// shunts, generators, storage, branch/HVDC/transformer endpoints, and control
-    /// references) onto `into`, drop the branches and HVDC lines that ran directly
-    /// between the two (now self-loops), and remove the `from` bus. The surviving
-    /// bus keeps the stronger of the two bus kinds (a slack is not demoted).
+    /// references) onto `into`, drop the branches, switches, and HVDC lines that
+    /// ran directly between the two (now self-loops), and remove the `from` bus.
+    /// The surviving bus keeps the stronger of the two bus kinds (a slack is not
+    /// demoted).
     ///
     /// A no-op when `into == from`. The other attributes of `from` (its voltage,
     /// limits, name) are discarded; the topology and injections are what move.
+    /// [`merge_buses`](BalancedNetwork::merge_buses) is the rule driven merge
+    /// that also reports what it removed.
     pub fn merge_bus(&mut self, into: BusId, from: BusId) {
         if into == from {
             return;
         }
-        let remap = |b: &mut BusId| {
-            if *b == from {
-                *b = into;
-            }
-        };
-
-        for l in self.loads_mut() {
-            remap(&mut l.bus);
-        }
-        for s in self.shunts_mut() {
-            remap(&mut s.bus);
-            if let Some(cb) = s.control.as_mut().and_then(|c| c.control_bus.as_mut()) {
-                remap(cb);
-            }
-        }
-        for svc in self.static_var_compensators_mut() {
-            remap(&mut svc.bus);
-        }
-        for g in self.generators_mut() {
-            remap(&mut g.bus);
-            if let Some(rb) = g.regulated_bus.as_mut() {
-                remap(rb);
-            }
-        }
-        for st in self.storage_mut() {
-            remap(&mut st.bus);
-        }
-        for br in self.branches_mut() {
-            remap(&mut br.from);
-            remap(&mut br.to);
-            if let Some(cb) = br.control.as_mut().and_then(|c| c.controlled_bus.as_mut()) {
-                remap(cb);
-            }
-        }
+        self.remap_buses(|bus| if bus == from { into } else { bus });
         self.branches_mut().retain(|b| b.from != b.to);
-        for sw in self.switches_mut() {
-            remap(&mut sw.from);
-            remap(&mut sw.to);
-        }
         self.switches_mut().retain(|s| s.from != s.to);
-        for d in self.hvdc_mut() {
-            remap(&mut d.from);
-            remap(&mut d.to);
-        }
         self.hvdc_mut().retain(|d| d.from != d.to);
-        for t in self.transformers_3w_mut() {
-            for w in &mut t.windings {
-                remap(&mut w.bus);
-                if let Some(controlled_bus) = w
-                    .control
-                    .as_mut()
-                    .and_then(|control| control.controlled_bus.as_mut())
-                {
-                    remap(controlled_bus);
-                }
-            }
-        }
-        for a in self.areas_mut() {
-            if let Some(slack) = a.slack_bus.as_mut() {
-                remap(slack);
-            }
-        }
 
         // Promote the surviving bus kind, then drop the merged bus.
         let from_kind = self.buses().iter().find(|b| b.id == from).map(|b| b.kind);
@@ -370,40 +304,140 @@ impl BalancedNetwork {
         // The topology changed, so the retained source text is stale.
     }
 
-    /// Collapse every in-service, non-transformer branch whose series impedance
-    /// magnitude is at or below `threshold` by merging its endpoints (the to-bus
-    /// into the from-bus), returning the number of branches removed. Parallel
-    /// jumpers between the same pair go in the same step.
-    ///
-    /// Zero-impedance branches (bus ties, breakers modeled as jumpers) carry no
-    /// power flow drop, so collapsing them shrinks the network without changing
-    /// its electrical behavior. An out-of-service jumper is an open switch whose
-    /// endpoints are not electrically joined, so it is left in place. Transformers
-    /// are never collapsed (a unity-ratio transformer is a real device, not a
-    /// jumper); a jumper between two windings of the same 3-winding transformer is
-    /// also skipped, since merging would collapse that transformer onto one node.
-    pub fn reduce_zero_impedance(&mut self, threshold: f64) -> usize {
-        let before = self.branches().len();
-        // Re-scan after each merge: bus ids and the branch list both change.
-        while let Some((into, from)) = self.branches().iter().find_map(|b| {
-            (b.in_service
-                && !b.is_transformer()
-                && b.from != b.to
-                && b.r.hypot(b.x) <= threshold
-                && !self.shares_transformer_3w(b.from, b.to))
-            .then_some((b.from, b.to))
-        }) {
-            self.merge_bus(into, from);
+    /// Rewrite every element's bus references through `map`, one pass per
+    /// table: load, shunt, static var compensator, generator, storage, branch,
+    /// switch, and HVDC buses; generator regulated buses; switched shunt,
+    /// transformer, and winding control buses; three winding transformer
+    /// windings; and area swing buses. The bus table and the detailed
+    /// connectivity are the caller's to keep consistent. A table none of
+    /// whose references change is not copied.
+    pub(crate) fn remap_buses(&mut self, map: impl Fn(BusId) -> BusId) {
+        fn remap_table<T: Clone>(
+            table: &mut std::sync::Arc<Vec<T>>,
+            touches: impl Fn(&T) -> bool,
+            apply: impl FnMut(&mut T),
+        ) {
+            if table.iter().any(touches) {
+                std::sync::Arc::make_mut(table).iter_mut().for_each(apply);
+            }
         }
-        before - self.branches().len()
+        let moved = |bus: BusId| map(bus) != bus;
+        let moved_opt = |bus: Option<BusId>| bus.is_some_and(moved);
+        let set = |bus: &mut BusId| *bus = map(*bus);
+        let set_opt = |bus: &mut Option<BusId>| {
+            if let Some(bus) = bus {
+                *bus = map(*bus);
+            }
+        };
+        let tables = self.tables_mut();
+        remap_table(&mut tables.loads, |l| moved(l.bus), |l| set(&mut l.bus));
+        remap_table(
+            &mut tables.shunts,
+            |s| moved(s.bus) || moved_opt(s.control.as_ref().and_then(|c| c.control_bus)),
+            |s| {
+                set(&mut s.bus);
+                if let Some(control) = s.control.as_mut() {
+                    set_opt(&mut control.control_bus);
+                }
+            },
+        );
+        remap_table(
+            &mut tables.static_var_compensators,
+            |svc| moved(svc.bus),
+            |svc| set(&mut svc.bus),
+        );
+        remap_table(
+            &mut tables.generators,
+            |g| moved(g.bus) || moved_opt(g.regulated_bus),
+            |g| {
+                set(&mut g.bus);
+                set_opt(&mut g.regulated_bus);
+            },
+        );
+        remap_table(&mut tables.storage, |s| moved(s.bus), |s| set(&mut s.bus));
+        remap_table(
+            &mut tables.branches,
+            |b| {
+                moved(b.from)
+                    || moved(b.to)
+                    || moved_opt(b.control.as_ref().and_then(|c| c.controlled_bus))
+            },
+            |b| {
+                set(&mut b.from);
+                set(&mut b.to);
+                if let Some(control) = b.control.as_mut() {
+                    set_opt(&mut control.controlled_bus);
+                }
+            },
+        );
+        remap_table(
+            &mut tables.switches,
+            |s| moved(s.from) || moved(s.to),
+            |s| {
+                set(&mut s.from);
+                set(&mut s.to);
+            },
+        );
+        remap_table(
+            &mut tables.hvdc,
+            |d| moved(d.from) || moved(d.to),
+            |d| {
+                set(&mut d.from);
+                set(&mut d.to);
+            },
+        );
+        remap_table(
+            &mut tables.transformers_3w,
+            |t| {
+                t.windings.iter().any(|w| {
+                    moved(w.bus) || moved_opt(w.control.as_ref().and_then(|c| c.controlled_bus))
+                })
+            },
+            |t| {
+                for w in &mut t.windings {
+                    set(&mut w.bus);
+                    if let Some(control) = w.control.as_mut() {
+                        set_opt(&mut control.controlled_bus);
+                    }
+                }
+            },
+        );
+        remap_table(
+            &mut tables.areas,
+            |a| moved_opt(a.slack_bus),
+            |a| set_opt(&mut a.slack_bus),
+        );
     }
 
-    /// Whether buses `a` and `b` are two windings of the same 3-winding
-    /// transformer; merging them would short two windings onto one node.
-    fn shares_transformer_3w(&self, a: BusId, b: BusId) -> bool {
-        self.transformers_3w()
-            .iter()
-            .any(|t| t.windings.iter().any(|w| w.bus == a) && t.windings.iter().any(|w| w.bus == b))
+    /// Collapse every in-service, non-transformer branch whose series impedance
+    /// magnitude is at or below `threshold` by merging its endpoints, returning
+    /// the number of branches removed. Parallel jumpers between the same pair go
+    /// in the same step.
+    ///
+    /// This is [`merge_buses`](BalancedNetwork::merge_buses) under
+    /// [`ZeroImpedanceRule::ImpedanceMagnitude`]
+    /// with closed switches left alone, applied in place; prefer `merge_buses`,
+    /// which also returns the bus map, the removed elements, and diagnostics.
+    /// A threshold that is negative or not finite merges nothing.
+    ///
+    /// An out-of-service jumper is an open switch whose endpoints are not
+    /// electrically joined, so it is left in place. Transformers are never
+    /// collapsed (a unity-ratio transformer is a real device, not a jumper); a
+    /// jumper between two windings of the same 3-winding transformer is also
+    /// kept, since merging would collapse that transformer onto one node.
+    pub fn reduce_zero_impedance(&mut self, threshold: f64) -> usize {
+        let rule = BusMergeRule::new(
+            false,
+            Some(ZeroImpedanceRule::ImpedanceMagnitude(threshold)),
+        );
+        match self.merge_buses(&rule) {
+            Ok(merge) => {
+                let removed = merge.removed_branches.len();
+                *self = merge.network;
+                removed
+            }
+            Err(_) => 0,
+        }
     }
 
     /// Collapse degree-2 passthrough buses, returning the number removed. A
