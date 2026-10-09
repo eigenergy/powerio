@@ -170,3 +170,22 @@ fn copied_spacing_is_a_snapshot_and_geometry_ignores_its_phase_count() {
         [0., 2.]
     );
 }
+
+#[test]
+fn cn_forward_references_and_native_geometry_copy_failure_are_explicit() {
+    let missing =
+        raw("New LineGeometry.g nconds=1 nphases=1 cncables=[later]\nNew CNData.later rac=.001\n");
+    assert!(
+        resolve(&missing, missing.line_snapshot(0))
+            .unwrap_err()
+            .contains("did not exist")
+    );
+    let copied = raw(
+        "New CNData.a rac=.001\nNew LineGeometry.g nconds=1 nphases=1 cncables=[a]\nNew LineGeometry.h like=g\n",
+    );
+    assert!(
+        resolve(&copied, copied.line_snapshot(2))
+            .unwrap_err()
+            .contains("cannot copy")
+    );
+}

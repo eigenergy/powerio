@@ -7,6 +7,8 @@ use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub(super) struct State {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cable: Option<super::cn::Data>,
     pub rdc: f64,
     pub rac: f64,
     pub runits: usize,
@@ -22,6 +24,7 @@ pub(super) struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            cable: None,
             rdc: -1.0,
             rac: -1.0,
             runits: 0,
@@ -118,13 +121,22 @@ impl State {
             // Seasonal ratings are retained in the source; they do not alter
             // this static conductor impedance or the two scalar ratings.
             "seasons" | "ratings" => {}
-            _ => return Err(format!("unqualified WireData property {key}")),
+            _ => {
+                if let Some(cable) = &mut self.cable {
+                    cable.apply(key, number()?)?;
+                } else {
+                    return Err(format!("unqualified WireData property {key}"));
+                }
+            }
         }
         Ok(())
     }
 
     pub fn at(&self, x: f64, height: f64) -> super::Wire {
         super::Wire {
+            cable: self
+                .cable
+                .map(|c| c.si(self.radunits, self.gmrunits, self.runits)),
             x,
             height,
             radius: self.radius * meters(self.radunits),
@@ -171,7 +183,7 @@ pub(super) fn resolve_with_budget(
             .objects
             .get(point.object)
             .ok_or("missing WireData object")?;
-        if object.class != "wiredata" {
+        if !matches!(object.class.as_str(), "wiredata" | "cndata") {
             return Err("expected WireData history".into());
         }
         let history = raw
@@ -187,6 +199,9 @@ pub(super) fn resolve_with_budget(
             .ok_or("WireData evaluation work limit exceeded")?;
         if ready {
             let mut state = State::default();
+            if object.class == "cndata" {
+                state.cable = Some(super::cn::Data::default());
+            }
             let props = object
                 .props
                 .get(..point.properties)

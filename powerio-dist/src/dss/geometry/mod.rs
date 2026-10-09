@@ -1,9 +1,10 @@
-//! Pinned OpenDSS overhead geometry calculations in SI units.
+//! Pinned OpenDSS overhead and concentric-neutral geometry calculations in SI units.
 //!
-//! Ordered overhead definitions and shared native calculation caches feed
-//! conductor-resolved Line snapshots. Unqualified spacing/cable paths retain
+//! Ordered conductor definitions and shared native calculation caches feed
+//! conductor-resolved Line snapshots. Unqualified direct-spacing/tape-shield paths retain
 //! explicit unresolved-geometry diagnostics.
 pub(super) mod cache;
+mod cn;
 pub(super) mod definition;
 mod spacing;
 pub(super) mod timeline;
@@ -45,6 +46,8 @@ impl EarthModel {
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 pub(super) struct Wire {
+    #[serde(default)]
+    pub cable: Option<cn::Data>,
     pub x: f64,
     pub height: f64,
     pub radius: f64,
@@ -59,6 +62,8 @@ pub(super) struct Geometry {
     pub wires: Vec<Wire>,
     pub phases: usize,
     pub reduce: bool,
+    #[serde(default)]
+    pub reduction_order: Option<usize>,
     pub earth_model: EarthModel,
     pub rho: f64,
 }
@@ -143,7 +148,7 @@ impl Geometry {
             ),
             EarthModel::Deri => {
                 let depth = 1.0 / Complex::new(0.0, omega_mu / self.rho).sqrt();
-                let height = first.height + second.height + 2.0 * depth;
+                let height = first.height.abs() + second.height.abs() + 2.0 * depth;
                 let argument = if i == j {
                     height
                 } else {
@@ -152,11 +157,11 @@ impl Geometry {
                 Complex::new(0.0, omega_mu / TWO_PI) * argument.ln()
             }
             EarthModel::FullCarson => {
-                let distance = (first.height + second.height).hypot(first.x - second.x);
+                let distance = (first.height.abs() + second.height.abs()).hypot(first.x - second.x);
                 let theta = if i == j {
                     0.0
                 } else {
-                    ((first.height + second.height) / distance).acos()
+                    ((first.height.abs() + second.height.abs()) / distance).acos()
                 };
                 let scaled_distance = 2.8099e-3 * distance * (frequency / self.rho).sqrt();
                 let b1 = 1.0 / (3.0 * 2.0_f64.sqrt());
@@ -186,6 +191,9 @@ impl Geometry {
     }
 
     pub fn calculate(&self, frequency: f64) -> Result<LineMatrices, String> {
+        if self.wires.iter().any(|w| w.cable.is_some()) {
+            return cn::calculate(self, frequency);
+        }
         self.validate(frequency)?;
         let n = self.wires.len();
         let omega = TWO_PI * frequency;
@@ -228,7 +236,9 @@ impl Geometry {
             }
         }
         let inverse = inverse(potential)?;
-        let keep = if self.reduce { self.phases } else { n };
+        let keep = self
+            .reduction_order
+            .unwrap_or(if self.reduce { self.phases } else { n });
         for k in (keep..n).rev() {
             if z[k][k] == Complex::default() {
                 return Err("geometry neutral reduction has a zero pivot".into());

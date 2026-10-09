@@ -1,8 +1,7 @@
 """Check pinned public geometry definitions in controlled static circuits.
 
 This qualifies the selected LineSpacing/LineGeometry definitions, not the full
-North American feeder. Its underground primary and direct Line.spacing remain
-separate compatibility work.
+North American feeder. Direct Line.spacing remains separate compatibility work.
 """
 
 import argparse
@@ -49,7 +48,7 @@ def main():
         bridge_sha256=hashlib.sha256(args.bridge.read_bytes()).hexdigest(),
         cases={},
     )
-    for geometry, length in (("Trans", 150), ("Sec", 30)):
+    for geometry, length in (("Trans", 150), ("Pri", 300), ("Sec", 30)):
         folder = args.output / geometry.lower()
         folder.mkdir()
         source = folder / "input.dss"

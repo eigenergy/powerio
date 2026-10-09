@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 struct Entry {
     point: Snapshot,
     allocated: usize,
+    cable_allocations: usize,
     dirty: bool,
     rho: f64,
     rho_changed: bool,
@@ -39,6 +40,7 @@ impl<'a> Context<'a> {
         let entry = self.entries.entry(point.object).or_insert_with(|| Entry {
             point,
             allocated: 0,
+            cable_allocations: 0,
             dirty: true,
             rho: 100.0,
             rho_changed: true,
@@ -46,8 +48,13 @@ impl<'a> Context<'a> {
             matrices: None,
         });
         entry.point = point;
-        if matches!(key, Some("nconds" | "like")) {
+        if matches!(key, Some("nconds" | "like" | "cncable" | "cncables")) {
             let definition = definition::resolve(self.raw, point)?;
+            if definition.cable_allocations != entry.cable_allocations {
+                entry.cable_allocations = definition.cable_allocations;
+                entry.input = None;
+                entry.matrices = None;
+            }
             if definition.conductors.len() != entry.allocated {
                 entry.allocated = definition.conductors.len();
                 entry.rho = 100.0;
@@ -55,6 +62,15 @@ impl<'a> Context<'a> {
                 entry.matrices = None;
                 entry.rho_changed = true;
             }
+        }
+        if key == Some("nphases")
+            && let Some(input) = &mut entry.input
+        {
+            // Native changes the cable phase count immediately, but does not
+            // invalidate a matrix already calculated at this frequency.
+            input.phases = definition::resolve(self.raw, point)?
+                .phases
+                .min(input.wires.len());
         }
         if matches!(
             key,
@@ -126,8 +142,7 @@ impl<'a> Context<'a> {
             } else {
                 old_keep
             };
-            input.reduce = keep.is_some();
-            input.phases = keep.unwrap_or(n);
+            input.reduction_order = keep;
             entry.input = Some(input);
         }
         if entry.dirty

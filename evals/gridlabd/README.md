@@ -1612,9 +1612,10 @@ POWERIO_XFMRCODE_ORACLE=/tmp/new-xfmrcode-states/observations.json \
   cargo test -p powerio-dist --test dss_xfmrcode -- --include-ignored
 ```
 
-## Public IEEE13, IEEE34, IEEE37 and IEEE123 OpenDSS profiles
 
-`ieee_distribution_import_oracle.py` compares six public feeder entries with
+## Public IEEE13, IEEE34, IEEE37, IEEE123 and North American LV profiles
+
+`ieee_distribution_import_oracle.py` compares eight public feeder entries with
 canonical output and repeated conversion. Sources and dependencies are pinned
 in `ieee-corpus.json`; public bytes remain in an external checkout. Run:
 
@@ -1637,11 +1638,12 @@ case reports its result independently; a parser success is not qualification.
 ### Public North American spacing definitions
 
 `dss_spacing_oracle.py` verifies the pinned North American master before selecting
-its conductor and geometry definitions. It puts the `Trans` overhead geometry
-and reduced four-conductor `Sec` bundle into controlled, unbalanced circuits.
+its conductor and geometry definitions. It puts the `Trans` overhead geometry,
+`Pri` concentric-neutral cables and reduced four-conductor `Sec` bundle into
+controlled, unbalanced circuits.
 The report records the source line range and hashes; generated source files
 show the complete circuit additions. These are geometry probes, not full-feeder
-qualification. The underground `Pri` geometry still requires cable support.
+qualification.
 
 ```sh
 python evals/gridlabd/dss_spacing_oracle.py \
@@ -1649,7 +1651,46 @@ python evals/gridlabd/dss_spacing_oracle.py \
   --bridge /path/to/dist_network --output /new/path
 ```
 
-Both probes compare complex bus voltages, terminal currents, powers and losses,
+All three probes compare complex bus voltages, terminal currents, powers and losses,
 source ports, IR equality and repeated canonical conversion. A changed line
 length must fail the comparison. Public input bytes and generated results stay
 outside the repository.
+
+
+### Concentric-neutral cable geometry
+
+The reader resolves `CNData` and `LineGeometry.CNCable`/`CNCables` through the
+existing conductor histories. It preserves native unit interpretation, strand
+GMR defaults, historical copies, live electrical edits and copied ratings.
+Cable phases may have trailing bare neutrals; concentric strands are always
+eliminated before optional reduction of those bare neutrals. The resulting
+impedance and capacitance use the existing typed line model and IR layout.
+Direct `Line.spacing`, tape-shield cables and mixed bare/cable phase positions
+remain unqualified. The pinned engine rejects `LineGeometry like=` when copying
+a CN geometry with an invalid type cast; PowerIO reports that case explicitly.
+
+```sh
+python evals/gridlabd/dss_cn_geometry_oracle.py --output /tmp/new-cn-geometry
+POWERIO_GEOMETRY_ORACLE=/tmp/new-cn-geometry/matrices.json \
+  cargo test -p powerio-dist --lib pinned_overhead_matrices -- --ignored
+POWERIO_GEOMETRY_DEFINITION_ORACLE=/tmp/new-cn-geometry/definitions.json \
+  cargo test -p powerio-dist --lib pinned_geometry_definitions -- --ignored
+python evals/gridlabd/dss_geometry_cache_oracle.py --output /tmp/new-geometry-cache
+POWERIO_GEOMETRY_CACHE_ORACLE=/tmp/new-geometry-cache/observations.json \
+  cargo test -p powerio-dist --lib pinned_calculation_history -- --ignored
+```
+
+The cable oracle checks 75 native matrices across three earth models, five
+frequencies and five conductor/phase/reduction configurations. It records
+convergence separately: the unloaded high-frequency circuits are matrix probes,
+not feeder qualifications. Nine successful definition probes and the native
+copy failure are recorded separately. Sixteen cache histories cover both
+conductor families, including live cable edits and an overhead-to-cable change.
+
+The complete North American master now imports with no electrical-readiness
+blockers and survives IR and repeated canonical conversion. Native and emitted
+solves converge, but the 21,671-observable comparison still fails: maximum
+errors are approximately 26 microvolts, 57 microamps and 7.9 VA. Its `SecPar`
+variant also remains unqualified. These residuals remain visible under the
+unchanged acceptance thresholds. The three controlled public-geometry probes
+pass independently; their success does not qualify the complete feeder.

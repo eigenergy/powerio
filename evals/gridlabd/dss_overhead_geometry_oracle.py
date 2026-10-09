@@ -39,17 +39,21 @@ def deck(geometry, frequency):
         f"set earthmodel={geometry['earth_model']}",
     ]
     for i, wire in enumerate(geometry["wires"]):
+        cable = wire.get("cable")
+        kind = "cndata" if cable else "wiredata"
         text.append(
-            f"new wiredata.w{i} runits=m gmrunits=m radunits=m "
+            f"new {kind}.w{i} runits=m gmrunits=m radunits=m "
             f"rdc={wire['rdc']:.17g} rac={wire['rac']:.17g} gmrac={wire['gmr']:.17g} "
             f"radius={wire['radius']:.17g} capradius={wire['capacitance_radius']:.17g}"
         )
+        if cable:
+            text.append("~ " + " ".join(f"{k}={v:.17g}" for k, v in cable.items()))
     text.append(
         f"new linegeometry.g nconds={len(geometry['wires'])} nphases={geometry['phases']} reduce={'yes' if geometry['reduce'] else 'no'}"
     )
     for i, wire in enumerate(geometry["wires"]):
         text.append(
-            f"~ cond={i + 1} wire=w{i} units=m x={wire['x']:.17g} h={wire['height']:.17g}"
+            f"~ cond={i + 1} {'cncable' if wire.get('cable') else 'wire'}=w{i} units=m x={wire['x']:.17g} h={wire['height']:.17g}"
         )
     text += [
         f"new line.l bus1=sourcebus bus2=end geometry=g length=1 units=m rho={geometry['rho']:.17g}",

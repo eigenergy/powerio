@@ -1,4 +1,4 @@
-//! Ordered overhead LineGeometry definitions, retaining live wire identities.
+//! Ordered LineGeometry definitions, retaining live conductor identities.
 use super::{EarthModel, Geometry, wire};
 use crate::dss::{
     line_history::Snapshot,
@@ -23,6 +23,8 @@ pub(in crate::dss) struct Definition {
     pub reduce: bool,
     pub normamps: f64,
     pub emergamps: f64,
+    pub cable_allocations: usize,
+    cn_choices: Vec<bool>,
     active: usize,
     last_unit: usize,
 }
@@ -35,6 +37,8 @@ impl Default for Definition {
             reduce: false,
             normamps: 0.0,
             emergamps: 0.0,
+            cable_allocations: 0,
+            cn_choices: Vec::new(),
             active: 0,
             last_unit: 5,
         }
@@ -43,6 +47,10 @@ impl Default for Definition {
 
 impl Definition {
     fn resize(&mut self, n: usize) {
+        if self.cn_choices.iter().any(|v| *v) {
+            self.cable_allocations += 1;
+        }
+        self.cn_choices = vec![false; n];
         self.conductors = vec![
             Conductor {
                 wire: None,
@@ -86,6 +94,62 @@ impl Definition {
             }
             if self.emergamps == 0.0 && source.emergamps > 0.0 {
                 self.emergamps = source.emergamps;
+            }
+        }
+        Ok(())
+    }
+
+    fn bind_property(
+        &mut self,
+        raw: &RawDss,
+        object: usize,
+        offset: usize,
+        key: &str,
+        budget: &mut usize,
+    ) -> Result<(), String> {
+        let refs = raw.line_history[&object]
+            .wires
+            .get(&offset)
+            .ok_or("missing WireData binding")?;
+        let single = matches!(key, "wire" | "cncable");
+        if key == "wire" && self.cn_choices.get(self.active) == Some(&true) {
+            return Err("replacing a CN cable with a bare phase wire is unqualified".into());
+        }
+        let start = if single {
+            self.active
+        } else if key == "wires" && self.cn_choices.get(self.active) == Some(&true) {
+            self.phases
+        } else {
+            0
+        };
+        let count = if single {
+            1
+        } else if key == "cncables" {
+            self.phases
+        } else {
+            self.conductors.len().saturating_sub(start)
+        };
+        if refs.len() != count || count == 0 {
+            return Err("geometry wire array has wrong length".into());
+        }
+        for (index, point) in refs.iter().enumerate() {
+            self.bind(
+                start + index,
+                point.ok_or("WireData did not exist at assignment")?,
+                raw,
+                budget,
+            )?;
+        }
+        if key == "wires" {
+            self.active = start + count - 1;
+        } else if key.starts_with("cn") {
+            let choice = self
+                .cn_choices
+                .get_mut(self.active)
+                .ok_or("invalid CN selector")?;
+            if !*choice {
+                self.cable_allocations += 1;
+                *choice = true;
             }
         }
         Ok(())
@@ -147,30 +211,8 @@ impl Definition {
                     }
                 }
             }
-            "wire" | "wires" => {
-                let refs = raw.line_history[&object]
-                    .wires
-                    .get(&offset)
-                    .ok_or("missing WireData binding")?;
-                let count = if key == "wire" {
-                    1
-                } else {
-                    self.conductors.len()
-                };
-                if refs.len() != count || count == 0 {
-                    return Err("geometry wire array has wrong length".into());
-                }
-                for (index, point) in refs.iter().enumerate() {
-                    self.bind(
-                        if key == "wire" { self.active } else { index },
-                        point.ok_or("WireData did not exist at assignment")?,
-                        raw,
-                        budget,
-                    )?;
-                }
-                if key == "wires" {
-                    self.active = count - 1;
-                }
+            "wire" | "wires" | "cncable" | "cncables" => {
+                self.bind_property(raw, object, offset, key, budget)?;
             }
             "spacing" => {
                 let point = raw.line_history[&object]
@@ -224,10 +266,14 @@ impl Definition {
                 Ok(state.at(conductor.x * meters, conductor.height * meters))
             })
             .collect::<Result<Vec<_>, String>>()?;
+        if self.cn_choices.iter().any(|v| *v) && !wires.iter().any(|w| w.cable.is_some()) {
+            return Err("replacing all CN cables with bare phase wires is unqualified".into());
+        }
         Ok(Geometry {
             wires,
             phases: self.phases,
             reduce: self.reduce,
+            reduction_order: None,
             earth_model,
             rho,
         })
@@ -285,11 +331,13 @@ pub(super) fn resolve(raw: &RawDss, point: Snapshot) -> Result<Definition, Strin
                 budget = budget
                     .checked_sub(copy.start - offset + 32)
                     .ok_or("LineGeometry evaluation work limit exceeded")?;
-                state.copy(
-                    cache
-                        .get(&copy.source)
-                        .ok_or("unresolved LineGeometry copy")?,
-                );
+                let source: &Definition = cache
+                    .get(&copy.source)
+                    .ok_or("unresolved LineGeometry copy")?;
+                if source.cn_choices.iter().any(|v| *v) {
+                    return Err("pinned native engine cannot copy a CN LineGeometry".into());
+                }
+                state.copy(source);
                 offset = copy.end;
             }
             let remaining = props.get(offset..).ok_or("invalid geometry copy span")?;

@@ -1463,6 +1463,7 @@ impl<L: Loader> Executor<'_, L> {
             "line"
                 | "linecode"
                 | "wiredata"
+                | "cndata"
                 | "linegeometry"
                 | "linespacing"
                 | "xfmrcode"
@@ -1474,7 +1475,7 @@ impl<L: Loader> Executor<'_, L> {
             );
             if matches!(
                 self.raw.objects[idx].class.as_str(),
-                "line" | "wiredata" | "linegeometry"
+                "line" | "wiredata" | "cndata" | "linegeometry"
             ) {
                 self.raw
                     .geometry_timeline
@@ -1731,7 +1732,10 @@ impl<L: Loader> Executor<'_, L> {
                     .collect();
                 self.raw.objects[idx].props.extend(cloned);
                 self.raw.objects[idx].edits.extend(bounds);
-                if matches!(class.as_str(), "line" | "wiredata" | "linegeometry") {
+                if matches!(
+                    class.as_str(),
+                    "line" | "wiredata" | "cndata" | "linegeometry"
+                ) {
                     self.raw
                         .geometry_timeline
                         .push(super::geometry::timeline::Action::Copy {
@@ -1754,9 +1758,12 @@ impl<L: Loader> Executor<'_, L> {
         ctx: &dyn Fn(String) -> String,
     ) -> bool {
         if self.raw.objects[idx].class == "linegeometry"
-            && matches!(p.name.as_deref(), Some("wire" | "wires"))
+            && matches!(
+                p.name.as_deref(),
+                Some("wire" | "wires" | "cncable" | "cncables")
+            )
         {
-            let names = if p.name.as_deref() == Some("wire") {
+            let names = if matches!(p.name.as_deref(), Some("wire" | "cncable")) {
                 vec![p.value.text.clone()]
             } else {
                 p.value.to_string_list(Some(&self.raw.vars))
@@ -1774,12 +1781,17 @@ impl<L: Loader> Executor<'_, L> {
                 return false;
             }
             self.raw.total_props += names.len();
+            let class = if p.name.as_deref().unwrap().starts_with("cn") {
+                "cndata"
+            } else {
+                "wiredata"
+            };
             let references = names
                 .iter()
                 .map(|name| {
                     self.raw
                         .index
-                        .get(&("wiredata".into(), name.to_ascii_lowercase()))
+                        .get(&(class.into(), name.to_ascii_lowercase()))
                         .map(|&object| self.raw.line_snapshot(object))
                 })
                 .collect();
@@ -1909,7 +1921,7 @@ impl<L: Loader> Executor<'_, L> {
             self.raw.objects[idx].props.push(p);
             if matches!(
                 self.raw.objects[idx].class.as_str(),
-                "line" | "wiredata" | "linegeometry"
+                "line" | "wiredata" | "cndata" | "linegeometry"
             ) {
                 self.raw
                     .geometry_timeline

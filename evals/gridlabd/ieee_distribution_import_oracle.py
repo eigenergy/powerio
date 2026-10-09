@@ -1,6 +1,6 @@
-"""Public IEEE13/34/37/123 DSS feeders at their written, fixed device states.
+"""Public IEEE13/34/37/123 and North American LV DSS feeders at their written, fixed device states.
 
-Every solve and voltage-base calculation in the six selected entry files is
+Every solve and voltage-base calculation in the selected entry files is
 preceded by ControlMode=Off. Original bytes are pinned and retained separately;
 this is an explicit static profile, not a claim about active regulator results.
 """
@@ -22,6 +22,8 @@ CASES = {
     "ieee37": "37Bus/ieee37.dss",
     "ieee123": "123Bus/IEEE123Master.dss",
     "ieee123_switches": "123Bus/IEEE123Switches.dss",
+    "north_american": "LVTestCaseNorthAmerican/Master.dss",
+    "north_american_secpar": "LVTestCaseNorthAmerican/SecPar.dss",
 }
 
 
@@ -41,7 +43,13 @@ def main():
     records = {}
     commits = set()
     for family in catalog["families"]:
-        if family["id"] not in ("ieee13", "ieee34", "ieee37", "ieee123"):
+        if family["id"] not in (
+            "ieee13",
+            "ieee34",
+            "ieee37",
+            "ieee123",
+            "north_american_lv_network",
+        ):
             continue
         for pin in family["sources"]:
             if not pin["repository"].endswith("/electricdss-tst"):

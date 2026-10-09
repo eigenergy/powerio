@@ -1327,6 +1327,11 @@
               "path": "Version8/Distrib/IEEETestCases/LVTestCaseNorthAmerican/network_protectors.dss",
               "git_blob_sha1": "8c6b9412fc96b2cd811aacb85f7c2ff75df5a48a",
               "bytes": 12448
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCaseNorthAmerican/buscoords.dat",
+              "git_blob_sha1": "0f7ef3cd175d46fc6beb1810efc9ffe44b28da4c",
+              "bytes": 6023
             }
           ]
         }

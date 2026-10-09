@@ -3,6 +3,7 @@ use super::*;
 fn sample() -> Geometry {
     Geometry {
         wires: vec![Wire {
+            cable: None,
             x: 0.0,
             height: 10.0,
             radius: 0.01,
@@ -13,6 +14,7 @@ fn sample() -> Geometry {
         }],
         phases: 1,
         reduce: false,
+        reduction_order: None,
         earth_model: EarthModel::Carson,
         rho: 100.0,
     }

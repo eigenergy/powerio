@@ -99,6 +99,50 @@ def cases():
         + LINES.replace(" earthmodel=carson", ""),
         ["set earthmodel=fullcarson", "edit line.a geometry=g"],
     )
+    cn = (
+        "new cndata.c rac=.0002 radius=.01 radunits=m runits=m k=13 "
+        "diastrand=.0015 rstrand=.0008 inslayer=.004 diains=.028 diacable=.033\n"
+    )
+    cn_base = (
+        "clear\nnew circuit.c basekv=12.47\n"
+        + cn
+        + "new linegeometry.g nconds=1 nphases=1 cond=1 cncable=c x=0 h=-1 units=m\n"
+        + LINES
+    )
+    result["cn_live_definition"] = (
+        cn_base,
+        [
+            "edit cndata.c rac=.0004 diastrand=.002",
+            "edit linegeometry.g h=-1.1",
+            "edit line.a geometry=g",
+            "edit line.b geometry=g",
+        ],
+    )
+    result["cn_frequency_and_rho"] = (
+        cn_base,
+        [
+            "set frequency=50",
+            "edit line.b rho=37",
+            "edit line.a geometry=g",
+            "set frequency=60",
+        ],
+    )
+    result["cn_reset_same_size"] = (
+        cn_base,
+        [
+            "edit linegeometry.g nconds=1 cond=1 cncable=c x=0 h=-2 units=m",
+            "edit line.a geometry=g",
+            "edit line.b geometry=g",
+        ],
+    )
+    result["overhead_to_cn"] = (
+        BASE,
+        [
+            cn + "edit linegeometry.g cond=1 cncable=c h=-1",
+            "edit line.a geometry=g",
+            "edit line.b geometry=g",
+        ],
+    )
     return result
 
 

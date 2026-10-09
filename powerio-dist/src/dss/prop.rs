@@ -613,6 +613,36 @@ class!(
     ]
 );
 
+// CNData inherits CableData and then ConductorData in the pinned engine.
+class!(
+    CN_DATA,
+    "cndata",
+    [
+        "k",
+        "diastrand",
+        "gmrstrand",
+        "rstrand",
+        "epsr",
+        "inslayer",
+        "diains",
+        "diacable",
+        "rdc",
+        "rac",
+        "runits",
+        "gmrac",
+        "gmrunits",
+        "radius",
+        "radunits",
+        "normamps",
+        "emergamps",
+        "diam",
+        "seasons",
+        "ratings",
+        "capradius",
+        "like"
+    ]
+);
+
 class!(
     LINE_GEOMETRY,
     "linegeometry",
@@ -651,6 +681,7 @@ static CLASSES: &[&DssClass] = &[
     &LINE,
     &LINECODE,
     &WIRE_DATA,
+    &CN_DATA,
     &LINE_GEOMETRY,
     &LINE_SPACING,
     &LOAD,

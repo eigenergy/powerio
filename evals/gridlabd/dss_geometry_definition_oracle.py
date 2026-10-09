@@ -84,7 +84,10 @@ def observe(script, matrices="fresh", data_path=None):
         data = dict(
             units=[int(v) for v in units],
             wires=[
-                v.removeprefix("WireData.").removeprefix("wiredata.")
+                v.removeprefix("WireData.")
+                .removeprefix("wiredata.")
+                .removeprefix("CNData.")
+                .removeprefix("cndata.")
                 for v in api.Conductors()
             ],
             x=list(api.Xcoords()),
