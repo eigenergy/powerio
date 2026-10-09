@@ -465,6 +465,23 @@ equivalent; FBS solves the same circuit and matches the analytic solution.
 Engine validation therefore checks finite voltages, currents and powers, and
 reports these NR failures separately from successful electrical comparisons.
 
+PNNL 5.3 `diesel_dg` in `CONSTANT_PQ` mode reads as three single-phase
+constant-power generators, retaining unequal signed P/Q, the initialized
+per-phase rating limit, and component coordinates. Scalar power fields override
+the complex fields at initialization; the native `-1` sentinel leaves that
+component unchanged. Missing or nonpositive `Rated_VA` uses the pinned engine's
+500 kVA default. Positive `Rated_V` must match the parent's line-line nominal
+voltage within 1%. An ordinary ABC parent and `module generators;` are required.
+Dynamic modes and Arras's different diesel model remain unsupported.
+
+OpenDSS emission of generators without retained voltage bounds supplies a
+0..2 pu constant-power band and reports the substitution. Above the emitted
+upper bound OpenDSS uses constant impedance. Generators parsed from OpenDSS
+retain their explicit bounds or native 0.9..1.1 pu defaults. Generator rating
+limits remain in IR; their OpenDSS mapping is unfinished and reports a loss.
+Canonical GLM generator writing is also unfinished. This device qualification
+is a prerequisite for IEEE9500, not qualification of that feeder.
+
 GridLAB-D object latitude and longitude map to the network's typed
 `component_locations` table. Each point identifies its component table and exact
 name, with optional latitude, longitude, datum and point origin. Missing axes

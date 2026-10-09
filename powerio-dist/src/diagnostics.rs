@@ -49,6 +49,8 @@ pub mod codes {
             "static switch status and banked initialization determine contact states";
         READ_GLM_SWITCH_EQUIVALENT = "READ.GLM.SWITCH_EQUIVALENT", Remark,
             "finite closed switch contacts use an exact static line equivalent";
+        READ_GLM_GENERATOR_EQUIVALENT = "READ.GLM.GENERATOR_EQUIVALENT", Remark,
+            "initialized static generator powers and ratings use phase-resolved records";
         READ_GLM_REGULATOR_EQUIVALENT = "READ.GLM.REGULATOR_EQUIVALENT", Remark,
             "fixed regulator phases use equivalent winding records on explicit normalization bases";
         READ_GLM_TRANSFORMER_EQUIVALENT = "READ.GLM.TRANSFORMER_EQUIVALENT", Warning,

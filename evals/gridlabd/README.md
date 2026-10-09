@@ -1147,3 +1147,26 @@ Canonical output still preserves the physical pi circuit using end shunts. An
 exact representation of the nonreciprocal native FBS equation is unresolved.
 The full IEEE8500 qualification is unaffected; these cases exercise additional
 line-capacitance behavior.
+
+
+### PNNL constant-PQ generators
+
+`diesel_import_oracle.py` checks seven circuits with both NR and FBS: unequal
+signed phase powers, a parent-meter alias, native per-phase clipping, scalar
+initialization overrides, the native default rating, and low/high voltages.
+Each circuit compares nine complex voltage/current/power observations against
+an independent diagonal-line solution, then against actual PowerIO import,
+IR restoration and OpenDSS emission. A deliberately wrong phase power must
+fail the comparison. Arras's different diesel class is not substituted.
+
+```sh
+python evals/gridlabd/diesel_import_oracle.py \
+  --bridge /path/to/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-diesel-validation-directory
+```
+
+The high/low cases exercise voltages outside OpenDSS's default generator band.
+Format-neutral generators emit a diagnosed 0..2 pu band; parsed OpenDSS
+generators retain their own bounds. This does not promise constant power above
+2 pu or qualify the complete IEEE9500 feeder. Canonical GLM generator writing
+and OpenDSS generator rating-limit mapping remain unfinished.

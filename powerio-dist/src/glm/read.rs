@@ -18,6 +18,7 @@ const METERS_PER_MILE: f64 = 1609.344;
 mod cables;
 mod capacitors;
 mod delta_grounded;
+mod generators;
 mod geometry;
 mod loads;
 mod regulators;
@@ -93,6 +94,7 @@ pub fn parse(
     reader.transformers()?;
     reader.regulators()?;
     reader.capacitors()?;
+    reader.generators()?;
     reader.coordinates()?;
     crate::require_electrical_readiness(&reader.net)
         .map_err(|e| e.with_source(project.source().clone()))?;
@@ -154,6 +156,7 @@ impl Reader<'_> {
 
     fn top_level(&mut self) -> Result<(), Error> {
         let mut powerflow = false;
+        let mut generators = false;
         for statement in self.project.statements() {
             match statement {
                 Statement::Block { header, body, span }
@@ -183,7 +186,10 @@ impl Reader<'_> {
                     if tokens.first().is_some_and(|t| t.text() == "module") =>
                 {
                     if tokens.len() != 2
-                        || !matches!(tokens[1].text(), "powerflow" | "tape" | "assert")
+                        || !matches!(
+                            tokens[1].text(),
+                            "powerflow" | "tape" | "assert" | "generators"
+                        )
                     {
                         return Err(self.project.electrical_error(
                             span,
@@ -191,6 +197,7 @@ impl Reader<'_> {
                         ));
                     }
                     powerflow |= tokens[1].text() == "powerflow";
+                    generators |= tokens[1].text() == "generators";
                 }
                 Statement::Block { header, .. }
                     if header
@@ -203,6 +210,15 @@ impl Reader<'_> {
                         .electrical_error(span, "unsupported top-level electrical declaration"));
                 }
             }
+        }
+        if !generators
+            && let Some(object) = self
+                .index
+                .objects()
+                .iter()
+                .find(|o| class(o) == "diesel_dg")
+        {
+            return Err(self.error(object.key(), "diesel_dg requires the generators module"));
         }
         if !powerflow {
             return Err(Error::new(
@@ -930,7 +946,8 @@ fn supported_class(name: &str) -> bool {
     bus_class(name)
         || matches!(
             name,
-            "overhead_line"
+            "diesel_dg"
+                | "overhead_line"
                 | "underground_line"
                 | "underground_line_conductor"
                 | "triplex_line"
@@ -978,6 +995,7 @@ fn allowed_property(class: &str, name: &str) -> bool {
         || split_phase::allowed(class, name)
         || triplex_lines::allowed(class, name)
         || geometry::rating_property(class, name)
+        || generators::allowed(class, name)
         || capacitors::allowed(class, name)
         || regulators::allowed(class, name)
         || transformers::allowed(class, name)
@@ -1007,6 +1025,7 @@ fn quantity_spec(
     use GlmQuantityKind::{Complex, Real};
     if let Some(spec) = split_phase::quantity_spec(class, name)
         .or_else(|| triplex_lines::quantity_spec(class, name))
+        .or_else(|| generators::quantity_spec(class, name))
     {
         return Some((spec.0, Some(spec.1)));
     }

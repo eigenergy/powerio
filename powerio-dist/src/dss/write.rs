@@ -2242,8 +2242,8 @@ impl DssWriter {
                     ),
                 );
             }
-            // Rating fields await the kVA mapping decision (#266); dropping
-            // them stays loud in the meantime.
+            // Rating fields need a separate kVA mapping; dropping them
+            // stays loud in the meantime.
             for (key, present) in [("s_max", g.s_max.is_some()), ("i_max", g.i_max.is_some())] {
                 if present {
                     self.warn(
@@ -2256,6 +2256,14 @@ impl DssWriter {
                 }
             }
             let mut extras = g.extras.clone();
+            if !extras.contains_key("vminpu") || !extras.contains_key("vmaxpu") {
+                extras.entry("vminpu".into()).or_insert(0.0.into());
+                extras.entry("vmaxpu".into()).or_insert(2.0.into());
+                self.warn(
+                    &C::EMIT_DSS_VALUE_SUBSTITUTED,
+                    format!("generator {}: missing voltage bounds use 0..2 pu for the declared power law; OpenDSS switches to constant impedance above the emitted vmaxpu", g.name),
+                );
+            }
             strip_emitted_extras(&mut extras, &["kv", "phases", "conn"]);
             s.push_str(&self.extras_tail("generator", &g.name, &extras));
             self.line_out(&s);
