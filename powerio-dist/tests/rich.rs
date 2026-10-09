@@ -171,8 +171,49 @@ fn rich_opendss_load_models_and_switches_round_trip() {
         New Load.cp3 bus1=b2.1.2.3 phases=3 conn=wye kv=12.47 kw=90 kvar=45 model=3\n\
         New Load.zip bus1=b2.1.2.3 phases=3 conn=wye kv=12.47 kw=90 kvar=45 model=8 zipv=[0.2,0.3,0.5,0.1,0.4,0.5,0.8]\n";
     let net = parse_dss_str(dss);
-    assert_eq!(net.switches().len(), 1);
-    assert!(net.switches()[0].open);
+    assert!(net.switches().is_empty());
+    assert!(
+        net.diagnostics
+            .iter()
+            .any(|d| d.code() == "READ.DSS.RETAINED_SOURCE_ONLY")
+    );
+    let switch_line = net.lines().iter().find(|l| l.name == "sw").unwrap();
+    let switch_code = net.linecode(&switch_line.linecode).unwrap();
+    assert_eq!(switch_line.bus_from, "sourcebus");
+    assert_eq!(switch_line.bus_to, "b2");
+    // With active controls excluded, Action=open does not execute. The
+    // native switch=yes defaults leave a closed 0.001 + j0.001 ohm line.
+    for i in 0..3 {
+        for j in 0..3 {
+            let expected = if i == j { 0.001 } else { 0.0 };
+            assert!((switch_code.r_series[i][j] * switch_line.length - expected).abs() < 1e-15);
+            assert!((switch_code.x_series[i][j] * switch_line.length - expected).abs() < 1e-15);
+        }
+    }
+    let assert_switch_impedance = |other: &powerio_dist::MulticonductorNetwork| {
+        let line = other.lines().iter().find(|l| l.name == "sw").unwrap();
+        let code = other.linecode(&line.linecode).unwrap();
+        assert_eq!(line.bus_from, switch_line.bus_from);
+        assert_eq!(line.bus_to, switch_line.bus_to);
+        assert_eq!(line.terminal_map_from, switch_line.terminal_map_from);
+        assert_eq!(line.terminal_map_to, switch_line.terminal_map_to);
+        for i in 0..3 {
+            for j in 0..3 {
+                assert!(
+                    (code.r_series[i][j] * line.length
+                        - switch_code.r_series[i][j] * switch_line.length)
+                        .abs()
+                        < 1e-15
+                );
+                assert!(
+                    (code.x_series[i][j] * line.length
+                        - switch_code.x_series[i][j] * switch_line.length)
+                        .abs()
+                        < 1e-15
+                );
+            }
+        }
+    };
     let dss_v_nom = 12_470.0 / 3f64.sqrt();
     assert!(matches!(
         load_model(&net, "ci"),
@@ -210,14 +251,14 @@ fn rich_opendss_load_models_and_switches_round_trip() {
         bmopf_doc["load"]["zip"]["alpha_z"],
         serde_json::json!([0.2, 0.2, 0.2])
     );
-    assert_eq!(bmopf_doc["switch"]["sw"]["open_switch"], true);
+    assert!(bmopf_doc["line"].get("sw").is_some());
     let from_bmopf = parse_bmopf_str(&bmopf.text).unwrap();
-    assert_eq!(from_bmopf.switches()[0].open, net.switches()[0].open);
+    assert_switch_impedance(&from_bmopf);
     assert_eq!(load_model(&from_bmopf, "zip"), load_model(&net, "zip"));
 
     let dss_back = emit_dss(&from_bmopf);
     let reparsed = parse_dss_str(&dss_back.text);
-    assert_eq!(reparsed.switches()[0].open, net.switches()[0].open);
+    assert_switch_impedance(&reparsed);
     assert_eq!(load_model(&reparsed, "ci"), load_model(&net, "ci"));
     assert_eq!(load_model(&reparsed, "cz"), load_model(&net, "cz"));
     assert_eq!(load_model(&reparsed, "zip"), load_model(&net, "zip"));

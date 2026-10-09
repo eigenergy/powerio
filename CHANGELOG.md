@@ -5,6 +5,12 @@
 - Update ZIP support to 9.0.4 to address extraction advisories. Archive readers
   report filename-decoding failures explicitly and retain their bounded-input
   and unsafe-entry checks.
+- OpenDSS static imports now carry full source impedances and ordered effective
+  line matrices in the typed network. Canonical DSS output preserves independent
+  phase voltages and floating source returns with exact equivalent circuits;
+  PMD output no longer invents a second source impedance. Source replay remains
+  byte exact. Load voltage-band transitions, deferred geometry and several
+  static device states remain compatibility gaps documented in the guide.
 
 - Multiconductor voltage sources can prescribe voltages relative to an explicit
   terminal, preserving floating-star displacement and reference current in the

@@ -182,7 +182,7 @@ impl State {
             }
             "phases" => self.set_phases(number()?)?,
             "units" => {
-                let units = linecode::units(&prop.value.text)?;
+                let units = linecode::units(&prop.value.text);
                 self.units_convert = self
                     .code_units
                     .map_or(self.units_convert * conversion(self.units, units), |code| {

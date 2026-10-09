@@ -144,6 +144,9 @@ use powerio_cli::invariants::{
 };
 use powerio_dist::{DistTargetFormat, MulticonductorNetwork};
 
+#[path = "../../powerio-dist/tests/helpers/source_equivalents.rs"]
+mod source_equivalents;
+
 const REPORT_ENV: &str = "POWERIO_CONVERSION_MATRIX_REPORT";
 const DETAILS_ENV: &str = "POWERIO_CONVERSION_MATRIX_DETAILS";
 const REPORT_MARKER: &str = "<!-- powerio-conversion-matrix-report -->";
@@ -1568,11 +1571,22 @@ const DISTRIBUTION_FORMATS: [DistributionFormat; 3] = [
 ];
 
 // Counts include conductor remapping, explicit neutral materialization, and
-// fields the target cannot represent. Phase voltage limits survive the PMD
-// projection; OpenDSS reports their omission. Retained PMD neutral limits
-// require an additional diagnostic only when they carry nondefault data.
-// PMD emergency transformer ratings remain available for targets to report.
-const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 66, 88], [21, 0, 16], [27, 44, 0]];
+// fields the target cannot represent. The public source/line activation was
+// audited against the prior baseline with complete warning details:
+// Dss->Dss +28: 14 retained LineCode definitions on each parse leg.
+// Dss->BMOPF +55: +14 parse, +28 line history, +6 normal ratings, +14 nominal
+// bases, +14 definition drops, +10 separate-source notices, -26 old source
+// hints and -5 old unit hints (now replaced by explicit snapshot metadata).
+// Dss->PMD +235: +14 parse, +160 line metadata, +49 matrix provenance,
+// +14 definition drops, -2 old sequence hints now represented in typed lines.
+// BMOPF->Dss +30: +14 definitions, +10 matrix provenance, +7 exact-source
+// remarks, -1 source-phase collapse. BMOPF->PMD +10: matrix provenance.
+// PMD->Dss +30: +14 definitions, +21 source metadata, +7 exact-source remarks,
+// -4 sequence notices, -1 source-phase collapse, -7 old configuration notices.
+// PMD->BMOPF +2: +4 capacitance-half stashes on explicit source branches,
+// -2 former switch-matrix stashes. Unchanged source replay remains byte exact;
+// the nonzero Dss diagonal counts parse disclosures, not replay losses.
+const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[28, 121, 323], [51, 0, 26], [57, 46, 0]];
 
 const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 7] = [
     (
@@ -1762,7 +1776,8 @@ fn distribution_payloads(format: DistributionFormat) -> Result<Vec<DistributionP
             let rendered = emit_distribution_value(&base.network, format.target)?;
             let parsed = parse_distribution_text(&rendered.text, format)
                 .map_err(|err| format!("read generated {rel} as {}: {err}", format.name))?;
-            let core = distribution_core(&parsed.network);
+            let core =
+                distribution_core(&source_equivalents::contract_source_pairs(&parsed.network));
             Ok(DistributionPayload {
                 label,
                 network: parsed.network,
@@ -1794,7 +1809,14 @@ fn validate_distribution_pair(
     match parse_distribution_text(&conversion.text, target) {
         Ok(parsed) => {
             cell.record_warnings(TARGET_READBACK, &parsed.warnings);
-            let actual = distribution_core(&parsed.network);
+            let before = source_equivalents::contract_source_pairs(&payload.network);
+            let after = source_equivalents::contract_source_pairs(&parsed.network);
+            source_equivalents::assert_source_constraints(
+                &before,
+                &after,
+                &format!("{} to {}", payload.label, target.name),
+            );
+            let actual = distribution_core(&after);
             if !core_survives(&payload.core, &actual, target.target) {
                 cell.failures.push(format!(
                     "{} core changed for {}: before {:?}, after {:?}",
@@ -1865,7 +1887,9 @@ fn parse_distribution_text(
 
 /// Whether the core survived the round trip.
 ///
-/// Everything must match, with one allowance: a dss target splits a load whose
+/// Source-equivalent series pairs are already contracted after checking their
+/// exact cancellation and exclusive internal nodes. Everything else must match,
+/// with one allowance: a dss target splits a load whose
 /// phases carry different power into one single phase `Load` per phase (#266),
 /// because a dss `Load` divides its `kw` evenly and cannot state the profile
 /// otherwise. That grows the object count and nothing else — the power the

@@ -924,7 +924,13 @@ fn bmopf_fixed_dispatch_ibr_emits_dss_generator() {
 
     let out = emit_dss(&net);
 
-    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+    assert!(
+        out.diagnostics
+            .iter()
+            .all(|d| d.code() == "EMIT.DSS.SOURCE_EQUIVALENT"),
+        "{:?}",
+        out.warnings
+    );
     let line = out
         .text
         .lines()
@@ -980,7 +986,13 @@ fn bmopf_volt_var_ibr_emits_dss_pvsystem_control() {
 
     let out = emit_dss(&net);
 
-    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+    assert!(
+        out.diagnostics
+            .iter()
+            .all(|d| d.code() == "EMIT.DSS.SOURCE_EQUIVALENT"),
+        "{:?}",
+        out.warnings
+    );
     assert!(out.text.contains("New PVSystem.pv"), "{}", out.text);
     assert!(out.text.contains("New XYcurve.vv_pv"), "{}", out.text);
     assert!(out.text.contains("New InvControl.ivc_pv"), "{}", out.text);
@@ -1086,116 +1098,40 @@ fn bmopf_coordinates_keep_schema_valid_geometry_after_mutation() {
 }
 
 #[test]
-fn opendss_split_voltage_sources_merge_in_bmopf() {
+fn opendss_split_sources_preserve_separate_impedances_in_bmopf() {
     let third = 2.0 * std::f64::consts::FRAC_PI_3;
-    let net = parse_dss_str(
-        "Clear\n\
-         New Circuit.split phases=1 basekv=7.2 pu=1.0 angle=0 bus1=SourceBus.1\n\
-         New Vsource.phb phases=1 basekv=7.2 pu=1.0 angle=-120 bus1=sourcebus.2\n\
-         New Vsource.phc phases=1 basekv=7.2 pu=1.0 angle=120 bus1=SOURCEBUS.3\n",
-    );
-    assert_eq!(net.sources().len(), 3);
-
-    let out = emit_bmopf_json(&net);
-    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
-    assert!(
-        out.warnings
-            .iter()
-            .all(|w| !w.contains("expects exactly one source")),
-        "{:?}",
-        out.warnings
-    );
-    // The per-field aggregation (#377) carries the elements in details.
-    let by_field = |field: &str| {
-        out.diagnostics
-            .iter()
-            .find(|d| {
-                d.code() == "EMIT.BMOPF.FIELD_DROPPED"
-                    && d.details().get("field") == Some(&serde_json::json!(field))
-            })
-            .unwrap_or_else(|| panic!("missing aggregated drop for {field}: {out:?}"))
-    };
-    let angle = by_field("angle");
-    assert!(
-        angle.details()["elements"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|e| e == "voltage source phb"),
-        "{:?}",
-        angle.details()
-    );
-    let basekv = by_field("basekv");
-    assert!(
-        basekv.details()["elements"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|e| e == "voltage source phc"),
-        "{:?}",
-        basekv.details()
-    );
-    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    assert!(doc["bus"].get("SourceBus").is_some(), "{}", out.text);
-    let sources = doc["voltage_source"].as_object().unwrap();
-    assert_eq!(sources.len(), 1, "{sources:?}");
-    let source = &sources["source"];
-    assert_eq!(source["bus"], serde_json::json!("SourceBus"));
-    assert_eq!(
-        source["terminal_map"],
-        serde_json::json!(["1", "2", "3", "4"])
-    );
-    assert_eq!(
-        source["v_magnitude"],
-        serde_json::json!([7200.0, 7200.0, 7200.0, 0.0])
-    );
-    let angles = source["v_angle"].as_array().unwrap();
-    assert_eq!(angles.len(), 4);
-    for (actual, expected) in angles.iter().zip([0.0, -third, third, 0.0]) {
-        let actual = actual.as_f64().unwrap();
-        assert!(
-            (actual - expected).abs() < 1e-12,
-            "v_angle entry = {actual}, expected {expected}"
+    for count in [2, 3] {
+        let mut text = String::from(
+            "Clear\nNew Circuit.split phases=1 basekv=7.2 angle=0 bus1=SourceBus.1 r1=1 x1=2 r0=1 x0=2\n\
+             New Vsource.phb phases=1 basekv=7.2 angle=-120 bus1=sourcebus.2 r1=3 x1=4 r0=3 x0=4\n",
         );
-    }
-}
-
-#[test]
-fn two_phase_split_voltage_sources_merge_in_bmopf() {
-    let third = 2.0 * std::f64::consts::FRAC_PI_3;
-    let net = parse_dss_str(
-        "Clear\n\
-         New Circuit.split phases=1 basekv=7.2 pu=1.0 angle=0 bus1=sourcebus.1\n\
-         New Vsource.phb phases=1 basekv=7.2 pu=1.0 angle=-120 bus1=sourcebus.2\n",
-    );
-    assert_eq!(net.sources().len(), 2);
-
-    let out = emit_bmopf_json(&net);
-    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
-    assert!(
-        out.warnings
-            .iter()
-            .all(|w| !w.contains("expects exactly one source")),
-        "{:?}",
-        out.warnings
-    );
-    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    let sources = doc["voltage_source"].as_object().unwrap();
-    assert_eq!(sources.len(), 1, "{sources:?}");
-    let source = &sources["source"];
-    assert_eq!(source["terminal_map"], serde_json::json!(["1", "2", "4"]));
-    assert_eq!(
-        source["v_magnitude"],
-        serde_json::json!([7200.0, 7200.0, 0.0])
-    );
-    let angles = source["v_angle"].as_array().unwrap();
-    assert_eq!(angles.len(), 3);
-    for (actual, expected) in angles.iter().zip([0.0, -third, 0.0]) {
-        let actual = actual.as_f64().unwrap();
+        if count == 3 {
+            text.push_str("New Vsource.phc phases=1 basekv=7.2 angle=120 bus1=SOURCEBUS.3 r1=5 x1=6 r0=5 x0=6\n");
+        }
+        let net = parse_dss_str(&text);
+        let out = emit_bmopf_json(&net);
+        assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
         assert!(
-            (actual - expected).abs() < 1e-12,
-            "v_angle entry = {actual}, expected {expected}"
+            out.diagnostics
+                .iter()
+                .any(|d| d.code() == "EMIT.BMOPF.SOURCE_COUNT")
         );
+        let again = parse_bmopf_str(&out.text).unwrap();
+        assert_eq!(again.sources().len(), count);
+        assert_eq!(again.lines().len(), count);
+        for (i, name) in ["source", "phb", "phc"].iter().take(count).enumerate() {
+            let vs = again.sources().iter().find(|s| s.name == *name).unwrap();
+            assert_eq!(vs.v_magnitude.len(), 1);
+            assert!((vs.v_magnitude[0] - 7200.0).abs() < 1e-10);
+            assert!((vs.v_angle[0] - [0.0, -third, third][i]).abs() < 1e-12);
+            let line = again.lines().iter().find(|l| l.bus_from == vs.bus).unwrap();
+            assert_eq!(line.terminal_map_from, vs.terminal_map);
+            assert!(line.bus_to.eq_ignore_ascii_case("sourcebus"));
+            assert_eq!(line.terminal_map_to, [(i + 1).to_string()]);
+            let code = again.linecode(&line.linecode).unwrap();
+            assert!((code.r_series[0][0] * line.length - (2 * i + 1) as f64).abs() < 1e-12);
+            assert!((code.x_series[0][0] * line.length - (2 * i + 2) as f64).abs() < 1e-12);
+        }
     }
 }
 
@@ -1966,7 +1902,7 @@ fn bmopf_phase_to_phase_single_phase_load_emits_delta_dss() {
 }
 
 #[test]
-fn zero_voltage_source_neutral_does_not_inflate_dss_phases() {
+fn zero_voltage_source_preserves_the_ungrounded_zero_voltage_constraint() {
     let net = parse_bmopf_str(
         r#"{
           "bus": {
@@ -1985,8 +1921,24 @@ fn zero_voltage_source_neutral_does_not_inflate_dss_phases() {
     .unwrap();
 
     let out = emit_dss(&net);
-    let line = out.text.lines().find(|l| l.contains("Circuit.")).unwrap();
-    assert!(line.contains("phases=3"), "{line}");
+    let raw =
+        powerio_dist::dss::__parse_raw_with(&out.text, "case.dss", &mut |_: &std::path::Path| {
+            Err(std::io::Error::other("no includes"))
+        });
+    let sources: Vec<_> = raw.of_class("vsource").collect();
+    assert_eq!(sources.len(), 4);
+    assert!(sources.iter().all(|s| s.get("phases").unwrap().text == "1"));
+    let zero = sources
+        .iter()
+        .find(|s| s.get("pu").unwrap().text == "0")
+        .unwrap();
+    let bus = zero.get("bus1").unwrap().text.as_str();
+    let link = raw
+        .of_class("line")
+        .find(|l| l.get("bus1").is_some_and(|v| v.text == bus))
+        .unwrap();
+    assert_eq!(link.get("bus2").unwrap().text, "src.4");
+    assert_eq!(zero.get("bus2").unwrap().text, "src.0");
 }
 
 #[test]
@@ -3248,9 +3200,8 @@ fn source_terminal_conventions_pass_through_verbatim() {
     );
 }
 
-/// A line with no `linecode=` carries its rating on the linecode synthesized
-/// for it, not on both. Emitting it twice reads as a per line override of a
-/// shared default, and `_line_*` is a stand-in that belongs to this line alone.
+/// Effective ratings belong to each line; its private impedance code does
+/// not duplicate the rating.
 #[test]
 fn an_inline_line_rating_is_not_repeated_on_its_synthetic_linecode() {
     let src = "New Circuit.c1\n\
@@ -3264,13 +3215,13 @@ fn an_inline_line_rating_is_not_repeated_on_its_synthetic_linecode() {
         .expect("synthetic linecode");
 
     assert_eq!(
-        code.i_max.as_deref(),
+        line.i_max.as_deref(),
         Some([250.0, 250.0, 250.0].as_slice())
     );
     assert!(
-        line.i_max.is_none(),
-        "the rating belongs to the linecode alone: {:?}",
-        line.i_max
+        code.i_max.is_none(),
+        "the rating belongs to the line alone: {:?}",
+        code.i_max
     );
 
     let text = emit_dss(&net).text;

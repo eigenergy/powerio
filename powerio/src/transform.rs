@@ -2810,6 +2810,13 @@ fn classify_transformer<'net>(
 
 fn check_untyped_objects(net: &MulticonductorNetwork, report: &mut MulticonductorToBalancedReport) {
     for (i, obj) in net.untyped_objects().iter().enumerate() {
+        if obj.class.eq_ignore_ascii_case("linecode") {
+            report.diagnostics.push(Diagnostic::of(
+                &codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_OBJECT,
+                format!("linecode {} source definition is omitted; typed line matrices supply the electrical data", obj.name),
+            ).with_severity(DiagnosticSeverity::Remark).with_value_target(format!("/untyped/{i}")));
+            continue;
+        }
         report.diagnostics.push(
             Diagnostic::of(
                 &codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_OBJECT,

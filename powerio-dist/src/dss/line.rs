@@ -1,4 +1,4 @@
-//! Ordered ordinary Line interpretation, staged before public reader activation.
+//! Ordered ordinary Line interpretation for static snapshots.
 
 use super::line_history::Snapshot;
 use super::linecode;

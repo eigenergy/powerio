@@ -44,11 +44,13 @@ pub fn require_electrical_readiness(
 pub fn require_earth_referenced_sources(
     net: &MulticonductorNetwork,
 ) -> Result<(), powerio_core::Error> {
-    if let Some(source) = net
-        .sources()
-        .iter()
-        .find(|s| s.reference_terminal.is_some())
-    {
+    if let Some(source) = net.sources().iter().find(|s| {
+        s.reference_terminal.as_ref().is_some_and(|reference| {
+            !net.buses()
+                .iter()
+                .any(|bus| bus.id.eq_ignore_ascii_case(&s.bus) && bus.grounded.contains(reference))
+        })
+    }) {
         return Err(powerio_core::Error::new(
             &crate::diagnostics::codes::BUILD_DIST_ELECTRICAL_INCOMPLETE,
             format!(
@@ -493,6 +495,21 @@ mod tests {
         assert!(!audit_electrical_readiness(&net).is_ready());
         net.untyped_objects_mut()[0].props.clear();
         assert!(!audit_electrical_readiness(&net).is_ready());
+    }
+
+    #[test]
+    fn grounded_voltage_reference_is_earth_but_a_floating_reference_is_not() {
+        let mut net = MulticonductorNetwork::new();
+        let mut bus = DistBus::new("feed", vec!["1".into(), "4".into()]);
+        bus.grounded.push("4".into());
+        net.buses_mut().push(bus);
+        let mut source =
+            crate::VoltageSource::new("s", "feed", vec!["1".into()], vec![240.0], vec![0.0]);
+        source.reference_terminal = Some("4".into());
+        net.sources_mut().push(source);
+        assert!(require_earth_referenced_sources(&net).is_ok());
+        net.buses_mut()[0].grounded.clear();
+        assert!(require_earth_referenced_sources(&net).is_err());
     }
 
     #[test]

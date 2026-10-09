@@ -1,11 +1,16 @@
-//! Typed Thevenin decomposition, staged behind the private reader oracle.
+//! Typed Thevenin decomposition for static snapshots.
 //!
-//! Each internal EMF terminal lives on the return bus so the existing ideal
-//! source can constrain its voltage relative to the actual return terminal.
+//! Floating EMF constraints share the return bus; earth-referenced sources
+//! use a distinct internal bus, preserving physical bus conductor identities.
 //! One coupled series branch connects those terminals to bus1. Its KVL is
 //! `V(bus1) - V(bus2) = E - Z I`, with no added grounding or small impedance.
 
-use super::*;
+use super::{
+    BTreeMap, BTreeSet, BusSpec, BusState, C, DistLine, DistLineCode, RawDss, Reader,
+    UntypedObject, Value, VoltageSource,
+};
+#[cfg(test)]
+use super::{DistLocation, MulticonductorNetwork};
 use crate::dss::source::{ResolvedSource, resolve};
 
 type SourceResult<T> = std::result::Result<T, String>;
@@ -36,6 +41,11 @@ impl Reader<'_> {
 
     fn report_source_behavior(&mut self, raw: &RawDss) {
         for object in raw.of_class("vsource") {
+            for field in ["phases", "basekv", "pu", "angle", "bus1"] {
+                if object.get(field).is_none() {
+                    self.defaulted("vsource", &object.name, field);
+                }
+            }
             let settings: Vec<_> = ["daily", "yearly", "duty", "spectrum", "scantype"]
                 .into_iter()
                 .filter(|key| object.get(key).is_some_and(|v| !v.text.is_empty()))
@@ -49,7 +59,24 @@ impl Reader<'_> {
         }
     }
 
-    fn resolved_sources(&mut self, raw: &RawDss) -> SourceResult<()> {
+    fn emf_bus(&mut self, port: &Ports, grounded: bool, names: &mut BTreeSet<String>) -> String {
+        if !grounded {
+            return port.end.name.clone();
+        }
+        let name = unique_name(&format!("_pio_vsource_{}_emf", port.name), names);
+        let spec = BusSpec {
+            name: name.clone(),
+            nodes: vec![0],
+        };
+        self.terminals(&spec, 1, 1, 1);
+        name
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keep source port allocation and both parts of its equivalent in one ordered pass"
+    )]
+    pub(super) fn resolved_sources(&mut self, raw: &RawDss) -> SourceResult<()> {
         require_snapshot_profile(raw)?;
         // Resolve every source before modifying the reader. Then register
         // every original port before any source can allocate a virtual node.
@@ -94,33 +121,33 @@ impl Reader<'_> {
         let mut lines = names(raw.of_class("line").map(|v| v.name.as_str()));
         let mut sources = names(ports.iter().map(|v| v.name.as_str()));
         let mut cursors = BTreeMap::new();
+        let mut bus_names = self.buses.keys().cloned().collect();
         for port in ports {
             let n = port.source.emf.len();
-            let key = port.end.name.to_ascii_lowercase();
+            // Earth-referenced sources can put the internal EMF on a distinct
+            // bus. This keeps original bus conductor identities unchanged and
+            // lets ordinary three-phase consumers see a separate source branch.
+            let grounded = port.to.iter().all(|t| t == "0");
+            let emf_bus = self.emf_bus(&port, grounded, &mut bus_names);
+            let key = emf_bus.to_ascii_lowercase();
             let bus = self.buses.get_mut(&key).unwrap();
             let cursor = cursors.entry(key).or_insert(1);
             let virtuals = allocate_terminals(bus, cursor, n)?;
             let base = format!("_pio_vsource_{}_impedance", port.name);
             let code_name = unique_name(&base, &mut codes);
             let line_name = unique_name(&base, &mut lines);
-            let mut code = DistLineCode::new(
-                &code_name,
-                port.source
-                    .impedance
-                    .iter()
-                    .map(|row| row.iter().map(|v| v.re).collect())
-                    .collect(),
-                port.source
-                    .impedance
-                    .iter()
-                    .map(|row| row.iter().map(|v| v.im).collect())
-                    .collect(),
-            );
+            let (resistance, reactance): (Vec<Vec<_>>, Vec<Vec<_>>) = port
+                .source
+                .impedance
+                .iter()
+                .map(|row| row.iter().map(|v| (v.re, v.im)).unzip())
+                .unzip();
+            let mut code = DistLineCode::new(&code_name, resistance, reactance);
             code.source = Some(format!("OpenDSS Vsource.{} Thevenin impedance", port.name));
             self.net.line_codes_mut().push(code);
             self.net.lines_mut().push(DistLine::new(
                 line_name,
-                &port.end.name,
+                &emf_bus,
                 &port.start.name,
                 virtuals.clone(),
                 port.from,
@@ -144,14 +171,23 @@ impl Reader<'_> {
                 };
                 let mut source = VoltageSource::new(
                     name,
-                    &port.end.name,
+                    &emf_bus,
                     indexes.iter().map(|&i| virtuals[i].clone()).collect(),
                     indexes.iter().map(|&i| port.source.emf[i].norm()).collect(),
                     indexes.iter().map(|&i| port.source.emf[i].arg()).collect(),
                 );
                 // Keep the explicit ground marker until finish_buses rewrites
                 // both sides of every voltage constraint consistently.
-                source.reference_terminal = Some(reference);
+                source.reference_terminal = (!grounded).then_some(reference);
+                // Nominal bases are unit metadata, independent of edited EMF
+                // magnitudes. All electrical impedance remains in the line.
+                source.extras.insert(
+                    "nominal_phase_kv".into(),
+                    port.source.nominal_phase_kv.into(),
+                );
+                source
+                    .extras
+                    .insert("basemva".into(), port.source.base_mva.into());
                 self.net.sources_mut().push(source);
             }
         }
@@ -216,6 +252,7 @@ fn require_snapshot_profile(raw: &RawDss) -> SourceResult<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn staged_read(text: &str) -> MulticonductorNetwork {
     let raw = crate::dss::raw::__parse_raw_with(text, "source.dss", &mut |_: &std::path::Path| {
         Err(std::io::Error::other("no includes"))
@@ -223,22 +260,11 @@ fn staged_read(text: &str) -> MulticonductorNetwork {
     staged_from_raw(&raw).unwrap()
 }
 
+#[cfg(test)]
 pub(super) fn staged_from_raw(
     raw: &RawDss,
 ) -> std::result::Result<MulticonductorNetwork, Vec<crate::diagnostics::Diagnostic>> {
-    let (net, diagnostics) = to_network_with_source_reader(
-        raw,
-        Some(|rd, raw| {
-            if let Err(error) = rd.resolved_sources(raw) {
-                rd.warn(&C::READ_DSS_SOURCE_UNRESOLVED, error);
-            }
-        }),
-        Some(|rd, raw| {
-            if let Err(error) = rd.resolved_lines(raw) {
-                rd.warn(&C::READ_DSS_LINE_UNRESOLVED, error);
-            }
-        }),
-    );
+    let (net, diagnostics) = super::snapshot_network(raw);
     if diagnostics
         .iter()
         .any(|d| d.severity() == powerio_core::DiagnosticSeverity::Error)
@@ -428,7 +454,12 @@ fn coupled_sources_keep_each_return_and_register_all_original_terminals_first() 
     assert_eq!(constraints.len(), 3);
     for (source, reference) in constraints.iter().zip(["8", "4", "7"]) {
         assert_eq!(source.reference_terminal.as_deref(), Some(reference));
-        assert!(source.extras.is_empty());
+        assert_eq!(source.extras.len(), 2);
+        assert_eq!(source.extras["basemva"], serde_json::json!(100.0));
+        assert!(
+            (source.extras["nominal_phase_kv"].as_f64().unwrap() - 1.0 / 3_f64.sqrt()).abs()
+                < 1e-15
+        );
     }
     assert_eq!(
         net.line_codes()[0].r_series,
@@ -550,6 +581,7 @@ fn export_staged_source_networks() {
     std::fs::write(output, serde_json::to_vec_pretty(&networks).unwrap()).unwrap();
 }
 
+#[cfg(test)]
 pub(super) fn write_staged_network(
     net: &MulticonductorNetwork,
     directory: &std::path::Path,

@@ -1,9 +1,9 @@
-"""Qualify the staged exact source writer with P/I/Z/PIZ loaded circuits.
+"""Qualify the exact source writer with P/I/Z/PIZ loaded circuits.
 
 The native original first matches an independent analytic reference. Canonical
-output and a second canonical output after staged typed reimport then match all
-original line/source port voltages, currents and powers. No ordinary API
-activation or general nonlinear typed solver qualification is claimed.
+output and a second canonical output after typed reimport then match all
+original line/source port voltages, currents and powers. Pass --powerio to
+exercise public import, IR, canonical output and reimport.
 """
 
 import argparse
@@ -13,7 +13,7 @@ from pathlib import Path
 
 from dss_source_lowering_oracle import canonical_snapshot, native
 from dss_source_oracle import LAWS, PATTERNS, deck, native_snapshot, reference
-from oracle import compare
+from oracle import command, compare
 
 
 def prepare(output):
@@ -35,9 +35,12 @@ def prepare(output):
     print(f"Prepared {len(inputs)} circuits")
 
 
-def evaluate(output, canonical):
+def evaluate(output, canonical, powerio=None):
     inputs = json.loads((output / "inputs.json").read_text())
-    report = {"scope": __doc__, "cases": {}}
+    if powerio:
+        canonical = output / "canonical"
+        canonical.mkdir(exist_ok=False)
+    report = {"scope": __doc__, "public_conversion": powerio is not None, "cases": {}}
     for key, path in inputs.items():
         pattern, law, floating, _, _ = key.split("/")
         floating = floating == "True"
@@ -46,6 +49,36 @@ def evaluate(output, canonical):
             "input_sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest(),
         }
         try:
+            if powerio:
+                directory = canonical / key
+                directory.mkdir(parents=True)
+                source = Path(path)
+                for stem in ("case", "case.reimport"):
+                    ir = directory / f"{stem}.pio.json"
+                    written = directory / f"{stem}.dss"
+                    command(
+                        [
+                            str(powerio.resolve()),
+                            "serialize",
+                            str(source.resolve()),
+                            "-o",
+                            str(ir.resolve()),
+                        ],
+                        directory,
+                    )
+                    command(
+                        [
+                            str(powerio.resolve()),
+                            "convert",
+                            str(ir.resolve()),
+                            "--to",
+                            "opendss",
+                            "-o",
+                            str(written.resolve()),
+                        ],
+                        directory,
+                    )
+                    source = written
             expected, convergence = reference(pattern, law, floating)
             observed, version = native_snapshot(
                 Path(path), len(PATTERNS[pattern]), floating
@@ -84,11 +117,12 @@ if __name__ == "__main__":
     parser.add_argument("action", choices=("prepare", "evaluate"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--canonical", type=Path)
+    parser.add_argument("--powerio", type=Path)
     args = parser.parse_args()
-    if args.action == "evaluate" and args.canonical is None:
-        parser.error("evaluate requires --canonical")
+    if args.action == "evaluate" and args.canonical is None and args.powerio is None:
+        parser.error("evaluate requires --canonical or --powerio")
     raise SystemExit(
         prepare(args.output)
         if args.action == "prepare"
-        else evaluate(args.output, args.canonical)
+        else evaluate(args.output, args.canonical, args.powerio)
     )

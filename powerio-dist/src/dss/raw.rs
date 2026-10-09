@@ -311,12 +311,10 @@ impl RawDss {
         }
     }
 
-    #[cfg(test)]
     pub(super) fn solution_mode(&self) -> &'static str {
         self.solution_mode.name()
     }
 
-    #[cfg(test)]
     pub(super) fn unresolved_mode_transition(&self) -> Option<&'static str> {
         self.solution_mode.unresolved_transition()
     }
@@ -324,7 +322,6 @@ impl RawDss {
     pub(super) fn snapshot_frequency(&self) -> f64 {
         self.frequency.snapshot()
     }
-    #[cfg(test)]
     pub(super) fn source_replay(&self, object: &RawObject) -> &SourceReplay {
         let index = self.index[&(object.class.clone(), object.name.to_ascii_lowercase())];
         &self.source_replay[&index]

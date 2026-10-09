@@ -84,6 +84,14 @@ const OPTIONS: &[&str] = &[
     "defaultbasefrequency",
 ];
 
+pub(super) fn option_position(name: &str) -> usize {
+    OPTIONS
+        .iter()
+        .position(|&s| s == name)
+        .or_else(|| OPTIONS.iter().position(|s| s.starts_with(name)))
+        .map_or(usize::MAX, |i| i + 1)
+}
+
 #[derive(Debug)]
 pub(super) struct FrequencyState {
     default: f64,
@@ -124,11 +132,7 @@ impl FrequencyState {
         *position = if name.is_empty() {
             position.saturating_add(1)
         } else {
-            OPTIONS
-                .iter()
-                .position(|&s| s == name)
-                .or_else(|| OPTIONS.iter().position(|s| s.starts_with(name)))
-                .map_or(usize::MAX, |i| i + 1)
+            option_position(name)
         };
         if !matches!(*position, 6 | 53 | 73) {
             return;

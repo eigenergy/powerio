@@ -1,4 +1,4 @@
-//! Exact ideal-source circuits, qualified before production activation.
+//! Exact ideal-source circuits for canonical OpenDSS output.
 
 use std::collections::BTreeSet;
 
@@ -245,7 +245,7 @@ impl DssWriter {
                     num(net.base_frequency()), num(net.base_frequency()),
                 ));
                 self.line_out(&format!(
-                    "New Line.{name} phases=1 bus1={name}.1 bus2={port} length=1 units=m r1=-1 x1=0 r0=-1 x0=0 c1=0 c0=0 basefreq={}",
+                    "New Line.{name} phases=1 bus1={name}.1 bus2={port} length=1 r1=-1 x1=0 r0=-1 x0=0 c1=0 c0=0 basefreq={} units=m",
                     num(net.base_frequency()),
                 ));
                 count += 1;
@@ -272,6 +272,33 @@ impl DssWriter {
         }
         self.out.push('\n');
     }
+}
+
+#[test]
+fn typed_snapshot_frequency_supersedes_retained_frequency_options() {
+    let mut net = MulticonductorNetwork::default();
+    net.buses_mut().push(DistBus::new("feed", vec!["1".into()]));
+    net.sources_mut().push(crate::VoltageSource::new(
+        "s",
+        "feed",
+        vec!["1".into()],
+        vec![240.0],
+        vec![0.0],
+    ));
+    for key in ["f", "frequency", "basef", "defaultb"] {
+        net.options_mut().push((key.into(), "50".into()));
+    }
+    let output = emit_staged_sources(&net).unwrap();
+    let raw = crate::dss::raw::__parse_raw_with(
+        &output.text,
+        "frequency.dss",
+        &mut |_: &std::path::Path| Err(std::io::Error::other("no includes")),
+    );
+    assert_eq!(raw.snapshot_frequency().to_bits(), 60.0_f64.to_bits());
+    let source =
+        crate::dss::source::resolve(&raw, raw.find("vsource", "source").unwrap(), 60.0).unwrap();
+    assert!((source.emf[0] - Complex64::new(240.0, 0.0)).norm() < 1e-12);
+    assert!(output.text.contains("Set Mode=Snapshot ControlMode=Off"));
 }
 
 #[test]
@@ -337,4 +364,21 @@ fn generated_source_bus_does_not_alias_an_original_bus() {
     let line = raw.of_class("line").next().unwrap();
     assert_eq!(line.get("bus1").unwrap().to_bus_spec().name, virtual_bus);
     assert_eq!(line.get("bus2").unwrap().text, "_pio_ideal_0.1");
+    // Sequence setters reset native line units, so the unit assignment must
+    // follow them. The electrical equivalent has an explicit one-metre basis.
+    let (restored, diagnostics) = crate::dss::to_network_from_raw(&raw);
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|d| d.message().contains("no declared length unit"))
+    );
+    let branch = restored
+        .lines()
+        .iter()
+        .find(|l| l.name == line.name)
+        .unwrap();
+    assert_eq!(branch.extras["dss_source_units"], serde_json::json!(4));
+    assert!((branch.length - 1.0).abs() < 1e-15);
+    let code = restored.linecode(&branch.linecode).unwrap();
+    assert!((code.r_series[0][0] + 1.0).abs() < 1e-15);
 }

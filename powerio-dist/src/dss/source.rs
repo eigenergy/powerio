@@ -16,6 +16,8 @@ pub(super) struct ResolvedSource {
     pub bus2: String,
     pub emf: Vec<Complex64>,
     pub impedance: Vec<Vec<Complex64>>,
+    pub nominal_phase_kv: f64,
+    pub base_mva: f64,
 }
 
 #[derive(Clone, Copy)]
@@ -322,6 +324,11 @@ impl State {
                 }
             }
         }
+        let nominal_phase_kv = if self.phases > 1 {
+            self.kv / (2.0 * (std::f64::consts::PI / self.phases as f64).sin())
+        } else {
+            self.kv
+        };
         let mut magnitude = self.kv * self.pu * 1000.0;
         if self.phases > 1 {
             magnitude /= 2.0 * (std::f64::consts::PI / self.phases as f64).sin();
@@ -352,6 +359,8 @@ impl State {
             bus2: self.bus2,
             emf,
             impedance,
+            nominal_phase_kv,
+            base_mva: self.base_mva,
         })
     }
 }

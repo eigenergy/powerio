@@ -42,6 +42,7 @@ impl State {
     /// Later edits require ordered Line interpretation, not another call using
     /// the final line properties. Positive-sequence and long-line modes are
     /// outside this helper's ordinary multiconductor pi-section contract.
+    #[cfg(test)]
     pub fn line_matrices(
         &self,
         operating: f64,
@@ -216,7 +217,7 @@ impl State {
                 }
                 self.neutral = neutral as usize;
             }
-            "units" => self.units = units(&prop.value.text)?,
+            "units" => self.units = units(&prop.value.text),
             "kron" if prop.value.text.starts_with(['y', 'Y', 't', 'T']) => {
                 return Err("ordered linecode Kron reduction is not implemented yet".into());
             }
@@ -264,7 +265,7 @@ pub(super) fn symmetric_matrix(rows: &[Vec<f64>], n: usize) -> Result<Vec<Vec<f6
     Ok(matrix)
 }
 
-pub(super) fn units(text: &str) -> Result<usize, String> {
+pub(super) fn units(text: &str) -> usize {
     let text = text.to_ascii_lowercase();
     let names = [
         ("none", 0),
@@ -278,16 +279,17 @@ pub(super) fn units(text: &str) -> Result<usize, String> {
         ("mm", 8),
         ("meter", 4),
         ("miles", 1),
+        ("mile", 1),
     ];
     names
         .iter()
         .find(|(name, _)| *name == text)
-        .map(|(_, unit)| *unit)
-        .ok_or_else(|| format!("unqualified linecode units {text}"))
+        .map_or(0, |(_, unit)| *unit)
 }
 
 /// Evaluate captured prefixes without recursion or replaying copied property
 /// text as setters. The cache stores at most the bounded evaluation budget.
+#[cfg(test)]
 pub(super) fn resolve(raw: &RawDss, point: Snapshot) -> Result<State, String> {
     resolve_with_budget(raw, point, &mut (1_usize << 22))
 }

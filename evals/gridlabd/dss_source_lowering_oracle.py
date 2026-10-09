@@ -1,10 +1,9 @@
-"""Compare staged Rust source decomposition with pinned native loaded circuits.
+"""Compare Rust source decomposition with pinned native loaded circuits.
 
-Preparation writes only synthetic inputs and a manifest. The ignored Rust test
-reads those inputs through the real element reader with the staged source hook.
-Evaluation solves the resulting typed records independently, including coupled
-impedances and explicit voltage references. No source extras supply physics.
-This does not enable the staged path in ordinary parsing or qualify its writer.
+Preparation writes synthetic inputs and a manifest. Evaluation uses either
+staged networks or --public CLI import, IR and canonical emission. An independent
+MNA checks typed coupled impedances and voltage references; extras supply no
+physics. Public equivalent-source imports also enforce the analytic reference.
 """
 
 import argparse
@@ -194,11 +193,14 @@ def canonical_snapshot(path, elements):
     return result
 
 
-def evaluate(output, powerio, canonical=None):
+def evaluate(output, powerio, canonical=None, public=False):
     inputs = json.loads((output / "inputs.json").read_text())
-    networks = json.loads((output / "networks.json").read_text())
-    assert inputs.keys() == networks.keys() and inputs
-    report = {"scope": __doc__, "cases": {}}
+    networks = {} if public else json.loads((output / "networks.json").read_text())
+    assert inputs and (public or inputs.keys() == networks.keys())
+    if public:
+        canonical = output / "canonical"
+        canonical.mkdir(exist_ok=False)
+    report = {"scope": __doc__, "public_conversion": public, "cases": {}}
     for name, path in inputs.items():
         result = {
             "passed": False,
@@ -221,6 +223,36 @@ def evaluate(output, powerio, canonical=None):
             )
             document = json.loads(original.read_text())
             assert document["value"]["type"] == "powerio.MulticonductorNetwork"
+            if public:
+                networks[name] = document["value"]["data"]
+                target = canonical / name
+                target.mkdir(parents=True)
+                written = target / "case.dss"
+                command(
+                    [
+                        str(powerio.resolve()),
+                        "convert",
+                        str(original.resolve()),
+                        "--to",
+                        "opendss",
+                        "-o",
+                        str(written.resolve()),
+                    ],
+                    directory,
+                )
+                restored = target / "reimport.pio.json"
+                command(
+                    [
+                        str(powerio.resolve()),
+                        "serialize",
+                        str(written.resolve()),
+                        "-o",
+                        str(restored.resolve()),
+                    ],
+                    directory,
+                )
+                reimported = json.loads(restored.read_text())["value"]["data"]
+                (target / "reimport.json").write_text(json.dumps(reimported) + "\n")
             if name.startswith("equivalent/"):
                 _, pattern, floating, _, _ = name.split("/")
                 floating = floating == "True"
@@ -236,6 +268,10 @@ def evaluate(output, powerio, canonical=None):
                     },
                     original_voltage,
                 )
+                if public and not result["production_reimport"]["passed"]:
+                    raise ValueError(
+                        "public source import failed the analytic reference"
+                    )
             document["value"]["data"] = networks[name]
             encoded = directory / "staged.pio.json"
             encoded.write_text(json.dumps(document, indent=2) + "\n")
@@ -309,7 +345,10 @@ def evaluate(output, powerio, canonical=None):
         report["cases"][name] = result
         (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     passed = sum(v["passed"] for v in report["cases"].values())
-    print(f"{passed}/{len(inputs)} staged typed circuits passed")
+    if public:
+        (output / "networks.json").write_text(json.dumps(networks) + "\n")
+    profile = "public" if public else "staged"
+    print(f"{passed}/{len(inputs)} {profile} typed circuits passed")
     return int(passed != len(inputs))
 
 
@@ -319,11 +358,16 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--powerio", type=Path)
     parser.add_argument("--canonical", type=Path)
+    parser.add_argument(
+        "--public",
+        action="store_true",
+        help="use CLI import, IR and canonical output instead of staged networks",
+    )
     args = parser.parse_args()
     if args.action == "evaluate" and args.powerio is None:
         parser.error("evaluate requires --powerio for facade IR validation")
     raise SystemExit(
         prepare(args.output)
         if args.action == "prepare"
-        else evaluate(args.output, args.powerio, args.canonical)
+        else evaluate(args.output, args.powerio, args.canonical, args.public)
     )

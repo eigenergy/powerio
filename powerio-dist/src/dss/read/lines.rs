@@ -1,12 +1,36 @@
 //! Snapshot Line lowering into existing conductor-resolved records.
 
-use super::*;
+#[cfg(test)]
+use super::sources;
+use super::{
+    BTreeSet, BusSpec, C, DistLine, DistLineCode, RawDss, Reader, UntypedObject, Value, scale_mat,
+};
 use crate::dss::line;
 
 type LineResult<T> = std::result::Result<T, String>;
 
 impl Reader<'_> {
-    pub(super) fn resolved_lines(&mut self, raw: &RawDss) -> LineResult<()> {
+    fn retain_line_definitions(&mut self, raw: &RawDss) {
+        for object in raw
+            .objects
+            .iter()
+            .filter(|o| matches!(o.class.as_str(), "line" | "linecode"))
+        {
+            for prop in object
+                .props
+                .iter()
+                .filter(|p| p.name.as_deref() == Some("units"))
+            {
+                if crate::dss::linecode::units(&prop.value.text) == 0
+                    && !prop.value.text.eq_ignore_ascii_case("none")
+                {
+                    self.warn(&C::READ_DSS_VALUE_UNSUPPORTED, format!(
+                        "{}.{}: unknown units `{}` use native units=none; no physical distance is inferred",
+                        object.class, object.name, prop.value.text,
+                    ));
+                }
+            }
+        }
         // Source definitions remain available in the IR, but are not live
         // electrical dependencies: each native Line copied its own state.
         for object in raw.of_class("linecode") {
@@ -17,6 +41,42 @@ impl Reader<'_> {
                 "LineCode.{} is retained as a source definition; line-specific effective matrices carry the electrical snapshot", object.name,
             ));
         }
+    }
+
+    fn line_defaults(&mut self, object: &super::RawObject) {
+        if object.get("length").is_none() {
+            self.defaulted("line", &object.name, "length");
+        }
+        if [
+            "like", "linecode", "rmatrix", "xmatrix", "cmatrix", "r1", "r0", "x1", "x0", "c1",
+            "c0", "b1", "b0", "switch",
+        ]
+        .iter()
+        .all(|key| object.get(key).is_none())
+        {
+            self.defaulted("line", &object.name, "r1");
+            self.defaulted("line", &object.name, "x1");
+        }
+    }
+
+    fn retain_deferred_line(&mut self, object: &super::RawObject) -> bool {
+        if !crate::readiness::DEFERRED_GEOMETRY_KEYS
+            .iter()
+            .any(|key| object.get(key).is_some())
+        {
+            return false;
+        }
+        self.warn(&C::READ_DSS_GEOMETRY_UNRESOLVED, format!(
+            "line {}: geometry-derived conductor impedances are unresolved; the source object is retained and electrical readiness is blocked", object.name,
+        ));
+        self.net
+            .untyped_objects_mut()
+            .push(UntypedObject::from(object));
+        true
+    }
+
+    pub(super) fn resolved_lines(&mut self, raw: &RawDss) -> LineResult<()> {
+        self.retain_line_definitions(raw);
         let mut used: BTreeSet<_> = raw
             .of_class("linecode")
             .map(|o| o.name.to_ascii_lowercase())
@@ -28,6 +88,9 @@ impl Reader<'_> {
             .enumerate()
             .filter(|(_, o)| o.class == "line")
         {
+            if self.retain_deferred_line(object) {
+                continue;
+            }
             let mut state = line::resolve(raw, raw.line_snapshot(index))
                 .map_err(|e| format!("Line.{}: {e}", object.name))?;
             if state.enabled {
@@ -51,6 +114,7 @@ impl Reader<'_> {
             }
         }
         for (object, state, matrices, from, to) in resolved {
+            self.line_defaults(object);
             let base = format!("_pio_line_{}", object.name);
             let mut name = base.clone();
             let mut suffix = 0;
@@ -68,7 +132,7 @@ impl Reader<'_> {
                 scale_mat(&matrices.x, 1.0 / length),
             );
             code.b_from = scale_mat(&matrices.b, 0.5 / length);
-            code.b_to = code.b_from.clone();
+            code.b_to.clone_from(&code.b_from);
             code.source = Some(format!("OpenDSS Line.{} effective snapshot", object.name));
             let n = state.n;
             let terminal_from = self.terminals(&from, n, n, n);

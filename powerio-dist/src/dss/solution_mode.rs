@@ -59,12 +59,10 @@ impl SolutionMode {
         }
     }
 
-    #[cfg(test)]
     pub fn name(&self) -> &'static str {
         self.selected
     }
 
-    #[cfg(test)]
     pub fn unresolved_transition(&self) -> Option<&'static str> {
         self.requires_solved_state
     }
