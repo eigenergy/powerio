@@ -752,8 +752,8 @@ symmetric positions; missing cells retain earlier writes or zero. Extra numeric
 rows beyond the conductor count are unread, and an empty property token keeps
 the previous matrix. An oversized consumed row remains an error. The line and
 linecode oracles include short, asymmetric, empty and partially specified rows.
-`IMYD.dss` now imports its four-wire capacitance matrix, but strict floating-neutral
-comparisons remain failed; importing its matrix does not qualify the full feeder.
+`IMYD.dss` imports its four-wire capacitance matrix. Full-feeder comparisons are
+reported separately; matching its matrix alone does not qualify the feeder.
 
 
 Source resolution preserves native arithmetic order when positive and negative
@@ -761,6 +761,40 @@ sequence impedances agree. Diagonal impedance uses `(2 Z1 + Z0) / 3`;
 sequence-specified mutual reactance uses `Xs - X1`, while short-circuit inputs
 use `(X0 - X1) / 3`. The source-state oracle includes the modified secondary
 source, and a bit-level regression pins the distinction.
+
+
+## Compact native Thevenin emission
+
+An isolated imported three-phase source can emit as native `Vsource.source`
+when its current typed EMF phasors and series impedance have a representable
+native sequence form. This avoids additional ideal-source cancellation circuits.
+The writer derives the voltage, angle, sequence and impedance from typed values;
+retained parameters never override edits. Matrix reconstruction must be exact
+under the pinned engine's arithmetic. Phasor reconstruction allows only its
+floating-point roundoff, not material unbalance.
+
+The source must have a grounded return and no other attachment at its internal
+EMF bus. Bounds, location, route, ratings, shunts, asymmetric impedance or
+unrepresentable voltage changes retain the general equivalent. The source
+branch provenance identifies the compiler-created component but supplies no
+physics. This changes no network, IR or ABI type.
+
+```sh
+cargo build -p powerio-cli
+cargo build -p powerio --example dist_network
+python evals/gridlabd/dss_thevenin_oracle.py \
+  --bridge target/debug/examples/dist_network --powerio target/debug/powerio \
+  --output /tmp/new-thevenin-results
+```
+
+Twenty native checks cover 50/60 Hz, positive/negative/zero sequences, phase
+permutation, the secondary feeder source, short-circuit specification, unequal
+sequence and explicit-return fallbacks. Public IR conversions verify edits to
+voltage, resistance and branch length against separately changed native inputs.
+All original voltages, equipment quantities and source conductors pass both
+canonical cycles. Changed-line, moved-source-port and unedited-model controls
+must fail. The observer follows explicit compiler source terminals when a
+fallback reimport splits the original port; it never substitutes bus KCL sums.
 
 ## Underground cable conversion
 
@@ -1560,11 +1594,12 @@ of a deliberately changed line. It compares every original bus voltage and
 Line/Transformer/AutoTrans/Load/Capacitor/Reactor terminal current, power and loss, plus the physical
 source feeder port. Source bytes and generated evidence stay external.
 
-Fifteen cases qualify: `DDBal`, `DDUnBal`, `DYBal`, `DYUnBal`, `GYDBal`,
-`GYDUnBal`, `OYODBal`, `OYODUnBal`, `OnePh`, `SCTBal`, `SCTUnBal`, `YDBal`,
-`YDUnBal`, `YYBal`, and `YYUnBal`. Together they provide 1,043 complex
-observables per conversion pass. These are IEEE4 variants, not fifteen distinct
-feeder families. Twelve remain unqualified:
+Nineteen cases qualify: `DDBal`, `DDUnBal`, `DYBal`, `DYUnBal`, `GYDBal`,
+`GYDUnBal`, `IMODOD`, `IMOYODlag`, `IMOYODlead`, `IMYD`, `OYODBal`,
+`OYODUnBal`, `OnePh`, `SCTBal`, `SCTUnBal`, `YDBal`, `YDUnBal`, `YYBal`,
+and `YYUnBal`. Together they provide 1,434 complex observables per conversion
+pass. These are IEEE4 variants, not nineteen distinct feeder families.
+Eight remain unqualified:
 
 - `YYD` retains delta-side voltage/power mismatches (maximum about
   `1.32e-4 V` and `0.0763 VA`).
@@ -1576,8 +1611,13 @@ feeder families. Twelve remain unqualified:
   mismatches, particularly at the very short connecting lines.
 - `AutoAuto` retains all original observations and its typed autotransformer
   quantities match; the complete feeder still fails source/switch comparisons.
-- `IMODOD`, `IMOYODlag`, `IMOYODlead`, and `IMYD` import and retain all
-  original observations, but fail strict four-wire voltage/power comparisons.
+
+The four newly passing `IM*` cases use a native Thevenin source reconstructed
+from current typed voltages and impedance. The same observer run against the
+previous writer still qualifies 15/27, so the gain is not an observation change.
+Every original bus node and source conductor remains observed. Source keys
+include the original bus and node identities, and ambiguous interfaces fail.
+Compiler-created auxiliary nodes are not original feeder observables.
 
 `OYODUnBal` passes after the native source arithmetic correction described
 above. Its 77 observations pass canonical output and reimport, with a failing
@@ -1654,10 +1694,12 @@ The secondary circuit's 74 binary load profiles are pinned by size and Git blob
 hash and remain external. Its explicit `sngfile`/`dblfile` path separators are
 normalized for the POSIX engine, with every change recorded in the report.
 
-Both IEEE 8500 variants pass their first canonical comparison (60,595 and
-64,126 observations). Reimport leaves one strict line-loss mismatch per case,
-about 0.000162 VA and 0.000105 VA, so neither is fully qualified. The unchanged
-whole-case requirements currently qualify three of sixteen entries.
+The IEEE 8500 comparisons retain all 60,595 balanced and 64,126 unbalanced
+observations. The latest balanced first pass succeeds, but its reimport and both
+unbalanced passes have one strict line-loss mismatch, about 0.00019–0.00021 VA.
+Earlier first passes both succeeded; these cancellation-sensitive residuals
+remain failures under unchanged thresholds. Neither feeder is fully qualified.
+The whole-case requirements currently qualify three of sixteen entries.
 
 NEV now reaches electrical comparison: canonical load records omit harmonic
 spectrum references with a diagnostic. The pinned engine uses those spectra
@@ -1692,9 +1734,10 @@ The native equations and connection convention are pinned to DSS C-API
 
 The modified secondary circuit now resolves its 74 binary load profiles and
 static `UseActual` assignments. Scalar transformer kVA assignments also follow
-the native winding synchronization rules. It still fails 716 of 953 observations
+the native winding synchronization rules. It still fails 671 of 953 observations
 through canonical output and reimport. The maximum voltage difference is
-0.456 V, down from 8.93 V before these corrections; it is not fully qualified.
+0.212 V, down from 8.93 V before the profile corrections and 0.456 V before
+compact source emission; it is not fully qualified.
 A native diagnostic that changes only the almost-zero-impedance substation
 link from sequence parameters to the emitted matrix form produces a 0.212 V
 difference. This establishes numerical sensitivity, not permission to loosen
@@ -2038,5 +2081,5 @@ The public CIMHub IEEE 4 `AutoAuto.dss` now parses into typed equipment and
 retains all 77 electrical observations. Its autotransformer observations match,
 but the complete feeder still fails strict source/switch comparisons (about
 0.000503 A and 100.23 VA maximum residual in the pinned run). It remains a failed
-feeder qualification. The broader IEEE 4 suite is 15/27 qualified; no
+feeder qualification. The broader IEEE 4 suite is 19/27 qualified; no
 thresholds have changed.

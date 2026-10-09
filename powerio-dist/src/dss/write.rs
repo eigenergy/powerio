@@ -37,6 +37,7 @@ mod loads;
 mod sources;
 mod storage;
 mod terminal_voltage;
+mod thevenin;
 
 /// Options for canonical OpenDSS output.
 #[derive(Clone, Debug, PartialEq)]
@@ -113,6 +114,8 @@ fn emit_snapshot(net: &MulticonductorNetwork, options: &DssEmitOptions) -> TextE
             .collect(),
         kv_estimate: estimate_bus_kv(net),
         terminal_kv: terminal_voltage::estimate(net),
+        native_source_line: None,
+        native_source_code: None,
     };
     w.network(net);
     TextEmission::new(w.out, w.sidecars, w.warnings)
@@ -136,6 +139,8 @@ struct DssWriter {
     /// Bus id (lowercase) → phase to neutral voltage estimate, volts.
     kv_estimate: BTreeMap<String, f64>,
     terminal_kv: terminal_voltage::TerminalVoltages,
+    native_source_line: Option<String>,
+    native_source_code: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -1049,6 +1054,13 @@ impl DssWriter {
     fn line_codes(&mut self, net: &MulticonductorNetwork) {
         let omega_nf = std::f64::consts::TAU * net.base_frequency() * 1e-9;
         for c in net.line_codes() {
+            if self
+                .native_source_code
+                .as_ref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(&c.name))
+            {
+                continue;
+            }
             if sources::asymmetric(c) {
                 self.warn(&C::EMIT_DSS_RECORD_DROPPED, format!(
                     "linecode {}: asymmetric library definition is not regenerated; instantiated line impedances use equivalent sources", c.name,
@@ -1180,6 +1192,9 @@ impl DssWriter {
     #[allow(clippy::too_many_lines)]
     fn lines(&mut self, net: &MulticonductorNetwork) {
         for l in net.lines() {
+            if self.native_source_line.as_deref() == Some(l.name.as_str()) {
+                continue;
+            }
             if self.sequence_impedance_branch(net, l) {
                 continue;
             }

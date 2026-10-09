@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 
 import opendssdirect as dss
-from european_lv_import_oracle import snapshot
+from european_lv_import_oracle import node_inventory, snapshot, source_inventory
 from oracle import HERE, LOCK, command, compare
 from physical_ports import interfaces
 
@@ -79,6 +79,10 @@ def evaluate(source, bridge, folder, tolerance, acquisition_root=None):
         port_maps = interfaces(native, network, aliases)
         row["physical_port_maps"] = port_maps
         buses = [b.lower() for b in native.Circuit.AllBusNames()]
+        bus_nodes = node_inventory(native, buses)
+        row["bus_node_inventory"] = bus_nodes
+        source_port = source_inventory(native)
+        row["source_port_inventory"] = source_port
         elements = [
             n.lower()
             for n in native.Circuit.AllElementNames()
@@ -100,7 +104,7 @@ def evaluate(source, bridge, folder, tolerance, acquisition_root=None):
         (folder / "native.json").write_text(json.dumps(expected, indent=2) + "\n")
         row["stage"] = "canonical solve"
         canonical = run(canonical_path, tolerance)
-        actual = snapshot(canonical, buses, elements, canonical=True, aliases=aliases, port_maps=port_maps)
+        actual = snapshot(canonical, buses, elements, canonical=True, aliases=aliases, port_maps=port_maps, bus_nodes=bus_nodes, source_port=source_port)
         row["comparison"] = compare(expected, actual)
         (folder / "canonical.json").write_text(json.dumps(actual, indent=2) + "\n")
         row["stage"] = "reimport"
@@ -112,6 +116,8 @@ def evaluate(source, bridge, folder, tolerance, acquisition_root=None):
             canonical=True,
             aliases=aliases,
             port_maps=port_maps,
+            bus_nodes=bus_nodes,
+            source_port=source_port,
         )
         row["reimport_comparison"] = compare(expected, repeated)
         (folder / "reimported.json").write_text(json.dumps(repeated, indent=2) + "\n")
@@ -139,7 +145,7 @@ def evaluate(source, bridge, folder, tolerance, acquisition_root=None):
         wrong_path = canonical_path.with_name("wrong-line.dss")
         wrong_path.write_text(text)
         wrong = snapshot(
-            run(wrong_path, tolerance), buses, elements, canonical=True, aliases=aliases, port_maps=port_maps
+            run(wrong_path, tolerance), buses, elements, canonical=True, aliases=aliases, port_maps=port_maps, bus_nodes=bus_nodes, source_port=source_port
         )
         negative = compare(expected, wrong)
         row["wrong_line_negative"] = {
