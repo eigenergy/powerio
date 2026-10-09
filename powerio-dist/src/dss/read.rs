@@ -31,6 +31,7 @@ use crate::model::{
 };
 
 mod autotrans;
+mod capacitors;
 mod lines;
 mod open_lines;
 mod reactors;
@@ -166,7 +167,7 @@ fn snapshot_network(raw: &RawDss) -> (MulticonductorNetwork, Vec<crate::diagnost
         rd.net.loads_mut().push(l);
     }
     for obj in raw.of_class("capacitor") {
-        rd.capacitor(obj);
+        rd.capacitor(obj, raw);
     }
     for obj in raw.of_class("reactor") {
         rd.reactor(obj, raw);
@@ -1103,8 +1104,10 @@ impl Reader<'_> {
 
     // ----- capacitor → shunt ---------------------------------------------
 
-    fn capacitor(&mut self, obj: &RawObject) {
-        self.kvar_shunt(obj, CAPACITOR_KVAR_SHUNT);
+    fn capacitor(&mut self, obj: &RawObject, raw: &RawDss) {
+        if !self.common_return_capacitor(obj, raw) {
+            self.kvar_shunt(obj, CAPACITOR_KVAR_SHUNT);
+        }
     }
 
     // ----- reactor → shunt -----------------------------------------------

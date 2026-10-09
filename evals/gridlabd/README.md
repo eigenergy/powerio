@@ -1655,14 +1655,38 @@ normalized for the POSIX engine, with every change recorded in the report.
 Both IEEE 8500 variants pass their first canonical comparison (60,595 and
 64,126 observations). Reimport leaves one strict line-loss mismatch per case,
 about 0.000162 VA and 0.000105 VA, so neither is fully qualified. The unchanged
-whole-case requirements currently qualify two of sixteen entries.
+whole-case requirements currently qualify three of sixteen entries.
 
 NEV now reaches electrical comparison: canonical load records omit harmonic
 spectrum references with a diagnostic. The pinned engine uses those spectra
 only in non-fundamental harmonic mode; changing every native NEV load to the
 default spectrum leaves all 3,044 native observations unchanged in the snapshot.
-NEV still fails because its explicit-neutral capacitor banks remain untyped,
-with missing capacitor observations and substantial network residuals.
+NEV now passes all 3,031 compared observations through canonical emission and
+reimport. Its four wye capacitor banks retain their common neutral conductor
+(`Bus2=.10.10.10`) in the existing shunt admittance matrix. Canonical emission
+recognizes a uniform star, derives its kvar from the typed matrix and preserves
+the original capacitor identity and both terminals. Edits to the matrix take
+precedence over retained kvar. Other matrix shapes use the general admittance
+writer. There is no new network or IR type.
+
+`dss_capacitor_oracle.py` isolates this connection in twelve native cases:
+one, two and three phases, phase permutations, and independent 50/60 Hz operating
+and base frequencies. It checks typed and emitted primitives, all 660 electrical
+observations, IR/reimport, and changed-line and grounded-return negative controls:
+
+```sh
+python evals/gridlabd/dss_capacitor_oracle.py \
+  --bridge /path/to/dist_network --output /new/path
+```
+
+The newly qualified common-return profile is a single energized kvar/kV bank.
+Filtered/stepped banks, capacitance specification, copy or repeated connection
+history, separate return buses and terminal commands remain explicit gaps.
+Untyped active capacitors block electrical readiness. Explicitly disabled
+capacitors remain source-only unless a command could change that state.
+The native equations and connection convention are pinned to DSS C-API
+`87d85c2622c8281b92255335bc7c09b11191b21d`, `src/PDElements/Capacitor.pas`
+(Git blob `4e5d4557fcb47394a03c3906ce50b55c93059c08`).
 
 The secondary circuit now has a native baseline but exposes unresolved static
 `UseActual` behavior: assigning a duty shape changes nominal load powers even

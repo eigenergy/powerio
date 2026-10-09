@@ -30,6 +30,7 @@ use super::{lex, prop};
 
 mod admittance_shunts;
 mod asymmetric_pair;
+mod common_return_shunts;
 mod ideal_switches;
 mod ideal_transformers;
 mod loads;
@@ -2227,7 +2228,7 @@ impl DssWriter {
 
     fn shunts(&mut self, net: &MulticonductorNetwork) {
         for (index, sh) in net.shunts().iter().enumerate() {
-            if self.full_admittance_shunt(net, sh, index) {
+            if self.common_return_shunt(net, sh) || self.full_admittance_shunt(net, sh, index) {
                 continue;
             }
             let stashed_delta = shunt_stashed_delta(sh);
@@ -4490,32 +4491,31 @@ mod tests {
 
     #[test]
     fn extras_tail_values_wrap_like_options() {
-        let (b, vs) = three_phase_source(2400.0);
-        let mut load = load_on("sb", &["1", "2", "3", "4"], Configuration::Wye);
-        load.extras
+        // Spectrum remains an emitted extra for generators. Static loads
+        // deliberately omit it because its harmonic definition is not emitted.
+        let mut net = parse_dss_str(
+            "new circuit.c basekv=4.16\nnew generator.g phases=3 bus1=sourcebus kv=4.16 kw=1 kvar=0\n",
+        );
+        net.generators_mut()[0]
+            .extras
             .insert("spectrum".into(), serde_json::json!("a ) b"));
-        let net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
-            base_frequency: 60.0,
-            buses: vec![b],
-            sources: vec![vs],
-            loads: vec![load],
-            ..MulticonductorNetworkTables::default()
-        });
         let (first, second) = roundtrip(&net);
         // A paren wrapper would close at the `)` and land `b)` on the next
         // positional property; brackets survive.
         assert!(first.contains("spectrum=[a ) b]"), "{first}");
         assert_eq!(
-            first.lines().find(|line| line.starts_with("New Load.ld ")),
+            first
+                .lines()
+                .find(|line| line.starts_with("New Generator.g ")),
             second
                 .lines()
-                .find(|line| line.starts_with("New Load.ld "))
+                .find(|line| line.starts_with("New Generator.g "))
                 .map(|line| line.replace(" vlowpu=0.5", ""))
                 .as_deref()
         );
         let back = parse_dss_str(&first);
         assert_eq!(
-            back.loads()[0]
+            back.generators()[0]
                 .extras
                 .get("spectrum")
                 .and_then(serde_json::Value::as_str),
@@ -4528,17 +4528,12 @@ mod tests {
         // Every quote closer appears, and the spaces split a bare scan: no
         // emitted form reparses to this value.
         let bad = "a )]}\"' b";
-        let (b, vs) = three_phase_source(2400.0);
-        let mut load = load_on("sb", &["1", "2", "3", "4"], Configuration::Wye);
-        load.extras
+        let mut net = parse_dss_str(
+            "new circuit.c basekv=4.16\nnew generator.g phases=3 bus1=sourcebus kv=4.16 kw=1 kvar=0\n",
+        );
+        net.generators_mut()[0]
+            .extras
             .insert("spectrum".into(), serde_json::json!(bad));
-        let mut net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
-            base_frequency: 60.0,
-            buses: vec![b],
-            sources: vec![vs],
-            loads: vec![load],
-            ..MulticonductorNetworkTables::default()
-        });
         net.options_mut().push(("foo".into(), bad.into()));
         let out = emit_dss_text(&net);
         assert!(out.text.contains(&format!("Set foo={bad}")), "{}", out.text);
@@ -4559,7 +4554,7 @@ mod tests {
     #[test]
     fn canonical_snapshot_omits_loadshape_references_with_diagnostics() {
         let dss = "clear\nnew circuit.c basekv=12.47 bus1=sb\n\
-                   new load.ld bus1=sb.1 phases=1 kv=7.2 kw=10 daily=() duty=sh yearly=annual\nsolve\n";
+                   new load.ld bus1=sb.1 phases=1 kv=7.2 kw=10 daily=() duty=sh yearly=annual spectrum=custom\nsolve\n";
         let net = parse_dss_str(dss);
         assert_eq!(
             net.loads()[0].extras.get("duty").and_then(|v| v.as_str()),
@@ -4575,6 +4570,13 @@ mod tests {
                     .any(|d| d.contains(&format!("`{key}` loadshape reference omitted")))
             );
         }
+        assert!(!emitted.text.contains(" spectrum="));
+        assert!(
+            emitted
+                .render_diagnostics()
+                .iter()
+                .any(|d| d.contains("harmonic spectrum reference omitted"))
+        );
         let again = parse_dss_str(&emitted.text);
         assert_eq!(again.loads()[0].p_nom, net.loads()[0].p_nom);
         assert_eq!(again.loads()[0].q_nom, net.loads()[0].q_nom);
