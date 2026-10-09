@@ -21,9 +21,11 @@ mod delta_grounded;
 mod generators;
 mod geometry;
 mod loads;
+mod reactors;
 mod regulators;
 mod sources;
 mod split_phase;
+mod substations;
 mod switches;
 mod templates;
 mod transformers;
@@ -51,7 +53,10 @@ mod triplex_lines;
 /// Triplex geometry uses full conductor matrices with both endpoint neutrals
 /// grounded, preserving native hot-conductor and neutral-current behavior.
 /// Direct triplex matrices and canonical GLM service emission remain unfinished.
-/// Other conductor/device profiles remain under implementation.
+/// Standalone substations preserve sequence-derived source phasors. Static
+/// reactors use uncoupled lines or ideal contacts, including native NR zero
+/// impedance substitution. PNNL constant-PQ generators preserve initialized
+/// per-phase injections and ratings. Other device profiles remain unfinished.
 pub fn parse(
     source: Source,
     options: PreprocessOptions,
@@ -89,6 +94,7 @@ pub fn parse(
     reader.buses()?;
     reader.loads_and_sources()?;
     reader.lines()?;
+    reader.reactors()?;
     reader.triplex_lines()?;
     reader.switches()?;
     reader.transformers()?;
@@ -529,7 +535,14 @@ impl Reader<'_> {
         name: &str,
         value: Complex64,
     ) {
-        if let Some((canonical, imaginary, default)) = (class == "transformer_configuration")
+        if let Some((canonical, imaginary)) = reactors::alias(class, name) {
+            let previous = quantities.entry((key, canonical)).or_default();
+            if imaginary {
+                previous.im = value.re;
+            } else {
+                previous.re = value.re;
+            }
+        } else if let Some((canonical, imaginary, default)) = (class == "transformer_configuration")
             .then(|| transformers::alias(name))
             .flatten()
         {
@@ -593,6 +606,7 @@ impl Reader<'_> {
             {
                 return Err(self.error(key, "child nominal voltage conflicts with its parent"));
             }
+            let sequence = self.substation_voltages(key)?;
             let bustype = self.text(key, "bustype")?.unwrap_or_else(|| "PQ".into());
             if bustype == "SWING" || (bustype == "PQ" && implicit_source == Some(key)) {
                 if key != root {
@@ -601,10 +615,14 @@ impl Reader<'_> {
                 let mut magnitudes = Vec::new();
                 let mut angles = Vec::new();
                 for &phase in &phases {
-                    let value = self
-                        .quantity(key, &format!("voltage_{}", phase_name(phase)))
-                        .filter(|v| *v != Complex64::default())
-                        .unwrap_or_else(|| nominal_phasor(nominal, phase));
+                    let value = sequence.as_ref().map_or_else(
+                        || {
+                            self.quantity(key, &format!("voltage_{}", phase_name(phase)))
+                                .filter(|v| *v != Complex64::default())
+                                .unwrap_or_else(|| nominal_phasor(nominal, phase))
+                        },
+                        |v| v[phase],
+                    );
                     magnitudes.push(value.norm());
                     angles.push(value.arg());
                 }
@@ -947,6 +965,7 @@ fn supported_class(name: &str) -> bool {
         || matches!(
             name,
             "diesel_dg"
+                | "series_reactor"
                 | "overhead_line"
                 | "underground_line"
                 | "underground_line_conductor"
@@ -964,7 +983,8 @@ fn supported_class(name: &str) -> bool {
         )
 }
 fn bus_class(name: &str) -> bool {
-    matches!(name, "node" | "load" | "meter" | "capacitor") || split_phase::bus_class(name)
+    matches!(name, "node" | "load" | "meter" | "capacitor" | "substation")
+        || split_phase::bus_class(name)
 }
 fn matrix_property(name: &str) -> bool {
     let bytes = name.as_bytes();
@@ -995,6 +1015,8 @@ fn allowed_property(class: &str, name: &str) -> bool {
         || split_phase::allowed(class, name)
         || triplex_lines::allowed(class, name)
         || geometry::rating_property(class, name)
+        || reactors::allowed(class, name)
+        || substations::allowed(class, name)
         || generators::allowed(class, name)
         || capacitors::allowed(class, name)
         || regulators::allowed(class, name)
@@ -1026,6 +1048,8 @@ fn quantity_spec(
     if let Some(spec) = split_phase::quantity_spec(class, name)
         .or_else(|| triplex_lines::quantity_spec(class, name))
         .or_else(|| generators::quantity_spec(class, name))
+        .or_else(|| reactors::quantity_spec(class, name))
+        .or_else(|| substations::quantity_spec(class, name))
     {
         return Some((spec.0, Some(spec.1)));
     }

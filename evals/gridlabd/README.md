@@ -1170,3 +1170,34 @@ Format-neutral generators emit a diagnosed 0..2 pu band; parsed OpenDSS
 generators retain their own bounds. This does not promise constant power above
 2 pu or qualify the complete IEEE9500 feeder. Canonical GLM generator writing
 and OpenDSS generator rating-limit mapping remain unfinished.
+
+### Static reactors and standalone substations
+
+`reactor_source_oracle.py` checks eight diagonal circuits under NR and FBS on
+both pinned forks. It covers unequal reactor impedances, mixed/all-zero phases,
+single-phase and phase-pair links, sequence voltages, reference-phase rotations,
+and the IEEE9500 source/reactor parameter values (66,395.28 V nominal,
+69,715.045 V positive-sequence input, and 14.7983 ohm per-phase reactance). Each phase compares complex
+source/sink voltages, both-end currents and powers against an independent
+analytic circuit and actual import, IR and OpenDSS output. Deliberately changed
+load power must fail. The IEEE9500 parameter probe is not a full-feeder result.
+
+```sh
+python evals/gridlabd/reactor_source_oracle.py \
+  --bridge /path/to/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-reactor-import-results
+python evals/gridlabd/reactor_canonical_oracle.py \
+  --powerio /path/to/powerio --bridge /path/to/glm_network \
+  --pnnl-root /path/to/GridLAB-D \
+  --import-results /path/to/new-reactor-import-results \
+  --output /path/to/new-reactor-canonical-results
+```
+
+The second harness takes the qualified IR for the reference-B and IEEE9500
+parameter circuits, emits fresh GLM, solves it natively, reimports it and solves
+its OpenDSS output. A second pass edits source angles and reactor impedances in
+the public IR, then requires agreement with changed analytic results and
+disagreement with the original circuit. Both forks are checked independently.
+
+Reactor current ratings remain source-only with diagnostics. Open reactor states,
+parented substations and external transmission coupling need further mapping.

@@ -465,6 +465,22 @@ equivalent; FBS solves the same circuit and matches the analytic solution.
 Engine validation therefore checks finite voltages, currents and powers, and
 reports these NR failures separately from successful electrical comparisons.
 
+Standalone `substation` objects can supply fixed zero-, positive- and
+negative-sequence voltages. The reader applies the native `reference_phase`
+rotation and keeps the resulting phase voltages. Nonzero sequences require an
+explicit ABC SWING bus and override phase-voltage declarations. With all
+sequences zero, ordinary node initialization applies. Parented substations and
+external transmission coupling remain unsupported; standalone reporting settings
+are retained with a diagnostic.
+
+Static `series_reactor` objects map to uncoupled line impedances with unit
+normalization length. Scalar resistance/reactance aliases apply in source order.
+Zero impedance uses an ideal contact in FBS; NR uses the pinned native fallback
+`1 / (10000 + j10000)` ohm. Mixed ideal and finite phases remain separate typed
+components with their source coordinates. Current ratings remain in source with
+a diagnostic; typed rating projection and open reactor states remain unfinished.
+Canonical GLM output uses the existing line, switch and fixed-source equivalents.
+
 PNNL 5.3 `diesel_dg` in `CONSTANT_PQ` mode reads as three single-phase
 constant-power generators, retaining unequal signed P/Q, the initialized
 per-phase rating limit, and component coordinates. Scalar power fields override
