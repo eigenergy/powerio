@@ -13,7 +13,7 @@
 //! reads the full precision back.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use crate::convert::{TextEmission, TextSidecar};
@@ -28,6 +28,7 @@ use crate::model::{
 use super::read::delta_edges;
 use super::{lex, prop};
 
+mod loads;
 mod sources;
 
 /// Options for canonical OpenDSS output.
@@ -1578,100 +1579,64 @@ impl DssWriter {
         Some(kv)
     }
 
-    /// The `Load` objects one [`DistLoad`] emits as: itself, or one per phase
-    /// when its phases carry different power (#266).
-    ///
-    /// An OpenDSS `Load` divides its `kw`/`kvar` evenly across its phases, so a
-    /// load whose `p_nom`/`q_nom` differ per phase has no single object
-    /// expression. Emitting one balanced `Load` keeps the total and loses the
-    /// profile; one single phase `Load` per terminal keeps both. A delta load's
-    /// phases sit across terminal pairs rather than on one terminal each, so
-    /// the same split needs branch geometry: it keeps the balanced form and
-    /// says what was lost.
+    /// Split unequal branch powers or voltage laws into native one-phase
+    /// loads. Wye branches retain their return; delta branches follow the
+    /// ordered terminal pairs, including the closing edge of a delta bank.
     fn load_parts<'l>(&mut self, l: &'l DistLoad) -> Vec<Cow<'l, DistLoad>> {
-        let n = l.p_nom.len();
-        // Exact comparison: any difference at all makes one balanced object the
-        // wrong statement, and a tolerance here would decide how much
-        // imbalance is allowed to vanish.
-        #[allow(clippy::float_cmp)]
-        let uniform = |xs: &[f64]| xs.iter().all(|x| *x == xs[0]);
-        let stated_per_phase = n >= 2 && l.q_nom.len() == n;
-        let unbalanced = stated_per_phase && !(uniform(&l.p_nom) && uniform(&l.q_nom));
-        // dss reads the node list positionally: phase conductors first, the
-        // return last. A center tapped service maps as `[p1, n, p2]`, so one
-        // record over that map names a different node pair than the load sits
-        // on however its power divides.
-        let return_index = self.return_terminal_index(&l.bus, &l.terminal_map);
+        let return_index = (l.configuration != Configuration::Delta)
+            .then(|| self.return_terminal_index(&l.bus, &l.terminal_map))
+            .flatten();
         let misordered = return_index.is_some_and(|i| i + 1 != l.terminal_map.len());
-        if !unbalanced && !misordered {
+        if !loads::needs_split(l) && !misordered {
             return vec![Cow::Borrowed(l)];
         }
-        if l.configuration == Configuration::Delta {
+        let Some(maps) = loads::branch_maps(l, return_index) else {
+            // Public emission rejects this shape before writing any output.
             self.warn(
                 &C::EMIT_DSS_VALUE_COLLAPSED,
                 format!(
-                    "load {}: per phase power on a delta load has no dss expression; \
-                 emitted one balanced Load carrying the total",
+                    "load {}: branch powers do not align with its terminal map",
                     l.name
                 ),
             );
             return vec![Cow::Borrowed(l)];
-        }
-        // Without a grounded terminal the map states the return last, the
-        // shape the reader writes for a wye element.
-        let (hot_indices, return_terminal) = match return_index {
-            Some(i) => (
-                (0..l.terminal_map.len()).filter(|j| *j != i).collect(),
-                Some(l.terminal_map[i].clone()),
-            ),
-            None if l.terminal_map.len() > n => ((0..n).collect(), Some(l.terminal_map[n].clone())),
-            None => ((0..l.terminal_map.len()).collect::<Vec<_>>(), None),
         };
-        if !stated_per_phase || hot_indices.len() != n {
-            self.warn(
-                &C::EMIT_DSS_VALUE_COLLAPSED,
-                format!(
-                    "load {}: {} over a terminal map with {} phase conductors; \
-                 emitted one Load carrying the total",
-                    l.name,
-                    if stated_per_phase {
-                        format!("per phase power over {n} phases")
-                    } else {
-                        "one power value".to_string()
-                    },
-                    hot_indices.len()
-                ),
-            );
-            return vec![Cow::Borrowed(l)];
-        }
-        hot_indices
-            .into_iter()
+        maps.into_iter()
             .enumerate()
-            .map(|(i, hot)| {
+            .map(|(i, map)| {
                 let mut part = l.clone();
-                part.name = format!("{}_{}", l.name, l.terminal_map[hot]);
-                part.terminal_map = match &return_terminal {
-                    Some(r) => vec![l.terminal_map[hot].clone(), r.clone()],
-                    None => vec![l.terminal_map[hot].clone()],
-                };
-                part.configuration = Configuration::Wye;
+                part.name = format!("{}_{}", l.name, map[0]);
+                part.terminal_map = map;
                 part.p_nom = vec![l.p_nom[i]];
                 part.q_nom = vec![l.q_nom[i]];
-                // The whole-load spellings do not survive the split: `phases`
-                // and `conn` describe the bank, `kv` its line to line voltage,
-                // and `pf` would re-derive a shared reactive ratio over power
-                // this part states outright.
-                for key in ["phases", "conn", "kv", "pf"] {
+                part.voltage_model = loads::phase_model(&l.voltage_model, i);
+                // Whole-bank voltage and power-factor spellings must not override
+                // the selected branch's typed values.
+                for key in ["conn", "kv", "pf"] {
                     part.extras.remove(key);
                 }
+                part.extras.insert("phases".into(), 1.into());
                 Cow::Owned(part)
             })
             .collect()
     }
 
     fn loads(&mut self, net: &MulticonductorNetwork) {
+        let mut names: BTreeSet<_> = net
+            .loads()
+            .iter()
+            .map(|load| load.name.to_ascii_lowercase())
+            .collect();
         for load in net.loads() {
-            for part in self.load_parts(load) {
+            for mut part in self.load_parts(load) {
+                if let Cow::Owned(ref mut part) = part {
+                    let base = part.name.clone();
+                    let mut suffix = 2;
+                    while !names.insert(part.name.to_ascii_lowercase()) {
+                        part.name = format!("{base}_{suffix}");
+                        suffix += 1;
+                    }
+                }
                 self.write_load(&part);
             }
         }
@@ -1692,17 +1657,24 @@ impl DssWriter {
         let kw: f64 = l.p_nom.iter().sum::<f64>() / 1e3;
         let kvar: f64 = l.q_nom.iter().sum::<f64>() / 1e3;
         let typed_kv = self.load_nominal_kv(&l.voltage_model, phases, l.configuration, &l.name);
-        let kv = self.element_kv(
-            &l.extras,
-            ElementKv {
-                bus: &l.bus,
-                phases,
-                configuration: l.configuration,
-                name: &l.name,
-                class: "load",
-                typed_kv,
-            },
-        );
+        // Full branch arrays are authoritative after a typed edit. Preserve
+        // legacy scalar voltage hints for formats that store the bank kV.
+        let typed_branch_kv = (l.voltage_model.v_nom().len() == l.p_nom.len())
+            .then_some(typed_kv)
+            .flatten();
+        let kv = typed_branch_kv.unwrap_or_else(|| {
+            self.element_kv(
+                &l.extras,
+                ElementKv {
+                    bus: &l.bus,
+                    phases,
+                    configuration: l.configuration,
+                    name: &l.name,
+                    class: "load",
+                    typed_kv,
+                },
+            )
+        });
         let mut extras = l.extras.clone();
         strip_emitted_extras(&mut extras, &["kv", "phases", "conn"]);
         let retained_model = extras.remove("model");
@@ -4063,9 +4035,7 @@ mod tests {
     }
 
     #[test]
-    fn a_delta_load_with_per_phase_power_stays_balanced_and_says_so() {
-        // A delta load's phases sit across terminal pairs, so the split would
-        // need branch geometry it does not have.
+    fn an_unbalanced_delta_load_preserves_each_ordered_branch() {
         let (b, vs) = three_phase_source(2400.0);
         let l = DistLoad::new(
             "d1",
@@ -4083,18 +4053,27 @@ mod tests {
             ..MulticonductorNetworkTables::default()
         });
         let out = emit_dss_text(&net);
-        assert_eq!(
-            out.text.lines().filter(|l| l.contains("New Load.")).count(),
-            1,
-            "{}",
-            out.text
-        );
+        let records: Vec<_> = out
+            .text
+            .lines()
+            .filter(|l| l.contains("New Load."))
+            .collect();
+        assert_eq!(records.len(), 3, "{}", out.text);
+        for (record, pair, kw) in [
+            (records[0], "1.2", 1),
+            (records[1], "2.3", 2),
+            (records[2], "3.1", 3),
+        ] {
+            assert!(
+                record.contains(&format!("bus1=sb.{pair} phases=1 conn=delta")),
+                "{record}"
+            );
+            assert!(record.contains(&format!("kw={kw} ")), "{record}");
+        }
         assert!(
-            out.render_diagnostics()
+            !out.render_diagnostics()
                 .iter()
-                .any(|w| w.contains("per phase power on a delta load")),
-            "{:?}",
-            out.render_diagnostics()
+                .any(|w| w.contains("collapsed"))
         );
     }
 

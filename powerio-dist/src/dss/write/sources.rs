@@ -74,41 +74,12 @@ pub(super) fn validate(net: &MulticonductorNetwork) -> Result<(), String> {
             }
         }
     }
-    validate_load_coefficients(net)?;
+    loads::validate(net)?;
     for code in net.line_codes().iter().filter(|c| asymmetric(c)) {
         if sequence_impedance(code, 1.0).is_none() {
             return Err(format!(
                 "linecode {}: asymmetric matrix has no qualified DSS equivalent",
                 code.name
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn validate_load_coefficients(net: &MulticonductorNetwork) -> Result<(), String> {
-    for load in net.loads() {
-        if let DistLoadVoltageModel::BoundedZip {
-            v_nom,
-            alpha_z,
-            alpha_i,
-            alpha_p,
-            beta_z,
-            beta_i,
-            beta_p,
-            ..
-        } = &load.voltage_model
-            && [v_nom, alpha_z, alpha_i, alpha_p, beta_z, beta_i, beta_p]
-                .iter()
-                .any(|values| {
-                    values
-                        .windows(2)
-                        .any(|pair| (pair[0] - pair[1]).abs() > 0.0)
-                })
-        {
-            return Err(format!(
-                "load {}: nonuniform bounded ZIP coefficients need per-phase DSS emission",
-                load.name
             ));
         }
     }
