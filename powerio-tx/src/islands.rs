@@ -12,10 +12,8 @@
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
 
-use serde::Deserialize as _;
-
 use crate::diagnostics::{Diagnostic, codes};
-use crate::network::{BalancedNetwork, BusId, BusType, Generator, Transformer3W};
+use crate::network::{BalancedNetwork, BusId, BusType, Generator};
 
 /// How normalization and [`BalancedNetwork::assign_island_references`] treat
 /// the reference buses of a network with several islands.
@@ -96,17 +94,6 @@ pub struct IslandReferenceReport {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// Whether each winding of `transformer` is connected, in winding order: the
-/// per winding status kept under `extras["winding_in_service"]` as three
-/// booleans, every winding in service when the entry is absent or malformed.
-pub(crate) fn winding_connected(transformer: &Transformer3W) -> [bool; 3] {
-    transformer
-        .extras
-        .get("winding_in_service")
-        .and_then(|value| <[bool; 3]>::deserialize(value).ok())
-        .unwrap_or([true; 3])
-}
-
 /// The `pmax` order the reference choice uses: a NaN bound never wins, and an
 /// unbounded `+Inf` wins as the largest capacity.
 fn pmax_key(generator: &Generator) -> f64 {
@@ -173,22 +160,14 @@ impl BalancedNetwork {
     /// lines do not join islands: they tie asynchronous systems. Buses typed
     /// isolated belong to no island and are listed apart, and an element that
     /// touches one does not join anything through it. A three winding
-    /// transformer joins the buses of its connected windings, so one whose
-    /// tertiary sits on an isolated bus, or is stated out of service
-    /// (`extras["winding_in_service"]`), still joins the other two. Carve an
+    /// transformer joins the buses of its in-service windings
+    /// ([`Transformer3W::winding_in_service`](crate::Transformer3W::winding_in_service)),
+    /// so one whose tertiary sits on an isolated bus or is out of service
+    /// still joins the other two. Carve an
     /// island out with [`subset_buses`](BalancedNetwork::subset_buses), which
     /// keeps such a transformer.
     #[must_use]
     pub fn calc_islands(&self) -> IslandPartition {
-        self.calc_islands_where(true)
-    }
-
-    /// [`calc_islands`](BalancedNetwork::calc_islands), where
-    /// `partial_transformers_3w` decides whether a three winding transformer
-    /// with a winding on an isolated bus still joins its other windings.
-    /// Normalization drops such a transformer whole (`norm_transformers_3w`),
-    /// so it partitions without it; keep the two rules together.
-    pub(crate) fn calc_islands_where(&self, partial_transformers_3w: bool) -> IslandPartition {
         let buses = self.buses();
         let index_of: HashMap<BusId, usize> = buses
             .iter()
@@ -209,17 +188,10 @@ impl BalancedNetwork {
             join(switch.from, switch.to);
         }
         for transformer in self.transformers_3w().iter().filter(|t| t.in_service) {
-            let energized = transformer
-                .windings
-                .iter()
-                .all(|w| index_of.contains_key(&w.bus));
-            if !partial_transformers_3w && !energized {
-                continue;
-            }
             let connected: Vec<BusId> = transformer
                 .windings
                 .iter()
-                .zip(winding_connected(transformer))
+                .zip(transformer.winding_in_service())
                 .filter(|(_, connected)| *connected)
                 .map(|(winding, _)| winding.bus)
                 .collect();
@@ -319,8 +291,9 @@ impl BalancedNetwork {
     /// - An island with no in-service generator has no source to balance it,
     ///   so it is de-energized: its buses are typed isolated, and the
     ///   in-service loads, shunts, static var compensators, storage, and every
-    ///   branch, three winding transformer, and HVDC line touching them are
-    ///   taken out of service.
+    ///   branch and HVDC line touching them are taken out of service. A three
+    ///   winding transformer loses the windings on those buses and goes out
+    ///   whole only when fewer than two windings remain.
     ///
     /// Each change records one finding. [`IslandReferencePolicy::Stated`]
     /// changes nothing and reports the partition.
@@ -534,18 +507,30 @@ impl BalancedNetwork {
                 line.in_service = false;
             }
         }
-        let winding_at = |t: &crate::network::Transformer3W| t.windings.iter().any(|w| at(w.bus));
+        // A winding on a de-energized bus goes out; a transformer left with
+        // fewer than two windings couples nothing and goes out whole.
+        let live_after = |t: &crate::network::Transformer3W| -> [bool; 3] {
+            let mut live = t.winding_in_service();
+            for (state, winding) in live.iter_mut().zip(&t.windings) {
+                *state &= !at(winding.bus);
+            }
+            live
+        };
         if self
             .transformers_3w()
             .iter()
-            .any(|t| t.in_service && winding_at(t))
+            .any(|t| t.in_service && live_after(t) != t.winding_in_service())
         {
-            for transformer in self
-                .transformers_3w_mut()
-                .iter_mut()
-                .filter(|t| winding_at(t))
-            {
-                transformer.in_service = false;
+            for transformer in self.transformers_3w_mut().iter_mut() {
+                let live = live_after(transformer);
+                if live == transformer.winding_in_service() {
+                    continue;
+                }
+                if live.iter().filter(|&&on| on).count() < 2 {
+                    transformer.in_service = false;
+                } else {
+                    transformer.set_winding_in_service(live);
+                }
             }
         }
     }
@@ -647,8 +632,8 @@ mod tests {
 
     #[test]
     fn a_winding_on_an_isolated_bus_leaves_the_other_two_joined() {
-        // Normalization drops a three winding transformer with a winding on
-        // an isolated bus whole, so its per island pass sees two islands.
+        // Normalization takes the winding on the isolated bus out of service
+        // and keeps the transformer, so the two other windings stay joined.
         let mut buses: Vec<Bus> = (1..=3)
             .map(|id| Bus::new(BusId(id), BusType::Pq, 230.0))
             .collect();
@@ -670,8 +655,44 @@ mod tests {
             ..NormalizeOptions::default()
         };
         let normalized = net.to_normalized_with_options(&options).unwrap();
-        assert_eq!(normalized.network.buses().len(), 1);
-        assert!(codes(&normalized.diagnostics).contains(&"CANONICALIZE.ISLAND.DE_ENERGIZED"));
+        assert_eq!(normalized.network.buses().len(), 2);
+        let transformer = &normalized.network.transformers_3w()[0];
+        assert_eq!(transformer.winding_in_service(), [true, false, true]);
+        assert!(transformer.in_service);
+        assert_eq!(normalized.network.calc_islands().islands.len(), 1);
+        let found = codes(&normalized.diagnostics);
+        assert!(found.contains(&"CANONICALIZE.NORMALIZE.WINDING_TAKEN_OUT"));
+        assert!(!found.contains(&"CANONICALIZE.ISLAND.DE_ENERGIZED"));
+        crate::IndexedNetwork::new(&normalized.network)
+            .check_reference_coverage()
+            .unwrap();
+        normalized.network.validate().unwrap();
+    }
+
+    #[test]
+    fn de_energizing_takes_out_the_windings_on_the_dead_island() {
+        let mut net = three_islands();
+        // A transformer inside the dead island {6, 7}, plus one joining the
+        // live island B to a dead bus only through a winding already out.
+        net.transformers_3w_mut().push(Transformer3W::new(
+            [6, 7, 6].map(|bus| Winding::new(BusId(bus))),
+            [Impedance::new(0.0, 0.1, 100.0); 3],
+        ));
+        let mut partial = Transformer3W::new(
+            [3, 4, 7].map(|bus| Winding::new(BusId(bus))),
+            [Impedance::new(0.0, 0.1, 100.0); 3],
+        );
+        partial.set_winding_in_service([true, true, false]);
+        net.transformers_3w_mut().push(partial);
+        net.assign_island_references(IslandReferencePolicy::PerIsland);
+        assert!(
+            !net.transformers_3w()[0].in_service,
+            "nothing left to couple"
+        );
+        let partial = &net.transformers_3w()[1];
+        assert!(partial.in_service, "its live windings stay");
+        assert_eq!(partial.winding_in_service(), [true, true, false]);
+        net.validate().unwrap();
     }
 
     #[test]
