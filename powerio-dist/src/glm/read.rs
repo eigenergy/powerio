@@ -15,6 +15,7 @@ use crate::{
 
 const METERS_PER_MILE: f64 = 1609.344;
 
+mod cables;
 mod geometry;
 mod loads;
 mod switches;
@@ -24,9 +25,9 @@ mod switches;
 /// omitted from an apparently usable network. The source project is retained.
 ///
 /// This initial profile covers ordinary phase-to-earth node/load/meter objects,
-/// fixed source phasors, P/I/Z loads, overhead line matrices or conductor geometry
-/// and fixed ordinary-phase switch contacts. Finite contacts use exact line
-/// equivalents; ideal and open contacts remain typed switches.
+/// fixed source phasors, P/I/Z loads, overhead and underground line matrices
+/// or conductor geometry, and fixed ordinary-phase switch contacts. Finite
+/// contacts use exact line equivalents; ideal and open contacts remain typed switches.
 /// Other conductor/device profiles remain under implementation.
 pub fn parse(
     source: Source,
@@ -170,6 +171,19 @@ impl Reader<'_> {
                 Statement::Directive(token) => {
                     let text = token.text().trim();
                     let setting = text.strip_prefix("#set ").and_then(|s| s.split_once('='));
+                    if let Some(("iteration_limit", value)) =
+                        setting.map(|(k, v)| (k.trim(), v.trim().trim_end_matches(';')))
+                    {
+                        if value.parse::<u32>().ok().is_none_or(|v| v == 0) {
+                            return Err(self.project.electrical_error(
+                                &token.span(),
+                                "iteration_limit requires a positive integer",
+                            ));
+                        }
+                        self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_SOURCE_ONLY,
+                            "iteration_limit is retained in source; canonical output uses its own solver settings"));
+                        continue;
+                    }
                     if !setting.is_some_and(|(name, _)| {
                         matches!(
                             name.trim(),
@@ -238,8 +252,12 @@ impl Reader<'_> {
                         )
                     })?;
             }
-            ("line_capacitance", "TRUE") => self.line_capacitance = true,
-            ("line_capacitance", "FALSE") => self.line_capacitance = false,
+            ("line_capacitance", v) if v.eq_ignore_ascii_case("true") => {
+                self.line_capacitance = true;
+            }
+            ("line_capacitance", v) if v.eq_ignore_ascii_case("false") => {
+                self.line_capacitance = false;
+            }
             _ => {
                 return Err(self
                     .project
@@ -274,7 +292,12 @@ impl Reader<'_> {
             let class = class(object);
             if matches!(
                 class,
-                "recorder" | "impedance_dump" | "complex_assert" | "assert"
+                "recorder"
+                    | "impedance_dump"
+                    | "voltdump"
+                    | "currdump"
+                    | "complex_assert"
+                    | "assert"
             ) {
                 self.diagnostics.push(Diagnostic::of(
                     &codes::READ_GLM_SOURCE_ONLY,
@@ -570,7 +593,7 @@ impl Reader<'_> {
             .index
             .objects()
             .iter()
-            .filter(|o| class(o) == "overhead_line")
+            .filter(|o| matches!(class(o), "overhead_line" | "underground_line"))
             .map(GlmObject::key)
             .collect();
         for key in keys {
@@ -622,7 +645,11 @@ impl Reader<'_> {
                 let neutral = self
                     .text(key, "phases")?
                     .is_some_and(|flags| flags.contains('N'));
-                self.geometry_line_code(config, &phases, neutral, &code_name)?
+                if class(&self.index.objects()[key.ordinal()]) == "underground_line" {
+                    self.cable_line_code(config, &phases, neutral, &code_name)?
+                } else {
+                    self.geometry_line_code(config, &phases, neutral, &code_name)?
+                }
             };
             if !super::line_physics::line_shunts_commute(&code) {
                 self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_NATIVE_LINE_DISCREPANCY,
@@ -781,6 +808,8 @@ fn supported_class(name: &str) -> bool {
         || matches!(
             name,
             "overhead_line"
+                | "underground_line"
+                | "underground_line_conductor"
                 | "line_configuration"
                 | "switch"
                 | "overhead_line_conductor"
@@ -813,10 +842,11 @@ fn allowed_property(class: &str, name: &str) -> bool {
                 | "voltage_C"
         ))
         || (class == "load" && loads::property(name).is_some())
-        || (class == "overhead_line"
+        || (matches!(class, "overhead_line" | "underground_line")
             && matches!(name, "phases" | "from" | "to" | "length" | "configuration"))
         || (class == "line_configuration" && matrix_property(name))
         || geometry::allowed(class, name)
+        || cables::unit(class, name).is_some()
         || (class == "switch"
             && matches!(
                 name,
@@ -835,7 +865,7 @@ fn allowed_property(class: &str, name: &str) -> bool {
 }
 fn quantity_spec(class: &str, name: &str) -> Option<(GlmQuantityKind, &'static str)> {
     use GlmQuantityKind::{Complex, Real};
-    if let Some(unit) = geometry::unit(class, name) {
+    if let Some(unit) = geometry::unit(class, name).or_else(|| cables::unit(class, name)) {
         return Some((Real, unit));
     }
     if class == "switch" {
@@ -855,7 +885,7 @@ fn quantity_spec(class: &str, name: &str) -> Option<(GlmQuantityKind, &'static s
     if class == "load" {
         return loads::property(name).map(|(_, _, kind, unit)| (kind, unit));
     }
-    if class == "overhead_line" && name == "length" {
+    if matches!(class, "overhead_line" | "underground_line") && name == "length" {
         return Some((Real, "ft"));
     }
     if class == "line_configuration" && matrix_property(name) {

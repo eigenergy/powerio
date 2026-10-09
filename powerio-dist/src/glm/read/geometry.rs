@@ -50,7 +50,7 @@ pub(super) fn unit(class: &str, name: &str) -> Option<&'static str> {
 }
 
 impl Reader<'_> {
-    fn geometry_reference(
+    pub(super) fn geometry_reference(
         &self,
         key: ObjectKey,
         name: &str,
@@ -66,7 +66,7 @@ impl Reader<'_> {
         Ok(target)
     }
 
-    fn positive_geometry(&self, key: ObjectKey, name: &str) -> Result<f64, Error> {
+    pub(super) fn positive_geometry(&self, key: ObjectKey, name: &str) -> Result<f64, Error> {
         self.real(key, name).filter(|v| v.is_finite() && *v > 0.0)
             .ok_or_else(|| self.error(key, format!("geometry requires finite positive {name}; native missing/invalid-value fallbacks are not qualified")))
     }

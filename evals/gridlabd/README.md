@@ -744,3 +744,24 @@ protection sequences, load schedules and behavioral simulation are not executed.
 The complete static compatibility target still includes additional neutral,
 geometry, transformer and device profiles; these are not completed by source and
 line snapshot qualification alone.
+
+## Underground cable conversion
+
+`cable_oracle.py` compares conductor geometry with native impedance dumps and an
+independent block-matrix reduction. It checks voltages, currents, powers and
+charging admittances for native inputs, canonical output and edited networks.
+IR-restored output must match fresh canonical bytes. Source root meters witness
+physical current independently of native link reporting; removing return paths
+(or perturbing bare-cable resistance) must fail the comparison.
+
+```sh
+cargo build -p powerio --example glm_roundtrip
+python evals/gridlabd/cable_oracle.py --bridge target/debug/examples/glm_roundtrip --pnnl-root "$PNNL_ROOT" --output /tmp/gld-cables
+```
+
+The cases include IEEE13's CN606/CN607 parameters, phase subsets, a separate
+neutral, tape shields, capacitance and 50/60 Hz. PNNL and Arras have different
+neutral reductions, so each uses its own reference profile. PNNL unshielded
+geometry and Arras shield geometry without N are checked as native-invalid
+inputs, separately from supported electrical cases. These results do not yet
+qualify triplex cables, OpenDSS CNData/TSData decoding or a complete feeder.
