@@ -28,7 +28,9 @@ Every other file here is original to this repository: `case5.raw`,
 `case14.raw`, `case3_3w_v33.raw`, and `case7_v32.raw` are hand written
 minimal cases whose title lines say what each exercises, and `case14_v34.raw`
 and `case14_v35.raw` were written from `../case14.m` with
-`powerio convert --to psse34` and `--to psse35`. `case7_v32.raw` states every
+`powerio convert --to psse34` and `--to psse35`. `case14_v34.raw` was written
+again once the revision 34 writer put the winding node last on each winding
+line and stated the system switching device section, as PSS/E 34 does. `case7_v32.raw` states every
 record type the reader maps in the revision 32 layout: bus, load, fixed shunt,
 generator, branch, two and three winding transformer, area, two-terminal DC
 line, and switched shunt, plus zone, owner, inter-area transfer, and impedance

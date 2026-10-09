@@ -77,9 +77,10 @@ fn v34_and_v35_fixtures_match_the_matpower_source() {
 #[test]
 fn transformer_control_round_trips_at_v34_and_v35() {
     // The count/sum checks above cannot see the winding line control columns:
-    // v34/35 widen the line to twelve ratings and insert NODE after CONT, so
-    // COD sits at 15 and RMA..NTP at 18..22. A regulating control must survive
-    // a write/read cycle at both revisions.
+    // v34/35 widen the line to twelve ratings, so COD sits at 15. v34 then
+    // runs RMA..NTP at 17..21 and ends the line with the node; v35 puts the
+    // node right after CONT and RMA..NTP at 18..22. A regulating control must
+    // survive a write/read cycle at both revisions.
     let mut net = parse_matpower_file(data("case14.m")).unwrap();
     let idx = net
         .branches()
@@ -364,9 +365,11 @@ fn hand_written_revision32_case_maps_branch_and_transformer_records() {
     assert_eq!((transformer.from, transformer.to), (BusId(2), BusId(3)));
     close(transformer.calc_effective_tap(), 1.025, "WINDV1 / WINDV2");
     close(transformer.x, 0.1, "X1-2");
+    // PSS/E connects MAG1 + jMAG2 at bus I, outside the 1.025 tap; the branch
+    // charging sits inside it.
     let charging = transformer.calc_terminal_charging();
-    close(charging.g_fr, 0.001, "MAG1");
-    close(charging.b_fr, -0.02, "MAG2");
+    close(charging.g_fr, 0.001 * 1.025 * 1.025, "MAG1 * tap^2");
+    close(charging.b_fr, -0.02 * 1.025 * 1.025, "MAG2 * tap^2");
     let control = transformer.control.as_ref().unwrap();
     assert_eq!(control.mode, TransformerControlMode::Voltage);
     assert!(control.enabled);
