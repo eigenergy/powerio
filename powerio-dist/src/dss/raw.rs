@@ -248,6 +248,8 @@ pub struct RawDss {
     pub(super) capacitor_copies: std::collections::BTreeSet<String>,
     /// Storage MakeLike copies hidden inverter state not reconstructed yet.
     pub(super) storage_copies: std::collections::BTreeSet<String>,
+    /// Generator MakeLike may copy hidden user-library state.
+    pub(super) generator_copies: std::collections::BTreeSet<String>,
     /// Bumped by `clear`, so `run_command` can tell whether a `Clear` ran
     /// during the command it just dispatched and, if so, skip restoring the
     /// pre-command var snapshot over the empty table `clear` installed.
@@ -2032,6 +2034,7 @@ impl<L: Loader> Executor<'_, L> {
                     "autotrans" => Some(&mut self.raw.autotrans_copies),
                     "capacitor" => Some(&mut self.raw.capacitor_copies),
                     "storage" => Some(&mut self.raw.storage_copies),
+                    "generator" => Some(&mut self.raw.generator_copies),
                     _ => None,
                 };
                 if let Some(copies) = copies {

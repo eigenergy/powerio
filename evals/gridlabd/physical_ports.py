@@ -79,6 +79,12 @@ def interfaces(native, network, aliases):
                 raise ValueError(f"invalid typed open Line boundary: {original}")
             ports.append(dict(element="line." + contact.lower(), terminal=1, **port))
         result[original] = ports
+    from shunt_ports import interfaces as shunt_interfaces
+
+    for original, interface in shunt_interfaces(native, network).items():
+        if original in result:
+            raise ValueError(f"ambiguous shunt interface: {original}")
+        result[original] = interface
     from autotrans_ports import interfaces as autotrans_interfaces
 
     for original, interface in autotrans_interfaces(native, network).items():
@@ -94,6 +100,10 @@ def observe(engine, ports):
         from autotrans_ports import observe as observe_autotrans
 
         return observe_autotrans(engine, ports)
+    if isinstance(ports, dict) and ports.get("kind") == "full_shunt":
+        from shunt_ports import observe as observe_shunt
+
+        return observe_shunt(engine, ports)
     result = []
     total = 0j
     for port in ports:

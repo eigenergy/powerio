@@ -3069,18 +3069,13 @@ mod tests {
         let input = std::path::PathBuf::from(std::env::var("POWERIO_MOTOR_INPUT").unwrap());
         let output = std::path::PathBuf::from(std::env::var("POWERIO_MOTOR_OUTPUT").unwrap());
         std::fs::create_dir(&output).unwrap();
-        for name in [
-            "Kersting4wireIndMotor.dss",
-            "Kersting4wire_Lagging.dss",
-            "Kersting4wire_Leading.dss",
-        ] {
-            let net = parse_dss_str(&std::fs::read_to_string(input.join(name)).unwrap());
-            assert!(!crate::audit_electrical_readiness(&net).is_ready());
-            // Deliberately exercise only the low-level writer. Public canonical
-            // emission remains blocked until the motor law is typed; this probe
-            // diagnoses source-property replay, never feeder qualification.
-            std::fs::write(output.join(name), emit_dss_text(&net).text).unwrap();
-        }
+        let name = "Kersting4wireIndMotor.dss";
+        let net = parse_dss_str(&std::fs::read_to_string(input.join(name)).unwrap());
+        assert!(!crate::audit_electrical_readiness(&net).is_ready());
+        // Deliberately exercise only the low-level writer. Public canonical
+        // emission remains blocked until the motor law is typed; this probe
+        // diagnoses source-property replay, never feeder qualification.
+        std::fs::write(output.join(name), emit_dss_text(&net).text).unwrap();
     }
 
     fn strings(v: &[&str]) -> Vec<String> {

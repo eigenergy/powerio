@@ -557,12 +557,18 @@ multipoint efficiency and canonical GLM inverter writing remain unfinished.
 Climate coordinates and thermal inputs remain source-only with diagnostics.
 
 OpenDSS Generator model 6 delegates its voltage/current law to an external
-library. PowerIO retains those settings and nominal powers, but does not yet
-provide a typed user-model equivalent. Electrical readiness reports
-`READINESS.DSS.GENERATOR_USER_MODEL_UNRESOLVED`, including after an IR round trip.
-Same-format source emission remains available. A locally built, pinned upstream
-`IndMach012a` library supplies native reference results for the three public
-four-wire induction-machine cases; these remain unqualified typed conversions.
+library. The three-phase delta `IndMach012a` fixed-slip profile reads into the
+existing full shunt admittance, including positive- and negative-sequence
+behavior. Canonical DSS derives its equivalent circuit from the current typed
+matrix. Native checks qualify both public four-wire lagging/leading feeders,
+including IR, canonical reimport and all original motor terminals. A separate
+27-case native sweep covers voltage, slip, initialization order and typed
+matrix edits. Explicit positive kV/kVA bases and named numeric userdata are
+required; library reloads, successive edits and slip-limit setter order are
+preserved. Variable slip, copied hidden state, other connections/user libraries
+and unsupported parameters remain blocked by
+`READINESS.DSS.GENERATOR_USER_MODEL_UNRESOLVED`. Retained same-format source
+emission remains available. No new network type or IR schema is needed.
 
 OpenDSS Storage voltage model 1 reads fixed idling, charging and discharging
 power as signed `BoundedConstantPower` loads. The profile covers one-phase wye

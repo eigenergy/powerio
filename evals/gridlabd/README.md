@@ -1708,8 +1708,9 @@ Both IEEE 8500 variants now pass canonical output, IR and repeated conversion,
 with 60,595 balanced and 64,126 unbalanced observations in each pass. Independent
 fresh runs reproduce both qualifications, including changed-line negative
 controls. The former line-loss mismatches disappear after direct normalization
-of whole-line series impedance. The whole-case requirements now qualify five
-of sixteen entries: IEEE34mod1, IEEE37, both IEEE8500 variants and NEV.
+of whole-line series impedance. The whole-case requirements now qualify seven
+of sixteen entries: IEEE34mod1, IEEE37, both IEEE8500 variants, NEV and the
+four-wire lagging/leading fixed-slip motor feeders.
 
 NEV now reaches electrical comparison: canonical load records omit harmonic
 spectrum references with a diagnostic. The pinned engine uses those spectra
@@ -1780,33 +1781,58 @@ python evals/gridlabd/ieee_distribution_import_oracle.py \
 The native motor, lagging and leading cases converge at the unchanged strict
 settings and expose 109, 96 and 96 electrical observations. The runner saves
 these original reference snapshots even when typed conversion is blocked.
-These references do **not** qualify PowerIO's motor model. Generator model 6
-currently retains library settings and nominal powers, without a typed
-voltage/current law. It now reports
-`READINESS.DSS.GENERATOR_USER_MODEL_UNRESOLVED`; canonical writing and numerical
-use must not treat nominal P/Q as an electrical equivalent. Retained same-format
-source emission remains available, and the finding survives IR metadata.
+The fixed-slip lagging/leading feeders now qualify all 96 observations each
+through typed import, IR, canonical output and reimport. Their full phase
+admittance is nonreciprocal and uses the existing `DistShunt` matrix; canonical
+DSS writes the existing exact coupled-impedance decomposition. The comparator
+sums only the explicitly declared equivalent's external terminal currents and
+powers, validates every component's bus/node inventory, and follows the typed
+source-impedance branch on reimport. It does not use unrelated bus flows or
+internal negative-element losses as the motor's electrical observations.
 
-The native baseline exposed an ordering bug in the low-level writer: `UserData`
-was emitted alphabetically before `UserModel`, so the library used constructor
-defaults. It now writes `UserData` after loading the library. A diagnostic native
-replay probe exercises the internal writer while public canonical output remains
-blocked:
+The reader reproduces the pinned library's actual sequence transform: its
+rotation constant is `0.866025403` and it explicitly inverts that matrix.
+Replacing the inverse with conjugate/3 causes observable zero-slip errors.
+Userdata before library creation is ignored; library reloads reset state;
+successive userdata edits persist. Slip clamps when assigned, using the current
+maximum slip. Changing the maximum afterward does not retroactively clamp.
+The profile requires three-phase delta, explicit positive kV/kVA, and named
+numeric userdata. Unqualified parameters, copied hidden state and variable slip
+retain the explicit `READINESS.DSS.GENERATOR_USER_MODEL_UNRESOLVED` blocker.
+Same-format byte echo remains available. Static variable-slip behavior remains
+an unresolved compatibility requirement, not an excluded active control.
+
+`dss_fixed_motor_oracle.py` checks nine parameter/state histories at 0.9, 1.0 and
+1.1 pu. All 27 cases pass typed matrix current evaluation, canonical output,
+reimport and changed-line negative controls (999 observations per conversion).
+An ignored Rust test multiplies each actual typed matrix by 1.17 and emits from
+a fresh module. All 27 edited circuits match independently increased native
+motor kVA ratings and differ from their original circuits (another 999
+observations). The maximum native current-law difference is below 2e-9 A.
+No acceptance thresholds change.
 
 ```sh
-POWERIO_MOTOR_INPUT=/path/to/pinned/4wire-Delta \
-POWERIO_MOTOR_OUTPUT=/tmp/new-motor-replay \
-  cargo test -p powerio-dist --lib export_generator_user_model_native_probe -- --ignored
+DYLD_LIBRARY_PATH=/tmp/new-indmach-oracle/build \
+python evals/gridlabd/dss_fixed_motor_oracle.py prepare \
+  --bridge /path/to/dist_network \
+  --indmach-manifest /tmp/new-indmach-oracle/manifest.json \
+  --output /tmp/new-fixed-motor-sweep
+POWERIO_FIXED_MOTOR_CASES=/tmp/new-fixed-motor-sweep \
+  cargo test -p powerio-dist --test dss_user_model \
+  export_edited_fixed_motor_matrices -- --ignored
+DYLD_LIBRARY_PATH=/tmp/new-indmach-oracle/build \
+python evals/gridlabd/dss_fixed_motor_oracle.py check-edits \
+  --bridge /path/to/dist_network \
+  --indmach-manifest /tmp/new-indmach-oracle/manifest.json \
+  --output /tmp/new-fixed-motor-sweep
 ```
 
-All 301 original electrical observations match in this native replay check.
-This diagnostic deliberately calls the internal text writer on unresolved data;
-it is not the public canonical conversion path or a feeder qualification. Native
-replay and a typed motor equivalent remain separate checks. For the fixed-slip
-lagging/leading cases, independent sequence-admittance calculations agree with
-native phase currents within the unchanged tolerance. Their nonreciprocal phase
-matrix can be represented by the existing full shunt type. Variable-slip static
-behavior still requires its own faithful voltage/current representation.
+The earlier native baseline also exposed a writer ordering bug: `UserData` was
+emitted before `UserModel`, leaving constructor defaults. The internal writer
+now loads the library first. `export_generator_user_model_native_probe` remains
+a diagnostic replay check for the unresolved variable-slip source, invoked
+with `POWERIO_MOTOR_INPUT` and `POWERIO_MOTOR_OUTPUT`. Internal replay is not
+public typed qualification.
 
 ### Static load-profile assignments
 

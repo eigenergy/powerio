@@ -109,13 +109,16 @@ def evaluate(source, bridge, folder, tolerance, acquisition_root=None):
         (folder / "canonical.json").write_text(json.dumps(actual, indent=2) + "\n")
         row["stage"] = "reimport"
         reimported_path = imported(bridge, canonical_path, folder / "reimported")
+        from shunt_ports import reimport_interfaces
+
+        repeated_ports = reimport_interfaces(port_maps, json.loads((folder / "reimported/bridge.json").read_text())["network"])
         repeated = snapshot(
             run(reimported_path, tolerance),
             buses,
             elements,
             canonical=True,
             aliases=aliases,
-            port_maps=port_maps,
+            port_maps=repeated_ports,
             bus_nodes=bus_nodes,
             source_port=source_port,
         )

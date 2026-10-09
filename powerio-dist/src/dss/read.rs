@@ -34,6 +34,7 @@ use crate::model::{
 mod autotrans;
 mod capacitors;
 mod lines;
+mod motors;
 mod open_lines;
 mod reactors;
 mod sources;
@@ -176,6 +177,9 @@ fn snapshot_network(raw: &RawDss) -> (MulticonductorNetwork, Vec<crate::diagnost
         rd.reactor(obj, raw);
     }
     for obj in raw.of_class("generator") {
+        if rd.fixed_motor(obj, raw) {
+            continue;
+        }
         let g = rd.generator(obj);
         rd.net.generators_mut().push(g);
     }
