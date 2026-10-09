@@ -102,7 +102,8 @@ impl BalancedNetwork {
     ///
     /// A 3-winding transformer with a winding in the set is also kept when
     /// each of its other windings is dead: its bus is typed isolated, or the
-    /// winding is stated out of service (`extras["winding_in_service"]`).
+    /// winding is out of service
+    /// ([`Transformer3W::winding_in_service`](crate::Transformer3W::winding_in_service)).
     /// That winding's bus comes along as an isolated stub (tagged
     /// `extras["tie_bus"]`), so an island that such a transformer joins stays
     /// one island.
@@ -121,7 +122,7 @@ impl BalancedNetwork {
                 transformer
                     .windings
                     .iter()
-                    .zip(crate::islands::winding_connected(transformer))
+                    .zip(transformer.winding_in_service())
             };
             let touches = windings().any(|(w, _)| in_scope.contains(&w.bus));
             let dead_outside = windings().all(|(w, connected)| {

@@ -671,19 +671,39 @@ fn norm_transformers_3w(
     xfmrs: &[Transformer3W],
     base: f64,
     map: &HashMap<BusId, BusId>,
+    warnings: &mut crate::diagnostics::Diagnostics,
 ) -> (Vec<Transformer3W>, Vec<Option<usize>>) {
-    xfmrs
+    let mut taken_out = Vec::new();
+    let normalized = xfmrs
         .iter()
         .enumerate()
         .filter(|(_, t)| t.in_service)
         .filter_map(|(row, t)| {
-            // Remap each winding terminal and drop the whole unit if any was filtered
-            // out (a 3-winding transformer can't keep a dangling winding). Phase
-            // shifts and the star angle go to radians; winding ratings go per unit;
-            // the pairwise impedances are already per unit on the system base.
+            // A winding whose bus this pass drops goes out of service, as PSS/E
+            // takes out a winding on a disconnected bus; the other two stay
+            // coupled through the star point. Its bus field then names a
+            // kept winding's bus, so the record stays reference consistent,
+            // and the source row gives the original. A transformer left with
+            // fewer than two windings couples nothing and is dropped. Phase
+            // shifts and the star angle go to radians; winding ratings go per
+            // unit; the pairwise impedances are already per unit on the system
+            // base.
+            let mut live = t.winding_in_service();
+            for (state, winding) in live.iter_mut().zip(&t.windings) {
+                *state &= remap(map, winding.bus).is_some();
+            }
+            let kept_bus = t
+                .windings
+                .iter()
+                .zip(live)
+                .find(|(_, on)| *on)
+                .map(|(winding, _)| winding.bus)?;
+            if live.iter().filter(|&&on| on).count() < 2 {
+                return None;
+            }
             let mut windings = t.windings.clone();
             for w in &mut windings {
-                w.bus = remap(map, w.bus)?;
+                w.bus = remap(map, w.bus).unwrap_or(kept_bus);
                 if let Some(control) = &mut w.control {
                     norm_transformer_control(control, base, map);
                 }
@@ -704,9 +724,35 @@ fn norm_transformers_3w(
                 }
                 transformer.set_winding_rating_sets(winding, sets);
             }
+            if live != t.winding_in_service() {
+                transformer.set_winding_in_service(live);
+                taken_out.push(row);
+            }
             Some((transformer, Some(row)))
         })
-        .unzip()
+        .unzip();
+    if !taken_out.is_empty() {
+        let names = taken_out
+            .iter()
+            .take(5)
+            .map(|&row| {
+                xfmrs[row]
+                    .uid
+                    .clone()
+                    .unwrap_or_else(|| format!("transformers_3w:{row}"))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        warnings.push(
+            &crate::diagnostics::codes::CANONICALIZE_NORMALIZE_WINDING_TAKEN_OUT,
+            format!(
+                "{} three winding transformer(s) have a winding on a bus normalization drops; \
+                 that winding was taken out of service and the other two kept ({names})",
+                taken_out.len()
+            ),
+        );
+    }
+    normalized
 }
 
 /// No reference survived the bus type pass: anchor the slack at the largest
@@ -1023,10 +1069,10 @@ impl BalancedNetwork {
         // Per island references: an island no in-service generator supplies
         // cannot be solved, so its buses stay out like isolated ones and the
         // element filters below drop what sits on them. The partition follows
-        // what this pass keeps: a three winding transformer with a winding on
-        // an isolated bus is dropped whole, so it joins nothing.
+        // what this pass keeps: a three winding transformer keeps the windings
+        // on kept buses.
         let partition = (options.island_references == IslandReferencePolicy::PerIsland)
-            .then(|| self.calc_islands_where(false));
+            .then(|| self.calc_islands());
         let unsupplied = partition
             .as_ref()
             .map(|partition| unsupplied_island_buses(self, partition, &mut warnings))
@@ -1064,7 +1110,7 @@ impl BalancedNetwork {
         let (storage, storage_rows) = norm_storage(self.storage(), base, &id_map);
         let (hvdc, hvdc_rows) = norm_hvdc(self.hvdc(), base, &id_map);
         let (transformers_3w, transformer_3w_rows) =
-            norm_transformers_3w(self.transformers_3w(), base, &id_map);
+            norm_transformers_3w(self.transformers_3w(), base, &id_map, &mut warnings);
         let source_rows = NormalizeSourceRows {
             buses: bus_rows,
             loads: load_rows,

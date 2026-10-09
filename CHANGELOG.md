@@ -47,6 +47,17 @@
   `to_normalized(island_references="per_island")`, and `powerio summary` lists
   the islands under `topology.islands`.
 
+- Normalization no longer drops an in-service three winding transformer
+  whole because one winding sits on a bus it drops. That winding is taken out
+  of service (`Transformer3W::winding_in_service`) and the other two stay
+  coupled, as PSS/E does; the transformer goes only when fewer than two
+  windings remain, and each such case is reported as
+  `CANONICALIZE.NORMALIZE.WINDING_TAKEN_OUT`. Island partitions, subsets, and
+  de-energization read the same per winding status. On a 100,000 bus
+  planning case the normalized network keeps every in-service three winding
+  transformer and has the same nine islands as the case itself, where it
+  split into 24 before.
+
 - Normalization reports a PQ bus it retypes PV because it hosts an in-service
   generator as `CANONICALIZE.NORMALIZE.GENERATOR_BUS_RETYPED`. The retyping
   itself is unchanged. `NormalizeOptions` gained a field, so a struct literal
