@@ -597,10 +597,21 @@ fn parse_scope(upper: &[String], words: &[&str], at: usize) -> Option<(MonitorSc
 }
 
 /// `i j [ckt]` inside a monitored block, or the contingency file spelling
-/// `[BRANCH | LINE] FROM BUS i TO BUS j [CIRCUIT c]` there and after
-/// `MONITOR` on its own line. A third `TO BUS k` names a three winding
+/// `[BRANCH | LINE] FROM BUS i TO BUS j [CIRCUIT c]` there, with or without a
+/// leading `MONITOR`, and after `MONITOR` on its own line. A third `TO BUS k` names a three winding
 /// transformer, which a [`BranchRef`] cannot hold, so such a line stays text.
 fn parse_branch_ref(words: &[&str]) -> Option<BranchRef> {
+    // A block line may also repeat the standalone statement whole, `MONITOR`
+    // included.
+    let words = match words {
+        [monitor, noun, ..]
+            if monitor.eq_ignore_ascii_case("MONITOR")
+                && (noun.eq_ignore_ascii_case("BRANCH") || noun.eq_ignore_ascii_case("LINE")) =>
+        {
+            &words[1..]
+        }
+        _ => words,
+    };
     if words.first()?.parse::<usize>().is_err() {
         let upper: Vec<String> = words.iter().map(|word| word.to_ascii_uppercase()).collect();
         let mut at = usize::from(matches!(upper[0].as_str(), "BRANCH" | "LINE"));
