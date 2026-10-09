@@ -1116,3 +1116,34 @@ check return displacement, voltage ratios, currents, powers and total losses.
 Deliberately incomplete cancellation must fail. The floating return uses two
 negative half-ohm conductors to cancel the one-ohm differential leakage without
 adding a ground connection. Core and neutral shunts remain outside this profile.
+
+
+### IEEE13/34 FBS incompatibility audit
+
+`fbs_feeder_import_oracle.py` uses the pinned original FBS inputs and their
+configuration includes. It checks actual import, IR and OpenDSS output with the
+same V/A limits as the existing NR feeder harness. IEEE34 retains its documented
+voltage-scaled absolute power resolution. Wrong regulator taps must be detected.
+
+```sh
+python evals/gridlabd/fbs_feeder_import_oracle.py \
+  --case ieee34 --source /path/to/autotest/test_IEEE_34_FBS.glm \
+  --bridge /path/to/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-fbs-audit-directory
+```
+
+These original FBS cases currently **fail** electrical equivalence; the audit
+returns nonzero and does not count a successful parse as qualification. Both
+pinned forks use `d = a` in their line transfer matrices where a physical pi line
+requires `d = transpose(a)` for symmetric impedance/admittance matrices. FBS
+uses this current equation during the solve. Native reported ports satisfy KCL,
+but physical ports reconstructed independently from native impedance dumps do
+not at that solution. IEEE34 differs from physical OpenDSS output by about
+0.024 V; this is not covered by widening a solver tolerance. NR stamps the
+physical circuit and uses the differing equation for reporting only.
+
+The parser's `READ.GLM.NATIVE_LINE_DISCREPANCY` warning identifies the distinction.
+Canonical output still preserves the physical pi circuit using end shunts. An
+exact representation of the nonreciprocal native FBS equation is unresolved.
+The full IEEE8500 qualification is unaffected; these cases exercise additional
+line-capacitance behavior.

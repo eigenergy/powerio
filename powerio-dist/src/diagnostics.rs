@@ -56,7 +56,7 @@ pub mod codes {
         READ_GLM_CONTROL_FROZEN = "READ.GLM.CONTROL_FROZEN", Warning,
             "active control behavior is omitted while declared fixed electrical states are preserved";
         READ_GLM_NATIVE_LINE_DISCREPANCY = "READ.GLM.NATIVE_LINE_DISCREPANCY", Warning,
-            "native reported line currents differ from the physical pi-line model for noncommuting matrices";
+            "native line reporting and FBS solved states can differ from the physical pi-line model for noncommuting matrices";
         READ_GLM_GEOMETRY_MATERIALIZED = "READ.GLM.GEOMETRY_MATERIALIZED", Remark,
             "overhead conductor geometry is materialized as phase matrices with explicit reduction provenance";
         EMIT_GLM_UNSUPPORTED = "EMIT.GLM.UNSUPPORTED", Error,

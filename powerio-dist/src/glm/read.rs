@@ -770,8 +770,13 @@ impl Reader<'_> {
                 }
             };
             if !super::line_physics::line_shunts_commute(&code) {
+                let effect = if self.newton_raphson {
+                    "native NR reported source-end currents and losses differ from the physical line ports"
+                } else {
+                    "native FBS uses the differing source-end current equation during its solve, so solved voltages and injections can also differ"
+                };
                 self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_NATIVE_LINE_DISCREPANCY,
-                    format!("line {}: this source has noncommuting impedance/capacitance matrices; the typed network preserves the physical pi-line law, while pinned PNNL/Arras native reported line currents and losses differ in NR and FBS; canonical output uses exact end-shunt equivalents", self.names[&key])));
+                    format!("line {}: this source has noncommuting impedance/capacitance matrices; {effect}; the typed network preserves the physical pi-line law, not the nonreciprocal native FBS equation; canonical output uses exact end-shunt equivalents", self.names[&key])));
             }
             self.net.line_codes_mut().push(code);
             self.attach(

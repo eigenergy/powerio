@@ -143,7 +143,7 @@ def snapshot(directory, network):
     return result
 
 
-def read_dss(path, network):
+def read_dss(path, network, edits=()):
     import numpy as np
     import opendssdirect as dss
 
@@ -155,6 +155,10 @@ def read_dss(path, network):
     def unpack(raw):
         return np.array(raw[::2]) + 1j * np.array(raw[1::2])
 
+    for edit in edits:
+        dss.Text.Command(edit)
+    if edits:
+        dss.Solution.Solve()
     snapshots = {}
     for mode in ("default", "strict"):
         if mode == "strict":

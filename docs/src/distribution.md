@@ -439,8 +439,12 @@ exact equivalents and currently fail. No small impedance replaces an ideal
 constraint, and the input network is unchanged.
 
 For noncommuting line impedance and capacitance matrices, the pinned engines
-report incorrect source-end currents in NR and FBS despite correct receiving voltages.
-Import reports this native discrepancy and retains the physical pi-line model.
+use a source-end current equation that differs from the physical pi-line law.
+NR uses it for reporting. FBS also uses it during the solve, so its voltages and
+injections can differ from a physical line circuit. Import warns about the
+solver-specific discrepancy and retains the physical pi-line model. The original
+IEEE13/34 FBS variants therefore remain unqualified for exact native result
+matching; their successful parse is not electrical equivalence.
 Canonical output replaces native line capacitance with exact phase-pair and
 earth-return impedance loads at each end. Conductive or unequal end shunts use
 the same equivalent in either solver. End-shunt expansion requires symmetric

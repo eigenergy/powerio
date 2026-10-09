@@ -39,6 +39,16 @@ def devices(network):
             ],
         )
 
+    for switch in network["switches"]:
+        yield (
+            switch["name"],
+            "switch",
+            [
+                (switch["bus_" + side], switch["terminal_map_" + side])
+                for side in ("from", "to")
+            ],
+        )
+
 
 def load_objects(text):
     # Source hash is enforced by the caller; nested assertions begin after
@@ -222,7 +232,7 @@ def snapshot(directory, network, original):
 def read_dss(dss, network):
     result = {}
     for name, kind, ends in devices(network):
-        element = kind + "." + name
+        element = ("line" if kind == "switch" else kind) + "." + name
         dss.Circuit.SetActiveElement(element)
         if (
             dss.CktElement.Name().lower() != element.lower()
@@ -238,7 +248,28 @@ def read_dss(dss, network):
         current = unpack(dss.CktElement.Currents())
         voltage = unpack(dss.CktElement.Voltages())
         volts, amps = [], []
+        transformer = next(
+            (t for t in network["transformers"] if t["name"] == name), None
+        )
+        cancellation = (
+            f"line._pio_switch_{name}"
+            if kind == "switch"
+            and not next(s for s in network["switches"] if s["name"] == name)["open"]
+            else f"line._pio_xfmr_{name}"
+            if transformer
+            and transformer["phases"] == 1
+            and transformer["xsc_pct"] == [0.0]
+            and all(w["r_pct"] == 0.0 for w in transformer["windings"])
+            else None
+        )
         for i, (_, terminals) in enumerate(ends):
+            if i == 1 and cancellation:
+                if dss.Circuit.SetActiveElement(cancellation) < 0:
+                    raise ValueError("missing exact-circuit companion " + cancellation)
+                n = dss.CktElement.NumConductors()
+                nodes = dss.CktElement.NodeOrder()
+                current = unpack(dss.CktElement.Currents())
+                voltage = unpack(dss.CktElement.Voltages())
             indices = [
                 i * n + nodes[i * n : (i + 1) * n].index(int(t)) for t in terminals
             ]

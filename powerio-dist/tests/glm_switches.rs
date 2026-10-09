@@ -448,5 +448,17 @@ object overhead_line { name l; phases ABN; from a; to b; configuration c; length
                 .any(|d| d.code() == "READ.GLM.NATIVE_LINE_DISCREPANCY"),
             expected
         );
+        let diagnostic = module
+            .diagnostics()
+            .iter()
+            .find(|d| d.code() == "READ.GLM.NATIVE_LINE_DISCREPANCY")
+            .unwrap();
+        assert_eq!(
+            diagnostic
+                .message()
+                .contains("solved voltages and injections"),
+            solver == "FBS"
+        );
+        assert!(diagnostic.message().contains("physical pi-line law"));
     }
 }
