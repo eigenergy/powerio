@@ -1,8 +1,10 @@
-"""Pinned IEEE13 bus-voltage and source-current conversion qualification.
+"""Pinned IEEE13 static conversion: buses, device ports, loads and edited cases.
 
-This is a complete-feeder run with a limited observable scope. Device port
-currents, device losses and edited-feeder laws remain separate
-qualification work; passing this harness does not prove those requirements.
+Both GridLAB-D forks and OpenDSS compare 257 complex quantities: 38 bus phase
+voltages, 3 source currents, 156 branch-port/current/power/loss quantities and
+60 load-object phase currents/powers. Every bus must also satisfy current
+balance. This qualifies the pinned NR case and documented edits, not arbitrary
+feeders, explicit-neutral circuits or all transformer connections.
 """
 
 import argparse
@@ -12,7 +14,8 @@ import re
 import subprocess
 from pathlib import Path
 
-from oracle import HERE, LOCK, add, compare, recorded, run_glm
+import feeder_ports
+from oracle import HERE, LOCK, add, compare, literal, parse_complex, recorded, run_glm
 from transformer_roundtrip_oracle import header
 
 
@@ -51,7 +54,8 @@ def instrument(text, network, original):
         text += f'object recorder {{ parent "{bus["id"]}"; property {props}; interval 1; file "{filename}"; }}\n'
     text += 'object recorder { parent n650; property measured_current_A,measured_current_B,measured_current_C; interval 1; file "source-meter.csv"; }\n'
     outputs.append("source-meter.csv")
-    return text, tuple(outputs)
+    text, ports = feeder_ports.instrument(text, network, original)
+    return text, (*outputs, *ports)
 
 
 def snapshot(directory, network):
@@ -124,8 +128,91 @@ def read_dss(path, network):
                 "A",
                 unpack(dss.CktElement.Currents())[0],
             )
+        actual.update(feeder_ports.read_dss(dss, network))
         snapshots[mode] = actual
     return snapshots
+
+
+def edited_original(text):
+    """Apply the bridge's documented edits directly to the pinned native case.
+
+    Does not read converted values or writer output. Regulator phases use
+    native Type A with independent per-phase settings; the writer uses Type B.
+    """
+    text = re.sub(r"//[^\n]*", "", text)
+    text = re.sub(r"object complex_assert\s*\{[^{}]*\};?", "", text)
+
+    def edit_object(match):
+        cls, body = match.groups()
+        if cls == "load":
+
+            def scale_load(prop):
+                key, law, value = prop.groups()
+                factor = 1 / 1.25 if law == "impedance" else 1.25
+                return f"{key} {literal(parse_complex(value) * factor)};"
+
+            body = re.sub(
+                r"(constant_(power|current|impedance)_[ABC])\s+([^;]+);",
+                scale_load,
+                body,
+            )
+        elif cls in ("overhead_line", "underground_line"):
+            body, count = re.subn(
+                r"length\s+([0-9.]+);",
+                lambda m: f"length {float(m[1]) * 1.1:.17g};",
+                body,
+            )
+            if count != 1:
+                raise ValueError("unexpected original line length")
+        elif cls == "switch":
+            body += " switch_resistance 0.00011; "
+        elif cls == "transformer_configuration":
+            for prop, factor in [
+                ("secondary_voltage", 1.05),
+                ("resistance", 1.2),
+                ("reactance", 0.9),
+            ]:
+                body, count = re.subn(
+                    rf"\b{prop}\s+([0-9.]+);",
+                    lambda m, prop=prop, factor=factor: (
+                        f"{prop} {float(m[1]) * factor:.17g};"
+                    ),
+                    body,
+                )
+                if count != 1:
+                    raise ValueError("missing native transformer parameter")
+        elif cls == "node" and re.search(r"name\s+n650\s*;", body):
+            body = re.sub(
+                r"voltage_A\s+([^;]+);",
+                lambda m: f"voltage_A {literal(parse_complex(m[1]) * 1.03)};",
+                body,
+            )
+        elif cls == "regulator_configuration":
+            return ""
+        elif cls == "regulator":
+            result = []
+            for phase, tap in zip("ABC", (10, 8, 11), strict=True):
+                # Original Type A a=1/(1+tap*.1/16). The typed edit changes
+                # primary tap by1.02 and secondary rated volts by1.05.
+                ratio = 1 / (1 + tap * 0.1 / 16) * 1.02 / 1.05
+                regulation = 1 / ratio - 1
+                resistance = 1e-4 * 1.2 * 1.05**2
+                name = f"fregn650n630__{phase}"
+                result.append(
+                    f'object regulator_configuration {{ name "{name}__native_edited"; connect_type WYE_WYE; Control MANUAL; Type A; raise_taps 1; lower_taps 1; regulation {regulation:.17g}; tap_pos_{phase} 1; }}'
+                )
+                result.append(
+                    f'object regulator {{ name "{name}"; phases {phase}N; from n650; to n630; configuration "{name}__native_edited"; regulator_resistance {resistance:.17g}; }}'
+                )
+            return "\n".join(result)
+        return f"object {cls} {{ {body} }}"
+
+    # Native negative switch reactance selects -default_resistance; changing
+    # that module default scales the original contact X as well as R.
+    text = text.replace(
+        "module powerflow {", "module powerflow { default_resistance 0.00011;", 1
+    )
+    return re.sub(r"object (\w+)\s*\{([^{}]*)\}", edit_object, text)
 
 
 def main():
@@ -153,7 +240,10 @@ def main():
             "Omit voltdump; Arras rejects PNNL mode POLAR",
             "Set original bus convergence to canonical 1e-9 V; electrical comparison tolerances unchanged",
             "Replace SWING node with a root meter; preserve source phasors and topology",
-            "Retain the original 32 published voltage assertions",
+            "Retain the original 32 published voltage assertions; remove them only for deliberately edited inputs",
+            "Original physical line ports use native a/b impedance dumps; published noncommuting-shunt current reporting is checked separately",
+            "Canonical generated shunts and load objects use native coefficients and solved voltages; original parent topology is retained",
+            "Independent edits: loads x1.25, line/contact impedance lengths x1.1, winding R x1.2, X x0.9, secondary volts x1.05, regulator primary taps x1.02, source phase A x1.03",
         ],
         "cases": {},
     }
@@ -169,20 +259,34 @@ def main():
             check=True,
         )
         (base / "bridge.json").write_text(run.stdout)
-        network = json.loads(run.stdout)["fresh"]["network"]
+        decoded = json.loads(run.stdout)
+        network = decoded["fresh"]["network"]
+        inventory = {
+            key: len(network[key])
+            for key in ("buses", "lines", "transformers", "loads")
+        }
+        if inventory != {"buses": 15, "lines": 12, "transformers": 4, "loads": 16}:
+            raise ValueError("pinned feeder inventory changed")
         if (converted / "fresh.glm").read_bytes() != (
             converted / "restored.glm"
         ).read_bytes():
             raise ValueError("IR changed canonical output")
         snapshots = {}
-        for label in ("original", "fresh", "negative"):
+        balances = {}
+        native_reports = {}
+        for label in ("original", "fresh", "edited_original", "edited", "negative"):
             directory = base / label
             directory.mkdir()
+            original = label in ("original", "edited_original")
+            variant = "edited" if label.startswith("edited") else "fresh"
+            case_network = decoded[variant]["network"]
             text = (
                 data.decode()
-                if label == "original"
-                else header() + (converted / "fresh.glm").read_text()
+                if original
+                else header() + (converted / f"{variant}.glm").read_text()
             )
+            if label == "edited_original":
+                text = edited_original(text)
             if label == "negative":
                 text, count = re.subn(
                     r"regulation ([^;]+);", "regulation 0;", text, count=1
@@ -191,15 +295,41 @@ def main():
                     raise ValueError(
                         "negative control did not remove a regulator boost"
                     )
-            text, outputs = instrument(text, network, label == "original")
+            text, outputs = instrument(text, case_network, original)
             (directory / "model.glm").write_text(text)
             run_glm(profile, directory, args.pnnl_root, outputs=outputs)
-            snapshots[label] = snapshot(directory, network)
+            snapshots[label] = snapshot(directory, case_network)
+            ports, raw, native_report = feeder_ports.snapshot(
+                directory, case_network, original
+            )
+            native_reports[label] = native_report
+            snapshots[label].update(ports)
+            balances[label] = feeder_ports.kcl(snapshots[label], case_network)
+            (directory / "raw-ports.json").write_text(json.dumps(raw, indent=2))
         dss_snapshots = read_dss(converted / "fresh.dss" / "case.dss", network)
         snapshots["dss_default"] = dss_snapshots["default"]
         snapshots["dss_strict"] = dss_snapshots["strict"]
+        edited_dss = read_dss(
+            converted / "edited.dss" / "case.dss", decoded["edited"]["network"]
+        )
+        snapshots["edited_dss_default"] = edited_dss["default"]
+        snapshots["edited_dss_strict"] = edited_dss["strict"]
+        balances["edited_dss_strict"] = feeder_ports.kcl(
+            edited_dss["strict"], decoded["edited"]["network"]
+        )
         (base / "snapshots.json").write_text(json.dumps(snapshots, indent=2))
+        balances["dss_strict"] = feeder_ports.kcl(snapshots["dss_strict"], network)
         check = compare(snapshots["original"], snapshots["fresh"])
+        check["kcl"] = balances
+        check["inventory"] = inventory
+        check["native_reporting"] = native_reports
+        check["edited_glm"] = compare(snapshots["edited_original"], snapshots["edited"])
+        check["edited_dss"] = compare(
+            snapshots["edited_original"], snapshots["edited_dss_strict"]
+        )
+        check["stale_output_detected"] = not compare(
+            snapshots["edited_original"], snapshots["fresh"]
+        )["passed"]
         check["negative_control"] = compare(
             snapshots["original"], snapshots["negative"]
         )
@@ -215,17 +345,29 @@ def main():
             "maxiterations": 100,
             "controls": "off",
         }
-        report["cases"][profile] = check
-        print(profile, check["passed"], check["max_absolute_error"], flush=True)
-        (args.output / "report.json").write_text(json.dumps(report, indent=2))
-    return (
-        0
-        if all(
-            c["passed"] and c["negative_detected"] and c["dss_strict_solve"]["passed"]
-            for c in report["cases"].values()
+        check["accepted"] = (
+            check["passed"]
+            and check["negative_detected"]
+            and check["dss_strict_solve"]["passed"]
+            and check["edited_glm"]["passed"]
+            and check["edited_dss"]["passed"]
+            and check["stale_output_detected"]
+            and all(v["passed"] for v in balances.values())
+            and all(
+                v["reported_current_law"]["passed"] for v in native_reports.values()
+            )
         )
-        else 1
-    )
+        report["cases"][profile] = check
+        print(
+            profile,
+            "accepted",
+            check["accepted"],
+            "observables",
+            check["observables"],
+            flush=True,
+        )
+        (args.output / "report.json").write_text(json.dumps(report, indent=2))
+    return 0 if all(c["accepted"] for c in report["cases"].values()) else 1
 
 
 if __name__ == "__main__":

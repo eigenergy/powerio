@@ -804,15 +804,36 @@ overrides, native default resistance, edited winding values and OpenDSS output.
 Every case must detect a deliberately wrong turns ratio.
 
 `feeder_oracle.py` accepts only the hash-pinned IEEE13 NR input in `upstream.json`.
-It compares all 38 bus phase voltages and three root-meter source currents after
-full-network conversion, separately under PNNL and Arras. It retains the original
-32 published assertions, removes the output-only voltdump unsupported by Arras,
-and uses the same `1e-9 V` convergence setting for original and canonical models.
-Electrical comparison tolerances remain those in `oracle.py`. Removing one
-regulator's boost must be detected. IR-restored and fresh GLM must be identical.
-OpenDSS checks the same observables with controls disabled and solver tolerance
-`1e-12`; its default-solve measurements are retained separately to distinguish
-stopping error from electrical conversion error.
+It compares 257 complex quantities under both pinned GridLAB-D forks and the
+pinned OpenDSS engine: all 38 bus-phase voltages, three source currents,
+156 line/transformer terminal current, power and loss quantities, and 60
+per-phase current/power quantities for the ten original load objects. Canonical
+load pieces are aggregated by their original object identity. Every bus also
+passes Kirchhoff current balance, including the independently metered root.
+
+Fresh and IR-restored GLM must be byte-identical. Edited output is compared
+with independently edited original GLM, without reading the converted electrical
+parameters: loads change by 25%, line lengths/contact impedances by 10%,
+winding resistances by 20%, reactances by -10%, secondary ratings by 5%,
+regulator primary taps by 2%, and source phase A by 3%. The edited native
+regulator reference uses Type A; canonical output uses Type B. Removing a
+regulator boost and substituting stale unedited output must both be detected.
+
+The harness removes only the incompatible output-only `voltdump`, replaces the
+root node by an electrically equivalent meter, and instruments the existing
+parent relationships. Native original voltage assertions remain enabled;
+assertions are removed for deliberate edits. Both original and canonical GLM
+use a 1e-9 V convergence threshold. OpenDSS uses controls off, tolerance 1e-12
+and at most 100 iterations; its default-solve measurements remain separately
+recorded, not used as strict acceptance evidence.
+
+For original lines, native a/b impedance dumps and solved voltages determine
+physical pi-circuit ports. GridLAB-D's published input-current calculation uses
+a different matrix order for noncommuting shunts; its raw output is preserved
+and independently checked against native a/b/c/d equations. Canonical generated
+end shunts and P/I/Z loads use native coefficient readback and solved voltages,
+without inserting meters that change NR parent topology. Loss means the sum of
+terminal powers; published phase-clamped `power_losses` is retained separately.
 
 ```sh
 cargo build -p powerio --example glm_roundtrip
@@ -820,5 +841,6 @@ python evals/gridlabd/regulator_oracle.py --bridge target/debug/examples/glm_rou
 python evals/gridlabd/feeder_oracle.py --bridge target/debug/examples/glm_roundtrip --source /path/to/autotest/test_IEEE_13_NR.glm --pnnl-root "$PNNL_ROOT" --output /tmp/gld-ieee13
 ```
 
-The feeder check is an initial acceptance layer. Device port currents, device
-losses and edited-feeder laws require further qualification; passing bus voltages and source currents does not establish them.
+This qualifies the pinned IEEE13 NR case and these edits, including all its
+static device ports. It does not qualify other feeders, FBS, explicit-neutral
+networks, split-phase services or the remaining transformer/load profiles.

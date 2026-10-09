@@ -255,6 +255,14 @@ FBS regulators, open-delta connections and banked initialization remain unfinish
 
 Canonical node convergence is set to `1e-9 V`. The tighter former absolute
 setting could prevent IEEE13 from converging despite stable electrical values.
+
+The pinned IEEE13 NR feeder is qualified against PNNL, Arras and OpenDSS for
+all bus-phase voltages, source currents, line/transformer terminal currents,
+terminal powers and losses, and original load-object currents/powers. Checks
+include independently edited input, IR-restored canonical output and current
+balance at every bus. This evidence applies to that feeder and its documented
+edits; it does not establish the unfinished profiles above. See
+`evals/gridlabd/README.md` for the reproducible oracle and measurement conventions.
 This is an engine stopping criterion, not the validation comparison tolerance.
 
 Other geometry/earth models, split-phase and
