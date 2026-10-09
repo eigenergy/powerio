@@ -1758,9 +1758,55 @@ source-equivalent cancellation. These changes improve floating-point fidelity;
 they do not round away impedance, replace equipment with ideal connections,
 change acceptance thresholds, or omit difficult terminal observations.
 
-The four-wire induction-machine baselines cannot run because the local native
-engine cannot load their `IndMach012a` user-model library. These are recorded
-failures, without substitute equipment or fabricated native reference values.
+The three four-wire induction-machine baselines now run with the actual upstream
+`IndMach012a` library. `build_indmach_oracle.py` fetches the BSD-3 source at
+`tshort/OpenDSS` commit `5005c668a72d20775f4c2d060feebb2866ba1d38`, verifies every
+pinned Git blob, and builds it with Free Pascal 3.2.2 on macOS arm64. The only
+source changes are local include paths, removal of the unused Windows resource,
+and Darwin C export names. Original and patched hashes, compiler output and the
+library hash remain in the external build directory. No motor equations change.
+The generator/dynamics records use the same packed ABI as the pinned C-API engine.
+
+```sh
+python evals/gridlabd/build_indmach_oracle.py --output /tmp/new-indmach-oracle
+DYLD_LIBRARY_PATH=/tmp/new-indmach-oracle/build \
+python evals/gridlabd/ieee_distribution_import_oracle.py \
+  --source-root /path/to/pinned/electricdss-tst \
+  --bridge /path/to/dist_network \
+  --indmach-manifest /tmp/new-indmach-oracle/manifest.json \
+  --output /tmp/new-ieee-with-motors
+```
+
+The native motor, lagging and leading cases converge at the unchanged strict
+settings and expose 109, 96 and 96 electrical observations. The runner saves
+these original reference snapshots even when typed conversion is blocked.
+These references do **not** qualify PowerIO's motor model. Generator model 6
+currently retains library settings and nominal powers, without a typed
+voltage/current law. It now reports
+`READINESS.DSS.GENERATOR_USER_MODEL_UNRESOLVED`; canonical writing and numerical
+use must not treat nominal P/Q as an electrical equivalent. Retained same-format
+source emission remains available, and the finding survives IR metadata.
+
+The native baseline exposed an ordering bug in the low-level writer: `UserData`
+was emitted alphabetically before `UserModel`, so the library used constructor
+defaults. It now writes `UserData` after loading the library. A diagnostic native
+replay probe exercises the internal writer while public canonical output remains
+blocked:
+
+```sh
+POWERIO_MOTOR_INPUT=/path/to/pinned/4wire-Delta \
+POWERIO_MOTOR_OUTPUT=/tmp/new-motor-replay \
+  cargo test -p powerio-dist --lib export_generator_user_model_native_probe -- --ignored
+```
+
+All 301 original electrical observations match in this native replay check.
+This diagnostic deliberately calls the internal text writer on unresolved data;
+it is not the public canonical conversion path or a feeder qualification. Native
+replay and a typed motor equivalent remain separate checks. For the fixed-slip
+lagging/leading cases, independent sequence-admittance calculations agree with
+native phase currents within the unchanged tolerance. Their nonreciprocal phase
+matrix can be represented by the existing full shunt type. Variable-slip static
+behavior still requires its own faithful voltage/current representation.
 
 ### Static load-profile assignments
 

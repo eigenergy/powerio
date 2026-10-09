@@ -1427,6 +1427,18 @@ impl Reader<'_> {
 
     // ----- generator -----------------------------------------------------
 
+    fn retain_generator_model(&mut self, obj: &RawObject, extras: &mut Extras) {
+        if obj
+            .get("model")
+            .is_some_and(|v| v.to_i64(Some(self.vars)) == Ok(6))
+        {
+            // Resolve expressions now; readiness cannot reconstruct source variables.
+            extras.insert("model".into(), 6.into());
+            self.warn(&C::READ_DSS_RETAINED_SOURCE_ONLY, format!(
+                "generator {}: model 6 user-library voltage/current behavior is source-only; nominal P/Q is not a typed electrical equivalent", obj.name));
+        }
+    }
+
     fn generator(&mut self, obj: &RawObject) -> DistGenerator {
         let props = Props::new(obj);
         let phases = self.usize_or(
@@ -1506,6 +1518,7 @@ impl Reader<'_> {
         let per_phase = |total_kw: f64| vec![total_kw * 1e3 / phases as f64; phases];
         let mut extras = extras_from_leftovers(&props);
         self.stash_kv_and_phases(&props, &mut extras, kv, phases);
+        self.retain_generator_model(obj, &mut extras);
         // Preserve native voltage-law defaults when a parsed generator is
         // subsequently emitted from the typed value or restored from IR.
         extras

@@ -186,6 +186,18 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
     audit_untyped(net, &mut report);
     audit_load_voltage(net, &mut report);
 
+    for generator in net.generators() {
+        let model = generator.extras.get("model").and_then(|value| {
+            value
+                .as_f64()
+                .or_else(|| value.as_str().and_then(|s| s.parse::<f64>().ok()))
+        });
+        if model.is_some_and(|value| value.round() as i64 == 6) {
+            report.block("READINESS.DSS.GENERATOR_USER_MODEL_UNRESOLVED", &generator.name,
+                "generator model 6 has no typed voltage/current law; retained user-library settings and nominal P/Q do not establish an electrical equivalent");
+        }
+    }
+
     for (element, fields) in net.defaulted() {
         report.warn(
             "READINESS.SOURCE.DEFAULTED",

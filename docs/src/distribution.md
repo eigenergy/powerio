@@ -556,6 +556,14 @@ checks cover both solvers and forks. Other battery operating modes, weather file
 multipoint efficiency and canonical GLM inverter writing remain unfinished.
 Climate coordinates and thermal inputs remain source-only with diagnostics.
 
+OpenDSS Generator model 6 delegates its voltage/current law to an external
+library. PowerIO retains those settings and nominal powers, but does not yet
+provide a typed user-model equivalent. Electrical readiness reports
+`READINESS.DSS.GENERATOR_USER_MODEL_UNRESOLVED`, including after an IR round trip.
+Same-format source emission remains available. A locally built, pinned upstream
+`IndMach012a` library supplies native reference results for the three public
+four-wire induction-machine cases; these remain unqualified typed conversions.
+
 OpenDSS Storage voltage model 1 reads fixed idling, charging and discharging
 power as signed `BoundedConstantPower` loads. The profile covers one-phase wye
 and two-/three-phase wye or delta, including reactive-only states. It preserves
