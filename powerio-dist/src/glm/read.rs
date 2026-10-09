@@ -16,6 +16,7 @@ use crate::{
 const METERS_PER_MILE: f64 = 1609.344;
 
 mod cables;
+mod capacitors;
 mod geometry;
 mod loads;
 mod regulators;
@@ -32,6 +33,7 @@ mod transformers;
 /// contacts use exact line equivalents; ideal and open contacts remain typed switches.
 /// Ordinary NR single-phase and three-phase grounded-wye transformers use typed windings.
 /// Wye regulators preserve fixed phase taps and NR resistance in winding equivalents.
+/// Manual wye capacitors use fixed per-phase shunt admittances.
 /// Other conductor/device profiles remain under implementation.
 pub fn parse(
     source: Source,
@@ -72,6 +74,7 @@ pub fn parse(
     reader.switches()?;
     reader.transformers()?;
     reader.regulators()?;
+    reader.capacitors()?;
     reader.coordinates()?;
     crate::require_electrical_readiness(&reader.net)
         .map_err(|e| e.with_source(project.source().clone()))?;
@@ -851,7 +854,7 @@ fn supported_class(name: &str) -> bool {
         )
 }
 fn bus_class(name: &str) -> bool {
-    matches!(name, "node" | "load" | "meter")
+    matches!(name, "node" | "load" | "meter" | "capacitor")
 }
 fn matrix_property(name: &str) -> bool {
     let bytes = name.as_bytes();
@@ -864,7 +867,7 @@ fn allowed_property(class: &str, name: &str) -> bool {
     matches!(
         name,
         "name" | "parent" | "groupid" | "latitude" | "longitude"
-    ) || (matches!(class, "node" | "meter" | "load")
+    ) || (bus_class(class)
         && matches!(
             name,
             "phases"
@@ -879,6 +882,7 @@ fn allowed_property(class: &str, name: &str) -> bool {
         || (matches!(class, "overhead_line" | "underground_line")
             && matches!(name, "phases" | "from" | "to" | "length" | "configuration"))
         || (class == "line_configuration" && matrix_property(name))
+        || capacitors::allowed(class, name)
         || regulators::allowed(class, name)
         || transformers::allowed(class, name)
         || geometry::allowed(class, name)
@@ -921,7 +925,10 @@ fn quantity_spec(
             },
         );
     }
-    if let Some(unit) = geometry::unit(class, name).or_else(|| cables::unit(class, name)) {
+    if let Some(unit) = capacitors::unit(class, name)
+        .or_else(|| geometry::unit(class, name))
+        .or_else(|| cables::unit(class, name))
+    {
         return Some((Real, Some(unit)));
     }
     if class == "switch" {

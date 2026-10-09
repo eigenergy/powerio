@@ -1,10 +1,9 @@
-"""Pinned IEEE13/IEEE37 NR static conversion and independently edited cases.
+"""Pinned IEEE distribution feeder conversions against both forks and OpenDSS.
 
-Both GridLAB-D forks and OpenDSS compare all bus phase voltages, source currents,
-branch phase-port currents/powers/losses, and original load-object phase currents
-and powers: 257 complex quantities for IEEE13, 732 for IEEE37. Every bus must
-also satisfy current balance. This qualifies these pinned NR cases and edits,
-not arbitrary feeders, explicit neutrals or physical delta transformer isolation.
+IEEE13/37 include independently edited cases. IEEE34 currently qualifies the
+fixed source state only. Compare every bus phase voltage, physical device port,
+load and capacitor current/power, and bus current balance. Results apply to the
+pinned NR inputs, not arbitrary feeders or other solver profiles.
 """
 
 import argparse
@@ -12,14 +11,33 @@ import hashlib
 import json
 import re
 import subprocess
+from functools import partial
 from pathlib import Path
 
 import feeder_ports
-from oracle import HERE, LOCK, add, compare, literal, parse_complex, recorded, run_glm
+from oracle import (
+    HERE,
+    LOCK,
+    TOLERANCES,
+    add,
+    compare as compare_raw,
+    literal,
+    parse_complex,
+    recorded,
+    run_glm,
+)
 from transformer_roundtrip_oracle import header
 
 
-def instrument(text, network, original):
+def instrument(text, network, original, voltage_error="1e-9"):
+    # Recorder instrumentation must remain a bounded static solve.
+    if not re.search(r"\bstoptime\b", text):
+        text = re.sub(
+            r"(clock\s*\{[^}]*)(\})",
+            r"\1 stoptime '2001-01-01 0:00:01'; \2",
+            text,
+            count=1,
+        )
     source = feeder_ports.source_bus(network)
     # The hash-pinned input has braces inside line comments. This adaptation
     # is confined to that known fixture, not a general GLM preprocessing API.
@@ -33,7 +51,13 @@ def instrument(text, network, original):
     if original:
         text = re.sub(
             r"object (node|load)\s*\{",
-            r"object \1 { maximum_voltage_error 1e-9;",
+            rf"object \1 {{ maximum_voltage_error {voltage_error};",
+            text,
+        )
+    if not original:
+        text = re.sub(
+            r"maximum_voltage_error\s+[^;]+;",
+            f"maximum_voltage_error {voltage_error};",
             text,
         )
     text, count = re.subn(
@@ -44,7 +68,7 @@ def instrument(text, network, original):
     if count != 1:
         raise ValueError(f"source meter insertion count {count}")
     text = (
-        "#set complex_format=%.15g%+.15gj\n#set complex_output_format=RECT\n"
+        "#set complex_format=%.17g%+.17gj\n#set complex_output_format=RECT\n"
         + text
         + "\nmodule tape;\n"
     )
@@ -221,13 +245,22 @@ def edited_original(text, source="n650"):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True, type=Path)
-    parser.add_argument("--case", choices=("ieee13", "ieee37"), default="ieee13")
+    parser.add_argument(
+        "--case", choices=("ieee13", "ieee34", "ieee37"), default="ieee13"
+    )
+    parser.add_argument(
+        "--baseline-only",
+        action="store_true",
+        help="qualify the fixed source state without the IEEE13/37-specific edits",
+    )
     parser.add_argument("--bridge", required=True, type=Path)
     parser.add_argument("--pnnl-root", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     manifest = json.loads((HERE / "upstream.json").read_text())
-    number = "13" if args.case == "ieee13" else "37"
+    number = args.case.removeprefix("ieee")
+    if args.case == "ieee34" and not args.baseline_only:
+        parser.error("IEEE34 currently requires --baseline-only")
     fixture = next(
         f
         for f in manifest["files"]
@@ -239,18 +272,18 @@ def main():
     native_text = data.decode()
     bridge_options = []
     dependency = None
-    if args.case == "ieee37":
+    if args.case in ("ieee34", "ieee37"):
         dependency = next(
             f
             for f in manifest["files"]
-            if f["local"] == "data_configurations_37_node.glm"
+            if f["local"] == f"data_configurations_{number}_node.glm"
         )
         root = args.source.resolve().parent.parent
         config = (root / dependency["local"]).read_bytes()
         if hashlib.sha256(config).hexdigest() != dependency["sha256"]:
             raise ValueError("feeder include pin mismatch")
         native_text = native_text.replace(
-            '#include "../data_configurations_37_node.glm";', config.decode()
+            f'#include "../data_configurations_{number}_node.glm";', config.decode()
         )
         bridge_options = ["--acquisition-root", str(root)]
     args.output.mkdir(parents=True, exist_ok=False)
@@ -259,20 +292,28 @@ def main():
         "source": fixture,
         "dependency": dependency,
         "feeder": args.case,
+        "baseline_only": args.baseline_only,
         "engines": LOCK,
         "bridge_sha256": hashlib.sha256(args.bridge.read_bytes()).hexdigest(),
         "adaptations": [
             "Strip known input's line comments before instrumenting objects",
             "Override source complex_output_format with RECT to match the explicit recorder j suffix",
             "Omit voltdump; Arras rejects PNNL mode POLAR",
-            "Set original bus convergence to canonical 1e-9 V; electrical comparison tolerances unchanged",
+            f"Set original/canonical bus stopping tolerance to {'1e-6' if args.case == 'ieee34' else '1e-9'} V; preserve V/A comparison limits; IEEE34 power resolution is twice maximum source voltage times absolute current tolerance",
             "Replace SWING node with a root meter; preserve source phasors and topology",
             f"Retain the original {fixture['assertions']} published voltage assertions; remove them only for deliberately edited inputs",
-            "IEEE37 only: flatten the hash-pinned configuration include for native instrumentation; PowerIO reads the original project with an explicit root",
+            "IEEE34/37: flatten hash-pinned configuration include for native instrumentation; PowerIO reads the original project with an explicit root",
+            "Bound recorder runs with a one-second stop after the declared timezone and start time",
+            "Record 17 significant digits; retain raw source-meter current and compare source current summed from physical native ports",
             "Original physical line ports use native a/b impedance dumps; published noncommuting-shunt current reporting is checked separately",
             "Canonical generated shunts and load objects use native coefficients and solved voltages; original parent topology is retained",
-            "Independent edits: loads x1.25, line/contact impedance lengths x1.1, winding R x1.2, X x0.9, secondary volts x1.05, regulator primary taps x1.02, source phase A x1.03",
+            (
+                "No edited-state qualification in baseline-only mode"
+                if args.baseline_only
+                else "Independent edits: loads x1.25, line/contact impedance lengths x1.1, winding R x1.2, X x0.9, secondary volts x1.05, regulator primary taps x1.02, source phase A x1.03"
+            ),
         ],
+        "edited_state_qualified": not args.baseline_only,
         "cases": {},
     }
     for profile in ("pnnl", "arras"):
@@ -295,6 +336,19 @@ def main():
         (base / "bridge.json").write_text(run.stdout)
         decoded = json.loads(run.stdout)
         network = decoded["fresh"]["network"]
+        tolerances = dict(TOLERANCES)
+        if args.case == "ieee34":
+            # At 15 kV the existing 1e-7 A current resolution is millivolt-amperes.
+            # Two port powers are subtracted for losses. Carry that resolution
+            # into their absolute power budget; retain all V/A/relative limits.
+            maximum_voltage = max(
+                v for src in network["sources"] for v in src["v_magnitude"]
+            )
+            tolerances["VA"] = (
+                2 * maximum_voltage * TOLERANCES["A"][0],
+                TOLERANCES["VA"][1],
+            )
+        compare = partial(compare_raw, tolerances=tolerances)
         inventory = {
             key: len(network[key])
             for key in ("buses", "lines", "transformers", "loads")
@@ -303,6 +357,8 @@ def main():
             {"buses": 15, "lines": 12, "transformers": 4, "loads": 16}
             if args.case == "ieee13"
             else {"buses": 37, "lines": 35, "transformers": 1, "loads": 32}
+            if args.case == "ieee37"
+            else {"buses": 55, "lines": 51, "transformers": 7, "loads": 70}
         )
         if inventory != expected_inventory:
             raise ValueError("pinned feeder inventory changed")
@@ -313,7 +369,12 @@ def main():
         snapshots = {}
         balances = {}
         native_reports = {}
-        for label in ("original", "fresh", "edited_original", "edited", "negative"):
+        labels = (
+            ("original", "fresh", "negative")
+            if args.baseline_only
+            else ("original", "fresh", "edited_original", "edited", "negative")
+        )
+        for label in labels:
             directory = base / label
             directory.mkdir()
             original = label in ("original", "edited_original")
@@ -342,7 +403,12 @@ def main():
                     raise ValueError(
                         "negative control did not change the winding ratio"
                     )
-            text, outputs = instrument(text, case_network, original)
+            text, outputs = instrument(
+                text,
+                case_network,
+                original,
+                "1e-6" if args.case == "ieee34" else "1e-9",
+            )
             (directory / "model.glm").write_text(text)
             run_glm(profile, directory, args.pnnl_root, outputs=outputs)
             snapshots[label] = snapshot(directory, case_network)
@@ -350,33 +416,65 @@ def main():
                 directory, case_network, original
             )
             native_reports[label] = native_report
+            # Native NR source meters aggregate the native reported line input
+            # currents. For noncommuting pi shunts those differ from physical
+            # ports; retain the meter separately and sum measured physical ports.
+            raw["source_meter"] = {
+                k: v for k, v in snapshots[label].items() if k.startswith("source.")
+            }
+            for p in "ABC":
+                total = 0j
+                for name, _, ends in feeder_ports.devices(case_network):
+                    for side, (bus, terminals) in zip(
+                        ("from", "to"), ends, strict=True
+                    ):
+                        if (
+                            bus == feeder_ports.source_bus(case_network)
+                            and str("ABC".index(p) + 1) in terminals
+                        ):
+                            total += complex(
+                                *ports[f"{name}.{side}.{p}.current"]["value"]
+                            )
+                snapshots[label][f"source.measured_current_{p}"]["value"] = [
+                    total.real,
+                    total.imag,
+                ]
             snapshots[label].update(ports)
             balances[label] = feeder_ports.kcl(snapshots[label], case_network)
             (directory / "raw-ports.json").write_text(json.dumps(raw, indent=2))
         dss_snapshots = read_dss(converted / "fresh.dss" / "case.dss", network)
         snapshots["dss_default"] = dss_snapshots["default"]
         snapshots["dss_strict"] = dss_snapshots["strict"]
-        edited_dss = read_dss(
-            converted / "edited.dss" / "case.dss", decoded["edited"]["network"]
-        )
-        snapshots["edited_dss_default"] = edited_dss["default"]
-        snapshots["edited_dss_strict"] = edited_dss["strict"]
-        balances["edited_dss_strict"] = feeder_ports.kcl(
-            edited_dss["strict"], decoded["edited"]["network"]
-        )
+        if not args.baseline_only:
+            edited_dss = read_dss(
+                converted / "edited.dss" / "case.dss", decoded["edited"]["network"]
+            )
+            snapshots["edited_dss_default"] = edited_dss["default"]
+            snapshots["edited_dss_strict"] = edited_dss["strict"]
+            balances["edited_dss_strict"] = feeder_ports.kcl(
+                edited_dss["strict"], decoded["edited"]["network"]
+            )
         (base / "snapshots.json").write_text(json.dumps(snapshots, indent=2))
         balances["dss_strict"] = feeder_ports.kcl(snapshots["dss_strict"], network)
         check = compare(snapshots["original"], snapshots["fresh"])
+        check["comparison_tolerances"] = tolerances
+        check["microcase_power_threshold_check"] = {
+            "glm": compare_raw(snapshots["original"], snapshots["fresh"]),
+            "dss": compare_raw(snapshots["original"], snapshots["dss_strict"]),
+        }
         check["kcl"] = balances
         check["inventory"] = inventory
         check["native_reporting"] = native_reports
-        check["edited_glm"] = compare(snapshots["edited_original"], snapshots["edited"])
-        check["edited_dss"] = compare(
-            snapshots["edited_original"], snapshots["edited_dss_strict"]
-        )
-        check["stale_output_detected"] = not compare(
-            snapshots["edited_original"], snapshots["fresh"]
-        )["passed"]
+        if not args.baseline_only:
+            check["edited_glm"] = compare(
+                snapshots["edited_original"], snapshots["edited"]
+            )
+            check["edited_dss"] = compare(
+                snapshots["edited_original"], snapshots["edited_dss_strict"]
+            )
+            check["stale_output_detected"] = not compare(
+                snapshots["edited_original"], snapshots["fresh"]
+            )["passed"]
         check["negative_control"] = compare(
             snapshots["original"], snapshots["negative"]
         )
@@ -396,9 +494,14 @@ def main():
             check["passed"]
             and check["negative_detected"]
             and check["dss_strict_solve"]["passed"]
-            and check["edited_glm"]["passed"]
-            and check["edited_dss"]["passed"]
-            and check["stale_output_detected"]
+            and (
+                args.baseline_only
+                or (
+                    check["edited_glm"]["passed"]
+                    and check["edited_dss"]["passed"]
+                    and check["stale_output_detected"]
+                )
+            )
             and all(v["passed"] for v in balances.values())
             and all(
                 v["reported_current_law"]["passed"] for v in native_reports.values()

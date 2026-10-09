@@ -64,7 +64,8 @@ def add(snapshot: dict, key: str, unit: str, value: complex) -> None:
     snapshot[key] = {"unit": unit, "value": [float(value.real), float(value.imag)]}
 
 
-def compare(expected: dict, actual: dict) -> dict:
+def compare(expected: dict, actual: dict, *, tolerances=None) -> dict:
+    tolerances = TOLERANCES if tolerances is None else tolerances
     failures = []
     if not expected or not actual:
         failures.append("empty snapshot is not evidence")
@@ -75,7 +76,7 @@ def compare(expected: dict, actual: dict) -> dict:
     maximum = {}
     for key in sorted(expected.keys() & actual.keys()):
         ref, got = expected[key], actual[key]
-        if ref["unit"] != got["unit"] or ref["unit"] not in TOLERANCES:
+        if ref["unit"] != got["unit"] or ref["unit"] not in tolerances:
             failures.append(f"{key}: incompatible units")
             continue
         a, b = complex(*ref["value"]), complex(*got["value"])
@@ -85,7 +86,7 @@ def compare(expected: dict, actual: dict) -> dict:
         error = abs(a - b)
         unit = ref["unit"]
         maximum[unit] = max(maximum.get(unit, 0.0), error)
-        atol, rtol = TOLERANCES[unit]
+        atol, rtol = tolerances[unit]
         if error > atol + rtol * abs(a):
             failures.append(f"{key}: {b} != {a}; absolute error {error:.8g} {unit}")
     return {

@@ -87,6 +87,7 @@ pub(crate) fn emit_text(network: &MulticonductorNetwork) -> Result<TextEmission,
     writer.switches()?;
     writer.transformers()?;
     writer.loads()?;
+    writer.capacitor_shunts()?;
     writer.remaining_locations();
     Ok(TextEmission::new(
         writer.out,
@@ -159,7 +160,6 @@ impl Writer<'_> {
         }
         if !self.net.generators().is_empty()
             || !self.net.ibrs().is_empty()
-            || !self.net.shunts().is_empty()
             || !self.net.capacitors().is_empty()
             || !self.net.control_profiles().is_empty()
             || !self.net.untyped_objects().is_empty()
@@ -221,6 +221,9 @@ impl Writer<'_> {
         }
         for load in self.net.loads() {
             self.reserve(&load.name)?;
+        }
+        for shunt in self.net.shunts() {
+            self.reserve(&shunt.name)?;
         }
         for switch in self.net.switches() {
             self.reserve(&switch.name)?;

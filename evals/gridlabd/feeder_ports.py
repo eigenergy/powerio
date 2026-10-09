@@ -1,4 +1,4 @@
-"""Device ports for the pinned IEEE13/IEEE37 feeders (not a general GLM reader).
+"""Device ports for the pinned IEEE13/IEEE34/IEEE37 feeders (not a general GLM reader).
 
 Topology/phase identities come from the converted network. Electrical reference
 values come only from native recorder output and native impedance dumps.
@@ -57,11 +57,10 @@ def load_identity(name):
 def instrument(text, network, original):
     outputs = []
     for i, (name, _, ends) in enumerate(devices(network)):
+        base = name.rsplit("__", 1)[0]
         native_name = (
-            "fregn650n630"
-            if original
-            and name.startswith("fregn650n630__")
-            and re.search(r"name\s+fregn650n630\s*;", text)
+            base
+            if original and re.search(rf'name\s+"?{re.escape(base)}"?\s*;', text)
             else name
         )
         props = (
@@ -95,6 +94,11 @@ def instrument(text, network, original):
             ]
         )
         filename = f"load-{i}.csv"
+        text += f'object recorder {{ parent "{name}"; property {props}; interval 1; file "{filename}"; }}\n'
+        outputs.append(filename)
+    for i, (name, _) in enumerate(capacitor_objects(text)):
+        props = ",".join(f"{q}_{p}" for q in ("voltage", "shunt") for p in "ABC")
+        filename = f"capacitor-{i}.csv"
         text += f'object recorder {{ parent "{name}"; property {props}; interval 1; file "{filename}"; }}\n'
         outputs.append(filename)
     return text, tuple(outputs)
@@ -196,6 +200,7 @@ def snapshot(directory, network, original):
     if shunts:
         raise ValueError("unmeasured generated shunts")
     result.update(load_snapshot(directory))
+    result.update(capacitor_snapshot(directory))
     # Canonical ports use observed series currents and native load coefficients.
     # Original native reporting is additionally checked against its own a/b/c/d
     # law; a mismatch with physical ports is retained rather than waived silently.
@@ -272,6 +277,62 @@ def read_dss(dss, network):
         for p in "ABC":
             add(result, f"load.{name}.{p}.current", "A", amps[p])
             add(result, f"load.{name}.{p}.power", "VA", powers[p])
+    result.update(capacitor_dss(dss, network))
+    return result
+
+
+def capacitor_objects(text):
+    for body in re.findall(r"object capacitor\s*\{([^{}]*)", text):
+        props = dict(re.findall(r'(\w+)\s+"?([^;"\n]+)"?;', body))
+        name = props["name"].strip()
+        yield name, props.get("parent", name).strip()
+
+
+def capacitor_snapshot(directory):
+    text = (directory / "model.glm").read_text()
+    groups = {}
+    for i, (name, _) in enumerate(capacitor_objects(text)):
+        row = recorded(directory / f"capacitor-{i}.csv")
+        amps, powers = groups.setdefault(
+            load_identity(name), (dict.fromkeys("ABC", 0j), dict.fromkeys("ABC", 0j))
+        )
+        for p in "ABC":
+            current = row[f"voltage_{p}"] * row[f"shunt_{p}"]
+            amps[p] += current
+            powers[p] += row[f"voltage_{p}"] * current.conjugate()
+    result = {}
+    for name, (amps, powers) in groups.items():
+        for p in "ABC":
+            add(result, f"capacitor.{name}.{p}.current", "A", amps[p])
+            add(result, f"capacitor.{name}.{p}.power", "VA", powers[p])
+    return result
+
+
+def capacitor_dss(dss, network):
+    groups = {}
+    for shunt in network["shunts"]:
+        name = "capacitor." + shunt["name"]
+        dss.Circuit.SetActiveElement(name)
+        if dss.CktElement.Name().lower() != name.lower():
+            raise ValueError("missing DSS capacitor " + name)
+        amps, powers = groups.setdefault(
+            load_identity(shunt["name"]),
+            (dict.fromkeys("ABC", 0j), dict.fromkeys("ABC", 0j)),
+        )
+        n = dss.CktElement.NumConductors()
+        raw_i, raw_v = dss.CktElement.Currents(), dss.CktElement.Voltages()
+        for i, node in enumerate(dss.CktElement.NodeOrder()[:n]):
+            if node:
+                p = "ABC"[node - 1]
+                current = complex(*raw_i[2 * i : 2 * i + 2])
+                voltage = complex(*raw_v[2 * i : 2 * i + 2])
+                amps[p] += current
+                powers[p] += voltage * current.conjugate()
+    result = {}
+    for name, (amps, powers) in groups.items():
+        for p in "ABC":
+            add(result, f"capacitor.{name}.{p}.current", "A", amps[p])
+            add(result, f"capacitor.{name}.{p}.power", "VA", powers[p])
     return result
 
 
@@ -355,6 +416,14 @@ def kcl(snapshot, network):
                 residual[bus, p] += amps
             elif amps != 0:
                 raise ValueError("load current on absent phase")
+    capacitor_buses = {load_identity(sh["name"]): sh["bus"] for sh in network["shunts"]}
+    for name, bus in capacitor_buses.items():
+        for p in "ABC":
+            amps = value(f"capacitor.{name}.{p}.current")
+            if (bus, p) in residual:
+                residual[bus, p] += amps
+            elif amps != 0:
+                raise ValueError("capacitor current on absent phase")
     for p in "ABC":
         residual[source_bus(network), p] -= value(f"source.measured_current_{p}")
     expected, actual = {}, {}

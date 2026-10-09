@@ -880,3 +880,36 @@ physical delta isolation or the separate FBS transformer equations. The pinned
 [PNNL transformer implementation](https://github.com/gridlab-d/gridlab-d/blob/1b2e463d3c149e999a2c5f04213477f545e01dc6/powerflow/transformer.cpp)
 and [link stamps](https://github.com/gridlab-d/gridlab-d/blob/1b2e463d3c149e999a2c5f04213477f545e01dc6/powerflow/link.cpp)
 provide the native equations; the engine checks independently verify the mapping.
+
+### IEEE feeder corpus
+
+`ieee-corpus.json` catalogs pinned public feeder inputs and published result
+sources, including IEEE4/13/34/37/123/8500/9500 and low-voltage/neutral cases.
+It is an acquisition inventory, not a compatibility claim. Keep downloaded
+models outside the repository; review the source license before redistributing.
+
+The existing `upstream.py` downloader now includes the IEEE34 NR case and its
+configuration include. Run its fixed-state conversion check with:
+
+```sh
+python evals/gridlabd/feeder_oracle.py --case ieee34 --baseline-only \
+  --source /path/to/upstream/autotest/test_IEEE_34_NR.glm \
+  --bridge /path/to/glm_roundtrip --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-report-directory
+```
+
+This profile covers 55 electrical buses, 51 lines, seven winding equivalents,
+70 load records and six fixed capacitor coils. Each fork compares 1,000 complex
+quantities with canonical GLM and OpenDSS and checks every bus's current balance.
+It does not yet qualify edited IEEE34 states. IEEE13/37 retain their edited-state
+checks. Fresh and IR-restored canonical GLM must be identical.
+
+IEEE34 needs a native stopping tolerance of `1e-6 V`; tighter settings failed
+convergence on the pinned engine. Voltage/current acceptance limits remain those
+in `oracle.py`. Its absolute power budget is twice the maximum source voltage
+multiplied by the absolute current tolerance, to account for subtracting two
+terminal powers at roughly 15 kV. The report also retains results against the
+stricter microcase power threshold. Native source-meter current, which follows
+GridLAB-D's noncommuting line-shunt reporting law, is retained separately;
+compared source current sums physical native ports. Recorder runs are bounded
+to one second and use 17 significant digits.

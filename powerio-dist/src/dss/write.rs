@@ -1760,6 +1760,11 @@ impl DssWriter {
 
     fn add_default_load_voltage_bounds(&self, extras: &mut Extras) {
         if let Some(bounds) = self.options.default_load_voltage_bounds {
+            if bounds.vminpu == 0.0 {
+                // Vminpu=0 alone leaves the native Vlowpu=.5 impedance fallback.
+                // Unbounded P/I laws must retain their behavior below that threshold.
+                extras.entry("vlowpu".into()).or_insert_with(|| 0.0.into());
+            }
             extras
                 .entry("vminpu".into())
                 .or_insert_with(|| bounds.vminpu.into());
@@ -3070,6 +3075,7 @@ mod tests {
         let out = emit_dss_text(&net);
         let line = out.text.lines().find(|l| l.contains("Load.ld")).unwrap();
         assert!(line.contains("vminpu=0"), "{line}");
+        assert!(line.contains("vlowpu=0"), "{line}");
         assert!(line.contains("vmaxpu=2"), "{line}");
     }
 
