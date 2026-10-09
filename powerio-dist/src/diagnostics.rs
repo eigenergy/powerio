@@ -69,6 +69,8 @@ pub mod codes {
             "native NR delta-delta transformer equations use an equivalent grounded-wye circuit";
         READ_GLM_CONTROL_FROZEN = "READ.GLM.CONTROL_FROZEN", Warning,
             "active control behavior is omitted while declared fixed electrical states are preserved";
+        READ_GLM_LINE_EQUIVALENT = "READ.GLM.LINE_EQUIVALENT", Remark,
+            "native FBS noncommuting line equations use an exact admittance equivalent";
         READ_GLM_NATIVE_LINE_DISCREPANCY = "READ.GLM.NATIVE_LINE_DISCREPANCY", Warning,
             "native line reporting and FBS solved states can differ from the physical pi-line model for noncommuting matrices";
         READ_GLM_GEOMETRY_MATERIALIZED = "READ.GLM.GEOMETRY_MATERIALIZED", Remark,

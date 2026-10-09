@@ -467,12 +467,20 @@ constraint, and the input network is unchanged.
 
 For noncommuting line impedance and capacitance matrices, the pinned engines
 use a source-end current equation that differs from the physical pi-line law.
-NR uses it for reporting. FBS also uses it during the solve, so its voltages and
-injections can differ from a physical line circuit. Import warns about the
-solver-specific discrepancy and retains the physical pi-line model. The original
-IEEE13/34 FBS variants therefore remain unqualified for exact native result
-matching; their successful parse is not electrical equivalence.
-Canonical output replaces native line capacitance with exact phase-pair and
+NR uses it for reporting, so NR import retains the physical circuit and warns
+about the reporting discrepancy. FBS uses it during its solve: FBS import now
+preserves the native equations as a conductor admittance with auxiliary current
+variables and ideal external contacts, reporting `READ.GLM.LINE_EQUIVALENT`.
+Line coordinates follow the shunt and contacts; configuration coordinates and
+materialized coefficients remain on the retained linecode. OpenDSS output
+preserves this nonreciprocal circuit. Eight analytic/native/IR/DSS cases cover
+two- and three-phase examples, and IEEE13 FBS matches both pinned engines.
+IEEE34 still has two loss comparisons just above the strict tolerance; IEEE123's
+zero-voltage variant has one undeclared-phase voltage discrepancy. Neither is
+claimed as a complete raw match. Canonical GLM writing of these native FBS
+auxiliary-node equivalents remains unsupported.
+
+For physical pi-line networks, canonical output replaces native line capacitance with exact phase-pair and
 earth-return impedance loads at each end. Conductive or unequal end shunts use
 the same equivalent in either solver. End-shunt expansion requires symmetric
 matrices; a nonreciprocal equivalent needs additional mapping and fails explicitly.

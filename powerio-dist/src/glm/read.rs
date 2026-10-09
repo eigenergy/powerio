@@ -20,6 +20,7 @@ mod cables;
 mod capacitors;
 mod delta_delta;
 mod delta_grounded;
+mod fbs_lines;
 mod generators;
 mod geometry;
 mod inverters;
@@ -844,13 +845,13 @@ impl Reader<'_> {
                 }
             };
             if !super::line_physics::line_shunts_commute(&code) {
-                let effect = if self.newton_raphson {
-                    "native NR reported source-end currents and losses differ from the physical line ports"
-                } else {
-                    "native FBS uses the differing source-end current equation during its solve, so solved voltages and injections can also differ"
-                };
-                self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_NATIVE_LINE_DISCREPANCY,
-                    format!("line {}: this source has noncommuting impedance/capacitance matrices; {effect}; the typed network preserves the physical pi-line law, not the nonreciprocal native FBS equation; canonical output uses exact end-shunt equivalents", self.names[&key])));
+                if !self.newton_raphson {
+                    self.fbs_line(key, &phases, &code, length)?;
+                    self.net.line_codes_mut().push(code);
+                    self.attach(config, crate::DistLocationTarget::LineCode, code_name);
+                    continue;
+                }
+                self.warn_native_line_reporting(key);
             }
             self.net.line_codes_mut().push(code);
             self.attach(

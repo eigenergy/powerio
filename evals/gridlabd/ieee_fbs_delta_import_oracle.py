@@ -1,4 +1,4 @@
-"""Original IEEE37/123 FBS cases through IR and physical DSS port measurements."""
+"""Original IEEE13/34/37/123 FBS cases through IR and physical DSS port measurements."""
 
 import argparse
 import hashlib
@@ -20,7 +20,9 @@ from oracle import LOCK, compare, run_glm
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--case", choices=("ieee37", "ieee123"), required=True)
+    p.add_argument(
+        "--case", choices=("ieee13", "ieee34", "ieee37", "ieee123"), required=True
+    )
     for name in ("source", "bridge", "output", "pnnl-root"):
         p.add_argument("--" + name, type=Path, required=True)
     args = p.parse_args()
@@ -93,8 +95,8 @@ def main():
             # The fork renamed dump formatting keywords; this only changes
             # telemetry syntax, never electrical inputs or fixed states.
             model = re.sub(
-                r"(object voltdump\s*\{[^{}]*?mode\s+)RECT",
-                r"\1rect",
+                r"(object voltdump\s*\{[^{}]*?mode\s+)(RECT|POLAR)",
+                lambda m: m[1] + m[2].lower(),
                 model,
             )
             model = re.sub(r"object group_recorder\s*\{[^{}]*\}", "", model)

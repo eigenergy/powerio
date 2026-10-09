@@ -1118,12 +1118,14 @@ negative half-ohm conductors to cancel the one-ohm differential leakage without
 adding a ground connection. Core and neutral shunts remain outside this profile.
 
 
-### IEEE13/34 FBS incompatibility audit
+### IEEE13/34 FBS native-equation audit
 
-`fbs_feeder_import_oracle.py` uses the pinned original FBS inputs and their
-configuration includes. It checks actual import, IR and OpenDSS output with the
-same V/A limits as the existing NR feeder harness. IEEE34 retains its documented
-voltage-scaled absolute power resolution. Wrong regulator taps must be detected.
+`fbs_feeder_import_oracle.py` now delegates to the common original-feeder
+harness, preserving its command-line entry point. The obsolete audit assumed
+that imported lines were all physical pi circuits. Native FBS instead sets
+`d=a` in its hybrid transfer equations, and import now preserves that law using
+existing admittance records. NR still solves a physical circuit and uses the
+noncommuting equation only for reporting.
 
 ```sh
 python evals/gridlabd/fbs_feeder_import_oracle.py \
@@ -1132,21 +1134,11 @@ python evals/gridlabd/fbs_feeder_import_oracle.py \
   --output /path/to/new-fbs-audit-directory
 ```
 
-These original FBS cases currently **fail** electrical equivalence; the audit
-returns nonzero and does not count a successful parse as qualification. Both
-pinned forks use `d = a` in their line transfer matrices where a physical pi line
-requires `d = transpose(a)` for symmetric impedance/admittance matrices. FBS
-uses this current equation during the solve. Native reported ports satisfy KCL,
-but physical ports reconstructed independently from native impedance dumps do
-not at that solution. IEEE34 differs from physical OpenDSS output by about
-0.024 V; this is not covered by widening a solver tolerance. NR stamps the
-physical circuit and uses the differing equation for reporting only.
-
-The parser's `READ.GLM.NATIVE_LINE_DISCREPANCY` warning identifies the distinction.
-Canonical output still preserves the physical pi circuit using end shunts. An
-exact representation of the nonreciprocal native FBS equation is unresolved.
-The full IEEE8500 qualification is unaffected; these cases exercise additional
-line-capacitance behavior.
+IEEE13 FBS passes the raw bus and physical external-port comparisons on both
+forks. IEEE34 currently retains two failed line-loss comparisons, about
+0.00011 VA each, with unchanged common tolerances. It is not declared a complete
+raw match. Both retain deliberately incorrect output checks. Canonical writing
+of the auxiliary-node native FBS line equivalent remains unfinished.
 
 
 ### PNNL constant-PQ generators
@@ -1316,13 +1308,37 @@ solve in DSS, but their complete raw comparisons remain **failed**:
   failures. A regulator reports an undeclared phase voltage. An open switch
   reports downstream load current/power despite zero input; DSS reports zero
   at both open ports. These sixteen raw failures remain visible.
-- The zero-voltage variant has 2,079 measurements. It also reports an undeclared
-  phase voltage, and small line/port discrepancies remain above the strict
-  tolerance. Neither changing tolerance nor discarding these observables is
-  used to declare a pass.
+- The zero-voltage variant has 2,079 measurements. With the native FBS line
+  equivalent, only its undeclared-phase voltage remains a raw failure on each
+  fork. All line/port comparisons pass. The inconsistent voltage observable
+  remains in the comparison, so the full case is not declared a pass.
 
 Together with earlier support, thirteen of fourteen cached original GLM entry
 points now parse with IR equality. This is an entry-point count, not fourteen
 feeder families or thirteen electrical qualifications. The remaining
 `test_IEEE123_run.glm` is a switching-schedule simulation; it still needs explicit
 static-snapshot handling rather than silently executing or stripping controls.
+
+### Analytic FBS line equivalents
+
+`fbs_line_import_oracle.py` exercises eight combinations of two/three phases,
+line length, and pinned engine fork. It compares an independent analytic hybrid
+solve with native outputs and the actual import → IR → DSS path. Wrong contact
+impedance must fail. The native equations are `Vfrom=a Vto+Z Iout` and
+`Iin=c Vto+a Iout`, with `a=I+ZY/2`, `c=Y+YZY/4`, and Y the total shunt.
+No matrix symmetrization, epsilon impedance, or tolerance widening is used.
+Configuration coefficients/coordinates remain on a linecode; line coordinates
+follow the equivalent's shunt and contacts. FBS import uses these equations only
+when Z/Y do not commute; NR retains the physical circuit.
+
+```sh
+python evals/gridlabd/fbs_line_import_oracle.py \
+  --bridge /path/to/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-fbs-line-results
+```
+
+The OpenDSS source writer also distinguishes its native symmetric (`Z1=Z2`)
+and asymmetric sequence-source formulas. Only the latter needs compensation
+for the pinned engine's truncated rotation constants. Using that compensation
+for symmetric blocks introduced a measurable projection error; the line
+microcases exercise both branches and catch it.

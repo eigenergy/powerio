@@ -196,10 +196,16 @@ def imported_snapshot(path, network, objects, wrong_tap=False):
         else:
             # Perturb a feeder line when all transformers use admittance
             # equivalents; an unloaded transformer would make a weak negative.
-            line = network["lines"][0]
-            e.Text.Command(
-                f"edit line.{line['name']} length={line['length'] * 1.01:.17g}"
-            )
+            if network.get("lines"):
+                line = network["lines"][0]
+                e.Text.Command(
+                    f"edit line.{line['name']} length={line['length'] * 1.01:.17g}"
+                )
+            else:
+                contact = next(
+                    s for s in network["switches"] if s["name"].endswith("__glm_to")
+                )
+                e.Text.Command(f"edit line.{contact['name']} r1=1.1 r0=1.1")
     e.Text.Command("set tolerance=1e-12 maxiterations=1000 controlmode=off")
     e.Solution.Solve()
     if not e.Solution.Converged() or e.Solution.ControlMode() != -1:
@@ -267,7 +273,7 @@ def imported_snapshot(path, network, objects, wrong_tap=False):
                     currents[end, index] += iv
                     powers[end, index] += sv
 
-        if cls == "transformer" and any(
+        if cls in ("transformer", "overhead_line", "underground_line") and any(
             s["name"] == name for s in network.get("shunts", [])
         ):
             for end, side in enumerate(("from", "to")):
