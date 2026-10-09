@@ -1460,13 +1460,16 @@ impl<L: Loader> Executor<'_, L> {
         });
         if matches!(
             self.raw.objects[idx].class.as_str(),
-            "line" | "linecode" | "wiredata" | "linegeometry"
+            "line" | "linecode" | "wiredata" | "linegeometry" | "xfmrcode" | "transformer"
         ) {
             self.raw.line_history.insert(
                 idx,
                 super::line_history::LineHistory::new(self.raw.frequency.constructor()),
             );
-            if self.raw.objects[idx].class != "linecode" {
+            if matches!(
+                self.raw.objects[idx].class.as_str(),
+                "line" | "wiredata" | "linegeometry"
+            ) {
                 self.raw
                     .geometry_timeline
                     .push(super::geometry::timeline::Action::New {
@@ -1621,6 +1624,22 @@ impl<L: Loader> Executor<'_, L> {
         }
     }
 
+    fn copy_transformer_bindings(&mut self, idx: usize, src: usize, base: usize) {
+        if self.raw.objects[idx].class == "transformer" {
+            let bindings = self.raw.line_history[&src].xfmrcodes.clone();
+            self.raw
+                .line_history
+                .get_mut(&idx)
+                .unwrap()
+                .xfmrcodes
+                .extend(
+                    bindings
+                        .into_iter()
+                        .map(|(offset, point)| (base + offset, point)),
+                );
+        }
+    }
+
     fn apply_like(&mut self, idx: usize, value: &Value, ctx: &dyn Fn(String) -> String) {
         let class = self.raw.objects[idx].class.clone();
         let key = (class.clone(), value.text.to_ascii_lowercase());
@@ -1697,6 +1716,7 @@ impl<L: Loader> Executor<'_, L> {
                         },
                     );
                 }
+                self.copy_transformer_bindings(idx, src, base);
                 self.append_source_resets(idx, src, base);
                 let cloned = self.raw.objects[src].props.clone();
                 let bounds: Vec<usize> = self.raw.objects[src]
@@ -1838,6 +1858,21 @@ impl<L: Loader> Executor<'_, L> {
                     .get_mut(&idx)
                     .unwrap()
                     .linecodes
+                    .insert(offset, referenced);
+            }
+            if self.raw.objects[idx].class == "transformer" && p.name.as_deref() == Some("xfmrcode")
+            {
+                let referenced = self
+                    .raw
+                    .index
+                    .get(&("xfmrcode".into(), p.value.text.to_ascii_lowercase()))
+                    .map(|&index| self.raw.line_snapshot(index));
+                let offset = self.raw.objects[idx].props.len();
+                self.raw
+                    .line_history
+                    .get_mut(&idx)
+                    .unwrap()
+                    .xfmrcodes
                     .insert(offset, referenced);
             }
             if !self.bind_geometry_references(idx, &p, ctx) {

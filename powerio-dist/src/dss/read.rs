@@ -141,9 +141,19 @@ fn snapshot_network(raw: &RawDss) -> (MulticonductorNetwork, Vec<crate::diagnost
     if let Err(error) = rd.resolved_lines(raw) {
         rd.warn(&C::READ_DSS_LINE_UNRESOLVED, error);
     }
-    for obj in raw.of_class("transformer") {
-        let t = rd.transformer(obj);
-        rd.net.transformers_mut().push(t);
+    for (index, obj) in raw
+        .objects
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| o.class == "transformer")
+    {
+        match rd.transformer(obj, raw, index) {
+            Ok(t) => rd.net.transformers_mut().push(t),
+            Err(e) => rd.warn(
+                &C::READ_DSS_TRANSFORMER_UNRESOLVED,
+                format!("Transformer.{}: {e}", obj.name),
+            ),
+        }
     }
     for obj in raw.of_class("load") {
         let l = rd.load(obj);
@@ -805,7 +815,12 @@ impl Reader<'_> {
     // ----- transformer ---------------------------------------------------
 
     #[allow(clippy::too_many_lines)] // OpenDSS transformer edits must be replayed in order
-    fn transformer(&mut self, obj: &RawObject) -> DistTransformer {
+    fn transformer(
+        &mut self,
+        obj: &RawObject,
+        raw: &RawDss,
+        index: usize,
+    ) -> std::result::Result<DistTransformer, String> {
         // Order matters: wdg= switches the winding under edit, windings=
         // reallocates. Walk assignments sequentially.
         let mut phases = dd::transformer::PHASES;
@@ -823,10 +838,39 @@ impl Reader<'_> {
         let mut begin = 0;
         for end in obj.edit_bounds() {
             let mut scalar_reactance_changed = false;
-            for p in &obj.props[begin..end] {
+            for (offset, p) in obj.props.iter().enumerate().take(end).skip(begin) {
                 let Some(name) = &p.name else { continue };
                 let v = &p.value;
                 match name.as_str() {
+                    "xfmrcode" => {
+                        let point = raw.line_history[&index].xfmrcodes.get(&offset)
+                            .ok_or("missing XfmrCode binding")?
+                            .ok_or("XfmrCode did not exist at assignment")?;
+                        let code = super::xfmrcode::resolve(raw, point)?;
+                        phases = code.phases;
+                        n_windings = code.windings.len();
+                        let buses: Vec<_> = windings.iter().map(|w| w.bus.clone()).collect();
+                        windings = code.windings.iter().enumerate().map(|(i, w)| WindingRaw {
+                            bus: buses.get(i).cloned().flatten(),
+                            conn_delta: w.delta, kv: w.kv, kva: w.kva, tap: w.tap,
+                            r_pct: w.r, r_neutral: Some(w.rneut), x_neutral: Some(w.xneut),
+                            kv_specified: true, kva_specified: true,
+                        }).collect();
+                        if active >= n_windings { return Err("XfmrCode leaves an invalid winding selector".into()); }
+                        [xhl, xht, xlt] = code.x;
+                        xsc_pct = code.xsc;
+                        xhl_specified = true;
+                        // FetchXfmrCode immediately calls RecalcElementData.
+                        if scalar_reactance_changed && n_windings <= 3 {
+                            let count = xsc_pct.len();
+                            xsc_pct.clone_from_slice(&code.x[..count]);
+                        }
+                        scalar_reactance_changed = false;
+                        for (key, value) in code.extras {
+                            extras.insert(key, value.into());
+                        }
+                    }
+
                     "phases" => {
                         phases = self.usize_prop(Some(v)).unwrap_or(phases);
                     }
@@ -969,13 +1013,13 @@ impl Reader<'_> {
         }
         let out = self.finish_windings(&windings, phases, &obj.name);
 
-        DistTransformer {
+        Ok(DistTransformer {
             name: obj.name.clone(),
             windings: out,
             xsc_pct,
             phases,
             extras,
-        }
+        })
     }
 
     /// Resolves winding bus specs, terminal maps, and SI ratings, recording

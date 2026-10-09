@@ -217,6 +217,54 @@ class!(
     ]
 );
 
+// Pinned DSS C-API XfmrCode.pas; codes have no bus or circuit-element fields.
+class!(
+    XFMR_CODE,
+    "xfmrcode",
+    [
+        "phases",
+        "windings",
+        "wdg",
+        "conn",
+        "kv",
+        "kva",
+        "tap",
+        "%r",
+        "rneut",
+        "xneut",
+        "conns",
+        "kvs",
+        "kvas",
+        "taps",
+        "xhl",
+        "xht",
+        "xlt",
+        "xscarray",
+        "thermal",
+        "n",
+        "m",
+        "flrise",
+        "hsrise",
+        "%loadloss",
+        "%noloadloss",
+        "normhkva",
+        "emerghkva",
+        "maxtap",
+        "mintap",
+        "numtaps",
+        "%imag",
+        "ppm_antifloat",
+        "%rs",
+        "x12",
+        "x13",
+        "x23",
+        "rdcohms",
+        "seasons",
+        "ratings",
+        "like",
+    ]
+);
+
 class!(
     VSOURCE,
     "vsource",
@@ -600,6 +648,7 @@ static CLASSES: &[&DssClass] = &[
     &LINE_GEOMETRY,
     &LOAD,
     &TRANSFORMER,
+    &XFMR_CODE,
     &VSOURCE,
     &CAPACITOR,
     &REACTOR,
@@ -677,7 +726,7 @@ mod tests {
         assert!(class_by_name("Line").is_some());
         assert!(class_by_name("LINECODE").is_some());
         assert!(class_by_name("reactor").is_some());
-        assert!(class_by_name("xfmrcode").is_none());
+        assert_eq!(class_by_name("xfmrcode").unwrap().props[3], "conn");
     }
 
     #[test]

@@ -1528,23 +1528,79 @@ python evals/gridlabd/ieee4_import_oracle.py \
   --bridge target/debug/examples/dist_network --output /tmp/new-ieee4-import
 ```
 
-The IEEE4 harness checks the seventeen pinned CIMHub cases that declare
-`LineGeometry`. Each qualification requires typed import, IR equality, native
+The IEEE4 harness checks all twenty-seven pinned CIMHub cases, including
+transformer-code, autotransformer, four-wire and geometry variants. It also
+verifies and stages the pinned `ieee4xy.dat` coordinate companion. Each qualification requires typed import, IR equality, native
 versus canonical electrical comparison, repeated import/emission, and rejection
 of a deliberately changed line. It compares every original bus voltage and
-Line/Transformer/Load terminal current, power and loss, plus the physical
+Line/Transformer/AutoTrans/Load/Capacitor/Reactor terminal current, power and loss, plus the physical
 source feeder port. Source bytes and generated evidence stay external.
 
-Twelve cases qualify: `DDBal`, `DDUnBal`, `DYBal`, `DYUnBal`, `GYDBal`,
-`GYDUnBal`, `OYODBal`, `OnePh`, `YDBal`, `YDUnBal`, `YYBal`, and `YYUnBal`.
-Together they provide 853 complex observables per conversion pass. These are
-IEEE4 variants, not twelve distinct feeder families. Five remain unqualified:
+Fourteen cases qualify: `DDBal`, `DDUnBal`, `DYBal`, `DYUnBal`, `GYDBal`,
+`GYDUnBal`, `OYODBal`, `OnePh`, `SCTBal`, `SCTUnBal`, `YDBal`, `YDUnBal`,
+`YYBal`, and `YYUnBal`. Together they provide 953 complex observables per
+conversion pass. These are IEEE4 variants, not fourteen distinct feeder
+families. Thirteen remain unqualified. The three geometry cases retain these
+failures:
 
-- `SCTBal`, `SCTUnBal`, `YYD`, and `YYD1Tank` need `XfmrCode` interpretation.
+- `YYD` retains delta-side voltage/power mismatches (maximum about
+  `1.37e-4 V` and `0.0788 VA`).
+- `YYD1Tank` does not converge in the converted native solve.
 - `YYDXn` retains eighteen electrical mismatches, including a maximum voltage
   difference of about `4.53e-6 V` and power difference of `0.00261 VA`.
+
+For these three cases, native and canonical transformer admittance matrices
+are identical, and the largest line admittance difference is `7.95e-15 S`.
+The delta-side voltage differences are a common offset across phases; removing
+that offset leaves less than `2.3e-12 V`. This diagnostic does not change the
+qualification criteria or excuse nonconvergence.
+
+The ten additional cases exposed by the wider scan are also reported:
+
+- `Auto1bus`, `Auto3bus`, `AutoHLT`, and `AutoHLTCode` retain strict electrical
+  mismatches, particularly at the very short connecting lines.
+- `AutoAuto` loses the native `AutoTrans` component during conversion.
+- `IMODOD`, `IMOYODlag`, and `IMOYODlead` retain substantive four-wire
+  voltage/current/power mismatches.
+- `IMYD` fails import on an inconsistent LineCode capacitance dimension.
+- `OYODUnBal` passes its first comparison but its repeated conversion fails
+  native convergence, so it does not qualify.
+
+The broader external script audit recognizes both `New Circuit` and
+`New object=Circuit` spellings: 53 of 61 entry points parse and retain typed
+network equality through IR. The expanded inventory includes IEEE34, IEEE37
+and IEEE123 master cases previously missed by that scan. It also includes
+auxiliary and fault-study scripts; these counts are not qualified-feeder totals.
 
 The native and generated solves all use controls off, at most 1,000 iterations,
 and tolerance `1e-11`, stricter than the original files' `1e-8`. The balanced
 delta-delta native case stalls at `1e-12`; nonconverged runs never qualify.
 Observable acceptance thresholds in `oracle.compare` remain unchanged.
+
+### OpenDSS transformer-code assignment
+
+`XfmrCode` properties use their native ordered table, including positional and
+abbreviated input. A transformer binds the code state available at assignment;
+later code edits do not change it. The reader uses bounded existing property
+and copy histories, materializing winding connections, voltage/rating/tap,
+resistance and neutral impedance, reactances, excitation and antifloat values.
+Missing references and unresolved code properties produce an error instead of
+a transformer with factory defaults. Code definitions remain retained metadata.
+Seasonal ratings, tap bounds and DC resistance are not newly projected into
+typed fields by this AC snapshot work.
+
+Native `MakeLike` omits excitation and antifloat fields; self-copy resets winding
+records. Scalar kVA setters propagate between windings, while arrays assign
+individual winding values. End-of-edit scalar reactances can override an array.
+Fifteen native state probes cover these distinctions and historical bindings.
+The public IEEE4 checks above additionally qualify the balanced and unbalanced
+center-tapped feeders, including excitation and unequal winding resistance.
+Canonical output keeps typed winding resistances authoritative: replaying a
+stored total load loss after them would replace unequal values with an equal
+split. A mutation round-trip regression exercises this behavior.
+
+```sh
+python evals/gridlabd/dss_xfmrcode_oracle.py --output /tmp/new-xfmrcode-states
+POWERIO_XFMRCODE_ORACLE=/tmp/new-xfmrcode-states/observations.json \
+  cargo test -p powerio-dist --test dss_xfmrcode -- --include-ignored
+```

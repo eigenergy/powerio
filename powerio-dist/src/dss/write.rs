@@ -1466,6 +1466,9 @@ impl DssWriter {
             let _ = write!(s, " %Rs=({}) taps=({})", rs.join(", "), taps.join(", "));
             self.transformer_reactances(t, &mut s);
             let mut extras = t.extras.clone();
+            // Winding resistances are authoritative; replaying the derived
+            // total would overwrite unequal first/second winding values.
+            extras.remove("%loadloss");
             // Typed reactances determine output after an IR load or mutation.
             if t.xsc_pct.len() == nw * (nw - 1) / 2 {
                 extras.remove("xscarray");

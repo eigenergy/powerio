@@ -1,4 +1,4 @@
-"""Pinned IEEE4 overhead cases through import, IR and repeated canonical DSS.
+"""Pinned IEEE4 cases through import, IR and repeated canonical DSS.
 
 Reports every failure. Definition-only, retained-source or nonconverged results
 never count as electrical qualification. Public dataset bytes remain external.
@@ -54,7 +54,16 @@ def evaluate(source, bridge, folder, tolerance):
         elements = [
             n.lower()
             for n in native.Circuit.AllElementNames()
-            if n.lower().startswith(("line.", "transformer.", "load."))
+            if n.lower().startswith(
+                (
+                    "line.",
+                    "transformer.",
+                    "load.",
+                    "autotrans.",
+                    "capacitor.",
+                    "reactor.",
+                )
+            )
         ]
         expected = snapshot(native, buses, elements, canonical=False)
         (folder / "native.json").write_text(json.dumps(expected, indent=2) + "\n")
@@ -130,9 +139,8 @@ def main():
         "bridge_sha256": hashlib.sha256(args.bridge.read_bytes()).hexdigest(),
         "cases": {},
     }
+    verified = {}
     for record in pin["files"]:
-        if not record["path"].lower().endswith(".dss"):
-            continue
         name = Path(record["path"]).name
         data = (args.ieee4_base / name).read_bytes()
         if (
@@ -141,12 +149,21 @@ def main():
             != record["git_blob_sha1"]
         ):
             raise ValueError(f"source pin mismatch: {name}")
-        if not re.search(r"(?im)^\s*new\s+linegeometry\.", data.decode("utf-8-sig")):
+        verified[name] = (record, data)
+    report["companions"] = {
+        name: dict(record, sha256=hashlib.sha256(data).hexdigest())
+        for name, (record, data) in verified.items()
+        if not name.lower().endswith(".dss")
+    }
+    for name, (record, data) in verified.items():
+        if not name.lower().endswith(".dss"):
             continue
         folder = args.output / Path(name).stem
         folder.mkdir()
         source = folder / "native.dss"
         source.write_bytes(data)
+        for companion in report["companions"]:
+            (folder / companion).write_bytes(verified[companion][1])
         # Floating delta cases and edited controls can stall below 1e-11.
         # Use one pinned solve criterion, stricter than the files' 1e-8;
         # observable acceptance in oracle.compare remains unchanged.
