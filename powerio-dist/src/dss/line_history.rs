@@ -50,6 +50,7 @@ pub(super) struct LineHistory {
     pub linecodes: BTreeMap<usize, Option<Snapshot>>,
     pub xfmrcodes: BTreeMap<usize, Option<Snapshot>>,
     pub geometries: BTreeMap<usize, Option<Snapshot>>,
+    pub spacings: BTreeMap<usize, Option<Snapshot>>,
     // Geometry conductor assignments bind identities immediately; their
     // snapshots also preserve the ratings copied at that assignment.
     pub wires: BTreeMap<usize, Vec<Option<Snapshot>>>,
@@ -63,6 +64,7 @@ impl LineHistory {
             events: Vec::new(),
             linecodes: BTreeMap::new(),
             geometries: BTreeMap::new(),
+            spacings: BTreeMap::new(),
             xfmrcodes: BTreeMap::new(),
             wires: BTreeMap::new(),
         }

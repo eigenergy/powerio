@@ -134,3 +134,39 @@ fn pinned_geometry_definitions() {
         }
     }
 }
+
+#[test]
+fn spacing_missing_at_assignment_cannot_be_repaired_later() {
+    let raw = raw(
+        "New LineGeometry.g nconds=1 nphases=1 spacing=missing\nNew LineSpacing.missing nconds=1 x=[0] h=[10]\n",
+    );
+    assert!(
+        resolve(&raw, raw.line_snapshot(0))
+            .unwrap_err()
+            .contains("did not exist")
+    );
+}
+
+#[test]
+fn spacing_dimension_mismatch_and_uninitialized_growth_are_refused() {
+    for text in [
+        "New LineSpacing.s nconds=2 x=[0 1] h=[10 11]\nNew LineGeometry.g nconds=1 nphases=1 spacing=s\n",
+        "New LineSpacing.s nconds=4\nNew LineGeometry.g nconds=4 nphases=3 spacing=s\n",
+    ] {
+        let raw = raw(text);
+        assert!(resolve(&raw, raw.line_snapshot(1)).is_err());
+    }
+}
+
+#[test]
+fn copied_spacing_is_a_snapshot_and_geometry_ignores_its_phase_count() {
+    let raw = raw(
+        "New LineSpacing.s nconds=2 nphases=1 units=m x=[0 2] h=[10 11]\nNew LineSpacing.t like=s\nEdit LineSpacing.s x=[3 4]\nNew LineGeometry.g nconds=2 nphases=2 spacing=t\nEdit LineSpacing.t x=[5 6]\n",
+    );
+    let g = resolve(&raw, raw.line_snapshot(2)).unwrap();
+    assert_eq!(g.phases, 2);
+    assert_eq!(
+        g.conductors.iter().map(|c| c.x).collect::<Vec<_>>(),
+        [0., 2.]
+    );
+}

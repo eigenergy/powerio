@@ -172,6 +172,27 @@ impl Definition {
                     self.active = count - 1;
                 }
             }
+            "spacing" => {
+                let point = raw.line_history[&object]
+                    .spacings
+                    .get(&offset)
+                    .ok_or("missing LineSpacing binding")?
+                    .ok_or("LineSpacing did not exist at assignment")?;
+                let spacing = super::spacing::resolve_with_budget(raw, point, budget)?;
+                if spacing.x.len() != self.conductors.len() {
+                    return Err("LineSpacing has the wrong number of conductors".into());
+                }
+                self.last_unit = spacing.units;
+                for (i, conductor) in self.conductors.iter_mut().enumerate() {
+                    if !spacing.x[i].is_finite() || !spacing.height[i].is_finite() {
+                        return Err("LineSpacing coordinates were not initialized".into());
+                    }
+                    conductor.x = spacing.x[i];
+                    conductor.height = spacing.height[i];
+                    conductor.units = Some(spacing.units);
+                }
+                // Spacing changes neither the geometry's phase count nor its selector.
+            }
             "normamps" => self.normamps = number()?,
             "emergamps" => self.emergamps = number()?,
             "reduce" => self.reduce = prop.value.text.starts_with(['y', 'Y', 't', 'T']),

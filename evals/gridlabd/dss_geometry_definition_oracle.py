@@ -33,6 +33,31 @@ def scripts():
         "historical_rating": "new wiredata.c like=a\nedit wiredata.a normamps=500\nedit linegeometry.g normamps=0 cond=1 wire=c\n",
         "geometry_abbreviations": "edit linegeometry.g cond=1 wir=b uni=ft h=30 norm=120 emerg=180 red=no\n",
     }
+    spacing = "new linespacing.s nconds=2 nphases=1 units=m x=[0 2] h=[12 11]\n"
+    variants.update(
+        {
+            "spacing": spacing + "edit linegeometry.g spacing=s\n",
+            "spacing_later_edit": spacing
+            + "edit linegeometry.g spacing=s\nedit linespacing.s x=[3 4] h=[13 14]\n",
+            "spacing_reassign": spacing
+            + "edit linegeometry.g spacing=s\nedit linespacing.s x=[3 4] h=[13 14]\nedit linegeometry.g spacing=s\n",
+            "spacing_partial": spacing
+            + "edit linespacing.s x=[3]\nedit linegeometry.g spacing=s\n",
+            "spacing_same_size": spacing
+            + "edit linespacing.s nconds=2\nedit linegeometry.g spacing=s\n",
+            "spacing_shrink": "new linespacing.s nconds=3 units=m x=[0 2 3] h=[12 11 13]\nedit linespacing.s nconds=2\nedit linegeometry.g spacing=s\n",
+            "spacing_grow_initialized": "new linespacing.s nconds=1 x=[0] h=[12]\nedit linespacing.s nconds=2 x=[0 2] h=[12 11]\nedit linegeometry.g spacing=s\n",
+            "spacing_self_like": spacing
+            + "edit linespacing.s like=s\nedit linegeometry.g spacing=s\n",
+            "spacing_like": spacing
+            + "new linespacing.t like=s\nedit linespacing.s x=[3 4]\nedit linegeometry.g spacing=t\n",
+            "spacing_selector": spacing
+            + "edit linegeometry.g cond=2 spacing=s x=3 cond=1 h=14\n",
+            "spacing_keeps_geometry_phases": spacing
+            + "edit linegeometry.g nphases=2 reduce=no spacing=s\n",
+            "spacing_abbreviations": "new linespacing.s nc=2 np=1 x=[0 2] h=[12 11] u=m\nedit linegeometry.g spac=s\n",
+        }
+    )
     return {
         name: "clear\nnew circuit.c\n" + WIRE + GEOMETRY + edit
         for name, edit in variants.items()

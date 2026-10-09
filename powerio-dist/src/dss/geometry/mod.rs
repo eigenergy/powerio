@@ -5,6 +5,7 @@
 //! explicit unresolved-geometry diagnostics.
 pub(super) mod cache;
 pub(super) mod definition;
+mod spacing;
 pub(super) mod timeline;
 mod wire;
 

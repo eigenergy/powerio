@@ -1460,7 +1460,13 @@ impl<L: Loader> Executor<'_, L> {
         });
         if matches!(
             self.raw.objects[idx].class.as_str(),
-            "line" | "linecode" | "wiredata" | "linegeometry" | "xfmrcode" | "transformer"
+            "line"
+                | "linecode"
+                | "wiredata"
+                | "linegeometry"
+                | "linespacing"
+                | "xfmrcode"
+                | "transformer"
         ) {
             self.raw.line_history.insert(
                 idx,
@@ -1784,6 +1790,24 @@ impl<L: Loader> Executor<'_, L> {
                 .unwrap()
                 .wires
                 .insert(offset, references);
+        }
+        if matches!(
+            self.raw.objects[idx].class.as_str(),
+            "linegeometry" | "line"
+        ) && p.name.as_deref() == Some("spacing")
+        {
+            let referenced = self
+                .raw
+                .index
+                .get(&("linespacing".into(), p.value.text.to_ascii_lowercase()))
+                .map(|&object| self.raw.line_snapshot(object));
+            let offset = self.raw.objects[idx].props.len();
+            self.raw
+                .line_history
+                .get_mut(&idx)
+                .unwrap()
+                .spacings
+                .insert(offset, referenced);
         }
         if self.raw.objects[idx].class == "line" && p.name.as_deref() == Some("geometry") {
             let referenced = self

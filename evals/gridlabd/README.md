@@ -1462,14 +1462,20 @@ initializes capacitance radius only while the latter is negative; later radius
 edits leave it alone. A GMR-only definition can leave capacitance radius negative,
 in which case the geometry calculation uses the physical radius.
 
-`dss_geometry_definition_oracle.py` checks 15 synthetic geometry-definition
+`dss_geometry_definition_oracle.py` checks 27 synthetic geometry-definition
 cases. Conductor selectors, sticky units, equal-size and changed-size resets,
 wire arrays and copied definitions follow native order. Wire assignment binds
 an existing identity and copies its current scalar ratings, while calculation
 reads the wire values visible at that later time. A later declaration does not
 repair a missing reference. Both resolvers reuse bounded append-only property
 and copy histories; no new public model or IR type is introduced. Seasonal
-ratings remain source metadata, and spacing/cable definitions remain unresolved.
+ratings remain source metadata. Assigning `LineSpacing` to `LineGeometry` copies
+its coordinates and units at that point; later spacing edits do not change the
+geometry until reassignment. The geometry keeps its own phase count and conductor
+selector. Spacing copies, self-copies, partial coordinate arrays and size changes
+follow the pinned engine. Missing references, mismatched conductor counts and
+uninitialized coordinates remain errors. Direct `Line.spacing` and cable
+conductor definitions remain unresolved.
 
 ```sh
 python evals/gridlabd/dss_wiredata_oracle.py --output /tmp/new-wire-observations
@@ -1626,3 +1632,24 @@ The common IEEE4 comparator checks complex bus voltages and device terminal
 currents, powers and losses, source ports, IR equality, repeated conversion and
 a changed-line negative control. Missing ports and nonconvergence fail. Each
 case reports its result independently; a parser success is not qualification.
+
+
+### Public North American spacing definitions
+
+`dss_spacing_oracle.py` verifies the pinned North American master before selecting
+its conductor and geometry definitions. It puts the `Trans` overhead geometry
+and reduced four-conductor `Sec` bundle into controlled, unbalanced circuits.
+The report records the source line range and hashes; generated source files
+show the complete circuit additions. These are geometry probes, not full-feeder
+qualification. The underground `Pri` geometry still requires cable support.
+
+```sh
+python evals/gridlabd/dss_spacing_oracle.py \
+  --north-american-master /path/to/LVTestCaseNorthAmerican/Master.dss \
+  --bridge /path/to/dist_network --output /new/path
+```
+
+Both probes compare complex bus voltages, terminal currents, powers and losses,
+source ports, IR equality and repeated canonical conversion. A changed line
+length must fail the comparison. Public input bytes and generated results stay
+outside the repository.

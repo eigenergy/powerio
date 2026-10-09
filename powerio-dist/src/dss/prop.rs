@@ -640,12 +640,19 @@ class!(
     ]
 );
 
+class!(
+    LINE_SPACING,
+    "linespacing",
+    ["nconds", "nphases", "x", "h", "units", "like"]
+);
+
 /// Classes with ordered property tables; other classes remain untyped.
 static CLASSES: &[&DssClass] = &[
     &LINE,
     &LINECODE,
     &WIRE_DATA,
     &LINE_GEOMETRY,
+    &LINE_SPACING,
     &LOAD,
     &TRANSFORMER,
     &XFMR_CODE,
