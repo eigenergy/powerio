@@ -18,6 +18,67 @@
   the case again. The IR 2 schema keeps its published descriptions, which
   state the old mapping.
 
+- PSS/E RAW revision 34 node columns now sit where PSS/E 34 writes them.
+  PSS/E 34 appends each node column to the end of its record: the
+  transformer winding `NOD` after `CNXA`, the generator `NREG` after `WPF`,
+  the switched shunt `NREG` after the eighth step pair, and the two-terminal
+  DC converter `NDR`/`NDI` after `XCAPR`. Revision 35 moved each next to the
+  bus it qualifies. The RAW reader and writer used the revision 35 winding
+  layout at revision 34, so on a winding line PSS/E 34 wrote, the reader took
+  `RMA` as the node and read each of `RMA` through `CNXA` from the column
+  after it: each of the 12 transformers in a PSS/E 34.8 export of the 39 bus
+  New England case read wrong ratio and voltage limits and a step count of 0
+  instead of 8, and raised a spurious `READ.PSSE.REFERENCE_DROPPED`. The
+  reader also ignored the revision 34 generator and switched shunt `NREG`,
+  and the revision 34 writer dropped them and left out the system switching
+  device section that PSS/E 34 reads between branch and transformer data.
+  Revision 34 output now writes that section, reports what a switching
+  device record cannot carry as revision 35 output does, and keeps a switched
+  shunt to the eight step pairs that come before `NREG`, reporting the rest.
+  The writer placed the DC converter node column by the length of the
+  retained converter line rather than by its revision, and between `IFR` and
+  `ITR` when it added one, so fresh output that changed revision moved `IFR`,
+  `ITR`, or the node into a neighbouring column, and a revision 33 downgrade
+  could drop `IFR` or `ITR` in place of the node. The reader now keeps a
+  converter line in revision 35 order whatever revision stated it, fills its
+  blank or omitted trailing fields with PSS/E's defaults, and reports a
+  field past its last column. Revision 33 output now reports a switched
+  shunt's dropped `NREG` as it already did a generator's. Revision 35 output
+  is otherwise unchanged.
+  A revision 34 file an earlier PowerIO release wrote states the winding node
+  after `CONT`, so each winding field from `RMA` through `CNXA` now reads from
+  the column before it and nothing is reported: the limits shift, the step
+  count reads the old `VMI`, and `TAB` reads the old `NTP`. Its two-terminal
+  DC converter lines state the node before `ITR` and read shifted too.
+  Convert its source to revision 34 again, and read again a PowerIO IR
+  document an earlier release wrote from a revision 34 DC line (#592).
+
+- A PSS/E two winding transformer's magnetizing admittance now reaches bus I
+  as PSS/E states it. PSS/E connects `MAG1 + jMAG2` from bus I to ground,
+  outside winding 1's ratio, while the neutral branch charging sits inside
+  the tap, `Y_ff = (y_s + y_fr) / tap²`. The RAW and RAWX readers stored the
+  admittance as given, so bus I saw it divided by the square of the tap:
+  5.97 % too much for a tap of 1.02/1.05. The reader now stores the
+  admittance times the square of the tap, and the writer divides it back out
+  and states the shortest decimal that reads back to the same charging, so
+  RAW and RAWX output of a PSS/E case state a `MAG1`/`MAG2` given with up to
+  15 significant digits as the source did; a 16 or 17 digit value can come
+  back as a neighbouring decimal that reads to the same charging.
+  `Branch::b`, the branch charging, the matrices, and every other format's
+  output of a PSS/E transformer with an off nominal tap change accordingly;
+  XIIDM output now carries the magnetizing admittance PowSybl's own PSS/E
+  import gives at the stated tap (PowSybl keeps `g` and `b` at `MAG1`/`MAG2`
+  and applies the square of the ratio through a ratio tap changer step, while
+  PowerIO folds it into `g` and `b`). PSS/E output of a transformer read from
+  another format, such as a MATPOWER branch with a nonzero `BR_B` and an off
+  nominal `TAP`, now states its total charging divided by the square of the
+  tap, which reads back to the same charging. PSS/E has one magnetizing
+  admittance at bus I, so the half of a MATPOWER `BR_B` at the to end still
+  moves to bus I, now divided by the square of the tap as well. A PowerIO IR
+  document an earlier release wrote from a PSS/E case carries the unscaled
+  admittance, so read the case again. A three winding transformer's
+  magnetizing admittance is unchanged (#592).
+
 ## 0.11.4
 
 - Out-of-service loads and shunts no longer count. `IndexedNetwork` folded
