@@ -29,6 +29,11 @@ use powerio_tx::{BranchSusceptanceFormula, BusId, IndexedNetwork};
 use powerio_prob::diagnostics::codes;
 use powerio_prob::{DcBusSpecification, DcPfInstance};
 
+/// The DC-relevant identity and parameters of an analysis branch. Floating-
+/// point values are compared by bits so signed-zero or non-finite changes do
+/// not silently reuse operators built from different data.
+type DcBranchSignature = (Option<String>, BusId, BusId, u64, u64, u64, u64, bool);
+
 /// The stable row identity a mapping row reports: the element uid when one
 /// exists, else `table:row`.
 fn row_identity(uid: Option<&str>, table: &str, row: usize) -> String {
@@ -96,6 +101,11 @@ impl DcOperatorOptions {
 #[derive(Clone, Debug)]
 pub struct DcOperators {
     bus_ids: Vec<BusId>,
+    /// DC-relevant branch data, including derived transformer windings, at build time.
+    analysis_branch_signature: Vec<DcBranchSignature>,
+    /// Network base and normalization state used to build the operators.
+    network_base_mva_bits: u64,
+    network_normalized: bool,
     branch_identities: Vec<String>,
     /// Operator column to the analysis branch row it was built from.
     branch_rows: Vec<usize>,
@@ -156,6 +166,24 @@ impl DcOperators {
         let network = view.network();
         let formula = instance.branch_susceptance_formula();
         let base = network.base_mva();
+        let analysis_branch_signature: Vec<DcBranchSignature> = network
+            .branches()
+            .iter()
+            .map(|branch| {
+                (
+                    branch.uid.clone(),
+                    branch.from,
+                    branch.to,
+                    branch.r.to_bits(),
+                    branch.x.to_bits(),
+                    branch.tap.to_bits(),
+                    branch.shift.to_bits(),
+                    branch.in_service,
+                )
+            })
+            .collect();
+        let network_base_mva_bits = base.to_bits();
+        let network_normalized = network.is_normalized();
         let bus_ids: Vec<BusId> = network.buses().iter().map(|bus| bus.id).collect();
         let row_of: std::collections::BTreeMap<BusId, usize> = bus_ids
             .iter()
@@ -248,6 +276,9 @@ impl DcOperators {
         let incidence = calc_incidence(bus_ids.len(), &endpoints);
         let mut operators = Self {
             bus_ids,
+            analysis_branch_signature,
+            network_base_mva_bits,
+            network_normalized,
             branch_identities,
             branch_rows,
             skipped_branch_rows,
@@ -271,10 +302,39 @@ impl DcOperators {
     /// an operating point update goes through here and reconstructs nothing.
     ///
     /// # Errors
-    /// A specification list whose length disagrees with the built bus axis.
+    /// The source bus specification axis differs from the built axis, or the
+    /// network base, normalization state, DC formula, topology, or branch
+    /// parameters changed after the operators were built.
     pub fn update(&mut self, instance: &DcPfInstance) -> Result<(), Error> {
-        let base = instance.network().base_mva();
-        self.refresh_injections(instance, base)
+        let view = IndexedNetwork::new(instance.network());
+        let network = view.network();
+        let branch_signature: Vec<DcBranchSignature> = network
+            .branches()
+            .iter()
+            .map(|branch| {
+                (
+                    branch.uid.clone(),
+                    branch.from,
+                    branch.to,
+                    branch.r.to_bits(),
+                    branch.x.to_bits(),
+                    branch.tap.to_bits(),
+                    branch.shift.to_bits(),
+                    branch.in_service,
+                )
+            })
+            .collect();
+        if network.base_mva().to_bits() != self.network_base_mva_bits
+            || network.is_normalized() != self.network_normalized
+            || instance.branch_susceptance_formula() != self.branch_susceptance_formula
+            || branch_signature != self.analysis_branch_signature
+        {
+            return Err(Error::new(
+                &codes::BUILD_INSTANCE_SHAPE_MISMATCH,
+                "the network base, normalization, branch parameters, topology, or DC formula differ from those used to build the DC operators; rebuild the operators before updating",
+            ));
+        }
+        self.refresh_injections(instance, network.base_mva())
     }
 
     fn refresh_injections(&mut self, instance: &DcPfInstance, base: f64) -> Result<(), Error> {

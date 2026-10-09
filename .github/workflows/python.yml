@@ -39,7 +39,6 @@ env:
 
 jobs:
   release-preflight:
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.release.outputs.tag }}
@@ -50,8 +49,10 @@ jobs:
           ref: ${{ env.SOURCE_REF }}
           fetch-depth: 0
       - name: Release identity agreement
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         run: bash scripts/check-release-versions.sh
       - name: Verify the immutable published release
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -315,7 +316,7 @@ jobs:
 
   wheels:
     name: wheels (${{ matrix.platform.target }} on ${{ matrix.platform.runner }})
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
     needs: release-preflight
     runs-on: ${{ matrix.platform.runner }}
     strategy:
@@ -334,6 +335,7 @@ jobs:
         with:
           ref: ${{ env.SOURCE_REF }}
       - name: Match the preflight release commit
+        if: github.event_name != 'pull_request'
         shell: bash
         env:
           EXPECTED_SHA: ${{ needs.release-preflight.outputs.sha }}
@@ -369,7 +371,7 @@ jobs:
   # macOS x86_64 runs the cross compiled x86_64 wheel under Rosetta.
   wheel-smoke:
     name: wheel smoke (${{ matrix.platform.target }} on ${{ matrix.platform.runner }})
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
     needs: [ release-preflight, wheels ]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
@@ -425,7 +427,7 @@ jobs:
           "$py" scripts/wheel-smoke.py
 
   sdist:
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
     needs: release-preflight
     runs-on: ubuntu-latest
     steps:
@@ -433,6 +435,7 @@ jobs:
         with:
           ref: ${{ env.SOURCE_REF }}
       - name: Match the preflight release commit
+        if: github.event_name != 'pull_request'
         shell: bash
         env:
           EXPECTED_SHA: ${{ needs.release-preflight.outputs.sha }}
