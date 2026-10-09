@@ -33,6 +33,8 @@ use crate::model::{
 // The calibrated source decomposition stays private until its canonical
 // writer and static-profile validation are qualified together.
 #[cfg(test)]
+mod lines;
+#[cfg(test)]
 mod sources;
 
 /// Upper bound on any count property (`phases`, conductors, `windings`, tap
@@ -96,7 +98,7 @@ pub(crate) fn parse_dss_collecting(
 pub fn to_network_from_raw(
     raw: &RawDss,
 ) -> (MulticonductorNetwork, Vec<crate::diagnostics::Diagnostic>) {
-    to_network_with_source_reader(raw, None)
+    to_network_with_source_reader(raw, None, None)
 }
 
 // An internal hook lets oracle tests exercise the real element reader and
@@ -105,6 +107,7 @@ pub fn to_network_from_raw(
 fn to_network_with_source_reader(
     raw: &RawDss,
     source_reader: Option<fn(&mut Reader<'_>, &RawDss)>,
+    line_reader: Option<fn(&mut Reader<'_>, &RawDss)>,
 ) -> (MulticonductorNetwork, Vec<crate::diagnostics::Diagnostic>) {
     let mut diags = crate::collect::Diagnostics::new();
     diags.absorb(raw.diagnostics.iter().cloned());
@@ -152,20 +155,23 @@ fn to_network_with_source_reader(
             .push((cmd.verb.clone(), cmd.args.clone()));
     }
 
-    // Linecodes first: lines reference them. Then everything else in script
-    // order per class.
-    for obj in raw.of_class("linecode") {
-        let lc = rd.linecode(obj);
-        rd.net.line_codes_mut().push(lc);
-    }
-    if source_reader.is_none() {
-        for obj in raw.of_class("vsource") {
-            let vs = rd.vsource(obj);
-            rd.net.sources_mut().push(vs);
+    if let Some(read) = line_reader {
+        read(&mut rd, raw);
+    } else {
+        // Legacy linecodes first: lines reference them.
+        for obj in raw.of_class("linecode") {
+            let lc = rd.linecode(obj);
+            rd.net.line_codes_mut().push(lc);
         }
-    }
-    for obj in raw.of_class("line") {
-        rd.line(obj);
+        if source_reader.is_none() {
+            for obj in raw.of_class("vsource") {
+                let vs = rd.vsource(obj);
+                rd.net.sources_mut().push(vs);
+            }
+        }
+        for obj in raw.of_class("line") {
+            rd.line(obj);
+        }
     }
     for obj in raw.of_class("transformer") {
         let t = rd.transformer(obj);

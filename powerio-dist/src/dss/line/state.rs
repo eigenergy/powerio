@@ -289,6 +289,19 @@ impl State {
         }
     }
 
+    pub fn physical_length(&self) -> Option<f64> {
+        let units = if self.units == 0 {
+            self.code_units?
+        } else {
+            self.units
+        };
+        if units == 0 {
+            None
+        } else {
+            Some(self.length * conversion(units, 4))
+        }
+    }
+
     pub fn solve(&mut self, frequency: f64) -> Result<(), String> {
         if self.enabled {
             self.primitive(frequency)?;

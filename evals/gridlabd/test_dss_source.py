@@ -108,6 +108,21 @@ class SourceOracleTests(unittest.TestCase):
         volts, currents, _ = typed_linear_solution(document)
         np.testing.assert_allclose(currents["source"], expected, rtol=1e-12)
         np.testing.assert_allclose(currents["ground"], -expected, rtol=1e-12)
+        # Source definitions may survive reimport without affecting the typed
+        # circuit. An active unconverted element must still fail this oracle.
+        for record in (
+            {"class": "linecode", "props": [["rmatrix", "[999]"]]},
+            {"class": "line", "props": [["enabled", "no"]]},
+        ):
+            net["untyped"] = [record]
+            _, retained_currents, _ = typed_linear_solution(document)
+            np.testing.assert_allclose(
+                retained_currents["source"], expected, rtol=1e-12
+            )
+        net["untyped"] = [{"class": "line", "props": [["enabled", "yes"]]}]
+        with self.assertRaises(AssertionError):
+            typed_linear_solution(document)
+        net["untyped"] = []
         for i in range(2):
             self.assertLess(
                 abs(volts[("feed", str(i + 1))] - load_z[i] * expected[i]), 1e-10

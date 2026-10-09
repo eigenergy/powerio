@@ -257,23 +257,23 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
 
 fn audit_untyped(net: &MulticonductorNetwork, report: &mut ElectricalReadiness) {
     for object in net.untyped_objects() {
-        if object.class.eq_ignore_ascii_case("vsource")
-            && !object
-                .props
-                .iter()
-                .rev()
-                .find(|(key, _)| {
-                    key.as_ref()
-                        .is_some_and(|key| key.eq_ignore_ascii_case("enabled"))
-                })
-                .is_some_and(|(_, value)| {
-                    value.eq_ignore_ascii_case("no") || value.eq_ignore_ascii_case("false")
-                })
-        {
+        let explicitly_disabled = object
+            .props
+            .iter()
+            .rev()
+            .find(|(key, _)| {
+                key.as_ref()
+                    .is_some_and(|key| key.eq_ignore_ascii_case("enabled"))
+            })
+            .is_some_and(|(_, value)| {
+                value.eq_ignore_ascii_case("no") || value.eq_ignore_ascii_case("false")
+            });
+        if object.class.eq_ignore_ascii_case("vsource") && !explicitly_disabled {
             report.block("READINESS.DSS.SOURCE_UNRESOLVED", &object.name,
                 "untyped voltage source must remain explicitly disabled; enabling it requires electrical source conversion");
         }
         if object.class.eq_ignore_ascii_case("line")
+            && !explicitly_disabled
             && object.props.iter().any(|(key, _)| {
                 key.as_ref().is_some_and(|key| {
                     DEFERRED_GEOMETRY_KEYS
@@ -284,6 +284,9 @@ fn audit_untyped(net: &MulticonductorNetwork, report: &mut ElectricalReadiness) 
         {
             report.block("READINESS.DSS.GEOMETRY_DEFERRED", &object.name,
                 "source line geometry has no calculated conductor impedances or resolved terminal map");
+        } else if object.class.eq_ignore_ascii_case("line") && !explicitly_disabled {
+            report.block("READINESS.DSS.LINE_UNRESOLVED", &object.name,
+                "untyped line must remain explicitly disabled; enabling it requires electrical line conversion");
         }
     }
 }
@@ -488,6 +491,29 @@ mod tests {
             .props
             .push((Some("enabled".into()), "yes".into()));
         assert!(!audit_electrical_readiness(&net).is_ready());
+        net.untyped_objects_mut()[0].props.clear();
+        assert!(!audit_electrical_readiness(&net).is_ready());
+    }
+
+    #[test]
+    fn inactive_line_metadata_cannot_be_reenabled_without_electrical_conversion() {
+        let mut net = MulticonductorNetwork::new();
+        net.untyped_objects_mut()
+            .push(crate::model::UntypedObject::new(
+                "line",
+                "off",
+                vec![(Some("enabled".into()), "no".into())],
+            ));
+        assert!(audit_electrical_readiness(&net).is_ready());
+        net.untyped_objects_mut()[0]
+            .props
+            .push((Some("enabled".into()), "yes".into()));
+        let report = audit_electrical_readiness(&net);
+        assert!(
+            report
+                .blockers()
+                .any(|f| f.code == "READINESS.DSS.LINE_UNRESOLVED")
+        );
         net.untyped_objects_mut()[0].props.clear();
         assert!(!audit_electrical_readiness(&net).is_ready());
     }

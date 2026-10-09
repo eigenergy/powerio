@@ -183,10 +183,16 @@ def typed_linear_solution(document):
     assert value["type"] == "powerio.MulticonductorNetwork"
     net = value["data"]
     assert not any(net[k] for k in ("switches", "transformers", "generators", "shunts"))
-    # Only explicitly inactive source records may remain outside the typed
-    # circuit in these microcases. Their properties never supply physics.
+    # Retained linecode definitions are not live circuit elements. Each typed
+    # line below must resolve its own typed impedance; source records may
+    # remain outside the circuit only when explicitly inactive.
     assert all(
-        obj["class"] == "vsource" and obj["props"][-1] == ["enabled", "no"]
+        obj["class"] == "linecode"
+        or (
+            obj["class"] in ("vsource", "line")
+            and obj["props"]
+            and obj["props"][-1] == ["enabled", "no"]
+        )
         for obj in net["untyped"]
     )
     nodes = [

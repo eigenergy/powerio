@@ -88,7 +88,8 @@ impl Reader<'_> {
                 .line_codes()
                 .iter()
                 .map(|v| v.name.as_str())
-                .chain(self.net.lines().iter().map(|v| v.linecode.as_str())),
+                .chain(self.net.lines().iter().map(|v| v.linecode.as_str()))
+                .chain(raw.of_class("linecode").map(|v| v.name.as_str())),
         );
         let mut lines = names(raw.of_class("line").map(|v| v.name.as_str()));
         let mut sources = names(ports.iter().map(|v| v.name.as_str()));
@@ -222,7 +223,7 @@ fn staged_read(text: &str) -> MulticonductorNetwork {
     staged_from_raw(&raw).unwrap()
 }
 
-fn staged_from_raw(
+pub(super) fn staged_from_raw(
     raw: &RawDss,
 ) -> std::result::Result<MulticonductorNetwork, Vec<crate::diagnostics::Diagnostic>> {
     let (net, diagnostics) = to_network_with_source_reader(
@@ -230,6 +231,11 @@ fn staged_from_raw(
         Some(|rd, raw| {
             if let Err(error) = rd.resolved_sources(raw) {
                 rd.warn(&C::READ_DSS_SOURCE_UNRESOLVED, error);
+            }
+        }),
+        Some(|rd, raw| {
+            if let Err(error) = rd.resolved_lines(raw) {
+                rd.warn(&C::READ_DSS_LINE_UNRESOLVED, error);
             }
         }),
     );
@@ -457,14 +463,18 @@ fn finite_return_is_not_grounded_and_synthetic_names_do_not_collide() {
 }
 
 #[test]
-fn source_decomposition_does_not_resolve_a_dangling_linecode_or_ground_a_return() {
-    let net = staged_read(
+fn source_decomposition_does_not_resolve_a_dangling_linecode() {
+    let raw = crate::dss::raw::__parse_raw_with(
         "New Circuit.c phases=1 bus1=feed.1 bus2=return.4 r1=3 x1=2\nNew Line.unresolved phases=1 bus1=feed.1 bus2=load.1 linecode=_pio_vsource_source_impedance",
+        "source.dss",
+        &mut |_: &std::path::Path| Err(std::io::Error::other("no includes")),
     );
-    let original = &net.lines()[0];
-    assert!(!net.line_codes().iter().any(|c| c.name == original.linecode));
-    assert_eq!(net.lines()[1].linecode, "_pio_vsource_source_impedance_1");
-    assert!(net.buses().iter().all(|b| b.grounded.is_empty()));
+    assert!(
+        staged_from_raw(&raw)
+            .unwrap_err()
+            .iter()
+            .any(|d| d.code() == C::READ_DSS_LINE_UNRESOLVED.code)
+    );
 }
 
 #[test]
@@ -540,7 +550,11 @@ fn export_staged_source_networks() {
     std::fs::write(output, serde_json::to_vec_pretty(&networks).unwrap()).unwrap();
 }
 
-fn write_staged_network(net: &MulticonductorNetwork, directory: &std::path::Path, stem: &str) {
+pub(super) fn write_staged_network(
+    net: &MulticonductorNetwork,
+    directory: &std::path::Path,
+    stem: &str,
+) {
     let emitted = crate::dss::write::emit_staged_sources(net).unwrap();
     let typed = serde_json::to_value(net).unwrap();
     let restored: MulticonductorNetwork = serde_json::from_value(typed.clone()).unwrap();
