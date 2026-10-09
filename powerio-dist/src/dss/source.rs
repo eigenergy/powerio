@@ -301,8 +301,10 @@ impl State {
         let mut impedance = vec![vec![Complex64::default(); self.phases]; self.phases];
         let diagonal = if quasi {
             self.ideal_z * self.kv.powi(2) / self.base_mva
+        } else if self.z[1] == self.z[2] {
+            (2.0 * self.z[1] + self.z[0]) / 3.0
         } else {
-            (self.z[0] + self.z[1] + self.z[2]) / 3.0
+            (self.z[2] + self.z[1] + self.z[0]) / 3.0
         };
         for (i, row) in impedance.iter_mut().enumerate() {
             row[i] = diagonal;
@@ -315,7 +317,17 @@ impl State {
                 for (j, value) in row.iter_mut().enumerate() {
                     if i != j {
                         *value = if self.z[1] == self.z[2] {
-                            (self.z[0] - self.z[1]) / 3.0
+                            // Native sequence setters compute Xm as Xs-X1;
+                            // short-circuit setters use (X0-X1)/3. Their
+                            // rounding differs in ill-conditioned networks.
+                            Complex64::new(
+                                (self.z[0].re - self.z[1].re) / 3.0,
+                                if matches!(self.spec, ImpedanceSpec::Sequence) {
+                                    diagonal.im - self.z[1].im
+                                } else {
+                                    (self.z[0].im - self.z[1].im) / 3.0
+                                },
+                            )
                         } else if self.phases == 3 {
                             (self.z[0]
                                 + self.z[1] * alpha.powu(((j + 3 - i) % 3) as u32)
@@ -524,6 +536,29 @@ mod tests {
             read("New Circuit.c z1=[1 2]\nEdit Vsource.source r1=0 x1=0 like=source z1=[1 2]")
                 .unwrap();
         assert_eq!(result.impedance[0][0], Complex64::new(1.0, 2.0));
+    }
+
+    #[test]
+    fn sequence_source_preserves_native_mutual_reactance_rounding() {
+        // IEEE modified secondary source; pinned VSource.pas sequence branch.
+        let source =
+            read("New Circuit.c basekv=46 r1=1.036 x1=10.1433 r0=5.462 x0=34.1897").unwrap();
+        assert_eq!(
+            source.impedance[0][0].re.to_bits(),
+            2.511_333_333_333_333_4_f64.to_bits()
+        );
+        assert_eq!(
+            source.impedance[0][0].im.to_bits(),
+            18.158_766_666_666_67_f64.to_bits()
+        );
+        assert_eq!(
+            source.impedance[0][1].im.to_bits(),
+            (18.158_766_666_666_67_f64 - 10.1433).to_bits()
+        );
+        assert_ne!(
+            source.impedance[0][1].im.to_bits(),
+            ((34.1897_f64 - 10.1433) / 3.0).to_bits()
+        );
     }
 
     #[test]

@@ -755,6 +755,13 @@ linecode oracles include short, asymmetric, empty and partially specified rows.
 `IMYD.dss` now imports its four-wire capacitance matrix, but strict floating-neutral
 comparisons remain failed; importing its matrix does not qualify the full feeder.
 
+
+Source resolution preserves native arithmetic order when positive and negative
+sequence impedances agree. Diagonal impedance uses `(2 Z1 + Z0) / 3`;
+sequence-specified mutual reactance uses `Xs - X1`, while short-circuit inputs
+use `(X0 - X1) / 3`. The source-state oracle includes the modified secondary
+source, and a bit-level regression pins the distinction.
+
 ## Underground cable conversion
 
 `cable_oracle.py` compares conductor geometry with native impedance dumps and an
@@ -1553,35 +1560,30 @@ of a deliberately changed line. It compares every original bus voltage and
 Line/Transformer/AutoTrans/Load/Capacitor/Reactor terminal current, power and loss, plus the physical
 source feeder port. Source bytes and generated evidence stay external.
 
-Fourteen cases qualify: `DDBal`, `DDUnBal`, `DYBal`, `DYUnBal`, `GYDBal`,
-`GYDUnBal`, `OYODBal`, `OnePh`, `SCTBal`, `SCTUnBal`, `YDBal`, `YDUnBal`,
-`YYBal`, and `YYUnBal`. Together they provide 953 complex observables per
-conversion pass. These are IEEE4 variants, not fourteen distinct feeder
-families. Thirteen remain unqualified. The three geometry cases retain these
-failures:
+Fifteen cases qualify: `DDBal`, `DDUnBal`, `DYBal`, `DYUnBal`, `GYDBal`,
+`GYDUnBal`, `OYODBal`, `OYODUnBal`, `OnePh`, `SCTBal`, `SCTUnBal`, `YDBal`,
+`YDUnBal`, `YYBal`, and `YYUnBal`. Together they provide 1,043 complex
+observables per conversion pass. These are IEEE4 variants, not fifteen distinct
+feeder families. Twelve remain unqualified:
 
 - `YYD` retains delta-side voltage/power mismatches (maximum about
-  `1.37e-4 V` and `0.0788 VA`).
-- `YYD1Tank` does not converge in the converted native solve.
+  `1.32e-4 V` and `0.0763 VA`).
+- `YYD1Tank` converges through canonical conversion and reimport, but retains
+  eighteen strict mismatches in each pass, over all 110 observations.
 - `YYDXn` retains eighteen electrical mismatches, including a maximum voltage
-  difference of about `4.53e-6 V` and power difference of `0.00261 VA`.
-
-For these three cases, native and canonical transformer admittance matrices
-are identical, and the largest line admittance difference is `7.95e-15 S`.
-The delta-side voltage differences are a common offset across phases; removing
-that offset leaves less than `2.3e-12 V`. This diagnostic does not change the
-qualification criteria or excuse nonconvergence.
-
-The ten additional cases exposed by the wider scan are also reported:
-
+  difference of about `5.02e-6 V` and power difference of `0.00289 VA`.
 - `Auto1bus`, `Auto3bus`, `AutoHLT`, and `AutoHLTCode` retain strict electrical
   mismatches, particularly at the very short connecting lines.
-- `AutoAuto` loses the native `AutoTrans` component during conversion.
-- `IMODOD`, `IMOYODlag`, and `IMOYODlead` retain substantive four-wire
-  voltage/current/power mismatches.
-- `IMYD` fails import on an inconsistent LineCode capacitance dimension.
-- `OYODUnBal` passes its first comparison but its repeated conversion fails
-  native convergence, so it does not qualify.
+- `AutoAuto` retains all original observations and its typed autotransformer
+  quantities match; the complete feeder still fails source/switch comparisons.
+- `IMODOD`, `IMOYODlag`, `IMOYODlead`, and `IMYD` import and retain all
+  original observations, but fail strict four-wire voltage/power comparisons.
+
+`OYODUnBal` passes after the native source arithmetic correction described
+above. Its 77 observations pass canonical output and reimport, with a failing
+changed-line control; three additional fresh runs reproduce that result.
+The same fresh-run check confirms that `YYD1Tank` converges but still fails its
+electrical comparison. No threshold was relaxed or observation removed.
 
 The broader external script audit recognizes both `New Circuit` and
 `New object=Circuit` spellings: 53 of 61 entry points parse and retain typed
@@ -2036,5 +2038,5 @@ The public CIMHub IEEE 4 `AutoAuto.dss` now parses into typed equipment and
 retains all 77 electrical observations. Its autotransformer observations match,
 but the complete feeder still fails strict source/switch comparisons (about
 0.000503 A and 100.23 VA maximum residual in the pinned run). It remains a failed
-feeder qualification. The broader IEEE 4 suite remains 14/27 qualified; no
+feeder qualification. The broader IEEE 4 suite is 15/27 qualified; no
 thresholds have changed.
