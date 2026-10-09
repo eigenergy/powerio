@@ -1,6 +1,6 @@
 """Pinned IEEE distribution feeder conversions against both forks and OpenDSS.
 
-IEEE13/37 include independently edited cases. IEEE34 currently qualifies the
+IEEE13/37 include independently edited cases. IEEE34/123 currently qualify the
 fixed source state only. Compare every bus phase voltage, physical device port,
 load and capacitor current/power, and bus current balance. Results apply to the
 pinned NR inputs, not arbitrary feeders or other solver profiles.
@@ -27,6 +27,34 @@ from oracle import (
     run_glm,
 )
 from transformer_roundtrip_oracle import header
+
+
+FEEDERS = {
+    "ieee13": {
+        "file": "test_IEEE_13_NR.glm",
+        "config": None,
+        "inventory": {"buses": 15, "lines": 12, "transformers": 4, "loads": 16},
+        "stopping_V": "1e-9",
+    },
+    "ieee34": {
+        "file": "test_IEEE_34_NR.glm",
+        "config": "data_configurations_34_node.glm",
+        "inventory": {"buses": 55, "lines": 51, "transformers": 7, "loads": 70},
+        "stopping_V": "1e-6",
+    },
+    "ieee37": {
+        "file": "test_IEEE_37_NR.glm",
+        "config": "data_configurations_37_node.glm",
+        "inventory": {"buses": 37, "lines": 35, "transformers": 1, "loads": 32},
+        "stopping_V": "1e-9",
+    },
+    "ieee123": {
+        "file": "test_IEEE123_zero_voltages_NR.glm",
+        "config": "data_configurations_delta_123node.glm",
+        "inventory": {"buses": 130, "lines": 124, "transformers": 10, "loads": 89},
+        "stopping_V": "1e-7",
+    },
+}
 
 
 def instrument(text, network, original, voltage_error="1e-9"):
@@ -245,9 +273,7 @@ def edited_original(text, source="n650"):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True, type=Path)
-    parser.add_argument(
-        "--case", choices=("ieee13", "ieee34", "ieee37"), default="ieee13"
-    )
+    parser.add_argument("--case", choices=tuple(FEEDERS), default="ieee13")
     parser.add_argument(
         "--baseline-only",
         action="store_true",
@@ -258,32 +284,26 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     manifest = json.loads((HERE / "upstream.json").read_text())
-    number = args.case.removeprefix("ieee")
-    if args.case == "ieee34" and not args.baseline_only:
-        parser.error("IEEE34 currently requires --baseline-only")
-    fixture = next(
-        f
-        for f in manifest["files"]
-        if f["local"].endswith(f"test_IEEE_{number}_NR.glm")
-    )
+    feeder = FEEDERS[args.case]
+    if args.case in ("ieee34", "ieee123") and not args.baseline_only:
+        parser.error(f"{args.case} currently requires --baseline-only")
+    fixture = next(f for f in manifest["files"] if f["local"].endswith(feeder["file"]))
     data = args.source.read_bytes()
     if hashlib.sha256(data).hexdigest() != fixture["sha256"]:
         raise ValueError("feeder source pin mismatch")
     native_text = data.decode()
     bridge_options = []
     dependency = None
-    if args.case in ("ieee34", "ieee37"):
+    if feeder["config"]:
         dependency = next(
-            f
-            for f in manifest["files"]
-            if f["local"] == f"data_configurations_{number}_node.glm"
+            f for f in manifest["files"] if f["local"] == feeder["config"]
         )
         root = args.source.resolve().parent.parent
         config = (root / dependency["local"]).read_bytes()
         if hashlib.sha256(config).hexdigest() != dependency["sha256"]:
             raise ValueError("feeder include pin mismatch")
         native_text = native_text.replace(
-            f'#include "../data_configurations_{number}_node.glm";', config.decode()
+            f'#include "../{feeder["config"]}";', config.decode()
         )
         bridge_options = ["--acquisition-root", str(root)]
     args.output.mkdir(parents=True, exist_ok=False)
@@ -299,10 +319,10 @@ def main():
             "Strip known input's line comments before instrumenting objects",
             "Override source complex_output_format with RECT to match the explicit recorder j suffix",
             "Omit voltdump; Arras rejects PNNL mode POLAR",
-            f"Set original/canonical bus stopping tolerance to {'1e-6' if args.case == 'ieee34' else '1e-9'} V; preserve V/A comparison limits; IEEE34 power resolution is twice maximum source voltage times absolute current tolerance",
+            f"Set original/canonical bus stopping tolerance to {feeder['stopping_V']} V; preserve V/A comparison limits; IEEE34 power resolution is twice maximum source voltage times absolute current tolerance",
             "Replace SWING node with a root meter; preserve source phasors and topology",
             f"Retain the original {fixture['assertions']} published voltage assertions; remove them only for deliberately edited inputs",
-            "IEEE34/37: flatten hash-pinned configuration include for native instrumentation; PowerIO reads the original project with an explicit root",
+            "IEEE34/37/123: flatten hash-pinned configuration include for native instrumentation; PowerIO reads the original project with an explicit root",
             "Bound recorder runs with a one-second stop after the declared timezone and start time",
             "Record 17 significant digits; retain raw source-meter current and compare source current summed from physical native ports",
             "Original physical line ports use native a/b impedance dumps; published noncommuting-shunt current reporting is checked separately",
@@ -338,7 +358,7 @@ def main():
         network = decoded["fresh"]["network"]
         tolerances = dict(TOLERANCES)
         if args.case == "ieee34":
-            # At 15 kV the existing 1e-7 A current resolution is millivolt-amperes.
+            # Scale absolute power resolution to the feeder voltage level.
             # Two port powers are subtracted for losses. Carry that resolution
             # into their absolute power budget; retain all V/A/relative limits.
             maximum_voltage = max(
@@ -353,13 +373,7 @@ def main():
             key: len(network[key])
             for key in ("buses", "lines", "transformers", "loads")
         }
-        expected_inventory = (
-            {"buses": 15, "lines": 12, "transformers": 4, "loads": 16}
-            if args.case == "ieee13"
-            else {"buses": 37, "lines": 35, "transformers": 1, "loads": 32}
-            if args.case == "ieee37"
-            else {"buses": 55, "lines": 51, "transformers": 7, "loads": 70}
-        )
+        expected_inventory = feeder["inventory"]
         if inventory != expected_inventory:
             raise ValueError("pinned feeder inventory changed")
         if (converted / "fresh.glm").read_bytes() != (
@@ -407,7 +421,7 @@ def main():
                 text,
                 case_network,
                 original,
-                "1e-6" if args.case == "ieee34" else "1e-9",
+                feeder["stopping_V"],
             )
             (directory / "model.glm").write_text(text)
             run_glm(profile, directory, args.pnnl_root, outputs=outputs)

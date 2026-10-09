@@ -200,6 +200,11 @@ replay reports that those inputs must accompany the files; the module's
 source descriptors. The legacy network `source_format` field stays unset so
 the existing IR 2 record remains compatible.
 
+Unused passive equipment definitions remain in source with a diagnostic. The
+reader follows configuration, conductor and spacing references from instantiated
+objects; a connected unsupported device still fails. This lets shared equipment
+libraries contain unused transformer or triplex definitions.
+
 Fresh networks, edited modules, IR-restored modules and cross-profile writes
 generate `case.glm` from the typed network. Rust's
 `powerio_dist::glm::emit_canonical` offers single-file output directly from a
@@ -264,6 +269,7 @@ FBS regulators, open-delta connections and banked initialization remain unfinish
 
 Canonical node convergence is set to `1e-9 V`. The tighter former absolute
 setting could prevent IEEE13 from converging despite stable electrical values.
+This is an engine stopping criterion, not the validation comparison tolerance.
 
 The pinned IEEE13 and IEEE37 NR feeders are qualified against PNNL, Arras and OpenDSS for
 all bus-phase voltages, source currents, line/transformer terminal currents,
@@ -274,7 +280,11 @@ edits; it does not establish the unfinished profiles above. IEEE37 starts downst
 of its regulator; its NR delta transformer uses the equivalent described above.
 Its parent-directory include uses the existing explicit acquisition-root API. See
 `evals/gridlabd/README.md` for the reproducible oracle and measurement conventions.
-This is an engine stopping criterion, not the validation comparison tolerance.
+
+IEEE34 and IEEE123 NR also have fixed-state qualification across both forks and
+OpenDSS, including per-phase manual capacitor admittances and switch/regulator
+states. Their edited-state qualification remains pending. The harness documents
+per-feeder stopping settings and numerical comparison budgets.
 
 Other geometry/earth models, split-phase and
 additional static devices remain unfinished and fail explicitly. Full OpenDSS

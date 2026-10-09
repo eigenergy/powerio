@@ -888,8 +888,8 @@ sources, including IEEE4/13/34/37/123/8500/9500 and low-voltage/neutral cases.
 It is an acquisition inventory, not a compatibility claim. Keep downloaded
 models outside the repository; review the source license before redistributing.
 
-The existing `upstream.py` downloader now includes the IEEE34 NR case and its
-configuration include. Run its fixed-state conversion check with:
+The `upstream.py` downloader includes the IEEE34 and IEEE123 NR cases and their
+configuration includes. Run a fixed-state conversion check with:
 
 ```sh
 python evals/gridlabd/feeder_oracle.py --case ieee34 --baseline-only \
@@ -898,11 +898,20 @@ python evals/gridlabd/feeder_oracle.py --case ieee34 --baseline-only \
   --output /path/to/new-report-directory
 ```
 
-This profile covers 55 electrical buses, 51 lines, seven winding equivalents,
-70 load records and six fixed capacitor coils. Each fork compares 1,000 complex
-quantities with canonical GLM and OpenDSS and checks every bus's current balance.
-It does not yet qualify edited IEEE34 states. IEEE13/37 retain their edited-state
-checks. Fresh and IR-restored canonical GLM must be identical.
+For IEEE123 use `--case ieee123 --baseline-only` and source
+`autotest/test_IEEE123_zero_voltages_NR.glm`. The original IEEE123 assertions
+check absent-phase zero voltages; the oracle measures the energized circuit too.
+
+| Fixed-state profile | Buses | Lines | Winding equivalents | Loads | Capacitor coils | Complex quantities |
+|---|---:|---:|---:|---:|---:|---:|
+| IEEE34 NR | 55 | 51 | 7 | 70 | 6 | 1,000 |
+| IEEE123 NR | 130 | 124 | 10 | 89 | 6 | 2,029 |
+
+Each fork compares the complete inventory with canonical GLM and OpenDSS and
+checks current balance at every bus. These profiles do not yet qualify edited
+IEEE34/123 states. IEEE13/37 retain their edited-state checks. Fresh and
+IR-restored canonical GLM must be identical. IEEE123's unused center-tapped and
+triplex equipment definitions stay in source; no service circuit is instantiated.
 
 IEEE34 needs a native stopping tolerance of `1e-6 V`; tighter settings failed
 convergence on the pinned engine. Voltage/current acceptance limits remain those

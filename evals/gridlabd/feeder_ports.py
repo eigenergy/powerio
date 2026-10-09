@@ -1,4 +1,4 @@
-"""Device ports for the pinned IEEE13/IEEE34/IEEE37 feeders (not a general GLM reader).
+"""Device ports for the pinned IEEE13/IEEE34/IEEE37/IEEE123 feeders (not a general GLM reader).
 
 Topology/phase identities come from the converted network. Electrical reference
 values come only from native recorder output and native impedance dumps.
@@ -160,7 +160,11 @@ def snapshot(directory, network, original):
             np.array([sign * row[f"current_{suffix}_{'ABC'[int(t) - 1]}"] for t in ts])
             for (_, ts), suffix, sign in zip(ends, ("in", "out"), (1, -1), strict=True)
         ]
-        if original and kind == "line" and name != "switch_671-692":
+        if (
+            original
+            and kind == "line"
+            and native_links[name].tag in ("overhead_line", "underground_line")
+        ):
             # Native reporting uses d=a even when Z and Y do not commute.
             # Reconstruct the physical pi ports from native a/b, independently
             # of PowerIO's linecode. Keep published currents/losses in raw.

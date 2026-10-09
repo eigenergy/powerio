@@ -21,6 +21,7 @@ mod geometry;
 mod loads;
 mod regulators;
 mod switches;
+mod templates;
 mod transformers;
 
 /// Read the initial static GLM electrical profile. Unknown physical
@@ -211,17 +212,17 @@ impl Reader<'_> {
                 "iteration_limit is retained in source; canonical output uses its own solver settings"));
             return Ok(());
         }
-        if let Some(("profiler", value)) =
+        if let Some((name @ ("profiler" | "relax_naming_rules"), value)) =
             setting.map(|(k, v)| (k.trim(), v.trim().trim_end_matches(';')))
         {
             if !matches!(value, "0" | "1" | "TRUE" | "FALSE" | "true" | "false") {
                 return Err(self
                     .project
-                    .electrical_error(&token.span(), "profiler requires a boolean"));
+                    .electrical_error(&token.span(), format!("{name} requires a boolean")));
             }
             self.diagnostics.push(Diagnostic::of(
                 &codes::READ_GLM_SOURCE_ONLY,
-                "profiler is an output-only engine setting retained in source",
+                format!("{name} is a non-electrical engine setting retained in source; object identities remain literal"),
             ));
             return Ok(());
         }
@@ -293,7 +294,7 @@ impl Reader<'_> {
         Ok(())
     }
 
-    fn inventory(&mut self) -> Result<(), Error> {
+    fn reserve_explicit_names(&mut self) -> Result<(), Error> {
         for object in self.index.objects() {
             if let Some(name) = object.name()
                 && !self.identities.insert(name.to_ascii_lowercase())
@@ -304,6 +305,12 @@ impl Reader<'_> {
                 ));
             }
         }
+        Ok(())
+    }
+
+    fn inventory(&mut self) -> Result<(), Error> {
+        let used_templates = self.used_templates()?;
+        self.reserve_explicit_names()?;
         for object in self.index.objects() {
             let name = object.name().map_or_else(
                 || {
@@ -316,6 +323,11 @@ impl Reader<'_> {
             );
             self.names.insert(object.key(), name);
             let class = class(object);
+            if templates::is_template(class) && !used_templates.contains(&object.key()) {
+                self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_SOURCE_ONLY,
+                    format!("unused {class} {} is retained in source; it contributes no network equipment", self.names[&object.key()])));
+                continue;
+            }
             if matches!(
                 class,
                 "recorder"

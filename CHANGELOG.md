@@ -7,7 +7,8 @@
   and unsafe-entry checks.
 
 - Read fixed wye GridLAB-D capacitor coils and emit their current shunt values.
-  Qualify the IEEE34 NR feeder and prevent OpenDSS low-voltage defaults from
+  Qualify IEEE34 and IEEE123 NR feeders, retain unused equipment library entries
+  without instantiating devices, and prevent OpenDSS low-voltage defaults from
   changing unbounded load laws below half nominal voltage.
 
 - OpenDSS load models 1, 5 and 8 retain voltage bands and ZIP dropout in a

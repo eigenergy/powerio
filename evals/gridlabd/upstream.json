@@ -58,6 +58,21 @@
       "source": "powerflow/autotest/data_configurations_34_node.glm",
       "local": "data_configurations_34_node.glm",
       "sha256": "f90d71b4237ee155d4c30e19724583635e72f0c316d10ae0d8b98a8c58203d99"
+    },
+    {
+      "source": "powerflow/autotest/test_IEEE123_zero_voltages_NR.glm",
+      "local": "autotest/test_IEEE123_zero_voltages_NR.glm",
+      "sha256": "035a54d8ae1c47271dcdcc1acc35362d556830bed4017c4cb5171b63861338cd",
+      "assertions": 28,
+      "tolerances_V": {
+        "0.01": 28
+      },
+      "qualification": "Static NR IEEE123 with manual regulator/capacitor states. Original assertions test absent-phase zero voltages; full electrical comparison is separate."
+    },
+    {
+      "source": "powerflow/autotest/data_configurations_delta_123node.glm",
+      "local": "data_configurations_delta_123node.glm",
+      "sha256": "5b7e97d954e3fac99cc7eaca8d488cad402ef4dc641377f808f1cfaa1fcea959"
     }
   ]
 }
