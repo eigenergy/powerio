@@ -739,6 +739,7 @@ fn designate_reference(
 /// The buses of the islands no in-service generator supplies, each island
 /// reported as left out.
 fn unsupplied_island_buses(
+    network: &BalancedNetwork,
     partition: &IslandPartition,
     warnings: &mut crate::diagnostics::Diagnostics,
 ) -> HashSet<BusId> {
@@ -748,14 +749,8 @@ fn unsupplied_island_buses(
         .iter()
         .filter(|island| !island.is_supplied())
     {
-        warnings.push(
-            &crate::diagnostics::codes::CANONICALIZE_ISLAND_DE_ENERGIZED,
-            format!(
-                "the island of {} bus(es) ({}) has no in-service generator and was left out of \
-                 the normalized network",
-                island.buses.len(),
-                bus_list(&island.buses)
-            ),
+        warnings.record(
+            network.unsupplied_island_finding(island, "was left out of the normalized network"),
         );
         unsupplied.extend(island.buses.iter().copied());
     }
@@ -1029,7 +1024,7 @@ impl BalancedNetwork {
             .then(|| self.calc_islands_where(false));
         let unsupplied = partition
             .as_ref()
-            .map(|partition| unsupplied_island_buses(partition, &mut warnings))
+            .map(|partition| unsupplied_island_buses(self, partition, &mut warnings))
             .unwrap_or_default();
 
         // Kept buses keep their original `kind` for now (the reference scan below

@@ -1350,6 +1350,9 @@ mpc.branch = [
 \t3\t4\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 \t5\t6\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 ];
+mpc.dcline = [
+\t1\t5\t1\t10\t9.5\t0\t0\t1\t1\t0\t20\t-10\t10\t-10\t10\t0\t0;
+];
 ";
 
 #[test]
@@ -1363,10 +1366,13 @@ fn summary_lists_the_islands() {
     let islands = &value["topology"]["islands"];
     assert_eq!(islands["count"], 3);
     assert_eq!(islands["unsupplied"], 1);
+    assert_eq!(islands["unsupplied_hvdc_fed"], 1);
     assert_eq!(islands["without_reference"], 2);
     assert_eq!(
         islands["islands"][0]["reference_buses"],
         serde_json::json!([1])
     );
     assert_eq!(islands["islands"][2]["generators"], 0);
+    assert_eq!(islands["islands"][2]["hvdc_ties"], 1);
+    assert_eq!(islands["islands"][1]["hvdc_ties"], 0);
 }

@@ -98,8 +98,8 @@ pockets behind an open breaker, and stranded equipment. `calc_islands`
 partitions the energized buses into islands joined by in-service branches,
 closed switches, and in-service three winding transformers. Buses typed
 isolated belong to no island, and HVDC lines do not join islands. Each island
-lists its buses, reference buses, and in-service generators, largest island
-first. `subset_buses` carves one island out as a network of its own.
+lists its buses, reference buses, in-service generators, and the in-service
+HVDC lines that tie it to another island, largest island first. `subset_buses` carves one island out as a network of its own.
 
 A power flow needs one reference bus per island, and an island with no source
 cannot be solved. `assign_island_references` with the per island policy gives
@@ -112,6 +112,11 @@ each island exactly one:
   demotes the others;
 - an island with no in-service generator is de-energized: its buses are typed
   isolated and the equipment on or touching them is taken out of service.
+  Supply counts in-service generators only, so an island that only an HVDC
+  line feeds is de-energized too, and the line with it. It gets its own code,
+  `CANONICALIZE.ISLAND.HVDC_FED_DE_ENERGIZED`, which names the lines and the
+  power they schedule into the island; model that infeed as a generator at
+  the converter bus to keep the island.
 
 Every change is reported under `CANONICALIZE.ISLAND`. Normalization applies
 the same rule when asked, and leaves the unsupplied islands out of the

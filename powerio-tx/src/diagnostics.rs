@@ -394,6 +394,9 @@ pub mod codes {
             "an island stated several reference buses; one was kept and the others demoted";
         CANONICALIZE_ISLAND_DE_ENERGIZED = "CANONICALIZE.ISLAND.DE_ENERGIZED", Warning,
             "an island no in-service generator supplies was de-energized";
+        CANONICALIZE_ISLAND_HVDC_FED_DE_ENERGIZED =
+            "CANONICALIZE.ISLAND.HVDC_FED_DE_ENERGIZED", Warning,
+            "an island fed only by HVDC, with no in-service generator, was de-energized with its HVDC lines";
 
         // CANONICALIZE.MERGE: the explicit bus merge.
         CANONICALIZE_MERGE_ZERO_IMPEDANCE = "CANONICALIZE.MERGE.ZERO_IMPEDANCE", Warning,

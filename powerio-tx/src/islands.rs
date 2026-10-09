@@ -46,6 +46,9 @@ pub struct Island {
     pub references: Vec<BusId>,
     /// Rows of the in-service generators on its buses.
     pub generators: Vec<usize>,
+    /// Rows of the in-service HVDC lines that tie it to another island: one
+    /// terminal on its buses, the other on another island's.
+    pub hvdc: Vec<usize>,
 }
 
 impl Island {
@@ -239,20 +242,14 @@ impl BalancedNetwork {
                 buses: Vec::new(),
                 references: Vec::new(),
                 generators: Vec::new(),
+                hvdc: Vec::new(),
             });
             island.buses.push(bus.id);
             if bus.kind == BusType::Ref {
                 island.references.push(bus.id);
             }
         }
-        for (row, generator) in self.generators().iter().enumerate() {
-            if let Some(&index) = index_of.get(&generator.bus)
-                && generator.in_service
-                && let Some(island) = by_root.get_mut(&labels[index])
-            {
-                island.generators.push(row);
-            }
-        }
+        self.attach_generators_and_hvdc(&mut by_root, &labels, &index_of);
         let mut islands: Vec<Island> = by_root.into_values().collect();
         for island in &mut islands {
             island.buses.sort_unstable();
@@ -274,6 +271,37 @@ impl BalancedNetwork {
             islands,
             isolated,
             island_of,
+        }
+    }
+
+    /// Record on each island, keyed by its union-find root, the rows of its
+    /// in-service generators and of the in-service HVDC lines tying it to
+    /// another island.
+    fn attach_generators_and_hvdc(
+        &self,
+        by_root: &mut HashMap<usize, Island>,
+        labels: &[usize],
+        index_of: &HashMap<BusId, usize>,
+    ) {
+        for (row, generator) in self.generators().iter().enumerate() {
+            if let Some(&index) = index_of.get(&generator.bus)
+                && generator.in_service
+                && let Some(island) = by_root.get_mut(&labels[index])
+            {
+                island.generators.push(row);
+            }
+        }
+        for (row, line) in self.hvdc().iter().enumerate() {
+            if let (Some(&from), Some(&to)) = (index_of.get(&line.from), index_of.get(&line.to))
+                && line.in_service
+                && labels[from] != labels[to]
+            {
+                for end in [from, to] {
+                    if let Some(island) = by_root.get_mut(&labels[end]) {
+                        island.hvdc.push(row);
+                    }
+                }
+            }
         }
     }
 
@@ -327,13 +355,10 @@ impl BalancedNetwork {
                     .filter(|load| load.in_service && island.buses.binary_search(&load.bus).is_ok())
                     .map(|load| load.p)
                     .sum();
-                diagnostics.push(Diagnostic::of(
-                    &codes::CANONICALIZE_ISLAND_DE_ENERGIZED,
-                    format!(
-                        "the island of {} bus(es) ({}) has no in-service generator and was \
-                         de-energized; its {load} MW of in-service load is no longer served",
-                        island.buses.len(),
-                        bus_list(&island.buses)
+                diagnostics.push(self.unsupplied_island_finding(
+                    island,
+                    &format!(
+                        "was de-energized; its {load} MW of in-service load is no longer served"
                     ),
                 ));
                 dead.extend(island.buses.iter().copied());
@@ -413,6 +438,45 @@ impl BalancedNetwork {
             de_energized: dead.into_iter().collect(),
             diagnostics,
         }
+    }
+
+    /// The finding for an island no in-service generator supplies, whose
+    /// `outcome` completes the sentence. An island an HVDC line still feeds
+    /// gets its own code, naming the lines and the power they schedule into
+    /// it, since supply counts generators only and that infeed goes too.
+    pub(crate) fn unsupplied_island_finding(&self, island: &Island, outcome: &str) -> Diagnostic {
+        let size = island.buses.len();
+        let buses = bus_list(&island.buses);
+        if island.hvdc.is_empty() {
+            return Diagnostic::of(
+                &codes::CANONICALIZE_ISLAND_DE_ENERGIZED,
+                format!(
+                    "the island of {size} bus(es) ({buses}) has no in-service generator and {outcome}"
+                ),
+            );
+        }
+        let inside = |bus: BusId| island.buses.binary_search(&bus).is_ok();
+        let mut infeed = 0.0;
+        let mut lines = Vec::with_capacity(island.hvdc.len());
+        for &row in &island.hvdc {
+            let line = &self.hvdc()[row];
+            // MATPOWER's dcline convention: `pf` leaves the from bus and `pt`
+            // arrives at the to bus.
+            infeed += if inside(line.to) { line.pt } else { -line.pf };
+            lines.push(format!("{}-{}", line.from, line.to));
+        }
+        Diagnostic::of(
+            &codes::CANONICALIZE_ISLAND_HVDC_FED_DE_ENERGIZED,
+            format!(
+                "the island of {size} bus(es) ({buses}) has no in-service generator and {outcome}; \
+                 {} in-service HVDC line(s) ({}) schedule {infeed} MW into it, and only \
+                 generators count as supply, so they were taken out of service with it and the \
+                 other island(s) no longer exchange that power. To keep the island, model the \
+                 infeed as a generator at its converter bus",
+                lines.len(),
+                lines.join(", ")
+            ),
+        )
     }
 
     /// Take every element at or touching `buses` out of service. Only a table
@@ -525,7 +589,13 @@ mod tests {
             Load::new(BusId(3), 40.0, 0.0),
             Load::new(BusId(7), 25.0, 0.0),
         ]);
-        net.hvdc_mut().push(Hvdc::new(BusId(1), BusId(6)));
+        // An HVDC line from island A feeds island C, which has no generator.
+        let mut tie = Hvdc::new(BusId(1), BusId(6));
+        tie.pf = 30.0;
+        tie.pt = 29.0;
+        // One inside island A ties nothing.
+        let inside = Hvdc::new(BusId(1), BusId(2));
+        net.hvdc_mut().extend([tie, inside]);
         net
     }
 
@@ -553,6 +623,11 @@ mod tests {
         assert!(!partition.islands[2].is_supplied());
         assert_eq!(partition.island_of(BusId(5)), Some(1));
         assert_eq!(partition.island_of(BusId(8)), None);
+        // The HVDC tie belongs to both islands it joins; the line inside
+        // island A ties nothing.
+        assert_eq!(partition.islands[0].hvdc, [0]);
+        assert_eq!(partition.islands[1].hvdc, [] as [usize; 0]);
+        assert_eq!(partition.islands[2].hvdc, [0]);
     }
 
     #[test]
@@ -619,15 +694,23 @@ mod tests {
         assert!(!net.branches()[3].in_service);
         assert!(!net.branches()[4].in_service, "the branch onto bus 8");
         assert!(!net.hvdc()[0].in_service);
+        assert!(net.hvdc()[1].in_service, "the line inside island A");
         assert!(net.branches()[0].in_service && net.loads()[0].in_service);
+        // Island C was fed over HVDC, so its finding has its own code and
+        // names the line and the power it scheduled into the island.
         assert_eq!(
             codes(&report.diagnostics),
             [
                 "CANONICALIZE.ISLAND.REFERENCE_DESIGNATED",
-                "CANONICALIZE.ISLAND.DE_ENERGIZED"
+                "CANONICALIZE.ISLAND.HVDC_FED_DE_ENERGIZED"
             ]
         );
-        assert!(report.diagnostics[1].message().contains("25 MW"));
+        let message = report.diagnostics[1].message();
+        assert!(message.contains("25 MW of in-service load"), "{message}");
+        assert!(
+            message.contains("(1-6) schedule 29 MW into it"),
+            "{message}"
+        );
         assert_eq!(report.partition.islands.len(), 2);
         assert!(
             report
@@ -702,9 +785,14 @@ mod tests {
             .map(|bus| bus.id)
             .collect();
         assert_eq!(references, [BusId(1), BusId(5)]);
-        assert_eq!(per_island.network.hvdc().as_slice(), []);
+        assert_eq!(
+            per_island.network.hvdc().len(),
+            1,
+            "only the line inside island A"
+        );
         let found = codes(&per_island.diagnostics);
-        assert!(found.contains(&"CANONICALIZE.ISLAND.DE_ENERGIZED"));
+        assert!(found.contains(&"CANONICALIZE.ISLAND.HVDC_FED_DE_ENERGIZED"));
+        assert!(!found.contains(&"CANONICALIZE.ISLAND.DE_ENERGIZED"));
         assert!(found.contains(&"CANONICALIZE.ISLAND.REFERENCE_DESIGNATED"));
         crate::IndexedNetwork::new(&per_island.network)
             .check_reference_coverage()

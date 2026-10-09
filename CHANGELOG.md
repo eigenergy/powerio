@@ -28,20 +28,24 @@
 
 - `BalancedNetwork::calc_islands` partitions the energized buses into AC
   islands joined by in-service branches, closed switches, and in-service three
-  winding transformers, each with its buses, reference buses, and in-service
-  generators. `assign_island_references(IslandReferencePolicy::PerIsland)`
-  gives every island one reference bus: an island that states none takes its
-  largest `pmax` generator's bus, an island stating several keeps the one with
-  the most generation and demotes the others, and an island no in-service
+  winding transformers, each with its buses, reference buses, in-service
+  generators, and HVDC ties to other islands.
+  `assign_island_references(IslandReferencePolicy::PerIsland)` gives every
+  island one reference bus: an island that states none takes its largest
+  `pmax` generator's bus, an island stating several keeps the one with the
+  most generation and demotes the others, and an island no in-service
   generator supplies is de-energized. Each change is reported under
-  `CANONICALIZE.ISLAND`. `NormalizeOptions::island_references` applies the
+  `CANONICALIZE.ISLAND`; an island that only an HVDC line feeds has its own
+  code, `CANONICALIZE.ISLAND.HVDC_FED_DE_ENERGIZED`, naming the lines and the
+  power they scheduled into it. `NormalizeOptions::island_references` applies the
   same rule during normalization and leaves the unsupplied islands out; its
   default, `Stated`, keeps today's behavior. A three winding transformer joins
   the buses of its connected windings, so a dead tertiary (a winding on an
   isolated bus, or one `extras["winding_in_service"]` states out) does not cut
   an island, and `subset_buses` carves out one island whole, keeping such a
-  transformer with the dead winding's bus as an isolated stub. Python takes `to_normalized(island_references="per_island")`, and
-  `powerio summary` lists the islands under `topology.islands`.
+  transformer with the dead winding's bus as an isolated stub. Python takes
+  `to_normalized(island_references="per_island")`, and `powerio summary` lists
+  the islands under `topology.islands`.
 
 - Normalization reports a PQ bus it retypes PV because it hosts an in-service
   generator as `CANONICALIZE.NORMALIZE.GENERATOR_BUS_RETYPED`. The retyping
