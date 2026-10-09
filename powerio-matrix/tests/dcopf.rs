@@ -579,14 +579,17 @@ fn auto_writes_sparse_outputs_above_the_dense_threshold() {
 }
 
 #[test]
-fn auto_sparse_rejects_non_positive_susceptance() {
+fn auto_sparse_factors_a_negative_susceptance() {
+    // A series capacitor's negative susceptance makes the grounded matrix
+    // negative definite here; the sparse path falls back from Cholesky and
+    // agrees with the dense path.
     let case = net(
         "negative_x",
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
         vec![branch(1, 2, -0.1)],
     );
     let view = IndexedNetwork::new(&case);
-    let err = calc_ptdf_lodf_with_options(
+    let sparse = calc_ptdf_lodf_with_options(
         &view,
         &SensitivityOptions {
             solver: SensitivitySolver::Auto,
@@ -594,14 +597,11 @@ fn auto_sparse_rejects_non_positive_susceptance() {
             ..Default::default()
         },
     )
-    .unwrap_err();
-
-    match err {
-        Error::InvalidSensitivityOptions { reason } => {
-            assert!(reason.contains("positive finite branch susceptances"));
-        }
-        other => panic!("unexpected error: {other}"),
-    }
+    .unwrap();
+    assert_eq!(
+        sparse.metadata.solver_path,
+        SensitivitySolverPath::SparseLdlt
+    );
 
     let dense = calc_ptdf_lodf_with_options(
         &view,
@@ -615,6 +615,8 @@ fn auto_sparse_rejects_non_positive_susceptance() {
         dense.metadata.solver_path,
         SensitivitySolverPath::DenseInverse
     );
+    assert_matrix_close(&sparse.ptdf, &dense.ptdf, 1e-12, "PTDF");
+    assert_matrix_close(&sparse.lodf, &dense.lodf, 1e-12, "LODF");
 }
 
 // ---------------------------------------------------------------------------

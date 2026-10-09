@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- PTDF and LODF accept negative branch reactances on the sparse path. A
+  series capacitor's negative susceptance can make the reference grounded DC
+  bus susceptance matrix indefinite, and the sparse path refused any branch
+  with a nonpositive susceptance, leaving only the dense path, which cannot
+  hold a 100k bus case. The sparse path now factors with Cholesky while the
+  matrix is positive definite, then with `LDLᵀ`, then with LU and partial
+  pivoting. It accepts a factorization only when it solves a probe right hand
+  side with a normwise backward error below 1e-10 and a relative forward error
+  below 1e-4, and refuses the matrix as singular only when every
+  factorization fails. `SensitivitySolverPath` gains `SparseLdlt` and
+  `SparseLu` (`sparse_ldlt`, `sparse_lu` in metadata), and a nonfinite branch
+  susceptance is still refused. The new `calc_ptdf_rows`,
+  `calc_ptdf_columns`, and `calc_lodf_columns` return selected PTDF rows,
+  PTDF columns, and LODF columns from one factorization and one solve per
+  row or column, without forming the full matrices.
+
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW
   and RAWX readers had the two swapped, so a continuously adjusted shunt, such
