@@ -265,6 +265,12 @@ fn audit_untyped(net: &MulticonductorNetwork, report: &mut ElectricalReadiness) 
                 .next_param()
                 .is_some_and(|p| p.value.text.to_ascii_lowercase().starts_with("reactor."))
     });
+    let storage_state_command = net.commands().iter().any(|(verb, args)| {
+        matches!(verb.as_str(), "enable" | "disable" | "open" | "close")
+            && crate::dss::lex::Scanner::new(args, None)
+                .next_param()
+                .is_some_and(|p| p.value.text.to_ascii_lowercase().starts_with("storage."))
+    });
     for object in net.untyped_objects() {
         let explicitly_disabled = object
             .props
@@ -282,6 +288,15 @@ fn audit_untyped(net: &MulticonductorNetwork, report: &mut ElectricalReadiness) 
         {
             report.block("READINESS.DSS.REACTOR_UNRESOLVED", &object.name,
                 "untyped reactor has unresolved electrical behavior; omitting a series reactor can disconnect the feeder");
+        }
+        if object.class.eq_ignore_ascii_case("storage")
+            && (!explicitly_disabled || storage_state_command)
+        {
+            report.block(
+                "READINESS.DSS.STORAGE_UNRESOLVED",
+                &object.name,
+                "untyped storage has unresolved static power exchange, including idling losses",
+            );
         }
         if object.class.eq_ignore_ascii_case("vsource") && !explicitly_disabled {
             report.block("READINESS.DSS.SOURCE_UNRESOLVED", &object.name,

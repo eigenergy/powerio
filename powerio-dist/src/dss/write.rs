@@ -2741,6 +2741,12 @@ fn ibr_profile<'a>(
 }
 
 fn ibr_phases(ibr: &DistIbr) -> usize {
+    // Ratings are per electrical phase; topology identifies the connection,
+    // and a wye terminal map includes a return conductor. In particular a
+    // two-phase wye inverter has three terminals but only two phase ratings.
+    if !ibr.s_max.is_empty() {
+        return ibr.s_max.len();
+    }
     match ibr.topology {
         IbrTopology::SinglePhase => 1,
         IbrTopology::ThreeLeg | IbrTopology::FourLeg => 3,
@@ -4873,6 +4879,41 @@ mod tests {
             .unwrap();
         assert!(line.contains("phases=2 conn=delta"), "{line}");
         assert_eq!(line.matches("phases=").count(), 1, "{line}");
+    }
+
+    #[test]
+    fn inverter_phase_count_uses_typed_ratings_instead_of_topology_or_stale_extras() {
+        for (phases, conn, nodes) in [
+            (1, "wye", "1.0"),
+            (2, "wye", "1.2.0"),
+            (2, "delta", "1.2.3"),
+            (3, "wye", "1.2.3.0"),
+        ] {
+            let mut net = parse_dss_str(&format!(
+                "new circuit.c\nnew pvsystem.pv bus1=sourcebus.{nodes} phases={phases} conn={conn} kv=12.47 kva=90 pmpp=60\n"
+            ));
+            net.ibrs_mut()[0]
+                .extras
+                .insert("phases".into(), "99".into());
+            for fixed in [false, true] {
+                if fixed {
+                    let ibr = &mut net.ibrs_mut()[0];
+                    ibr.p_min.clone_from(&ibr.p_max);
+                    ibr.q_min = Some(vec![0.0; phases]);
+                    ibr.q_max.clone_from(&ibr.q_min);
+                }
+                let output = emit_dss_text(&net);
+                let class = if fixed { "Generator" } else { "PVSystem" };
+                let prefix = format!("New {class}.pv ");
+                let line = output
+                    .text
+                    .lines()
+                    .find(|l| l.starts_with(&prefix))
+                    .unwrap();
+                assert!(line.contains(&format!("phases={phases} ")), "{line}");
+                assert_eq!(line.matches("phases=").count(), 1);
+            }
+        }
     }
 
     #[test]

@@ -31,6 +31,7 @@ num-complex.workspace = true
 quick-xml.workspace = true
 uuid.workspace = true
 memchr = "2.4"
+regex = "1"
 
 [dev-dependencies]
 # Draft 2020-12 validation against the vendored BMOPF schema in tests.

@@ -1769,11 +1769,47 @@ python evals/gridlabd/dss_series_reactor_oracle.py \
 Fifteen native cases cover single-, two- and three-phase ports, resistance,
 frequency scaling, assignment-time current ratings, IR, repeated canonical
 conversion and changed-line negative controls. All pass. Both complete CIMHub
-IEEE9500 canonical cases now converge and energize the feeder, but remain
-unqualified: maximum voltage differences are approximately 88.8 V balanced and
-89.2 V unbalanced. Each comparison also reports 103 missing switch-port
-observations. A balanced-case diagnostic finds that matched passive-device
-admittance entries agree within `9.1e-13` S. Two-phase PV systems are incorrectly
-emitted with three phases and a grounded third leg; total PV injection falls
-from 2,954.66 kW to 2,303.11 kW. This is a remaining conversion defect, not an
-accepted approximation. Strict acceptance thresholds remain unchanged.
+IEEE9500 canonical cases energize the feeder, but remain unqualified.
+
+### IEEE9500 PV phases and static BatchEdit commands
+
+PVSystem and fixed-dispatch inverter output uses the typed per-phase rating
+count. A two-phase wye inverter has two phases and a separate return terminal;
+the return does not become a third generating phase. Thirteen native cases
+cover wye/delta connections, phase permutations, power factors and a split-phase
+service, with IR, repeated output and negative controls.
+
+`BatchEdit` applies properties to the objects present at that point in the
+script, in native visit order. Name matching is case-insensitive regular
+expression search, without implicit anchoring. The reader uses the existing
+ordered property/copy machinery and charges visits and assignments against its
+work budgets. Supported ASCII expressions include anchors, alternation,
+character classes and repetitions. Unsupported expressions such as lookarounds
+or backreferences, non-ASCII matching and unknown classes report
+`READ.DSS.BATCH_UNRESOLVED`; they are not ignored. A continuation following a
+batch edits the last visited object, even when its name did not match. Load
+copies preserve the destination's bus connection.
+
+```sh
+python evals/gridlabd/dss_pv_phase_oracle.py \
+  --bridge /path/to/dist_network --output /tmp/new-pv-phases
+python evals/gridlabd/dss_batch_edit_oracle.py \
+  --bridge /path/to/dist_network --output /tmp/new-batch-edits
+```
+
+In the balanced CIMHub9500 case, fixing the PV phase count restores total PV
+output from 2,303.11 kW to the native 2,954.66 kW. Applying the feeder's
+`BatchEdit load..* vminpu=0.88` restores the native total load of 13,668.991 kW.
+Maximum voltage differences fall from 88.8 V to 9.86 V after the PV fix, then to
+0.638 V after the load edit. The unbalanced case reaches 0.638 V as well.
+These are still failed comparisons under unchanged thresholds. Matched passive
+admittance entries agree within `9.1e-13` S in the balanced diagnostic.
+
+The remaining omitted devices include two Storage objects in the idling state,
+each consuming 2.5 kW natively. Their static losses are in scope even though
+active battery control is excluded. Untyped active storage now reports
+`READINESS.DSS.STORAGE_UNRESOLVED`, so the current complete feeder imports remain
+blocked until those electrical contributions are represented. The full
+comparisons preceding that explicit blocker are retained as failure evidence;
+each also contains missing switch-port observations. The feeder is not
+qualified by matching aggregate generation or by successful native convergence.

@@ -65,3 +65,16 @@ fn disabled_property_cannot_hide_an_unresolved_enable_command() {
     );
     assert!(!powerio_dist::audit_electrical_readiness(&net).is_ready());
 }
+
+#[test]
+fn untyped_idle_storage_is_not_electrically_ready() {
+    let net = parse("new circuit.c\nnew storage.b bus1=sourcebus kwrated=250 state=idling\n");
+    let audit = powerio_dist::audit_electrical_readiness(&net);
+    assert!(!audit.is_ready());
+    assert!(
+        audit
+            .findings
+            .iter()
+            .any(|f| f.code == "READINESS.DSS.STORAGE_UNRESOLVED")
+    );
+}

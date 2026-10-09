@@ -123,6 +123,8 @@ pub mod codes {
             "a transformer definition could not be resolved into the static electrical snapshot";
         READ_DSS_LINE_UNRESOLVED = "READ.DSS.LINE_UNRESOLVED", Error,
             "a line is invalid or outside the qualified static electrical profile", category = Data;
+        READ_DSS_BATCH_UNRESOLVED = "READ.DSS.BATCH_UNRESOLVED", Error,
+            "a BatchEdit selector could not be executed faithfully", category = Data;
         READ_DSS_PROPERTY_UNKNOWN = "READ.DSS.PROPERTY_UNKNOWN", Warning,
             "a property this reader does not model is kept as written";
         READ_DSS_REFERENCE_DROPPED = "READ.DSS.REFERENCE_DROPPED", Warning,

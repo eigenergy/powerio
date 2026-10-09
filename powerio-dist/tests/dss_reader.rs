@@ -627,13 +627,19 @@ fn grounding_reactor_bus2_uses_the_dss_fill_rule() {
         "New Circuit.c basekv=4.16\n\
          New Reactor.rz bus1=b2.1.2.3 bus2=b2.0 phases=3 r=3 x=4\n",
     );
-    assert!(net.untyped_objects().iter().any(|o| o.name == "rz"));
+    // Only the first return is ground: native fills the remaining entries
+    // with phases 2 and 3, so this is a series-port equivalent, not a bank of
+    // three grounding shunts.
+    let line = net
+        .lines()
+        .iter()
+        .find(|line| line.name == "_pio_reactor_rz")
+        .unwrap();
+    assert_eq!(line.bus_from, "b2");
+    assert_eq!(line.bus_to, "b2");
+    assert_eq!(line.terminal_map_from, ["1", "2", "3"]);
+    assert_eq!(line.terminal_map_to, ["4", "2", "3"]);
     assert!(net.shunts().iter().all(|s| s.name != "rz"));
-    assert!(
-        net.warnings
-            .iter()
-            .any(|w| w.contains("reactor rz") && w.contains("series"))
-    );
 
     let net = parse_dss_str(
         "New Circuit.c basekv=4.16\n\

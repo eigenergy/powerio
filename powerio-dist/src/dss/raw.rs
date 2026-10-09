@@ -630,6 +630,7 @@ impl<L: Loader> Executor<'_, L> {
         match command_index(&verb).map(|i| COMMANDS[i]) {
             Some("new") => self.do_new(scan, ctx),
             Some("edit") => self.do_edit(scan, ctx),
+            Some("batchedit") => self.do_batch_edit(scan, ctx),
             Some("more" | "m" | "~") => self.do_more(scan, ctx),
             Some("select") => self.do_select(scan, ctx),
             Some(canonical @ ("open" | "close")) => self.do_terminal_state(canonical, scan, ctx),
@@ -878,6 +879,126 @@ impl<L: Loader> Executor<'_, L> {
             return;
         };
         self.consume_and_apply(idx, scan, ctx);
+    }
+
+    fn batch_targets(&mut self, class: &str, ctx: &dyn Fn(String) -> String) -> Option<Vec<usize>> {
+        // Charge the selection scan, including objects in other classes, so
+        // repeated empty matches cannot evade the whole-script work bound.
+        let cost = self.raw.objects.len();
+        if self.raw.total_props.saturating_add(cost) > MAX_TOTAL_PROPS {
+            self.raw.halt(ctx(
+                "BatchEdit selection exceeds the whole-script work budget".into(),
+            ));
+            return None;
+        }
+        self.raw.total_props += cost;
+        Some(
+            self.raw
+                .objects
+                .iter()
+                .enumerate()
+                .filter(|(_, object)| object.class == class)
+                .map(|(i, _)| i)
+                .collect(),
+        )
+    }
+
+    fn do_batch_edit(&mut self, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
+        let Some((class, pattern)) = self.object_spec(scan, ctx) else {
+            self.raw.warn(
+                &C::READ_DSS_BATCH_UNRESOLVED,
+                ctx("BatchEdit requires Class.Pattern".into()),
+            );
+            return;
+        };
+        if class.eq_ignore_ascii_case("circuit") {
+            return; // Native BatchEdit deliberately ignores Circuit.
+        }
+        let class = class.to_ascii_lowercase();
+        let Some(table) = prop_table(&class) else {
+            self.raw.warn(
+                &C::READ_DSS_BATCH_UNRESOLVED,
+                ctx(format!("BatchEdit class {class} is not supported")),
+            );
+            return;
+        };
+        // The native regular expression searches names case-insensitively;
+        // it is not a shell glob and is not implicitly anchored. Unsupported
+        // backreferences/lookarounds fail explicitly rather than being skipped.
+        let Some(expression) = batch_expression(&pattern) else {
+            self.raw.warn(
+                &C::READ_DSS_BATCH_UNRESOLVED,
+                ctx("BatchEdit needs a supported ASCII regular expression".into()),
+            );
+            return;
+        };
+        let props = collect_props_for(Some(table), scan, None, &mut self.raw, ctx);
+        let Some(targets) = self.batch_targets(&class, ctx) else {
+            return;
+        };
+        let mut cursor = 0;
+        while let Some(&idx) = targets.get(cursor) {
+            if self.raw.halted {
+                return;
+            }
+            if self.raw.total_props >= MAX_TOTAL_PROPS {
+                self.raw.halt(ctx(
+                    "BatchEdit iterator exceeds the whole-script work budget".into(),
+                ));
+                return;
+            }
+            self.raw.total_props += 1;
+            cursor += 1;
+            if !self.raw.objects[idx].name.is_ascii() {
+                self.raw.warn(
+                    &C::READ_DSS_BATCH_UNRESOLVED,
+                    ctx("BatchEdit matching of non-ASCII object names is not qualified".into()),
+                );
+                return;
+            }
+            // Native First/Next selects every visited object, including the
+            // last unmatched name. A following continuation edits that object.
+            self.raw.active = Some(idx);
+            if expression.is_match(self.raw.objects[idx].name.as_bytes()) {
+                if self
+                    .raw
+                    .total_props
+                    .saturating_add(props.len())
+                    .saturating_add(1)
+                    > MAX_TOTAL_PROPS
+                    || self
+                        .retained_property_count(idx)
+                        .saturating_add(props.len())
+                        .saturating_add(1)
+                        > MAX_OBJECT_PROPS
+                {
+                    self.raw.halt(ctx(
+                        "BatchEdit assignments exceed the property/work budget".into()
+                    ));
+                    return;
+                }
+                self.apply_props(idx, props.clone(), ctx);
+                // Native MakeLike locates the template through the same
+                // class iterator. Next resumes after that template, which
+                // can skip names or revisit earlier ones; visits stay bounded.
+                for property in props.iter().filter(|p| p.name.as_deref() == Some("like")) {
+                    if let Some(position) = self
+                        .raw
+                        .index
+                        .get(&(class.clone(), property.value.text.to_ascii_lowercase()))
+                        .and_then(|target| targets.binary_search(target).ok())
+                    {
+                        cursor = position + 1;
+                    } else {
+                        self.raw.warn(
+                            &C::READ_DSS_BATCH_UNRESOLVED,
+                            ctx("BatchEdit copy template does not exist".into()),
+                        );
+                        return;
+                    }
+                }
+            }
+        }
     }
 
     fn do_more(&mut self, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
@@ -1647,6 +1768,23 @@ impl<L: Loader> Executor<'_, L> {
         }
     }
 
+    fn copied_properties(&self, target: usize, source: usize) -> Vec<RawProp> {
+        let mut cloned = self.raw.objects[source].props.clone();
+        if self.raw.objects[target].class == "load" {
+            // TLoadObj.MakeLike keeps the destination's physical connection.
+            let bus = self.raw.objects[target]
+                .get("bus1")
+                .cloned()
+                .unwrap_or_default();
+            for property in &mut cloned {
+                if property.name.as_deref() == Some("bus1") {
+                    property.value.clone_from(&bus);
+                }
+            }
+        }
+        cloned
+    }
+
     fn apply_like(&mut self, idx: usize, value: &Value, ctx: &dyn Fn(String) -> String) {
         let class = self.raw.objects[idx].class.clone();
         let key = (class.clone(), value.text.to_ascii_lowercase());
@@ -1725,7 +1863,7 @@ impl<L: Loader> Executor<'_, L> {
                 }
                 self.copy_transformer_bindings(idx, src, base);
                 self.append_source_resets(idx, src, base);
-                let cloned = self.raw.objects[src].props.clone();
+                let cloned = self.copied_properties(idx, src);
                 let bounds: Vec<usize> = self.raw.objects[src]
                     .edit_bounds()
                     .map(|e| base + e)
@@ -1937,6 +2075,19 @@ impl<L: Loader> Executor<'_, L> {
         let end = self.raw.objects[idx].props.len();
         self.raw.objects[idx].edits.push(end);
     }
+}
+
+fn batch_expression(pattern: &str) -> Option<regex::bytes::Regex> {
+    if !pattern.is_ascii() {
+        return None;
+    }
+    regex::bytes::RegexBuilder::new(pattern)
+        .case_insensitive(true)
+        .unicode(false)
+        .size_limit(1 << 20)
+        .dfa_size_limit(1 << 20)
+        .build()
+        .ok()
 }
 
 fn prop_table(class: &str) -> Option<&'static DssClass> {
@@ -2344,6 +2495,38 @@ mod tests {
 
     fn parse(text: &str) -> RawDss {
         __parse_raw_with(text, "test.dss", &mut no_files)
+    }
+
+    #[test]
+    fn batch_edit_matches_names_and_keeps_native_last_visited_object_active() {
+        let raw =
+            parse("new load.alpha kw=1\nnew load.beta kw=2\nbatchedit load.ALP kw=3\n~ kvar=4\n");
+        assert_eq!(
+            raw.find("load", "alpha").unwrap().get("kw").unwrap().text,
+            "3"
+        );
+        assert_eq!(
+            raw.find("load", "beta").unwrap().get("kw").unwrap().text,
+            "2"
+        );
+        assert_eq!(
+            raw.find("load", "beta").unwrap().get("kvar").unwrap().text,
+            "4"
+        );
+        assert!(raw.commands.iter().all(|c| c.verb != "batchedit"));
+    }
+
+    #[test]
+    fn unsupported_batch_selectors_are_errors() {
+        for selector in ["load.(?=alpha)", "load.(a)\\1", "missing..*", "load.é"] {
+            let raw = parse(&format!("new load.alpha kw=1\nbatchedit {selector} kw=3\n"));
+            assert!(
+                raw.diagnostics
+                    .iter()
+                    .any(|d| d.code() == C::READ_DSS_BATCH_UNRESOLVED.code),
+                "{selector}"
+            );
+        }
     }
 
     #[test]
