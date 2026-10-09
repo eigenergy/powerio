@@ -7,6 +7,8 @@
 
 pub mod defaults;
 mod frequency;
+#[cfg_attr(not(test), allow(dead_code))]
+mod geometry;
 pub mod lex;
 mod line;
 mod line_history;

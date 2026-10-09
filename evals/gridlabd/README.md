@@ -1414,3 +1414,40 @@ Geometry-derived lines still require calculated impedances before conversion.
 Commands on other device classes, omitted/invalid terminal indices, and
 out-of-range conductor indices remain explicit refusals. Active switching and
 protection execution remain outside this static profile.
+
+### OpenDSS overhead geometry calculation checkpoint
+
+`dss_overhead_geometry_oracle.py` captures native series impedance and total
+shunt susceptance for 150 synthetic cases: Carson, FullCarson and Deri; 40, 50,
+60, 1000 and 3000 Hz; one and three phase arrangements, an explicit fourth
+conductor, and four/five-conductor neutral reduction; two resistance/earth
+resistivity profiles including strong skin effect. These are explicit SI
+inputs to a private evaluator, not feeder-import qualification.
+
+```sh
+python evals/gridlabd/dss_overhead_geometry_oracle.py \
+  --output /path/to/new-dss-overhead-matrices
+POWERIO_GEOMETRY_ORACLE=/path/to/new-dss-overhead-matrices/matrices.json \
+  cargo test -p powerio-dist --lib \
+  dss::geometry::tests::pinned_overhead_matrices -- --ignored --nocapture
+```
+
+Both steps are required: native capture alone does not compare PowerIO. The
+Rust comparison checks every matrix entry, with absolute tolerances of
+`1e-12 ohm/m` and `1e-18 S/m`, plus `1e-10` relative tolerance. Generated decks,
+SHA-256 hashes and native observations remain outside the repository.
+
+The calculation follows pinned DSS C-API
+[`LineConstants.pas`](https://github.com/dss-extensions/dss_capi/blob/87d85c2622c8281b92255335bc7c09b11191b21d/src/General/LineConstants.pas),
+including its rounded physical constants, frequency-boundary behavior and
+Deri Bessel-series calculation. Neutral reduction eliminates the neutral
+impedance block but retains the phase block of the full inverted potential
+matrix for capacitance. The native C API reports capacitance in nF using a
+different, full-precision `TwoPi`; the observation script converts that
+quantity back to susceptance with the corresponding constant.
+
+The public reader still defers geometry. Ordered `WireData`/`LineGeometry`
+selection, sticky units/defaults, assignment-time references and shared native
+calculation-cache behavior must be integrated and checked before this changes.
+Cable models and public IEEE electrical comparisons remain separate work.
+This checkpoint does not increase the qualified-feeder count.
