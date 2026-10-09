@@ -73,6 +73,13 @@
       "source": "powerflow/autotest/data_configurations_delta_123node.glm",
       "local": "data_configurations_delta_123node.glm",
       "sha256": "5b7e97d954e3fac99cc7eaca8d488cad402ef4dc641377f808f1cfaa1fcea959"
+    },
+    {
+      "source": "models/powerflow_IEEE_4node.glm",
+      "local": "models/powerflow_IEEE_4node.glm",
+      "sha256": "1d10ac44ec30fa2a84a8f59d9ef11a859fcdfd6e66292b9c8b3a155ce98aec22",
+      "assertions": 0,
+      "qualification": "Legacy balanced grounded-wye step-down IEEE4; default FBS and implicit upstream source. Reference measurements require native engine runs."
     }
   ]
 }

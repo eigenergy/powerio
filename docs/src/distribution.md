@@ -235,15 +235,25 @@ calculated matrices, so it does not reinterpret geometry under the target fork.
 
 Numerical `iteration_limit` settings and voltage/current dump objects remain in
 retained source and are reported; they do not become network components.
-Ordinary NR transformers support three-phase `WYE_WYE` and single-phase
-`SINGLE_PHASE` connections with explicit voltage/rating and positive series
+Ordinary transformers support three-phase `WYE_WYE` (also numeric `1`) and
+single-phase `SINGLE_PHASE` connections with explicit voltages and positive series
 resistance/reactance. They map to grounded winding records and retain device
 coordinates. Canonical output uses the current winding voltage, resistance and
 reactance; source-only configuration objects are not required after an IR round
 trip. OpenDSS output explicitly disables its additional anti-floating admittance
-for these imported circuits. FBS transformer equations, other connections,
-non-unit ordinary-transformer taps and explicit magnetizing branches still need
-qualification.
+for these imported circuits. The total rating can be explicit or the sum of
+phase ratings; conflicting totals beyond the native 1% limit fail. Individual
+phase nameplate declarations remain in source and are reported.
+
+FBS grounded-wye transformers preserve the finite default core admittance in
+the existing `no_load_shunt` winding-2 record. Canonical NR GLM materializes it
+as a constant-impedance load at the secondary bus, with a diagnostic identifying
+its contribution to the transformer port current. OpenDSS uses its equivalent
+winding-2 exciting branch. A connected directed FBS tree without an explicit
+source uses its unique upstream root's phasors; ambiguous roots, cycles and
+implicit-source switch/regulator networks fail. Other transformer connections,
+non-unit ordinary-transformer taps and explicit source magnetizing parameters
+still need qualification.
 
 For both pinned engines, NR `DELTA_DELTA` (also numeric `2`) stamps three
 grounded-wye branches, including zero-sequence transfer. The reader preserves
@@ -280,6 +290,12 @@ edits; it does not establish the unfinished profiles above. IEEE37 starts downst
 of its regulator; its NR delta transformer uses the equivalent described above.
 Its parent-directory include uses the existing explicit acquisition-root API. See
 `evals/gridlabd/README.md` for the reproducible oracle and measurement conventions.
+
+The legacy IEEE4 grounded-wye step-down feeder has fixed-state qualification
+with its original default FBS solver and implicit upstream source. Both pinned
+forks and OpenDSS agree on all bus and device-port measurements; deliberately
+omitting its small default core current fails the comparison. This does not
+qualify every IEEE4 transformer variant.
 
 IEEE34 and IEEE123 NR also have fixed-state qualification across both forks and
 OpenDSS, including per-phase manual capacitor admittances and switch/regulator

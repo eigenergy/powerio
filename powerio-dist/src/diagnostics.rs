@@ -41,6 +41,8 @@ pub mod codes {
             "native quantity conversion ignores a stated unit suffix";
         READ_GLM_ELECTRICAL_UNSUPPORTED = "READ.GLM.ELECTRICAL_UNSUPPORTED", Error,
             "a GLM electrical feature has no verified static mapping", category = Data;
+        READ_GLM_IMPLICIT_SOURCE = "READ.GLM.IMPLICIT_SOURCE", Remark,
+            "a connected directed FBS tree has one implicit upstream voltage source";
         READ_GLM_SOURCE_ONLY = "READ.GLM.SOURCE_ONLY", Remark,
             "non-electrical GLM data remains in the retained source";
         READ_GLM_SWITCH_STATE_NORMALIZED = "READ.GLM.SWITCH_STATE_NORMALIZED", Remark,
@@ -65,6 +67,8 @@ pub mod codes {
             "a GLM nominal voltage or identity was materialized without changing electrical behavior";
         EMIT_GLM_IDEAL_CONTACTS = "EMIT.GLM.IDEAL_CONTACTS", Remark,
             "ideal contacts use source-oriented FBS with exact zero impedance and explicit phase grouping";
+        EMIT_GLM_TRANSFORMER_SHUNT_EQUIVALENT = "EMIT.GLM.TRANSFORMER_SHUNT_EQUIVALENT", Remark,
+            "a transformer terminal core shunt uses an exact admittance load";
         EMIT_GLM_LINE_SHUNT_EQUIVALENT = "EMIT.GLM.LINE_SHUNT_EQUIVALENT", Remark,
             "line end shunts use exact phase-pair and earth-return admittance loads";
         EMIT_GLM_PROJECT_UNREPRESENTABLE = "EMIT.GLM.PROJECT_UNREPRESENTABLE", Error,

@@ -888,8 +888,9 @@ sources, including IEEE4/13/34/37/123/8500/9500 and low-voltage/neutral cases.
 It is an acquisition inventory, not a compatibility claim. Keep downloaded
 models outside the repository; review the source license before redistributing.
 
-The `upstream.py` downloader includes the IEEE34 and IEEE123 NR cases and their
-configuration includes. Run a fixed-state conversion check with:
+The `upstream.py` downloader includes IEEE4 and the IEEE34/IEEE123 NR cases and
+their configuration includes. Files without assertions are acquired only;
+the feeder oracle adds bounded recorder runs. Run a fixed-state conversion check with:
 
 ```sh
 python evals/gridlabd/feeder_oracle.py --case ieee34 --baseline-only \
@@ -898,18 +899,27 @@ python evals/gridlabd/feeder_oracle.py --case ieee34 --baseline-only \
   --output /path/to/new-report-directory
 ```
 
+For IEEE4 use `--case ieee4 --baseline-only` and source
+`models/powerflow_IEEE_4node.glm`. Its default FBS solver, implicit upstream
+source, numeric grounded-wye connection and declared phase ratings are retained.
+Instrumentation names its three numeric-ID links for measurement. The legacy
+clock parses its timestamp before its EST timezone; the recorder stops one
+second after that actual start. The native default core admittance remains in
+fresh output. Omitting it must fail, as must a wrong transformer ratio.
+
 For IEEE123 use `--case ieee123 --baseline-only` and source
 `autotest/test_IEEE123_zero_voltages_NR.glm`. The original IEEE123 assertions
 check absent-phase zero voltages; the oracle measures the energized circuit too.
 
 | Fixed-state profile | Buses | Lines | Winding equivalents | Loads | Capacitor coils | Complex quantities |
 |---|---:|---:|---:|---:|---:|---:|
+| IEEE4 FBS grounded-wye step-down | 4 | 2 | 1 | 1 | 0 | 60 |
 | IEEE34 NR | 55 | 51 | 7 | 70 | 6 | 1,000 |
 | IEEE123 NR | 130 | 124 | 10 | 89 | 6 | 2,029 |
 
 Each fork compares the complete inventory with canonical GLM and OpenDSS and
 checks current balance at every bus. These profiles do not yet qualify edited
-IEEE34/123 states. IEEE13/37 retain their edited-state checks. Fresh and
+IEEE4/34/123 states or other IEEE4 transformer variants. IEEE13/37 retain their edited-state checks. Fresh and
 IR-restored canonical GLM must be identical. IEEE123's unused center-tapped and
 triplex equipment definitions stay in source; no service circuit is instantiated.
 

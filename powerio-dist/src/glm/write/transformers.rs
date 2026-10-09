@@ -16,6 +16,7 @@ impl Writer<'_> {
             if self.ideal_plan.is_some()
                 || !matches!(t.phases, 1 | 3)
                 || t.extras.iter().any(|(k, v)| match k.as_str() {
+                    "no_load_shunt" => core_admittance(t).is_none(),
                     "ppm_antifloat" => v.as_f64() != Some(0.0),
                     "gridlabd_declared_connection" => v.as_str() != Some("DELTA_DELTA"),
                     "rating_is_normalization_base" => v.as_bool() != Some(true),
@@ -31,6 +32,9 @@ impl Writer<'_> {
                 return Err(fail());
             };
             let regulator = t.phases == 1 && *x == 0.0 && a.r_pct == 0.0 && b.tap == 1.0;
+            if regulator && t.extras.contains_key("no_load_shunt") {
+                return Err(fail());
+            }
             if !x.is_finite() || *x < 0.0 || (*x == 0.0 && !regulator) || a.s_rating != b.s_rating {
                 return Err(fail());
             }
@@ -107,7 +111,40 @@ impl Writer<'_> {
             );
             self.coordinates(DistLocationTarget::Transformer, &t.name);
             self.out.push_str("}\n");
+            self.transformer_core(t, &phases)?;
         }
+        Ok(())
+    }
+    fn transformer_core(&mut self, t: &DistTransformer, phases: &[usize]) -> Result<(), Error> {
+        let Some(y) = core_admittance(t) else {
+            return Ok(());
+        };
+        if y == num_complex::Complex64::default() {
+            return Ok(());
+        }
+        let z = num_complex::Complex64::new(1.0, 0.0) / y;
+        if z == num_complex::Complex64::default() {
+            return Err(unsupported("transformer core impedance underflows"));
+        }
+        let z = super::complex_literal(z)?;
+        let name = self.generated_name(&format!("{}__glm_shunt_to", t.name));
+        let bus = &t.windings[1].bus;
+        let _ = writeln!(
+            self.out,
+            "object load {{ name \"{name}\"; parent \"{bus}\"; phases {}N; nominal_voltage {};",
+            flags(phases),
+            self.nominal[bus.as_str()]
+        );
+        for &phase in phases {
+            let _ = writeln!(
+                self.out,
+                "constant_impedance_{}N {z};",
+                super::phase_name(phase)
+            );
+        }
+        self.out.push_str("}\n");
+        self.diagnostics.push(&crate::diagnostics::codes::EMIT_GLM_TRANSFORMER_SHUNT_EQUIVALENT,
+            format!("transformer {}: winding-2 core shunt is materialized as load {name}; physical transformer output current includes this load", t.name));
         Ok(())
     }
     fn regulator(
@@ -153,4 +190,15 @@ impl Writer<'_> {
         self.diagnostics.push(&crate::diagnostics::codes::EMIT_GLM_VALUE_REBASED,format!("{}: canonical manual regulator settings encode the current winding ratio and resistance; no controller is emitted",t.name));
         Ok(())
     }
+}
+
+fn core_admittance(t: &DistTransformer) -> Option<num_complex::Complex64> {
+    let shunt = t.extras.get("no_load_shunt")?.as_object()?;
+    if shunt.len() != 3 || shunt.get("winding")?.as_u64()? != 2 {
+        return None;
+    }
+    let g = shunt.get("g")?.as_f64()?;
+    let b = shunt.get("b")?.as_f64()?;
+    (g.is_finite() && b.is_finite() && g >= 0.0 && b <= 0.0)
+        .then_some(num_complex::Complex64::new(g, b))
 }

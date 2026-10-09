@@ -1,4 +1,4 @@
-"""Device ports for the pinned IEEE13/IEEE34/IEEE37/IEEE123 feeders (not a general GLM reader).
+"""Device ports for the pinned IEEE4/IEEE13/IEEE34/IEEE37/IEEE123 feeders (not a general GLM reader).
 
 Topology/phase identities come from the converted network. Electrical reference
 values come only from native recorder output and native impedance dumps.
@@ -349,7 +349,7 @@ def load_snapshot(directory):
             strict=True,
         )
     )
-    for i, (name, bus, delta) in enumerate(
+    for i, (name, _bus, delta) in enumerate(
         load_objects((directory / "model.glm").read_text())
     ):
         row = recorded(directory / f"load-{i}.csv")

@@ -20,6 +20,7 @@ mod capacitors;
 mod geometry;
 mod loads;
 mod regulators;
+mod sources;
 mod switches;
 mod templates;
 mod transformers;
@@ -32,7 +33,9 @@ mod transformers;
 /// fixed source phasors, P/I/Z loads, overhead and underground line matrices
 /// or conductor geometry, and fixed ordinary-phase switch contacts. Finite
 /// contacts use exact line equivalents; ideal and open contacts remain typed switches.
-/// Ordinary NR single-phase and three-phase grounded-wye transformers use typed windings.
+/// Ordinary single-phase and three-phase grounded-wye transformers use winding
+/// records; FBS additionally preserves its finite default winding-2 core shunt.
+/// A connected directed FBS tree may use its implicit upstream voltage source.
 /// Wye regulators preserve fixed phase taps and NR resistance in winding equivalents.
 /// Manual wye capacitors use fixed per-phase shunt admittances.
 /// Other conductor/device profiles remain under implementation.
@@ -483,6 +486,7 @@ impl Reader<'_> {
     }
 
     fn loads_and_sources(&mut self) -> Result<(), Error> {
+        let implicit_source = self.implicit_fbs_source()?;
         let entries: Vec<_> = self.roots.iter().map(|(&k, &r)| (k, r)).collect();
         for (key, root) in entries {
             let phases = if key == root {
@@ -508,7 +512,7 @@ impl Reader<'_> {
                 return Err(self.error(key, "child nominal voltage conflicts with its parent"));
             }
             let bustype = self.text(key, "bustype")?.unwrap_or_else(|| "PQ".into());
-            if bustype == "SWING" {
+            if bustype == "SWING" || (bustype == "PQ" && implicit_source == Some(key)) {
                 if key != root {
                     return Err(self.error(key, "parented SWING source is not qualified"));
                 }

@@ -1,4 +1,4 @@
-//! Ordinary NR transformer coils on the existing winding model.
+//! Ordinary transformer coils on the existing winding model.
 use super::{Reader, class, parse_phases};
 use crate::glm::GlmQuantityKind;
 use crate::{DistLocationTarget, DistTransformer, DistWinding, DistWindingConn};
@@ -21,7 +21,7 @@ pub(super) fn quantity_spec(class: &str, name: &str) -> Option<(GlmQuantityKind,
     }
     match name {
         "primary_voltage" | "secondary_voltage" => Some((Real, "V")),
-        "power_rating" => Some((Real, "kVA")),
+        "power_rating" | "powerA_rating" | "powerB_rating" | "powerC_rating" => Some((Real, "kVA")),
         "resistance" | "reactance" => Some((Real, "pu*Ohm")),
         "impedance" => Some((Complex, "pu*Ohm")),
         _ => None,
@@ -38,12 +38,6 @@ impl Reader<'_> {
             .map(crate::glm::GlmObject::key)
             .collect::<Vec<_>>();
         for key in keys {
-            if !self.newton_raphson {
-                return Err(self.error(
-                    key,
-                    "FBS transformer port equations still require a qualified mapping",
-                ));
-            }
             let cfg = self.geometry_reference(key, "configuration", "transformer_configuration")?;
             let phases = parse_phases(
                 self.text(key, "phases")?
@@ -54,16 +48,22 @@ impl Reader<'_> {
             let connection = self.text(cfg, "connect_type")?.unwrap_or_default();
             if !matches!(
                 (connection.as_str(), phases.len()),
-                ("WYE_WYE" | "DELTA_DELTA" | "2", 3) | ("SINGLE_PHASE", 1)
+                ("WYE_WYE" | "1" | "DELTA_DELTA" | "2", 3) | ("SINGLE_PHASE", 1)
             ) {
                 return Err(self.error(
                     key,
                     "transformer connection/phase profile is not qualified yet",
                 ));
             }
+            if !self.newton_raphson && matches!(connection.as_str(), "DELTA_DELTA" | "2") {
+                return Err(self.error(
+                    key,
+                    "FBS delta transformer equations need a separate mapping",
+                ));
+            }
             let primary = self.positive_geometry(cfg, "primary_voltage")?;
             let secondary = self.positive_geometry(cfg, "secondary_voltage")?;
-            let rating = self.positive_geometry(cfg, "power_rating")? * 1000.0;
+            let rating = self.transformer_rating(cfg)?;
             let impedance = self.quantity(cfg, "impedance").ok_or_else(|| {
                 self.error(
                     cfg,
@@ -109,12 +109,15 @@ impl Reader<'_> {
             let name = self.names[&key].clone();
             let mut transformer =
                 DistTransformer::new(&name, windings, vec![100.0 * impedance.im], phases.len());
-            // Native NR ordinary transformers have no artificial grounding
+            // Native ordinary transformers have no artificial grounding
             // admittance. Prevent OpenDSS's default anti-floating shunts from
             // adding a reactive current to this circuit on cross emission.
             transformer
                 .extras
                 .insert("ppm_antifloat".into(), serde_json::json!(0.0));
+            if !self.newton_raphson {
+                self.default_fbs_core(cfg, &mut transformer)?;
+            }
             if matches!(connection.as_str(), "DELTA_DELTA" | "2") {
                 // Both pinned NR engines stamp three independent grounded
                 // branches here, not a physical delta winding primitive.
@@ -133,5 +136,60 @@ impl Reader<'_> {
             self.attach(key, DistLocationTarget::Transformer, name);
         }
         Ok(())
+    }
+}
+
+impl Reader<'_> {
+    fn default_fbs_core(
+        &self,
+        cfg: crate::glm::ObjectKey,
+        transformer: &mut DistTransformer,
+    ) -> Result<(), Error> {
+        // FBS includes the native finite default core at the secondary
+        // terminals, after the series impedance. NR omits this branch.
+        let secondary = &transformer.windings[1];
+        let g = secondary.s_rating / secondary.v_ref.powi(2) / 999_999_999.0;
+        if !g.is_finite() || g <= 0.0 {
+            return Err(self.error(cfg, "FBS core admittance overflows or underflows"));
+        }
+        transformer.extras.insert(
+            "no_load_shunt".into(),
+            serde_json::json!({"winding": 2, "g": g, "b": -g}),
+        );
+        Ok(())
+    }
+
+    fn transformer_rating(&mut self, cfg: crate::glm::ObjectKey) -> Result<f64, Error> {
+        let mut phase_sum = 0.0;
+        let mut declared = false;
+        for field in ["powerA_rating", "powerB_rating", "powerC_rating"] {
+            if let Some(value) = self.real(cfg, field) {
+                if value < 0.0 {
+                    return Err(self.error(cfg, "negative transformer phase rating is unsupported"));
+                }
+                declared = true;
+                phase_sum += value;
+            }
+        }
+        let total = self
+            .real(cfg, "power_rating")
+            .filter(|v| *v != 0.0)
+            .unwrap_or(phase_sum);
+        if !total.is_finite() || total <= 0.0 || !(total * 1000.0).is_finite() {
+            return Err(self.error(cfg, "transformer requires a positive finite total rating"));
+        }
+        if phase_sum != 0.0 && ((total - phase_sum) / total).abs() > 0.01 {
+            return Err(self.error(
+                cfg,
+                "native transformer total/phase rating mismatch exceeds 1%",
+            ));
+        }
+        if declared {
+            self.diagnostics.push(powerio_core::Diagnostic::of(
+                &crate::diagnostics::codes::READ_GLM_SOURCE_ONLY,
+                format!("{}: ordinary transformer impedance uses total power_rating; individual phase nameplate ratings remain in source", self.names[&cfg]),
+            ));
+        }
+        Ok(total * 1000.0)
     }
 }

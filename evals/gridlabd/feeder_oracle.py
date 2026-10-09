@@ -1,9 +1,9 @@
 """Pinned IEEE distribution feeder conversions against both forks and OpenDSS.
 
-IEEE13/37 include independently edited cases. IEEE34/123 currently qualify the
+IEEE13/37 include independently edited cases. IEEE4/34/123 currently qualify the
 fixed source state only. Compare every bus phase voltage, physical device port,
 load and capacitor current/power, and bus current balance. Results apply to the
-pinned NR inputs, not arbitrary feeders or other solver profiles.
+pinned IEEE4 FBS and other NR inputs, not arbitrary feeders or solver profiles.
 """
 
 import argparse
@@ -20,16 +20,24 @@ from oracle import (
     LOCK,
     TOLERANCES,
     add,
-    compare as compare_raw,
     literal,
     parse_complex,
     recorded,
     run_glm,
 )
+from oracle import (
+    compare as compare_raw,
+)
 from transformer_roundtrip_oracle import header
 
-
 FEEDERS = {
+    "ieee4": {
+        "file": "powerflow_IEEE_4node.glm",
+        "config": None,
+        "inventory": {"buses": 4, "lines": 2, "transformers": 1, "loads": 1},
+        "stopping_V": "1e-9",
+        "stop": "1999-12-31 19:00:01",
+    },
     "ieee13": {
         "file": "test_IEEE_13_NR.glm",
         "config": None,
@@ -57,12 +65,14 @@ FEEDERS = {
 }
 
 
-def instrument(text, network, original, voltage_error="1e-9"):
+def instrument(
+    text, network, original, voltage_error="1e-9", stop="2001-01-01 0:00:01"
+):
     # Recorder instrumentation must remain a bounded static solve.
     if not re.search(r"\bstoptime\b", text):
         text = re.sub(
             r"(clock\s*\{[^}]*)(\})",
-            r"\1 stoptime '2001-01-01 0:00:01'; \2",
+            lambda m: f"{m[1]} stoptime '{stop}'; {m[2]}",
             text,
             count=1,
         )
@@ -285,13 +295,25 @@ def main():
     args = parser.parse_args()
     manifest = json.loads((HERE / "upstream.json").read_text())
     feeder = FEEDERS[args.case]
-    if args.case in ("ieee34", "ieee123") and not args.baseline_only:
+    if args.case in ("ieee4", "ieee34", "ieee123") and not args.baseline_only:
         parser.error(f"{args.case} currently requires --baseline-only")
     fixture = next(f for f in manifest["files"] if f["local"].endswith(feeder["file"]))
     data = args.source.read_bytes()
     if hashlib.sha256(data).hexdigest() != fixture["sha256"]:
         raise ValueError("feeder source pin mismatch")
     native_text = data.decode()
+    if args.case == "ieee4":
+        # Add observable names without replacing numeric references or changing
+        # solver, connection type, source phasors, phase ratings or topology.
+        for cls, object_id, ordinal in [
+            ("overhead_line", 12, 6),
+            ("transformer", 23, 8),
+            ("overhead_line", 34, 10),
+        ]:
+            native_text = native_text.replace(
+                f"object {cls}:{object_id} {{",
+                f'object {cls}:{object_id} {{ name "__glm_object_{ordinal}";',
+            )
     bridge_options = []
     dependency = None
     if feeder["config"]:
@@ -320,10 +342,12 @@ def main():
             "Override source complex_output_format with RECT to match the explicit recorder j suffix",
             "Omit voltdump; Arras rejects PNNL mode POLAR",
             f"Set original/canonical bus stopping tolerance to {feeder['stopping_V']} V; preserve V/A comparison limits; IEEE34 power resolution is twice maximum source voltage times absolute current tolerance",
-            "Replace SWING node with a root meter; preserve source phasors and topology",
+            "Replace the explicit or implicit source node with a root meter; preserve source phasors and topology",
+            "IEEE4 only: add observable names to the three numeric-ID links, preserving their IDs and references; retain default FBS and implicit source",
             f"Retain the original {fixture['assertions']} published voltage assertions; remove them only for deliberately edited inputs",
             "IEEE34/37/123: flatten hash-pinned configuration include for native instrumentation; PowerIO reads the original project with an explicit root",
-            "Bound recorder runs with a one-second stop after the declared timezone and start time",
+            "Bound recorder runs with a one-second stop after the actual parsed start; IEEE4 timestamp precedes EST timezone so its start is 1999-12-31 19:00 EST",
+            "IEEE4 also checks that omitting the default transformer core current fails comparison",
             "Record 17 significant digits; retain raw source-meter current and compare source current summed from physical native ports",
             "Original physical line ports use native a/b impedance dumps; published noncommuting-shunt current reporting is checked separately",
             "Canonical generated shunts and load objects use native coefficients and solved voltages; original parent topology is retained",
@@ -388,6 +412,8 @@ def main():
             if args.baseline_only
             else ("original", "fresh", "edited_original", "edited", "negative")
         )
+        if args.case == "ieee4":
+            labels += ("negative_core",)
         for label in labels:
             directory = base / label
             directory.mkdir()
@@ -417,11 +443,22 @@ def main():
                     raise ValueError(
                         "negative control did not change the winding ratio"
                     )
+            if label == "negative_core":
+                text, count = re.subn(
+                    r'object load\s*\{\s*name "[^"\n]+__glm_shunt_to";[^{}]*\}',
+                    "",
+                    text,
+                )
+                if count != 1:
+                    raise ValueError(
+                        "IEEE4 missing-core negative control did not remove one load"
+                    )
             text, outputs = instrument(
                 text,
                 case_network,
                 original,
                 feeder["stopping_V"],
+                feeder.get("stop", "2001-01-01 0:00:01"),
             )
             (directory / "model.glm").write_text(text)
             run_glm(profile, directory, args.pnnl_root, outputs=outputs)
@@ -493,6 +530,11 @@ def main():
             snapshots["original"], snapshots["negative"]
         )
         check["negative_detected"] = not check["negative_control"]["passed"]
+        if args.case == "ieee4":
+            check["negative_core"] = compare(
+                snapshots["original"], snapshots["negative_core"]
+            )
+            check["missing_core_detected"] = not check["negative_core"]["passed"]
         check["dss_default_solve"] = compare(
             snapshots["original"], snapshots["dss_default"]
         )
@@ -507,6 +549,7 @@ def main():
         check["accepted"] = (
             check["passed"]
             and check["negative_detected"]
+            and check.get("missing_core_detected", True)
             and check["dss_strict_solve"]["passed"]
             and (
                 args.baseline_only

@@ -51,7 +51,9 @@ def main() -> int:
         raise ValueError("engine version mismatch")
     report = {"scope": __doc__, "engine": version.strip(), "cases": {}}
     for item in manifest["files"]:
-        if "assertions" not in item:
+        if not item.get("assertions"):
+            # Models without assertions may also lack a stop time. Acquire
+            # them here; feeder_oracle instruments a bounded numerical check.
             continue
         path = output / item["local"]
         source = path.read_text()
