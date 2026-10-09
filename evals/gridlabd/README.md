@@ -803,7 +803,8 @@ independent coil equations. It exercises unequal taps, phase subsets, object tap
 overrides, native default resistance, edited winding values and OpenDSS output.
 Every case must detect a deliberately wrong turns ratio.
 
-`feeder_oracle.py` accepts only the hash-pinned IEEE13 NR input in `upstream.json`.
+`feeder_oracle.py` defaults to the hash-pinned IEEE13 NR input in `upstream.json`;
+its IEEE37 profile is described below.
 It compares 257 complex quantities under both pinned GridLAB-D forks and the
 pinned OpenDSS engine: all 38 bus-phase voltages, three source currents,
 156 line/transformer terminal current, power and loss quantities, and 60
@@ -844,3 +845,38 @@ python evals/gridlabd/feeder_oracle.py --bridge target/debug/examples/glm_roundt
 This qualifies the pinned IEEE13 NR case and these edits, including all its
 static device ports. It does not qualify other feeders, FBS, explicit-neutral
 networks, split-phase services or the remaining transformer/load profiles.
+
+
+## IEEE37 and native NR delta declarations
+
+The same full-feeder harness accepts `--case ieee37`, with the pinned IEEE37
+input and its configuration file kept in the `upstream.py` directory layout.
+The bridge passes that directory as an explicit `Source` acquisition root;
+ordinary parsing never widens containment automatically. The profiler flag is
+retained as an output-only setting. Native instrumentation flattens only the
+hash-checked configuration include and overrides the source's polar output
+setting to match the recorder's rectangular format.
+
+```sh
+python evals/gridlabd/feeder_oracle.py --case ieee37 --bridge target/debug/examples/glm_roundtrip --source /path/to/autotest/test_IEEE_37_NR.glm --pnnl-root "$PNNL_ROOT" --output /tmp/gld-ieee37
+python evals/gridlabd/transformer_roundtrip_oracle.py --connection DELTA_DELTA --bridge target/debug/examples/glm_roundtrip --pnnl-root "$PNNL_ROOT" --output /tmp/gld-nr-delta
+```
+
+IEEE37 acceptance covers 732 complex quantities: 111 bus-phase voltages, three
+source currents, 468 branch terminal current/power/loss quantities, and 150
+phase current/power quantities across 25 original load objects. The same
+independent edits, every-bus current balance and native reporting-law checks
+apply. A wrong transformer ratio and stale unedited output must fail. Original
+input retains all six published line-line voltage assertions; the feeder begins
+downstream of its regulator, so this is not open-delta regulator qualification.
+
+Both pinned engines implement NR `DELTA_DELTA` with grounded-wye port equations.
+The reader records that effective circuit and diagnoses the equivalent; the
+canonical writer emits `WYE_WYE`. `transformer_roundtrip_oracle.py` additionally
+checks this behavior with unequal ground-referenced impedances, witnessing
+nonzero zero-sequence current. A physical OpenDSS delta/delta winding is an
+explicit negative control. Matching this native profile does not establish
+physical delta isolation or the separate FBS transformer equations. The pinned
+[PNNL transformer implementation](https://github.com/gridlab-d/gridlab-d/blob/1b2e463d3c149e999a2c5f04213477f545e01dc6/powerflow/transformer.cpp)
+and [link stamps](https://github.com/gridlab-d/gridlab-d/blob/1b2e463d3c149e999a2c5f04213477f545e01dc6/powerflow/link.cpp)
+provide the native equations; the engine checks independently verify the mapping.

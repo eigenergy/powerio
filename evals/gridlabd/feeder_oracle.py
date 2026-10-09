@@ -1,10 +1,10 @@
-"""Pinned IEEE13 static conversion: buses, device ports, loads and edited cases.
+"""Pinned IEEE13/IEEE37 NR static conversion and independently edited cases.
 
-Both GridLAB-D forks and OpenDSS compare 257 complex quantities: 38 bus phase
-voltages, 3 source currents, 156 branch-port/current/power/loss quantities and
-60 load-object phase currents/powers. Every bus must also satisfy current
-balance. This qualifies the pinned NR case and documented edits, not arbitrary
-feeders, explicit-neutral circuits or all transformer connections.
+Both GridLAB-D forks and OpenDSS compare all bus phase voltages, source currents,
+branch phase-port currents/powers/losses, and original load-object phase currents
+and powers: 257 complex quantities for IEEE13, 732 for IEEE37. Every bus must
+also satisfy current balance. This qualifies these pinned NR cases and edits,
+not arbitrary feeders, explicit neutrals or physical delta transformer isolation.
 """
 
 import argparse
@@ -20,9 +20,13 @@ from transformer_roundtrip_oracle import header
 
 
 def instrument(text, network, original):
+    source = feeder_ports.source_bus(network)
     # The hash-pinned input has braces inside line comments. This adaptation
     # is confined to that known fixture, not a general GLM preprocessing API.
     text = re.sub(r"//[^\n]*", "", text)
+    # A fixed j suffix combined with native POLAR_DEG would mislabel angles
+    # as imaginary parts. Output instrumentation must override both settings.
+    text = re.sub(r"(?m)^#set complex_output_format=.*(?:\n|$)", "", text)
     # Arras rejects PNNL's voltdump mode POLAR. Our recorders provide the
     # measurements instead; remove only this non-electrical output object.
     text = re.sub(r"object voltdump\s*\{[^{}]*\}", "", text)
@@ -33,7 +37,7 @@ def instrument(text, network, original):
             text,
         )
     text, count = re.subn(
-        r'object\s+node\s*\{(?=[^{}]*\bname\s+"?n650[;"\s])',
+        rf'object\s+(?:node|meter)\s*\{{(?=[^{{}}]*\bname\s+"?{re.escape(source)}[;"\s])',
         "object meter {",
         text,
     )
@@ -52,7 +56,7 @@ def instrument(text, network, original):
         filename = f"bus-{i}.csv"
         outputs.append(filename)
         text += f'object recorder {{ parent "{bus["id"]}"; property {props}; interval 1; file "{filename}"; }}\n'
-    text += 'object recorder { parent n650; property measured_current_A,measured_current_B,measured_current_C; interval 1; file "source-meter.csv"; }\n'
+    text += f'object recorder {{ parent "{source}"; property measured_current_A,measured_current_B,measured_current_C; interval 1; file "source-meter.csv"; }}\n'
     outputs.append("source-meter.csv")
     text, ports = feeder_ports.instrument(text, network, original)
     return text, (*outputs, *ports)
@@ -108,32 +112,29 @@ def read_dss(path, network):
                         "V",
                         values[int(terminal)],
                     )
-        # In this pinned fixture the three regulator legs are the only
-        # outgoing branches at the source. Read their native primary currents.
-        legs = [t for t in network["transformers"] if t["windings"][0]["bus"] == "n650"]
-        if len(legs) != 3 or any(t["phases"] != 1 for t in legs):
-            raise ValueError("unexpected source topology")
-        for transformer in legs:
-            phase = int(transformer["windings"][0]["terminal_map"][0])
-            name = "transformer." + transformer["name"]
-            dss.Circuit.SetActiveElement(name)
-            if (
-                dss.CktElement.Name().lower() != name.lower()
-                or dss.CktElement.NodeOrder() != [phase, 0, phase, 0]
-            ):
-                raise ValueError("unexpected regulator terminal map")
-            add(
-                actual,
-                f"source.measured_current_{'ABC'[phase - 1]}",
-                "A",
-                unpack(dss.CktElement.Currents())[0],
-            )
-        actual.update(feeder_ports.read_dss(dss, network))
+        ports = feeder_ports.read_dss(dss, network)
+        actual.update(ports)
+        # Sum native device port currents at the source. No native load is
+        # attached directly to either pinned feeder's source bus.
+        source = feeder_ports.source_bus(network)
+        if any(load["bus"] == source for load in network["loads"]):
+            raise ValueError("source load requires additional metering")
+        currents = dict.fromkeys("ABC", 0j)
+        for name, _, ends in feeder_ports.devices(network):
+            for side, (bus, terminals) in zip(("from", "to"), ends, strict=True):
+                if bus == source:
+                    for terminal in terminals:
+                        p = "ABC"[int(terminal) - 1]
+                        currents[p] += complex(
+                            *ports[f"{name}.{side}.{p}.current"]["value"]
+                        )
+        for p, current in currents.items():
+            add(actual, f"source.measured_current_{p}", "A", current)
         snapshots[mode] = actual
     return snapshots
 
 
-def edited_original(text):
+def edited_original(text, source="n650"):
     """Apply the bridge's documented edits directly to the pinned native case.
 
     Does not read converted values or writer output. Regulator phases use
@@ -181,7 +182,9 @@ def edited_original(text):
                 )
                 if count != 1:
                     raise ValueError("missing native transformer parameter")
-        elif cls == "node" and re.search(r"name\s+n650\s*;", body):
+        elif cls in ("node", "meter") and re.search(
+            rf'name\s+"?{re.escape(source)}"?\s*;', body
+        ):
             body = re.sub(
                 r"voltage_A\s+([^;]+);",
                 lambda m: f"voltage_A {literal(parse_complex(m[1]) * 1.03)};",
@@ -218,29 +221,54 @@ def edited_original(text):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True, type=Path)
+    parser.add_argument("--case", choices=("ieee13", "ieee37"), default="ieee13")
     parser.add_argument("--bridge", required=True, type=Path)
     parser.add_argument("--pnnl-root", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     manifest = json.loads((HERE / "upstream.json").read_text())
+    number = "13" if args.case == "ieee13" else "37"
     fixture = next(
-        f for f in manifest["files"] if f["local"].endswith("test_IEEE_13_NR.glm")
+        f
+        for f in manifest["files"]
+        if f["local"].endswith(f"test_IEEE_{number}_NR.glm")
     )
     data = args.source.read_bytes()
     if hashlib.sha256(data).hexdigest() != fixture["sha256"]:
-        raise ValueError("IEEE13 source pin mismatch")
+        raise ValueError("feeder source pin mismatch")
+    native_text = data.decode()
+    bridge_options = []
+    dependency = None
+    if args.case == "ieee37":
+        dependency = next(
+            f
+            for f in manifest["files"]
+            if f["local"] == "data_configurations_37_node.glm"
+        )
+        root = args.source.resolve().parent.parent
+        config = (root / dependency["local"]).read_bytes()
+        if hashlib.sha256(config).hexdigest() != dependency["sha256"]:
+            raise ValueError("feeder include pin mismatch")
+        native_text = native_text.replace(
+            '#include "../data_configurations_37_node.glm";', config.decode()
+        )
+        bridge_options = ["--acquisition-root", str(root)]
     args.output.mkdir(parents=True, exist_ok=False)
     report = {
         "scope": __doc__,
         "source": fixture,
+        "dependency": dependency,
+        "feeder": args.case,
         "engines": LOCK,
         "bridge_sha256": hashlib.sha256(args.bridge.read_bytes()).hexdigest(),
         "adaptations": [
             "Strip known input's line comments before instrumenting objects",
+            "Override source complex_output_format with RECT to match the explicit recorder j suffix",
             "Omit voltdump; Arras rejects PNNL mode POLAR",
             "Set original bus convergence to canonical 1e-9 V; electrical comparison tolerances unchanged",
             "Replace SWING node with a root meter; preserve source phasors and topology",
-            "Retain the original 32 published voltage assertions; remove them only for deliberately edited inputs",
+            f"Retain the original {fixture['assertions']} published voltage assertions; remove them only for deliberately edited inputs",
+            "IEEE37 only: flatten the hash-pinned configuration include for native instrumentation; PowerIO reads the original project with an explicit root",
             "Original physical line ports use native a/b impedance dumps; published noncommuting-shunt current reporting is checked separately",
             "Canonical generated shunts and load objects use native coefficients and solved voltages; original parent topology is retained",
             "Independent edits: loads x1.25, line/contact impedance lengths x1.1, winding R x1.2, X x0.9, secondary volts x1.05, regulator primary taps x1.02, source phase A x1.03",
@@ -253,7 +281,13 @@ def main():
         converted = base / "converted"
         converted.mkdir()
         run = subprocess.run(
-            [str(args.bridge), str(args.source), str(converted), profile],
+            [
+                str(args.bridge),
+                str(args.source),
+                str(converted),
+                profile,
+                *bridge_options,
+            ],
             capture_output=True,
             text=True,
             check=True,
@@ -265,7 +299,12 @@ def main():
             key: len(network[key])
             for key in ("buses", "lines", "transformers", "loads")
         }
-        if inventory != {"buses": 15, "lines": 12, "transformers": 4, "loads": 16}:
+        expected_inventory = (
+            {"buses": 15, "lines": 12, "transformers": 4, "loads": 16}
+            if args.case == "ieee13"
+            else {"buses": 37, "lines": 35, "transformers": 1, "loads": 32}
+        )
+        if inventory != expected_inventory:
             raise ValueError("pinned feeder inventory changed")
         if (converted / "fresh.glm").read_bytes() != (
             converted / "restored.glm"
@@ -281,19 +320,27 @@ def main():
             variant = "edited" if label.startswith("edited") else "fresh"
             case_network = decoded[variant]["network"]
             text = (
-                data.decode()
+                native_text
                 if original
                 else header() + (converted / f"{variant}.glm").read_text()
             )
             if label == "edited_original":
-                text = edited_original(text)
+                text = edited_original(text, feeder_ports.source_bus(network))
             if label == "negative":
-                text, count = re.subn(
-                    r"regulation ([^;]+);", "regulation 0;", text, count=1
-                )
+                if args.case == "ieee13":
+                    text, count = re.subn(
+                        r"regulation ([^;]+);", "regulation 0;", text, count=1
+                    )
+                else:
+                    text, count = re.subn(
+                        r"primary_voltage ([^;]+);",
+                        lambda m: f"primary_voltage {float(m[1]) * 1.01:.17g};",
+                        text,
+                        count=1,
+                    )
                 if count != 1:
                     raise ValueError(
-                        "negative control did not remove a regulator boost"
+                        "negative control did not change the winding ratio"
                     )
             text, outputs = instrument(text, case_network, original)
             (directory / "model.glm").write_text(text)

@@ -1,4 +1,9 @@
-"""Loaded ordinary transformer conversions against independent coil equations."""
+"""Loaded NR transformer conversions against independent coil equations.
+
+DELTA_DELTA is tested against the native NR grounded-wye equations, including
+nonzero zero-sequence current from unequal ground-referenced loads. A physical
+DSS delta winding is a negative control, not the intended native equivalent.
+"""
 
 import argparse
 import cmath
@@ -169,6 +174,7 @@ def read_dss(path, phases):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bridge", required=True, type=Path)
+    parser.add_argument("--connection", action="append")
     parser.add_argument("--pnnl-root", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
@@ -178,12 +184,23 @@ def main():
         "engines": LOCK,
         "cases": [],
     }
-    for phases in ("A", "C", "ABC"):
+    for phases, connection in [
+        ("A", "SINGLE_PHASE"),
+        ("C", "SINGLE_PHASE"),
+        ("ABC", "WYE_WYE"),
+        ("ABC", "DELTA_DELTA"),
+    ]:
+        if args.connection and connection not in args.connection:
+            continue
         for profile in ("pnnl", "arras"):
-            base = args.output / f"{phases}-{profile}"
+            base = args.output / f"{phases}-{connection}-{profile}"
             base.mkdir()
             original = base / "input.glm"
-            original.write_text(deck(phases))
+            original.write_text(
+                deck(phases).replace(
+                    "connect_type WYE_WYE", f"connect_type {connection}"
+                )
+            )
             converted = base / "converted"
             converted.mkdir()
             run = subprocess.run(
@@ -216,9 +233,20 @@ def main():
                 )
                 actual = read_glm(directory, phases)
                 reference = expected(phases, variant == "edited")
+                if (
+                    connection == "DELTA_DELTA"
+                    and abs(
+                        sum(
+                            complex(*actual[f"from.{p}.current"]["value"])
+                            for p in phases
+                        )
+                    )
+                    < 1e-3
+                ):
+                    raise ValueError("native NR zero-sequence transfer witness absent")
                 result = compare(reference, actual)
                 result.update(
-                    case=f"{phases}/{profile}/{variant}",
+                    case=f"{phases}/{connection}/{profile}/{variant}",
                     version=version,
                     negative_detected=not compare(
                         expected(phases, variant == "edited", True), actual
@@ -234,12 +262,23 @@ def main():
             for variant in ("fresh", "edited"):
                 actual = read_dss(converted / f"{variant}.dss" / "case.dss", phases)
                 reference = expected(phases, variant == "edited")
+                if (
+                    connection == "DELTA_DELTA"
+                    and abs(
+                        sum(
+                            complex(*actual[f"from.{p}.current"]["value"])
+                            for p in phases
+                        )
+                    )
+                    < 1e-3
+                ):
+                    raise ValueError("native NR zero-sequence transfer witness absent")
                 (converted / f"{variant}-dss-measurements.json").write_text(
                     json.dumps({"expected": reference, "actual": actual}, indent=2)
                 )
                 result = compare(reference, actual)
                 result.update(
-                    case=f"{phases}/{profile}/{variant}/dss",
+                    case=f"{phases}/{connection}/{profile}/{variant}/dss",
                     negative_detected=not compare(
                         expected(phases, variant == "edited", True), actual
                     )["passed"],
@@ -247,6 +286,34 @@ def main():
                 report["cases"].append(result)
                 print(
                     result["case"], result["passed"], result["failures"][:2], flush=True
+                )
+            if connection == "DELTA_DELTA":
+                negative = converted / "physical-delta-negative.dss"
+                text = (converted / "fresh.dss" / "case.dss").read_text()
+                if "conns=(wye, wye)" not in text:
+                    raise ValueError("missing winding negative-control target")
+                negative.write_text(
+                    text.replace("conns=(wye, wye)", "conns=(delta, delta)")
+                )
+                actual = read_dss(negative, phases)
+                check = compare(expected(phases), actual)
+                report["cases"].append(
+                    {
+                        "case": f"{phases}/{connection}/{profile}/physical-delta-negative",
+                        "passed": not check["passed"],
+                        "negative_detected": not check["passed"],
+                        "comparison": check,
+                        "source_current_sum_A": [
+                            sum(
+                                complex(*actual[f"from.{p}.current"]["value"])
+                                for p in phases
+                            ).real,
+                            sum(
+                                complex(*actual[f"from.{p}.current"]["value"])
+                                for p in phases
+                            ).imag,
+                        ],
+                    }
                 )
             (args.output / "report.json").write_text(json.dumps(report, indent=2))
     return (

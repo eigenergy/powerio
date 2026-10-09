@@ -85,3 +85,65 @@ fn unqualified_transformer_physics_fails_instead_of_projecting() {
     n.transformers_mut()[0].windings[1].tap = 1.05;
     assert!(emit_canonical(&n, Destination::memory("bad.glm").unwrap()).is_err());
 }
+
+#[test]
+fn nr_delta_declaration_preserves_native_grounded_wye_equations() {
+    for connection in ["DELTA_DELTA", "2"] {
+        let m = read(&deck().replace("WYE_WYE", connection));
+        let t = &m.value().transformers()[0];
+        assert!(
+            t.windings
+                .iter()
+                .all(|w| w.conn == powerio_dist::DistWindingConn::Wye)
+        );
+        assert_eq!(t.windings[0].terminal_map, ["1", "2", "3", "n"]);
+        assert_eq!(t.extras["gridlabd_declared_connection"], "DELTA_DELTA");
+        assert!(
+            m.diagnostics()
+                .iter()
+                .any(|d| d.code() == "READ.GLM.TRANSFORMER_EQUIVALENT")
+        );
+        let output = fresh(m.value());
+        assert!(output.contains("connect_type WYE_WYE;"));
+        let again = read(&output);
+        assert_eq!(again.value().transformers()[0].windings, t.windings);
+        assert_eq!(again.value().transformers()[0].xsc_pct, t.xsc_pct);
+    }
+}
+
+#[test]
+fn physical_delta_windings_are_not_silently_written_as_native_nr_delta() {
+    let mut n = read(deck()).into_value();
+    for w in &mut n.transformers_mut()[0].windings {
+        w.conn = powerio_dist::DistWindingConn::Delta;
+        w.terminal_map.pop();
+    }
+    assert!(emit_canonical(&n, Destination::memory("bad.glm").unwrap()).is_err());
+}
+
+#[test]
+fn profiler_is_retained_without_changing_electrical_values() {
+    let baseline = read(deck());
+    let profiled = read(&format!("#set profiler=1\n{}", deck()));
+    assert_eq!(
+        serde_json::to_value(profiled.value()).unwrap(),
+        serde_json::to_value(baseline.value()).unwrap()
+    );
+    assert!(
+        profiled
+            .diagnostics()
+            .iter()
+            .any(|d| d.code() == "READ.GLM.SOURCE_ONLY")
+    );
+    assert!(
+        parse(
+            Source::from_memory(
+                "bad.glm",
+                format!("#set profiler=garbage\n{}", deck()).as_bytes()
+            )
+            .unwrap(),
+            PreprocessOptions::default()
+        )
+        .is_err()
+    );
+}

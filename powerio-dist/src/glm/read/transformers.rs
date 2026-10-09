@@ -54,7 +54,7 @@ impl Reader<'_> {
             let connection = self.text(cfg, "connect_type")?.unwrap_or_default();
             if !matches!(
                 (connection.as_str(), phases.len()),
-                ("WYE_WYE", 3) | ("SINGLE_PHASE", 1)
+                ("WYE_WYE" | "DELTA_DELTA" | "2", 3) | ("SINGLE_PHASE", 1)
             ) {
                 return Err(self.error(
                     key,
@@ -115,6 +115,20 @@ impl Reader<'_> {
             transformer
                 .extras
                 .insert("ppm_antifloat".into(), serde_json::json!(0.0));
+            if matches!(connection.as_str(), "DELTA_DELTA" | "2") {
+                // Both pinned NR engines stamp three independent grounded
+                // branches here, not a physical delta winding primitive.
+                // The effective circuit lives in typed windings; extras retain
+                // only the source declaration's provenance across IR.
+                transformer.extras.insert(
+                    "gridlabd_declared_connection".into(),
+                    serde_json::json!("DELTA_DELTA"),
+                );
+                self.diagnostics.push(powerio_core::Diagnostic::of(
+                    &crate::diagnostics::codes::READ_GLM_TRANSFORMER_EQUIVALENT,
+                    format!("{name}: native NR DELTA_DELTA uses grounded-wye port equations, including zero-sequence transfer; winding records preserve that engine behavior, not physical delta isolation"),
+                ));
+            }
             self.net.transformers_mut().push(transformer);
             self.attach(key, DistLocationTarget::Transformer, name);
         }

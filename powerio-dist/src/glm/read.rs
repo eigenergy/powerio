@@ -174,40 +174,7 @@ impl Reader<'_> {
                     if header
                         .first()
                         .is_some_and(|t| matches!(t.text(), "object" | "clock")) => {}
-                Statement::Directive(token) => {
-                    let text = token.text().trim();
-                    let setting = text.strip_prefix("#set ").and_then(|s| s.split_once('='));
-                    if let Some(("iteration_limit", value)) =
-                        setting.map(|(k, v)| (k.trim(), v.trim().trim_end_matches(';')))
-                    {
-                        if value.parse::<u32>().ok().is_none_or(|v| v == 0) {
-                            return Err(self.project.electrical_error(
-                                &token.span(),
-                                "iteration_limit requires a positive integer",
-                            ));
-                        }
-                        self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_SOURCE_ONLY,
-                            "iteration_limit is retained in source; canonical output uses its own solver settings"));
-                        continue;
-                    }
-                    if !setting.is_some_and(|(name, _)| {
-                        matches!(
-                            name.trim(),
-                            "complex_format"
-                                | "complex_output_format"
-                                | "double_format"
-                                | "savefile"
-                                | "reinclude"
-                                | "literal_if"
-                                | "relax_undefined_if"
-                        )
-                    }) {
-                        return Err(self.project.electrical_error(
-                            &token.span(),
-                            "unqualified global directive in static GLM input",
-                        ));
-                    }
-                }
+                Statement::Directive(token) => self.global_directive(token)?,
                 Statement::Simple { span, .. } | Statement::Block { span, .. } => {
                     return Err(self
                         .project
@@ -221,6 +188,56 @@ impl Reader<'_> {
                 "GLM static network requires the powerflow module",
             )
             .with_source(self.project.source().clone()));
+        }
+        Ok(())
+    }
+
+    fn global_directive(&mut self, token: &super::Token) -> Result<(), Error> {
+        let text = token.text().trim();
+        let setting = text.strip_prefix("#set ").and_then(|s| s.split_once('='));
+        if let Some(("iteration_limit", value)) =
+            setting.map(|(k, v)| (k.trim(), v.trim().trim_end_matches(';')))
+        {
+            if value.parse::<u32>().ok().is_none_or(|v| v == 0) {
+                return Err(self.project.electrical_error(
+                    &token.span(),
+                    "iteration_limit requires a positive integer",
+                ));
+            }
+            self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_SOURCE_ONLY,
+                "iteration_limit is retained in source; canonical output uses its own solver settings"));
+            return Ok(());
+        }
+        if let Some(("profiler", value)) =
+            setting.map(|(k, v)| (k.trim(), v.trim().trim_end_matches(';')))
+        {
+            if !matches!(value, "0" | "1" | "TRUE" | "FALSE" | "true" | "false") {
+                return Err(self
+                    .project
+                    .electrical_error(&token.span(), "profiler requires a boolean"));
+            }
+            self.diagnostics.push(Diagnostic::of(
+                &codes::READ_GLM_SOURCE_ONLY,
+                "profiler is an output-only engine setting retained in source",
+            ));
+            return Ok(());
+        }
+        if !setting.is_some_and(|(name, _)| {
+            matches!(
+                name.trim(),
+                "complex_format"
+                    | "complex_output_format"
+                    | "double_format"
+                    | "savefile"
+                    | "reinclude"
+                    | "literal_if"
+                    | "relax_undefined_if"
+            )
+        }) {
+            return Err(self.project.electrical_error(
+                &token.span(),
+                "unqualified global directive in static GLM input",
+            ));
         }
         Ok(())
     }

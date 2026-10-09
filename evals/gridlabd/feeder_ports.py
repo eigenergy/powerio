@@ -1,4 +1,4 @@
-"""Device ports for the pinned IEEE13 feeder (not a general GLM reader).
+"""Device ports for the pinned IEEE13/IEEE37 feeders (not a general GLM reader).
 
 Topology/phase identities come from the converted network. Electrical reference
 values come only from native recorder output and native impedance dumps.
@@ -11,6 +11,12 @@ import xml.etree.ElementTree as ET
 import numpy as np
 from oracle import add, compare, parse_complex, recorded
 from shunt_measurement import PAIRS, loads
+
+
+def source_bus(network):
+    if len(network["sources"]) != 1:
+        raise ValueError("expected one feeder source")
+    return network["sources"][0]["bus"]
 
 
 def devices(network):
@@ -350,7 +356,7 @@ def kcl(snapshot, network):
             elif amps != 0:
                 raise ValueError("load current on absent phase")
     for p in "ABC":
-        residual["n650", p] -= value(f"source.measured_current_{p}")
+        residual[source_bus(network), p] -= value(f"source.measured_current_{p}")
     expected, actual = {}, {}
     for (bus, p), amps in residual.items():
         add(expected, bus + "." + p, "A", 0j)

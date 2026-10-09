@@ -17,6 +17,7 @@ impl Writer<'_> {
                 || !matches!(t.phases, 1 | 3)
                 || t.extras.iter().any(|(k, v)| match k.as_str() {
                     "ppm_antifloat" => v.as_f64() != Some(0.0),
+                    "gridlabd_declared_connection" => v.as_str() != Some("DELTA_DELTA"),
                     "rating_is_normalization_base" => v.as_bool() != Some(true),
                     _ => true,
                 })
@@ -71,6 +72,9 @@ impl Writer<'_> {
             let a = &t.windings[0];
             let b = &t.windings[1];
             let phases = super::phases(&a.terminal_map[..t.phases])?;
+            if t.extras.contains_key("gridlabd_declared_connection") {
+                self.dropped(format!("transformer {}: source NR DELTA_DELTA declaration is emitted using the current typed grounded-wye circuit; its original connection label has no field on that configuration", t.name));
+            }
             let config = self.generated_name(&format!("{}__configuration", t.name));
             if t.xsc_pct[0] == 0.0 {
                 self.regulator(t, &config, &phases)?;

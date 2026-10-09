@@ -49,6 +49,8 @@ pub mod codes {
             "finite closed switch contacts use an exact static line equivalent";
         READ_GLM_REGULATOR_EQUIVALENT = "READ.GLM.REGULATOR_EQUIVALENT", Remark,
             "fixed regulator phases use equivalent winding records on explicit normalization bases";
+        READ_GLM_TRANSFORMER_EQUIVALENT = "READ.GLM.TRANSFORMER_EQUIVALENT", Warning,
+            "native NR delta-delta transformer equations use an equivalent grounded-wye circuit";
         READ_GLM_CONTROL_FROZEN = "READ.GLM.CONTROL_FROZEN", Warning,
             "active regulator behavior is omitted while declared fixed tap states are preserved";
         READ_GLM_NATIVE_LINE_DISCREPANCY = "READ.GLM.NATIVE_LINE_DISCREPANCY", Warning,

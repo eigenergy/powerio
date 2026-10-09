@@ -240,6 +240,15 @@ for these imported circuits. FBS transformer equations, other connections,
 non-unit ordinary-transformer taps and explicit magnetizing branches still need
 qualification.
 
+For both pinned engines, NR `DELTA_DELTA` (also numeric `2`) stamps three
+grounded-wye branches, including zero-sequence transfer. The reader preserves
+that native circuit in existing winding records and issues
+`READ.GLM.TRANSFORMER_EQUIVALENT`. The `gridlabd_declared_connection` extra keeps
+the original label across IR; it does not carry electrical parameters. Canonical
+GLM writes the effective `WYE_WYE` circuit and diagnoses the label change.
+This is native-engine compatibility, not physical delta winding isolation;
+physical delta export and FBS delta transformers still require their own mappings.
+
 NR `WYE_WYE` regulators preserve Type A/B per-phase ratios and series resistance
 as single-phase winding records. An object tap overrides its configuration tap.
 Manual missing taps use the native neutral position; an active controller needs
@@ -256,12 +265,14 @@ FBS regulators, open-delta connections and banked initialization remain unfinish
 Canonical node convergence is set to `1e-9 V`. The tighter former absolute
 setting could prevent IEEE13 from converging despite stable electrical values.
 
-The pinned IEEE13 NR feeder is qualified against PNNL, Arras and OpenDSS for
+The pinned IEEE13 and IEEE37 NR feeders are qualified against PNNL, Arras and OpenDSS for
 all bus-phase voltages, source currents, line/transformer terminal currents,
 terminal powers and losses, and original load-object currents/powers. Checks
 include independently edited input, IR-restored canonical output and current
-balance at every bus. This evidence applies to that feeder and its documented
-edits; it does not establish the unfinished profiles above. See
+balance at every bus. This evidence applies to those feeders and their documented
+edits; it does not establish the unfinished profiles above. IEEE37 starts downstream
+of its regulator; its NR delta transformer uses the equivalent described above.
+Its parent-directory include uses the existing explicit acquisition-root API. See
 `evals/gridlabd/README.md` for the reproducible oracle and measurement conventions.
 This is an engine stopping criterion, not the validation comparison tolerance.
 
