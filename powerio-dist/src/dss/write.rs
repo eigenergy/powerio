@@ -642,7 +642,14 @@ impl DssWriter {
         let table = prop::class_by_name(class);
         let mut tail = String::new();
         for (key, value) in extras {
-            if matches!(key.as_str(), "bmopf_subtype") || key.starts_with("pmd_") {
+            if matches!(
+                key.as_str(),
+                "bmopf_subtype"
+                    | "dss_autotrans_original"
+                    | "dss_autotrans_banks"
+                    | "dss_autotrans_contacts"
+            ) || key.starts_with("pmd_")
+            {
                 continue; // converter bookkeeping
             }
             // Canonical output is a static snapshot and does not regenerate

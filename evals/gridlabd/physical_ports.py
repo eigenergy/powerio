@@ -79,11 +79,21 @@ def interfaces(native, network, aliases):
                 raise ValueError(f"invalid typed open Line boundary: {original}")
             ports.append(dict(element="line." + contact.lower(), terminal=1, **port))
         result[original] = ports
+    from autotrans_ports import interfaces as autotrans_interfaces
+
+    for original, interface in autotrans_interfaces(native, network).items():
+        if original in result:
+            raise ValueError(f"ambiguous AutoTrans interface: {original}")
+        result[original] = interface
     return result
 
 
 def observe(engine, ports):
     """Return ordered boundary currents/powers and their total complex loss."""
+    if isinstance(ports, dict) and ports.get("kind") == "autotrans":
+        from autotrans_ports import observe as observe_autotrans
+
+        return observe_autotrans(engine, ports)
     result = []
     total = 0j
     for port in ports:

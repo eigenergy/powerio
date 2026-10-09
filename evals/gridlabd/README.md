@@ -1887,3 +1887,45 @@ power differences are about 17.5 VA and 13.7 VA. This establishes native numeric
 sensitivity under the existing strict thresholds. It does not establish that
 all conversion residuals are numerical, widen tolerances, or replace missing
 model validation with a passing classification.
+
+
+### IEEE 4 AutoTrans coil equivalents
+
+The DSS reader supports the three-phase series/common-wye AutoTrans profile
+with two windings or a delta tertiary, grounded common returns and unity taps.
+It requires explicit scalar leakage measurements and winding buses. Arrays,
+MakeLike, terminal operations, non-unity taps and other connections remain
+untyped with an electrical-readiness blocker. Disabled unsupported equipment
+can remain source-only. This is a bounded static profile, not full AutoTrans
+support.
+
+The typed representation uses three existing single-phase transformers and
+ideal contacts. Series-coil voltage and leakage parameters use the native
+HV-minus-LV base correction. Creation frequency, core losses and antifloat
+admittance are retained. Each coil uses the existing two-ended delta connection;
+ordinary single-phase wye would add a neutral admittance absent from AutoTrans.
+
+```sh
+python evals/gridlabd/dss_autotrans_oracle.py \
+  --bridge /path/to/dist_network --output /tmp/new-autotrans-results
+```
+
+Eight energized native cases check two/three windings, phase permutations,
+unequal loading, core-loss settings and 50/60 Hz snapshots. They compare native
+primitive admittances, voltages, all reported terminal currents and powers,
+losses, IR round trips and repeated canonical output. Wrong contact nodes,
+coil buses and missing banks are rejected. Altering a feeder line must fail the
+electrical comparison.
+
+Native AutoTrans reporting needs special treatment: common hot currents include
+the series return, but the series-return slots remain in the API output.
+`Powers` uses these adjusted currents; `Losses` uses the unadjusted primitive.
+The observer reproduces both conventions without dropping the duplicated slots
+or replacing losses with the sum of reported powers.
+
+The public CIMHub IEEE 4 `AutoAuto.dss` now parses into typed equipment and
+retains all 77 electrical observations. Its autotransformer observations match,
+but the complete feeder still fails strict source/switch comparisons (about
+0.000503 A and 100.23 VA maximum residual in the pinned run). It remains a failed
+feeder qualification. The broader IEEE 4 suite remains 14/27 qualified; no
+thresholds have changed.

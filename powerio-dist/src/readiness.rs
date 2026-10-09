@@ -259,6 +259,12 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
 }
 
 fn audit_untyped(net: &MulticonductorNetwork, report: &mut ElectricalReadiness) {
+    let autotrans_state_command = net.commands().iter().any(|(verb, args)| {
+        matches!(verb.as_str(), "enable" | "disable" | "open" | "close")
+            && crate::dss::lex::Scanner::new(args, None)
+                .next_param()
+                .is_some_and(|p| p.value.text.to_ascii_lowercase().starts_with("autotrans."))
+    });
     let reactor_state_command = net.commands().iter().any(|(verb, args)| {
         matches!(verb.as_str(), "enable" | "disable" | "open" | "close")
             && crate::dss::lex::Scanner::new(args, None)
@@ -283,6 +289,12 @@ fn audit_untyped(net: &MulticonductorNetwork, report: &mut ElectricalReadiness) 
             .is_some_and(|(_, value)| {
                 value.eq_ignore_ascii_case("no") || value.eq_ignore_ascii_case("false")
             });
+        if object.class.eq_ignore_ascii_case("autotrans")
+            && (!explicitly_disabled || autotrans_state_command)
+        {
+            report.block("READINESS.DSS.AUTOTRANS_UNRESOLVED", &object.name,
+                "untyped autotransformer has unresolved winding behavior; omitting it can disconnect the feeder");
+        }
         if object.class.eq_ignore_ascii_case("reactor")
             && (!explicitly_disabled || reactor_state_command)
         {

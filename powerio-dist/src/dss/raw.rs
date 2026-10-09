@@ -237,6 +237,8 @@ pub struct RawDss {
     pub commands: Vec<RawCommand>,
     pub buscoords: Vec<BusCoord>,
     pub vars: VarMap,
+    /// AutoTrans MakeLike copies derived winding state not reconstructed yet.
+    pub(super) autotrans_copies: std::collections::BTreeSet<String>,
     /// Storage MakeLike copies hidden inverter state not reconstructed yet.
     pub(super) storage_copies: std::collections::BTreeSet<String>,
     /// Bumped by `clear`, so `run_command` can tell whether a `Clear` ran
@@ -1997,6 +1999,11 @@ impl<L: Loader> Executor<'_, L> {
             // Stateful source/line readers also use reset/copy records to
             // recover hidden defaults and the state visible during MakeLike.
             if p.name.as_deref() == Some("like") {
+                if self.raw.objects[idx].class == "autotrans" {
+                    self.raw
+                        .autotrans_copies
+                        .insert(self.raw.objects[idx].name.to_ascii_lowercase());
+                }
                 if self.raw.objects[idx].class == "storage" {
                     self.raw
                         .storage_copies

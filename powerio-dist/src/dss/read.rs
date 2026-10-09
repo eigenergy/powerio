@@ -30,6 +30,7 @@ use crate::model::{
     open_delta_pairable, pair_keys, winding_phase_pair,
 };
 
+mod autotrans;
 mod lines;
 mod open_lines;
 mod reactors;
@@ -64,6 +65,7 @@ const TYPED_DSS_CLASSES: &[&str] = &[
     "vsource",
     "line",
     "transformer",
+    "autotrans",
     "load",
     "capacitor",
     "reactor",
@@ -158,6 +160,7 @@ fn snapshot_network(raw: &RawDss) -> (MulticonductorNetwork, Vec<crate::diagnost
             ),
         }
     }
+    rd.autotrans_objects(raw);
     for obj in raw.of_class("load") {
         let l = rd.load(obj);
         rd.net.loads_mut().push(l);
