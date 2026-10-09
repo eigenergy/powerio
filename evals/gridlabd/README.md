@@ -1747,11 +1747,33 @@ python evals/gridlabd/ieee9500_archive_import_oracle.py \
 ```
 
 The archive bytes are checked against the catalog before extraction. Both
-fixed-state native cases converge, but their first converted comparisons left
-almost every downstream bus de-energized. The source path contains a series
-`Reactor.hvmv_sub_hsb` with `r=0` and `x=14.798307` ohms; that reactor was
-retained untyped and omitted from canonical electrical equipment. These are
-failed comparisons, not valid all-zero solutions. The readiness audit now
-blocks active untyped reactors explicitly, so these feeder imports correctly
-remain incomplete after their line geometry is resolved. Series-reactor
-conversion is the next required electrical feature for these public cases.
+fixed-state native cases converge. Their source-path series reactor now lowers
+to an existing conductor-resolved impedance branch, restoring the downstream
+connection in canonical output. No public network or IR type is added.
+
+The scalar series-reactor profile requires explicit `x`, permits `r`, preserves
+phase and terminal order, and scales reactance from `basefreq` to the snapshot
+frequency. Default and explicit current ratings are retained. Competing
+impedance specifications, delta connections, damping/curves, copy histories,
+non-default creation-frequency history and terminal/enable commands remain
+explicitly unqualified. Active untyped reactors block electrical readiness;
+a disabled property cannot hide an unresolved enable command. The comparator
+uses the typed branch's original-element identity to compare the reactor's
+physical ports even though its canonical class is Line.
+
+```sh
+python evals/gridlabd/dss_series_reactor_oracle.py \
+  --bridge /path/to/dist_network --output /tmp/new-series-reactor
+```
+
+Fifteen native cases cover single-, two- and three-phase ports, resistance,
+frequency scaling, assignment-time current ratings, IR, repeated canonical
+conversion and changed-line negative controls. All pass. Both complete CIMHub
+IEEE9500 canonical cases now converge and energize the feeder, but remain
+unqualified: maximum voltage differences are approximately 88.8 V balanced and
+89.2 V unbalanced. Each comparison also reports 103 missing switch-port
+observations. A balanced-case diagnostic finds that matched passive-device
+admittance entries agree within `9.1e-13` S. Two-phase PV systems are incorrectly
+emitted with three phases and a grounded third leg; total PV injection falls
+from 2,954.66 kW to 2,303.11 kW. This is a remaining conversion defect, not an
+accepted approximation. Strict acceptance thresholds remain unchanged.

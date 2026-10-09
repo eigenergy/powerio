@@ -35,7 +35,7 @@ def run(path):
     return engine
 
 
-def snapshot(engine, buses, elements, *, canonical):
+def snapshot(engine, buses, elements, *, canonical, aliases=None):
     result = {}
     known_buses = {bus.lower() for bus in engine.Circuit.AllBusNames()}
     known_elements = {name.lower() for name in engine.Circuit.AllElementNames()}
@@ -48,9 +48,10 @@ def snapshot(engine, buses, elements, *, canonical):
         ):
             add(result, f"bus.{bus}.{node}.voltage", "V", voltage)
     for name in elements:
-        if name not in known_elements:
+        physical = (aliases or {}).get(name, name) if canonical else name
+        if physical not in known_elements:
             continue
-        engine.Circuit.SetActiveElement(name)
+        engine.Circuit.SetActiveElement(physical)
         if not engine.CktElement.Enabled():
             continue
         nodes = engine.CktElement.NodeOrder()

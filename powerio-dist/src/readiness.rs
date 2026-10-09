@@ -259,6 +259,12 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
 }
 
 fn audit_untyped(net: &MulticonductorNetwork, report: &mut ElectricalReadiness) {
+    let reactor_state_command = net.commands().iter().any(|(verb, args)| {
+        matches!(verb.as_str(), "enable" | "disable" | "open" | "close")
+            && crate::dss::lex::Scanner::new(args, None)
+                .next_param()
+                .is_some_and(|p| p.value.text.to_ascii_lowercase().starts_with("reactor."))
+    });
     for object in net.untyped_objects() {
         let explicitly_disabled = object
             .props
@@ -271,7 +277,9 @@ fn audit_untyped(net: &MulticonductorNetwork, report: &mut ElectricalReadiness) 
             .is_some_and(|(_, value)| {
                 value.eq_ignore_ascii_case("no") || value.eq_ignore_ascii_case("false")
             });
-        if object.class.eq_ignore_ascii_case("reactor") && !explicitly_disabled {
+        if object.class.eq_ignore_ascii_case("reactor")
+            && (!explicitly_disabled || reactor_state_command)
+        {
             report.block("READINESS.DSS.REACTOR_UNRESOLVED", &object.name,
                 "untyped reactor has unresolved electrical behavior; omitting a series reactor can disconnect the feeder");
         }

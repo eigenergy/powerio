@@ -58,6 +58,14 @@ def evaluate(source, bridge, folder, tolerance, acquisition_root=None):
     try:
         row["stage"] = "import"
         canonical_path = imported(bridge, source, folder / "imported", acquisition_root)
+        network = json.loads((folder / "imported/bridge.json").read_text())["network"]
+        aliases = {
+            line["extras"]["dss_original_element"].lower(): "line."
+            + line["name"].lower()
+            for line in network["lines"]
+            if "dss_original_element" in line.get("extras", {})
+        }
+        row["physical_port_aliases"] = aliases
         row["stage"] = "native solve"
         native = run(source, tolerance)
         row["engine"] = native.Basic.Version()
@@ -83,13 +91,17 @@ def evaluate(source, bridge, folder, tolerance, acquisition_root=None):
         (folder / "native.json").write_text(json.dumps(expected, indent=2) + "\n")
         row["stage"] = "canonical solve"
         canonical = run(canonical_path, tolerance)
-        actual = snapshot(canonical, buses, elements, canonical=True)
+        actual = snapshot(canonical, buses, elements, canonical=True, aliases=aliases)
         row["comparison"] = compare(expected, actual)
         (folder / "canonical.json").write_text(json.dumps(actual, indent=2) + "\n")
         row["stage"] = "reimport"
         reimported_path = imported(bridge, canonical_path, folder / "reimported")
         repeated = snapshot(
-            run(reimported_path, tolerance), buses, elements, canonical=True
+            run(reimported_path, tolerance),
+            buses,
+            elements,
+            canonical=True,
+            aliases=aliases,
         )
         row["reimport_comparison"] = compare(expected, repeated)
         (folder / "reimported.json").write_text(json.dumps(repeated, indent=2) + "\n")
@@ -116,7 +128,9 @@ def evaluate(source, bridge, folder, tolerance, acquisition_root=None):
             )
         wrong_path = canonical_path.with_name("wrong-line.dss")
         wrong_path.write_text(text)
-        wrong = snapshot(run(wrong_path, tolerance), buses, elements, canonical=True)
+        wrong = snapshot(
+            run(wrong_path, tolerance), buses, elements, canonical=True, aliases=aliases
+        )
         negative = compare(expected, wrong)
         row["wrong_line_negative"] = {
             "passed": not negative["passed"],

@@ -32,6 +32,7 @@ use crate::model::{
 
 mod lines;
 mod open_lines;
+mod reactors;
 mod sources;
 
 /// Upper bound on any count property (`phases`, conductors, `windings`, tap
@@ -163,7 +164,7 @@ fn snapshot_network(raw: &RawDss) -> (MulticonductorNetwork, Vec<crate::diagnost
         rd.capacitor(obj);
     }
     for obj in raw.of_class("reactor") {
-        rd.reactor(obj);
+        rd.reactor(obj, raw);
     }
     for obj in raw.of_class("generator") {
         let g = rd.generator(obj);
@@ -1106,8 +1107,8 @@ impl Reader<'_> {
     /// with inductive (negative) susceptance, the sign mirror of a capacitor.
     /// A reactor from a bus terminal to the same bus's node 0 is also a shunt;
     /// when it uses `r`/`x`, store the equivalent conductance and susceptance.
-    /// Other `bus2` reactors are series elements and stay untyped.
-    fn reactor(&mut self, obj: &RawObject) {
+    /// Explicit scalar series reactors use a conductor-resolved impedance branch.
+    fn reactor(&mut self, obj: &RawObject, raw: &RawDss) {
         let props = Props::new(obj);
         let phases = self.usize_or(&props, "phases", "reactor", &obj.name, dd::reactor::PHASES);
         if phases == 0 {
@@ -1133,17 +1134,16 @@ impl Reader<'_> {
                 .as_ref()
                 .is_some_and(|return_bus| same_bus_ground_return(&bus, return_bus, phases));
 
-        if bus2.is_some() && !grounding_return {
-            self.warn(
-                &C::READ_DSS_OBJECT_UNTYPED,
-                format!(
-                    "reactor {}: series reactors (bus2) are not typed yet; kept untyped",
-                    obj.name
-                ),
-            );
-            self.net
-                .untyped_objects_mut()
-                .push(UntypedObject::from(obj));
+        if let Some(bus2) = bus2.as_ref().filter(|_| !grounding_return) {
+            if let Err(reason) = self.series_reactor(obj, &props, &bus, bus2, phases, raw) {
+                self.warn(
+                    &C::READ_DSS_OBJECT_UNTYPED,
+                    format!("reactor {}: {reason}; kept untyped", obj.name),
+                );
+                self.net
+                    .untyped_objects_mut()
+                    .push(UntypedObject::from(obj));
+            }
             return;
         }
 
