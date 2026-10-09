@@ -58,6 +58,8 @@ impl Reader<'_> {
             let voltage = self
                 .real(key, "cap_nominal_voltage")
                 .filter(|v| *v != 0.0)
+                // Native node initialization copies the parent's nominal
+                // voltage before the capacitor derives its omitted rating.
                 .unwrap_or(self.nominal[&root]);
             if voltage <= 0.0 {
                 return Err(self.error(key, "capacitor nominal voltage must be positive"));
@@ -118,6 +120,23 @@ impl Reader<'_> {
         key: crate::glm::ObjectKey,
         phases: &[usize],
     ) -> Result<(), Error> {
+        let control = self
+            .text(key, "control")?
+            .unwrap_or_else(|| "MANUAL".into());
+        if self.real(key, "nominal_voltage").is_some_and(|v| v <= 0.0) {
+            return Err(self.error(key, "capacitor node nominal voltage must be positive"));
+        }
+        if self.text(key, "control_level")?.as_deref() == Some("BANK")
+            && control == "MANUAL"
+            && phases.len() == 1
+            && self
+                .text(key, "pt_phase")?
+                .is_some_and(|v| v == phase_name(phases[0]).to_string())
+        {
+            // A one-phase bank sensing that phase cannot change its declared
+            // switch state during native bank initialization.
+            return Ok(());
+        }
         if !matches!(
             self.text(key, "control_level")?.as_deref(),
             None | Some("INDIVIDUAL")
@@ -127,9 +146,6 @@ impl Reader<'_> {
                 "banked capacitor initialization requires a qualified snapshot",
             ));
         }
-        let control = self
-            .text(key, "control")?
-            .unwrap_or_else(|| "MANUAL".into());
         if control == "MANUAL" {
             return Ok(());
         }

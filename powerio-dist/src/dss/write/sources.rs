@@ -77,10 +77,27 @@ pub(super) fn validate(net: &MulticonductorNetwork) -> Result<(), String> {
     loads::validate(net)?;
     ideal_transformers::validate(net)?;
     for code in net.line_codes().iter().filter(|c| asymmetric(c)) {
-        if sequence_impedance(code, 1.0).is_none() {
+        if sequence_impedance(code, 1.0).is_none()
+            && super::asymmetric_pair::equivalent(code, 1.0).is_none()
+        {
             return Err(format!(
                 "linecode {}: asymmetric matrix has no qualified DSS equivalent",
                 code.name
+            ));
+        }
+    }
+    for line in net.lines() {
+        if let Some(code) = net
+            .line_codes()
+            .iter()
+            .find(|c| c.name.eq_ignore_ascii_case(&line.linecode))
+            && asymmetric(code)
+            && sequence_impedance(code, line.length).is_none()
+            && super::asymmetric_pair::equivalent(code, line.length).is_none()
+        {
+            return Err(format!(
+                "line {}: scaled asymmetric impedance has no finite DSS equivalent",
+                line.name
             ));
         }
     }
@@ -97,7 +114,7 @@ pub(super) fn asymmetric(code: &DistLineCode) -> bool {
     })
 }
 
-fn sequence_impedance(code: &DistLineCode, length: f64) -> Option<[Complex64; 3]> {
+pub(super) fn sequence_impedance(code: &DistLineCode, length: f64) -> Option<[Complex64; 3]> {
     if code.n_conductors != 3
         || !length.is_finite()
         || length <= 0.0
@@ -160,22 +177,27 @@ impl DssWriter {
         if !asymmetric(code) {
             return false;
         }
-        let z = sequence_impedance(code, line.length).expect("validated exact impedance profile");
-        let mut text = format!(
-            "New Vsource._pio_coupled_{} phases=3 bus1={} bus2={} basekv=1 pu=0 frequency={} basefreq={}",
-            line.name,
-            self.bus_ref(&line.bus_from, &line.terminal_map_from),
-            self.bus_ref(&line.bus_to, &line.terminal_map_to),
-            num(net.base_frequency()),
-            num(net.base_frequency()),
-        );
-        for (i, value) in z.iter().enumerate() {
-            let _ = write!(text, " z{i}=[{} {}]", num(value.re), num(value.im));
-        }
-        self.line_out(&text);
-        self.warn(&C::EMIT_DSS_IMPEDANCE_EQUIVALENT, format!(
+        if code.n_conductors == 2 {
+            self.asymmetric_pair_branch(net, line, code);
+        } else {
+            let z =
+                sequence_impedance(code, line.length).expect("validated exact impedance profile");
+            let mut text = format!(
+                "New Vsource._pio_coupled_{} phases=3 bus1={} bus2={} basekv=1 pu=0 frequency={} basefreq={}",
+                line.name,
+                self.bus_ref(&line.bus_from, &line.terminal_map_from),
+                self.bus_ref(&line.bus_to, &line.terminal_map_to),
+                num(net.base_frequency()),
+                num(net.base_frequency()),
+            );
+            for (i, value) in z.iter().enumerate() {
+                let _ = write!(text, " z{i}=[{} {}]", num(value.re), num(value.im));
+            }
+            self.line_out(&text);
+            self.warn(&C::EMIT_DSS_IMPEDANCE_EQUIVALENT, format!(
             "line {}: complete asymmetric sequence impedance emitted as zero-EMF Vsource._pio_coupled_{}", line.name, line.name,
         ));
+        }
         if code.i_max.is_some()
             || code.s_max.is_some()
             || line.i_max.is_some()

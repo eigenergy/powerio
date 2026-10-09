@@ -151,3 +151,60 @@ fn triplex_source_round_trip_retains_seasonal_ratings_and_geometry_exactly() {
     };
     assert_eq!(artifacts[0].bytes(), deck().as_bytes());
 }
+
+#[test]
+fn direct_triplex_matrix_preserves_native_leg_orientation_and_dss_ports() {
+    let text = deck().replace(
+        "name cable;",
+        "name cable; z11 2.16454+.880800j; z12 .623542+.673688j; z21 .623542+.673688j; z22 2.16454+.880800j;",
+    );
+    for dialect in [GlmDialect::Pnnl5_3, GlmDialect::Arras4_3] {
+        let m = read(&text, dialect);
+        let n = m.value();
+        let line = &n.lines()[0];
+        assert_eq!(line.terminal_map_from, ["1", "2"]);
+        assert_eq!(line.terminal_map_to, ["1", "2"]);
+        let code = &n.line_codes()[0];
+        assert_eq!(code.n_conductors, 2);
+        for (row, expected) in [[2.16454, 0.623_542], [-0.623_542, -2.16454]]
+            .iter()
+            .enumerate()
+        {
+            for (col, value) in expected.iter().enumerate() {
+                assert!((code.r_series[row][col] * 1609.344 - value).abs() < 1e-12);
+            }
+        }
+        assert!(
+            m.diagnostics()
+                .iter()
+                .any(|d| d.code() == "READ.GLM.REDUCED_TRIPLEX")
+        );
+        let out = powerio_dist::emit(
+            &m,
+            DistTargetFormat::Dss,
+            Destination::memory("case.dss").unwrap(),
+        )
+        .unwrap();
+        let EmittedOutput::Memory { artifacts } = out.output() else {
+            panic!("expected DSS bytes")
+        };
+        let dss = std::str::from_utf8(artifacts[0].bytes()).unwrap();
+        assert!(dss.contains("New Vsource._pio_coupled_service phases=3 bus1=head.1.2.0"));
+        assert!(dss.contains("New Line.service phases=2 bus1=_pio_pair_0.1.2 bus2=sink.1.2"));
+        let mut overflow = m.clone();
+        overflow.value_mut().lines_mut()[0].length = f64::MAX;
+        for row in &mut overflow.value_mut().line_codes_mut()[0].r_series {
+            for value in row {
+                *value *= 1e6;
+            }
+        }
+        assert!(
+            powerio_dist::emit(
+                &overflow,
+                DistTargetFormat::Dss,
+                Destination::memory("case.dss").unwrap()
+            )
+            .is_err()
+        );
+    }
+}

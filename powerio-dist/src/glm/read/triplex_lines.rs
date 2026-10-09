@@ -57,8 +57,12 @@ impl Reader<'_> {
             let name = self.names[&key].clone();
             let code_name = allocate_name(&mut self.identities, &format!("{name}__glm_linecode"));
             let code = self.triplex_line_code(config, &code_name)?;
+            let terminals = if code.n_conductors == 2 {
+                vec!["1".into(), "2".into()]
+            } else {
+                vec!["1".into(), "2".into(), "n".into()]
+            };
             self.net.line_codes_mut().push(code);
-            let terminals = vec!["1".into(), "2".into(), "n".into()];
             self.net.lines_mut().push(DistLine::new(
                 &name,
                 &self.names[&from],
@@ -93,12 +97,48 @@ impl Reader<'_> {
         Ok(object)
     }
 
+    fn triplex_direct_code(
+        &mut self,
+        config: ObjectKey,
+        name: &str,
+    ) -> Result<DistLineCode, Error> {
+        let mut z = [[Complex64::default(); 2]; 2];
+        for (i, row) in z.iter_mut().enumerate() {
+            for (j, value) in row.iter_mut().enumerate() {
+                // Native b multiplies physical currents but stores leg-2 voltage
+                // reversed. Geometry applies this sign internally; direct input
+                // does not. Preserve the physical, potentially nonreciprocal law.
+                *value = self
+                    .quantity(config, &format!("z{}{}", i + 1, j + 1))
+                    .unwrap_or_default()
+                    * if i == 0 { 1.0 } else { -1.0 }
+                    / METERS_PER_MILE;
+            }
+        }
+        let determinant = z[0][0] * z[1][1] - z[0][1] * z[1][0];
+        if determinant == Complex64::default()
+            || !determinant.re.is_finite()
+            || !determinant.im.is_finite()
+        {
+            return Err(self.error(config, "direct triplex matrix is singular or overflows"));
+        }
+        let mut code = DistLineCode::new(
+            name,
+            z.iter().map(|r| r.iter().map(|v| v.re).collect()).collect(),
+            z.iter().map(|r| r.iter().map(|v| v.im).collect()).collect(),
+        );
+        code.source=Some("GridLAB-D direct triplex matrix; physical leg-2 row sign applied; neutral/ground current is unspecified".into());
+        self.diagnostics.push(Diagnostic::of(&crate::diagnostics::codes::READ_GLM_REDUCED_TRIPLEX,
+            format!("{}: direct triplex matrix defines only the two hot-conductor voltage/current equations; native leg-2 row sign is retained, even when nonreciprocal; no physical neutral/ground current is inferred",self.names[&config])));
+        Ok(code)
+    }
+
     fn triplex_line_code(&mut self, config: ObjectKey, name: &str) -> Result<DistLineCode, Error> {
-        if ["z11", "z12", "z21", "z22"].iter().any(|field| {
+        if ["z11", "z22"].iter().any(|field| {
             self.quantity(config, field)
                 .is_some_and(|z| z != Complex64::default())
         }) {
-            return Err(self.error(config, "direct triplex matrices do not determine neutral currents; their reduced profile is not qualified yet"));
+            return self.triplex_direct_code(config, name);
         }
         let diameter = self.positive_geometry(config, "diameter")?;
         let insulation = self.positive_geometry(config, "insulation_thickness")?;

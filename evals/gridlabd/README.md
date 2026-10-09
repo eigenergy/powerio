@@ -1224,6 +1224,55 @@ IEEE9500 solar block produces 13,989.345858367315 W under its static climate,
 which differs from the declared 13,990 W inverter schedule. Comparisons use
 native inverter `VA_Out`; Arras does not update solar `P_Out` in this path.
 The profile covers `BASEEFFICIENT` solar with default orientation and simple
-inverter efficiency in `FOUR_QUADRANT CONSTANT_PF` mode. Battery inputs, other
-control modes, weather files, canonical GLM inverter output and full IEEE9500
-qualification remain unfinished.
+inverter efficiency in `FOUR_QUADRANT CONSTANT_PF` mode. Other control modes, weather files and canonical GLM inverter output remain unfinished. The idle battery profile and full IEEE9500 audit are described below.
+
+
+### IEEE9500 prerequisites and complete feeder audit
+
+`battery_import_oracle.py` qualifies the internal lithium-ion battery's idle
+`CONSTANT_PF` state: eight native/import comparisons across both solvers and
+forks, including different SOC and scheduled powers, with wrong-power negatives.
+`triplex_zip_import_oracle.py` checks sixteen service circuits covering the
+IEEE9500 load parameters, mixed ZIP terms, signed power factors, native fraction
+normalization, explicit-term overrides and zero base power.
+`direct_triplex_import_oracle.py` checks eight direct-matrix services, including
+the IEEE9500 matrix and a reciprocal physical variant. It compares physical hot
+ports and signed losses through IR and DSS; undefined neutral currents stay
+outside that comparison. Native absolute-real loss telemetry is recorded
+separately. Every wrong-load negative must fail.
+
+`fixed_state_import_oracle.py` checks inherited and explicit capacitor rating
+voltages and single-phase manual banks on both forks, plus the connected PNNL NR
+`SWING_PQ`/future-outage case. Five native comparisons and wrong-impedance
+negatives qualify these device states. It does not execute active controls.
+
+Each device harness takes `--bridge`, `--pnnl-root`, and a new `--output` directory.
+For the complete externally cached CIMHub projects:
+
+```sh
+python evals/gridlabd/ieee9500_import_oracle.py \
+  --source /path/to/CIMHub/ieee9500 \
+  --bridge /path/to/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-ieee9500-results
+```
+
+The harness pins each original base, wrapper and edits file by SHA-256, parses
+both complete projects, verifies IR equality and runs their DSS outputs. It
+records every native bus and both ends of every native link at full precision.
+Native instrumentation extends the zero-duration clock by one second and uses
+`default_maximum_voltage_error=1e-8`; electrical declarations remain unchanged.
+Direct triplex neutral currents are unspecified and are explicitly excluded.
+Source bytes remain external; this change vendors no public feeder files.
+
+**The strict full-feeder comparison currently fails and the harness exits 1.**
+Initial whole-feeder voltages agree within tens of microvolts; reported branch
+currents/powers have additional discrepancies. The largest observed current
+difference is explained by pinned native `line.cpp` using `d=a=I+ZY/2`, while
+physical pi ports require `d=I+YZ/2`. The independently evaluated difference
+`(ZY-YZ) Iout / 2` predicts the observed reporting offset. The audit records that
+explanation separately and never overwrites measurements, loosens tolerances,
+or converts a failed comparison into a pass. Near-zero impedances and native
+convergence floors still need qualification. Deliberate wrong-tap output must
+fail. No full matching claim, edited-feeder qualification, or Arras IEEE9500
+portability is implied; the original Arras input also has unsupported properties
+and different diesel semantics.

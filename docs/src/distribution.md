@@ -338,7 +338,7 @@ snapshots only when every phase has an explicit switch state and control is
 individual. `READ.GLM.CONTROL_FROZEN` reports excluded control execution.
 Thresholds, sensing references and delays remain in source; canonical output
 uses manual coils with the current typed admittances. Missing switch states and
-banked initialization fail.
+unqualified banked initialization fail. A single-phase manual bank sensing its own phase is supported. An explicit `cap_nominal_voltage` sets its admittance base; otherwise native initialization uses the parent bus nominal voltage.
 
 The IEEE8500 native reference harness compares its original PNNL input with
 explicit static variants on both forks. Arras requires `triplex_load` constant
@@ -372,9 +372,23 @@ neutral grounded at both endpoints. This is equivalent to the native grounded
 neutral reduction and retains its reconstructed neutral current. Unequal
 conductors, 50/60 Hz, NR/FBS, mixed loads and connected IEEE8500 service parameters
 have native-to-OpenDSS qualification, including both-end powers and losses.
-Direct triplex 2×2 matrices, floating service neutrals, canonical GLM service
-output, other geometry/earth models and additional static devices remain
-unfinished and fail explicitly.
+Direct triplex 2×2 matrices also import. GridLAB-D's reversed leg-2 voltage
+convention requires negating the second matrix row to obtain physical terminal
+voltages and currents. The resulting matrix can be nonreciprocal; import preserves
+it and reports `READ.GLM.REDUCED_TRIPLEX`. Such input does not define a physical
+neutral/ground-current model. OpenDSS output uses an exact source-and-line
+equivalent, including an open auxiliary third port, when needed. Aggregate its
+physical end ports for powers and losses; internal element losses alone are not
+the original line's losses. Both forks and solvers have direct-matrix microcase
+qualification through IR and DSS, including deliberate wrong-load checks.
+Floating service neutrals, canonical GLM service output and additional geometry
+models remain unfinished and fail explicitly.
+
+Nonzero triplex `base_power_1`, `_2`, and `_12` initialize separate constant-power,
+constant-current and constant-impedance terms, overriding explicit coefficients
+on that connection. Import reproduces native power-fraction normalization and
+signed power factors, with `READ.GLM.LOAD_NORMALIZED`. Zero base power leaves
+explicit P/I/Z coefficients in effect.
 
 A missing or zero overhead mutual spacing produces zero mutual impedance in the
 pinned engines. Import preserves this behavior and reports it instead of
@@ -510,10 +524,31 @@ Component coordinates remain attached to the typed inverter records.
 
 Both pinned forks are checked on ordinary and split-phase circuits, including
 the IEEE9500 solar parameters. Arras requires a meter or triplex-meter parent.
-Weather files, multipoint efficiency, other inverter modes, battery inputs and
-canonical GLM inverter writing remain unsupported. Climate coordinates and
-thermal inputs remain source-only with diagnostics. These device checks do not
-qualify the complete IEEE9500 feeder.
+An internal `LI_ION` battery on this inverter profile initializes with zero DC
+input and therefore zero AC injection, even if `P_Out` requests charging. Import
+preserves that idle electrical state and reports `READ.GLM.BATTERY_IDLE`; energy,
+state of charge and inactive load-following settings remain source-only. Native
+checks cover both solvers and forks. Other battery operating modes, weather files,
+multipoint efficiency and canonical GLM inverter writing remain unfinished.
+Climate coordinates and thermal inputs remain source-only with diagnostics.
+
+The PNNL NR profile accepts future manual reliability events only when their
+start date is strictly after the complete clock window, all references resolve,
+and every declared phase reaches a fixed source. Connected `SWING_PQ` buses in
+the grid-association profile remain PQ buses, as in native initialization. Island
+promotion, active outages and protection execution remain unsupported. These
+choices produce explicit static-state diagnostics. Per-phase link current
+ratings are validated and retained in source; typed ampacity mapping is pending.
+
+Both original CIMHub IEEE9500 balanced and unbalanced projects now parse through
+IR and produce solvable OpenDSS circuits with their DER and fixed device states.
+Full-precision voltage and both-end current/power comparisons are available, but
+strict full-feeder qualification remains open. The native NR line-current
+reporting formula differs from physical pi-circuit currents when series
+impedance and shunt admittance matrices do not commute. The harness retains the
+raw failing comparison and independently audits that discrepancy. Small
+convergence and near-zero-impedance residuals also remain under investigation;
+no complete IEEE9500 matching claim is made yet.
 
 GridLAB-D object latitude and longitude map to the network's typed
 `component_locations` table. Each point identifies its component table and exact

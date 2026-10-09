@@ -110,6 +110,7 @@ impl Reader<'_> {
                 "triplex child nominal voltage conflicts with its parent",
             ));
         }
+        let zip = self.triplex_zip(key)?;
         for law in ["power", "current", "impedance"] {
             for (suffix, terminals, scale) in [
                 ("1", ["1", "n"], 1.0),
@@ -123,20 +124,25 @@ impl Reader<'_> {
                 } else {
                     continue;
                 };
-                let Some(value) = self.quantity(key, &field) else {
+                let zip_power = zip.get(&field).copied();
+                let Some(value) = zip_power.or_else(|| self.quantity(key, &field)) else {
                     continue;
                 };
                 if kind != "triplex_load" && self.project.dialect() == GlmDialect::Arras4_3 {
                     return Err(self.error(key, "Arras triplex_node power accumulators are hidden; use an explicit triplex_load"));
                 }
                 let voltage = nominal * scale;
-                let power = match law {
-                    "power" => value,
-                    // Triplex load current uses local voltage angle, with a zero-angle
-                    // reference on every primary phase, unlike ordinary load current.
-                    "current" => voltage * value.conj(),
-                    _ if value == Complex64::default() => Complex64::default(),
-                    _ => voltage.powi(2) / value.conj(),
+                let power = if zip_power.is_some() {
+                    value
+                } else {
+                    match law {
+                        "power" => value,
+                        // Triplex load current uses local voltage angle, with a zero-angle
+                        // reference on every primary phase, unlike ordinary load current.
+                        "current" => voltage * value.conj(),
+                        _ if value == Complex64::default() => Complex64::default(),
+                        _ => voltage.powi(2) / value.conj(),
+                    }
                 };
                 if !voltage.is_finite()
                     || !power.re.is_finite()

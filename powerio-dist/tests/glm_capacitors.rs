@@ -86,3 +86,25 @@ fn controlled_capacitors_require_declared_individual_states_and_report_freezing(
         assert!(read(&source.replace("480 s", "broken s")).is_err());
     }
 }
+
+#[test]
+fn single_phase_manual_bank_inherits_parent_voltage_unless_rating_is_explicit() {
+    let text = "module powerflow { solver_method NR; }
+object node { name source; phases ABCN; bustype SWING; nominal_voltage 240; }
+object capacitor { name cap; parent source; phases BN; nominal_voltage 120;
+control MANUAL; control_level BANK; pt_phase B; capacitor_B 1440; switchB CLOSED; }";
+    let m = read(text).unwrap();
+    assert_eq!(m.value().shunts().len(), 1);
+    let cap = &m.value().shunts()[0];
+    assert_eq!(cap.terminal_map, ["2"]);
+    assert!((cap.b[0][0] - 0.025).abs() < 1e-15);
+    let explicit = read(&text.replace(
+        "nominal_voltage 120;",
+        "nominal_voltage 120; cap_nominal_voltage 120;",
+    ))
+    .unwrap();
+    assert!((explicit.value().shunts()[0].b[0][0] - 0.1).abs() < 1e-15);
+    assert_eq!(cap.bus, "source");
+    assert!(read(&text.replace("pt_phase B", "pt_phase A")).is_err());
+    assert!(read(&text.replace("nominal_voltage 120", "nominal_voltage 0")).is_err());
+}

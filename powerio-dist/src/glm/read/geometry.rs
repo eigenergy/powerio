@@ -270,19 +270,40 @@ fn inverse(matrix: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
 }
 
 pub(super) fn rating_property(class: &str, name: &str) -> bool {
+    link_rating(class, name)
+        || matches!(
+            class,
+            "overhead_line_conductor"
+                | "underground_line_conductor"
+                | "triplex_line_conductor"
+                | "line_configuration"
+                | "triplex_line_configuration"
+        ) && matches!(
+            name,
+            "rating.summer.continuous"
+                | "rating.summer.emergency"
+                | "rating.winter.continuous"
+                | "rating.winter.emergency"
+        )
+}
+
+fn link_rating(class: &str, name: &str) -> bool {
     matches!(
         class,
-        "overhead_line_conductor"
-            | "underground_line_conductor"
-            | "triplex_line_conductor"
-            | "line_configuration"
-            | "triplex_line_configuration"
+        "regulator"
+            | "transformer"
+            | "switch"
+            | "overhead_line"
+            | "underground_line"
+            | "triplex_line"
     ) && matches!(
         name,
-        "rating.summer.continuous"
-            | "rating.summer.emergency"
-            | "rating.winter.continuous"
-            | "rating.winter.emergency"
+        "continuous_rating_A"
+            | "continuous_rating_B"
+            | "continuous_rating_C"
+            | "emergency_rating_A"
+            | "emergency_rating_B"
+            | "emergency_rating_C"
     )
 }
 
@@ -297,6 +318,27 @@ impl Reader<'_> {
             .collect();
         if fields.is_empty() {
             return Ok(None);
+        }
+        if fields.iter().any(|name| link_rating(class(object), name)) {
+            if self.project.dialect() != crate::glm::GlmDialect::Pnnl5_3 {
+                return Err(self.error(
+                    key,
+                    "per-phase link ratings are not published by the pinned Arras profile",
+                ));
+            }
+            if fields
+                .iter()
+                .any(|name| self.real(key, name).is_none_or(|v| v < 0.0))
+            {
+                return Err(self.error(key, "link current ratings must be nonnegative"));
+            }
+            return Ok(Some(Diagnostic::of(
+                &codes::READ_GLM_SOURCE_ONLY,
+                format!(
+                    "{}: link continuous/emergency current ratings remain in source; static impedances and tap states are preserved, but typed ampacity projection is unfinished",
+                    self.names[&key]
+                ),
+            )));
         }
         if fields
             .iter()

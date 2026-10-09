@@ -120,7 +120,7 @@ def native_snapshot(directory, phase):
     return result
 
 
-def imported_snapshot(path, phase, floating=False):
+def imported_snapshot(path, phase, floating=False, direct=False):
     import opendssdirect as dss
 
     engine = dss.NewContext()
@@ -160,6 +160,39 @@ def imported_snapshot(path, phase, floating=False):
     ):
         result[f"transformer.to.{label}.power"]["value"] = [value.real, value.imag]
     engine.Circuit.SetActiveElement("line.service")
+    if direct:
+        if engine.CktElement.NodeOrder() != [1, 2, 1, 2]:
+            raise ValueError("unexpected two-conductor correction order")
+        lv, li, lp = (
+            unpack(engine.CktElement.Voltages()),
+            unpack(engine.CktElement.Currents()),
+            1000 * unpack(engine.CktElement.Powers()),
+        )
+        fv, fi, fp = lv[:2], li[:2], lp[:2]
+        if "Vsource._pio_coupled_service".lower() in [
+            n.lower() for n in engine.Circuit.AllElementNames()
+        ]:
+            engine.Circuit.SetActiveElement("vsource._pio_coupled_service")
+            sv, si, sp = (
+                unpack(engine.CktElement.Voltages()),
+                unpack(engine.CktElement.Currents()),
+                1000 * unpack(engine.CktElement.Powers()),
+            )
+            if abs(si[2]) > 1e-8 or abs(si[5]) > 1e-8:
+                raise ValueError("auxiliary third port is not open")
+            fv, fi, fp = sv[:2], si[:2], sp[:2]
+
+        def ports(first, second):
+            return np.array([first[0], first[1], 0j, second[0], second[1], 0j])
+
+        line_observations(
+            result,
+            ports(fv, lv[2:]),
+            ports(fi, li[2:]),
+            ports(fp, lp[2:]),
+            sum(fp) + sum(lp[2:]),
+        )
+        return result
     if engine.CktElement.NodeOrder() != [1, 2, 0, 1, 2, 4 if floating else 0]:
         raise ValueError("unexpected service conductor order")
 

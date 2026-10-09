@@ -49,6 +49,12 @@ pub mod codes {
             "static switch status and banked initialization determine contact states";
         READ_GLM_SWITCH_EQUIVALENT = "READ.GLM.SWITCH_EQUIVALENT", Remark,
             "finite closed switch contacts use an exact static line equivalent";
+        READ_GLM_REDUCED_TRIPLEX = "READ.GLM.REDUCED_TRIPLEX", Warning,
+            "a direct triplex matrix does not specify physical neutral or ground current";
+        READ_GLM_LOAD_NORMALIZED = "READ.GLM.LOAD_NORMALIZED", Remark,
+            "native ZIP initialization defines the typed load voltage-law terms";
+        READ_GLM_BATTERY_IDLE = "READ.GLM.BATTERY_IDLE", Remark,
+            "Internal battery has zero fixed injection in constant-PF mode; energy and inactive control metadata remain in source";
         READ_GLM_SOLAR_EQUIVALENT = "READ.GLM.SOLAR_EQUIVALENT", Remark,
             "a static solar and inverter snapshot uses fixed typed inverter injections";
         READ_GLM_REACTOR_EQUIVALENT = "READ.GLM.REACTOR_EQUIVALENT", Remark,

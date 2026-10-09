@@ -28,6 +28,7 @@ use crate::model::{
 use super::read::delta_edges;
 use super::{lex, prop};
 
+mod asymmetric_pair;
 mod ideal_switches;
 mod ideal_transformers;
 mod loads;

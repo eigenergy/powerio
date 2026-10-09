@@ -1,4 +1,4 @@
-//! Fixed solar-fed four-quadrant inverter dispatch in the pinned profiles.
+//! Fixed four-quadrant inverter dispatch in the pinned profiles.
 use super::{Reader, allocate_name, class, parse_phases, phase_name};
 use crate::glm::{GlmQuantityKind, ObjectKey};
 use crate::{DistIbr, DistLocationTarget, IbrPrimeMover, IbrTopology};
@@ -18,6 +18,13 @@ pub(super) fn quantity_spec(
         "V_base" => Some("V"),
         "power_factor" => Some("unit"),
         "inverter_efficiency" => None,
+        "max_charge_rate"
+        | "max_discharge_rate"
+        | "charge_on_threshold"
+        | "charge_off_threshold"
+        | "discharge_on_threshold"
+        | "discharge_off_threshold" => Some("W"),
+        "charge_lockout_time" | "discharge_lockout_time" => Some("s"),
         _ => return None,
     };
     Some((GlmQuantityKind::Real, unit))
@@ -33,10 +40,11 @@ pub(super) fn allowed(class: &str, name: &str) -> bool {
                     | "inverter_type"
                     | "use_multipoint_efficiency"
                     | "four_quadrant_control_mode"
+                    | "sense_object"
             ))
 }
 impl Reader<'_> {
-    pub(super) fn solar_inverters(&mut self) -> Result<(), Error> {
+    pub(super) fn fixed_inverters(&mut self) -> Result<(), Error> {
         let keys = self
             .index
             .objects()
@@ -45,31 +53,30 @@ impl Reader<'_> {
             .map(crate::glm::GlmObject::key)
             .collect::<Vec<_>>();
         for key in keys {
-            self.solar_inverter(key)?;
+            self.fixed_inverter(key)?;
         }
-        for object in self.index.objects().iter().filter(|o| class(o) == "solar") {
+        for object in self
+            .index
+            .objects()
+            .iter()
+            .filter(|o| matches!(class(o), "solar" | "battery"))
+        {
             if self
                 .index
                 .parent(object.key())
                 .is_none_or(|k| class(&self.index.objects()[k.ordinal()]) != "inverter")
             {
-                return Err(self.error(object.key(), "solar requires a supported inverter parent"));
+                return Err(self.error(
+                    object.key(),
+                    "DC device requires a supported inverter parent",
+                ));
             }
         }
         Ok(())
     }
-    fn solar_inverter(&mut self, key: ObjectKey) -> Result<(), Error> {
-        let online = self.solar_inverter_mode(key)?;
-        let children = self
-            .index
-            .objects()
-            .iter()
-            .filter(|o| class(o) == "solar" && self.index.parent(o.key()) == Some(key))
-            .map(crate::glm::GlmObject::key)
-            .collect::<Vec<_>>();
-        let [solar] = children.as_slice() else {
-            return Err(self.error(key,"inverter snapshot requires exactly one supported solar child; battery and other DC sources need separate mappings"));
-        };
+    fn fixed_inverter(&mut self, key: ObjectKey) -> Result<(), Error> {
+        let online = self.fixed_inverter_mode(key)?;
+        let (dc, prime_mover, dc_power) = self.inverter_input(key)?;
         let maps = self.inverter_terminals(key)?;
         let parent = self.index.parent(key).expect("parent validated");
         let root = self.roots[&parent];
@@ -90,7 +97,7 @@ impl Reader<'_> {
         if rating <= 0.0 {
             return Err(self.error(key, "inverter rated_power must be positive"));
         }
-        let available = self.solar_dc_power(*solar)? * eta;
+        let available = dc_power * eta;
         let pf = self.real(key, "power_factor").unwrap_or(1.0);
         if !(-1.0..=1.0).contains(&pf) {
             return Err(self.error(key, "inverter power_factor must lie in -1..1"));
@@ -129,28 +136,57 @@ impl Reader<'_> {
                 &self.names[&root],
                 map,
                 IbrTopology::SinglePhase,
-                IbrPrimeMover::Pv,
+                prime_mover,
                 vec![rating],
             );
-            ibr.p_avail = Some(available / n);
+            ibr.p_avail = (prime_mover == IbrPrimeMover::Pv).then_some(available / n);
             ibr.p_min = Some(vec![power.re / n]);
             ibr.p_max.clone_from(&ibr.p_min);
             ibr.q_min = Some(vec![power.im / n]);
             ibr.q_max.clone_from(&ibr.q_min);
             self.net.ibrs_mut().push(ibr);
             self.attach(key, DistLocationTarget::Ibr, name.clone());
-            self.attach(*solar, DistLocationTarget::Ibr, name);
+            self.attach(dc, DistLocationTarget::Ibr, name);
         }
-        self.diagnostics.push(Diagnostic::of(&crate::diagnostics::codes::READ_GLM_SOLAR_EQUIVALENT,format!("inverter {original}: fixed solar irradiance/temperature, simple efficiency, constant power factor and native clipping produce {power} VA; scheduled P_Out/Q_Out and V_base do not set this mode's dispatch; DC/thermal metadata remains in source")));
+        if prime_mover == IbrPrimeMover::Pv {
+            self.diagnostics.push(Diagnostic::of(&crate::diagnostics::codes::READ_GLM_SOLAR_EQUIVALENT,format!("inverter {original}: fixed solar irradiance/temperature, simple efficiency, constant power factor and native clipping produce {power} VA; scheduled P_Out/Q_Out and V_base do not set this mode's dispatch; DC/thermal metadata and inactive load-following settings remain in source")));
+        }
+
         Ok(())
     }
-    fn solar_inverter_mode(&self, key: ObjectKey) -> Result<bool, Error> {
+    fn inverter_input(&mut self, key: ObjectKey) -> Result<(ObjectKey, IbrPrimeMover, f64), Error> {
+        let children = self
+            .index
+            .objects()
+            .iter()
+            .filter(|o| {
+                matches!(class(o), "solar" | "battery") && self.index.parent(o.key()) == Some(key)
+            })
+            .map(crate::glm::GlmObject::key)
+            .collect::<Vec<_>>();
+        let [child] = children.as_slice() else {
+            return Err(self.error(
+                key,
+                "inverter snapshot requires exactly one supported solar or battery child",
+            ));
+        };
+        // LOAD_FOLLOWING fields cannot affect the required CONSTANT_PF mode.
+        // Resolve object references even when the native controller is inactive.
+        self.index.resolve_property(key, "sense_object")?;
+        if class(&self.index.objects()[child.ordinal()]) == "solar" {
+            Ok((*child, IbrPrimeMover::Pv, self.solar_dc_power(*child)?))
+        } else {
+            self.idle_battery(*child)?;
+            Ok((*child, IbrPrimeMover::Battery, 0.0))
+        }
+    }
+    fn fixed_inverter_mode(&self, key: ObjectKey) -> Result<bool, Error> {
         if self.text(key, "inverter_type")?.as_deref() != Some("FOUR_QUADRANT")
             || self
                 .text(key, "four_quadrant_control_mode")?
                 .is_some_and(|v| v != "CONSTANT_PF")
         {
-            return Err(self.error(key,"solar inverter requires FOUR_QUADRANT CONSTANT_PF; other static/control modes remain under implementation"));
+            return Err(self.error(key,"fixed inverter requires FOUR_QUADRANT CONSTANT_PF; other static/control modes remain under implementation"));
         }
         if self
             .text(key, "use_multipoint_efficiency")?
