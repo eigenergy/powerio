@@ -442,8 +442,9 @@ A `MONITOR BRANCHES` line with nothing after it opens a block of branch lines
 that runs to the next `END`, and `MONITOR INTERFACE` always opens one. Inside a
 block, `i j` names circuit `1` and `i j ckt` names that circuit, and a line in
 the contingency file spelling, `[BRANCH | LINE] FROM BUS i TO BUS j [CIRCUIT
-c]`, names the same branch. A `MONITOR BRANCH` line in that spelling is a block
-of one branch, and the writer states it as one. A third `TO BUS k`, which names
+c]`, names the same branch, with or without a leading `MONITOR`. A `MONITOR
+BRANCH` line in that spelling outside a block is a block of one branch, and
+the writer states it as one. A third `TO BUS k`, which names
 a three winding transformer, has no `BranchRef`, so the line is kept as text. A
 scope is one
 of `ALL BUSES`, `SUBSYSTEM name`, `BUS n`, `AREA n`, `ZONE n`, `OWNER n`, and

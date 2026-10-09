@@ -6,11 +6,11 @@
   `MONITOR BRANCH FROM BUS i TO BUS j [CIRCUIT c]` (also `LINE`, `CKT`, and
   bare bus numbers) reads as a one-branch `Branches` statement, and a
   `MONITOR BRANCHES` or `MONITOR INTERFACE` block reads
-  `[BRANCH | LINE] FROM BUS i TO BUS j [CIRCUIT c]` lines beside `i j [ckt]`;
-  both were kept as text before. The writer states a one-branch statement as
-  a block, which reads back to the same set. A line naming a third bus, a
-  three winding transformer, stays text, because a monitored branch
-  reference holds two buses.
+  `[MONITOR] [BRANCH | LINE] FROM BUS i TO BUS j [CIRCUIT c]` lines beside
+  `i j [ckt]`; both were kept as text before. The writer states a one-branch
+  statement as a block, which reads back to the same set. A line naming a
+  third bus, a three winding transformer, stays text, because a monitored
+  branch reference holds two buses.
 
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW

@@ -1246,3 +1246,51 @@ fn a_three_bus_monitor_branch_line_stays_text() {
     assert_eq!(branches, &[]);
     assert_eq!(kept_text(retained), ["FROM BUS 101 TO BUS 102 TO BUS 103"]);
 }
+
+#[test]
+fn a_block_line_may_repeat_the_monitor_keyword() {
+    let parsed = MonitoredSet::parse(
+        "MONITOR BRANCHES\n MONITOR BRANCH FROM BUS 11 TO BUS 22 CIRCUIT 1\nEND\nEND\n",
+    )
+    .expect("parse");
+    assert_eq!(mon_codes(&parsed), [] as [&str; 0]);
+    assert_eq!(
+        parsed.set.statements,
+        [MonitorStatement::Branches {
+            branches: vec![BranchRef {
+                from: BusId(11),
+                to: BusId(22),
+                circuit: "1".into(),
+            }],
+            retained: Vec::new(),
+        }]
+    );
+
+    // All three spellings in one block bind, and nothing is kept as text.
+    let parsed = MonitoredSet::parse(
+        "MONITOR BRANCHES\n\
+         101 102 2\n\
+         FROM BUS 102 TO BUS 103 CKT 1\n\
+         MONITOR LINE FROM BUS 103 TO BUS 201 CIRCUIT '1'\n\
+         END\n\
+         END\n",
+    )
+    .expect("parse");
+    assert_eq!(mon_codes(&parsed), [] as [&str; 0]);
+    let MonitorStatement::Branches { branches, retained } = &parsed.set.statements[0] else {
+        panic!("a branch block");
+    };
+    assert_eq!(branches.len(), 3);
+    assert_eq!(retained, &[]);
+    assert_eq!(parsed.set.retained, []);
+    check_mon_fixed_point(&parsed);
+    let resolution = parsed
+        .set
+        .resolve(&select_network(), &parse_sub("selectors.sub").set);
+    assert_eq!(rows(&resolution.branch_rows), [1, 2, 3]);
+    assert!(
+        resolution.unresolved.is_empty(),
+        "{:?}",
+        resolution.unresolved
+    );
+}
