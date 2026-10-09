@@ -257,6 +257,7 @@ pub struct RawDss {
     // to offsets in the existing flattened history; no extra history tree.
     source_replay: BTreeMap<usize, SourceReplay>,
     frequency: super::frequency::FrequencyState,
+    solution_mode: super::solution_mode::SolutionMode,
     /// Diagnostic records retained, against `MAX_TOTAL_DIAGNOSTICS`. Survives
     /// `clear` with the channel it counts.
     total_diagnostics: usize,
@@ -276,6 +277,9 @@ pub(super) struct SourceReplay {
     // MakeLike re-enables the target independently of the copied property
     // history. Wildcard Enable/Disable changes this without an engine Edit.
     pub enabled: bool,
+    // Native object references bind during assignment, not after all objects
+    // have been declared. A later overwrite cannot erase an earlier failure.
+    pub invalid_reference: Option<String>,
 }
 
 impl SourceReplay {
@@ -289,6 +293,23 @@ impl SourceReplay {
 }
 
 impl RawDss {
+    fn option_assignment(&mut self, position: &mut usize, name: &str, value: &Value) {
+        self.frequency.assignment(position, name, value, &self.vars);
+        if *position == 8 {
+            self.solution_mode.assign(&value.text);
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn solution_mode(&self) -> &'static str {
+        self.solution_mode.name()
+    }
+
+    #[cfg(test)]
+    pub(super) fn unresolved_mode_transition(&self) -> Option<&'static str> {
+        self.solution_mode.unresolved_transition()
+    }
+
     pub(super) fn snapshot_frequency(&self) -> f64 {
         self.frequency.snapshot()
     }
@@ -611,11 +632,10 @@ impl<L: Loader> Executor<'_, L> {
                             if p.value.text.is_empty() {
                                 break;
                             }
-                            self.raw.frequency.assignment(
+                            self.raw.option_assignment(
                                 &mut position,
                                 &p.name.unwrap_or_default().to_ascii_lowercase(),
                                 &p.value,
-                                &self.raw.vars,
                             );
                         }
                     }
@@ -794,6 +814,7 @@ impl<L: Loader> Executor<'_, L> {
             // written values from materialized defaults.
             self.raw.circuit_name = Some(name);
             self.raw.frequency.new_circuit();
+            self.raw.solution_mode = super::solution_mode::SolutionMode::default();
             let idx = self.make_object("vsource", "source".into());
             self.consume_and_apply(idx, scan, ctx);
             return;
@@ -862,9 +883,7 @@ impl<L: Loader> Executor<'_, L> {
             }
             let name = p.name.unwrap_or_default().to_ascii_lowercase();
             if self.raw.charge_preserved() {
-                self.raw
-                    .frequency
-                    .assignment(&mut position, &name, &p.value, &self.raw.vars);
+                self.raw.option_assignment(&mut position, &name, &p.value);
                 self.raw.options.push((name, p.value));
             }
         }
@@ -1281,6 +1300,7 @@ impl<L: Loader> Executor<'_, L> {
                     constructor_frequency: frequency,
                     resets: Vec::new(),
                     enabled: true,
+                    invalid_reference: None,
                 },
             );
         }
@@ -1320,6 +1340,9 @@ impl<L: Loader> Executor<'_, L> {
                 .get_mut(&target)
                 .expect("source replay initialized");
             target.enabled = true;
+            if target.invalid_reference.is_none() {
+                target.invalid_reference = replay.invalid_reference;
+            }
             target.resets.push((base, replay.constructor_frequency));
             target.resets.extend(
                 replay
@@ -1327,6 +1350,41 @@ impl<L: Loader> Executor<'_, L> {
                     .into_iter()
                     .map(|(offset, frequency)| (base + offset, frequency)),
             );
+        }
+    }
+
+    fn source_reference(&mut self, idx: usize, property: &RawProp) {
+        if !self.raw.source_replay.contains_key(&idx) || property.value.text.is_empty() {
+            return;
+        }
+        let (class, defaults): (&str, &[&str]) = match property.name.as_deref() {
+            Some("daily" | "yearly" | "duty") => ("loadshape", &["default"]),
+            Some("spectrum") => (
+                "spectrum",
+                &[
+                    "default",
+                    "defaultload",
+                    "defaultgen",
+                    "defaultvsource",
+                    "linear",
+                    "pwm6",
+                    "dc6",
+                ],
+            ),
+            _ => return,
+        };
+        let name = property.value.text.to_ascii_lowercase();
+        if (class == "loadshape" && name == "none")
+            || (!defaults.contains(&name.as_str()) && self.raw.find(class, &name).is_none())
+        {
+            let replay = self.raw.source_replay.get_mut(&idx).unwrap();
+            if replay.invalid_reference.is_none() {
+                replay.invalid_reference = Some(format!(
+                    "{} references missing {class} object {:?} at assignment (native error 401)",
+                    property.name.as_deref().unwrap(),
+                    property.value.text,
+                ));
+            }
         }
     }
 
@@ -1434,6 +1492,7 @@ impl<L: Loader> Executor<'_, L> {
                 continue;
             }
             self.raw.total_props += 1;
+            self.source_reference(idx, &p);
             if let Some(replay) = self.raw.source_replay.get_mut(&idx) {
                 replay.record_property(&p);
             }

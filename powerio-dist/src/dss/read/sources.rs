@@ -34,7 +34,23 @@ impl Reader<'_> {
         }
     }
 
+    fn report_source_behavior(&mut self, raw: &RawDss) {
+        for object in raw.of_class("vsource") {
+            let settings: Vec<_> = ["daily", "yearly", "duty", "spectrum", "scantype"]
+                .into_iter()
+                .filter(|key| object.get(key).is_some_and(|v| !v.text.is_empty()))
+                .collect();
+            if !settings.is_empty() && raw.source_replay(object).enabled {
+                self.warn(&C::READ_DSS_RETAINED_SOURCE_ONLY, format!(
+                    "Vsource.{} settings {} do not change snapshot source voltages; their non-snapshot behavior remains in retained source data and is omitted from the typed equivalent",
+                    object.name, settings.join(", "),
+                ));
+            }
+        }
+    }
+
     fn resolved_sources(&mut self, raw: &RawDss) -> SourceResult<()> {
+        require_snapshot_profile(raw)?;
         // Resolve every source before modifying the reader. Then register
         // every original port before any source can allocate a virtual node.
         let mut resolved = Vec::new();
@@ -50,6 +66,7 @@ impl Reader<'_> {
             }
         }
         self.retain_disabled_sources(raw);
+        self.report_source_behavior(raw);
         let ports: Vec<_> = resolved
             .into_iter()
             .map(|(name, source, start, end)| {
@@ -183,6 +200,21 @@ fn unique_name(base: &str, used: &mut BTreeSet<String>) -> String {
     name
 }
 
+fn require_snapshot_profile(raw: &RawDss) -> SourceResult<()> {
+    if let Some(mode) = raw.unresolved_mode_transition() {
+        return Err(format!(
+            "solution mode transition {mode} requires native solved state; it cannot be reconstructed by static parsing, including after a return to snapshot mode",
+        ));
+    }
+    if raw.solution_mode() != "snapshot" {
+        return Err(format!(
+            "solution mode {} requires a separately materialized static state; its source/load behavior is not qualified by the snapshot reader",
+            raw.solution_mode(),
+        ));
+    }
+    Ok(())
+}
+
 fn staged_read(text: &str) -> MulticonductorNetwork {
     let raw = crate::dss::raw::__parse_raw_with(text, "source.dss", &mut |_: &std::path::Path| {
         Err(std::io::Error::other("no includes"))
@@ -280,6 +312,99 @@ fn pinned_source_validity() {
         findings.insert(name, case.accepted);
     }
     let output = std::env::var("POWERIO_SOURCE_VALIDITY_RESULT").expect("comparison path");
+    std::fs::write(output, serde_json::to_vec_pretty(&findings).unwrap()).unwrap();
+}
+
+#[test]
+fn snapshot_settings_validate_references_and_do_not_apply_shapes() {
+    let base = "New Circuit.c phases=1 basekv=0.24 pu=0.9 z1=[1 2]\n";
+    let plain = staged_read(base);
+    let shaped = staged_read(&format!(
+        "{base}New Loadshape.day npts=1 interval=1 mult=[0.4]\nEdit Vsource.source daily=day scantype=neg"
+    ));
+    assert_eq!(plain.sources(), shaped.sources());
+    for body in [
+        "Edit Vsource.source daily=later\nNew Loadshape.later npts=1 mult=[1]",
+        "Edit Vsource.source daily=missing daily=default",
+        "Edit Vsource.source enabled=no spectrum=missing",
+        "New Loadshape.none npts=1 mult=[1]\nEdit Vsource.source duty=none",
+        "Edit Vsource.source scantype=nonsense",
+        "Set mode=daily",
+    ] {
+        let raw = crate::dss::raw::__parse_raw_with(
+            &format!("{base}{body}"),
+            "profile.dss",
+            &mut |_: &std::path::Path| Err(std::io::Error::other("no includes")),
+        );
+        assert!(staged_from_raw(&raw).is_err(), "{body}");
+    }
+    assert!(
+        staged_read(&format!("{base}Set mode=daily\nSolve mode=snapshot"))
+            .sources()
+            .len()
+            == 1
+    );
+}
+
+#[test]
+#[ignore = "requires pinned native source-profile observations"]
+fn pinned_source_profiles() {
+    #[derive(serde::Deserialize)]
+    struct Case {
+        script: String,
+        mode: Option<String>,
+        profile_accepted: bool,
+        emf: Option<Vec<[f64; 2]>>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Report {
+        cases: BTreeMap<String, Case>,
+        failures: Vec<String>,
+    }
+    let path = std::env::var("POWERIO_SOURCE_PROFILE_ORACLE").expect("oracle report path");
+    let report: Report = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert!(report.failures.is_empty());
+    assert!(!report.cases.is_empty());
+    let mut findings = BTreeMap::new();
+    for (name, case) in report.cases {
+        let raw = crate::dss::raw::__parse_raw_with(
+            &case.script,
+            "profile.dss",
+            &mut |_: &std::path::Path| Err(std::io::Error::other("no includes")),
+        );
+        if let Some(mode) = case.mode {
+            assert_eq!(raw.solution_mode(), mode, "{name}");
+        }
+        let result = staged_from_raw(&raw);
+        assert_eq!(result.is_ok(), case.profile_accepted, "{name}: {result:?}");
+        if case.profile_accepted {
+            let expected = case.emf.expect("native snapshot EMF");
+            let source = resolve(
+                &raw,
+                raw.find("vsource", "source").unwrap(),
+                raw.snapshot_frequency(),
+            )
+            .unwrap();
+            assert_eq!(expected.len(), source.emf.len());
+            for (expected, actual) in expected.iter().zip(source.emf) {
+                let expected = num_complex::Complex64::new(expected[0], expected[1]);
+                assert!(
+                    (actual - expected).norm() <= 1e-6 + 1e-9 * expected.norm(),
+                    "{name}: {actual} != {expected}"
+                );
+            }
+        } else {
+            assert!(
+                result.unwrap_err().iter().any(|d| {
+                    d.code() == C::READ_DSS_SOURCE_UNRESOLVED.code
+                        && d.severity() == powerio_core::DiagnosticSeverity::Error
+                }),
+                "{name}"
+            );
+        }
+        findings.insert(name, case.profile_accepted);
+    }
+    let output = std::env::var("POWERIO_SOURCE_PROFILE_RESULT").expect("comparison path");
     std::fs::write(output, serde_json::to_vec_pretty(&findings).unwrap()).unwrap();
 }
 

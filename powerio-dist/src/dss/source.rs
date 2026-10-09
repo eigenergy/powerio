@@ -182,19 +182,14 @@ impl State {
             }
             "puzideal" => self.ideal_z = complex(value, vars)?,
             "sequence" => {
-                self.sequence = match value.text.to_ascii_lowercase().as_str() {
-                    "positive" | "pos" | "p" => 1.0,
-                    "negative" | "neg" | "n" => -1.0,
-                    "zero" | "z" => 0.0,
-                    _ => return Err("unqualified source sequence token".into()),
-                }
+                self.sequence = source_enum(
+                    &value.text,
+                    &[("negative", -1.0), ("zero", 0.0), ("positive", 1.0)],
+                )?;
             }
             "model" => {
-                self.quasi_ideal = match value.text.to_ascii_lowercase().as_str() {
-                    "ideal" | "i" => true,
-                    "thevenin" | "t" => false,
-                    _ => return Err("unqualified source model token".into()),
-                }
+                self.quasi_ideal =
+                    source_enum(&value.text, &[("thevenin", 0.0), ("ideal", 1.0)])? > 0.0;
             }
             "bus1" => {
                 self.bus1.clone_from(&value.text);
@@ -209,10 +204,15 @@ impl State {
                 self.bus2.clone_from(&value.text);
                 self.bus2_defined = true;
             }
-            // These do not change a fundamental-frequency snapshot's source
-            // primitive. Time-varying shapes and disabled objects are handled
-            // by the caller's profile validation before lowering.
-            "scantype" | "spectrum" | "yearly" | "daily" | "duty" | "enabled" => {}
+            "scantype" => {
+                source_enum(
+                    &value.text,
+                    &[("none", -1.0), ("zero", 0.0), ("positive", 1.0)],
+                )?;
+            }
+            // References were validated at assignment in the raw layer.
+            // The reader separately checks the selected solution profile.
+            "spectrum" | "yearly" | "daily" | "duty" | "enabled" => {}
             _ => return Err(format!("unqualified source property {key}")),
         }
         Ok(())
@@ -411,6 +411,20 @@ fn scaled_division(numerator: Complex64, denominator: Complex64) -> Complex64 {
     }
 }
 
+fn source_enum(value: &str, choices: &[(&str, f64)]) -> Result<f64> {
+    // Native source enums compare one leading character but reject values
+    // longer than the corresponding canonical name (MinChars=MaxChars=1).
+    choices
+        .iter()
+        .find(|(name, _)| {
+            !value.is_empty()
+                && value.len() <= name.len()
+                && value.as_bytes()[0].eq_ignore_ascii_case(&name.as_bytes()[0])
+        })
+        .map(|(_, ordinal)| *ordinal)
+        .ok_or_else(|| format!("invalid source enum value {value:?}"))
+}
+
 fn complex(value: &Value, vars: &VarMap) -> Result<Complex64> {
     let v = value.to_vector(Some(vars)).map_err(|e| e.to_string())?;
     let [r, x] = v.as_slice() else {
@@ -428,6 +442,9 @@ pub(super) fn resolve(
     snapshot_frequency: f64,
 ) -> Result<ResolvedSource> {
     let replay = raw.source_replay(object);
+    if let Some(error) = &replay.invalid_reference {
+        return Err(error.clone());
+    }
     let mut resets = replay.resets.iter().peekable();
     let mut state = State::new(replay.constructor_frequency)?;
     let mut start = 0;

@@ -12,6 +12,7 @@ pub mod prop;
 pub mod raw;
 pub mod read;
 mod rpn;
+mod solution_mode;
 // Calibrate the state replay before replacing the legacy source lowering.
 #[cfg(test)]
 mod source;
