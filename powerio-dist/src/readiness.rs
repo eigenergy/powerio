@@ -334,6 +334,10 @@ fn audit_untyped(net: &MulticonductorNetwork, report: &mut ElectricalReadiness) 
                 "untyped storage has unresolved static power exchange, including idling losses",
             );
         }
+        if object.class.eq_ignore_ascii_case("fault") && !explicitly_disabled {
+            report.block("READINESS.DSS.FAULT_UNRESOLVED", &object.name,
+                "enabled fault has unresolved static admittance and switching state; omitting it changes the circuit");
+        }
         if object.class.eq_ignore_ascii_case("vsource") && !explicitly_disabled {
             report.block("READINESS.DSS.SOURCE_UNRESOLVED", &object.name,
                 "untyped voltage source must remain explicitly disabled; enabling it requires electrical source conversion");

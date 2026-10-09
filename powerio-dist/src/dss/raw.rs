@@ -1055,13 +1055,18 @@ impl<L: Loader> Executor<'_, L> {
             return;
         };
         let key = (class.to_ascii_lowercase(), name.to_ascii_lowercase());
+        let diagnostic = if class.eq_ignore_ascii_case("transformer") {
+            &C::READ_DSS_TRANSFORMER_UNRESOLVED
+        } else {
+            &C::READ_DSS_LINE_UNRESOLVED
+        };
         let Some(&idx) = self
             .raw
             .index
             .get(&key)
-            .filter(|_| class.eq_ignore_ascii_case("line"))
+            .filter(|_| matches!(class.to_ascii_lowercase().as_str(), "line" | "transformer"))
         else {
-            self.raw.warn(&C::READ_DSS_LINE_UNRESOLVED, ctx(format!("{verb} {class}.{name}: terminal state requires an existing ordinary Line; other classes remain unresolved")));
+            self.raw.warn(diagnostic, ctx(format!("{verb} {class}.{name}: terminal state requires an existing Line or Transformer; other classes remain unresolved")));
             return;
         };
         // The native command consumes positional values even when they have
@@ -1081,16 +1086,29 @@ impl<L: Loader> Executor<'_, L> {
                 _ => None,
             }
         };
-        let (Some(terminal @ 1..=2), Some(conductor)) = (number(terminal, 0), number(conductor, 0))
-        else {
-            self.raw.warn(&C::READ_DSS_LINE_UNRESOLVED, ctx(format!("{verb} Line.{name}: explicit terminal 1 or 2 and a nonnegative conductor index are required")));
+        let limit = if class.eq_ignore_ascii_case("line") {
+            2
+        } else {
+            32
+        };
+        let (Some(terminal), Some(conductor)) = (number(terminal, 0), number(conductor, 0)) else {
+            self.raw.warn(diagnostic, ctx(format!("{verb} {class}.{name}: explicit terminal and a nonnegative conductor index are required")));
             return;
         };
+        if terminal == 0 || terminal > limit {
+            self.raw.warn(
+                diagnostic,
+                ctx(format!(
+                    "{verb} {class}.{name}: terminal index is outside the supported range"
+                )),
+            );
+            return;
+        }
         if self.raw.total_props >= MAX_TOTAL_PROPS
             || self.retained_property_count(idx) >= MAX_OBJECT_PROPS
         {
             self.raw.halt(ctx(
-                "line terminal history exceeds the supported work budget".into(),
+                "element terminal history exceeds the supported work budget".into(),
             ));
             return;
         }
@@ -1107,14 +1125,16 @@ impl<L: Loader> Executor<'_, L> {
             .unwrap()
             .events
             .push(event);
-        self.raw
-            .geometry_timeline
-            .push(super::geometry::timeline::Action::Terminal {
-                object: idx,
-                terminal,
-                conductor,
-                closed: verb == "close",
-            });
+        if class.eq_ignore_ascii_case("line") {
+            self.raw
+                .geometry_timeline
+                .push(super::geometry::timeline::Action::Terminal {
+                    object: idx,
+                    terminal,
+                    conductor,
+                    closed: verb == "close",
+                });
+        }
         self.raw.active = Some(idx);
     }
 
@@ -1172,6 +1192,15 @@ impl<L: Loader> Executor<'_, L> {
         let Some((class, name)) = parameter.value.text.split_once('.') else {
             return; // Native Enable/Disable requires an explicit class.
         };
+        if class.eq_ignore_ascii_case("fault") {
+            self.raw.warn(
+                &C::READ_DSS_FAULT_UNRESOLVED,
+                ctx(format!(
+                    "{canonical} Fault.{name}: switching state is not materialized"
+                )),
+            );
+            return;
+        }
         if class.eq_ignore_ascii_case("line") {
             self.do_line_enabled(name, canonical == "enable", ctx);
             return;

@@ -123,6 +123,8 @@ pub mod codes {
             "static UseActual loadshape power could not be resolved";
         READ_DSS_SOURCE_UNRESOLVED = "READ.DSS.SOURCE_UNRESOLVED", Error,
             "a voltage source is invalid or outside the qualified static profile", category = Data;
+        READ_DSS_FAULT_UNRESOLVED = "READ.DSS.FAULT_UNRESOLVED", Error,
+            "a fault switching state could not be resolved into the static electrical snapshot", category = Data;
         READ_DSS_TRANSFORMER_UNRESOLVED = "READ.DSS.TRANSFORMER_UNRESOLVED", Error,
             "a transformer definition could not be resolved into the static electrical snapshot";
         READ_DSS_LINE_UNRESOLVED = "READ.DSS.LINE_UNRESOLVED", Error,

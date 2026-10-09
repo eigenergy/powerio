@@ -1636,7 +1636,7 @@ and `YYDXn`; the current `GYDBal` first pass matches every observation exactly.
 No threshold was relaxed or observation removed.
 
 The broader external script audit recognizes both `New Circuit` and
-`New object=Circuit` spellings: 55 of 61 entry points parse and retain typed
+`New object=Circuit` spellings: 56 of 61 entry points parse and retain typed
 network equality through IR. The expanded inventory includes IEEE34, IEEE37
 and IEEE123 master cases previously missed by that scan. It also includes
 auxiliary and fault-study scripts; these counts are not qualified-feeder totals.
@@ -1644,9 +1644,11 @@ auxiliary and fault-study scripts; these counts are not qualified-feeder totals.
 The reproducible inventory verifies all 351 acquired files against repository
 commits in the catalog and their byte, SHA-256 and Git-blob hashes. Fifty-four
 entries can emit canonical DSS; the variable-slip induction-machine case
-remains blocked. The six parse refusals involve fault-study/direct-mode state
-or an open transformer terminal. None of these counts proves a native
-electrical match. Canonical GLM remains unavailable for this DSS inventory.
+remains blocked. Five parse refusals involve fault-study/direct-mode state.
+The DG protection case now reads its fixed open transformer through IR, but
+its enabled Fault remains unresolved and blocks electrical emission. None of
+these counts proves a native electrical match. Canonical GLM remains unavailable
+for this DSS inventory.
 
 ```sh
 python evals/gridlabd/dss_corpus_audit.py --source-root /path/to/acquisition-with-manifest --bridge /path/to/dist_network --output /tmp/new-dss-audit
@@ -2086,6 +2088,44 @@ IEEE118 now parses through IR and emits canonical DSS. Its original native
 baseline does not converge at the pinned validation settings, so no whole-case
 electrical qualification is claimed. Its PV-generator behavior and the broader
 generator-model audit remain separate work.
+
+### Fixed OpenDSS transformer terminals
+
+Explicit Open/Close commands bind an existing Transformer and materialize its
+final conductor states. A conductor index of zero changes phase conductors
+only; the neutral remains in its current state. The unchanged typed winding
+circuit moves open ports to internal zero-current nodes. Closed non-grounded
+ports use ideal contacts; closed grounded returns stay directly on earth.
+Every external conductor receives the pinned engine's 1e-12 S stabilization
+when any port opens. Delta's unused conductor does not create an isolated
+internal node. Two-phase delta retains all three hot terminals of its open
+chain, including an explicit third bus node.
+
+The native oracle measures every original terminal/conductor, including the
+neutral and unused slots, plus aggregate external power and losses. It verifies
+the declared winding/contact/stabilization inventory and observes only those
+components. Internal element losses do not replace the original port loss.
+
+```sh
+python evals/gridlabd/dss_open_transformer_oracle.py --bridge /path/to/dist_network --output /tmp/new-open-transformers
+POWERIO_OPEN_TRANSFORMER_CASES=/tmp/new-open-transformers cargo test -p powerio-dist --test dss_open_transformer export_edited_open_transformer_windings -- --ignored
+python evals/gridlabd/dss_open_transformer_oracle.py --bridge /path/to/dist_network --output /tmp/new-open-transformers --check-edits
+```
+
+Eighty-four cases cover one/two/three phases, delta/wye connections, either
+terminal, phase/neutral/unused-slot openings and three-winding units. All pass
+canonical output, IR equality, reimport and changed-line negative controls.
+All 84 actual typed winding-resistance/primary-tap edits also match independent
+native edits, with 4,408 complex observations per pass. The unchanged input
+fails each edited comparison as a negative control.
+
+Layout/XfmrCode/copy changes after terminal commands and disabled transformers
+with terminal commands still fail explicitly. Ordinary parameter edits preserve
+the materialized state; reclosed ports use the ordinary transformer mapping.
+Active protection execution is excluded. Enabled unconverted Fault objects now
+block electrical use and canonical emission instead of being omitted. The
+public DG protection input therefore gains parsing/IR support, without a
+whole-case electrical qualification or canonical DSS claim.
 
 ### IEEE9500 PV phases and static BatchEdit commands
 

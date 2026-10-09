@@ -564,6 +564,19 @@ the current typed matrix, including edits after reimport. Copied state,
 competing specifications, curves and delta resistance remain unsupported in
 this profile. Native tests cover thirty phase/frequency/impedance cases.
 
+OpenDSS Transformer Open/Close commands preserve fixed conductor states for
+one-, two- and three-phase circuits. Open ports move to internal zero-current
+terminals while retaining editable winding parameters; ideal contacts preserve
+closed connections. The equivalent includes the native external diagonal
+stabilization. A whole-terminal command changes phase conductors, leaving the
+neutral state unchanged. Two-phase delta windings retain their third hot
+terminal. Native checks cover 84 cases through IR, canonical DSS and reimport,
+including three-winding units. Aggregate losses must use the external ports.
+Layout, XfmrCode or copy changes after terminal commands, and disabled units
+with terminal commands, remain unresolved. Canonical GLM mapping of these
+circuits remains unfinished. Enabled unconverted Fault objects block electrical
+emission until their static admittance and switching state are represented.
+
 OpenDSS Generator model 6 delegates its voltage/current law to an external
 library. The three-phase delta `IndMach012a` fixed-slip profile reads into the
 existing full shunt admittance, including positive- and negative-sequence

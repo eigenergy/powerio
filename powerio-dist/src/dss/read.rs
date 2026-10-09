@@ -36,6 +36,7 @@ mod capacitors;
 mod lines;
 mod motors;
 mod open_lines;
+mod open_transformers;
 mod reactors;
 mod sources;
 mod storage;
@@ -1072,15 +1073,39 @@ impl Reader<'_> {
         if !xhl_specified {
             self.defaulted("transformer", &obj.name, "xhl");
         }
+        let native_ports: Vec<Vec<String>> = if raw.line_history[&index]
+            .events
+            .iter()
+            .any(|e| e.terminal_state.is_some())
+        {
+            windings
+                .iter()
+                .enumerate()
+                .map(|(i, w)| {
+                    let spec = w.bus.clone().unwrap_or_else(|| {
+                        Value::new(format!("{}_w{}", obj.name, i + 1)).to_bus_spec()
+                    });
+                    self.terminals(&spec, phases, phases + 1, phases + 1)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let out = self.finish_windings(&windings, phases, &obj.name);
 
-        Ok(DistTransformer {
-            name: obj.name.clone(),
-            windings: out,
-            xsc_pct,
-            phases,
-            extras,
-        })
+        self.transformer_terminal_state(
+            obj,
+            raw,
+            index,
+            DistTransformer {
+                name: obj.name.clone(),
+                windings: out,
+                xsc_pct,
+                phases,
+                extras,
+            },
+            &native_ports,
+        )
     }
 
     /// Resolves winding bus specs, terminal maps, and SI ratings, recording
@@ -1103,13 +1128,13 @@ impl Reader<'_> {
                 .bus
                 .clone()
                 .unwrap_or_else(|| Value::new(format!("{name}_w{}", i + 1)).to_bus_spec());
-            // Each winding terminal has phases + 1 conductors; wye keeps the
-            // neutral in the map, delta leaves the unused conductor out. A
-            // delta winding is wired line to line, so a single phase delta leg
-            // (an open delta secondary, bus spec `.1.2`) still spans two phase
-            // terminals; keep both rather than collapsing to one.
-            let keep = if w.conn_delta {
-                phases.max(2)
+            // Each winding terminal has phases + 1 conductors; wye keeps its
+            // neutral in the map. Delta with one or two phases uses an open
+            // chain: it needs the
+            // additional hot terminal. Only a closed three-phase delta has
+            // an unused trailing conductor.
+            let keep = if w.conn_delta && phases >= 3 {
+                phases
             } else {
                 phases + 1
             };
