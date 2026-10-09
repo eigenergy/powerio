@@ -9,6 +9,7 @@ pub(in crate::dss) struct State {
     pub frequency: f64,
     pub bus: [String; 2],
     pub enabled: bool,
+    pub closed: [Vec<bool>; 2],
     pub is_switch: bool,
     pub normamps: f64,
     pub emergamps: f64,
@@ -42,6 +43,7 @@ impl State {
             frequency,
             bus: [format!("{name}_1"), format!("{name}_2")],
             enabled: true,
+            closed: [vec![true; 3], vec![true; 3]],
             is_switch: false,
             normamps: 400.0,
             emergamps: 600.0,
@@ -70,6 +72,35 @@ impl State {
         state.update_kxg();
         state.recalc();
         state
+    }
+
+    fn resize_terminals(&mut self, n: usize) {
+        if self.n != n {
+            self.closed = [vec![true; n], vec![true; n]];
+        }
+        self.n = n;
+    }
+
+    pub fn set_closed(
+        &mut self,
+        terminal: usize,
+        conductor: usize,
+        closed: bool,
+    ) -> Result<(), String> {
+        let end = self
+            .closed
+            .get_mut(terminal.wrapping_sub(1))
+            .ok_or("invalid Line terminal")?;
+        if conductor > self.n {
+            return Err("Line terminal command conductor exceeds its current count".into());
+        }
+        if conductor == 0 {
+            end.fill(closed);
+        } else {
+            end[conductor - 1] = closed;
+        }
+        self.dirty = true;
+        Ok(())
     }
 
     fn update_kxg(&mut self) {
@@ -110,7 +141,7 @@ impl State {
         self.units_convert = conversion(code.units, self.units);
         self.normamps = code.normamps;
         self.emergamps = code.emergamps;
-        self.n = code.n;
+        self.resize_terminals(code.n);
         self.sequence.model = code.sequence;
         if code.sequence {
             self.sequence.values = code.seq;
@@ -132,7 +163,7 @@ impl State {
         if self.n != source.n {
             self.dirty = true;
         }
-        self.n = source.n;
+        self.resize_terminals(source.n);
         self.frequency = source.frequency;
         self.enabled = true;
         self.normamps = source.normamps;
@@ -258,7 +289,7 @@ impl State {
             if !self.sequence.model {
                 return Err("illegal matrix-mode Line phase change (native error 18101)".into());
             }
-            self.n = n;
+            self.resize_terminals(n);
             self.recalc();
         }
         self.dirty = true;

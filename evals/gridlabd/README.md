@@ -1377,3 +1377,40 @@ references remain retained on import; same-format source replay is unaffected.
 This result qualifies the feeder's static DSS/IR/DSS path. It does not qualify
 its time series or canonical GridLAB-D emission, which still reports unsupported
 additional tables and transformer details.
+
+### Fixed OpenDSS Line terminal states
+
+`dss_terminal_state_oracle.py` checks 38 synthetic native cases through import,
+IR and first/repeated canonical DSS output. It covers one through four
+conductors, partial and whole-terminal opens, both ends, reclosure, equal and
+changed conductor counts, `LineCode` assignment, `MakeLike`, explicit-neutral
+opens, and zero charging. Every opened typed matrix is compared directly with
+native `YPrim`; bus voltages and physical line-port currents and powers are
+compared after both canonical cycles. A separately initialized native circuit
+with the wrong fixed state must fail the electrical comparison.
+
+```sh
+cargo build -p powerio --example dist_network
+python evals/gridlabd/dss_terminal_state_oracle.py \
+  --bridge target/debug/examples/dist_network \
+  --output /path/to/new-terminal-state-results
+```
+
+Ordinary Line `Open`/`Close` commands bind at execution time and replay in
+property/copy/solve order. Native conductor-count changes reset the contacts;
+a same-size `MakeLike` keeps the destination's contacts. Fixed open ports use
+the native zero-current Schur complement, including the pinned engine's
+`1e-12 S` diagonal stabilization, represented by an existing typed shunt and
+ideal external contacts. Effective linecodes remain available, contact ratings
+are retained, and unsupported line metadata is diagnosed as source-only.
+No new IR type or solver dependency is introduced.
+
+The DSS writer preserves reciprocal coupled/unequal shunts with scalar
+impedance branches and diagonal corrections; nonreciprocal matrices use the
+existing coupled-source equivalent. This avoids collapsing a symmetric matrix
+to one scalar and avoids unnecessary cancellation in reciprocal circuits.
+Already-exact scalar delta shunts keep their compact native expression.
+Geometry-derived lines still require calculated impedances before conversion.
+Commands on other device classes, omitted/invalid terminal indices, and
+out-of-range conductor indices remain explicit refusals. Active switching and
+protection execution remain outside this static profile.

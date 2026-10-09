@@ -75,6 +75,10 @@ impl Reader<'_> {
         true
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "ordered line resolution and typed lowering stay in one pass"
+    )]
     pub(super) fn resolved_lines(&mut self, raw: &RawDss) -> LineResult<()> {
         self.retain_line_definitions(raw);
         let mut used: BTreeSet<_> = raw
@@ -169,8 +173,12 @@ impl Reader<'_> {
                     "Line.{} has no declared length unit: a one-meter electrical equivalent is used and the source length is retained in extras; no geographic distance is inferred",object.name,
                 ));
             }
+            if state.closed.iter().flatten().any(|closed| !closed) {
+                self.open_line(raw, &line, &code, &state.closed)?;
+            } else {
+                self.net.lines_mut().push(line);
+            }
             self.net.line_codes_mut().push(code);
-            self.net.lines_mut().push(line);
         }
         Ok(())
     }

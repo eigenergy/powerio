@@ -28,8 +28,8 @@ use crate::model::{
 use super::read::delta_edges;
 use super::{lex, prop};
 
+mod admittance_shunts;
 mod asymmetric_pair;
-mod asymmetric_shunts;
 mod ideal_switches;
 mod ideal_transformers;
 mod loads;
@@ -2177,7 +2177,7 @@ impl DssWriter {
 
     fn shunts(&mut self, net: &MulticonductorNetwork) {
         for (index, sh) in net.shunts().iter().enumerate() {
-            if self.asymmetric_shunt(net, sh, index) {
+            if self.full_admittance_shunt(net, sh, index) {
                 continue;
             }
             let stashed_delta = shunt_stashed_delta(sh);
@@ -4313,23 +4313,21 @@ mod tests {
             ..MulticonductorNetworkTables::default()
         });
         let out = emit_dss_text(&net);
-        let line = out
-            .text
-            .lines()
-            .find(|l| l.contains("Capacitor.capx"))
-            .unwrap_or_else(|| panic!("no capacitor emitted in:\n{}", out.text));
-        assert!(line.contains("conn=wye"), "{line}");
+        assert!(out.text.contains("_pio_shunt_0_pair_"));
         assert!(
             out.render_diagnostics()
                 .iter()
-                .any(|w| w.contains("off diagonal")),
-            "{:?}",
-            out.render_diagnostics()
+                .any(|w| w.contains("full admittance"))
+        );
+        assert!(
+            !out.render_diagnostics()
+                .iter()
+                .any(|w| w.contains("only the diagonal"))
         );
     }
 
     #[test]
-    fn stashed_delta_matrix_warns_when_scalar_emission_is_lossy() {
+    fn stashed_delta_matrix_preserves_unequal_branches() {
         let (b, vs) = three_phase_source(2400.0);
         let bmat = vec![
             vec![0.003, -0.001, -0.002],
@@ -4355,18 +4353,16 @@ mod tests {
             ..MulticonductorNetworkTables::default()
         });
         let out = emit_dss_text(&net);
-        let line = out
-            .text
-            .lines()
-            .find(|l| l.contains("Capacitor.capx"))
-            .unwrap_or_else(|| panic!("no capacitor emitted in:\n{}", out.text));
-        assert!(line.contains("conn=delta"), "{line}");
+        assert!(out.text.contains("_pio_shunt_0_pair_"));
         assert!(
             out.render_diagnostics()
                 .iter()
-                .any(|w| w.contains("no scalar capacitor expression")),
-            "{:?}",
-            out.render_diagnostics()
+                .any(|w| w.contains("full admittance"))
+        );
+        assert!(
+            !out.render_diagnostics()
+                .iter()
+                .any(|w| w.contains("only the average"))
         );
     }
 

@@ -90,7 +90,9 @@ fn replay(
         }) {
             charge(budget, state.n * state.n * 6)?;
             // Native BuildY marks SystemYChanged, not each Line YPrim.
-            if !e.rebuild_only {
+            if let Some((terminal, conductor, closed)) = e.terminal_state {
+                state.set_closed(terminal, conductor, closed)?;
+            } else if !e.rebuild_only {
                 state.solve(e.frequency)?;
             }
             event += 1;

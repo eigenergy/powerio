@@ -622,6 +622,7 @@ impl<L: Loader> Executor<'_, L> {
             Some("edit") => self.do_edit(scan, ctx),
             Some("more" | "m" | "~") => self.do_more(scan, ctx),
             Some("select") => self.do_select(scan, ctx),
+            Some(canonical @ ("open" | "close")) => self.do_terminal_state(canonical, scan, ctx),
             Some("set") => self.do_set(scan),
             Some("redirect") => self.do_redirect(scan, false, ctx),
             Some("compile") => self.do_redirect(scan, true, ctx),
@@ -878,6 +879,82 @@ impl<L: Loader> Executor<'_, L> {
             return;
         };
         self.consume_and_apply(idx, scan, ctx);
+    }
+
+    fn do_terminal_state(
+        &mut self,
+        verb: &str,
+        scan: &mut Scanner,
+        ctx: &dyn Fn(String) -> String,
+    ) {
+        if !self.raw.charge_preserved() {
+            return;
+        }
+        self.raw.commands.push(RawCommand {
+            verb: verb.into(),
+            args: scan.remainder().into(),
+        });
+        let Some((class, name)) = self.object_spec(scan, ctx) else {
+            self.raw.warn(
+                &C::READ_DSS_LINE_UNRESOLVED,
+                ctx("terminal command requires an explicit element".into()),
+            );
+            return;
+        };
+        let key = (class.to_ascii_lowercase(), name.to_ascii_lowercase());
+        let Some(&idx) = self
+            .raw
+            .index
+            .get(&key)
+            .filter(|_| class.eq_ignore_ascii_case("line"))
+        else {
+            self.raw.warn(&C::READ_DSS_LINE_UNRESOLVED, ctx(format!("{verb} {class}.{name}: terminal state requires an existing ordinary Line; other classes remain unresolved")));
+            return;
+        };
+        // The native command consumes positional values even when they have
+        // parameter names. Bind the object now, not after later declarations.
+        let mut integer = || {
+            scan.next_param()
+                .map(|p| p.value.to_f64(Some(&self.raw.vars)))
+        };
+        let terminal = integer();
+        let conductor = integer();
+        let number = |v: Option<std::result::Result<f64, _>>, default: usize| -> Option<usize> {
+            match v {
+                None => Some(default),
+                Some(Ok(n)) if n.is_finite() && (0.0..=32.0).contains(&n) && n.fract() == 0.0 => {
+                    Some(n as usize)
+                }
+                _ => None,
+            }
+        };
+        let (Some(terminal @ 1..=2), Some(conductor)) = (number(terminal, 0), number(conductor, 0))
+        else {
+            self.raw.warn(&C::READ_DSS_LINE_UNRESOLVED, ctx(format!("{verb} Line.{name}: explicit terminal 1 or 2 and a nonnegative conductor index are required")));
+            return;
+        };
+        if self.raw.total_props >= MAX_TOTAL_PROPS
+            || self.retained_property_count(idx) >= MAX_OBJECT_PROPS
+        {
+            self.raw.halt(ctx(
+                "line terminal history exceeds the supported work budget".into(),
+            ));
+            return;
+        }
+        let event = super::line_history::Event {
+            position: self.raw.line_snapshot(idx),
+            frequency: self.raw.snapshot_frequency(),
+            rebuild_only: false,
+            terminal_state: Some((terminal, conductor, verb == "close")),
+        };
+        self.raw.total_props += 1;
+        self.raw
+            .line_history
+            .get_mut(&idx)
+            .unwrap()
+            .events
+            .push(event);
+        self.raw.active = Some(idx);
     }
 
     fn do_select(&mut self, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
@@ -1437,6 +1514,7 @@ impl<L: Loader> Executor<'_, L> {
                 position: self.raw.line_snapshot(idx),
                 frequency: self.raw.snapshot_frequency(),
                 rebuild_only,
+                terminal_state: None,
             };
             self.raw
                 .line_history

@@ -24,6 +24,7 @@ pub(super) struct Event {
     pub position: Snapshot,
     pub frequency: f64,
     pub rebuild_only: bool,
+    pub terminal_state: Option<(usize, usize, bool)>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]

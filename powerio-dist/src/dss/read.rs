@@ -31,6 +31,7 @@ use crate::model::{
 };
 
 mod lines;
+mod open_lines;
 mod sources;
 
 /// Upper bound on any count property (`phases`, conductors, `windings`, tap
@@ -132,15 +133,6 @@ fn snapshot_network(raw: &RawDss) -> (MulticonductorNetwork, Vec<crate::diagnost
             .push((name.clone(), value.text.clone()));
     }
     for cmd in &raw.commands {
-        if matches!(cmd.verb.as_str(), "open" | "close") {
-            rd.warn(
-                &C::READ_DSS_LINE_UNRESOLVED,
-                format!(
-                    "{} {}: fixed terminal state lowering is unfinished",
-                    cmd.verb, cmd.args,
-                ),
-            );
-        }
         rd.net
             .commands_mut()
             .push((cmd.verb.clone(), cmd.args.clone()));
@@ -2144,7 +2136,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_commands_cannot_silently_leave_the_circuit_closed() {
+    fn terminal_commands_materialize_fixed_electrical_states() {
         for command in ["Open", "Close"] {
             let source = powerio_core::Source::from_memory(
                 "state.dss",
@@ -2153,7 +2145,12 @@ mod tests {
             )
             .unwrap();
             let mut diagnostics = crate::collect::Diagnostics::new();
-            assert!(parse_dss_collecting(&source, &mut diagnostics).is_err());
+            let net = parse_dss_collecting(&source, &mut diagnostics).unwrap();
+            assert_eq!(net.shunts().len(), usize::from(command == "Open"));
+            assert_eq!(
+                net.lines().iter().any(|l| l.name == "l"),
+                command == "Close"
+            );
         }
     }
 
