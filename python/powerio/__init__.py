@@ -341,7 +341,8 @@ class BusMerge:
     ``row``, ``id``, ``from_id`` and ``to_id`` buses, ``survivor``, ``reason``
     (``"zero_impedance"``, ``"closed_switch"``, or ``"shorted"``), status, and
     ratings. ``branch_rows`` and ``switch_rows`` map each source row to its
-    merged row, or ``None`` when removed. ``diagnostics`` holds the merge's
+    merged row, or ``None`` when removed, and ``charging_shunts`` lists the
+    merged shunt rows that hold removed branches' charging. ``diagnostics`` holds the merge's
     findings, which the merged network's module carries as well.
     """
 
@@ -382,6 +383,10 @@ class BusMerge:
     @property
     def switch_rows(self) -> list[Optional[int]]:
         return self._inner.switch_rows
+
+    @property
+    def charging_shunts(self) -> list[int]:
+        return self._inner.charging_shunts
 
     @property
     def diagnostics(self) -> list[Diagnostic]:
@@ -752,6 +757,7 @@ class BalancedNetwork:
         closed_switches: bool = True,
         zero_impedance: Optional[str] = None,
         threshold: Optional[float] = None,
+        charging: str = "fold",
     ) -> "BusMerge":
         """Merge the buses closed switches and zero impedance branches join.
 
@@ -767,7 +773,9 @@ class BalancedNetwork:
         in-service generator, else a bus a generator regulates, smallest id
         first. Every element moves onto it. The merged elements and any
         branch the merge shorts are removed and listed with their source rows
-        and ratings. This network is unchanged.
+        and ratings. ``charging="fold"`` turns each removed branch's line
+        charging and line shunts into a fixed shunt at the survivor;
+        ``"drop"`` discards them. This network is unchanged.
 
         Raises :class:`PowerIODataError` for a threshold that is negative or
         not finite, or for ``"psse"`` with no threshold when the case states
@@ -778,6 +786,7 @@ class BalancedNetwork:
                 closed_switches=closed_switches,
                 zero_impedance=zero_impedance,
                 threshold=threshold,
+                charging=charging,
             )
         )
 

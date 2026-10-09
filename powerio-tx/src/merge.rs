@@ -96,6 +96,22 @@ impl std::fmt::Display for ZeroImpedanceRule {
     }
 }
 
+/// What happens to the line charging and line shunts of a branch the merge
+/// removes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MergedCharging {
+    /// Fold each removed in-service branch's terminal admittances (`B/2` per
+    /// end and any line shunts) onto the survivor as one fixed shunt. Both
+    /// ends sit at the survivor, so the merged network draws what the
+    /// unmerged one did; on a large PSS/E case this reproduces the stated
+    /// solution's reactive balance at every merged group.
+    #[default]
+    FoldToShunt,
+    /// Drop the terminal admittances with the branch.
+    Drop,
+}
+
 /// What [`BalancedNetwork::merge_buses`] merges.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -105,16 +121,27 @@ pub struct BusMergeRule {
     /// Merge the two buses of every branch this rule selects; `None` merges
     /// no branch.
     pub zero_impedance: Option<ZeroImpedanceRule>,
+    /// What happens to the charging of a removed branch.
+    pub charging: MergedCharging,
 }
 
 impl BusMergeRule {
-    /// A rule from its two parts.
+    /// A rule from its two parts, folding removed branches' charging onto
+    /// the survivors.
     #[must_use]
     pub const fn new(closed_switches: bool, zero_impedance: Option<ZeroImpedanceRule>) -> Self {
         Self {
             closed_switches,
             zero_impedance,
+            charging: MergedCharging::FoldToShunt,
         }
+    }
+
+    /// The same rule with `charging` for the removed branches' charging.
+    #[must_use]
+    pub const fn with_charging(mut self, charging: MergedCharging) -> Self {
+        self.charging = charging;
+        self
     }
 
     /// Closed switches and exact zero impedance branches: the connections
@@ -213,7 +240,8 @@ pub struct RemovedBranch {
     pub in_service: bool,
     pub r: f64,
     pub x: f64,
-    /// Total line charging susceptance, per unit; the merge drops it.
+    /// Total line charging susceptance, per unit. [`MergedCharging`] decides
+    /// whether it moves to the survivor or goes with the branch.
     pub b: f64,
     /// Thermal ratings in MVA; `0` means unlimited.
     pub rate_a: f64,
@@ -273,6 +301,11 @@ pub struct BusMerge {
     /// For each source switch row, its row in the merged network, or `None`
     /// when the merge removed it.
     pub switch_rows: Vec<Option<usize>>,
+    /// Rows of the merged network's shunt table holding the charging of a
+    /// removed branch under [`MergedCharging::FoldToShunt`], one per
+    /// in-service removed branch with nonzero terminal admittance, after the
+    /// source's own shunts. Each carries the `uid` `merged-charging:<branch>`.
+    pub charging_shunts: Vec<usize>,
     /// What the merge changed or could not do.
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -524,6 +557,41 @@ fn remap_detailed_connectivity(
     ))
 }
 
+/// Append one fixed shunt per in-service removed branch that carries terminal
+/// admittance, at its survivor, and return their rows. The shunt holds the
+/// branch's total terminal conductance and susceptance in MW and MVAr at
+/// 1 per unit, the units [`Shunt`](crate::Shunt) states.
+fn fold_charging(
+    network: &mut BalancedNetwork,
+    source: &BalancedNetwork,
+    removed: &[RemovedBranch],
+) -> Vec<usize> {
+    let scale = if source.is_normalized() {
+        1.0
+    } else {
+        source.base_mva()
+    };
+    let shunts: Vec<crate::network::Shunt> = removed
+        .iter()
+        .filter(|removed| removed.in_service)
+        .filter_map(|removed| {
+            let charging = source.branches()[removed.row].calc_terminal_charging();
+            let (g, b) = (charging.g_fr + charging.g_to, charging.b_fr + charging.b_to);
+            (g != 0.0 || b != 0.0).then(|| {
+                let mut shunt = crate::network::Shunt::new(removed.survivor, g * scale, b * scale);
+                shunt.uid = Some(format!("merged-charging:{}", removed.identity));
+                shunt
+            })
+        })
+        .collect();
+    let first = network.shunts().len();
+    let rows = (first..first + shunts.len()).collect();
+    if !shunts.is_empty() {
+        network.shunts_mut().extend(shunts);
+    }
+    rows
+}
+
 /// Bus kind importance: the survivor of a group takes the strongest kind of
 /// its members, so a merge never demotes a slack.
 pub(crate) fn kind_priority(kind: BusType) -> u8 {
@@ -570,7 +638,8 @@ impl BalancedNetwork {
     /// The merge removes the selected elements and any other branch or
     /// switch whose two buses it joined; [`BusMerge::removed_branches`] and
     /// [`BusMerge::removed_switches`] list each with its source row and
-    /// ratings. An HVDC line whose two ends merged stays, with a diagnostic.
+    /// ratings. A removed in-service branch's line charging and line shunts
+    /// become a fixed shunt at the survivor ([`MergedCharging`]). An HVDC line whose two ends merged stays, with a diagnostic.
     /// An element whose merge would join two windings of one three winding
     /// transformer stays in place and is reported. Detailed connectivity
     /// follows the survivors; when the merge joins buses its hierarchy keeps
@@ -768,7 +837,7 @@ impl BalancedNetwork {
         let mut removed_branches = Vec::new();
         let mut branch_rows = Vec::with_capacity(self.branches().len());
         let mut next = 0usize;
-        let (mut charging_dropped, mut rated) = (0usize, 0usize);
+        let (mut charged, mut rated) = (0usize, 0usize);
         for (row, branch) in self.branches().iter().enumerate() {
             let survivor = resolve(branch.from);
             if branch.from == branch.to || survivor != resolve(branch.to) {
@@ -812,7 +881,7 @@ impl BalancedNetwork {
                     ),
                 ));
             } else {
-                charging_dropped += usize::from(removed.b != 0.0);
+                charged += usize::from(removed.b != 0.0);
                 rated += usize::from(
                     removed.rate_a > 0.0 || removed.rate_b > 0.0 || removed.rate_c > 0.0,
                 );
@@ -881,18 +950,22 @@ impl BalancedNetwork {
         if let Some(branch_rule) = rule.zero_impedance
             && zero_impedance > 0
         {
+            let charging = match rule.charging {
+                MergedCharging::FoldToShunt => "folded onto the survivors as fixed shunts",
+                MergedCharging::Drop => "dropped",
+            };
             diagnostics.push(counted(
                 &codes::CANONICALIZE_MERGE_ZERO_IMPEDANCE,
                 format!(
                     "{zero_impedance} in-service branch(es) with {branch_rule} were merged \
-                     ({rated} with a thermal rating, {charging_dropped} with line charging, \
-                     which the merge drops); their flows are no longer variables of the merged \
-                     network, and BusMerge::calc_removed_flows recovers them from a solution"
+                     ({rated} with a thermal rating, {charged} with line charging, {charging}); \
+                     their flows are no longer variables of the merged network, and \
+                     BusMerge::calc_removed_flows recovers them from a solution"
                 ),
                 &[
                     ("count", zero_impedance),
                     ("rated", rated),
-                    ("charging_dropped", charging_dropped),
+                    ("charged", charged),
                 ],
             ));
         }
@@ -930,6 +1003,11 @@ impl BalancedNetwork {
             }
         }
         network.remap_buses(resolve);
+        let charging_shunts = if rule.charging == MergedCharging::FoldToShunt {
+            fold_charging(&mut network, self, &removed_branches)
+        } else {
+            Vec::new()
+        };
         network.buses_mut().retain_mut(|bus| {
             if merged_buses.contains_key(&bus.id) {
                 return false;
@@ -957,6 +1035,7 @@ impl BalancedNetwork {
             removed_switches,
             branch_rows,
             switch_rows,
+            charging_shunts,
             diagnostics,
         })
     }
@@ -972,6 +1051,7 @@ impl BalancedNetwork {
             removed_switches: Vec::new(),
             branch_rows: (0..self.branches().len()).map(Some).collect(),
             switch_rows: (0..self.switches().len()).map(Some).collect(),
+            charging_shunts: Vec::new(),
             diagnostics,
         }
     }
@@ -1627,6 +1707,42 @@ mod tests {
             .find(|d| d.code() == "CANONICALIZE.MERGE.ZERO_IMPEDANCE")
             .unwrap();
         assert_eq!(summary.details()["count"], 3);
+    }
+
+    #[test]
+    fn a_merged_jumper_s_charging_becomes_a_shunt_at_the_survivor() {
+        let mut charged = jumper(2, 3);
+        charged.b = 0.02;
+        let network = net(&[1, 2, 3], vec![line(1, 2, 0.01, 0.1), charged]);
+        let merge = network.merge_buses(&PSSE).unwrap();
+        assert_eq!(merge.charging_shunts, [0]);
+        let shunt = &merge.network.shunts()[0];
+        assert_eq!(shunt.bus, BusId(2));
+        assert!(
+            (shunt.b - 2.0).abs() < 1e-12,
+            "0.02 pu on 100 MVA is 2 MVAr"
+        );
+        assert_eq!(shunt.g, 0.0);
+        assert!(
+            shunt
+                .uid
+                .as_deref()
+                .is_some_and(|uid| uid.starts_with("merged-charging:"))
+        );
+        merge.network.validate().unwrap();
+
+        let dropped = network
+            .merge_buses(&PSSE.with_charging(MergedCharging::Drop))
+            .unwrap();
+        assert_eq!(dropped.charging_shunts, Vec::<usize>::new());
+        assert_eq!(dropped.network.shunts().as_slice(), []);
+        let summary = dropped
+            .diagnostics
+            .iter()
+            .find(|d| d.code() == "CANONICALIZE.MERGE.ZERO_IMPEDANCE")
+            .unwrap();
+        assert!(summary.message().contains("dropped"));
+        assert_eq!(summary.details()["charged"], 1);
     }
 
     #[test]

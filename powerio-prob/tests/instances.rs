@@ -413,7 +413,11 @@ fn the_zero_impedance_merge_moves_every_element_on_a_merged_bus() {
     assert_eq!(merged.switches()[0].from, BusId(5));
     assert_eq!(merged.static_var_compensators()[0].bus, BusId(5));
     assert_eq!(merged.storage()[0].bus, BusId(5));
-    let shunt = merged.shunts().last().unwrap();
+    let shunt = merged
+        .shunts()
+        .iter()
+        .find(|shunt| shunt.control.is_some())
+        .unwrap();
     assert_eq!(shunt.control.as_ref().unwrap().control_bus, Some(BusId(5)));
     assert_eq!(
         merged.generators().last().unwrap().regulated_bus,

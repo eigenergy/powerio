@@ -888,6 +888,8 @@ class BusMerge:
     @property
     def switch_rows(self) -> List[Optional[int]]: ...
     @property
+    def charging_shunts(self) -> List[int]: ...
+    @property
     def diagnostics(self) -> List[Diagnostic]: ...
     def survivor(self, bus: int) -> int: ...
     def calc_removed_flows(
@@ -1040,6 +1042,7 @@ class BalancedNetwork:
         closed_switches: bool = ...,
         zero_impedance: Optional[Literal["exact", "psse", "impedance"]] = ...,
         threshold: Optional[float] = ...,
+        charging: Literal["fold", "drop"] = ...,
     ) -> "BusMerge": ...
     def to_normalized(
         self,

@@ -927,14 +927,24 @@ impl PyBalancedNetwork {
     /// `zero_impedance` is `None`, `"exact"`, `"psse"`, or `"impedance"`;
     /// `"psse"` reads the case's stated threshold unless `threshold` names
     /// one, and `"impedance"` requires `threshold`.
-    #[pyo3(signature = (*, closed_switches=true, zero_impedance=None, threshold=None))]
+    #[pyo3(signature = (*, closed_switches=true, zero_impedance=None, threshold=None, charging="fold"))]
     fn merge_buses(
         &self,
         closed_switches: bool,
         zero_impedance: Option<&str>,
         threshold: Option<f64>,
+        charging: &str,
     ) -> PyResult<PyBusMerge> {
-        use powerio_tx::{BusMergeRule, ZeroImpedanceRule};
+        use powerio_tx::{BusMergeRule, MergedCharging, ZeroImpedanceRule};
+        let charging = match charging {
+            "fold" => MergedCharging::FoldToShunt,
+            "drop" => MergedCharging::Drop,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown charging treatment {other:?}; expected \"fold\" or \"drop\""
+                )));
+            }
+        };
         let branch_rule = match (zero_impedance, threshold) {
             (None, None) => None,
             (Some("exact"), None) => Some(ZeroImpedanceRule::Exact),
@@ -963,7 +973,7 @@ impl PyBalancedNetwork {
                 )));
             }
         };
-        let rule = BusMergeRule::new(closed_switches, branch_rule);
+        let rule = BusMergeRule::new(closed_switches, branch_rule).with_charging(charging);
         let merge = self.inner().merge_buses(&rule).map_err(core_pyerr)?;
         let mut diagnostics = self.diagnostics().to_vec();
         diagnostics.extend(merge.diagnostics.iter().cloned());
@@ -1868,6 +1878,12 @@ impl PyBusMerge {
     #[getter]
     fn switch_rows(&self) -> Vec<Option<usize>> {
         self.merge.switch_rows.clone()
+    }
+
+    /// Rows of the merged shunt table that hold removed branches' charging.
+    #[getter]
+    fn charging_shunts(&self) -> Vec<usize> {
+        self.merge.charging_shunts.clone()
     }
 
     /// The merge's own findings.

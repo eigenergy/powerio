@@ -106,6 +106,8 @@ class _BusMerge:
     @property
     def switch_rows(self) -> list[Optional[int]]: ...
     @property
+    def charging_shunts(self) -> list[int]: ...
+    @property
     def diagnostics(self) -> list[Diagnostic]: ...
     def survivor(self, bus: int) -> int: ...
     def calc_removed_flows(
@@ -225,6 +227,7 @@ class _BalancedNetwork:
         closed_switches: bool = ...,
         zero_impedance: Optional[str] = ...,
         threshold: Optional[float] = ...,
+        charging: str = ...,
     ) -> _BusMerge: ...
     # Matrix builders return COO triplets `(data, row, col, (nrows, ncols))` as
     # plain Python lists, except `incidence`/`ybus_parts` which nest them.

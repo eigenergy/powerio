@@ -39,7 +39,8 @@ pub struct ZeroImpedanceMerge {
 /// The survivor is the group's reference bus, else a bus hosting an
 /// in-service generator, else a bus a generator regulates, with the smallest
 /// id breaking each tie. A branch whose two buses the merge joined through
-/// other branches is removed as well.
+/// other branches is removed as well, and a removed branch's line charging
+/// becomes a fixed shunt at the survivor.
 ///
 /// The flow through a removed branch is no longer a variable of any derived
 /// calculation, and merged buses may have stated different attributes; both

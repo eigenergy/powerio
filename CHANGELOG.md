@@ -12,7 +12,11 @@
   generator bus, else a regulated bus, smallest id first, and every element
   reference follows it. The returned `BusMerge` lists the merged buses and
   their groups, every removed branch and switch with its source row, identity,
-  and ratings, and the source to merged row maps. Diagnostics under
+  and ratings, and the source to merged row maps. A removed in-service
+  branch's line charging and line shunts become a fixed shunt at the survivor
+  (`MergedCharging::FoldToShunt`, the default, which reproduces a solved PSS/E
+  case's reactive balance at each merged group), or go with the branch under
+  `MergedCharging::Drop`. Diagnostics under
   `CANONICALIZE.MERGE.*` report merged buses of different base voltage,
   branches the merge shorts, and jumpers kept because they would join two
   windings of one three winding transformer. `BusMerge::calc_removed_flows`

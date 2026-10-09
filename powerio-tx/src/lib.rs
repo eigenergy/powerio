@@ -132,9 +132,9 @@ pub use geo::{
 };
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
 pub use merge::{
-    BusGroup, BusMerge, BusMergeRule, MergedFlows, PSSE_DEFAULT_ZERO_IMPEDANCE_THRESHOLD,
-    RemovalReason, RemovedBranch, RemovedFlow, RemovedFlowMethod, RemovedFlows, RemovedSwitch,
-    ZeroImpedanceRule,
+    BusGroup, BusMerge, BusMergeRule, MergedCharging, MergedFlows,
+    PSSE_DEFAULT_ZERO_IMPEDANCE_THRESHOLD, RemovalReason, RemovedBranch, RemovedFlow,
+    RemovedFlowMethod, RemovedFlows, RemovedSwitch, ZeroImpedanceRule,
 };
 pub use network::{
     AcDcConverterControlMode, ActivePowerControl, Area, BalancedNetwork, BoundaryLine,

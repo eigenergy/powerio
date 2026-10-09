@@ -33,6 +33,7 @@ def test_psse_rule_merges_the_jumper_chain_and_the_closed_switch():
     assert merge.removed_switches[0]["reason"] == "closed_switch"
     assert merge.branch_rows == [0, None, None, 1]
     assert merge.switch_rows == [None]
+    assert merge.charging_shunts == []
     assert merge.network.n_buses == 2
     assert network.n_buses == 5, "the input is unchanged"
     codes = {diagnostic.code for diagnostic in merge.diagnostics}
