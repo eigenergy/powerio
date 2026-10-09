@@ -75,6 +75,7 @@ pub(super) fn validate(net: &MulticonductorNetwork) -> Result<(), String> {
         }
     }
     loads::validate(net)?;
+    super::asymmetric_shunts::validate(net)?;
     ideal_transformers::validate(net)?;
     for code in net.line_codes().iter().filter(|c| asymmetric(c)) {
         if sequence_impedance(code, 1.0).is_none()

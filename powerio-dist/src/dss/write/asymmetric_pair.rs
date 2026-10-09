@@ -76,22 +76,53 @@ impl DssWriter {
         {
             auxiliary.push('_');
         }
+        let from = self.bus_ref(&line.bus_from, &line.terminal_map_from);
+        let to = self.bus_ref(&line.bus_to, &line.terminal_map_to);
+        self.coupled_pair(
+            PairPorts {
+                name: &line.name,
+                auxiliary: &auxiliary,
+                from: &from,
+                to: &to,
+            },
+            net.base_frequency(),
+            (sequence, correction),
+        );
+        self.warn(&super::C::EMIT_DSS_IMPEDANCE_EQUIVALENT,format!("line {}: full two-conductor impedance uses Vsource._pio_coupled_{} at the physical from end, an open auxiliary third port, and Line.{} at the physical to end; aggregate both elements for port power and loss",line.name,line.name,line.name));
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct PairPorts<'a> {
+    pub name: &'a str,
+    pub auxiliary: &'a str,
+    pub from: &'a str,
+    pub to: &'a str,
+}
+impl DssWriter {
+    pub(super) fn coupled_pair(
+        &mut self,
+        ports: PairPorts<'_>,
+        frequency: f64,
+        (sequence, correction): ([Complex64; 3], [Complex64; 2]),
+    ) {
+        let PairPorts {
+            name,
+            auxiliary,
+            from,
+            to,
+        } = ports;
         let mut text = format!(
-            "New Vsource._pio_coupled_{} phases=3 bus1={}.0 bus2={auxiliary}.1.2.3 basekv=1 pu=0 frequency={} basefreq={}",
-            line.name,
-            self.bus_ref(&line.bus_from, &line.terminal_map_from),
-            num(net.base_frequency()),
-            num(net.base_frequency())
+            "New Vsource._pio_coupled_{name} phases=3 bus1={from}.0 bus2={auxiliary}.1.2.3 basekv=1 pu=0 frequency={} basefreq={}",
+            num(frequency),
+            num(frequency)
         );
         for (i, value) in sequence.iter().enumerate() {
             let _ = write!(text, " z{i}=[{} {}]", num(value.re), num(value.im));
         }
         self.line_out(&text);
-        // The third auxiliary node has no other attachment, imposing I3=0.
-        // The first two ports retain both off-diagonal entries. Independent
-        // series corrections restore the two original diagonal impedances.
-        let to = self.bus_ref(&line.bus_to, &line.terminal_map_to);
-        self.line_out(&format!("New Line.{} phases=2 bus1={auxiliary}.1.2 bus2={} length=1 units=m rmatrix=[{} | 0 {}] xmatrix=[{} | 0 {}] cmatrix=[0 | 0 0] basefreq={}",line.name,to,num(correction[0].re),num(correction[1].re),num(correction[0].im),num(correction[1].im),num(net.base_frequency())));
-        self.warn(&super::C::EMIT_DSS_IMPEDANCE_EQUIVALENT,format!("line {}: full two-conductor impedance uses Vsource._pio_coupled_{} at the physical from end, an open auxiliary third port, and Line.{} at the physical to end; aggregate both elements for port power and loss",line.name,line.name,line.name));
+        // The unattached third auxiliary port imposes I3=0. Independent
+        // corrections restore both physical diagonal impedances exactly.
+        self.line_out(&format!("New Line.{name} phases=2 bus1={auxiliary}.1.2 bus2={to} length=1 units=m rmatrix=[{} | 0 {}] xmatrix=[{} | 0 {}] cmatrix=[0 | 0 0] basefreq={}", num(correction[0].re), num(correction[1].re), num(correction[0].im), num(correction[1].im), num(frequency)));
     }
 }

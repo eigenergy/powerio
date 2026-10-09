@@ -266,7 +266,20 @@ that native circuit in existing winding records and issues
 the original label across IR; it does not carry electrical parameters. Canonical
 GLM writes the effective `WYE_WYE` circuit and diagnoses the label change.
 This is native-engine compatibility, not physical delta winding isolation;
-physical delta export and FBS `DELTA_DELTA` still require their own mappings.
+physical delta export still requires its own mapping.
+
+FBS `DELTA_DELTA` instead imports its native hybrid equations as a nine-terminal
+admittance with two ideal external contacts. Three auxiliary voltages encode
+scaled output currents: the native law removes common-mode input voltage but
+transfers common-mode current. This preserves the pinned solver's behavior for
+unbalanced grounded loads without substituting physical delta isolation.
+Coordinates follow the equivalent's shunt and contacts; ratings remain
+source-only and are diagnosed. Twelve native comparisons cover both forks,
+step-up/down/equal voltages, and wye/delta loads through IR and OpenDSS.
+OpenDSS writing preserves the full asymmetric admittance with coupled two-port
+blocks and exact diagonal corrections. Internal negative-element losses are
+not physical device losses; measure the aggregate external ports. Canonical
+GLM writing of this auxiliary-node equivalent remains unsupported.
 
 `DELTA_GWYE` (also numeric `3`) imports for NR and FBS as three single-phase
 coils. Each primary joins two phase terminals; each secondary joins its phase

@@ -1276,3 +1276,53 @@ convergence floors still need qualification. Deliberate wrong-tap output must
 fail. No full matching claim, edited-feeder qualification, or Arras IEEE9500
 portability is implied; the original Arras input also has unsupported properties
 and different diesel semantics.
+
+### FBS delta-delta imports and remaining IEEE variants
+
+`delta_delta_import_oracle.py` validates the native FBS `DELTA_DELTA` equations
+against an independent analytic solve and the actual PowerIO → IR → DSS path.
+Its twelve cases cover both pinned forks, step-up/down/equal ratios, wye/delta
+loads, and unbalanced source phasors. Deliberately damaged output must fail.
+The equivalent uses existing admittance and ideal-contact records, including
+three scaled-current auxiliary variables. It does not claim physical delta
+zero-sequence isolation or canonical GLM output support.
+
+```sh
+python evals/gridlabd/delta_delta_import_oracle.py \
+  --bridge /path/to/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-delta-results
+python evals/gridlabd/ieee_fbs_delta_import_oracle.py \
+  --case ieee37 --source /path/to/autotest/test_IEEE_37_FBS.glm \
+  --bridge /path/to/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-ieee37-results
+```
+
+The feeder harness also accepts `--case ieee123` with either
+`test_IEEE-123_FBS.glm` or `test_IEEE123_zero_voltages_FBS.glm`. It inventories
+objects with numeric IDs and nested assertions, resolves source aliases, and
+records every node and both ends of every link. Unnamed objects receive stable
+recorder names. It preserves electrical declarations, fixed states and native
+assertions, tightens the FBS stopping fraction to `1e-12`, and supplies one
+recorder timestep. Arras's `voltdump` formatting keyword is spelled `rect`;
+this telemetry-only spelling is adjusted explicitly. Both forks use pinned
+engines, and no feeder bytes are vendored.
+
+IEEE37 FBS passes all 579 raw complex measurements on both forks, with a
+wrong-line-length negative. The two IEEE123 variants parse, preserve IR and
+solve in DSS, but their complete raw comparisons remain **failed**:
+
+- The standard case has 2,157 measurements. Four isolated native nodes retain
+  initialized voltages and have no DSS bus; these remain missing-measurement
+  failures. A regulator reports an undeclared phase voltage. An open switch
+  reports downstream load current/power despite zero input; DSS reports zero
+  at both open ports. These sixteen raw failures remain visible.
+- The zero-voltage variant has 2,079 measurements. It also reports an undeclared
+  phase voltage, and small line/port discrepancies remain above the strict
+  tolerance. Neither changing tolerance nor discarding these observables is
+  used to declare a pass.
+
+Together with earlier support, thirteen of fourteen cached original GLM entry
+points now parse with IR equality. This is an entry-point count, not fourteen
+feeder families or thirteen electrical qualifications. The remaining
+`test_IEEE123_run.glm` is a switching-schedule simulation; it still needs explicit
+static-snapshot handling rather than silently executing or stripping controls.

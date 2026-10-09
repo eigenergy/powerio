@@ -18,6 +18,7 @@ const METERS_PER_MILE: f64 = 1609.344;
 mod batteries;
 mod cables;
 mod capacitors;
+mod delta_delta;
 mod delta_grounded;
 mod generators;
 mod geometry;

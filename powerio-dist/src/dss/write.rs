@@ -29,6 +29,7 @@ use super::read::delta_edges;
 use super::{lex, prop};
 
 mod asymmetric_pair;
+mod asymmetric_shunts;
 mod ideal_switches;
 mod ideal_transformers;
 mod loads;
@@ -2161,7 +2162,10 @@ impl DssWriter {
     }
 
     fn shunts(&mut self, net: &MulticonductorNetwork) {
-        for sh in net.shunts() {
+        for (index, sh) in net.shunts().iter().enumerate() {
+            if self.asymmetric_shunt(net, sh, index) {
+                continue;
+            }
             let stashed_delta = shunt_stashed_delta(sh);
             let inferred_phases =
                 extras_usize(&sh.extras, "phases").unwrap_or_else(|| sh.terminal_map.len().max(1));

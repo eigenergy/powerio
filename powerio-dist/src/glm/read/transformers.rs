@@ -74,6 +74,9 @@ impl Reader<'_> {
                 "transformer connection/phase profile is not qualified yet",
             ));
         }
+        if !self.newton_raphson && matches!(connection.as_str(), "DELTA_DELTA" | "2") {
+            return self.fbs_delta_delta(key, cfg, &phases);
+        }
         let primary = self.positive_geometry(cfg, "primary_voltage")?;
         let secondary = self.positive_geometry(cfg, "secondary_voltage")?;
         let rating = self.transformer_rating(cfg, true)?;
@@ -175,12 +178,6 @@ impl Reader<'_> {
                 if self.quantity(cfg, field).is_some() {
                     return Err(self.error(cfg, "explicit secondary/core parameters are only qualified for center-tapped transformers"));
                 }
-            }
-            if !self.newton_raphson && matches!(connection.as_str(), "DELTA_DELTA" | "2") {
-                return Err(self.error(
-                    key,
-                    "FBS delta transformer equations need a separate mapping",
-                ));
             }
         }
         Ok((cfg, connection))

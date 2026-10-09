@@ -49,25 +49,80 @@ SOURCE_HASHES = {
 
 
 def inventory(text):
+    # Keep quoted strings intact while discarding comments. Braces in macros
+    # are not object boundaries; nested assertions must not hide their parent.
     clean = re.sub(r"\$\{[^}]+\}", "MACRO", text)
-    objects = {}
-    for cls, body in re.findall(r"object (\w+)\s*\{([^{}]*)\}", clean):
+    tokens = list(
+        re.finditer(
+            r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|//[^\n]*|/\*.*?\*/|[{}]|[^{}"\'/]+|/',
+            clean,
+            re.S,
+        )
+    )
+    clean = "".join(
+        " " * len(t[0]) if t[0].startswith(("//", "/*")) else t[0] for t in tokens
+    )
+    objects, aliases = {}, {}
+    for ordinal, header in enumerate(
+        re.finditer(r"\bobject\s+(\w+)(?::(\d+))?\s*\{", clean)
+    ):
+        cls, identity = header.groups()
         if cls not in NODES + LINKS:
             continue
+        depth, pieces = 1, []
+        for token in re.finditer(
+            r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[{}]|[^{}"\']+',
+            clean[header.end() :],
+        ):
+            value = token[0]
+            if value == "{":
+                depth += 1
+            elif value == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+                if depth == 1:
+                    pieces.append(";")
+            elif depth == 1:
+                pieces.append(value)
+        else:
+            raise ValueError("unterminated source object")
         fields = {
             k: (a or b)
             for k, a, b in re.findall(
-                r'\b(name|parent|phases|from|to)\s+(?:"([^"]+)"|([^;\s]+))\s*;', body
+                r'\b(name|parent|phases|from|to)\s+(?:"([^"]+)"|([^;\s]+))\s*;',
+                "".join(pieces),
             )
         }
-        name = fields.pop("name")
-        if name in objects:
-            raise ValueError("duplicate source identity")
+        name = fields.pop("name", None)
+        if name is None:
+            name = f"__glm_object_{ordinal}"
+            if identity is None:
+                raise ValueError(
+                    "unnamed object without source identity needs explicit instrumentation"
+                )
+            fields["source_identity"] = f"{cls}:{identity}"
+        if identity:
+            aliases[f"{cls}:{identity}"] = name
+        if name is None or name in objects:
+            raise ValueError("missing or duplicate source identity")
         objects[name] = {"class": cls, **fields}
+    for obj in objects.values():
+        for field in ("from", "to", "parent"):
+            if field in obj:
+                obj[field] = aliases.get(obj[field], obj[field])
     return objects
 
 
 def instrument(text, objects):
+    for name, obj in objects.items():
+        if "source_identity" in obj:
+            pattern = r"(\bobject\s+" + re.escape(obj["source_identity"]) + r"\s*\{)"
+            text, count = re.subn(
+                pattern, lambda m, name=name: m[0] + f' name "{name}";', text
+            )
+            if count != 1:
+                raise ValueError("ambiguous unnamed recorder target")
     text = text.replace(
         "stoptime '2000-01-01 0:00:00'", "stoptime '2000-01-01 0:00:01'"
     )
@@ -129,14 +184,22 @@ def imported_snapshot(path, network, objects, wrong_tap=False):
         raise ValueError("OpenDSS pin mismatch")
     e.Text.Command(f'redirect "{path}"')
     if wrong_tap:
-        t = next(
-            t
-            for t in network["transformers"]
-            if any(w["tap"] != 1 for w in t["windings"])
-        )
-        e.Text.Command(
-            f"edit transformer.{t['name']} wdg=1 tap={t['windings'][0]['tap'] * 1.01:.17g}"
-        )
+        transformers = network["transformers"]
+        if transformers:
+            t = next(
+                (t for t in transformers if any(w["tap"] != 1 for w in t["windings"])),
+                transformers[0],
+            )
+            e.Text.Command(
+                f"edit transformer.{t['name']} wdg=1 tap={t['windings'][0]['tap'] * 1.01:.17g}"
+            )
+        else:
+            # Perturb a feeder line when all transformers use admittance
+            # equivalents; an unloaded transformer would make a weak negative.
+            line = network["lines"][0]
+            e.Text.Command(
+                f"edit line.{line['name']} length={line['length'] * 1.01:.17g}"
+            )
     e.Text.Command("set tolerance=1e-12 maxiterations=1000 controlmode=off")
     e.Solution.Solve()
     if not e.Solution.Converged() or e.Solution.ControlMode() != -1:
@@ -167,11 +230,15 @@ def imported_snapshot(path, network, objects, wrong_tap=False):
     transformers = {t["name"]: t for t in network.get("transformers", [])}
     switches = {s["name"]: s for s in network.get("switches", [])}
     result = {}
+    missing_buses = []
     for name, obj in objects.items():
         cls = obj["class"]
         if cls in NODES:
             if e.Circuit.SetActiveBus(root(name)) < 0:
-                raise ValueError(f"missing bus {name}")
+                # Keep expected native measurements. compare() must report these
+                # as missing, rather than copying native initialized voltages.
+                missing_buses.append(name)
+                continue
             volts = dict(zip(e.Bus.Nodes(), unpack(e.Bus.Voltages()), strict=True))
             for phase in "ABC":
                 if cls.startswith("triplex"):
@@ -200,7 +267,14 @@ def imported_snapshot(path, network, objects, wrong_tap=False):
                     currents[end, index] += iv
                     powers[end, index] += sv
 
-        if cls in ("transformer", "regulator"):
+        if cls == "transformer" and any(
+            s["name"] == name for s in network.get("shunts", [])
+        ):
+            for end, side in enumerate(("from", "to")):
+                nodes, amps, va = element(f"line.{name}__glm_{side}")
+                count = len(nodes) // 2
+                scatter(nodes[:count], amps[:count], va[:count], end)
+        elif cls in ("transformer", "regulator"):
             names = (
                 [name]
                 if name in transformers
@@ -222,6 +296,12 @@ def imported_snapshot(path, network, objects, wrong_tap=False):
                     for end, endpoint in enumerate(("from", "to")):
                         if winding["bus"] == root(obj[endpoint]):
                             sl = slice(w * count, (w + 1) * count)
+                            companion = "line._pio_xfmr_" + coil
+                            if w == 1 and companion.lower() in element_names:
+                                cn, ci, cs = element(companion)
+                                half = len(cn) // 2
+                                scatter(cn[half:], ci[half:], cs[half:], end)
+                                continue
                             scatter(
                                 nodes[sl],
                                 amps[sl],
@@ -237,7 +317,15 @@ def imported_snapshot(path, network, objects, wrong_tap=False):
         else:
             nodes, amps, va = element("line." + name)
             count = len(nodes) // 2
-            scatter(nodes[count:], amps[count:], va[count:], 1, cls == "triplex_line")
+            companion = "line._pio_switch_" + name
+            if companion.lower() in element_names:
+                cn, ci, cs = element(companion)
+                half = len(cn) // 2
+                scatter(cn[half:], ci[half:], cs[half:], 1)
+            else:
+                scatter(
+                    nodes[count:], amps[count:], va[count:], 1, cls == "triplex_line"
+                )
             coupled = "vsource._pio_coupled_" + name
             if coupled.lower() in element_names:
                 nodes, amps, va = element(coupled)
@@ -260,6 +348,7 @@ def imported_snapshot(path, network, objects, wrong_tap=False):
         "converged": True,
         "iterations": e.Solution.Iterations(),
         "control_mode": e.Solution.ControlMode(),
+        "missing_buses": missing_buses,
     }
 
 

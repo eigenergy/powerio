@@ -177,16 +177,13 @@ fn fbs_core_and_phase_rating_sum_are_preserved() {
 }
 
 #[test]
-fn inconsistent_phase_ratings_and_fbs_delta_are_rejected() {
+fn inconsistent_phase_ratings_are_rejected() {
     for text in [
         deck().replace("power_rating .5 MVA", "power_rating 500; powerA_rating 300"),
         deck().replace(
             "power_rating .5 MVA",
             "powerA_rating -100; powerB_rating 600",
         ),
-        deck()
-            .replace("solver_method NR", "solver_method FBS")
-            .replace("WYE_WYE", "DELTA_DELTA"),
     ] {
         assert!(
             parse(
