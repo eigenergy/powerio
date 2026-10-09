@@ -1022,5 +1022,33 @@ The missing-spacing case preserves the pinned engine's zero mutual impedance,
 with an import diagnostic. Seasonal ampacities remain in source with an explicit
 projection diagnostic. This evidence does not qualify direct triplex 2×2
 matrices, floating-neutral service import, canonical GLM service writing or the
-complete IEEE8500 feeder. The feeder now reaches its delta–grounded-wye
-transformer mapping after passing the line-reading stage.
+complete IEEE8500 feeder.
+
+
+### Delta–grounded-wye import
+
+`delta_grounded_import_oracle.py` validates the native `DELTA_GWYE` connection
+through actual import, IR restoration and OpenDSS emission. Seven circuits
+cover NR/FBS step-down, step-up, equal line-voltage ratings and IEEE8500's
+115/12.47 kV, 27.5 MVA, 0.01344+j0.1551 pu substation parameters. Each uses
+unbalanced impedances and source phasors with a common-mode component.
+
+```sh
+cargo build -p powerio --example glm_network
+python evals/gridlabd/delta_grounded_import_oracle.py \
+  --bridge target/debug/examples/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-delta-grounded-import-directory
+```
+
+Each case compares 19 complex V/A/VA observables: both buses' phase voltages,
+all physical phase-port currents and powers, and total transformer losses.
+An independent ideal-coil circuit provides a linear reference. A deliberately
+grounded primary coil must fail, guarding against loss of delta isolation.
+The typed equivalent consists of three ordinary phase-pair primary coils with
+grounded secondary coils. It adds no internal buses or new model types.
+Native step-down and step-up orientations differ; equal line-voltage ratings
+use the step-up orientation. Neither solver adds a core branch for this connection.
+
+This qualifies the reader and OpenDSS projection, not canonical GLM writing of
+phase-pair coils or the complete IEEE8500 feeder. The original feeder now passes
+transformer reading and reaches its still-unqualified FBS regulators.

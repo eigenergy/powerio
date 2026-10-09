@@ -17,6 +17,7 @@ const METERS_PER_MILE: f64 = 1609.344;
 
 mod cables;
 mod capacitors;
+mod delta_grounded;
 mod geometry;
 mod loads;
 mod regulators;
@@ -41,6 +42,8 @@ mod triplex_lines;
 /// Wye regulators preserve fixed phase taps and NR resistance in winding equivalents.
 /// Wye capacitors use fixed per-phase shunt admittances. Active controls require
 /// explicit individual switch states and produce a frozen-control diagnostic.
+/// Delta–grounded-wye transformers use phase-pair primary coils with grounded
+/// secondaries, preserving native step-up/down polarity in both solvers.
 /// Center-tapped services with grounded neutrals use typed windings and an
 /// internal core impedance load; triplex P/I/Z loads retain leg polarity.
 /// Triplex geometry uses full conductor matrices with both endpoint neutrals

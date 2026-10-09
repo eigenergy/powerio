@@ -64,7 +64,7 @@ fn transformer_alias_assignments_obey_source_order() {
 #[test]
 fn unqualified_transformer_physics_fails_instead_of_projecting() {
     for (old, new) in [
-        ("WYE_WYE", "DELTA_GWYE"),
+        ("WYE_WYE", "OPEN_DELTA_GWYE"),
         ("resistance .011", "resistance 0"),
         ("reactance .02", "reactance -1"),
         ("power_rating .5 MVA", "power_rating 0"),

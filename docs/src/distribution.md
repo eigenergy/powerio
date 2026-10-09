@@ -266,7 +266,18 @@ that native circuit in existing winding records and issues
 the original label across IR; it does not carry electrical parameters. Canonical
 GLM writes the effective `WYE_WYE` circuit and diagnoses the label change.
 This is native-engine compatibility, not physical delta winding isolation;
-physical delta export and FBS delta transformers still require their own mappings.
+physical delta export and FBS `DELTA_DELTA` still require their own mappings.
+
+`DELTA_GWYE` (also numeric `3`) imports for NR and FBS as three single-phase
+coils. Each primary joins two phase terminals; each secondary joins its phase
+to ground. The native step-up and step-down orientations differ, including
+their phase shifts. The mapping preserves that orientation and zero-sequence
+blocking without depending on a target's default transformer clock angle.
+Coil ratings use one third of total power and secondary coil voltage uses
+line-to-neutral voltage. Both pinned engines and IR-restored OpenDSS agree
+on unbalanced step-up, step-down, equal-rating and IEEE8500-parameter circuits.
+Coordinates attach to all three coils. Canonical GLM emission of these phase-pair
+coils remains unfinished and fails explicitly.
 
 NR `WYE_WYE` regulators preserve Type A/B per-phase ratios and series resistance
 as single-phase winding records. An object tap overrides its configuration tap.

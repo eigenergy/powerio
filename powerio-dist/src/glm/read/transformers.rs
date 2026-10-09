@@ -44,102 +44,112 @@ impl Reader<'_> {
             .map(crate::glm::GlmObject::key)
             .collect::<Vec<_>>();
         for key in keys {
-            let (cfg, connection) = self.transformer_configuration(key)?;
-            if matches!(connection.as_str(), "SINGLE_PHASE_CENTER_TAPPED" | "5") {
-                self.center_tapped_transformer(key, cfg)?;
-                continue;
-            }
-            let phases = parse_phases(
-                self.text(key, "phases")?
-                    .as_deref()
-                    .ok_or_else(|| self.error(key, "transformer requires explicit phases"))?,
-            )
-            .map_err(|m| self.error(key, m))?;
-            if !matches!(
-                (connection.as_str(), phases.len()),
-                ("WYE_WYE" | "1" | "DELTA_DELTA" | "2", 3) | ("SINGLE_PHASE", 1)
-            ) {
-                return Err(self.error(
-                    key,
-                    "transformer connection/phase profile is not qualified yet",
-                ));
-            }
-            let primary = self.positive_geometry(cfg, "primary_voltage")?;
-            let secondary = self.positive_geometry(cfg, "secondary_voltage")?;
-            let rating = self.transformer_rating(cfg, true)?;
-            let impedance = self.quantity(cfg, "impedance").ok_or_else(|| {
-                self.error(
-                    cfg,
-                    "transformer requires positive series resistance and reactance",
-                )
-            })?;
-            if impedance.re <= 0.0 || impedance.im <= 0.0 {
-                return Err(self.error(
-                    cfg,
-                    "native transformer requires positive series resistance and reactance",
-                ));
-            }
-            let mut windings = Vec::new();
-            for (field, voltage, resistance) in [
-                ("from", primary, 0.0),
-                ("to", secondary, 100.0 * impedance.re),
-            ] {
-                let object = self
-                    .index
-                    .resolve_property(key, field)?
-                    .ok_or_else(|| self.error(key, format!("transformer requires {field}")))?;
-                let root = self.roots.get(&object).ok_or_else(|| {
-                    self.error(key, "transformer endpoint is not an electrical bus")
-                })?;
-                if self.triplex.contains_key(root)
-                    || phases.iter().any(|p| !self.phases[root].contains(p))
-                {
-                    return Err(self.error(key, "transformer phase is absent at an endpoint"));
-                }
-                let mut terminals = phases
-                    .iter()
-                    .map(|p| (p + 1).to_string())
-                    .collect::<Vec<_>>();
-                terminals.push("n".into());
-                let mut winding = DistWinding::new(
-                    &self.names[root],
-                    terminals,
-                    DistWindingConn::Wye,
-                    voltage,
-                    rating,
-                );
-                winding.r_pct = resistance;
-                windings.push(winding);
-            }
-            let name = self.names[&key].clone();
-            let mut transformer =
-                DistTransformer::new(&name, windings, vec![100.0 * impedance.im], phases.len());
-            // Native ordinary transformers have no artificial grounding
-            // admittance. Prevent OpenDSS's default anti-floating shunts from
-            // adding a reactive current to this circuit on cross emission.
-            transformer
-                .extras
-                .insert("ppm_antifloat".into(), serde_json::json!(0.0));
-            if !self.newton_raphson {
-                self.default_fbs_core(cfg, &mut transformer)?;
-            }
-            if matches!(connection.as_str(), "DELTA_DELTA" | "2") {
-                // Both pinned NR engines stamp three independent grounded
-                // branches here, not a physical delta winding primitive.
-                // The effective circuit lives in typed windings; extras retain
-                // only the source declaration's provenance across IR.
-                transformer.extras.insert(
-                    "gridlabd_declared_connection".into(),
-                    serde_json::json!("DELTA_DELTA"),
-                );
-                self.diagnostics.push(powerio_core::Diagnostic::of(
-                    &crate::diagnostics::codes::READ_GLM_TRANSFORMER_EQUIVALENT,
-                    format!("{name}: native NR DELTA_DELTA uses grounded-wye port equations, including zero-sequence transfer; winding records preserve that engine behavior, not physical delta isolation"),
-                ));
-            }
-            self.net.transformers_mut().push(transformer);
-            self.attach(key, DistLocationTarget::Transformer, name);
+            self.transformer(key)?;
         }
+        Ok(())
+    }
+
+    fn transformer(&mut self, key: crate::glm::ObjectKey) -> Result<(), Error> {
+        let (cfg, connection) = self.transformer_configuration(key)?;
+        if matches!(connection.as_str(), "SINGLE_PHASE_CENTER_TAPPED" | "5") {
+            self.center_tapped_transformer(key, cfg)?;
+            return Ok(());
+        }
+        let phases = parse_phases(
+            self.text(key, "phases")?
+                .as_deref()
+                .ok_or_else(|| self.error(key, "transformer requires explicit phases"))?,
+        )
+        .map_err(|m| self.error(key, m))?;
+        if matches!(connection.as_str(), "DELTA_GWYE" | "3") {
+            self.delta_grounded_transformer(key, cfg, &phases)?;
+            return Ok(());
+        }
+        if !matches!(
+            (connection.as_str(), phases.len()),
+            ("WYE_WYE" | "1" | "DELTA_DELTA" | "2", 3) | ("SINGLE_PHASE", 1)
+        ) {
+            return Err(self.error(
+                key,
+                "transformer connection/phase profile is not qualified yet",
+            ));
+        }
+        let primary = self.positive_geometry(cfg, "primary_voltage")?;
+        let secondary = self.positive_geometry(cfg, "secondary_voltage")?;
+        let rating = self.transformer_rating(cfg, true)?;
+        let impedance = self.quantity(cfg, "impedance").ok_or_else(|| {
+            self.error(
+                cfg,
+                "transformer requires positive series resistance and reactance",
+            )
+        })?;
+        if impedance.re <= 0.0 || impedance.im <= 0.0 {
+            return Err(self.error(
+                cfg,
+                "native transformer requires positive series resistance and reactance",
+            ));
+        }
+        let mut windings = Vec::new();
+        for (field, voltage, resistance) in [
+            ("from", primary, 0.0),
+            ("to", secondary, 100.0 * impedance.re),
+        ] {
+            let object = self
+                .index
+                .resolve_property(key, field)?
+                .ok_or_else(|| self.error(key, format!("transformer requires {field}")))?;
+            let root = self
+                .roots
+                .get(&object)
+                .ok_or_else(|| self.error(key, "transformer endpoint is not an electrical bus"))?;
+            if self.triplex.contains_key(root)
+                || phases.iter().any(|p| !self.phases[root].contains(p))
+            {
+                return Err(self.error(key, "transformer phase is absent at an endpoint"));
+            }
+            let mut terminals = phases
+                .iter()
+                .map(|p| (p + 1).to_string())
+                .collect::<Vec<_>>();
+            terminals.push("n".into());
+            let mut winding = DistWinding::new(
+                &self.names[root],
+                terminals,
+                DistWindingConn::Wye,
+                voltage,
+                rating,
+            );
+            winding.r_pct = resistance;
+            windings.push(winding);
+        }
+        let name = self.names[&key].clone();
+        let mut transformer =
+            DistTransformer::new(&name, windings, vec![100.0 * impedance.im], phases.len());
+        // Native ordinary transformers have no artificial grounding
+        // admittance. Prevent OpenDSS's default anti-floating shunts from
+        // adding a reactive current to this circuit on cross emission.
+        transformer
+            .extras
+            .insert("ppm_antifloat".into(), serde_json::json!(0.0));
+        if !self.newton_raphson {
+            self.default_fbs_core(cfg, &mut transformer)?;
+        }
+        if matches!(connection.as_str(), "DELTA_DELTA" | "2") {
+            // Both pinned NR engines stamp three independent grounded
+            // branches here, not a physical delta winding primitive.
+            // The effective circuit lives in typed windings; extras retain
+            // only the source declaration's provenance across IR.
+            transformer.extras.insert(
+                "gridlabd_declared_connection".into(),
+                serde_json::json!("DELTA_DELTA"),
+            );
+            self.diagnostics.push(powerio_core::Diagnostic::of(
+                &crate::diagnostics::codes::READ_GLM_TRANSFORMER_EQUIVALENT,
+                format!("{name}: native NR DELTA_DELTA uses grounded-wye port equations, including zero-sequence transfer; winding records preserve that engine behavior, not physical delta isolation"),
+            ));
+        }
+        self.net.transformers_mut().push(transformer);
+        self.attach(key, DistLocationTarget::Transformer, name);
         Ok(())
     }
 }
