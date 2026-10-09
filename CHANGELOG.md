@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- TARA contingency statements are read at analysis time. The readers keep
+  them as text, as before, because the contingency, subsystem, and monitored
+  set layouts are fixed within PowerIO IR 2; the new views read that text.
+  `ContingencySet::resolve` binds a statement naming buses by quoted name and
+  base kV (`BUSNAMES`, `'NAME 345'`) and one naming a branch by quoted name
+  (`BRANCHNAMES`), matching exactly first and then without regard to letter
+  case and runs of whitespace, and reports a name matching nothing or several
+  elements with the new reasons `no_such_bus_name`, `ambiguous_bus_name`,
+  `no_such_branch_name`, and `ambiguous_branch_name`. A case action that
+  closes with `DISPATCH` binds as the action ahead of the keyword.
+  `ContingencySet::calc_default_dispatch` reads `DEFAULT DISPATCH [UP | DOWN |
+  FIRSTLEVEL]` blocks and `ContingencyAction::calc_dispatched_action` a case's
+  dispatch block into `SUBSYSTEM`, `BUS`, and `PARTICIPATING MACHINES`
+  entries, and `Subsystem::calc_dispatch_rules` reads `PARTICIPATE`, `SCALE
+  ALL ...`, `BASELOAD`, `TURBINETYPE`, and `EXCEPT` lines into
+  `SubsystemDispatchRule`s.
+
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW
   and RAWX readers had the two swapped, so a continuously adjusted shunt, such

@@ -191,11 +191,49 @@ their lines, with the surrounding whitespace dropped:
 - `BUSDOUBLE` and the other `DOUBLE` spellings beyond
   `DOUBLE BRANCH|UNIT|TIE IN|FROM SUBSYSTEM`.
 - `PARALLEL` branch statements.
-- What a `DISPATCH` block's body means: the subsystem, the participating
-  machines, and the dispatch method are kept as lines rather than as fields.
-  Every such block is reported at its opening line.
-- Bus-name mode, where a statement names `'02CHAMBR 345'` in place of a bus
-  number. Reading these needs the case, which this module does not take.
+- The dispatch method a `DISPATCH` block states beyond its `SUBSYSTEM`,
+  `BUS`, and `PARTICIPATING MACHINES` lines. Every such block is reported at
+  its opening line, and [TARA statements](#tara-statements) reads the lines it
+  can.
+
+## TARA statements
+
+TARA reads statements beyond the PSS/E grammar, drawn here from the PowerGEM
+example file cited in the fixture README. The readers keep each of them as
+text, because the PowerIO IR layouts of the three sets are fixed within 0.11,
+and the views below read that text at analysis time.
+
+**Names.** After `BUSNAMES` a statement names a bus by a quoted token holding
+the bus name and base kV, `'02CHAMBR 345'`, in place of its number; after
+`BRANCHNAMES` a statement such as `OPEN "name"` names one branch by its name;
+`BUSNUMBERS` returns to numbers. A quoted token after `BUS` cannot be a number,
+so `ContingencySet::resolve` reads it as a name whichever mode statement came
+before it. The last word of the token is the base kV when it reads as a number,
+matched within 1e-6 kV; a token without one matches on the name alone. A name
+matches exactly first, then without regard to letter case and runs of
+whitespace. A name that matches no element binds none with `NoSuchBusName` or
+`NoSuchBranchName`, and one that matches several at the stage that decided
+binds none with `AmbiguousBusName` or `AmbiguousBranchName`. A statement whose
+named buses all resolve binds as the same statement with numbers would.
+`OPEN`, `TRIP`, or `DISCONNECT`, optionally followed by `BRANCH` or `LINE`,
+then one quoted token is the branch name form.
+
+**Dispatch blocks.** `ContingencySet::calc_default_dispatch` reads each file
+level `DEFAULT DISPATCH [UP | DOWN | FIRSTLEVEL]` block into its
+`DispatchLevel` and `DispatchBlock`, and
+`ContingencyAction::calc_dispatched_action` reads a case action that closes
+with `DISPATCH` into the action ahead of the keyword and the block under it.
+A block line `SUBSYSTEM name [x]` or `BUS n [x]` reads as an entry with the
+number the line states after it, `PARTICIPATING MACHINES` as its own entry, and
+any other line stays in the block's `unread` lines. The binding of a dispatched
+action is the binding of the action ahead of `DISPATCH`.
+
+**Subsystem rules.** `Subsystem::calc_dispatch_rules` reads the lines a
+subsystem keeps, its own and then each `JOIN` group's: `PARTICIPATE [INCLUDE
+OFFLINE]`; `SCALE ALL GENERATION [WITH PMAX GREATER x MW]`, `SCALE ALL LOAD
+[INCLUDE NONCONFORMING]`, and `SCALE ALL FOR IMPORT | EXPORT [WITH PMAX
+GREATER x MW] [INCLUDE OFFLINE]`; `BASELOAD n`; `TURBINETYPE n`; and `EXCEPT`
+with the words after it as written. Any other line stays text only.
 
 ## Resolution against a network
 
@@ -261,7 +299,8 @@ stored in different winding orders are ambiguous the same way.
 | `RemoveLoad` | the `load` with that id, or every load at the bus | `NoSuchLoad` |
 | `DisconnectBus` | the `bus` row alone | `NoSuchBus` |
 | `ChangeLoad`, `ChangeGeneration` | the `bus` row alone | `NoSuchBus` |
-| `Unrecognized` | nothing | `Unrecognized` |
+| `Unrecognized` naming buses or a branch by name, or ahead of `DISPATCH` | what the statement binds to with numbers, or the branch | `NoSuchBusName`, `AmbiguousBusName`, `NoSuchBranchName`, `AmbiguousBranchName`, or the numbered statement's reason |
+| any other `Unrecognized` | nothing | `Unrecognized` |
 
 `DisconnectBus` binds to the bus and to nothing else: which elements at that
 bus leave service depends on what the consumer models, so expanding the bus is
@@ -286,7 +325,8 @@ switched shunt at the bus.
 Every reason states a snake_case `name`, for reports and bindings:
 `no_such_bus`, `no_such_branch`, `ambiguous_branch`,
 `ambiguous_transformer_3w`, `no_such_machine`, `no_such_shunt`, `no_such_load`,
-`no_such_transformer_3w`, `unrecognized`.
+`no_such_transformer_3w`, `unrecognized`, `no_such_bus_name`,
+`ambiguous_bus_name`, `no_such_branch_name`, `ambiguous_branch_name`.
 
 Resolution reports rather than refuses. A case holding any unresolved action is
 counted unresolved and earns one `BUILD.CON.CASE_UNRESOLVED` note naming the

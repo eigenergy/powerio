@@ -2589,6 +2589,14 @@ fn unresolved_reason_text(reason: powerio::UnresolvedReason) -> String {
         Reason::NoSuchLoad => "names no load".to_owned(),
         Reason::NoSuchTransformer3w => "names no three winding transformer".to_owned(),
         Reason::Unrecognized => "was kept as text and names no element".to_owned(),
+        Reason::NoSuchBusName => "names a bus by a name no bus has".to_owned(),
+        Reason::AmbiguousBusName { matches } => {
+            format!("names a bus by a name {matches} buses have")
+        }
+        Reason::NoSuchBranchName => "names a branch by a name no branch has".to_owned(),
+        Reason::AmbiguousBranchName { matches } => {
+            format!("names a branch by a name {matches} branches have")
+        }
         _ => "names no element".to_owned(),
     }
 }
