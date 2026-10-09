@@ -2150,8 +2150,7 @@ impl DssWriter {
                 typed_kv: None,
             },
         );
-        let kvar = extras_f64(&sh.extras, "kvar")
-            .unwrap_or_else(|| shunt_kvar(sh, phases, conn_delta, &edges, b_phase, kv));
+        let kvar = shunt_kvar(sh, phases, conn_delta, &edges, b_phase, kv);
         let mut extras = sh.extras.clone();
         strip_shunt_extras(&mut extras);
         let conn = if conn_delta { "delta" } else { "wye" };
@@ -3009,6 +3008,27 @@ fn shunt_kvar(
     b_phase: f64,
     kv: f64,
 ) -> f64 {
+    let v_ref = if conn_delta || !matches!(phases, 2 | 3) {
+        kv * 1e3
+    } else {
+        kv * 1e3 / 3f64.sqrt()
+    };
+    if let Some(saved) = extras_f64(&sh.extras, "kvar")
+        && super::read::kvar_shunt_matrix(
+            &sh.terminal_map,
+            phases,
+            conn_delta,
+            saved,
+            v_ref,
+            b_phase.signum(),
+        )
+        .as_ref()
+            == Some(&sh.b)
+    {
+        // Retain the exact rating only while it still describes every matrix
+        // entry. An edit to typed B must not be overwritten by stale metadata.
+        return saved;
+    }
     if conn_delta {
         let b_branch = delta_branch_abs(&sh.b, edges).unwrap_or(b_phase.abs());
         b_branch * (kv * 1e3) * (kv * 1e3) * edges.len() as f64 / 1e3

@@ -1,5 +1,7 @@
 //! Explicit scalar series reactors lower to existing impedance branches.
-use super::{BusSpec, DistLine, DistLineCode, Props, RawDss, RawObject, Reader, UntypedObject};
+use super::{
+    BusSpec, DistLine, DistLineCode, DistShunt, Props, RawDss, RawObject, Reader, UntypedObject,
+};
 
 impl Reader<'_> {
     pub(super) fn series_reactor(
@@ -147,6 +149,10 @@ fn check_profile(object: &RawObject, raw: &RawDss) -> Result<(), String> {
     if object.get("x").is_none() {
         return Err("series reactor requires explicit scalar X".into());
     }
+    check_commands_and_frequency(raw)
+}
+
+fn check_commands_and_frequency(raw: &RawDss) -> Result<(), String> {
     if raw.options.iter().any(|(key, value)| {
         key == "defaultbasefrequency" && value.to_f64(Some(&raw.vars)) != Ok(60.0)
     }) {
@@ -202,4 +208,148 @@ fn default_rating(object: &RawObject, vars: &super::VarMap) -> Result<f64, Strin
         start = end;
     }
     Ok(amps)
+}
+
+// R does not select SpecType=2 in Reactor.PropertySideEffects. A rated bank
+// keeps computing X from kvar/kV and leaves R as assigned, including R=0.
+impl Reader<'_> {
+    pub(super) fn rated_resistive_reactor(&mut self, object: &RawObject, raw: &RawDss) -> bool {
+        if (object.get("r").is_none() && object.get("rp").is_none())
+            || object.get("x").is_some()
+            || object.get("bus2").is_some()
+            || (object.get("kv").is_none() && object.get("kvar").is_none())
+        {
+            return false;
+        }
+        match self.rated_reactor_shunt(object, raw) {
+            Ok(shunt) => self.net.shunts_mut().push(shunt),
+            Err(reason) => {
+                self.warn(
+                    &super::C::READ_DSS_OBJECT_UNTYPED,
+                    format!("reactor {}: {reason}; kept untyped", object.name),
+                );
+                self.net
+                    .untyped_objects_mut()
+                    .push(UntypedObject::from(object));
+            }
+        }
+        true
+    }
+
+    fn rated_reactor_shunt(
+        &mut self,
+        object: &RawObject,
+        raw: &RawDss,
+    ) -> Result<DistShunt, String> {
+        rated_profile(object, raw)?;
+        let props = Props::new(object);
+        if props.get("enabled").is_some_and(|v| !v.to_bool()) {
+            return Err("disabled rated reactor is source-only".into());
+        }
+        if props.get("conn").is_some_and(|v| {
+            !matches!(
+                v.text.to_ascii_lowercase().as_str(),
+                "wye" | "w" | "y" | "ln"
+            )
+        }) {
+            return Err("resistive delta rated reactor is not qualified".into());
+        }
+        let number = |key, default| {
+            props
+                .get(key)
+                .map_or(Ok(default), |v| v.to_f64(Some(self.vars)))
+                .map_err(|_| format!("invalid rated reactor {key}"))
+        };
+        let phases = number("phases", 3.0)?;
+        if !matches!(phases, 1.0 | 2.0 | 3.0) {
+            return Err("rated reactor requires one to three phases".into());
+        }
+        let kv = number("kv", 12.47)?;
+        let kvar = number("kvar", 100.0)?;
+        let resistance = number("r", 0.0)?;
+        let rp = number("rp", 0.0)?;
+        let base = number("basefreq", 60.0)?;
+        let frequency = self.net.base_frequency();
+        if [kv, kvar, base].iter().any(|v| !v.is_finite() || *v <= 0.0)
+            || [resistance, rp].iter().any(|v| !v.is_finite() || *v < 0.0)
+            || frequency < 0.51
+        {
+            return Err("invalid rated reactor parameters or AC frequency".into());
+        }
+        let phase_kv = kv / if phases >= 2.0 { 3.0_f64.sqrt() } else { 1.0 };
+        let reactance = phase_kv * phase_kv * 1000.0 / (kvar / phases);
+        let inductance = reactance / std::f64::consts::TAU / base;
+        let impedance =
+            num_complex::Complex64::new(resistance, inductance * std::f64::consts::TAU * frequency);
+        let admittance = 1.0 / impedance + if rp == 0.0 { 0.0 } else { 1.0 / rp };
+        if !admittance.re.is_finite()
+            || !admittance.im.is_finite()
+            || admittance == num_complex::Complex64::default()
+        {
+            return Err("singular rated reactor admittance".into());
+        }
+        let bus = super::bus_spec(props.get("bus1"), "");
+        if bus.name.is_empty()
+            || bus.nodes.len() > phases as usize
+            || bus.nodes.iter().any(|&n| n < 0 || n == i32::MAX)
+        {
+            return Err("invalid rated reactor bus".into());
+        }
+        let n = phases as usize;
+        let map = self.terminals(&bus, n, n + 1, n);
+        let mut g = vec![vec![0.0; n]; n];
+        let mut b = g.clone();
+        for i in 0..n {
+            g[i][i] = admittance.re;
+            b[i][i] = admittance.im;
+        }
+        let mut shunt = DistShunt::new(&object.name, bus.name, map, g, b);
+        shunt.extras.insert("kv".into(), kv.into());
+        shunt.extras.insert("phases".into(), n.into());
+        for (key, default) in [
+            ("normamps", (kvar / phases) / phase_kv),
+            ("emergamps", (kvar / phases) / phase_kv * 1.35),
+        ] {
+            let value = number(key, default)?;
+            if !value.is_finite() || value < 0.0 {
+                return Err("invalid rated reactor current limit".into());
+            }
+            shunt.extras.insert(key.into(), value.into());
+        }
+        // R, Rp, kvar and base frequency are now in G/B. Replaying them
+        // after an edited matrix would overwrite its electrical meaning.
+        Ok(shunt)
+    }
+}
+
+fn rated_profile(object: &RawObject, raw: &RawDss) -> Result<(), String> {
+    if raw
+        .reactor_copies
+        .contains(&object.name.to_ascii_lowercase())
+    {
+        return Err("copied reactor specification state is unresolved".into());
+    }
+    for property in &object.props {
+        let key = property.name.as_deref().unwrap_or("");
+        if !matches!(
+            key,
+            "bus1"
+                | "phases"
+                | "conn"
+                | "kv"
+                | "kvar"
+                | "r"
+                | "rp"
+                | "parallel"
+                | "basefreq"
+                | "enabled"
+                | "normamps"
+                | "emergamps"
+        ) {
+            return Err(format!(
+                "rated reactor property {key} is outside the static profile"
+            ));
+        }
+    }
+    check_commands_and_frequency(raw)
 }

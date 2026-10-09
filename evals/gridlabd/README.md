@@ -1636,10 +1636,47 @@ and `YYDXn`; the current `GYDBal` first pass matches every observation exactly.
 No threshold was relaxed or observation removed.
 
 The broader external script audit recognizes both `New Circuit` and
-`New object=Circuit` spellings: 53 of 61 entry points parse and retain typed
+`New object=Circuit` spellings: 55 of 61 entry points parse and retain typed
 network equality through IR. The expanded inventory includes IEEE34, IEEE37
 and IEEE123 master cases previously missed by that scan. It also includes
 auxiliary and fault-study scripts; these counts are not qualified-feeder totals.
+
+The reproducible inventory verifies all 351 acquired files against repository
+commits in the catalog and their byte, SHA-256 and Git-blob hashes. Fifty-four
+entries can emit canonical DSS; the variable-slip induction-machine case
+remains blocked. The six parse refusals involve fault-study/direct-mode state
+or an open transformer terminal. None of these counts proves a native
+electrical match. Canonical GLM remains unavailable for this DSS inventory.
+
+```sh
+python evals/gridlabd/dss_corpus_audit.py --source-root /path/to/acquisition-with-manifest --bridge /path/to/dist_network --output /tmp/new-dss-audit
+```
+
+`dss_order_sensitivity.py` compares the native engine with itself after moving
+unchanged transformer declarations or reversing unchanged line declarations.
+It verifies exact element, terminal, bus/node and primitive-admittance
+inventories before reporting numerical sensitivity. No electrical parameter
+or comparison tolerance is changed.
+
+```sh
+python evals/gridlabd/dss_order_sensitivity.py --run-directory /path/to/ieee_distribution_import_oracle-output --output /tmp/new-order-diagnostic
+```
+
+All eight permutations of IEEE34mod2, IEEE13, IEEE123 and IEEE123Switches have
+identical native primitives but exceed at least one current strict threshold.
+Maximum native-to-native differences across the two permutations are:
+
+| Case | Voltage (V) | Current (A) | Power/loss (VA) |
+| --- | ---: | ---: | ---: |
+| IEEE34mod2 | 2.06e-8 | 7.45e-9 | 1.84e-4 |
+| IEEE13 | 7.07e-6 | 1.10e-5 | 1.70e-2 |
+| IEEE123 | 7.30e-7 | 1.43e-6 | 4.10e-3 |
+| IEEE123Switches | 7.31e-7 | 9.57e-7 | 4.48e-3 |
+
+This establishes an ordering-dependent numerical effect; it does not prove
+that every import residual is harmless. These feeders remain unqualified under
+the unchanged strict comparison. The diagnostic does not choose a favorable
+ordering, remove ports or replace native losses with inferred values.
 
 The native and generated solves all use controls off, at most 1,000 iterations,
 and tolerance `1e-11`, stricter than the original files' `1e-8`. The balanced
@@ -2020,6 +2057,35 @@ Fifteen native cases cover single-, two- and three-phase ports, resistance,
 frequency scaling, assignment-time current ratings, IR, repeated canonical
 conversion and changed-line negative controls. All pass. Both complete CIMHub
 IEEE9500 canonical cases energize the feeder, but remain unqualified.
+
+Rated wye shunt reactors with explicit series resistance or parallel damping
+also use the existing shunt matrix. Native Reactor.R does not change the
+kV/kvar specification mode: X still comes from the rating, with R retained.
+This includes the R=0 declarations in the public IEEE118 case. Rp contributes
+parallel conductance, including when series R is omitted. The reader evaluates
+the inductance at the snapshot frequency and preserves normal/emergency
+current ratings. Competing impedance specifications, copied state, explicit
+return buses, delta resistance, curves and terminal commands remain outside
+this added profile; existing series/grounding profiles are unchanged.
+
+```sh
+python evals/gridlabd/dss_rated_reactor_oracle.py --bridge /path/to/dist_network --output /tmp/new-rated-reactors
+POWERIO_RATED_REACTOR_CASES=/tmp/new-rated-reactors cargo test -p powerio-dist --test dss_rated_reactor export_edited_rated_reactor_matrices -- --ignored
+python evals/gridlabd/dss_rated_reactor_oracle.py --bridge /path/to/dist_network --output /tmp/new-rated-reactors --check-edits
+```
+
+Thirty cases cover one/two/three phases, 50/60 Hz, zero/nonzero resistance,
+parallel damping and implicit R. Checks include canonical output, reimport,
+current ratings and changed-line negative controls. Independent native edits
+reduce resistance/damping and increase kvar to match actual edited typed
+matrices; ratings are explicitly held fixed, as in the typed edit. Scalar
+shunt emission reuses a retained kvar only when its projection exactly equals
+the current matrix, so stale metadata cannot undo an edit.
+
+IEEE118 now parses through IR and emits canonical DSS. Its original native
+baseline does not converge at the pinned validation settings, so no whole-case
+electrical qualification is claimed. Its PV-generator behavior and the broader
+generator-model audit remain separate work.
 
 ### IEEE9500 PV phases and static BatchEdit commands
 

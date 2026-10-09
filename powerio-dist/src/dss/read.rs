@@ -442,9 +442,9 @@ impl<'a> Props<'a> {
     }
 }
 
-/// Reactor properties that set the impedance directly. When any is present
-/// the engine takes its SpecType from the impedance and ignores `kvar`/`kv`,
-/// so the kvar-shunt typing does not apply and the object stays untyped.
+/// Reactor impedance inputs that the legacy kvar-only path cannot interpret.
+/// R alone does not select a new SpecType; rated banks with R are resolved
+/// separately. Competing mode setters require ordered specification replay.
 /// `parallel` (series vs parallel R-X) and `rp` (a parallel damping
 /// resistance) are modifiers, not a SpecType of their own: a `kvar` reactor
 /// that also sets them is still a kvar shunt, so they are not listed here.
@@ -1149,6 +1149,9 @@ impl Reader<'_> {
     /// when it uses `r`/`x`, store the equivalent conductance and susceptance.
     /// Explicit scalar series reactors use a conductor-resolved impedance branch.
     fn reactor(&mut self, obj: &RawObject, raw: &RawDss) {
+        if self.rated_resistive_reactor(obj, raw) {
+            return;
+        }
         let props = Props::new(obj);
         let phases = self.usize_or(&props, "phases", "reactor", &obj.name, dd::reactor::PHASES);
         if phases == 0 {
@@ -2077,7 +2080,7 @@ pub(super) fn delta_edges(n: usize, phases: usize) -> Vec<(usize, usize)> {
     }
 }
 
-fn kvar_shunt_matrix(
+pub(super) fn kvar_shunt_matrix(
     map: &[String],
     phases: usize,
     conn_delta: bool,

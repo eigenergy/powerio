@@ -556,6 +556,14 @@ checks cover both solvers and forks. Other battery operating modes, weather file
 multipoint efficiency and canonical GLM inverter writing remain unfinished.
 Climate coordinates and thermal inputs remain source-only with diagnostics.
 
+OpenDSS rated wye reactors with kV/kvar and explicit R or Rp map to the
+existing shunt admittance. R=0 retains the rating-based reactance; R does not
+select the explicit-X specification mode. The profile preserves resistance,
+parallel damping and the snapshot-frequency admittance. Canonical output uses
+the current typed matrix, including edits after reimport. Copied state,
+competing specifications, curves and delta resistance remain unsupported in
+this profile. Native tests cover thirty phase/frequency/impedance cases.
+
 OpenDSS Generator model 6 delegates its voltage/current law to an external
 library. The three-phase delta `IndMach012a` fixed-slip profile reads into the
 existing full shunt admittance, including positive- and negative-sequence
