@@ -83,6 +83,7 @@ struct IndexBaseMeta {
 struct BuildOptionsMeta {
     skip_zero_impedance: bool,
     synthesize_unrated_limits: bool,
+    angle_difference_bounds: powerio_tx::AngleDifferenceBounds,
 }
 
 #[derive(Serialize)]
@@ -227,6 +228,7 @@ fn emit_prepared(
         build_options: BuildOptionsMeta {
             skip_zero_impedance: instance.skip_zero_impedance,
             synthesize_unrated_limits: instance.synthesize_unrated_limits,
+            angle_difference_bounds: instance.angle_difference_bounds,
         },
         zero_impedance: ZeroImpedanceMeta {
             skip: instance.skip_zero_impedance,

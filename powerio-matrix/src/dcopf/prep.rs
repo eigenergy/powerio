@@ -75,22 +75,11 @@ pub struct DcOpfOptions {
     /// existed deserialize to the default (off), the pre-field behavior.
     #[serde(default)]
     pub synthesize_unrated_limits: bool,
-    /// Replace each unconstrained or unusable angle difference interval with
-    /// PowerModels' ±60 degree pad (`correct_voltage_angle_differences!`),
-    /// a solver conditioning choice. Off by default (a document written before the field existed read with it on): the prepared arrays
-    /// carry the stated `angmin`/`angmax` (`theta_from - theta_to`, the
-    /// MATPOWER and PowerModels convention, not net of a phase shift), with a
-    /// side the source leaves unconstrained held at ±360 degrees. A padded
-    /// window does not move with a branch's phase shift, so a branch shifting
-    /// by more than 60 degrees cannot meet it.
-    #[serde(default = "default_true")]
-    pub correct_angle_difference_bounds: bool,
+    /// Which angle difference bounds the prepared arrays carry.
+    #[serde(default)]
+    pub angle_difference_bounds: powerio_tx::AngleDifferenceBounds,
     /// The already validated instance objective to compile into the arrays.
     pub objective: PreparedObjective,
-}
-
-const fn default_true() -> bool {
-    true
 }
 
 /// Generator parameters in generator column order.
@@ -199,8 +188,15 @@ pub struct DcOpfPreparation {
     /// their limits retain the old unsynthesized meaning.
     #[serde(default)]
     pub synthesize_unrated_limits: bool,
-    /// Whether PowerModels' angle difference correction was applied.
+    /// Whether PowerModels' angle difference pad was applied
+    /// ([`AngleDifferenceBounds::PowerModelsPad`](powerio_tx::AngleDifferenceBounds::PowerModelsPad)).
     pub correct_angle_difference_bounds: bool,
+    /// Which angle difference bounds `angle_min` and `angle_max` carry.
+    /// `#[serde(default)]`: a document written before the field reads as
+    /// `Stated`, and its `correct_angle_difference_bounds` says whether the
+    /// pad was applied.
+    #[serde(default)]
+    pub angle_difference_bounds: powerio_tx::AngleDifferenceBounds,
     /// Dense bus index to external bus ID.
     pub bus_ids: Vec<BusId>,
     /// Dense bus index to row in the star-lowered analysis network.
@@ -446,11 +442,10 @@ pub(crate) fn preparation_from_view(
         }
         let source_amin = case.to_radians(branch.angmin);
         let source_amax = case.to_radians(branch.angmax);
-        let (amin, amax) = if options.correct_angle_difference_bounds {
-            powerio_tx::correct_angle_difference_bounds(source_amin, source_amax)
-        } else {
-            powerio_tx::stated_angle_difference_bounds(source_amin, source_amax)
-        };
+        let (amin, amax) =
+            options
+                .angle_difference_bounds
+                .calc_bounds(source_amin, source_amax, shift_rad);
         from_bus.push(from);
         branch_identities.push(crate::opf::row_identity(
             branch.uid.as_deref(),
@@ -495,7 +490,9 @@ pub(crate) fn preparation_from_view(
         objective: options.objective,
         skip_zero_impedance: options.skip_zero_impedance,
         synthesize_unrated_limits: options.synthesize_unrated_limits,
-        correct_angle_difference_bounds: options.correct_angle_difference_bounds,
+        correct_angle_difference_bounds: options.angle_difference_bounds
+            == powerio_tx::AngleDifferenceBounds::PowerModelsPad,
+        angle_difference_bounds: options.angle_difference_bounds,
         bus_ids: active_buses.bus_ids,
         bus_analysis_rows,
         bus_source_rows,

@@ -1,12 +1,19 @@
 //! A source that states no angle difference limit gets none: a phase shifting
 //! winding whose DC angle difference sits near its 150 degree shift stays
-//! inside the prepared bounds unless the PowerModels pad is asked for.
+//! inside the prepared bounds. PowerModels' pad, asked for explicitly, is
+//! centered on the shift, so it holds that difference too; centered on zero,
+//! as PowerModels itself does, it would not.
 
-use powerio_matrix::{DcOperators, DcOpfAssemblyOptions, build_dc_opf_preparation};
+use std::collections::HashMap;
+
+use powerio_matrix::{
+    DcOperators, DcOpfAssemblyOptions, DcOpfPreparation, build_dc_opf_preparation,
+};
 use powerio_prob::{DcOpfInstance, DcPfInstance};
 use powerio_tx::{
-    BalancedNetwork, Branch, Bus, BusId, BusType, GenCost, Generator, Impedance, Load,
-    POWER_MODELS_ANGLE_BOUND_PAD, Transformer3W, Winding,
+    AngleDifferenceBounds, BalancedNetwork, Branch, Bus, BusId, BusType, GenCost, Generator,
+    Impedance, Load, POWER_MODELS_ANGLE_BOUND_PAD, Transformer3W, Winding,
+    correct_angle_difference_bounds,
 };
 
 /// Dense Gaussian elimination with partial pivoting for the small reduced
@@ -63,12 +70,8 @@ fn shifted_three_winding() -> BalancedNetwork {
     net
 }
 
-#[test]
-fn a_150_degree_winding_meets_the_stated_bounds_and_not_the_pad() {
-    let net = shifted_three_winding();
-
-    // The DC power flow puts the shifted winding's angle difference near its
-    // shift.
+/// The DC power flow angle of every bus, star buses included.
+fn dc_angles(net: &BalancedNetwork) -> HashMap<BusId, f64> {
     let operators = DcOperators::build(&DcPfInstance::from_network(net.clone()).unwrap()).unwrap();
     let system = operators.calc_reference_constrained_system().unwrap();
     let size = system.retained_rows.len();
@@ -83,47 +86,94 @@ fn a_150_degree_winding_meets_the_stated_bounds_and_not_the_pad() {
     for (index, &row) in system.retained_rows.iter().enumerate() {
         angles[row] = reduced[index];
     }
-    let incidence = operators.calc_incidence_matrix();
-    let mut differences = vec![0.0; incidence.rows()];
-    for (row, values) in incidence.outer_iterator().enumerate() {
-        for (column, &value) in values.iter() {
-            differences[row] += value * angles[column];
-        }
+    operators.bus_ids().iter().copied().zip(angles).collect()
+}
+
+/// `theta_from - theta_to` of every prepared branch at the given angles.
+fn branch_differences(prep: &DcOpfPreparation, angles: &HashMap<BusId, f64>) -> Vec<f64> {
+    prep.branches
+        .from_bus
+        .iter()
+        .zip(&prep.branches.to_bus)
+        .map(|(&from, &to)| angles[&prep.bus_ids[from]] - angles[&prep.bus_ids[to]])
+        .collect()
+}
+
+fn assert_holds(prep: &DcOpfPreparation, differences: &[f64]) {
+    for ((min, max), difference) in prep
+        .branches
+        .angle_min
+        .iter()
+        .zip(&prep.branches.angle_max)
+        .zip(differences)
+    {
+        assert!(
+            min <= difference && difference <= max,
+            "[{min}, {max}] holds {difference}"
+        );
     }
+}
+
+#[test]
+fn a_150_degree_winding_meets_the_stated_bounds_and_the_centered_pad() {
+    let net = shifted_three_winding();
+    let angles = dc_angles(&net);
+    let instance = DcOpfInstance::from_network(net).unwrap();
+
+    // The DC power flow puts the shifted winding's angle difference near its
+    // shift.
+    let stated = build_dc_opf_preparation(&instance, &DcOpfAssemblyOptions::default()).unwrap();
+    assert!(!stated.correct_angle_difference_bounds);
+    assert_eq!(
+        stated.angle_difference_bounds,
+        AngleDifferenceBounds::Stated
+    );
+    let differences = branch_differences(&stated, &angles);
     let widest = differences.iter().fold(0.0f64, |m, d| m.max(d.abs()));
     assert!(
         widest > 140.0_f64.to_radians(),
         "the shifted winding holds about 150 degrees: {widest}"
     );
+    assert_holds(&stated, &differences);
 
-    let instance = DcOpfInstance::from_network(net).unwrap();
-    let stated = build_dc_opf_preparation(&instance, &DcOpfAssemblyOptions::default()).unwrap();
-    assert!(!stated.correct_angle_difference_bounds);
-    for (min, max) in stated
+    // The PowerModels pad, centered on each branch's shift, holds it too.
+    let padded = build_dc_opf_preparation(
+        &instance,
+        &DcOpfAssemblyOptions::default()
+            .with_angle_difference_bounds(AngleDifferenceBounds::PowerModelsPad),
+    )
+    .unwrap();
+    assert!(padded.correct_angle_difference_bounds);
+    assert_eq!(padded.branches.shift, stated.branches.shift);
+    for ((min, max), shift) in padded
         .branches
         .angle_min
         .iter()
-        .zip(&stated.branches.angle_max)
+        .zip(&padded.branches.angle_max)
+        .zip(&padded.branches.shift)
     {
-        assert!(
-            *min <= -widest && widest <= *max,
-            "[{min}, {max}] holds {widest}"
-        );
+        assert!((min - (shift - POWER_MODELS_ANGLE_BOUND_PAD)).abs() < 1e-12);
+        assert!((max - (shift + POWER_MODELS_ANGLE_BOUND_PAD)).abs() < 1e-12);
     }
+    assert_holds(&padded, &branch_differences(&padded, &angles));
 
-    // The PowerModels pad, asked for explicitly, cannot hold that difference:
-    // it bounds theta_from - theta_to, not the difference net of the shift.
-    let padded = build_dc_opf_preparation(
+    // Centered on zero, as PowerModels' correct_voltage_angle_differences!
+    // does, the pad cuts off the shifted winding's operating point: it bounds
+    // theta_from - theta_to, not the difference net of the shift.
+    let (_, zero_centered_max) = correct_angle_difference_bounds(0.0, 0.0);
+    assert!(widest > zero_centered_max);
+
+    let unbounded = build_dc_opf_preparation(
         &instance,
-        &DcOpfAssemblyOptions::default().with_correct_angle_difference_bounds(true),
+        &DcOpfAssemblyOptions::default().with_angle_difference_bounds(AngleDifferenceBounds::None),
     )
     .unwrap();
     assert!(
-        padded
+        unbounded
             .branches
-            .angle_max
+            .angle_min
             .iter()
-            .all(|&max| max <= POWER_MODELS_ANGLE_BOUND_PAD + 1e-12)
+            .chain(&unbounded.branches.angle_max)
+            .all(|bound| (bound.abs() - std::f64::consts::TAU).abs() < 1e-12)
     );
-    assert!(widest > POWER_MODELS_ANGLE_BOUND_PAD);
 }

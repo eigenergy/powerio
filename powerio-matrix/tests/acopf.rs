@@ -12,7 +12,7 @@ use powerio_prob::{
     AcBusSpecification, AcOpfInstance, AcPfInstance, ActiveConstraints,
     BalancedOperatingPointBuilder, ConstraintSelection, Objective,
 };
-use powerio_tx::{Impedance, Load, Shunt, Storage, Transformer3W, Winding};
+use powerio_tx::{AngleDifferenceBounds, Impedance, Load, Shunt, Storage, Transformer3W, Winding};
 
 #[test]
 fn public_preparation_formulates_the_complete_ac_opf() {
@@ -58,24 +58,17 @@ fn public_preparation_formulates_the_complete_ac_opf() {
 
     let padded = build_ac_opf_preparation(
         &instance,
-        &AcOpfAssemblyOptions::default().with_correct_angle_difference_bounds(true),
+        &AcOpfAssemblyOptions::default()
+            .with_angle_difference_bounds(AngleDifferenceBounds::PowerModelsPad),
     )
     .unwrap();
     assert!(padded.correct_angle_difference_bounds);
-    assert_eq!(
-        padded.branches.angle_min,
-        vec![
-            -powerio_tx::POWER_MODELS_ANGLE_BOUND_PAD,
-            -powerio_tx::POWER_MODELS_ANGLE_BOUND_PAD,
-        ]
-    );
-    assert_eq!(
-        padded.branches.angle_max,
-        vec![
-            powerio_tx::POWER_MODELS_ANGLE_BOUND_PAD,
-            powerio_tx::POWER_MODELS_ANGLE_BOUND_PAD,
-        ]
-    );
+    // The pad is centered on each branch's phase shift: zero on the line,
+    // 30 degrees on the transformer.
+    let pad = powerio_tx::POWER_MODELS_ANGLE_BOUND_PAD;
+    let shift = 30.0_f64.to_radians();
+    assert_eq!(padded.branches.angle_min, vec![-pad, shift - pad]);
+    assert_eq!(padded.branches.angle_max, vec![pad, shift + pad]);
 
     // Per unit demand and the series admittance of the plain line:
     // y = 1/(0.01 + j0.1) => g = 0.01/0.0101, b = -0.1/0.0101.
@@ -507,7 +500,8 @@ fn ac_pf_preparation_does_not_require_a_generator() {
 
     let padded = build_ac_pf_preparation(
         &instance,
-        &AcPfAssemblyOptions::default().with_correct_angle_difference_bounds(true),
+        &AcPfAssemblyOptions::default()
+            .with_angle_difference_bounds(AngleDifferenceBounds::PowerModelsPad),
     )
     .unwrap();
     assert!(padded.correct_angle_difference_bounds);

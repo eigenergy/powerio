@@ -151,7 +151,7 @@ pub use network::{
     calc_series_admittance_of, repair_values,
 };
 pub use normalize::{
-    NormalizeOptions, NormalizeSourceRows, NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD,
-    correct_angle_difference_bounds, stated_angle_difference_bounds,
+    AngleDifferenceBounds, NormalizeOptions, NormalizeSourceRows, NormalizedNetwork,
+    POWER_MODELS_ANGLE_BOUND_PAD, correct_angle_difference_bounds, stated_angle_difference_bounds,
 };
 pub use operations::Selector;

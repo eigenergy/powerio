@@ -241,6 +241,62 @@ fn json_format_leaves_only_the_diagnostics_array_on_stderr() {
 }
 
 #[test]
+fn dcopf_writes_the_angle_difference_bounds_it_was_asked_for() {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let case = repo_file("tests/data/case9.m");
+    let bounds = |choice: Option<&str>| {
+        let output = std::env::temp_dir().join(format!(
+            "powerio-cli-angle-{stamp}-{}",
+            choice.unwrap_or("default")
+        ));
+        let mut args = vec![
+            "dcopf",
+            case.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+        ];
+        if let Some(choice) = choice {
+            args.extend(["--angle-difference-bounds", choice]);
+        }
+        assert_success(&run(&args));
+        let bundle = output.join("case9_dcopf");
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(bundle.join("dcopf_meta.json")).unwrap())
+                .unwrap();
+        let angle_max: Vec<f64> = std::fs::read_to_string(bundle.join("angle_max.mtx"))
+            .unwrap()
+            .lines()
+            .filter(|line| !line.starts_with('%'))
+            .skip(1)
+            .map(|line| line.trim().parse().unwrap())
+            .collect();
+        let _ = std::fs::remove_dir_all(&output);
+        (
+            manifest["build_options"]["angle_difference_bounds"].clone(),
+            angle_max,
+        )
+    };
+
+    // case9 states ±360 degrees on every branch.
+    let (stated, stated_max) = bounds(None);
+    assert_eq!(stated, "stated");
+    assert!(
+        stated_max
+            .iter()
+            .all(|&max| (max - std::f64::consts::TAU).abs() < 1e-12)
+    );
+    let (padded, padded_max) = bounds(Some("powermodels-pad"));
+    assert_eq!(padded, "power_models_pad");
+    let pad = powerio_tx::POWER_MODELS_ANGLE_BOUND_PAD;
+    assert!(padded_max.iter().all(|&max| (max - pad).abs() < 1e-12));
+    let (none, _) = bounds(Some("none"));
+    assert_eq!(none, "none");
+}
+
+#[test]
 fn a_malformed_case_exits_with_the_parse_status() {
     let out = run_with_stdin(
         &[

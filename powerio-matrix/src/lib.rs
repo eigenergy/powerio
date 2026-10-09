@@ -41,9 +41,9 @@
 // the top level facade. `Error` and `Result` are this crate's own: the variants
 // below are raised here and nowhere in the hub.
 pub use powerio_tx::{
-    BalancedNetwork, Branch, Bus, BusId, BusType, ConnectivityReport, Extras, GenCost, Generator,
-    Hvdc, IndexCore, IndexedNetwork, Load, POWER_MODELS_ANGLE_BOUND_PAD, Shunt, SourceFormat,
-    Storage,
+    AngleDifferenceBounds, BalancedNetwork, Branch, Bus, BusId, BusType, ConnectivityReport,
+    Extras, GenCost, Generator, Hvdc, IndexCore, IndexedNetwork, Load,
+    POWER_MODELS_ANGLE_BOUND_PAD, Shunt, SourceFormat, Storage,
 };
 
 // Internal compatibility paths used throughout the matrix implementation.

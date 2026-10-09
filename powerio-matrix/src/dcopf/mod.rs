@@ -17,6 +17,7 @@ use crate::{
 
 use crate::Result;
 use powerio_prob::DcOpfInstance;
+use powerio_tx::AngleDifferenceBounds;
 use prep::{DcOpfOptions, apply_instance_semantics, preparation_from_view};
 
 pub use bundle::{DcOpfBundleMetadata, DcOpfBundleOptions, DcOpfOutputs, emit_dcopf_bundle};
@@ -40,15 +41,9 @@ pub struct DcOpfAssemblyOptions {
     /// [`Branch::synthesize_rate_a`](powerio_tx::Branch::synthesize_rate_a)
     /// states. If false, an absent rating reads as unlimited.
     pub synthesize_unrated_limits: bool,
-    /// Replace each unconstrained or unusable angle difference interval with
-    /// PowerModels' ±60 degree pad (`correct_voltage_angle_differences!`),
-    /// a solver conditioning choice. Off by default: the prepared arrays
-    /// carry the stated `angmin`/`angmax` (`theta_from - theta_to`, the
-    /// MATPOWER and PowerModels convention, not net of a phase shift), with a
-    /// side the source leaves unconstrained held at ±360 degrees. A padded
-    /// window does not move with a branch's phase shift, so a branch shifting
-    /// by more than 60 degrees cannot meet it.
-    pub correct_angle_difference_bounds: bool,
+    /// Which angle difference bounds the prepared arrays carry. The default,
+    /// [`AngleDifferenceBounds::Stated`], is what the source states.
+    pub angle_difference_bounds: AngleDifferenceBounds,
 }
 
 impl DcOpfAssemblyOptions {
@@ -71,8 +66,8 @@ impl DcOpfAssemblyOptions {
     }
 
     #[must_use]
-    pub const fn with_correct_angle_difference_bounds(mut self, correct: bool) -> Self {
-        self.correct_angle_difference_bounds = correct;
+    pub const fn with_angle_difference_bounds(mut self, bounds: AngleDifferenceBounds) -> Self {
+        self.angle_difference_bounds = bounds;
         self
     }
 }
@@ -135,7 +130,7 @@ pub fn build_dc_opf_preparation(
             units: options.units,
             skip_zero_impedance: options.skip_zero_impedance,
             synthesize_unrated_limits: options.synthesize_unrated_limits,
-            correct_angle_difference_bounds: options.correct_angle_difference_bounds,
+            angle_difference_bounds: options.angle_difference_bounds,
             objective,
         },
     )?;
