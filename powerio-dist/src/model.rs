@@ -446,6 +446,17 @@ pub enum DistLoadVoltageModel {
         v_min_pu: f64,
         v_max_pu: f64,
     },
+    /// Constant power between positive voltage bounds, with impedance
+    /// continuation outside them and an optional current-magnitude limit.
+    /// `v_nom` is volts per active branch. `current_limit_pu` is a multiple
+    /// of that branch's nominal apparent power divided by nominal voltage.
+    /// P and Q share one scale, preserving power factor. See [`Self::power_scale`].
+    BoundedConstantPower {
+        v_nom: Vec<f64>,
+        v_min_pu: f64,
+        v_max_pu: f64,
+        current_limit_pu: Option<f64>,
+    },
 }
 
 impl Default for DistLoadVoltageModel {
@@ -464,6 +475,7 @@ impl DistLoadVoltageModel {
             | Self::Zip { v_nom, .. }
             | Self::Exponential { v_nom, .. }
             | Self::BoundedZip { v_nom, .. }
+            | Self::BoundedConstantPower { v_nom, .. }
             | Self::BoundedExponential { v_nom, .. } => v_nom,
         }
     }

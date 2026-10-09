@@ -34,6 +34,7 @@ mod lines;
 mod open_lines;
 mod reactors;
 mod sources;
+mod storage;
 
 /// Upper bound on any count property (`phases`, conductors, `windings`, tap
 /// counts). `phases` sizes a dense n×n matrix and the winding count drives a
@@ -68,6 +69,7 @@ const TYPED_DSS_CLASSES: &[&str] = &[
     "reactor",
     "generator",
     "pvsystem",
+    "storage",
     "xycurve",
     "invcontrol",
     "swtcontrol",
@@ -171,6 +173,7 @@ fn snapshot_network(raw: &RawDss) -> (MulticonductorNetwork, Vec<crate::diagnost
         rd.net.generators_mut().push(g);
     }
     read_ibr_objects(&mut rd, raw);
+    rd.idle_storage_objects(raw);
     for obj in raw.of_class("swtcontrol") {
         rd.swtcontrol(obj);
     }

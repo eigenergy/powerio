@@ -314,3 +314,81 @@ fn empty_exponential_laws_fail_before_canonical_writing() {
         "{error}"
     );
 }
+
+#[test]
+fn idle_storage_is_a_typed_bounded_load_with_current_limit() {
+    let mut module = parse(
+        "New Circuit.c basekv=.48\nNew Storage.s bus1=b.1.2.3.0 phases=3 conn=w kv=.48 kwrated=250 kva=250 state=idling limitcurrent=yes pf=-1\n",
+    );
+    let load = &module.value().loads()[0];
+    assert!((load.p_nom.iter().sum::<f64>() - 2500.0).abs() < 1e-10);
+    assert!(load.q_nom.iter().all(|q| *q == 0.0));
+    let law = &load.voltage_model;
+    for (u, scale) in [
+        (0.0, 0.0),
+        (0.45, 0.25),
+        (0.9, 1.0),
+        (1.0, 1.0),
+        (1.1, 1.0),
+        (1.21, 1.21),
+        (1.8, 2.0),
+    ] {
+        assert!((law.power_scale(0, law.v_nom()[0] * u).unwrap()[0] - scale).abs() < 1e-12);
+    }
+    // Typed changes govern output, including the law outside the solved point.
+    module.value_mut().loads_mut()[0].p_nom = vec![400.0, 500.0, 600.0];
+    let emitted = emit_value(module.value(), DistTargetFormat::Dss);
+    let back = parse(&emitted.text);
+    assert_eq!(back.value().loads().len(), 3);
+    assert_eq!(
+        back.value()
+            .loads()
+            .iter()
+            .map(|l| l.p_nom[0])
+            .collect::<Vec<_>>(),
+        [400.0, 500.0, 600.0]
+    );
+    assert!(back.value().loads().iter().all(|l| matches!(
+        l.voltage_model,
+        DistLoadVoltageModel::BoundedConstantPower { .. }
+    )));
+    for target in [DistTargetFormat::PmdJson, DistTargetFormat::BmopfJson] {
+        assert!(
+            emit_value(module.value(), target)
+                .warnings
+                .iter()
+                .any(|w| w.contains("current limits"))
+        );
+    }
+}
+
+#[test]
+fn unsupported_storage_keeps_electrical_blockers() {
+    for extra in [
+        "state=charging",
+        "model=2",
+        "conn=delta phases=1",
+        "balanced=yes",
+        "effcurve=c",
+        "%idlingkw=0",
+        "vminpu=0",
+        "vmaxpu=.8",
+        "pf=.0001",
+        "like=another",
+    ] {
+        let module = parse(&format!(
+            "New Circuit.c basekv=.48\nNew Storage.s bus1=b.1.2.3.0 kv=.48 kwrated=250 kva=250 {extra}\n"
+        ));
+        assert!(module.value().loads().is_empty(), "{extra}");
+        assert_eq!(
+            module
+                .value()
+                .untyped_objects()
+                .iter()
+                .filter(|o| o.class == "storage")
+                .count(),
+            1,
+            "{extra}"
+        );
+    }
+}

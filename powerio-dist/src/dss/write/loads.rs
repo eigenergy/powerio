@@ -7,7 +7,8 @@ fn parameters(model: &DistLoadVoltageModel) -> Vec<&[f64]> {
     match model {
         DistLoadVoltageModel::ConstantPower { v_nom }
         | DistLoadVoltageModel::ConstantCurrent { v_nom }
-        | DistLoadVoltageModel::ConstantImpedance { v_nom } => vec![v_nom],
+        | DistLoadVoltageModel::ConstantImpedance { v_nom }
+        | DistLoadVoltageModel::BoundedConstantPower { v_nom, .. } => vec![v_nom],
         DistLoadVoltageModel::Exponential {
             v_nom,
             gamma_p,
@@ -46,7 +47,8 @@ pub(super) fn phase_model(model: &DistLoadVoltageModel, phase: usize) -> DistLoa
     let arrays = match &mut model {
         DistLoadVoltageModel::ConstantPower { v_nom }
         | DistLoadVoltageModel::ConstantCurrent { v_nom }
-        | DistLoadVoltageModel::ConstantImpedance { v_nom } => vec![v_nom],
+        | DistLoadVoltageModel::ConstantImpedance { v_nom }
+        | DistLoadVoltageModel::BoundedConstantPower { v_nom, .. } => vec![v_nom],
         DistLoadVoltageModel::Exponential {
             v_nom,
             gamma_p,
@@ -150,6 +152,7 @@ pub(super) fn validate(net: &MulticonductorNetwork) -> Result<(), String> {
             return Err(format!("load {}: duplicate native object name", load.name));
         }
         let n = load.p_nom.len();
+        super::storage::validate(load)?;
         for (i, array) in parameters(&load.voltage_model).iter().enumerate() {
             let legacy_scalar_voltage = i == 0
                 && array.len() == 1
@@ -157,6 +160,7 @@ pub(super) fn validate(net: &MulticonductorNetwork) -> Result<(), String> {
                     load.voltage_model,
                     DistLoadVoltageModel::BoundedZip { .. }
                         | DistLoadVoltageModel::BoundedExponential { .. }
+                        | DistLoadVoltageModel::BoundedConstantPower { .. }
                 );
             if (i != 0 || !array.is_empty()) && array.len() != n && !legacy_scalar_voltage {
                 return Err(format!(

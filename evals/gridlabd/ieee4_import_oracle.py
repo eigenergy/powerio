@@ -65,6 +65,12 @@ def evaluate(source, bridge, folder, tolerance, acquisition_root=None):
             for line in network["lines"]
             if "dss_original_element" in line.get("extras", {})
         }
+        aliases.update({
+            load["extras"]["dss_original_element"].lower(): "storage." + load["name"].lower()
+            for load in network["loads"]
+            if load["voltage_model"]["model"] == "bounded_constant_power"
+            and "dss_original_element" in load.get("extras", {})
+        })
         row["physical_port_aliases"] = aliases
         row["stage"] = "native solve"
         native = run(source, tolerance)

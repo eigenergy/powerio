@@ -34,6 +34,7 @@ mod ideal_switches;
 mod ideal_transformers;
 mod loads;
 mod sources;
+mod storage;
 mod terminal_voltage;
 
 /// Options for canonical OpenDSS output.
@@ -1688,6 +1689,13 @@ impl DssWriter {
     /// One `New Load.<name>` record. A [`DistLoad`] emits one of these, or one
     /// per phase when [`Self::load_parts`] split it.
     fn write_load(&mut self, l: &DistLoad) {
+        if matches!(
+            l.voltage_model,
+            DistLoadVoltageModel::BoundedConstantPower { .. }
+        ) {
+            self.write_static_storage(l);
+            return;
+        }
         self.check_name("load", &l.name);
         let phases =
             self.element_phases(&l.extras, &l.terminal_map, l.configuration, "load", &l.name);
@@ -1791,7 +1799,8 @@ impl DssWriter {
                 }
             }
             DistLoadVoltageModel::BoundedZip { .. }
-            | DistLoadVoltageModel::BoundedExponential { .. } => {
+            | DistLoadVoltageModel::BoundedExponential { .. }
+            | DistLoadVoltageModel::BoundedConstantPower { .. } => {
                 unreachable!("bounds handled above")
             }
             DistLoadVoltageModel::Exponential {

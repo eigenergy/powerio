@@ -1805,11 +1805,39 @@ Maximum voltage differences fall from 88.8 V to 9.86 V after the PV fix, then to
 These are still failed comparisons under unchanged thresholds. Matched passive
 admittance entries agree within `9.1e-13` S in the balanced diagnostic.
 
-The remaining omitted devices include two Storage objects in the idling state,
-each consuming 2.5 kW natively. Their static losses are in scope even though
-active battery control is excluded. Untyped active storage now reports
-`READINESS.DSS.STORAGE_UNRESOLVED`, so the current complete feeder imports remain
-blocked until those electrical contributions are represented. The full
-comparisons preceding that explicit blocker are retained as failure evidence;
-each also contains missing switch-port observations. The feeder is not
-qualified by matching aggregate generation or by successful native convergence.
+### IEEE9500 idle battery demand
+
+The two idling Storage objects each consume 2.5 kW. The reader represents their
+AC demand as typed `BoundedConstantPower` loads: constant power inside the
+voltage band, impedance continuation outside it, and an optional current limit.
+The law survives IR and typed edits. Canonical DSS writes an idle Storage
+equivalent; it does not reconstruct battery dispatch or energy capacity.
+
+The qualified profile covers one-phase wye and two-/three-phase wye or delta,
+voltage model 1, and idle P/Q setpoints strictly inside inverter ratings. Voltage
+base and reactive-mode assignment order are preserved. Efficiency curves,
+forced balance, copied inverter state, charging/discharging, one-phase delta,
+and rating-clipped setpoints remain explicit electrical blockers. Untyped active
+storage reports `READINESS.DSS.STORAGE_UNRESOLVED`. PMD/BMOPF projections report
+the loss of voltage bounds and current limits. Legacy C load views reject this
+law rather than presenting it as unbounded constant power.
+
+```sh
+python evals/gridlabd/dss_storage_oracle.py \
+  --bridge /path/to/dist_network --output /tmp/new-storage-sweeps
+POWERIO_STORAGE_SAMPLES=/tmp/new-storage-sweeps/report.json \
+  cargo test -p powerio --test load_voltage_ir \
+  typed_idle_storage_powers_match_native_voltage_sweeps -- --ignored
+```
+
+The sweep compares original, canonical and reimported bus voltages, terminal
+currents, powers and losses with unchanged thresholds. An altered-line negative
+control must fail. The Rust check separately evaluates typed branch powers at
+the native voltages, including high-voltage current limiting and low-voltage
+impedance continuation.
+
+Including the idle demand reduces maximum voltage differences to approximately
+0.00111 V (balanced) and 0.00118 V (unbalanced), from 0.638 V. Both complete
+IEEE9500 comparisons still fail. Missing switch-port observations and residual
+electrical differences remain unresolved; aggregate power and native convergence
+do not qualify a feeder.
