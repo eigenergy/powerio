@@ -88,6 +88,27 @@
   `CANONICALIZE.MERGE.ATTRIBUTE_CONFLICT` codes moved to the `powerio-tx`
   registry; `powerio_prob::diagnostics::codes` re-exports them.
 
+- PSS/E three winding transformers keep each winding's status and all
+  twelve winding ratings. The three winding `STAT` codes 2, 3, and 4 take only
+  winding 2, 3, or 1 out of service, but the RAW and RAWX readers read every
+  nonzero code as all three windings in service, so a transformer with one
+  winding open still coupled all three buses in `IndexedNetwork`, the Y-bus,
+  and every analysis built on them. The reader now records the status per
+  winding, read through `Transformer3W::winding_in_service`, and the star
+  lowering gives a winding that is out an out of service branch while the
+  other two stay coupled through the star point. Revision 34 and 35 winding
+  lines state RATE1 to RATE12; the reader kept only the first three and the
+  writer wrote zeros for the rest. RATE4 to RATE12 are now read through
+  `Transformer3W::winding_rating_sets`, named as on branches, carry through
+  normalization and the star lowering, and write back. Both are kept in the
+  transformer's `extras` (`winding_in_service` and `winding_rating_sets`),
+  present only when a winding is out or states a rating set, so the PowerIO
+  IR schema and the C ABI winding view are unchanged. The writer states each
+  STAT code back. A transformer in service with two windings out has no code,
+  so it is written as STAT 0 with a diagnostic. PSS/E revision 33, PSLF,
+  XIIDM, and CGMES output report the winding detail they cannot state. A STAT
+  code outside 0 to 4 reads as 1, as before, and is now reported.
+
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW
   and RAWX readers had the two swapped, so a continuously adjusted shunt, such
