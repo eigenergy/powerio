@@ -1201,3 +1201,29 @@ disagreement with the original circuit. Both forks are checked independently.
 
 Reactor current ratings remain source-only with diagnostics. Open reactor states,
 parented substations and external transmission coupling need further mapping.
+
+### Static solar-fed inverters
+
+`solar_import_oracle.py` checks eight circuits on each pinned fork. The cases
+cover signed power factors, pure reactive output, clipping, offline state,
+static weather, all three split-phase anchors, and the IEEE9500 PV parameters
+on a service transformer. The harness independently evaluates the solar
+thermal equation and inverter dispatch, compares native complex electrical
+results with actual PowerIO import, IR and OpenDSS emission, and requires a
+wrong-power negative control to fail.
+
+```sh
+python evals/gridlabd/solar_import_oracle.py \
+  --bridge /path/to/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-solar-import-results
+```
+
+The high-output service case checks the 240 V hot-to-hot base: a 120 V base
+would incorrectly trigger OpenDSS's generator voltage-law transition. The
+IEEE9500 solar block produces 13,989.345858367315 W under its static climate,
+which differs from the declared 13,990 W inverter schedule. Comparisons use
+native inverter `VA_Out`; Arras does not update solar `P_Out` in this path.
+The profile covers `BASEEFFICIENT` solar with default orientation and simple
+inverter efficiency in `FOUR_QUADRANT CONSTANT_PF` mode. Battery inputs, other
+control modes, weather files, canonical GLM inverter output and full IEEE9500
+qualification remain unfinished.

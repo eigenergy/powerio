@@ -49,6 +49,8 @@ pub mod codes {
             "static switch status and banked initialization determine contact states";
         READ_GLM_SWITCH_EQUIVALENT = "READ.GLM.SWITCH_EQUIVALENT", Remark,
             "finite closed switch contacts use an exact static line equivalent";
+        READ_GLM_SOLAR_EQUIVALENT = "READ.GLM.SOLAR_EQUIVALENT", Remark,
+            "a static solar and inverter snapshot uses fixed typed inverter injections";
         READ_GLM_REACTOR_EQUIVALENT = "READ.GLM.REACTOR_EQUIVALENT", Remark,
             "a static reactor uses an exact line or ideal-contact equivalent";
         READ_GLM_SUBSTATION_EQUIVALENT = "READ.GLM.SUBSTATION_EQUIVALENT", Remark,

@@ -498,6 +498,23 @@ limits remain in IR; their OpenDSS mapping is unfinished and reports a loss.
 Canonical GLM generator writing is also unfinished. This device qualification
 is a prerequisite for IEEE9500, not qualification of that feeder.
 
+Solar-fed `FOUR_QUADRANT` inverters in `CONSTANT_PF` mode read as fixed
+per-phase inverter injections, including native efficiency and rating clipping.
+The supported solar profile is `BASEEFFICIENT` with default orientation and
+static climate temperature and direct irradiance. The reader evaluates its
+thermal equation; the inverter's declared `P_Out` does not set dispatch in this
+mode. Split-phase inverters connect across the two hot terminals. OpenDSS
+emission derives their line-line voltage base from winding polarity and
+conductor mappings; retained OpenDSS voltage bases still take precedence.
+Component coordinates remain attached to the typed inverter records.
+
+Both pinned forks are checked on ordinary and split-phase circuits, including
+the IEEE9500 solar parameters. Arras requires a meter or triplex-meter parent.
+Weather files, multipoint efficiency, other inverter modes, battery inputs and
+canonical GLM inverter writing remain unsupported. Climate coordinates and
+thermal inputs remain source-only with diagnostics. These device checks do not
+qualify the complete IEEE9500 feeder.
+
 GridLAB-D object latitude and longitude map to the network's typed
 `component_locations` table. Each point identifies its component table and exact
 name, with optional latitude, longitude, datum and point origin. Missing axes

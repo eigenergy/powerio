@@ -32,6 +32,7 @@ mod ideal_switches;
 mod ideal_transformers;
 mod loads;
 mod sources;
+mod terminal_voltage;
 
 /// Options for canonical OpenDSS output.
 #[derive(Clone, Debug, PartialEq)]
@@ -107,6 +108,7 @@ fn emit_snapshot(net: &MulticonductorNetwork, options: &DssEmitOptions) -> TextE
             .map(|b| (b.id.to_ascii_lowercase(), b.terminals.clone()))
             .collect(),
         kv_estimate: estimate_bus_kv(net),
+        terminal_kv: terminal_voltage::estimate(net),
     };
     w.network(net);
     TextEmission::new(w.out, w.sidecars, w.warnings)
@@ -129,6 +131,7 @@ struct DssWriter {
     terminals: BTreeMap<String, Vec<String>>,
     /// Bus id (lowercase) → phase to neutral voltage estimate, volts.
     kv_estimate: BTreeMap<String, f64>,
+    terminal_kv: terminal_voltage::TerminalVoltages,
 }
 
 #[derive(Clone, Copy)]
@@ -2216,7 +2219,9 @@ impl DssWriter {
                     configuration: g.configuration,
                     name: &g.name,
                     class: "generator",
-                    typed_kv: None,
+                    typed_kv: (phases == 1)
+                        .then(|| terminal_voltage::get(&self.terminal_kv, &g.bus, &g.terminal_map))
+                        .flatten(),
                 },
             );
             let mut s = format!(
@@ -2628,7 +2633,9 @@ impl DssWriter {
                 configuration,
                 name: &ibr.name,
                 class,
-                typed_kv: None,
+                typed_kv: (phases == 1)
+                    .then(|| terminal_voltage::get(&self.terminal_kv, &ibr.bus, &ibr.terminal_map))
+                    .flatten(),
             },
         )
     }

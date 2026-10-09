@@ -20,9 +20,11 @@ mod capacitors;
 mod delta_grounded;
 mod generators;
 mod geometry;
+mod inverters;
 mod loads;
 mod reactors;
 mod regulators;
+mod solar;
 mod sources;
 mod split_phase;
 mod substations;
@@ -101,6 +103,7 @@ pub fn parse(
     reader.regulators()?;
     reader.capacitors()?;
     reader.generators()?;
+    reader.solar_inverters()?;
     reader.coordinates()?;
     crate::require_electrical_readiness(&reader.net)
         .map_err(|e| e.with_source(project.source().clone()))?;
@@ -163,6 +166,7 @@ impl Reader<'_> {
     fn top_level(&mut self) -> Result<(), Error> {
         let mut powerflow = false;
         let mut generators = false;
+        let mut climate = false;
         for statement in self.project.statements() {
             match statement {
                 Statement::Block { header, body, span }
@@ -194,7 +198,7 @@ impl Reader<'_> {
                     if tokens.len() != 2
                         || !matches!(
                             tokens[1].text(),
-                            "powerflow" | "tape" | "assert" | "generators"
+                            "powerflow" | "tape" | "assert" | "generators" | "climate"
                         )
                     {
                         return Err(self.project.electrical_error(
@@ -204,6 +208,7 @@ impl Reader<'_> {
                     }
                     powerflow |= tokens[1].text() == "powerflow";
                     generators |= tokens[1].text() == "generators";
+                    climate |= tokens[1].text() == "climate";
                 }
                 Statement::Block { header, .. }
                     if header
@@ -222,9 +227,17 @@ impl Reader<'_> {
                 .index
                 .objects()
                 .iter()
-                .find(|o| class(o) == "diesel_dg")
+                .find(|o| matches!(class(o), "diesel_dg" | "solar" | "inverter"))
         {
-            return Err(self.error(object.key(), "diesel_dg requires the generators module"));
+            return Err(self.error(
+                object.key(),
+                "generator objects require the generators module",
+            ));
+        }
+        if !climate
+            && let Some(object) = self.index.objects().iter().find(|o| class(o) == "climate")
+        {
+            return Err(self.error(object.key(), "climate object requires the climate module"));
         }
         if !powerflow {
             return Err(Error::new(
@@ -889,6 +902,10 @@ impl Reader<'_> {
             if point.latitude.is_none() && point.longitude.is_none() {
                 continue;
             }
+            if class(object) == "climate" {
+                self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_SOURCE_ONLY, format!("climate {}: weather-station coordinates remain in source; no electrical component is created", self.names[&object.key()])));
+                continue;
+            }
             let Some(targets) = self.attachments.get(&object.key()) else {
                 return Err(self.error(
                     object.key(),
@@ -965,6 +982,9 @@ fn supported_class(name: &str) -> bool {
         || matches!(
             name,
             "diesel_dg"
+                | "inverter"
+                | "solar"
+                | "climate"
                 | "series_reactor"
                 | "overhead_line"
                 | "underground_line"
@@ -1015,6 +1035,8 @@ fn allowed_property(class: &str, name: &str) -> bool {
         || split_phase::allowed(class, name)
         || triplex_lines::allowed(class, name)
         || geometry::rating_property(class, name)
+        || solar::allowed(class, name)
+        || inverters::allowed(class, name)
         || reactors::allowed(class, name)
         || substations::allowed(class, name)
         || generators::allowed(class, name)
@@ -1045,6 +1067,11 @@ fn quantity_spec(
     dialect: super::GlmDialect,
 ) -> Option<(GlmQuantityKind, Option<&'static str>)> {
     use GlmQuantityKind::{Complex, Real};
+    if let Some(spec) =
+        solar::quantity_spec(class, name).or_else(|| inverters::quantity_spec(class, name))
+    {
+        return Some(spec);
+    }
     if let Some(spec) = split_phase::quantity_spec(class, name)
         .or_else(|| triplex_lines::quantity_spec(class, name))
         .or_else(|| generators::quantity_spec(class, name))
