@@ -795,3 +795,30 @@ python evals/gridlabd/transformer_roundtrip_oracle.py --bridge target/debug/exam
 This qualifies ordinary NR series-coil behavior, not FBS, magnetizing branches,
 regulators, split-phase services or a complete public feeder. The earlier
 `transformer_oracle.py` calibrates engine coil conventions without PowerIO.
+
+## Fixed regulators and IEEE13
+
+`regulator_oracle.py` compares Type A/B phase ratios and series resistance with
+independent coil equations. It exercises unequal taps, phase subsets, object tap
+overrides, native default resistance, edited winding values and OpenDSS output.
+Every case must detect a deliberately wrong turns ratio.
+
+`feeder_oracle.py` accepts only the hash-pinned IEEE13 NR input in `upstream.json`.
+It compares all 38 bus phase voltages and three root-meter source currents after
+full-network conversion, separately under PNNL and Arras. It retains the original
+32 published assertions, removes the output-only voltdump unsupported by Arras,
+and uses the same `1e-9 V` convergence setting for original and canonical models.
+Electrical comparison tolerances remain those in `oracle.py`. Removing one
+regulator's boost must be detected. IR-restored and fresh GLM must be identical.
+OpenDSS checks the same observables with controls disabled and solver tolerance
+`1e-12`; its default-solve measurements are retained separately to distinguish
+stopping error from electrical conversion error.
+
+```sh
+cargo build -p powerio --example glm_roundtrip
+python evals/gridlabd/regulator_oracle.py --bridge target/debug/examples/glm_roundtrip --pnnl-root "$PNNL_ROOT" --output /tmp/gld-regulators
+python evals/gridlabd/feeder_oracle.py --bridge target/debug/examples/glm_roundtrip --source /path/to/autotest/test_IEEE_13_NR.glm --pnnl-root "$PNNL_ROOT" --output /tmp/gld-ieee13
+```
+
+The feeder check is an initial acceptance layer. Device port currents, device
+losses and edited-feeder laws require further qualification; passing bus voltages and source currents does not establish them.

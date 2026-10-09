@@ -47,6 +47,10 @@ pub mod codes {
             "static switch status and banked initialization determine contact states";
         READ_GLM_SWITCH_EQUIVALENT = "READ.GLM.SWITCH_EQUIVALENT", Remark,
             "finite closed switch contacts use an exact static line equivalent";
+        READ_GLM_REGULATOR_EQUIVALENT = "READ.GLM.REGULATOR_EQUIVALENT", Remark,
+            "fixed regulator phases use equivalent winding records on explicit normalization bases";
+        READ_GLM_CONTROL_FROZEN = "READ.GLM.CONTROL_FROZEN", Warning,
+            "active regulator behavior is omitted while declared fixed tap states are preserved";
         READ_GLM_NATIVE_LINE_DISCREPANCY = "READ.GLM.NATIVE_LINE_DISCREPANCY", Warning,
             "native reported line currents differ from the physical pi-line model for noncommuting matrices";
         READ_GLM_GEOMETRY_MATERIALIZED = "READ.GLM.GEOMETRY_MATERIALIZED", Remark,

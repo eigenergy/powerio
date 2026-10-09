@@ -129,6 +129,9 @@ fn override_shunts(
 
 fn edit_transformers(network: &mut powerio_dist::MulticonductorNetwork) {
     for transformer in network.transformers_mut() {
+        if transformer.xsc_pct == [0.0] {
+            transformer.windings[0].tap *= 1.02;
+        }
         for winding in &mut transformer.windings {
             winding.r_pct *= 1.2;
         }

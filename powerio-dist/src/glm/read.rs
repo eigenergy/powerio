@@ -18,6 +18,7 @@ const METERS_PER_MILE: f64 = 1609.344;
 mod cables;
 mod geometry;
 mod loads;
+mod regulators;
 mod switches;
 mod transformers;
 
@@ -30,6 +31,7 @@ mod transformers;
 /// or conductor geometry, and fixed ordinary-phase switch contacts. Finite
 /// contacts use exact line equivalents; ideal and open contacts remain typed switches.
 /// Ordinary NR single-phase and three-phase grounded-wye transformers use typed windings.
+/// Wye regulators preserve fixed phase taps and NR resistance in winding equivalents.
 /// Other conductor/device profiles remain under implementation.
 pub fn parse(
     source: Source,
@@ -69,6 +71,7 @@ pub fn parse(
     reader.lines()?;
     reader.switches()?;
     reader.transformers()?;
+    reader.regulators()?;
     reader.coordinates()?;
     crate::require_electrical_readiness(&reader.net)
         .map_err(|e| e.with_source(project.source().clone()))?;
@@ -329,10 +332,10 @@ impl Reader<'_> {
                         format!("unmapped property {class}.{name}"),
                     ));
                 }
-                if let Some((kind, unit)) = quantity_spec(class, name) {
+                if let Some((kind, unit)) = quantity_spec(class, name, self.project.dialect()) {
                     // Native setters run in source order, even if a later
                     // assignment overwrites the value or its phase is absent.
-                    let result = self.project.quantity(property, kind, Some(unit))?;
+                    let result = self.project.quantity(property, kind, unit)?;
                     self.diagnostics.extend(result.diagnostics);
                     Self::assign_quantity(
                         &mut self.quantities,
@@ -826,6 +829,8 @@ fn supported_class(name: &str) -> bool {
                 | "line_spacing"
                 | "transformer"
                 | "transformer_configuration"
+                | "regulator"
+                | "regulator_configuration"
         )
 }
 fn bus_class(name: &str) -> bool {
@@ -857,6 +862,7 @@ fn allowed_property(class: &str, name: &str) -> bool {
         || (matches!(class, "overhead_line" | "underground_line")
             && matches!(name, "phases" | "from" | "to" | "length" | "configuration"))
         || (class == "line_configuration" && matrix_property(name))
+        || regulators::allowed(class, name)
         || transformers::allowed(class, name)
         || geometry::allowed(class, name)
         || cables::unit(class, name).is_some()
@@ -876,39 +882,56 @@ fn allowed_property(class: &str, name: &str) -> bool {
                     | "switch_reactance"
             ))
 }
-fn quantity_spec(class: &str, name: &str) -> Option<(GlmQuantityKind, &'static str)> {
+fn quantity_spec(
+    class: &str,
+    name: &str,
+    dialect: super::GlmDialect,
+) -> Option<(GlmQuantityKind, Option<&'static str>)> {
     use GlmQuantityKind::{Complex, Real};
-    if let Some(spec) = transformers::quantity_spec(class, name) {
-        return Some(spec);
+    if let Some(spec) = transformers::quantity_spec(class, name)
+        .map(|(kind, unit)| (kind, Some(unit)))
+        .or_else(|| regulators::quantity_spec(class, name))
+    {
+        // Arras publishes regulation in percent; PNNL has no unit.
+        return Some(
+            if class == "regulator_configuration"
+                && name == "regulation"
+                && dialect == super::GlmDialect::Arras4_3
+            {
+                (spec.0, Some("%"))
+            } else {
+                spec
+            },
+        );
     }
     if let Some(unit) = geometry::unit(class, name).or_else(|| cables::unit(class, name)) {
-        return Some((Real, unit));
+        return Some((Real, Some(unit)));
     }
     if class == "switch" {
         match name {
-            "switch_impedance" => return Some((Complex, "Ohm")),
-            "switch_resistance" | "switch_reactance" => return Some((Real, "Ohm")),
+            "switch_impedance" => return Some((Complex, Some("Ohm"))),
+            "switch_resistance" | "switch_reactance" => return Some((Real, Some("Ohm"))),
             _ => {}
         }
     }
     if bus_class(class) {
         match name {
-            "nominal_voltage" | "maximum_voltage_error" => return Some((Real, "V")),
-            "voltage_A" | "voltage_B" | "voltage_C" => return Some((Complex, "V")),
+            "nominal_voltage" | "maximum_voltage_error" => return Some((Real, Some("V"))),
+            "voltage_A" | "voltage_B" | "voltage_C" => return Some((Complex, Some("V"))),
             _ => {}
         }
     }
     if class == "load" {
-        return loads::property(name).map(|(_, _, kind, unit)| (kind, unit));
+        return loads::property(name).map(|(_, _, kind, unit)| (kind, Some(unit)));
     }
     if matches!(class, "overhead_line" | "underground_line") && name == "length" {
-        return Some((Real, "ft"));
+        return Some((Real, Some("ft")));
     }
     if class == "line_configuration" && matrix_property(name) {
         return Some(if name.starts_with('z') {
-            (Complex, "Ohm/mile")
+            (Complex, Some("Ohm/mile"))
         } else {
-            (Real, "nF/mile")
+            (Real, Some("nF/mile"))
         });
     }
     None

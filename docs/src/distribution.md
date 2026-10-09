@@ -237,7 +237,25 @@ coordinates. Canonical output uses the current winding voltage, resistance and
 reactance; source-only configuration objects are not required after an IR round
 trip. OpenDSS output explicitly disables its additional anti-floating admittance
 for these imported circuits. FBS transformer equations, other connections,
-non-unit taps and explicit magnetizing branches still need qualification.
+non-unit ordinary-transformer taps and explicit magnetizing branches still need
+qualification.
+
+NR `WYE_WYE` regulators preserve Type A/B per-phase ratios and series resistance
+as single-phase winding records. An object tap overrides its configuration tap.
+Manual missing taps use the native neutral position; an active controller needs
+explicit taps on every active phase and produces a frozen-control warning.
+Unit suffixes follow the selected engine: PNNL's `regulation` field has no unit,
+while Arras publishes `%`. Bare numeric values retain their native meaning.
+The winding's 1 VA normalization base is marked as defaulted and is not a declared
+nameplate rating. The `rating_is_normalization_base` extra preserves that fact in
+IR; cross-format writers diagnose loss of that metadata. Device coordinates attach to every resulting phase record.
+Canonical GLM emits manual regulator equivalents from current winding values;
+OpenDSS uses `xscarray=(0)` to avoid its scalar zero-reactance substitution.
+FBS regulators, open-delta connections and banked initialization remain unfinished.
+
+Canonical node convergence is set to `1e-9 V`. The tighter former absolute
+setting could prevent IEEE13 from converging despite stable electrical values.
+This is an engine stopping criterion, not the validation comparison tolerance.
 
 Other geometry/earth models, split-phase and
 additional static devices remain unfinished and fail explicitly. Full OpenDSS
