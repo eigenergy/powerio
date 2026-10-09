@@ -14,7 +14,7 @@ use sprs::CsMat;
 use powerio::BalancedNetwork;
 use powerio_matrix::matrix::{MatrixStats, check_sddm};
 use powerio_matrix::pipeline::{MatrixKind, RhsKind, calc_matrix_stats_for_kind};
-use powerio_matrix::synth::{SynthSpec, Topology};
+use powerio_synth::{SynthSpec, Topology};
 
 use super::log_pane::LogBuf;
 

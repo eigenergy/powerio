@@ -180,5 +180,26 @@
 <path fill="none" stroke="#4a5568" d="M418.86,-378.38C406.95,-387.42 392.91,-398.09 380.17,-407.77"/>
 <polygon fill="#4a5568" stroke="#4a5568" points="378.22,-404.85 372.37,-413.69 382.45,-410.43 378.22,-404.85"/>
 </g>
+<g id="synth_node" class="node">
+<title>powerio-synth</title>
+<rect x="30" y="-292" width="185" height="35" rx="6" ry="6" fill="#f4f6f8" stroke="#4a5568"/>
+<text text-anchor="middle" x="122.5" y="-276" font-family="Helvetica,sans-serif" font-size="11.00" fill="#1a202c">powerio-synth</text>
+<text text-anchor="middle" x="122.5" y="-264" font-family="Helvetica,sans-serif" font-size="10.00" fill="#1a202c">synthetic networks</text>
+</g>
+<g id="synth_edge_matrix" class="edge">
+<title>powerio-matrix-&gt;powerio-synth</title>
+<path fill="none" stroke="#4a5568" d="M156,-216 C145,-230 132,-244 123,-257"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="120,-255 118,-264 126,-259 120,-255"/>
+</g>
+<g id="synth_edge_tx" class="edge">
+<title>powerio-synth-&gt;powerio-tx</title>
+<path fill="none" stroke="#4a5568" d="M123,-292 C145,-307 175,-322 205,-334"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="203,-337 215,-338 207,-331 203,-337"/>
+</g>
+<g id="synth_edge_cli" class="edge">
+<title>powerio-cli-&gt;powerio-synth</title>
+<path fill="none" stroke="#4a5568" d="M151,-36 C130,-95 115,-177 120,-257"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="123,-256 121,-267 117,-258 123,-256"/>
+</g>
 </g>
 </svg>

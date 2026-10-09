@@ -2396,6 +2396,7 @@ dependencies = [
  "powerio-dist",
  "powerio-matrix",
  "powerio-prob",
+ "powerio-synth",
  "powerio-tx",
  "ratatui",
  "schemars",
@@ -2447,6 +2448,7 @@ dependencies = [
  "powerio-core",
  "powerio-dist",
  "powerio-prob",
+ "powerio-synth",
  "powerio-tx",
  "rand 0.10.3",
  "rand_chacha",
@@ -2470,6 +2472,16 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "powerio-synth"
+version = "0.11.4"
+dependencies = [
+ "powerio-tx",
+ "rand 0.10.3",
+ "rand_chacha",
+ "serde",
 ]
 
 [[package]]

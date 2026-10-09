@@ -10,7 +10,8 @@
 //! └── powerio-dist
 //!
 //! powerio-prob   -> powerio-core + powerio-tx + powerio-dist
-//! powerio-matrix -> powerio-core + powerio-tx + powerio-dist + powerio-prob
+//! powerio-synth  -> powerio-tx
+//! powerio-matrix -> powerio-core + powerio-tx + powerio-dist + powerio-prob + powerio-synth
 //! powerio        -> powerio-core + powerio-tx + powerio-dist + powerio-prob
 //! powerio        -> powerio-matrix when the matrix feature is enabled
 //! ```
@@ -83,11 +84,25 @@ fn the_dependency_graph_matches_the_settled_layout() {
         BTreeSet::from(["powerio-core", "powerio-tx", "powerio-dist"])
     );
 
-    // Matrix construction sits above the models and problem data, never on
-    // or through the facade.
+    // Synthetic network generation is a standalone layer over the balanced
+    // transmission model; matrix construction consumes it alongside the
+    // models and problem data, never through the facade.
+    assert_eq!(
+        workspace_deps_of(&graph, "powerio-synth"),
+        BTreeSet::from(["powerio-tx"])
+    );
+
+    // Matrix construction sits above the models, problem data, and synthetic
+    // generators, never on or through the facade.
     assert_eq!(
         workspace_deps_of(&graph, "powerio-matrix"),
-        BTreeSet::from(["powerio-core", "powerio-tx", "powerio-dist", "powerio-prob"])
+        BTreeSet::from([
+            "powerio-core",
+            "powerio-tx",
+            "powerio-dist",
+            "powerio-prob",
+            "powerio-synth",
+        ])
     );
 
     // The facade pulls the component crates; matrix functionality is its

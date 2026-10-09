@@ -5,7 +5,7 @@ mod helpers;
 use helpers::*;
 
 use powerio_core::{Destination, EmittedOutput, PioModule};
-use powerio_matrix::synth::{SynthSpec, Topology, generate};
+use powerio_synth::{SynthSpec, Topology, generate};
 use powerio_tx::{BalancedNetwork, TargetFormat};
 
 fn emit_matpower(network: &BalancedNetwork) -> String {

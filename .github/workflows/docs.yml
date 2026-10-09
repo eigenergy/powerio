@@ -1,9 +1,10 @@
 name: Docs
 
-# Build the workspace rustdoc and publish it to GitHub Pages. This renders all
-# eight library crates, including powerio-capi and powerio-py (publish = false),
+# Build the workspace rustdoc and publish it to GitHub Pages.
+# PR publication is represented by a validation gate so no check is skipped. This renders all
+# nine library crates, including powerio-capi and powerio-py (publish = false),
 # whose //! docs docs.rs would never host. docs.rs takes over for the published
-# crates (powerio, powerio-core, powerio-matrix, powerio-prob, powerio-dist,
+# crates (powerio, powerio-core, powerio-matrix, powerio-prob, powerio-dist, powerio-synth,
 # retired crates) once they reach crates.io.
 # PRs build the docs too (so a broken intra-doc link fails review, not main),
 # but only push to main / dispatch deploys to Pages; see the `deploy` gate.
@@ -19,15 +20,9 @@ permissions:
   pages: write
   id-token: write
 
-# Serialize per ref. On main, queue rather than cancel: a cancelled in-flight
-# Pages deployment can leave the backend rejecting the next deployment
-# ("Deployment failed, try again later"), so successive main pushes must each
-# deploy in order. A pull request run never deploys (see the `deploy` gate),
-# so a superseded one is cancelled like the other pull request workflows.
-concurrency:
-  group: pages-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
+# Main and PR runs are allowed to complete independently. PR runs never
+# publish to Pages (see the `deploy` gate), while main / dispatch runs retain
+# the real Pages deployment path.
 env:
   CARGO_TERM_COLOR: always
 
@@ -52,7 +47,7 @@ jobs:
     - name: Build docs
       env:
         RUSTDOCFLAGS: "-D warnings"
-      run: cargo doc --no-deps --all-features -p powerio -p powerio-core -p powerio-tx -p powerio-matrix -p powerio-prob -p powerio-dist -p powerio-capi -p powerio-py
+      run: cargo doc --no-deps --all-features -p powerio -p powerio-core -p powerio-tx -p powerio-matrix -p powerio-prob -p powerio-dist -p powerio-synth -p powerio-capi -p powerio-py
     - name: Build Python API docs
       run: |
         python -m pip install --upgrade pip
@@ -144,6 +139,7 @@ jobs:
                 <a href="powerio_dist/index.html">powerio-dist</a>
                 <a href="powerio_prob/index.html">powerio-prob</a>
                 <a href="powerio_matrix/index.html">powerio-matrix</a>
+                <a href="powerio_synth/index.html">powerio-synth</a>
                 <a href="powerio_capi/index.html">powerio-capi</a>
                 <a href="python/powerio.html">python</a></dd>
           </div>
@@ -218,13 +214,20 @@ jobs:
         path: target/doc
 
   deploy:
+    name: Documentation publication gate
     needs: build
-    # PR runs build to catch doc breakage but never publish; only main / dispatch deploy.
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
-      name: github-pages
+      name: ${{ github.event_name == 'pull_request' && 'ci' || 'github-pages' }}
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+    - name: Verify documentation build
+      env:
+        BUILD_RESULT: ${{ needs.build.result }}
+      run: test "$BUILD_RESULT" = success
+    - name: PR publication dry-run
+      if: github.event_name == 'pull_request'
+      run: echo "Documentation build passed; GitHub Pages publication is main/dispatch-only."
     - id: deployment
+      if: github.event_name != 'pull_request'
       uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

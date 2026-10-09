@@ -39,19 +39,20 @@ env:
 
 jobs:
   release-preflight:
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
-      tag: ${{ steps.release.outputs.tag }}
-      sha: ${{ steps.release.outputs.sha }}
+      tag: ${{ steps.release.outputs.tag || '' }}
+      sha: ${{ steps.release.outputs.sha || steps.pr_release.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_REF }}
           fetch-depth: 0
       - name: Release identity agreement
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         run: bash scripts/check-release-versions.sh
       - name: Verify the immutable published release
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -87,6 +88,10 @@ jobs:
           fi
           echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "sha=$head_commit" >> "$GITHUB_OUTPUT"
+      - name: PR preflight
+        if: github.event_name != 'release' && github.event_name != 'workflow_dispatch'
+        id: pr_release
+        run: echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
   lint:
     runs-on: ubuntu-latest
@@ -315,7 +320,6 @@ jobs:
 
   wheels:
     name: wheels (${{ matrix.platform.target }} on ${{ matrix.platform.runner }})
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     needs: release-preflight
     runs-on: ${{ matrix.platform.runner }}
     strategy:
@@ -369,7 +373,6 @@ jobs:
   # macOS x86_64 runs the cross compiled x86_64 wheel under Rosetta.
   wheel-smoke:
     name: wheel smoke (${{ matrix.platform.target }} on ${{ matrix.platform.runner }})
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     needs: [ release-preflight, wheels ]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
@@ -425,7 +428,6 @@ jobs:
           "$py" scripts/wheel-smoke.py
 
   sdist:
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     needs: release-preflight
     runs-on: ubuntu-latest
     steps:
@@ -457,35 +459,55 @@ jobs:
           path: dist
 
   publish:
-    name: publish to PyPI
-    # release-binaries.yml stages each release as a draft a human publishes, so
-    # the release event fires with a user actor (events from a workflow's
-    # GITHUB_TOKEN are swallowed by the recursion guard). Manual dispatch is the
-    # recovery path for a missed event. A prerelease still builds wheels and an
-    # sdist as run artifacts, but never uploads them to PyPI.
-    if: (github.event_name == 'release' && github.event.release.prerelease == false) || github.event_name == 'workflow_dispatch'
+    name: Package publication gate
+    if: always()
     needs: [ release-preflight, lint, quality, test, test-gridfm, goc3-reference, wheels, wheel-smoke, sdist ]
     runs-on: ubuntu-latest
-    # Deployment protection (required reviewers, tag rules) lives on the pypi
-    # environment in the repo settings, not in this file.
-    environment: pypi
+    environment: ${{ (github.event_name == 'release' || github.event_name == 'workflow_dispatch') && 'pypi' || 'ci' }}
     permissions:
-      id-token: write  # PyPI trusted publishing; no stored token
+      contents: read
+      id-token: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - name: Verify all package prerequisites
+        env:
+          RELEASE_PREFLIGHT: ${{ needs.release-preflight.result }}
+          LINT: ${{ needs.lint.result }}
+          QUALITY: ${{ needs.quality.result }}
+          TEST: ${{ needs.test.result }}
+          TEST_GRIDFM: ${{ needs.test-gridfm.result }}
+          GOC3: ${{ needs.goc3-reference.result }}
+          WHEELS: ${{ needs.wheels.result }}
+          WHEEL_SMOKE: ${{ needs.wheel-smoke.result }}
+          SDIST: ${{ needs.sdist.result }}
+        run: |
+          set -euo pipefail
+          for result in "$RELEASE_PREFLIGHT" "$LINT" "$QUALITY" "$TEST" "$TEST_GRIDFM" "$GOC3" "$WHEELS" "$WHEEL_SMOKE" "$SDIST"; do
+            test "$result" = success || {
+              echo "package prerequisite did not succeed: $result" >&2
+              exit 1
+            }
+          done
+      - name: PR publication dry-run
+        if: github.event_name != 'release' && github.event_name != 'workflow_dispatch'
+        run: echo "All package artifacts passed validation; PyPI publication is release-only."
+      - name: Download release artifacts
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
           merge-multiple: true
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.x"
       - name: Check distributions
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         run: |
           python -m pip install twine
           python -m twine check dist/*
-      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        with:
+          python-version: "3.x"
+      - name: Publish to PyPI
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: dist
-          # A partially failed upload (e.g. wheels in, sdist rejected) is
-          # recovered by re-running; already-uploaded files are skipped.
           skip-existing: true

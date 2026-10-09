@@ -20,7 +20,7 @@ use app::{App, BatchJob, BatchProgress, Screen, SynthField, WorkerEvent};
 use log_pane::LogBuf;
 
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
-use powerio_matrix::synth::Topology;
+use powerio_synth::Topology;
 
 #[derive(Debug, Default)]
 pub struct TuiOptions {
@@ -377,7 +377,7 @@ fn handle_synth(app: &mut App, key: KeyEvent) {
         KeyCode::Left => synth_tweak(app, false),
         KeyCode::Right => synth_tweak(app, true),
         KeyCode::Char('g') => {
-            let case = powerio_matrix::synth::generate(&app.synth.spec);
+            let case = powerio_synth::generate(&app.synth.spec);
             app.synth.generated = Some(case);
             app.set_status("regenerated synthetic case");
         }

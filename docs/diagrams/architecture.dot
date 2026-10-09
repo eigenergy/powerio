@@ -26,6 +26,7 @@ digraph powerio_architecture {
     powerio [label = "powerio (facade)\nparse, emit, serialize, deserialize,\nPioValue"];
 
     "powerio-matrix" [label = "powerio-matrix\nsparse matrices, graph data"];
+    "powerio-synth" [label = "powerio-synth\ndeterministic synthetic networks"];
     "powerio-prob" [label = "powerio-prob\noperating points, 7 instances,\n8 solutions"];
 
     "powerio-tx" [label = "powerio-tx\nBalancedNetwork\n+ balanced formats"];
@@ -42,12 +43,15 @@ digraph powerio_architecture {
     "powerio-matrix" -> "powerio-tx";
     "powerio-matrix" -> "powerio-dist";
     "powerio-matrix" -> "powerio-prob";
+    "powerio-matrix" -> "powerio-synth";
+    "powerio-synth" -> "powerio-tx";
     powerio -> "powerio-core";
     powerio -> "powerio-tx";
     powerio -> "powerio-dist";
     powerio -> "powerio-prob";
     powerio -> "powerio-matrix" [label = "matrix feature", style = dashed];
     "powerio-cli" -> powerio;
+    "powerio-cli" -> "powerio-synth";
     "powerio-capi" -> powerio;
     "powerio-py" -> powerio;
 
