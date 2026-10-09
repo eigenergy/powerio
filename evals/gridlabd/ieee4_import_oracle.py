@@ -7,6 +7,7 @@ never count as electrical qualification. Public dataset bytes remain external.
 import argparse
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 
@@ -16,13 +17,20 @@ from oracle import HERE, LOCK, command, compare
 
 
 def run(path, tolerance):
+    path = path.resolve()
     engine = dss.NewContext()
     for flag in ("AllowChangeDir", "AllowDOScmd", "AllowEditor", "AllowForms"):
         getattr(engine.Basic, flag)(False)
     if LOCK["dss"]["version"] not in engine.Basic.Version():
         raise ValueError("unpinned engine")
     engine.Basic.DataPath(str(path.parent.resolve()))
-    engine.Text.Command(f'redirect "{path.resolve()}"')
+    # UUIDs uses the process directory even when native AllowChangeDir is off.
+    previous = Path.cwd()
+    try:
+        os.chdir(path.parent)
+        engine.Text.Command(f'redirect "{path.resolve()}"')
+    finally:
+        os.chdir(previous)
     engine.Text.Command(
         f"set mode=snapshot controlmode=off tolerance={tolerance} maxiterations=1000"
     )
@@ -65,6 +73,9 @@ def evaluate(source, bridge, folder, tolerance, acquisition_root=None):
                     "autotrans.",
                     "capacitor.",
                     "reactor.",
+                    "generator.",
+                    "pvsystem.",
+                    "storage.",
                 )
             )
         ]

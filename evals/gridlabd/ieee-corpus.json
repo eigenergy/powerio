@@ -740,6 +740,27 @@
               "bytes": 1445129
             }
           ]
+        },
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/ieee9500dss/ieee9500_base.dss",
+              "git_blob_sha1": "bb5d8745d98a808e2d2c5478bc9b24611401100e",
+              "bytes": 1064633
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/ieee9500dss/ieee9500_busxy.dss",
+              "git_blob_sha1": "892fcdfecf58c188a801e55587ea64e7642b752a",
+              "bytes": 165083
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/ieee9500dss/ieee9500_uuid.dss",
+              "git_blob_sha1": "12ad8f0fdcd6b72aad3ecc1170019f0aa4f8c49b",
+              "bytes": 381690
+            }
+          ]
         }
       ],
       "note": "Archives include paired engine results. GLM wrappers include climate/generator/reliability modules; do not silently discard their effects."

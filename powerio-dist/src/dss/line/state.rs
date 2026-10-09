@@ -1,6 +1,6 @@
 use std::f64::consts::TAU;
 
-use crate::dss::geometry::{EarthModel, cache::Context, definition::Definition};
+use crate::dss::geometry::{EarthModel, cache::Context, definition::Definition, direct::Binding};
 use crate::dss::{linecode, raw::RawDss, raw::RawProp};
 use linecode::LineMatrices;
 
@@ -31,6 +31,8 @@ pub(in crate::dss) struct State {
     dirty: bool,
     cached: Option<(f64, LineMatrices)>,
     geometry: Option<usize>,
+    spacing: Option<Binding>,
+    ratings_specified: bool,
     geometry_frequency: Option<f64>,
     // Native Zinv survives MakeLike and LineCode assignment while geometry
     // remains bound; those operations copy Z/Yc without copying Zinv.
@@ -81,6 +83,8 @@ impl State {
             dirty: true,
             cached: None,
             geometry: None,
+            spacing: None,
+            ratings_specified: false,
             geometry_frequency: None,
             geometry_impedance: None,
             earth_model: EarthModel::Deri,
@@ -149,7 +153,8 @@ impl State {
     }
 
     pub fn fetch_code(&mut self, code: &linecode::State) {
-        self.geometry = None;
+        self.kill_geometry();
+        self.kill_spacing();
         self.frequency = code.frequency;
         self.rg = code.rg;
         self.xg = code.xg;
@@ -261,7 +266,8 @@ impl State {
                     self.matrices.x = matrix;
                 }
                 self.sequence.model = false;
-                self.geometry = None;
+                self.kill_geometry();
+                self.kill_spacing();
                 self.reset_units();
                 self.dirty = true;
             }
@@ -281,24 +287,34 @@ impl State {
             }
             "earthmodel" => self.earth_model = EarthModel::parse(&prop.value.text)?,
             "enabled" => self.enabled = yes(&prop.value.text),
-            "switch" => {
-                self.is_switch = yes(&prop.value.text);
-                if self.is_switch {
-                    self.sequence.values = [1.0, 1.0, 1.0, 1.0, 1.1e-9, 1e-9];
-                    self.length = 0.001;
-                    self.reset_units();
-                    self.geometry = None;
-                    self.sequence.changed = true;
-                    self.dirty = true;
+            "switch" => self.set_switch(yes(&prop.value.text)),
+            "normamps" | "emergamps" => {
+                if key == "normamps" {
+                    self.normamps = number()?;
+                } else {
+                    self.emergamps = number()?;
                 }
+                self.ratings_specified = true;
             }
-            "normamps" => self.normamps = number()?,
-            "emergamps" => self.emergamps = number()?,
+            "seasons" | "ratings" => self.ratings_specified = true,
             // These fields do not alter an ordinary matrix/sequence primitive.
-            "faultrate" | "pctperm" | "repair" | "seasons" | "ratings" | "linetype" => {}
+            "faultrate" | "pctperm" | "repair" | "linetype" => {}
             _ => return Err(format!("unqualified Line property {key}")),
         }
         Ok(())
+    }
+
+    fn set_switch(&mut self, enabled: bool) {
+        self.is_switch = enabled;
+        if enabled {
+            self.sequence.values = [1.0, 1.0, 1.0, 1.0, 1.1e-9, 1e-9];
+            self.length = 0.001;
+            self.reset_units();
+            self.kill_geometry();
+            self.kill_spacing();
+            self.sequence.changed = true;
+            self.dirty = true;
+        }
     }
 
     fn set_phases(&mut self, n: f64) -> Result<(), String> {
@@ -318,7 +334,8 @@ impl State {
     }
 
     fn set_sequence(&mut self, key: &str, value: f64) {
-        self.geometry = None;
+        self.kill_geometry();
+        self.kill_spacing();
         let (index, scale) = match key {
             "r1" => (0, 1.0),
             "x1" => (1, 1.0),
@@ -342,6 +359,80 @@ impl State {
         }
     }
 
+    fn kill_geometry(&mut self) {
+        if self.geometry.take().is_some() {
+            self.geometry_frequency = None;
+        }
+    }
+
+    fn kill_spacing(&mut self) {
+        if self.spacing.take().is_some() {
+            self.geometry_frequency = None;
+        }
+    }
+
+    pub fn fetch_spacing(&mut self, object: usize, context: &Context<'_>) -> Result<(), String> {
+        let spacing = context.spacing(object)?;
+        if spacing.phases == 0 || spacing.phases > spacing.x.len() {
+            return Err("invalid direct LineSpacing phase count".into());
+        }
+        // Reassignment allocates new conductor slots but retains FZFrequency
+        // and the previous cable choice unless a geometry was bound.
+        let cable = self.spacing.as_ref().is_some_and(|b| b.cable);
+        self.kill_geometry();
+        self.code_units = None;
+        self.spacing = Some(Binding {
+            object,
+            conductors: vec![None; spacing.x.len()],
+            cable,
+        });
+        self.resize_terminals(spacing.phases);
+        self.sequence.model = false;
+        self.sequence.changed = false;
+        self.ratings_specified = false;
+        self.dirty = true;
+        Ok(())
+    }
+
+    pub fn bind_conductors(
+        &mut self,
+        cable: bool,
+        objects: &[usize],
+        context: &Context<'_>,
+    ) -> Result<(), String> {
+        let binding = self
+            .spacing
+            .as_mut()
+            .ok_or("LineSpacing must precede conductor assignment")?;
+        let spacing = context.spacing(binding.object)?;
+        if spacing.x.len() != binding.conductors.len() {
+            return Err("live LineSpacing size differs from its assigned conductor slots".into());
+        }
+        let start = if !cable && binding.cable {
+            spacing.phases
+        } else {
+            0
+        };
+        let count = binding.conductors.len().saturating_sub(start);
+        if objects.is_empty() || objects.len() > count || (!cable && objects.len() != count) {
+            return Err("direct spacing conductor array has wrong length".into());
+        }
+        for (i, object) in objects.iter().enumerate() {
+            binding.conductors[start + i] = Some(*object);
+            if !cable {
+                let state = context.conductor(*object)?;
+                self.normamps = state.normamps;
+                self.emergamps = state.emergamps;
+            }
+        }
+        if cable {
+            binding.cable = true;
+        }
+        self.ratings_specified = false;
+        self.dirty = true;
+        Ok(())
+    }
+
     pub fn fetch_geometry(
         &mut self,
         object: usize,
@@ -356,6 +447,7 @@ impl State {
         if n == 0 || n > 32 {
             return Err("invalid geometry Line conductor count".into());
         }
+        self.kill_spacing();
         self.geometry = Some(object);
         self.geometry_frequency = None;
         self.code_units = None;
@@ -384,9 +476,9 @@ impl State {
         frequency: f64,
         context: &mut Context<'_>,
     ) -> Result<LineMatrices, String> {
-        let Some(object) = self.geometry else {
+        if self.geometry.is_none() && self.spacing.is_none() {
             return self.primitive(frequency);
-        };
+        }
         if let Some((f, matrix)) = &self.cached
             && !self.dirty
             && f.to_bits() == frequency.to_bits()
@@ -400,8 +492,22 @@ impl State {
             .geometry_frequency
             .is_none_or(|f| f.to_bits() != frequency.to_bits())
         {
-            context.active_earth = Ok(self.earth_model);
-            let mut matrix = context.calculate(object, frequency)?;
+            let mut matrix = if let Some(object) = self.geometry {
+                context.active_earth = Ok(self.earth_model);
+                context.calculate(object, frequency)?
+            } else {
+                let (matrix, normamps, emergamps) = self.spacing.as_ref().unwrap().calculate(
+                    context,
+                    frequency,
+                    self.earth_model,
+                    self.rho_specified.then_some(self.rho),
+                )?;
+                if !self.ratings_specified {
+                    self.normamps = normamps;
+                    self.emergamps = emergamps;
+                }
+                matrix
+            };
             Context::scale(&mut matrix, self.length, self.units);
             self.geometry_impedance = Some(matrix.clone());
             self.matrices = matrix;
@@ -463,7 +569,7 @@ impl State {
         {
             return Ok(matrix.clone());
         }
-        if self.geometry.is_some() {
+        if self.geometry.is_some() || self.spacing.is_some() {
             return Err("geometry Line requires a resolved shared calculation context".into());
         }
         if !frequency.is_finite() || frequency <= 0.51 {

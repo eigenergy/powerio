@@ -49,7 +49,7 @@ impl Reader<'_> {
         }
         if [
             "like", "linecode", "rmatrix", "xmatrix", "cmatrix", "r1", "r0", "x1", "x0", "c1",
-            "c0", "b1", "b0", "switch", "geometry",
+            "c0", "b1", "b0", "switch", "geometry", "spacing",
         ]
         .iter()
         .all(|key| object.get(key).is_none())
@@ -93,7 +93,7 @@ impl Reader<'_> {
         let mut resolved = Vec::new();
         let mut joint = raw
             .of_class("line")
-            .any(|o| o.get("geometry").is_some())
+            .any(|o| o.get("geometry").is_some() || o.get("spacing").is_some())
             .then(|| crate::dss::geometry::timeline::resolve(raw));
         for (index, object) in raw
             .objects

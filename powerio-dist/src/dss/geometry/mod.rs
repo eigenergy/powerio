@@ -1,11 +1,12 @@
 //! Pinned OpenDSS overhead and concentric-neutral geometry calculations in SI units.
 //!
 //! Ordered conductor definitions and shared native calculation caches feed
-//! conductor-resolved Line snapshots. Unqualified direct-spacing/tape-shield paths retain
+//! conductor-resolved Line snapshots. Unqualified cable paths retain
 //! explicit unresolved-geometry diagnostics.
 pub(super) mod cache;
 mod cn;
 pub(super) mod definition;
+pub(super) mod direct;
 mod spacing;
 pub(super) mod timeline;
 mod wire;

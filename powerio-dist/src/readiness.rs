@@ -271,6 +271,10 @@ fn audit_untyped(net: &MulticonductorNetwork, report: &mut ElectricalReadiness) 
             .is_some_and(|(_, value)| {
                 value.eq_ignore_ascii_case("no") || value.eq_ignore_ascii_case("false")
             });
+        if object.class.eq_ignore_ascii_case("reactor") && !explicitly_disabled {
+            report.block("READINESS.DSS.REACTOR_UNRESOLVED", &object.name,
+                "untyped reactor has unresolved electrical behavior; omitting a series reactor can disconnect the feeder");
+        }
         if object.class.eq_ignore_ascii_case("vsource") && !explicitly_disabled {
             report.block("READINESS.DSS.SOURCE_UNRESOLVED", &object.name,
                 "untyped voltage source must remain explicitly disabled; enabling it requires electrical source conversion");
@@ -510,6 +514,32 @@ fn audit_load_voltage(net: &MulticonductorNetwork, report: &mut ElectricalReadin
 mod tests {
     use super::*;
     use crate::{DistBus, DistLine, DistLineCode, Extras, MulticonductorNetwork};
+
+    #[test]
+    fn unresolved_series_reactor_is_a_blocker_unless_disabled() {
+        let mut net = MulticonductorNetwork::new();
+        net.untyped_objects_mut()
+            .push(crate::model::UntypedObject::new(
+                "reactor",
+                "feed",
+                vec![
+                    (Some("bus1".into()), "source".into()),
+                    (Some("bus2".into()), "feeder".into()),
+                    (Some("x".into()), "15".into()),
+                ],
+            ));
+        let report = audit_electrical_readiness(&net);
+        assert!(
+            report
+                .blockers()
+                .any(|f| f.code == "READINESS.DSS.REACTOR_UNRESOLVED")
+        );
+        assert!(require_electrical_readiness(&net).is_err());
+        net.untyped_objects_mut()[0]
+            .props
+            .push((Some("enabled".into()), "no".into()));
+        assert!(audit_electrical_readiness(&net).is_ready());
+    }
 
     #[test]
     fn inactive_source_metadata_cannot_be_reenabled_without_electrical_conversion() {

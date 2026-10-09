@@ -1613,9 +1613,9 @@ POWERIO_XFMRCODE_ORACLE=/tmp/new-xfmrcode-states/observations.json \
 ```
 
 
-## Public IEEE13, IEEE34, IEEE37, IEEE123 and North American LV profiles
+## Public IEEE13, IEEE34, IEEE37, IEEE123, IEEE9500 and North American LV profiles
 
-`ieee_distribution_import_oracle.py` compares eight public feeder entries with
+`ieee_distribution_import_oracle.py` compares nine public feeder entries with
 canonical output and repeated conversion. Sources and dependencies are pinned
 in `ieee-corpus.json`; public bytes remain in an external checkout. Run:
 
@@ -1665,8 +1665,8 @@ GMR defaults, historical copies, live electrical edits and copied ratings.
 Cable phases may have trailing bare neutrals; concentric strands are always
 eliminated before optional reduction of those bare neutrals. The resulting
 impedance and capacitance use the existing typed line model and IR layout.
-Direct `Line.spacing`, tape-shield cables and mixed bare/cable phase positions
-remain unqualified. The pinned engine rejects `LineGeometry like=` when copying
+Direct `Line.spacing` is covered below. Tape-shield cables and mixed bare/cable
+phase positions remain unqualified. The pinned engine rejects `LineGeometry like=` when copying
 a CN geometry with an invalid type cast; PowerIO reports that case explicitly.
 
 ```sh
@@ -1694,3 +1694,64 @@ errors are approximately 26 microvolts, 57 microamps and 7.9 VA. Its `SecPar`
 variant also remains unqualified. These residuals remain visible under the
 unchanged acceptance thresholds. The three controlled public-geometry probes
 pass independently; their success does not qualify the complete feeder.
+
+
+### Direct Line.spacing and IEEE9500
+
+Direct spacing retains live `LineSpacing`, `WireData` and `CNData` references.
+The reader preserves assignment-time dimensions and ratings, later edits,
+copied definitions and the native per-Line frequency cache. Unlike a
+`LineGeometry.spacing` assignment, this path reads current coordinates when it
+recalculates. Missing historical bindings and unsafe live conductor-count
+changes remain explicit errors. The calculation also preserves the native
+order of earth-model selection; the temporary geometry is first calculated
+with the previous active earth model.
+
+```sh
+python evals/gridlabd/dss_direct_spacing_oracle.py --output /tmp/new-direct-spacing
+POWERIO_GEOMETRY_CACHE_ORACLE=/tmp/new-direct-spacing/observations.json \
+  cargo test -p powerio-dist --lib pinned_calculation_history -- --ignored
+python evals/gridlabd/ieee9500_spacing_oracle.py \
+  --master /path/to/ieee9500dss/ieee9500_base.dss \
+  --bridge /path/to/dist_network --output /tmp/new-ieee9500-spacing
+```
+
+Twenty native histories compare line primitives and current ratings. The public
+spacing oracle selects one original line for each overhead/cable and phase-count
+combination, keeps its definitions and length, and replaces its endpoints with
+a controlled source and unequal loads. All five selections pass: overhead
+single-, two- and three-phase lines and single- and three-phase CN cables.
+Together they compare 150 complex quantities, IR, repeated canonical output
+and changed-line negative controls. They are line probes, not full-feeder
+qualifications.
+
+The `electricdss-tst` IEEE9500 master and its coordinate and UUID companions are
+now pinned in the catalog. Its 2,622 unresolved geometry entries are eliminated;
+import and IR equality succeed. The complete source does not converge in the
+pinned native engine under the written fixed-state profile. Normal and Newton
+methods both fail within 1,000 iterations at tolerances from `1e-11` to `1e-8`;
+the original source with controls enabled also fails. Canonical convergence
+alone cannot qualify that conversion. The separately pinned CIMHub balanced
+and unbalanced archives remain distinct cases.
+The full-feeder comparator also includes Generator, PVSystem and Storage ports;
+missing converted ports are reported, not silently omitted. UUID resolution
+uses the source directory while native automatic directory changes remain off.
+
+
+Both CIMHub archives are exercised by:
+
+```sh
+python evals/gridlabd/ieee9500_archive_import_oracle.py \
+  --archives /path/to/pinned/archives --bridge /path/to/dist_network \
+  --output /tmp/new-ieee9500-archives
+```
+
+The archive bytes are checked against the catalog before extraction. Both
+fixed-state native cases converge, but their first converted comparisons left
+almost every downstream bus de-energized. The source path contains a series
+`Reactor.hvmv_sub_hsb` with `r=0` and `x=14.798307` ohms; that reactor was
+retained untyped and omitted from canonical electrical equipment. These are
+failed comparisons, not valid all-zero solutions. The readiness audit now
+blocks active untyped reactors explicitly, so these feeder imports correctly
+remain incomplete after their line geometry is resolved. Series-reactor
+conversion is the next required electrical feature for these public cases.

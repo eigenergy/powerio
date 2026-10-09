@@ -1,4 +1,4 @@
-"""Public IEEE13/34/37/123 and North American LV DSS feeders at their written, fixed device states.
+"""Public IEEE13/34/37/123/9500 and North American LV DSS feeders at their written, fixed device states.
 
 Every solve and voltage-base calculation in the selected entry files is
 preceded by ControlMode=Off. Original bytes are pinned and retained separately;
@@ -22,6 +22,7 @@ CASES = {
     "ieee37": "37Bus/ieee37.dss",
     "ieee123": "123Bus/IEEE123Master.dss",
     "ieee123_switches": "123Bus/IEEE123Switches.dss",
+    "ieee9500": "ieee9500dss/ieee9500_base.dss",
     "north_american": "LVTestCaseNorthAmerican/Master.dss",
     "north_american_secpar": "LVTestCaseNorthAmerican/SecPar.dss",
 }
@@ -49,6 +50,7 @@ def main():
             "ieee37",
             "ieee123",
             "north_american_lv_network",
+            "ieee9500",
         ):
             continue
         for pin in family["sources"]:

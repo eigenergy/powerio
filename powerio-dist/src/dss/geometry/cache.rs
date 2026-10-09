@@ -94,6 +94,22 @@ impl<'a> Context<'a> {
         Ok(())
     }
 
+    pub fn spacing(&self, object: usize) -> Result<super::spacing::State, String> {
+        let point = self
+            .visible
+            .get(&object)
+            .ok_or("LineSpacing is not visible")?;
+        super::spacing::resolve_with_budget(self.raw, *point, &mut (1_usize << 22))
+    }
+
+    pub fn conductor(&self, object: usize) -> Result<wire::State, String> {
+        let point = self
+            .visible
+            .get(&object)
+            .ok_or("conductor is not visible")?;
+        wire::resolve_with_budget(self.raw, *point, &mut (1_usize << 22))
+    }
+
     pub fn definition(&self, object: usize) -> Result<definition::Definition, String> {
         let point = self
             .entries

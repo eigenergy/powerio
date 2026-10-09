@@ -1475,7 +1475,7 @@ impl<L: Loader> Executor<'_, L> {
             );
             if matches!(
                 self.raw.objects[idx].class.as_str(),
-                "line" | "wiredata" | "cndata" | "linegeometry"
+                "line" | "wiredata" | "cndata" | "linegeometry" | "linespacing"
             ) {
                 self.raw
                     .geometry_timeline
@@ -1734,7 +1734,7 @@ impl<L: Loader> Executor<'_, L> {
                 self.raw.objects[idx].edits.extend(bounds);
                 if matches!(
                     class.as_str(),
-                    "line" | "wiredata" | "cndata" | "linegeometry"
+                    "line" | "wiredata" | "cndata" | "linegeometry" | "linespacing"
                 ) {
                     self.raw
                         .geometry_timeline
@@ -1757,12 +1757,13 @@ impl<L: Loader> Executor<'_, L> {
         p: &RawProp,
         ctx: &dyn Fn(String) -> String,
     ) -> bool {
-        if self.raw.objects[idx].class == "linegeometry"
-            && matches!(
-                p.name.as_deref(),
-                Some("wire" | "wires" | "cncable" | "cncables")
-            )
-        {
+        if matches!(
+            self.raw.objects[idx].class.as_str(),
+            "linegeometry" | "line"
+        ) && matches!(
+            p.name.as_deref(),
+            Some("wire" | "wires" | "cncable" | "cncables")
+        ) {
             let names = if matches!(p.name.as_deref(), Some("wire" | "cncable")) {
                 vec![p.value.text.clone()]
             } else {
@@ -1921,7 +1922,7 @@ impl<L: Loader> Executor<'_, L> {
             self.raw.objects[idx].props.push(p);
             if matches!(
                 self.raw.objects[idx].class.as_str(),
-                "line" | "wiredata" | "cndata" | "linegeometry"
+                "line" | "wiredata" | "cndata" | "linegeometry" | "linespacing"
             ) {
                 self.raw
                     .geometry_timeline

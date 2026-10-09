@@ -82,6 +82,31 @@ fn execute(raw: &RawDss, finalize: bool) -> (States, Result<EarthModel, String>)
                                 let definition = context.definition(source.object)?;
                                 state.fetch_geometry(source.object, &definition, &mut context)
                             }
+                            Some("spacing") => {
+                                let source = raw.line_history[&point.object]
+                                    .spacings
+                                    .get(&offset)
+                                    .ok_or("missing LineSpacing binding")?
+                                    .ok_or("LineSpacing did not exist at assignment")?;
+                                state.fetch_spacing(source.object, &context)
+                            }
+                            Some("wires" | "cncables") => {
+                                let objects = raw.line_history[&point.object]
+                                    .wires
+                                    .get(&offset)
+                                    .ok_or("missing conductor bindings")?
+                                    .iter()
+                                    .map(|p| {
+                                        p.map(|s| s.object)
+                                            .ok_or("conductor did not exist at assignment")
+                                    })
+                                    .collect::<Result<Vec<_>, _>>()?;
+                                state.bind_conductors(
+                                    prop.name.as_deref() == Some("cncables"),
+                                    &objects,
+                                    &context,
+                                )
+                            }
                             Some("linecode") => {
                                 let source = raw.line_history[&point.object]
                                     .linecodes

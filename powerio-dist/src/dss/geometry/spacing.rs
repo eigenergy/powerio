@@ -6,7 +6,7 @@ use crate::dss::{
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug)]
-pub(super) struct State {
+pub(in crate::dss) struct State {
     pub x: Vec<f64>,
     pub height: Vec<f64>,
     pub phases: usize,

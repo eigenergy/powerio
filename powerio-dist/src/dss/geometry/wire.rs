@@ -6,7 +6,7 @@ use crate::dss::{
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, serde::Serialize)]
-pub(super) struct State {
+pub(in crate::dss) struct State {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cable: Option<super::cn::Data>,
     pub rdc: f64,
