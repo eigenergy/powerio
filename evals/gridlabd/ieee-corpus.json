@@ -528,14 +528,554 @@
           "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
           "files": [
             {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Buscoords.txt",
+              "git_blob_sha1": "8cc819e53e8fab2fbb20dda97e2e330c2fbcd727",
+              "bytes": 23723
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_1.txt",
+              "git_blob_sha1": "f08762073aced1f6eebd6c110eaa2c7c300f5a19",
+              "bytes": 12803
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_10.txt",
+              "git_blob_sha1": "6a36b211d6bcd38a1e64c7d01fe7ef29b12463af",
+              "bytes": 12933
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_100.txt",
+              "git_blob_sha1": "ebdebc7bef085ef10d45239173d4c2df00fb11ed",
+              "bytes": 12891
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_11.txt",
+              "git_blob_sha1": "6242023c7c272cdc389dc5ed0592d2e83f007897",
+              "bytes": 12931
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_12.txt",
+              "git_blob_sha1": "4c47d41a9c7808fcbae28bed103addc16adcc841",
+              "bytes": 12937
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_13.txt",
+              "git_blob_sha1": "10b91ea876fc2ae1e0a37e98068a7e7174457a9c",
+              "bytes": 12903
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_14.txt",
+              "git_blob_sha1": "a26c66055796b045635ca0b5fe62b3f5466c3533",
+              "bytes": 12687
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_15.txt",
+              "git_blob_sha1": "679490c5b522c63c5e3a7ff42967205fcd421918",
+              "bytes": 12960
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_16.txt",
+              "git_blob_sha1": "745d3d3118800e7a179a73e51bb959f8fe456f97",
+              "bytes": 12744
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_17.txt",
+              "git_blob_sha1": "fc29e229d2ba0ecea83f654710209e61340d67c5",
+              "bytes": 12851
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_18.txt",
+              "git_blob_sha1": "2af17bc3056c214736406e4b7349a674c6a66970",
+              "bytes": 12556
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_19.txt",
+              "git_blob_sha1": "419d6700d10d92fd468289940e6a6e2bb5bf3eca",
+              "bytes": 12773
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_2.txt",
+              "git_blob_sha1": "386be3ce43aaf37858875e7c493e79a10e8b85ac",
+              "bytes": 12881
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_20.txt",
+              "git_blob_sha1": "30e2c2f19a6eabbda67fc6bcc38905cd606f7e9e",
+              "bytes": 12854
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_21.txt",
+              "git_blob_sha1": "771f437c01402460ea97231bff3023f9a62e443a",
+              "bytes": 12632
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_22.txt",
+              "git_blob_sha1": "09fbd29fed9bf87803c065fd71d38033edbb4cc3",
+              "bytes": 12807
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_23.txt",
+              "git_blob_sha1": "feed4f1eb1ce278aa4651897a071f681785649e4",
+              "bytes": 12941
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_24.txt",
+              "git_blob_sha1": "8eda61b9db1e013eff3d105427ca4d6a237ada59",
+              "bytes": 12906
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_25.txt",
+              "git_blob_sha1": "8f26a996dbd3ce8eccf590adf63a81129f445464",
+              "bytes": 12179
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_26.txt",
+              "git_blob_sha1": "4583c293c03fdcacc771f81adf5cdf1388fefffa",
+              "bytes": 12941
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_27.txt",
+              "git_blob_sha1": "47a1cc33ceef328332ab3c45410f16101d507e92",
+              "bytes": 12893
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_28.txt",
+              "git_blob_sha1": "3c948e9b8b087fb85bbfa37f93c277e2c1b12cf2",
+              "bytes": 12948
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_29.txt",
+              "git_blob_sha1": "d36fcb6d68d6d3f7f2924ca1f49a64fa60485c23",
+              "bytes": 12818
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_3.txt",
+              "git_blob_sha1": "c105c37e1387f5bf448bb9cc89e23b10051170a1",
+              "bytes": 12943
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_30.txt",
+              "git_blob_sha1": "da112b221aa20150f3927485f133fd297faf6aa7",
+              "bytes": 12899
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_31.txt",
+              "git_blob_sha1": "8f8468a7dcaaf17602a6883781f48b6d1b61c223",
+              "bytes": 12819
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_32.txt",
+              "git_blob_sha1": "1972f910670a06b8323e7940b014171004fda18c",
+              "bytes": 12867
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_33.txt",
+              "git_blob_sha1": "370935c3320330b501f81bef83b93546f1859820",
+              "bytes": 12794
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_34.txt",
+              "git_blob_sha1": "48d8dec7647020b5123202960646134ec5382750",
+              "bytes": 12920
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_35.txt",
+              "git_blob_sha1": "dc71cbd1e298512866a941754cd2fe1f4f26735b",
+              "bytes": 12918
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_36.txt",
+              "git_blob_sha1": "58429739b6bd10d31e8a9ac51c71a46ec0c8e0d2",
+              "bytes": 12954
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_37.txt",
+              "git_blob_sha1": "644d45775f7e5dc9820274829e3c77bfda198218",
+              "bytes": 12838
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_38.txt",
+              "git_blob_sha1": "43d575ade058ce0e6825d572f8cfe5f8fd9a1321",
+              "bytes": 12863
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_39.txt",
+              "git_blob_sha1": "96a917a8a4e24a7d26fd86076da51ef2f4b72ad3",
+              "bytes": 12857
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_4.txt",
+              "git_blob_sha1": "7bf9c1011191e308c03c3905224cad488c4f654d",
+              "bytes": 12884
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_40.txt",
+              "git_blob_sha1": "5cef11afc2f30f407de1784d5e1117e8efd072d4",
+              "bytes": 12924
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_41.txt",
+              "git_blob_sha1": "2cbb2eb779b9324e43d7c1c53e427f93d2487c6a",
+              "bytes": 12911
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_42.txt",
+              "git_blob_sha1": "98f5b5a61f9aeaf6e852fef8e2f14a8a02bdb4ef",
+              "bytes": 12750
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_43.txt",
+              "git_blob_sha1": "42d1a743587d38360db20247d947ee641b7b26c9",
+              "bytes": 11876
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_44.txt",
+              "git_blob_sha1": "bf738e0bb0f2e9bf9d667950c474dce38a9a5ecd",
+              "bytes": 12872
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_45.txt",
+              "git_blob_sha1": "39337b3c043b7480c004f002f08eb399e7c3dce1",
+              "bytes": 12887
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_46.txt",
+              "git_blob_sha1": "17857c14b2a863b268b23d04fd39d334f19b5aff",
+              "bytes": 12905
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_47.txt",
+              "git_blob_sha1": "c8a46e2218cea50e8c729e66e5c6812a0359fc0a",
+              "bytes": 12928
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_48.txt",
+              "git_blob_sha1": "9fce7100f7009bde3582bf737e4b778116f78219",
+              "bytes": 12854
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_49.txt",
+              "git_blob_sha1": "50de96e669c9a24d62986f5df9f933410ec66251",
+              "bytes": 12879
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_5.txt",
+              "git_blob_sha1": "6b8f4c92e153b840a279f78b5974fc1ef3fd73bb",
+              "bytes": 12865
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_50.txt",
+              "git_blob_sha1": "80b093d196a80f40cb7dac82d88269e16df673b1",
+              "bytes": 12734
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_51.txt",
+              "git_blob_sha1": "454f0bcbe8c34d397ea8d30b73a16ae0f4d0d476",
+              "bytes": 12915
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_52.txt",
+              "git_blob_sha1": "404eb8b17c5a35de7a81dcf84b02aa7e71db6c1e",
+              "bytes": 12923
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_53.txt",
+              "git_blob_sha1": "62c029148f28bfdb041cb73f3a24d67b49e8595f",
+              "bytes": 12829
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_54.txt",
+              "git_blob_sha1": "8cf96b44a183326646125bd191780372db943679",
+              "bytes": 12908
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_55.txt",
+              "git_blob_sha1": "30e9905cad35fc2aedfc4bbf48f01ccdaa697ae6",
+              "bytes": 12778
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_56.txt",
+              "git_blob_sha1": "db4ee2e2ce5c450d1613011ddfa59c3b2a168e2f",
+              "bytes": 12286
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_57.txt",
+              "git_blob_sha1": "6c5d42d24c5c065329154485c644c986f0ad82e8",
+              "bytes": 12956
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_58.txt",
+              "git_blob_sha1": "4b0fcd7b2383fef4dc7e8bf2e40fa71de3645f0d",
+              "bytes": 11970
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_59.txt",
+              "git_blob_sha1": "d32c95d68d024006348da0d14475dab07d195fe6",
+              "bytes": 12888
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_6.txt",
+              "git_blob_sha1": "73988fd802083e57ed81bd747d17e2493fb68e14",
+              "bytes": 12939
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_60.txt",
+              "git_blob_sha1": "98dad3c86495dd1379799ed0587eb6747b5c2d88",
+              "bytes": 12932
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_61.txt",
+              "git_blob_sha1": "cce954342c91a5681a44c387c253191f066edcca",
+              "bytes": 12893
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_62.txt",
+              "git_blob_sha1": "93d55688dd8fa2156de23af4467dec81b94b41a3",
+              "bytes": 12903
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_63.txt",
+              "git_blob_sha1": "30bc3de2a9845a09ab14e759f1f879d5b8ef13be",
+              "bytes": 12553
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_64.txt",
+              "git_blob_sha1": "c0f54e35147a67fe636f0b434f466706bf523752",
+              "bytes": 12890
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_65.txt",
+              "git_blob_sha1": "5039eb6dca57d2c82c02bd5fec76edc8b9c5c803",
+              "bytes": 12925
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_66.txt",
+              "git_blob_sha1": "91081a7e9d88ff6fdc7ca408f76ed1dc9a9c5f74",
+              "bytes": 12917
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_67.txt",
+              "git_blob_sha1": "7252405b880e263819556015a15abae13af1a75f",
+              "bytes": 12469
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_68.txt",
+              "git_blob_sha1": "5a8beb7a210cb8ad265a601e00e23f8be51522eb",
+              "bytes": 12776
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_69.txt",
+              "git_blob_sha1": "b0e085ffb35325c33424368bb0660bac73ac2e12",
+              "bytes": 12799
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_7.txt",
+              "git_blob_sha1": "26e88e6dfe7b64600c49b06e6149bf0a9ab0bf3b",
+              "bytes": 12928
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_70.txt",
+              "git_blob_sha1": "97fd982ce690aca2037a4e258b4b938eae251157",
+              "bytes": 12881
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_71.txt",
+              "git_blob_sha1": "a33adfb72e15e222de6cecbcd12931ffcd5d50c4",
+              "bytes": 12911
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_72.txt",
+              "git_blob_sha1": "f81a09543599208543caf7c6c419f264fd0f8911",
+              "bytes": 12762
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_73.txt",
+              "git_blob_sha1": "83f8b98c14c93d0674815c5a9252e25f03a48e4a",
+              "bytes": 12848
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_74.txt",
+              "git_blob_sha1": "177c04e643508dcb31b129df1e8f501a463fd342",
+              "bytes": 12904
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_75.txt",
+              "git_blob_sha1": "839e9ee9a7c56acd3182a01fb87dfcf9e821532b",
+              "bytes": 12858
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_76.txt",
+              "git_blob_sha1": "0adc49eee74abb9524bbadf82e83a2efb5dd3976",
+              "bytes": 12896
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_77.txt",
+              "git_blob_sha1": "df89893825e2c6d81869683b65ca614b8cb316fc",
+              "bytes": 12864
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_78.txt",
+              "git_blob_sha1": "f61e64632962cecea0ba1a179439af02bcbb8969",
+              "bytes": 12837
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_79.txt",
+              "git_blob_sha1": "df0871fd5ed2db4db9c38e88cf8b9c24f9fef74a",
+              "bytes": 12945
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_8.txt",
+              "git_blob_sha1": "121128ea2e8dc5b539ecbb2f421d9ee412e94588",
+              "bytes": 12850
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_80.txt",
+              "git_blob_sha1": "b396823fc6a5873e96a37e3cb7ac935eb2c59332",
+              "bytes": 12890
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_81.txt",
+              "git_blob_sha1": "b9f38d6fefa857bac465fe72cec9b35262492969",
+              "bytes": 12205
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_82.txt",
+              "git_blob_sha1": "0846073ff3e4356b896c2a2dae9de66243fb3434",
+              "bytes": 12903
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_83.txt",
+              "git_blob_sha1": "79a235d3f8460ec629104b0d0b44f2f9957e7e47",
+              "bytes": 12914
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_84.txt",
+              "git_blob_sha1": "24d36a09cfd50b2e7cccf0e2bee096f12106b2e1",
+              "bytes": 12921
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_85.txt",
+              "git_blob_sha1": "644aef20ab04680f6b6bd19dcb80b1067848161b",
+              "bytes": 12915
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_86.txt",
+              "git_blob_sha1": "b4389d0247e16f49128c1900a887e14b069b5ab9",
+              "bytes": 12912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_87.txt",
+              "git_blob_sha1": "c96ea601b36f7bbd7d3e9542ad649554affcec87",
+              "bytes": 12928
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_88.txt",
+              "git_blob_sha1": "dcb048b995d9d0445736be0c92d854182df18f22",
+              "bytes": 12854
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_89.txt",
+              "git_blob_sha1": "1ddcafce91c0077d1b474851c23c0d8bfd3e3be9",
+              "bytes": 12765
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_9.txt",
+              "git_blob_sha1": "c4045068b940106a09bb67ff60835f23f796431c",
+              "bytes": 12862
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_90.txt",
+              "git_blob_sha1": "70811de84fdde77c23c58bcb7c893344a267f1eb",
+              "bytes": 12772
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_91.txt",
+              "git_blob_sha1": "1c8f6e15935790f515ee8c393e05470c9bb1c374",
+              "bytes": 12945
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_92.txt",
+              "git_blob_sha1": "6d0f34196455e92f3115f2a9b4f386ea0634b01b",
+              "bytes": 12266
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_93.txt",
+              "git_blob_sha1": "00822106724c84bc5f908cd028b2b095bbadaf07",
+              "bytes": 12900
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_94.txt",
+              "git_blob_sha1": "32f327c5672633ff504dc975016f7cb6e2eb1430",
+              "bytes": 12947
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_95.txt",
+              "git_blob_sha1": "618d9c6747acc44205d1673285ab68e506498bd0",
+              "bytes": 12879
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_96.txt",
+              "git_blob_sha1": "29f1e106cc9178270a9c4a9d0b51cba2470ec0b4",
+              "bytes": 12878
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_97.txt",
+              "git_blob_sha1": "a388bc3f2f7fda143407d4cce60c0ac1d191a591",
+              "bytes": 12903
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_98.txt",
+              "git_blob_sha1": "79c6d94850015f04ed708a6398575666a5baa65b",
+              "bytes": 12852
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_99.txt",
+              "git_blob_sha1": "ce760afa068eda60abbcf424da86f8502c1b36d0",
+              "bytes": 12896
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Generators.txt",
+              "git_blob_sha1": "d9bd27384ae2c4b19848f288b93b47572c183c5a",
+              "bytes": 56
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/LineCode.txt",
+              "git_blob_sha1": "264bd68fede735712030e76af1d0f2a461c748df",
+              "bytes": 864
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Lines.txt",
+              "git_blob_sha1": "dc52c03ca9e262e0534a2f22136da47f065b32a9",
+              "bytes": 74784
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/LoadShapes.txt",
+              "git_blob_sha1": "b085affedf28f4e0cd0b272e7e177c29197cddb2",
+              "bytes": 6362
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Loads.txt",
+              "git_blob_sha1": "2cf6a1aba083ef8945f36c11fe1e1cf22fa7afb8",
+              "bytes": 4046
+            },
+            {
               "path": "Version8/Distrib/IEEETestCases/LVTestCase/Master.dss",
               "git_blob_sha1": "21e4d7f3610558718da7b4f94d3352878ed6cbfd",
               "bytes": 1600
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Monitors.txt",
+              "git_blob_sha1": "922798c64cd36ced81e43f913b959e76a920161a",
+              "bytes": 109069
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Transformers.txt",
+              "git_blob_sha1": "4f46319b644cd103282cdf6876a9b4fd9901f857",
+              "bytes": 101
             }
           ]
         }
       ],
-      "note": "OpenDSS corpus source; this catalog does not imply an available GLM equivalent or validated PowerIO support."
+      "note": "Original snapshot entrypoint and all companion files pinned; european_lv_import_oracle.py checks native DSS against import, IR and fresh canonical DSS. Time-series simulation and GLM emission remain separate qualifications."
     },
     {
       "id": "north_american_lv_network",

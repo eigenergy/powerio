@@ -644,6 +644,20 @@ impl DssWriter {
             if matches!(key.as_str(), "bmopf_subtype") || key.starts_with("pmd_") {
                 continue; // converter bookkeeping
             }
+            // Canonical output is a static snapshot and does not regenerate
+            // loadshape objects. Replaying these references creates dangling
+            // native dependencies even when the snapshot never uses a shape.
+            if matches!(class, "load" | "generator" | "vsource")
+                && matches!(key.as_str(), "daily" | "yearly" | "duty")
+            {
+                self.warn(
+                    &C::EMIT_DSS_EXTRAS_DROPPED,
+                    format!(
+                        "{class} {name}: extra `{key}` loadshape reference omitted from the static snapshot; its definition is not regenerated"
+                    ),
+                );
+                continue;
+            }
             let known = table.is_some_and(|t| t.props.contains(&key.as_str()));
             let text = value
                 .as_str()
@@ -4415,7 +4429,7 @@ mod tests {
         let (b, vs) = three_phase_source(2400.0);
         let mut load = load_on("sb", &["1", "2", "3", "4"], Configuration::Wye);
         load.extras
-            .insert("daily".into(), serde_json::json!("a ) b"));
+            .insert("spectrum".into(), serde_json::json!("a ) b"));
         let net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
             base_frequency: 60.0,
             buses: vec![b],
@@ -4425,8 +4439,8 @@ mod tests {
         });
         let (first, second) = roundtrip(&net);
         // A paren wrapper would close at the `)` and land `b)` on the next
-        // positional property (duty); brackets survive.
-        assert!(first.contains("daily=[a ) b]"), "{first}");
+        // positional property; brackets survive.
+        assert!(first.contains("spectrum=[a ) b]"), "{first}");
         assert_eq!(
             first.lines().find(|line| line.starts_with("New Load.ld ")),
             second
@@ -4439,7 +4453,7 @@ mod tests {
         assert_eq!(
             back.loads()[0]
                 .extras
-                .get("daily")
+                .get("spectrum")
                 .and_then(serde_json::Value::as_str),
             Some("a ) b")
         );
@@ -4452,7 +4466,8 @@ mod tests {
         let bad = "a )]}\"' b";
         let (b, vs) = three_phase_source(2400.0);
         let mut load = load_on("sb", &["1", "2", "3", "4"], Configuration::Wye);
-        load.extras.insert("daily".into(), serde_json::json!(bad));
+        load.extras
+            .insert("spectrum".into(), serde_json::json!(bad));
         let mut net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
             base_frequency: 60.0,
             buses: vec![b],
@@ -4463,39 +4478,43 @@ mod tests {
         net.options_mut().push(("foo".into(), bad.into()));
         let out = emit_dss_text(&net);
         assert!(out.text.contains(&format!("Set foo={bad}")), "{}", out.text);
-        assert!(out.text.contains(&format!("daily={bad}")), "{}", out.text);
+        assert!(
+            out.text.contains(&format!("spectrum={bad}")),
+            "{}",
+            out.text
+        );
         let warned = |needle: &str| {
             out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains(needle) && w.contains("emitted as written"))
         };
         assert!(warned("option `foo`"), "{:?}", out.render_diagnostics());
-        assert!(warned("`daily`"), "{:?}", out.render_diagnostics());
+        assert!(warned("`spectrum`"), "{:?}", out.render_diagnostics());
     }
 
     #[test]
-    fn empty_extras_values_wrap_instead_of_eating_the_next_token() {
+    fn canonical_snapshot_omits_loadshape_references_with_diagnostics() {
         let dss = "clear\nnew circuit.c basekv=12.47 bus1=sb\n\
-                   new load.ld bus1=sb.1 phases=1 kv=7.2 kw=10 daily=() duty=sh\nsolve\n";
+                   new load.ld bus1=sb.1 phases=1 kv=7.2 kw=10 daily=() duty=sh yearly=annual\nsolve\n";
         let net = parse_dss_str(dss);
-        let load = &net.loads()[0];
-        assert_eq!(load.extras.get("daily").and_then(|v| v.as_str()), Some(""));
-        let w1 = emit_dss_text(&net).text;
-        let again = parse_dss_str(&w1);
-        let load2 = &again.loads()[0];
-        assert_eq!(load2.extras.get("daily").and_then(|v| v.as_str()), Some(""));
         assert_eq!(
-            load2.extras.get("duty").and_then(|v| v.as_str()),
+            net.loads()[0].extras.get("duty").and_then(|v| v.as_str()),
             Some("sh")
         );
-        let second = emit_dss_text(&again);
-        assert_eq!(
-            w1.lines().find(|line| line.starts_with("New Load.ld ")),
-            second
-                .text
-                .lines()
-                .find(|line| line.starts_with("New Load.ld "))
-        );
+        let emitted = emit_dss_text(&net);
+        for key in ["daily", "duty", "yearly"] {
+            assert!(!emitted.text.contains(&format!(" {key}=")));
+            assert!(
+                emitted
+                    .render_diagnostics()
+                    .iter()
+                    .any(|d| d.contains(&format!("`{key}` loadshape reference omitted")))
+            );
+        }
+        let again = parse_dss_str(&emitted.text);
+        assert_eq!(again.loads()[0].p_nom, net.loads()[0].p_nom);
+        assert_eq!(again.loads()[0].q_nom, net.loads()[0].q_nom);
+        assert_eq!(again.loads()[0].voltage_model, net.loads()[0].voltage_model);
     }
 
     #[test]

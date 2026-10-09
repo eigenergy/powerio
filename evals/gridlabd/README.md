@@ -1342,3 +1342,38 @@ and asymmetric sequence-source formulas. Only the latter needs compensation
 for the pinned engine's truncated rotation constants. Using that compensation
 for symmetric blocks introduced a measurable projection error; the line
 microcases exercise both branches and catch it.
+
+### IEEE European low-voltage snapshot
+
+`european_lv_import_oracle.py` validates the original European LV `Master.dss`
+from the pinned `dss-extensions/electricdss-tst` revision in `ieee-corpus.json`.
+The catalog pins all 109 companion files, including the load profiles, by byte
+count and Git blob hash. Keep this checkout outside the PowerIO repository;
+no public dataset bytes are vendored. The original master selects snapshot
+mode and sets `useactual=no` on the shapes before creating its loads.
+
+```sh
+cargo build -p powerio --example dist_network
+python evals/gridlabd/european_lv_import_oracle.py \
+  --source /path/to/electricdss-tst/Version8/Distrib/IEEETestCases/LVTestCase \
+  --bridge target/debug/examples/dist_network \
+  --output /path/to/new-european-lv-results
+```
+
+The bridge imports the original, serializes/deserializes its IR with full typed
+network equality, and emits canonical output from a fresh module. This prevents
+retained-source replay from being mistaken for writer validation. The oracle
+compares all 907 original buses, all 906 lines, the transformer, all 55 loads,
+and the source's physical feeder port: 14,784 complex voltage/current/power/loss
+quantities. It repeats the comparison after a second import and canonical
+write, and requires an intentionally changed line length to fail. Both native
+and canonical snapshots use the pinned DSS engine, controls off and solver
+tolerance `1e-12`; acceptance tolerances remain those in `oracle.py`.
+
+Canonical static DSS output omits `daily`, `yearly`, and `duty` loadshape
+references on loads, generators and voltage sources, with an explicit loss
+diagnostic, because their definitions are not regenerated. The original
+references remain retained on import; same-format source replay is unaffected.
+This result qualifies the feeder's static DSS/IR/DSS path. It does not qualify
+its time series or canonical GridLAB-D emission, which still reports unsupported
+additional tables and transformer details.
