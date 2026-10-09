@@ -319,8 +319,18 @@ power declarations where this older input uses `triplex_node.power_1/power_2`.
 The harness also handles different dump-mode spellings. These native comparisons
 do not establish complete PowerIO conversion of IEEE8500.
 
-Other geometry/earth models, split-phase and
-additional static devices remain unfinished and fail explicitly. Full OpenDSS
+Grounded center-tapped services import as four typed windings and a
+constant-impedance load at an auxiliary core bus. The fourth winding exposes the
+internal core branch after primary leakage; the two secondary windings preserve
+opposite polarity. Configuration phase ratings determine the impedance base.
+Triplex loads retain separate leg and line-to-line P/I/Z terms. These circuits
+have native-to-OpenDSS import qualification on both pinned forks, including
+IEEE8500 service parameters and an IR round trip. The internal core load must be
+included when aggregating physical transformer losses.
+
+Triplex lines, floating service neutrals, canonical GLM service output,
+other geometry/earth models and additional static devices remain unfinished and
+fail explicitly. Full OpenDSS
 static compatibility is not yet established.
 
 Electrical parents are zero-length bus attachments. Qualified node/meter/load

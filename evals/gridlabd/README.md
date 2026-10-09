@@ -961,3 +961,34 @@ This is native reference preparation at six-decimal dump precision. It is not
 PowerIO conversion qualification, a full-precision port/loss comparison, or an
 edited-model check. Original engine failures and source adaptations must remain
 distinct from converter results. Dataset contents remain outside git.
+
+
+### Center-tapped service import
+
+`split_phase_import_oracle.py` validates actual GLM import, IR restoration and
+OpenDSS emission for the grounded service circuit used by IEEE8500. Six small
+synthetic circuits cover primary phases A/B/C, NR and FBS, unequal secondary
+impedances, mixed P/I/Z terms, default/copy rules and IEEE8500 service parameters.
+Both pinned forks supply native reference measurements. The linear cases also
+compare against the independent ideal-core circuit equations. Deliberately
+reversing a secondary, removing core loss or changing the rating must fail.
+
+```sh
+cargo build -p powerio --example glm_network
+python evals/gridlabd/split_phase_import_oracle.py \
+  --bridge target/debug/examples/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-service-import-directory
+```
+
+The typed equivalent uses four windings and a constant-impedance load at an
+auxiliary core bus. Its zero-leakage fourth winding exposes the internal core;
+placing that load at an external terminal changes primary copper losses.
+Loss measurements aggregate the three external ports, including the separate
+core load. Secondary leg 2 has reversed terminal order, matching the native
+`voltage_2` convention. The comparison uses the existing full-precision V/A/VA
+budgets, not the IEEE8500 dump precision.
+
+This qualifies grounded service import and OpenDSS emission only. Triplex lines,
+floating neutrals, canonical GLM service writing and complete IEEE8500 feeder
+conversion remain unfinished. PNNL's legacy `triplex_node.power_*` inputs are
+accepted only by the PNNL import profile; Arras requires `triplex_load` fields.

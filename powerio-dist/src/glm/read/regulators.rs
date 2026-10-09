@@ -154,7 +154,9 @@ impl Reader<'_> {
                 .roots
                 .get(&object)
                 .ok_or_else(|| self.error(key, "regulator endpoint must be a bus"))?;
-            if phases.iter().any(|p| !self.phases[&root].contains(p)) {
+            if self.triplex.contains_key(&root)
+                || phases.iter().any(|p| !self.phases[&root].contains(p))
+            {
                 return Err(self.error(key, "regulator phase absent at endpoint"));
             }
             endpoints.push(root);

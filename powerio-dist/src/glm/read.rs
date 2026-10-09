@@ -21,6 +21,7 @@ mod geometry;
 mod loads;
 mod regulators;
 mod sources;
+mod split_phase;
 mod switches;
 mod templates;
 mod transformers;
@@ -39,6 +40,9 @@ mod transformers;
 /// Wye regulators preserve fixed phase taps and NR resistance in winding equivalents.
 /// Wye capacitors use fixed per-phase shunt admittances. Active controls require
 /// explicit individual switch states and produce a frozen-control diagnostic.
+/// Center-tapped services with grounded neutrals use typed windings and an
+/// internal core impedance load; triplex P/I/Z loads retain leg polarity.
+/// Triplex lines and canonical GLM emission of these services remain unfinished.
 /// Other conductor/device profiles remain under implementation.
 pub fn parse(
     source: Source,
@@ -63,6 +67,7 @@ pub fn parse(
         quantities: BTreeMap::new(),
         phases: BTreeMap::new(),
         nominal: BTreeMap::new(),
+        triplex: BTreeMap::new(),
         attachments: BTreeMap::new(),
         line_capacitance: false,
         newton_raphson: false,
@@ -112,6 +117,7 @@ struct Reader<'a> {
     quantities: BTreeMap<(ObjectKey, String), Complex64>,
     phases: BTreeMap<ObjectKey, Vec<usize>>,
     nominal: BTreeMap<ObjectKey, f64>,
+    triplex: BTreeMap<ObjectKey, usize>,
     attachments: BTreeMap<ObjectKey, Vec<(crate::DistLocationTarget, String)>>,
     line_capacitance: bool,
     newton_raphson: bool,
@@ -459,12 +465,16 @@ impl Reader<'_> {
     fn buses(&mut self) -> Result<(), Error> {
         let roots: BTreeSet<_> = self.roots.values().copied().collect();
         for key in roots {
-            let phases = parse_bus_phases(
-                self.text(key, "phases")?
-                    .as_deref()
-                    .ok_or_else(|| self.error(key, "explicit phases are required"))?,
-            )
-            .map_err(|m| self.error(key, m))?;
+            let flags = self
+                .text(key, "phases")?
+                .ok_or_else(|| self.error(key, "explicit phases are required"))?;
+            let phases = if split_phase::bus_class(class(&self.index.objects()[key.ordinal()])) {
+                let anchor = split_phase::anchor(&flags).map_err(|m| self.error(key, m))?;
+                self.triplex.insert(key, anchor);
+                vec![0, 1]
+            } else {
+                parse_bus_phases(&flags).map_err(|m| self.error(key, m))?
+            };
             let nominal = self
                 .real(key, "nominal_voltage")
                 .ok_or_else(|| self.error(key, "nominal_voltage is required"))?;
@@ -493,16 +503,23 @@ impl Reader<'_> {
         name: &str,
         value: Complex64,
     ) {
-        if class == "transformer_configuration" && matches!(name, "resistance" | "reactance") {
-            let previous = quantities.entry((key, "impedance".into())).or_default();
-            if name == "resistance" {
-                previous.re = value.re;
-            } else {
-                previous.im = value.re;
-            }
-        } else if let Some((canonical, Some(imaginary), _, _)) =
-            (class == "load").then(|| loads::property(name)).flatten()
+        if let Some((canonical, imaginary, default)) = (class == "transformer_configuration")
+            .then(|| transformers::alias(name))
+            .flatten()
         {
+            let previous = quantities.entry((key, canonical.into())).or_insert(default);
+            if imaginary {
+                previous.im = value.re;
+            } else {
+                previous.re = value.re;
+            }
+        } else if let Some((canonical, Some(imaginary), _, _)) = if class == "load" {
+            loads::property(name)
+        } else if split_phase::bus_class(class) {
+            split_phase::property(class, name)
+        } else {
+            None
+        } {
             let previous = quantities.entry((key, canonical.to_owned())).or_default();
             if imaginary {
                 previous.im = value.re;
@@ -518,6 +535,16 @@ impl Reader<'_> {
         let implicit_source = self.implicit_fbs_source()?;
         let entries: Vec<_> = self.roots.iter().map(|(&k, &r)| (k, r)).collect();
         for (key, root) in entries {
+            if self.triplex.contains_key(&root) {
+                if implicit_source == Some(key) {
+                    return Err(self.error(key, "implicit triplex voltage source is not qualified"));
+                }
+                self.triplex_loads(key, root)?;
+                continue;
+            }
+            if split_phase::bus_class(class(&self.index.objects()[key.ordinal()])) {
+                return Err(self.error(key, "triplex child requires a triplex parent"));
+            }
             let phases = if key == root {
                 self.phases[&root].clone()
             } else {
@@ -697,6 +724,9 @@ impl Reader<'_> {
                 .roots
                 .get(&to)
                 .ok_or_else(|| self.error(key, "line to is not an electrical bus"))?;
+            if self.triplex.contains_key(&from) || self.triplex.contains_key(&to) {
+                return Err(self.error(key, "ordinary line cannot connect triplex buses"));
+            }
             if phases
                 .iter()
                 .any(|p| !self.phases[&from].contains(p) || !self.phases[&to].contains(p))
@@ -899,7 +929,7 @@ fn supported_class(name: &str) -> bool {
         )
 }
 fn bus_class(name: &str) -> bool {
-    matches!(name, "node" | "load" | "meter" | "capacitor")
+    matches!(name, "node" | "load" | "meter" | "capacitor") || split_phase::bus_class(name)
 }
 fn matrix_property(name: &str) -> bool {
     let bytes = name.as_bytes();
@@ -927,6 +957,7 @@ fn allowed_property(class: &str, name: &str) -> bool {
         || (matches!(class, "overhead_line" | "underground_line")
             && matches!(name, "phases" | "from" | "to" | "length" | "configuration"))
         || (class == "line_configuration" && matrix_property(name))
+        || split_phase::allowed(class, name)
         || capacitors::allowed(class, name)
         || regulators::allowed(class, name)
         || transformers::allowed(class, name)
@@ -954,6 +985,9 @@ fn quantity_spec(
     dialect: super::GlmDialect,
 ) -> Option<(GlmQuantityKind, Option<&'static str>)> {
     use GlmQuantityKind::{Complex, Real};
+    if let Some(spec) = split_phase::quantity_spec(class, name) {
+        return Some((spec.0, Some(spec.1)));
+    }
     if let Some(spec) = transformers::quantity_spec(class, name)
         .map(|(kind, unit)| (kind, Some(unit)))
         .or_else(|| regulators::quantity_spec(class, name))

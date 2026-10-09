@@ -76,7 +76,8 @@ impl Reader<'_> {
             .roots
             .get(&object)
             .ok_or_else(|| self.error(key, format!("switch {field} is not an electrical bus")))?;
-        if phases.iter().any(|p| !self.phases[root].contains(p)) {
+        if self.triplex.contains_key(root) || phases.iter().any(|p| !self.phases[root].contains(p))
+        {
             return Err(self.error(key, "switch phases are absent at an endpoint"));
         }
         Ok(self.names[root].clone())
