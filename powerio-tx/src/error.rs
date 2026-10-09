@@ -95,6 +95,18 @@ pub enum Error {
     )]
     UngroundedComponent { components: usize },
 
+    /// Closed switches join buses that a calculation which models no
+    /// switches would leave apart.
+    #[error(
+        "{closed} closed switch(es) join distinct buses (the first, switch row {row}, joins buses {from} and {to}), and this calculation does not model switches; merge their buses first: BusMergeRule::closed_switches() with merge_buses in Rust, merge_buses(closed_switches=True) or to_normalized(closed_switches=\"merge\") in Python, or --merge-buses switches on the command line"
+    )]
+    ClosedSwitch {
+        row: usize,
+        from: BusId,
+        to: BusId,
+        closed: usize,
+    },
+
     /// A [`BusMergeRule`](crate::BusMergeRule) that cannot be applied.
     #[error("invalid bus merge rule: {message}")]
     BusMergeRule { message: String },
@@ -177,6 +189,7 @@ impl Error {
             Error::InvalidBaseMva { .. } => &codes::CANONICALIZE_NORMALIZE_INVALID_BASE_MVA,
             Error::InvalidNormalizeOption { .. } => &codes::CANONICALIZE_NORMALIZE_INVALID_OPTION,
             Error::UngroundedComponent { .. } => &codes::BUILD_INDEX_UNGROUNDED_COMPONENT,
+            Error::ClosedSwitch { .. } => &codes::BUILD_SWITCH_CLOSED,
             Error::BusMergeRule { .. } => &codes::CANONICALIZE_MERGE_INVALID_RULE,
             Error::MergedFlowShape { .. } => &codes::CANONICALIZE_MERGE_FLOW_SHAPE_MISMATCH,
             Error::UnlocatedElements { .. } => &codes::BUILD_GEO_UNLOCATED_ELEMENTS,
@@ -223,6 +236,7 @@ impl Error {
             | Error::InvalidBaseMva { .. }
             | Error::InvalidNormalizeOption { .. }
             | Error::UngroundedComponent { .. }
+            | Error::ClosedSwitch { .. }
             | Error::BusMergeRule { .. }
             | Error::MergedFlowShape { .. }
             | Error::UnlocatedElements { .. } => C::Data,
@@ -299,6 +313,12 @@ mod tests {
                 value: 0.0,
             },
             Error::UngroundedComponent { components: 1 },
+            Error::ClosedSwitch {
+                row: 0,
+                from: BusId(1),
+                to: BusId(2),
+                closed: 1,
+            },
             Error::BusMergeRule {
                 message: "threshold".into(),
             },

@@ -591,8 +591,8 @@ impl BalancedNetwork {
     }
 
     /// Retype to [`BusType::Isolated`] every bus with no in-service electrical
-    /// connection — no in-service incident branch, HVDC line, or 3-winding
-    /// transformer — returning the number retyped.
+    /// connection — no in-service incident branch, closed switch, HVDC line,
+    /// or 3-winding transformer — returning the number retyped.
     ///
     /// A stranded bus (retired or not-yet-built equipment, or the residue of a
     /// topology edit) otherwise keeps a PQ/PV/slack kind that tells a solver to
@@ -606,6 +606,10 @@ impl BalancedNetwork {
         for br in self.branches().iter().filter(|b| b.in_service) {
             connected.insert(br.from);
             connected.insert(br.to);
+        }
+        for sw in self.switches().iter().filter(|sw| sw.closed) {
+            connected.insert(sw.from);
+            connected.insert(sw.to);
         }
         for d in self.hvdc().iter().filter(|d| d.in_service) {
             connected.insert(d.from);
@@ -1013,6 +1017,31 @@ mod tests {
         );
         assert_eq!(net.retype_isolated_buses(), 2);
         assert!(net.buses().iter().all(|b| b.kind == BusType::Isolated));
+    }
+
+    #[test]
+    fn retype_isolated_counts_a_closed_switch_as_a_connection() {
+        // Bus 3 is reached only through a closed switch; bus 4 only through an
+        // open one.
+        let mut net = BalancedNetwork::in_memory(
+            "net",
+            100.0,
+            vec![
+                bus(1, 1, 230.0),
+                bus(2, 1, 230.0),
+                bus(3, 1, 230.0),
+                bus(4, 1, 230.0),
+            ],
+            vec![line(1, 2)],
+        );
+        net.switches_mut().extend([
+            crate::network::Switch::new(BusId(2), BusId(3), true),
+            crate::network::Switch::new(BusId(2), BusId(4), false),
+        ]);
+        assert_eq!(net.retype_isolated_buses(), 1);
+        let kind = |id| net.buses().iter().find(|b| b.id == BusId(id)).unwrap().kind;
+        assert_eq!(kind(3), BusType::Pq);
+        assert_eq!(kind(4), BusType::Isolated);
     }
 
     #[test]

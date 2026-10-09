@@ -132,8 +132,10 @@ impl DcOperators {
     /// loops carry no operator column.
     ///
     /// # Errors
-    /// A zero impedance branch, a non-finite branch value, or a branch naming
-    /// an undeclared bus.
+    /// A zero impedance branch, a non-finite branch value, a branch naming
+    /// an undeclared bus, or a closed switch joining two buses
+    /// (`BUILD.SWITCH.CLOSED`), which the operators do not model; merge its
+    /// buses first with `BalancedNetwork::merge_buses`.
     pub fn build(instance: &DcPfInstance) -> Result<Self, Error> {
         Self::build_with(instance, &DcOperatorOptions::default())
     }
@@ -146,13 +148,16 @@ impl DcOperators {
     ///
     /// # Errors
     /// A zero impedance branch when it is not skipped, a non-finite branch
-    /// value, or a branch naming an undeclared bus.
+    /// value, a branch naming an undeclared bus, or a closed switch joining
+    /// two buses.
     // One pass over the branch table that fills every axis and operator
     // column; splitting it would scatter the invariants the columns share.
     #[expect(clippy::too_many_lines)]
     pub fn build_with(instance: &DcPfInstance, options: &DcOperatorOptions) -> Result<Self, Error> {
         let source = instance.network();
         let view = IndexedNetwork::new(source);
+        view.check_closed_switches()
+            .map_err(|error| Error::new(error.code(), error.to_string()))?;
         let network = view.network();
         let formula = instance.branch_susceptance_formula();
         let base = network.base_mva();

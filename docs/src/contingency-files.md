@@ -71,6 +71,9 @@ and `MonitoredSet::resolve` binds monitored branches, interfaces, and voltage
 scopes to table rows against a network and a subsystem set. The binding
 recomputes the PSS/E machine and circuit identifier of every element with the
 RAW writer's own allocation, because a network row's identity carries neither.
+A branch statement such as `OPEN BRANCH FROM BUS 1 TO BUS 5 CIRCUIT '@1'`
+that names no line or two winding transformer binds to a system switching
+device on that pair, as component type `switch`.
 
 Python reaches the same three values and the same two operations:
 

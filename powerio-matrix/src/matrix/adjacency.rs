@@ -11,7 +11,12 @@ use crate::indexed::IndexedNetwork;
 use crate::matrix::triplet::CooBuilder;
 
 /// Calculate the `n × n` 0/1 adjacency matrix.
+///
+/// # Errors
+/// A branch naming an undeclared bus, or a closed switch joining two buses
+/// ([`powerio_tx::Error::ClosedSwitch`]), which the matrix does not model.
 pub fn calc_adjacency_matrix(case: &IndexedNetwork) -> Result<CsMat<f64>> {
+    case.check_closed_switches()?;
     let n = case.n();
     let mut edges: HashSet<(usize, usize)> = HashSet::new();
     for (idx, br) in case.in_service_branches() {

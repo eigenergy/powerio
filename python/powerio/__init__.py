@@ -795,6 +795,7 @@ class BalancedNetwork:
         *,
         clamp_angle_bounds: bool = False,
         angle_bound_pad: Optional[float] = None,
+        closed_switches: str = "refuse",
     ) -> "BalancedNetwork":
         """Return a normalized copy with per unit power and radian angles.
 
@@ -810,12 +811,23 @@ class BalancedNetwork:
         become ``[-angle_bound_pad, angle_bound_pad]``. A repair that would
         invert the interval widens to that same window. The default pad is
         1.0472 radians.
+
+        ``closed_switches="merge"`` merges the buses closed switches join
+        first, as :meth:`merge_buses` does with ``closed_switches=True``. The
+        default ``"refuse"`` keeps them, and every matrix and DC calculation
+        then refuses the network with ``BUILD.SWITCH.CLOSED``.
         """
-        if not clamp_angle_bounds and angle_bound_pad is None:
+        if (
+            not clamp_angle_bounds
+            and angle_bound_pad is None
+            and closed_switches == "refuse"
+        ):
             return BalancedNetwork(self._inner.to_normalized())
         return BalancedNetwork(
             self._inner.to_normalized_with_options(
-                clamp_angle_bounds=clamp_angle_bounds, angle_bound_pad=angle_bound_pad
+                clamp_angle_bounds=clamp_angle_bounds,
+                angle_bound_pad=angle_bound_pad,
+                closed_switches=closed_switches,
             )
         )
 
