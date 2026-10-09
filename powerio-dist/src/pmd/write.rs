@@ -725,7 +725,12 @@ impl Writer {
                         o.insert("vm_nom".into(), json!(kv));
                     }
                 };
-                let model = match &l.voltage_model {
+                let nominal_model = l.voltage_model.without_voltage_bounds();
+                if matches!(l.voltage_model, DistLoadVoltageModel::BoundedZip { .. }) {
+                    self.warn(&C::EMIT_PMD_VALUE_SUBSTITUTED, format!("{what}: voltage-band transitions and dropout have no PMD load-law field; emitted the nominal law"));
+                }
+                let model = match &nominal_model {
+                    DistLoadVoltageModel::BoundedZip { .. } => unreachable!("bounds handled above"),
                     DistLoadVoltageModel::ConstantImpedance { v_nom } => {
                         insert_vm_nom(v_nom);
                         "IMPEDANCE"

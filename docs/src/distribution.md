@@ -58,11 +58,20 @@ Direct `Open`/`Close` commands and explicit `SwtControl.State` are not yet
 lowered and cause a parse error. Active `Action`/`Normal` control execution is
 excluded and reported. Deferred geometry remains source-only and blocks
 numerical use or canonical conversion. These restrictions are compatibility
-gaps; they do not establish complete static OpenDSS support. Load voltage-band
-transitions also need typed support: a native OpenDSS load can change behavior
-outside its nominal voltage band, whereas the current constant-power/current
-records describe only the nominal law. The canonical writer's default widened
-band can therefore change feeder results when the source did not state bounds.
+gaps; they do not establish complete static OpenDSS support. OpenDSS load models
+1, 5 and 8 carry a typed `BoundedZip` law, including low-voltage current
+interpolation, upper-voltage impedance continuation and ZIP dropout. Model 2
+remains constant impedance. The Rust `power_scale` method evaluates per-branch
+active and reactive multipliers. IR retains this distinct tagged model; readers
+without the variant reject it. Canonical DSS writes the typed limits, including
+native defaults, ahead of stale extras or writer defaults.
+
+BMOPF and PMD currently project these bounded loads to their nominal laws with
+a diagnostic. Per-phase differences in bounded ZIP coefficients are retained
+in the typed model but currently block DSS emission. The legacy C load views
+cannot expose the voltage window and reject these loads; additive binding
+views remain unfinished. Models 3, 4, 6 and 7 still need complete typed laws.
+These are outstanding compatibility tasks, not supported approximations.
 
 ```julia
 emit(feeder, "dss", "copy.dss")            # the source bytes, sidecars included

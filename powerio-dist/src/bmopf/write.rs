@@ -1142,6 +1142,11 @@ impl Writer {
         what: &str,
     ) {
         match model {
+            DistLoadVoltageModel::BoundedZip { .. } => {
+                self.warn(&C::EMIT_BMOPF_VALUE_SUBSTITUTED, format!("{what}: voltage-band transitions and dropout have no BMOPF load-law field; emitted the nominal law"));
+                self.load_voltage_model(o, &model.without_voltage_bounds(), what);
+            }
+
             DistLoadVoltageModel::ConstantPower { v_nom } => {
                 o.insert("model".into(), json!("CONSTANT_POWER"));
                 if !v_nom.is_empty() {

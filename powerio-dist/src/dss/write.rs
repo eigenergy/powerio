@@ -1720,9 +1720,13 @@ impl DssWriter {
             num(kv),
             num(kw),
         );
-        match &l.voltage_model {
+        let nominal_model = l.voltage_model.without_voltage_bounds();
+        let bounded_cutoff = load_voltage_bounds(&l.voltage_model, &mut extras);
+        match &nominal_model {
             DistLoadVoltageModel::ConstantPower { .. } => {
-                if let Some(model) = retained_model {
+                if bounded_cutoff.is_none()
+                    && let Some(model) = retained_model
+                {
                     extras.insert("model".into(), model);
                 }
             }
@@ -1750,7 +1754,8 @@ impl DssWriter {
                     beta_i.first(),
                     beta_p.first(),
                 ) {
-                    let cutoff = zipv_cutoff(retained_zipv.as_ref()).unwrap_or(0.0);
+                    let cutoff = bounded_cutoff
+                        .unwrap_or_else(|| zipv_cutoff(retained_zipv.as_ref()).unwrap_or(0.0));
                     let _ = write!(
                         s,
                         " zipv=({}, {}, {}, {}, {}, {}, {})",
@@ -1764,6 +1769,7 @@ impl DssWriter {
                     );
                 }
             }
+            DistLoadVoltageModel::BoundedZip { .. } => unreachable!("bounds handled above"),
             DistLoadVoltageModel::Exponential { .. } => {
                 self.warn(&C::EMIT_DSS_VALUE_SUBSTITUTED, format!(
                     "load {}: exponential voltage model has no OpenDSS load model code; emitted constant power",
@@ -2895,6 +2901,24 @@ fn shunt_kvar(
             kv * 1e3
         };
         b_phase.abs() * v_phase * v_phase * phases as f64 / 1e3
+    }
+}
+
+fn load_voltage_bounds(model: &DistLoadVoltageModel, extras: &mut Extras) -> Option<f64> {
+    if let DistLoadVoltageModel::BoundedZip {
+        v_low_pu,
+        v_min_pu,
+        v_max_pu,
+        cutoff_pu,
+        ..
+    } = model
+    {
+        extras.insert("vlowpu".into(), (*v_low_pu).into());
+        extras.insert("vminpu".into(), (*v_min_pu).into());
+        extras.insert("vmaxpu".into(), (*v_max_pu).into());
+        Some(*cutoff_pu)
+    } else {
+        None
     }
 }
 
@@ -4379,7 +4403,11 @@ mod tests {
         assert!(first.contains("daily=[a ) b]"), "{first}");
         assert_eq!(
             first.lines().find(|line| line.starts_with("New Load.ld ")),
-            second.lines().find(|line| line.starts_with("New Load.ld "))
+            second
+                .lines()
+                .find(|line| line.starts_with("New Load.ld "))
+                .map(|line| line.replace(" vlowpu=0.5", ""))
+                .as_deref()
         );
         let back = parse_dss_str(&first);
         assert_eq!(
@@ -4532,7 +4560,7 @@ mod tests {
         }
         // The derived values substitute.
         let line = out.text.lines().find(|l| l.contains("Circuit.")).unwrap();
-        assert!(line.contains("pu=1 angle=0"), "{line}");
+        assert!(line.contains("pu=1 angle=-360"), "{line}");
     }
 
     fn emitted_source_ports(text: &str) -> BTreeMap<String, num_complex::Complex64> {

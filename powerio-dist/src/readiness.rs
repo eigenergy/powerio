@@ -185,6 +185,8 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
         }
     };
     audit_untyped(net, &mut report);
+    audit_load_voltage(net, &mut report);
+
     for (element, fields) in net.defaulted() {
         report.warn(
             "READINESS.SOURCE.DEFAULTED",
@@ -471,6 +473,36 @@ fn audit_square_matrix(
             element,
             format!("{field} contains a non-finite value"),
         );
+    }
+}
+
+fn audit_load_voltage(net: &MulticonductorNetwork, report: &mut ElectricalReadiness) {
+    for load in net.loads() {
+        if matches!(
+            load.voltage_model,
+            crate::DistLoadVoltageModel::BoundedZip { .. }
+        ) {
+            let n = load.p_nom.len().max(load.q_nom.len());
+            if n == 0 || load.voltage_model.v_nom().len() != n {
+                report.block(
+                    "READINESS.LOAD.VOLTAGE_LAW",
+                    &load.name,
+                    "bounded load law must align with nominal power branches",
+                );
+            }
+            for phase in 0..n {
+                let v = load
+                    .voltage_model
+                    .v_nom()
+                    .get(phase)
+                    .copied()
+                    .unwrap_or(f64::NAN);
+                if let Err(error) = load.voltage_model.power_scale(phase, v) {
+                    report.block("READINESS.LOAD.VOLTAGE_LAW", &load.name, error);
+                    break;
+                }
+            }
+        }
     }
 }
 

@@ -765,3 +765,15 @@ neutral reductions, so each uses its own reference profile. PNNL unshielded
 geometry and Arras shield geometry without N are checked as native-invalid
 inputs, separately from supported electrical cases. These results do not yet
 qualify triplex cables, OpenDSS CNData/TSData decoding or a complete feeder.
+
+## Bounded load laws
+
+`load_voltage_oracle.py --powerio /path/to/powerio --output /new/path` checks
+55 static cases for OpenDSS load models 1, 2, 5 and 8 across the voltage band
+and dropout transition. It parses through public IR, emits canonical DSS and
+compares native complex load voltages, currents and powers. Run the ignored
+`typed_laws_match_native_load_currents` test in `powerio/tests/load_voltage_ir.rs`
+with `POWERIO_LOAD_VOLTAGE_SAMPLES` set to the resulting `report.json` to verify
+the Rust evaluator against the same independent native samples. The report
+records the pinned engine version and CLI/input hashes. These microcases do
+not by themselves qualify a complete feeder or the remaining load models.

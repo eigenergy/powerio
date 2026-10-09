@@ -1586,7 +1586,10 @@ const DISTRIBUTION_FORMATS: [DistributionFormat; 3] = [
 // PMD->BMOPF +2: +4 capacitance-half stashes on explicit source branches,
 // -2 former switch-matrix stashes. Unchanged source replay remains byte exact;
 // the nonzero Dss diagonal counts parse disclosures, not replay losses.
-const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[28, 121, 323], [51, 0, 26], [57, 46, 0]];
+// Typed load bounds: DSS->BMOPF adds 21 nominal-law projection notices and
+// removes 14 aggregated vmin/vmax extra notices (+7). DSS->PMD adds the same
+// 21 notices and removes 42 per-load vmin/vmax extra notices (-21).
+const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[28, 128, 302], [51, 0, 26], [57, 46, 0]];
 
 const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 7] = [
     (

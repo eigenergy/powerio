@@ -5,6 +5,14 @@
 - Update ZIP support to 9.0.4 to address extraction advisories. Archive readers
   report filename-decoding failures explicitly and retain their bounded-input
   and unsafe-entry checks.
+
+- OpenDSS load models 1, 5 and 8 retain voltage bands and ZIP dropout in a
+  distinct bounded ZIP model, including the native constructor defaults.
+  Canonical DSS and IR preserve these limits; Rust can evaluate their power
+  factors at a supplied voltage. JSON projections diagnose the lost bounds.
+  Legacy C load views reject the new law until full binding views are supplied.
+  Source phasors also follow the pinned engine's rounded angle conversion.
+
 - OpenDSS static imports now carry full source impedances and ordered effective
   line matrices in the typed network. Canonical DSS output preserves independent
   phase voltages and floating source returns with exact equivalent circuits;

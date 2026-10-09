@@ -245,11 +245,41 @@ fn same_v_nom(a: &[f64], b: &[f64], allow_derived: bool) -> bool {
         || (allow_derived && a.is_empty() && !b.is_empty())
 }
 
+#[allow(clippy::float_cmp)] // Exact ZIP coefficients are checked before acknowledging a diagnosed projection.
 fn same_load_voltage_model(
     a: &DistLoadVoltageModel,
     b: &DistLoadVoltageModel,
     allow_derived_v_nom: bool,
 ) -> bool {
+    if let DistLoadVoltageModel::BoundedZip {
+        v_nom,
+        alpha_z,
+        alpha_i,
+        alpha_p,
+        beta_z,
+        beta_i,
+        beta_p,
+        ..
+    } = a
+    {
+        // Off-diagonal JSON projection reports the lost voltage band below.
+        // These corpus loads are pure P/I; verify every nominal coefficient.
+        let (want_z, want_i, want_p) = match b {
+            DistLoadVoltageModel::ConstantPower { .. } => (0.0, 0.0, 1.0),
+            DistLoadVoltageModel::ConstantCurrent { .. } => (0.0, 1.0, 0.0),
+            _ => return false,
+        };
+        return same_v_nom(v_nom, b.v_nom(), allow_derived_v_nom)
+            && [alpha_z, beta_z]
+                .iter()
+                .all(|v| v.iter().all(|x| *x == want_z))
+            && [alpha_i, beta_i]
+                .iter()
+                .all(|v| v.iter().all(|x| *x == want_i))
+            && [alpha_p, beta_p]
+                .iter()
+                .all(|v| v.iter().all(|x| *x == want_p));
+    }
     match (a, b) {
         (
             DistLoadVoltageModel::ConstantPower { v_nom: a },
@@ -836,6 +866,19 @@ fn off_diagonal_round_trips() {
             if target == Fmt::Dss {
                 assert_dss_equivalent(&net, &back, case, "cross-format write");
                 continue;
+            }
+            for load in net
+                .loads()
+                .iter()
+                .filter(|l| matches!(l.voltage_model, DistLoadVoltageModel::BoundedZip { .. }))
+            {
+                assert!(
+                    out.warnings
+                        .iter()
+                        .any(|w| w.contains(&format!("load {}:", load.name))
+                            && w.contains("voltage-band transitions")),
+                    "{what}: lost voltage band without disclosure"
+                );
             }
             let transformers = !(target == Fmt::Bmopf && case.bmopf_restates_transformers);
             let (expected, actual) = if target == Fmt::Bmopf {
