@@ -39,6 +39,7 @@ mod lexer;
 pub mod mon;
 mod resolve;
 pub mod sub;
+mod tara;
 
 use std::cmp::Ordering;
 
@@ -55,6 +56,10 @@ pub use resolve::{
 };
 pub use sub::{
     JoinName, SelectorGroup, Subsystem, SubsystemParsed, SubsystemSelector, SubsystemSet,
+};
+pub use tara::{
+    DefaultDispatch, DispatchBlock, DispatchEntry, DispatchLevel, DispatchedAction, ScaledQuantity,
+    SubsystemDispatchRule,
 };
 
 use crate::diagnostics::{Diagnostic, DiagnosticInfo, codes};
