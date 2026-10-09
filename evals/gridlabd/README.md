@@ -1446,11 +1446,11 @@ matrix for capacitance. The native C API reports capacitance in nF using a
 different, full-precision `TwoPi`; the observation script converts that
 quantity back to susceptance with the corresponding constant.
 
-The public reader still defers geometry. The definition checkpoint below
-handles ordered selection, defaults and references; shared native calculation
-caches and Line lowering remain to be integrated. Cable models and whole-feeder
-IEEE electrical comparisons remain separate work. These checkpoints do not
-increase the qualified-feeder count.
+The public reader now uses this calculation together with ordered definitions
+and native shared-cache history, as described below. The kernel comparison
+alone does not qualify a feeder; whole-feeder qualification uses the public
+reader, IR round trips and canonical output. Spacing and cable models remain
+unresolved in the OpenDSS reader.
 
 ### Ordered OpenDSS overhead definitions
 
@@ -1497,8 +1497,54 @@ POWERIO_GEOMETRY_DEFINITION_ORACLE=/tmp/new-ieee4-geometries/definitions.json \
 
 This compares definition fields and the Carson impedance/admittance matrices
 at 60 Hz, including unbalanced, single-phase and center-tapped case inputs.
-It does **not** qualify their transformer models, full power flows, canonical
-output, or native shared-cache history. Synthetic geometry `MakeLike` checks
-compare definition fields only: native `MakeLike` also calculates matrices,
-whose cache must be replayed during Line integration. The public reader retains
-its existing unresolved-geometry diagnostic until that integration is ready.
+Definition checks alone do **not** qualify transformer models or full power
+flows. The following checks exercise shared-cache history and public import.
+
+### Public OpenDSS overhead import and IEEE4 qualification
+
+The reader lowers supported overhead `WireData`/`LineGeometry` lines to the
+existing effective line matrices. It replays source-order assignments and
+calculation commands because native OpenDSS shares geometry calculations while
+each line caches its own primitive. Default and active earth models differ;
+geometry edits, `MakeLike`, length/units changes, frequency changes and `Clear`
+do not all invalidate the same caches. Unsupported geometry remains an explicit
+electrical readiness blocker. This introduces no public model or IR type.
+
+`dss_geometry_cache_oracle.py` captures twelve synthetic histories. The Rust
+comparison checks native line primitives after each recorded state, with
+`1e-10 S` absolute plus `1e-10` relative tolerance. Histories include shared
+geometries, earth-model inheritance, definition edits, `MakeLike`, and replacing
+a geometry binding with a `LineCode` or sequence parameters.
+
+```sh
+python evals/gridlabd/dss_geometry_cache_oracle.py \
+  --output /tmp/new-geometry-cache
+POWERIO_GEOMETRY_CACHE_ORACLE=/tmp/new-geometry-cache/observations.json \
+  cargo test -p powerio-dist --lib \
+  dss::geometry::timeline::tests::pinned_calculation_history -- --ignored
+cargo build -p powerio --example dist_network
+python evals/gridlabd/ieee4_import_oracle.py \
+  --ieee4-base /path/to/CIMHub/ieee4/base \
+  --bridge target/debug/examples/dist_network --output /tmp/new-ieee4-import
+```
+
+The IEEE4 harness checks the seventeen pinned CIMHub cases that declare
+`LineGeometry`. Each qualification requires typed import, IR equality, native
+versus canonical electrical comparison, repeated import/emission, and rejection
+of a deliberately changed line. It compares every original bus voltage and
+Line/Transformer/Load terminal current, power and loss, plus the physical
+source feeder port. Source bytes and generated evidence stay external.
+
+Twelve cases qualify: `DDBal`, `DDUnBal`, `DYBal`, `DYUnBal`, `GYDBal`,
+`GYDUnBal`, `OYODBal`, `OnePh`, `YDBal`, `YDUnBal`, `YYBal`, and `YYUnBal`.
+Together they provide 853 complex observables per conversion pass. These are
+IEEE4 variants, not twelve distinct feeder families. Five remain unqualified:
+
+- `SCTBal`, `SCTUnBal`, `YYD`, and `YYD1Tank` need `XfmrCode` interpretation.
+- `YYDXn` retains eighteen electrical mismatches, including a maximum voltage
+  difference of about `4.53e-6 V` and power difference of `0.00261 VA`.
+
+The native and generated solves all use controls off, at most 1,000 iterations,
+and tolerance `1e-11`, stricter than the original files' `1e-8`. The balanced
+delta-delta native case stalls at `1e-12`; nonconverged runs never qualify.
+Observable acceptance thresholds in `oracle.compare` remain unchanged.

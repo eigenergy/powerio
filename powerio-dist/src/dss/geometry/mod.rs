@@ -1,9 +1,11 @@
 //! Pinned OpenDSS overhead geometry calculations in SI units.
 //!
-//! This evaluator is staged ahead of ordered WireData/LineGeometry binding.
-//! The public reader continues to report unresolved geometry until that
-//! binding and shared calculation-cache history are represented.
-mod definition;
+//! Ordered overhead definitions and shared native calculation caches feed
+//! conductor-resolved Line snapshots. Unqualified spacing/cable paths retain
+//! explicit unresolved-geometry diagnostics.
+pub(super) mod cache;
+pub(super) mod definition;
+pub(super) mod timeline;
 mod wire;
 
 use super::linecode::LineMatrices;
@@ -23,10 +25,21 @@ const EPSILON_0: f64 = 8.854e-12;
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub(super) enum EarthModel {
+pub(in crate::dss) enum EarthModel {
     Carson,
     FullCarson,
     Deri,
+}
+
+impl EarthModel {
+    pub fn parse(text: &str) -> Result<Self, String> {
+        match text.to_ascii_lowercase().as_str() {
+            "carson" => Ok(Self::Carson),
+            "fullcarson" => Ok(Self::FullCarson),
+            "deri" => Ok(Self::Deri),
+            _ => Err(format!("unqualified earth model {text:?}")),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]

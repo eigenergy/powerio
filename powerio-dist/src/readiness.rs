@@ -2,8 +2,8 @@
 //!
 //! Parsing and electrical readiness are deliberately separate. A source can be
 //! syntactically valid while the resulting typed network is not safe to hand
-//! to a solver or semantic writer. In particular, OpenDSS line geometry is
-//! still deferred: until Carson/geometry lowering exists, a geometry-defined
+//! to a solver or semantic writer. Unresolved OpenDSS geometry metadata
+//! must remain blocked: a geometry-defined
 //! line must not be treated as electrically complete merely because the
 //! parser has a placeholder linecode.
 
@@ -157,11 +157,10 @@ impl ElectricalReadiness {
 /// topology, invent conductor counts, or replace missing electrical data with
 /// source-format defaults. OpenDSS `geometry=`, `spacing=`, `wires=`,
 /// `cncables=`, and `tscables=` metadata are treated as a hard blocker because
-/// the geometry family is not yet lowered into the canonical impedance
-/// matrices. A distribution CIM segment whose source states no impedance the
-/// reader can use is a hard blocker for the same reason. The audit therefore
-/// provides an explicit fail-closed boundary for applications that need to
-/// decide whether a parsed network is safe to analyse.
+/// those retained references have not been lowered into canonical impedance
+/// matrices. Resolved geometry carries explicit matrices instead. A CIM segment
+/// whose source states no readable impedance is a hard blocker for the same
+/// reason. The audit provides a fail-closed boundary for numerical consumers.
 #[must_use]
 pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalReadiness {
     let mut report = ElectricalReadiness::default();

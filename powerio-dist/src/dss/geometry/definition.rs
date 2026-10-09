@@ -7,7 +7,7 @@ use crate::dss::{
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, serde::Serialize)]
-pub(super) struct Conductor {
+pub(in crate::dss) struct Conductor {
     pub wire: Option<usize>,
     pub x: f64,
     pub height: f64,
@@ -17,7 +17,7 @@ pub(super) struct Conductor {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct Definition {
+pub(in crate::dss) struct Definition {
     pub conductors: Vec<Conductor>,
     pub phases: usize,
     pub reduce: bool,

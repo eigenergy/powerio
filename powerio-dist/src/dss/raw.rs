@@ -257,6 +257,9 @@ pub struct RawDss {
     // to offsets in the existing flattened history; no extra history tree.
     source_replay: BTreeMap<usize, SourceReplay>,
     pub(super) line_history: BTreeMap<usize, super::line_history::LineHistory>,
+    pub(super) geometry_timeline: Vec<super::geometry::timeline::Action>,
+    earth_model: Option<String>,
+    pub(super) geometry_earth: Option<std::result::Result<super::geometry::EarthModel, String>>,
     frequency: super::frequency::FrequencyState,
     solution_mode: super::solution_mode::SolutionMode,
     /// Diagnostic records retained, against `MAX_TOTAL_DIAGNOSTICS`. Survives
@@ -306,6 +309,9 @@ impl RawDss {
 
     fn option_assignment(&mut self, position: &mut usize, name: &str, value: &Value) {
         self.frequency.assignment(position, name, value, &self.vars);
+        if *position == 81 {
+            self.earth_model = Some(value.text.clone());
+        }
         if *position == 8 {
             self.solution_mode.assign(&value.text);
         }
@@ -390,6 +396,7 @@ impl RawDss {
     }
 
     fn clear(&mut self) {
+        let geometry_earth = Some(super::geometry::timeline::earth_before_clear(self));
         // `Clear` resets the circuit, not the record of how the script was
         // read. A warning or an `Error` finding already emitted describes input
         // the caller wrote, and no later command un-writes it — dropping them
@@ -404,10 +411,13 @@ impl RawDss {
         let vars_generation = self.vars_generation.wrapping_add(1);
         let mut frequency = std::mem::take(&mut self.frequency);
         frequency.clear();
+        let earth_model = self.earth_model.take();
         *self = RawDss {
             vars_generation,
             warnings,
             diagnostics,
+            earth_model,
+            geometry_earth,
             frequency,
             total_diagnostics,
             halted,
@@ -954,6 +964,14 @@ impl<L: Loader> Executor<'_, L> {
             .unwrap()
             .events
             .push(event);
+        self.raw
+            .geometry_timeline
+            .push(super::geometry::timeline::Action::Terminal {
+                object: idx,
+                terminal,
+                conductor,
+                closed: verb == "close",
+            });
         self.raw.active = Some(idx);
     }
 
@@ -1448,6 +1466,14 @@ impl<L: Loader> Executor<'_, L> {
                 idx,
                 super::line_history::LineHistory::new(self.raw.frequency.constructor()),
             );
+            if self.raw.objects[idx].class != "linecode" {
+                self.raw
+                    .geometry_timeline
+                    .push(super::geometry::timeline::Action::New {
+                        point: self.raw.line_snapshot(idx),
+                        earth: self.raw.earth_model.clone(),
+                    });
+            }
         }
         if self.raw.objects[idx].class == "vsource" {
             let frequency = self.raw.frequency.constructor();
@@ -1516,6 +1542,13 @@ impl<L: Loader> Executor<'_, L> {
             return;
         }
         self.raw.total_props += indices.len();
+        if !rebuild_only {
+            self.raw
+                .geometry_timeline
+                .push(super::geometry::timeline::Action::Solve {
+                    frequency: self.raw.snapshot_frequency(),
+                });
+        }
         for idx in indices {
             let event = super::line_history::Event {
                 position: self.raw.line_snapshot(idx),
@@ -1672,12 +1705,81 @@ impl<L: Loader> Executor<'_, L> {
                     .collect();
                 self.raw.objects[idx].props.extend(cloned);
                 self.raw.objects[idx].edits.extend(bounds);
+                if matches!(class.as_str(), "line" | "wiredata" | "linegeometry") {
+                    self.raw
+                        .geometry_timeline
+                        .push(super::geometry::timeline::Action::Copy {
+                            point: self.raw.line_snapshot(idx),
+                            frequency: self.raw.snapshot_frequency(),
+                        });
+                }
             }
             None => self.raw.warn(
                 &C::READ_DSS_REFERENCE_DROPPED,
                 ctx(format!("like={} names an unknown {class}", value.text)),
             ),
         }
+    }
+
+    fn bind_geometry_references(
+        &mut self,
+        idx: usize,
+        p: &RawProp,
+        ctx: &dyn Fn(String) -> String,
+    ) -> bool {
+        if self.raw.objects[idx].class == "linegeometry"
+            && matches!(p.name.as_deref(), Some("wire" | "wires"))
+        {
+            let names = if p.name.as_deref() == Some("wire") {
+                vec![p.value.text.clone()]
+            } else {
+                p.value.to_string_list(Some(&self.raw.vars))
+            };
+            if names.len() > 32
+                || self
+                    .retained_property_count(idx)
+                    .saturating_add(names.len())
+                    > MAX_OBJECT_PROPS
+                || self.raw.total_props.saturating_add(names.len()) > MAX_TOTAL_PROPS
+            {
+                self.raw.halt(ctx(
+                    "geometry conductor bindings exceed the supported count/work budget".into(),
+                ));
+                return false;
+            }
+            self.raw.total_props += names.len();
+            let references = names
+                .iter()
+                .map(|name| {
+                    self.raw
+                        .index
+                        .get(&("wiredata".into(), name.to_ascii_lowercase()))
+                        .map(|&object| self.raw.line_snapshot(object))
+                })
+                .collect();
+            let offset = self.raw.objects[idx].props.len();
+            self.raw
+                .line_history
+                .get_mut(&idx)
+                .unwrap()
+                .wires
+                .insert(offset, references);
+        }
+        if self.raw.objects[idx].class == "line" && p.name.as_deref() == Some("geometry") {
+            let referenced = self
+                .raw
+                .index
+                .get(&("linegeometry".into(), p.value.text.to_ascii_lowercase()))
+                .map(|&object| self.raw.line_snapshot(object));
+            let offset = self.raw.objects[idx].props.len();
+            self.raw
+                .line_history
+                .get_mut(&idx)
+                .unwrap()
+                .geometries
+                .insert(offset, referenced);
+        }
+        true
     }
 
     fn apply_props(&mut self, idx: usize, props: Vec<RawProp>, ctx: &dyn Fn(String) -> String) {
@@ -1738,49 +1840,25 @@ impl<L: Loader> Executor<'_, L> {
                     .linecodes
                     .insert(offset, referenced);
             }
-            if self.raw.objects[idx].class == "linegeometry"
-                && matches!(p.name.as_deref(), Some("wire" | "wires"))
-            {
-                let names = if p.name.as_deref() == Some("wire") {
-                    vec![p.value.text.clone()]
-                } else {
-                    p.value.to_string_list(Some(&self.raw.vars))
-                };
-                if names.len() > 32
-                    || self
-                        .retained_property_count(idx)
-                        .saturating_add(names.len())
-                        > MAX_OBJECT_PROPS
-                    || self.raw.total_props.saturating_add(names.len()) > MAX_TOTAL_PROPS
-                {
-                    self.raw.halt(ctx(
-                        "geometry conductor bindings exceed the supported count/work budget".into(),
-                    ));
-                    return;
-                }
-                self.raw.total_props += names.len();
-                let references = names
-                    .iter()
-                    .map(|name| {
-                        self.raw
-                            .index
-                            .get(&("wiredata".into(), name.to_ascii_lowercase()))
-                            .map(|&object| self.raw.line_snapshot(object))
-                    })
-                    .collect();
-                let offset = self.raw.objects[idx].props.len();
-                self.raw
-                    .line_history
-                    .get_mut(&idx)
-                    .unwrap()
-                    .wires
-                    .insert(offset, references);
+            if !self.bind_geometry_references(idx, &p, ctx) {
+                return;
             }
             self.source_reference(idx, &p);
             if let Some(replay) = self.raw.source_replay.get_mut(&idx) {
                 replay.record_property(&p);
             }
             self.raw.objects[idx].props.push(p);
+            if matches!(
+                self.raw.objects[idx].class.as_str(),
+                "line" | "wiredata" | "linegeometry"
+            ) {
+                self.raw
+                    .geometry_timeline
+                    .push(super::geometry::timeline::Action::Property {
+                        point: self.raw.line_snapshot(idx),
+                        offset: self.raw.objects[idx].props.len() - 1,
+                    });
+            }
         }
         // This command line was one engine Edit; it ends in
         // RecalcElementData, so record the boundary.

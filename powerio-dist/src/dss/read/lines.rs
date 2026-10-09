@@ -49,7 +49,7 @@ impl Reader<'_> {
         }
         if [
             "like", "linecode", "rmatrix", "xmatrix", "cmatrix", "r1", "r0", "x1", "x0", "c1",
-            "c0", "b1", "b0", "switch",
+            "c0", "b1", "b0", "switch", "geometry",
         ]
         .iter()
         .all(|key| object.get(key).is_none())
@@ -59,16 +59,21 @@ impl Reader<'_> {
         }
     }
 
-    fn retain_deferred_line(&mut self, object: &super::RawObject) -> bool {
+    fn retain_deferred_line(&mut self, object: &super::RawObject, reason: Option<&str>) -> bool {
         if !crate::readiness::DEFERRED_GEOMETRY_KEYS
             .iter()
             .any(|key| object.get(key).is_some())
         {
             return false;
         }
-        self.warn(&C::READ_DSS_GEOMETRY_UNRESOLVED, format!(
-            "line {}: geometry-derived conductor impedances are unresolved; the source object is retained and electrical readiness is blocked", object.name,
-        ));
+        self.warn(
+            &C::READ_DSS_GEOMETRY_UNRESOLVED,
+            format!(
+                "line {}: {}; the source object is retained and electrical readiness is blocked",
+                object.name,
+                reason.unwrap_or("geometry-derived conductor impedances are unresolved"),
+            ),
+        );
         self.net
             .untyped_objects_mut()
             .push(UntypedObject::from(object));
@@ -86,17 +91,31 @@ impl Reader<'_> {
             .map(|o| o.name.to_ascii_lowercase())
             .collect();
         let mut resolved = Vec::new();
+        let mut joint = raw
+            .of_class("line")
+            .any(|o| o.get("geometry").is_some())
+            .then(|| crate::dss::geometry::timeline::resolve(raw));
         for (index, object) in raw
             .objects
             .iter()
             .enumerate()
             .filter(|(_, o)| o.class == "line")
         {
-            if self.retain_deferred_line(object) {
-                continue;
-            }
-            let mut state = line::resolve(raw, raw.line_snapshot(index))
-                .map_err(|e| format!("Line.{}: {e}", object.name))?;
+            let result = if let Some(joint) = &mut joint {
+                joint.remove(&index).ok_or("missing ordered Line state")?
+            } else {
+                if self.retain_deferred_line(object, None) {
+                    continue;
+                }
+                line::resolve(raw, raw.line_snapshot(index))
+            };
+            let mut state = match result {
+                Ok(state) => state,
+                Err(error) if self.retain_deferred_line(object, Some(&error)) => {
+                    continue;
+                }
+                Err(error) => return Err(format!("Line.{}: {error}", object.name)),
+            };
             if state.enabled {
                 let matrices = state
                     .primitive(self.net.base_frequency())

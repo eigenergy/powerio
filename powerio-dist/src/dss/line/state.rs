@@ -1,9 +1,14 @@
 use std::f64::consts::TAU;
 
+use crate::dss::geometry::{EarthModel, cache::Context, definition::Definition};
 use crate::dss::{linecode, raw::RawDss, raw::RawProp};
 use linecode::LineMatrices;
 
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent native enable, switch, invalidation and explicit-property flags"
+)]
 pub(in crate::dss) struct State {
     pub n: usize,
     pub frequency: f64,
@@ -25,6 +30,13 @@ pub(in crate::dss) struct State {
     kxg: f64,
     dirty: bool,
     cached: Option<(f64, LineMatrices)>,
+    geometry: Option<usize>,
+    geometry_frequency: Option<f64>,
+    // Native Zinv survives MakeLike and LineCode assignment while geometry
+    // remains bound; those operations copy Z/Yc without copying Zinv.
+    geometry_impedance: Option<LineMatrices>,
+    pub earth_model: EarthModel,
+    rho_specified: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -68,6 +80,11 @@ impl State {
             kxg: 0.0,
             dirty: true,
             cached: None,
+            geometry: None,
+            geometry_frequency: None,
+            geometry_impedance: None,
+            earth_model: EarthModel::Deri,
+            rho_specified: false,
         };
         state.update_kxg();
         state.recalc();
@@ -132,6 +149,7 @@ impl State {
     }
 
     pub fn fetch_code(&mut self, code: &linecode::State) {
+        self.geometry = None;
         self.frequency = code.frequency;
         self.rg = code.rg;
         self.xg = code.xg;
@@ -243,6 +261,7 @@ impl State {
                     self.matrices.x = matrix;
                 }
                 self.sequence.model = false;
+                self.geometry = None;
                 self.reset_units();
                 self.dirty = true;
             }
@@ -257,8 +276,10 @@ impl State {
             }
             "rho" => {
                 self.rho = number()?;
+                self.rho_specified = true;
                 self.update_kxg();
             }
+            "earthmodel" => self.earth_model = EarthModel::parse(&prop.value.text)?,
             "enabled" => self.enabled = yes(&prop.value.text),
             "switch" => {
                 self.is_switch = yes(&prop.value.text);
@@ -266,6 +287,7 @@ impl State {
                     self.sequence.values = [1.0, 1.0, 1.0, 1.0, 1.1e-9, 1e-9];
                     self.length = 0.001;
                     self.reset_units();
+                    self.geometry = None;
                     self.sequence.changed = true;
                     self.dirty = true;
                 }
@@ -273,8 +295,7 @@ impl State {
             "normamps" => self.normamps = number()?,
             "emergamps" => self.emergamps = number()?,
             // These fields do not alter an ordinary matrix/sequence primitive.
-            "faultrate" | "pctperm" | "repair" | "seasons" | "ratings" | "linetype"
-            | "earthmodel" => {}
+            "faultrate" | "pctperm" | "repair" | "seasons" | "ratings" | "linetype" => {}
             _ => return Err(format!("unqualified Line property {key}")),
         }
         Ok(())
@@ -297,6 +318,7 @@ impl State {
     }
 
     fn set_sequence(&mut self, key: &str, value: f64) {
+        self.geometry = None;
         let (index, scale) = match key {
             "r1" => (0, 1.0),
             "x1" => (1, 1.0),
@@ -318,6 +340,100 @@ impl State {
         if !matches!(key, "b1" | "b0") {
             self.dirty = true;
         }
+    }
+
+    pub fn fetch_geometry(
+        &mut self,
+        object: usize,
+        definition: &Definition,
+        context: &mut Context<'_>,
+    ) -> Result<(), String> {
+        let n = if definition.reduce {
+            definition.phases
+        } else {
+            definition.conductors.len()
+        };
+        if n == 0 || n > 32 {
+            return Err("invalid geometry Line conductor count".into());
+        }
+        self.geometry = Some(object);
+        self.geometry_frequency = None;
+        self.code_units = None;
+        self.resize_terminals(n);
+        self.normamps = definition.normamps;
+        self.emergamps = definition.emergamps;
+        self.sequence.model = false;
+        self.sequence.changed = false;
+        self.dirty = true;
+        if self.rho_specified {
+            context.set_rho(object, self.rho)?;
+        }
+        Ok(())
+    }
+
+    pub fn update_geometry_rho(&mut self, context: &mut Context<'_>) -> Result<(), String> {
+        if let Some(object) = self.geometry {
+            context.set_rho(object, self.rho)?;
+            self.dirty = true;
+        }
+        Ok(())
+    }
+
+    pub fn primitive_with_geometry(
+        &mut self,
+        frequency: f64,
+        context: &mut Context<'_>,
+    ) -> Result<LineMatrices, String> {
+        let Some(object) = self.geometry else {
+            return self.primitive(frequency);
+        };
+        if let Some((f, matrix)) = &self.cached
+            && !self.dirty
+            && f.to_bits() == frequency.to_bits()
+        {
+            return Ok(matrix.clone());
+        }
+        if !frequency.is_finite() || frequency <= 0.51 {
+            return Err("Line AC frequency must exceed 0.51 Hz".into());
+        }
+        if self
+            .geometry_frequency
+            .is_none_or(|f| f.to_bits() != frequency.to_bits())
+        {
+            context.active_earth = Ok(self.earth_model);
+            let mut matrix = context.calculate(object, frequency)?;
+            Context::scale(&mut matrix, self.length, self.units);
+            self.geometry_impedance = Some(matrix.clone());
+            self.matrices = matrix;
+            self.geometry_frequency = Some(frequency);
+        }
+        let mut effective = self.matrices.clone();
+        if let Some(impedance) = &self.geometry_impedance {
+            effective.r.clone_from(&impedance.r);
+            effective.x.clone_from(&impedance.x);
+        }
+        if [&effective.r, &effective.x, &effective.b]
+            .iter()
+            .any(|m| m.len() != self.n || m.iter().any(|row| row.len() != self.n))
+        {
+            return Err("geometry calculation dimension differs from the Line terminals".into());
+        }
+        let impedance: Vec<Vec<_>> = self
+            .matrices
+            .r
+            .iter()
+            .zip(&effective.x)
+            .map(|(r, x)| {
+                r.iter()
+                    .zip(x)
+                    .map(|(&r, &x)| num_complex::Complex64::new(r, x))
+                    .collect()
+            })
+            .collect();
+        crate::dss::primitive::validate(&impedance, "Line", 183)?;
+        self.cached = Some((frequency, effective.clone()));
+        self.dirty = false;
+        Ok(effective.clone())
     }
 
     pub fn physical_length(&self) -> Option<f64> {
@@ -346,6 +462,9 @@ impl State {
             && cached_frequency.to_bits() == frequency.to_bits()
         {
             return Ok(matrix.clone());
+        }
+        if self.geometry.is_some() {
+            return Err("geometry Line requires a resolved shared calculation context".into());
         }
         if !frequency.is_finite() || frequency <= 0.51 {
             return Err("Line AC frequency must exceed 0.51 Hz".into());

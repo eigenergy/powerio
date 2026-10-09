@@ -48,6 +48,7 @@ pub(super) struct LineHistory {
     // Property offset -> referenced linecode prefix. None records a missing
     // reference at assignment, even if that name is declared later.
     pub linecodes: BTreeMap<usize, Option<Snapshot>>,
+    pub geometries: BTreeMap<usize, Option<Snapshot>>,
     // Geometry conductor assignments bind identities immediately; their
     // snapshots also preserve the ratings copied at that assignment.
     pub wires: BTreeMap<usize, Vec<Option<Snapshot>>>,
@@ -60,6 +61,7 @@ impl LineHistory {
             copies: Vec::new(),
             events: Vec::new(),
             linecodes: BTreeMap::new(),
+            geometries: BTreeMap::new(),
             wires: BTreeMap::new(),
         }
     }

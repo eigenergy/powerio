@@ -6,8 +6,8 @@
 
 use super::lex::{Value, VarMap};
 
-// Native option order through the final frequency-setting option. Later
-// options cannot advance positionally back into one of these three slots.
+// Native option order through the last state-setting option interpreted here.
+// Later options cannot advance positionally back into these slots.
 const OPTIONS: &[&str] = &[
     "type",
     "element",
@@ -82,6 +82,14 @@ const OPTIONS: &[&str] = &[
     "showexport",
     "numallociterations",
     "defaultbasefrequency",
+    "markswitches",
+    "switchmarkercode",
+    "daisysize",
+    "marktransformers",
+    "transmarkercode",
+    "transmarkersize",
+    "loadshapeclass",
+    "earthmodel",
 ];
 
 pub(super) fn option_position(name: &str) -> usize {
