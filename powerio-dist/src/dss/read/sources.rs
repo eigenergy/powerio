@@ -37,16 +37,18 @@ impl Reader<'_> {
     fn resolved_sources(&mut self, raw: &RawDss) -> SourceResult<()> {
         // Resolve every source before modifying the reader. Then register
         // every original port before any source can allocate a virtual node.
-        let resolved = raw
-            .of_class("vsource")
-            .filter(|object| raw.source_replay(object).enabled)
-            .map(|object| {
-                let source = resolve(raw, object, self.net.base_frequency())?;
+        let mut resolved = Vec::new();
+        for object in raw.of_class("vsource") {
+            // Native construction and primitive checks still apply to disabled
+            // sources. Only their electrical contribution is omitted.
+            let source = resolve(raw, object, self.net.base_frequency())
+                .map_err(|error| format!("Vsource.{}: {error}", object.name))?;
+            if raw.source_replay(object).enabled {
                 let start = source_bus(&source.bus1)?;
                 let end = source_bus(&source.bus2)?;
-                Ok((object.name.clone(), source, start, end))
-            })
-            .collect::<SourceResult<Vec<_>>>()?;
+                resolved.push((object.name.clone(), source, start, end));
+            }
+        }
         self.retain_disabled_sources(raw);
         let ports: Vec<_> = resolved
             .into_iter()
@@ -185,13 +187,100 @@ fn staged_read(text: &str) -> MulticonductorNetwork {
     let raw = crate::dss::raw::__parse_raw_with(text, "source.dss", &mut |_: &std::path::Path| {
         Err(std::io::Error::other("no includes"))
     });
-    let (net, _) = to_network_with_source_reader(
-        &raw,
+    staged_from_raw(&raw).unwrap()
+}
+
+fn staged_from_raw(
+    raw: &RawDss,
+) -> std::result::Result<MulticonductorNetwork, Vec<crate::diagnostics::Diagnostic>> {
+    let (net, diagnostics) = to_network_with_source_reader(
+        raw,
         Some(|rd, raw| {
-            rd.resolved_sources(raw).unwrap();
+            if let Err(error) = rd.resolved_sources(raw) {
+                rd.warn(&C::READ_DSS_SOURCE_UNRESOLVED, error);
+            }
         }),
     );
-    net
+    if diagnostics
+        .iter()
+        .any(|d| d.severity() == powerio_core::DiagnosticSeverity::Error)
+    {
+        Err(diagnostics)
+    } else {
+        Ok(net)
+    }
+}
+
+#[test]
+fn invalid_sources_never_return_a_partial_network_even_when_disabled() {
+    for enabled in ["yes", "no"] {
+        for properties in [
+            "phases=1 z1=[0 0]",
+            "phases=3 z1=[1 0] z0=[0 0]",
+            "phases=1 model=ideal puzideal=[0 0]",
+            "phases=1 z1=[0 0]\nEdit Vsource.bad z1=[1 0]",
+        ] {
+            let script =
+                format!("New Circuit.c z1=[1 0]\nNew Vsource.bad enabled={enabled} {properties}");
+            let raw = crate::dss::raw::__parse_raw_with(
+                &script,
+                "invalid.dss",
+                &mut |_: &std::path::Path| Err(std::io::Error::other("no includes")),
+            );
+            let diagnostics = staged_from_raw(&raw).unwrap_err();
+            assert!(
+                diagnostics.iter().any(|diagnostic| {
+                    diagnostic.code() == C::READ_DSS_SOURCE_UNRESOLVED.code
+                        && diagnostic.severity() == powerio_core::DiagnosticSeverity::Error
+                        && format!("{diagnostic:?}").contains("Vsource.bad")
+                }),
+                "{script}: {diagnostics:?}"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned local OpenDSS source-validity oracle"]
+fn pinned_source_validity() {
+    #[derive(serde::Deserialize)]
+    struct Case {
+        script: String,
+        accepted: bool,
+        expected_error: Option<u32>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Report {
+        cases: BTreeMap<String, Case>,
+        failures: Vec<String>,
+    }
+    let path = std::env::var("POWERIO_SOURCE_VALIDITY_ORACLE").expect("oracle report path");
+    let report: Report = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert!(report.failures.is_empty());
+    assert!(!report.cases.is_empty());
+    let mut findings = BTreeMap::new();
+    for (name, case) in report.cases {
+        let raw = crate::dss::raw::__parse_raw_with(
+            &case.script,
+            "validity.dss",
+            &mut |_: &std::path::Path| Err(std::io::Error::other("no includes")),
+        );
+        let result = staged_from_raw(&raw);
+        assert_eq!(result.is_ok(), case.accepted, "{name}: {result:?}");
+        if let Err(diagnostics) = result {
+            assert!(case.expected_error.is_some(), "{name}");
+            assert!(
+                diagnostics.iter().any(|d| {
+                    d.code() == C::READ_DSS_SOURCE_UNRESOLVED.code
+                        && d.severity() == powerio_core::DiagnosticSeverity::Error
+                }),
+                "{name}: {diagnostics:?}"
+            );
+        }
+        findings.insert(name, case.accepted);
+    }
+    let output = std::env::var("POWERIO_SOURCE_VALIDITY_RESULT").expect("comparison path");
+    std::fs::write(output, serde_json::to_vec_pretty(&findings).unwrap()).unwrap();
 }
 
 #[test]
@@ -347,13 +436,7 @@ fn write_staged_network(net: &MulticonductorNetwork, directory: &std::path::Path
         std::fs::write(directory.join(sidecar.path), sidecar.text).unwrap();
     }
     let raw = crate::dss::raw::__parse_raw_file(&path).unwrap();
-    let (reimported, diagnostics) =
-        to_network_with_source_reader(&raw, Some(|rd, raw| rd.resolved_sources(raw).unwrap()));
-    assert!(
-        diagnostics
-            .iter()
-            .all(|d| d.severity() != powerio_core::DiagnosticSeverity::Error)
-    );
+    let reimported = staged_from_raw(&raw).unwrap();
     let target = if stem == "case" {
         "reimport.json".to_owned()
     } else {

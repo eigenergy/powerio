@@ -61,6 +61,8 @@ pub mod codes {
             "an object shape the model does not type yet is kept untyped";
         READ_DSS_SOURCE_DISABLED = "READ.DSS.SOURCE_DISABLED", Remark,
             "a disabled source is retained without electrical contributions";
+        READ_DSS_SOURCE_UNRESOLVED = "READ.DSS.SOURCE_UNRESOLVED", Error,
+            "a voltage source is invalid or outside the qualified static profile", category = Data;
         READ_DSS_PROPERTY_UNKNOWN = "READ.DSS.PROPERTY_UNKNOWN", Warning,
             "a property this reader does not model is kept as written";
         READ_DSS_REFERENCE_DROPPED = "READ.DSS.REFERENCE_DROPPED", Warning,
