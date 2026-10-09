@@ -543,11 +543,61 @@ class!(
     ]
 );
 
-/// The Phase A classes with property tables. Anything else parses into the
-/// raw layer untyped.
+// Pinned DSS C-API ConductorData.pas (WireData adds no own fields).
+class!(
+    WIRE_DATA,
+    "wiredata",
+    [
+        "rdc",
+        "rac",
+        "runits",
+        "gmrac",
+        "gmrunits",
+        "radius",
+        "radunits",
+        "normamps",
+        "emergamps",
+        "diam",
+        "seasons",
+        "ratings",
+        "capradius",
+        "like",
+    ]
+);
+
+class!(
+    LINE_GEOMETRY,
+    "linegeometry",
+    [
+        "nconds",
+        "nphases",
+        "cond",
+        "wire",
+        "x",
+        "h",
+        "units",
+        "normamps",
+        "emergamps",
+        "reduce",
+        "spacing",
+        "wires",
+        "cncable",
+        "tscable",
+        "cncables",
+        "tscables",
+        "seasons",
+        "ratings",
+        "linetype",
+        "like",
+    ]
+);
+
+/// Classes with ordered property tables; other classes remain untyped.
 static CLASSES: &[&DssClass] = &[
     &LINE,
     &LINECODE,
+    &WIRE_DATA,
+    &LINE_GEOMETRY,
     &LOAD,
     &TRANSFORMER,
     &VSOURCE,

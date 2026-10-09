@@ -1440,7 +1440,10 @@ impl<L: Loader> Executor<'_, L> {
             props: Vec::new(),
             edits: Vec::new(),
         });
-        if matches!(self.raw.objects[idx].class.as_str(), "line" | "linecode") {
+        if matches!(
+            self.raw.objects[idx].class.as_str(),
+            "line" | "linecode" | "wiredata" | "linegeometry"
+        ) {
             self.raw.line_history.insert(
                 idx,
                 super::line_history::LineHistory::new(self.raw.frequency.constructor()),
@@ -1481,7 +1484,11 @@ impl<L: Loader> Executor<'_, L> {
         self.raw.objects[idx].props.len()
             + self.raw.line_history.get(&idx).map_or(0, |h| {
                 // Include the current command's pending closing checkpoint.
-                h.copies.len() + h.events.len() + self.raw.objects[idx].edits.len() + 1
+                h.copies.len()
+                    + h.events.len()
+                    + h.wires.values().map(Vec::len).sum::<usize>()
+                    + self.raw.objects[idx].edits.len()
+                    + 1
             })
             + self
                 .raw
@@ -1730,6 +1737,44 @@ impl<L: Loader> Executor<'_, L> {
                     .unwrap()
                     .linecodes
                     .insert(offset, referenced);
+            }
+            if self.raw.objects[idx].class == "linegeometry"
+                && matches!(p.name.as_deref(), Some("wire" | "wires"))
+            {
+                let names = if p.name.as_deref() == Some("wire") {
+                    vec![p.value.text.clone()]
+                } else {
+                    p.value.to_string_list(Some(&self.raw.vars))
+                };
+                if names.len() > 32
+                    || self
+                        .retained_property_count(idx)
+                        .saturating_add(names.len())
+                        > MAX_OBJECT_PROPS
+                    || self.raw.total_props.saturating_add(names.len()) > MAX_TOTAL_PROPS
+                {
+                    self.raw.halt(ctx(
+                        "geometry conductor bindings exceed the supported count/work budget".into(),
+                    ));
+                    return;
+                }
+                self.raw.total_props += names.len();
+                let references = names
+                    .iter()
+                    .map(|name| {
+                        self.raw
+                            .index
+                            .get(&("wiredata".into(), name.to_ascii_lowercase()))
+                            .map(|&object| self.raw.line_snapshot(object))
+                    })
+                    .collect();
+                let offset = self.raw.objects[idx].props.len();
+                self.raw
+                    .line_history
+                    .get_mut(&idx)
+                    .unwrap()
+                    .wires
+                    .insert(offset, references);
             }
             self.source_reference(idx, &p);
             if let Some(replay) = self.raw.source_replay.get_mut(&idx) {

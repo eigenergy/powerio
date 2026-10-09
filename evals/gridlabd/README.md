@@ -1446,8 +1446,59 @@ matrix for capacitance. The native C API reports capacitance in nF using a
 different, full-precision `TwoPi`; the observation script converts that
 quantity back to susceptance with the corresponding constant.
 
-The public reader still defers geometry. Ordered `WireData`/`LineGeometry`
-selection, sticky units/defaults, assignment-time references and shared native
-calculation-cache behavior must be integrated and checked before this changes.
-Cable models and public IEEE electrical comparisons remain separate work.
-This checkpoint does not increase the qualified-feeder count.
+The public reader still defers geometry. The definition checkpoint below
+handles ordered selection, defaults and references; shared native calculation
+caches and Line lowering remain to be integrated. Cable models and whole-feeder
+IEEE electrical comparisons remain separate work. These checkpoints do not
+increase the qualified-feeder count.
+
+### Ordered OpenDSS overhead definitions
+
+`dss_wiredata_oracle.py` checks 49 native conductor-definition cases, including
+positional/abbreviated properties, RPN values, default backfilling, unit changes,
+repeated radius assignments and historical/self `MakeLike`. A radius assignment
+initializes capacitance radius only while the latter is negative; later radius
+edits leave it alone. A GMR-only definition can leave capacitance radius negative,
+in which case the geometry calculation uses the physical radius.
+
+`dss_geometry_definition_oracle.py` checks 15 synthetic geometry-definition
+cases. Conductor selectors, sticky units, equal-size and changed-size resets,
+wire arrays and copied definitions follow native order. Wire assignment binds
+an existing identity and copies its current scalar ratings, while calculation
+reads the wire values visible at that later time. A later declaration does not
+repair a missing reference. Both resolvers reuse bounded append-only property
+and copy histories; no new public model or IR type is introduced. Seasonal
+ratings remain source metadata, and spacing/cable definitions remain unresolved.
+
+```sh
+python evals/gridlabd/dss_wiredata_oracle.py --output /tmp/new-wire-observations
+POWERIO_WIRE_ORACLE=/tmp/new-wire-observations/wires.json \
+  cargo test -p powerio-dist --lib \
+  dss::geometry::wire::tests::pinned_wire_definitions -- --ignored
+python evals/gridlabd/dss_geometry_definition_oracle.py \
+  --output /tmp/new-geometry-definitions
+POWERIO_GEOMETRY_DEFINITION_ORACLE=/tmp/new-geometry-definitions/definitions.json \
+  cargo test -p powerio-dist --lib \
+  dss::geometry::definition::tests::pinned_geometry_definitions -- --ignored
+```
+
+For public data, the same oracle checks the 32 geometry objects in the 17
+CIMHub IEEE4 cases that declare `LineGeometry`. It verifies source byte counts
+and Git blob hashes against `ieee-corpus.json` before execution. Keep the pinned
+CIMHub checkout and generated observations outside the PowerIO repository.
+
+```sh
+python evals/gridlabd/dss_geometry_definition_oracle.py \
+  --ieee4-base /path/to/CIMHub/ieee4/base --output /tmp/new-ieee4-geometries
+POWERIO_GEOMETRY_DEFINITION_ORACLE=/tmp/new-ieee4-geometries/definitions.json \
+  cargo test -p powerio-dist --lib \
+  dss::geometry::definition::tests::pinned_geometry_definitions -- --ignored
+```
+
+This compares definition fields and the Carson impedance/admittance matrices
+at 60 Hz, including unbalanced, single-phase and center-tapped case inputs.
+It does **not** qualify their transformer models, full power flows, canonical
+output, or native shared-cache history. Synthetic geometry `MakeLike` checks
+compare definition fields only: native `MakeLike` also calculates matrices,
+whose cache must be replayed during Line integration. The public reader retains
+its existing unresolved-geometry diagnostic until that integration is ready.

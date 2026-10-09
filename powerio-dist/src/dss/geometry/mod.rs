@@ -3,6 +3,9 @@
 //! This evaluator is staged ahead of ordered WireData/LineGeometry binding.
 //! The public reader continues to report unresolved geometry until that
 //! binding and shared calculation-cache history are represented.
+mod definition;
+mod wire;
+
 use super::linecode::LineMatrices;
 use num_complex::Complex64 as Complex;
 use serde::Deserialize;
