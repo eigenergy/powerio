@@ -1841,3 +1841,49 @@ Including the idle demand reduces maximum voltage differences to approximately
 IEEE9500 comparisons still fail. Missing switch-port observations and residual
 electrical differences remain unresolved; aggregate power and native convergence
 do not qualify a feeder.
+
+### External ports of fixed-open Line equivalents
+
+Fixed-open Lines retain their original element identity and the names of their
+two external contacts on the reduced-admittance shunt. The native comparator
+checks those contacts against the original bus/conductor inventory and the
+typed equivalent's internal terminals. It compares each external current and
+power, and sums boundary power for total complex loss. It does not compare an
+internal negative resistance's loss as if it were the whole original device.
+Aliased reactors also retain original conductor identities when canonical DSS
+moves a ground return to the last conductor. Ambiguous repeated-node
+permutations are refused.
+
+```sh
+python evals/gridlabd/dss_open_ports_oracle.py \
+  --bridge /path/to/dist_network --output /tmp/new-open-port-results
+```
+
+Ten native cases cover single phase, permuted three phase, explicit neutrals,
+partial/whole terminal openings, generated-name collisions and reactor return
+permutations. Wrong interface bus, node and element mappings must be rejected;
+the altered-line electrical negative control must also fail. Both IEEE9500
+archive comparisons now include all original observations, including the 85
+previously missing switch observations in each case. Strict electrical residuals
+remain failures.
+
+### Native declaration-order sensitivity
+
+The following diagnostic reorders only independent, explicitly parameterized
+fixed-switch declarations in already acquired IEEE9500 profiles. It verifies
+original profile hashes, component bus/node inventories and every native YPrim
+entry before comparing solutions. It performs no PowerIO conversion and never
+qualifies a feeder.
+
+```sh
+python evals/gridlabd/ieee9500_native_order_oracle.py \
+  --profile-run /path/to/ieee9500-archive-results \
+  --output /tmp/new-native-order-results
+```
+
+With identical native admittance entries, the balanced and unbalanced controls
+show maximum voltage differences of about 0.00225 V and 0.00291 V. Their maximum
+power differences are about 17.5 VA and 13.7 VA. This establishes native numerical
+sensitivity under the existing strict thresholds. It does not establish that
+all conversion residuals are numerical, widen tolerances, or replace missing
+model validation with a passing classification.

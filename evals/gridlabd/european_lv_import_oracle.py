@@ -13,6 +13,7 @@ from pathlib import Path
 
 import opendssdirect as dss
 from oracle import HERE, LOCK, add, command, compare
+from physical_ports import observe
 
 
 def pairs(values):
@@ -35,7 +36,7 @@ def run(path):
     return engine
 
 
-def snapshot(engine, buses, elements, *, canonical, aliases=None):
+def snapshot(engine, buses, elements, *, canonical, aliases=None, port_maps=None):
     result = {}
     known_buses = {bus.lower() for bus in engine.Circuit.AllBusNames()}
     known_elements = {name.lower() for name in engine.Circuit.AllElementNames()}
@@ -48,6 +49,14 @@ def snapshot(engine, buses, elements, *, canonical, aliases=None):
         ):
             add(result, f"bus.{bus}.{node}.voltage", "V", voltage)
     for name in elements:
+        if canonical and name in (port_maps or {}):
+            ports, loss = observe(engine, port_maps[name])
+            for terminal, port in enumerate(ports, 1):
+                for quantity, unit, values in [("current", "A", port["currents"]), ("power", "VA", port["powers"])]:
+                    for conductor, (node, value) in enumerate(zip(port["nodes"], values, strict=True), 1):
+                        add(result, f"{name}.terminal{terminal}.conductor{conductor}.node{node}.{quantity}", unit, value)
+            add(result, f"{name}.loss", "VA", loss)
+            continue
         physical = (aliases or {}).get(name, name) if canonical else name
         if physical not in known_elements:
             continue

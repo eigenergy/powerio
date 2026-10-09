@@ -218,7 +218,12 @@ impl DssWriter {
             }
         }
         self.warn(&C::EMIT_DSS_IMPEDANCE_EQUIVALENT,format!("shunt {}: full admittance uses reciprocal impedance branches or {} coupled two-port blocks and exact diagonal corrections under prefix {prefix}; aggregate external terminal currents instead of interpreting internal negative-element losses",shunt.name,projection.pairs.len()));
-        for key in shunt.extras.keys() {
+        for key in shunt.extras.keys().filter(|key| {
+            !matches!(
+                key.as_str(),
+                "dss_original_element" | "dss_external_contacts"
+            )
+        }) {
             self.warn(
                 &C::EMIT_DSS_EXTRAS_DROPPED,
                 format!(
