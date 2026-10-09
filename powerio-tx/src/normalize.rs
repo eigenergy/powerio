@@ -14,6 +14,9 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::islands::{
+    IslandPartition, IslandReferencePolicy, bus_list, kept_reference, largest_generator_bus,
+};
 use crate::merge::{BusMerge, BusMergeRule};
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost,
@@ -99,6 +102,12 @@ pub struct NormalizeOptions {
     /// What happens to closed switches. The default keeps them, as
     /// [`BalancedNetwork::to_normalized`] does.
     pub closed_switches: ClosedSwitchPolicy,
+    /// How the reference buses of a network with several islands are chosen.
+    /// [`IslandReferencePolicy::Stated`], the default, keeps the behavior of
+    /// [`BalancedNetwork::to_normalized`];
+    /// [`IslandReferencePolicy::PerIsland`] gives every island one reference
+    /// and leaves out the islands no in-service generator supplies.
+    pub island_references: IslandReferencePolicy,
 }
 
 impl Default for NormalizeOptions {
@@ -107,6 +116,7 @@ impl Default for NormalizeOptions {
             clamp_angle_bounds: false,
             angle_bound_pad: POWER_MODELS_ANGLE_BOUND_PAD,
             closed_switches: ClosedSwitchPolicy::Refuse,
+            island_references: IslandReferencePolicy::Stated,
         }
     }
 }
@@ -726,6 +736,152 @@ fn designate_reference(
     Ok(())
 }
 
+/// The buses of the islands no in-service generator supplies, each island
+/// reported as left out.
+fn unsupplied_island_buses(
+    network: &BalancedNetwork,
+    partition: &IslandPartition,
+    warnings: &mut crate::diagnostics::Diagnostics,
+) -> HashSet<BusId> {
+    let mut unsupplied = HashSet::new();
+    for island in partition
+        .islands
+        .iter()
+        .filter(|island| !island.is_supplied())
+    {
+        warnings.record(
+            network.unsupplied_island_finding(island, "was left out of the normalized network"),
+        );
+        unsupplied.extend(island.buses.iter().copied());
+    }
+    unsupplied
+}
+
+/// Canonical bus types: a bus hosting an in-service generator keeps `Ref` if
+/// the file marked it `Ref`, else becomes `Pv`; a gen-less bus is `Pq`. A
+/// `Pq` bus that becomes `Pv` is reported, since its generator now holds the
+/// bus voltage.
+fn canonicalize_bus_types(
+    buses: &mut [Bus],
+    generators: &[Generator],
+    warnings: &mut crate::diagnostics::Diagnostics,
+) {
+    let gen_buses: HashSet<BusId> = generators.iter().map(|g| g.bus).collect();
+    let mut retyped_pq = Vec::new();
+    for b in buses.iter_mut() {
+        if b.kind == BusType::Pq && gen_buses.contains(&b.id) {
+            retyped_pq.push(b.id);
+        }
+        b.kind = match (gen_buses.contains(&b.id), b.kind) {
+            (true, BusType::Ref) => BusType::Ref,
+            (true, _) => BusType::Pv,
+            (false, _) => BusType::Pq,
+        };
+    }
+    if !retyped_pq.is_empty() {
+        warnings.push(
+            &crate::diagnostics::codes::CANONICALIZE_NORMALIZE_GENERATOR_BUS_RETYPED,
+            format!(
+                "{} PQ bus(es) host an in-service generator and were retyped PV, so the \
+                 generator holds the bus voltage ({})",
+                retyped_pq.len(),
+                bus_list(&retyped_pq)
+            ),
+        );
+    }
+}
+
+/// The reference buses of the normalized tables: one per island of
+/// `partition` under [`IslandReferencePolicy::PerIsland`], and the largest
+/// generator's bus when no reference survives at all.
+fn assign_normalized_references(
+    buses: &mut [Bus],
+    generators: &[Generator],
+    partition: Option<&IslandPartition>,
+    warnings: &mut crate::diagnostics::Diagnostics,
+) -> Result<()> {
+    if let Some(partition) = partition {
+        assign_normalized_island_references(buses, generators, partition, warnings);
+    }
+    if !buses.iter().any(|b| b.kind == BusType::Ref) {
+        designate_reference(buses, generators, warnings)?;
+    }
+    Ok(())
+}
+
+/// [`IslandReferencePolicy::PerIsland`] over the normalized tables: each
+/// supplied island of `partition` keeps exactly one reference bus. The bus
+/// types are already canonical, so a reference hosts a generator and a demoted
+/// one becomes PV.
+fn assign_normalized_island_references(
+    buses: &mut [Bus],
+    generators: &[Generator],
+    partition: &IslandPartition,
+    warnings: &mut crate::diagnostics::Diagnostics,
+) {
+    let mut island_generators: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (row, generator) in generators.iter().enumerate() {
+        if let Some(island) = partition.island_of(generator.bus) {
+            island_generators.entry(island).or_default().push(row);
+        }
+    }
+    let mut island_references: HashMap<usize, Vec<BusId>> = HashMap::new();
+    for bus in buses.iter().filter(|bus| bus.kind == BusType::Ref) {
+        if let Some(island) = partition.island_of(bus.id) {
+            island_references.entry(island).or_default().push(bus.id);
+        }
+    }
+    let mut designated = HashSet::new();
+    let mut demoted = HashSet::new();
+    for (position, island) in partition.islands.iter().enumerate() {
+        let Some(rows) = island_generators.get(&position) else {
+            continue;
+        };
+        let mut references = island_references.remove(&position).unwrap_or_default();
+        references.sort_unstable();
+        match references.as_slice() {
+            [_] => {}
+            [] => {
+                if let Some(bus) = largest_generator_bus(generators, rows) {
+                    warnings.push(
+                        &crate::diagnostics::codes::CANONICALIZE_ISLAND_REFERENCE_DESIGNATED,
+                        format!(
+                            "the island of {} bus(es) ({}) has no reference bus that survives \
+                             normalization; bus {bus} hosts its largest pmax in-service \
+                             generator and was designated the reference",
+                            island.buses.len(),
+                            bus_list(&island.buses)
+                        ),
+                    );
+                    designated.insert(bus);
+                }
+            }
+            many => {
+                let kept = kept_reference(many, generators, rows).unwrap_or(many[0]);
+                let others: Vec<BusId> = many.iter().copied().filter(|&b| b != kept).collect();
+                warnings.push(
+                    &crate::diagnostics::codes::CANONICALIZE_ISLAND_REFERENCE_DEMOTED,
+                    format!(
+                        "the island of {} bus(es) keeps {} reference buses; bus {kept} hosts the \
+                         most generation and stays the reference, and bus(es) {} became PV",
+                        island.buses.len(),
+                        many.len(),
+                        bus_list(&others)
+                    ),
+                );
+                demoted.extend(others);
+            }
+        }
+    }
+    for bus in buses.iter_mut() {
+        if designated.contains(&bus.id) {
+            bus.kind = BusType::Ref;
+        } else if demoted.contains(&bus.id) {
+            bus.kind = BusType::Pv;
+        }
+    }
+}
+
 impl BalancedNetwork {
     /// A normalized, computation-ready copy of this network. The raw `BalancedNetwork` is
     /// kept lossless (MATPOWER units, 1-based sparse ids, out-of-service elements
@@ -751,10 +907,13 @@ impl BalancedNetwork {
     ///   indices without destroying source ids.
     /// - **Bus types**: a bus hosting a surviving generator keeps `REF` if the file
     ///   marked it `REF`, otherwise becomes `PV`; a generator-less bus is `PQ` (so a
-    ///   generator-less `REF` is demoted). The file's `REF` buses are kept, several
-    ///   included, and the consumer picks the slack. Only when no reference bus
-    ///   survives is the largest-`pmax` in-service generator's bus promoted to
-    ///   `REF`.
+    ///   generator-less `REF` is demoted). A `PQ` bus retyped `PV` is reported as
+    ///   `CANONICALIZE.NORMALIZE.GENERATOR_BUS_RETYPED`. The file's `REF` buses are
+    ///   kept, several included, and the consumer picks the slack. Only when no
+    ///   reference bus survives is the largest-`pmax` in-service generator's bus
+    ///   promoted to `REF`;
+    ///   [`NormalizeOptions::island_references`] applies that rule per island
+    ///   instead.
     ///
     /// This is a derived product, not a source for write-back: `source` is dropped
     /// and `source_format` is [`SourceFormat::Normalized`], so writing it serializes
@@ -854,6 +1013,19 @@ impl BalancedNetwork {
         validate_normalize_options(options)?;
         self.check_base_mva()?;
         let base = self.base_mva();
+        let mut warnings = crate::diagnostics::Diagnostics::new();
+
+        // Per island references: an island no in-service generator supplies
+        // cannot be solved, so its buses stay out like isolated ones and the
+        // element filters below drop what sits on them. The partition follows
+        // what this pass keeps: a three winding transformer with a winding on
+        // an isolated bus is dropped whole, so it joins nothing.
+        let partition = (options.island_references == IslandReferencePolicy::PerIsland)
+            .then(|| self.calc_islands_where(false));
+        let unsupplied = partition
+            .as_ref()
+            .map(|partition| unsupplied_island_buses(self, partition, &mut warnings))
+            .unwrap_or_default();
 
         // Kept buses keep their original `kind` for now (the reference scan below
         // reads it) and their source ids. Isolated buses are dropped.
@@ -864,7 +1036,7 @@ impl BalancedNetwork {
         // `pad_to_lowered` extends the map over what the star lowering appends.
         let mut bus_rows: Vec<Option<usize>> = Vec::with_capacity(self.buses().len());
         for (row, b) in self.buses().iter().enumerate() {
-            if b.kind == BusType::Isolated {
+            if b.kind == BusType::Isolated || unsupplied.contains(&b.id) {
                 continue;
             }
             id_map.insert(b.id, b.id);
@@ -879,7 +1051,6 @@ impl BalancedNetwork {
         let (static_var_compensators, static_var_compensator_rows) =
             norm_static_var_compensators(self.static_var_compensators(), base, &id_map);
         let (mut branches, branch_rows) = norm_branches(self.branches(), base, &id_map);
-        let mut warnings = crate::diagnostics::Diagnostics::new();
         if options.clamp_angle_bounds {
             clamp_angle_bounds(&mut branches, options.angle_bound_pad, &mut warnings);
         }
@@ -902,21 +1073,11 @@ impl BalancedNetwork {
             transformers_3w: transformer_3w_rows,
         };
 
-        // Bus types: a bus hosting an in-service generator keeps `Ref` if the
-        // file marked it `Ref`, else becomes `Pv`; a gen-less bus is `Pq`.
-        // Multiple file `Ref` buses are kept as-is, and only when no `Ref`
-        // survives is the largest-pmax generator's bus promoted.
-        let gen_buses: HashSet<BusId> = generators.iter().map(|g| g.bus).collect();
-        for b in &mut buses {
-            b.kind = match (gen_buses.contains(&b.id), b.kind) {
-                (true, BusType::Ref) => BusType::Ref,
-                (true, _) => BusType::Pv,
-                (false, _) => BusType::Pq,
-            };
-        }
-        if !buses.iter().any(|b| b.kind == BusType::Ref) {
-            designate_reference(&mut buses, &generators, &mut warnings)?;
-        }
+        // Bus types. Multiple file `Ref` buses are kept as-is unless the per
+        // island policy keeps one per island, and only when no `Ref` survives
+        // is the largest-pmax generator's bus promoted.
+        canonicalize_bus_types(&mut buses, &generators, &mut warnings);
+        assign_normalized_references(&mut buses, &generators, partition.as_ref(), &mut warnings)?;
         // The other silent semantic decision this gateway announces: a
         // solver-ready copy whose cost objective is identically zero.
         if !generators.is_empty() && generators.iter().all(|g| g.cost.is_none()) {

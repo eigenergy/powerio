@@ -91,5 +91,42 @@ powerio summary case.raw --merge-buses psse
 powerio convert case.raw --merge-buses psse=0.0001 --to matpower -o merged.m
 ```
 
+## Islands and reference buses
+
+A large case can hold several AC islands: systems joined only by HVDC,
+pockets behind an open breaker, and stranded equipment. `calc_islands`
+partitions the energized buses into islands joined by in-service branches,
+closed switches, and in-service three winding transformers. Buses typed
+isolated belong to no island, and HVDC lines do not join islands. Each island
+lists its buses, reference buses, in-service generators, and the in-service
+HVDC lines that tie it to another island, largest island first. `subset_buses` carves one island out as a network of its own.
+
+A power flow needs one reference bus per island, and an island with no source
+cannot be solved. `assign_island_references` with the per island policy gives
+each island exactly one:
+
+- an island that states one reference keeps it;
+- an island that states none takes the bus of its largest `pmax` in-service
+  generator;
+- an island that states several keeps the one hosting the most generation and
+  demotes the others;
+- an island with no in-service generator is de-energized: its buses are typed
+  isolated and the equipment on or touching them is taken out of service.
+  Supply counts in-service generators only, so an island that only an HVDC
+  line feeds is de-energized too, and the line with it. It gets its own code,
+  `CANONICALIZE.ISLAND.HVDC_FED_DE_ENERGIZED`, which names the lines and the
+  power they schedule into the island; model that infeed as a generator at
+  the converter bus to keep the island.
+
+Every change is reported under `CANONICALIZE.ISLAND`. Normalization applies
+the same rule when asked, and leaves the unsupplied islands out of the
+normalized network; by default it keeps the case's references and designates
+one only when none survives. `powerio summary` lists the islands under
+`topology.islands`.
+
+```python
+normalized = network.to_normalized(island_references="per_island")
+```
+
 Building matrices from a balanced network has its own chapter,
 [Matrices and graphs](matrices.md).

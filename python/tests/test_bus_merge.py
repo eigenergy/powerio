@@ -1,5 +1,6 @@
-"""The bus merge from Python: closed switches and zero impedance branches."""
+"""The bus merge and island references from Python."""
 
+import io
 from pathlib import Path
 
 import pytest
@@ -90,3 +91,42 @@ def test_normalization_merges_closed_switches_on_request():
     assert merged.calc_incidence_matrix().shape == (4, 4)
     with pytest.raises(ValueError, match="closed_switches"):
         network.to_normalized(closed_switches="ignore")
+
+
+THREE_ISLANDS = """function mpc = islands
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t1\t50\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t3\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t4\t1\t30\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t5\t1\t20\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t6\t1\t10\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t50\t0\t100\t-100\t1\t100\t1\t200\t0;
+\t3\t30\t0\t100\t-100\t1\t100\t1\t150\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t3\t4\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t5\t6\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+"""
+
+
+def test_per_island_references_in_normalization():
+    network = powerio.parse(
+        io.StringIO(THREE_ISLANDS), name="islands.m", format="matpower"
+    ).value
+    stated = network.to_normalized()
+    assert stated.n_buses == 6
+    assert len(stated.reference_bus_indices()) == 1
+
+    per_island = network.to_normalized(island_references="per_island")
+    assert [bus["id"] for bus in per_island.buses] == [1, 2, 3, 4]
+    references = [bus["id"] for bus in per_island.buses if bus["kind"] == "REF"]
+    assert references == [1, 3]
+    with pytest.raises(ValueError, match="island_references"):
+        network.to_normalized(island_references="nearest")

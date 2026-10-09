@@ -53,6 +53,7 @@ pub mod format;
 pub mod gen_cost;
 pub mod geo;
 pub mod indexed;
+pub mod islands;
 pub mod merge;
 pub mod network;
 mod normalize;
@@ -131,6 +132,7 @@ pub use geo::{
     to_geo_layer_from_aux_substations, to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
 };
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
+pub use islands::{Island, IslandPartition, IslandReferencePolicy, IslandReferenceReport};
 pub use merge::{
     BusGroup, BusMerge, BusMergeRule, MergedCharging, MergedFlows,
     PSSE_DEFAULT_ZERO_IMPEDANCE_THRESHOLD, RemovalReason, RemovedBranch, RemovedFlow,
