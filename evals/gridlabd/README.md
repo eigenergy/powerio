@@ -1769,10 +1769,19 @@ mapping, invalid data, or short Q files produce an error when an actual-power
 assignment depends on them. They cannot silently leave the old load power.
 
 `dss_useactual_oracle.py` compares nominal P/Q and native electrical results in
-49 cases, including ordered references and copies, signed/tied peaks, PF
+55 cases, including ordered references and copies, signed/tied peaks, PF
 precedence, binary/CSV inputs, and scalar versus array transformer ratings.
 All cases require canonical output, IR equality, reimport, and a changed-line
-negative control:
+negative control.
+
+LoadShape has a native ordered property table, so bounded `BatchEdit`,
+abbreviations and positional assignments use the same stateful path as ordinary
+edits. This restores the European LV master's `BatchEdit LoadShape..*
+useactual=no` before load creation. Later shape edits affect future load
+assignments; they do not retroactively change an already assigned nominal power.
+Unsupported actions still produce explicit errors when an actual shape is used.
+The complete European LV feeder again passes all 14,784 electrical observations
+through canonical output and reimport.
 
 ```sh
 python evals/gridlabd/dss_useactual_oracle.py \

@@ -44,6 +44,15 @@ def cases(folder):
         "batch-reference": "batchedit load.l pf=.8 daily=s",
     }.items():
         yield label, SHAPE + LOAD + "daily=s\n" + tail + "\n"
+    for label, script in {
+        "batch-shape-disable": SHAPE + "batchedit loadshape..* useactual=no\n" + LOAD + "daily=s\n",
+        "batch-shape-enable": SHAPE.replace("useactual=yes", "useactual=no") + "batchedit loadshape..* usea=yes\n" + LOAD + "daily=s\n",
+        "batch-shape-selection": SHAPE + "new loadshape.t npts=3 mult=[10 20 30] qmult=[2 4 6] useactual=yes\nbatchedit loadshape.^s$ useactual=no\n" + LOAD + "daily=t\n",
+        "batch-shape-after-bound": SHAPE + LOAD + "daily=s\nbatchedit loadshape..* mult=[10 20 30] qmult=[2 4 6]\n",
+        "batch-shape-rebound": SHAPE + LOAD + "daily=s\nbatchedit loadshape.^s$ npts=3 1 [10 20 30] qmult=[2 4 6] usea=yes\nedit load.l daily=s\n",
+        "shape-position-and-abbreviation": "new loadshape.s 3 1 [5 7 3] qmult=[9 2 99] usea=yes\n" + LOAD + "daily=s\n",
+    }.items():
+        yield label, script
     for kind, fmt in (("dblfile", "d"), ("sngfile", "f")):
         (folder / (kind + "-p.bin")).write_bytes(struct.pack("<3" + fmt, 5, 7.123456789, 3))
         (folder / (kind + "-q.bin")).write_bytes(struct.pack("<3" + fmt, 9, 2.123456789, 99))

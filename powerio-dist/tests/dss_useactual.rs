@@ -213,3 +213,38 @@ fn native_single_precision_copy_does_not_activate_a_retained_double_q_array() {
         );
     }
 }
+
+#[test]
+fn batch_shape_edits_affect_future_load_assignments_only() {
+    let text = "new circuit.c\nnew loadshape.s npts=3 mult=[5 7 3] qmult=[9 2 99] useactual=yes\nnew load.before bus1=sourcebus kw=4 kvar=1 daily=s\nbatchedit loadshape..* usea=no\nnew load.disabled bus1=sourcebus kw=4 kvar=1 daily=s\nbatchedit loadshape.^s$ npts=3 1 [10 20 30] qmult=[2 4 6] usea=yes\nnew load.after bus1=sourcebus kw=4 kvar=1 daily=s\n";
+    let module = powerio_dist::parse(source(text)).unwrap();
+    for (load, (p, q)) in module
+        .value()
+        .loads()
+        .iter()
+        .zip([(7.0, 2.0), (4.0, 1.0), (30.0, 6.0)])
+    {
+        assert!(
+            (load.p_nom.iter().sum::<f64>() / 1000.0 - p).abs() < 1e-12,
+            "{}",
+            load.name
+        );
+        assert!(
+            (load.q_nom.iter().sum::<f64>() / 1000.0 - q).abs() < 1e-12,
+            "{}",
+            load.name
+        );
+    }
+}
+
+#[test]
+fn batch_shape_unsupported_actions_remain_explicit() {
+    let text = "new circuit.c\nnew loadshape.s npts=3 mult=[5 7 3] useactual=yes\nbatchedit loadshape..* action=normalize\nnew load.l bus1=sourcebus daily=s\n";
+    let error = powerio_dist::parse(source(text)).unwrap_err();
+    assert!(
+        error
+            .diagnostics()
+            .iter()
+            .any(|d| d.code() == "READ.DSS.LOADSHAPE_UNRESOLVED")
+    );
+}
