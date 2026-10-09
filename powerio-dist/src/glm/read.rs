@@ -19,6 +19,7 @@ mod cables;
 mod geometry;
 mod loads;
 mod switches;
+mod transformers;
 
 /// Read the initial static GLM electrical profile. Unknown physical
 /// classes, properties and globals fail explicitly; they are not silently
@@ -28,6 +29,7 @@ mod switches;
 /// fixed source phasors, P/I/Z loads, overhead and underground line matrices
 /// or conductor geometry, and fixed ordinary-phase switch contacts. Finite
 /// contacts use exact line equivalents; ideal and open contacts remain typed switches.
+/// Ordinary NR single-phase and three-phase grounded-wye transformers use typed windings.
 /// Other conductor/device profiles remain under implementation.
 pub fn parse(
     source: Source,
@@ -66,6 +68,7 @@ pub fn parse(
     reader.loads_and_sources()?;
     reader.lines()?;
     reader.switches()?;
+    reader.transformers()?;
     reader.coordinates()?;
     crate::require_electrical_readiness(&reader.net)
         .map_err(|e| e.with_source(project.source().clone()))?;
@@ -423,7 +426,14 @@ impl Reader<'_> {
         name: &str,
         value: Complex64,
     ) {
-        if let Some((canonical, Some(imaginary), _, _)) =
+        if class == "transformer_configuration" && matches!(name, "resistance" | "reactance") {
+            let previous = quantities.entry((key, "impedance".into())).or_default();
+            if name == "resistance" {
+                previous.re = value.re;
+            } else {
+                previous.im = value.re;
+            }
+        } else if let Some((canonical, Some(imaginary), _, _)) =
             (class == "load").then(|| loads::property(name)).flatten()
         {
             let previous = quantities.entry((key, canonical.to_owned())).or_default();
@@ -814,6 +824,8 @@ fn supported_class(name: &str) -> bool {
                 | "switch"
                 | "overhead_line_conductor"
                 | "line_spacing"
+                | "transformer"
+                | "transformer_configuration"
         )
 }
 fn bus_class(name: &str) -> bool {
@@ -845,6 +857,7 @@ fn allowed_property(class: &str, name: &str) -> bool {
         || (matches!(class, "overhead_line" | "underground_line")
             && matches!(name, "phases" | "from" | "to" | "length" | "configuration"))
         || (class == "line_configuration" && matrix_property(name))
+        || transformers::allowed(class, name)
         || geometry::allowed(class, name)
         || cables::unit(class, name).is_some()
         || (class == "switch"
@@ -865,6 +878,9 @@ fn allowed_property(class: &str, name: &str) -> bool {
 }
 fn quantity_spec(class: &str, name: &str) -> Option<(GlmQuantityKind, &'static str)> {
     use GlmQuantityKind::{Complex, Real};
+    if let Some(spec) = transformers::quantity_spec(class, name) {
+        return Some(spec);
+    }
     if let Some(unit) = geometry::unit(class, name).or_else(|| cables::unit(class, name)) {
         return Some((Real, unit));
     }

@@ -17,11 +17,13 @@ const METERS_PER_MILE: f64 = 1609.344;
 mod ideal;
 mod loads;
 mod shunts;
+mod transformers;
 
 /// Emit fresh GLM from the current typed network, without retained-source echo.
 ///
 /// The initial profile supports earth/phase-pair P/I/Z loads, ideal fixed sources,
-/// explicit phase line matrices and fixed contacts. Ideal closed contacts select
+/// explicit phase line matrices, ordinary grounded-wye transformers and fixed
+/// contacts. Ideal closed contacts select
 /// exact FBS output on a checked forest with one source bus per component.
 /// Symmetric line end shunts use exact admittance-load equivalents when native
 /// line parameters cannot preserve their port equations. Returned diagnostics
@@ -67,6 +69,7 @@ pub(crate) fn emit_text(network: &MulticonductorNetwork) -> Result<TextEmission,
     writer.inventory()?;
     writer.sources()?;
     writer.prepare_ideal_contacts()?;
+    writer.validate_transformers()?;
     writer.nominal_voltages()?;
     let solver = if writer.ideal_plan.is_some() {
         "FBS"
@@ -81,6 +84,7 @@ pub(crate) fn emit_text(network: &MulticonductorNetwork) -> Result<TextEmission,
     writer.buses()?;
     writer.lines()?;
     writer.switches()?;
+    writer.transformers()?;
     writer.loads()?;
     writer.remaining_locations();
     Ok(TextEmission::new(
@@ -152,8 +156,7 @@ impl Writer<'_> {
                 "nominal frequencies other than 50 or 60 Hz are not qualified",
             ));
         }
-        if !self.net.transformers().is_empty()
-            || !self.net.generators().is_empty()
+        if !self.net.generators().is_empty()
             || !self.net.ibrs().is_empty()
             || !self.net.shunts().is_empty()
             || !self.net.capacitors().is_empty()
@@ -211,6 +214,9 @@ impl Writer<'_> {
         }
         for line in self.net.lines() {
             self.reserve(&line.name)?;
+        }
+        for t in self.net.transformers() {
+            self.reserve(&t.name)?;
         }
         for load in self.net.loads() {
             self.reserve(&load.name)?;
@@ -325,8 +331,29 @@ impl Writer<'_> {
             self.nominal.insert(bus, nominal);
             queue.push_back(bus);
         }
+        let mut ratios: BTreeMap<&str, Vec<(&str, f64)>> = BTreeMap::new();
+        for t in self.net.transformers() {
+            let a = &t.windings[0];
+            let b = &t.windings[1];
+            ratios
+                .entry(&a.bus)
+                .or_default()
+                .push((&b.bus, b.v_ref / a.v_ref));
+            ratios
+                .entry(&b.bus)
+                .or_default()
+                .push((&a.bus, a.v_ref / b.v_ref));
+        }
         while let Some(bus) = queue.pop_front() {
             let nominal = self.nominal[bus];
+            for &(neighbor, ratio) in ratios.get(bus).into_iter().flatten() {
+                if let std::collections::btree_map::Entry::Vacant(entry) =
+                    self.nominal.entry(neighbor)
+                {
+                    entry.insert(nominal * ratio);
+                    queue.push_back(neighbor);
+                }
+            }
             for &neighbor in neighbors.get(bus).into_iter().flatten() {
                 if let std::collections::btree_map::Entry::Vacant(entry) =
                     self.nominal.entry(neighbor)

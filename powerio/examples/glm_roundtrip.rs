@@ -47,6 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             *q *= 1.25;
         }
     }
+    edit_transformers(&mut edited);
     for line in edited.lines_mut() {
         line.length *= 1.1;
     }
@@ -87,6 +88,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ] {
         let path = output.join(format!("{label}.glm"));
         let emission = emit_canonical(&network, Destination::path(path))?;
+        if !network.transformers().is_empty() {
+            powerio_dist::emit(
+                &powerio::PioModule::new(network.clone()),
+                powerio_dist::DistTargetFormat::Dss,
+                Destination::path(output.join(format!("{label}.dss"))),
+            )?;
+        }
         reports.insert(label.into(), serde_json::json!({
             "network": network,
             "diagnostics": emission.diagnostics().iter().map(powerio::Diagnostic::code).collect::<Vec<_>>(),
@@ -117,4 +125,18 @@ fn override_shunts(
     code.g_to = shunts.g_to;
     code.b_to = shunts.b_to;
     Ok(())
+}
+
+fn edit_transformers(network: &mut powerio_dist::MulticonductorNetwork) {
+    for transformer in network.transformers_mut() {
+        for winding in &mut transformer.windings {
+            winding.r_pct *= 1.2;
+        }
+        for x in &mut transformer.xsc_pct {
+            *x *= 0.9;
+        }
+        if let Some(secondary) = transformer.windings.get_mut(1) {
+            secondary.v_ref *= 1.05;
+        }
+    }
 }

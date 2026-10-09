@@ -230,7 +230,16 @@ calculated matrices, so it does not reinterpret geometry under the target fork.
 
 Numerical `iteration_limit` settings and voltage/current dump objects remain in
 retained source and are reported; they do not become network components.
-Other geometry/earth models, transformers, split-phase and
+Ordinary NR transformers support three-phase `WYE_WYE` and single-phase
+`SINGLE_PHASE` connections with explicit voltage/rating and positive series
+resistance/reactance. They map to grounded winding records and retain device
+coordinates. Canonical output uses the current winding voltage, resistance and
+reactance; source-only configuration objects are not required after an IR round
+trip. OpenDSS output explicitly disables its additional anti-floating admittance
+for these imported circuits. FBS transformer equations, other connections,
+non-unit taps and explicit magnetizing branches still need qualification.
+
+Other geometry/earth models, split-phase and
 additional static devices remain unfinished and fail explicitly. Full OpenDSS
 static compatibility is not yet established.
 

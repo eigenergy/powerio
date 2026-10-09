@@ -777,3 +777,21 @@ with `POWERIO_LOAD_VOLTAGE_SAMPLES` set to the resulting `report.json` to verify
 the Rust evaluator against the same independent native samples. The report
 records the pinned engine version and CLI/input hashes. These microcases do
 not by themselves qualify a complete feeder or the remaining load models.
+
+## Ordinary transformer conversion
+
+`transformer_roundtrip_oracle.py` uses independent ideal-coil and series-impedance
+equations to check loaded single-phase A/C and unbalanced three-phase grounded
+wye transformers. Both pinned GridLAB-D forks run the original, fresh canonical
+and edited network; OpenDSS runs fresh and edited conversions. Edits change
+source voltage, load demand, winding voltage, resistance and reactance. A wrong
+turns ratio must fail, and IR-restored GLM must equal fresh canonical output.
+
+```sh
+cargo build -p powerio --example glm_roundtrip
+python evals/gridlabd/transformer_roundtrip_oracle.py --bridge target/debug/examples/glm_roundtrip --pnnl-root "$PNNL_ROOT" --output /tmp/gld-transformers
+```
+
+This qualifies ordinary NR series-coil behavior, not FBS, magnetizing branches,
+regulators, split-phase services or a complete public feeder. The earlier
+`transformer_oracle.py` calibrates engine coil conventions without PowerIO.
