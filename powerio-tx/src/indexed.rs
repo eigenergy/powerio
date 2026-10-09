@@ -327,13 +327,15 @@ impl<'n> IndexedNetwork<'n> {
     /// closed switches before building.
     ///
     /// # Errors
-    /// [`Error::ClosedSwitch`] naming the first closed switch.
+    /// [`Error::ClosedSwitch`] naming the first closed switch and the count,
+    /// with the calls that merge them.
     pub fn check_closed_switches(&self) -> Result<()> {
         match self.closed_switches().next() {
             Some((row, switch)) => Err(Error::ClosedSwitch {
                 row,
                 from: switch.from,
                 to: switch.to,
+                closed: self.closed_switches().count(),
             }),
             None => Ok(()),
         }

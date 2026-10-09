@@ -14,6 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::merge::{BusMerge, BusMergeRule};
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost,
     Generator, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat, StaticVarCompensator, Storage,
@@ -73,6 +74,20 @@ pub(crate) const GEN_PU_KEYS: [&str; 4] = ["ramp_agc", "ramp_10", "ramp_30", "ra
 #[allow(clippy::approx_constant)]
 pub const POWER_MODELS_ANGLE_BOUND_PAD: f64 = 1.0472;
 
+/// What normalization does with a closed switch that joins two buses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ClosedSwitchPolicy {
+    /// Keep it as data. The analysis builders model no switches, so each of
+    /// them refuses the normalized network with `BUILD.SWITCH.CLOSED`.
+    #[default]
+    Refuse,
+    /// Merge the buses closed switches join first, with
+    /// [`BusMergeRule::closed_switches`], and return the merge beside the
+    /// normalized network ([`NormalizedNetwork::bus_merge`]).
+    Merge,
+}
+
 /// Options for [`BalancedNetwork::to_normalized_with_options`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NormalizeOptions {
@@ -81,6 +96,9 @@ pub struct NormalizeOptions {
     pub clamp_angle_bounds: bool,
     /// Replacement magnitude, in radians, for clamped angle bounds.
     pub angle_bound_pad: f64,
+    /// What happens to closed switches. The default keeps them, as
+    /// [`BalancedNetwork::to_normalized`] does.
+    pub closed_switches: ClosedSwitchPolicy,
 }
 
 impl Default for NormalizeOptions {
@@ -88,6 +106,7 @@ impl Default for NormalizeOptions {
         Self {
             clamp_angle_bounds: false,
             angle_bound_pad: POWER_MODELS_ANGLE_BOUND_PAD,
+            closed_switches: ClosedSwitchPolicy::Refuse,
         }
     }
 }
@@ -100,6 +119,10 @@ pub struct NormalizedNetwork {
     pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
     /// The same findings as `CODE: message` lines.
     pub warnings: Vec<String>,
+    /// The closed switch merge normalization ran first under
+    /// [`ClosedSwitchPolicy::Merge`]: its bus map, removed switches, and row
+    /// maps from the source. `None` under [`ClosedSwitchPolicy::Refuse`].
+    pub bus_merge: Option<BusMerge>,
 }
 
 /// Row provenance for one normalize pass: for each dense position in the
@@ -139,6 +162,48 @@ pub struct NormalizeSourceRows {
 }
 
 impl NormalizeSourceRows {
+    /// Rows over a merged network, carried back to the network `merge`
+    /// read. Buses resolve by id; a removed branch or switch has no merged
+    /// row, and a shunt the merge added for a removed branch's charging has
+    /// no source row. The other families keep their rows.
+    fn through_merge(mut self, merge: &BusMerge) -> Self {
+        let source_bus: HashMap<BusId, usize> = merge
+            .source
+            .buses()
+            .iter()
+            .enumerate()
+            .map(|(row, bus)| (bus.id, row))
+            .collect();
+        let merged_buses = merge.network.buses();
+        for row in self.buses.iter_mut().flatten() {
+            *row = source_bus[&merged_buses[*row].id];
+        }
+        let inverse = |rows: &[Option<usize>]| {
+            let mut inverse = vec![0; rows.iter().flatten().count()];
+            for (source, merged) in rows.iter().enumerate() {
+                if let Some(merged) = merged {
+                    inverse[*merged] = source;
+                }
+            }
+            inverse
+        };
+        let branches = inverse(&merge.branch_rows);
+        for row in self.branches.iter_mut().flatten() {
+            *row = branches[*row];
+        }
+        let switches = inverse(&merge.switch_rows);
+        for row in self.switches.iter_mut().flatten() {
+            *row = switches[*row];
+        }
+        let source_shunts = merge.source.shunts().len();
+        for row in &mut self.shunts {
+            if row.is_some_and(|row| row >= source_shunts) {
+                *row = None;
+            }
+        }
+        self
+    }
+
     /// Grow the families the star lowering appends to so each length matches the
     /// lowered form of `net`. The appended entries have no source row. The
     /// lengths come from [`BalancedNetwork::lowered_lengths`], which counts them off the
@@ -758,10 +823,31 @@ impl BalancedNetwork {
         Ok((normalized, rows))
     }
 
-    /// The pass itself. The rows it gives cover the normalized network before
-    /// the star lowering, so only [`Self::to_normalized_with_source_rows`] pays
-    /// for the lowered lengths.
+    /// The pass itself, after the closed switch merge
+    /// [`ClosedSwitchPolicy::Merge`] asks for. The rows it gives cover the
+    /// normalized network before the star lowering, so only
+    /// [`Self::to_normalized_with_source_rows`] pays for the lowered lengths.
     fn normalize_inner(
+        &self,
+        options: &NormalizeOptions,
+    ) -> Result<(NormalizedNetwork, NormalizeSourceRows)> {
+        if options.closed_switches != ClosedSwitchPolicy::Merge {
+            return self.normalize_pass(options);
+        }
+        validate_normalize_options(options)?;
+        let merge = self.merge_buses(&BusMergeRule::closed_switches())?;
+        let (mut normalized, rows) = merge.network.normalize_pass(options)?;
+        let rows = rows.through_merge(&merge);
+        let mut diagnostics = merge.diagnostics.clone();
+        diagnostics.append(&mut normalized.diagnostics);
+        normalized.warnings = crate::diagnostics::render_diagnostics(&diagnostics);
+        normalized.diagnostics = diagnostics;
+        normalized.bus_merge = Some(merge);
+        Ok((normalized, rows))
+    }
+
+    /// One normalization pass over this network as it stands.
+    fn normalize_pass(
         &self,
         options: &NormalizeOptions,
     ) -> Result<(NormalizedNetwork, NormalizeSourceRows)> {
@@ -877,6 +963,7 @@ impl BalancedNetwork {
         );
         Ok((
             NormalizedNetwork {
+                bus_merge: None,
                 network: net,
                 warnings: warnings.lines(),
                 diagnostics: warnings.into_records(),
@@ -889,6 +976,67 @@ impl BalancedNetwork {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_merge_policy_merges_closed_switches_before_normalizing() {
+        use crate::network::Switch;
+        let mut buses: Vec<Bus> = (1..=3)
+            .map(|id| Bus::new(BusId(id), BusType::Pq, 230.0))
+            .collect();
+        buses[0].kind = BusType::Ref;
+        let mut net = BalancedNetwork::in_memory(
+            "switched",
+            100.0,
+            buses,
+            vec![Branch::new(BusId(1), BusId(2), 0.0, 0.1)],
+        );
+        net.switches_mut().extend([
+            Switch::new(BusId(2), BusId(3), true),
+            Switch::new(BusId(1), BusId(3), false),
+        ]);
+        net.generators_mut().push(Generator::new(BusId(1)));
+        net.loads_mut().push(Load::new(BusId(3), 10.0, 0.0));
+
+        let kept = net
+            .to_normalized_with_options(&NormalizeOptions::default())
+            .unwrap();
+        assert!(kept.bus_merge.is_none());
+        let error = crate::IndexedNetwork::new(&kept.network)
+            .check_closed_switches()
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.starts_with("1 closed switch(es)"), "{message}");
+        for call in [
+            "BusMergeRule::closed_switches()",
+            "to_normalized(closed_switches",
+            "--merge-buses switches",
+        ] {
+            assert!(message.contains(call), "{message}");
+        }
+
+        let options = NormalizeOptions {
+            closed_switches: ClosedSwitchPolicy::Merge,
+            ..NormalizeOptions::default()
+        };
+        let (merged, rows) = net.to_normalized_with_source_rows(&options).unwrap();
+        let merge = merged.bus_merge.as_ref().unwrap();
+        assert_eq!(merge.survivor(BusId(3)), BusId(2));
+        assert_eq!(merged.network.buses().len(), 2);
+        assert_eq!(merged.network.loads()[0].bus, BusId(2));
+        crate::IndexedNetwork::new(&merged.network)
+            .check_closed_switches()
+            .unwrap();
+        assert!(
+            merged
+                .diagnostics
+                .iter()
+                .any(|d| d.code() == "CANONICALIZE.MERGE.CLOSED_SWITCH")
+        );
+        // The open switch survives at merged row 0 and maps back to source row 1.
+        assert_eq!(rows.switches, [Some(1)]);
+        assert_eq!(rows.buses, [Some(0), Some(1)]);
+        assert_eq!(rows.branches, [Some(0)]);
+    }
     use crate::network::GeneratorEnergySource;
 
     fn approx(a: f64, b: f64) -> bool {
@@ -1001,6 +1149,7 @@ mod tests {
             .to_normalized_with_options(&NormalizeOptions {
                 clamp_angle_bounds: true,
                 angle_bound_pad: std::f64::consts::FRAC_PI_2,
+                ..NormalizeOptions::default()
             })
             .unwrap_err();
         assert!(matches!(

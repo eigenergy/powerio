@@ -95,12 +95,17 @@ pub enum Error {
     )]
     UngroundedComponent { components: usize },
 
-    /// A closed switch joins two buses that a calculation which models no
+    /// Closed switches join buses that a calculation which models no
     /// switches would leave apart.
     #[error(
-        "switch row {row} between buses {from} and {to} is closed, and this calculation does not model switches; merge its buses with merge_buses first"
+        "{closed} closed switch(es) join distinct buses (the first, switch row {row}, joins buses {from} and {to}), and this calculation does not model switches; merge their buses first: BusMergeRule::closed_switches() with merge_buses in Rust, merge_buses(closed_switches=True) or to_normalized(closed_switches=\"merge\") in Python, or --merge-buses switches on the command line"
     )]
-    ClosedSwitch { row: usize, from: BusId, to: BusId },
+    ClosedSwitch {
+        row: usize,
+        from: BusId,
+        to: BusId,
+        closed: usize,
+    },
 
     /// A [`BusMergeRule`](crate::BusMergeRule) that cannot be applied.
     #[error("invalid bus merge rule: {message}")]
@@ -312,6 +317,7 @@ mod tests {
                 row: 0,
                 from: BusId(1),
                 to: BusId(2),
+                closed: 1,
             },
             Error::BusMergeRule {
                 message: "threshold".into(),
