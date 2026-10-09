@@ -249,7 +249,7 @@ pub struct RawDss {
     pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
     index: BTreeMap<(String, String), usize>,
     active: Option<usize>,
-    /// Properties, source resets, line copy/edit history and wildcard source work,
+    /// Properties, source resets, line copy/edit/calculation history and wildcard work,
     /// charged against `MAX_TOTAL_PROPS`.
     total_props: usize,
     // Source MakeLike copies resolved state, including flags/defaults that
@@ -300,6 +300,7 @@ impl RawDss {
             properties: self.objects[object].props.len(),
             edits: self.objects[object].edits.len(),
             copies: self.line_history[&object].copies.len(),
+            events: self.line_history[&object].events.len(),
         }
     }
 
@@ -631,7 +632,7 @@ impl<L: Loader> Executor<'_, L> {
             Some("setbusxy") => self.do_setbusxy(scan, ctx),
             Some("var") => self.do_var(scan, ctx),
             Some("clear" | "clearall") => self.raw.clear(),
-            Some("enable" | "disable") => self.do_source_enabled(&verb, scan, ctx),
+            Some("enable" | "disable") => self.do_enabled(&verb, scan, ctx),
             Some("//") => {}
             Some(canonical) => {
                 if self.raw.charge_preserved() {
@@ -648,6 +649,17 @@ impl<L: Loader> Executor<'_, L> {
                                 &p.value,
                             );
                         }
+                    }
+                    if matches!(
+                        canonical,
+                        "solve"
+                            | "_solvenocontrol"
+                            | "_solvedirect"
+                            | "_solvepflow"
+                            | "calcvoltagebases"
+                            | "buildy"
+                    ) {
+                        self.record_line_calculation(canonical == "buildy", ctx);
                     }
                     self.raw.commands.push(RawCommand {
                         verb: canonical.to_string(),
@@ -899,12 +911,7 @@ impl<L: Loader> Executor<'_, L> {
         }
     }
 
-    fn do_source_enabled(
-        &mut self,
-        verb: &str,
-        scan: &mut Scanner,
-        ctx: &dyn Fn(String) -> String,
-    ) {
+    fn do_enabled(&mut self, verb: &str, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
         let canonical = COMMANDS[command_index(verb).unwrap()];
         if !self.raw.charge_preserved() {
             return;
@@ -930,8 +937,12 @@ impl<L: Loader> Executor<'_, L> {
         let Some((class, name)) = parameter.value.text.split_once('.') else {
             return; // Native Enable/Disable requires an explicit class.
         };
+        if class.eq_ignore_ascii_case("line") {
+            self.do_line_enabled(name, canonical == "enable", ctx);
+            return;
+        }
         if !class.eq_ignore_ascii_case("vsource") {
-            return; // Other equipment states remain outside this staged source path.
+            return; // Other equipment enable/disable histories remain unqualified.
         }
         let enabled = canonical == "enable";
         if name == "*" {
@@ -966,6 +977,59 @@ impl<L: Loader> Executor<'_, L> {
                 &C::READ_DSS_REFERENCE_DROPPED,
                 ctx(format!("{canonical} names an unknown Vsource.{name}")),
             );
+        }
+    }
+
+    fn do_line_enabled(&mut self, name: &str, enabled: bool, ctx: &dyn Fn(String) -> String) {
+        let targets: Vec<_> = if name == "*" {
+            self.raw
+                .line_history
+                .keys()
+                .copied()
+                .filter(|&idx| self.raw.objects[idx].class == "line")
+                .collect()
+        } else {
+            self.raw
+                .index
+                .get(&("line".into(), name.to_ascii_lowercase()))
+                .copied()
+                .into_iter()
+                .collect()
+        };
+        if targets.is_empty() && name != "*" {
+            self.raw.warn(
+                &C::READ_DSS_REFERENCE_DROPPED,
+                ctx(format!("enabled assignment names an unknown Line.{name}")),
+            );
+            return;
+        }
+        if self
+            .raw
+            .total_props
+            .saturating_add(targets.len().saturating_mul(2))
+            > MAX_TOTAL_PROPS
+            || targets
+                .iter()
+                .any(|&idx| self.retained_property_count(idx).saturating_add(2) > MAX_OBJECT_PROPS)
+        {
+            self.raw.halt(ctx(
+                "Line enabled assignments exceed the supported work budget".into(),
+            ));
+            return;
+        }
+        let active = self.raw.active;
+        for idx in targets {
+            self.apply_props(
+                idx,
+                vec![RawProp {
+                    name: Some("enabled".into()),
+                    value: Value::new(if enabled { "true" } else { "false" }),
+                }],
+                ctx,
+            );
+        }
+        if name == "*" {
+            self.raw.active = active;
         }
     }
 
@@ -1343,13 +1407,47 @@ impl<L: Loader> Executor<'_, L> {
         self.raw.objects[idx].props.len()
             + self.raw.line_history.get(&idx).map_or(0, |h| {
                 // Include the current command's pending closing checkpoint.
-                h.copies.len() + self.raw.objects[idx].edits.len() + 1
+                h.copies.len() + h.events.len() + self.raw.objects[idx].edits.len() + 1
             })
             + self
                 .raw
                 .source_replay
                 .get(&idx)
                 .map_or(0, |r| r.resets.len())
+    }
+
+    fn record_line_calculation(&mut self, rebuild_only: bool, ctx: &dyn Fn(String) -> String) {
+        let indices: Vec<_> = self
+            .raw
+            .line_history
+            .keys()
+            .copied()
+            .filter(|&idx| self.raw.objects[idx].class == "line")
+            .collect();
+        if self.raw.total_props.saturating_add(indices.len()) > MAX_TOTAL_PROPS
+            || indices
+                .iter()
+                .any(|&idx| self.retained_property_count(idx) >= MAX_OBJECT_PROPS)
+        {
+            self.raw.halt(ctx(
+                "line calculation history exceeds the supported work budget".into(),
+            ));
+            return;
+        }
+        self.raw.total_props += indices.len();
+        for idx in indices {
+            let event = super::line_history::Event {
+                position: self.raw.line_snapshot(idx),
+                frequency: self.raw.snapshot_frequency(),
+                rebuild_only,
+            };
+            self.raw
+                .line_history
+                .get_mut(&idx)
+                .unwrap()
+                .events
+                .push(event);
+        }
     }
 
     fn append_source_resets(&mut self, target: usize, source: usize, base: usize) {
@@ -1877,6 +1975,79 @@ pub fn __parse_raw_file(path: impl AsRef<Path>) -> Result<RawDss> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn calculation_events_record_frequency_and_copy_horizons() {
+        let raw = parse(
+            "New Circuit.c\nNew Line.a\nSolve frequency=50\nNew Line.b like=a\nBuildY\nSolve frequency=70",
+        );
+        let a = raw
+            .objects
+            .iter()
+            .position(|o| o.class == "line" && o.name == "a")
+            .unwrap();
+        let b = raw
+            .objects
+            .iter()
+            .position(|o| o.class == "line" && o.name == "b")
+            .unwrap();
+        assert_eq!(raw.line_history[&a].events.len(), 3);
+        assert_eq!(raw.line_history[&b].copies[0].source.events, 1);
+        assert_eq!(
+            raw.line_history[&a].events[0].frequency.to_bits(),
+            50.0_f64.to_bits()
+        );
+        assert!(raw.line_history[&b].events[0].rebuild_only);
+        assert_eq!(
+            raw.line_history[&b].events[1].frequency.to_bits(),
+            70.0_f64.to_bits()
+        );
+    }
+
+    #[test]
+    fn calculation_history_charges_the_whole_parse_budget_atomically() {
+        let mut raw = parse("New Circuit.c\nNew Line.a\nNew Line.b");
+        raw.total_props = MAX_TOTAL_PROPS - 1;
+        let mut loader = no_files;
+        let mut executor = Executor {
+            raw,
+            loader: &mut loader,
+            dirs: Vec::new(),
+            root: None,
+            boundary: IncludeBoundary::CaseDirectory,
+            includes: 0,
+            include_bytes: 0,
+            budget_spent: false,
+            var_count: 0,
+            var_bytes: 0,
+            var_budget_spent: false,
+        };
+        executor.record_line_calculation(false, &|s| s);
+        assert!(executor.raw.halted);
+        assert!(
+            executor
+                .raw
+                .line_history
+                .values()
+                .all(|h| h.events.is_empty())
+        );
+    }
+
+    #[test]
+    fn line_wildcards_preserve_selection_and_apply_only_to_existing_lines() {
+        let raw = parse(
+            "New Circuit.c\nNew Line.a\nNew Line.b\nDisable Line.*\n~ enabled=yes\nNew Line.c",
+        );
+        assert_eq!(
+            raw.find("line", "a").unwrap().get("enabled").unwrap().text,
+            "false"
+        );
+        assert_eq!(
+            raw.find("line", "b").unwrap().get("enabled").unwrap().text,
+            "yes"
+        );
+        assert!(raw.find("line", "c").unwrap().get("enabled").is_none());
+    }
+
+    #[test]
     fn empty_linecode_self_copies_bound_edit_history_as_well_as_properties() {
         let raw = parse(&format!(
             "New Linecode.empty\n{}",
@@ -1962,7 +2133,7 @@ mod tests {
             var_bytes: 0,
             var_budget_spent: false,
         };
-        executor.do_source_enabled("disable", &mut Scanner::new("Vsource.*", None), &|s| s);
+        executor.do_enabled("disable", &mut Scanner::new("Vsource.*", None), &|s| s);
         let raw = executor.raw;
         assert!(raw.halted);
         assert!(

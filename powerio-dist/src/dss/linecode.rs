@@ -25,10 +25,10 @@ pub(super) struct State {
     pub neutral: usize,
     pub normamps: f64,
     pub emergamps: f64,
-    seq: [f64; 6], // R1, X1, R0, X0, C1, C0 (farads)
+    pub(super) seq: [f64; 6], // R1, X1, R0, X0, C1, C0 (farads)
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct LineMatrices {
     pub r: Vec<Vec<f64>>,
     pub x: Vec<Vec<f64>>,
@@ -48,9 +48,9 @@ impl State {
         length: f64,
         line_units: usize,
     ) -> Result<LineMatrices, String> {
-        if !operating.is_finite() || operating < 0.51 || !length.is_finite() || length <= 0.0 {
+        if !operating.is_finite() || operating <= 0.51 || !length.is_finite() || length <= 0.0 {
             return Err(
-                "line requires a positive length and AC operating frequency >= 0.51 Hz".into(),
+                "line requires a positive length and AC operating frequency > 0.51 Hz".into(),
             );
         }
         let meters = [
@@ -92,7 +92,7 @@ impl State {
         Ok(LineMatrices { r, x, b })
     }
 
-    fn new(frequency: f64) -> Self {
+    pub(super) fn new(frequency: f64) -> Self {
         let mut state = Self {
             n: 3,
             frequency,
@@ -239,7 +239,7 @@ fn sequence_matrix(n: usize, positive: f64, zero: f64) -> Vec<Vec<f64>> {
 
 // This staged profile requires exactly symmetric input, without averaging.
 #[allow(clippy::float_cmp)]
-fn symmetric_matrix(rows: &[Vec<f64>], n: usize) -> Result<Vec<Vec<f64>>, String> {
+pub(super) fn symmetric_matrix(rows: &[Vec<f64>], n: usize) -> Result<Vec<Vec<f64>>, String> {
     if rows.len() != n || rows.iter().flatten().any(|v| !v.is_finite()) {
         return Err("invalid linecode matrix".into());
     }
@@ -264,7 +264,7 @@ fn symmetric_matrix(rows: &[Vec<f64>], n: usize) -> Result<Vec<Vec<f64>>, String
     Ok(matrix)
 }
 
-fn units(text: &str) -> Result<usize, String> {
+pub(super) fn units(text: &str) -> Result<usize, String> {
     let text = text.to_ascii_lowercase();
     let names = [
         ("none", 0),
@@ -289,10 +289,17 @@ fn units(text: &str) -> Result<usize, String> {
 /// Evaluate captured prefixes without recursion or replaying copied property
 /// text as setters. The cache stores at most the bounded evaluation budget.
 pub(super) fn resolve(raw: &RawDss, point: Snapshot) -> Result<State, String> {
+    resolve_with_budget(raw, point, &mut (1_usize << 22))
+}
+
+pub(super) fn resolve_with_budget(
+    raw: &RawDss,
+    point: Snapshot,
+    budget: &mut usize,
+) -> Result<State, String> {
     let mut cache = HashMap::new();
     let mut pending = vec![(point, false)];
     let mut visiting = HashSet::new();
-    let mut budget = 1_usize << 22;
     while let Some((point, ready)) = pending.pop() {
         if cache.contains_key(&point) {
             continue;
@@ -310,15 +317,15 @@ pub(super) fn resolve(raw: &RawDss, point: Snapshot) -> Result<State, String> {
             .get(..point.copies)
             .ok_or("invalid linecode copy prefix")?;
         if ready {
-            let state = replay(raw, point, &cache, &mut budget)?;
+            let state = replay(raw, point, &cache, budget)?;
             visiting.remove(&point);
-            charge(&mut budget, state.n * state.n * 3)?;
+            charge(budget, state.n * state.n * 3)?;
             cache.insert(point, state);
         } else {
             if !visiting.insert(point) {
                 return Err("cyclic linecode history".into());
             }
-            charge(&mut budget, 1)?;
+            charge(budget, 1)?;
             pending.push((point, true));
             for copy in copies.iter().rev() {
                 pending.push((copy.source, false));

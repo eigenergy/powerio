@@ -15,6 +15,15 @@ pub(super) struct Snapshot {
     pub edits: usize,
     // Empty MakeLike operations can leave the property count unchanged.
     pub copies: usize,
+    pub events: usize,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Event {
+    pub position: Snapshot,
+    pub frequency: f64,
+    pub rebuild_only: bool,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -34,6 +43,7 @@ pub(super) struct CopyPoint {
 pub(super) struct LineHistory {
     pub constructor_frequency: f64,
     pub copies: Vec<CopyPoint>,
+    pub events: Vec<Event>,
     // Property offset -> referenced linecode prefix. None records a missing
     // reference at assignment, even if that name is declared later.
     pub linecodes: BTreeMap<usize, Option<Snapshot>>,
@@ -44,6 +54,7 @@ impl LineHistory {
         Self {
             constructor_frequency,
             copies: Vec::new(),
+            events: Vec::new(),
             linecodes: BTreeMap::new(),
         }
     }

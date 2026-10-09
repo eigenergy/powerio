@@ -346,68 +346,13 @@ impl State {
         {
             return Err("source snapshot became nonfinite".into());
         }
-        validate_primitive(&impedance)?;
+        super::primitive::validate(&impedance, "source", 325)?;
         Ok(ResolvedSource {
             bus1: self.bus1,
             bus2: self.bus2,
             emf,
             impedance,
         })
-    }
-}
-
-fn validate_primitive(impedance: &[Vec<Complex64>]) -> Result<()> {
-    // Check the successive Schur complements in the pinned engine's
-    // diagonal-pivot order (TcMatrix.Invert). Only unused rows/columns affect
-    // later pivots, so no inverse is constructed or substituted into the model.
-    // An exact zero pivot triggers native error 325; there is no epsilon test.
-    let mut reduced = impedance.to_vec();
-    let mut remaining: Vec<_> = (0..reduced.len()).collect();
-    while !remaining.is_empty() {
-        let mut selected = None;
-        let mut largest = 0.0;
-        for &i in &remaining {
-            // Native Cabs uses sqrt(re²+im²), including its range behavior.
-            let magnitude = reduced[i][i].norm_sqr().sqrt();
-            if magnitude > largest {
-                largest = magnitude;
-                selected = Some(i);
-            }
-        }
-        let pivot = selected
-            .ok_or("native source primitive inversion has a zero diagonal pivot (error 325)")?;
-        remaining.retain(|&i| i != pivot);
-        for &i in &remaining {
-            for &j in &remaining {
-                let correction =
-                    scaled_division(reduced[i][pivot] * reduced[pivot][j], reduced[pivot][pivot]);
-                reduced[i][j] -= correction;
-                if !reduced[i][j].re.is_finite() || !reduced[i][j].im.is_finite() {
-                    return Err("source primitive elimination became nonfinite".into());
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn scaled_division(numerator: Complex64, denominator: Complex64) -> Complex64 {
-    // Ratio-based complex division matches the native runtime's arithmetic
-    // order. A squared-denominator formula can round a zero pivot differently.
-    if denominator.re.abs() > denominator.im.abs() {
-        let ratio = denominator.im / denominator.re;
-        let divisor = denominator.re + denominator.im * ratio;
-        Complex64::new(
-            (numerator.re + numerator.im * ratio) / divisor,
-            (numerator.im - numerator.re * ratio) / divisor,
-        )
-    } else {
-        let ratio = denominator.re / denominator.im;
-        let divisor = denominator.im + denominator.re * ratio;
-        Complex64::new(
-            (numerator.im + numerator.re * ratio) / divisor,
-            (-numerator.re + numerator.im * ratio) / divisor,
-        )
     }
 }
 

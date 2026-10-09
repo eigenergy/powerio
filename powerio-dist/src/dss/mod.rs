@@ -11,7 +11,11 @@ pub mod lex;
 mod line_history;
 // Ordered electrical interpretation is qualified before public integration.
 #[cfg(test)]
+mod line;
+#[cfg(test)]
 mod linecode;
+#[cfg(test)]
+mod primitive;
 pub mod prop;
 pub mod raw;
 pub mod read;
