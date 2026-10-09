@@ -614,3 +614,23 @@ fn a_subnormal_reactance_is_refused_like_zero() {
         "{error}"
     );
 }
+
+#[test]
+fn update_rejects_same_size_network_with_reordered_bus_axis() {
+    let net = case9();
+    let original = DcPfInstance::from_network(net.clone()).unwrap();
+    let mut operators = DcOperators::build(&original).unwrap();
+
+    // The bus count is unchanged, but every dense row after the swap means a
+    // different BusId. Accepting this instance would attach its injections to
+    // the wrong rows of the already-built operators.
+    let mut reordered = net;
+    reordered.buses_mut().swap(0, 1);
+    let changed = DcPfInstance::from_network(reordered).unwrap();
+
+    let error = operators.update(&changed).unwrap_err();
+    assert!(
+        error.to_string().contains("bus IDs or bus order"),
+        "{error}"
+    );
+}

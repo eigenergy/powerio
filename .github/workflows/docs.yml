@@ -16,8 +16,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # Serialize per ref. On main, queue rather than cancel: a cancelled in-flight
 # Pages deployment can leave the backend rejecting the next deployment
@@ -219,12 +217,19 @@ jobs:
 
   deploy:
     needs: build
-    # PR runs build to catch doc breakage but never publish; only main / dispatch deploy.
-    if: github.event_name != 'pull_request'
+    # Keep the deployment check present on PRs, but never publish from a PR.
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
-      name: github-pages
+      name: ${{ github.event_name == 'pull_request' && 'ci' || 'github-pages' }}
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+    - name: PR build only; no Pages deployment
+      if: github.event_name == 'pull_request'
+      run: echo "Documentation build passed; deployment is reserved for main and manual dispatch."
     - id: deployment
+      if: github.event_name != 'pull_request'
       uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
