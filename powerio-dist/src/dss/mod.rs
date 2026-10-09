@@ -8,6 +8,7 @@
 pub mod defaults;
 mod frequency;
 pub mod lex;
+mod line_history;
 pub mod prop;
 pub mod raw;
 pub mod read;

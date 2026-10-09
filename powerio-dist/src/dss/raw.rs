@@ -249,13 +249,14 @@ pub struct RawDss {
     pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
     index: BTreeMap<(String, String), usize>,
     active: Option<usize>,
-    /// Properties, source reset records and wildcard source state work,
+    /// Properties, source resets, line copy/edit history and wildcard source work,
     /// charged against `MAX_TOTAL_PROPS`.
     total_props: usize,
     // Source MakeLike copies resolved state, including flags/defaults that
     // an appended property history alone cannot restore. Reset markers refer
     // to offsets in the existing flattened history; no extra history tree.
     source_replay: BTreeMap<usize, SourceReplay>,
+    pub(super) line_history: BTreeMap<usize, super::line_history::LineHistory>,
     frequency: super::frequency::FrequencyState,
     solution_mode: super::solution_mode::SolutionMode,
     /// Diagnostic records retained, against `MAX_TOTAL_DIAGNOSTICS`. Survives
@@ -293,6 +294,15 @@ impl SourceReplay {
 }
 
 impl RawDss {
+    pub(super) fn line_snapshot(&self, object: usize) -> super::line_history::Snapshot {
+        super::line_history::Snapshot {
+            object,
+            properties: self.objects[object].props.len(),
+            edits: self.objects[object].edits.len(),
+            copies: self.line_history[&object].copies.len(),
+        }
+    }
+
     fn option_assignment(&mut self, position: &mut usize, name: &str, value: &Value) {
         self.frequency.assignment(position, name, value, &self.vars);
         if *position == 8 {
@@ -1292,6 +1302,12 @@ impl<L: Loader> Executor<'_, L> {
             props: Vec::new(),
             edits: Vec::new(),
         });
+        if matches!(self.raw.objects[idx].class.as_str(), "line" | "linecode") {
+            self.raw.line_history.insert(
+                idx,
+                super::line_history::LineHistory::new(self.raw.frequency.constructor()),
+            );
+        }
         if self.raw.objects[idx].class == "vsource" {
             let frequency = self.raw.frequency.constructor();
             self.raw.source_replay.insert(
@@ -1325,6 +1341,10 @@ impl<L: Loader> Executor<'_, L> {
 
     fn retained_property_count(&self, idx: usize) -> usize {
         self.raw.objects[idx].props.len()
+            + self.raw.line_history.get(&idx).map_or(0, |h| {
+                // Include the current command's pending closing checkpoint.
+                h.copies.len() + self.raw.objects[idx].edits.len() + 1
+            })
             + self
                 .raw
                 .source_replay
@@ -1388,85 +1408,113 @@ impl<L: Loader> Executor<'_, L> {
         }
     }
 
+    fn apply_like(&mut self, idx: usize, value: &Value, ctx: &dyn Fn(String) -> String) {
+        let class = self.raw.objects[idx].class.clone();
+        let key = (class.clone(), value.text.to_ascii_lowercase());
+        match self.raw.index.get(&key).copied() {
+            Some(src) => {
+                if class == "vsource" && src == idx {
+                    // Native source MakeLike(self) does not recalculate
+                    // the current edit or reset its in-flight setters.
+                    self.raw.source_replay.get_mut(&idx).unwrap().enabled = true;
+                    return;
+                }
+                let base = self.raw.objects[idx].props.len();
+                let src_len = self.raw.objects[src].props.len();
+                let replay_charge = self
+                    .raw
+                    .source_replay
+                    .get(&src)
+                    .map_or(0, |r| r.resets.len() + 1)
+                    + if self.raw.line_history.contains_key(&idx) {
+                        1 + self.raw.objects[src].edit_bounds().count()
+                    } else {
+                        0
+                    };
+                // Refuse a splice that would push the object past the
+                // cap. A self reference (`Edit X like=X`) or a mutual
+                // chain otherwise doubles the prop count per edit; the
+                // guard turns that into a warning instead of unbounded
+                // growth.
+                if self
+                    .retained_property_count(idx)
+                    .saturating_add(src_len)
+                    .saturating_add(replay_charge)
+                    > MAX_OBJECT_PROPS
+                {
+                    self.raw.warn(
+                        &C::READ_DSS_VALUE_CLAMPED,
+                        ctx(format!(
+                            "like={}: {class} property count would exceed the supported \
+                         maximum of {MAX_OBJECT_PROPS}; splice refused",
+                            value.text
+                        )),
+                    );
+                    return;
+                }
+                if self
+                    .raw
+                    .total_props
+                    .saturating_add(src_len)
+                    .saturating_add(replay_charge)
+                    > MAX_TOTAL_PROPS
+                {
+                    self.raw.warn(
+                        &C::READ_DSS_VALUE_CLAMPED,
+                        ctx(format!(
+                            "like={}: the script's retained property count would exceed \
+                         the supported maximum of {MAX_TOTAL_PROPS}; splice refused",
+                            value.text
+                        )),
+                    );
+                    return;
+                }
+                self.raw.total_props += src_len + replay_charge;
+                if self.raw.line_history.contains_key(&idx) {
+                    let source = self.raw.line_snapshot(src);
+                    self.raw.line_history.get_mut(&idx).unwrap().copies.push(
+                        super::line_history::CopyPoint {
+                            start: base,
+                            end: base + src_len,
+                            source,
+                        },
+                    );
+                }
+                self.append_source_resets(idx, src, base);
+                let cloned = self.raw.objects[src].props.clone();
+                let bounds: Vec<usize> = self.raw.objects[src]
+                    .edit_bounds()
+                    .map(|e| base + e)
+                    .collect();
+                self.raw.objects[idx].props.extend(cloned);
+                self.raw.objects[idx].edits.extend(bounds);
+            }
+            None => self.raw.warn(
+                &C::READ_DSS_REFERENCE_DROPPED,
+                ctx(format!("like={} names an unknown {class}", value.text)),
+            ),
+        }
+    }
+
     fn apply_props(&mut self, idx: usize, props: Vec<RawProp>, ctx: &dyn Fn(String) -> String) {
         self.raw.active = Some(idx);
+        if self.raw.line_history.contains_key(&idx) {
+            if self.retained_property_count(idx) > MAX_OBJECT_PROPS
+                || self.raw.total_props >= MAX_TOTAL_PROPS
+            {
+                self.raw.warn(&C::READ_DSS_VALUE_CLAMPED, ctx("line history edit count exceeds the supported property/work budget; edit refused".into()));
+                return;
+            }
+            // Reserve the closing checkpoint without exposing it as a
+            // completed edit to references captured inside this command.
+            self.raw.total_props += 1;
+        }
         for p in props {
-            // `like=<name>` splices the source object's accumulated props,
-            // checkpoints included: MakeLike copies the source's recalced
-            // state (Load.cpp ~810-815 takes kWBase, kvarBase, LoadSpecType,
-            // AND PFNominal), which equals replaying the source's writes
-            // with its own edit boundaries.
+            // Keep the legacy flattened assignments and edit boundaries.
+            // Stateful source/line readers also use reset/copy records to
+            // recover hidden defaults and the state visible during MakeLike.
             if p.name.as_deref() == Some("like") {
-                let class = self.raw.objects[idx].class.clone();
-                let key = (class.clone(), p.value.text.to_ascii_lowercase());
-                match self.raw.index.get(&key).copied() {
-                    Some(src) => {
-                        if class == "vsource" && src == idx {
-                            // Native source MakeLike(self) does not recalculate
-                            // the current edit or reset its in-flight setters.
-                            self.raw.source_replay.get_mut(&idx).unwrap().enabled = true;
-                            continue;
-                        }
-                        let base = self.raw.objects[idx].props.len();
-                        let src_len = self.raw.objects[src].props.len();
-                        let replay_charge = self
-                            .raw
-                            .source_replay
-                            .get(&src)
-                            .map_or(0, |r| r.resets.len() + 1);
-                        // Refuse a splice that would push the object past the
-                        // cap. A self reference (`Edit X like=X`) or a mutual
-                        // chain otherwise doubles the prop count per edit; the
-                        // guard turns that into a warning instead of unbounded
-                        // growth.
-                        if self
-                            .retained_property_count(idx)
-                            .saturating_add(src_len)
-                            .saturating_add(replay_charge)
-                            > MAX_OBJECT_PROPS
-                        {
-                            self.raw.warn(
-                                &C::READ_DSS_VALUE_CLAMPED,
-                                ctx(format!(
-                                    "like={}: {class} property count would exceed the supported \
-                                 maximum of {MAX_OBJECT_PROPS}; splice refused",
-                                    p.value.text
-                                )),
-                            );
-                            continue;
-                        }
-                        if self
-                            .raw
-                            .total_props
-                            .saturating_add(src_len)
-                            .saturating_add(replay_charge)
-                            > MAX_TOTAL_PROPS
-                        {
-                            self.raw.warn(
-                                &C::READ_DSS_VALUE_CLAMPED,
-                                ctx(format!(
-                                    "like={}: the script's retained property count would exceed \
-                                 the supported maximum of {MAX_TOTAL_PROPS}; splice refused",
-                                    p.value.text
-                                )),
-                            );
-                            continue;
-                        }
-                        self.raw.total_props += src_len + replay_charge;
-                        self.append_source_resets(idx, src, base);
-                        let cloned = self.raw.objects[src].props.clone();
-                        let bounds: Vec<usize> = self.raw.objects[src]
-                            .edit_bounds()
-                            .map(|e| base + e)
-                            .collect();
-                        self.raw.objects[idx].props.extend(cloned);
-                        self.raw.objects[idx].edits.extend(bounds);
-                    }
-                    None => self.raw.warn(
-                        &C::READ_DSS_REFERENCE_DROPPED,
-                        ctx(format!("like={} names an unknown {class}", p.value.text)),
-                    ),
-                }
+                self.apply_like(idx, &p.value, ctx);
                 continue;
             }
             if self.retained_property_count(idx) >= MAX_OBJECT_PROPS {
@@ -1492,6 +1540,20 @@ impl<L: Loader> Executor<'_, L> {
                 continue;
             }
             self.raw.total_props += 1;
+            if self.raw.objects[idx].class == "line" && p.name.as_deref() == Some("linecode") {
+                let referenced = self
+                    .raw
+                    .index
+                    .get(&("linecode".into(), p.value.text.to_ascii_lowercase()))
+                    .map(|&index| self.raw.line_snapshot(index));
+                let offset = self.raw.objects[idx].props.len();
+                self.raw
+                    .line_history
+                    .get_mut(&idx)
+                    .unwrap()
+                    .linecodes
+                    .insert(offset, referenced);
+            }
             self.source_reference(idx, &p);
             if let Some(replay) = self.raw.source_replay.get_mut(&idx) {
                 replay.record_property(&p);
@@ -1810,6 +1872,25 @@ pub fn __parse_raw_file(path: impl AsRef<Path>) -> Result<RawDss> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn empty_linecode_self_copies_bound_edit_history_as_well_as_properties() {
+        let raw = parse(&format!(
+            "New Linecode.empty\n{}",
+            "Edit Linecode.empty like=empty\n".repeat(30)
+        ));
+        let object = raw.find("linecode", "empty").unwrap();
+        let history = &raw.line_history[&0];
+        assert!(object.props.is_empty());
+        assert!(history.copies.len() < 30);
+        assert!(object.edits.len() + history.copies.len() <= MAX_OBJECT_PROPS);
+        assert!(raw.total_props <= MAX_TOTAL_PROPS);
+        assert!(
+            raw.diagnostics
+                .iter()
+                .any(|d| d.code() == C::READ_DSS_VALUE_CLAMPED.code)
+        );
+    }
+
     use super::*;
 
     fn no_files(_: &Path) -> std::io::Result<String> {
