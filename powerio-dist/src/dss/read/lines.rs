@@ -9,6 +9,15 @@ use crate::dss::line;
 
 type LineResult<T> = std::result::Result<T, String>;
 
+// Divide once: a separately rounded reciprocal introduces another rounding
+// before the total impedance is reconstructed from density and length.
+fn per_meter(matrix: &[Vec<f64>], length: f64) -> Vec<Vec<f64>> {
+    matrix
+        .iter()
+        .map(|row| row.iter().map(|v| v / length).collect())
+        .collect()
+}
+
 impl Reader<'_> {
     fn retain_line_definitions(&mut self, raw: &RawDss) {
         for object in raw
@@ -151,8 +160,8 @@ impl Reader<'_> {
             }
             let mut code = DistLineCode::new(
                 &name,
-                scale_mat(&matrices.r, 1.0 / length),
-                scale_mat(&matrices.x, 1.0 / length),
+                per_meter(&matrices.r, length),
+                per_meter(&matrices.x, length),
             );
             code.b_from = scale_mat(&matrices.b, 0.5 / length);
             code.b_to.clone_from(&code.b_from);
@@ -250,4 +259,32 @@ fn invalid_line_never_returns_a_partial_typed_network() {
             .iter()
             .any(|d| d.code() == C::READ_DSS_LINE_UNRESOLVED.code)
     );
+}
+
+#[test]
+fn short_line_retains_native_total_impedance_after_normalization() {
+    let raw = crate::dss::raw::__parse_raw_with(
+        "new circuit.c\nnew linecode.busbar nphases=3 r1=1e-4 x1=1e-4 r0=1e-4 x0=1e-4 c1=0 c0=0 units=km\nnew line.short bus1=sourcebus bus2=end length=.001 linecode=busbar units=m\n",
+        "test.dss",
+        &mut |_: &std::path::Path| Err(std::io::Error::other("no includes")),
+    );
+    let net = sources::staged_from_raw(&raw).unwrap();
+    let line = net.lines().iter().find(|l| l.name == "short").unwrap();
+    let code = net
+        .line_codes()
+        .iter()
+        .find(|c| c.name == line.linecode)
+        .unwrap();
+    // Pinned native total series impedance is 1e-10 + j1e-10 ohm.
+    // Reciprocal multiplication introduces an extra ulp before reinversion.
+    for matrix in [&code.r_series, &code.x_series] {
+        for (i, row) in matrix.iter().enumerate() {
+            for (j, value) in row.iter().enumerate() {
+                assert_eq!(
+                    (value * line.length).to_bits(),
+                    (if i == j { 1e-10_f64 } else { 0.0 }).to_bits()
+                );
+            }
+        }
+    }
 }

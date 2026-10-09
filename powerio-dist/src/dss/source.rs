@@ -32,6 +32,31 @@ enum ImpedanceSpec {
     Sequence,
 }
 
+// Shared with the canonical writer's exact inverse of the native MVA form.
+pub(super) fn short_circuit_positive(kv: f64, mva3: f64, xr1: f64) -> Complex64 {
+    let x = kv.powi(2) / mva3 / (1.0 + 1.0 / xr1.powi(2)).sqrt();
+    Complex64::new(x / xr1, x)
+}
+
+pub(super) fn short_circuit_zero(
+    kv: f64,
+    isc1: f64,
+    factor: f64,
+    xr0: f64,
+    positive: Complex64,
+) -> Result<Complex64> {
+    let (r, x) = (positive.re, positive.im);
+    let quadratic = 1.0 + xr0.powi(2);
+    let linear = 4.0 * (r + x * xr0);
+    let constant = 4.0 * (r * r + x * x) - (3.0 * kv * 1000.0 / factor / isc1).powi(2);
+    let discriminant = linear * linear - 4.0 * quadratic * constant;
+    if discriminant < 0.0 {
+        return Err("source short-circuit profile has no real zero-sequence resistance".into());
+    }
+    let r0 = (-linear + discriminant.sqrt()) / (2.0 * quadratic);
+    Ok(Complex64::new(r0, r0 * xr0))
+}
+
 struct State {
     phases: usize,
     kv: f64,
@@ -236,26 +261,13 @@ impl State {
             self.mva1 = factor * self.kv * self.isc1 / 1000.0;
         }
         if matches!(self.spec, ImpedanceSpec::Mva | ImpedanceSpec::Current) {
-            let x = self.kv.powi(2) / self.mva3 / (1.0 + 1.0 / self.xr1.powi(2)).sqrt();
-            let r = x / self.xr1;
-            self.z[1] = Complex64::new(r, x);
+            self.z[1] = short_circuit_positive(self.kv, self.mva3, self.xr1);
             self.z[2] = self.z[1];
             if matches!(self.spec, ImpedanceSpec::Mva) {
                 self.isc3 = self.mva3 * 1000.0 / (3.0_f64.sqrt() * self.kv);
                 self.isc1 = self.mva1 * 1000.0 / (factor * self.kv);
             }
-            let quadratic = 1.0 + self.xr0.powi(2);
-            let linear = 4.0 * (r + x * self.xr0);
-            let constant =
-                4.0 * (r * r + x * x) - (3.0 * self.kv * 1000.0 / factor / self.isc1).powi(2);
-            let discriminant = linear * linear - 4.0 * quadratic * constant;
-            if discriminant < 0.0 {
-                return Err(
-                    "source short-circuit profile has no real zero-sequence resistance".into(),
-                );
-            }
-            let r0 = (-linear + discriminant.sqrt()) / (2.0 * quadratic);
-            self.z[0] = Complex64::new(r0, r0 * self.xr0);
+            self.z[0] = short_circuit_zero(self.kv, self.isc1, factor, self.xr0, self.z[1])?;
         } else {
             if self.pu_written[1] {
                 let base = self.kv.powi(2) / self.base_mva;

@@ -12,6 +12,63 @@ struct Native<'a> {
     sequence: &'static str,
     zero: Complex64,
     positive: Complex64,
+    mva: Option<ShortCircuit>,
+}
+
+struct ShortCircuit {
+    mva3: f64,
+    mva1: f64,
+    xr1: f64,
+    xr0: f64,
+}
+
+// An MVA-defined source uses a different mutual-reactance arithmetic path.
+// Derive candidates from typed sequence values and accept only exact forward
+// reconstruction; no source property or feeder identity participates.
+fn short_circuit(kv: f64, zero: Complex64, positive: Complex64) -> Option<ShortCircuit> {
+    use crate::dss::source::{short_circuit_positive, short_circuit_zero};
+    let valid = |v: f64| v.is_finite() && v > 0.0;
+    if ![zero.re, zero.im, positive.re, positive.im]
+        .into_iter()
+        .all(valid)
+    {
+        return None;
+    }
+    let (mut positive_spec, mut zero_spec) = (None, None);
+    'positive: for xr1 in neighbors(positive.im / positive.re)
+        .into_iter()
+        .filter(|&v| valid(v))
+    {
+        let mva3 = kv.powi(2) / positive.im / (1.0 + 1.0 / xr1.powi(2)).sqrt();
+        for mva3 in neighbors(mva3).into_iter().filter(|&v| valid(v)) {
+            if short_circuit_positive(kv, mva3, xr1) == positive {
+                positive_spec = Some((mva3, xr1));
+                break 'positive;
+            }
+        }
+    }
+    let (mva3, xr1) = positive_spec?;
+    'zero: for xr0 in neighbors(zero.im / zero.re)
+        .into_iter()
+        .filter(|&v| valid(v))
+    {
+        let mva1 = 3.0 * kv.powi(2) / (2.0 * positive + zero).norm();
+        for mva1 in neighbors(mva1).into_iter().filter(|&v| valid(v)) {
+            let factor = 3.0_f64.sqrt();
+            let isc1 = mva1 * 1000.0 / (factor * kv);
+            if short_circuit_zero(kv, isc1, factor, xr0, positive).ok() == Some(zero) {
+                zero_spec = Some((mva1, xr0));
+                break 'zero;
+            }
+        }
+    }
+    let (mva1, xr0) = zero_spec?;
+    Some(ShortCircuit {
+        mva3,
+        mva1,
+        xr1,
+        xr0,
+    })
 }
 
 fn neighbors(value: f64) -> [f64; 17] {
@@ -166,7 +223,7 @@ fn equivalent<'a>(net: &'a MulticonductorNetwork, source: &VoltageSource) -> Opt
         return None;
     }
     let mut values = Vec::new();
-    for (matrix, reactance) in [(&code.r_series, false), (&code.x_series, true)] {
+    for matrix in [&code.r_series, &code.x_series] {
         if matrix.len() != 3 || matrix.iter().any(|row| row.len() != 3) {
             return None;
         }
@@ -179,14 +236,23 @@ fn equivalent<'a>(net: &'a MulticonductorNetwork, source: &VoltageSource) -> Opt
         }) {
             return None;
         }
-        values.push(sequence(diagonal, mutual, reactance)?);
+        values.push((diagonal, mutual));
     }
-    let zero = Complex64::new(values[0].0, values[1].0);
-    let positive = Complex64::new(values[0].1, values[1].1);
+    let r = sequence(values[0].0, values[0].1, false)?;
+    let explicit_x = sequence(values[1].0, values[1].1, true);
+    let x = explicit_x.or_else(|| sequence(values[1].0, values[1].1, false))?;
+    let zero = Complex64::new(r.0, x.0);
+    let positive = Complex64::new(r.1, x.1);
     if positive == Complex64::default() {
         return None;
     }
     let (kv, angle, sequence) = voltage(source)?;
+    let mva = if explicit_x.is_some() {
+        None
+    } else {
+        Some(short_circuit(kv, zero, positive)?)
+    };
+
     Some(Native {
         line,
         kv,
@@ -194,6 +260,7 @@ fn equivalent<'a>(net: &'a MulticonductorNetwork, source: &VoltageSource) -> Opt
         sequence,
         zero,
         positive,
+        mva,
     })
 }
 
@@ -209,14 +276,30 @@ impl DssWriter {
         let circuit = net.name().as_deref().unwrap_or("converted");
         self.check_name("circuit", circuit);
         let port = self.bus_ref(&native.line.bus_to, &native.line.terminal_map_to);
+        let impedance = if let Some(mva) = native.mva {
+            format!(
+                "mvasc3={} mvasc1={} x1r1={} x0r0={}",
+                num(mva.mva3),
+                num(mva.mva1),
+                num(mva.xr1),
+                num(mva.xr0)
+            )
+        } else {
+            format!(
+                "z0=[{} {}] z1=[{} {}] z2=[{} {}]",
+                num(native.zero.re),
+                num(native.zero.im),
+                num(native.positive.re),
+                num(native.positive.im),
+                num(native.positive.re),
+                num(native.positive.im)
+            )
+        };
         self.line_out(&format!(
-            "New Circuit.{circuit} phases=3 bus1={} basekv={} pu=1 angle={} sequence={} frequency={} basefreq={} z0=[{} {}] z1=[{} {}] z2=[{} {}]",
+            "New Circuit.{circuit} phases=3 bus1={} basekv={} pu=1 angle={} sequence={} frequency={} basefreq={} {impedance}",
             port,
             num(native.kv), num(native.angle), native.sequence,
             num(net.base_frequency()), num(net.base_frequency()),
-            num(native.zero.re), num(native.zero.im),
-            num(native.positive.re), num(native.positive.im),
-            num(native.positive.re), num(native.positive.im),
         ));
         self.native_source_line = Some(native.line.name.clone());
         if net

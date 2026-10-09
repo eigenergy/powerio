@@ -17,6 +17,10 @@ def cases():
             for angle in (0, 17):
                 name = f"{frequency}-{sequence}-{angle}"
                 yield name, frequency, f"angle={angle} sequence={sequence} r1=1 x1=2 r0=3 x0=4", "", True
+    for frequency in (50, 60):
+        for angle in (0, 17):
+            name = "mva-ieee4" if (frequency, angle) == (60, 0) else f"mva-{frequency}-{angle}"
+            yield name, frequency, f"angle={angle} mvasc3=200000 mvasc1=200000 x1r1=4 x0r0=3", "", True
     yield "permuted", 60, "bus1=feed.3.1.2 r1=1 x1=2 r0=3 x0=4", "", True
     yield "ieee-secondary", 60, "r1=1.036 x1=10.1433 r0=5.462 x0=34.1897", "", True
     yield "mva", 60, "mvasc3=25 mvasc1=30 x1r1=5 x0r0=4", "", None
@@ -27,12 +31,12 @@ def cases():
 
 
 def edited_cases(root, bridge, powerio):
-    base = root / "60-positive-0"
-    original_ir = json.loads((base / "imported/network.pio.json").read_text())
-    original_text = (base / "input.dss").read_text()
-    original_observations = json.loads((base / "native.json").read_text())
     rows = {}
-    for name in ("edited-voltage-resistance", "edited-source-length"):
+    for name in ("edited-voltage-resistance", "edited-source-length", "edited-mva-voltage"):
+        base = root / ("mva-ieee4" if name == "edited-mva-voltage" else "60-positive-0")
+        original_ir = json.loads((base / "imported/network.pio.json").read_text())
+        original_text = (base / "input.dss").read_text()
+        original_observations = json.loads((base / "native.json").read_text())
         folder = root / name
         folder.mkdir()
         ir = copy.deepcopy(original_ir)
@@ -43,6 +47,10 @@ def edited_cases(root, bridge, powerio):
             code = next(c for c in network["linecodes"] if c["name"] == "_pio_vsource_source_impedance")
             code["r_series"] = [[value * 2 for value in row] for row in code["r_series"]]
             reference = original_text.replace("basekv=12.47", f"basekv={12.47 * 1.125:.17g}").replace("r1=1 x1=2 r0=3 x0=4", "r1=2 x1=2 r0=6 x0=4")
+        elif name == "edited-mva-voltage":
+            for source in network["sources"]:
+                source["v_magnitude"] = [value * 2 for value in source["v_magnitude"]]
+            reference = original_text.replace("basekv=12.47", "basekv=24.94").replace("mvasc3=200000 mvasc1=200000", "mvasc3=800000 mvasc1=800000")
         else:
             line = next(line for line in network["lines"] if line["name"] == "_pio_vsource_source_impedance")
             line["length"] *= 2
