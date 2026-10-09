@@ -87,7 +87,7 @@ fn idle_storage_law_survives_ir_and_calculation_instances() {
 
 #[test]
 #[ignore = "requires pinned native samples from evals/gridlabd/dss_storage_oracle.py"]
-fn typed_idle_storage_powers_match_native_voltage_sweeps() {
+fn typed_static_storage_powers_match_native_voltage_sweeps() {
     let path = std::env::var("POWERIO_STORAGE_SAMPLES").unwrap();
     let data: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     for (name, sample) in data["cases"].as_object().unwrap() {

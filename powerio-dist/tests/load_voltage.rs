@@ -365,12 +365,12 @@ fn idle_storage_is_a_typed_bounded_load_with_current_limit() {
 #[test]
 fn unsupported_storage_keeps_electrical_blockers() {
     for extra in [
-        "state=charging",
+        "state=unknown",
         "model=2",
         "conn=delta phases=1",
         "balanced=yes",
         "effcurve=c",
-        "%idlingkw=0",
+        "%idlingkw=-1",
         "vminpu=0",
         "vmaxpu=.8",
         "pf=.0001",
@@ -391,4 +391,69 @@ fn unsupported_storage_keeps_electrical_blockers() {
             "{extra}"
         );
     }
+}
+
+#[test]
+fn static_storage_replays_soc_and_kw_edit_boundaries() {
+    for (commands, watts) in [
+        ("state=charging", 100.0),
+        ("state=charging %stored=50", 10000.0),
+        ("state=charging\nEdit Storage.s %stored=50", 100.0),
+        ("%stored=10 state=discharging", -10000.0),
+        ("%stored=10 %reserve=20 state=discharging", 100.0),
+        ("kwhRated=50 %stored=10 state=discharging", 100.0),
+        ("%stored=50 kw=-3", 3000.0),
+        ("%stored=50 kw=3", -3000.0),
+        ("%stored=50 kw=-3 kwrated=20", 6000.0),
+        ("%stored=50 state=c %charge=200", 10000.0),
+        ("%stored=50 state=d %discharge=200", -10000.0),
+        ("%stored=50 state=charging %charge=0", 0.0),
+        ("%idlingkw=0 kvar=2", 0.0),
+        ("%stored=50 kw=3 kw=0", 100.0),
+        (
+            "%stored=50 state=charging\nEdit Storage.s %stored=100 %stored=50",
+            10000.0,
+        ),
+        (
+            "%stored=50 state=charging\nEdit Storage.s %stored=100\nEdit Storage.s %stored=50",
+            100.0,
+        ),
+    ] {
+        let module = parse(&format!(
+            "New Circuit.c basekv=.48\nNew Storage.s bus1=b.1.2.3.0 kv=.48 kwrated=10 kva=40 {commands}\n"
+        ));
+        assert_eq!(module.value().loads().len(), 1, "{commands}");
+        let load = &module.value().loads()[0];
+        assert!(
+            (load.p_nom.iter().sum::<f64>() - watts).abs() < 1e-9,
+            "{commands}: {load:?}"
+        );
+        let emitted = emit_value(module.value(), DistTargetFormat::Dss);
+        let back = parse(&emitted.text);
+        let actual = &back.value().loads()[0];
+        for (a, b) in load
+            .p_nom
+            .iter()
+            .zip(&actual.p_nom)
+            .chain(load.q_nom.iter().zip(&actual.q_nom))
+        {
+            assert!((a - b).abs() < 1e-9, "{commands}: {emitted:?}");
+        }
+    }
+}
+
+#[test]
+fn edited_storage_can_mix_generation_consumption_and_reactive_only_branches() {
+    let mut module = parse("New Circuit.c basekv=.48\nNew Storage.s bus1=b.1.2.3.0 kv=.48\n");
+    module.value_mut().loads_mut()[0].p_nom = vec![-400.0, 500.0, 0.0];
+    module.value_mut().loads_mut()[0].q_nom = vec![40.0, -50.0, 60.0];
+    let emitted = emit_value(module.value(), DistTargetFormat::Dss);
+    let back = parse(&emitted.text);
+    let actual: Vec<_> = back
+        .value()
+        .loads()
+        .iter()
+        .map(|l| (l.p_nom[0], l.q_nom[0]))
+        .collect();
+    assert_eq!(actual, [(-400.0, 40.0), (500.0, -50.0), (0.0, 60.0)]);
 }

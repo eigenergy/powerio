@@ -1,4 +1,4 @@
-//! Native static equivalent for bounded constant-power consumption.
+//! Native static equivalent for signed bounded constant power.
 use super::{Configuration, DistLoad, DistLoadVoltageModel, DssWriter, num};
 
 pub(super) fn validate(load: &DistLoad) -> Result<(), String> {
@@ -40,14 +40,14 @@ pub(super) fn validate(load: &DistLoad) -> Result<(), String> {
         ));
     }
     if load.p_nom.is_empty()
-        || load.p_nom.iter().any(|p| !p.is_finite() || *p <= 0.0)
+        || load.p_nom.iter().any(|p| !p.is_finite())
         || load.q_nom.len() != load.p_nom.len()
         || load.q_nom.iter().any(|q| !q.is_finite())
         || load.p_nom.len() > 3
         || current_limit_pu.is_some_and(|limit| (limit * v_min_pu - 1.0).abs() > 1e-12)
     {
         return Err(format!(
-            "load {}: native bounded-power equivalent requires one to three consuming branches and a current limit equal to 1/v_min_pu",
+            "load {}: native bounded-power equivalent requires one to three branches and a current limit equal to 1/v_min_pu",
             load.name
         ));
     }
@@ -81,7 +81,13 @@ impl DssWriter {
             };
         let kw = load.p_nom.iter().sum::<f64>() / 1000.0;
         let kvar = load.q_nom.iter().sum::<f64>() / 1000.0;
-        let rating = 2.0 * kw.hypot(kvar);
+        let rating = (2.0 * kw.hypot(kvar)).max(1.0);
+        let rated = kw.abs().max(1.0);
+        let (state, idle, discharge) = if kw < 0.0 {
+            ("discharging", 0.0, -kw / rated * 100.0)
+        } else {
+            ("idling", kw / rated * 100.0, 100.0)
+        };
         self.check_name("storage", &load.name);
         for key in load
             .extras
@@ -92,8 +98,8 @@ impl DssWriter {
         }
         let bus = self.bus_ref(&load.bus, &load.terminal_map);
         self.line_out(&format!(
-            "New Storage.{} phases={phases} bus1={} conn={conn} kv={} kwrated={} kva={} %idlingkw=100 state=idling kvar={} vminpu={} vmaxpu={} limitcurrent={} model=1",
-            load.name, bus, num(kv), num(kw), num(rating), num(-kvar), num(*v_min_pu), num(*v_max_pu), if current_limit_pu.is_some() { "yes" } else { "no" }
+            "New Storage.{} phases={phases} bus1={} conn={conn} kv={} kwrated={} kva={} %idlingkw={} state={state} %discharge={} kvar={} vminpu={} vmaxpu={} limitcurrent={} model=1",
+            load.name, bus, num(kv), num(rated), num(rating), num(idle), num(discharge), num(-kvar), num(*v_min_pu), num(*v_max_pu), if current_limit_pu.is_some() { "yes" } else { "no" }
         ));
     }
 }

@@ -1983,20 +1983,27 @@ Maximum voltage differences fall from 88.8 V to 9.86 V after the PV fix, then to
 These are still failed comparisons under unchanged thresholds. Matched passive
 admittance entries agree within `9.1e-13` S in the balanced diagnostic.
 
-### IEEE9500 idle battery demand
+### IEEE9500 fixed battery power
 
-The two idling Storage objects each consume 2.5 kW. The reader represents their
-AC demand as typed `BoundedConstantPower` loads: constant power inside the
+The two idling Storage objects in each CIMHub IEEE9500 archive consume 2.5 kW
+each. The reader represents their AC demand as typed `BoundedConstantPower` loads: constant power inside the
 voltage band, impedance continuation outside it, and an optional current limit.
-The law survives IR and typed edits. Canonical DSS writes an idle Storage
-equivalent; it does not reconstruct battery dispatch or energy capacity.
+The law survives IR and typed edits. Canonical DSS writes a fixed Storage
+equivalent, using discharging for negative demand and idling for positive or
+zero demand; it does not reconstruct battery dispatch or energy capacity.
 
 The qualified profile covers one-phase wye and two-/three-phase wye or delta,
-voltage model 1, and idle P/Q setpoints strictly inside inverter ratings. Voltage
-base and reactive-mode assignment order are preserved. Efficiency curves,
-forced balance, copied inverter state, charging/discharging, one-phase delta,
-and rating-clipped setpoints remain explicit electrical blockers. Untyped active
-storage reports `READINESS.DSS.STORAGE_UNRESOLVED`. PMD/BMOPF projections report
+voltage model 1, and fixed idling, charging or discharging P/Q setpoints within
+inverter ratings. Voltage base, kW/rating and reactive-mode assignment order are
+preserved. State-of-charge guards run at each native edit boundary: a full
+battery requested to charge becomes idling, and a later SOC edit alone does not
+restart it. The pinned constructor initially has zero absolute reserve despite
+its displayed 20% setting; an explicit `kWhRated` or `%Reserve` setter updates
+the absolute reserve. Charge/discharge percentages use the default rated-kW cap.
+Efficiency settings without an inverter curve do not alter the fixed AC power.
+Efficiency curves, forced balance, copied inverter state, one-phase delta,
+negative charge/discharge percentages and inverter P/Q clipping remain explicit
+electrical blockers. Untyped active storage reports `READINESS.DSS.STORAGE_UNRESOLVED`. PMD/BMOPF projections report
 the loss of voltage bounds and current limits. Legacy C load views reject this
 law rather than presenting it as unbounded constant power.
 
@@ -2005,14 +2012,26 @@ python evals/gridlabd/dss_storage_oracle.py \
   --bridge /path/to/dist_network --output /tmp/new-storage-sweeps
 POWERIO_STORAGE_SAMPLES=/tmp/new-storage-sweeps/report.json \
   cargo test -p powerio --test load_voltage_ir \
-  typed_idle_storage_powers_match_native_voltage_sweeps -- --ignored
+  typed_static_storage_powers_match_native_voltage_sweeps -- --ignored
 ```
 
-The sweep compares original, canonical and reimported bus voltages, terminal
-currents, powers and losses with unchanged thresholds. An altered-line negative
-control must fail. The Rust check separately evaluates typed branch powers at
+The 239-case sweep compares original, canonical and reimported bus voltages,
+terminal currents, powers and losses with unchanged thresholds. It covers all
+three states, five connection layouts, both current-limit settings, seven
+voltage levels, reactive-only output, and assignment/edit histories. An altered
+line negative control must fail. The Rust check separately evaluates typed branch powers at
 the native voltages, including high-voltage current limiting and low-voltage
-impedance continuation.
+impedance continuation. Zero-power cases include an independent background load
+so the changed-line control still exercises an energized line. Typed edits may
+mix consuming, generating and reactive-only branches; canonical output splits
+them without losing terminal mappings.
+
+The separate electricdss-tst IEEE9500 entry now imports through IR and emits
+canonical DSS without readiness blockers. Its two batteries default to 25 kW
+ratings and each draws 0.25 kW at the written state, including the first battery's
+full-SOC transition from charging to idling. The original native feeder still
+does not converge at the pinned strict snapshot settings, so this entry remains
+unqualified. Parser success is recorded separately from electrical matching.
 
 Including the idle demand reduces maximum voltage differences to approximately
 0.00111 V (balanced) and 0.00118 V (unbalanced), from 0.638 V. Both complete

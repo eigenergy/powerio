@@ -71,7 +71,9 @@ fn storage_readiness_requires_a_typed_static_equivalent() {
     let idle = parse("new circuit.c\nnew storage.b bus1=sourcebus kwrated=250 state=idling\n");
     assert_eq!(idle.loads().len(), 1);
     assert!(powerio_dist::audit_electrical_readiness(&idle).is_ready());
-    let net = parse("new circuit.c\nnew storage.b bus1=sourcebus kwrated=250 state=charging\n");
+    let net = parse(
+        "new circuit.c\nnew storage.b bus1=sourcebus kwrated=250 state=charging effcurve=c\n",
+    );
     let audit = powerio_dist::audit_electrical_readiness(&net);
     assert!(!audit.is_ready());
     assert!(

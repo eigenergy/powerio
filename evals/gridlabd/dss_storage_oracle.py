@@ -1,4 +1,4 @@
-"""Idle storage laws through native voltage sweeps, IR and canonical DSS.
+"""Fixed storage laws through native voltage sweeps, IR and canonical DSS.
 
 The ignored Rust storage-current test consumes report.json to independently
 compare typed voltage-law powers with the native terminal powers.
@@ -22,17 +22,18 @@ def circuits():
         (3, "wye", "1.2.3.0", 0.48),
         (3, "delta", "3.1.2", 0.48),
     ):
-        for limited in ("yes", "no"):
-            for pu in (0.45, 0.899, 0.901, 1.0, 1.101, 1.344, 1.5):
-                yield (
-                    f"{phases}ph-{conn}-{limited}-{pu}",
-                    phases,
-                    conn,
-                    pu,
-                    f"phases={phases} conn={conn} bus1=end.{nodes} kv={kv:.17g} "
-                    f"kwrated=250 kva=250 %idlingkw=1 state=idling pf=-.95 "
-                    f"vminpu=.9 vmaxpu=1.1 limitcurrent={limited}",
-                )
+        for state in ("idling", "charging", "discharging"):
+            for limited in ("yes", "no"):
+                for pu in (0.45, 0.899, 0.901, 1.0, 1.101, 1.344, 1.5):
+                    yield (
+                        f"{state}-{phases}ph-{conn}-{limited}-{pu}",
+                        phases,
+                        conn,
+                        pu,
+                        f"phases={phases} conn={conn} bus1=end.{nodes} kv={kv:.17g} "
+                        f"kwrated=250 kva=500 %idlingkw=1 %stored=50 state={state} pf=-.95 "
+                        f"vminpu=.9 vmaxpu=1.1 limitcurrent={limited}",
+                    )
     for name, props in (
         ("kvar", "phases=3 kv=.48 kwrated=100 kva=100 kvar=2"),
         ("reactive-last", "phases=3 kv=.48 kwrated=100 kva=100 kvar=2 pf=.95"),
@@ -43,6 +44,36 @@ def circuits():
     ):
         phases = 1 if "phases=1" in props else 3
         yield name, phases, "wye", 15.0 if name == "constructor-voltage" else 1.0, f"bus1=end.1.2.3.0 {props}"
+
+    for name, props in (
+        ("full-charge", "state=charging"),
+        ("same-edit-soc", "state=charging %stored=50"),
+        ("later-edit-soc", "state=charging\nedit storage.s %stored=50"),
+        ("default-reserve", "%stored=10 state=discharging"),
+        ("explicit-reserve", "%stored=10 %reserve=20 state=discharging"),
+        ("rating-reserve", "kwhrated=50 %stored=10 state=discharging"),
+        ("kw-charge", "%stored=50 kw=-3"),
+        ("kw-discharge", "%stored=50 kw=3"),
+        ("kw-rating-order", "%stored=50 kw=-3 kwrated=20"),
+        ("kw-zero", "%stored=50 kw=3 kw=0"),
+        ("zero-rate", "%stored=50 state=charging %charge=0"),
+        ("zero-idle", "%idlingkw=0"),
+        ("pure-reactive", "%idlingkw=0 kvar=2"),
+        ("overcharge", "%stored=50 state=charging %charge=200"),
+        ("overdischarge", "%stored=50 state=discharging %discharge=200"),
+        ("efficiencies", "%stored=50 state=charging %charge=50 %effcharge=30 %effdischarge=20"),
+        ("abbreviation", "%stored=50 state=c"),
+        ("soc-same-edit", "%stored=50 state=charging\nedit storage.s %stored=100 %stored=50"),
+        ("soc-separate-edits", "%stored=50 state=charging\nedit storage.s %stored=100\nedit storage.s %stored=50"),
+        ("discharge-kvar", "%stored=50 state=discharging kvar=2"),
+        ("charge-kvar", "%stored=50 state=charging kvar=-2"),
+        ("idle-rated-cap", "%idlingkw=200"),
+        ("at-rating", "kva=10 state=discharging"),
+    ):
+        # Zero storage power leaves the line unloaded. A separate ordinary load
+        # makes the changed-line negative control electrically observable.
+        background = "\nnew load.background bus1=end.1.2.3.0 kv=.48 kw=1 kvar=0" if name in ("zero-rate", "zero-idle") else ""
+        yield name, 3, "wye", 1.0, f"phases=3 bus1=end.1.2.3.0 kv=.48 kwrated=10 kva=40 {props}{background}"
 
 
 def main():

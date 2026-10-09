@@ -180,7 +180,7 @@ fn snapshot_network(raw: &RawDss) -> (MulticonductorNetwork, Vec<crate::diagnost
         rd.net.generators_mut().push(g);
     }
     read_ibr_objects(&mut rd, raw);
-    rd.idle_storage_objects(raw);
+    rd.static_storage_objects(raw);
     for obj in raw.of_class("swtcontrol") {
         rd.swtcontrol(obj);
     }

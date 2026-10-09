@@ -556,6 +556,15 @@ checks cover both solvers and forks. Other battery operating modes, weather file
 multipoint efficiency and canonical GLM inverter writing remain unfinished.
 Climate coordinates and thermal inputs remain source-only with diagnostics.
 
+OpenDSS Storage voltage model 1 reads fixed idling, charging and discharging
+power as signed `BoundedConstantPower` loads. The profile covers one-phase wye
+and two-/three-phase wye or delta, including reactive-only states. It preserves
+voltage bounds, current limits, setter order and end-of-edit state-of-charge
+guards. Canonical DSS derives fixed equivalents from the current typed powers,
+including edits that mix consuming and generating branches. Energy integration
+and dispatch remain source-only. Inverter curves, P/Q clipping, copied inverter
+state and one-phase delta remain unsupported and block electrical readiness.
+
 The PNNL NR profile accepts future manual reliability events only when their
 start date is strictly after the complete clock window, all references resolve,
 and every declared phase reaches a fixed source. Connected `SWING_PQ` buses in
