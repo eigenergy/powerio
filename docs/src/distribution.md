@@ -235,6 +235,10 @@ calculated matrices, so it does not reinterpret geometry under the target fork.
 
 Numerical `iteration_limit` settings and voltage/current dump objects remain in
 retained source and are reported; they do not become network components.
+`line_limits`, positive default voltage convergence tolerances and
+`multi_recorder` objects are also retained and reported. Passive equipment
+names resolve case-sensitively, including names differing only by case;
+typed component names still need distinct case-insensitive identities.
 Ordinary transformers support three-phase `WYE_WYE` (also numeric `1`) and
 single-phase `SINGLE_PHASE` connections with explicit voltages and positive series
 resistance/reactance. They map to grounded winding records and retain device
@@ -301,6 +305,19 @@ IEEE34 and IEEE123 NR also have fixed-state qualification across both forks and
 OpenDSS, including per-phase manual capacitor admittances and switch/regulator
 states. Their edited-state qualification remains pending. The harness documents
 per-feeder stopping settings and numerical comparison budgets.
+
+Capacitor `VAR`, `VOLT`, `VARVOLT` and `CURRENT` controls import as fixed
+snapshots only when every phase has an explicit switch state and control is
+individual. `READ.GLM.CONTROL_FROZEN` reports excluded control execution.
+Thresholds, sensing references and delays remain in source; canonical output
+uses manual coils with the current typed admittances. Missing switch states and
+banked initialization fail.
+
+The IEEE8500 native reference harness compares its original PNNL input with
+explicit static variants on both forks. Arras requires `triplex_load` constant
+power declarations where this older input uses `triplex_node.power_1/power_2`.
+The harness also handles different dump-mode spellings. These native comparisons
+do not establish complete PowerIO conversion of IEEE8500.
 
 Other geometry/earth models, split-phase and
 additional static devices remain unfinished and fail explicitly. Full OpenDSS

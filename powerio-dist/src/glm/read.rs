@@ -37,7 +37,8 @@ mod transformers;
 /// records; FBS additionally preserves its finite default winding-2 core shunt.
 /// A connected directed FBS tree may use its implicit upstream voltage source.
 /// Wye regulators preserve fixed phase taps and NR resistance in winding equivalents.
-/// Manual wye capacitors use fixed per-phase shunt admittances.
+/// Wye capacitors use fixed per-phase shunt admittances. Active controls require
+/// explicit individual switch states and produce a frozen-control diagnostic.
 /// Other conductor/device profiles remain under implementation.
 pub fn parse(
     source: Source,
@@ -258,6 +259,27 @@ impl Reader<'_> {
         match (name, value) {
             ("solver_method", "NR") => self.newton_raphson = true,
             ("solver_method", "FBS") => self.newton_raphson = false,
+            ("line_limits", value)
+                if matches!(
+                    value.to_ascii_lowercase().as_str(),
+                    "true" | "false" | "0" | "1"
+                ) =>
+            {
+                self.diagnostics.push(Diagnostic::of(
+                    &codes::READ_GLM_SOURCE_ONLY,
+                    "line_limits controls native limit reporting; the setting remains in source",
+                ));
+            }
+            ("default_maximum_voltage_error" | "maximum_voltage_error", value) => {
+                if !value.parse::<f64>().is_ok_and(|v| v.is_finite() && v > 0.0) {
+                    return Err(self.project.electrical_error(
+                        span,
+                        "default voltage convergence tolerance requires a finite positive scalar",
+                    ));
+                }
+                self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_SOURCE_ONLY,
+                    "native voltage convergence tolerance remains in source; canonical output uses its own solver settings"));
+            }
             ("default_resistance", value) => {
                 self.switch_default_resistance = value
                     .parse::<f64>()
@@ -298,14 +320,20 @@ impl Reader<'_> {
     }
 
     fn reserve_explicit_names(&mut self) -> Result<(), Error> {
+        let mut components = BTreeSet::new();
         for object in self.index.objects() {
-            if let Some(name) = object.name()
-                && !self.identities.insert(name.to_ascii_lowercase())
-            {
-                return Err(self.error(
-                    object.key(),
-                    "object identities collide under current canonical case-insensitive lookup",
-                ));
+            if let Some(name) = object.name() {
+                let folded = name.to_ascii_lowercase();
+                // Passive templates resolve by native case-sensitive identity.
+                // Their names never become typed component/linecode identities.
+                // Still reserve them against generated names for canonical output.
+                self.identities.insert(folded.clone());
+                if !templates::is_template(class(object)) && !components.insert(folded) {
+                    return Err(self.error(
+                        object.key(),
+                        "object identities collide under current canonical case-insensitive lookup",
+                    ));
+                }
             }
         }
         Ok(())
@@ -334,6 +362,7 @@ impl Reader<'_> {
             if matches!(
                 class,
                 "recorder"
+                    | "multi_recorder"
                     | "impedance_dump"
                     | "voltdump"
                     | "currdump"

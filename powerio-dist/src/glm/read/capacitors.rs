@@ -7,14 +7,31 @@ pub(super) fn allowed(class: &str, name: &str) -> bool {
     class == "capacitor"
         && (matches!(
             name,
-            "phases_connected" | "control" | "switchA" | "switchB" | "switchC"
+            "phases_connected"
+                | "control"
+                | "control_level"
+                | "pt_phase"
+                | "remote_sense"
+                | "remote_sense_B"
+                | "switchA"
+                | "switchB"
+                | "switchC"
         ) || unit(class, name).is_some())
 }
 
 pub(super) fn unit(class: &str, name: &str) -> Option<&'static str> {
     match (class, name) {
-        ("capacitor", "cap_nominal_voltage") => Some("V"),
-        ("capacitor", "capacitor_A" | "capacitor_B" | "capacitor_C") => Some("VAr"),
+        (
+            "capacitor",
+            "cap_nominal_voltage" | "voltage_set_high" | "voltage_set_low" | "voltage_deadband",
+        ) => Some("V"),
+        (
+            "capacitor",
+            "VAr_set_high" | "VAr_set_low" | "VAr_deadband" | "capacitor_A" | "capacitor_B"
+            | "capacitor_C",
+        ) => Some("VAr"),
+        ("capacitor", "current_set_high" | "current_set_low" | "current_deadband") => Some("A"),
+        ("capacitor", "time_delay" | "dwell_time" | "lockout_time") => Some("s"),
         _ => None,
     }
 }
@@ -29,15 +46,10 @@ impl Reader<'_> {
             .map(crate::glm::GlmObject::key)
             .collect::<Vec<_>>();
         for key in keys {
-            if !matches!(self.text(key, "control")?.as_deref(), None | Some("MANUAL")) {
-                return Err(self.error(
-                    key,
-                    "capacitor control requires a qualified fixed-state snapshot",
-                ));
-            }
             let root = self.roots[&key];
             let declared = self.text(key, "phases")?.unwrap_or_default();
             let phases = parse_phases(&declared).map_err(|m| self.error(key, m))?;
+            self.capacitor_control(key, &phases)?;
             let connected = self.text(key, "phases_connected")?.unwrap_or(declared);
             let connected = parse_phases(&connected).map_err(|m| self.error(key, m))?;
             if connected.iter().any(|p| !phases.contains(p)) {
@@ -96,6 +108,47 @@ impl Reader<'_> {
             self.diagnostics.push(Diagnostic::of(&crate::diagnostics::codes::READ_GLM_SOURCE_ONLY,
                 format!("capacitor {}: typed phase shunts preserve fixed admittance; bank ratings and switch declarations remain in source", self.names[&key])));
         }
+        Ok(())
+    }
+}
+
+impl Reader<'_> {
+    fn capacitor_control(
+        &mut self,
+        key: crate::glm::ObjectKey,
+        phases: &[usize],
+    ) -> Result<(), Error> {
+        if !matches!(
+            self.text(key, "control_level")?.as_deref(),
+            None | Some("INDIVIDUAL")
+        ) {
+            return Err(self.error(
+                key,
+                "banked capacitor initialization requires a qualified snapshot",
+            ));
+        }
+        let control = self
+            .text(key, "control")?
+            .unwrap_or_else(|| "MANUAL".into());
+        if control == "MANUAL" {
+            return Ok(());
+        }
+        if !matches!(control.as_str(), "VAR" | "VOLT" | "VARVOLT" | "CURRENT") {
+            return Err(self.error(key, "unknown capacitor control"));
+        }
+        for &phase in phases {
+            if self
+                .text(key, &format!("switch{}", phase_name(phase)))?
+                .is_none()
+            {
+                return Err(self.error(
+                    key,
+                    "active capacitor control requires an explicit switch state on every phase",
+                ));
+            }
+        }
+        self.diagnostics.push(Diagnostic::of(&crate::diagnostics::codes::READ_GLM_CONTROL_FROZEN,
+            format!("capacitor {}: preserve declared phase switch states; {control} control execution and sensing are excluded from this static snapshot", self.names[&key])));
         Ok(())
     }
 }

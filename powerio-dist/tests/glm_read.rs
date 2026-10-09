@@ -243,3 +243,59 @@ fn naming_rule_flag_is_validated_without_rewriting_identities() {
     assert_eq!(m.value().buses()[0].id, "source");
     assert!(read(&format!("#set relax_naming_rules=maybe\n{SINGLE}")).is_err());
 }
+
+#[test]
+fn feeder_reporting_and_convergence_settings_retain_the_electrical_model() {
+    let baseline = read(SINGLE).unwrap();
+    for settings in [
+        "line_limits TRUE; default_maximum_voltage_error 1e-4;",
+        "line_limits FALSE; maximum_voltage_error 1e-6;",
+    ] {
+        let source = SINGLE.replace(
+            "solver_method NR;",
+            &format!("solver_method NR; {settings}"),
+        );
+        let source = format!(
+            "{source} object multi_recorder {{ parent source; file taps.csv; property voltage_A; interval 60; }}"
+        );
+        let m = read(&source).unwrap();
+        assert_eq!(
+            serde_json::to_value(m.value()).unwrap(),
+            serde_json::to_value(baseline.value()).unwrap()
+        );
+        assert_eq!(
+            m.diagnostics()
+                .iter()
+                .filter(|d| d.code() == "READ.GLM.SOURCE_ONLY")
+                .count(),
+            3
+        );
+    }
+    for settings in [
+        "line_limits nonsense;",
+        "default_maximum_voltage_error NaN;",
+        "default_maximum_voltage_error -1;",
+        "maximum_voltage_error 0;",
+    ] {
+        assert!(
+            read(&SINGLE.replace(
+                "solver_method NR;",
+                &format!("solver_method NR; {settings}")
+            ))
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn passive_template_names_resolve_case_sensitively_without_component_collisions() {
+    let source = format!("{SINGLE}
+object line_configuration {{ name CFG; z11 2+1j; }}
+object overhead_line {{ name parallel; phases AN; from source; to sink; length 1 mile; configuration CFG; }}");
+    let m = read(&source).unwrap();
+    assert_eq!(m.value().lines().len(), 2);
+    close(m.value().line_codes()[0].r_series[0][0] * 1609.344, 1.0);
+    close(m.value().line_codes()[1].r_series[0][0] * 1609.344, 2.0);
+    assert_ne!(m.value().lines()[0].linecode, m.value().lines()[1].linecode);
+    assert!(read(&source.replace("name parallel", "name SOURCE")).is_err());
+}

@@ -932,3 +932,32 @@ stricter microcase power threshold. Native source-meter current, which follows
 GridLAB-D's noncommuting line-shunt reporting law, is retained separately;
 compared source current sums physical native ports. Recorder runs are bounded
 to one second and use 17 significant digits.
+
+
+### IEEE8500 static reference
+
+`ieee8500_reference.py` pins the IEEE8500 input catalogued from
+`GRIDAPPSD/Powergrid-Models/archive/GLM/IEEE_8500node.glm`. It compares the
+original PNNL circuit with explicit static versions on PNNL and Arras. Three
+VARVOLT capacitor banks use their declared switch states; the fourth bank and
+all regulator taps are already manual. All four banks and all regulator taps
+are recorded. The 1,177 loaded `triplex_node` objects become `triplex_load`
+objects with `constant_power_1/constant_power_2`, because Arras hides the older
+node `power_1/power_2` properties. Source bytes must match the pinned digest.
+
+The original lowercase voltage/current dump modes are not portable: PNNL uses
+`RECT` for voltage, Arras uses `rect`, and both use `RECT` for current. Correcting
+these output settings changes no electrical fields. Runs stop after one second;
+recorders use one-second intervals. The three controlled banks are frozen only
+in the static variants. Complete inventories contain 4,879 voltage rows and
+4,876 current rows, giving 29,265 complex values including absent phases.
+
+```sh
+python evals/gridlabd/ieee8500_reference.py --source /path/to/IEEE_8500node.glm \
+  --pnnl-root /path/to/GridLAB-D --output /path/to/new-reference-directory
+```
+
+This is native reference preparation at six-decimal dump precision. It is not
+PowerIO conversion qualification, a full-precision port/loss comparison, or an
+edited-model check. Original engine failures and source adaptations must remain
+distinct from converter results. Dataset contents remain outside git.
