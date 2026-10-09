@@ -1050,5 +1050,69 @@ Native step-down and step-up orientations differ; equal line-voltage ratings
 use the step-up orientation. Neither solver adds a core branch for this connection.
 
 This qualifies the reader and OpenDSS projection, not canonical GLM writing of
-phase-pair coils or the complete IEEE8500 feeder. The original feeder now passes
-transformer reading and reaches its still-unqualified FBS regulators.
+phase-pair coils or the complete IEEE8500 feeder. The full feeder now has separate import qualification below.
+
+
+### FBS regulator and complete IEEE8500 import
+
+`fbs_regulator_import_oracle.py` checks Type A/B taps, phase subsets, object tap
+overrides and ignored FBS resistance against both pinned forks and independent
+ideal-ratio equations. The reader stores zero leakage. OpenDSS's directly zero
+transformer impedance is singular, so emission uses one-ohm secondary leakage
+and an equal negative series resistance. At the unloaded internal node, KCL
+cancels them exactly. Physical to-port powers and total losses include the added
+line. The oracle removes cancellation deliberately and requires a mismatch.
+
+```sh
+cargo build -p powerio --example glm_network
+python evals/gridlabd/fbs_regulator_import_oracle.py \
+  --bridge target/debug/examples/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-fbs-regulator-directory
+python evals/gridlabd/ieee8500_import_oracle.py \
+  --source /path/to/IEEE_8500node.glm \
+  --bridge target/debug/examples/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-ieee8500-import-directory
+```
+
+The IEEE8500 harness uses the external file pinned by `ieee8500_reference.py`;
+no dataset contents are vendored. It retains the documented portable static
+adaptations, compares the original PNNL import with that circuit, and checks
+actual IR-restored OpenDSS emission against both native engines. It compares
+82,901 complex observations and checks current balance at 8,525 non-source,
+non-ground bus terminals in each solution. These include all 4,879 native bus
+objects and 4,876 links, with explicit aggregation of transformer and switch
+circuit equivalents. A 1% error in one feeder-regulator tap must fail.
+
+The native default voltage error is a fraction of nominal voltage: the source
+file's `1e-4` permits much larger differences than the comparison budget. This
+harness uses `1e-12` and full-precision rectangular recordings. OpenDSS uses
+`tolerance=1e-12`, `maxiterations=1000`, and disabled controls. The shared V/A/VA
+comparison budgets are unchanged.
+
+Physical losses are the signed sum of external port powers. Native GridLAB-D
+ordinary links instead take the absolute real loss on each phase before summing;
+mutual coupling can make that reported value differ from dissipation. Both
+physical losses and that native reported quantity are checked separately. The
+delta-grounded-wye bank reports the signed total. No phase-power differences are
+discarded to make aggregate losses agree.
+
+PNNL records groups of properties. The pinned Arras group recorder truncates
+rows because its write uses the pointer size as the buffer bound. Arras instead
+uses bounded multi-recorder property lists under 900 characters, in a temporary
+output directory, with the validation container's file-descriptor limit set to
+65,536. Complete identity and column inventories are checked before comparison.
+
+Plain ideal closed contacts emit exact cancelling resistances, avoiding the
+OpenDSS `switch=y` dummy impedance. Plain open contacts are disabled and do not
+introduce line charging or numerical leakage. Broader source-specific switch
+profiles remain separate compatibility work.
+This qualifies fixed-state feeder import and OpenDSS emission; canonical GLM
+service writing and edited IEEE8500 feeder qualification remain unfinished.
+
+`ideal_transformer_oracle.py --powerio /path/to/powerio --output /path/to/new-directory`
+checks grounded and floating secondary returns, nominal and unequal winding taps,
+through public DSS import, IR, emission and reimport. Analytic resistive circuits
+check return displacement, voltage ratios, currents, powers and total losses.
+Deliberately incomplete cancellation must fail. The floating return uses two
+negative half-ohm conductors to cancel the one-ohm differential leakage without
+adding a ground connection. Core and neutral shunts remain outside this profile.

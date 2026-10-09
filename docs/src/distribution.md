@@ -290,7 +290,23 @@ nameplate rating. The `rating_is_normalization_base` extra preserves that fact i
 IR; cross-format writers diagnose loss of that metadata. Device coordinates attach to every resulting phase record.
 Canonical GLM emits manual regulator equivalents from current winding values;
 OpenDSS uses `xscarray=(0)` to avoid its scalar zero-reactance substitution.
-FBS regulators, open-delta connections and banked initialization remain unfinished.
+FBS `WYE_WYE` regulators instead retain ideal zero-leakage winding constraints;
+the native FBS solver ignores declared regulator resistance. OpenDSS emission
+uses a one-ohm winding resistance followed by its exact negative, eliminating
+both at an unloaded internal bus. This preserves the ideal ratio and external
+currents without an arbitrary small leakage. A diagnostic identifies the added
+line: physical secondary powers and total losses include it. The typed value
+and IR retain zero leakage. Canonical GLM writing of ideal regulator constraints,
+open-delta connections and banked initialization remain unfinished.
+
+Plain ideal closed switches likewise use cancelling resistances in OpenDSS;
+plain open contacts are disabled and have no artificial line charging or leakage.
+Switches retaining source-specific impedance declarations use the existing
+source-aware path. Transformer cancellation currently covers complete two-coil,
+single-phase winding records with grounded or floating secondary returns and
+no core or neutral shunts. A floating return uses two cancelling conductors,
+preserving common-mode displacement. Other ideal-transformer profiles need
+further qualification.
 
 Canonical node convergence is set to `1e-9 V`. The tighter former absolute
 setting could prevent IEEE13 from converging despite stable electrical values.
@@ -327,8 +343,20 @@ banked initialization fail.
 The IEEE8500 native reference harness compares its original PNNL input with
 explicit static variants on both forks. Arras requires `triplex_load` constant
 power declarations where this older input uses `triplex_node.power_1/power_2`.
-The harness also handles different dump-mode spellings. These native comparisons
-do not establish complete PowerIO conversion of IEEE8500.
+The harness also handles different dump-mode spellings. That initial dump-only
+reference remains separate from full-precision import qualification.
+
+The complete pinned IEEE8500 fixed-state case now has native-to-OpenDSS import
+qualification through IR, across both forks. The full-feeder harness compares
+all 4,879 native bus objects and 4,876 device ports, including center-tapped
+services, triplex neutral currents and ideal regulators/switches. It verifies
+physical powers and losses, native loss-report conventions, and current balance
+at all non-source, non-ground bus terminals. The original PNNL input and portable
+static input produce identical typed circuits. Native convergence is tightened
+from a nominal-voltage fraction of `1e-4` to `1e-12` for comparison; electrical
+data and the common comparison budgets are unchanged. A deliberately wrong
+regulator tap must fail. Edited-feeder and canonical GLM qualification remain
+unfinished.
 
 Grounded center-tapped services import as four typed windings and a
 constant-impedance load at an auxiliary core bus. The fourth winding exposes the

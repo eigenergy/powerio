@@ -128,6 +128,10 @@ pub mod codes {
             "a line names a linecode the case does not declare";
 
         // EMIT.DSS: what the canonical dss writer cannot state.
+        EMIT_DSS_IDEAL_SWITCH_EQUIVALENT = "EMIT.DSS.IDEAL_SWITCH_EQUIVALENT", Remark,
+            "an ideal closed switch is emitted using exact impedance cancellation";
+        EMIT_DSS_IDEAL_TRANSFORMER_EQUIVALENT = "EMIT.DSS.IDEAL_TRANSFORMER_EQUIVALENT", Remark,
+            "an ideal transformer is emitted using exact leakage cancellation";
         EMIT_DSS_SOURCE_EQUIVALENT = "EMIT.DSS.SOURCE_EQUIVALENT", Remark,
             "an ideal source is emitted as an exact finite-impedance circuit equivalent";
         EMIT_DSS_IMPEDANCE_EQUIVALENT = "EMIT.DSS.IMPEDANCE_EQUIVALENT", Remark,

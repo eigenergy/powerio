@@ -28,6 +28,8 @@ use crate::model::{
 use super::read::delta_edges;
 use super::{lex, prop};
 
+mod ideal_switches;
+mod ideal_transformers;
 mod loads;
 mod sources;
 
@@ -1268,6 +1270,7 @@ impl DssWriter {
     }
 
     fn switches(&mut self, net: &MulticonductorNetwork) {
+        let mut used = ideal_transformers::used_names(net);
         for sw in net.switches() {
             self.check_name("line", &sw.name);
             // #307: a switch is ideal — no conductor indexed matrices — so an
@@ -1309,6 +1312,12 @@ impl DssWriter {
                 map_from = sw.terminal_map_from.clone();
                 map_to = sw.terminal_map_to.clone();
             }
+            let mut mapped = sw.clone();
+            mapped.terminal_map_from.clone_from(&map_from);
+            mapped.terminal_map_to.clone_from(&map_to);
+            if self.ideal_closed_switch(&mapped, &mut used) {
+                continue;
+            }
             let phases = sw.terminal_map_from.len();
             let mut s = format!(
                 "New Line.{} bus1={} bus2={} phases={phases} switch=y",
@@ -1316,6 +1325,10 @@ impl DssWriter {
                 self.bus_ref(&sw.bus_from, &map_from),
                 self.bus_ref(&sw.bus_to, &map_to),
             );
+            if sw.open && sw.extras.is_empty() {
+                // A disconnected ideal contact has no line-charging shunts.
+                s.push_str(" c1=0 c0=0 enabled=no");
+            }
             match sw.i_max.as_deref() {
                 Some([amps, ..]) if amps.is_finite() => {
                     let _ = write!(s, " emergamps={}", num(*amps));
@@ -1365,7 +1378,10 @@ impl DssWriter {
     }
 
     fn transformers(&mut self, net: &MulticonductorNetwork) {
-        for t in net.transformers() {
+        let mut used = ideal_transformers::used_names(net);
+        for original in net.transformers() {
+            let projected = self.ideal_transformer(original, &mut used);
+            let t = projected.as_ref().unwrap_or(original);
             self.check_name("transformer", &t.name);
             let nw = t.windings.len();
             let buses: Vec<String> = t
@@ -3813,7 +3829,8 @@ mod tests {
             "New Generator.gen bus1=lv.1.3.0 ",
             "New Generator.fixed_ibr bus1=lv.1.3.0 ",
             "New PVSystem.pv_ibr bus1=lv.1.3.0 ",
-            "New Line.sw1 bus1=lv.1.3.0 bus2=lv.1.3.0 phases=3 switch=y",
+            "New Line.sw1 bus1=lv.1.3.0 bus2=_pio_switch_sw1.1.2.0 phases=3 switch=y",
+            "New Line._pio_switch_sw1 bus1=_pio_switch_sw1.1.2.0 bus2=lv.1.3.0 phases=3",
             "New Line.l1 bus1=lv.1.0.3 bus2=lv.1.0.3 phases=3 linecode=lc ",
         ] {
             assert!(

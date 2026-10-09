@@ -39,7 +39,8 @@ mod triplex_lines;
 /// Ordinary single-phase and three-phase grounded-wye transformers use winding
 /// records; FBS additionally preserves its finite default winding-2 core shunt.
 /// A connected directed FBS tree may use its implicit upstream voltage source.
-/// Wye regulators preserve fixed phase taps and NR resistance in winding equivalents.
+/// Wye regulators preserve fixed phase taps, NR resistance and FBS ideal
+/// ratios in winding equivalents.
 /// Wye capacitors use fixed per-phase shunt admittances. Active controls require
 /// explicit individual switch states and produce a frozen-control diagnostic.
 /// Delta–grounded-wye transformers use phase-pair primary coils with grounded

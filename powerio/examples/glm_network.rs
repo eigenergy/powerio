@@ -6,23 +6,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let input = args
         .next()
-        .ok_or("usage: glm_network FILE IR_OUTPUT [pnnl|arras] [--dss-output FILE]")?;
+        .ok_or("usage: glm_network FILE IR_OUTPUT [pnnl|arras] [--dss-output FILE] [--acquisition-root DIRECTORY]")?;
     let output = args.next().ok_or("missing IR output path")?;
     let dialect = match args.next().as_deref() {
         None | Some("pnnl") => GlmDialect::Pnnl5_3,
         Some("arras") => GlmDialect::Arras4_3,
         _ => return Err("expected pnnl or arras dialect".into()),
     };
-    let dss_output = match args.next().as_deref() {
-        None => None,
-        Some("--dss-output") => Some(args.next().ok_or("missing DSS output path")?),
-        _ => return Err("unexpected argument".into()),
-    };
-    if args.next().is_some() {
-        return Err("too many arguments".into());
+    let mut source = Source::open(input)?;
+    let mut dss_output = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--dss-output" if dss_output.is_none() => {
+                dss_output = Some(args.next().ok_or("missing DSS output path")?);
+            }
+            "--acquisition-root" => {
+                source =
+                    source.with_acquisition_root(args.next().ok_or("missing acquisition root")?)?;
+            }
+            _ => return Err("unexpected argument".into()),
+        }
     }
     let module = powerio_dist::glm::parse(
-        Source::open(input)?,
+        source,
         PreprocessOptions {
             dialect,
             ..Default::default()

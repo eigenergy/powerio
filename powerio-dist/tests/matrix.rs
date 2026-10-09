@@ -803,6 +803,8 @@ fn assert_dss_equivalent(
     let what = format!("{} → dss → back ({stage})", case.label);
     let a = source_equivalents::contract_source_pairs(&with_pmd_switch_impedances(a));
     let b = source_equivalents::contract_source_pairs(b);
+    let a = source_equivalents::contract_transformer_pairs(&a);
+    let b = source_equivalents::contract_transformer_pairs(&b);
     source_equivalents::assert_source_constraints(&a, &b, &what);
     let a = normalize_bmopf_bus_metadata(&a, &a);
     let (a, b) = if case.dss_renames_grounded {
@@ -1171,5 +1173,34 @@ fn source_equivalence_checks_reject_corrupted_circuits() {
             .is_err(),
             "accepted {fault} corruption"
         );
+    }
+}
+
+#[test]
+fn ideal_transformer_contraction_requires_electrical_cancellation() {
+    let source = "New Circuit.c phases=1 bus1=source.1.0 basekv=2.4\n\
+        New Transformer.x phases=1 windings=2 buses=(source.1.0 internal.1.2) \
+        conns=(wye wye) kvs=(2.4 .24) kvas=(10 10) \
+        %rs=(0 17.36111111111111) xscarray=(0) ppm_antifloat=0\n\
+        New Line.cancel phases=2 bus1=internal.1.2 bus2=load.1.2 length=1 units=m \
+        rmatrix=(-.5 | 0 -.5) xmatrix=(0 | 0 0) cmatrix=(0 | 0 0)\n";
+    let parse = |text: &str| Fmt::Dss.parse_text_and_sidecars(text, &[]).unwrap();
+    let original = parse(source);
+    let contracted = source_equivalents::contract_transformer_pairs(&original);
+    assert_eq!(contracted.lines().len() + 1, original.lines().len());
+    let winding = &contracted.transformers()[0].windings[1];
+    assert_eq!(winding.bus, "load");
+    assert_eq!(winding.terminal_map, ["1", "2"]);
+    assert_eq!(winding.r_pct.to_bits(), 0.0_f64.to_bits());
+    assert!(contracted.bus("internal").is_none());
+    for invalid in [
+        source.replace("(-.5 | 0 -.5)", "(-.4 | 0 -.5)"),
+        source.replace("cmatrix=(0 | 0 0)", "cmatrix=(1 | 0 1)"),
+        format!("{source}New Load.extra phases=1 bus1=internal.1.2 kv=.24 kw=1\n"),
+    ] {
+        let original = parse(&invalid);
+        let contracted = source_equivalents::contract_transformer_pairs(&original);
+        assert_eq!(contracted.lines().len(), original.lines().len());
+        assert!(contracted.bus("internal").is_some());
     }
 }

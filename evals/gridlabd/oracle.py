@@ -356,6 +356,7 @@ def run_glm(
     directory: Path,
     pnnl_root: Path | None,
     outputs: tuple[str, ...] = ("source.csv", "sink.csv", "line.csv", "impedance.xml"),
+    open_files: int | None = None,
 ) -> str:
     if profile == "pnnl":
         if pnnl_root is None:
@@ -390,6 +391,11 @@ def run_glm(
                 "none",
                 "--workdir",
                 "/case",
+                *(
+                    ["--ulimit", f"nofile={open_files}:{open_files}"]
+                    if open_files
+                    else []
+                ),
                 "--entrypoint",
                 "gridlabd",
                 image,
