@@ -117,6 +117,10 @@ pub mod codes {
             "an object shape the model does not type yet is kept untyped";
         READ_DSS_SOURCE_DISABLED = "READ.DSS.SOURCE_DISABLED", Remark,
             "a disabled source is retained without electrical contributions";
+        EMIT_DSS_PROJECT_UNREPRESENTABLE = "EMIT.DSS.PROJECT_UNREPRESENTABLE", Error,
+            "retained DSS dependencies cannot be replayed as a portable project", category = Output;
+        READ_DSS_LOADSHAPE_UNRESOLVED = "READ.DSS.LOADSHAPE_UNRESOLVED", Error,
+            "static UseActual loadshape power could not be resolved";
         READ_DSS_SOURCE_UNRESOLVED = "READ.DSS.SOURCE_UNRESOLVED", Error,
             "a voltage source is invalid or outside the qualified static profile", category = Data;
         READ_DSS_TRANSFORMER_UNRESOLVED = "READ.DSS.TRANSFORMER_UNRESOLVED", Error,

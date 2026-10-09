@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 
 use super::lex::{Scanner, Value, VarMap};
 use super::prop::{self, DssClass};
+
+mod static_loads;
 use crate::diagnostics::codes as C;
 use crate::error::{Error, Result};
 
@@ -237,6 +239,9 @@ pub struct RawDss {
     pub commands: Vec<RawCommand>,
     pub buscoords: Vec<BusCoord>,
     pub vars: VarMap,
+    pub(super) absolute_dependency: bool,
+    load_powers: BTreeMap<usize, super::load_power::LoadPower>,
+    load_shapes: BTreeMap<usize, super::loadshape::Shape>,
     /// AutoTrans MakeLike copies derived winding state not reconstructed yet.
     pub(super) autotrans_copies: std::collections::BTreeSet<String>,
     /// Capacitor MakeLike copies connection and step state not reconstructed yet.
@@ -419,6 +424,7 @@ impl RawDss {
         frequency.clear();
         let earth_model = self.earth_model.take();
         *self = RawDss {
+            absolute_dependency: self.absolute_dependency,
             vars_generation,
             warnings,
             diagnostics,
@@ -435,6 +441,12 @@ impl RawDss {
 /// Supplies included file text, so tests can run without a filesystem.
 pub trait Loader {
     fn load(&mut self, path: &Path) -> std::io::Result<String>;
+
+    /// Binary profile data. Text-only test loaders retain their existing API;
+    /// filesystem/named-buffer acquisition overrides this without UTF-8 decoding.
+    fn load_bytes(&mut self, path: &Path) -> std::io::Result<Vec<u8>> {
+        self.load(path).map(String::into_bytes)
+    }
 }
 
 impl<F> Loader for F
@@ -837,7 +849,7 @@ impl<L: Loader> Executor<'_, L> {
             &mut self.raw,
             ctx,
         ));
-        self.apply_props(idx, props, ctx);
+        self.apply_props(idx, props, scan.vars(), ctx);
     }
 
     fn do_new(&mut self, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
@@ -983,7 +995,7 @@ impl<L: Loader> Executor<'_, L> {
                     ));
                     return;
                 }
-                self.apply_props(idx, props.clone(), ctx);
+                self.apply_props(idx, props.clone(), scan.vars(), ctx);
                 // Native MakeLike locates the template through the same
                 // class iterator. Next resumes after that template, which
                 // can skip names or revisit earlier ones; visits stay bounded.
@@ -1189,6 +1201,7 @@ impl<L: Loader> Executor<'_, L> {
                     name: Some("enabled".into()),
                     value: Value::new(if enabled { "true" } else { "false" }),
                 }],
+                None,
                 ctx,
             );
         } else {
@@ -1244,6 +1257,7 @@ impl<L: Loader> Executor<'_, L> {
                     name: Some("enabled".into()),
                     value: Value::new(if enabled { "true" } else { "false" }),
                 }],
+                None,
                 ctx,
             );
         }
@@ -1294,6 +1308,7 @@ impl<L: Loader> Executor<'_, L> {
         file_arg: &str,
         ctx: &dyn Fn(String) -> String,
     ) -> Option<PathBuf> {
+        self.raw.absolute_dependency |= Path::new(&file_arg.replace('\\', "/")).is_absolute();
         let resolved = self.resolve(file_arg);
         if resolved.is_none() {
             let message = ctx(format!(
@@ -1640,7 +1655,7 @@ impl<L: Loader> Executor<'_, L> {
             &mut self.raw,
             ctx,
         );
-        self.apply_props(idx, props, ctx);
+        self.apply_props(idx, props, scan.vars(), ctx);
     }
 
     fn retained_property_count(&self, idx: usize) -> usize {
@@ -1867,6 +1882,7 @@ impl<L: Loader> Executor<'_, L> {
                         },
                     );
                 }
+                self.copy_static_load(idx, src);
                 self.copy_transformer_bindings(idx, src, base);
                 self.append_source_resets(idx, src, base);
                 let cloned = self.copied_properties(idx, src);
@@ -1983,7 +1999,17 @@ impl<L: Loader> Executor<'_, L> {
         true
     }
 
-    fn apply_props(&mut self, idx: usize, props: Vec<RawProp>, ctx: &dyn Fn(String) -> String) {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keep ordered assignment dispatch and the native edit boundary together"
+    )]
+    fn apply_props(
+        &mut self,
+        idx: usize,
+        props: Vec<RawProp>,
+        vars: Option<&VarMap>,
+        ctx: &dyn Fn(String) -> String,
+    ) {
         self.raw.active = Some(idx);
         if self.raw.line_history.contains_key(&idx) {
             if self.retained_property_count(idx) > MAX_OBJECT_PROPS
@@ -2069,6 +2095,7 @@ impl<L: Loader> Executor<'_, L> {
             if !self.bind_geometry_references(idx, &p, ctx) {
                 return;
             }
+            self.static_load_property(idx, &p, vars, ctx);
             self.source_reference(idx, &p);
             if let Some(replay) = self.raw.source_replay.get_mut(&idx) {
                 replay.record_property(&p);
@@ -2086,6 +2113,7 @@ impl<L: Loader> Executor<'_, L> {
                     });
             }
         }
+        self.finish_static_load(idx);
         // This command line was one engine Edit; it ends in
         // RecalcElementData, so record the boundary.
         let end = self.raw.objects[idx].props.len();
@@ -2215,34 +2243,47 @@ fn include_acquisition_error(error: &powerio_core::Error) -> std::io::Error {
 /// and acquired by that root relative name; an in-memory source consults its
 /// named buffers under the same names. A leading byte order mark on an
 /// included file is not decoded (the retained bytes keep it).
-fn source_include_loader(
-    source: &powerio_core::Source,
+struct SourceLoader<'a> {
+    source: &'a powerio_core::Source,
     lexical_root: PathBuf,
-) -> impl FnMut(&Path) -> std::io::Result<String> {
-    move |p: &Path| {
-        let relative = p.strip_prefix(&lexical_root).map_err(|_| {
-            Containment::refused(format!(
-                "{} does not sit under the confinement root",
-                p.display()
-            ))
-        })?;
-        let mut name = String::new();
-        for component in relative.components() {
-            if !name.is_empty() {
-                name.push('/');
-            }
-            name.push_str(&component.as_os_str().to_string_lossy());
-        }
-        let buffer = source
-            .root_buffer(&name)
-            .map_err(|error| include_acquisition_error(&error))?;
-        let text = std::str::from_utf8(buffer.content_bytes()).map_err(|e| {
+}
+
+fn source_include_loader(source: &powerio_core::Source, lexical_root: PathBuf) -> SourceLoader<'_> {
+    SourceLoader {
+        source,
+        lexical_root,
+    }
+}
+
+impl Loader for SourceLoader<'_> {
+    fn load(&mut self, path: &Path) -> std::io::Result<String> {
+        let bytes = self.load_bytes(path)?;
+        let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
+        String::from_utf8(bytes.to_vec()).map_err(|error| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("stream did not contain valid UTF-8: {e}"),
+                format!("stream did not contain valid UTF-8: {}", error.utf8_error()),
             )
+        })
+    }
+
+    fn load_bytes(&mut self, path: &Path) -> std::io::Result<Vec<u8>> {
+        let relative = path.strip_prefix(&self.lexical_root).map_err(|_| {
+            Containment::refused(format!(
+                "{} does not sit under the confinement root",
+                path.display()
+            ))
         })?;
-        Ok(text.to_owned())
+        let name = relative
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        let buffer = self
+            .source
+            .root_buffer(&name)
+            .map_err(|error| include_acquisition_error(&error))?;
+        Ok(buffer.bytes().to_vec())
     }
 }
 

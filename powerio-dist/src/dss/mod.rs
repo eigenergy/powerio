@@ -6,12 +6,15 @@
 //! and the TRPNCalc expression calculator.
 
 pub mod defaults;
+mod emit_project;
 mod frequency;
 mod geometry;
 pub mod lex;
 mod line;
 mod line_history;
 mod linecode;
+mod load_power;
+mod loadshape;
 mod primitive;
 pub mod prop;
 pub mod raw;
@@ -30,3 +33,5 @@ pub use raw::{__parse_raw_file, __parse_raw_with};
 pub use read::to_network_from_raw;
 pub use write::{DssEmitOptions, DssLoadVoltageBounds};
 pub(crate) use write::{emit_dss_text_with_options, validate_emission};
+
+pub(crate) use emit_project::retained_project;

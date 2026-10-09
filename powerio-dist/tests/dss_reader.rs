@@ -1046,9 +1046,9 @@ fn calculation_constructs_are_named_outside_the_static_profile() {
     let parsed = parse_dss_str(dss);
     let rendered = &parsed.warnings;
     assert!(
-        rendered
-            .iter()
-            .any(|w| w.contains("2 `loadshape` object(s) are outside the static circuit profile")),
+        rendered.iter().any(|w| w
+            .contains("2 `loadshape` object(s): static Load UseActual assignments")
+            && w.contains("time-varying simulation remains source-only")),
         "{rendered:?}"
     );
     assert!(
@@ -1057,7 +1057,7 @@ fn calculation_constructs_are_named_outside_the_static_profile() {
             .any(|w| w.contains("1 `monitor` object(s) are outside the static circuit profile")),
         "{rendered:?}"
     );
-    // Retained, not interpreted: the objects survive for exact writing.
+    // Definitions survive for exact writing; no time-series execution occurs.
     assert_eq!(parsed.untyped_objects().len(), 3);
     // The solve command is preserved without execution.
     assert!(parsed.commands().iter().any(|(verb, _)| verb == "solve"));

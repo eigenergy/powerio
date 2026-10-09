@@ -1688,12 +1688,60 @@ The native equations and connection convention are pinned to DSS C-API
 `87d85c2622c8281b92255335bc7c09b11191b21d`, `src/PDElements/Capacitor.pas`
 (Git blob `4e5d4557fcb47394a03c3906ce50b55c93059c08`).
 
-The secondary circuit now has a native baseline but exposes unresolved static
-`UseActual` behavior: assigning a duty shape changes nominal load powers even
-in snapshot mode. Its 874 failed observations remain failures. The four-wire
-induction-machine baselines cannot run because the local native engine cannot
-load their `IndMach012a` user-model library. These are recorded failures, without
-substitute equipment or fabricated native reference values.
+The modified secondary circuit now resolves its 74 binary load profiles and
+static `UseActual` assignments. Scalar transformer kVA assignments also follow
+the native winding synchronization rules. It still fails 716 of 953 observations
+through canonical output and reimport. The maximum voltage difference is
+0.456 V, down from 8.93 V before these corrections; it is not fully qualified.
+A native diagnostic that changes only the almost-zero-impedance substation
+link from sequence parameters to the emitted matrix form produces a 0.212 V
+difference. This establishes numerical sensitivity, not permission to loosen
+the whole-case comparison. All validation thresholds remain unchanged.
+
+The four-wire induction-machine baselines cannot run because the local native
+engine cannot load their `IndMach012a` user-model library. These are recorded
+failures, without substitute equipment or fabricated native reference values.
+
+### Static load-profile assignments
+
+Assigning a `UseActual=yes` LoadShape to a Load's `daily`, `yearly`, or `duty`
+property changes its nominal power even in snapshot mode. The reader applies
+that change at the assignment, using the shape's state at that point in the
+script. Later shape edits do not retroactively change an already assigned load.
+The peak uses the first maximum absolute P sample, retaining its sign and Q at
+that same index. An explicit Qmax overrides the sampled Q; absent Q data gives
+zero. Explicit PF, kvar, ordered edits and MakeLike follow the pinned native
+assignment rules. No time-series execution is performed.
+
+Supported profile data includes inline arrays, CSV columns with an optional
+header, direct CSV/PQCSV input, and little-endian single/double precision binary
+files. Direct variable-interval binary files contain time/value pairs. The
+reader preserves the native distinction between direct single-precision
+storage and binary arrays promoted to double precision, including copied shapes.
+Acquisition uses the existing source-root confinement and include budgets;
+shapes are limited to 1,048,576 points. Unsupported transformations, memory
+mapping, invalid data, or short Q files produce an error when an actual-power
+assignment depends on them. They cannot silently leave the old load power.
+
+`dss_useactual_oracle.py` compares nominal P/Q and native electrical results in
+49 cases, including ordered references and copies, signed/tied peaks, PF
+precedence, binary/CSV inputs, and scalar versus array transformer ratings.
+All cases require canonical output, IR equality, reimport, and a changed-line
+negative control:
+
+```sh
+python evals/gridlabd/dss_useactual_oracle.py \
+  --bridge /path/to/dist_network --output /new/path
+```
+
+Same-format DSS project emission includes every acquired dependency, including
+binary profiles, byte for byte under its original relative name. Root-level
+projects also provide the established `case.dss` entrypoint; nested entrypoints
+keep their relative location. Emission does not reopen source files. Absolute
+dependencies, missing dependency context, or portable filename collisions are
+refused because a byte-exact project cannot safely be relocated in those cases.
+Canonical emission from the typed value remains available. Binary input is
+never decoded as text or stripped of bytes that resemble a UTF-8 BOM.
 
 
 ### Public North American spacing definitions
