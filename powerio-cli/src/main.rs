@@ -21,7 +21,7 @@ use powerio_matrix::{
     DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions, Units, emit_dcopf_bundle,
 };
 use powerio_matrix::{SensitivityOptions, SensitivitySolver};
-use powerio_tx::{EmitOptions, MissingGenCostPolicy};
+use powerio_tx::{AngleDifferenceBounds, EmitOptions, MissingGenCostPolicy};
 use serde_json::json;
 mod cases;
 mod codes;
@@ -143,6 +143,11 @@ enum Command {
         /// CSV with columns gen_index,bus,c2,c1,c0 and optional startup,shutdown.
         #[arg(long)]
         gen_cost_csv: Option<PathBuf>,
+        /// Which angle difference bounds `angle_min` and `angle_max` carry:
+        /// the stated bounds (±360 degrees where none is stated), PowerModels'
+        /// ±60 degree pad centered on each branch's phase shift, or none.
+        #[arg(long, value_enum, default_value = "stated")]
+        angle_difference_bounds: AngleDifferenceBoundsArg,
     },
     /// Emit DC sensitivity matrices (PTDF, LODF) for one case.
     Sensitivities {
@@ -786,6 +791,23 @@ impl From<UnitsArg> for Units {
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
+enum AngleDifferenceBoundsArg {
+    Stated,
+    PowermodelsPad,
+    None,
+}
+
+impl From<AngleDifferenceBoundsArg> for AngleDifferenceBounds {
+    fn from(value: AngleDifferenceBoundsArg) -> Self {
+        match value {
+            AngleDifferenceBoundsArg::Stated => Self::Stated,
+            AngleDifferenceBoundsArg::PowermodelsPad => Self::PowerModelsPad,
+            AngleDifferenceBoundsArg::None => Self::None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
 enum RhsArg {
     None,
     Random,
@@ -859,15 +881,19 @@ fn main() -> std::process::ExitCode {
             missing_gen_cost,
             default_gen_cost,
             gen_cost_csv,
+            angle_difference_bounds,
         } => run_dcopf(
             &input,
             from,
             &output,
             formula.into(),
             units.into(),
-            missing_gen_cost,
-            default_gen_cost.as_deref(),
-            gen_cost_csv.as_deref(),
+            GenCostCliOptions::new(
+                missing_gen_cost,
+                default_gen_cost.as_deref(),
+                gen_cost_csv.as_deref(),
+            ),
+            angle_difference_bounds.into(),
         ),
         Command::Sensitivities {
             input,
@@ -1521,20 +1547,20 @@ fn run_dcopf(
     output: &Path,
     formula: BranchSusceptanceFormula,
     units: Units,
-    missing_gen_cost: MissingGenCostArg,
-    default_gen_cost: Option<&str>,
-    gen_cost_csv: Option<&Path>,
+    gen_cost: GenCostCliOptions<'_>,
+    angle_difference_bounds: AngleDifferenceBounds,
 ) -> anyhow::Result<()> {
     let mpc = balanced_case(input, from).with_context(|| format!("parse {}", input.display()))?;
-    let cost_opts = emit_options(missing_gen_cost, default_gen_cost, gen_cost_csv)?;
+    let cost_opts = gen_cost.emit_options()?;
     let mut policy_network = mpc.clone();
     let cost_report = policy_network
         .apply_gen_cost_policy(&cost_opts.gen_cost_patches, cost_opts.missing_gen_cost)?;
     let instance = powerio_prob::DcOpfInstance::from_network(policy_network)
         .with_context(|| format!("build DC OPF instance for {}", input.display()))?
         .with_branch_susceptance_formula(formula);
-    let mut assembly = DcOpfAssemblyOptions::default();
-    assembly.units = units;
+    let assembly = DcOpfAssemblyOptions::default()
+        .with_units(units)
+        .with_angle_difference_bounds(angle_difference_bounds);
     let bundle_options = DcOpfBundleOptions {
         assembly,
         metadata: DcOpfBundleMetadata {

@@ -666,10 +666,11 @@ class BalancedNetwork:
         normalized (no reference bus can be chosen, or a non-positive base MVA).
 
         ``clamp_angle_bounds=True`` applies the PowerModels angle difference
-        bound repair: limits at or beyond ``+/-pi/2`` and zero/zero windows
-        become ``[-angle_bound_pad, angle_bound_pad]``. A repair that would
-        invert the interval widens to that same window. The default pad is
-        1.0472 radians.
+        bound repair, centered on each branch's phase shift: limits at or
+        beyond ``+/-pi/2`` and zero/zero windows become
+        ``[shift - angle_bound_pad, shift + angle_bound_pad]``. A repair that
+        would invert the interval widens to that same window. The default pad
+        is 1.0472 radians.
         """
         if not clamp_angle_bounds and angle_bound_pad is None:
             return BalancedNetwork(self._inner.to_normalized())

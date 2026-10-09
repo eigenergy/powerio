@@ -17,6 +17,7 @@ use crate::{
 
 use crate::Result;
 use powerio_prob::DcOpfInstance;
+use powerio_tx::AngleDifferenceBounds;
 use prep::{DcOpfOptions, apply_instance_semantics, preparation_from_view};
 
 pub use bundle::{DcOpfBundleMetadata, DcOpfBundleOptions, DcOpfOutputs, emit_dcopf_bundle};
@@ -26,7 +27,7 @@ pub use prep::{
 
 /// Assembly choices that select the numerical content derived from an
 /// instance without changing the instance itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct DcOpfAssemblyOptions {
     /// Power and cost scaling of the derived arrays.
@@ -40,20 +41,9 @@ pub struct DcOpfAssemblyOptions {
     /// [`Branch::synthesize_rate_a`](powerio_tx::Branch::synthesize_rate_a)
     /// states. If false, an absent rating reads as unlimited.
     pub synthesize_unrated_limits: bool,
-    /// Apply PowerModels' ±60 degree correction to unconstrained or unusable
-    /// branch angle difference intervals in the prepared arrays.
-    pub correct_angle_difference_bounds: bool,
-}
-
-impl Default for DcOpfAssemblyOptions {
-    fn default() -> Self {
-        Self {
-            units: Units::default(),
-            skip_zero_impedance: false,
-            synthesize_unrated_limits: false,
-            correct_angle_difference_bounds: true,
-        }
-    }
+    /// Which angle difference bounds the prepared arrays carry. The default,
+    /// [`AngleDifferenceBounds::Stated`], is what the source states.
+    pub angle_difference_bounds: AngleDifferenceBounds,
 }
 
 impl DcOpfAssemblyOptions {
@@ -76,8 +66,8 @@ impl DcOpfAssemblyOptions {
     }
 
     #[must_use]
-    pub const fn with_correct_angle_difference_bounds(mut self, correct: bool) -> Self {
-        self.correct_angle_difference_bounds = correct;
+    pub const fn with_angle_difference_bounds(mut self, bounds: AngleDifferenceBounds) -> Self {
+        self.angle_difference_bounds = bounds;
         self
     }
 }
@@ -140,7 +130,7 @@ pub fn build_dc_opf_preparation(
             units: options.units,
             skip_zero_impedance: options.skip_zero_impedance,
             synthesize_unrated_limits: options.synthesize_unrated_limits,
-            correct_angle_difference_bounds: options.correct_angle_difference_bounds,
+            angle_difference_bounds: options.angle_difference_bounds,
             objective,
         },
     )?;

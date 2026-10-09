@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use powerio_prob::{AcBusSpecification, AcOpfInstance, AcPfInstance, ReferenceBuses};
-use powerio_tx::{BalancedNetwork, BusId, IndexedNetwork};
+use powerio_tx::{AngleDifferenceBounds, BalancedNetwork, BusId, IndexedNetwork};
 
 use crate::dcopf::{Units, limits, nodal};
 use crate::{AnalysisBranchSource, Error, PiecewiseLinearCost, PreparedObjective, Result};
@@ -14,7 +14,7 @@ use crate::{AnalysisBranchSource, Error, PiecewiseLinearCost, PreparedObjective,
 /// Assembly choices that select the numerical content derived from an AC
 /// instance without changing the instance itself. There is no convention
 /// field: the branch pi model always carries taps, shifts, and charging.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct AcOpfAssemblyOptions {
     /// Power and cost scaling of the derived arrays.
@@ -29,20 +29,9 @@ pub struct AcOpfAssemblyOptions {
     /// states. If false, `rate_a <= 0` reaches `s_max` as zero, which reads
     /// as unlimited.
     pub synthesize_unrated_limits: bool,
-    /// Apply PowerModels' ±60 degree correction to unconstrained or unusable
-    /// branch angle difference intervals in the prepared arrays.
-    pub correct_angle_difference_bounds: bool,
-}
-
-impl Default for AcOpfAssemblyOptions {
-    fn default() -> Self {
-        Self {
-            units: Units::default(),
-            skip_zero_impedance: false,
-            synthesize_unrated_limits: false,
-            correct_angle_difference_bounds: true,
-        }
-    }
+    /// Which angle difference bounds the prepared arrays carry. The default,
+    /// [`AngleDifferenceBounds::Stated`], is what the source states.
+    pub angle_difference_bounds: AngleDifferenceBounds,
 }
 
 impl AcOpfAssemblyOptions {
@@ -65,33 +54,23 @@ impl AcOpfAssemblyOptions {
     }
 
     #[must_use]
-    pub const fn with_correct_angle_difference_bounds(mut self, correct: bool) -> Self {
-        self.correct_angle_difference_bounds = correct;
+    pub const fn with_angle_difference_bounds(mut self, bounds: AngleDifferenceBounds) -> Self {
+        self.angle_difference_bounds = bounds;
         self
     }
 }
 
 /// Assembly choices for an AC power flow instance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct AcPfAssemblyOptions {
     /// Power and admittance scaling of the prepared values.
     pub units: Units,
     /// Skip non-self-loop branches with `r² + x² = 0`.
     pub skip_zero_impedance: bool,
-    /// Apply PowerModels' ±60 degree correction to unconstrained or unusable
-    /// branch angle difference intervals in the prepared arrays.
-    pub correct_angle_difference_bounds: bool,
-}
-
-impl Default for AcPfAssemblyOptions {
-    fn default() -> Self {
-        Self {
-            units: Units::default(),
-            skip_zero_impedance: false,
-            correct_angle_difference_bounds: true,
-        }
-    }
+    /// Which angle difference bounds the prepared arrays carry. The default,
+    /// [`AngleDifferenceBounds::Stated`], is what the source states.
+    pub angle_difference_bounds: AngleDifferenceBounds,
 }
 
 impl AcPfAssemblyOptions {
@@ -108,8 +87,8 @@ impl AcPfAssemblyOptions {
     }
 
     #[must_use]
-    pub const fn with_correct_angle_difference_bounds(mut self, correct: bool) -> Self {
-        self.correct_angle_difference_bounds = correct;
+    pub const fn with_angle_difference_bounds(mut self, bounds: AngleDifferenceBounds) -> Self {
+        self.angle_difference_bounds = bounds;
         self
     }
 }
@@ -175,8 +154,14 @@ pub struct AcPfPreparation {
     pub base_mva: f64,
     pub units: Units,
     pub skip_zero_impedance: bool,
-    /// Whether PowerModels' angle difference correction was applied.
+    /// Whether PowerModels' angle difference pad was applied
+    /// ([`AngleDifferenceBounds::PowerModelsPad`]).
     pub correct_angle_difference_bounds: bool,
+    /// Which angle difference bounds `angle_min` and `angle_max` carry.
+    /// `#[serde(default)]`: a document written before the field reads as
+    /// `Stated`.
+    #[serde(default)]
+    pub angle_difference_bounds: AngleDifferenceBounds,
     /// Dense bus index to external bus ID.
     pub bus_ids: Vec<BusId>,
     /// Dense bus index to row in the star-lowered analysis network.
@@ -390,8 +375,14 @@ pub struct AcOpfPreparation {
     pub skip_zero_impedance: bool,
     /// Whether absent source ratings were replaced with synthesized limits.
     pub synthesize_unrated_limits: bool,
-    /// Whether PowerModels' angle difference correction was applied.
+    /// Whether PowerModels' angle difference pad was applied
+    /// ([`AngleDifferenceBounds::PowerModelsPad`]).
     pub correct_angle_difference_bounds: bool,
+    /// Which angle difference bounds `angle_min` and `angle_max` carry.
+    /// `#[serde(default)]`: a document written before the field reads as
+    /// `Stated`.
+    #[serde(default)]
+    pub angle_difference_bounds: AngleDifferenceBounds,
     /// Dense bus index to external bus ID.
     pub bus_ids: Vec<BusId>,
     /// Dense bus index to row in the star-lowered analysis network.
@@ -552,7 +543,7 @@ pub fn build_ac_pf_preparation(
             units: options.units,
             skip_zero_impedance: options.skip_zero_impedance,
             synthesize_unrated_limits: false,
-            correct_angle_difference_bounds: options.correct_angle_difference_bounds,
+            angle_difference_bounds: options.angle_difference_bounds,
         },
         PreparedObjective::Feasibility,
     )?;
@@ -601,6 +592,7 @@ pub fn build_ac_pf_preparation(
         units: common.units,
         skip_zero_impedance: common.skip_zero_impedance,
         correct_angle_difference_bounds: common.correct_angle_difference_bounds,
+        angle_difference_bounds: common.angle_difference_bounds,
         bus_ids: common.bus_ids,
         bus_analysis_rows: common.bus_analysis_rows,
         bus_source_rows: common.bus_source_rows,
@@ -880,13 +872,13 @@ fn preparation_from_view(
         b_to.push(charging.b_to * y_scale);
         let source_amin = case.to_radians(branch.angmin);
         let source_amax = case.to_radians(branch.angmax);
-        let (amin, amax) = if options.correct_angle_difference_bounds {
-            powerio_tx::correct_angle_difference_bounds(source_amin, source_amax)
-        } else {
-            (source_amin, source_amax)
-        };
+        let branch_shift = case.to_radians(branch.shift);
+        let (amin, amax) =
+            options
+                .angle_difference_bounds
+                .calc_bounds(source_amin, source_amax, branch_shift);
         tap.push(branch.calc_divisible_tap(source_row)?);
-        shift.push(case.to_radians(branch.shift));
+        shift.push(branch_shift);
         s_max.push(thermal.of(
             branch,
             source_amin,
@@ -934,7 +926,9 @@ fn preparation_from_view(
         objective,
         skip_zero_impedance: options.skip_zero_impedance,
         synthesize_unrated_limits: options.synthesize_unrated_limits,
-        correct_angle_difference_bounds: options.correct_angle_difference_bounds,
+        correct_angle_difference_bounds: options.angle_difference_bounds
+            == AngleDifferenceBounds::PowerModelsPad,
+        angle_difference_bounds: options.angle_difference_bounds,
         bus_ids: active_buses.bus_ids,
         bus_analysis_rows,
         bus_source_rows,

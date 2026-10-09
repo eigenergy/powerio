@@ -71,7 +71,20 @@ shifts, or when the case has no phase shifter), and `fixed_withdrawal`, equal to
 The branch indexed vectors, of length \\(m\\), are `b` (susceptances), `shift`
 (radians), `flow_offset` (equal to `-b * shift` elementwise), `fmax` (thermal
 limits; \\(0\\) means unlimited per MATPOWER), and the radian limits
-`angle_min` and `angle_max`.
+`angle_min` and `angle_max` on \\(\theta_{\mathrm{from}} - \theta_{\mathrm{to}}\\), the
+MATPOWER and PowerModels convention, which is not net of the branch's phase
+shift. They are the bounds the case states. A side it leaves unconstrained (the
+MATPOWER `0`/`0` spelling, or beyond ±360 degrees, which is how PSS/E and
+other formats with no angle limits read) is ±360 degrees and never binds, so a
+phase shifting branch stays feasible. PowerModels' ±60 degree pad is a solver
+conditioning choice, applied only on request
+(`AngleDifferenceBounds::PowerModelsPad`,
+`powerio dcopf --angle-difference-bounds powermodels-pad`). It replaces a side
+the case leaves unconstrained or unusable (at or beyond ±90 degrees) with the
+branch's phase shift ±60 degrees, so for an unshifted branch it is exactly
+PowerModels' `correct_voltage_angle_differences!`, and a phase shifting branch
+keeps its operating point inside the window. `AngleDifferenceBounds::None`
+(`--angle-difference-bounds none`) writes ±360 degrees for every branch.
 
 The generator space vectors, of length \\(n_{\mathrm{gen}}\\), are `q_gen`,
 `c_gen`, `c0_gen`, `pmax_gen`, and `pmin_gen`.
@@ -104,8 +117,9 @@ structured metadata:
 - `index_base`: `dense = 0` for manifest bus, branch, generator, and reference
   indices; `matrix_market = 1` for `.mtx` coordinates.
 - `branch_susceptance_formula`, `units`, `build_options`, and `zero_impedance`.
-  `build_options` records both `skip_zero_impedance` and
-  `synthesize_unrated_limits`. The zero impedance block records the skip flag,
+  `build_options` records `skip_zero_impedance`,
+  `synthesize_unrated_limits`, and `angle_difference_bounds` (`stated`,
+  `power_models_pad`, or `none`). The zero impedance block records the skip flag,
   denominator rule, skipped count, and skipped source branch rows.
 - `grounding`: reference buses, removed rows and columns, the grounded operator
   (`L_grounded`), and the reference selector (`e_r`).

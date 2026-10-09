@@ -46,7 +46,7 @@ use powerio_prob::{
     DcPfInstance, LoadAllocation, NetworkUpdate, OperatingPointUpdate, ReactivePower,
     ReactivePowerUnit, UpdateChange, UpdatedField, apply_bus_load_active_power, apply_updates,
 };
-use powerio_tx::BranchSusceptanceFormula;
+use powerio_tx::{AngleDifferenceBounds, BranchSusceptanceFormula};
 
 use crate::diagnostics::codes;
 
@@ -6601,6 +6601,17 @@ fn opf_analysis_branch_source(
     }
 }
 
+/// The C ABI's `correct_angle_difference_bounds` flag: `true` asks for
+/// PowerModels' pad centered on each branch's phase shift, `false` for the
+/// stated bounds.
+const fn angle_difference_bounds(correct: bool) -> AngleDifferenceBounds {
+    if correct {
+        AngleDifferenceBounds::PowerModelsPad
+    } else {
+        AngleDifferenceBounds::Stated
+    }
+}
+
 /// Build the matrix free DC OPF inputs from one typed instance.
 ///
 /// # Safety
@@ -6630,7 +6641,9 @@ pub unsafe extern "C" fn pio_build_dc_opf_preparation(
                 .with_units(units)
                 .with_skip_zero_impedance(skip_zero_impedance)
                 .with_synthesize_unrated_limits(synthesize_unrated_limits)
-                .with_correct_angle_difference_bounds(correct_angle_difference_bounds);
+                .with_angle_difference_bounds(angle_difference_bounds(
+                    correct_angle_difference_bounds,
+                ));
             build_dc_opf_preparation(instance, &options)
                 .map(PioDcOpfPreparation::new_raw)
                 .map_err(|failure| error_from_matrix(&failure))
@@ -6886,7 +6899,9 @@ pub unsafe extern "C" fn pio_build_ac_opf_preparation(
                 .with_units(units)
                 .with_skip_zero_impedance(skip_zero_impedance)
                 .with_synthesize_unrated_limits(synthesize_unrated_limits)
-                .with_correct_angle_difference_bounds(correct_angle_difference_bounds);
+                .with_angle_difference_bounds(angle_difference_bounds(
+                    correct_angle_difference_bounds,
+                ));
             build_ac_opf_preparation(instance, &options)
                 .map(PioAcOpfPreparation::new_raw)
                 .map_err(|failure| error_from_matrix(&failure))

@@ -77,9 +77,10 @@ pub const POWER_MODELS_ANGLE_BOUND_PAD: f64 = 1.0472;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NormalizeOptions {
     /// Clamp branch angle difference bounds to the interval PowerModels relaxations
-    /// accept. Disabled by default so [`BalancedNetwork::to_normalized`] stays unchanged.
+    /// accept, with the pad centered on each branch's phase shift. Disabled by
+    /// default so [`BalancedNetwork::to_normalized`] stays unchanged.
     pub clamp_angle_bounds: bool,
-    /// Replacement magnitude, in radians, for clamped angle bounds.
+    /// Replacement half width, in radians, for clamped angle bounds.
     pub angle_bound_pad: f64,
 }
 
@@ -418,7 +419,7 @@ fn clamp_angle_bounds(
         let mut changes = Vec::new();
 
         let (corrected_min, corrected_max) =
-            correct_angle_difference_bounds_with_pad(old_min, old_max, pad);
+            correct_angle_difference_bounds_with_pad(old_min, old_max, pad, br.shift);
 
         if old_min != corrected_min {
             br.angmin = corrected_min;
@@ -448,26 +449,102 @@ fn clamp_angle_bounds(
 /// at or above 90 degrees becomes 60 degrees, and the MATPOWER 0/0 spelling
 /// becomes ±60 degrees. If correcting one side would invert the interval, the
 /// result is also ±60 degrees. Inputs and outputs are radians.
+///
+/// This is the pad centered on zero, which suits an unshifted branch only;
+/// [`AngleDifferenceBounds::PowerModelsPad`] centers it on the branch's
+/// phase shift.
 #[must_use]
 pub fn correct_angle_difference_bounds(angle_min: f64, angle_max: f64) -> (f64, f64) {
-    correct_angle_difference_bounds_with_pad(angle_min, angle_max, POWER_MODELS_ANGLE_BOUND_PAD)
+    correct_angle_difference_bounds_with_pad(
+        angle_min,
+        angle_max,
+        POWER_MODELS_ANGLE_BOUND_PAD,
+        0.0,
+    )
 }
 
-fn correct_angle_difference_bounds_with_pad(
-    mut angle_min: f64,
-    mut angle_max: f64,
-    pad: f64,
-) -> (f64, f64) {
-    if angle_min <= -std::f64::consts::FRAC_PI_2 {
-        angle_min = -pad;
+/// One branch angle difference interval as the source states it, for a
+/// consumer that applies no pad. Inputs and outputs are radians.
+///
+/// The interval constrains `theta_from - theta_to`, as MATPOWER and
+/// PowerModels define it. The MATPOWER `0`/`0` spelling states no
+/// constraint, and a side beyond ±360 degrees constrains nothing a solution
+/// can reach, so both read as ±360 degrees (`±2π`): the widest finite window,
+/// which never binds and leaves a phase shifting branch free. Every other
+/// stated bound passes through unchanged.
+#[must_use]
+pub fn stated_angle_difference_bounds(angle_min: f64, angle_max: f64) -> (f64, f64) {
+    let full = std::f64::consts::TAU;
+    if angle_min == 0.0 && angle_max == 0.0 {
+        return (-full, full);
     }
-    if angle_max >= std::f64::consts::FRAC_PI_2 {
-        angle_max = pad;
-    }
-    if angle_min == 0.0 && angle_max == 0.0 || angle_min > angle_max {
-        return (-pad, pad);
-    }
+    let angle_min = if angle_min < -full { -full } else { angle_min };
+    let angle_max = if angle_max > full { full } else { angle_max };
     (angle_min, angle_max)
+}
+
+/// Which angle difference bounds an OPF or power flow preparation carries.
+///
+/// Every bound constrains `theta_from - theta_to`, the MATPOWER and
+/// PowerModels convention, which is not net of a branch's phase shift.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AngleDifferenceBounds {
+    /// The bounds the source states ([`stated_angle_difference_bounds`]):
+    /// a side it leaves unconstrained reads as ±360 degrees and never binds.
+    #[default]
+    Stated,
+    /// PowerModels' ±60 degree pad for a side the source leaves
+    /// unconstrained or unusable (at or beyond ±90 degrees, the `0`/`0`
+    /// spelling, or an inverted window), centered on the branch's phase
+    /// shift so a phase shifting branch stays feasible. An unshifted branch
+    /// gets exactly PowerModels' `correct_voltage_angle_differences!`; a
+    /// usable stated side is kept.
+    PowerModelsPad,
+    /// No angle difference bound: every interval is ±360 degrees.
+    None,
+}
+
+impl AngleDifferenceBounds {
+    /// The interval for one branch, in radians, from its stated `angmin`
+    /// and `angmax` and the phase shift the preparation models.
+    #[must_use]
+    pub fn calc_bounds(self, angle_min: f64, angle_max: f64, shift: f64) -> (f64, f64) {
+        let full = std::f64::consts::TAU;
+        match self {
+            Self::Stated => stated_angle_difference_bounds(angle_min, angle_max),
+            Self::None => (-full, full),
+            Self::PowerModelsPad => correct_angle_difference_bounds_with_pad(
+                angle_min,
+                angle_max,
+                POWER_MODELS_ANGLE_BOUND_PAD,
+                shift,
+            ),
+        }
+    }
+}
+
+/// The PowerModels rule with the pad centered on `center`, the branch's
+/// phase shift in radians: PowerModels itself centers it on zero.
+#[allow(clippy::float_cmp)] // the `0`/`0` spelling is an exact sentinel
+fn correct_angle_difference_bounds_with_pad(
+    angle_min: f64,
+    angle_max: f64,
+    pad: f64,
+    center: f64,
+) -> (f64, f64) {
+    let (mut low, mut high) = (angle_min, angle_max);
+    if low <= -std::f64::consts::FRAC_PI_2 {
+        low = center - pad;
+    }
+    if high >= std::f64::consts::FRAC_PI_2 {
+        high = center + pad;
+    }
+    if angle_min == 0.0 && angle_max == 0.0 || low > high {
+        return (center - pad, center + pad);
+    }
+    (low, high)
 }
 
 fn norm_gens(
