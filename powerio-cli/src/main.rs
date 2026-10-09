@@ -143,6 +143,12 @@ enum Command {
         /// CSV with columns gen_index,bus,c2,c1,c0 and optional startup,shutdown.
         #[arg(long)]
         gen_cost_csv: Option<PathBuf>,
+        /// Replace each angle difference bound the case leaves unconstrained
+        /// with PowerModels' ±60 degree pad. Off by default: `angle_min` and
+        /// `angle_max` carry the stated bounds, ±360 degrees where none is
+        /// stated.
+        #[arg(long)]
+        pad_angle_differences: bool,
     },
     /// Emit DC sensitivity matrices (PTDF, LODF) for one case.
     Sensitivities {
@@ -859,15 +865,19 @@ fn main() -> std::process::ExitCode {
             missing_gen_cost,
             default_gen_cost,
             gen_cost_csv,
+            pad_angle_differences,
         } => run_dcopf(
             &input,
             from,
             &output,
             formula.into(),
             units.into(),
-            missing_gen_cost,
-            default_gen_cost.as_deref(),
-            gen_cost_csv.as_deref(),
+            GenCostCliOptions::new(
+                missing_gen_cost,
+                default_gen_cost.as_deref(),
+                gen_cost_csv.as_deref(),
+            ),
+            pad_angle_differences,
         ),
         Command::Sensitivities {
             input,
@@ -1521,20 +1531,20 @@ fn run_dcopf(
     output: &Path,
     formula: BranchSusceptanceFormula,
     units: Units,
-    missing_gen_cost: MissingGenCostArg,
-    default_gen_cost: Option<&str>,
-    gen_cost_csv: Option<&Path>,
+    gen_cost: GenCostCliOptions<'_>,
+    pad_angle_differences: bool,
 ) -> anyhow::Result<()> {
     let mpc = balanced_case(input, from).with_context(|| format!("parse {}", input.display()))?;
-    let cost_opts = emit_options(missing_gen_cost, default_gen_cost, gen_cost_csv)?;
+    let cost_opts = gen_cost.emit_options()?;
     let mut policy_network = mpc.clone();
     let cost_report = policy_network
         .apply_gen_cost_policy(&cost_opts.gen_cost_patches, cost_opts.missing_gen_cost)?;
     let instance = powerio_prob::DcOpfInstance::from_network(policy_network)
         .with_context(|| format!("build DC OPF instance for {}", input.display()))?
         .with_branch_susceptance_formula(formula);
-    let mut assembly = DcOpfAssemblyOptions::default();
-    assembly.units = units;
+    let assembly = DcOpfAssemblyOptions::default()
+        .with_units(units)
+        .with_correct_angle_difference_bounds(pad_angle_differences);
     let bundle_options = DcOpfBundleOptions {
         assembly,
         metadata: DcOpfBundleMetadata {

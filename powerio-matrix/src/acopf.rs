@@ -14,7 +14,7 @@ use crate::{AnalysisBranchSource, Error, PiecewiseLinearCost, PreparedObjective,
 /// Assembly choices that select the numerical content derived from an AC
 /// instance without changing the instance itself. There is no convention
 /// field: the branch pi model always carries taps, shifts, and charging.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct AcOpfAssemblyOptions {
     /// Power and cost scaling of the derived arrays.
@@ -29,20 +29,15 @@ pub struct AcOpfAssemblyOptions {
     /// states. If false, `rate_a <= 0` reaches `s_max` as zero, which reads
     /// as unlimited.
     pub synthesize_unrated_limits: bool,
-    /// Apply PowerModels' ±60 degree correction to unconstrained or unusable
-    /// branch angle difference intervals in the prepared arrays.
+    /// Replace each unconstrained or unusable angle difference interval with
+    /// PowerModels' ±60 degree pad (`correct_voltage_angle_differences!`),
+    /// a solver conditioning choice. Off by default: the prepared arrays
+    /// carry the stated `angmin`/`angmax` (`theta_from - theta_to`, the
+    /// MATPOWER and PowerModels convention, not net of a phase shift), with a
+    /// side the source leaves unconstrained held at ±360 degrees. A padded
+    /// window does not move with a branch's phase shift, so a branch shifting
+    /// by more than 60 degrees cannot meet it.
     pub correct_angle_difference_bounds: bool,
-}
-
-impl Default for AcOpfAssemblyOptions {
-    fn default() -> Self {
-        Self {
-            units: Units::default(),
-            skip_zero_impedance: false,
-            synthesize_unrated_limits: false,
-            correct_angle_difference_bounds: true,
-        }
-    }
 }
 
 impl AcOpfAssemblyOptions {
@@ -72,26 +67,22 @@ impl AcOpfAssemblyOptions {
 }
 
 /// Assembly choices for an AC power flow instance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct AcPfAssemblyOptions {
     /// Power and admittance scaling of the prepared values.
     pub units: Units,
     /// Skip non-self-loop branches with `r² + x² = 0`.
     pub skip_zero_impedance: bool,
-    /// Apply PowerModels' ±60 degree correction to unconstrained or unusable
-    /// branch angle difference intervals in the prepared arrays.
+    /// Replace each unconstrained or unusable angle difference interval with
+    /// PowerModels' ±60 degree pad (`correct_voltage_angle_differences!`),
+    /// a solver conditioning choice. Off by default: the prepared arrays
+    /// carry the stated `angmin`/`angmax` (`theta_from - theta_to`, the
+    /// MATPOWER and PowerModels convention, not net of a phase shift), with a
+    /// side the source leaves unconstrained held at ±360 degrees. A padded
+    /// window does not move with a branch's phase shift, so a branch shifting
+    /// by more than 60 degrees cannot meet it.
     pub correct_angle_difference_bounds: bool,
-}
-
-impl Default for AcPfAssemblyOptions {
-    fn default() -> Self {
-        Self {
-            units: Units::default(),
-            skip_zero_impedance: false,
-            correct_angle_difference_bounds: true,
-        }
-    }
 }
 
 impl AcPfAssemblyOptions {
@@ -883,7 +874,7 @@ fn preparation_from_view(
         let (amin, amax) = if options.correct_angle_difference_bounds {
             powerio_tx::correct_angle_difference_bounds(source_amin, source_amax)
         } else {
-            (source_amin, source_amax)
+            powerio_tx::stated_angle_difference_bounds(source_amin, source_amax)
         };
         tap.push(branch.calc_divisible_tap(source_row)?);
         shift.push(case.to_radians(branch.shift));

@@ -57,7 +57,7 @@ impl Units {
 }
 
 /// Options for DC OPF instance assembly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct DcOpfOptions {
     /// Formula used to calculate each branch susceptance.
     pub formula: BranchSusceptanceFormula,
@@ -75,8 +75,14 @@ pub struct DcOpfOptions {
     /// existed deserialize to the default (off), the pre-field behavior.
     #[serde(default)]
     pub synthesize_unrated_limits: bool,
-    /// Apply PowerModels' ±60 degree correction to unconstrained or unusable
-    /// branch angle difference intervals in the prepared arrays.
+    /// Replace each unconstrained or unusable angle difference interval with
+    /// PowerModels' ±60 degree pad (`correct_voltage_angle_differences!`),
+    /// a solver conditioning choice. Off by default (a document written before the field existed read with it on): the prepared arrays
+    /// carry the stated `angmin`/`angmax` (`theta_from - theta_to`, the
+    /// MATPOWER and PowerModels convention, not net of a phase shift), with a
+    /// side the source leaves unconstrained held at ±360 degrees. A padded
+    /// window does not move with a branch's phase shift, so a branch shifting
+    /// by more than 60 degrees cannot meet it.
     #[serde(default = "default_true")]
     pub correct_angle_difference_bounds: bool,
     /// The already validated instance objective to compile into the arrays.
@@ -85,19 +91,6 @@ pub struct DcOpfOptions {
 
 const fn default_true() -> bool {
     true
-}
-
-impl Default for DcOpfOptions {
-    fn default() -> Self {
-        Self {
-            formula: BranchSusceptanceFormula::default(),
-            units: Units::default(),
-            skip_zero_impedance: false,
-            synthesize_unrated_limits: false,
-            correct_angle_difference_bounds: true,
-            objective: PreparedObjective::default(),
-        }
-    }
 }
 
 /// Generator parameters in generator column order.
@@ -456,7 +449,7 @@ pub(crate) fn preparation_from_view(
         let (amin, amax) = if options.correct_angle_difference_bounds {
             powerio_tx::correct_angle_difference_bounds(source_amin, source_amax)
         } else {
-            (source_amin, source_amax)
+            powerio_tx::stated_angle_difference_bounds(source_amin, source_amax)
         };
         from_bus.push(from);
         branch_identities.push(crate::opf::row_identity(

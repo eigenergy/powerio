@@ -244,46 +244,50 @@ fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
 }
 
 #[test]
-fn angle_difference_correction_matches_powermodels_and_can_be_disabled() {
-    use powerio_tx::{POWER_MODELS_ANGLE_BOUND_PAD, correct_angle_difference_bounds};
+fn angle_difference_bounds_are_stated_by_default_and_padded_on_request() {
+    use powerio_tx::{
+        POWER_MODELS_ANGLE_BOUND_PAD, correct_angle_difference_bounds,
+        stated_angle_difference_bounds,
+    };
+    let full = std::f64::consts::TAU;
 
     let network = small_network();
     let raw = IndexedNetwork::new(&network);
-    let corrected = preparation_from_view(&raw, DcOpfOptions::default()).unwrap();
-    assert!(corrected.correct_angle_difference_bounds);
-    assert_close(
-        corrected.branches.angle_min[0],
-        -POWER_MODELS_ANGLE_BOUND_PAD,
-    );
-    assert_close(
-        corrected.branches.angle_max[0],
-        POWER_MODELS_ANGLE_BOUND_PAD,
-    );
+    let stated = preparation_from_view(&raw, DcOpfOptions::default()).unwrap();
+    assert!(!stated.correct_angle_difference_bounds);
+    assert_close(stated.branches.angle_min[0], -full);
+    assert_close(stated.branches.angle_max[0], full);
 
-    let exact = preparation_from_view(
+    let padded = preparation_from_view(
         &raw,
         DcOpfOptions {
-            correct_angle_difference_bounds: false,
+            correct_angle_difference_bounds: true,
             ..DcOpfOptions::default()
         },
     )
     .unwrap();
-    assert!(!exact.correct_angle_difference_bounds);
-    assert_close(exact.branches.angle_min[0], -2.0 * std::f64::consts::PI);
-    assert_close(exact.branches.angle_max[0], 2.0 * std::f64::consts::PI);
+    assert!(padded.correct_angle_difference_bounds);
+    assert_close(padded.branches.angle_min[0], -POWER_MODELS_ANGLE_BOUND_PAD);
+    assert_close(padded.branches.angle_max[0], POWER_MODELS_ANGLE_BOUND_PAD);
 
+    // A raw case and its normalized form prepare the same bounds.
     let normalized = network.to_normalized().unwrap();
     let normalized = IndexedNetwork::new(&normalized);
-    let normalized_corrected = preparation_from_view(&normalized, DcOpfOptions::default()).unwrap();
-    assert_close(
-        normalized_corrected.branches.angle_min[0],
-        corrected.branches.angle_min[0],
-    );
-    assert_close(
-        normalized_corrected.branches.angle_max[0],
-        corrected.branches.angle_max[0],
-    );
+    let normalized_stated = preparation_from_view(&normalized, DcOpfOptions::default()).unwrap();
+    assert_close(normalized_stated.branches.angle_min[0], -full);
+    assert_close(normalized_stated.branches.angle_max[0], full);
 
+    // The MATPOWER 0/0 spelling states no constraint, which the stated form
+    // reads as the widest window and PowerModels pads.
+    assert_eq!(stated_angle_difference_bounds(0.0, 0.0), (-full, full));
+    assert_eq!(
+        stated_angle_difference_bounds(-45.0_f64.to_radians(), 30.0_f64.to_radians()),
+        (-45.0_f64.to_radians(), 30.0_f64.to_radians())
+    );
+    assert_eq!(
+        stated_angle_difference_bounds(-3.0 * full, 2.0 * full),
+        (-full, full)
+    );
     assert_eq!(
         correct_angle_difference_bounds(0.0, 0.0),
         (-POWER_MODELS_ANGLE_BOUND_PAD, POWER_MODELS_ANGLE_BOUND_PAD)

@@ -453,6 +453,26 @@ pub fn correct_angle_difference_bounds(angle_min: f64, angle_max: f64) -> (f64, 
     correct_angle_difference_bounds_with_pad(angle_min, angle_max, POWER_MODELS_ANGLE_BOUND_PAD)
 }
 
+/// One branch angle difference interval as the source states it, for a
+/// consumer that applies no pad. Inputs and outputs are radians.
+///
+/// The interval constrains `theta_from - theta_to`, as MATPOWER and
+/// PowerModels define it. The MATPOWER `0`/`0` spelling states no
+/// constraint, and a side beyond ±360 degrees constrains nothing a solution
+/// can reach, so both read as ±360 degrees (`±2π`): the widest finite window,
+/// which never binds and leaves a phase shifting branch free. Every other
+/// stated bound passes through unchanged.
+#[must_use]
+pub fn stated_angle_difference_bounds(angle_min: f64, angle_max: f64) -> (f64, f64) {
+    let full = std::f64::consts::TAU;
+    if angle_min == 0.0 && angle_max == 0.0 {
+        return (-full, full);
+    }
+    let angle_min = if angle_min < -full { -full } else { angle_min };
+    let angle_max = if angle_max > full { full } else { angle_max };
+    (angle_min, angle_max)
+}
+
 fn correct_angle_difference_bounds_with_pad(
     mut angle_min: f64,
     mut angle_max: f64,

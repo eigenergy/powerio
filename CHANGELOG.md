@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- The DC and AC OPF and AC power flow preparations no longer pad angle
+  difference bounds by default. They used to apply PowerModels' ±60 degree
+  correction to every interval the source leaves unconstrained, which PSS/E
+  and other formats with no angle limits always do, and a branch or lowered
+  three winding transformer winding that shifts phase by more than 60 degrees
+  cannot meet that window, because the bound is on `theta_from - theta_to`
+  (the MATPOWER and PowerModels convention), not on the difference net of the
+  shift. The prepared `angle_min` and `angle_max` are now the stated bounds,
+  with the MATPOWER `0`/`0` spelling and any side beyond ±360 degrees read as
+  ±360 degrees (`stated_angle_difference_bounds`). The pad stays available
+  explicitly: `correct_angle_difference_bounds` on `DcOpfAssemblyOptions`,
+  `AcOpfAssemblyOptions`, and `AcPfAssemblyOptions` (the C ABI already passes
+  it), and `powerio dcopf --pad-angle-differences`. A serialized `DcOpfOptions`
+  that predates the field still reads with the pad on.
+
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW
   and RAWX readers had the two swapped, so a continuously adjusted shunt, such

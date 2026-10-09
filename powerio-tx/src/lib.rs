@@ -152,6 +152,6 @@ pub use network::{
 };
 pub use normalize::{
     NormalizeOptions, NormalizeSourceRows, NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD,
-    correct_angle_difference_bounds,
+    correct_angle_difference_bounds, stated_angle_difference_bounds,
 };
 pub use operations::Selector;

@@ -71,7 +71,14 @@ shifts, or when the case has no phase shifter), and `fixed_withdrawal`, equal to
 The branch indexed vectors, of length \\(m\\), are `b` (susceptances), `shift`
 (radians), `flow_offset` (equal to `-b * shift` elementwise), `fmax` (thermal
 limits; \\(0\\) means unlimited per MATPOWER), and the radian limits
-`angle_min` and `angle_max`.
+`angle_min` and `angle_max` on \\(\theta_{\mathrm{from}} - \theta_{\mathrm{to}}\\), the
+MATPOWER and PowerModels convention, which is not net of the branch's phase
+shift. They are the bounds the case states. A side it leaves unconstrained (the
+MATPOWER `0`/`0` spelling, or beyond ±360 degrees, which is how PSS/E and
+other formats with no angle limits read) is ±360 degrees and never binds, so a
+phase shifting branch stays feasible. PowerModels' ±60 degree pad is a solver
+conditioning choice, applied only on request
+(`correct_angle_difference_bounds`, `powerio dcopf --pad-angle-differences`).
 
 The generator space vectors, of length \\(n_{\mathrm{gen}}\\), are `q_gen`,
 `c_gen`, `c0_gen`, `pmax_gen`, and `pmin_gen`.

@@ -49,35 +49,32 @@ fn public_preparation_formulates_the_complete_ac_opf() {
     assert_eq!(prep.n_branches(), 2);
     assert_eq!(prep.n_generators(), 1);
     assert!(!prep.synthesize_unrated_limits);
-    assert!(prep.correct_angle_difference_bounds);
+    assert!(!prep.correct_angle_difference_bounds);
     assert_eq!(
         prep.branches.angle_min,
-        vec![
-            -powerio_tx::POWER_MODELS_ANGLE_BOUND_PAD,
-            -powerio_tx::POWER_MODELS_ANGLE_BOUND_PAD,
-        ]
-    );
-    assert_eq!(
-        prep.branches.angle_max,
-        vec![
-            powerio_tx::POWER_MODELS_ANGLE_BOUND_PAD,
-            powerio_tx::POWER_MODELS_ANGLE_BOUND_PAD,
-        ]
-    );
-
-    let exact = build_ac_opf_preparation(
-        &instance,
-        &AcOpfAssemblyOptions::default().with_correct_angle_difference_bounds(false),
-    )
-    .unwrap();
-    assert!(!exact.correct_angle_difference_bounds);
-    assert_eq!(
-        exact.branches.angle_min,
         vec![-2.0 * std::f64::consts::PI; 2]
     );
+    assert_eq!(prep.branches.angle_max, vec![2.0 * std::f64::consts::PI; 2]);
+
+    let padded = build_ac_opf_preparation(
+        &instance,
+        &AcOpfAssemblyOptions::default().with_correct_angle_difference_bounds(true),
+    )
+    .unwrap();
+    assert!(padded.correct_angle_difference_bounds);
     assert_eq!(
-        exact.branches.angle_max,
-        vec![2.0 * std::f64::consts::PI; 2]
+        padded.branches.angle_min,
+        vec![
+            -powerio_tx::POWER_MODELS_ANGLE_BOUND_PAD,
+            -powerio_tx::POWER_MODELS_ANGLE_BOUND_PAD,
+        ]
+    );
+    assert_eq!(
+        padded.branches.angle_max,
+        vec![
+            powerio_tx::POWER_MODELS_ANGLE_BOUND_PAD,
+            powerio_tx::POWER_MODELS_ANGLE_BOUND_PAD,
+        ]
     );
 
     // Per unit demand and the series admittance of the plain line:
@@ -502,19 +499,22 @@ fn ac_pf_preparation_does_not_require_a_generator() {
     let prepared = build_ac_pf_preparation(&instance, &AcPfAssemblyOptions::default()).unwrap();
     assert_eq!(prepared.n_generators(), 0);
     assert_eq!(prepared.n_branches(), 1);
-    assert!(prepared.correct_angle_difference_bounds);
+    assert!(!prepared.correct_angle_difference_bounds);
     assert_eq!(
         prepared.branches.angle_min,
-        vec![-powerio_tx::POWER_MODELS_ANGLE_BOUND_PAD]
+        vec![-2.0 * std::f64::consts::PI]
     );
 
-    let exact = build_ac_pf_preparation(
+    let padded = build_ac_pf_preparation(
         &instance,
-        &AcPfAssemblyOptions::default().with_correct_angle_difference_bounds(false),
+        &AcPfAssemblyOptions::default().with_correct_angle_difference_bounds(true),
     )
     .unwrap();
-    assert!(!exact.correct_angle_difference_bounds);
-    assert_eq!(exact.branches.angle_min, vec![-2.0 * std::f64::consts::PI]);
+    assert!(padded.correct_angle_difference_bounds);
+    assert_eq!(
+        padded.branches.angle_min,
+        vec![-powerio_tx::POWER_MODELS_ANGLE_BOUND_PAD]
+    );
 }
 
 #[test]
