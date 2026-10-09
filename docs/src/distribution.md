@@ -328,9 +328,21 @@ have native-to-OpenDSS import qualification on both pinned forks, including
 IEEE8500 service parameters and an IR round trip. The internal core load must be
 included when aggregating physical transformer losses.
 
-Triplex lines, floating service neutrals, canonical GLM service output,
-other geometry/earth models and additional static devices remain unfinished and
-fail explicitly. Full OpenDSS
+Triplex line geometry imports as a full three-conductor impedance matrix with
+neutral grounded at both endpoints. This is equivalent to the native grounded
+neutral reduction and retains its reconstructed neutral current. Unequal
+conductors, 50/60 Hz, NR/FBS, mixed loads and connected IEEE8500 service parameters
+have native-to-OpenDSS qualification, including both-end powers and losses.
+Direct triplex 2×2 matrices, floating service neutrals, canonical GLM service
+output, other geometry/earth models and additional static devices remain
+unfinished and fail explicitly.
+
+A missing or zero overhead mutual spacing produces zero mutual impedance in the
+pinned engines. Import preserves this behavior and reports it instead of
+inventing a spacing. Capacitance geometry still requires its qualified positive
+dimensions. Seasonal conductor/configuration ampacities are validated and
+retained in source with `READ.GLM.SOURCE_ONLY`; projection into typed ampacity
+limits remains unfinished. Full OpenDSS
 static compatibility is not yet established.
 
 Electrical parents are zero-length bus attachments. Qualified node/meter/load

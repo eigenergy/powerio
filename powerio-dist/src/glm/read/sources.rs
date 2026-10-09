@@ -27,7 +27,7 @@ impl Reader<'_> {
             }
             if !matches!(
                 class(object),
-                "overhead_line" | "underground_line" | "transformer"
+                "overhead_line" | "underground_line" | "triplex_line" | "transformer"
             ) {
                 continue;
             }

@@ -25,6 +25,7 @@ mod split_phase;
 mod switches;
 mod templates;
 mod transformers;
+mod triplex_lines;
 
 /// Read the initial static GLM electrical profile. Unknown physical
 /// classes, properties and globals fail explicitly; they are not silently
@@ -42,7 +43,9 @@ mod transformers;
 /// explicit individual switch states and produce a frozen-control diagnostic.
 /// Center-tapped services with grounded neutrals use typed windings and an
 /// internal core impedance load; triplex P/I/Z loads retain leg polarity.
-/// Triplex lines and canonical GLM emission of these services remain unfinished.
+/// Triplex geometry uses full conductor matrices with both endpoint neutrals
+/// grounded, preserving native hot-conductor and neutral-current behavior.
+/// Direct triplex matrices and canonical GLM service emission remain unfinished.
 /// Other conductor/device profiles remain under implementation.
 pub fn parse(
     source: Source,
@@ -81,6 +84,7 @@ pub fn parse(
     reader.buses()?;
     reader.loads_and_sources()?;
     reader.lines()?;
+    reader.triplex_lines()?;
     reader.switches()?;
     reader.transformers()?;
     reader.regulators()?;
@@ -395,8 +399,7 @@ impl Reader<'_> {
             }
             for property in object.properties() {
                 let name = property.name;
-                let allowed = allowed_property(class, name);
-                if !allowed {
+                if !allowed_property(class, name) {
                     return Err(self.project.electrical_error(
                         property.span,
                         format!("unmapped property {class}.{name}"),
@@ -415,6 +418,9 @@ impl Reader<'_> {
                         result.value,
                     );
                 }
+            }
+            if let Some(diagnostic) = self.rating_metadata(object.key())? {
+                self.diagnostics.push(diagnostic);
             }
         }
         let keys: Vec<_> = self
@@ -918,6 +924,9 @@ fn supported_class(name: &str) -> bool {
             "overhead_line"
                 | "underground_line"
                 | "underground_line_conductor"
+                | "triplex_line"
+                | "triplex_line_configuration"
+                | "triplex_line_conductor"
                 | "line_configuration"
                 | "switch"
                 | "overhead_line_conductor"
@@ -958,6 +967,8 @@ fn allowed_property(class: &str, name: &str) -> bool {
             && matches!(name, "phases" | "from" | "to" | "length" | "configuration"))
         || (class == "line_configuration" && matrix_property(name))
         || split_phase::allowed(class, name)
+        || triplex_lines::allowed(class, name)
+        || geometry::rating_property(class, name)
         || capacitors::allowed(class, name)
         || regulators::allowed(class, name)
         || transformers::allowed(class, name)
@@ -985,7 +996,9 @@ fn quantity_spec(
     dialect: super::GlmDialect,
 ) -> Option<(GlmQuantityKind, Option<&'static str>)> {
     use GlmQuantityKind::{Complex, Real};
-    if let Some(spec) = split_phase::quantity_spec(class, name) {
+    if let Some(spec) = split_phase::quantity_spec(class, name)
+        .or_else(|| triplex_lines::quantity_spec(class, name))
+    {
         return Some((spec.0, Some(spec.1)));
     }
     if let Some(spec) = transformers::quantity_spec(class, name)

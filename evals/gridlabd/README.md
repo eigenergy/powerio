@@ -988,7 +988,39 @@ core load. Secondary leg 2 has reversed terminal order, matching the native
 `voltage_2` convention. The comparison uses the existing full-precision V/A/VA
 budgets, not the IEEE8500 dump precision.
 
-This qualifies grounded service import and OpenDSS emission only. Triplex lines,
-floating neutrals, canonical GLM service writing and complete IEEE8500 feeder
-conversion remain unfinished. PNNL's legacy `triplex_node.power_*` inputs are
+This qualifies grounded service import and OpenDSS emission only. Triplex geometry
+has separate qualification below. Direct triplex matrices, floating neutrals,
+canonical GLM service writing and complete IEEE8500 feeder conversion remain
+unfinished. PNNL's legacy `triplex_node.power_*` inputs are
 accepted only by the PNNL import profile; Arras requires `triplex_load` fields.
+
+
+### Connected triplex geometry import
+
+`triplex_import_oracle.py` extends the grounded service circuit with a triplex
+line. It compares 30 complex observables per case: transformer ports, both line
+ends including neutral current, load voltages and losses. The six cases cover
+A/B/C primaries, NR/FBS, unequal wires, 50/60 Hz, mixed P/I/Z loads, IEEE8500
+parameters and an upstream overhead line with omitted mutual spacing. Two
+linear cases also use independent ideal-core and three-conductor circuit
+solutions. Floating the receiving neutral deliberately must fail.
+
+```sh
+cargo build -p powerio --example glm_network
+python evals/gridlabd/triplex_import_oracle.py \
+  --bridge target/debug/examples/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-triplex-import-directory
+```
+
+The typed line keeps the full primitive impedance matrix and both neutral
+terminals are grounded. The native hot-port reduction is its Schur complement;
+the primitive also recovers the native neutral current. Ground current can flow
+at a bus independently of current in the neutral conductor. These conventions
+must not be replaced with a floating-neutral series circuit.
+
+The missing-spacing case preserves the pinned engine's zero mutual impedance,
+with an import diagnostic. Seasonal ampacities remain in source with an explicit
+projection diagnostic. This evidence does not qualify direct triplex 2×2
+matrices, floating-neutral service import, canonical GLM service writing or the
+complete IEEE8500 feeder. The feeder now reaches its delta–grounded-wye
+transformer mapping after passing the line-reading stage.

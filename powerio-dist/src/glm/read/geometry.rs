@@ -40,6 +40,9 @@ pub(super) fn allowed(class: &str, name: &str) -> bool {
 }
 
 pub(super) fn unit(class: &str, name: &str) -> Option<&'static str> {
+    if rating_property(class, name) {
+        return Some("A");
+    }
     match (class, name) {
         ("line_spacing", name) if spacing_property(name) => Some("ft"),
         ("overhead_line_conductor", "resistance") => Some("Ohm/mile"),
@@ -147,7 +150,7 @@ impl Reader<'_> {
     }
 
     fn geometry_impedance(
-        &self,
+        &mut self,
         spacing: ObjectKey,
         labels: &[char],
         conductors: &[ObjectKey],
@@ -162,10 +165,19 @@ impl Reader<'_> {
                 let distance = if i == j {
                     gmr
                 } else {
-                    self.positive_geometry(
-                        spacing,
-                        &format!("distance_{}{}", labels[i], labels[j]),
-                    )?
+                    let field = format!("distance_{}{}", labels[i], labels[j]);
+                    let distance = self.real(spacing, &field).unwrap_or(0.0);
+                    if distance < 0.0 {
+                        return Err(
+                            self.error(spacing, "negative conductor spacing is not qualified")
+                        );
+                    }
+                    if distance == 0.0 {
+                        self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_GEOMETRY_MATERIALIZED,
+                            format!("{}: missing/zero {field} gives zero native mutual impedance; no geometric distance is inferred", self.names[&spacing])));
+                        continue;
+                    }
+                    distance
                 };
                 // Native log(1/d) must also be representable: algebraically
                 // replacing it with -log(d) must not repair native overflow.
@@ -255,4 +267,49 @@ fn inverse(matrix: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
         .flatten()
         .all(|v| v.is_finite())
         .then_some(result)
+}
+
+pub(super) fn rating_property(class: &str, name: &str) -> bool {
+    matches!(
+        class,
+        "overhead_line_conductor"
+            | "underground_line_conductor"
+            | "triplex_line_conductor"
+            | "line_configuration"
+            | "triplex_line_configuration"
+    ) && matches!(
+        name,
+        "rating.summer.continuous"
+            | "rating.summer.emergency"
+            | "rating.winter.continuous"
+            | "rating.winter.emergency"
+    )
+}
+
+impl Reader<'_> {
+    pub(super) fn rating_metadata(&self, key: ObjectKey) -> Result<Option<Diagnostic>, Error> {
+        let object = &self.index.objects()[key.ordinal()];
+        let fields: Vec<_> = object
+            .properties()
+            .iter()
+            .filter(|p| rating_property(class(object), p.name))
+            .map(|p| p.name)
+            .collect();
+        if fields.is_empty() {
+            return Ok(None);
+        }
+        if fields
+            .iter()
+            .any(|f| self.real(key, f).is_none_or(|v| v <= 0.0))
+        {
+            return Err(self.error(key, "seasonal ampacity must be positive"));
+        }
+        Ok(Some(Diagnostic::of(
+            &codes::READ_GLM_SOURCE_ONLY,
+            format!(
+                "{}: seasonal conductor/configuration ampacities remain in source; the static power-flow circuit is preserved but typed ampacity projection is unfinished",
+                self.names[&key]
+            ),
+        )))
+    }
 }
