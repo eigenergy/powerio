@@ -44,6 +44,10 @@ def main():
     models = {
         "power": "model=1",
         "current": "model=5",
+        "motor": "model=3",
+        "cvr": "model=4",
+        "cvr_fractional": "model=4 cvrwatts=.7 cvrvars=1.8",
+        "cvr_negative": "model=4 cvrwatts=-.5 cvrvars=3",
         "impedance": "model=2",
         "zip": "model=8 zipv=[.2 .3 .5 .1 .4 .5 0]",
         "dropout": "model=8 zipv=[0 0 1 0 0 1 .8]",
@@ -64,17 +68,24 @@ def main():
             )
             ir = case / "input.pio.json"
             canonical = case / "canonical.dss"
+            repeated_ir = case / "reimported.pio.json"
+            repeated = case / "reimported.dss"
             for command in (
                 ["serialize", str(source), "-o", str(ir)],
                 ["convert", str(ir), "--to", "opendss", "-o", str(canonical)],
+                ["serialize", str(canonical), "-o", str(repeated_ir)],
+                ["convert", str(repeated_ir), "--to", "opendss", "-o", str(repeated)],
             ):
                 run = subprocess.run(
                     [str(cli), *command], text=True, capture_output=True, check=False
                 )
-                (case / f"{command[0]}.log").write_text(run.stdout + run.stderr)
+                (case / f"{Path(command[-1]).name}.log").write_text(
+                    run.stdout + run.stderr
+                )
                 run.check_returncode()
             original = snapshot(source)
             actual = snapshot(canonical)
+            reimported = snapshot(repeated)
             # Same voltage/current/power thresholds as the established engine
             # microcase suite. No angle alignment or magnitude-only comparison.
             absolute = dict(voltage=1e-6, current=1e-7, power=1e-4)
@@ -82,8 +93,13 @@ def main():
                 key: abs(complex(*original[key]) - complex(*actual[key]))
                 for key in original
             }
+            repeat_errors = {
+                key: abs(complex(*original[key]) - complex(*reimported[key]))
+                for key in original
+            }
             passed = all(
-                errors[key] <= absolute[key] + 1e-9 * abs(complex(*original[key]))
+                max(errors[key], repeat_errors[key])
+                <= absolute[key] + 1e-9 * abs(complex(*original[key]))
                 for key in original
             )
             cases.append(
@@ -93,12 +109,14 @@ def main():
                     input_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
                     original=original,
                     canonical=actual,
+                    reimported=reimported,
+                    reimported_errors=repeat_errors,
                     errors=errors,
                     passed=passed,
                 )
             )
     report = dict(
-        scope="Models 1, 2, 5, 8; explicit static state; public IR and canonical DSS",
+        scope="Models 1, 2, 3, 4, 5, 8; explicit static state; public IR and canonical DSS",
         version=dss.Basic.Version(),
         cli_sha256=hashlib.sha256(cli.read_bytes()).hexdigest(),
         cases=cases,

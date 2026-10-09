@@ -5,20 +5,26 @@ use powerio_dist::DistLoadVoltageModel;
 
 #[test]
 fn bounded_load_law_survives_ir_in_network_and_calculation() {
-    let source = Source::from_memory("load.dss", b"New Circuit.c phases=1 bus1=b.1 basekv=.24\nNew Load.l phases=1 bus1=b.1.0 kv=.24 kw=1 kvar=.5 model=5 vminpu=.9 vmaxpu=1.1 vlowpu=.4\n".to_vec()).unwrap();
-    let module = powerio_dist::parse(source).unwrap();
-    let net = module.value();
-    for value in [
-        PioValue::from(net.clone()),
-        PioValue::from(powerio_prob::McAcPfInstance::from_network(net.clone()).unwrap()),
+    for (model, tag) in [
+        (5, "bounded_zip"),
+        (3, "bounded_exponential"),
+        (4, "bounded_exponential"),
     ] {
-        let text = serialize_module_text(&PioModule::new(value)).unwrap();
-        assert!(text.contains("bounded_zip"));
-        let back = deserialize_module_text(&text).unwrap();
-        let again = serialize_module_text(&back).unwrap();
-        let first: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let second: serde_json::Value = serde_json::from_str(&again).unwrap();
-        assert_eq!(first["value"], second["value"]);
+        let source = Source::from_memory("load.dss", format!("New Circuit.c phases=1 bus1=b.1 basekv=.24\nNew Load.l phases=1 bus1=b.1.0 kv=.24 kw=1 kvar=.5 model={model} vminpu=.9 vmaxpu=1.1 vlowpu=.4\n").into_bytes()).unwrap();
+        let module = powerio_dist::parse(source).unwrap();
+        let net = module.value();
+        for value in [
+            PioValue::from(net.clone()),
+            PioValue::from(powerio_prob::McAcPfInstance::from_network(net.clone()).unwrap()),
+        ] {
+            let text = serialize_module_text(&PioModule::new(value)).unwrap();
+            assert!(text.contains(tag));
+            let back = deserialize_module_text(&text).unwrap();
+            let again = serialize_module_text(&back).unwrap();
+            let first: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let second: serde_json::Value = serde_json::from_str(&again).unwrap();
+            assert_eq!(first["value"], second["value"]);
+        }
     }
 }
 
@@ -38,7 +44,8 @@ fn typed_laws_match_native_load_currents() {
         let load = &net.loads()[0];
         assert!(matches!(
             load.voltage_model,
-            DistLoadVoltageModel::BoundedZip { .. }
+            DistLoadVoltageModel::BoundedExponential { .. }
+                | DistLoadVoltageModel::BoundedZip { .. }
                 | DistLoadVoltageModel::ConstantImpedance { .. }
         ));
         let complex = |v: &serde_json::Value| {

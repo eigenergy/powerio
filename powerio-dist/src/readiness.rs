@@ -480,6 +480,7 @@ fn audit_load_voltage(net: &MulticonductorNetwork, report: &mut ElectricalReadin
         if matches!(
             load.voltage_model,
             crate::DistLoadVoltageModel::BoundedZip { .. }
+                | crate::DistLoadVoltageModel::BoundedExponential { .. }
         ) {
             let n = load.p_nom.len().max(load.q_nom.len());
             if n == 0 || load.voltage_model.v_nom().len() != n {

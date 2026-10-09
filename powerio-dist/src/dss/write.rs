@@ -1719,8 +1719,6 @@ impl DssWriter {
         });
         let mut extras = l.extras.clone();
         strip_emitted_extras(&mut extras, &["kv", "phases", "conn"]);
-        let retained_model = extras.remove("model");
-        let retained_zipv = extras.remove("zipv");
         // q that came from a power factor goes back as pf=, so the
         // engine recomputes its own kvar bit for bit.
         let reactive = match extras.remove("pf").and_then(|v| v.as_f64()) {
@@ -1734,8 +1732,17 @@ impl DssWriter {
             num(kv),
             num(kw),
         );
+        self.write_load_voltage_model(l, &mut extras, &mut s);
+        self.add_default_load_voltage_bounds(&mut extras);
+        s.push_str(&self.extras_tail("load", &l.name, &extras));
+        self.line_out(&s);
+    }
+
+    fn write_load_voltage_model(&mut self, l: &DistLoad, extras: &mut Extras, s: &mut String) {
+        let retained_model = extras.remove("model");
+        let retained_zipv = extras.remove("zipv");
         let nominal_model = l.voltage_model.without_voltage_bounds();
-        let bounded_cutoff = load_voltage_bounds(&l.voltage_model, &mut extras);
+        let bounded_cutoff = load_voltage_bounds(&l.voltage_model, extras);
         match &nominal_model {
             DistLoadVoltageModel::ConstantPower { .. } => {
                 if bounded_cutoff.is_none()
@@ -1783,7 +1790,26 @@ impl DssWriter {
                     );
                 }
             }
-            DistLoadVoltageModel::BoundedZip { .. } => unreachable!("bounds handled above"),
+            DistLoadVoltageModel::BoundedZip { .. }
+            | DistLoadVoltageModel::BoundedExponential { .. } => {
+                unreachable!("bounds handled above")
+            }
+            DistLoadVoltageModel::Exponential {
+                gamma_p, gamma_q, ..
+            } if matches!(
+                l.voltage_model,
+                DistLoadVoltageModel::BoundedExponential { .. }
+            ) =>
+            {
+                extras.remove("cvrwatts");
+                extras.remove("cvrvars");
+                let _ = write!(
+                    s,
+                    " model=4 cvrwatts={} cvrvars={}",
+                    num(gamma_p[0]),
+                    num(gamma_q[0])
+                );
+            }
             DistLoadVoltageModel::Exponential { .. } => {
                 self.warn(&C::EMIT_DSS_VALUE_SUBSTITUTED, format!(
                     "load {}: exponential voltage model has no OpenDSS load model code; emitted constant power",
@@ -1791,9 +1817,6 @@ impl DssWriter {
                 ));
             }
         }
-        self.add_default_load_voltage_bounds(&mut extras);
-        s.push_str(&self.extras_tail("load", &l.name, &extras));
-        self.line_out(&s);
     }
 
     fn add_default_load_voltage_bounds(&self, extras: &mut Extras) {
@@ -2939,6 +2962,18 @@ fn shunt_kvar(
 }
 
 fn load_voltage_bounds(model: &DistLoadVoltageModel, extras: &mut Extras) -> Option<f64> {
+    if let DistLoadVoltageModel::BoundedExponential {
+        v_low_pu,
+        v_min_pu,
+        v_max_pu,
+        ..
+    } = model
+    {
+        extras.insert("vlowpu".into(), (*v_low_pu).into());
+        extras.insert("vminpu".into(), (*v_min_pu).into());
+        extras.insert("vmaxpu".into(), (*v_max_pu).into());
+        return Some(0.0);
+    }
     if let DistLoadVoltageModel::BoundedZip {
         v_low_pu,
         v_min_pu,

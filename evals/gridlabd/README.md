@@ -769,9 +769,10 @@ qualify triplex cables, OpenDSS CNData/TSData decoding or a complete feeder.
 ## Bounded load laws
 
 `load_voltage_oracle.py --powerio /path/to/powerio --output /new/path` checks
-55 static cases for OpenDSS load models 1, 2, 5 and 8 across the voltage band
-and dropout transition. It parses through public IR, emits canonical DSS and
-compares native complex load voltages, currents and powers. Run the ignored
+99 static cases for OpenDSS load models 1, 2, 3, 4, 5 and 8 across the voltage
+band and dropout transition, including fractional and negative CVR exponents.
+It parses through public IR, emits canonical DSS, repeats the import and output,
+and compares native complex load voltages, currents and powers. Run the ignored
 `typed_laws_match_native_load_currents` test in `powerio/tests/load_voltage_ir.rs`
 with `POWERIO_LOAD_VOLTAGE_SAMPLES` set to the resulting `report.json` to verify
 the Rust evaluator against the same independent native samples. The report
@@ -1604,3 +1605,24 @@ python evals/gridlabd/dss_xfmrcode_oracle.py --output /tmp/new-xfmrcode-states
 POWERIO_XFMRCODE_ORACLE=/tmp/new-xfmrcode-states/observations.json \
   cargo test -p powerio-dist --test dss_xfmrcode -- --include-ignored
 ```
+
+## Public IEEE13, IEEE34, IEEE37 and IEEE123 OpenDSS profiles
+
+`ieee_distribution_import_oracle.py` compares six public feeder entries with
+canonical output and repeated conversion. Sources and dependencies are pinned
+in `ieee-corpus.json`; public bytes remain in an external checkout. Run:
+
+```sh
+python evals/gridlabd/ieee_distribution_import_oracle.py \
+  --source-root /path/to/electricdss-tst \
+  --bridge /path/to/dist_network --output /new/path
+```
+
+The profile inserts `Set ControlMode=Off` before every solve or voltage-base
+calculation in the selected entry files. The report retains each insertion,
+the original bytes and hashes, and the adjusted hashes. It compares the written
+fixed device states; it does not reproduce actively regulated published results.
+The common IEEE4 comparator checks complex bus voltages and device terminal
+currents, powers and losses, source ports, IR equality, repeated conversion and
+a changed-line negative control. Missing ports and nonconvergence fail. Each
+case reports its result independently; a parser success is not qualification.

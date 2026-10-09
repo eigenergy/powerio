@@ -676,7 +676,7 @@ impl Reader<'_> {
     }
 
     fn load_voltage_model(
-        &self,
+        &mut self,
         props: &Props<'_>,
         phases: usize,
         model: i64,
@@ -685,6 +685,24 @@ impl Reader<'_> {
     ) -> DistLoadVoltageModel {
         if model == 2 {
             return DistLoadVoltageModel::ConstantImpedance { v_nom };
+        }
+        if matches!(model, 3 | 4) {
+            let (p, q) = if model == 3 {
+                (0.0, 2.0)
+            } else {
+                (
+                    self.f64_prop(props.get("cvrwatts")).unwrap_or(1.0),
+                    self.f64_prop(props.get("cvrvars")).unwrap_or(2.0),
+                )
+            };
+            return DistLoadVoltageModel::BoundedExponential {
+                v_nom,
+                gamma_p: vec![p; phases],
+                gamma_q: vec![q; phases],
+                v_low_pu,
+                v_min_pu,
+                v_max_pu,
+            };
         }
         if !matches!(model, 1 | 5 | 8) {
             return DistLoadVoltageModel::ConstantPower { v_nom };
@@ -775,7 +793,7 @@ impl Reader<'_> {
         // fields hold explicit power per phase. phases rides too: a 2
         // phase delta load also has 3 conductors, so the terminal map
         // alone cannot reconstruct `phases=`.
-        let (v_low_pu, v_min_pu, v_max_pu) = if matches!(model, 1 | 5 | 8) {
+        let (v_low_pu, v_min_pu, v_max_pu) = if matches!(model, 1 | 3 | 4 | 5 | 8) {
             (
                 self.f64_prop(props.get("vlowpu")).unwrap_or(0.5),
                 self.f64_prop(props.get("vminpu")).unwrap_or(0.95),
@@ -800,6 +818,10 @@ impl Reader<'_> {
         let v_nom = vec![v_phase; phases];
         let voltage_model =
             self.load_voltage_model(&props, phases, model, v_nom, (v_low_pu, v_min_pu, v_max_pu));
+        if model == 4 {
+            extras.remove("cvrwatts");
+            extras.remove("cvrvars");
+        }
         DistLoad {
             name: obj.name.clone(),
             bus: spec.name,

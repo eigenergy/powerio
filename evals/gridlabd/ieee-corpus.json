@@ -26,6 +26,32 @@
               "bytes": 14065
             }
           ]
+        },
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/13Bus/IEEE13Node_BusXY.csv",
+              "git_blob_sha1": "26cd6f484e910e03ec196318f8692266421c9f2a",
+              "bytes": 243
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/13Bus/IEEE13Nodeckt.dss",
+              "git_blob_sha1": "f02bc852ff50fc03632a7efe9cead633a237a66a",
+              "bytes": 8354
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/13Bus/IEEELineCodes.DSS",
+              "git_blob_sha1": "519a228cf1907f551a6b38c1522da651d1322c26",
+              "bytes": 30
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/IEEELineCodes.DSS",
+              "git_blob_sha1": "eba8d904eb8f0aa1b8fa69faa0fdbc6afa10c3dd",
+              "bytes": 12032
+            }
+          ]
         }
       ],
       "note": "Keep solver variants distinct; do not substitute NR for FBS implicitly."
@@ -53,6 +79,52 @@
               "bytes": 2873
             }
           ]
+        },
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/34Bus/IEEE34_BusXY.csv",
+              "git_blob_sha1": "da24689018a460a25c7d973fa56d92f2b33d951d",
+              "bytes": 506
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/34Bus/IEEELineCodes.DSS",
+              "git_blob_sha1": "519a228cf1907f551a6b38c1522da651d1322c26",
+              "bytes": 30
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/34Bus/Run_IEEE34Mod1.dss",
+              "git_blob_sha1": "b01299250d68acde03317822fac0e86e020f8bc6",
+              "bytes": 1565
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/34Bus/Run_IEEE34Mod2.dss",
+              "git_blob_sha1": "7bca2e2f0c389e023901f63db71bc2d0458685a4",
+              "bytes": 1691
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/34Bus/ieee34Mod1.dss",
+              "git_blob_sha1": "2e4c35226bcf35008f73620e5926854b96437e34",
+              "bytes": 14341
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/34Bus/ieee34Mod2.dss",
+              "git_blob_sha1": "1a6297718368277ff8d8dd689cb00bf55e5525ae",
+              "bytes": 14329
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/34Bus/nmsu_linecode2_ABC.txt",
+              "git_blob_sha1": "cbafbe5d0616493d3ea5c3cb3842001bbfd5fdd5",
+              "bytes": 1281
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/IEEELineCodes.DSS",
+              "git_blob_sha1": "eba8d904eb8f0aa1b8fa69faa0fdbc6afa10c3dd",
+              "bytes": 12032
+            }
+          ]
         }
       ],
       "note": "Keep solver variants distinct; do not substitute NR for FBS implicitly."
@@ -78,6 +150,32 @@
               "path": "powerflow/autotest/data_configurations_37_node.glm",
               "git_blob_sha1": "21e6a6981f683673aadc8cccb6786d132e60ba06",
               "bytes": 2637
+            }
+          ]
+        },
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/37Bus/IEEE37_BusXY.csv",
+              "git_blob_sha1": "48c6bc6bdb3ea8d3f4209c9a596bc6a4cf565fa1",
+              "bytes": 755
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/37Bus/IEEELineCodes.DSS",
+              "git_blob_sha1": "519a228cf1907f551a6b38c1522da651d1322c26",
+              "bytes": 30
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/37Bus/ieee37.dss",
+              "git_blob_sha1": "938b6843f3e025f223194d32072503a017191bf8",
+              "bytes": 7427
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/IEEELineCodes.DSS",
+              "git_blob_sha1": "eba8d904eb8f0aa1b8fa69faa0fdbc6afa10c3dd",
+              "bytes": 12032
             }
           ]
         }
@@ -120,6 +218,127 @@
               "path": "powerflow/autotest/IEEE123_base.inc",
               "git_blob_sha1": "cfa0ecf6fd4d6fac7c4633222bc4a9664b0f1f64",
               "bytes": 57032
+            }
+          ]
+        },
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/BusCoords.dat",
+              "git_blob_sha1": "1bced02d1de85454674d6b0a4a263ffd7bbbee5a",
+              "bytes": 2858
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/CircuitPlottingScripts.dss",
+              "git_blob_sha1": "e65fd37cdc1a1aa7480970647bb14c22de5e6412",
+              "bytes": 1165
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/IEEE123Loads.DSS",
+              "git_blob_sha1": "452974187c8dcc05e387e1d83cf798db373ed1d7",
+              "bytes": 8289
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/IEEE123Master.dss",
+              "git_blob_sha1": "1f234a8615253c8891ac2530f3f2803fca34915f",
+              "bytes": 17096
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/IEEE123Regulators.DSS",
+              "git_blob_sha1": "f695011c017946feadcd0f5280f833d8d9680ac4",
+              "bytes": 1861
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/IEEE123Switches.dss",
+              "git_blob_sha1": "f42cde72efe27a43fc39eba21925066979b8d666",
+              "bytes": 16925
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/IEEELineCodes.DSS",
+              "git_blob_sha1": "519a228cf1907f551a6b38c1522da651d1322c26",
+              "bytes": 30
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/P174_Run_SolarRamp.DSS",
+              "git_blob_sha1": "b9003175125afc623d07938afc899dc4d833f375",
+              "bytes": 1439
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/P174_Run_VoltageProfile.DSS",
+              "git_blob_sha1": "43a71343404dec1e2edb4f094f8f464b0bf64709",
+              "bytes": 1034
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/PV5sdata1.csv",
+              "git_blob_sha1": "cc5609a244f6c829fb967b2a438e285bfd6c69b6",
+              "bytes": 28794
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/PVShape.dss",
+              "git_blob_sha1": "4c0469a76186fbba90201ccfe9c292a056c2c71f",
+              "bytes": 14521
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/PaperLoadShape.txt",
+              "git_blob_sha1": "5f42b2bb14e55c8b3954ff6df2f0772f9aba1a87",
+              "bytes": 61318
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/RevRegTest.dss",
+              "git_blob_sha1": "c22706e56ba0f29d988528b4bed5c8a846edf0c8",
+              "bytes": 1753
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/Run_IEEE123Bus.DSS",
+              "git_blob_sha1": "84d74a943d99195b7c8f0f4fcaa45d1674eadeaf",
+              "bytes": 4766
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/Run_YearlySim.dss",
+              "git_blob_sha1": "25d503322862a8e08f9b3ade012e8bf006cf0ec3",
+              "bytes": 1717
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/SetDailyLoadShape.DSS",
+              "git_blob_sha1": "6ca22a83376142f320d5bf2dbe98c1291fa21a93",
+              "bytes": 2277
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/SolarRamp-Mack.DSS",
+              "git_blob_sha1": "c16caecade45949ca7c29c42a194824fdbcc1ead",
+              "bytes": 2230
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/SolarRamp.DSS",
+              "git_blob_sha1": "180127226edae02d46c6b38e21f7df4e75dcec50",
+              "bytes": 1940
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/SolarRamp.csv",
+              "git_blob_sha1": "2e55be78f8f81a3235aaac72eb54779864c008da",
+              "bytes": 1202
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/StorageRamp.CSV",
+              "git_blob_sha1": "9e3ece25ef79dd28888e9583bfa67d0df21185fb",
+              "bytes": 1202
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/WindRamp.DSS",
+              "git_blob_sha1": "50c76a79256fdc7bdaaf9765b1c0aa39aa7a3369",
+              "bytes": 1432
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/WindRampRevRegTest.DSS",
+              "git_blob_sha1": "caf901d9c517daf5f3dced2f239d564154859e36",
+              "bytes": 1992
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/IEEELineCodes.DSS",
+              "git_blob_sha1": "eba8d904eb8f0aa1b8fa69faa0fdbc6afa10c3dd",
+              "bytes": 12032
             }
           ]
         }

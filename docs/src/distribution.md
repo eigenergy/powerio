@@ -54,24 +54,27 @@ returns using exact equivalent circuits. Reimport can introduce auxiliary
 components, so canonical output is electrically equivalent rather than a text
 fixed point. Unchanged source replay remains byte exact.
 
-Direct `Open`/`Close` commands and explicit `SwtControl.State` are not yet
-lowered and cause a parse error. Active `Action`/`Normal` control execution is
-excluded and reported. Deferred geometry remains source-only and blocks
-numerical use or canonical conversion. These restrictions are compatibility
-gaps; they do not establish complete static OpenDSS support. OpenDSS load models
-1, 5 and 8 carry a typed `BoundedZip` law, including low-voltage current
-interpolation, upper-voltage impedance continuation and ZIP dropout. Model 2
-remains constant impedance. The Rust `power_scale` method evaluates per-branch
-active and reactive multipliers. IR retains this distinct tagged model; readers
-without the configuration reject it. Canonical DSS writes the typed limits, including
-native defaults, ahead of stale extras or writer defaults.
+Direct `Open`/`Close` commands and explicit `SwtControl.State` on lines
+preserve their fixed terminal states through equivalent circuits. Other device
+classes remain unresolved. Active `Action`/`Normal` control execution is
+excluded and reported. Unsupported geometry blocks numerical use or canonical
+conversion. These restrictions do not establish complete static OpenDSS support.
 
-BMOPF and PMD currently project these bounded loads to their nominal laws with
-a diagnostic. Per-phase differences in bounded ZIP coefficients are retained
-in the typed model but currently block DSS emission. The legacy C load views
-cannot expose the voltage window and reject these loads; additive binding
-views remain unfinished. Models 3, 4, 6 and 7 still need complete typed laws.
-These are outstanding compatibility tasks, not supported approximations.
+OpenDSS load models 1, 5 and 8 carry a typed `BoundedZip` law, including
+low-voltage current interpolation, upper-voltage impedance continuation and ZIP
+dropout. Model 2 remains constant impedance. Models 3 and 4 carry a typed
+`BoundedExponential` law: their middle-band P and Q exponents are respectively
+`(0, 2)` and the native CVR exponents (default `(1, 2)`). Outside the band, both
+powers follow the native fallback independently of those exponents. The Rust
+`power_scale` method evaluates these per-branch multipliers. IR retains the
+distinct tagged models; readers without a variant reject it. Canonical DSS
+writes the typed exponents and voltage limits ahead of stale extras or writer
+defaults. Unequal per-branch parameters emit separate single-phase loads.
+
+BMOPF and PMD project voltage-bounded loads to their nominal laws with a
+diagnostic; PMD also diagnoses its lack of exponential load fields. Legacy C
+load views cannot expose the voltage window and reject these loads; additive
+binding views remain unfinished. Models 6 and 7 still need complete typed laws.
 
 ```julia
 emit(feeder, "dss", "copy.dss")            # the source bytes, sidecars included

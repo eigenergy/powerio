@@ -250,7 +250,28 @@ fn same_load_voltage_model(
     a: &DistLoadVoltageModel,
     b: &DistLoadVoltageModel,
     allow_derived_v_nom: bool,
+    allow_exponential_projection: bool,
 ) -> bool {
+    if let DistLoadVoltageModel::BoundedExponential {
+        v_nom,
+        gamma_p,
+        gamma_q,
+        ..
+    } = a
+    {
+        // JSON destinations diagnose the missing voltage band; only BMOPF
+        // can also retain the nominal exponents. PMD diagnoses their loss.
+        return same_v_nom(v_nom, b.v_nom(), allow_derived_v_nom)
+            && match b {
+                DistLoadVoltageModel::Exponential {
+                    gamma_p: p,
+                    gamma_q: q,
+                    ..
+                } => gamma_p == p && gamma_q == q,
+                DistLoadVoltageModel::ConstantPower { .. } => allow_exponential_projection,
+                _ => false,
+            };
+    }
     if let DistLoadVoltageModel::BoundedZip {
         v_nom,
         alpha_z,
@@ -369,7 +390,12 @@ fn assert_loads_eq(
             &format!("load {} map", x.name),
         );
         assert!(
-            same_load_voltage_model(&x.voltage_model, &y.voltage_model, allow_derived_v_nom),
+            same_load_voltage_model(
+                &x.voltage_model,
+                &y.voltage_model,
+                allow_derived_v_nom,
+                what.contains("→ PMD → back")
+            ),
             "{what}: load {} voltage model {:?} vs {:?}",
             x.name,
             x.voltage_model,
@@ -869,11 +895,13 @@ fn off_diagonal_round_trips() {
                 assert_dss_equivalent(&net, &back, case, "cross-format write");
                 continue;
             }
-            for load in net
-                .loads()
-                .iter()
-                .filter(|l| matches!(l.voltage_model, DistLoadVoltageModel::BoundedZip { .. }))
-            {
+            for load in net.loads().iter().filter(|l| {
+                matches!(
+                    l.voltage_model,
+                    DistLoadVoltageModel::BoundedZip { .. }
+                        | DistLoadVoltageModel::BoundedExponential { .. }
+                )
+            }) {
                 assert!(
                     out.warnings
                         .iter()
@@ -881,6 +909,20 @@ fn off_diagonal_round_trips() {
                             && w.contains("voltage-band transitions")),
                     "{what}: lost voltage band without disclosure"
                 );
+                if target == Fmt::Pmd
+                    && matches!(
+                        load.voltage_model,
+                        DistLoadVoltageModel::BoundedExponential { .. }
+                    )
+                {
+                    assert!(
+                        out.warnings
+                            .iter()
+                            .any(|w| w.contains(&format!("load {}:", load.name))
+                                && w.contains("exponential load model")),
+                        "{what}: lost exponents without disclosure"
+                    );
+                }
             }
             let transformers = !(target == Fmt::Bmopf && case.bmopf_restates_transformers);
             let (expected, actual) = if target == Fmt::Bmopf {

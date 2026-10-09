@@ -236,11 +236,12 @@ fn rich_opendss_load_models_and_switches_round_trip() {
         "{}",
         dss_direct.text
     );
-    assert!(
-        dss_direct.text.contains("New Load.cp3") && dss_direct.text.contains("model=3"),
-        "{}",
-        dss_direct.text
-    );
+    let canonical = parse_dss_str(&dss_direct.text);
+    assert_eq!(load_model(&canonical, "cp3"), load_model(&net, "cp3"));
+    assert!(matches!(load_model(&canonical, "cp3"),
+        DistLoadVoltageModel::BoundedExponential { gamma_p, gamma_q, .. }
+        if all_close(gamma_p, 0.0) && all_close(gamma_q, 2.0)
+    ));
 
     assert_nominal_json_projection(&net, dss_v_nom, assert_switch_impedance);
 }
@@ -267,7 +268,16 @@ fn assert_nominal_json_projection(
         load_model(&from_bmopf, "zip"),
         DistLoadVoltageModel::Zip { .. }
     ));
-    for name in ["ci", "zip"] {
+    assert_eq!(bmopf_doc["load"]["cp3"]["model"], "EXPONENTIAL");
+    assert_eq!(
+        bmopf_doc["load"]["cp3"]["gamma_p"],
+        serde_json::json!([0., 0., 0.])
+    );
+    assert_eq!(
+        bmopf_doc["load"]["cp3"]["gamma_q"],
+        serde_json::json!([2., 2., 2.])
+    );
+    for name in ["ci", "zip", "cp3"] {
         assert!(bmopf.warnings.iter().any(
             |w| w.contains(&format!("load {name}:")) && w.contains("voltage-band transitions")
         ));
@@ -280,6 +290,12 @@ fn assert_nominal_json_projection(
     }
 
     let dss_back = emit_dss(&from_bmopf);
+    assert!(
+        dss_back
+            .warnings
+            .iter()
+            .any(|w| w.contains("load cp3:") && w.contains("exponential voltage model"))
+    );
     let reparsed = parse_dss_str(&dss_back.text);
     assert_switch_impedance(&reparsed);
     // JSON retains the nominal law, not the original voltage window. The

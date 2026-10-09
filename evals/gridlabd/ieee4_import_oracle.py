@@ -32,8 +32,11 @@ def run(path, tolerance):
     return engine
 
 
-def imported(bridge, source, folder):
-    result = json.loads(command([str(bridge), str(source), str(folder)], folder.parent))
+def imported(bridge, source, folder, acquisition_root=None):
+    args = [str(bridge), str(source), str(folder)]
+    if acquisition_root is not None:
+        args.append(str(acquisition_root))
+    result = json.loads(command(args, folder.parent))
     (folder / "bridge.json").write_text(json.dumps(result, indent=2) + "\n")
     if not result["ir_network_equal"] or not result["targets"]["dss"]["ok"]:
         raise ValueError("IR equality or canonical DSS emission failed")
@@ -42,11 +45,11 @@ def imported(bridge, source, folder):
     return folder / "dss/case.dss"
 
 
-def evaluate(source, bridge, folder, tolerance):
+def evaluate(source, bridge, folder, tolerance, acquisition_root=None):
     row = {"passed": False, "solver_tolerance": tolerance}
     try:
         row["stage"] = "import"
-        canonical_path = imported(bridge, source, folder / "imported")
+        canonical_path = imported(bridge, source, folder / "imported", acquisition_root)
         row["stage"] = "native solve"
         native = run(source, tolerance)
         row["engine"] = native.Basic.Version()
