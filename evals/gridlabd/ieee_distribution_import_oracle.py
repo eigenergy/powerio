@@ -1,4 +1,4 @@
-"""Public IEEE13/34/37/123/9500 and North American LV DSS feeders at their written, fixed device states.
+"""Public IEEE and low-voltage DSS feeders at their written, fixed device states.
 
 Every solve and voltage-base calculation in the selected entry files is
 preceded by ControlMode=Off. Original bytes are pinned and retained separately;
@@ -22,9 +22,16 @@ CASES = {
     "ieee37": "37Bus/ieee37.dss",
     "ieee123": "123Bus/IEEE123Master.dss",
     "ieee123_switches": "123Bus/IEEE123Switches.dss",
+    "ieee8500_balanced": "8500-Node/Master.dss",
+    "ieee8500_unbalanced": "8500-Node/Master-unbal.dss",
     "ieee9500": "ieee9500dss/ieee9500_base.dss",
     "north_american": "LVTestCaseNorthAmerican/Master.dss",
     "north_american_secpar": "LVTestCaseNorthAmerican/SecPar.dss",
+    "neutral_earth_voltage": "NEVTestCase/NEVMASTER.DSS",
+    "four_wire_indmotor": "4wire-Delta/Kersting4wireIndMotor.dss",
+    "four_wire_lagging": "4wire-Delta/Kersting4wire_Lagging.dss",
+    "four_wire_leading": "4wire-Delta/Kersting4wire_Leading.dss",
+    "secondary_circuit": "SecondaryTestCircuit_modified/Master.DSS",
 }
 
 
@@ -38,7 +45,9 @@ def main():
     )
     parser.add_argument("--bridge", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--case", action="append", choices=CASES, help="run only selected entries; repeat to select several")
     args = parser.parse_args()
+    selected = set(args.case or CASES)
     args.output.mkdir(parents=True, exist_ok=False)
     catalog = json.loads((HERE / "ieee-corpus.json").read_text())
     records = {}
@@ -50,6 +59,10 @@ def main():
             "ieee37",
             "ieee123",
             "north_american_lv_network",
+            "neutral_earth_voltage",
+            "four_wire_delta",
+            "secondary_circuit",
+            "ieee8500",
             "ieee9500",
         ):
             continue
@@ -102,6 +115,21 @@ def main():
                 )
             adjusted = "".join(result).encode()
             patches[relative] = edits
+        # This public Windows dataset names binary profiles with backslashes.
+        # Normalize only its explicit profile-file references for the native
+        # POSIX engine; pinned binary bytes and all electrical settings remain.
+        if relative.startswith(PREFIX + "SecondaryTestCircuit_modified/") and relative.lower().endswith(".dss"):
+            lines = adjusted.decode("utf-8-sig").splitlines(keepends=True)
+            result = []
+            for number, line in enumerate(lines, 1):
+                normalized = re.sub(r"(?i)(\b(?:sngfile|dblfile)\s*=\s*Profiles)\\", r"\1/", line)
+                if normalized != line:
+                    patches.setdefault(relative, []).append(dict(
+                        line=number, original_command=line.strip(), replacement=normalized.strip(),
+                        reason="portable binary-profile path separator",
+                    ))
+                result.append(normalized)
+            adjusted = "".join(result).encode()
         b.write_bytes(adjusted)
         hashes[relative] = dict(
             record,
@@ -117,6 +145,8 @@ def main():
         cases={},
     )
     for name, relative in CASES.items():
+        if name not in selected:
+            continue
         folder = args.output / name
         folder.mkdir()
         row = evaluate(
@@ -133,7 +163,7 @@ def main():
     report["qualified_cases"] = sum(v["passed"] for v in report["cases"].values())
     report["passed"] = all(v["passed"] for v in report["cases"].values())
     (args.output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
-    print(f"Qualified {report['qualified_cases']}/{len(CASES)} fixed-state cases.")
+    print(f"Qualified {report['qualified_cases']}/{len(report['cases'])} fixed-state cases.")
 
 
 if __name__ == "__main__":

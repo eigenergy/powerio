@@ -1088,3 +1088,23 @@ fn generator_voltage_law_defaults_survive_typed_emission() {
         );
     }
 }
+
+#[test]
+fn static_load_emission_diagnoses_omitted_harmonic_spectrum_reference() {
+    let net = parse_dss_str(
+        "new circuit.c basekv=12.47\nnew spectrum.third numharm=1 harmonic=[3] %mag=[8] angle=[0]\nnew load.l bus1=sourcebus kv=12.47 kw=10 spectrum=third",
+    );
+    assert_eq!(net.loads()[0].extras["spectrum"], "third");
+    assert!(net.untyped_objects().iter().any(|o| o.class == "spectrum"));
+    let emitted = emit_dss(&net);
+    assert!(!emitted.text.to_ascii_lowercase().contains("spectrum="));
+    assert!(
+        emitted
+            .warnings
+            .iter()
+            .any(|w| w.contains("harmonic spectrum reference omitted"))
+    );
+    let restored = parse_dss_str(&emitted.text);
+    assert_eq!(net.loads()[0].p_nom, restored.loads()[0].p_nom);
+    assert_eq!(net.loads()[0].q_nom, restored.loads()[0].q_nom);
+}

@@ -77,6 +77,18 @@ def layouts():
         + " rg=0.04 xg=0.2 rho=250 normamps=150 emergamps=200\nNew Linecode.b like=a",
         "frequency_changed_constructor": "New Linecode.a\nSet basefrequency=45\nNew Linecode.b like=a\nNew Linecode.c",
     }
+    cases.update({
+        "ieee4_short_cmatrix": "New Linecode.a nphases=4 cmatrix=(2.849 | -.922454 3.00287 | -.353318 -.587272 2.70828)\nNew Reactor.matrix_reference phases=1 bus1=sourcebus.4 r=.1 x=0",
+        "short_rmatrix": "New Linecode.a rmatrix=(1|.2 2)",
+        "short_xmatrix": "New Linecode.a xmatrix=(1|.2 2)",
+        "upper_entries_retained": "New Linecode.a rmatrix=(1 .7 .8|.2 2)",
+        "asymmetric_rows_overwrite": "New Linecode.a rmatrix=(1 .7 .8|.2 2 .9|.3 .4 3)",
+        "empty_middle_row": "New Linecode.a cmatrix=(1||.3 .4 3)",
+        "empty_first_row": "New Linecode.a cmatrix=(|.2 2|.3 .4 3)",
+        "extra_matrix_row": "New Linecode.a cmatrix=(1|.2 2|.3 .4 3|99)",
+        "empty_matrix_token": "New Linecode.a " + matrix + " rmatrix=() cmatrix=()",
+        "blank_matrix_token": "New Linecode.a cmatrix=( )",
+    })
     for n in (1, 2, 3, 4):
         cases[f"sequence_{n}"] = f"New Linecode.a nphases={n} " + sequence
         cases[f"susceptance_{n}"] = f"New Linecode.a nphases={n} b1=8 b0=4 basefreq=45"
@@ -109,7 +121,7 @@ def observe(script, output, operating, line_unit):
         for name in engine.LineCodes.AllNames():
             engine.LineCodes.Name(name)
 
-            def query(prop):
+            def query(prop, name=name):
                 engine.Text.Command(f"? linecode.{name}.{prop}")
                 return float(engine.Text.Result())
 

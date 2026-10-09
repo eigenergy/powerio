@@ -249,6 +249,9 @@ impl State {
                 self.set_sequence(key, number()?);
             }
             "rmatrix" | "xmatrix" | "cmatrix" => {
+                if prop.value.text.is_empty() {
+                    return Ok(());
+                }
                 let rows = prop
                     .value
                     .to_rows(Some(&raw.vars))

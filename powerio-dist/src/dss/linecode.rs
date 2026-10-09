@@ -2,7 +2,7 @@
 //!
 //! Matrices are ohms and total shunt siemens per declared length unit. Charging
 //! is retained at its construction frequency; changing BaseFrequency in matrix
-//! mode does not rebuild it. This module is staged until line lowering uses it.
+//! mode does not rebuild it. Line lowering consumes this ordered state.
 
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::TAU;
@@ -188,6 +188,10 @@ impl State {
                 }
             }
             "rmatrix" | "xmatrix" | "cmatrix" => {
+                // The native property setter skips an empty token entirely.
+                if prop.value.text.is_empty() {
+                    return Ok(());
+                }
                 let rows = prop
                     .value
                     .to_rows(Some(&raw.vars))
@@ -238,25 +242,21 @@ fn sequence_matrix(n: usize, positive: f64, zero: f64) -> Vec<Vec<f64>> {
     matrix
 }
 
-// This staged profile requires exactly symmetric input, without averaging.
-#[allow(clippy::float_cmp)]
+// DSS C-API 87d85c2 ParserDel.ParseAsSymMatrix starts with zeros, then
+// mirrors each supplied entry in row order. Later rows overwrite both sides;
+// omitted cells retain earlier writes (or zero), and rows beyond N are unread.
+// Too many columns in a consumed row is native error 65534, not truncation.
 pub(super) fn symmetric_matrix(rows: &[Vec<f64>], n: usize) -> Result<Vec<Vec<f64>>, String> {
-    if rows.len() != n || rows.iter().flatten().any(|v| !v.is_finite()) {
+    if n == 0
+        || rows
+            .iter()
+            .take(n)
+            .any(|row| row.len() > n || row.iter().any(|v| !v.is_finite()))
+    {
         return Err("invalid linecode matrix".into());
     }
-    if rows.iter().all(|row| row.len() == n) {
-        // Asymmetric full-matrix parsing remains a separate qualification;
-        // do not silently average its two triangles.
-        if (0..n).any(|i| (0..n).any(|j| rows[i][j] != rows[j][i])) {
-            return Err("asymmetric linecode matrix".into());
-        }
-        return Ok(rows.to_vec());
-    }
-    if !rows.iter().enumerate().all(|(i, row)| row.len() == i + 1) {
-        return Err("invalid linecode triangular matrix".into());
-    }
     let mut matrix = vec![vec![0.0; n]; n];
-    for (i, row) in rows.iter().enumerate() {
+    for (i, row) in rows.iter().take(n).enumerate() {
         for (j, value) in row.iter().enumerate() {
             matrix[i][j] = *value;
             matrix[j][i] = *value;

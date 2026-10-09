@@ -652,6 +652,14 @@ impl DssWriter {
             {
                 continue; // converter bookkeeping
             }
+            // Load spectra are consulted only in non-fundamental harmonic
+            // mode (pinned Load.CalcLoadModelContribution), not power flow.
+            if class == "load" && key == "spectrum" {
+                self.warn(&C::EMIT_DSS_EXTRAS_DROPPED, format!(
+                    "load {name}: harmonic spectrum reference omitted from the static snapshot; its definition is not regenerated"
+                ));
+                continue;
+            }
             // Canonical output is a static snapshot and does not regenerate
             // loadshape objects. Replaying these references creates dangling
             // native dependencies even when the snapshot never uses a shape.

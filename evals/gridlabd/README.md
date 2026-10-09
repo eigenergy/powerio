@@ -745,6 +745,16 @@ The complete static compatibility target still includes additional neutral,
 geometry, transformer and device profiles; these are not completed by source and
 line snapshot qualification alone.
 
+
+Matrix parsing follows the pinned native `ParseAsSymMatrix` rules: start with
+zeros and mirror supplied entries in row order. Later entries overwrite both
+symmetric positions; missing cells retain earlier writes or zero. Extra numeric
+rows beyond the conductor count are unread, and an empty property token keeps
+the previous matrix. An oversized consumed row remains an error. The line and
+linecode oracles include short, asymmetric, empty and partially specified rows.
+`IMYD.dss` now imports its four-wire capacitance matrix, but strict floating-neutral
+comparisons remain failed; importing its matrix does not qualify the full feeder.
+
 ## Underground cable conversion
 
 `cable_oracle.py` compares conductor geometry with native impedance dumps and an
@@ -1613,9 +1623,9 @@ POWERIO_XFMRCODE_ORACLE=/tmp/new-xfmrcode-states/observations.json \
 ```
 
 
-## Public IEEE13, IEEE34, IEEE37, IEEE123, IEEE9500 and North American LV profiles
+## Public IEEE and low-voltage fixed-state profiles
 
-`ieee_distribution_import_oracle.py` compares nine public feeder entries with
+`ieee_distribution_import_oracle.py` compares sixteen public feeder entries with
 canonical output and repeated conversion. Sources and dependencies are pinned
 in `ieee-corpus.json`; public bytes remain in an external checkout. Run:
 
@@ -1633,6 +1643,33 @@ The common IEEE4 comparator checks complex bus voltages and device terminal
 currents, powers and losses, source ports, IR equality, repeated conversion and
 a changed-line negative control. Missing ports and nonconvergence fail. Each
 case reports its result independently; a parser success is not qualification.
+
+
+The suite includes both IEEE 8500 variants, the neutral-earth-voltage case,
+three four-wire delta induction-machine cases, and the modified secondary test
+circuit. Use `--case NAME` to select an entry; repeat the option for several.
+The secondary circuit's 74 binary load profiles are pinned by size and Git blob
+hash and remain external. Its explicit `sngfile`/`dblfile` path separators are
+normalized for the POSIX engine, with every change recorded in the report.
+
+Both IEEE 8500 variants pass their first canonical comparison (60,595 and
+64,126 observations). Reimport leaves one strict line-loss mismatch per case,
+about 0.000162 VA and 0.000105 VA, so neither is fully qualified. The unchanged
+whole-case requirements currently qualify two of sixteen entries.
+
+NEV now reaches electrical comparison: canonical load records omit harmonic
+spectrum references with a diagnostic. The pinned engine uses those spectra
+only in non-fundamental harmonic mode; changing every native NEV load to the
+default spectrum leaves all 3,044 native observations unchanged in the snapshot.
+NEV still fails because its explicit-neutral capacitor banks remain untyped,
+with missing capacitor observations and substantial network residuals.
+
+The secondary circuit now has a native baseline but exposes unresolved static
+`UseActual` behavior: assigning a duty shape changes nominal load powers even
+in snapshot mode. Its 874 failed observations remain failures. The four-wire
+induction-machine baselines cannot run because the local native engine cannot
+load their `IndMach012a` user-model library. These are recorded failures, without
+substitute equipment or fabricated native reference values.
 
 
 ### Public North American spacing definitions
