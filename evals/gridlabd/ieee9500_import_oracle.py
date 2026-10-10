@@ -5,6 +5,7 @@ Native controls retain their original fixed states and future outage schedules.
 """
 
 import argparse
+import copy
 import hashlib
 import json
 import math
@@ -13,8 +14,9 @@ import subprocess
 from pathlib import Path
 
 import numpy as np
+from feeder_balance import current_balance
 from ieee8500_import_oracle import PORT_PROPERTIES, grouped
-from oracle import LOCK, add, compare, run_glm
+from oracle import FEEDER_TOLERANCES, LOCK, TOLERANCES, add, command, compare, run_glm
 
 NODES = (
     "node",
@@ -214,6 +216,7 @@ def imported_snapshot(path, network, objects, wrong_tap=False):
     if not e.Solution.Converged() or e.Solution.ControlMode() != -1:
         raise ValueError("DSS did not converge with controls disabled")
     element_names = {n.lower() for n in e.Circuit.AllElementNames()}
+    raw_equivalent_ports = {}
 
     def unpack(raw):
         return np.array(raw[::2]) + 1j * np.array(raw[1::2])
@@ -221,11 +224,19 @@ def imported_snapshot(path, network, objects, wrong_tap=False):
     def element(name):
         if e.Circuit.SetActiveElement(name) < 0:
             raise ValueError(f"missing element {name}")
-        return (
+        values = (
             e.CktElement.NodeOrder(),
             unpack(e.CktElement.Currents()),
             1000 * unpack(e.CktElement.Powers()),
         )
+        if "_pio_coupled_" in name.lower():
+            raw_equivalent_ports[name] = {
+                "buses": e.CktElement.BusNames(),
+                "nodes": values[0],
+                "current_A": [[v.real, v.imag] for v in values[1]],
+                "power_VA": [[v.real, v.imag] for v in values[2]],
+            }
+        return values
 
     def root(name):
         seen = set()
@@ -289,6 +300,15 @@ def imported_snapshot(path, network, objects, wrong_tap=False):
 
     transformers = {t["name"]: t for t in network.get("transformers", [])}
     switches = {s["name"]: s for s in network.get("switches", [])}
+    inactive_lines = set()
+    for record in network.get("untyped", []):
+        if record["class"].lower() != "line":
+            continue
+        values = {k.lower(): v for k, v in record["props"] if k is not None}
+        if values.get("enabled", "").lower() in ("no", "false", "0"):
+            inactive_lines.add(record["name"].lower())
+    omitted_inactive = []
+
     result = {}
     missing_buses = []
     for name, obj in objects.items():
@@ -327,7 +347,9 @@ def imported_snapshot(path, network, objects, wrong_tap=False):
                     currents[end, index] += iv
                     powers[end, index] += sv
 
-        current_ends = current_form_ends(name, obj)
+        current_ends = (
+            None if name.lower() in inactive_lines else current_form_ends(name, obj)
+        )
         if current_ends is not None:
             for part, (nodes, amps, va) in enumerate(current_ends):
                 scatter(nodes, amps, va, part // 2)
@@ -375,6 +397,14 @@ def imported_snapshot(path, network, objects, wrong_tap=False):
                                     "triplex"
                                 ),
                             )
+        elif (
+            name.lower() in inactive_lines
+            and "line." + name.lower() not in element_names
+        ):
+            # Reimport retains disabled lines as source-only records. Canonical
+            # output diagnoses their omission. Absence is a zero electrical
+            # branch, but only with this explicit inactive-state evidence.
+            omitted_inactive.append(name)
         elif name in switches and switches[name]["open"]:
             if e.Circuit.SetActiveElement("line." + name) < 0 or e.CktElement.Enabled():
                 raise ValueError("open contact not disabled")
@@ -398,6 +428,22 @@ def imported_snapshot(path, network, objects, wrong_tap=False):
                     raise ValueError("auxiliary third port is not open")
             scatter(nodes[:count], amps[:count], va[:count], 0, cls == "triplex_line")
         phases = "AB" if cls == "triplex_line" else "ABC"
+        # Boundary currents can be observed across a series equivalent, but its
+        # internal voltage and power may differ after source reimport. Physical
+        # port powers use actual endpoint voltages, never internal-source power.
+        for end, endpoint in enumerate(("from", "to")):
+            bus = root(obj[endpoint])
+            if e.Circuit.SetActiveBus(bus) < 0:
+                raise ValueError(f"missing physical endpoint {bus}")
+            volts = dict(zip(e.Bus.Nodes(), unpack(e.Bus.Voltages()), strict=True))
+            triplex = objects[bus]["class"].startswith("triplex")
+            for index, phase in enumerate(phases):
+                node = {"A": 1, "B": 2, "C": 0}[phase] if triplex else index + 1
+                if node != 0 and node not in volts and currents[end, index] != 0:
+                    raise ValueError("nonzero boundary current has no endpoint voltage")
+                powers[end, index] = (
+                    volts.get(node, 0j) * currents[end, index].conjugate()
+                )
         for end, label in enumerate(("in", "out")):
             for k, phase in enumerate(phases):
                 add(
@@ -414,6 +460,9 @@ def imported_snapshot(path, network, objects, wrong_tap=False):
         "control_mode": e.Solution.ControlMode(),
         "missing_buses": missing_buses,
         "current_form_lines": current_forms,
+        "omitted_inactive_lines": omitted_inactive,
+        "raw_equivalent_ports": raw_equivalent_ports,
+        "power_definition": "physical endpoint voltage times conjugate boundary current",
     }
 
 
@@ -475,6 +524,7 @@ def main():
     p.add_argument("--native-stopping-fraction", type=float, default=1e-8)
     p.add_argument("--native-iteration-limit", type=int, default=100)
     p.add_argument("--execution-timeout", type=float, default=120)
+    p.add_argument("--roundtrip-bridge", type=Path)
     args = p.parse_args()
     if (
         not math.isfinite(args.native_stopping_fraction)
@@ -488,11 +538,19 @@ def main():
         p.error("execution timeout must be finite and positive")
     args.output.mkdir(parents=True, exist_ok=False)
     report = {
+        "scope": "GLM import/IR to static DSS; optional repeated DSS import/IR/output. Canonical GLM is not qualified by this report.",
+        "validation_profile": "feeder-1ppm-v1",
         "engines": LOCK,
         "bridge_sha256": hashlib.sha256(args.bridge.read_bytes()).hexdigest(),
         "native_stopping_fraction": args.native_stopping_fraction,
         "native_iteration_limit": args.native_iteration_limit,
         "execution_timeout_seconds": args.execution_timeout,
+        "roundtrip_bridge_sha256": hashlib.sha256(
+            args.roundtrip_bridge.read_bytes()
+        ).hexdigest()
+        if args.roundtrip_bridge
+        else None,
+        "validation_profiles": {"calibration": TOLERANCES, "feeder": FEEDER_TOLERANCES},
         "cases": {},
     }
     for case in ("bal", "unbal"):
@@ -552,11 +610,54 @@ def main():
         actual, solve = imported_snapshot(
             directory / "dss/case.dss", bridge["network"], objects
         )
-        check = compare(expected, actual)
+        calibration = compare(expected, actual)
+        check = compare(expected, actual, tolerances=FEEDER_TOLERANCES)
+        balance = current_balance(actual, bridge["network"], objects, LINKS)
+        changed = copy.deepcopy(bridge["network"])
+        changed = changed.get("value", changed)
+        changed = changed.get("network", changed)
+        for load in changed["loads"]:
+            load["p_nom"] = [v * 1.1 for v in load["p_nom"]]
+            load["q_nom"] = [v * 1.1 for v in load["q_nom"]]
+        changed_load = current_balance(actual, changed, objects, LINKS)
+
         wrong, _ = imported_snapshot(
             directory / "dss/case.dss", bridge["network"], objects, wrong_tap=True
         )
-        negative = compare(expected, wrong)
+        negative = compare(expected, wrong, tolerances=FEEDER_TOLERANCES)
+        repeated = None
+        if args.roundtrip_bridge:
+            destination = directory / "reimported"
+            repeat = json.loads(
+                command(
+                    [
+                        str(args.roundtrip_bridge.resolve()),
+                        str((directory / "dss/case.dss").resolve()),
+                        str(destination.resolve()),
+                    ],
+                    directory,
+                )
+            )
+            if not repeat["ir_network_equal"] or not repeat["targets"]["dss"]["ok"]:
+                raise ValueError("DSS reimport/IR/write failed")
+            repeat_net = repeat["network"]
+            repeat_net = repeat_net.get("value", repeat_net)
+            repeat_net = repeat_net.get("network", repeat_net)
+            reimported, repeat_solve = imported_snapshot(
+                destination / "dss/case.dss", repeat_net, objects
+            )
+            repeated = {
+                "ir_equal": True,
+                "comparison": compare(
+                    expected, reimported, tolerances=FEEDER_TOLERANCES
+                ),
+                "calibration_comparison": compare(expected, reimported),
+                "current_balance": current_balance(
+                    reimported, bridge["network"], objects, LINKS
+                ),
+                "solve": repeat_solve,
+            }
+            (directory / "reimported.json").write_text(json.dumps(reimported))
         item = {
             "source_sha256": hashes,
             "inventory": {
@@ -566,6 +667,13 @@ def main():
             "ir_equal": True,
             "solve": solve,
             "comparison": check,
+            "calibration_comparison": calibration,
+            "current_balance": balance,
+            "changed_load_negative": {
+                "passed": not changed_load["passed"],
+                "mismatch": changed_load,
+            },
+            "reimported": repeated,
             "native_reporting_audit": telemetry_audit(
                 bridge["network"], expected, objects
             ),
@@ -577,7 +685,17 @@ def main():
                 "passed": not negative["passed"],
                 "mismatch": negative,
             },
-            "passed": check["passed"] and not negative["passed"],
+            "passed": check["passed"]
+            and balance["passed"]
+            and not negative["passed"]
+            and not changed_load["passed"]
+            and (
+                repeated is None
+                or (
+                    repeated["comparison"]["passed"]
+                    and repeated["current_balance"]["passed"]
+                )
+            ),
         }
         for filename, value in (
             ("native.json", expected),

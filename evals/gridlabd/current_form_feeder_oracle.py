@@ -1,11 +1,13 @@
 """Qualify feeder physical-port aggregation on native current-form microcases."""
 
 import argparse
+import copy
 import json
 import tempfile
 from pathlib import Path
 
 from current_form_write_oracle import expected
+from feeder_balance import current_balance
 from ieee9500_import_oracle import imported_snapshot
 from oracle import add, command, compare
 
@@ -111,6 +113,19 @@ def main():
                 for variant, path, state in paths:
                     actual, solve = imported_snapshot(path, state, objects)
                     check = compare(snapshot, actual)
+                    balance = current_balance(actual, state, objects, ["overhead_line"])
+                    changed = copy.deepcopy(state)
+                    for load in changed["loads"]:
+                        load["p_nom"] = [p * 1.1 for p in load["p_nom"]]
+                        load["q_nom"] = [q * 1.1 for q in load["q_nom"]]
+                    negative = current_balance(
+                        actual, changed, objects, ["overhead_line"]
+                    )
+                    check["current_balance"] = balance
+                    check["changed_load_negative"] = negative
+                    check["passed"] = (
+                        check["passed"] and balance["passed"] and not negative["passed"]
+                    )
                     if solve["current_form_lines"] != ["line"]:
                         raise ValueError(
                             "microcase did not exercise current-form aggregation"

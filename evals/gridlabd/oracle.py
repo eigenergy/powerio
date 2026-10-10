@@ -36,6 +36,17 @@ TOLERANCES = {
 }
 
 
+# Whole-feeder agreement: one part per million plus SI floors for values near
+# zero. Calibration keeps the original tighter budgets; matrix fidelity does
+# not inherit the feeder voltage/current/power thresholds.
+FEEDER_TOLERANCES = {
+    **TOLERANCES,
+    "V": (1e-4, 1e-6),
+    "A": (1e-5, 1e-6),
+    "VA": (1e-2, 1e-6),
+}
+
+
 def parse_complex(value: str) -> complex:
     """GridLAB-D complex literals: rectangular j/i, polar d(deg)/r(rad)."""
     value = value.strip()

@@ -2560,11 +2560,12 @@ misattached equivalent elements fail explicitly. Source bus names that merely
 resemble generated names remain ordinary physical buses.
 
 Fresh pinned native references and current DSS output compare all 84,501
-original quantities per case. All 20,337 bus-voltage quantities pass in each
-case. The balanced case retains 2,517 failing current/power/loss comparisons;
-the unbalanced case retains 1,609. These are failed whole-case qualifications.
-Noncommuting NR telemetry and small current/power residuals are retained;
-voltage matching alone does not qualify the feeder.
+original quantities per case. Both cases pass the feeder accuracy profile
+through import, IR and repeated DSS output, including all 20,337 bus-voltage
+quantities. The tighter calibration profile remains in the report: it retains
+2,517 balanced and 1,609 unbalanced discrepancies in direct output. Raw native
+noncommuting NR telemetry and numerical residuals are never overwritten.
+Canonical GLM convergence remains unqualified.
 
 `current_form_feeder_oracle.py` checks the feeder observer against independent
 analytic microcase quantities and previously solved native equivalent circuits:
@@ -2587,3 +2588,47 @@ balanced GLM probes timed out at 120 and 300 seconds; separate stopping-precisio
 and zero-current initialization probes also timed out. A process sample showed
 active NR/SuperLU computation. None of these probes is a canonical electrical
 qualification, and the failed records remain external evidence.
+
+### Calibration and feeder accuracy profiles
+
+`oracle.TOLERANCES` remains the default for analytic microcases. Full IEEE9500
+runs report both calibration and `FEEDER_TOLERANCES`. Feeder comparisons allow
+`absolute + relative * abs(reference)` complex error, with these SI budgets:
+
+| Quantity | Absolute floor | Relative budget |
+|---|---:|---:|
+| Voltage | 0.0001 V | 0.000001 |
+| Current | 0.00001 A | 0.000001 |
+| Power/loss | 0.01 VA | 0.000001 |
+
+These are declared validation criteria, not engine convergence settings or a
+claim of universal numerical accuracy. Impedance/admittance calibration budgets
+remain unchanged. Missing keys, incompatible units and nonfinite values still
+fail. Losses remain signed sums of physical terminal powers; the absolute floor
+avoids dividing by a near-zero reference loss. Component-law and finite-impedance
+checks remain independent of feeder flow tolerances.
+
+`feeder_balance.py` independently evaluates external P/I/Z load currents,
+fixed generator/inverter injections and shunt admittances from the typed model.
+Each non-reference conductor must balance within the absolute current floor
+plus the relative budget times total incident current magnitude. Unsupported
+external laws fail explicitly. Private transformer core contributions stay at
+the observed external winding boundaries. Changed-load and wrong-tap negative
+controls must fail under the same feeder budgets.
+
+```sh
+python evals/gridlabd/ieee9500_import_oracle.py \
+  --source /path/to/CIMHub/ieee9500 \
+  --bridge target/debug/examples/glm_network \
+  --roundtrip-bridge target/debug/examples/dist_network \
+  --pnnl-root /path/to/GridLAB-D --output /path/to/new-feeder-profile-results
+```
+
+The optional round-trip bridge adds fresh DSS import, IR equality and canonical
+re-emission checks. Reimported disabled lines retained in the `untyped` table
+can map to zero port current only when explicit inactive-state evidence exists
+and the target element is absent. Their omission remains diagnosed; an
+unexplained missing active element fails. Internal coupled-source current/power
+measurements remain in `raw_equivalent_ports`, while physical port power uses
+actual endpoint voltage times conjugate boundary current. This avoids measuring
+at a virtual voltage behind a compensating series element after reimport.

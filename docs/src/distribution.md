@@ -699,14 +699,17 @@ Both original CIMHub IEEE9500 balanced and unbalanced projects now parse through
 IR and produce solvable OpenDSS circuits with their DER and fixed device states.
 Both projects also produce canonical GLM from their current typed fixed
 injections and passive networks. This is output availability, not full-feeder
-qualification. The current scalar line equivalents give both complete DSS
-cases a strict match on all 20,337 original bus-voltage measurements per case.
-Both-end current, power and loss comparisons remain unresolved. The native NR
-line-current reporting formula differs from physical pi-circuit currents when
-series impedance and shunt admittance matrices do not commute. The harness
-retains every raw failing quantity and independently audits that discrepancy.
-Canonical GLM runtime and convergence remain under investigation; no complete
-IEEE9500 matching claim is made yet.
+qualification of canonical GLM. Both complete cases meet the documented
+one-part-per-million feeder accuracy profile for all 84,501 original voltage,
+current, power and loss measurements through import, IR and repeated DSS output.
+Independent external-terminal current balance also passes. The tighter analytic
+calibration comparisons remain separate and retain their discrepancies, including
+native NR line-current reporting when impedance and shunt matrices do not commute.
+Reimported disabled contacts retain inactive-state metadata; canonical DSS
+reports their omission, with zero external currents and endpoint voltages still
+checked. Physical terminal powers use endpoint voltages and boundary currents,
+not internal equivalent-source powers. Canonical GLM runtime/convergence and
+broader format compatibility remain unfinished.
 
 GridLAB-D object latitude and longitude map to the network's typed
 `component_locations` table. Each point identifies its component table and exact
