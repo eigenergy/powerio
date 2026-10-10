@@ -127,10 +127,12 @@ class PowerIOError(ValueError):
     """Base error from the powerio parser, emitter, or matrix calculations.
 
     Failures mapped from the Rust core carry the diagnostic code string as
-    ``code``; it is set at raise time, so it is instance-only.
+    ``code`` and the structured ``diagnostics`` list; they are set at raise
+    time, so they are instance-only.
     """
 
     code: str
+    diagnostics: list[Diagnostic]
 
 class PowerIOParseError(PowerIOError):
     """A case file is malformed or unparseable."""

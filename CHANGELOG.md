@@ -6,6 +6,10 @@
   report filename-decoding failures explicitly and retain their bounded-input
   and unsafe-entry checks.
 
+- Add complete borrowed C views for bounded distribution load laws and PF
+  prescribed loads without changing ABI 7 layouts. Python parse errors retain
+  structured component diagnostics, including refused includes.
+
 - CLI text failures show the retained component diagnostics, including OpenDSS
   include refusals and unresolved line definitions. Invalid static snapshots
   fail before electrical conversion or IR output; read errors retain their
