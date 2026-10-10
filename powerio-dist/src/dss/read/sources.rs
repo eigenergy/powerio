@@ -536,9 +536,13 @@ fn export_staged_source_networks() {
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("glm"));
         let net = if is_glm {
-            panic!(
-                "GLM network cases belong to the later GLM reader validation, not this DSS-only prerequisite"
+            crate::glm::parse(
+                powerio_core::Source::from_memory("case.glm", text.as_bytes()).unwrap(),
+                crate::glm::PreprocessOptions::default(),
             )
+            .unwrap()
+            .value()
+            .clone()
         } else {
             staged_read(&text)
         };
