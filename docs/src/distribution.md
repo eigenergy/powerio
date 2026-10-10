@@ -227,7 +227,7 @@ with points uses the additive nested `"powerio.LocatedMulticonductorNetwork"`
 record; the electrical network inside it retains the legacy layout. Older IR
 readers reject this new record instead of silently losing locations. Rust
 accessors borrow the typed table; edits copy shared network tables only on the
-first write. IR preserves these points in calculation and collection envelopes
+first write. IR preserves these points in calculation and collection modules
 as well as standalone networks.
 
 Neutral reduction and LinDist3Flow preparation validate point attachments on
