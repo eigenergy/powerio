@@ -16,6 +16,7 @@ const METERS_PER_MILE: f64 = 1609.344;
 
 mod coil_banks;
 mod ideal;
+mod injections;
 mod loads;
 mod regulators;
 mod services;
@@ -29,6 +30,8 @@ mod transformers;
 /// contacts. Grounded center-tapped services with private impedance core loads
 /// emit native transformers; triplex P/I/Z terms and qualified full-neutral or
 /// direct hot-conductor line matrices emit from current typed coefficients.
+/// Fixed generator and explicitly fixed inverter injections emit signed
+/// constant-power loads; component identity and metadata losses are diagnosed.
 /// Coherent three-coil phase-pair banks emit native delta-grounded-wye
 /// configurations using current effective winding voltages and impedances.
 /// Fixed resistive regulator equivalents emit manual Type B settings.
@@ -112,6 +115,7 @@ pub(crate) fn emit_text(network: &MulticonductorNetwork) -> Result<TextEmission,
     writer.switches()?;
     writer.transformers()?;
     writer.loads()?;
+    writer.static_injections()?;
     writer.capacitor_shunts()?;
     writer.remaining_locations();
     Ok(TextEmission::new(
@@ -186,9 +190,7 @@ impl Writer<'_> {
                 "nominal frequencies other than 50 or 60 Hz are not qualified",
             ));
         }
-        if !self.net.generators().is_empty()
-            || !self.net.ibrs().is_empty()
-            || !self.net.capacitors().is_empty()
+        if !self.net.capacitors().is_empty()
             || !self.net.control_profiles().is_empty()
             || !self.net.untyped_objects().is_empty()
         {
@@ -255,6 +257,12 @@ impl Writer<'_> {
         }
         for load in self.net.loads() {
             self.reserve(&load.name)?;
+        }
+        for generator in self.net.generators() {
+            self.reserve(&generator.name)?;
+        }
+        for inverter in self.net.ibrs() {
+            self.reserve(&inverter.name)?;
         }
         for shunt in self.net.shunts() {
             self.reserve(&shunt.name)?;

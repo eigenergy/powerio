@@ -239,3 +239,99 @@ object load { name 2; parent 1; phases AN; nominal_voltage 240; constant_power_A
     assert_eq!(repeated.value().buses()[0].id, "1");
     assert_eq!(repeated.value().loads()[0].bus, "1");
 }
+
+#[test]
+fn fixed_generators_and_inverters_emit_current_signed_injections() {
+    use powerio_dist::{DistGenerator, DistIbr, IbrPrimeMover, IbrTopology};
+    let mut net = network();
+    net.generators_mut().push(DistGenerator::new(
+        "gen",
+        "sink",
+        vec!["3".into(), "1".into(), "n".into()],
+        Configuration::Wye,
+        vec![1000.0, -300.0],
+        vec![200.0, -50.0],
+    ));
+    let mut inverter = DistIbr::new(
+        "pv",
+        "sink",
+        vec!["3".into(), "1".into()],
+        IbrTopology::SinglePhase,
+        IbrPrimeMover::Pv,
+        vec![2000.0],
+    );
+    inverter.p_min = Some(vec![500.0]);
+    inverter.p_max = inverter.p_min.clone();
+    inverter.q_min = Some(vec![-100.0]);
+    inverter.q_max = inverter.q_min.clone();
+    net.ibrs_mut().push(inverter);
+    net.component_locations_mut()
+        .push(powerio_dist::DistComponentLocation::new(
+            powerio_dist::DistLocationTarget::Generator,
+            "gen",
+            powerio_dist::DistGeographicPoint::new(Some(0.0), Some(151.0)),
+        ));
+    net.component_locations_mut()
+        .push(powerio_dist::DistComponentLocation::new(
+            powerio_dist::DistLocationTarget::Ibr,
+            "pv",
+            powerio_dist::DistGeographicPoint::new(Some(-27.0), Some(153.0)),
+        ));
+    let before = serde_json::to_value(&net).unwrap();
+    let again = reparse(&text(&net));
+    assert!(again.generators().is_empty() && again.ibrs().is_empty());
+    for (name, p, q) in [
+        ("gen__glm_power_CN", -1000.0_f64, -200.0_f64),
+        ("gen__glm_power_AN", 300.0, 50.0),
+        ("pv", -500.0, 100.0),
+    ] {
+        let load = again.loads().iter().find(|l| l.name == name).unwrap();
+        assert_eq!(load.p_nom[0].to_bits(), p.to_bits());
+        assert_eq!(load.q_nom[0].to_bits(), q.to_bits());
+    }
+    assert!(again.component_locations().iter().any(|p| p.name == "pv"
+        && p.target == powerio_dist::DistLocationTarget::Load
+        && p.point.latitude == Some(-27.0)));
+    assert!(
+        again
+            .component_locations()
+            .iter()
+            .any(|p| p.name.starts_with("gen__") && p.point.latitude == Some(0.0))
+    );
+    assert_eq!(serde_json::to_value(&net).unwrap(), before);
+    net.generators_mut()[0].p_nom[0] = 1500.0;
+    let edited = reparse(&text(&net));
+    assert_eq!(
+        edited
+            .loads()
+            .iter()
+            .find(|l| l.name == "gen__glm_power_CN")
+            .unwrap()
+            .p_nom[0]
+            .to_bits(),
+        (-1500.0_f64).to_bits()
+    );
+}
+
+#[test]
+fn inverter_available_power_and_nonfixed_bounds_are_not_dispatch() {
+    use powerio_dist::{DistIbr, IbrPrimeMover, IbrTopology};
+    let mut net = network();
+    let mut inverter = DistIbr::new(
+        "pv",
+        "sink",
+        vec!["1".into(), "n".into()],
+        IbrTopology::SinglePhase,
+        IbrPrimeMover::Pv,
+        vec![2000.0],
+    );
+    inverter.p_avail = Some(1000.0);
+    net.ibrs_mut().push(inverter);
+    assert!(emit_canonical(&net, Destination::memory("pv.glm").unwrap()).is_err());
+    let i = &mut net.ibrs_mut()[0];
+    i.p_min = Some(vec![0.0]);
+    i.p_max = Some(vec![1000.0]);
+    i.q_min = Some(vec![0.0]);
+    i.q_max = Some(vec![0.0]);
+    assert!(emit_canonical(&net, Destination::memory("pv.glm").unwrap()).is_err());
+}

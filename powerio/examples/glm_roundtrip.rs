@@ -44,6 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             *q *= 1.25;
         }
     }
+    edit_injections(&mut edited);
     edit_transformers(&mut edited);
     for line in edited.lines_mut() {
         line.length *= 1.1;
@@ -85,13 +86,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ] {
         let path = output.join(format!("{label}.glm"));
         let emission = emit_canonical(&network, Destination::path(path))?;
-        if !network.transformers().is_empty() {
-            powerio_dist::emit(
-                &powerio::PioModule::new(network.clone()),
-                powerio_dist::DistTargetFormat::Dss,
-                Destination::path(output.join(format!("{label}.dss"))),
-            )?;
-        }
+        powerio_dist::emit(
+            &powerio::PioModule::new(network.clone()),
+            powerio_dist::DistTargetFormat::Dss,
+            Destination::path(output.join(format!("{label}.dss"))),
+        )?;
         reports.insert(label.into(), serde_json::json!({
             "network": network,
             "diagnostics": emission.diagnostics().iter().map(powerio::Diagnostic::code).collect::<Vec<_>>(),
@@ -181,6 +180,32 @@ fn edit_transformers(network: &mut powerio_dist::MulticonductorNetwork) {
         }
         if let Some(secondary) = transformer.windings.get_mut(1) {
             secondary.v_ref *= 1.05;
+        }
+    }
+}
+
+fn edit_injections(network: &mut powerio_dist::MulticonductorNetwork) {
+    for generator in network.generators_mut() {
+        for p in &mut generator.p_nom {
+            *p *= 1.25;
+        }
+        for q in &mut generator.q_nom {
+            *q *= 1.25;
+        }
+    }
+    for inverter in network.ibrs_mut() {
+        for values in [
+            &mut inverter.p_min,
+            &mut inverter.p_max,
+            &mut inverter.q_min,
+            &mut inverter.q_max,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            for value in values {
+                *value *= 1.25;
+            }
         }
     }
 }

@@ -7,6 +7,7 @@ Native controls retain their original fixed states and future outage schedules.
 import argparse
 import hashlib
 import json
+import math
 import re
 import subprocess
 from pathlib import Path
@@ -114,7 +115,7 @@ def inventory(text):
     return objects
 
 
-def instrument(text, objects):
+def instrument(text, objects, stopping_fraction=1e-8, iteration_limit=100):
     for name, obj in objects.items():
         if "source_identity" in obj:
             pattern = r"(\bobject\s+" + re.escape(obj["source_identity"]) + r"\s*\{)"
@@ -127,8 +128,9 @@ def instrument(text, objects):
         "stoptime '2000-01-01 0:00:00'", "stoptime '2000-01-01 0:00:01'"
     )
     text = text.replace(
-        "solver_method NR;", "solver_method NR; default_maximum_voltage_error 1e-8;"
+        "solver_method NR;", f"solver_method NR; default_maximum_voltage_error {stopping_fraction:.17g};"
     )
+    text += f"\n#set iteration_limit={iteration_limit};\n"
     text += "\n#set complex_format=%.17g%+.17gj\n#set double_format=%.17g\n#set complex_output_format=RECT\n"
     classes = {obj["class"] for obj in objects.values()}
     spec = {
@@ -413,12 +415,17 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     for name in ("source", "bridge", "output", "pnnl-root"):
         p.add_argument("--" + name, type=Path, required=True)
+    p.add_argument("--native-stopping-fraction", type=float, default=1e-8)
+    p.add_argument("--native-iteration-limit", type=int, default=100)
     args = p.parse_args()
+    if not math.isfinite(args.native_stopping_fraction) or args.native_stopping_fraction <= 0 or not 1 <= args.native_iteration_limit <= 10000:
+        p.error("native stopping fraction must be finite/positive and iteration limit in 1..10000")
     args.output.mkdir(parents=True, exist_ok=False)
     report = {
         "engines": LOCK,
         "bridge_sha256": hashlib.sha256(args.bridge.read_bytes()).hexdigest(),
-        "native_stopping_fraction": 1e-8,
+        "native_stopping_fraction": args.native_stopping_fraction,
+        "native_iteration_limit": args.native_iteration_limit,
         "cases": {},
     }
     for case in ("bal", "unbal"):
@@ -458,7 +465,7 @@ def main():
         objects = inventory(
             source.read_text() + (directory / f"{name}_base.glm").read_text()
         )
-        native_text, spec = instrument(source.read_text(), objects)
+        native_text, spec = instrument(source.read_text(), objects, args.native_stopping_fraction, args.native_iteration_limit)
         (directory / "model.glm").write_text(native_text)
         run_glm(
             "pnnl",

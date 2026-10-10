@@ -2473,3 +2473,43 @@ did not resolve it. With the larger budget, all quantities pass unchanged
 thresholds. The original failed reports remain available in local evidence.
 IEEE9500 residuals, floating/explicit neutrals, broader static laws and interface
 qualification remain separate unresolved work.
+
+### Canonical fixed generator and inverter injections
+
+`glm_injection_write_oracle.py` checks signed constant-power load equivalents
+from current generator P/Q and explicitly fixed inverter bounds. It covers
+fourteen PNNL NR/FBS diesel cases and sixteen solar/inverter cases across both
+pinned forks, including the IEEE9500 split-phase PV parameters. Fresh, IR,
+edited, rebased and explicitly referenced-source output is solved through
+canonical GLM and repeated GLM/DSS. All thirty cases pass 600 comparisons with
+6,680 complex observations; unchanged output must fail after typed edits.
+Diesel circuits also use independent analytic equations, and inverter power is
+checked against the original thermal/efficiency/clipping equations.
+
+```sh
+cargo build -p powerio --example glm_roundtrip
+python evals/gridlabd/glm_injection_write_oracle.py \
+  --bridge target/debug/examples/glm_roundtrip --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-injection-write-directory
+```
+
+Injection power is measured at physical feeder boundaries and, for the solar
+circuits, separated from background P/I/Z loads using their constitutive laws.
+This works on both forks without assuming load telemetry fields that are not
+published consistently. Reimported load identities are observed alongside the
+original generator identities. Current component points are written on the
+equivalent; bounds, ratings, costs and prime-mover metadata losses are diagnosed.
+Available power alone is not dispatch, and nonfixed bounds, active profiles,
+uninterpreted electrical extras and unqualified topology/voltage laws fail.
+
+Both complete CIMHub IEEE9500 GLM inputs now construct canonical GLM/DSS through
+IR and typed edits. This is output availability, not whole-feeder electrical
+qualification. Raw port residuals, noncommuting native NR reporting and nearly
+zero capacitor links remain tracked failures. Native stopping fractions and
+iteration limits can be selected explicitly with
+`ieee9500_import_oracle.py --native-stopping-fraction ...
+--native-iteration-limit ...`; comparison budgets are unchanged. The initial
+`1e-12`/1,000-iteration and `1e-10`/100-iteration native trials hit execution
+timeouts, and their original reports/logs remain external evidence. Two Arras
+launcher failures in the injection sweep passed complete identical-input
+reruns; both original failures are retained in the aggregate report.

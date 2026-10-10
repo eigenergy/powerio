@@ -395,6 +395,13 @@ impl Writer<'_> {
         Ok(())
     }
     pub(super) fn service_load(&mut self, load: &DistLoad) -> Result<(), Error> {
+        self.service_load_with_target(load, DistLocationTarget::Load)
+    }
+    pub(super) fn service_load_with_target(
+        &mut self,
+        load: &DistLoad,
+        target: DistLocationTarget,
+    ) -> Result<(), Error> {
         let fail = || {
             unsupported(format!(
                 "service load {} needs another voltage-law/connection mapping",
@@ -432,7 +439,7 @@ impl Writer<'_> {
             phase_name(phase),
             self.nominal[load.bus.as_str()]
         );
-        self.coordinates(DistLocationTarget::Load, &load.name);
+        self.coordinates(target, &load.name);
         for (i, channel) in channels.iter().enumerate() {
             let power = Complex::new(load.p_nom[i], load.q_nom[i]);
             let value = match law {

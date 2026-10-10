@@ -596,8 +596,13 @@ OpenDSS emission of generators without retained voltage bounds supplies a
 upper bound OpenDSS uses constant impedance. Generators parsed from OpenDSS
 retain their explicit bounds or native 0.9..1.1 pu defaults. Generator rating
 limits remain in IR; their OpenDSS mapping is unfinished and reports a loss.
-Canonical GLM generator writing is also unfinished. This device qualification
-is a prerequisite for IEEE9500, not qualification of that feeder.
+Canonical GLM writes current fixed generator injections as signed
+constant-power loads, preserving phase/phase-pair connections and component
+points. Reimport retains their electrical law under load identities. Ratings,
+optimization bounds and costs have no matching load fields and are diagnosed
+as omitted. Generator electrical extras or voltage/current laws outside this
+profile remain unsupported. This device qualification does not qualify the
+complete IEEE9500 feeder.
 
 Solar-fed `FOUR_QUADRANT` inverters in `CONSTANT_PF` mode read as fixed
 per-phase inverter injections, including native efficiency and rating clipping.
@@ -616,7 +621,12 @@ input and therefore zero AC injection, even if `P_Out` requests charging. Import
 preserves that idle electrical state and reports `READ.GLM.BATTERY_IDLE`; energy,
 state of charge and inactive load-following settings remain source-only. Native
 checks cover both solvers and forks. Other battery operating modes, weather files,
-multipoint efficiency and canonical GLM inverter writing remain unfinished.
+multipoint efficiency remain unfinished. Canonical GLM writes explicitly fixed
+inverter P/Q bounds as signed constant-power loads on the current ordinary or
+split-phase connection. Available power alone is not dispatch; missing or
+nonfixed bounds, active profiles and unresolved voltage/current laws fail.
+Points remain attached to the equivalent, while prime-mover, availability and
+rating metadata losses are diagnosed.
 Climate coordinates and thermal inputs remain source-only with diagnostics.
 
 OpenDSS rated wye reactors with kV/kvar and explicit R or Rp map to the
@@ -673,8 +683,10 @@ ratings are validated and retained in source; typed ampacity mapping is pending.
 
 Both original CIMHub IEEE9500 balanced and unbalanced projects now parse through
 IR and produce solvable OpenDSS circuits with their DER and fixed device states.
-Full-precision voltage and both-end current/power comparisons are available, but
-strict full-feeder qualification remains open. The native NR line-current
+Both projects also produce canonical GLM from their current typed fixed
+injections and passive networks. This is output availability, not full-feeder
+qualification. Full-precision voltage and both-end current/power comparisons
+are available, but strict full-feeder qualification remains open. The native NR line-current
 reporting formula differs from physical pi-circuit currents when series
 impedance and shunt admittance matrices do not commute. The harness retains the
 raw failing comparison and independently audits that discrepancy. Small
