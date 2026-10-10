@@ -45,7 +45,7 @@ fn reactors_preserve_alias_order_and_native_zero_impedance_rules() {
         assert_eq!(m.value().switches()[0].terminal_map_from, ["1", "3"]);
         assert_eq!(m.value().component_locations().len(), 2);
         let m = read(&deck("FBS", "BC", ""), dialect).unwrap();
-        assert!(m.value().lines().is_empty());
+        assert_eq!(m.value().lines().as_slice(), []);
         assert_eq!(m.value().switches()[0].terminal_map_from, ["2", "3"]);
     }
 }

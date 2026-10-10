@@ -125,7 +125,7 @@ impl Reader<'_> {
         if parts.is_empty() || !parts.len().is_multiple_of(3) {
             return Err(self.error(key, "manual_outages requires object,start,restore triples"));
         }
-        for event in parts.chunks_exact(3) {
+        for event in parts.as_chunks::<3>().0 {
             self.index
                 .resolve_reference(event[0])?
                 .ok_or_else(|| self.error(key, "outage target cannot be root"))?;

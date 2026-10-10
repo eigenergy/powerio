@@ -449,7 +449,7 @@ object overhead_line { name l; phases ABN; from a; to b; configuration c; length
             expected
         );
         if solver == "FBS" {
-            assert!(module.value().lines().is_empty());
+            assert_eq!(module.value().lines().as_slice(), []);
             assert_eq!(module.value().shunts()[0].terminal_map.len(), 6);
             assert_eq!(module.value().switches().len(), 2);
             assert!(

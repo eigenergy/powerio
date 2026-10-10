@@ -354,7 +354,7 @@ uses manual coils with the current typed admittances. Missing switch states and
 unqualified banked initialization fail. A single-phase manual bank sensing its own phase is supported. An explicit `cap_nominal_voltage` sets its admittance base; otherwise native initialization uses the parent bus nominal voltage.
 
 The IEEE8500 native reference harness compares its original PNNL input with
-explicit static variants on both forks. Arras requires `triplex_load` constant
+explicit static configurations on both forks. Arras requires `triplex_load` constant
 power declarations where this older input uses `triplex_node.power_1/power_2`.
 The harness also handles different dump-mode spellings. That initial dump-only
 reference remains separate from full-precision import qualification.
@@ -472,11 +472,11 @@ about the reporting discrepancy. FBS uses it during its solve: FBS import now
 preserves the native equations as a conductor admittance with auxiliary current
 variables and ideal external contacts, reporting `READ.GLM.LINE_EQUIVALENT`.
 Line coordinates follow the shunt and contacts; configuration coordinates and
-materialized coefficients remain on the retained linecode. OpenDSS output
+calculated coefficients remain on the retained linecode. OpenDSS output
 preserves this nonreciprocal circuit. Eight analytic/native/IR/DSS cases cover
 two- and three-phase examples, and IEEE13 FBS matches both pinned engines.
 IEEE34 still has two loss comparisons just above the strict tolerance; IEEE123's
-zero-voltage variant has one undeclared-phase voltage discrepancy. Neither is
+zero-voltage configuration has one undeclared-phase voltage discrepancy. Neither is
 claimed as a complete raw match. Canonical GLM writing of these native FBS
 auxiliary-node equivalents remains unsupported.
 

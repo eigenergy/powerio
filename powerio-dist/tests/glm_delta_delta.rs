@@ -21,7 +21,7 @@ fn native_fbs_delta_law_keeps_independent_voltage_and_current_maps() {
         )
         .unwrap();
         let net = module.value();
-        assert!(net.transformers().is_empty());
+        assert_eq!(net.transformers().as_slice(), []);
         assert_eq!(net.switches().len(), 2);
         assert_eq!(net.shunts().len(), 1);
         let shunt = &net.shunts()[0];
