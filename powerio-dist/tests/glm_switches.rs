@@ -88,7 +88,7 @@ fn finite_contacts_preserve_native_solver_defaults_and_alias_assignment_order() 
                 impedances(module.value()),
                 vec![("1".into(), expected), ("3".into(), expected)]
             );
-            assert!(module.value().switches().is_empty());
+            assert_eq!(module.value().switches().as_slice(), []);
             assert!(
                 module
                     .diagnostics()
@@ -186,14 +186,14 @@ fn unspecified_fbs_contacts_stay_ideal_in_source_free_output() {
         "solver_method NR; solver_method FBS;",
     ] {
         let net = read(&deck(module, "ABC", ""));
-        assert!(net.lines().is_empty());
+        assert_eq!(net.lines().as_slice(), []);
         assert_eq!(net.switches().len(), 1);
         assert!(!net.switches()[0].open);
         let output = canonical(&net);
         assert!(output.contains("solver_method FBS"));
         assert!(output.contains("switch_impedance 0+0j"));
         let restored = read(&output);
-        assert!(restored.lines().is_empty());
+        assert_eq!(restored.lines().as_slice(), []);
         assert!(!restored.switches()[0].open);
     }
 }
