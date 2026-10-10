@@ -49,7 +49,7 @@ fn single_phase_import_materializes_ground_and_preserves_physical_units() {
     assert!(
         matches!(&load.voltage_model, DistLoadVoltageModel::ConstantImpedance { v_nom } if v_nom == &[240.0])
     );
-    assert!(module.diagnostics().is_empty());
+    assert_eq!(module.diagnostics(), []);
     assert_eq!(
         module.source().unwrap().primary_buffer().unwrap().bytes(),
         SINGLE.as_bytes()
