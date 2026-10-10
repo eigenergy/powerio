@@ -60,7 +60,7 @@ fn pinned_calculation_history() {
                 let diagonal = y + Complex::new(0.0, m.b[0][0] / 2.0);
                 let actual = [diagonal, -y, -y, diagonal];
                 assert_eq!(expected.len(), 8);
-                for (actual, expected) in actual.iter().zip(expected.chunks_exact(2)) {
+                for (actual, expected) in actual.iter().zip(expected.as_chunks::<2>().0.iter()) {
                     let expected = Complex::new(expected[0], expected[1]);
                     assert!(
                         (*actual - expected).norm() <= 1e-10 + 1e-10 * expected.norm(),

@@ -67,7 +67,7 @@ dropout. Model 2 remains constant impedance. Models 3 and 4 carry a typed
 `(0, 2)` and the native CVR exponents (default `(1, 2)`). Outside the band, both
 powers follow the native fallback independently of those exponents. The Rust
 `power_scale` method evaluates these per-branch multipliers. IR retains the
-distinct tagged models; readers without a variant reject it. Canonical DSS
+distinct tagged models; readers without a configuration reject it. Canonical DSS
 writes the typed exponents and voltage limits ahead of stale extras or writer
 defaults. Unequal per-branch parameters emit separate single-phase loads.
 
