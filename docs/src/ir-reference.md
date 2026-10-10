@@ -638,7 +638,7 @@ Schema definitions: `MulticonductorNetwork/anyOf/0`, `MulticonductorNetworkBody`
 ### LocatedMulticonductorNetwork
 
 The `powerio.MulticonductorNetwork` value can instead contain a nested
-`powerio.LocatedMulticonductorNetwork` record. It remains the same runtime
+`"powerio.LocatedMulticonductorNetwork"` record. It remains the same runtime
 network family. An older reader rejects the wrapper because its required
 electrical fields are absent at the root. This representation works wherever
 the network is stored, including calculation and collection values.
@@ -647,7 +647,7 @@ Schema definition: `LocatedNetworkWire`.
 
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
-| `type` | string | | | exactly `powerio.LocatedMulticonductorNetwork` | required |
+| `type` | string | | | exactly `"powerio.LocatedMulticonductorNetwork"` | required |
 | `value` | `LocatedNetworkFields` | | | | required |
 
 Schema definition: `LocatedNetworkFields`.

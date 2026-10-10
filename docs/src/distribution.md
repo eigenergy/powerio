@@ -223,7 +223,7 @@ GeoLayer extraction report omitted component geography. Cross-format coordinate
 mapping and dedicated binding accessors remain unfinished.
 
 Networks without component geography keep their existing IR body. A network
-with points uses the additive nested `powerio.LocatedMulticonductorNetwork`
+with points uses the additive nested `"powerio.LocatedMulticonductorNetwork"`
 record; the electrical network inside it retains the legacy layout. Older IR
 readers reject this new record instead of silently losing locations. Rust
 accessors borrow the typed table; edits copy shared network tables only on the
