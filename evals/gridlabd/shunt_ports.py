@@ -11,7 +11,10 @@ def interfaces(native, network):
     result = {}
     names = [b["id"].lower() for b in network["buses"]]
     for table in ("lines", "switches", "transformers", "shunts", "loads", "generators", "sources", "ibrs"):
-        names.extend(item["name"].lower() for item in network.get(table, []))
+        for item in network.get(table, []):
+            if table == "sources" and item.get("type") == "powerio.ReferencedVoltageSource":
+                item = item["value"]
+            names.append(item["name"].lower())
     grounded = {b["id"].lower(): set(b["grounded"]) for b in network["buses"]}
     for index, shunt in enumerate(network["shunts"]):
         original = shunt.get("extras", {}).get("dss_original_element", "").lower()

@@ -1592,7 +1592,17 @@ const DISTRIBUTION_FORMATS: [DistributionFormat; 3] = [
 // Generator voltage bounds: DSS->BMOPF/PMD each adds two disclosures for
 // retained native vminpu/vmaxpu defaults. BMOPF/PMD->DSS each adds one
 // disclosure for the explicit 0..2 pu band on the format-neutral generator.
-const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[28, 130, 304], [52, 0, 26], [58, 46, 0]];
+// Native Thevenin source compaction (full warning-text audit against d8d94896):
+// DSS->DSS -6: three fewer retained source LineCode definitions on each parse leg.
+// DSS->BMOPF -12: -3 parse definitions, -3 dropped definitions, -6 source-count
+// disclosures; one native source replaces three cancellation constraints.
+// DSS->PMD -84: -3 parse definitions, -3 dropped records, -78 derived helper-line
+// metadata notices. Current typed source voltages and impedances are unchanged.
+// BMOPF->DSS -6: -3 derived matrix-provenance notices, -3 readback definitions.
+// Every delta is accounted for by complete stage/message counts. Existing
+// electrical/source-equivalent invariants continue to run; no warnings were
+// removed to force a zero cell.
+const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[22, 118, 220], [46, 0, 26], [58, 46, 0]];
 
 const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 7] = [
     (
