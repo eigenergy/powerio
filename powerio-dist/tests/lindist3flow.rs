@@ -429,8 +429,7 @@ fn permissive_policy_omits_untyped_records_but_lower_retains_them() {
     );
 }
 
-#[test]
-fn bounded_zip_projection_is_explicit_and_preserves_nominal_value_and_slope() {
+fn assert_bounded_projection(law: &DistLoadVoltageModel) {
     let mut source = network();
     let mut load = DistLoad::new(
         "demand",
@@ -440,19 +439,6 @@ fn bounded_zip_projection_is_explicit_and_preserves_nominal_value_and_slope() {
         vec![100.0],
         vec![20.0],
     );
-    let law = DistLoadVoltageModel::BoundedZip {
-        v_nom: vec![230.0],
-        alpha_z: vec![0.0],
-        alpha_i: vec![1.0],
-        alpha_p: vec![0.0],
-        beta_z: vec![0.0],
-        beta_i: vec![1.0],
-        beta_p: vec![0.0],
-        v_low_pu: 0.5,
-        v_min_pu: 0.95,
-        v_max_pu: 1.05,
-        cutoff_pu: 0.2,
-    };
     load.voltage_model = law.clone();
     source.loads_mut().push(load);
     for policy in [
@@ -460,7 +446,7 @@ fn bounded_zip_projection_is_explicit_and_preserves_nominal_value_and_slope() {
         LinDist3FlowPreparationPolicy::Lower,
     ] {
         let prepared = prepare_lindist3flow_network(&source, policy).unwrap();
-        assert_eq!(prepared.network().loads()[0].voltage_model, law);
+        assert_eq!(&prepared.network().loads()[0].voltage_model, law);
         assert!(
             !prepared
                 .report()
@@ -471,7 +457,7 @@ fn bounded_zip_projection_is_explicit_and_preserves_nominal_value_and_slope() {
     }
     let prepared =
         prepare_lindist3flow_network(&source, LinDist3FlowPreparationPolicy::Approximate).unwrap();
-    assert_eq!(source.loads()[0].voltage_model, law);
+    assert_eq!(&source.loads()[0].voltage_model, law);
     let action = prepared
         .report()
         .actions
@@ -480,7 +466,7 @@ fn bounded_zip_projection_is_explicit_and_preserves_nominal_value_and_slope() {
         .unwrap();
     assert_eq!(
         action.details["source_voltage_model"],
-        serde_json::json!(&law)
+        serde_json::json!(law)
     );
     let projected = &prepared.network().loads()[0].voltage_model;
     for (actual, expected) in projected
@@ -500,15 +486,14 @@ fn bounded_zip_projection_is_explicit_and_preserves_nominal_value_and_slope() {
             (hi[1] - lo[1]) / (2.0 * step),
         ]
     };
-    for (actual, expected) in slope(projected).into_iter().zip(slope(&law)) {
+    for (actual, expected) in slope(projected).into_iter().zip(slope(law)) {
         assert!((actual - expected).abs() < 1e-8);
     }
-    let DistLoadVoltageModel::BoundedZip { v_min_pu, .. } =
-        &mut source.loads_mut()[0].voltage_model
-    else {
-        unreachable!()
-    };
-    *v_min_pu = 1.0;
+    match &mut source.loads_mut()[0].voltage_model {
+        DistLoadVoltageModel::BoundedZip { v_min_pu, .. }
+        | DistLoadVoltageModel::BoundedExponential { v_min_pu, .. } => *v_min_pu = 1.0,
+        _ => unreachable!(),
+    }
     let unchanged =
         prepare_lindist3flow_network(&source, LinDist3FlowPreparationPolicy::Approximate).unwrap();
     assert_eq!(
@@ -519,4 +504,42 @@ fn bounded_zip_projection_is_explicit_and_preserves_nominal_value_and_slope() {
         unchanged.report().actions,
         [] as [powerio_dist::LinDist3FlowPreparationAction; 0]
     );
+}
+
+#[test]
+fn bounded_zip_projection_is_explicit_and_preserves_nominal_value_and_slope() {
+    for (z, i, p) in [
+        (1.0, 0.0, 0.0),
+        (0.0, 1.0, 0.0),
+        (0.0, 0.0, 1.0),
+        (0.2, 0.3, 0.5),
+    ] {
+        for cutoff_pu in [0.0, 0.2] {
+            assert_bounded_projection(&DistLoadVoltageModel::BoundedZip {
+                v_nom: vec![230.0],
+                alpha_z: vec![z],
+                alpha_i: vec![i],
+                alpha_p: vec![p],
+                beta_z: vec![z],
+                beta_i: vec![i],
+                beta_p: vec![p],
+                v_low_pu: 0.5,
+                v_min_pu: 0.95,
+                v_max_pu: 1.05,
+                cutoff_pu,
+            });
+        }
+    }
+}
+
+#[test]
+fn bounded_exponential_projection_preserves_independent_fractional_slopes() {
+    assert_bounded_projection(&DistLoadVoltageModel::BoundedExponential {
+        v_nom: vec![230.0],
+        gamma_p: vec![-0.5],
+        gamma_q: vec![1.7],
+        v_low_pu: 0.5,
+        v_min_pu: 0.95,
+        v_max_pu: 1.05,
+    });
 }

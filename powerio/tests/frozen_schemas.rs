@@ -163,7 +163,7 @@ fn ir_version_2_schemas_only_add() {
                     );
                 }
             } else if name == "DistLoadVoltageModel" {
-                assert_additive_load_law(earlier, definition, &current_defs[name]);
+                assert_additive_load_laws(earlier, definition, &current_defs[name]);
             } else if name == "MulticonductorNetwork" {
                 // Component geography uses a new mandatory nested type tag.
                 // The legacy network branch and the nested electrical body
@@ -269,49 +269,87 @@ fn every_powerio_ir_property_is_typed() {
     assert!(bad.is_empty(), "untyped properties: {bad:?}");
 }
 
-fn assert_additive_load_law(
+fn assert_additive_load_laws(
     earlier: &str,
     published: &serde_json::Value,
     current: &serde_json::Value,
 ) {
-    // A new discriminator is an additive electrical law, not new
-    // optional fields on a published law that old readers ignore.
-    // Preserve every old variant exactly and pin the sole addition.
+    // Explicit discriminators add electrical laws without changing any
+    // published variant. Pin each addition and its fields, rather than
+    // accepting an arbitrary increase in the enum's variant count.
     let old = published["oneOf"].as_array().unwrap();
     let new = current["oneOf"].as_array().unwrap();
-    assert_eq!(new.len(), old.len() + 1);
+    let additions: [(&str, &[&str], &[&str]); 2] = [
+        (
+            "bounded_zip",
+            &[
+                "model",
+                "v_nom",
+                "alpha_z",
+                "alpha_i",
+                "alpha_p",
+                "beta_z",
+                "beta_i",
+                "beta_p",
+                "v_low_pu",
+                "v_min_pu",
+                "v_max_pu",
+                "cutoff_pu",
+            ],
+            &[],
+        ),
+        (
+            "bounded_exponential",
+            &[
+                "model", "v_nom", "gamma_p", "gamma_q", "v_low_pu", "v_min_pu", "v_max_pu",
+            ],
+            &[],
+        ),
+    ];
+    assert_eq!(new.len(), old.len() + additions.len());
     for variant in old {
         let tag = &variant["properties"]["model"]["const"];
         assert_eq!(
             new.iter()
                 .find(|candidate| candidate["properties"]["model"]["const"] == *tag),
             Some(variant),
-            "{earlier}: load law {tag} changed"
+            "{earlier}: load law {tag} changed",
         );
     }
-    let bounded = new
+    let nominal_voltage = &old
         .iter()
-        .find(|variant| variant["properties"]["model"]["const"] == "bounded_zip")
-        .unwrap();
-    assert!(
-        !old.iter()
-            .any(|variant| variant["properties"]["model"]["const"] == "bounded_zip")
-    );
-    assert_eq!(
-        bounded["required"],
-        serde_json::json!([
-            "model",
-            "v_nom",
-            "alpha_z",
-            "alpha_i",
-            "alpha_p",
-            "beta_z",
-            "beta_i",
-            "beta_p",
-            "v_low_pu",
-            "v_min_pu",
-            "v_max_pu",
-            "cutoff_pu"
-        ])
-    );
+        .find(|variant| variant["properties"]["model"]["const"] == "constant_power")
+        .unwrap()["properties"]["v_nom"];
+    for (tag, required, optional) in additions {
+        assert!(
+            !old.iter()
+                .any(|variant| variant["properties"]["model"]["const"] == tag),
+            "{earlier}: {tag} was already published",
+        );
+        let added = new
+            .iter()
+            .find(|variant| variant["properties"]["model"]["const"] == tag)
+            .unwrap();
+        assert_eq!(added["type"], "object");
+        assert_eq!(added["required"], serde_json::json!(required));
+        let fields = added["properties"].as_object().unwrap();
+        let mut expected_fields: Vec<_> = required.iter().chain(optional).copied().collect();
+        expected_fields.sort_unstable();
+        assert_eq!(
+            fields.keys().map(String::as_str).collect::<Vec<_>>(),
+            expected_fields
+        );
+        for (name, schema) in fields {
+            let expected = match name.as_str() {
+                "model" => serde_json::json!({"type": "string", "const": tag}),
+                "v_nom" | "alpha_z" | "alpha_i" | "alpha_p" | "beta_z" | "beta_i" | "beta_p"
+                | "gamma_p" | "gamma_q" => nominal_voltage.clone(),
+                "v_low_pu" | "v_min_pu" | "v_max_pu" | "cutoff_pu" => {
+                    nominal_voltage["items"].clone()
+                }
+                _ => panic!("unexpected {tag} field {name}"),
+            };
+            assert_eq!(schema, &expected, "{tag}.{name} schema changed");
+        }
+    }
 }
