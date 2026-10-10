@@ -42,7 +42,7 @@ fn real_units_preserve_dimensions_defaults_prefixes_and_native_offsets() {
             "{text}"
         );
         assert_eq!(result.value.im.to_bits(), 0.0_f64.to_bits());
-        assert!(result.diagnostics.is_empty());
+        assert_eq!(result.diagnostics, [] as [powerio_core::Diagnostic; 0]);
     }
 }
 
@@ -67,7 +67,7 @@ fn rectangular_polar_and_exponent_signs_produce_the_same_phasor() {
             (result.value - Complex64::new(3.0, 4.0)).norm() < 1e-12,
             "{text}"
         );
-        assert!(result.diagnostics.is_empty());
+        assert_eq!(result.diagnostics, [] as [powerio_core::Diagnostic; 0]);
     }
 }
 

@@ -136,7 +136,7 @@ fn unknown_variables_and_active_execution_are_explicit_failures() {
             "{text}"
         );
         assert!(failure.retained_source().is_some());
-        assert!(!failure.diagnostics()[0].spans().is_empty());
+        assert_ne!(failure.diagnostics()[0].spans(), []);
     }
 }
 
