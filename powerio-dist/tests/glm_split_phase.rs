@@ -231,7 +231,7 @@ fn parented_triplex_loads_keep_anchor_and_collision_free_core_ids() {
 }
 
 #[test]
-fn source_echo_is_exact_but_canonical_triplex_writing_is_still_an_explicit_gap() {
+fn source_echo_and_fresh_center_tapped_emission_preserve_the_service() {
     let module = read(deck());
     let result = powerio_dist::emit(
         &module,
@@ -243,5 +243,61 @@ fn source_echo_is_exact_but_canonical_triplex_writing_is_still_an_explicit_gap()
         panic!()
     };
     assert_eq!(artifacts[0].bytes(), deck().as_bytes());
-    assert!(emit_canonical(module.value(), Destination::memory("case.glm").unwrap()).is_err());
+    let result = emit_canonical(module.value(), Destination::memory("case.glm").unwrap()).unwrap();
+    let EmittedOutput::Memory { artifacts } = result.output() else {
+        panic!()
+    };
+    let fresh = parse(
+        Source::from_memory("fresh.glm", artifacts[0].bytes()).unwrap(),
+        PreprocessOptions::default(),
+    )
+    .unwrap()
+    .into_value();
+    let a = &module.value().transformers()[0];
+    let b = &fresh.transformers()[0];
+    assert_eq!(a.windings.len(), b.windings.len());
+    for (a, b) in a.windings.iter().zip(&b.windings) {
+        close(a.v_ref, b.v_ref);
+        close(a.r_pct, b.r_pct);
+        close(a.s_rating, b.s_rating);
+        assert_eq!(a.terminal_map, b.terminal_map);
+    }
+    for (a, b) in a.xsc_pct.iter().zip(&b.xsc_pct) {
+        close(*a, *b);
+    }
+    assert_eq!(
+        fresh.component_locations(),
+        module.value().component_locations()
+    );
+}
+
+#[test]
+fn a_core_with_an_extra_device_cannot_be_folded_into_the_native_transformer() {
+    let mut net = read(deck()).into_value();
+    let mut extra = net
+        .loads()
+        .iter()
+        .find(|l| l.bus == net.transformers()[0].windings[3].bus)
+        .unwrap()
+        .clone();
+    extra.name = "extra-core-device".into();
+    net.loads_mut().push(extra);
+    assert!(emit_canonical(&net, Destination::memory("case.glm").unwrap()).is_err());
+}
+
+#[test]
+fn native_center_tapped_output_rejects_unequal_effective_leg_ratios() {
+    let mut net = read(deck()).into_value();
+    net.transformers_mut()[0].windings[1].tap = 1.1;
+    assert!(emit_canonical(&net, Destination::memory("case.glm").unwrap()).is_err());
+}
+
+#[test]
+fn current_loads_with_conflicting_points_cannot_be_grouped_silently() {
+    let text = format!(
+        "{}\nobject triplex_load {{ name first; parent sink; phases CS; nominal_voltage 120; constant_current_1 1-.1j; latitude -27; }}\nobject triplex_load {{ name second; parent sink; phases CS; nominal_voltage 120; constant_current_1 2-.2j; latitude -28; }}",
+        deck()
+    );
+    let net = read(&text).into_value();
+    assert!(emit_canonical(&net, Destination::memory("case.glm").unwrap()).is_err());
 }

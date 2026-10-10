@@ -7,12 +7,26 @@ impl Writer<'_> {
     #[allow(clippy::float_cmp)] // Exact base/tap restrictions; no approximate projection.
     pub(super) fn validate_transformers(&self) -> Result<(), Error> {
         for t in self.net.transformers() {
+            if self.services.centers.contains_key(t.name.as_str()) {
+                if self.ideal_plan.is_some() {
+                    return Err(unsupported(
+                        "service circuits with ideal contacts need a qualified FBS forest mapping",
+                    ));
+                }
+                continue;
+            }
             let fail = || {
                 unsupported(format!(
                     "transformer {} needs an additional winding/connection/tap/shunt mapping",
                     t.name
                 ))
             };
+            if t.windings
+                .iter()
+                .any(|w| self.services.buses.contains_key(w.bus.as_str()))
+            {
+                return Err(fail());
+            }
             if self.ideal_plan.is_some()
                 || !matches!(t.phases, 1 | 3)
                 || t.extras.iter().any(|(k, v)| match k.as_str() {
@@ -73,6 +87,10 @@ impl Writer<'_> {
 
     pub(super) fn transformers(&mut self) -> Result<(), Error> {
         for t in self.net.transformers() {
+            if self.services.centers.contains_key(t.name.as_str()) {
+                self.center_transformer(t)?;
+                continue;
+            }
             let a = &t.windings[0];
             let b = &t.windings[1];
             let phases = super::phases(&a.terminal_map[..t.phases])?;

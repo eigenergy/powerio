@@ -397,8 +397,28 @@ equivalent, including an open auxiliary third port, when needed. Aggregate its
 physical end ports for powers and losses; internal element losses alone are not
 the original line's losses. Both forks and solvers have direct-matrix microcase
 qualification through IR and DSS, including deliberate wrong-load checks.
-Floating service neutrals, canonical GLM service output and additional geometry
-models remain unfinished and fail explicitly.
+Floating service neutrals, service switches, service circuits with ideal
+contacts and additional geometry models remain unfinished and fail explicitly.
+
+Canonical GLM can now write grounded center-tapped services from their current
+four-winding circuit and private impedance core load. Effective winding ratios,
+leakage and core admittance set the native configuration; retained source
+parameters do not override edits. The core bus must have no additional device
+or external connection. Unequal effective leg ratios require another mapping.
+Triplex power and impedance terms keep separate load objects. Current terms
+are combined on the root triplex_load so native NR updates their voltage angle
+every iteration; diagnostics report the grouped identities. Distinct geographic
+points on grouped current terms fail instead of being merged silently.
+
+Full three-conductor triplex matrices emit a native geometry derived from the
+current coefficients, with every primitive entry checked before writing. This
+preserves grounded-neutral currents for that geometry family; it does not fit
+arbitrary edited matrices or recover the original construction. Direct
+hot-conductor matrices instead emit with the inverse leg-2 row convention and
+report that no physical neutral-current model is inferred. Line, configuration
+and transformer coordinates use the current typed points. These component
+profiles do not establish whole-feeder canonical IEEE8500 qualification; its
+other transformer/regulator mappings still remain unfinished.
 
 Nonzero triplex `base_power_1`, `_2`, and `_12` initialize separate constant-power,
 constant-current and constant-impedance terms, overriding explicit coefficients

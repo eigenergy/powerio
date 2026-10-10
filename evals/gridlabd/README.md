@@ -2306,3 +2306,55 @@ but the complete feeder still fails strict source/switch comparisons (about
 0.000503 A and 100.23 VA maximum residual in the pinned run). It remains a failed
 feeder qualification. The broader IEEE 4 suite is 20/27 qualified; no
 thresholds have changed.
+
+
+### Canonical grounded service writing
+
+`glm_service_write_oracle.py` checks fresh GLM from current typed center-tapped
+and triplex circuits, including IR restoration, edited winding/core/load/line
+values, equivalent nominal-voltage rebasing and repeated canonical output.
+Both pinned forks and native OpenDSS observe all transformer ports and, for
+full cable matrices, both hot and grounded-neutral ports. Generated GLM excludes
+retained-source replay. Tests include the IEEE8500 service parameters and the
+IEEE9500-style direct hot matrix; this is component qualification, not a
+whole-feeder canonical writing claim.
+
+```sh
+python evals/gridlabd/glm_service_write_oracle.py --bridge /path/to/glm_service_roundtrip --pnnl-root /path/to/pnnl --output /tmp/new-service-writer
+```
+
+The native NR bus calls the root triplex_load's update function during solve
+iterations. Parented current terms may retain their sync-time voltage angle:
+probes show that separate or grouped child loads exceed the strict thresholds
+at the original clock window, while the same current terms on the root match
+native DSS. Extending the clock also settles the children, but canonical output
+uses root current coefficients without changing the comparison window or
+thresholds. Power/impedance objects keep their individual identities.
+
+Full-neutral cable emission algebraically inverts the pinned native geometry
+family and verifies the entire primitive before writing. Only floating-point
+reconstruction roundoff is admitted by that certificate; no electrical-result
+acceptance threshold changes. Matrices outside the family fail explicitly.
+Source geometry provenance and thermal/route fields are diagnosed separately.
+The private core circuit is folded only when no additional connection/device
+exists. Native configuration values come from current winding and load data,
+including taps and core nominal bases. Conflicting points on grouped currents,
+floating neutrals, service contacts and ideal-contact forests remain gaps.
+
+The cable checks retain every original hot/neutral current and terminal-power
+slot. Physical complex loss is the signed sum of those measured terminal
+powers. GridLAB-D's published loss also remains a separate check: its real
+part is the sum of the absolute per-conductor real losses. The IEEE9500-style
+direct matrix demonstrates the distinction (about 16.272 W reported versus
+7.608 W physical in the baseline). Both canonical and repeated GLM must match
+the original reporting value as well as physical port data; edited output
+checks the reporting law against independent native DSS terminal powers.
+The initial unnormalized failed comparisons remain in the validation record.
+
+The final component packet qualifies 32 engine/profile cases with 512 electrical
+comparisons (12,288 complex observations) and 340 separate native-reporting
+checks. The distribution suite passes 718 tests. Two Arras launcher failures
+occurred during the final sweep; failed logs remain preserved, and both cases
+pass complete reruns on identical pinned input and bridge bytes. The aggregate
+report records each case's originating run. This is not whole-feeder IEEE8500
+or IEEE9500 canonical qualification.

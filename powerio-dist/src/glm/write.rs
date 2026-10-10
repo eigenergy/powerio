@@ -16,6 +16,7 @@ const METERS_PER_MILE: f64 = 1609.344;
 
 mod ideal;
 mod loads;
+mod services;
 mod shunts;
 mod transformers;
 
@@ -23,7 +24,10 @@ mod transformers;
 ///
 /// The initial profile supports earth/phase-pair P/I/Z loads, ideal fixed sources,
 /// explicit phase line matrices, ordinary grounded-wye transformers and fixed
-/// contacts. Fixed resistive regulator equivalents emit manual Type B settings.
+/// contacts. Grounded center-tapped services with private impedance core loads
+/// emit native transformers; triplex P/I/Z terms and qualified full-neutral or
+/// direct hot-conductor line matrices emit from current typed coefficients.
+/// Fixed resistive regulator equivalents emit manual Type B settings.
 /// Ideal closed contacts select
 /// exact FBS output on a checked forest with one source bus per component.
 /// Symmetric line end shunts use exact admittance-load equivalents when native
@@ -66,6 +70,7 @@ pub(crate) fn emit_text(network: &MulticonductorNetwork) -> Result<TextEmission,
             .collect(),
         written_locations: BTreeSet::new(),
         ideal_plan: None,
+        services: services::Services::discover(network)?,
     };
     writer.inventory()?;
     writer.sources()?;
@@ -107,6 +112,7 @@ struct Writer<'a> {
     locations: BTreeMap<(crate::DistLocationTarget, &'a str), &'a crate::DistComponentLocation>,
     written_locations: BTreeSet<(crate::DistLocationTarget, &'a str)>,
     ideal_plan: Option<ideal::IdealPlan<'a>>,
+    services: services::Services<'a>,
 }
 
 fn unsupported(message: impl Into<String>) -> Error {
@@ -203,6 +209,12 @@ impl Writer<'_> {
                     "bus {} requires explicit conductor/ground interpretation",
                     bus.id
                 )));
+            }
+            if self.services.buses.contains_key(bus.id.as_str()) && bus.terminals != ["1", "2", "n"]
+            {
+                return Err(unsupported(
+                    "triplex buses need exactly two hot terminals and a grounded neutral",
+                ));
             }
             let phases = phases(
                 &bus.terminals
@@ -303,6 +315,17 @@ impl Writer<'_> {
     fn nominal_voltages(&mut self) -> Result<(), Error> {
         let mut neighbors: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         for line in self.net.lines() {
+            if self.services.buses.contains_key(line.bus_from.as_str()) {
+                neighbors
+                    .entry(&line.bus_from)
+                    .or_default()
+                    .push(&line.bus_to);
+                neighbors
+                    .entry(&line.bus_to)
+                    .or_default()
+                    .push(&line.bus_from);
+                continue;
+            }
             self.link_phases(
                 &line.name,
                 &line.bus_from,
@@ -367,7 +390,7 @@ impl Writer<'_> {
                 }
             }
         }
-        if self.nominal.len() != self.net.buses().len() {
+        if self.nominal.len() + self.services.core_buses.len() != self.net.buses().len() {
             return Err(unsupported(
                 "a GLM bus island has no fixed source from which to initialize voltage",
             ));
@@ -379,6 +402,13 @@ impl Writer<'_> {
 
     fn buses(&mut self) -> Result<(), Error> {
         for bus in self.net.buses() {
+            if self.services.core_buses.contains(bus.id.as_str()) {
+                continue;
+            }
+            if let Some(&phase) = self.services.buses.get(bus.id.as_str()) {
+                self.service_bus(bus, phase)?;
+                continue;
+            }
             let phase_flags = flags(&self.phases[bus.id.as_str()]);
             let _ = writeln!(
                 self.out,
@@ -482,6 +512,7 @@ impl Writer<'_> {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)] // A line and its coefficient/endpoint expansions stay together.
     fn lines(&mut self) -> Result<(), Error> {
         let codes: BTreeMap<_, _> = self
             .net
@@ -491,6 +522,14 @@ impl Writer<'_> {
             .collect();
         let mut used_codes = BTreeSet::new();
         for line in self.net.lines() {
+            if self.services.buses.contains_key(line.bus_from.as_str()) {
+                let code = codes
+                    .get(line.linecode.as_str())
+                    .ok_or_else(|| unsupported("service line has no linecode"))?;
+                used_codes.insert(code.name.as_str());
+                self.service_line(line, code)?;
+                continue;
+            }
             let phase_order = self.link_phases(
                 &line.name,
                 &line.bus_from,
@@ -583,6 +622,13 @@ impl Writer<'_> {
 
     fn loads(&mut self) -> Result<(), Error> {
         for load in self.net.loads() {
+            if self.services.core_loads.contains(load.name.as_str()) {
+                continue;
+            }
+            if self.services.buses.contains_key(load.bus.as_str()) {
+                self.service_load(load)?;
+                continue;
+            }
             if load.configuration != Configuration::Wye {
                 self.pair_load(load)?;
                 continue;
