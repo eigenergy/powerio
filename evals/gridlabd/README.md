@@ -213,3 +213,62 @@ connections, floating split-phase services, load-law sweeps, explicit-neutral GL
 equivalents and larger public feeders require additional qualification. The
 existing OpenDSS passive-admittance harness in `evals/validation/` remains a
 separate check; it intentionally excludes transformer physics.
+
+## Ordered OpenDSS source and line snapshots
+
+The OpenDSS adapter resolves the static electrical state in native definition
+and edit order. Circuit/Vsource and Line/LineCode copying, unit changes,
+frequency selection and solve-time primitive invalidation are qualified against
+DSS C-API 0.14.5. Unsupported source settings or an unmaterializable primitive
+fail explicitly. Disabled sources retain their declared data without adding
+live voltage constraints or impedance branches.
+
+A typed voltage source supplies an ideal EMF constraint. Imported finite source
+impedance is a separate coupled branch; floating returns use explicit reference
+terminals. Canonical DSS writes ideal constraints with exact cancelling-resistance
+circuits, preserving phase-specific phasors and source returns. It never turns a
+finite impedance into an epsilon or assumes that a native default source is ideal.
+The generated helper ports must be aggregated when measuring original source
+current and power.
+
+Each Line owns its ordered effective matrix state. LineCode definitions remain
+retained provenance rather than live electrical dependencies. Native `like`
+operations can retain different cached and current matrices; the snapshot
+resolver follows those rules. Unresolved geometry remains source data with a
+readiness blocker instead of acquiring fabricated conductor counts or default
+impedance. This prerequisite does not implement the GLM network reader or its
+geometry conversion.
+
+The source suites generate synthetic inputs outside git, then evaluate public
+import, IR and canonical output through the CLI:
+
+```sh
+cargo build -p powerio-cli --bin powerio
+python evals/gridlabd/dss_source_lowering_oracle.py prepare --output /tmp/dss-source-import
+python evals/gridlabd/dss_source_lowering_oracle.py evaluate \
+  --output /tmp/dss-source-import --public --powerio target/debug/powerio
+python evals/gridlabd/dss_source_writer_oracle.py prepare --output /tmp/dss-source-output
+python evals/gridlabd/dss_source_writer_oracle.py evaluate \
+  --output /tmp/dss-source-output --powerio target/debug/powerio
+```
+
+The loaded references use independent coupled-source MNA and native terminal
+observations. Source voltage, current, power, loss and impedance comparisons keep
+the calibration budgets from `oracle.py`; floating/earth returns, phase patterns,
+P/I/Z loads, IR reconstruction and repeated canonical output are separate cases.
+Bad impedance, incorrect grounding and changed source state must not pass.
+
+`dss_source_state_oracle.py`, `dss_source_enabled_oracle.py`,
+`dss_source_validity_oracle.py` and `dss_source_profile_oracle.py` qualify their
+named property and state profiles. `dss_line_history_oracle.py`,
+`dss_linecode_oracle.py` and `dss_line_oracle.py` qualify ordered line definitions
+and native primitive state. Their `--help` describes input/export requirements.
+Ignored Rust exporters for these suites accept DSS projects; GLM-specific
+exporters and overhead-geometry cross-format checks belong to the later GLM
+reader/geometry work.
+
+A pass applies to its named snapshot profile and engine pin. Active controllers,
+protection sequences, load schedules and behavioral simulation are not executed.
+The complete static compatibility target still includes additional neutral,
+geometry, transformer and device profiles; these are not completed by source and
+line snapshot qualification alone.
