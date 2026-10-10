@@ -212,6 +212,8 @@ Fresh networks, edited modules, IR-restored modules and cross-profile writes
 generate `case.glm` from the typed network. Rust's
 `powerio_dist::glm::emit_canonical` offers single-file output directly from a
 network value. Emission validates physical support before writing any output.
+Names beginning with a digit or hyphen retain their IDs; canonical output enables
+native relaxed naming when required.
 
 The currently qualified electrical profile covers phase-to-earth sources,
 node/meter/load objects, independent P/I/Z load terms, parented loads, and
@@ -303,9 +305,8 @@ pairs must match the native orientation for the current voltage ratio. Incomplet
 or unequal banks, parallel banks at the same endpoints, grounded primary returns,
 and ratio edits that cross the native orientation boundary require additional
 mappings and fail explicitly. Component qualification covers step-up, step-down,
-equal-voltage and IEEE8500 nameplate cases on both forks; whole-feeder canonical
-IEEE8500 output still needs a qualified mapping for its normally open FBS ties
-and whole-feeder canonical validation.
+equal-voltage and IEEE8500 nameplate cases on both forks. Complete IEEE8500
+canonical qualification is described below; the other bank restrictions remain.
 
 NR `WYE_WYE` regulators preserve Type A/B per-phase ratios and series resistance
 as single-phase winding records. An object tap overrides its configuration tap.
@@ -347,7 +348,8 @@ no core or neutral shunts. A floating return uses two cancelling conductors,
 preserving common-mode displacement. Other ideal-transformer profiles need
 further qualification.
 
-Canonical node convergence is set to `1e-9 V`. The tighter former absolute
+Canonical node convergence is set to `1e-9 V`. FBS output permits 1,000
+iterations so larger edited feeders can reach that stopping precision. The tighter former absolute
 setting could prevent IEEE13 from converging despite stable electrical values.
 This is an engine stopping criterion, not the validation comparison tolerance.
 
@@ -394,8 +396,17 @@ at all non-source, non-ground bus terminals. The original PNNL input and portabl
 static input produce identical typed circuits. Native convergence is tightened
 from a nominal-voltage fraction of `1e-4` to `1e-12` for comparison; electrical
 data and the common comparison budgets are unchanged. A deliberately wrong
-regulator tap must fail. Edited-feeder and canonical GLM qualification remain
-unfinished.
+regulator tap must fail.
+
+The pinned IEEE8500 case also qualifies fresh canonical GLM on both forks,
+including IR-restored, rebased, explicitly grounded-source and typed edited
+circuits. Reimported GLM and both DSS outputs agree at every original bus and
+physical link port. Edited circuits change load powers, winding voltages/taps,
+leakage and line lengths; their results are checked against the independent DSS
+engine and bus current balance. The harness preserves all 82,901 electrical
+observations per comparison. The ten engine/stage cases pass 38 comparisons
+and 187,550 current-balance observations without relaxing comparison budgets.
+This does not establish the remaining IEEE9500 or general OpenDSS profiles.
 
 Grounded center-tapped services import as four typed windings and a
 constant-impedance load at an auxiliary core bus. The fourth winding exposes the
@@ -444,8 +455,8 @@ arbitrary edited matrices or recover the original construction. Direct
 hot-conductor matrices instead emit with the inverse leg-2 row convention and
 report that no physical neutral-current model is inferred. Line, configuration
 and transformer coordinates use the current typed points. These component
-profiles do not establish whole-feeder canonical IEEE8500 qualification; its
-normally open FBS ties and whole-feeder canonical validation remain unfinished.
+profiles have separate complete IEEE8500 qualification above. Floating or
+arbitrary neutral circuits and unequal service leg ratios remain unsupported.
 
 Nonzero triplex `base_power_1`, `_2`, and `_12` initialize separate constant-power,
 constant-current and constant-impedance terms, overriding explicit coefficients
@@ -505,16 +516,19 @@ assignment order and unit interpretation. Canonical GLM emits finite contacts
 as overhead-line equivalents and fixed open contacts as open switches.
 
 Ideal closed contacts select FBS and emit explicit zero contact impedance.
-The complete link graph, including open contacts, must form a forest with one
-source bus per component. The check includes grouped ideal regulators,
+Conducting links must form a forest with one source bus per component. The check includes grouped ideal regulators,
 delta-grounded-wye banks and grounded service transformers, with their private
 core circuits contracted. Links are oriented away from their sources, and
 disjoint switch phases between the same buses are grouped into one native
 object. Endpoint reversal and grouped identities are reported. Matching
 component points survive grouping; conflicting points fail explicitly.
-Cycles, parallel contacts on the same phase, multiple source buses in one
-component and bus phases absent from the incoming link require additional
-exact equivalents and currently fail. No small impedance replaces an ideal
+Fully open ties between already connected endpoints use unloaded child nodes
+parented to their physical endpoints. These aliases preserve both terminal
+voltages, zero currents and losses, and the switch point. They avoid native
+rank cycles and outgoing-current contamination; reimport recovers the original
+bus attachments. Other open links retain their island attachment. Closed
+cycles, parallel contacts on the same phase, connected multiple source buses
+and bus phases absent from the incoming link need additional equivalents. No small impedance replaces an ideal
 constraint, and the input network is unchanged.
 
 For noncommuting line impedance and capacitance matrices, the pinned engines

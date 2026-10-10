@@ -277,14 +277,21 @@ fn ideal_output_rejects_unqualified_topology_and_conflicting_points() {
         vec!["1".into()],
         true,
     ));
-    for net in [
-        cyclic,
-        parallel,
-        incomplete,
-        conflicting,
-        open_tie,
-        multiple_sources,
-    ] {
+    let before = serde_json::to_value(&open_tie).unwrap();
+    let output = canonical(&open_tie);
+    assert!(output.contains("open_tie__glm_open_from"));
+    assert!(output.contains("open_tie__glm_open_to"));
+    let repeated = read(&output);
+    let tie = repeated
+        .switches()
+        .iter()
+        .find(|s| s.name == "open_tie")
+        .unwrap();
+    assert_eq!(tie.bus_from, "source");
+    assert_eq!(tie.bus_to, "sink");
+    assert!(tie.open);
+    assert_eq!(serde_json::to_value(&open_tie).unwrap(), before);
+    for net in [cyclic, parallel, incomplete, conflicting, multiple_sources] {
         assert!(emit_canonical(&net, Destination::memory("case.glm").unwrap()).is_err());
     }
 }

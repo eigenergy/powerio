@@ -10,10 +10,11 @@ use std::fmt::Write as _;
 pub(super) struct IdealPlan<'a> {
     pub(super) groups: Vec<ContactGroup<'a>>,
     pub(super) reversed: BTreeSet<String>,
+    pub(super) open_aliases: BTreeSet<String>,
 }
 
 pub(super) struct ContactGroup<'a> {
-    name: String,
+    pub(super) name: String,
     pub(super) from: &'a str,
     pub(super) to: &'a str,
     states: BTreeMap<usize, bool>,
@@ -27,14 +28,18 @@ impl<'a> Writer<'a> {
             return Ok(());
         }
         let groups = self.contact_groups()?;
-        let reversed = self.orient_ideal_forest(&groups)?;
+        let (reversed, open_aliases) = self.orient_ideal_forest(&groups)?;
         self.diagnostics.push(&codes::EMIT_GLM_IDEAL_CONTACTS,
-            "ideal contacts and winding constraints select native zero-impedance FBS output; the complete link graph is a checked forest oriented away from its source buses");
+            "ideal contacts and winding constraints select native zero-impedance FBS output; conducting links and required open-island attachments form a checked source-oriented forest; redundant fully open ties use unloaded terminal aliases");
         for name in &reversed {
             self.diagnostics.push(&codes::EMIT_GLM_IDEAL_CONTACTS,
                 format!("link {name}: native endpoints reversed to point away from the source; conductor identities and electrical parameters are unchanged"));
         }
-        self.ideal_plan = Some(IdealPlan { groups, reversed });
+        self.ideal_plan = Some(IdealPlan {
+            groups,
+            reversed,
+            open_aliases,
+        });
         Ok(())
     }
 
@@ -94,6 +99,8 @@ impl<'a> Writer<'a> {
         let mut groups: Vec<_> = groups.into_values().collect();
         for group in &mut groups {
             group.name = if group.members.len() == 1 {
+                group.from = &group.members[0].bus_from;
+                group.to = &group.members[0].bus_to;
                 group.members[0].name.clone()
             } else {
                 self.generated_name(&format!("{}__{}__glm_contact", group.from, group.to))
@@ -104,9 +111,14 @@ impl<'a> Writer<'a> {
     }
 
     #[allow(clippy::too_many_lines)] // One forest check over contracted electrical devices.
-    fn orient_ideal_forest(&self, groups: &[ContactGroup<'a>]) -> Result<BTreeSet<String>, Error> {
-        // Open links participate in native rank assignment. Contract only
-        // private core circuits already certified by Services::discover.
+    fn orient_ideal_forest(
+        &self,
+        groups: &[ContactGroup<'a>],
+    ) -> Result<(BTreeSet<String>, BTreeSet<String>), Error> {
+        // Conducting paths set the forest first. A redundant fully open link
+        // uses unloaded aliases, avoiding native rank cycles and bus-current
+        // contamination. Other open links retain their island attachment.
+        // Contract only private core circuits certified by Services::discover.
         type Link<'b> = (&'b str, &'b str, Vec<usize>, Vec<usize>, bool);
         let mut links: BTreeMap<&str, Link<'_>> = BTreeMap::new();
         let codes: BTreeMap<_, _> = self
@@ -222,33 +234,64 @@ impl<'a> Writer<'a> {
         let mut queue: VecDeque<_> = seen.iter().copied().collect();
         let mut edges = BTreeSet::new();
         let mut reversed = BTreeSet::new();
-        while let Some(bus) = queue.pop_front() {
-            for &(neighbor, name) in neighbors.get(bus).into_iter().flatten() {
-                if !edges.insert(name) {
-                    continue;
-                }
-                if !seen.insert(neighbor) {
-                    return Err(unsupported(
-                        "ideal FBS output requires a forest with one source bus per component; cycles, parallel links and connected multiple sources need another exact equivalent",
-                    ));
-                }
-                let (from, _, from_phases, to_phases, can_reverse) = &links[name];
-                let reverse = *from != bus;
-                let incoming = if reverse { from_phases } else { to_phases };
-                if self.phases[neighbor].iter().any(|p| !incoming.contains(p)) {
-                    return Err(unsupported(format!(
-                        "FBS bus {neighbor} has phases absent from its incoming link; disconnected terminal output needs another exact equivalent"
-                    )));
-                }
-                if reverse {
-                    if !can_reverse {
+        let open_names: BTreeSet<_> = groups
+            .iter()
+            .filter(|g| g.states.values().all(|&open| open))
+            .map(|g| g.name.as_str())
+            .collect();
+        let mut admitted_open = BTreeSet::new();
+        let mut open_aliases = BTreeSet::new();
+        loop {
+            while let Some(bus) = queue.pop_front() {
+                for &(neighbor, name) in neighbors.get(bus).into_iter().flatten() {
+                    if open_names.contains(name) && !admitted_open.contains(name) {
+                        continue;
+                    }
+                    if !edges.insert(name) {
+                        continue;
+                    }
+                    if !seen.insert(neighbor) {
+                        return Err(unsupported(
+                            "ideal FBS output requires a forest with one source bus per component; cycles, parallel links and connected multiple sources need another exact equivalent",
+                        ));
+                    }
+                    let (from, _, from_phases, to_phases, can_reverse) = &links[name];
+                    let reverse = *from != bus;
+                    let incoming = if reverse { from_phases } else { to_phases };
+                    if self.phases[neighbor].iter().any(|p| !incoming.contains(p)) {
                         return Err(unsupported(format!(
-                            "FBS link {name} needs a qualified reversed service or transformer mapping"
+                            "FBS bus {neighbor} has phases absent from its incoming link; disconnected terminal output needs another exact equivalent"
                         )));
                     }
-                    reversed.insert(name.to_owned());
+                    if reverse {
+                        if !can_reverse {
+                            return Err(unsupported(format!(
+                                "FBS link {name} needs a qualified reversed service or transformer mapping"
+                            )));
+                        }
+                        reversed.insert(name.to_owned());
+                    }
+                    queue.push_back(neighbor);
                 }
-                queue.push_back(neighbor);
+            }
+            let next = groups.iter().find(|g| {
+                open_names.contains(g.name.as_str())
+                    && !edges.contains(g.name.as_str())
+                    && (seen.contains(g.from) || seen.contains(g.to))
+            });
+            let Some(group) = next else {
+                break;
+            };
+            if seen.contains(group.from) && seen.contains(group.to) {
+                edges.insert(group.name.as_str());
+                open_aliases.insert(group.name.clone());
+            } else {
+                admitted_open.insert(group.name.as_str());
+                queue.push_back(if seen.contains(group.from) {
+                    group.from
+                } else {
+                    group.to
+                });
             }
         }
         if seen.len() + self.services.core_buses.len() != self.net.buses().len() {
@@ -256,17 +299,35 @@ impl<'a> Writer<'a> {
                 "ideal FBS output has a component without a fixed source",
             ));
         }
-        Ok(reversed)
+        Ok((reversed, open_aliases))
+    }
+
+    fn open_contact_alias(&mut self, name: &str, side: &str, bus: &str, phases: &str) -> String {
+        let alias = self.generated_name(&format!("{name}__glm_open_{side}"));
+        let _ = writeln!(
+            self.out,
+            "object node {{ name \"{alias}\"; parent \"{bus}\"; phases {phases}N; nominal_voltage {}; maximum_voltage_error 1e-9; }}",
+            self.nominal[bus]
+        );
+        alias
     }
 
     pub(super) fn ideal_contacts(&mut self, plan: &IdealPlan<'a>) {
         for group in &plan.groups {
-            let (from, to) = if plan.reversed.contains(&group.name) {
+            let (from_bus, to_bus) = if plan.reversed.contains(&group.name) {
                 (group.to, group.from)
             } else {
                 (group.from, group.to)
             };
             let phases = flags(&group.states.keys().copied().collect::<Vec<_>>());
+            let (from, to) = if plan.open_aliases.contains(&group.name) {
+                let a = self.open_contact_alias(&group.name, "from", from_bus, &phases);
+                let b = self.open_contact_alias(&group.name, "to", to_bus, &phases);
+                self.diagnostics.push(&codes::EMIT_GLM_IDEAL_CONTACTS,format!("switch {}: fully open tie uses unloaded terminal aliases parented to {from_bus} and {to_bus}; both endpoint voltages are preserved and native current/loss contamination and rank cycles are avoided",group.name));
+                (a, b)
+            } else {
+                (from_bus.to_owned(), to_bus.to_owned())
+            };
             let status = if group.states.values().all(|&open| open) {
                 "OPEN"
             } else {

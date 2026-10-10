@@ -212,3 +212,30 @@ fn non_electrical_projection_losses_are_reported() {
         2
     );
 }
+
+#[test]
+fn canonical_numeric_names_declare_native_relaxed_naming_without_changing_ids() {
+    let text = "#set relax_naming_rules=1;
+module powerflow { solver_method FBS; }
+object node { name 1; phases AN; bustype SWING; nominal_voltage 240; }
+object load { name 2; parent 1; phases AN; nominal_voltage 240; constant_power_A 100+20j; }";
+    let module = powerio_dist::glm::parse(
+        Source::from_memory("numbered.glm", text.as_bytes()).unwrap(),
+        PreprocessOptions::default(),
+    )
+    .unwrap();
+    let result =
+        emit_canonical(module.value(), Destination::memory("numbered.glm").unwrap()).unwrap();
+    let EmittedOutput::Memory { artifacts } = result.output() else {
+        panic!()
+    };
+    let fresh = std::str::from_utf8(artifacts[0].bytes()).unwrap();
+    assert!(fresh.contains("#set relax_naming_rules=1;"));
+    let repeated = powerio_dist::glm::parse(
+        Source::from_memory("numbered.glm", fresh.as_bytes()).unwrap(),
+        PreprocessOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(repeated.value().buses()[0].id, "1");
+    assert_eq!(repeated.value().loads()[0].bus, "1");
+}

@@ -35,7 +35,9 @@ mod transformers;
 /// Ideal closed contacts and grounded ideal phase ratios select exact FBS
 /// output on a checked forest with one source bus per component. Independent
 /// phase ratios use native series stages; private service core circuits are
-/// contracted for the forest check.
+/// contracted for the forest check. Redundant fully open ties use unloaded
+/// parented endpoint aliases to preserve their voltages and zero port currents.
+/// FBS uses a 1,000-iteration budget with unchanged node stopping precision.
 /// Symmetric line end shunts use exact admittance-load equivalents when native
 /// line parameters cannot preserve their port equations. Returned diagnostics
 /// identify the generated loads that contribute to physical line port flows.
@@ -95,6 +97,16 @@ pub(crate) fn emit_text(network: &MulticonductorNetwork) -> Result<TextEmission,
         "// Canonical PowerIO static network.\nmodule powerflow {{ solver_method {solver}; line_capacitance TRUE; nominal_frequency {}; }}\n",
         network.base_frequency()
     );
+    if writer.ideal_plan.is_some() {
+        writer.out.push_str("#set iteration_limit=1000;\n");
+    }
+    if writer
+        .identities
+        .iter()
+        .any(|name| !name.as_bytes()[0].is_ascii_alphabetic() && name.as_bytes()[0] != b'_')
+    {
+        writer.out.push_str("#set relax_naming_rules=1;\n");
+    }
     writer.buses()?;
     writer.lines()?;
     writer.switches()?;
@@ -355,6 +367,9 @@ impl Writer<'_> {
         }
         if let Some(plan) = &self.ideal_plan {
             for group in &plan.groups {
+                if plan.open_aliases.contains(&group.name) {
+                    continue;
+                }
                 neighbors.entry(group.from).or_default().push(group.to);
                 neighbors.entry(group.to).or_default().push(group.from);
             }

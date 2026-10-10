@@ -1052,8 +1052,8 @@ budgets, not the IEEE8500 dump precision.
 
 This qualifies grounded service import and OpenDSS emission only. Triplex geometry
 has separate qualification below. Direct triplex matrices, floating neutrals,
-canonical GLM service writing and complete IEEE8500 feeder conversion remain
-unfinished. PNNL's legacy `triplex_node.power_*` inputs are
+canonical GLM service writing and complete IEEE8500 feeder conversion have
+separate qualification below. PNNL's legacy `triplex_node.power_*` inputs are
 accepted only by the PNNL import profile; Arras requires `triplex_load` fields.
 
 
@@ -1169,7 +1169,8 @@ OpenDSS `switch=y` dummy impedance. Plain open contacts are disabled and do not
 introduce line charging or numerical leakage. Broader source-specific switch
 profiles remain separate compatibility work.
 This qualifies fixed-state feeder import and OpenDSS emission; canonical GLM
-service writing and edited IEEE8500 feeder qualification remain unfinished.
+service writing and edited IEEE8500 feeder qualification have separate evidence
+below.
 
 `ideal_transformer_oracle.py --powerio /path/to/powerio --output /path/to/new-directory`
 checks grounded and floating secondary returns, nominal and unequal winding taps,
@@ -2385,7 +2386,7 @@ identity diagnostics; conflicting points fail. Unequal/incomplete banks,
 parallel banks at the same endpoints, grounded primary returns and effective
 ratio edits crossing the native phase-pair orientation boundary remain
 unsupported. These component results do not qualify canonical whole-feeder
-IEEE8500 output, whose ideal regulators and FBS forest mapping remain unfinished.
+IEEE8500 output; complete canonical feeder qualification is described below.
 
 ### Canonical ideal FBS regulators and contracted services
 
@@ -2420,10 +2421,55 @@ service core buses are contracted only for the forest check, leaving the input
 network unchanged. Redundant unity regulator coils do not multiply native
 stages on repeated output; distinct point attachments keep separate stages.
 
-These results do not qualify full canonical IEEE8500 output. Its complete graph
-contains normally open ties, still refused by the strict forest check. A native
-probe also exposes open-link outgoing-current/loss contamination and reversed
-link rank failures. A rank-compatible equivalent and complete whole-feeder
-validation remain required. Closed cycles, reversed service/transformer links,
+These component results have separate full canonical IEEE8500 qualification
+below. Bare native open ties can contaminate outgoing currents/losses and fail
+rank initialization when reversed; the unloaded-alias equivalent avoids those
+failures. Closed cycles, reversed service/transformer links,
 floating returns, ordinary FBS winding/core profiles and broader compatibility
 gaps remain explicit limitations.
+
+### Complete IEEE8500 canonical output and open ties
+
+`ieee8500_write_oracle.py` reads the same hash-pinned external feeder as the
+import harness. It emits fresh, IR-restored, edited, rebased and explicitly
+grounded-source GLM/DSS, then repeats GLM import and emission. Both pinned forks
+pass all ten engine/stage cases: 38 comparisons with 3,150,238 complex electrical
+observations, plus 187,550 bus current-balance observations. Every comparison
+keeps all 82,901 original bus/physical-port quantities, including reported and
+signed physical losses. The original inventory remains 4,879 bus objects and
+4,876 links; generated regulator stages and aliases are observed at their
+original physical boundaries rather than discarded.
+
+```sh
+cargo build -p powerio --example glm_roundtrip
+python evals/gridlabd/ieee8500_write_oracle.py \
+  --source /path/to/IEEE_8500node.glm \
+  --bridge target/debug/examples/glm_roundtrip --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-ieee8500-write-directory
+python evals/gridlabd/glm_ideal_regulator_write_oracle.py \
+  --bridge target/debug/examples/glm_roundtrip --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-open-tie-directory --case type_a_bank --open-tie reverse
+```
+
+Typed edits change load powers by 1.25, line lengths by 1.1, winding resistance
+by 1.2 and leakage reactance by 0.9, with non-unit winding taps, secondary-voltage
+changes and a source-phase voltage edit. Edited canonical and repeated GLM are
+compared with the native DSS solution of the current typed circuit; unchanged
+output must fail. Intended constant-power laws are independently checked by
+bus current balance. Retained source echo is not used.
+
+Fully open ties use unloaded terminal aliases parented to their original bus
+endpoints. Both terminal voltages, zero currents/losses and the switch point
+survive; reimport recovers the original attachments. Four engine/direction
+microcases also pass 84 comparisons with 3,192 complex observations through
+IR, edits, rebasing and repeated GLM/DSS. Conducting cycles and conflicting
+sources remain refused. Numeric feeder IDs enable native relaxed naming rather
+than being renamed.
+
+Canonical FBS permits 1,000 iterations while keeping `1e-9 V` node stopping
+precision and the original electrical comparison budgets. The initial edited
+run exhausted the default iteration budget; changing stopping precision alone
+did not resolve it. With the larger budget, all quantities pass unchanged
+thresholds. The original failed reports remain available in local evidence.
+IEEE9500 residuals, floating/explicit neutrals, broader static laws and interface
+qualification remain separate unresolved work.

@@ -381,7 +381,7 @@ def kcl(snapshot, network, objects):
         for terminal, value in zip(terms, current, strict=True):
             if (bus, terminal) in residual:
                 residual[bus, terminal] += value
-    source_buses = {s["bus"] for s in network["sources"]}
+    source_buses = {s.get("value", s)["bus"] for s in network["sources"]}
     actual = {}
     zero = {}
     for (bus, terminal), value in residual.items():
