@@ -202,7 +202,7 @@ overhead and underground lines with explicit phase matrices or conductor/spacing
 configurations at 50 or 60 Hz. Overhead geometry uses the pinned modified-Carson
 constants and enabled image-potential capacitance. The resulting linecode records its calculation
 and neutral-reduction provenance; canonical output writes current matrices.
-Diagnostics report materialization and the loss of geometry provenance on
+Diagnostics report coefficient calculation and the loss of geometry provenance on
 canonical emission. Map coordinates never determine conductor spacing or length.
 Three-phase subsets keep their A/B/C identities. Bus earth returns do not
 constitute explicit line neutrals. A geometry configuration with a neutral
@@ -217,7 +217,7 @@ matrices and reports the selected interpretation. Arras tape-shield geometry
 without a separate neutral is singular and is refused. Unshielded phase-cable
 geometry is accepted only for Arras, whose native model omits its separate neutral
 and charging capacitance; PNNL rejects that geometry. Canonical output carries the
-materialized matrices, so it does not reinterpret geometry under the target fork.
+calculated matrices, so it does not reinterpret geometry under the target fork.
 
 Numerical `iteration_limit` settings and voltage/current dump objects remain in
 retained source and are reported; they do not become network components.
