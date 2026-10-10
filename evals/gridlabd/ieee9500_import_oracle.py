@@ -128,7 +128,8 @@ def instrument(text, objects, stopping_fraction=1e-8, iteration_limit=100):
         "stoptime '2000-01-01 0:00:00'", "stoptime '2000-01-01 0:00:01'"
     )
     text = text.replace(
-        "solver_method NR;", f"solver_method NR; default_maximum_voltage_error {stopping_fraction:.17g};"
+        "solver_method NR;",
+        f"solver_method NR; default_maximum_voltage_error {stopping_fraction:.17g};",
     )
     text += f"\n#set iteration_limit={iteration_limit};\n"
     text += "\n#set complex_format=%.17g%+.17gj\n#set double_format=%.17g\n#set complex_output_format=RECT\n"
@@ -235,6 +236,57 @@ def imported_snapshot(path, network, objects, wrong_tap=False):
             name = objects[name]["parent"]
         return name
 
+    current_forms = []
+    original_buses = {
+        name.lower() for name, obj in objects.items() if obj["class"] in NODES
+    }
+
+    def current_form_ends(name, obj):
+        if obj["class"] not in ("overhead_line", "underground_line"):
+            return None
+        if e.Circuit.SetActiveElement("line." + name) < 0:
+            raise ValueError(f"missing original line {name}")
+        buses = [b.split(".")[0].lower() for b in e.CktElement.BusNames()]
+        if len(buses) != 2:
+            raise ValueError("line terminal count changed")
+        aux = buses[1]
+        if aux in original_buses:
+            return None
+        if aux.startswith("_pio_current_"):
+            separator = "_"
+        elif "__glm_current" in aux:
+            separator = "__"
+        else:
+            return None
+        # Generated names identify a candidate, but actual terminal topology
+        # must confirm it before any physical quantities are aggregated.
+        parts = []
+        for side, branch in [
+            ("from", "line." + name),
+            ("to", "line." + aux + separator + "to"),
+        ]:
+            if e.Circuit.SetActiveElement(branch) < 0:
+                raise ValueError(f"missing current-form branch {branch}")
+            actual_buses = [b.split(".")[0].lower() for b in e.CktElement.BusNames()]
+            if actual_buses != [root(obj[side]).lower(), aux]:
+                raise ValueError("current-form physical endpoint changed")
+            n = e.CktElement.NumConductors()
+            nodes, amps, va = element(branch)
+            parts.append((nodes[:n], amps[:n], va[:n]))
+            shunt = "load." + aux + separator + side + "_shunt"
+            if e.Circuit.SetActiveElement(shunt) < 0:
+                raise ValueError(f"missing current-form endpoint shunt {shunt}")
+            if (
+                e.CktElement.BusNames()[0].split(".")[0].lower()
+                != root(obj[side]).lower()
+            ):
+                raise ValueError("current-form shunt endpoint changed")
+            n = e.CktElement.NumConductors()
+            nodes, amps, va = element(shunt)
+            parts.append((nodes[:n], amps[:n], va[:n]))
+        current_forms.append(name)
+        return parts
+
     transformers = {t["name"]: t for t in network.get("transformers", [])}
     switches = {s["name"]: s for s in network.get("switches", [])}
     result = {}
@@ -275,7 +327,11 @@ def imported_snapshot(path, network, objects, wrong_tap=False):
                     currents[end, index] += iv
                     powers[end, index] += sv
 
-        if cls in ("transformer", "overhead_line", "underground_line") and any(
+        current_ends = current_form_ends(name, obj)
+        if current_ends is not None:
+            for part, (nodes, amps, va) in enumerate(current_ends):
+                scatter(nodes, amps, va, part // 2)
+        elif cls in ("transformer", "overhead_line", "underground_line") and any(
             s["name"] == name for s in network.get("shunts", [])
         ):
             for end, side in enumerate(("from", "to")):
@@ -357,6 +413,7 @@ def imported_snapshot(path, network, objects, wrong_tap=False):
         "iterations": e.Solution.Iterations(),
         "control_mode": e.Solution.ControlMode(),
         "missing_buses": missing_buses,
+        "current_form_lines": current_forms,
     }
 
 
@@ -417,15 +474,25 @@ def main():
         p.add_argument("--" + name, type=Path, required=True)
     p.add_argument("--native-stopping-fraction", type=float, default=1e-8)
     p.add_argument("--native-iteration-limit", type=int, default=100)
+    p.add_argument("--execution-timeout", type=float, default=120)
     args = p.parse_args()
-    if not math.isfinite(args.native_stopping_fraction) or args.native_stopping_fraction <= 0 or not 1 <= args.native_iteration_limit <= 10000:
-        p.error("native stopping fraction must be finite/positive and iteration limit in 1..10000")
+    if (
+        not math.isfinite(args.native_stopping_fraction)
+        or args.native_stopping_fraction <= 0
+        or not 1 <= args.native_iteration_limit <= 10000
+    ):
+        p.error(
+            "native stopping fraction must be finite/positive and iteration limit in 1..10000"
+        )
+    if not math.isfinite(args.execution_timeout) or args.execution_timeout <= 0:
+        p.error("execution timeout must be finite and positive")
     args.output.mkdir(parents=True, exist_ok=False)
     report = {
         "engines": LOCK,
         "bridge_sha256": hashlib.sha256(args.bridge.read_bytes()).hexdigest(),
         "native_stopping_fraction": args.native_stopping_fraction,
         "native_iteration_limit": args.native_iteration_limit,
+        "execution_timeout_seconds": args.execution_timeout,
         "cases": {},
     }
     for case in ("bal", "unbal"):
@@ -465,12 +532,18 @@ def main():
         objects = inventory(
             source.read_text() + (directory / f"{name}_base.glm").read_text()
         )
-        native_text, spec = instrument(source.read_text(), objects, args.native_stopping_fraction, args.native_iteration_limit)
+        native_text, spec = instrument(
+            source.read_text(),
+            objects,
+            args.native_stopping_fraction,
+            args.native_iteration_limit,
+        )
         (directory / "model.glm").write_text(native_text)
         run_glm(
             "pnnl",
             directory,
             args.pnnl_root,
+            execution_timeout=args.execution_timeout,
             outputs=tuple(
                 f"{cls}-{prop}.csv" for cls, props in spec.items() for prop in props
             ),

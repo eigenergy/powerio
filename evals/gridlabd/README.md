@@ -2549,3 +2549,41 @@ values. Original failed runs remain external evidence; launcher failures can
 be retried only after establishing that the process failed before solving.
 This component qualification does not qualify the complete IEEE9500 feeder,
 coupled current variables, arbitrary neutrals or more extreme impedances.
+
+### IEEE9500 current-variable physical ports
+
+The complete balanced and unbalanced cases now use exact scalar current
+variables for `line_cap_3a`, `line_cap_3b` and `line_cap_3c` in canonical DSS.
+`ieee9500_import_oracle.py` verifies actual generated endpoint topology and
+aggregates measured branch and shunt terminal currents/powers. Missing or
+misattached equivalent elements fail explicitly. Source bus names that merely
+resemble generated names remain ordinary physical buses.
+
+Fresh pinned native references and current DSS output compare all 84,501
+original quantities per case. All 20,337 bus-voltage quantities pass in each
+case. The balanced case retains 2,517 failing current/power/loss comparisons;
+the unbalanced case retains 1,609. These are failed whole-case qualifications.
+Noncommuting NR telemetry and small current/power residuals are retained;
+voltage matching alone does not qualify the feeder.
+
+`current_form_feeder_oracle.py` checks the feeder observer against independent
+analytic microcase quantities and previously solved native equivalent circuits:
+
+```sh
+python evals/gridlabd/current_form_feeder_oracle.py \
+  --bridge target/debug/examples/glm_roundtrip \
+  --cases /path/to/current-form-results --output /path/to/new-feeder-port-checks
+```
+
+Each `--cases` directory must contain the full current-form harness outputs;
+repeat the option to check additional phase/impedance scenarios. The observer
+sweep covers A/B/C, constant P/I/Z, typed edits, IR and repeated DSS output.
+
+`ieee9500_import_oracle.py --execution-timeout SECONDS` selects the native
+execution budget separately from solver stopping settings and comparison
+budgets. The default remains 120 seconds. Subprocess timeouts retain partial
+stdout/stderr and their terminal status in `commands.jsonl`. Complete canonical
+balanced GLM probes timed out at 120 and 300 seconds; separate stopping-precision
+and zero-current initialization probes also timed out. A process sample showed
+active NR/SuperLU computation. None of these probes is a canonical electrical
+qualification, and the failed records remain external evidence.
