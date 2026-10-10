@@ -129,9 +129,13 @@ def test_cross_format_writes():
 
 def test_graph_projection():
     graph = _parse_file_value(FOURWIRE).to_graph()
-    assert {bus["id"] for bus in graph["buses"]} == {"sourcebus", "loadbus"}
-    source = next(bus for bus in graph["buses"] if bus["id"] == "sourcebus")
+    assert {bus["id"] for bus in graph["buses"]} == {
+        "sourcebus", "loadbus", "_pio_vsource_source_emf"
+    }
+    source = next(bus for bus in graph["buses"] if bus["id"] == "_pio_vsource_source_emf")
     assert source["has_source"] is True
+    impedance = next(edge for edge in graph["edges"] if edge["id"] == "_pio_vsource_source_impedance")
+    assert (impedance["from"], impedance["to"]) == (source["id"], "sourcebus")
     edge = next(edge for edge in graph["edges"] if edge["id"] == "l1")
     assert edge["kind"] == "line"
     assert edge["from"] == "sourcebus"
@@ -400,13 +404,9 @@ def _split_case(tmp_path):
 def test_parse_confines_includes_to_the_case_directory(tmp_path):
     root = _split_case(tmp_path)
     deck = root / "feeder" / "f.dss"
-    confined = powerio.parse(deck)
-    assert any(
-        "escapes the case directory" in diagnostic.message
-        for diagnostic in confined.diagnostics
-    )
+    with pytest.raises(powerio.PowerIOParseError, match="PARSE.DIST.SOURCE_MALFORMED"):
+        powerio.parse(deck)
     assert "include_root" not in inspect.signature(powerio.parse).parameters
-
 
 def test_source_energy_prices_and_draft_schema_digest_survive_ir():
     import hashlib

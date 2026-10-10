@@ -113,7 +113,7 @@ fn dss_parse_agrees_with_the_pmd_parse() {
 
     // OpenDSS switch=yes is a finite closed line in this static case.
     let switch_line = ours.lines().iter().find(|l| l.name == "671692").unwrap();
-    assert!(ours.switches().is_empty());
+    assert_eq!(ours.switches().as_slice(), []);
     assert!(!pmd.switches()[0].open);
     assert_eq!(switch_line.i_max, pmd.switches()[0].i_max);
     assert_eq!(switch_line.bus_from, pmd.switches()[0].bus_from);

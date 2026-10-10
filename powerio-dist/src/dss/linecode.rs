@@ -41,7 +41,7 @@ impl State {
     /// these fields, recalculates sequence matrices, and captures Kxg here.
     /// Later edits require ordered Line interpretation, not another call using
     /// the final line properties. Positive-sequence and long-line modes are
-    /// outside this helper's ordinary multiconductor pi-section contract.
+    /// outside this helper's ordinary multiconductor pi-section representation.
     #[cfg(test)]
     pub fn line_matrices(
         &self,

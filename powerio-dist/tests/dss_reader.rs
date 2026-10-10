@@ -131,7 +131,7 @@ fn ieee13_matches_the_engine_bus_map() {
     assert_eq!(net.sources().len(), 1);
     assert_eq!(net.transformers().len(), 5);
     assert_eq!(net.loads().len(), 15);
-    assert!(net.switches().is_empty());
+    assert_eq!(net.switches().as_slice(), []);
     assert_eq!(net.shunts().len(), 2);
     assert_eq!(net.lines().len(), 13); // 12 native lines plus source impedance
 
@@ -355,7 +355,7 @@ fn micro_transformers_type_correctly() {
 #[test]
 fn switch_control_actions_remain_excluded_from_the_fixed_circuit() {
     let net = parse("micro/switch.dss");
-    assert!(net.switches().is_empty());
+    assert_eq!(net.switches().as_slice(), []);
     for name in ["sw_closed", "sw_open"] {
         let line = net.lines().iter().find(|l| l.name == name).unwrap();
         assert!(net.linecode(&line.linecode).unwrap().r_series[0][0] > 0.0);

@@ -171,7 +171,7 @@ fn rich_opendss_load_models_and_switches_round_trip() {
         New Load.cp3 bus1=b2.1.2.3 phases=3 conn=wye kv=12.47 kw=90 kvar=45 model=3\n\
         New Load.zip bus1=b2.1.2.3 phases=3 conn=wye kv=12.47 kw=90 kvar=45 model=8 zipv=[0.2,0.3,0.5,0.1,0.4,0.5,0.8]\n";
     let net = parse_dss_str(dss);
-    assert!(net.switches().is_empty());
+    assert_eq!(net.switches().as_slice(), []);
     assert!(
         net.diagnostics
             .iter()

@@ -41,7 +41,7 @@ and their electrical data. Load shapes, solve commands, monitors, and other
 calculation instructions are outside it; they stay in the retained source,
 are reported as uninterpreted, and survive a same format write byte for byte.
 
-OpenDSS imports materialize source impedances as coupled branches with ideal
+OpenDSS imports represent source impedances as coupled branches with ideal
 voltage constraints, and each ordinary line carries its effective matrices at
 the snapshot frequency. LineCode assignment and later edits follow script
 order. Native `switch=yes` lines retain their finite impedance. Unknown length
