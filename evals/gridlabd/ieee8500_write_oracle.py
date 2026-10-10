@@ -7,6 +7,7 @@ from collections import deque
 from pathlib import Path
 
 import numpy as np
+from group_recorders import recorders
 from ieee8500_import_oracle import (
     LINK_CLASSES,
     NODE_CLASSES,
@@ -66,26 +67,10 @@ def record(text, profile, objects, folder, *, node_classes=NODE_CLASSES, link_cl
     props.update({cls: [f"{q}_{end}_{p}" for end in ("in", "out") for p in "ABC" for q in ("current", "power")] + ["power_losses"] for cls in link_classes})
     props = {cls: fields for cls, fields in props.items() if any(o["class"] == cls for o in objects.values())}
     text += "\n#set complex_format=%.15g%+.15gj\n#set complex_output_format=RECT\nmodule tape;\n"
-    if profile == "pnnl":
-        for cls, fields in props.items():
-            for field in fields:
-                text += f'object group_recorder {{ group "class={cls}"; property {field}; file "{cls}-{field}.csv"; interval 1; strict true; print_units false; }}\n'
-        spec, outputs = props, tuple(f"{cls}-{field}.csv" for cls, fields in props.items() for field in fields)
-    else:
-        chunks, chunk = [], []
-        for name, obj in objects.items():
-            for field in props[obj["class"]]:
-                value = f"{name}:{field}"
-                if len(",".join(chunk + [value])) > 900:
-                    chunks.append(chunk)
-                    chunk = []
-                chunk.append(value)
-        if chunk:
-            chunks.append(chunk)
-        for i, chunk in enumerate(chunks):
-            text += f'object multi_recorder {{ property {",".join(chunk)}; file "records/chunk{i}.csv"; interval 1; }}\n'
+    declarations, spec, outputs = recorders(props, objects, profile)
+    if profile == "arras":
         (folder / "records").mkdir()
-        spec, outputs = {"chunks": chunks}, ("records/.",)
+    text += declarations
     return text, spec, outputs
 
 

@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 
 import numpy as np
+from group_recorders import recorders
 from ieee8500_reference import SOURCE_SHA256, prepare
 from oracle import LOCK, add, compare, parse_complex, run_glm
 
@@ -41,28 +42,8 @@ def instrument(text, profile, objects):
         for cls in NODE_CLASSES
     }
     spec.update({cls: PORT_PROPERTIES for cls in LINK_CLASSES})
-    if profile == "arras":
-        # The pinned Arras group_recorder uses sizeof(pointer) as its output
-        # buffer size and truncates complex rows. Bounded multi_recorder lists
-        # retain the same full-precision observables without that native bug.
-        chunks = []
-        chunk = []
-        for name, obj in objects.items():
-            for prop in spec[obj["class"]]:
-                field = f"{name}:{prop}"
-                if len(",".join(chunk + [field])) > 900:
-                    chunks.append(chunk)
-                    chunk = []
-                chunk.append(field)
-        if chunk:
-            chunks.append(chunk)
-        for index, fields in enumerate(chunks):
-            text += f'object multi_recorder {{ property {",".join(fields)}; file "records/chunk{index}.csv"; interval 1; }}\n'
-        return text, {"chunks": chunks}
-    for cls, props in spec.items():
-        for prop in props:
-            text += f'object group_recorder {{ group "class={cls}"; property {prop}; file "{cls}-{prop}.csv"; interval 1; strict true; print_units false; }}\n'
-    return text, spec
+    declarations, spec, _ = recorders(spec, objects, profile)
+    return text + declarations, spec
 
 
 def inventory(text):

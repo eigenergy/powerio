@@ -15,6 +15,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
+from group_recorders import group_recorders
 from feeder_balance import current_balance
 from ieee8500_import_oracle import PORT_PROPERTIES, grouped
 from oracle import FEEDER_TOLERANCES, LOCK, TOLERANCES, add, command, compare, run_glm
@@ -146,9 +147,8 @@ def instrument(text, objects, stopping_fraction=1e-8, iteration_limit=100):
         if cls in classes
     }
     spec.update({cls: PORT_PROPERTIES for cls in LINKS if cls in classes})
-    for cls, props in spec.items():
-        for prop in props:
-            text += f'object group_recorder {{ group "class={cls}"; property {prop}; file "{cls}-{prop}.csv"; interval 1; strict true; print_units false; }}\n'
+    declarations, _ = group_recorders(spec)
+    text += declarations
     return text, spec
 
 

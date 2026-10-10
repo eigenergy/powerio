@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
+from group_recorders import recorders
 from coordinate_oracle import check as check_coordinates
 from coordinate_oracle import expected as expected_coordinates
 from object_oracle import source_graph
@@ -25,6 +26,28 @@ from shunt_measurement import measurements as shunt_measurements
 
 
 class OracleTests(unittest.TestCase):
+    def test_feeder_recorders_preserve_all_targets_and_native_string_bound(self):
+        properties = {"node": ["voltage_A", "voltage_B"]}
+        objects = {f"node_{i:04d}": {"class": "node"} for i in range(100)}
+        text, spec, outputs = recorders(properties, objects, "pnnl")
+        self.assertEqual(spec, properties)
+        self.assertEqual(outputs, ("node-voltage_A.csv", "node-voltage_B.csv"))
+        self.assertIn('group "class=node"; property voltage_A;', text)
+        self.assertIn('group "class=node"; property voltage_B;', text)
+        text, spec, outputs = recorders(properties, objects, "arras")
+        self.assertEqual(outputs, ("records/.",))
+        targets = [field for chunk in spec["chunks"] for field in chunk]
+        self.assertEqual(
+            targets,
+            [f"node_{i:04d}:voltage_{phase}" for i in range(100) for phase in "AB"],
+        )
+        self.assertEqual(len(targets), len(set(targets)))
+        for chunk in spec["chunks"]:
+            self.assertTrue(chunk)
+            self.assertLessEqual(len(",".join(chunk)), 900)
+        self.assertEqual(text.count("object multi_recorder"), len(spec["chunks"]))
+
+
     def test_line_shunt_reference_rejects_omission_and_swapped_ends(self):
         for case in ("source_only", "sink_only", "unequal_lossy", "reversed_lossy"):
             for edited in (False, True):
