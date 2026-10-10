@@ -304,7 +304,8 @@ or unequal banks, parallel banks at the same endpoints, grounded primary returns
 and ratio edits that cross the native orientation boundary require additional
 mappings and fail explicitly. Component qualification covers step-up, step-down,
 equal-voltage and IEEE8500 nameplate cases on both forks; whole-feeder canonical
-IEEE8500 output still needs ideal-regulator and FBS forest support.
+IEEE8500 output still needs a qualified mapping for its normally open FBS ties
+and whole-feeder canonical validation.
 
 NR `WYE_WYE` regulators preserve Type A/B per-phase ratios and series resistance
 as single-phase winding records. An object tap overrides its configuration tap.
@@ -323,8 +324,19 @@ uses a one-ohm winding resistance followed by its exact negative, eliminating
 both at an unloaded internal bus. This preserves the ideal ratio and external
 currents without an arbitrary small leakage. A diagnostic identifies the added
 line: physical secondary powers and total losses include it. The typed value
-and IR retain zero leakage. Canonical GLM writing of ideal regulator constraints,
-open-delta connections and banked initialization remain unfinished.
+and IR retain zero leakage.
+
+Canonical GLM now writes grounded ideal phase ratios as a series of native FBS
+manual regulator stages. Each stage changes one phase and passes the other
+connected bank phases at unity ratio. This avoids native current/loss errors
+from parallel single-phase regulator objects. Ratios come from current effective
+winding voltages; unrelated ratios do not need a common integer tap lattice.
+Generated intermediate buses are internal to the equivalent, and diagnostics
+identify the physical bank ports. Distinct component points remain on separate
+stages. Declared winding ratings are diagnosed as omitted because native
+regulator configurations have no power-rating field. Reimport absorbs redundant
+unity coils without multiplying the stage count. Open-delta connections, banked initialization and floating-return GLM
+writing remain unfinished.
 
 Plain ideal closed switches likewise use cancelling resistances in OpenDSS;
 plain open contacts are disabled and have no artificial line charging or leakage.
@@ -408,8 +420,12 @@ equivalent, including an open auxiliary third port, when needed. Aggregate its
 physical end ports for powers and losses; internal element losses alone are not
 the original line's losses. Both forks and solvers have direct-matrix microcase
 qualification through IR and DSS, including deliberate wrong-load checks.
-Floating service neutrals, service switches, service circuits with ideal
-contacts and additional geometry models remain unfinished and fail explicitly.
+Floating service neutrals, service switches and additional geometry models
+remain unfinished and fail explicitly. Grounded services can participate in a
+checked FBS forest with ordinary-phase ideal contacts; the private core bus is
+contracted for topology validation. Native checks cover impedance and mixed
+P/I/Z services, IEEE8500 cable parameters and direct hot matrices through edits
+and repeated output. Every contact port is included in these checks.
 
 Canonical GLM can now write grounded center-tapped services from their current
 four-winding circuit and private impedance core load. Effective winding ratios,
@@ -429,7 +445,7 @@ hot-conductor matrices instead emit with the inverse leg-2 row convention and
 report that no physical neutral-current model is inferred. Line, configuration
 and transformer coordinates use the current typed points. These component
 profiles do not establish whole-feeder canonical IEEE8500 qualification; its
-other transformer/regulator mappings still remain unfinished.
+normally open FBS ties and whole-feeder canonical validation remain unfinished.
 
 Nonzero triplex `base_power_1`, `_2`, and `_12` initialize separate constant-power,
 constant-current and constant-impedance terms, overriding explicit coefficients
@@ -490,7 +506,9 @@ as overhead-line equivalents and fixed open contacts as open switches.
 
 Ideal closed contacts select FBS and emit explicit zero contact impedance.
 The complete link graph, including open contacts, must form a forest with one
-source bus per component. Links are oriented away from their sources, and
+source bus per component. The check includes grouped ideal regulators,
+delta-grounded-wye banks and grounded service transformers, with their private
+core circuits contracted. Links are oriented away from their sources, and
 disjoint switch phases between the same buses are grouped into one native
 object. Endpoint reversal and grouped identities are reported. Matching
 component points survive grouping; conflicting points fail explicitly.

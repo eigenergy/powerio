@@ -2386,3 +2386,44 @@ parallel banks at the same endpoints, grounded primary returns and effective
 ratio edits crossing the native phase-pair orientation boundary remain
 unsupported. These component results do not qualify canonical whole-feeder
 IEEE8500 output, whose ideal regulators and FBS forest mapping remain unfinished.
+
+### Canonical ideal FBS regulators and contracted services
+
+`glm_ideal_regulator_write_oracle.py` checks independent grounded ideal phase
+ratios without inventing a common tap lattice. Native parallel single-phase
+regulators can preserve voltages while corrupting reported currents and losses.
+Canonical output instead uses full-bank series stages: one phase changes ratio
+at each stage, and other connected phases pass at unity. IR, typed ratio/load/
+source edits, rebasing and repeated output retain all physical boundary ports.
+The ten engine/profile cases pass 210 comparisons covering 2,730 complex
+observations, including independent analytic equations and native DSS. Wide
+manual ratios exercise both native Type A and Type B output settings. Wrong
+ratios and unchanged output after edits must fail.
+
+```sh
+cargo build -p powerio --example glm_roundtrip --example glm_service_roundtrip
+python evals/gridlabd/glm_ideal_regulator_write_oracle.py \
+  --bridge target/debug/examples/glm_roundtrip --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-ideal-regulator-write-directory
+python evals/gridlabd/glm_service_write_oracle.py \
+  --bridge target/debug/examples/glm_service_roundtrip \
+  --pnnl-root /path/to/GridLAB-D --output /path/to/new-fbs-services-directory \
+  --ideal-contact --case center-A-NR-Z --case center-C-NR-ZIP \
+  --case cable-ieee8500-service-parameters --case direct-ieee9500-FBS
+```
+
+The second command adds an observed ordinary-phase ideal contact upstream of
+four grounded service circuits and selects FBS. All eight engine/profile cases
+pass through fresh, IR-restored, edited, rebased and repeated GLM/DSS. It checks
+both contact currents/powers and loss alongside transformer/cable ports. Private
+service core buses are contracted only for the forest check, leaving the input
+network unchanged. Redundant unity regulator coils do not multiply native
+stages on repeated output; distinct point attachments keep separate stages.
+
+These results do not qualify full canonical IEEE8500 output. Its complete graph
+contains normally open ties, still refused by the strict forest check. A native
+probe also exposes open-link outgoing-current/loss contamination and reversed
+link rank failures. A rank-compatible equivalent and complete whole-feeder
+validation remain required. Closed cycles, reversed service/transformer links,
+floating returns, ordinary FBS winding/core profiles and broader compatibility
+gaps remain explicit limitations.

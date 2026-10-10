@@ -9,7 +9,7 @@ import json
 import re
 from pathlib import Path
 
-from oracle import LOCK, command, compare, run_glm
+from oracle import LOCK, add, command, compare, recorded, run_glm
 from split_phase_import_oracle import cases as center_cases
 from split_phase_import_oracle import read_dss, read_native
 from triplex_import_oracle import OUTPUTS, imported_snapshot, native_snapshot
@@ -20,6 +20,54 @@ def instrument(text, original):
     prelude = "\n".join(re.findall(r"(?m)^#set[^\n]*|clock\s*\{[^{}]*\}|module\s+tape\s*;", original))
     records = "\n".join(re.findall(r"object\s+(?:recorder|impedance_dump)\s*\{[^{}]*\}", original))
     return prelude + "\n" + text + "\n" + records + "\n"
+
+
+def with_contact(text, phase):
+    match = next(m for m in re.finditer(r"object node\s*\{([^{}]+)\}", text) if re.search(r"name source;", m[1]))
+    original = match[0]
+    root = original.replace("name source;", "name upstream_source;")
+    text = text.replace(original, original.replace("bustype SWING;", ""), 1)
+    text = re.sub(r"solver_method (NR|FBS)", "solver_method FBS", text)
+    return text + "\n" + root + f'\nobject switch {{ name contact; phases {phase}N; from upstream_source; to source; status CLOSED; switch_impedance 0+0j; }}\nobject recorder {{ parent upstream_source; property voltage_{phase}; interval 1; file "root.csv"; }}\nobject recorder {{ parent contact; property current_in_{phase},current_out_{phase},power_in_{phase},power_out_{phase},power_losses; interval 1; file "contact.csv"; }}\n'
+
+
+def native_contact(folder, phase):
+    row = recorded(folder / "contact.csv")
+    result = {}
+    add(result, "contact.from.voltage", "V", recorded(folder / "root.csv")[f"voltage_{phase}"])
+    for side, end, sign in (("from", "in", 1), ("to", "out", -1)):
+        for quantity, unit in (("current", "A"), ("power", "VA")):
+            add(result, f"contact.{side}.{quantity}", unit, sign * row[f"{quantity}_{end}_{phase}"])
+    add(result, "contact.loss", "VA", row["power_losses"])
+    return result
+
+
+def imported_contact(path, phase):
+    import opendssdirect as dss
+    e = dss.NewContext()
+    e.Basic.AllowChangeDir(False)
+    if LOCK["dss"]["version"] not in e.Basic.Version():
+        raise ValueError("OpenDSS pin mismatch")
+    e.Text.Command(f'redirect "{path}"')
+    e.Text.Command("set tolerance=1e-12 maxiterations=100 controlmode=off")
+    e.Solution.Solve()
+    if not e.Solution.Converged() or e.Solution.ControlMode() != -1:
+        raise ValueError("OpenDSS contact solve failed")
+    result = {}
+    e.Circuit.SetActiveBus("upstream_source")
+    voltages = e.Bus.Voltages()
+    node = e.Bus.Nodes().index("ABC".index(phase) + 1)
+    add(result, "contact.from.voltage", "V", complex(*voltages[2*node:2*node+2]))
+    loss = 0j
+    for side, name, terminal in (("from", "line.contact", 0), ("to", "line._pio_switch_contact", 1)):
+        e.Circuit.SetActiveElement(name)
+        index = terminal * e.CktElement.NumConductors()
+        currents, powers = e.CktElement.Currents(), e.CktElement.Powers()
+        add(result, f"contact.{side}.current", "A", complex(*currents[2*index:2*index+2]))
+        add(result, f"contact.{side}.power", "VA", 1000 * complex(*powers[2*index:2*index+2]))
+        loss += complex(*e.CktElement.Losses())
+    add(result, "contact.loss", "VA", loss)
+    return result
 
 
 def cable_losses(snapshot):
@@ -34,8 +82,10 @@ def loss_snapshot(value):
     return {"service.native_reported_loss": dict(unit="VA", value=[value.real, value.imag])}
 
 
-def physical_native(directory, phase):
+def physical_native(directory, phase, contact=False):
     snapshot = native_snapshot(directory, phase)
+    if contact:
+        snapshot.update(native_contact(directory, phase))
     raw = complex(*snapshot["service.loss"]["value"])
     physical, convention = cable_losses(snapshot)
     snapshot["service.loss"] = dict(unit="VA", value=[physical.real, physical.imag])
@@ -49,6 +99,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--case", action="append")
     parser.add_argument("--profile", action="append", choices=("pnnl", "arras"))
+    parser.add_argument("--ideal-contact", action="store_true", help="Add an observed upstream ideal contact and select native FBS.")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     report = dict(scope=__doc__, engines=LOCK, bridge_sha256=hashlib.sha256(args.bridge.read_bytes()).hexdigest(), cases={})
@@ -60,19 +111,29 @@ def main():
                         f"object triplex_line_configuration {{ name cable; z11 2.16454+.880800j; z12 .623542+.673688j; z21 {sign * .623542}{sign * .673688:+}j; z22 {sign * 2.16454}{sign * .880800:+}j; }}", original)
         for solver in ("NR", "FBS"):
             cases.append((f"direct-{label}-{solver}", phase, re.sub(r"solver_method (NR|FBS)", "solver_method " + solver, direct), True, True))
-    for label, phase, text, cable, direct in cases:
+    for label, phase, original_text, cable, direct in cases:
         if args.case and label not in args.case:
             continue
+        text = with_contact(original_text, phase) if args.ideal_contact else original_text
         for profile in args.profile or ("pnnl", "arras"):
             folder = args.output / label / profile
             reference = folder / "reference"
             reference.mkdir(parents=True)
             source = reference / "model.glm"
             source.write_text(text)
-            native_observe = native_snapshot if cable else read_native
+            def native_observe(folder, phase, cable=cable):
+                snapshot = native_snapshot(folder, phase) if cable else read_native(folder, phase)
+                if args.ideal_contact:
+                    snapshot.update(native_contact(folder, phase))
+                return snapshot
             def dss_observe(path, phase, cable=cable, direct=direct):
-                return imported_snapshot(path, phase, direct=direct) if cable else read_dss(path, phase)
+                snapshot = imported_snapshot(path, phase, direct=direct) if cable else read_dss(path, phase)
+                if args.ideal_contact:
+                    snapshot.update(imported_contact(path, phase))
+                return snapshot
             outputs = OUTPUTS if cable else ("source.csv", "sink.csv", "line.csv", "impedance.xml")
+            if args.ideal_contact:
+                outputs = (*outputs, "root.csv", "contact.csv")
             row = dict(passed=False, input_sha256=hashlib.sha256(text.encode()).hexdigest(), comparisons={})
             try:
                 emitted = folder / "emitted"
@@ -82,7 +143,7 @@ def main():
                     raise ValueError("IR network equality failed")
                 row["engine"] = run_glm(profile, reference, args.pnnl_root, outputs)
                 if cable:
-                    expected, raw_reference, reporting = physical_native(reference, phase)
+                    expected, raw_reference, reporting = physical_native(reference, phase, args.ideal_contact)
                     row["native_reporting"] = {"reference": reporting}
                 else:
                     expected = native_observe(reference, phase)
@@ -96,7 +157,7 @@ def main():
                         run_glm(profile, run_directory, args.pnnl_root, outputs)
                         key = f"{stage}/{variant}"
                         if cable:
-                            actual, raw, reporting = physical_native(run_directory, phase)
+                            actual, raw, reporting = physical_native(run_directory, phase, args.ideal_contact)
                             row["native_reporting"][key + "/law"] = reporting
                             wanted = cable_losses(goal)[1] if stage == "edited" else raw_reference
                             row["native_reporting"][key + "/original_or_edited"] = compare(loss_snapshot(wanted), loss_snapshot(raw))

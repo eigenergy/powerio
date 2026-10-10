@@ -17,6 +17,7 @@ const METERS_PER_MILE: f64 = 1609.344;
 mod coil_banks;
 mod ideal;
 mod loads;
+mod regulators;
 mod services;
 mod shunts;
 mod transformers;
@@ -31,8 +32,10 @@ mod transformers;
 /// Coherent three-coil phase-pair banks emit native delta-grounded-wye
 /// configurations using current effective winding voltages and impedances.
 /// Fixed resistive regulator equivalents emit manual Type B settings.
-/// Ideal closed contacts select
-/// exact FBS output on a checked forest with one source bus per component.
+/// Ideal closed contacts and grounded ideal phase ratios select exact FBS
+/// output on a checked forest with one source bus per component. Independent
+/// phase ratios use native series stages; private service core circuits are
+/// contracted for the forest check.
 /// Symmetric line end shunts use exact admittance-load equivalents when native
 /// line parameters cannot preserve their port equations. Returned diagnostics
 /// identify the generated loads that contribute to physical line port flows.
@@ -75,6 +78,7 @@ pub(crate) fn emit_text(network: &MulticonductorNetwork) -> Result<TextEmission,
         ideal_plan: None,
         services: services::Services::discover(network)?,
         coil_banks: coil_banks::CoilBanks::discover(network)?,
+        regulators: regulators::Regulators::discover(network)?,
     };
     writer.inventory()?;
     writer.sources()?;
@@ -118,6 +122,7 @@ struct Writer<'a> {
     ideal_plan: Option<ideal::IdealPlan<'a>>,
     services: services::Services<'a>,
     coil_banks: coil_banks::CoilBanks<'a>,
+    regulators: regulators::Regulators<'a>,
 }
 
 fn unsupported(message: impl Into<String>) -> Error {
@@ -494,7 +499,8 @@ impl Writer<'_> {
 
     fn switches(&mut self) -> Result<(), Error> {
         if let Some(plan) = self.ideal_plan.take() {
-            self.ideal_contacts(plan);
+            self.ideal_contacts(&plan);
+            self.ideal_plan = Some(plan);
             return Ok(());
         }
         for switch in self.net.switches() {

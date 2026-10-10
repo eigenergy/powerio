@@ -162,6 +162,20 @@ fn edit_transformers(network: &mut powerio_dist::MulticonductorNetwork) {
         for winding in &mut transformer.windings {
             winding.r_pct *= 1.2;
         }
+        if transformer.windings.len() == 4 && transformer.xsc_pct.len() == 6 {
+            let x = [
+                transformer.xsc_pct[2] * 0.9,
+                transformer.xsc_pct[4] * 0.9,
+                transformer.xsc_pct[5] * 0.9,
+            ];
+            transformer.xsc_pct = vec![x[0] + x[1], x[0] + x[2], x[0], x[1] + x[2], x[1], x[2]];
+            for winding in &mut transformer.windings[1..3] {
+                winding.v_ref *= 1.05;
+            }
+            transformer.windings[0].tap *= 1.02;
+            transformer.windings[3].tap *= 0.97;
+            continue;
+        }
         for x in &mut transformer.xsc_pct {
             *x *= 0.9;
         }

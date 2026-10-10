@@ -8,6 +8,9 @@ impl Writer<'_> {
     pub(super) fn validate_transformers(&self) -> Result<(), Error> {
         self.validate_coil_bank_points()?;
         for t in self.net.transformers() {
+            if self.regulators.leaders.contains_key(t.name.as_str()) {
+                continue;
+            }
             if self.coil_banks.leaders.contains_key(t.name.as_str()) {
                 for bus in [&t.windings[0].bus, &t.windings[1].bus] {
                     if self
@@ -23,11 +26,6 @@ impl Writer<'_> {
                 continue;
             }
             if self.services.centers.contains_key(t.name.as_str()) {
-                if self.ideal_plan.is_some() {
-                    return Err(unsupported(
-                        "service circuits with ideal contacts need a qualified FBS forest mapping",
-                    ));
-                }
                 continue;
             }
             let fail = || {
@@ -102,6 +100,12 @@ impl Writer<'_> {
 
     pub(super) fn transformers(&mut self) -> Result<(), Error> {
         for t in self.net.transformers() {
+            if let Some(&leader) = self.regulators.leaders.get(t.name.as_str()) {
+                if leader == t.name {
+                    self.ideal_regulator_group(leader)?;
+                }
+                continue;
+            }
             if let Some(&leader) = self.coil_banks.leaders.get(t.name.as_str()) {
                 if leader == t.name {
                     self.coil_bank(leader)?;

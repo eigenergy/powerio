@@ -209,7 +209,37 @@ fn fbs_regulators_keep_ideal_ratios_and_ignore_declared_series_resistance() {
         baseline.value().component_locations(),
         module.value().component_locations()
     );
-    assert!(emit_canonical(module.value(), Destination::memory("ideal.glm").unwrap()).is_err());
+    let canonical =
+        emit_canonical(module.value(), Destination::memory("ideal.glm").unwrap()).unwrap();
+    let EmittedOutput::Memory { artifacts } = canonical.output() else {
+        panic!()
+    };
+    let text = std::str::from_utf8(artifacts[0].bytes()).unwrap();
+    assert!(text.contains("solver_method FBS"));
+    assert_eq!(text.matches("object regulator {").count(), 3);
+    let repeated = read(text).unwrap();
+    for phase in 1..=3 {
+        let effective = repeated
+            .value()
+            .transformers()
+            .iter()
+            .filter(|t| t.windings[0].terminal_map[0] == phase.to_string())
+            .map(ratio)
+            .product::<f64>();
+        assert!((effective - ratio(&module.value().transformers()[phase - 1])).abs() < 1e-14);
+    }
+    let again =
+        emit_canonical(repeated.value(), Destination::memory("again.glm").unwrap()).unwrap();
+    let EmittedOutput::Memory { artifacts } = again.output() else {
+        panic!()
+    };
+    assert_eq!(
+        std::str::from_utf8(artifacts[0].bytes())
+            .unwrap()
+            .matches("object regulator {")
+            .count(),
+        3
+    );
     let output = powerio_dist::emit(
         &powerio_core::PioModule::new(module.into_value()),
         powerio_dist::DistTargetFormat::Dss,
@@ -229,4 +259,47 @@ fn fbs_regulators_keep_ideal_ratios_and_ignore_declared_series_resistance() {
     };
     let text = std::str::from_utf8(artifacts[0].bytes()).unwrap();
     assert_eq!(text.matches("rmatrix=(-1)").count(), 3);
+}
+
+#[test]
+fn ideal_regulator_output_rejects_missing_phases_parallel_coils_and_ground_paths() {
+    for mutation in 0..4 {
+        let mut net = read(&deck().replace("solver_method NR", "solver_method FBS"))
+            .unwrap()
+            .into_value();
+        match mutation {
+            0 => {
+                net.transformers_mut().pop();
+            }
+            1 => {
+                let t = net.transformers()[0].clone();
+                let mut t = t;
+                t.name = "parallel".into();
+                net.transformers_mut().push(t);
+            }
+            2 => net.transformers_mut()[0].windings[0].r_neutral = Some(1.0),
+            _ => net.transformers_mut()[0].windings[1].bus = "missing".into(),
+        }
+        assert!(emit_canonical(&net, Destination::memory("invalid.glm").unwrap()).is_err());
+    }
+}
+
+#[test]
+fn ideal_regulator_declared_ratings_are_not_silently_replaced_by_normalization_bases() {
+    let mut net = read(&deck().replace("solver_method NR", "solver_method FBS"))
+        .unwrap()
+        .into_value();
+    let transformer = &mut net.transformers_mut()[0];
+    transformer.extras.remove("rating_is_normalization_base");
+    for winding in &mut transformer.windings {
+        winding.s_rating = 2000.0;
+    }
+    let result = emit_canonical(&net, Destination::memory("rated.glm").unwrap()).unwrap();
+    assert!(
+        result
+            .diagnostics()
+            .iter()
+            .any(|d| d.code() == "EMIT.GLM.FIELD_DROPPED"
+                && d.message().contains("declared winding ratings"))
+    );
 }
