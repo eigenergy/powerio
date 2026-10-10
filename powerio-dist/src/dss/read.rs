@@ -2441,7 +2441,7 @@ mod tests {
              New Line.sw1 bus1=a.1 bus2=b.1 phases=1 switch=y\n\
              New SwtControl.s1 SwitchedObj=LINE.sw1 Action=open",
         );
-        assert!(net.switches().is_empty());
+        assert_eq!(net.switches().as_slice(), []);
         assert!(net.lines().iter().any(|line| line.name == "sw1"));
         assert!(has_warning(&net, "active control execution is excluded"));
         assert!(!has_warning(&net, "has no typed line"));

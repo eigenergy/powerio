@@ -2052,7 +2052,7 @@ mod tests {
         ));
         let object = raw.find("linecode", "empty").unwrap();
         let history = &raw.line_history[&0];
-        assert!(object.props.is_empty());
+        assert_eq!(object.props, [] as [crate::dss::raw::RawProp; 0]);
         assert!(history.copies.len() < 30);
         assert!(object.edits.len() + history.copies.len() <= MAX_OBJECT_PROPS);
         assert!(raw.total_props <= MAX_TOTAL_PROPS);

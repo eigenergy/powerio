@@ -235,7 +235,7 @@ mod tests {
         }
         let path = std::env::var("POWERIO_LINE_HISTORY_ORACLE").expect("native observations");
         let report: Report = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        assert!(report.failures.is_empty());
+        assert_eq!(report.failures, [] as [std::string::String; 0]);
         assert!(!report.cases.is_empty());
         let mut findings = BTreeMap::new();
         for (name, case) in report.cases {

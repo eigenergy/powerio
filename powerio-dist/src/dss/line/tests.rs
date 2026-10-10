@@ -134,7 +134,7 @@ fn pinned_line_states() {
         &std::fs::read(std::env::var("POWERIO_LINE_ORACLE").unwrap()).unwrap(),
     )
     .unwrap();
-    assert!(report.failures.is_empty());
+    assert_eq!(report.failures, [] as [std::string::String; 0]);
     assert!(!report.cases.is_empty());
     let mut output = std::collections::BTreeMap::new();
     for (name, case) in report.cases {

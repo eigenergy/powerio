@@ -207,7 +207,7 @@ fn finite_switch_and_linecode_history_survive_typed_lowering() {
         .find(|c| c.name == b.linecode)
         .unwrap();
     assert!((code.r_series[0][0] * b.length - 0.001).abs() < 1e-14);
-    assert!(net.switches().is_empty());
+    assert_eq!(net.switches().as_slice(), []);
 }
 
 #[test]

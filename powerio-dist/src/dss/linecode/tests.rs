@@ -194,7 +194,7 @@ fn direct_linecode_uses_frequency_correction_and_single_phase_sequence() {
     );
     let state = resolve(&raw, point(&raw, "a")).unwrap();
     let line = state.line_matrices(60.0, 500.0, 4).unwrap();
-    assert!((line.r[0][0] - (0.2 + 0.01805 * 0.2) * 0.5).abs() < 1e-15);
+    assert!((line.r[0][0] - f64::midpoint(0.2, 0.01805 * 0.2)).abs() < 1e-15);
     assert!((line.b[0][0] - TAU * 60.0 * 12e-9 * 0.5).abs() < 1e-18);
     assert!(state.line_matrices(0.0, 1.0, 0).is_err());
 }
@@ -215,7 +215,7 @@ fn pinned_linecode_matrices() {
     }
     let path = std::env::var("POWERIO_LINECODE_ORACLE").expect("native observations");
     let report: Report = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    assert!(report.failures.is_empty());
+    assert_eq!(report.failures, [] as [std::string::String; 0]);
     assert!(!report.cases.is_empty());
     let mut findings = std::collections::BTreeMap::new();
     let mut matrices = std::collections::BTreeMap::new();

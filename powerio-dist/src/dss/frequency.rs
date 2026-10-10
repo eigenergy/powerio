@@ -168,7 +168,10 @@ mod tests {
         assert_eq!(raw.snapshot_frequency(), 50.0);
         let source = raw.find("vsource", "source").unwrap();
         assert_eq!(raw.source_replay(source).constructor_frequency, 50.0);
-        assert!(raw.options.is_empty());
+        assert_eq!(
+            raw.options,
+            [] as [(std::string::String, crate::dss::lex::Value); 0]
+        );
     }
 
     #[test]

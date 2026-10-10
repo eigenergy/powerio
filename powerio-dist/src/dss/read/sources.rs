@@ -320,7 +320,7 @@ fn pinned_source_validity() {
     }
     let path = std::env::var("POWERIO_SOURCE_VALIDITY_ORACLE").expect("oracle report path");
     let report: Report = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    assert!(report.failures.is_empty());
+    assert_eq!(report.failures, [] as [std::string::String; 0]);
     assert!(!report.cases.is_empty());
     let mut findings = BTreeMap::new();
     for (name, case) in report.cases {
@@ -370,11 +370,11 @@ fn snapshot_settings_validate_references_and_do_not_apply_shapes() {
         );
         assert!(staged_from_raw(&raw).is_err(), "{body}");
     }
-    assert!(
+    assert_eq!(
         staged_read(&format!("{base}Set mode=daily\nSolve mode=snapshot"))
             .sources()
-            .len()
-            == 1
+            .len(),
+        1
     );
 }
 
@@ -395,7 +395,7 @@ fn pinned_source_profiles() {
     }
     let path = std::env::var("POWERIO_SOURCE_PROFILE_ORACLE").expect("oracle report path");
     let report: Report = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    assert!(report.failures.is_empty());
+    assert_eq!(report.failures, [] as [std::string::String; 0]);
     assert!(!report.cases.is_empty());
     let mut findings = BTreeMap::new();
     for (name, case) in report.cases {
@@ -469,13 +469,13 @@ fn coupled_sources_keep_each_return_and_register_all_original_terminals_first() 
             vec![1.0, 1.0, 2.0]
         ]
     );
-    assert!(
+    assert_eq!(
         net.buses()
             .iter()
             .find(|b| b.id == "feed")
             .unwrap()
-            .grounded
-            .is_empty()
+            .grounded,
+        [] as [std::string::String; 0]
     );
 }
 
@@ -511,10 +511,10 @@ fn source_decomposition_does_not_resolve_a_dangling_linecode() {
 #[test]
 fn disabled_sources_contribute_no_terminals_or_impedance_and_retain_the_final_state() {
     let net = staged_read("New Circuit.c bus1=unused.1.2.3\nDisable Vsource.source");
-    assert!(net.sources().is_empty());
-    assert!(net.lines().is_empty());
-    assert!(net.line_codes().is_empty());
-    assert!(net.buses().is_empty());
+    assert_eq!(net.sources().as_slice(), []);
+    assert_eq!(net.lines().as_slice(), []);
+    assert_eq!(net.line_codes().as_slice(), []);
+    assert_eq!(net.buses().as_slice(), []);
     let retained = &net.untyped_objects()[0];
     assert_eq!(retained.class, "vsource");
     assert_eq!(
