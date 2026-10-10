@@ -499,6 +499,14 @@ fn nominal_bounded_load(load: &crate::DistLoad) -> Result<Option<DistLoadVoltage
             v_max_pu,
             ..
         } => (*v_low_pu, *v_min_pu, *v_max_pu),
+        DistLoadVoltageModel::BoundedConstantPower {
+            v_min_pu,
+            v_max_pu,
+            current_limit_pu,
+            ..
+        } if current_limit_pu.is_none_or(|limit| limit.is_finite() && limit > 1.0) => {
+            (0.0, *v_min_pu, *v_max_pu)
+        }
         _ => return Ok(None),
     };
     if ![low, min, max].iter().all(|value| value.is_finite())

@@ -279,7 +279,7 @@ fn assert_additive_load_laws(
     // accepting an arbitrary increase in the enum's variant count.
     let old = published["oneOf"].as_array().unwrap();
     let new = current["oneOf"].as_array().unwrap();
-    let additions: [(&str, &[&str], &[&str]); 2] = [
+    let additions: [(&str, &[&str], &[&str]); 3] = [
         (
             "bounded_zip",
             &[
@@ -304,6 +304,11 @@ fn assert_additive_load_laws(
                 "model", "v_nom", "gamma_p", "gamma_q", "v_low_pu", "v_min_pu", "v_max_pu",
             ],
             &[],
+        ),
+        (
+            "bounded_constant_power",
+            &["model", "v_nom", "v_min_pu", "v_max_pu"],
+            &["current_limit_pu"],
         ),
     ];
     assert_eq!(new.len(), old.len() + additions.len());
@@ -344,6 +349,12 @@ fn assert_additive_load_laws(
                 "model" => serde_json::json!({"type": "string", "const": tag}),
                 "v_nom" | "alpha_z" | "alpha_i" | "alpha_p" | "beta_z" | "beta_i" | "beta_p"
                 | "gamma_p" | "gamma_q" => nominal_voltage.clone(),
+                "current_limit_pu" => serde_json::json!({
+                    "anyOf": [
+                        {"format": "double", "type": ["number", "null"]},
+                        {"enum": ["Infinity", "-Infinity", "NaN"], "type": "string"},
+                    ],
+                }),
                 "v_low_pu" | "v_min_pu" | "v_max_pu" | "cutoff_pu" => {
                     nominal_voltage["items"].clone()
                 }

@@ -491,7 +491,8 @@ fn assert_bounded_projection(law: &DistLoadVoltageModel) {
     }
     match &mut source.loads_mut()[0].voltage_model {
         DistLoadVoltageModel::BoundedZip { v_min_pu, .. }
-        | DistLoadVoltageModel::BoundedExponential { v_min_pu, .. } => *v_min_pu = 1.0,
+        | DistLoadVoltageModel::BoundedExponential { v_min_pu, .. }
+        | DistLoadVoltageModel::BoundedConstantPower { v_min_pu, .. } => *v_min_pu = 1.0,
         _ => unreachable!(),
     }
     let unchanged =
@@ -542,4 +543,39 @@ fn bounded_exponential_projection_preserves_independent_fractional_slopes() {
         v_min_pu: 0.95,
         v_max_pu: 1.05,
     });
+}
+
+#[test]
+fn bounded_constant_power_projection_requires_a_smooth_nominal_current_region() {
+    for current_limit_pu in [None, Some(1.2)] {
+        assert_bounded_projection(&DistLoadVoltageModel::BoundedConstantPower {
+            v_nom: vec![230.0],
+            v_min_pu: 0.95,
+            v_max_pu: 1.05,
+            current_limit_pu,
+        });
+    }
+    let mut source = network();
+    let mut load = DistLoad::new(
+        "limited",
+        "load",
+        terminals(&["1"]),
+        Configuration::Wye,
+        vec![100.0],
+        vec![20.0],
+    );
+    load.voltage_model = DistLoadVoltageModel::BoundedConstantPower {
+        v_nom: vec![230.0],
+        v_min_pu: 0.95,
+        v_max_pu: 1.05,
+        current_limit_pu: Some(1.0),
+    };
+    source.loads_mut().push(load);
+    let prepared =
+        prepare_lindist3flow_network(&source, LinDist3FlowPreparationPolicy::Approximate).unwrap();
+    assert!(prepared.report().actions.is_empty());
+    assert_eq!(
+        prepared.network().loads()[0].voltage_model,
+        source.loads()[0].voltage_model
+    );
 }
