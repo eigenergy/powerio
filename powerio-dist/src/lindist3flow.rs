@@ -479,6 +479,58 @@ fn lower_capacitors(
     Ok(())
 }
 
+// Bounded ZIP is projected only by the explicit approximation policy.
+// Strict preparation retains the complete law and its transition bounds.
+fn nominal_bounded_zip(load: &crate::DistLoad) -> Result<Option<DistLoadVoltageModel>> {
+    let DistLoadVoltageModel::BoundedZip {
+        v_nom,
+        alpha_z,
+        alpha_i,
+        alpha_p,
+        beta_z,
+        beta_i,
+        beta_p,
+        v_low_pu,
+        v_min_pu,
+        v_max_pu,
+        cutoff_pu,
+    } = &load.voltage_model
+    else {
+        return Ok(None);
+    };
+    if ![*v_low_pu, *v_min_pu, *v_max_pu, *cutoff_pu]
+        .iter()
+        .all(|x| x.is_finite())
+        || !(0.0..1.0).contains(v_low_pu)
+        || *v_min_pu >= 1.0
+        || *v_max_pu <= 1.0
+        || !(0.0..1.0).contains(cutoff_pu)
+    {
+        return Ok(None);
+    }
+    let n = load.p_nom.len();
+    if n == 0 || load.q_nom.len() != n || v_nom.len() != n {
+        return Err(fail(format!(
+            "load `{}` bounded law has invalid channel dimensions",
+            load.name
+        )));
+    }
+    for (channel, &voltage) in v_nom.iter().enumerate() {
+        load.voltage_model
+            .power_scale(channel, voltage)
+            .map_err(|error| fail(format!("load `{}`: {error}", load.name)))?;
+    }
+    Ok(Some(DistLoadVoltageModel::Zip {
+        v_nom: v_nom.clone(),
+        alpha_z: alpha_z.clone(),
+        alpha_i: alpha_i.clone(),
+        alpha_p: alpha_p.clone(),
+        beta_z: beta_z.clone(),
+        beta_i: beta_i.clone(),
+        beta_p: beta_p.clone(),
+    }))
+}
+
 fn approximate_loads(
     network: &mut MulticonductorNetwork,
     report: &mut LinDist3FlowPreparationReport,
@@ -493,7 +545,9 @@ fn approximate_loads(
         }
     };
     for load in network.loads_mut() {
-        let approximation = match &load.voltage_model {
+        let nominal = nominal_bounded_zip(load)?;
+        let model = nominal.as_ref().unwrap_or(&load.voltage_model);
+        let approximation = match model {
             DistLoadVoltageModel::ConstantCurrent { v_nom } => Some(DistLoadVoltageModel::Zip {
                 v_nom: v_nom.clone(),
                 alpha_z: vec![0.5; load.p_nom.len()],
@@ -557,8 +611,10 @@ fn approximate_loads(
                 })
             }
             _ => None,
-        };
+        }
+        .or(nominal);
         if let Some(approximation) = approximation {
+            let source_model = json!(&load.voltage_model);
             load.voltage_model = approximation;
             let mut action = LinDist3FlowPreparationAction::new(
                 LinDist3FlowPreparationActionKind::LoadApproximated,
@@ -569,6 +625,9 @@ fn approximate_loads(
                 "method".to_owned(),
                 json!("first_order_squared_voltage_at_nominal"),
             );
+            action
+                .details
+                .insert("source_voltage_model".into(), source_model);
             report.actions.push(action);
         }
     }

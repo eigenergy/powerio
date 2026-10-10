@@ -453,7 +453,11 @@ unique physical allocation of branch flows.
 policy. `Reject` keeps the strict boundary. `Lower` applies audited static
 neutral, switch, line-shunt and capacitor transformations. `Approximate` also
 linearizes supported load models and maps IBRs to static generators while
-freezing named controls. `Permissive` can additionally omit retained untyped
+freezing named controls. Bounded ZIP can be projected only when nominal
+voltage lies strictly inside its smooth law region, above dropout. The action
+retains the original `source_voltage_model` and its bounds; strict preparation
+keeps the complete piecewise law. The source network is not mutated.
+`Permissive` can additionally omit retained untyped
 records. `instance.source_network()` remains the caller's input,
 `instance.network()` is the prepared calculation network, and
 `instance.preparation()` records every action. The serialized instance stores

@@ -428,3 +428,92 @@ fn permissive_policy_omits_untyped_records_but_lower_retains_them() {
         })
     );
 }
+
+#[test]
+fn bounded_zip_projection_is_explicit_and_preserves_nominal_value_and_slope() {
+    let mut source = network();
+    let mut load = DistLoad::new(
+        "demand",
+        "load",
+        terminals(&["1"]),
+        Configuration::Wye,
+        vec![100.0],
+        vec![20.0],
+    );
+    let law = DistLoadVoltageModel::BoundedZip {
+        v_nom: vec![230.0],
+        alpha_z: vec![0.0],
+        alpha_i: vec![1.0],
+        alpha_p: vec![0.0],
+        beta_z: vec![0.0],
+        beta_i: vec![1.0],
+        beta_p: vec![0.0],
+        v_low_pu: 0.5,
+        v_min_pu: 0.95,
+        v_max_pu: 1.05,
+        cutoff_pu: 0.2,
+    };
+    load.voltage_model = law.clone();
+    source.loads_mut().push(load);
+    for policy in [
+        LinDist3FlowPreparationPolicy::Reject,
+        LinDist3FlowPreparationPolicy::Lower,
+    ] {
+        let prepared = prepare_lindist3flow_network(&source, policy).unwrap();
+        assert_eq!(prepared.network().loads()[0].voltage_model, law);
+        assert!(
+            !prepared
+                .report()
+                .actions
+                .iter()
+                .any(|a| a.kind == LinDist3FlowPreparationActionKind::LoadApproximated)
+        );
+    }
+    let prepared =
+        prepare_lindist3flow_network(&source, LinDist3FlowPreparationPolicy::Approximate).unwrap();
+    assert_eq!(source.loads()[0].voltage_model, law);
+    let action = prepared
+        .report()
+        .actions
+        .iter()
+        .find(|a| a.kind == LinDist3FlowPreparationActionKind::LoadApproximated)
+        .unwrap();
+    assert_eq!(
+        action.details["source_voltage_model"],
+        serde_json::json!(&law)
+    );
+    let projected = &prepared.network().loads()[0].voltage_model;
+    for (actual, expected) in projected
+        .power_scale(0, 230.0)
+        .unwrap()
+        .into_iter()
+        .zip(law.power_scale(0, 230.0).unwrap())
+    {
+        assert!((actual - expected).abs() <= f64::EPSILON);
+    }
+    let step = 1e-4_f64;
+    let slope = |model: &DistLoadVoltageModel| {
+        let hi = model.power_scale(0, 230.0 * (1.0 + step).sqrt()).unwrap();
+        let lo = model.power_scale(0, 230.0 * (1.0 - step).sqrt()).unwrap();
+        [
+            (hi[0] - lo[0]) / (2.0 * step),
+            (hi[1] - lo[1]) / (2.0 * step),
+        ]
+    };
+    for (actual, expected) in slope(projected).into_iter().zip(slope(&law)) {
+        assert!((actual - expected).abs() < 1e-8);
+    }
+    let DistLoadVoltageModel::BoundedZip { v_min_pu, .. } =
+        &mut source.loads_mut()[0].voltage_model
+    else {
+        unreachable!()
+    };
+    *v_min_pu = 1.0;
+    let unchanged =
+        prepare_lindist3flow_network(&source, LinDist3FlowPreparationPolicy::Approximate).unwrap();
+    assert_eq!(
+        unchanged.network().loads()[0].voltage_model,
+        source.loads()[0].voltage_model
+    );
+    assert!(unchanged.report().actions.is_empty());
+}
