@@ -369,7 +369,7 @@ fn zero_admittance_shunt_emits_no_fake_capacitor_rating() {
     );
     assert_eq!(serde_json::to_value(&net).unwrap(), before);
     let again = reparse(&content);
-    assert!(again.shunts().is_empty());
+    assert_eq!(again.shunts().as_slice(), []);
     assert!(again.loads().iter().any(|load| load.name == "idle_cap"));
     assert!(
         again

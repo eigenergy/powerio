@@ -118,7 +118,7 @@ impl<'a> Writer<'a> {
         // Conducting paths set the forest first. A redundant fully open link
         // uses unloaded aliases, avoiding native rank cycles and bus-current
         // contamination. Other open links retain their island attachment.
-        // Contract only private core circuits certified by Services::discover.
+        // Collapse only private core circuits certified by Services::discover.
         type Link<'b> = (&'b str, &'b str, Vec<usize>, Vec<usize>, bool);
         let mut links: BTreeMap<&str, Link<'_>> = BTreeMap::new();
         let codes: BTreeMap<_, _> = self
