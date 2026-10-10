@@ -15,8 +15,8 @@ from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
-from group_recorders import group_recorders
 from feeder_balance import current_balance
+from group_recorders import group_recorders
 from ieee8500_import_oracle import PORT_PROPERTIES, grouped
 from oracle import FEEDER_TOLERANCES, LOCK, TOLERANCES, add, command, compare, run_glm
 

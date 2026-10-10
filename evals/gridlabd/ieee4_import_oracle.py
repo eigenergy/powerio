@@ -230,6 +230,9 @@ def main():
     (args.output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     print(f"Qualified {report['qualified_cases']}/{len(report['cases'])} cases.")
 
+    if not report["passed"]:
+        raise SystemExit(1)
+
 
 if __name__ == "__main__":
     main()

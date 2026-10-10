@@ -16,7 +16,8 @@ from pathlib import Path
 
 import numpy as np
 from oracle import add, command, compare, literal, recorded, run_glm
-from shunt_measurement import instrument as instrument_shunts, measurements
+from shunt_measurement import instrument as instrument_shunts
+from shunt_measurement import measurements
 
 
 def variants():

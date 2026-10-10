@@ -12,8 +12,8 @@ import json
 from pathlib import Path
 
 import opendssdirect as dss
-from dss_source_oracle import complex_array
 from dss_source_lowering_oracle import canonical_snapshot, native, typed
+from dss_source_oracle import complex_array
 from oracle import LOCK, add, command, compare
 
 MAIN = (240, 0, 2, 1)

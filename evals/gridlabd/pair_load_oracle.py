@@ -94,7 +94,7 @@ def reference(terms, edited=False, wrong_connection=False, fixed_current=False):
         return result
 
     sink = source.copy()
-    for iteration in range(1000):
+    for _iteration in range(1000):
         nxt = np.linalg.solve(np.eye(3) + z @ y, source - z @ injection(sink))
         if max(abs(nxt - sink)) < 1e-11:
             sink = nxt
@@ -121,7 +121,7 @@ def reference(terms, edited=False, wrong_connection=False, fixed_current=False):
         for j, q in enumerate("ABC"):
             add(result, f"line.z.{p}{q}", "ohm", z[i, j])
     add(result, "line.loss", "VA", sum((source - sink) * current.conjugate()))
-    return result, {"iterations": iteration + 1, "kcl_residual_amperes": residual}
+    return result, {"iterations": _iteration + 1, "kcl_residual_amperes": residual}
 
 
 def deck(terms, solver):

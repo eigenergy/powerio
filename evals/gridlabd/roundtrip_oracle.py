@@ -12,7 +12,6 @@ import json
 from pathlib import Path
 
 import numpy as np
-
 from network_oracle import decks, residuals
 from oracle import analytic, command, compare, read_glm, recorded, run_glm
 

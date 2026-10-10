@@ -9,6 +9,7 @@ is explicit in engine inputs; canonical output itself is not changed on disk.
 """
 
 import re
+
 from oracle import recorded
 
 PAIRS = ("AB", "BC", "CA", "AN", "BN", "CN")

@@ -8,21 +8,27 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
-from group_recorders import recorders
 from coordinate_oracle import check as check_coordinates
 from coordinate_oracle import expected as expected_coordinates
-from object_oracle import source_graph
-from oracle import add, analytic, cases, compare, parse_complex, recorded
-from quantity_oracle import check_values, reference as quantity_reference
-from switch_roundtrip_oracle import impedance_run
+from group_recorders import recorders
 from ideal_switch_oracle import (
     parameters as ideal_parameters,
+)
+from ideal_switch_oracle import (
     reference as ideal_reference,
+)
+from ideal_switch_oracle import (
     variants as ideal_variants,
 )
-from pair_load_oracle import reference as pair_reference, variants as pair_variants
 from line_shunt_oracle import reference as shunt_reference
+from object_oracle import source_graph
+from oracle import add, analytic, cases, compare, parse_complex, recorded
+from pair_load_oracle import reference as pair_reference
+from pair_load_oracle import variants as pair_variants
+from quantity_oracle import check_values
+from quantity_oracle import reference as quantity_reference
 from shunt_measurement import measurements as shunt_measurements
+from switch_roundtrip_oracle import impedance_run
 
 
 class OracleTests(unittest.TestCase):

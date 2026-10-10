@@ -13,7 +13,6 @@ import re
 from pathlib import Path
 
 import numpy as np
-
 from oracle import add, analytic, cases, compare, glm, recorded, run_glm
 
 
@@ -93,7 +92,8 @@ def run_case(profile, directory, pnnl_root, solver, properties, expected_z):
     (directory / "model.glm").write_text(deck)
     version = run_glm(profile, directory, pnnl_root)
     actual = snapshot(directory)
-    voltage = lambda key: complex(*actual[key]["value"])
+    def voltage(key):
+        return complex(*actual[key]["value"])
     current = voltage("line.from.A.current")
     if abs(current) < 1.0:
         raise ValueError("insufficient current for an impedance witness")

@@ -32,7 +32,10 @@ execution requirement in the validation evidence.
 
 Run commands from the repository root with the evaluation environment active.
 Every result directory must be new: stale recordings must never qualify a failed
-rerun. Preserve command failures and explicit retry evidence. Each script's
+rerun. Preserve command failures and explicit retry evidence.
+If other Cargo checks run concurrently, copy the built validation executables
+to a separate run directory and pass those copies as `--bridge` and `--powerio`.
+Their recorded hashes must remain stable throughout the run. Each script's
 `--help` lists its required bridges, inputs and subset selectors.
 
 ## Calibrate before converting

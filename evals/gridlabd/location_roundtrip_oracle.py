@@ -14,7 +14,6 @@ import math
 from pathlib import Path
 
 import numpy as np
-
 from coordinate_oracle import locations
 from network_oracle import residuals
 from oracle import analytic, cases, command, compare, glm, read_glm, run_glm

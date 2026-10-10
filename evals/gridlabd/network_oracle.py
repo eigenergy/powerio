@@ -13,7 +13,6 @@ import json
 from pathlib import Path
 
 import numpy as np
-
 from oracle import analytic, cases, command, compare, glm, read_glm, recorded, run_glm
 
 
@@ -126,7 +125,8 @@ def residuals(net, directory, phases):
             load_currents[terminal] += (power / voltage).conjugate()
     for i, terminal in enumerate(line["terminal_map_to"]):
         check(f"sink.{terminal}.kcl", to_current[i] + load_currents[terminal], 0, 2e-7)
-    for source in net["sources"]:
+    for source_record in net["sources"]:
+        source = source_record
         if source.get("type") == "powerio.ReferencedVoltageSource":
             source = source["value"]
         reference_terminal = source.get("reference_terminal")
