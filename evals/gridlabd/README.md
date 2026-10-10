@@ -2513,3 +2513,39 @@ iteration limits can be selected explicitly with
 timeouts, and their original reports/logs remain external evidence. Two Arras
 launcher failures in the injection sweep passed complete identical-input
 reruns; both original failures are retained in the aggregate report.
+
+### Scalar finite-impedance current variables
+
+`current_form_write_oracle.py` checks scalar near-zero line output against an
+independent series-circuit solution. It solves fresh, IR-restored, edited,
+rebased and grounded-reference networks in both pinned GLM forks and DSS,
+then repeats GLM import/write, restored GLM output, GLM-to-DSS and DSS
+import/IR/write. The original finite impedance remains unchanged.
+
+```sh
+python evals/gridlabd/current_form_write_oracle.py \
+  --bridge target/debug/examples/glm_roundtrip \
+  --dss-bridge target/debug/examples/dist_network \
+  --pnnl-root /path/to/GridLAB-D --output /path/to/new-current-form-results
+```
+
+`--phase` selects A, B or C; `--impedance` takes an ohmic complex value.
+`--profile` and `--law` select cases for an explicit retry or targeted probe.
+Each comparison checks sink voltage, encoded current, both physical terminal
+currents and powers, signed physical loss, auxiliary-node current balance and the finite impedance
+stamp.
+Physical currents include independently recorded series-link currents and
+endpoint load contributions. PNNL publishes measured load powers; Arras
+publishes the load impedances and voltages, whose constitutive currents are
+used explicitly. DSS checks actual equivalent element terminal currents.
+Missing quantities, nonfinite values and empty snapshots fail. An unchanged
+circuit must fail comparison against the edited result, and an ideal-contact
+impedance must fail the stamp comparison.
+
+Native recorders set both complex formatting and rectangular output. Selecting
+only a rectangular-looking format string does not select rectangular
+coordinates and can render polar magnitude/angle as misleading real/imaginary
+values. Original failed runs remain external evidence; launcher failures can
+be retried only after establishing that the process failed before solving.
+This component qualification does not qualify the complete IEEE9500 feeder,
+coupled current variables, arbitrary neutrals or more extreme impedances.

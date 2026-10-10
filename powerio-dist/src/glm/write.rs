@@ -15,6 +15,7 @@ use super::read::{nominal_phasor, phase_name};
 const METERS_PER_MILE: f64 = 1609.344;
 
 mod coil_banks;
+mod current_form;
 mod ideal;
 mod injections;
 mod loads;
@@ -580,6 +581,10 @@ impl Writer<'_> {
                     .ok_or_else(|| unsupported("service line has no linecode"))?;
                 used_codes.insert(code.name.as_str());
                 self.service_line(line, code)?;
+                continue;
+            }
+            if self.current_form_line(line, &codes)? {
+                used_codes.insert(line.linecode.as_str());
                 continue;
             }
             let phase_order = self.link_phases(

@@ -559,6 +559,20 @@ as separate typed loads rather than reconstructing the original line identity.
 Native `power_losses` also makes each phase's real loss positive before summing;
 with mutual coupling, physical total loss must use signed powers at both ports.
 
+Finite scalar lines with impedance magnitude between `1e-8` and `1e-5` ohm
+can emit a current-variable equivalent in NR GLM and OpenDSS. This profile
+requires matching single-conductor endpoint maps, no line end shunts and no
+unresolved electrical extras. It preserves the exact finite impedance; it does
+not replace the line with an ideal contact or add an impedance floor.
+
+The generated auxiliary voltage represents current with a one-ohm scale.
+Physical terminal currents include the generated endpoint shunts, and physical
+loss is the sum of signed terminal powers. Internal resistor losses are not
+the original line loss. Emission diagnostics identify the equivalent elements
+and report omitted thermal limits and routes. Reimport keeps the explicit
+circuit; coupled matrices and more extreme impedances retain their existing
+projection and are not covered by this qualification.
+
 Output without ideal closed contacts selects NR. The pinned engines can return NaN results for
 some valid circuits even with a successful process exit. One qualified
 impedance case reproduces this with either a native switch or its line
