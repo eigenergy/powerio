@@ -1200,20 +1200,19 @@ pub(super) fn lag_polarity(windings: &[DistWinding]) -> Vec<i64> {
 /// Names (lowercased) of linecodes that re-inline on their lines: every
 /// referencing line carries the reader's `pmd_inline` marker.
 fn inlined_codes(net: &MulticonductorNetwork) -> BTreeSet<String> {
-    let mut inlined = BTreeSet::new();
-    for c in net.line_codes() {
-        let mut refs = net
-            .lines()
-            .iter()
-            .filter(|l| l.linecode.eq_ignore_ascii_case(&c.name))
-            .peekable();
-        if refs.peek().is_some()
-            && refs.all(|l| l.extras.get("pmd_inline").and_then(Value::as_bool) == Some(true))
-        {
-            inlined.insert(c.name.to_lowercase());
-        }
+    let mut all_inline = BTreeMap::new();
+    for line in net.lines() {
+        let inline = line.extras.get("pmd_inline").and_then(Value::as_bool) == Some(true);
+        all_inline
+            .entry(line.linecode.to_ascii_lowercase())
+            .and_modify(|value| *value &= inline)
+            .or_insert(inline);
     }
-    inlined
+    net.line_codes()
+        .iter()
+        .filter(|code| all_inline.get(&code.name.to_ascii_lowercase()) == Some(&true))
+        .map(|code| code.name.to_lowercase())
+        .collect()
 }
 
 /// The six ENGINEERING impedance matrices of a linecode, emitted onto a

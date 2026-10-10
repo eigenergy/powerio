@@ -495,6 +495,28 @@ fn inline_line_impedance_round_trips() {
     assert!(line.get("linecode").is_none());
     // The materialized linecode does not leak into the linecode section.
     assert!(out.get("linecode").is_none());
+
+    // Sharing a code, including ASCII case aliases, must retain the named
+    // code if any reference is not inline. Unreferenced codes also remain.
+    let mut net = net;
+    let mut second = net.lines()[0].clone();
+    second.name = "ln2".into();
+    second.linecode = "LN1_Z".into();
+    net.lines_mut().push(second);
+    let mut unused = net.line_codes()[0].clone();
+    unused.name = "unused".into();
+    net.line_codes_mut().push(unused);
+    let all_inline: serde_json::Value = serde_json::from_str(&emit_pmd_json(&net).text).unwrap();
+    assert!(all_inline["linecode"].get("ln1_z").is_none());
+    assert!(all_inline["linecode"].get("unused").is_some());
+    assert!(all_inline["line"]["ln2"].get("rs").is_some());
+
+    net.lines_mut()[1].extras.remove("pmd_inline");
+    let mixed: serde_json::Value = serde_json::from_str(&emit_pmd_json(&net).text).unwrap();
+    assert!(mixed["linecode"].get("ln1_z").is_some());
+    assert!(mixed["linecode"].get("unused").is_some());
+    assert_eq!(mixed["line"]["ln2"]["linecode"], "ln1_z");
+    assert!(mixed["line"]["ln1"].get("linecode").is_none());
 }
 
 /// A line that references a linecode and carries its own per-conductor
