@@ -63,7 +63,7 @@ gaps; they do not establish complete static OpenDSS support. OpenDSS load models
 interpolation, upper-voltage impedance continuation and ZIP dropout. Model 2
 remains constant impedance. The Rust `power_scale` method evaluates per-branch
 active and reactive multipliers. IR retains this distinct tagged model; readers
-without the variant reject it. Canonical DSS writes the typed limits, including
+without the configuration reject it. Canonical DSS writes the typed limits, including
 native defaults, ahead of stale extras or writer defaults.
 
 BMOPF and PMD currently project these bounded loads to their nominal laws with

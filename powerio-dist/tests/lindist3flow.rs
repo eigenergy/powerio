@@ -515,5 +515,8 @@ fn bounded_zip_projection_is_explicit_and_preserves_nominal_value_and_slope() {
         unchanged.network().loads()[0].voltage_model,
         source.loads()[0].voltage_model
     );
-    assert!(unchanged.report().actions.is_empty());
+    assert_eq!(
+        unchanged.report().actions,
+        [] as [powerio_dist::LinDist3FlowPreparationAction; 0]
+    );
 }

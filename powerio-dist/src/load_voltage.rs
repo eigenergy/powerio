@@ -111,7 +111,7 @@ impl DistLoadVoltageModel {
                             (voltage_pu, 1.0)
                         };
                         let dropout = if *cutoff > 0.0 {
-                            0.5 * (1.0 + (500.0 * (voltage_pu - cutoff)).tanh())
+                            f64::midpoint(1.0, (500.0 * (voltage_pu - cutoff)).tanh())
                         } else {
                             1.0
                         };
