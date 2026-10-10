@@ -342,7 +342,13 @@ writing remain unfinished.
 Plain ideal closed switches likewise use cancelling resistances in OpenDSS;
 plain open contacts are disabled and have no artificial line charging or leakage.
 Switches retaining source-specific impedance declarations use the existing
-source-aware path. Transformer cancellation currently covers complete two-coil,
+source-aware path.
+OpenDSS `Line` objects with `switch=yes` retain their finite line impedance and
+fixed terminal states. Operating-point `switch_closed` columns address typed
+ideal `DistSwitch` contacts. An application can add an explicit series contact
+while retaining the imported finite branch; this supplies contact states without
+executing an OpenDSS switching sequence.
+ Transformer cancellation currently covers complete two-coil,
 single-phase winding records with grounded or floating secondary returns and
 no core or neutral shunts. A floating return uses two cancelling conductors,
 preserving common-mode displacement. Other ideal-transformer profiles need

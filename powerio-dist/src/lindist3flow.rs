@@ -796,8 +796,10 @@ fn omit_controls_and_untyped(
 /// The input remains unchanged. Static switch contacts become independent
 /// zero-impedance line-flow variables, avoiding any aggregation of parallel
 /// contact ratings. Line charging and capacitors become explicit terminal
-/// shunts. Current and exponential load behavior is linearized in squared
-/// voltage at nominal voltage. IBRs become static generators; their dynamic
+/// shunts. Supported current and exponential load behavior, including smooth
+/// nominal branches of bounded laws, is linearized in squared voltage at
+/// nominal voltage. The report retains the original load law. IBRs become
+/// static generators; their dynamic
 /// controls and storage state are not represented.
 /// Component points follow replacement devices. Omitted devices' points remain
 /// in the corresponding audit action's `details.source_location`.
