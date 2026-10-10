@@ -292,8 +292,19 @@ blocking without depending on a target's default transformer clock angle.
 Coil ratings use one third of total power and secondary coil voltage uses
 line-to-neutral voltage. Both pinned engines and IR-restored OpenDSS agree
 on unbalanced step-up, step-down, equal-rating and IEEE8500-parameter circuits.
-Coordinates attach to all three coils. Canonical GLM emission of these phase-pair
-coils remains unfinished and fails explicitly.
+Coordinates attach to all three coils. Canonical GLM groups a complete coherent
+three-coil bank into one native `DELTA_GWYE` transformer. Its configuration uses
+the current effective winding voltages, total rating and series impedance,
+including edits after IR restoration. Diagnostics identify the grouped coil
+names; coincident component points remain on the bank. Conflicting points fail.
+
+The coils must share effective voltages, ratings and impedance, and their phase
+pairs must match the native orientation for the current voltage ratio. Incomplete
+or unequal banks, parallel banks at the same endpoints, grounded primary returns,
+and ratio edits that cross the native orientation boundary require additional
+mappings and fail explicitly. Component qualification covers step-up, step-down,
+equal-voltage and IEEE8500 nameplate cases on both forks; whole-feeder canonical
+IEEE8500 output still needs ideal-regulator and FBS forest support.
 
 NR `WYE_WYE` regulators preserve Type A/B per-phase ratios and series resistance
 as single-phase winding records. An object tap overrides its configuration tap.

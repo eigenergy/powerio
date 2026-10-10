@@ -146,6 +146,18 @@ fn edit_transformers(network: &mut powerio_dist::MulticonductorNetwork) {
     for transformer in network.transformers_mut() {
         if transformer.xsc_pct == [0.0] {
             transformer.windings[0].tap *= 1.02;
+        } else if transformer.phases == 1
+            && transformer.windings.len() == 2
+            && transformer.windings[0].terminal_map.len() == 2
+            && transformer.windings[0]
+                .terminal_map
+                .iter()
+                .all(|t| matches!(t.as_str(), "1" | "2" | "3"))
+        {
+            // Exercise current tap bases and leakage split on phase-pair banks.
+            transformer.windings[0].tap *= 1.02;
+            transformer.windings[1].tap *= 1.01;
+            transformer.windings[0].r_pct = transformer.windings[1].r_pct / 3.0;
         }
         for winding in &mut transformer.windings {
             winding.r_pct *= 1.2;

@@ -2358,3 +2358,31 @@ occurred during the final sweep; failed logs remain preserved, and both cases
 pass complete reruns on identical pinned input and bridge bytes. The aggregate
 report records each case's originating run. This is not whole-feeder IEEE8500
 or IEEE9500 canonical qualification.
+
+### Canonical delta-grounded-wye banks
+
+`glm_coil_bank_write_oracle.py` checks fresh native banks derived from the three
+current phase-pair winding records. Seven circuits cover step-up, step-down and
+equal-voltage NR/FBS cases plus the IEEE8500 nameplate parameters. Each runs on
+the pinned PNNL and Arras engines. The harness compares original, IR-restored,
+rebased, grounded-reference and edited circuits through canonical GLM, repeated
+GLM import/write, canonical DSS and repeated DSS output. Edits change winding
+voltages, non-unit taps, the primary/secondary resistance split, leakage, loads
+and source voltage. An unchanged-output negative control
+must fail for the edited case.
+
+```sh
+cargo build -p powerio --example glm_roundtrip
+python evals/gridlabd/glm_coil_bank_write_oracle.py \
+  --bridge target/debug/examples/glm_roundtrip --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-coil-bank-write-directory
+```
+
+The fourteen engine/profile cases pass 280 electrical comparisons covering
+5,320 complex observations, without changing comparison tolerances or using
+retained source replay. Matching coil locations become one bank location with
+identity diagnostics; conflicting points fail. Unequal/incomplete banks,
+parallel banks at the same endpoints, grounded primary returns and effective
+ratio edits crossing the native phase-pair orientation boundary remain
+unsupported. These component results do not qualify canonical whole-feeder
+IEEE8500 output, whose ideal regulators and FBS forest mapping remain unfinished.

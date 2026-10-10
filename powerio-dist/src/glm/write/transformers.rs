@@ -6,7 +6,22 @@ use std::fmt::Write as _;
 impl Writer<'_> {
     #[allow(clippy::float_cmp)] // Exact base/tap restrictions; no approximate projection.
     pub(super) fn validate_transformers(&self) -> Result<(), Error> {
+        self.validate_coil_bank_points()?;
         for t in self.net.transformers() {
+            if self.coil_banks.leaders.contains_key(t.name.as_str()) {
+                for bus in [&t.windings[0].bus, &t.windings[1].bus] {
+                    if self
+                        .phases
+                        .get(bus.as_str())
+                        .is_none_or(|p| p.len() != 3 || (0..3).any(|phase| !p.contains(&phase)))
+                    {
+                        return Err(unsupported(
+                            "delta-grounded-wye bank needs complete endpoint phases",
+                        ));
+                    }
+                }
+                continue;
+            }
             if self.services.centers.contains_key(t.name.as_str()) {
                 if self.ideal_plan.is_some() {
                     return Err(unsupported(
@@ -87,6 +102,12 @@ impl Writer<'_> {
 
     pub(super) fn transformers(&mut self) -> Result<(), Error> {
         for t in self.net.transformers() {
+            if let Some(&leader) = self.coil_banks.leaders.get(t.name.as_str()) {
+                if leader == t.name {
+                    self.coil_bank(leader)?;
+                }
+                continue;
+            }
             if self.services.centers.contains_key(t.name.as_str()) {
                 self.center_transformer(t)?;
                 continue;

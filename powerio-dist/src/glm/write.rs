@@ -14,6 +14,7 @@ use super::read::{nominal_phasor, phase_name};
 
 const METERS_PER_MILE: f64 = 1609.344;
 
+mod coil_banks;
 mod ideal;
 mod loads;
 mod services;
@@ -27,6 +28,8 @@ mod transformers;
 /// contacts. Grounded center-tapped services with private impedance core loads
 /// emit native transformers; triplex P/I/Z terms and qualified full-neutral or
 /// direct hot-conductor line matrices emit from current typed coefficients.
+/// Coherent three-coil phase-pair banks emit native delta-grounded-wye
+/// configurations using current effective winding voltages and impedances.
 /// Fixed resistive regulator equivalents emit manual Type B settings.
 /// Ideal closed contacts select
 /// exact FBS output on a checked forest with one source bus per component.
@@ -71,6 +74,7 @@ pub(crate) fn emit_text(network: &MulticonductorNetwork) -> Result<TextEmission,
         written_locations: BTreeSet::new(),
         ideal_plan: None,
         services: services::Services::discover(network)?,
+        coil_banks: coil_banks::CoilBanks::discover(network)?,
     };
     writer.inventory()?;
     writer.sources()?;
@@ -113,6 +117,7 @@ struct Writer<'a> {
     written_locations: BTreeSet<(crate::DistLocationTarget, &'a str)>,
     ideal_plan: Option<ideal::IdealPlan<'a>>,
     services: services::Services<'a>,
+    coil_banks: coil_banks::CoilBanks<'a>,
 }
 
 fn unsupported(message: impl Into<String>) -> Error {
@@ -312,6 +317,7 @@ impl Writer<'_> {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)] // Connected propagation includes distinct native winding bases.
     fn nominal_voltages(&mut self) -> Result<(), Error> {
         let mut neighbors: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         for line in self.net.lines() {
@@ -360,6 +366,23 @@ impl Writer<'_> {
         }
         let mut ratios: BTreeMap<&str, Vec<(&str, f64)>> = BTreeMap::new();
         for t in self.net.transformers() {
+            if let Some(leader) = self.coil_banks.leaders.get(t.name.as_str()) {
+                if *leader != t.name {
+                    continue;
+                }
+                let bank = &self.coil_banks.banks[leader];
+                let a = &t.windings[0];
+                let b = &t.windings[1];
+                ratios
+                    .entry(&a.bus)
+                    .or_default()
+                    .push((&b.bus, bank.secondary / bank.primary));
+                ratios
+                    .entry(&b.bus)
+                    .or_default()
+                    .push((&a.bus, bank.primary / bank.secondary));
+                continue;
+            }
             let a = &t.windings[0];
             let b = &t.windings[1];
             ratios
