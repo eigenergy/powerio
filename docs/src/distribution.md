@@ -246,7 +246,7 @@ phase ratings; conflicting totals beyond the native 1% limit fail. Individual
 phase nameplate declarations remain in source and are reported.
 
 FBS grounded-wye transformers preserve the finite default core admittance in
-the existing `no_load_shunt` winding-2 record. Canonical NR GLM materializes it
+the existing `no_load_shunt` winding-2 record. Canonical NR GLM represents it
 as a constant-impedance load at the secondary bus, with a diagnostic identifying
 its contribution to the transformer port current. OpenDSS uses its equivalent
 winding-2 exciting branch. A connected directed FBS tree without an explicit
@@ -295,7 +295,7 @@ The legacy IEEE4 grounded-wye step-down feeder has fixed-state qualification
 with its original default FBS solver and implicit upstream source. Both pinned
 forks and OpenDSS agree on all bus and device-port measurements; deliberately
 omitting its small default core current fails the comparison. This does not
-qualify every IEEE4 transformer variant.
+qualify every IEEE4 transformer configuration.
 
 IEEE34 and IEEE123 NR also have fixed-state qualification across both forks and
 OpenDSS, including per-phase manual capacitor admittances and switch/regulator
