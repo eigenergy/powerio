@@ -77,7 +77,7 @@ fn fixed_motor_replays_slip_limits_library_creation_and_edits() {
         "{MOTOR}userdata=(slip=.2 maxslip=.3 option=fixed)"
     ));
     let b = motor(&format!("{MOTOR}userdata=(slip=.1 option=fixed)"));
-    assert!(a.generators().is_empty());
+    assert_eq!(a.generators().as_slice(), []);
     assert!(audit_electrical_readiness(&a).is_ready());
     assert_eq!(a.shunts(), b.shunts());
     let c = motor(&format!(
@@ -144,7 +144,7 @@ fn export_edited_fixed_motor_matrices() {
         let folder = root.join(case);
         let module = powerio_dist::parse(Source::open(folder.join("native.dss")).unwrap()).unwrap();
         let mut net = module.into_value();
-        assert!(net.generators().is_empty());
+        assert_eq!(net.generators().as_slice(), []);
         assert_eq!(net.shunts().len(), 1);
         let shunt = &mut net.shunts_mut()[0];
         for matrix in [&mut shunt.g, &mut shunt.b] {

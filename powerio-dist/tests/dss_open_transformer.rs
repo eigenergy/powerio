@@ -12,7 +12,7 @@ fn whole_terminal_opens_phase_conductors_and_preserves_the_neutral() {
     assert!(audit_electrical_readiness(net).is_ready());
     assert_eq!(net.transformers().len(), 1);
     assert_eq!(net.shunts().len(), 2);
-    assert!(net.switches().is_empty());
+    assert_eq!(net.switches().as_slice(), []);
     let transformer = &net.transformers()[0];
     assert_eq!(transformer.windings[0].bus, "sourcebus");
     assert_ne!(transformer.windings[1].bus, "secondary");
@@ -49,7 +49,7 @@ fn reclosed_ports_restore_the_original_transformer() {
         .unwrap()
         .into_value();
     assert_eq!(net.transformers()[0].windings[1].bus, "secondary");
-    assert!(net.shunts().is_empty());
+    assert_eq!(net.shunts().as_slice(), []);
     assert!(
         !net.transformers()[0]
             .extras

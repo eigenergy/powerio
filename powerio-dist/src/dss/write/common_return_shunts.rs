@@ -175,7 +175,7 @@ mod tests {
         }
         let text = "new circuit.c\nnew capacitor.c bus1=b.1.2.3 bus2=b.10.10.10 enabled=no\n";
         let net = read(text);
-        assert!(net.shunts().is_empty());
+        assert_eq!(net.shunts().as_slice(), []);
         assert!(crate::audit_electrical_readiness(&net).is_ready());
         let net = read(&format!("{text}enable capacitor.c\n"));
         assert!(!crate::audit_electrical_readiness(&net).is_ready());

@@ -27,7 +27,7 @@ fn resistance_does_not_replace_the_rated_reactor_specification() {
     let net = parse("New Circuit.c basekv=138\nNew Reactor.bank bus1=sourcebus phases=3 kv=138 kvar=40000 r=0\n").into_value();
     assert!(audit_electrical_readiness(&net).is_ready());
     assert_eq!(net.shunts().len(), 1);
-    assert!(net.untyped_objects().is_empty());
+    assert_eq!(net.untyped_objects().as_slice(), []);
     let shunt = &net.shunts()[0];
     assert!(shunt.g.iter().flatten().all(|&v| v == 0.0));
     assert!((shunt.b[0][0] + 40_000_000.0 / 138_000.0_f64.powi(2)).abs() < 1e-17);

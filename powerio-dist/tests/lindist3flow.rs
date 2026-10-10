@@ -573,7 +573,10 @@ fn bounded_constant_power_projection_requires_a_smooth_nominal_current_region() 
     source.loads_mut().push(load);
     let prepared =
         prepare_lindist3flow_network(&source, LinDist3FlowPreparationPolicy::Approximate).unwrap();
-    assert!(prepared.report().actions.is_empty());
+    assert_eq!(
+        prepared.report().actions,
+        [] as [powerio_dist::LinDist3FlowPreparationAction; 0]
+    );
     assert_eq!(
         prepared.network().loads()[0].voltage_model,
         source.loads()[0].voltage_model

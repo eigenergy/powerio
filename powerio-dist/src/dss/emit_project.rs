@@ -15,7 +15,7 @@ pub(crate) fn retained_project(
         return Ok(None);
     }
     let buffers = source.acquired_buffers();
-    // Preserve the established single-document case.dss destination contract.
+    // Preserve the established single-document case.dss destination layout.
     if buffers.len() <= 1 {
         return Ok(None);
     }

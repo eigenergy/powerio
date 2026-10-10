@@ -74,7 +74,7 @@ fn short_circuit(kv: f64, zero: Complex64, positive: Complex64) -> Option<ShortC
 fn neighbors(value: f64) -> [f64; 17] {
     let mut result = [value; 17];
     let (mut up, mut down) = (value, value);
-    for pair in result[1..].chunks_exact_mut(2) {
+    for pair in result[1..].as_chunks_mut::<2>().0 {
         up = up.next_up();
         down = down.next_down();
         pair.copy_from_slice(&[up, down]);
