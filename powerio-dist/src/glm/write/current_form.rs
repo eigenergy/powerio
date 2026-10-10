@@ -29,9 +29,10 @@ impl Writer<'_> {
         )?;
         let p = phase_name(phases[0]);
         let aux = self.generated_name(&format!("{}__glm_current", line.name));
+        let voltage_error = self.voltage_error();
         let _ = writeln!(
             self.out,
-            "object load {{ name \"{aux}\"; phases {p}N; nominal_voltage {}; maximum_voltage_error 1e-9; constant_impedance_{p} {}; }}",
+            "object load {{ name \"{aux}\"; phases {p}N; nominal_voltage {}; maximum_voltage_error {voltage_error}; constant_impedance_{p} {}; }}",
             self.nominal[line.bus_from.as_str()],
             complex_literal(plan.auxiliary_impedance())?
         );

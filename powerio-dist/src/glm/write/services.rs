@@ -322,9 +322,10 @@ impl Writer<'_> {
         }
         // The NR bus invokes the root triplex_load's load-update callback each
         // iteration. A child current load instead retains its sync-time angle.
+        let voltage_error = self.voltage_error();
         let _ = writeln!(
             self.out,
-            "object triplex_load {{ name \"{}\"; phases {}S; nominal_voltage {}; maximum_voltage_error 1e-9;",
+            "object triplex_load {{ name \"{}\"; phases {}S; nominal_voltage {}; maximum_voltage_error {voltage_error};",
             bus.id,
             phase_name(phase),
             self.nominal[bus.id.as_str()]

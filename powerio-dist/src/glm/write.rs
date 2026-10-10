@@ -42,6 +42,8 @@ mod transformers;
 /// contracted for the forest check. Redundant fully open ties use unloaded
 /// parented endpoint aliases to preserve their voltages and zero port currents.
 /// FBS uses a 1,000-iteration budget with unchanged node stopping precision.
+/// NR uses a nominal-voltage-scaled convergence limit of 1e-9 per unit;
+/// the electrical circuit and source constraints remain unchanged.
 /// Symmetric line end shunts use exact admittance-load equivalents when native
 /// line parameters cannot preserve their port equations. Returned diagnostics
 /// identify the generated loads that contribute to physical line port flows.
@@ -96,9 +98,14 @@ pub(crate) fn emit_text(network: &MulticonductorNetwork) -> Result<TextEmission,
     } else {
         "NR"
     };
+    let precision = if writer.ideal_plan.is_some() {
+        ""
+    } else {
+        " default_maximum_voltage_error 1e-9;"
+    };
     let _ = writeln!(
         writer.out,
-        "// Canonical PowerIO static network.\nmodule powerflow {{ solver_method {solver}; line_capacitance TRUE; nominal_frequency {}; }}\n",
+        "// Canonical PowerIO static network.\nmodule powerflow {{ solver_method {solver}; line_capacitance TRUE; nominal_frequency {};{precision} }}\n",
         network.base_frequency()
     );
     if writer.ideal_plan.is_some() {
@@ -147,6 +154,17 @@ fn unsupported(message: impl Into<String>) -> Error {
 }
 
 impl Writer<'_> {
+    // Native NR derives this limit from nominal_voltage times the module's
+    // fractional criterion. A fixed nanovolt threshold can prevent convergence
+    // on a large feeder. Keep the qualified FBS absolute setting unchanged.
+    fn voltage_error(&self) -> &'static str {
+        if self.ideal_plan.is_some() {
+            "1e-9"
+        } else {
+            "0"
+        }
+    }
+
     fn coordinates(&mut self, target: crate::DistLocationTarget, name: &str) {
         let Some(location) = self.locations.get(&(target, name)).copied() else {
             return;
@@ -462,9 +480,10 @@ impl Writer<'_> {
                 continue;
             }
             let phase_flags = flags(&self.phases[bus.id.as_str()]);
+            let voltage_error = self.voltage_error();
             let _ = writeln!(
                 self.out,
-                "object node {{ name \"{}\"; phases {phase_flags}N; nominal_voltage {}; maximum_voltage_error 1e-9;",
+                "object node {{ name \"{}\"; phases {phase_flags}N; nominal_voltage {}; maximum_voltage_error {voltage_error};",
                 bus.id,
                 self.nominal[bus.id.as_str()]
             );

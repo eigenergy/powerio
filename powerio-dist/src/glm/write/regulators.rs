@@ -110,9 +110,10 @@ impl Writer<'_> {
                 to.to_owned()
             } else {
                 let bus = self.generated_name(&format!("{}__glm_ratio_bus_{index}", t.name));
+                let voltage_error = self.voltage_error();
                 let _ = writeln!(
                     self.out,
-                    "object node {{ name \"{bus}\"; phases {}N; nominal_voltage {}; maximum_voltage_error 1e-9; }}",
+                    "object node {{ name \"{bus}\"; phases {}N; nominal_voltage {}; maximum_voltage_error {voltage_error}; }}",
                     flags(&phases),
                     self.nominal[from]
                 );

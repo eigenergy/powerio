@@ -2632,3 +2632,54 @@ unexplained missing active element fails. Internal coupled-source current/power
 measurements remain in `raw_equivalent_ports`, while physical port power uses
 actual endpoint voltage times conjugate boundary current. This avoids measuring
 at a virtual voltage behind a compensating series element after reimport.
+
+### Canonical IEEE9500 convergence and physical ports
+
+`ieee9500_write_oracle.py` emits from current typed networks and checks fresh,
+IR-restored, edited, rebased and grounded-reference GLM on both pinned engines.
+Each stage repeats GLM import/output and emits DSS from the repeated network.
+Original measurement identities remain complete. Native physical line ports
+include generated current-variable and line-end-shunt loads; DSS observation
+includes the same contributions after reimport. Endpoint powers use physical
+voltage and boundary current, and an independent typed-device current balance
+must pass. The edited reference solve is excluded from comparison counts and
+an unchanged-model negative control must fail.
+
+```sh
+python evals/gridlabd/ieee9500_write_oracle.py \
+  --source /path/to/CIMHub/ieee9500 \
+  --bridge target/debug/examples/glm_roundtrip \
+  --reference /path/to/passed-ieee9500-import-results \
+  --pnnl-root /path/to/GridLAB-D --output /path/to/new-canonical-results
+```
+
+The reference must contain a passed source-pinned `ieee9500_import_oracle.py`
+feeder-profile run and all original measurement files. `--case`, `--profile`
+and `--stage` select explicit subsets; missing comparisons are not evidence of
+broader qualification. Canonical native recorders preserve both forks' load
+telemetry differences: PNNL supplies measured power, while Arras impedance
+loads use declared immutable coefficients and recorded terminal voltages.
+
+Canonical NR now sets its module convergence fraction to `1e-9` and lets nodes
+scale it by nominal voltage. This resolves the large-feeder runtime failure
+without changing impedances, loads, source constraints or comparison budgets.
+The historical absolute FBS setting remains unchanged. An absolute nanovolt
+setting, an absolute `1e-7` V trial and zero-current initialization did not solve
+the original convergence problem; their external failed evidence is retained.
+Zero-admittance capacitor records now emit explicit zero-current loads, with
+coordinates and class-rebasing diagnostics. Arras rejects zero-rated capacitor
+objects, so no nonzero rating is fabricated to make them acceptable.
+
+Fresh balanced/unbalanced canonical and repeated GLM/DSS now pass on both
+forks. The source-phase edit still fails: native NR DELTA_GWYE draws an extra
+primary zero-sequence current that its reported transformer currents omit.
+A nominally balanced stiff-source microcase does not expose this behavior.
+The edited feeder shows the voltage shift upstream and the independent
+current-balance residual. This remains an electrical mapping gap, not a
+convergence or tolerance failure; no failed values are normalized away.
+
+Current-variable microcases report default output under feeder budgets and
+separately request absolute `1e-9` V native stopping for analytic calibration.
+Only stopping precision changes in the latter run. Electrical coefficients,
+impedance checks and analytic budgets remain unchanged; both raw result sets
+are retained.

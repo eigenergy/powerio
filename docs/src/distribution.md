@@ -573,6 +573,14 @@ and report omitted thermal limits and routes. Reimport keeps the explicit
 circuit; coupled matrices and more extreme impedances retain their existing
 projection and are not covered by this qualification.
 
+Canonical NR output sets `default_maximum_voltage_error` to `1e-9` per unit
+and lets each node derive its absolute convergence limit from nominal voltage.
+This avoids an absolute nanovolt stopping threshold on large feeders. FBS keeps
+its previously qualified absolute node setting. These are engine stopping
+criteria; the independent electrical comparison budgets remain separate.
+Zero-admittance shunts emit zero-current loads with their current component
+points and a class-rebasing diagnostic. No nonzero capacitor rating is invented.
+
 Output without ideal closed contacts selects NR. The pinned engines can return NaN results for
 some valid circuits even with a successful process exit. One qualified
 impedance case reproduces this with either a native switch or its line
@@ -708,8 +716,11 @@ native NR line-current reporting when impedance and shunt matrices do not commut
 Reimported disabled contacts retain inactive-state metadata; canonical DSS
 reports their omission, with zero external currents and endpoint voltages still
 checked. Physical terminal powers use endpoint voltages and boundary currents,
-not internal equivalent-source powers. Canonical GLM runtime/convergence and
-broader format compatibility remain unfinished.
+not internal equivalent-source powers. Fresh canonical GLM now solves both
+complete cases on both pinned forks with the same feeder accuracy and physical
+current-balance checks. An edit that introduces source zero-sequence voltage
+still exposes a native NR delta-grounded-wye primary-stamp discrepancy; that
+profile remains unqualified. Broader format compatibility remains unfinished.
 
 GridLAB-D object latitude and longitude map to the network's typed
 `component_locations` table. Each point identifies its component table and exact

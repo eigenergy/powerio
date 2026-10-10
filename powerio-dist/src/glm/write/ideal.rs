@@ -304,9 +304,10 @@ impl<'a> Writer<'a> {
 
     fn open_contact_alias(&mut self, name: &str, side: &str, bus: &str, phases: &str) -> String {
         let alias = self.generated_name(&format!("{name}__glm_open_{side}"));
+        let voltage_error = self.voltage_error();
         let _ = writeln!(
             self.out,
-            "object node {{ name \"{alias}\"; parent \"{bus}\"; phases {phases}N; nominal_voltage {}; maximum_voltage_error 1e-9; }}",
+            "object node {{ name \"{alias}\"; parent \"{bus}\"; phases {phases}N; nominal_voltage {}; maximum_voltage_error {voltage_error}; }}",
             self.nominal[bus]
         );
         alias

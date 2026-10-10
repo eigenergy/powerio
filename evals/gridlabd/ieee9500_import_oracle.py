@@ -11,6 +11,7 @@ import json
 import math
 import re
 import subprocess
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -308,6 +309,12 @@ def imported_snapshot(path, network, objects, wrong_tap=False):
         if values.get("enabled", "").lower() in ("no", "false", "0"):
             inactive_lines.add(record["name"].lower())
     omitted_inactive = []
+    line_end_loads = defaultdict(list)
+    for load in network["loads"]:
+        if "__glm_shunt_" not in load["name"]:
+            continue
+        line, side = load["name"].split("__glm_shunt_", 1)
+        line_end_loads[line, side.split("_")[0]].append(load)
 
     result = {}
     missing_buses = []
@@ -427,6 +434,15 @@ def imported_snapshot(path, network, objects, wrong_tap=False):
                 if cls == "triplex_line" and abs(amps[count + 2]) > 1e-8:
                     raise ValueError("auxiliary third port is not open")
             scatter(nodes[:count], amps[:count], va[:count], 0, cls == "triplex_line")
+        for end, side in enumerate(("from", "to")):
+            for load in line_end_loads[name, side]:
+                if load["bus"] != root(obj[side]):
+                    raise ValueError(
+                        "line end-shunt load has the wrong physical endpoint"
+                    )
+                nodes, amps, va = element("load." + load["name"])
+                count = e.CktElement.NumConductors()
+                scatter(nodes[:count], amps[:count], va[:count], end)
         phases = "AB" if cls == "triplex_line" else "ABC"
         # Boundary currents can be observed across a series equivalent, but its
         # internal voltage and power may differ after source reimport. Physical

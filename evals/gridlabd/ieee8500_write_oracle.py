@@ -61,9 +61,9 @@ def path_between(edges, start, stop):
     raise ValueError(f"missing regulator path {start}->{stop}")
 
 
-def record(text, profile, objects, folder):
-    props = {cls: [f"voltage_{p}" for p in ("12N" if cls.startswith("triplex") else "ABC")] for cls in NODE_CLASSES}
-    props.update({cls: [f"{q}_{end}_{p}" for end in ("in", "out") for p in "ABC" for q in ("current", "power")] + ["power_losses"] for cls in LINK_CLASSES})
+def record(text, profile, objects, folder, *, node_classes=NODE_CLASSES, link_classes=LINK_CLASSES):
+    props = {cls: [f"voltage_{p}" for p in ("12N" if cls.startswith("triplex") else "ABC")] for cls in node_classes}
+    props.update({cls: [f"{q}_{end}_{p}" for end in ("in", "out") for p in "ABC" for q in ("current", "power")] + ["power_losses"] for cls in link_classes})
     props = {cls: fields for cls, fields in props.items() if any(o["class"] == cls for o in objects.values())}
     text += "\n#set complex_format=%.15g%+.15gj\n#set complex_output_format=RECT\nmodule tape;\n"
     if profile == "pnnl":

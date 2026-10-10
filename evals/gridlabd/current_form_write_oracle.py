@@ -7,7 +7,16 @@ import re
 from pathlib import Path
 
 import opendssdirect as dss
-from oracle import LOCK, add, command, compare, parse_complex, recorded, run_glm
+from oracle import (
+    FEEDER_TOLERANCES,
+    LOCK,
+    add,
+    command,
+    compare,
+    parse_complex,
+    recorded,
+    run_glm,
+)
 
 
 def deck(z, voltage, law, phase):
@@ -91,7 +100,11 @@ def snapshot(vs, vt, encoded, first, second, kcl, impedance):
     return result
 
 
-def native(folder, text, root, aux, phase):
+def native(folder, text, root, aux, phase, *, calibration=False):
+    if calibration:
+        # Only solver stopping changes; all electrical properties and budgets
+        # remain unchanged. Default output is observed separately below.
+        text = text.replace("maximum_voltage_error 0;", "maximum_voltage_error 1e-9;")
     # Observe every equivalent terminal, including native load power rather
     # than assuming the generated shunts contribute their declared currents.
     lines = glm_objects(text, "overhead_line")
@@ -231,6 +244,8 @@ def main():
         impedance=[args.impedance.real, args.impedance.imag],
         bridge_sha256=hashlib.sha256(args.bridge.read_bytes()).hexdigest(),
         dss_bridge_sha256=hashlib.sha256(args.dss_bridge.read_bytes()).hexdigest(),
+        calibration_absolute_stopping_V=1e-9,
+        default_output_budgets=FEEDER_TOLERANCES,
         cases={},
     )
     for law in args.law or ["Z", "P", "I"]:
@@ -318,7 +333,20 @@ def main():
                             aux,
                             args.phase,
                         )
-                        row["comparisons"][f"{stage}/{variant}"] = compare(
+                        row["comparisons"][f"{stage}/{variant}/default"] = compare(
+                            wanted, actual, tolerances=FEEDER_TOLERANCES
+                        )
+                        refined = folder / stage / ("calibration_" + variant)
+                        refined.mkdir()
+                        actual = native(
+                            refined,
+                            path.read_text(),
+                            (profile, args.pnnl_root),
+                            aux,
+                            args.phase,
+                            calibration=True,
+                        )
+                        row["comparisons"][f"{stage}/{variant}/calibration"] = compare(
                             wanted, actual
                         )
                     for variant, path, current_bus in [

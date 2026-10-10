@@ -335,3 +335,49 @@ fn inverter_available_power_and_nonfixed_bounds_are_not_dispatch() {
     i.q_max = Some(vec![0.0]);
     assert!(emit_canonical(&net, Destination::memory("pv.glm").unwrap()).is_err());
 }
+
+#[test]
+fn zero_admittance_shunt_emits_no_fake_capacitor_rating() {
+    let mut net = network();
+    net.shunts_mut().push(powerio_dist::DistShunt::new(
+        "idle_cap",
+        "sink",
+        vec!["1".into()],
+        vec![vec![0.0]],
+        vec![vec![0.0]],
+    ));
+    net.component_locations_mut()
+        .push(powerio_dist::DistComponentLocation::new(
+            powerio_dist::DistLocationTarget::Shunt,
+            "idle_cap",
+            powerio_dist::DistGeographicPoint::new(Some(0.0), Some(151.0)),
+        ));
+    let before = serde_json::to_value(&net).unwrap();
+    let output = emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap();
+    let EmittedOutput::Memory { artifacts } = output.output() else {
+        panic!()
+    };
+    let content = String::from_utf8(artifacts[0].bytes().to_vec()).unwrap();
+    assert!(content.contains("object load { name \"idle_cap\";"));
+    assert!(content.contains("constant_power_A 0+0j"));
+    assert!(!content.contains("capacitor_A 0"));
+    assert!(
+        output
+            .diagnostics()
+            .iter()
+            .any(|d| d.code() == "EMIT.GLM.VALUE_REBASED")
+    );
+    assert_eq!(serde_json::to_value(&net).unwrap(), before);
+    let again = reparse(&content);
+    assert!(again.shunts().is_empty());
+    assert!(again.loads().iter().any(|load| load.name == "idle_cap"));
+    assert!(
+        again
+            .component_locations()
+            .iter()
+            .any(|p| p.name == "idle_cap"
+                && p.target == powerio_dist::DistLocationTarget::Load
+                && p.point.latitude == Some(0.0)
+                && p.point.longitude == Some(151.0))
+    );
+}

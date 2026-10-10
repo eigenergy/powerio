@@ -60,6 +60,8 @@ fn current_form_keeps_finite_impedance_and_does_not_mutate_input() {
         powerio_dist::glm::emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap();
     let fresh = text(&output);
     assert!(fresh.contains("line__glm_current"));
+    assert!(fresh.contains("default_maximum_voltage_error 1e-9"));
+    assert!(fresh.contains("maximum_voltage_error 0;"));
 
     let again = powerio_dist::glm::parse(
         Source::from_memory("case.glm", fresh.as_bytes()).unwrap(),
