@@ -122,7 +122,7 @@ fn malformed_input_returns_registered_span_and_source() {
         let error = parse_raw_source(memory(text)).unwrap_err();
         assert_eq!(error.info().unwrap().code, "PARSE.GLM.SYNTAX", "{text}");
         assert!(error.retained_source().is_some());
-        assert!(!error.diagnostics()[0].spans().is_empty());
+        assert_ne!(error.diagnostics()[0].spans(), []);
     }
     let source = Source::from_memory("bad.glm", vec![0xff, b';']).unwrap();
     assert!(parse_raw_source(source).is_err());
