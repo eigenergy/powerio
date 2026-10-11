@@ -39,7 +39,12 @@ LEGACY_ROOT_ENVS = ("POWERIO_MCP_ROOT", "POWERIO_MCP_ALLOWED_ROOT")
 """Compatibility spellings, read in order when the primary is unset."""
 
 MAX_TREE_ENTRIES = 4_096
-"""Entries a directory input may hold, the budget PowerIO's own listing keeps."""
+"""Entries a directory input may hold, the budget PowerIO's own listing keeps.
+
+Counted as that listing counts them: the files found so far plus the
+directories found and not yet listed, never more than this at any point of
+the walk.
+"""
 
 MAX_TREE_DEPTH = 64
 """Directory levels a directory input may nest, PowerIO's own listing bound."""
@@ -218,10 +223,16 @@ def check_allowed_read_tree(path: Path, *, purpose: str = "path") -> None:
     cycle detection; broken links and special files are refused. A regular
     file is accepted as a one-entry tree.
 
-    The walk keeps PowerIO's own directory budgets: it refuses a tree past
-    :data:`MAX_TREE_ENTRIES` entries, counting files and directories below the
-    input, or with a directory :data:`MAX_TREE_DEPTH` levels below it, and
-    stops reading entries as soon as a budget is spent.
+    The walk keeps PowerIO's own directory budgets and counts entries as its
+    listing does. It refuses a tree with a directory :data:`MAX_TREE_DEPTH`
+    levels below the input, or one where the files found plus the
+    directories found and not yet listed pass :data:`MAX_TREE_ENTRIES` at any
+    point of the depth first walk; listing a directory takes it off the count
+    and adds its entries. For plain files and directories with UTF-8 names,
+    it accepts the trees PowerIO's listing accepts. It also follows contained
+    directory links, which that listing names without following, and counts
+    each one it follows as a directory. It stops reading entries as soon as a
+    budget is spent.
 
     This closes the gap between checking a directory name and handing that
     directory to a reader which opens its children. It is still a path
@@ -246,6 +257,11 @@ def check_allowed_read_tree(path: Path, *, purpose: str = "path") -> None:
                 f"`{purpose}` nests directories more than {MAX_TREE_DEPTH} "
                 f"levels deep: {current}"
             )
+        if depth:
+            # A listed directory leaves the count and its entries join it,
+            # the way PowerIO's listing charges only directories it has not
+            # yet descended into. The input itself was never counted.
+            seen -= 1
         try:
             with os.scandir(current) as entries:
                 for entry in entries:

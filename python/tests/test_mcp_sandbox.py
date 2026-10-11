@@ -5,12 +5,15 @@ interpreter the wheel supports, with or without ``powerio[mcp]`` installed.
 """
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 from powerio.mcp import sandbox
+
+import powerio
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
 ENV_NAMES = ("POWERIO_MCP_ALLOWED_ROOTS", "POWERIO_MCP_ROOT", "POWERIO_MCP_ALLOWED_ROOT")
@@ -206,14 +209,47 @@ def test_read_tree_keeps_the_acquisition_entry_budget(monkeypatch, tmp_path):
     case = root / "case"
     (case / "tables").mkdir(parents=True)
     (case / "buses.csv").write_text("bus")
+    (case / "generators.csv").write_text("gen")
     (case / "tables" / "lines.csv").write_text("line")
     monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, str(root))
-
-    # Three entries below the input: a file, a directory, and its file.
     monkeypatch.setattr(sandbox, "MAX_TREE_ENTRIES", 3)
+
+    # Listing `tables` takes it off the count and adds its file, so the walk
+    # never holds more than three entries, as PowerIO's listing counts them.
     assert sandbox.checked_read_tree(str(case)) == str(case)
-    (case / "generators.csv").write_text("gen")
+    (case / "loads.csv").write_text("load")
     with pytest.raises(sandbox.PathNotAllowed, match="more than 3 entries"):
+        sandbox.check_allowed_read_tree(case)
+
+    # A directory found and not yet listed counts, even an empty one.
+    (case / "loads.csv").unlink()
+    (case / "empty").mkdir()
+    with pytest.raises(sandbox.PathNotAllowed, match="more than 3 entries"):
+        sandbox.check_allowed_read_tree(case)
+
+
+def test_read_tree_accepts_the_trees_powerio_lists(monkeypatch, tmp_path):
+    root = tmp_path / "allowed"
+    case = root / "case"
+    shutil.copytree(DATA / "pypsa" / "example", case)
+    # 4,096 files and directories below the input in all, but PowerIO's
+    # listing holds at most the case files and the 2,048 subdirectories it
+    # has not yet listed.
+    for index in range(2_048):
+        notes = case / f"notes{index:04d}"
+        notes.mkdir()
+        (notes / "note.txt").write_text("x")
+    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, str(root))
+
+    assert isinstance(powerio.parse(str(case)).value, powerio.BalancedNetwork)
+    assert sandbox.checked_read_tree(str(case)) == str(case)
+
+    # Enough files beside them to pass the budget while the root is listed.
+    for index in range(sandbox.MAX_TREE_ENTRIES - 2_048):
+        (case / f"extra{index:04d}.txt").write_text("x")
+    with pytest.raises(powerio.PowerIOError, match="more than 4096 entries"):
+        powerio.parse(str(case))
+    with pytest.raises(sandbox.PathNotAllowed, match="more than 4096 entries"):
         sandbox.check_allowed_read_tree(case)
 
 

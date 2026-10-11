@@ -28,8 +28,9 @@
   library defaults stay 1 GiB. Inline `content` and `powerio_ir` arguments are
   refused past the primary limit before parsing, the `display` tool reads only
   a regular file within that limit where it used to read a file of any size or
-  wait on a named pipe, and a directory input may hold at most 4,096 entries
-  nested at most 64 levels deep.
+  wait on a named pipe, and the server refuses a directory input once its walk
+  passes the bounds PowerIO's own directory listing keeps: a subdirectory 64
+  levels down, or more than 4,096 files and subdirectories not yet listed.
 
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW

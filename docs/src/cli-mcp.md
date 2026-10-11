@@ -131,8 +131,10 @@ The server accepts exactly one input source: serialized PowerIO IR, a grid
 exchange path, or grid exchange content in memory. Filesystem reads and
 writes default to the directory captured at server startup.
 `POWERIO_MCP_ALLOWED_ROOTS` selects explicit directories instead. Remote URI
-schemes are rejected. A directory input may hold at most 4,096 entries and
-nest at most 64 levels deep, the bounds PowerIO's own directory reader keeps.
+schemes are rejected. A directory input is held to the bounds PowerIO's own
+directory listing keeps, counted the same way: no subdirectory may sit 64
+levels below it, and the files found plus the subdirectories not yet listed
+may never pass 4,096 while the server walks it.
 
 Tool arguments come from the client, so the server holds them to smaller
 byte limits than the 1 GiB library defaults meant for local use. When
