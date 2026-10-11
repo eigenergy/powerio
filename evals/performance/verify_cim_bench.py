@@ -123,6 +123,23 @@ def rows_by_identity(network, table, buses):
     return result
 
 
+def json_safe(value):
+    """Spell non-finite floats as the strings "NaN", "Infinity", and "-Infinity".
+
+    The packet is written with allow_nan=False, which rejects bare non-finite
+    floats, so a reported difference carries them as strings instead.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        if math.isnan(value):
+            return "NaN"
+        return "Infinity" if value > 0 else "-Infinity"
+    if isinstance(value, dict):
+        return {k: json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(v) for v in value]
+    return value
+
+
 def differences(left, right, path=""):
     if isinstance(left, dict) and isinstance(right, dict):
         return [
@@ -139,9 +156,12 @@ def differences(left, right, path=""):
     if isinstance(left, (float, int)) and isinstance(right, (float, int)):
         if math.isclose(left, right, rel_tol=1e-9, abs_tol=1e-9):
             return []
+        # A NaN that round trips is unchanged.
+        if math.isnan(left) and math.isnan(right):
+            return []
     if left == right:
         return []
-    return [{"path": path, "before": left, "after": right}]
+    return [{"path": path, "before": json_safe(left), "after": json_safe(right)}]
 
 
 def diagnostic_summary(records):
@@ -177,6 +197,10 @@ def classify_differences(key, changes, emit_diagnostics):
                 key == "svedala_igm_cgmes_3"
                 and table == "branches"
                 and field == "rate_a"
+                and all(
+                    isinstance(change[side], (int, float))
+                    for side in ("before", "after")
+                )
                 and math.isclose(
                     change["before"], change["after"], rel_tol=5e-6, abs_tol=1e-9
                 )
