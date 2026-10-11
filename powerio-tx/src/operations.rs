@@ -14,9 +14,31 @@ use std::collections::HashSet;
 use serde_json::Value;
 
 use crate::network::{
-    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, Generator, Shunt,
-    SourceFormat,
+    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, Generator,
+    IMPEDANCE_CORRECTION_NOMINAL_EXTRA, ImpedanceCorrectionVariable, Shunt, SourceFormat,
 };
+
+/// The nominal impedance an earlier impedance correction recorded in `extras`,
+/// or `current`, recorded there now.
+fn recorded_nominal<T>(extras: &mut Extras, current: T) -> T
+where
+    T: serde::Serialize + serde::de::DeserializeOwned,
+{
+    if let Some(nominal) = extras
+        .get(IMPEDANCE_CORRECTION_NOMINAL_EXTRA)
+        .and_then(|value| T::deserialize(value).ok())
+    {
+        return nominal;
+    }
+    let value = serde_json::to_value(&current).expect("an impedance serializes to JSON");
+    extras.insert(IMPEDANCE_CORRECTION_NOMINAL_EXTRA.to_owned(), value);
+    current
+}
+
+/// `(a.0 + j·a.1)·(b.0 + j·b.1)`.
+fn complex_product(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+    (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0)
+}
 
 /// The endpoint of `b` other than `m` (assumes `m` is an endpoint).
 fn other_end(b: &Branch, m: BusId) -> BusId {
@@ -554,6 +576,81 @@ impl BalancedNetwork {
         });
         self.buses_mut().retain(|b| b.id != m);
         // The topology changed, so the retained source text is stale.
+    }
+
+    /// Scale every transformer's series impedance by its impedance correction
+    /// table, at the winding's present turns ratio or phase shift, returning
+    /// the number of two winding transformers and three winding transformer
+    /// windings scaled.
+    ///
+    /// A two winding transformer's factor multiplies `r + jx`. A three winding
+    /// transformer's factor for a winding multiplies that winding's star
+    /// impedance, and the pairwise impedances are restated from the scaled
+    /// star. The first call records each scaled transformer's nominal
+    /// impedance under `extras["impedance_correction_nominal"]`, and every
+    /// call scales that nominal value: a repeated call changes nothing, and a
+    /// call after a tap or shift change evaluates the table there. The PSS/E
+    /// writer states the nominal impedance beside the table, as the format
+    /// does.
+    pub fn apply_impedance_correction(&mut self) -> usize {
+        // A normalized network states phase shifts in radians; the tables
+        // state degrees.
+        let angle_scale = if self.is_normalized() {
+            crate::normalize::RAD_TO_DEG
+        } else {
+            1.0
+        };
+        let mut scaled = 0;
+        for branch in self.branches_mut().iter_mut() {
+            let Some(correction) = branch.impedance_correction() else {
+                continue;
+            };
+            let at = match correction.variable {
+                ImpedanceCorrectionVariable::Angle => branch.shift * angle_scale,
+                _ => branch.calc_effective_tap(),
+            };
+            let Some(factor) = correction.calc_factor(at) else {
+                continue;
+            };
+            let [r, x] = recorded_nominal(&mut branch.extras, [branch.r, branch.x]);
+            (branch.r, branch.x) = complex_product((r, x), factor);
+            scaled += 1;
+        }
+        for transformer in self.transformers_3w_mut().iter_mut() {
+            let factors: [Option<(f64, f64)>; 3] = std::array::from_fn(|winding| {
+                let correction = transformer.winding_impedance_correction(winding)?;
+                let w = &transformer.windings[winding];
+                let at = match correction.variable {
+                    ImpedanceCorrectionVariable::Angle => w.shift * angle_scale,
+                    _ => w.tap,
+                };
+                correction.calc_factor(at)
+            });
+            if factors.iter().all(Option::is_none) {
+                continue;
+            }
+            let pairwise = transformer.z.map(|z| [z.r, z.x]);
+            let [z12, z23, z31] = recorded_nominal(&mut transformer.extras, pairwise);
+            let star = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| {
+                ((a[0] + b[0] - c[0]) / 2.0, (a[1] + b[1] - c[1]) / 2.0)
+            };
+            let mut stars = [
+                star(z12, z31, z23),
+                star(z12, z23, z31),
+                star(z23, z31, z12),
+            ];
+            for (star, factor) in stars.iter_mut().zip(factors) {
+                if let Some(factor) = factor {
+                    *star = complex_product(*star, factor);
+                    scaled += 1;
+                }
+            }
+            for (pair, (a, b)) in [(0, 1), (1, 2), (2, 0)].into_iter().enumerate() {
+                transformer.z[pair].r = stars[a].0 + stars[b].0;
+                transformer.z[pair].x = stars[a].1 + stars[b].1;
+            }
+        }
+        scaled
     }
 
     /// Retype to [`BusType::Isolated`] every bus with no in-service electrical
