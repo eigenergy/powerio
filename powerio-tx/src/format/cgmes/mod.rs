@@ -6734,6 +6734,30 @@ mod tests {
     }
 
     #[test]
+    fn omission_records_match_generators_by_uid_or_bus_position() {
+        let mut network = detailed_network();
+        let bus = network.generators()[0].bus;
+        let position = network.generators().len();
+        network.generators_mut().push(Generator::new(bus));
+        let named = component("generator", network.generators()[0].uid.as_deref().unwrap());
+        let positional = component("generator", &format!("{bus}-{position}"));
+        let absent = component("generator", &format!("{bus}-{}", position + 1));
+        Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap()).omitted_fields = vec![
+            OmittedField::new(named, OmittedFieldName::RatedApparentPower),
+            OmittedField::new(positional, OmittedFieldName::RatedApparentPower),
+            OmittedField::new(absent.clone(), OmittedFieldName::RatedApparentPower),
+        ];
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let unmatched = output
+            .warnings
+            .iter()
+            .filter(|warning| warning.contains("omitted field record"))
+            .collect::<Vec<_>>();
+        assert_eq!(unmatched.len(), 1, "{unmatched:?}");
+        assert!(unmatched[0].contains(&format!("component `{absent}`")));
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)] // the fixture exercises each diagnostic family explicitly
     fn fresh_output_diagnoses_boundary_case_and_metadata_projection() {
         let mut network = detailed_network();

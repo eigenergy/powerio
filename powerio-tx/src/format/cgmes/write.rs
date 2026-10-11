@@ -57,6 +57,7 @@ struct DetailedIndex<'a> {
     tap_index: HashMap<(&'a str, usize, bool), &'a TapChanger>,
     transformers_with_taps: HashSet<&'a str>,
     equipment_with_limits: HashSet<(&'a str, &'a str)>,
+    omitted_field_index: HashSet<(&'a str, &'a str, OmittedFieldName)>,
 }
 
 struct IndexedMetadata<'a> {
@@ -176,7 +177,7 @@ impl<'a> DetailedIndex<'a> {
                 }
             }
         }
-        let mut bus_mrids = HashMap::new();
+        let mut bus_mrids = network_bus_mrids(network);
         for (&bus, configured) in &configured_by_bus {
             let component = &configured.component;
             bus_mrids.insert(
@@ -188,11 +189,6 @@ impl<'a> DetailedIndex<'a> {
                     component,
                 ),
             );
-        }
-        for bus in network.buses() {
-            bus_mrids
-                .entry(bus.id)
-                .or_insert_with(|| mrid_or("bus", &bus.id.to_string(), bus.uid.as_deref()));
         }
         let mut tap_index = HashMap::new();
         let mut transformers_with_taps = HashSet::new();
@@ -214,6 +210,17 @@ impl<'a> DetailedIndex<'a> {
             .iter()
             .map(|group| (group.equipment.component_type(), group.equipment.local_id()))
             .collect();
+        let omitted_field_index = inner
+            .omitted_fields
+            .iter()
+            .map(|omitted| {
+                (
+                    omitted.component.component_type(),
+                    omitted.component.local_id(),
+                    omitted.field,
+                )
+            })
+            .collect();
         Self {
             inner,
             metadata,
@@ -230,6 +237,7 @@ impl<'a> DetailedIndex<'a> {
             tap_index,
             transformers_with_taps,
             equipment_with_limits,
+            omitted_field_index,
         }
     }
 }
@@ -673,11 +681,9 @@ fn field_was_omitted(
     field: OmittedFieldName,
 ) -> bool {
     detailed.is_some_and(|detailed| {
-        detailed.omitted_fields.iter().any(|omitted| {
-            omitted.field == field
-                && omitted.component.component_type() == component_type
-                && omitted.component.local_id() == local_id
-        })
+        detailed
+            .omitted_field_index
+            .contains(&(component_type, local_id, field))
     })
 }
 
@@ -731,49 +737,71 @@ fn case_metadata_fields(metadata: &CaseMetadata, include_date: bool) -> Vec<Stri
     fields
 }
 
-fn component_matches_omission_record(
-    network: &BalancedNetwork,
-    component: &ComponentId,
-    field: OmittedFieldName,
-) -> bool {
-    let local_id = component.local_id();
-    match (component.component_type(), field) {
-        ("load", OmittedFieldName::ActivePower | OmittedFieldName::ReactivePower) => {
-            network.loads().iter().enumerate().any(|(index, load)| {
-                load.uid
-                    .clone()
-                    .unwrap_or_else(|| format!("{}-{index}", load.bus))
-                    == local_id
-            })
+/// The loads, generators, and shunts an omitted field record can name, keyed
+/// by local id: the component uid, else `{bus}-{index}`. Each table's ids are
+/// collected on the first record that needs them, so checking every record
+/// costs one pass over each table rather than one per record.
+struct OmissionTargets<'a> {
+    network: &'a BalancedNetwork,
+    loads: Option<HashSet<Cow<'a, str>>>,
+    generators: Option<HashSet<Cow<'a, str>>>,
+    shunts: Option<HashSet<Cow<'a, str>>>,
+}
+
+impl<'a> OmissionTargets<'a> {
+    const fn new(network: &'a BalancedNetwork) -> Self {
+        Self {
+            network,
+            loads: None,
+            generators: None,
+            shunts: None,
         }
-        (
-            "generator",
-            OmittedFieldName::ActivePower
-            | OmittedFieldName::ReactivePower
-            | OmittedFieldName::VoltageSetpoint
-            | OmittedFieldName::RatedApparentPower,
-        ) => network
-            .generators()
-            .iter()
-            .enumerate()
-            .any(|(index, generator)| {
-                generator
-                    .uid
-                    .clone()
-                    .unwrap_or_else(|| format!("{}-{index}", generator.bus))
-                    == local_id
-            }),
-        ("shunt", OmittedFieldName::ShuntConductancePerSection) => {
-            network.shunts().iter().enumerate().any(|(index, shunt)| {
-                shunt
-                    .uid
-                    .clone()
-                    .unwrap_or_else(|| format!("{}-{index}", shunt.bus))
-                    == local_id
-            })
-        }
-        _ => false,
     }
+
+    /// Whether the writer can suppress the CGMES assignment `field` names on
+    /// `component`.
+    fn matches(&mut self, component: &ComponentId, field: OmittedFieldName) -> bool {
+        let network = self.network;
+        let ids = match (component.component_type(), field) {
+            ("load", OmittedFieldName::ActivePower | OmittedFieldName::ReactivePower) => {
+                self.loads.get_or_insert_with(|| {
+                    table_local_ids(network.loads(), |load| (load.uid.as_deref(), load.bus))
+                })
+            }
+            (
+                "generator",
+                OmittedFieldName::ActivePower
+                | OmittedFieldName::ReactivePower
+                | OmittedFieldName::VoltageSetpoint
+                | OmittedFieldName::RatedApparentPower,
+            ) => self.generators.get_or_insert_with(|| {
+                table_local_ids(network.generators(), |generator| {
+                    (generator.uid.as_deref(), generator.bus)
+                })
+            }),
+            ("shunt", OmittedFieldName::ShuntConductancePerSection) => {
+                self.shunts.get_or_insert_with(|| {
+                    table_local_ids(network.shunts(), |shunt| (shunt.uid.as_deref(), shunt.bus))
+                })
+            }
+            _ => return false,
+        };
+        ids.contains(component.local_id())
+    }
+}
+
+/// Local ids of one equipment table: each row's uid, else `{bus}-{index}`.
+fn table_local_ids<'a, T>(
+    rows: &'a [T],
+    identity: impl Fn(&'a T) -> (Option<&'a str>, BusId),
+) -> HashSet<Cow<'a, str>> {
+    rows.iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let (uid, bus) = identity(row);
+            uid.map_or_else(|| Cow::Owned(format!("{bus}-{index}")), Cow::Borrowed)
+        })
+        .collect()
 }
 
 const fn omitted_field_label(field: OmittedFieldName) -> &'static str {
@@ -924,8 +952,9 @@ pub(super) fn warn_unemitted_detailed_fields(
             ));
         }
     }
+    let mut omission_targets = OmissionTargets::new(network);
     for omitted in &detailed.omitted_fields {
-        if !component_matches_omission_record(network, &omitted.component, omitted.field) {
+        if !omission_targets.matches(&omitted.component, omitted.field) {
             warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
                 "omitted field record for component `{}` field `{}` does not match a CGMES assignment the writer can suppress and has no effect on fresh output",
                 omitted.component,
@@ -1345,7 +1374,7 @@ fn terminal_uses_connectivity_node(
 }
 
 fn terminal_topological_node_mrid(
-    network: &BalancedNetwork,
+    bus_mrids: &HashMap<BusId, String>,
     detailed: Option<&DetailedIndex<'_>>,
     terminal: Option<&Terminal>,
     bus: BusId,
@@ -1357,10 +1386,10 @@ fn terminal_topological_node_mrid(
         if let Some(node) = terminal.and_then(|value| value.node.as_ref())
             && let Some(calculated_bus) = calculated_bus_for_node(detailed, node)
         {
-            return bus_mrid(network, Some(detailed), calculated_bus);
+            return bus_mrid(bus_mrids, calculated_bus);
         }
     }
-    bus_mrid(network, detailed, bus)
+    bus_mrid(bus_mrids, bus)
 }
 
 fn terminal_voltage_level_mrid(
@@ -2325,16 +2354,20 @@ impl Writer<'_> {
     }
 }
 
-/// A bus's TopologicalNode id: the imported uid, else deterministic.
-fn bus_mrid(net: &BalancedNetwork, detailed: Option<&DetailedIndex<'_>>, bus: BusId) -> String {
-    if let Some(id) = detailed.and_then(|index| index.bus_mrids.get(&bus)) {
-        return id.clone();
+/// Each bus's TopologicalNode id: the imported uid, else deterministic. The
+/// first bus with an id names it.
+fn network_bus_mrids(net: &BalancedNetwork) -> HashMap<BusId, String> {
+    let mut ids = HashMap::with_capacity(net.buses().len());
+    for bus in net.buses() {
+        ids.entry(bus.id)
+            .or_insert_with(|| mrid_or("bus", &bus.id.to_string(), bus.uid.as_deref()));
     }
-    net.buses()
-        .iter()
-        .find(|b| b.id == bus)
-        .map(|b| mrid_or("bus", &b.id.to_string(), b.uid.as_deref()))
-        .unwrap_or_default()
+    ids
+}
+
+/// A bus's TopologicalNode id from the emission's bus identity map.
+fn bus_mrid(bus_mrids: &HashMap<BusId, String>, bus: BusId) -> String {
+    bus_mrids.get(&bus).cloned().unwrap_or_default()
 }
 
 /// Terminal id for equipment `eq` at sequence `seq`.
@@ -2580,7 +2613,6 @@ fn calculated_bus_for_node(detailed: &DetailedIndex<'_>, node: &ComponentId) -> 
 
 #[allow(clippy::too_many_arguments)]
 fn write_converter_ac_terminals(
-    network: &BalancedNetwork,
     detailed: &DetailedIndex<'_>,
     eq: &mut Doc,
     tp: &mut Doc,
@@ -2629,7 +2661,12 @@ fn write_converter_ac_terminals(
             tp.open("Terminal", &id, true);
             tp.reference(
                 "Terminal.TopologicalNode",
-                &terminal_topological_node_mrid(network, Some(detailed), Some(record), bus),
+                &terminal_topological_node_mrid(
+                    &detailed.bus_mrids,
+                    Some(detailed),
+                    Some(record),
+                    bus,
+                ),
             );
             tp.close("Terminal");
         }
@@ -3564,7 +3601,6 @@ fn write_dc_equipment(
         }
         eq.close("VsConverter");
         write_converter_ac_terminals(
-            writer.net,
             detailed,
             eq,
             tp,
@@ -3851,7 +3887,6 @@ fn write_line_commutated_converter(
     }
     eq.close("CsConverter");
     write_converter_ac_terminals(
-        writer.net,
         detailed,
         eq,
         tp,
@@ -4101,6 +4136,14 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         .as_deref()
         .map(|details| DetailedIndex::new(details, net));
     let detailed = detailed_index.as_ref();
+    // Every TopologicalNode reference resolves through one bus identity map.
+    let plain_bus_mrids;
+    let bus_mrids = if let Some(index) = detailed {
+        &index.bus_mrids
+    } else {
+        plain_bus_mrids = network_bus_mrids(net);
+        &plain_bus_mrids
+    };
     let retained_metadata = retained_identified_metadata(detailed, &mut w.warnings);
     if let Some(detailed) = detailed {
         warn_unemitted_detailed_fields(net, detailed, version, &mut w.warnings);
@@ -4569,7 +4612,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 tp.open("ConnectivityNode", &id, true);
                 tp.reference(
                     "ConnectivityNode.TopologicalNode",
-                    &bus_mrid(net, Some(detailed), bus),
+                    &bus_mrid(bus_mrids, bus),
                 );
                 tp.close("ConnectivityNode");
             }
@@ -4599,7 +4642,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 .buses
                 .get(bus)
                 .expect("active calculated bus exists in the balanced network");
-            let id = bus_mrid(net, Some(detailed), *bus);
+            let id = bus_mrid(bus_mrids, *bus);
             tp.named(
                 "TopologicalNode",
                 &id,
@@ -4631,7 +4674,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 .buses
                 .get(bus_id)
                 .expect("fallback bus exists in the balanced network");
-            let id = bus_mrid(net, Some(detailed), bus.id);
+            let id = bus_mrid(bus_mrids, bus.id);
             let voltage_level = det_mrid("voltagelevel", &bus.id.to_string());
             tp.named(
                 "TopologicalNode",
@@ -4697,7 +4740,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             tp.open("ConnectivityNode", &id, true);
             tp.reference(
                 "ConnectivityNode.TopologicalNode",
-                &bus_mrid(net, Some(detailed), *bus_id),
+                &bus_mrid(bus_mrids, *bus_id),
             );
             tp.close("ConnectivityNode");
             if !fallback_calculated_buses.contains(bus_id) {
@@ -4784,7 +4827,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             eq.text("VoltageLevel.highVoltageLimit", bus.vmax * bus.base_kv);
             eq.close("VoltageLevel");
 
-            let tn = bus_mrid(net, detailed, bus.id);
+            let tn = bus_mrid(bus_mrids, bus.id);
             tp.named(
                 "TopologicalNode",
                 &tn,
@@ -4868,7 +4911,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             tp.open("Terminal", &id, true);
             tp.reference(
                 "Terminal.TopologicalNode",
-                &terminal_topological_node_mrid(net, detailed, record, bus),
+                &terminal_topological_node_mrid(bus_mrids, detailed, record, bus),
             );
             tp.close("Terminal");
         }
@@ -7230,12 +7273,12 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         sv.named("TopologicalIsland", &island, "island");
         sv.reference(
             "TopologicalIsland.AngleRefTopologicalNode",
-            &bus_mrid(net, detailed, slack.id),
+            &bus_mrid(bus_mrids, slack.id),
         );
         for bus in net.buses() {
             sv.reference(
                 "TopologicalIsland.TopologicalNodes",
-                &bus_mrid(net, detailed, bus.id),
+                &bus_mrid(bus_mrids, bus.id),
             );
         }
         sv.close("TopologicalIsland");
