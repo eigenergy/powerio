@@ -192,6 +192,23 @@ fn acquire_documents(source: &Source) -> Result<Vec<(String, String)>> {
     acquire_documents_with_limit(source, max_bytes)
 }
 
+/// Hold one CGMES document the content sniff did not recognise, which the
+/// text reader passes to [`parse_text`], to the byte limit every other CGMES
+/// route counts in [`push_xml`].
+pub(crate) fn check_text_budget(source: &Source, text: &str) -> Result<()> {
+    let max_bytes = source
+        .acquisition_byte_limit()
+        .map_err(|error| source_error(&error))?;
+    let size = text.len() as u64;
+    if size > max_bytes {
+        return Err(format_error(format!(
+            "CGMES profile data would reach {size} bytes with {}, above the {max_bytes} byte input limit set by {ACQUISITION_LIMIT_VARIABLE}",
+            source.name()
+        )));
+    }
+    Ok(())
+}
+
 fn acquire_documents_with_limit(source: &Source, max_bytes: u64) -> Result<Vec<(String, String)>> {
     let mut documents = Vec::new();
     let mut names = BTreeSet::new();

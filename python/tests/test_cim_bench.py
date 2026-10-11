@@ -57,3 +57,21 @@ def test_component_counts_reject_normalized_equipment_classification():
     network = powerio.parse(DATA / "case14.m").value.to_normalized()
     with pytest.raises(ValueError, match="unnormalized network"):
         network.component_counts()
+
+
+def test_unrecognized_cgmes_xml_keeps_the_acquisition_limit(monkeypatch, tmp_path):
+    # A comment longer than the 16 KiB content sniff sends this profile
+    # through the text reader, which keeps the same byte limit.
+    profile = (DATA / "cgmes" / "node-breaker" / "NodeBreaker_EQ.xml").read_bytes()
+    declaration, body = profile.split(b"?>", 1)
+    padded = declaration + b"?>\n<!--" + b" " * 17_000 + b"-->" + body
+    path = tmp_path / "eq.xml"
+    path.write_bytes(padded)
+    monkeypatch.setenv("POWERIO_MAX_REFERENCED_BYTES", str(len(padded)))
+    assert powerio.parse(path).value.n_buses == 2
+    assert powerio.parse(padded, name="eq.xml").value.n_buses == 2
+    monkeypatch.setenv("POWERIO_MAX_REFERENCED_BYTES", str(len(padded) - 1))
+    with pytest.raises(powerio.PowerIOError, match="input limit"):
+        powerio.parse(path)
+    with pytest.raises(powerio.PowerIOError, match="input limit"):
+        powerio.parse(padded, name="eq.xml")
