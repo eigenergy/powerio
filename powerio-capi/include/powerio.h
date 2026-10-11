@@ -2771,8 +2771,9 @@ size_t pio_contingency_resolution_case_unresolved_count(const PioContingencyReso
  * Read why one action of one case bound to nothing, as a fixed snake case
  * name: `no_such_bus`, `no_such_branch`, `ambiguous_branch`,
  * `ambiguous_transformer_3w`, `no_such_machine`, `no_such_shunt`,
- * `no_such_load`, `no_such_transformer_3w`, or `unrecognized`. Python reports
- * the same names.
+ * `no_such_load`, `no_such_transformer_3w`, `unrecognized`,
+ * `no_such_bus_name`, `ambiguous_bus_name`, `no_such_branch_name`, or
+ * `ambiguous_branch_name`. Python reports the same names.
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.

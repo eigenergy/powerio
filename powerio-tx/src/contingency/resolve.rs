@@ -67,6 +67,8 @@ pub struct PsseEquipmentIndex<'n> {
     /// Keyed on the three bus ids in ascending order, so a statement naming
     /// them in any order finds the transformer.
     transformer_3w_rows: Transformer3wRows,
+    /// Buses and branches by name, for the statements TARA states by name.
+    names: super::tara::NameIndex,
 }
 
 fn sorted_triple(buses: [BusId; 3]) -> [BusId; 3] {
@@ -253,6 +255,7 @@ impl<'n> PsseEquipmentIndex<'n> {
             switched_shunt_rows,
             load_rows: load_index(net, &mut sanitized),
             transformer_3w_rows,
+            names: super::tara::NameIndex::new(net),
         }
     }
 
@@ -529,6 +532,19 @@ pub enum UnresolvedReason {
     NoSuchTransformer3w,
     /// The reader kept this statement as text, so it names no element.
     Unrecognized,
+    /// A quoted bus name and base kV that names no bus.
+    NoSuchBusName,
+    /// A quoted bus name that names more than one bus, exactly or without
+    /// regard to case and whitespace.
+    AmbiguousBusName {
+        matches: usize,
+    },
+    /// A quoted branch name that names no branch.
+    NoSuchBranchName,
+    /// A quoted branch name that names more than one branch.
+    AmbiguousBranchName {
+        matches: usize,
+    },
 }
 
 impl UnresolvedReason {
@@ -545,6 +561,10 @@ impl UnresolvedReason {
             Self::NoSuchLoad => "no_such_load",
             Self::NoSuchTransformer3w => "no_such_transformer_3w",
             Self::Unrecognized => "unrecognized",
+            Self::NoSuchBusName => "no_such_bus_name",
+            Self::AmbiguousBusName { .. } => "ambiguous_bus_name",
+            Self::NoSuchBranchName => "no_such_branch_name",
+            Self::AmbiguousBranchName { .. } => "ambiguous_branch_name",
         }
     }
 }
@@ -586,6 +606,22 @@ fn describe(action: &ContingencyAction, reason: UnresolvedReason) -> String {
             Some(id) => format!("no load {id} at bus {bus}"),
             None => format!("no load at bus {bus}"),
         },
+        (ContingencyAction::Unrecognized { text }, UnresolvedReason::NoSuchBusName) => {
+            format!("a bus name names no bus: {text}")
+        }
+        (
+            ContingencyAction::Unrecognized { text },
+            UnresolvedReason::AmbiguousBusName { matches },
+        ) => {
+            format!("a bus name names {matches} buses: {text}")
+        }
+        (ContingencyAction::Unrecognized { text }, UnresolvedReason::NoSuchBranchName) => {
+            format!("the branch name names no branch: {text}")
+        }
+        (
+            ContingencyAction::Unrecognized { text },
+            UnresolvedReason::AmbiguousBranchName { matches },
+        ) => format!("the branch name names {matches} branches: {text}"),
         (ContingencyAction::Unrecognized { text }, _) => {
             format!("statement kept as text: {text}")
         }
@@ -722,7 +758,18 @@ fn bind(
             .bus_row(*bus)
             .map(|row| vec![bus_component(net, row)])
             .ok_or(UnresolvedReason::NoSuchBus),
-        ContingencyAction::Unrecognized { .. } => Err(UnresolvedReason::Unrecognized),
+        // A TARA form the reader kept as text: buses or a branch named by
+        // name, or the action ahead of a dispatch block.
+        ContingencyAction::Unrecognized { text } => {
+            match super::tara::read_text_action(&index.names, text) {
+                None => Err(UnresolvedReason::Unrecognized),
+                Some(Err(reason)) => Err(reason),
+                Some(Ok(super::tara::TextAction::Action(action))) => bind(index, &action),
+                Some(Ok(super::tara::TextAction::Branch(row))) => {
+                    Ok(vec![branch_component(net, row)])
+                }
+            }
+        }
     }
 }
 
