@@ -1,5 +1,7 @@
 name: Python
-run-name: PowerIO Python ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+# Release and recovery runs carry their tag; an empty name keeps GitHub's
+# commit or pull request title for ordinary CI runs.
+run-name: ${{ (github.event_name == 'release' || github.event_name == 'workflow_dispatch') && format('PowerIO Python {0}', github.event_name == 'release' && github.event.release.tag_name || inputs.tag) || '' }}
 
 on:
   push:
