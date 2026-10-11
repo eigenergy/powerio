@@ -2752,10 +2752,12 @@ fn build_detailed_connectivity(
         };
         let sequence = store
             .f(id, "ACDCTerminal.sequenceNumber")?
-            .try_or_else(|| store.f(id, "Terminal.sequenceNumber"))?
-            .unwrap_or(1.0);
+            .try_or_else(|| store.f(id, "Terminal.sequenceNumber"))?;
         let terminal = terminal_side(store, id)?;
-        if terminal != sequence as u8 {
+        // An absent sequence number states nothing the winding contradicts.
+        if let Some(sequence) = sequence
+            && terminal != sequence as u8
+        {
             mapper.warnings.push_as(&codes::READ_CGMES_FIELD_UNMAPPED, format!(
                 "Terminal `{id}` sequenceNumber {sequence} differs from its transformer winding {terminal}; the neutral terminal number follows the winding, and fresh output uses that number"
             ));

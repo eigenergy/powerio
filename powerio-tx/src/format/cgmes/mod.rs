@@ -2817,6 +2817,56 @@ mod tests {
     }
 
     #[test]
+    fn transformer_terminal_without_sequence_number_states_no_difference() {
+        let mut network = network();
+        network.buses_mut()[1].base_kv = 115.0;
+        network.branches_mut()[0].tap = 1.05;
+        let mut files = write::write_cgmes(&network, CgmesVersion::V3_0)
+            .unwrap()
+            .files;
+        let eq = files
+            .iter_mut()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .unwrap();
+        let transformer =
+            eq.1.lines()
+                .find_map(|line| {
+                    line.trim()
+                        .strip_prefix("<cim:PowerTransformer rdf:ID=\"")
+                        .and_then(|tail| tail.split('"').next())
+                        .map(str::to_owned)
+                })
+                .unwrap();
+        eq.1 =
+            eq.1.split("</cim:Terminal>")
+                .map(|part| {
+                    if part.contains(&format!(
+                        "<cim:Terminal.ConductingEquipment rdf:resource=\"#{transformer}\""
+                    )) {
+                        part.lines()
+                            .filter(|line| !line.contains("ACDCTerminal.sequenceNumber"))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    } else {
+                        part.to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("</cim:Terminal>");
+        let parsed =
+            read::read_cgmes_documents(files, Some("unsequenced-transformer-terminals")).unwrap();
+        assert!(
+            !parsed
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("differs from its transformer winding")),
+            "an absent sequenceNumber was reported as differing"
+        );
+        let branch = &parsed.network.branches()[0];
+        assert!((branch.tap - 1.05).abs() < 1e-10, "tap {}", branch.tap);
+    }
+
+    #[test]
     fn imported_power_transformer_end_identities_round_trip_exactly() {
         let mut network = network();
         network.branches_mut()[0].tap = 1.05;
