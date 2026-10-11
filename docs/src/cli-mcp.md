@@ -136,7 +136,7 @@ directory listing keeps, counted the same way: no subdirectory may sit 64
 levels below it, and the files found plus the subdirectories not yet listed
 may never pass 4,096 while the server walks it.
 
-Tool arguments come from the client, so the server holds them to smaller
+Tool arguments come from the client, so the server parses them under smaller
 byte limits than the 1 GiB library defaults meant for local use. When
 `powerio-mcp` or `python -m powerio.mcp` starts, it sets
 `POWERIO_MAX_PRIMARY_BYTES` and `POWERIO_MAX_REFERENCED_BYTES` to 256 MiB
@@ -147,9 +147,11 @@ most the primary limit, checked before memory is reserved, and the files a
 case references or a directory holds share the referenced limit. Inline
 `content` and `powerio_ir` arguments are held to the primary limit in UTF-8
 bytes and refused before parsing, and the `display` tool reads only a regular
-file within it. To accept larger inputs, set either variable in the server's
-environment to a positive decimal byte count; the server keeps any value the
-operator sets. Importing `powerio.mcp` changes neither setting.
+file within it. The stdio transport reads and decodes each request whole
+before any tool runs, so these limits bound what the server parses, not the
+size of a request. To accept larger inputs, set either variable in the
+server's environment to a positive decimal byte count; the server keeps any
+value the operator sets. Importing `powerio.mcp` changes neither setting.
 
 Outside the server, both limits default to 1 GiB for Rust, C, Python, and
 Julia path-based acquisition. CGMES XML counts against the referenced limit

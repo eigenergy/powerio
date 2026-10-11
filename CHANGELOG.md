@@ -14,15 +14,17 @@
   `POWERIO_MAX_REFERENCED_BYTES`, so a CGMES file above 1 GiB named by path
   needs both settings raised.
 
-- The MCP server holds client input to 256 MiB. When `powerio-mcp` or
-  `python -m powerio.mcp` starts, it sets `POWERIO_MAX_PRIMARY_BYTES` and
-  `POWERIO_MAX_REFERENCED_BYTES` to 256 MiB unless the operator set them; the
-  library defaults stay 1 GiB. Inline `content` and `powerio_ir` arguments are
-  refused past the primary limit before parsing, the `display` tool reads only
-  a regular file within that limit where it used to read a file of any size or
-  wait on a named pipe, and the server refuses a directory input once its walk
-  passes the bounds PowerIO's own directory listing keeps: a subdirectory 64
-  levels down, or more than 4,096 files and subdirectories not yet listed.
+- The MCP server defaults its input byte limits to 256 MiB. When
+  `powerio-mcp` or `python -m powerio.mcp` starts, it sets
+  `POWERIO_MAX_PRIMARY_BYTES` and `POWERIO_MAX_REFERENCED_BYTES` to 256 MiB
+  unless the operator set them; the library defaults stay 1 GiB. Inline
+  `content` and `powerio_ir` arguments above the primary limit are refused
+  before parsing, although the stdio transport still reads and decodes each
+  request whole first. The `display` tool reads only a regular file within
+  that limit where it used to read a file of any size or wait on a named pipe,
+  and the server refuses a directory input once its walk passes the bounds
+  PowerIO's own directory listing keeps: a subdirectory 64 levels down, or
+  more than 4,096 files and subdirectories not yet listed.
 
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW
