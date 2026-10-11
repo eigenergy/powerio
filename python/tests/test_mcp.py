@@ -5,6 +5,8 @@ import io
 import json
 import os
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -424,3 +426,141 @@ def test_matrix_tool_computes_over_an_operating_point_entry(time_series_powerio_
     summary = server.summarize(powerio_ir=time_series_powerio_ir, time_index=1)
     assert summary["value_type"] == "OperatingPoint"
     assert summary["network"]["elements"]["buses"] == 9
+
+
+LIMIT_ENVS = ("POWERIO_MAX_PRIMARY_BYTES", "POWERIO_MAX_REFERENCED_BYTES")
+
+
+def test_server_start_defaults_unset_limits_to_256_mib(monkeypatch):
+    environ = {"POWERIO_MAX_PRIMARY_BYTES": ""}
+    server._apply_service_limits(environ)
+    assert environ == {name: str(256 << 20) for name in LIMIT_ENVS}
+
+    # Values the operator set stay as they are, valid or not; PowerIO
+    # validates them when it reads a source.
+    environ = {"POWERIO_MAX_PRIMARY_BYTES": "2048", "POWERIO_MAX_REFERENCED_BYTES": "x"}
+    server._apply_service_limits(environ)
+    assert environ == {
+        "POWERIO_MAX_PRIMARY_BYTES": "2048",
+        "POWERIO_MAX_REFERENCED_BYTES": "x",
+    }
+
+    # `main` applies the defaults to the process before it serves. Setting
+    # each variable through monkeypatch first restores the original afterward.
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", "")
+    monkeypatch.setenv("POWERIO_MAX_REFERENCED_BYTES", "4096")
+    monkeypatch.setattr(sandbox, "_DEFAULT_ROOT", sandbox._DEFAULT_ROOT)
+    served = []
+    monkeypatch.setattr(server.mcp, "run", lambda *args, **kwargs: served.append(True))
+    server.main()
+    assert served == [True]
+    assert os.environ["POWERIO_MAX_PRIMARY_BYTES"] == str(256 << 20)
+    assert os.environ["POWERIO_MAX_REFERENCED_BYTES"] == "4096"
+
+
+def test_importing_the_server_keeps_the_library_limits():
+    code = (
+        "import os; from powerio.mcp import server; "
+        "print([os.environ.get(name) for name in "
+        "('POWERIO_MAX_PRIMARY_BYTES', 'POWERIO_MAX_REFERENCED_BYTES')])"
+    )
+    env = {key: value for key, value in os.environ.items() if key not in LIMIT_ENVS}
+    out = subprocess.run(
+        [sys.executable, "-c", code], check=True, capture_output=True, text=True, env=env
+    )
+    assert out.stdout.strip() == "[None, None]"
+
+
+@pytest.mark.parametrize(
+    "value,limit",
+    [(None, 256 << 20), ("", 256 << 20), ("0", 256 << 20), ("-1", 256 << 20),
+     (" 7", 256 << 20), ("1e3", 256 << 20), ("١", 256 << 20), ("123", 123)],
+)
+def test_primary_limit_falls_back_to_the_service_default(monkeypatch, value, limit):
+    if value is None:
+        monkeypatch.delenv("POWERIO_MAX_PRIMARY_BYTES", raising=False)
+    else:
+        monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", value)
+    assert server._primary_byte_limit() == limit
+
+
+def test_inline_arguments_are_refused_past_the_primary_limit_before_parsing(
+    monkeypatch,
+):
+    text = (DATA / "case9.m").read_text()
+    powerio_ir = powerio.serialize(powerio.parse(DATA / "case9.m")).text
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", str(len(text.encode())))
+    assert server.parse(content=text, format="matpower")["summary"]["elements"][
+        "buses"
+    ] == 9
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("an oversize argument reached the reader")
+
+    monkeypatch.setattr(powerio, "parse", refuse)
+    monkeypatch.setattr(powerio, "deserialize", refuse)
+    limit = len(text.encode()) - 1
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", str(limit))
+    message = rf"`content` exceeds the {limit} byte .*POWERIO_MAX_PRIMARY_BYTES"
+    with pytest.raises(ValueError, match=message):
+        server.parse(content=text, format="matpower")
+    with pytest.raises(ValueError, match=message):
+        server.emit("psse", content=text, source_format="matpower")
+
+    limit = len(powerio_ir.encode()) - 1
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", str(limit))
+    message = rf"`powerio_ir` exceeds the {limit} byte .*POWERIO_MAX_PRIMARY_BYTES"
+    for call in (
+        lambda: server.summarize(powerio_ir=powerio_ir),
+        lambda: server.diagnostics(powerio_ir),
+        lambda: server.calc_matrix("bprime", powerio_ir=powerio_ir),
+        lambda: server._to_balanced_tool(powerio_ir=powerio_ir),
+    ):
+        with pytest.raises(ValueError, match=message):
+            call()
+
+
+def test_inline_size_counts_utf8_bytes(monkeypatch):
+    # Ten two-byte characters and one lone surrogate, which counts as the
+    # three bytes it would take if it were encoded.
+    value = "é" * 10 + "\ud800"
+    monkeypatch.setattr(server, "_UTF8_COUNT_CHUNK", 3)
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", "23")
+    server._check_inline_size("content", value)
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", "22")
+    with pytest.raises(ValueError, match="`content` exceeds the 22 byte"):
+        server._check_inline_size("content", value)
+    # More characters than the limit has bytes is refused without counting,
+    # and a limit of four bytes per character is accepted without counting.
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", "10")
+    with pytest.raises(ValueError, match="exceeds the 10 byte"):
+        server._check_inline_size("content", value)
+    monkeypatch.setattr(server, "_UTF8_COUNT_CHUNK", None)
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", "44")
+    server._check_inline_size("content", value)
+
+
+def test_display_requires_a_regular_file_within_the_primary_limit(
+    monkeypatch, tmp_path
+):
+    size = PWD.stat().st_size
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", str(size))
+    assert server.display(str(PWD))["format"] == "powerworld-pwd"
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("the display reader ran")
+
+    monkeypatch.setattr(powerio, "parse_display", refuse)
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", str(size - 1))
+    with pytest.raises(
+        ValueError, match=rf"exceeds the {size - 1} byte .*POWERIO_MAX_PRIMARY_BYTES"
+    ):
+        server.display(str(PWD))
+    with pytest.raises(ValueError, match="regular file"):
+        server.display(str(tmp_path))
+    if os.name != "nt":
+        # A named pipe is refused from its metadata, without opening it.
+        fifo = tmp_path / "display.pwd"
+        os.mkfifo(fifo)
+        with pytest.raises(ValueError, match="regular file"):
+            server.display(str(fifo))

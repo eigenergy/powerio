@@ -11,8 +11,20 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
+import stat
+import sys
 from pathlib import Path
-from typing import Annotated, Any, Dict, Literal, Mapping, Optional, cast
+from typing import (
+    Annotated,
+    Any,
+    Dict,
+    Literal,
+    Mapping,
+    MutableMapping,
+    Optional,
+    cast,
+)
 
 from mcp.server.mcpserver import MCPServer
 from pydantic import Field
@@ -102,6 +114,66 @@ _SOURCE_FORMAT_HELP = (
     "in `content`; serialized PowerIO IR belongs in `powerio_ir`."
 )
 
+# Tool arguments come from the client, so the server holds them to service
+# sized byte limits rather than the 1 GiB library defaults meant for local use.
+_PRIMARY_BYTES_ENV = "POWERIO_MAX_PRIMARY_BYTES"
+_REFERENCED_BYTES_ENV = "POWERIO_MAX_REFERENCED_BYTES"
+_SERVICE_BYTE_LIMIT = 256 << 20
+# Characters encoded at a time while counting an argument's UTF-8 bytes.
+_UTF8_COUNT_CHUNK = 1 << 20
+
+
+def _apply_service_limits(environ: MutableMapping[str, str] = os.environ) -> None:
+    """Default both acquisition limits to 256 MiB for the server process.
+
+    Only a setting the operator left unset or empty is filled in; any other
+    value stays as it is, and PowerIO validates it when it reads a source.
+    """
+    for name in (_PRIMARY_BYTES_ENV, _REFERENCED_BYTES_ENV):
+        if not environ.get(name):
+            environ[name] = str(_SERVICE_BYTE_LIMIT)
+
+
+def _primary_byte_limit() -> int:
+    """The byte limit for inline arguments and display files.
+
+    ``POWERIO_MAX_PRIMARY_BYTES`` when it holds a positive decimal byte count
+    that PowerIO accepts; otherwise the 256 MiB service default.
+    """
+    value = os.environ.get(_PRIMARY_BYTES_ENV, "")
+    if value.isascii() and value.isdigit():
+        limit = int(value)
+        if 0 < limit <= sys.maxsize:
+            return limit
+    return _SERVICE_BYTE_LIMIT
+
+
+def _over_limit(name: str, limit: int) -> ValueError:
+    return ValueError(
+        f"READ.IO.PRIMARY_BUDGET: `{name}` exceeds the {limit} byte input limit; "
+        f"set {_PRIMARY_BYTES_ENV} to raise it"
+    )
+
+
+def _check_inline_size(name: str, value: str) -> None:
+    """Refuse an inline argument whose UTF-8 encoding exceeds the limit.
+
+    A string of ``n`` characters encodes to between ``n`` and ``4n`` bytes,
+    so only a string between those bounds is counted, a chunk at a time,
+    stopping once the count passes the limit.
+    """
+    limit = _primary_byte_limit()
+    if len(value) > limit:
+        raise _over_limit(name, limit)
+    if value.isascii() or len(value) * 4 <= limit:
+        return
+    total = 0
+    for start in range(0, len(value), _UTF8_COUNT_CHUNK):
+        chunk = value[start : start + _UTF8_COUNT_CHUNK]
+        total += len(chunk.encode("utf-8", "surrogatepass"))
+        if total > limit:
+            raise _over_limit(name, limit)
+
 
 def _fmt(value: Optional[str]) -> Optional[str]:
     return value.strip().lower().replace("_", "-") if value is not None else None
@@ -145,6 +217,10 @@ def _load_module(
     format: Optional[str] = None,
 ) -> "powerio.PioModule":
     path, content, powerio_ir = _one_module_input(path, content, powerio_ir)
+    if content is not None:
+        _check_inline_size("content", content)
+    if powerio_ir is not None:
+        _check_inline_size("powerio_ir", powerio_ir)
     try:
         if powerio_ir is not None:
             return powerio.deserialize(io.StringIO(powerio_ir))
@@ -188,6 +264,7 @@ def _diagnostics_summary(records: list[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _diagnostics_payload(powerio_ir: str) -> Dict[str, Any]:
+    _check_inline_size("powerio_ir", powerio_ir)
     try:
         module = powerio.deserialize(io.StringIO(powerio_ir))
     except (powerio.PowerIOError, ValueError, TypeError) as exc:
@@ -597,8 +674,27 @@ def _matrix_impl(
     return payload
 
 
-def _display_impl(path: str, format: Optional[str] = None) -> Dict[str, Any]:
+def _checked_display_file(path: str) -> str:
+    """Confine a display path and hold it to the primary byte limit.
+
+    The display reader reads the whole file without a byte limit of its own,
+    so the server requires a regular file no larger than the limit first.
+    """
     checked = sandbox.checked_path(path, purpose="path")
+    try:
+        info = os.stat(checked)
+    except OSError as exc:
+        raise _coded_error("display parse failed", exc) from exc
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError(f"display `path` must be a regular file: {checked}")
+    limit = _primary_byte_limit()
+    if info.st_size > limit:
+        raise _over_limit("path", limit)
+    return checked
+
+
+def _display_impl(path: str, format: Optional[str] = None) -> Dict[str, Any]:
+    checked = _checked_display_file(path)
     try:
         data = powerio.parse_display(checked, format)
     except (powerio.PowerIOError, OSError, ValueError) as exc:
@@ -892,6 +988,14 @@ def diagnostics(powerio_ir: str) -> dict:
 
 
 def main() -> None:
-    """Serve the PowerIO MCP tools over stdio."""
+    """Serve the PowerIO MCP tools over stdio.
+
+    The server process defaults ``POWERIO_MAX_PRIMARY_BYTES`` and
+    ``POWERIO_MAX_REFERENCED_BYTES`` to 256 MiB when the operator leaves them
+    unset or empty. Importing this module leaves the environment alone, so a
+    program that calls the tool functions directly keeps the library defaults
+    for path input.
+    """
+    _apply_service_limits()
     sandbox._DEFAULT_ROOT = Path.cwd().resolve(strict=True)
     mcp.run()
