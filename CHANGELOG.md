@@ -87,10 +87,7 @@
   coupled, as PSS/E does; the transformer goes only when fewer than two
   windings remain, and each such case is reported as
   `CANONICALIZE.NORMALIZE.WINDING_TAKEN_OUT`. Island partitions, subsets, and
-  de-energization read the same per winding status. On a 100,000 bus
-  planning case the normalized network keeps every in-service three winding
-  transformer and has the same nine islands as the case itself, where it
-  split into 24 before.
+  de-energization read the same per winding status.
 
 ### Added
 
