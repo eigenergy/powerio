@@ -6,8 +6,8 @@
 use powerio_matrix::DcOperators;
 use powerio_prob::DcPfInstance;
 use powerio_tx::{
-    BalancedNetwork, Branch, BranchSusceptanceFormula, Bus, BusId, BusMergeRule, BusType,
-    Generator, Load, MergedFlows, RemovedFlowMethod, Switch, ZeroImpedanceRule,
+    BalancedNetwork, Branch, Bus, BusId, BusMergeRule, BusType, Generator, Load, MergedFlows,
+    RemovedFlowMethod, Switch, ZeroImpedanceRule,
 };
 
 /// The jumper reactance of the unmerged network, per unit: far below the
@@ -196,32 +196,35 @@ fn switched_network() -> BalancedNetwork {
 }
 
 #[test]
-fn analysis_on_unmerged_closed_switches_is_refused_with_a_code() {
+fn normalization_merges_closed_switches_for_the_builders() {
     use powerio_matrix::IndexedNetwork;
-    use powerio_matrix::matrix::{BuildOptions, calc_admittance_matrix, calc_ptdf};
+    use powerio_matrix::matrix::calc_adjacency_matrix;
 
+    // The builders stamp branches only: on the raw network the closed
+    // switch's bus 3 has no neighbor. The strict check names the switch.
     let net = switched_network();
     let view = IndexedNetwork::new(&net);
-    let code = |error: powerio_matrix::Error| error.code().code;
-    assert_eq!(
-        code(calc_admittance_matrix(&view, &BuildOptions::default()).unwrap_err()),
-        "BUILD.SWITCH.CLOSED"
-    );
-    assert_eq!(
-        code(calc_ptdf(&view, BranchSusceptanceFormula::default()).unwrap_err()),
-        "BUILD.SWITCH.CLOSED"
-    );
-    let instance = DcPfInstance::from_network(net.clone()).unwrap();
-    let error = DcOperators::build(&instance).unwrap_err();
-    assert_eq!(error.info().unwrap().code, "BUILD.SWITCH.CLOSED");
+    let adjacency = calc_adjacency_matrix(&view).unwrap();
+    let three = view.bus_index(BusId(3)).unwrap();
+    assert_eq!(adjacency.outer_view(three).unwrap().nnz(), 0);
+    let error = view.check_closed_switches().unwrap_err();
+    assert_eq!(error.code().code, "BUILD.SWITCH.CLOSED");
     assert!(error.to_string().contains("merge_buses"));
-    let opf = powerio_prob::DcOpfInstance::from_network(net.clone()).unwrap();
-    let options = powerio_matrix::DcOpfAssemblyOptions::default();
-    let error = powerio_matrix::build_dc_opf_preparation(&opf, &options).unwrap_err();
-    assert_eq!(code(error), "BUILD.SWITCH.CLOSED");
 
-    // Merging the switch resolves it: the merged network builds and the
-    // switch carries the load.
+    // Normalized, the switch's two buses are one, and the DC solve carries
+    // the whole load over the line.
+    let normalized = net.to_normalized().unwrap();
+    assert_eq!(normalized.buses().len(), 2);
+    IndexedNetwork::new(&normalized)
+        .check_closed_switches()
+        .unwrap();
+    let (_, flows) = solve_dc(&normalized);
+    assert!(
+        (flows[0] - normalized.loads()[0].p).abs() < 1e-9,
+        "{flows:?}"
+    );
+
+    // Merging the switch explicitly does the same and recovers its flow.
     let merge = net.merge_buses(&BusMergeRule::closed_switches()).unwrap();
     let (_, flows) = solve_dc(&merge.network);
     assert!((flows[0] - 30.0).abs() < 1e-9);

@@ -78,17 +78,19 @@ def test_rule_arguments_are_checked():
     assert case9.merge_buses(zero_impedance="exact").merged_buses == {}
 
 
-def test_normalization_merges_closed_switches_on_request():
+def test_normalization_merges_closed_switches_by_default():
     network = _merge_case()
-    kept = network.to_normalized()
-    with pytest.raises(powerio.PowerIODataError) as raised:
-        kept.calc_incidence_matrix()
-    assert raised.value.code == "BUILD.SWITCH.CLOSED"
-    assert "closed_switches=" in str(raised.value)
-
-    merged = network.to_normalized(closed_switches="merge")
+    merged = network.to_normalized()
     assert merged.n_buses == 4
     assert merged.calc_incidence_matrix().shape == (4, 4)
+    assert network.to_normalized(closed_switches="merge").n_buses == 4
+
+    kept = network.to_normalized(closed_switches="keep")
+    assert kept.n_buses > merged.n_buses
+    with pytest.raises(powerio.PowerIODataError) as raised:
+        network.to_normalized(closed_switches="refuse")
+    assert raised.value.code == "BUILD.SWITCH.CLOSED"
+    assert "closed_switches=" in str(raised.value)
     with pytest.raises(ValueError, match="closed_switches"):
         network.to_normalized(closed_switches="ignore")
 

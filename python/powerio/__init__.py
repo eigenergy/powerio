@@ -795,7 +795,7 @@ class BalancedNetwork:
         *,
         clamp_angle_bounds: bool = False,
         angle_bound_pad: Optional[float] = None,
-        closed_switches: str = "refuse",
+        closed_switches: str = "merge",
         island_references: str = "stated",
     ) -> "BalancedNetwork":
         """Return a normalized copy with per unit power and radian angles.
@@ -813,10 +813,11 @@ class BalancedNetwork:
         invert the interval widens to that same window. The default pad is
         1.0472 radians.
 
-        ``closed_switches="merge"`` merges the buses closed switches join
-        first, as :meth:`merge_buses` does with ``closed_switches=True``. The
-        default ``"refuse"`` keeps them, and every matrix and DC calculation
-        then refuses the network with ``BUILD.SWITCH.CLOSED``.
+        The default ``closed_switches="merge"`` merges the buses closed
+        switches join first, as :meth:`merge_buses` does with
+        ``closed_switches=True``, since the matrix and DC calculations model
+        no switches. ``"keep"`` leaves the switches as data, and ``"refuse"``
+        raises :class:`PowerIODataError` with code ``BUILD.SWITCH.CLOSED``.
 
         ``island_references="per_island"`` gives every island one reference
         bus: an island that states none takes the bus of its largest ``pmax``
@@ -828,7 +829,7 @@ class BalancedNetwork:
         if (
             not clamp_angle_bounds
             and angle_bound_pad is None
-            and closed_switches == "refuse"
+            and closed_switches == "merge"
             and island_references == "stated"
         ):
             return BalancedNetwork(self._inner.to_normalized())

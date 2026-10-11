@@ -320,11 +320,13 @@ impl<'n> IndexedNetwork<'n> {
 
     /// Error if a closed switch joins two buses.
     ///
-    /// The matrix builders and solver preparations stamp branches only, so a
-    /// closed switch would silently leave its two buses apart. They call this
-    /// first and refuse such a network; merge the switch's buses with
-    /// [`merge_buses`](BalancedNetwork::merge_buses) under a rule that merges
-    /// closed switches before building.
+    /// The matrix builders and solver preparations stamp branches only, so on
+    /// a network that still carries a closed switch they leave its two buses
+    /// apart. Normalization merges closed switches by default
+    /// ([`ClosedSwitchPolicy::Merge`](crate::ClosedSwitchPolicy::Merge)), and
+    /// [`merge_buses`](BalancedNetwork::merge_buses) merges them under a rule
+    /// that selects them; call this before building to refuse a network that
+    /// skipped both.
     ///
     /// # Errors
     /// [`Error::ClosedSwitch`] naming the first closed switch and the count,
@@ -699,8 +701,8 @@ mod tests {
             crate::Error::UngroundedComponent { components: 1 }
         ));
 
-        // The matrix builders model no switches, so the view refuses the
-        // closed one rather than leaving bus 3 apart.
+        // The matrix builders model no switches; the strict check refuses
+        // the closed one rather than leaving bus 3 apart.
         let error = view.check_closed_switches().unwrap_err();
         assert_eq!(error.code().code, "BUILD.SWITCH.CLOSED");
         assert!(error.to_string().contains("merge_buses"));

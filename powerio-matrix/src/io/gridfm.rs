@@ -413,7 +413,6 @@ fn snapshot_views<'a>(snapshots: &'a [GridfmSnapshot<'a>]) -> Result<Vec<Snapsho
             });
         }
         let view = IndexedNetwork::new(snap.net);
-        view.check_closed_switches()?;
         let ref_bus = view.reference_bus_index()?;
         views.push(SnapshotView {
             view,

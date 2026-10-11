@@ -904,7 +904,7 @@ impl PyBalancedNetwork {
         Ok(case_from_parts(normalized, self.diagnostics().to_vec()))
     }
 
-    #[pyo3(signature = (*, clamp_angle_bounds=false, angle_bound_pad=None, closed_switches="refuse", island_references="stated"))]
+    #[pyo3(signature = (*, clamp_angle_bounds=false, angle_bound_pad=None, closed_switches="merge", island_references="stated"))]
     fn to_normalized_with_options(
         &self,
         clamp_angle_bounds: bool,
@@ -913,11 +913,12 @@ impl PyBalancedNetwork {
         island_references: &str,
     ) -> PyResult<PyBalancedNetwork> {
         let closed_switches = match closed_switches {
-            "refuse" => powerio_tx::ClosedSwitchPolicy::Refuse,
             "merge" => powerio_tx::ClosedSwitchPolicy::Merge,
+            "refuse" => powerio_tx::ClosedSwitchPolicy::Refuse,
+            "keep" => powerio_tx::ClosedSwitchPolicy::Keep,
             other => {
                 return Err(PyValueError::new_err(format!(
-                    "unknown closed_switches policy {other:?}; expected \"refuse\" or \"merge\""
+                    "unknown closed_switches policy {other:?}; expected \"merge\", \"refuse\", or \"keep\""
                 )));
             }
         };
@@ -933,12 +934,13 @@ impl PyBalancedNetwork {
         let options = NormalizeOptions {
             clamp_angle_bounds,
             angle_bound_pad: angle_bound_pad.unwrap_or(POWER_MODELS_ANGLE_BOUND_PAD),
-            closed_switches,
-            island_references,
         };
-        let normalized = self
+        let settings = powerio_tx::NormalizeSettings::new(options)
+            .with_closed_switches(closed_switches)
+            .with_island_references(island_references);
+        let (normalized, _) = self
             .inner()
-            .to_normalized_with_options(&options)
+            .to_normalized_with(&settings)
             .map_err(core_pyerr)?;
         let mut diagnostics = self.diagnostics().to_vec();
         diagnostics.extend(normalized.diagnostics);

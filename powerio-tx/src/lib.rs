@@ -134,7 +134,7 @@ pub use geo::{
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
 pub use islands::{Island, IslandPartition, IslandReferencePolicy, IslandReferenceReport};
 pub use merge::{
-    BusGroup, BusMerge, BusMergeRule, MergedCharging, MergedFlows,
+    BusGroup, BusMerge, BusMergeRule, MergeSurvivor, MergedCharging, MergedFlows,
     PSSE_DEFAULT_ZERO_IMPEDANCE_THRESHOLD, RemovalReason, RemovedBranch, RemovedFlow,
     RemovedFlowMethod, RemovedFlows, RemovedSwitch, ZeroImpedanceRule,
 };
@@ -159,7 +159,7 @@ pub use network::{
     calc_series_admittance_of, repair_values,
 };
 pub use normalize::{
-    ClosedSwitchPolicy, NormalizeOptions, NormalizeSourceRows, NormalizedNetwork,
-    POWER_MODELS_ANGLE_BOUND_PAD, correct_angle_difference_bounds,
+    ClosedSwitchPolicy, NormalizeOptions, NormalizeReport, NormalizeSettings, NormalizeSourceRows,
+    NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD, correct_angle_difference_bounds,
 };
 pub use operations::Selector;

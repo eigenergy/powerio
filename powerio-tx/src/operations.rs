@@ -13,7 +13,7 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
-use crate::merge::{BusMergeRule, ZeroImpedanceRule, kind_priority};
+use crate::merge::{BusMergeRule, MergeSurvivor, ZeroImpedanceRule, kind_priority};
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, Generator, Shunt,
     SourceFormat,
@@ -469,12 +469,12 @@ impl BalancedNetwork {
     }
 
     /// Collapse every in-service, non-transformer branch whose series impedance
-    /// magnitude is at or below `threshold` by merging its endpoints, returning
-    /// the number of branches removed. Parallel jumpers between the same pair go
-    /// in the same step.
+    /// magnitude is at or below `threshold` by merging its endpoints (the to-bus
+    /// into the from-bus), returning the number of branches removed. Parallel
+    /// jumpers between the same pair go in the same step.
     ///
     /// This is [`merge_buses`](BalancedNetwork::merge_buses) under
-    /// [`ZeroImpedanceRule::ImpedanceMagnitude`]
+    /// [`ZeroImpedanceRule::ImpedanceMagnitude`] and [`MergeSurvivor::FromBus`]
     /// with closed switches left alone, applied in place; prefer `merge_buses`,
     /// which also returns the bus map, the removed elements, and diagnostics.
     /// A threshold that is negative or not finite merges nothing.
@@ -488,7 +488,8 @@ impl BalancedNetwork {
         let rule = BusMergeRule::new(
             false,
             Some(ZeroImpedanceRule::ImpedanceMagnitude(threshold)),
-        );
+        )
+        .with_survivor(MergeSurvivor::FromBus);
         match self.merge_buses(&rule) {
             Ok(merge) => {
                 let removed = merge.removed_branches.len();
@@ -1138,6 +1139,28 @@ mod tests {
             net.loads().iter().any(|l| l.bus == BusId(2)),
             "load re-homed"
         );
+        net.validate().unwrap();
+    }
+
+    #[test]
+    fn reduce_zero_impedance_keeps_the_from_bus() {
+        // The jumper runs from bus 3 to bus 2, so bus 3 survives although bus
+        // 2 has the smaller id.
+        let mut jumper = line(3, 2);
+        jumper.x = 0.0;
+        let mut net = BalancedNetwork::in_memory(
+            "net",
+            100.0,
+            vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
+            vec![line(1, 2), jumper],
+        );
+        net.loads_mut().push(load(2));
+
+        assert_eq!(net.reduce_zero_impedance(1e-9), 1);
+        let ids: Vec<BusId> = net.buses().iter().map(|b| b.id).collect();
+        assert_eq!(ids, [BusId(1), BusId(3)]);
+        assert_eq!(net.branches()[0].to, BusId(3));
+        assert_eq!(net.loads()[0].bus, BusId(3));
         net.validate().unwrap();
     }
 

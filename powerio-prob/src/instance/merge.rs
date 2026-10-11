@@ -13,7 +13,9 @@
 use std::collections::BTreeMap;
 
 use powerio_core::{Diagnostic, Error};
-use powerio_tx::{BalancedNetwork, BusId, BusMergeRule, RemovalReason, ZeroImpedanceRule};
+use powerio_tx::{
+    BalancedNetwork, BusId, BusMergeRule, MergeSurvivor, RemovalReason, ZeroImpedanceRule,
+};
 
 use crate::diagnostics::codes;
 
@@ -33,14 +35,13 @@ pub struct ZeroImpedanceMerge {
 
 /// Merge every group of buses joined by in service branches with zero series
 /// impedance (`r == 0` and `x == 0`, self loops and off-nominal transformers
-/// excluded) into one surviving bus, rewriting every element reference and
-/// dropping the merged buses and the zero impedance branches.
+/// excluded) into that group's smallest bus id, rewriting every element
+/// reference and dropping the merged buses and the zero impedance branches.
 ///
-/// The survivor is the group's reference bus, else a bus hosting an
-/// in-service generator, else a bus a generator regulates, with the smallest
-/// id breaking each tie. A branch whose two buses the merge joined through
-/// other branches is removed as well, and a removed branch's line charging
-/// becomes a fixed shunt at the survivor.
+/// The survivor takes the strongest bus kind of its group (reference, then
+/// PV, then PQ). A branch whose two buses the merge joined through other
+/// branches is removed as well, and a removed branch's line charging becomes
+/// a fixed shunt at the survivor.
 ///
 /// The flow through a removed branch is no longer a variable of any derived
 /// calculation, and merged buses may have stated different attributes; both
@@ -54,7 +55,8 @@ pub struct ZeroImpedanceMerge {
 pub fn merge_zero_impedance_buses(
     network: &BalancedNetwork,
 ) -> Result<(BalancedNetwork, ZeroImpedanceMerge, Vec<Diagnostic>), Error> {
-    let rule = BusMergeRule::new(false, Some(ZeroImpedanceRule::Exact));
+    let rule = BusMergeRule::new(false, Some(ZeroImpedanceRule::Exact))
+        .with_survivor(MergeSurvivor::SmallestId);
     let merge = network
         .merge_buses(&rule)
         .map_err(|error| Error::new(error.code(), error.to_string()))?;

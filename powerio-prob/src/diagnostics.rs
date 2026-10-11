@@ -115,11 +115,16 @@ pub mod codes {
             category = Request;
     }
 
-    /// The bus merge codes, which the balanced model crate owns now that the
-    /// merge lives there.
-    pub use powerio_tx::diagnostics::codes::{
-        CANONICALIZE_MERGE_ATTRIBUTE_CONFLICT, CANONICALIZE_MERGE_ZERO_IMPEDANCE,
-    };
+    // The bus merge codes, which the balanced model crate owns now that the
+    // merge lives there. They stay constants of this module, which names
+    // them since 0.11.0.
+
+    /// `CANONICALIZE.MERGE.ZERO_IMPEDANCE`, from the `powerio-tx` registry.
+    pub const CANONICALIZE_MERGE_ZERO_IMPEDANCE: powerio_core::DiagnosticInfo =
+        powerio_tx::diagnostics::codes::CANONICALIZE_MERGE_ZERO_IMPEDANCE;
+    /// `CANONICALIZE.MERGE.ATTRIBUTE_CONFLICT`, from the `powerio-tx` registry.
+    pub const CANONICALIZE_MERGE_ATTRIBUTE_CONFLICT: powerio_core::DiagnosticInfo =
+        powerio_tx::diagnostics::codes::CANONICALIZE_MERGE_ATTRIBUTE_CONFLICT;
 }
 
 /// Every code this crate declares.

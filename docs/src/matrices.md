@@ -139,14 +139,13 @@ between produces none of these findings.
 - **Reference coverage.** `IndexedNetwork::check_reference_coverage` verifies that
   every in service island has a reference bus. Islands are joined by in
   service branches and closed switches.
-- **Closed switches.** The builders stamp branches only, so a closed switch
-  that joins two buses fails every matrix, DC operator, OPF preparation, and
-  GridFM export with `BUILD.SWITCH.CLOSED` instead of leaving its buses apart.
-  The error counts the closed switches. Merge their buses first with
-  `merge_buses` (see [Merging buses](transmission.md#merging-buses)), or
-  normalize with `NormalizeOptions::closed_switches` set to `Merge`
-  (`to_normalized(closed_switches="merge")` in Python), which runs that merge
-  and returns its map with the normalized network.
+- **Closed switches.** The builders stamp branches only, so on a network
+  that still carries a closed switch they leave its two buses apart.
+  Normalization merges closed switches by default (`ClosedSwitchPolicy` on
+  `NormalizeSettings` keeps or refuses them instead), and `merge_buses` merges
+  them on request (see [Merging buses](transmission.md#merging-buses)).
+  `IndexedNetwork::check_closed_switches` refuses a network that skipped both
+  with `BUILD.SWITCH.CLOSED`, counting the closed switches.
 - **Branch susceptance formulas.** `BranchSusceptanceFormula` selects the
   branch susceptance vector \\(b\\) and, for formulas that include phase shifts,
   the phase shift injection. In the PowerModels form,

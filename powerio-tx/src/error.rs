@@ -96,9 +96,12 @@ pub enum Error {
     UngroundedComponent { components: usize },
 
     /// Closed switches join buses that a calculation which models no
-    /// switches would leave apart.
+    /// switches would leave apart: raised by
+    /// [`IndexedNetwork::check_closed_switches`](crate::IndexedNetwork::check_closed_switches)
+    /// and by normalization under
+    /// [`ClosedSwitchPolicy::Refuse`](crate::ClosedSwitchPolicy::Refuse).
     #[error(
-        "{closed} closed switch(es) join distinct buses (the first, switch row {row}, joins buses {from} and {to}), and this calculation does not model switches; merge their buses first: BusMergeRule::closed_switches() with merge_buses in Rust, merge_buses(closed_switches=True) or to_normalized(closed_switches=\"merge\") in Python, or --merge-buses switches on the command line"
+        "{closed} closed switch(es) join distinct buses (the first, switch row {row}, joins buses {from} and {to}), and this calculation does not model switches; merge their buses first: to_normalized under the default ClosedSwitchPolicy::Merge or BusMergeRule::closed_switches() with merge_buses in Rust, to_normalized(closed_switches=\"merge\") or merge_buses(closed_switches=True) in Python, or --merge-buses switches on the command line"
     )]
     ClosedSwitch {
         row: usize,

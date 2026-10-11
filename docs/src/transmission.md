@@ -61,17 +61,20 @@ buses, and no threshold applies unless the rule names it.
 
 Every rule considers in-service branches only. The surviving bus of a set is
 its reference bus, else a bus with an in-service generator, else a bus a
-generator regulates, with the smallest id breaking each tie. Loads, shunts,
-generators and their regulated buses, storage, branch, switch, and HVDC ends,
-three winding transformer windings, control buses, and area swing buses all
-follow the survivor. The result lists every removed element with its source
-row, identity, and ratings, and maps each source branch and switch row to its
-merged row. A removed branch's line charging and line shunts become a fixed
-shunt at the survivor, so the merged network draws the reactive power the
-unmerged one did; `charging="drop"` discards them instead. A branch the merge shorts, such as a line in parallel with a
-jumper, is removed and reported. A jumper whose merge would join two windings
-of one three winding transformer stays, also reported. Merging the result
-again changes nothing.
+generator regulates, with the smallest id breaking each tie. In Rust,
+`BusMergeRule::with_survivor` keeps the smallest id or each merged element's
+from bus instead, the survivors of `merge_zero_impedance_buses` and
+`reduce_zero_impedance`. The survivor takes the strongest bus kind of its set.
+Loads, shunts, generators and their regulated buses, storage, branch, switch,
+and HVDC ends, three winding transformer windings, control buses, and area
+swing buses all follow the survivor. The result lists every removed element
+with its source row, identity, and ratings, and maps each source branch and
+switch row to its merged row. A removed branch's line charging and line shunts
+become a fixed shunt at the survivor, so the merged network draws the reactive
+power the unmerged one did; `charging="drop"` discards them instead. A branch
+the merge shorts, such as a line in parallel with a jumper, is removed and
+reported. A jumper whose merge would join two windings of one three winding
+transformer stays, also reported. Merging the result again changes nothing.
 
 The removed elements' flows are not variables of the merged network.
 `calc_removed_flows` recovers their active power from a solution of the merged

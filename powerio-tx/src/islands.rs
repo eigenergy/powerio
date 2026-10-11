@@ -540,7 +540,7 @@ impl BalancedNetwork {
 mod tests {
     use super::*;
     use crate::network::{Branch, Bus, Hvdc, Impedance, Load, Switch, Transformer3W, Winding};
-    use crate::{IslandReferencePolicy, NormalizeOptions};
+    use crate::{ClosedSwitchPolicy, IslandReferencePolicy, NormalizeOptions, NormalizeSettings};
 
     fn generator(bus: usize, pmax: f64) -> Generator {
         let mut generator = Generator::new(BusId(bus));
@@ -650,11 +650,9 @@ mod tests {
         assert_eq!(partition.islands.len(), 1);
         assert_eq!(partition.islands[0].buses, [BusId(1), BusId(3)]);
 
-        let options = NormalizeOptions {
-            island_references: IslandReferencePolicy::PerIsland,
-            ..NormalizeOptions::default()
-        };
-        let normalized = net.to_normalized_with_options(&options).unwrap();
+        let settings =
+            NormalizeSettings::default().with_island_references(IslandReferencePolicy::PerIsland);
+        let (normalized, _) = net.to_normalized_with(&settings).unwrap();
         assert_eq!(normalized.network.buses().len(), 2);
         let transformer = &normalized.network.transformers_3w()[0];
         assert_eq!(transformer.winding_in_service(), [true, false, true]);
@@ -776,8 +774,8 @@ mod tests {
             .unwrap();
         assert_eq!(
             stated.network.buses().len(),
-            8,
-            "only the typed isolated bus goes"
+            7,
+            "the typed isolated bus goes, and the closed switch merges bus 5 into bus 4"
         );
         let references: Vec<BusId> = stated
             .network
@@ -791,21 +789,29 @@ mod tests {
             codes(&stated.diagnostics).contains(&"CANONICALIZE.NORMALIZE.GENERATOR_BUS_RETYPED")
         );
 
-        let options = NormalizeOptions {
-            island_references: IslandReferencePolicy::PerIsland,
-            ..NormalizeOptions::default()
+        let settings =
+            NormalizeSettings::default().with_island_references(IslandReferencePolicy::PerIsland);
+        let references = |network: &BalancedNetwork| -> Vec<BusId> {
+            network
+                .buses()
+                .iter()
+                .filter(|bus| bus.kind == BusType::Ref)
+                .map(|bus| bus.id)
+                .collect()
         };
-        let per_island = net.to_normalized_with_options(&options).unwrap();
-        let ids: Vec<usize> = per_island.network.buses().iter().map(|b| b.id.0).collect();
+        // Kept as data, the closed switch still joins island B, whose largest
+        // generator, on bus 5, becomes its reference.
+        let (kept, _) = net
+            .to_normalized_with(&settings.with_closed_switches(ClosedSwitchPolicy::Keep))
+            .unwrap();
+        let ids: Vec<usize> = kept.network.buses().iter().map(|b| b.id.0).collect();
         assert_eq!(ids, [1, 2, 3, 4, 5, 9]);
-        let references: Vec<BusId> = per_island
-            .network
-            .buses()
-            .iter()
-            .filter(|bus| bus.kind == BusType::Ref)
-            .map(|bus| bus.id)
-            .collect();
-        assert_eq!(references, [BusId(1), BusId(5)]);
+        assert_eq!(references(&kept.network), [BusId(1), BusId(5)]);
+        // Merged by default, both of island B's generators sit on bus 4.
+        let (per_island, _) = net.to_normalized_with(&settings).unwrap();
+        let ids: Vec<usize> = per_island.network.buses().iter().map(|b| b.id.0).collect();
+        assert_eq!(ids, [1, 2, 3, 4, 9]);
+        assert_eq!(references(&per_island.network), [BusId(1), BusId(4)]);
         assert_eq!(
             per_island.network.hvdc().len(),
             1,

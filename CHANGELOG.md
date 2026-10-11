@@ -2,102 +2,63 @@
 
 ## Unreleased
 
-- `BalancedNetwork::merge_buses` merges the buses that closed switches and
-  zero impedance branches join, under an explicit `BusMergeRule`: closed
-  switches, and branches that are exact zeros (`ZeroImpedanceRule::Exact`),
-  PSS/E zero impedance lines (`PsseThreshold`: non-transformer, `r == 0`,
-  `|x|` at most the threshold; `BusMergeRule::psse` reads the `THRSHZ` the case
-  states), or under an impedance magnitude (`ImpedanceMagnitude`). One union
-  find pass joins the buses. The survivor is the reference bus, else a
-  generator bus, else a regulated bus, smallest id first, and every element
-  reference follows it. The returned `BusMerge` lists the merged buses and
-  their groups, every removed branch and switch with its source row, identity,
-  and ratings, and the source to merged row maps. A removed in-service
-  branch's line charging and line shunts become a fixed shunt at the survivor
-  (`MergedCharging::FoldToShunt`, the default, which reproduces a solved PSS/E
-  case's reactive balance at each merged group), or go with the branch under
-  `MergedCharging::Drop`. Diagnostics under
-  `CANONICALIZE.MERGE.*` report merged buses of different base voltage,
-  branches the merge shorts, and jumpers kept because they would join two
-  windings of one three winding transformer. `BusMerge::calc_removed_flows`
-  recovers the active power on the removed elements from a merged solution:
-  exactly by Kirchhoff's current law where they form a tree, by reactance on a
-  loop, and by minimum norm with a diagnostic on a loop of zero reactance
-  elements. Python has `BalancedNetwork.merge_buses` and `BusMerge`, and
-  `powerio convert`, `summary`, and `verify` take `--merge-buses SPEC`.
+- PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
+  discrete and 2 is continuous adjustment of the regulated voltage. The RAW
+  and RAWX readers had the two swapped, so a continuously adjusted shunt, such
+  as 152 of the 153 switched shunts in ACTIVSg2000 (MODSW 2, half of them with
+  a BINIT between block steps), read as `discrete`, a MODSW 1 shunt read as
+  `continuous`, and PSS/E output of a discrete shunt from another format, such
+  as a regulating CGMES or XIIDM shunt compensator, stated MODSW 2. CGMES and
+  XIIDM output of a PSS/E case follow the corrected mode. Codes 3 to 6, which
+  adjust in discrete steps to control a plant, a VSC dc converter, another
+  switched shunt, or a FACTS device, still read as `discrete` and keep their
+  code in the `psse_modsw` extra for PSS/E output. A RAW or RAWX case written
+  back to PSS/E kept its codes before and still does. A PowerIO IR document an
+  earlier release wrote from a PSS/E case carries the swapped mode, so read
+  the case again. The IR 2 schema keeps its published descriptions, which
+  state the old mapping.
 
-- `BalancedNetwork::calc_islands` partitions the energized buses into AC
-  islands joined by in-service branches, closed switches, and in-service three
-  winding transformers, each with its buses, reference buses, in-service
-  generators, and HVDC ties to other islands.
-  `assign_island_references(IslandReferencePolicy::PerIsland)` gives every
-  island one reference bus: an island that states none takes its largest
-  `pmax` generator's bus, an island stating several keeps the one with the
-  most generation and demotes the others, and an island no in-service
-  generator supplies is de-energized. Each change is reported under
-  `CANONICALIZE.ISLAND`; an island that only an HVDC line feeds has its own
-  code, `CANONICALIZE.ISLAND.HVDC_FED_DE_ENERGIZED`, naming the lines and the
-  power they scheduled into it. `NormalizeOptions::island_references` applies the
-  same rule during normalization and leaves the unsupplied islands out; its
-  default, `Stated`, keeps today's behavior. A three winding transformer joins
-  the buses of its connected windings, so a dead tertiary (a winding on an
-  isolated bus, or one `extras["winding_in_service"]` states out) does not cut
-  an island, and `subset_buses` carves out one island whole, keeping such a
-  transformer with the dead winding's bus as an isolated stub. Python takes
-  `to_normalized(island_references="per_island")`, and `powerio summary` lists
-  the islands under `topology.islands`.
+### Changed results
 
-- Normalization no longer drops an in-service three winding transformer
-  whole because one winding sits on a bus it drops. That winding is taken out
-  of service (`Transformer3W::winding_in_service`) and the other two stay
-  coupled, as PSS/E does; the transformer goes only when fewer than two
-  windings remain, and each such case is reported as
-  `CANONICALIZE.NORMALIZE.WINDING_TAKEN_OUT`. Island partitions, subsets, and
-  de-energization read the same per winding status. On a 100,000 bus
-  planning case the normalized network keeps every in-service three winding
-  transformer and has the same nine islands as the case itself, where it
-  split into 24 before.
-
-- Normalization reports a PQ bus it retypes PV because it hosts an in-service
-  generator as `CANONICALIZE.NORMALIZE.GENERATOR_BUS_RETYPED`. The retyping
-  itself is unchanged. `NormalizeOptions` gained a field, so a struct literal
-  needs `..NormalizeOptions::default()`.
+- `reduce_zero_impedance` and `merge_zero_impedance_buses` now run through
+  `merge_buses`, so they are linear rather than quadratic in the bus count and
+  rewrite every element reference: `merge_zero_impedance_buses` used to leave
+  switches, HVDC lines, storage, three winding transformer windings, and
+  control buses on the merged bus. Each keeps the survivor it always kept, the
+  from bus and the smallest id respectively, and the survivor takes the
+  strongest bus kind of its group, as `reduce_zero_impedance` already did;
+  `merge_zero_impedance_buses` promoted only a reference bus, so a PV bus
+  merged into a PQ bus left a generator on a PQ bus. Both remove a branch
+  whose two buses the merge joined through other branches instead of leaving
+  a self loop, report it in `removed_branches`, and fold a removed in-service
+  branch's line charging and line shunts onto the survivor as a fixed shunt
+  instead of dropping them. `merge_zero_impedance_buses` no longer merges
+  across an off-nominal ideal transformer. The
+  `CANONICALIZE.MERGE.ZERO_IMPEDANCE` and
+  `CANONICALIZE.MERGE.ATTRIBUTE_CONFLICT` codes moved to the `powerio-tx`
+  registry; `powerio_prob::diagnostics::codes` keeps both constants.
 
 - Closed switches count as connections. `IndexedNetwork::calc_island_labels`,
   `calc_island_count`, `check_reference_coverage`, `is_radial`, and
   `calc_connectivity_report`, and `BalancedNetwork::retype_isolated_buses`,
   join the two buses of a closed switch, so a bus reached only through one is
-  no longer its own island or retyped isolated. The matrix builders, the DC
-  operators, the DC and AC OPF preparations, and the GridFM export model no
-  switches, and they used to leave a closed switch's buses apart without a
-  word; they now refuse it with `BUILD.SWITCH.CLOSED`, which counts the
-  closed switches and names the calls that merge them.
-  `IndexedNetwork::check_closed_switches` states the check. Open switches
-  change nothing. `NormalizeOptions::closed_switches` set to
-  `ClosedSwitchPolicy::Merge` (Python `to_normalized(closed_switches="merge")`)
-  merges them before normalizing and returns the merge in
-  `NormalizedNetwork::bus_merge`; the default, `Refuse`, keeps them.
-  `NormalizeOptions` and `NormalizedNetwork` gained fields, so a struct
-  literal needs `..NormalizeOptions::default()`.
+  no longer its own island or retyped isolated. Open switches change nothing.
+
+- `to_normalized` and `to_normalized_with_options` merge the buses closed
+  switches join before normalizing, with `BusMergeRule::closed_switches`, and
+  report the merge under `CANONICALIZE.MERGE`. The matrix builders, the DC
+  operators, the DC and AC OPF preparations, and the GridFM export stamp
+  branches only, so on a normalized network they used to leave a closed
+  switch's buses apart without a word, and a bus reached only through one
+  became its own island. A network with no closed switch normalizes exactly
+  as before, and a closed switch on an isolated bus is still dropped with that
+  bus. `ClosedSwitchPolicy::Keep` keeps the switches as data, as before.
 
 - The contingency resolver binds a branch statement that names no line or two
   winding transformer to a system switching device on the same buses and
   circuit id, so `OPEN BRANCH FROM BUS i TO BUS j CIRCUIT '@1'` resolves to
   component type `switch`. `PsseEquipmentIndex` gains `switch_ids` and
   `switch_rows`, using the RAW writer's switching device id allocation.
-
-- `reduce_zero_impedance` and `merge_zero_impedance_buses` now run through
-  `merge_buses`, so they are linear rather than quadratic in the bus count and
-  rewrite every element reference: `merge_zero_impedance_buses` used to leave
-  switches, HVDC lines, storage, three winding transformer windings, and
-  control buses on the merged bus. Both now keep a reference or generator bus
-  as the survivor rather than the smallest id or the from bus, remove a branch
-  whose two buses the merge joined through other branches instead of leaving a
-  self loop, and report that branch in `removed_branches`.
-  `merge_zero_impedance_buses` no longer merges across an off-nominal ideal
-  transformer. The `CANONICALIZE.MERGE.ZERO_IMPEDANCE` and
-  `CANONICALIZE.MERGE.ATTRIBUTE_CONFLICT` codes moved to the `powerio-tx`
-  registry; `powerio_prob::diagnostics::codes` re-exports them.
 
 - PSS/E three winding transformers keep each winding's status and all
   twelve winding ratings. The three winding `STAT` codes 2, 3, and 4 take only
@@ -120,21 +81,80 @@
   XIIDM, and CGMES output report the winding detail they cannot state. A STAT
   code outside 0 to 4 reads as 1, as before, and is now reported.
 
-- PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
-  discrete and 2 is continuous adjustment of the regulated voltage. The RAW
-  and RAWX readers had the two swapped, so a continuously adjusted shunt, such
-  as 152 of the 153 switched shunts in ACTIVSg2000 (MODSW 2, half of them with
-  a BINIT between block steps), read as `discrete`, a MODSW 1 shunt read as
-  `continuous`, and PSS/E output of a discrete shunt from another format, such
-  as a regulating CGMES or XIIDM shunt compensator, stated MODSW 2. CGMES and
-  XIIDM output of a PSS/E case follow the corrected mode. Codes 3 to 6, which
-  adjust in discrete steps to control a plant, a VSC dc converter, another
-  switched shunt, or a FACTS device, still read as `discrete` and keep their
-  code in the `psse_modsw` extra for PSS/E output. A RAW or RAWX case written
-  back to PSS/E kept its codes before and still does. A PowerIO IR document an
-  earlier release wrote from a PSS/E case carries the swapped mode, so read
-  the case again. The IR 2 schema keeps its published descriptions, which
-  state the old mapping.
+- Normalization no longer drops an in-service three winding transformer
+  whole because one winding sits on a bus it drops. That winding is taken out
+  of service (`Transformer3W::winding_in_service`) and the other two stay
+  coupled, as PSS/E does; the transformer goes only when fewer than two
+  windings remain, and each such case is reported as
+  `CANONICALIZE.NORMALIZE.WINDING_TAKEN_OUT`. Island partitions, subsets, and
+  de-energization read the same per winding status. On a 100,000 bus
+  planning case the normalized network keeps every in-service three winding
+  transformer and has the same nine islands as the case itself, where it
+  split into 24 before.
+
+### Added
+
+- `BalancedNetwork::merge_buses` merges the buses that closed switches and
+  zero impedance branches join, under an explicit `BusMergeRule`: closed
+  switches, and branches that are exact zeros (`ZeroImpedanceRule::Exact`),
+  PSS/E zero impedance lines (`PsseThreshold`: non-transformer, `r == 0`,
+  `|x|` at most the threshold; `BusMergeRule::psse` reads the `THRSHZ` the
+  case states), or under an impedance magnitude (`ImpedanceMagnitude`). One
+  union find pass joins the buses. The survivor is the reference bus, else a
+  generator bus, else a regulated bus, smallest id first
+  (`MergeSurvivor::Strongest`; `BusMergeRule::with_survivor` selects
+  `SmallestId` or `FromBus`), and every element reference follows it. The
+  returned `BusMerge` lists the merged buses and their groups, every removed
+  branch and switch with its source row, identity, and ratings, and the source
+  to merged row maps. A removed in-service branch's line charging and line
+  shunts become a fixed shunt at the survivor (`MergedCharging::FoldToShunt`,
+  the default, which reproduces a solved PSS/E case's reactive balance at each
+  merged group), or go with the branch under `MergedCharging::Drop`.
+  Diagnostics under `CANONICALIZE.MERGE.*` report merged buses of different
+  base voltage, branches the merge shorts, and jumpers kept because they would
+  join two windings of one three winding transformer.
+  `BusMerge::calc_removed_flows` recovers the active power on the removed
+  elements from a merged solution: exactly by Kirchhoff's current law where
+  they form a tree, by reactance on a loop, and by minimum norm with a
+  diagnostic on a loop of zero reactance elements. Python has
+  `BalancedNetwork.merge_buses` and `BusMerge`, and `powerio convert`,
+  `summary`, and `verify` take `--merge-buses SPEC`.
+
+- `BalancedNetwork::to_normalized_with` takes `NormalizeSettings`, the
+  `NormalizeOptions` repairs plus `with_closed_switches`: `ClosedSwitchPolicy`
+  `Merge` (the default), `Refuse`, which fails with `BUILD.SWITCH.CLOSED`, or
+  `Keep`. It returns a `NormalizeReport` beside the normalized network, whose
+  `bus_merge` holds the closed switch merge's bus map, removed switches, and
+  row maps. Python takes
+  `to_normalized(closed_switches="merge"|"refuse"|"keep")`.
+  `IndexedNetwork::closed_switches` lists the closed switches that join two
+  buses, and `check_closed_switches` refuses them with `BUILD.SWITCH.CLOSED`,
+  for a caller that builds matrices from a network it did not normalize.
+
+- `BalancedNetwork::calc_islands` partitions the energized buses into AC
+  islands joined by in-service branches, closed switches, and in-service three
+  winding transformers, each with its buses, reference buses, in-service
+  generators, and HVDC ties to other islands.
+  `assign_island_references(IslandReferencePolicy::PerIsland)` gives every
+  island one reference bus: an island that states none takes its largest
+  `pmax` generator's bus, an island stating several keeps the one with the
+  most generation and demotes the others, and an island no in-service
+  generator supplies is de-energized. Each change is reported under
+  `CANONICALIZE.ISLAND`; an island that only an HVDC line feeds has its own
+  code, `CANONICALIZE.ISLAND.HVDC_FED_DE_ENERGIZED`, naming the lines and the
+  power they scheduled into it. `NormalizeSettings::with_island_references`
+  applies the same rule during `to_normalized_with` and leaves the unsupplied
+  islands out; its default, `Stated`, keeps today's behavior. A three winding
+  transformer joins the buses of its connected windings, so a dead tertiary (a
+  winding on an isolated bus, or one `extras["winding_in_service"]` states
+  out) does not cut an island, and `subset_buses` carves out one island whole,
+  keeping such a transformer with the dead winding's bus as an isolated stub.
+  Python takes `to_normalized(island_references="per_island")`, and
+  `powerio summary` lists the islands under `topology.islands`.
+
+- Normalization reports a PQ bus it retypes PV because it hosts an in-service
+  generator as `CANONICALIZE.NORMALIZE.GENERATOR_BUS_RETYPED`. The retyping
+  itself is unchanged.
 
 ## 0.11.4
 

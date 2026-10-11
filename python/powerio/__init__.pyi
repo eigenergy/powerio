@@ -1049,7 +1049,7 @@ class BalancedNetwork:
         *,
         clamp_angle_bounds: bool = ...,
         angle_bound_pad: Optional[float] = ...,
-        closed_switches: Literal["refuse", "merge"] = ...,
+        closed_switches: Literal["merge", "refuse", "keep"] = ...,
         island_references: Literal["stated", "per_island"] = ...,
     ) -> "BalancedNetwork": ...
     def to_ppc(self) -> Dict[str, Any]: ...

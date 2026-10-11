@@ -112,6 +112,24 @@ pub enum MergedCharging {
     Drop,
 }
 
+/// Which bus of a merged group survives and carries the group.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MergeSurvivor {
+    /// The group's reference bus, else a bus hosting an in-service
+    /// generator, else a bus an in-service generator regulates, with the
+    /// smallest id breaking each tie.
+    #[default]
+    Strongest,
+    /// The group's smallest bus id, the survivor
+    /// `powerio_prob::merge_zero_impedance_buses` keeps.
+    SmallestId,
+    /// The from bus: taking the merged elements in table order, closed
+    /// switches first, the to bus's group joins the from bus's group. This is
+    /// the survivor [`BalancedNetwork::reduce_zero_impedance`] keeps.
+    FromBus,
+}
+
 /// What [`BalancedNetwork::merge_buses`] merges.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -123,6 +141,8 @@ pub struct BusMergeRule {
     pub zero_impedance: Option<ZeroImpedanceRule>,
     /// What happens to the charging of a removed branch.
     pub charging: MergedCharging,
+    /// Which bus of each merged group survives.
+    pub survivor: MergeSurvivor,
 }
 
 impl BusMergeRule {
@@ -134,6 +154,7 @@ impl BusMergeRule {
             closed_switches,
             zero_impedance,
             charging: MergedCharging::FoldToShunt,
+            survivor: MergeSurvivor::Strongest,
         }
     }
 
@@ -141,6 +162,13 @@ impl BusMergeRule {
     #[must_use]
     pub const fn with_charging(mut self, charging: MergedCharging) -> Self {
         self.charging = charging;
+        self
+    }
+
+    /// The same rule with `survivor` choosing each group's surviving bus.
+    #[must_use]
+    pub const fn with_survivor(mut self, survivor: MergeSurvivor) -> Self {
+        self.survivor = survivor;
         self
     }
 
@@ -419,6 +447,9 @@ struct MergeSets {
     parent: Vec<usize>,
     /// Per root, the three winding transformers with a winding in the set.
     windings: HashMap<usize, Vec<usize>>,
+    /// Keep the first argument's root on a join, so the roots are the
+    /// [`MergeSurvivor::FromBus`] survivors; otherwise the smaller index.
+    keep_first: bool,
 }
 
 enum Join {
@@ -429,10 +460,11 @@ enum Join {
 }
 
 impl MergeSets {
-    fn new(n: usize, windings: HashMap<usize, Vec<usize>>) -> Self {
+    fn new(n: usize, windings: HashMap<usize, Vec<usize>>, keep_first: bool) -> Self {
         Self {
             parent: (0..n).collect(),
             windings,
+            keep_first,
         }
     }
 
@@ -460,7 +492,11 @@ impl MergeSets {
         {
             return Join::Refused(shared);
         }
-        let (keep, gone) = if ra < rb { (ra, rb) } else { (rb, ra) };
+        let (keep, gone) = if self.keep_first || ra < rb {
+            (ra, rb)
+        } else {
+            (rb, ra)
+        };
         self.parent[gone] = keep;
         if let Some(moved) = self.windings.remove(&gone) {
             self.windings.entry(keep).or_default().extend(moved);
@@ -627,9 +663,10 @@ impl BalancedNetwork {
     ///
     /// Each set becomes one bus. The survivor is the set's reference bus,
     /// else a bus hosting an in-service generator, else a bus an in-service
-    /// generator regulates, with the smallest id breaking each tie. It takes
-    /// the strongest bus kind of the set (reference, then PV, then PQ) and
-    /// keeps its own other attributes. Every element reference to a merged
+    /// generator regulates, with the smallest id breaking each tie
+    /// ([`MergeSurvivor::Strongest`]; [`BusMergeRule::with_survivor`] selects
+    /// another rule). It takes the strongest bus kind of the set (reference,
+    /// then PV, then PQ) and keeps its own other attributes. Every element reference to a merged
     /// bus moves to the survivor: loads, shunts, static var compensators,
     /// generators and their regulated buses, storage, branch, switch, and
     /// HVDC endpoints, three winding transformer windings, control buses,
@@ -681,7 +718,11 @@ impl BalancedNetwork {
                 }
             }
         }
-        let mut sets = MergeSets::new(buses.len(), windings);
+        let mut sets = MergeSets::new(
+            buses.len(),
+            windings,
+            rule.survivor == MergeSurvivor::FromBus,
+        );
         let mut diagnostics = Vec::new();
         let mut refused = |what: String, from: BusId, to: BusId, t: usize| {
             let transformer = &self.transformers_3w()[t];
@@ -764,11 +805,16 @@ impl BalancedNetwork {
         let mut groups = Vec::with_capacity(members_of.len());
         let mut survivor_kind: HashMap<BusId, BusType> = HashMap::new();
         for (&root, members) in &members_of {
-            let survivor_index = members
-                .iter()
-                .copied()
-                .max_by_key(|&index| rank(index))
-                .unwrap_or(root);
+            let survivor_index = match rule.survivor {
+                MergeSurvivor::Strongest => {
+                    members.iter().copied().max_by_key(|&index| rank(index))
+                }
+                MergeSurvivor::SmallestId => {
+                    members.iter().copied().min_by_key(|&index| buses[index].id)
+                }
+                MergeSurvivor::FromBus => None,
+            }
+            .unwrap_or(root);
             let survivor = buses[survivor_index].id;
             let kind = members
                 .iter()
@@ -1339,7 +1385,7 @@ fn split_group(members: usize, edges: &[GroupEdge], injection: &[f64]) -> SplitG
     let mut too_large = 0;
 
     // Collapse the zero reactance elements.
-    let mut sets = MergeSets::new(members, HashMap::new());
+    let mut sets = MergeSets::new(members, HashMap::new(), false);
     for edge in edges.iter().filter(|edge| edge.x == 0.0) {
         let _ = sets.join(edge.from, edge.to);
     }
@@ -1470,7 +1516,7 @@ fn split_network(
     }
 
     // What is left is a set of meshed cores, each split on its own.
-    let mut sets = MergeSets::new(nodes, HashMap::new());
+    let mut sets = MergeSets::new(nodes, HashMap::new(), false);
     for (index, &(from, to, _)) in links.iter().enumerate() {
         if alive[index] {
             let _ = sets.join(from, to);
@@ -1830,6 +1876,35 @@ mod tests {
         let network = net(&[3, 1, 2], vec![jumper(3, 1), jumper(1, 2)]);
         let merge = network.merge_buses(&PSSE).unwrap();
         assert_eq!(merge.groups[0].survivor, BusId(1), "lowest id");
+    }
+
+    #[test]
+    fn the_survivor_rule_can_keep_the_smallest_id_or_the_from_bus() {
+        // Jumpers 3-1 and 4-3 in that order; bus 4 is the reference and bus 3
+        // hosts a generator.
+        let mut network = net(&[1, 3, 4], vec![jumper(3, 1), jumper(4, 3)]);
+        network.buses_mut()[2].kind = BusType::Ref;
+        network.generators_mut().push(Generator::new(BusId(3)));
+        let survivor = |rule: MergeSurvivor| {
+            let merge = network.merge_buses(&PSSE.with_survivor(rule)).unwrap();
+            let bus = &merge.network.buses()[0];
+            assert_eq!(merge.network.buses().len(), 1);
+            assert_eq!(bus.kind, BusType::Ref, "the strongest kind survives");
+            assert_eq!(merge.network.generators()[0].bus, bus.id);
+            merge.groups[0].survivor
+        };
+        assert_eq!(survivor(MergeSurvivor::Strongest), BusId(4));
+        assert_eq!(survivor(MergeSurvivor::SmallestId), BusId(1));
+        // 1 joins 3, then 3's group joins 4.
+        assert_eq!(survivor(MergeSurvivor::FromBus), BusId(4));
+
+        let network = net(&[1, 2, 3], vec![jumper(2, 1), jumper(2, 3)]);
+        let merge = network
+            .merge_buses(&PSSE.with_survivor(MergeSurvivor::FromBus))
+            .unwrap();
+        assert_eq!(merge.groups[0].survivor, BusId(2));
+        assert_eq!(merge.survivor(BusId(1)), BusId(2));
+        assert_eq!(merge.survivor(BusId(3)), BusId(2));
     }
 
     #[test]
