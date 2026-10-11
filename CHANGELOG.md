@@ -2,22 +2,6 @@
 
 ## Unreleased
 
-- PSS/E shunt FACTS devices read as static var compensators. A FACTS device
-  record with `J = 0` has only a shunt element, which PSS/E operates as a
-  voltage regulating STATCOM, and the RAW and RAWX readers skipped the whole
-  section. Each one now becomes a `StaticVarCompensator` at bus `I`: `SHMX`,
-  the shunt limit in MVA at unity voltage, bounds the susceptance at
-  `±SHMX / kV²` siemens on the bus base, `VSET` gives the voltage setpoint in
-  kV, `MODE 0` is out of service, and the device regulates its own bus or the
-  bus `FCREG` (`REMOT` before revision 35) names. A remote `FCREG` without a
-  node has no typed home and is reported, as are series devices (`J`
-  nonzero), which stay unmodeled. PSS/E and RAWX output write each static var
-  compensator back as a shunt FACTS record, restating the retained fields, so
-  a case written back states its own records; a compensator from another
-  format reports what the record cannot state, such as unequal limits,
-  terminal power, or a control other than voltage. RAWX reads and writes the
-  `facts` table.
-
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW
   and RAWX readers had the two swapped, so a continuously adjusted shunt, such
@@ -33,6 +17,27 @@
   earlier release wrote from a PSS/E case carries the swapped mode, so read
   the case again. The IR 2 schema keeps its published descriptions, which
   state the old mapping.
+
+### Changed results
+
+- PSS/E shunt FACTS devices read as static var compensators. A FACTS device
+  record with `J = 0` has only a shunt element, which PSS/E operates as a
+  voltage regulating STATCOM, and the RAW and RAWX readers skipped the whole
+  section. Each one now becomes a `StaticVarCompensator` at bus `I`: `SHMX`,
+  the shunt limit in MVA at unity voltage, bounds the susceptance at
+  `±SHMX / kV²` siemens on the bus base, `VSET`, in per unit of the bus base,
+  gives the voltage setpoint, `MODE 0` is out of service, and the device
+  regulates its own bus or the bus `FCREG` (`REMOT` before revision 35) names.
+  `SHMX` limits the shunt current, so the PSS/E reactive limit moves with the
+  voltage `V` while a susceptance bound moves with `V²`: the bound equals it
+  at 1 p.u. and is 5% tighter at 0.95 p.u. and 5% looser at 1.05 p.u. A
+  remote `FCREG` without a node has no typed home and is reported, as are
+  series devices (`J` nonzero), which stay unmodeled. PSS/E and RAWX output
+  write each static var compensator back as a shunt FACTS record, restating
+  the retained fields, so a case written back states its own records; a
+  compensator from another format reports what the record cannot state, such
+  as unequal limits, terminal power, or a control other than voltage. RAWX
+  reads and writes the `facts` table.
 
 ## 0.11.4
 
