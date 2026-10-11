@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use powerio_prob::{AcBusSpecification, AcOpfInstance, AcPfInstance, ReferenceBuses};
-use powerio_tx::{BalancedNetwork, BusId, IndexedNetwork};
+use powerio_tx::{AngleDifferenceBounds, BalancedNetwork, BusId, IndexedNetwork};
 
 use crate::dcopf::{Units, limits, nodal};
 use crate::{AnalysisBranchSource, Error, PiecewiseLinearCost, PreparedObjective, Result};
@@ -32,6 +32,11 @@ pub struct AcOpfAssemblyOptions {
     /// Apply PowerModels' ±60 degree correction to unconstrained or unusable
     /// branch angle difference intervals in the prepared arrays.
     pub correct_angle_difference_bounds: bool,
+    /// The angle difference bounds selected with
+    /// `with_angle_difference_bounds`. `None`, the default, leaves the choice
+    /// to `correct_angle_difference_bounds`
+    /// ([`AngleDifferenceBounds::from_correct_flag`]).
+    pub angle_difference_bounds: Option<AngleDifferenceBounds>,
 }
 
 impl Default for AcOpfAssemblyOptions {
@@ -41,6 +46,7 @@ impl Default for AcOpfAssemblyOptions {
             skip_zero_impedance: false,
             synthesize_unrated_limits: false,
             correct_angle_difference_bounds: true,
+            angle_difference_bounds: None,
         }
     }
 }
@@ -64,10 +70,32 @@ impl AcOpfAssemblyOptions {
         self
     }
 
+    /// Turn PowerModels' angle difference pad on or off. This clears a
+    /// selection made with `with_angle_difference_bounds`.
     #[must_use]
     pub const fn with_correct_angle_difference_bounds(mut self, correct: bool) -> Self {
         self.correct_angle_difference_bounds = correct;
+        self.angle_difference_bounds = None;
         self
+    }
+
+    /// Select the angle difference bounds the prepared arrays carry. The
+    /// selection takes precedence over `correct_angle_difference_bounds`,
+    /// which it sets to whether the selection pads.
+    #[must_use]
+    pub const fn with_angle_difference_bounds(mut self, bounds: AngleDifferenceBounds) -> Self {
+        self.correct_angle_difference_bounds = bounds.is_padded();
+        self.angle_difference_bounds = Some(bounds);
+        self
+    }
+
+    /// The angle difference bounds these options select.
+    #[must_use]
+    pub const fn selected_angle_difference_bounds(&self) -> AngleDifferenceBounds {
+        match self.angle_difference_bounds {
+            Some(bounds) => bounds,
+            None => AngleDifferenceBounds::from_correct_flag(self.correct_angle_difference_bounds),
+        }
     }
 }
 
@@ -82,6 +110,11 @@ pub struct AcPfAssemblyOptions {
     /// Apply PowerModels' ±60 degree correction to unconstrained or unusable
     /// branch angle difference intervals in the prepared arrays.
     pub correct_angle_difference_bounds: bool,
+    /// The angle difference bounds selected with
+    /// `with_angle_difference_bounds`. `None`, the default, leaves the choice
+    /// to `correct_angle_difference_bounds`
+    /// ([`AngleDifferenceBounds::from_correct_flag`]).
+    pub angle_difference_bounds: Option<AngleDifferenceBounds>,
 }
 
 impl Default for AcPfAssemblyOptions {
@@ -90,6 +123,7 @@ impl Default for AcPfAssemblyOptions {
             units: Units::default(),
             skip_zero_impedance: false,
             correct_angle_difference_bounds: true,
+            angle_difference_bounds: None,
         }
     }
 }
@@ -107,10 +141,32 @@ impl AcPfAssemblyOptions {
         self
     }
 
+    /// Turn PowerModels' angle difference pad on or off. This clears a
+    /// selection made with `with_angle_difference_bounds`.
     #[must_use]
     pub const fn with_correct_angle_difference_bounds(mut self, correct: bool) -> Self {
         self.correct_angle_difference_bounds = correct;
+        self.angle_difference_bounds = None;
         self
+    }
+
+    /// Select the angle difference bounds the prepared arrays carry. The
+    /// selection takes precedence over `correct_angle_difference_bounds`,
+    /// which it sets to whether the selection pads.
+    #[must_use]
+    pub const fn with_angle_difference_bounds(mut self, bounds: AngleDifferenceBounds) -> Self {
+        self.correct_angle_difference_bounds = bounds.is_padded();
+        self.angle_difference_bounds = Some(bounds);
+        self
+    }
+
+    /// The angle difference bounds these options select.
+    #[must_use]
+    pub const fn selected_angle_difference_bounds(&self) -> AngleDifferenceBounds {
+        match self.angle_difference_bounds {
+            Some(bounds) => bounds,
+            None => AngleDifferenceBounds::from_correct_flag(self.correct_angle_difference_bounds),
+        }
     }
 }
 
@@ -177,6 +233,11 @@ pub struct AcPfPreparation {
     pub skip_zero_impedance: bool,
     /// Whether PowerModels' angle difference correction was applied.
     pub correct_angle_difference_bounds: bool,
+    /// Which angle difference bounds `angle_min` and `angle_max` carry.
+    /// `None` only in a document written before the field existed, whose
+    /// `correct_angle_difference_bounds` says whether the pad was applied.
+    #[serde(default)]
+    pub angle_difference_bounds: Option<AngleDifferenceBounds>,
     /// Dense bus index to external bus ID.
     pub bus_ids: Vec<BusId>,
     /// Dense bus index to row in the star-lowered analysis network.
@@ -392,6 +453,11 @@ pub struct AcOpfPreparation {
     pub synthesize_unrated_limits: bool,
     /// Whether PowerModels' angle difference correction was applied.
     pub correct_angle_difference_bounds: bool,
+    /// Which angle difference bounds `angle_min` and `angle_max` carry.
+    /// `None` only in a document written before the field existed, whose
+    /// `correct_angle_difference_bounds` says whether the pad was applied.
+    #[serde(default)]
+    pub angle_difference_bounds: Option<AngleDifferenceBounds>,
     /// Dense bus index to external bus ID.
     pub bus_ids: Vec<BusId>,
     /// Dense bus index to row in the star-lowered analysis network.
@@ -553,6 +619,7 @@ pub fn build_ac_pf_preparation(
             skip_zero_impedance: options.skip_zero_impedance,
             synthesize_unrated_limits: false,
             correct_angle_difference_bounds: options.correct_angle_difference_bounds,
+            angle_difference_bounds: options.angle_difference_bounds,
         },
         PreparedObjective::Feasibility,
     )?;
@@ -601,6 +668,7 @@ pub fn build_ac_pf_preparation(
         units: common.units,
         skip_zero_impedance: common.skip_zero_impedance,
         correct_angle_difference_bounds: common.correct_angle_difference_bounds,
+        angle_difference_bounds: common.angle_difference_bounds,
         bus_ids: common.bus_ids,
         bus_analysis_rows: common.bus_analysis_rows,
         bus_source_rows: common.bus_source_rows,
@@ -666,6 +734,7 @@ fn preparation_from_view(
     let n_buses = active_buses.analysis_rows.len();
     let base = case.per_unit_base();
     let (p_scale, y_scale) = options.units.power_scales(base);
+    let angle_bounds = options.selected_angle_difference_bounds();
     let thermal = limits::ThermalLimits {
         synthesize_unrated: options.synthesize_unrated_limits,
         power_scale: p_scale,
@@ -880,13 +949,10 @@ fn preparation_from_view(
         b_to.push(charging.b_to * y_scale);
         let source_amin = case.to_radians(branch.angmin);
         let source_amax = case.to_radians(branch.angmax);
-        let (amin, amax) = if options.correct_angle_difference_bounds {
-            powerio_tx::correct_angle_difference_bounds(source_amin, source_amax)
-        } else {
-            (source_amin, source_amax)
-        };
+        let branch_shift = case.to_radians(branch.shift);
+        let (amin, amax) = angle_bounds.calc_bounds(source_amin, source_amax, branch_shift);
         tap.push(branch.calc_divisible_tap(source_row)?);
-        shift.push(case.to_radians(branch.shift));
+        shift.push(branch_shift);
         s_max.push(thermal.of(
             branch,
             source_amin,
@@ -934,7 +1000,8 @@ fn preparation_from_view(
         objective,
         skip_zero_impedance: options.skip_zero_impedance,
         synthesize_unrated_limits: options.synthesize_unrated_limits,
-        correct_angle_difference_bounds: options.correct_angle_difference_bounds,
+        correct_angle_difference_bounds: angle_bounds.is_padded(),
+        angle_difference_bounds: Some(angle_bounds),
         bus_ids: active_buses.bus_ids,
         bus_analysis_rows,
         bus_source_rows,

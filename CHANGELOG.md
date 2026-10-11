@@ -85,6 +85,41 @@
   the case again. The IR 2 schema keeps its published descriptions, which
   state the old mapping.
 
+### Changed results
+
+- With PowerModels' angle difference pad turned off
+  (`with_correct_angle_difference_bounds(false)` on the assembly options, or
+  `false` for the C ABI argument of that name), the DC and AC OPF and AC power
+  flow preparations read the MATPOWER `0`/`0` angle difference spelling as
+  unconstrained, ±360 degrees, instead of a zero width window that held
+  `theta_from` equal to `theta_to`, and write a side beyond ±360 degrees as
+  ±360 degrees. Every other stated bound passes through as before, and the
+  default, which pads, is unchanged.
+
+### Added
+
+- `AngleDifferenceBounds` selects the angle difference bounds the DC and AC
+  OPF and AC power flow preparations carry: `PowerModelsPad`, PowerModels'
+  ±60 degree pad and still the default; `ShiftCenteredPad`, the same pad
+  centered on each branch's phase shift; `Stated`, the bounds the source
+  states with an unconstrained side read as ±360 degrees
+  (`stated_angle_difference_bounds`); and `None`, ±360 degrees on every
+  branch. The bounds are on `theta_from - theta_to`, the MATPOWER and
+  PowerModels convention, so a branch or lowered three winding transformer
+  winding that shifts phase by more than 60 degrees cannot meet the default
+  window and a DC OPF on such a case is infeasible; `ShiftCenteredPad` and
+  `Stated` keep its operating point inside. `with_angle_difference_bounds` on
+  `DcOpfAssemblyOptions`, `AcOpfAssemblyOptions`, and `AcPfAssemblyOptions`
+  takes precedence over their `correct_angle_difference_bounds` flag, which
+  keeps its meaning, as does the C ABI argument. The preparations report the
+  choice in `angle_difference_bounds`, `powerio dcopf
+  --angle-difference-bounds powermodels-pad|shift-centered-pad|stated|none`
+  selects it, and the DC OPF bundle manifest records it in `build_options`.
+  On the 58 PGLib OPF cases checked, `Stated` and the default give every
+  branch the same bounds; the MATPOWER cases in `tests/data` (case9 to
+  case2869pegase) state ±360 degrees, and their DC OPF objectives under
+  `Stated` agree with the padded ones to 5e-15.
+
 ## 0.11.4
 
 - Out-of-service loads and shunts no longer count. `IndexedNetwork` folded
