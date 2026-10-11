@@ -95,6 +95,18 @@ pub enum Error {
     )]
     UngroundedComponent { components: usize },
 
+    /// A [`BusMergeRule`](crate::BusMergeRule) that cannot be applied.
+    #[error("invalid bus merge rule: {message}")]
+    BusMergeRule { message: String },
+
+    /// A merged network solution whose shape does not match the merge.
+    #[error("merged flow input `{what}` has {got} entries; the merge needs {expected}")]
+    MergedFlowShape {
+        what: &'static str,
+        expected: usize,
+        got: usize,
+    },
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
@@ -165,6 +177,8 @@ impl Error {
             Error::InvalidBaseMva { .. } => &codes::CANONICALIZE_NORMALIZE_INVALID_BASE_MVA,
             Error::InvalidNormalizeOption { .. } => &codes::CANONICALIZE_NORMALIZE_INVALID_OPTION,
             Error::UngroundedComponent { .. } => &codes::BUILD_INDEX_UNGROUNDED_COMPONENT,
+            Error::BusMergeRule { .. } => &codes::CANONICALIZE_MERGE_INVALID_RULE,
+            Error::MergedFlowShape { .. } => &codes::CANONICALIZE_MERGE_FLOW_SHAPE_MISMATCH,
             Error::UnlocatedElements { .. } => &codes::BUILD_GEO_UNLOCATED_ELEMENTS,
             Error::UnknownFormat(_) => &codes::REQUEST_FORMAT_UNKNOWN,
             Error::WriteUnsupported { .. } => &codes::REQUEST_FORMAT_WRITE_UNSUPPORTED,
@@ -209,6 +223,8 @@ impl Error {
             | Error::InvalidBaseMva { .. }
             | Error::InvalidNormalizeOption { .. }
             | Error::UngroundedComponent { .. }
+            | Error::BusMergeRule { .. }
+            | Error::MergedFlowShape { .. }
             | Error::UnlocatedElements { .. } => C::Data,
         }
     }
@@ -283,6 +299,14 @@ mod tests {
                 value: 0.0,
             },
             Error::UngroundedComponent { components: 1 },
+            Error::BusMergeRule {
+                message: "threshold".into(),
+            },
+            Error::MergedFlowShape {
+                what: "branch_p_from",
+                expected: 2,
+                got: 1,
+            },
             Error::UnlocatedElements {
                 buses: 1,
                 branches: 0,

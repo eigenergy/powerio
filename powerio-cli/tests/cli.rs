@@ -1228,3 +1228,102 @@ fn a_typed_library_failure_exits_with_its_category_and_code() {
 
     std::fs::remove_file(case).unwrap();
 }
+
+#[test]
+fn merge_buses_applies_the_psse_rule_before_summary_convert_and_verify() {
+    let case = repo_file("tests/data/psse/merge_v35.raw");
+    let case = case.to_str().unwrap();
+
+    let out = run(&["summary", case, "--merge-buses", "psse"]);
+    assert_success(&out);
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["elements"]["buses"], 2);
+    let merge = &value["bus_merge"];
+    assert_eq!(merge["merged_buses"], 3);
+    assert_eq!(merge["removed_branches"]["zero_impedance"], 2);
+    assert_eq!(merge["removed_switches"], 1);
+    let warnings = value["warnings"].as_array().unwrap();
+    assert!(warnings.iter().any(|w| {
+        w.as_str()
+            .unwrap()
+            .starts_with("CANONICALIZE.MERGE.CLOSED_SWITCH")
+    }));
+
+    // Without the flag the summary is unchanged.
+    let out = run(&["summary", case]);
+    assert_success(&out);
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["elements"]["buses"], 5);
+    assert!(value.get("bus_merge").is_none());
+
+    let out = run(&[
+        "convert",
+        case,
+        "--merge-buses",
+        "psse=1e-4",
+        "--to",
+        "matpower",
+        "-o",
+        "-",
+    ]);
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let bus_rows = stdout
+        .split("mpc.bus = [")
+        .nth(1)
+        .unwrap()
+        .split("];")
+        .next()
+        .unwrap()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count();
+    assert_eq!(bus_rows, 2, "{stdout}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("CANONICALIZE.MERGE.ZERO_IMPEDANCE"),
+        "{stderr}"
+    );
+
+    let out = run(&["verify", case, "--merge-buses", "exact"]);
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("n=4"),
+        "exact merges only the switch: {stdout}"
+    );
+}
+
+#[test]
+fn merge_buses_refuses_an_unknown_rule_and_a_missing_threshold() {
+    let case = repo_file("tests/data/psse/merge_v35.raw");
+    let out = run(&[
+        "--diagnostics-format",
+        "json",
+        "summary",
+        case.to_str().unwrap(),
+        "--merge-buses",
+        "nearby",
+    ]);
+    assert_eq!(out.status.code(), Some(2), "a request failure");
+    assert_eq!(
+        json_diagnostics(&out)[0]["code"],
+        "REQUEST.CLI.OPTION_INVALID"
+    );
+
+    // MATPOWER states no THRSHZ, so `psse` needs an explicit threshold.
+    let case = repo_file("tests/data/case9.m");
+    let out = run(&[
+        "--diagnostics-format",
+        "json",
+        "summary",
+        case.to_str().unwrap(),
+        "--merge-buses",
+        "psse",
+    ]);
+    assert_eq!(out.status.code(), Some(5), "a data failure");
+    assert_eq!(
+        json_diagnostics(&out)[0]["code"],
+        "CANONICALIZE.MERGE.INVALID_RULE"
+    );
+}

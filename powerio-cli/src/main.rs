@@ -115,6 +115,13 @@ enum Command {
         kind: MatrixKindArg,
         #[arg(long, value_enum, default_value = "bx")]
         scheme: SchemeArg,
+        /// Merge buses first. SPEC is `switches` (closed switches), `exact`
+        /// (and branches with r = 0 and x = 0), `psse` (and PSS/E zero
+        /// impedance lines: non-transformer, r = 0, |x| at most the case's
+        /// THRSHZ), `psse=<x>` (the same at threshold x), or `impedance=<z>`
+        /// (and non-transformer branches with |r + jx| at most z).
+        #[arg(long, value_name = "SPEC")]
+        merge_buses: Option<String>,
     },
     /// Emit the static DC OPF matrix/vector bundle for one case.
     #[command(name = "dcopf", visible_alias = "dc-opf")]
@@ -176,6 +183,13 @@ enum Command {
         /// With `--from gridfm`, which scenario to summarize.
         #[arg(long, default_value_t = 0)]
         scenario: i64,
+        /// Merge buses first. SPEC is `switches` (closed switches), `exact`
+        /// (and branches with r = 0 and x = 0), `psse` (and PSS/E zero
+        /// impedance lines: non-transformer, r = 0, |x| at most the case's
+        /// THRSHZ), `psse=<x>` (the same at threshold x), or `impedance=<z>`
+        /// (and non-transformer branches with |r + jx| at most z).
+        #[arg(long, value_name = "SPEC")]
+        merge_buses: Option<String>,
     },
     /// Serialize one input as PowerIO IR (`.pio.json`).
     Serialize {
@@ -265,6 +279,13 @@ enum Command {
         /// CSV with columns gen_index,bus,c2,c1,c0 and optional startup,shutdown.
         #[arg(long)]
         gen_cost_csv: Option<PathBuf>,
+        /// Merge buses first. SPEC is `switches` (closed switches), `exact`
+        /// (and branches with r = 0 and x = 0), `psse` (and PSS/E zero
+        /// impedance lines: non-transformer, r = 0, |x| at most the case's
+        /// THRSHZ), `psse=<x>` (the same at threshold x), or `impedance=<z>`
+        /// (and non-transformer branches with |r + jx| at most z).
+        #[arg(long, value_name = "SPEC")]
+        merge_buses: Option<String>,
     },
     /// Extract, apply, or normalize standalone geographic layers (.geo.json).
     Geo {
@@ -849,7 +870,14 @@ fn main() -> std::process::ExitCode {
             from,
             kind,
             scheme,
-        } => run_verify(&input, from, kind.into(), scheme.into()),
+            merge_buses,
+        } => run_verify(
+            &input,
+            from,
+            kind.into(),
+            scheme.into(),
+            merge_buses.as_deref(),
+        ),
         Command::DcOpf {
             input,
             from,
@@ -881,7 +909,8 @@ fn main() -> std::process::ExitCode {
             input,
             from,
             scenario,
-        } => run_summary(&input, from, scenario),
+            merge_buses,
+        } => run_summary(&input, from, scenario, merge_buses.as_deref()),
         Command::Corpus { action } => run_corpus(action),
         Command::Serialize {
             input,
@@ -914,6 +943,7 @@ fn main() -> std::process::ExitCode {
             missing_gen_cost,
             default_gen_cost,
             gen_cost_csv,
+            merge_buses,
         } => run_convert(
             &input,
             to,
@@ -925,6 +955,7 @@ fn main() -> std::process::ExitCode {
                 default_gen_cost.as_deref(),
                 gen_cost_csv.as_deref(),
             ),
+            merge_buses.as_deref(),
         ),
         Command::Geo { command } => run_geo(command),
         Command::Contingency { command } => run_contingency(command),
@@ -1607,8 +1638,14 @@ fn run_verify(
     from: Option<FormatArg>,
     kind: MatrixKind,
     scheme: Scheme,
+    merge_buses: Option<&str>,
 ) -> anyhow::Result<()> {
-    let mpc = balanced_case(input, from)?;
+    let mut mpc = balanced_case(input, from)?;
+    if let Some(spec) = merge_buses {
+        let merge = mpc.merge_buses(&bus_merge_rule(spec, &mpc)?)?;
+        report_diagnostics(&merge.diagnostics);
+        mpc = merge.network;
+    }
     let opts = BuildOptions {
         scheme,
         ..Default::default()
@@ -1720,30 +1757,186 @@ fn parse_gridfm_scenario(
     Ok((network.clone(), module.diagnostics().to_vec()))
 }
 
-fn run_summary(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow::Result<()> {
+fn run_summary(
+    input: &Path,
+    from: Option<FormatArg>,
+    scenario: i64,
+    merge_buses: Option<&str>,
+) -> anyhow::Result<()> {
     if is_stdin(input) {
         // Refuses a gridfm dataset, which is a directory, before the gridfm
         // branch opens a path named `-`.
         stdin_format(from)?;
     }
+    let transmission = |module: powerio_core::PioModule<powerio::BalancedNetwork>| {
+        let Some(spec) = merge_buses else {
+            let diagnostics = powerio_core::render_diagnostics(module.diagnostics());
+            return Ok(transmission_summary_json(module.value(), &diagnostics));
+        };
+        let (module, merge) = merge_balanced_module(module, spec)?;
+        let diagnostics = powerio_core::render_diagnostics(module.diagnostics());
+        let mut value = transmission_summary_json(module.value(), &diagnostics);
+        value["bus_merge"] = bus_merge_json(&merge);
+        anyhow::Ok(value)
+    };
     let value =
         if from == Some(FormatArg::Gridfm) || (from.is_none() && looks_like_gridfm_dir(input)) {
             let (network, diagnostics) = parse_gridfm_scenario(input, scenario)?;
-            transmission_summary_json(&network, &powerio_core::render_diagnostics(&diagnostics))
+            let mut module = powerio_core::PioModule::new(network);
+            for diagnostic in diagnostics {
+                module.add_diagnostic(diagnostic)?;
+            }
+            transmission(module)?
         } else {
             match parse_family_case(input, from)? {
                 FamilyCase::Distribution(module) => {
+                    if merge_buses.is_some() {
+                        fail_with!(
+                            REQUEST_CLI_OPTION_INVALID,
+                            "`--merge-buses` merges the buses of a transmission network; {} is \
+                             a distribution case",
+                            input.display()
+                        );
+                    }
                     let diagnostics = powerio_core::render_diagnostics(module.diagnostics());
                     distribution_summary_json(module.value(), &diagnostics)
                 }
-                FamilyCase::Transmission(module) => {
-                    let diagnostics = powerio_core::render_diagnostics(module.diagnostics());
-                    transmission_summary_json(module.value(), &diagnostics)
-                }
+                FamilyCase::Transmission(module) => transmission(*module)?,
             }
         };
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
+}
+
+/// The rule a `--merge-buses` spec names for `network`. Every rule merges
+/// closed switches.
+fn bus_merge_rule(
+    spec: &str,
+    network: &powerio_tx::BalancedNetwork,
+) -> anyhow::Result<powerio_tx::BusMergeRule> {
+    use powerio_tx::{BusMergeRule, ZeroImpedanceRule};
+    let threshold = |value: &str| {
+        value.trim().parse::<f64>().map_err(|_| {
+            failure!(
+                REQUEST_CLI_OPTION_INVALID,
+                "`--merge-buses {spec}`: `{value}` is not a number"
+            )
+        })
+    };
+    let rule = match spec.trim().split_once('=') {
+        None => match spec.trim() {
+            "switches" => BusMergeRule::closed_switches(),
+            "exact" => BusMergeRule::exact(),
+            "psse" => BusMergeRule::psse(network).context(
+                "`--merge-buses psse` reads the case's THRSHZ; name a threshold with `psse=<x>`",
+            )?,
+            _ => fail_with!(
+                REQUEST_CLI_OPTION_INVALID,
+                "`--merge-buses {spec}` is not a rule; use switches, exact, psse, psse=<x>, or \
+                 impedance=<z>"
+            ),
+        },
+        Some(("psse", value)) => BusMergeRule::new(
+            true,
+            Some(ZeroImpedanceRule::PsseThreshold(threshold(value)?)),
+        ),
+        Some(("impedance", value)) => BusMergeRule::new(
+            true,
+            Some(ZeroImpedanceRule::ImpedanceMagnitude(threshold(value)?)),
+        ),
+        Some(_) => fail_with!(
+            REQUEST_CLI_OPTION_INVALID,
+            "`--merge-buses {spec}` is not a rule; use switches, exact, psse, psse=<x>, or \
+             impedance=<z>"
+        ),
+    };
+    Ok(rule)
+}
+
+/// Merge a balanced module's buses under a `--merge-buses` spec. The merged
+/// module keeps the source's records, adds the merge's findings, and records
+/// one `merge_buses` history entry; its retained source is cleared.
+fn merge_balanced_module(
+    module: powerio_core::PioModule<powerio::BalancedNetwork>,
+    spec: &str,
+) -> anyhow::Result<(
+    powerio_core::PioModule<powerio::BalancedNetwork>,
+    powerio_tx::BusMerge,
+)> {
+    use powerio_core::{HistoryEntry, HistoryId, HistoryKind, Producer};
+    let rule = bus_merge_rule(spec, module.value())?;
+    let merge = module.value().merge_buses(&rule)?;
+    let taken: std::collections::BTreeSet<&str> = module
+        .history()
+        .iter()
+        .map(|entry| entry.id().as_str())
+        .collect();
+    // One more candidate than the module has entries, so one is free.
+    let id = std::iter::once("merge-buses".to_owned())
+        .chain((2..=taken.len() + 1).map(|n| format!("merge-buses-{n}")))
+        .find(|id| !taken.contains(id.as_str()))
+        .expect("more candidates than history entries leaves one unused");
+    let history = HistoryEntry::new(HistoryId::new(id)?, HistoryKind::Transform, "merge_buses")?
+        .with_input_type("powerio.BalancedNetwork")?
+        .with_output_type("powerio.BalancedNetwork")?
+        .with_parameters(std::collections::BTreeMap::from([(
+            "rule".to_owned(),
+            serde_json::Value::String(rule.to_string()),
+        )]))?;
+    let producer = Producer::new("powerio", powerio::VERSION)?;
+    let network = merge.network.clone();
+    let mut merged = module.derive_value(producer, history, |_| network)?;
+    for diagnostic in &merge.diagnostics {
+        merged.add_diagnostic(diagnostic.clone())?;
+    }
+    Ok((merged, merge))
+}
+
+/// Apply `--merge-buses` to a parsed module, which must hold a balanced
+/// network.
+fn merge_value_module(
+    module: powerio_core::PioModule<powerio::PioValue>,
+    spec: Option<&str>,
+) -> anyhow::Result<powerio_core::PioModule<powerio::PioValue>> {
+    let Some(spec) = spec else {
+        return Ok(module);
+    };
+    if !matches!(module.value(), powerio::PioValue::BalancedNetwork(_)) {
+        fail_with!(
+            REQUEST_CLI_OPTION_INVALID,
+            "`--merge-buses` merges the buses of a balanced network; the input holds {}",
+            module.value().type_name()
+        );
+    }
+    let balanced = module.map_value(|value| match value {
+        powerio::PioValue::BalancedNetwork(network) => network,
+        _ => unreachable!("the value variant was checked"),
+    });
+    let (merged, _) = merge_balanced_module(balanced, spec)?;
+    Ok(merged.map_value(powerio::PioValue::BalancedNetwork))
+}
+
+/// The `bus_merge` block of the summary: what the merge joined and removed.
+fn bus_merge_json(merge: &powerio_tx::BusMerge) -> serde_json::Value {
+    use powerio_tx::RemovalReason;
+    let count = |reason: RemovalReason| {
+        merge
+            .removed_branches
+            .iter()
+            .filter(|removed| removed.reason == reason)
+            .count()
+    };
+    json!({
+        "rule": merge.rule.to_string(),
+        "groups": merge.groups.len(),
+        "largest_group": merge.groups.iter().map(|group| group.members.len()).max().unwrap_or(0),
+        "merged_buses": merge.merged_buses.len(),
+        "removed_branches": {
+            "zero_impedance": count(RemovalReason::ZeroImpedance),
+            "shorted": count(RemovalReason::Shorted),
+        },
+        "removed_switches": merge.removed_switches.len(),
+    })
 }
 
 fn run_serialize(
@@ -1933,6 +2126,7 @@ fn run_convert(
     from: Option<FormatArg>,
     scenario: i64,
     gen_cost_options: GenCostCliOptions<'_>,
+    merge_buses: Option<&str>,
 ) -> anyhow::Result<()> {
     if to.is_input_spelling() {
         return Err(cli_failure(
@@ -1974,6 +2168,12 @@ fn run_convert(
         stdin_format(from)?;
     }
     if from == Some(FormatArg::Gridfm) {
+        if merge_buses.is_some() {
+            fail_with!(
+                REQUEST_CLI_OPTION_INVALID,
+                "`--merge-buses` does not apply to a gridfm dataset; convert the scenario first"
+            );
+        }
         // GridFM selects one scenario before it has a scalar module to emit.
         // The directory targets retain their existing writers; text targets
         // use the same balanced module writer as every other scalar network.
@@ -2010,14 +2210,14 @@ fn run_convert(
     // PowerIO IR is decoded rather than parsed, then follows the same typed
     // conversion path as a freshly parsed module.
     if from.is_none() && cases::powerio_ir_text(input)?.is_some() {
-        let module = deserialize_module(input)?;
+        let module = merge_value_module(deserialize_module(input)?, merge_buses)?;
         return convert_parsed_module(module, to, output, &gen_cost_options);
     }
 
     // Parse once through the facade. Static networks retain their established
     // emit options below; calculation instances and solutions stay typed and
     // go through the facade emitter for every target.
-    let module = load_module(input, from)?;
+    let module = merge_value_module(load_module(input, from)?, merge_buses)?;
     convert_parsed_module(module, to, output, &gen_cost_options)
 }
 
@@ -3343,6 +3543,7 @@ mpc.branch = [
             None,
             0,
             GenCostCliOptions::preserve(),
+            None,
         )
         .unwrap_err();
         assert!(err.to_string().contains("no conversion path"), "{err}");
@@ -3370,6 +3571,7 @@ mpc.branch = [
             Some(FormatArg::PypsaCsv),
             0,
             GenCostCliOptions::preserve(),
+            None,
         )
         .unwrap();
         let text = std::fs::read_to_string(&output).unwrap();
@@ -3428,6 +3630,7 @@ mpc.branch = [
             Some(FormatArg::BmopfJson),
             0,
             GenCostCliOptions::preserve(),
+            None,
         )
         .unwrap();
 
@@ -3448,6 +3651,7 @@ mpc.branch = [
             None,
             0,
             GenCostCliOptions::preserve(),
+            None,
         )
         .unwrap_err();
         assert!(
@@ -3465,6 +3669,7 @@ mpc.branch = [
             None,
             0,
             GenCostCliOptions::preserve(),
+            None,
         )
         .unwrap_err();
         assert!(err.to_string().contains("cannot write IEEE CDF"), "{err}");

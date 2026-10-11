@@ -383,6 +383,28 @@ pub mod codes {
         CANONICALIZE_NORMALIZE_INVALID_BASE_MVA = "CANONICALIZE.NORMALIZE.INVALID_BASE_MVA", Error,
             "the case base MVA is not a positive finite number", category = Data;
 
+        // CANONICALIZE.MERGE: the explicit bus merge.
+        CANONICALIZE_MERGE_ZERO_IMPEDANCE = "CANONICALIZE.MERGE.ZERO_IMPEDANCE", Warning,
+            "zero impedance branches were merged and their flows are no longer network variables";
+        CANONICALIZE_MERGE_CLOSED_SWITCH = "CANONICALIZE.MERGE.CLOSED_SWITCH", Warning,
+            "closed switches were merged and their flows are no longer network variables";
+        CANONICALIZE_MERGE_ATTRIBUTE_CONFLICT = "CANONICALIZE.MERGE.ATTRIBUTE_CONFLICT", Warning,
+            "merged buses stated different attributes; the surviving bus's values were kept";
+        CANONICALIZE_MERGE_ELEMENT_SHORTED = "CANONICALIZE.MERGE.ELEMENT_SHORTED", Warning,
+            "an element the rule did not select had both ends merged into one bus";
+        CANONICALIZE_MERGE_WINDING_PAIR_KEPT = "CANONICALIZE.MERGE.WINDING_PAIR_KEPT", Warning,
+            "an element was not merged because it would join two windings of one three winding transformer";
+        CANONICALIZE_MERGE_DETAIL_DROPPED = "CANONICALIZE.MERGE.DETAIL_DROPPED", Warning,
+            "the detailed connectivity's calculated bus assignments were dropped because the merge joined buses its hierarchy keeps apart";
+        CANONICALIZE_MERGE_FLOW_UNDETERMINED = "CANONICALIZE.MERGE.FLOW_UNDETERMINED", Warning,
+            "a removed element's recovered flow is not fixed by the network, so a minimum norm split is reported";
+        CANONICALIZE_MERGE_FLOW_RESIDUAL = "CANONICALIZE.MERGE.FLOW_RESIDUAL", Warning,
+            "a merged group's injections from the solution do not balance its stated devices";
+        CANONICALIZE_MERGE_INVALID_RULE = "CANONICALIZE.MERGE.INVALID_RULE", Error,
+            "a bus merge rule cannot be applied to this network", category = Data;
+        CANONICALIZE_MERGE_FLOW_SHAPE_MISMATCH = "CANONICALIZE.MERGE.FLOW_SHAPE_MISMATCH", Error,
+            "a merged network solution does not match the merge's tables", category = Data;
+
         // BUILD: assembling a derived object from a network that already parsed.
         BUILD_INDEX_UNKNOWN_BUS = "BUILD.INDEX.UNKNOWN_BUS", Error,
             "an element references a bus id the case does not declare", category = Data;
