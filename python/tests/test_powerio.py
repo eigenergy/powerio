@@ -1259,6 +1259,18 @@ def test_typed_collection_protocols_use_contained_values(time_series_powerio_ir)
     assert scenarios["peak"].branches[0]["rate_a"] == 321.0
     assert scenarios["base"].branches[0]["rate_a"] == original_base_rating
 
+    # A count read before an entry update is not served stale afterwards.
+    assert peak.n_islands == 1
+    powerio.apply_updates(
+        peak,
+        [
+            powerio.OperatingPointUpdate.set_branch_in_service(
+                powerio.ComponentId("branch", "1-2"), False
+            )
+        ],
+    )
+    assert peak.n_islands == 2
+
 
 def test_typed_collections_construct_without_powerio_ir():
     network = powerio.parse(DATA / "case9.m").value

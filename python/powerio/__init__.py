@@ -365,7 +365,8 @@ class BalancedNetwork:
                 f"{type(self).__name__!r} object has no attribute {name!r}"
             )
         value = getattr(self._inner, name)
-        # Network handles are immutable; scalar counts need no repeated FFI call.
+        # A native handle is immutable; scalar counts need no repeated FFI
+        # call. A collection entry update replaces the handle and clears them.
         if name.startswith("n_"):
             self.__dict__[name] = value
         return value
@@ -1609,6 +1610,10 @@ def _refresh_collection_entry(target: Any, location: _CollectionEntry) -> None:
         raise RuntimeError("a collection update changed the entry type")
     if isinstance(target, BalancedNetwork):
         target._inner = refreshed._inner
+        # Counts cached from the replaced handle may no longer hold, for
+        # example the island count after a branch status update.
+        for name in [name for name in vars(target) if name.startswith("n_")]:
+            del target.__dict__[name]
     elif isinstance(target, dist.MulticonductorNetwork):
         target._inner = refreshed._inner
     elif isinstance(target, _TypedValue):

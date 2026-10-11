@@ -367,7 +367,6 @@ pub struct PyBalancedNetwork {
     /// a handle built from a bare network writes canonically.
     module: powerio_core::PioModule<BalancedNetwork>,
     core: IndexCore,
-    line_count: usize,
 }
 
 impl PyBalancedNetwork {
@@ -448,17 +447,7 @@ fn ensure_line_classification(network: &BalancedNetwork) -> PyResult<()> {
 /// and keeping the reader's findings on the handle.
 fn case_from_module(module: powerio_core::PioModule<BalancedNetwork>) -> PyBalancedNetwork {
     let core = IndexCore::build(module.value());
-    let line_count = module
-        .value()
-        .branches()
-        .iter()
-        .filter(|branch| !branch.is_transformer())
-        .count();
-    PyBalancedNetwork {
-        core,
-        module,
-        line_count,
-    }
+    PyBalancedNetwork { core, module }
 }
 
 /// Wrap a bare network with findings: derived handles carry no retained
@@ -619,8 +608,13 @@ impl PyBalancedNetwork {
     /// AC line branches in an unnormalized network, excluding transformers.
     #[getter]
     fn n_lines(&self) -> PyResult<usize> {
-        ensure_line_classification(self.inner())?;
-        Ok(self.line_count)
+        let network = self.inner();
+        ensure_line_classification(network)?;
+        Ok(network
+            .branches()
+            .iter()
+            .filter(|branch| !branch.is_transformer())
+            .count())
     }
 
     /// Substations in the retained source hierarchy.
@@ -681,7 +675,6 @@ impl PyBalancedNetwork {
     /// Lines exclude transformer branches; loads include equivalent injections
     /// mapped to the load table. Substations are the retained source hierarchy.
     fn component_counts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        ensure_line_classification(self.inner())?;
         let counts = PyDict::new(py);
         counts.set_item("lines", self.n_lines()?)?;
         counts.set_item("generators", self.n_generators())?;
