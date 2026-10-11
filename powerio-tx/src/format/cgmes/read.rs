@@ -560,7 +560,7 @@ struct Store {
     /// Properties successfully read by the source neutral mapping. This lets
     /// the final diagnostic pass distinguish a mapped class from fields on
     /// that class which the mapping did not consume.
-    read_props: OnceCell<Vec<Vec<Cell<bool>>>>,
+    read_props: OnceCell<ReadFlags>,
     /// Whether a document declared this writer's modeling authority. The
     /// declaration permits suppressing only the exact container, island, and
     /// subordinate values fresh emission synthesizes; it does not make other
@@ -577,6 +577,21 @@ struct Store {
 /// object, not a second object with a conflicting class.
 fn is_profile_extension_class(class: &str) -> bool {
     class == "Equipment"
+}
+
+/// One read flag per merged property, flattened in object order, so marking
+/// a read costs two allocations for the whole store rather than one per
+/// object.
+struct ReadFlags {
+    /// Position of each object's first property flag.
+    starts: Vec<usize>,
+    flags: Vec<Cell<bool>>,
+}
+
+impl ReadFlags {
+    fn flag(&self, object_at: usize, property_at: usize) -> &Cell<bool> {
+        &self.flags[self.starts[object_at] + property_at]
+    }
 }
 
 impl Store {
@@ -751,15 +766,23 @@ impl Store {
     }
 
     fn mark_read(&self, object_at: usize, property_at: usize) {
-        self.read_properties()[object_at][property_at].set(true);
+        self.read_properties()
+            .flag(object_at, property_at)
+            .set(true);
     }
 
-    fn read_properties(&self) -> &Vec<Vec<Cell<bool>>> {
+    fn read_properties(&self) -> &ReadFlags {
         self.read_props.get_or_init(|| {
-            self.objects
-                .iter()
-                .map(|object| (0..object.props.len()).map(|_| Cell::new(false)).collect())
-                .collect()
+            let mut starts = Vec::with_capacity(self.objects.len());
+            let mut total = 0;
+            for object in &self.objects {
+                starts.push(total);
+                total += object.props.len();
+            }
+            ReadFlags {
+                starts,
+                flags: (0..total).map(|_| Cell::new(false)).collect(),
+            }
         })
     }
 
@@ -5923,7 +5946,7 @@ fn warn_unmapped(store: &Store, warnings: &mut CgmesDiagnostics) {
             continue;
         }
         for (property_at, (property, value)) in object.props.iter().enumerate() {
-            if read_props[object_at][property_at].get() {
+            if read_props.flag(object_at, property_at).get() {
                 continue;
             }
             if own_output && synthesized_unmapped_property(class, property) {
@@ -6201,8 +6224,8 @@ mod tests {
         assert_eq!(
             number
                 .read_properties()
+                .flags
                 .iter()
-                .flatten()
                 .filter(|read| read.get())
                 .count(),
             1
@@ -6214,7 +6237,7 @@ mod tests {
                 .unwrap(),
             Some(1.0)
         );
-        assert!(!unread.read_properties().iter().flatten().any(Cell::get));
+        assert!(!unread.read_properties().flags.iter().any(Cell::get));
     }
 
     #[test]
