@@ -382,6 +382,9 @@ pub mod codes {
             "a normalize option is outside the range it is defined on", category = Data;
         CANONICALIZE_NORMALIZE_INVALID_BASE_MVA = "CANONICALIZE.NORMALIZE.INVALID_BASE_MVA", Error,
             "the case base MVA is not a positive finite number", category = Data;
+        CANONICALIZE_NORMALIZE_WINDING_TAKEN_OUT =
+            "CANONICALIZE.NORMALIZE.WINDING_TAKEN_OUT", Warning,
+            "a three winding transformer winding on a bus normalization drops was taken out of service";
         CANONICALIZE_NORMALIZE_GENERATOR_BUS_RETYPED =
             "CANONICALIZE.NORMALIZE.GENERATOR_BUS_RETYPED", Warning,
             "PQ buses hosting an in-service generator were retyped PV, so the generator holds the bus voltage";

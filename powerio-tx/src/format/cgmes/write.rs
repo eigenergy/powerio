@@ -6811,6 +6811,29 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     limit_body.close("CurrentLimit");
                 }
             }
+            for rating_set in transformer.winding_rating_sets(index) {
+                w.warnings.push_as(
+                    &codes::EMIT_CGMES.rating_set_dropped,
+                    format!(
+                        "three winding transformer {} winding {end_number} rating set `{}` = {} MVA \
+                         dropped: a CGMES temporary limit states the seconds it is admissible for \
+                         and a named rating set states no duration to place it under",
+                        i + 1,
+                        rating_set.name,
+                        rating_set.rate_mva
+                    ),
+                );
+            }
+        }
+        if transformer.in_service && transformer.winding_in_service().contains(&false) {
+            w.warnings.push_as(
+                &codes::EMIT_CGMES.value_collapsed,
+                format!(
+                    "three winding transformer {} has a winding out of service; it was written \
+                     in service with every terminal connected",
+                    i + 1
+                ),
+            );
         }
         if v3 {
             ssh.open("PowerTransformer", &id, true);
