@@ -242,11 +242,8 @@ impl Writer<'_> {
                     bus.id
                 ));
             }
-            if bus.grounded.len() != 1
+            if bus.grounded.as_slice() != ["n"]
                 || bus.terminals.iter().filter(|t| t.as_str() == "n").count() != 1
-                || bus.grounded.iter().any(|t| t != "n")
-                || !bus.grounded.iter().any(|t| t == "n")
-                || !bus.terminals.iter().any(|t| t == "n")
             {
                 return Err(unsupported(format!(
                     "bus {} requires explicit conductor/ground interpretation",
