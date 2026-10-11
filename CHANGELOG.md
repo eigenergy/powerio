@@ -38,6 +38,28 @@
   `CANONICALIZE.MERGE.ATTRIBUTE_CONFLICT` codes moved to the `powerio-tx`
   registry; `powerio_prob::diagnostics::codes` keeps both constants.
 
+- Closed switches count as connections. `IndexedNetwork::calc_island_labels`,
+  `calc_island_count`, `check_reference_coverage`, `is_radial`, and
+  `calc_connectivity_report`, and `BalancedNetwork::retype_isolated_buses`,
+  join the two buses of a closed switch, so a bus reached only through one is
+  no longer its own island or retyped isolated. Open switches change nothing.
+
+- `to_normalized` and `to_normalized_with_options` merge the buses closed
+  switches join before normalizing, with `BusMergeRule::closed_switches`, and
+  report the merge under `CANONICALIZE.MERGE`. The matrix builders, the DC
+  operators, the DC and AC OPF preparations, and the GridFM export stamp
+  branches only, so on a normalized network they used to leave a closed
+  switch's buses apart without a word, and a bus reached only through one
+  became its own island. A network with no closed switch normalizes exactly
+  as before, and a closed switch on an isolated bus is still dropped with that
+  bus. `ClosedSwitchPolicy::Keep` keeps the switches as data, as before.
+
+- The contingency resolver binds a branch statement that names no line or two
+  winding transformer to a system switching device on the same buses and
+  circuit id, so `OPEN BRANCH FROM BUS i TO BUS j CIRCUIT '@1'` resolves to
+  component type `switch`. `PsseEquipmentIndex` gains `switch_ids` and
+  `switch_rows`, using the RAW writer's switching device id allocation.
+
 ### Added
 
 - `BalancedNetwork::merge_buses` merges the buses that closed switches and
@@ -65,6 +87,17 @@
   diagnostic on a loop of zero reactance elements. Python has
   `BalancedNetwork.merge_buses` and `BusMerge`, and `powerio convert`,
   `summary`, and `verify` take `--merge-buses SPEC`.
+
+- `BalancedNetwork::to_normalized_with` takes `NormalizeSettings`, the
+  `NormalizeOptions` repairs plus `with_closed_switches`: `ClosedSwitchPolicy`
+  `Merge` (the default), `Refuse`, which fails with `BUILD.SWITCH.CLOSED`, or
+  `Keep`. It returns a `NormalizeReport` beside the normalized network, whose
+  `bus_merge` holds the closed switch merge's bus map, removed switches, and
+  row maps. Python takes
+  `to_normalized(closed_switches="merge"|"refuse"|"keep")`.
+  `IndexedNetwork::closed_switches` lists the closed switches that join two
+  buses, and `check_closed_switches` refuses them with `BUILD.SWITCH.CLOSED`,
+  for a caller that builds matrices from a network it did not normalize.
 
 ## 0.11.4
 

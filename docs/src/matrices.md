@@ -137,7 +137,15 @@ between produces none of these findings.
   `BalancedNetwork::merge_buses` resolves them explicitly instead, together
   with closed switches (see [Merging buses](transmission.md#merging-buses)).
 - **Reference coverage.** `IndexedNetwork::check_reference_coverage` verifies that
-  every in service island has a reference bus.
+  every in service island has a reference bus. Islands are joined by in
+  service branches and closed switches.
+- **Closed switches.** The builders stamp branches only, so on a network
+  that still carries a closed switch they leave its two buses apart.
+  Normalization merges closed switches by default (`ClosedSwitchPolicy` on
+  `NormalizeSettings` keeps or refuses them instead), and `merge_buses` merges
+  them on request (see [Merging buses](transmission.md#merging-buses)).
+  `IndexedNetwork::check_closed_switches` refuses a network that skipped both
+  with `BUILD.SWITCH.CLOSED`, counting the closed switches.
 - **Branch susceptance formulas.** `BranchSusceptanceFormula` selects the
   branch susceptance vector \\(b\\) and, for formulas that include phase shifts,
   the phase shift injection. In the PowerModels form,

@@ -171,3 +171,66 @@ fn merged_dc_angles_and_recovered_flows_match_the_unmerged_case() {
     assert!((switch.p_from - 20.0).abs() < 1e-3);
     assert_eq!(switch.method, RemovedFlowMethod::Tree);
 }
+
+/// A reference bus 1 feeding bus 2 by a line; bus 3, with a load, hangs off
+/// bus 2 through a closed switch.
+fn switched_network() -> BalancedNetwork {
+    let mut buses: Vec<Bus> = (1..=3)
+        .map(|id| Bus::new(BusId(id), BusType::Pq, 230.0))
+        .collect();
+    buses[0].kind = BusType::Ref;
+    let mut net = BalancedNetwork::in_memory(
+        "switched",
+        100.0,
+        buses,
+        vec![Branch::new(BusId(1), BusId(2), 0.0, 0.1)],
+    );
+    net.switches_mut()
+        .push(Switch::new(BusId(2), BusId(3), true));
+    let mut slack = Generator::new(BusId(1));
+    slack.pg = 30.0;
+    slack.pmax = 100.0;
+    net.generators_mut().push(slack);
+    net.loads_mut().push(Load::new(BusId(3), 30.0, 0.0));
+    net
+}
+
+#[test]
+fn normalization_merges_closed_switches_for_the_builders() {
+    use powerio_matrix::IndexedNetwork;
+    use powerio_matrix::matrix::calc_adjacency_matrix;
+
+    // The builders stamp branches only: on the raw network the closed
+    // switch's bus 3 has no neighbor. The strict check names the switch.
+    let net = switched_network();
+    let view = IndexedNetwork::new(&net);
+    let adjacency = calc_adjacency_matrix(&view).unwrap();
+    let three = view.bus_index(BusId(3)).unwrap();
+    assert_eq!(adjacency.outer_view(three).unwrap().nnz(), 0);
+    let error = view.check_closed_switches().unwrap_err();
+    assert_eq!(error.code().code, "BUILD.SWITCH.CLOSED");
+    assert!(error.to_string().contains("merge_buses"));
+
+    // Normalized, the switch's two buses are one, and the DC solve carries
+    // the whole load over the line.
+    let normalized = net.to_normalized().unwrap();
+    assert_eq!(normalized.buses().len(), 2);
+    IndexedNetwork::new(&normalized)
+        .check_closed_switches()
+        .unwrap();
+    let (_, flows) = solve_dc(&normalized);
+    assert!(
+        (flows[0] - normalized.loads()[0].p).abs() < 1e-9,
+        "{flows:?}"
+    );
+
+    // Merging the switch explicitly does the same and recovers its flow.
+    let merge = net.merge_buses(&BusMergeRule::closed_switches()).unwrap();
+    let (_, flows) = solve_dc(&merge.network);
+    assert!((flows[0] - 30.0).abs() < 1e-9);
+    let p_to: Vec<f64> = flows.iter().map(|p| -p).collect();
+    let recovered = merge
+        .calc_removed_flows(&MergedFlows::new(&flows, &p_to))
+        .unwrap();
+    assert!((recovered.switches[0].p_from - 30.0).abs() < 1e-9);
+}

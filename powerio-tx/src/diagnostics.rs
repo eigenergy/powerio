@@ -412,6 +412,9 @@ pub mod codes {
             "the index needs exactly one reference bus", category = Data;
         BUILD_INDEX_UNGROUNDED_COMPONENT = "BUILD.INDEX.UNGROUNDED_COMPONENT", Error,
             "a connected component has no reference bus to ground", category = Data;
+        BUILD_SWITCH_CLOSED = "BUILD.SWITCH.CLOSED", Error,
+            "a closed switch joins two buses that a calculation which models no switches would leave apart",
+            category = Data;
         BUILD_BRANCH_ZERO_IMPEDANCE = "BUILD.BRANCH.ZERO_IMPEDANCE", Error,
             "a branch has a zero matrix denominator under the selected build options",
             category = Data;

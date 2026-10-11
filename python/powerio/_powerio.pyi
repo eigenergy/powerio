@@ -220,6 +220,7 @@ class _BalancedNetwork:
         *,
         clamp_angle_bounds: bool = ...,
         angle_bound_pad: Optional[float] = ...,
+        closed_switches: str = ...,
     ) -> _BalancedNetwork: ...
     def merge_buses(
         self,
