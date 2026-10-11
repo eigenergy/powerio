@@ -38,9 +38,17 @@ ALLOWED_ROOTS_ENV = "POWERIO_MCP_ALLOWED_ROOTS"
 LEGACY_ROOT_ENVS = ("POWERIO_MCP_ROOT", "POWERIO_MCP_ALLOWED_ROOT")
 """Compatibility spellings, read in order when the primary is unset."""
 
+MAX_TREE_ENTRIES = 4_096
+"""Entries a directory input may hold, the budget PowerIO's own listing keeps."""
+
+MAX_TREE_DEPTH = 64
+"""Directory levels a directory input may nest, PowerIO's own listing bound."""
+
 __all__ = [
     "ALLOWED_ROOTS_ENV",
     "LEGACY_ROOT_ENVS",
+    "MAX_TREE_DEPTH",
+    "MAX_TREE_ENTRIES",
     "PathNotAllowed",
     "admitting_root",
     "allowed_roots",
@@ -210,16 +218,22 @@ def check_allowed_read_tree(path: Path, *, purpose: str = "path") -> None:
     cycle detection; broken links and special files are refused. A regular
     file is accepted as a one-entry tree.
 
+    The walk keeps PowerIO's own directory budgets: it refuses a tree past
+    :data:`MAX_TREE_ENTRIES` entries, counting files and directories below the
+    input, or with a directory :data:`MAX_TREE_DEPTH` levels below it, and
+    stops reading entries as soon as a budget is spent.
+
     This closes the gap between checking a directory name and handing that
     directory to a reader which opens its children. It is still a path
     preflight, not a kernel sandbox: another process can replace an entry
     between this check and the reader's later ``open`` call.
     """
     root = admitting_root(path, purpose=purpose)
-    stack = [path]
+    stack = [(path, 0)]
     visited: set[tuple[int, int]] = set()
+    seen = 0
     while stack:
-        current = stack.pop()
+        current, depth = stack.pop()
         info = _check_tree_target(current, root, purpose=purpose)
         if stat.S_ISREG(info.st_mode):
             continue
@@ -227,14 +241,24 @@ def check_allowed_read_tree(path: Path, *, purpose: str = "path") -> None:
         if identity in visited:
             continue
         visited.add(identity)
+        if depth >= MAX_TREE_DEPTH:
+            raise PathNotAllowed(
+                f"`{purpose}` nests directories more than {MAX_TREE_DEPTH} "
+                f"levels deep: {current}"
+            )
         try:
             with os.scandir(current) as entries:
-                children = [Path(entry.path) for entry in entries]
+                for entry in entries:
+                    seen += 1
+                    if seen > MAX_TREE_ENTRIES:
+                        raise PathNotAllowed(
+                            f"`{purpose}` holds more than {MAX_TREE_ENTRIES} entries"
+                        )
+                    stack.append((Path(entry.path), depth + 1))
         except OSError as exc:
             raise PathNotAllowed(
                 f"cannot inspect `{purpose}` directory {current}: {exc}"
             ) from exc
-        stack.extend(children)
 
 
 def checked_read_tree(value: str, *, purpose: str = "path") -> str:

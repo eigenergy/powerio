@@ -200,6 +200,38 @@ def test_read_tree_refuses_special_files(monkeypatch, tmp_path):
         sandbox.check_allowed_read_tree(root)
 
 
+def test_read_tree_keeps_the_acquisition_entry_budget(monkeypatch, tmp_path):
+    assert sandbox.MAX_TREE_ENTRIES == 4_096
+    root = tmp_path / "allowed"
+    case = root / "case"
+    (case / "tables").mkdir(parents=True)
+    (case / "buses.csv").write_text("bus")
+    (case / "tables" / "lines.csv").write_text("line")
+    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, str(root))
+
+    # Three entries below the input: a file, a directory, and its file.
+    monkeypatch.setattr(sandbox, "MAX_TREE_ENTRIES", 3)
+    assert sandbox.checked_read_tree(str(case)) == str(case)
+    (case / "generators.csv").write_text("gen")
+    with pytest.raises(sandbox.PathNotAllowed, match="more than 3 entries"):
+        sandbox.check_allowed_read_tree(case)
+
+
+def test_read_tree_keeps_the_acquisition_depth_bound(monkeypatch, tmp_path):
+    assert sandbox.MAX_TREE_DEPTH == 64
+    root = tmp_path / "allowed"
+    case = root / "case"
+    deepest = case.joinpath(*["d"] * (sandbox.MAX_TREE_DEPTH - 1))
+    deepest.mkdir(parents=True)
+    (deepest / "buses.csv").write_text("bus")
+    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, str(root))
+
+    assert sandbox.checked_read_tree(str(case)) == str(case)
+    (deepest / "d").mkdir()
+    with pytest.raises(sandbox.PathNotAllowed, match="more than 64 levels deep"):
+        sandbox.check_allowed_read_tree(case)
+
+
 def _write_tree(staging: str, files: dict[str, str]) -> dict:
     # Real writers create their own target; the staging path handed to the
     # callback does not exist yet.
