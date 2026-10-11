@@ -123,6 +123,53 @@ def test_a_write_into_a_missing_directory_raises(monkeypatch, tmp_path):
         )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions and symlinks")
+def test_a_refusal_does_not_describe_the_filesystem_outside_the_roots(
+    monkeypatch, tmp_path
+):
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "case9.m").write_text("x")
+    a_file = tmp_path / "file.m"
+    a_file.write_text("x")
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    os.symlink(blocked / "target.m", root / "link.m")
+    tree = root / "tree"
+    tree.mkdir()
+    os.symlink(blocked / "target.m", tree / "link.m")
+    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, str(root))
+
+    blocked.chmod(0)
+    try:
+        refusals = set()
+        for path, for_write in [
+            (tmp_path / "missing" / "x.m", False),
+            (a_file / "x.m", False),
+            (blocked / "x.m", False),
+            (root / "link.m", False),
+            (tmp_path / "missing" / "out.raw", True),
+            (blocked / "out.raw", True),
+        ]:
+            with pytest.raises(sandbox.PathNotAllowed) as raised:
+                sandbox.checked_path(str(path), for_write=for_write)
+            refusals.add(str(raised.value))
+        with pytest.raises(sandbox.PathNotAllowed) as through_a_file:
+            sandbox.checked_path(str(root / "case9.m" / "x.m"))
+        with pytest.raises(sandbox.PathNotAllowed) as tree_link:
+            sandbox.checked_read_tree(str(tree))
+    finally:
+        blocked.chmod(0o700)
+
+    assert refusals == {f"`path` is outside allowed MCP roots: {root.resolve()}"}
+    # Inside a root the reason stays, without the paths the OS error names.
+    assert str(through_a_file.value) == (
+        "cannot resolve `path` against allowed MCP roots: Not a directory"
+    )
+    assert str(tree / "link.m") in str(tree_link.value)
+    assert str(blocked) not in str(tree_link.value)
+
+
 def test_refusals_raise_the_exported_type(monkeypatch, tmp_path):
     # Consumers match on the type; the prose is free to change.
     assert "PathNotAllowed" in sandbox.__all__

@@ -73,11 +73,15 @@
   server raises each refusal as the SDK's `ToolError`, so the message and its
   diagnostic code reach the client, for example a path outside the allowed
   roots, an unknown format, or an input over the byte limit; with mcp 2.1 and
-  later the client otherwise receives only `Error executing tool <name>`. An
-  unknown `scenario_id` lists the scenarios the ScenarioSet holds, and an out
-  of range `time_index` states the valid indices. `pip install 'powerio[mcp]'`
-  installs the NumPy and SciPy that `calc_matrix` needs, and the `about` tool
-  reports the build's feature set under `features`.
+  later the client otherwise receives only `Error executing tool <name>`. A
+  path outside the allowed roots gets the same refusal whether it exists, is
+  missing, or cannot be read, and a refusal states the operating system's
+  reason without the paths it names, which can be a link's target outside
+  the roots. An unknown `scenario_id` lists the scenarios the ScenarioSet
+  holds, and an out of range `time_index` states the valid indices.
+  `pip install 'powerio[mcp]'` installs the NumPy and SciPy that
+  `calc_matrix` needs, and the `about` tool reports the build's feature set
+  under `features`.
 
 - PSS/E RAW strings in double quotes now read as one field. PSS/E accepts
   either quote character, and revision 35 files double quote the rating set

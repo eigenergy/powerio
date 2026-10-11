@@ -121,6 +121,15 @@ def decode_local_path(value: str, *, purpose: str = "path") -> Path:
     return Path(str(value)).expanduser()
 
 
+def _reason(exc: OSError) -> str:
+    """The operating system's reason for ``exc``, without the paths it names.
+
+    A failure while following a link names the link's target, which can lie
+    outside the allowed roots.
+    """
+    return exc.strerror or type(exc).__name__
+
+
 def _path_for_policy(path: Path, *, for_write: bool) -> Path:
     try:
         if for_write and not path.exists():
@@ -151,17 +160,25 @@ def admitting_root(
     cannot redirect a write out of it.
     """
     roots = allowed_roots()
+    root_list = ", ".join(str(root) for root in roots)
+    outside = PathNotAllowed(f"`{purpose}` is outside allowed MCP roots: {root_list}")
     try:
         resolved = _path_for_policy(path, for_write=for_write)
     except OSError as exc:
+        # The reason resolution failed describes the filesystem along the
+        # path, so it is reported only for a path that leads into a root.
+        # Outside the roots the refusal is the same whether the path exists,
+        # is missing, or cannot be read.
+        followed = Path(os.path.realpath(path))
+        if not any(_inside(followed, root) for root in roots):
+            raise outside from exc
         raise PathNotAllowed(
-            f"cannot resolve `{purpose}` against allowed MCP roots: {exc}"
+            f"cannot resolve `{purpose}` against allowed MCP roots: {_reason(exc)}"
         ) from exc
     for root in roots:
-        if resolved == root or root in resolved.parents:
+        if _inside(resolved, root):
             return root
-    root_list = ", ".join(str(root) for root in roots)
-    raise PathNotAllowed(f"`{purpose}` is outside allowed MCP roots: {root_list}")
+    raise outside
 
 
 def check_allowed_path(
@@ -203,7 +220,9 @@ def _check_tree_target(
     except FileNotFoundError as exc:
         raise PathNotAllowed(f"`{purpose}` contains a broken link: {path}") from exc
     except OSError as exc:
-        raise PathNotAllowed(f"cannot inspect `{purpose}` entry {path}: {exc}") from exc
+        raise PathNotAllowed(
+            f"cannot inspect `{purpose}` entry {path}: {_reason(exc)}"
+        ) from exc
     if root is not None and not _inside(resolved, root):
         raise PathNotAllowed(
             f"`{purpose}` contains a link outside its allowed MCP root: {path}"
