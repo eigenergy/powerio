@@ -31,6 +31,7 @@ use std::collections::BTreeSet;
 use std::io::{Cursor, Read};
 use std::path::{Component, Path};
 
+use memchr::memmem;
 use powerio_core::{ArtifactPath, DiagnosticInfo, MemoryArtifact, Source};
 
 use crate::diagnostics::{Diagnostics, codes};
@@ -422,14 +423,7 @@ const ZIP64_END_RECORD: &[u8] = b"PK\x06\x06";
 /// accepted here it falls back to an earlier one, and the count comparison
 /// in [`open_archive`] refuses the result.
 fn declared_entry_count(bytes: &[u8]) -> Option<u64> {
-    let mut end = bytes.len();
-    while let Some(at) = rfind_bytes(&bytes[..end], END_RECORD) {
-        if let Some(count) = end_record_count(bytes, at) {
-            return Some(count);
-        }
-        end = at + END_RECORD.len() - 1;
-    }
-    None
+    memmem::rfind_iter(bytes, END_RECORD).find_map(|at| end_record_count(bytes, at))
 }
 
 fn end_record_count(bytes: &[u8], at: usize) -> Option<u64> {
@@ -462,10 +456,9 @@ fn zip64_entry_count(bytes: &[u8], locator: usize) -> Option<u64> {
     }
     // Prepended bytes move the record forward, so the reader searches forward
     // from the declared offset up to the locator.
-    let mut from = usize::try_from(declared_at).ok()?;
-    while let Some(found) = find_bytes(&bytes[from..locator], ZIP64_END_RECORD) {
+    let from = usize::try_from(declared_at).ok()?;
+    for found in memmem::find_iter(&bytes[from..locator], ZIP64_END_RECORD) {
         let at = from + found;
-        from = at + 1;
         let Some(record) = bytes.get(at..at + 56) else {
             continue;
         };
@@ -481,18 +474,6 @@ fn zip64_entry_count(bytes: &[u8], locator: usize) -> Option<u64> {
         return (le_u64(record, 24) <= total).then_some(total);
     }
     None
-}
-
-fn rfind_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .rposition(|window| window == needle)
-}
-
-fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
 }
 
 fn le_u16(bytes: &[u8], at: usize) -> u64 {
