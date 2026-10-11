@@ -13,6 +13,7 @@ import pytest
 
 pytest.importorskip("mcp", reason="powerio[mcp] not installed (needs Python 3.10+)")
 
+from mcp.server.mcpserver.exceptions import ToolError
 from powerio.mcp import sandbox, server
 
 import powerio
@@ -265,6 +266,28 @@ def test_about_reports_the_feature_set():
     about = server._about_tool()
     assert about["features"] == powerio.features()
     assert about["features"]["matrix"] is True
+
+
+def test_every_tool_reports_refusals_to_the_client():
+    tools = server.mcp._tool_manager.list_tools()
+    # Every tool is registered through `_tool`, so all share its wrapper.
+    assert len({tool.fn.__code__ for tool in tools}) == 1
+    assert all(hasattr(tool.fn, "__wrapped__") for tool in tools)
+    summarize = next(tool for tool in tools if tool.name == "summarize")
+    with pytest.raises(ToolError, match="provide exactly one"):
+        summarize.fn()
+
+
+def test_selectors_of_the_wrong_type_keep_the_collection_type_error(
+    time_series_powerio_ir,
+):
+    network = powerio.parse(DATA / "case9.m").value
+    scenarios = powerio.ScenarioSet({"base": network, "high": network})
+    scenario_ir = powerio.serialize(scenarios.module).text
+    with pytest.raises(TypeError, match="scenario keys must be strings"):
+        server.summarize(powerio_ir=scenario_ir, scenario_id=1)
+    with pytest.raises(TypeError, match="time series indices must be integers"):
+        server.summarize(powerio_ir=time_series_powerio_ir, time_index=5.0)
 
 
 def test_inputs_are_mutually_exclusive():

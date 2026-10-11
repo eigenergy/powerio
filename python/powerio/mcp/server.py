@@ -12,6 +12,7 @@ import base64
 import functools
 import io
 import json
+import operator
 import os
 import stat
 import sys
@@ -321,6 +322,13 @@ def _unknown_scenario_id(
     return _UnknownScenarioId(f"unknown `scenario_id` {scenario_id!r}: {held}")
 
 
+def _integer_index(value: Any) -> Optional[int]:
+    try:
+        return operator.index(value)
+    except TypeError:
+        return None
+
+
 def _select_value(
     value: Any,
     *,
@@ -332,15 +340,20 @@ def _select_value(
     selection: Dict[str, Any] = {}
     while remaining_time is not None or remaining_scenario is not None:
         if isinstance(value, powerio.TimeSeries) and remaining_time is not None:
+            # A selector that is not an integer goes on to the TimeSeries,
+            # which raises its own TypeError.
+            position = _integer_index(remaining_time)
             length = len(value)
-            if not -length <= remaining_time < length:
-                raise _time_index_out_of_range(remaining_time, length)
+            if position is not None and not -length <= position < length:
+                raise _time_index_out_of_range(position, length)
             selection["time_index"] = remaining_time
             value = value[remaining_time]
             remaining_time = None
             continue
         if isinstance(value, powerio.ScenarioSet) and remaining_scenario is not None:
-            if remaining_scenario not in value:
+            # A selector that is not a string goes on to the ScenarioSet,
+            # which raises its own TypeError.
+            if isinstance(remaining_scenario, str) and remaining_scenario not in value:
                 raise _unknown_scenario_id(remaining_scenario, value)
             selection["scenario_id"] = remaining_scenario
             value = value[remaining_scenario]
