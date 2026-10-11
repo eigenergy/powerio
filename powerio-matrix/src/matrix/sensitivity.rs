@@ -6,9 +6,16 @@
 //! `ABA = ground_with(L, refs)`: one row/column removed per reference bus.
 //! Every builder routes through the same solver selection: a dense Cholesky
 //! (with dense Gaussian elimination as the nonsingular indefinite fallback)
-//! below the `Auto` ceilings, and a sparse Cholesky factored once and reused
-//! across every right hand side above them. Disconnected networks with one
-//! reference per island are supported.
+//! below the `Auto` ceilings, and a sparse factorization factored once and
+//! reused across every right hand side above them. The sparse factorization is
+//! a Cholesky while the matrix is positive definite; a negative branch
+//! susceptance (a series capacitor) can make it indefinite, and LDLᵀ and then
+//! LU with partial pivoting take over, each accepted only when a probe solve
+//! shows a normwise backward error near machine precision and a forward error
+//! that leaves the matrix nonsingular to working precision. Disconnected
+//! networks with one reference per island are supported. The selected row and
+//! column builders ([`calc_ptdf_rows`], [`calc_ptdf_columns`],
+//! [`calc_lodf_columns`]) solve only the right hand sides they return.
 //! Several references in one island are fixed angle buses; this is not a
 //! participation factor based distributed slack model.
 
@@ -68,7 +75,8 @@ pub enum SensitivitySolver {
     Auto,
     /// Dense grounded factorization. Handles nonsingular indefinite cases.
     Dense,
-    /// Sparse Cholesky, factored once and reused across every right hand side.
+    /// Sparse factorization, factored once and reused across every right hand
+    /// side: Cholesky, then `LDLᵀ`, then LU for an indefinite matrix.
     Sparse,
 }
 
@@ -80,6 +88,10 @@ pub enum SensitivitySolverPath {
     DenseCholesky,
     DenseInverse,
     SparseCholesky,
+    /// Sparse `LDLᵀ` without pivoting, for an indefinite matrix.
+    SparseLdlt,
+    /// Sparse LU with partial pivoting, when `LDLᵀ` fails or loses accuracy.
+    SparseLu,
 }
 
 impl SensitivitySolverPath {
@@ -89,6 +101,8 @@ impl SensitivitySolverPath {
             Self::DenseCholesky => "dense_cholesky",
             Self::DenseInverse => "dense_inverse",
             Self::SparseCholesky => "sparse_cholesky",
+            Self::SparseLdlt => "sparse_ldlt",
+            Self::SparseLu => "sparse_lu",
         }
     }
 }
@@ -264,6 +278,150 @@ pub fn calc_ptdf_lodf_with_options(
     })
 }
 
+/// The PTDF rows of `branches` (dense branch indices), a `branches.len() × n`
+/// matrix whose row `i` is the full PTDF's row `branches[i]`.
+///
+/// Each row is one solve, `x = ABA⁻¹ (e_from − e_to)` through the symmetric
+/// grounded matrix, scaled by the branch susceptance, so neither the `m × n`
+/// PTDF nor an inverse is formed. The solver follows
+/// [`SensitivityOptions::solver`] on the reduced dimension alone, and entries
+/// at or below [`SensitivityOptions::drop_tolerance`] are omitted.
+///
+/// # Errors
+/// An index outside the branch table, the conditions of the full builders,
+/// and [`Error::SingularNetwork`] when no factorization is trusted.
+pub fn calc_ptdf_rows(
+    case: &IndexedNetwork,
+    options: &SensitivityOptions,
+    branches: &[usize],
+) -> Result<CsMat<f64>> {
+    let selected = SelectedSolve::new(case, options)?;
+    let (inc, g) = (&selected.inc, &selected.g);
+    let (n, m) = (inc.n(), inc.m());
+    check_selection("branch", branches, m)?;
+    let (from, to) = endpoints(&inc.a, m);
+    let full_of = g.full_of_reduced(n);
+    let mut builder = CooBuilder::new_rect(branches.len(), n);
+    for (chunk_index, chunk) in branches.chunks(SPARSE_SOLVE_BLOCK).enumerate() {
+        let mut block = faer::Mat::<f64>::zeros(full_of.len(), chunk.len());
+        for (col, &branch) in chunk.iter().enumerate() {
+            if let Some(rf) = g.reduced(from[branch]) {
+                block[(rf, col)] += 1.0;
+            }
+            if let Some(rt) = g.reduced(to[branch]) {
+                block[(rt, col)] -= 1.0;
+            }
+        }
+        selected.solver.solve_block(block.as_mut());
+        for (col, &branch) in chunk.iter().enumerate() {
+            let row = chunk_index * SPARSE_SOLVE_BLOCK + col;
+            for (reduced, &bus) in full_of.iter().enumerate() {
+                let v = inc.b[branch] * block[(reduced, col)];
+                if v.abs() > options.drop_tolerance {
+                    builder.add(row, bus, v);
+                }
+            }
+        }
+    }
+    Ok(builder.finish_csr())
+}
+
+/// The PTDF columns of `buses` (dense bus indices), an `m × buses.len()`
+/// matrix whose column `j` is the full PTDF's column `buses[j]`. A reference
+/// bus's column is zero.
+///
+/// Each column is one solve, so neither the `m × n` PTDF nor an inverse is
+/// formed. Solver selection and dropping follow [`calc_ptdf_rows`].
+///
+/// # Errors
+/// As [`calc_ptdf_rows`], for an index outside the bus table.
+pub fn calc_ptdf_columns(
+    case: &IndexedNetwork,
+    options: &SensitivityOptions,
+    buses: &[usize],
+) -> Result<CsMat<f64>> {
+    let selected = SelectedSolve::new(case, options)?;
+    let inc = &selected.inc;
+    check_selection("bus", buses, inc.n())?;
+    let mut builder = CooBuilder::new_rect(inc.m(), buses.len());
+    ptdf_column_entries(
+        inc,
+        &selected.g,
+        &selected.solver,
+        options,
+        buses,
+        |row, col, value| {
+            builder.add(row, col, value);
+            Ok(())
+        },
+    )?;
+    Ok(builder.finish_csr())
+}
+
+/// The LODF columns of the `outaged` branches (dense branch indices), an
+/// `m × outaged.len()` matrix whose column `j` is the full LODF's column
+/// `outaged[j]`: the flow each branch picks up per unit of the outaged
+/// branch's pre-outage flow, with `−1` at the outaged branch itself and a
+/// zero column for a branch whose outage islands the network.
+///
+/// Each column is one solve, so neither the `m × m` LODF nor the PTDF is
+/// formed. Solver selection and dropping follow [`calc_ptdf_rows`].
+///
+/// # Errors
+/// As [`calc_ptdf_rows`].
+pub fn calc_lodf_columns(
+    case: &IndexedNetwork,
+    options: &SensitivityOptions,
+    outaged: &[usize],
+) -> Result<CsMat<f64>> {
+    let selected = SelectedSolve::new(case, options)?;
+    let inc = &selected.inc;
+    check_selection("branch", outaged, inc.m())?;
+    let mut builder = CooBuilder::new_rect(inc.m(), outaged.len());
+    lodf_column_entries(
+        inc,
+        &selected.g,
+        &selected.solver,
+        options,
+        outaged,
+        |row, col, value| {
+            builder.add(row, col, value);
+            Ok(())
+        },
+    )?;
+    Ok(builder.finish_csr())
+}
+
+/// The factored grounded matrix the selected row and column builders solve
+/// against.
+struct SelectedSolve {
+    inc: IncidenceParts,
+    g: Grounding,
+    solver: GroundedSolver,
+}
+
+impl SelectedSolve {
+    fn new(case: &IndexedNetwork, options: &SensitivityOptions) -> Result<Self> {
+        options.validate()?;
+        case.check_reference_coverage()?;
+        let refs = case.reference_bus_indices();
+        let inc = build_incidence(case, options.formula, &BuildOptions::default())?;
+        let g = Grounding::new(&refs);
+        let lr = ground_with(&calc_weighted_laplacian(&inc.a, &inc.b), &g);
+        let solver = GroundedSolver::factor(&inc, &lr, options)?;
+        Ok(Self { inc, g, solver })
+    }
+}
+
+fn check_selection(what: &str, indices: &[usize], len: usize) -> Result<()> {
+    match indices.iter().find(|&&index| index >= len) {
+        Some(index) => Err(Error::InvalidSensitivityOptions {
+            reason: format!("{what} index {index} is outside the {len} {what}es of the network"),
+        }),
+        None => Ok(()),
+    }
+}
+
 /// Which matrices a [`build_parts`] call materializes. The dense path always
 /// forms the dense PTDF (the LODF is built from it); the sparse path runs only
 /// the requested halves.
@@ -328,33 +486,50 @@ fn build_parts(
             })
         }
         SensitivitySolver::Sparse => {
-            ensure_sparse_solver_eligible(&inc)?;
+            ensure_finite_susceptances(&inc)?;
             let lr = ground_with(&calc_weighted_laplacian(&inc.a, &inc.b), &g);
-            let llt = SparseLlt::factor(&lr)?;
+            let factor = SparseFactor::factor(&lr)?;
+            let solver = GroundedSolver::Sparse(Box::new(factor));
+            let all_buses: Vec<usize> = (0..inc.n()).collect();
+            let all_branches: Vec<usize> = (0..inc.m()).collect();
             let ptdf = if want == Want::Lodf {
                 None
             } else {
                 let mut builder = CooBuilder::new_rect(inc.m(), inc.n());
-                let meta = sparse_ptdf_entries(&inc, &g, &llt, options, |row, col, value| {
-                    builder.add(row, col, value);
-                    Ok(())
-                })?;
+                let meta = ptdf_column_entries(
+                    &inc,
+                    &g,
+                    &solver,
+                    options,
+                    &all_buses,
+                    |row, col, value| {
+                        builder.add(row, col, value);
+                        Ok(())
+                    },
+                )?;
                 Some((builder.finish_csr(), meta.dropped_entries))
             };
             let lodf = if want == Want::Ptdf {
                 None
             } else {
                 let mut builder = CooBuilder::new(inc.m());
-                let meta = sparse_lodf_entries(&inc, &g, &llt, options, |row, col, value| {
-                    builder.add(row, col, value);
-                    Ok(())
-                })?;
+                let meta = lodf_column_entries(
+                    &inc,
+                    &g,
+                    &solver,
+                    options,
+                    &all_branches,
+                    |row, col, value| {
+                        builder.add(row, col, value);
+                        Ok(())
+                    },
+                )?;
                 Some((builder.finish_csr(), meta.dropped_entries))
             };
             Ok(BuiltParts {
                 ptdf,
                 lodf,
-                solver_path: SensitivitySolverPath::SparseCholesky,
+                solver_path: solver.path(),
                 reduced_dimension,
             })
         }
@@ -393,13 +568,16 @@ pub(crate) fn for_each_ptdf_lodf_entry(
                 (solver_path, ptdf_meta, lodf_meta)
             }
             SensitivitySolver::Sparse => {
-                ensure_sparse_solver_eligible(&inc)?;
+                ensure_finite_susceptances(&inc)?;
                 let g = Grounding::new(&refs);
                 let lr = ground_with(&calc_weighted_laplacian(&inc.a, &inc.b), &g);
-                let llt = SparseLlt::factor(&lr)?;
-                let ptdf = sparse_ptdf_entries(&inc, &g, &llt, options, ptdf_entry)?;
-                let lodf = sparse_lodf_entries(&inc, &g, &llt, options, lodf_entry)?;
-                (SensitivitySolverPath::SparseCholesky, ptdf, lodf)
+                let solver = GroundedSolver::Sparse(Box::new(SparseFactor::factor(&lr)?));
+                let all_buses: Vec<usize> = (0..inc.n()).collect();
+                let all_branches: Vec<usize> = (0..inc.m()).collect();
+                let ptdf = ptdf_column_entries(&inc, &g, &solver, options, &all_buses, ptdf_entry)?;
+                let lodf =
+                    lodf_column_entries(&inc, &g, &solver, options, &all_branches, lodf_entry)?;
+                (solver.path(), ptdf, lodf)
             }
             SensitivitySolver::Auto => {
                 unreachable!("select_solver_for_shape resolves Auto")
@@ -578,13 +756,45 @@ fn scatter_minv_row(
     }
 }
 
-/// Sparse Cholesky of the grounded DC bus susceptance matrix, factored once
-/// and reused across every right hand side.
-struct SparseLlt {
-    llt: faer::sparse::linalg::solvers::Llt<usize, f64>,
+/// Normwise backward error a factorization must reach on its probe solve to
+/// be trusted. A backward stable solve lands near machine precision (about
+/// 1e-16 on transmission cases of any size); a factorization that lost
+/// accuracy, such as `LDLᵀ` without pivoting through a small pivot, lands far
+/// above it.
+const BACKWARD_ERROR_TRUST: f64 = 1e-10;
+
+/// Relative forward error a factorization's probe solve may reach before the
+/// matrix counts as singular to working precision. A backward stable solve
+/// errs forward by about the condition number times machine precision, so a
+/// grounded matrix stays usable up to a condition number near 1e12; a matrix
+/// that is singular but for rounding, where any factorization still reports
+/// a small backward error, lands near or above 1.
+const FORWARD_ERROR_TRUST: f64 = 1e-4;
+
+/// One way to factor the grounded matrix, `None` when it breaks down.
+type FactorAttempt = fn(&faer::sparse::SparseColMat<usize, f64>) -> Option<SparseFactor>;
+
+/// A sparse factorization of the grounded DC bus susceptance matrix, factored
+/// once and reused across every right hand side.
+///
+/// Positive branch susceptances make the matrix positive definite, and the
+/// Cholesky factorization serves it. A negative susceptance, a series
+/// capacitor's, can make it indefinite: `LDLᵀ` without pivoting takes over,
+/// and LU with partial pivoting when that fails or loses accuracy. A
+/// factorization is accepted only when it solves a probe right hand side
+/// with a normwise backward error below [`BACKWARD_ERROR_TRUST`], a finite
+/// result, and a forward error below [`FORWARD_ERROR_TRUST`]. The matrix is
+/// refused as singular only when every one fails.
+enum SparseFactor {
+    Llt(faer::sparse::linalg::solvers::Llt<usize, f64>),
+    Ldlt {
+        symbolic: faer::sparse::linalg::cholesky::SymbolicCholesky<usize>,
+        values: Vec<f64>,
+    },
+    Lu(faer::sparse::linalg::solvers::Lu<usize, f64>),
 }
 
-impl SparseLlt {
+impl SparseFactor {
     fn factor(lr: &CsMat<f64>) -> Result<Self> {
         let nr = lr.rows();
         if lr.cols() != nr {
@@ -594,15 +804,10 @@ impl SparseLlt {
                 got: lr.cols(),
             });
         }
-        // An absent, nonpositive, or nonfinite diagonal is a structural
-        // problem — an ungrounded row, or NaN poisoning — reported as
-        // singularity before the numerical factorization runs, so it is not
-        // mistaken for a factorization that merely broke down.
-        for i in 0..nr {
-            let d = lr.get(i, i).copied().unwrap_or(0.0);
-            if !d.is_finite() || d <= 0.0 {
-                return Err(Error::SingularNetwork);
-            }
+        // A nonfinite entry is NaN or infinity poisoning, not a property of
+        // the network; refuse it before any factorization runs.
+        if lr.data().iter().any(|v| !v.is_finite()) {
+            return Err(Error::SingularNetwork);
         }
         let mut triplets = Vec::with_capacity(lr.nnz());
         for (i, row) in lr.outer_iterator().enumerate() {
@@ -612,25 +817,243 @@ impl SparseLlt {
         }
         let mat = faer::sparse::SparseColMat::try_new_from_triplets(nr, nr, &triplets)
             .map_err(|_| Error::SingularNetwork)?;
-        let llt = mat
-            .as_ref()
-            .sp_cholesky(faer::Side::Lower)
-            .map_err(|_| Error::SingularNetwork)?;
-        Ok(Self { llt })
+        let probe = Probe::new(lr);
+        let candidates: [FactorAttempt; 3] = [
+            |mat| {
+                mat.as_ref()
+                    .sp_cholesky(faer::Side::Lower)
+                    .ok()
+                    .map(Self::Llt)
+            },
+            Self::factor_ldlt,
+            |mat| mat.as_ref().sp_lu().ok().map(Self::Lu),
+        ];
+        for candidate in candidates {
+            if let Some(factor) = candidate(&mat)
+                && probe.trusts(&factor)
+            {
+                return Ok(factor);
+            }
+        }
+        Err(Error::SingularNetwork)
+    }
+
+    fn factor_ldlt(mat: &faer::sparse::SparseColMat<usize, f64>) -> Option<Self> {
+        use faer::dyn_stack::{MemBuffer, MemStack};
+        use faer::linalg::cholesky::ldlt::factor::LdltRegularization;
+        use faer::sparse::linalg::cholesky::{
+            CholeskySymbolicParams, SymmetricOrdering, factorize_symbolic_cholesky,
+        };
+        let symbolic = factorize_symbolic_cholesky(
+            mat.symbolic(),
+            faer::Side::Lower,
+            SymmetricOrdering::default(),
+            CholeskySymbolicParams::default(),
+        )
+        .ok()?;
+        let mut values = vec![0.0; symbolic.len_val()];
+        let par = faer::get_global_parallelism();
+        let mut buffer = MemBuffer::try_new(
+            symbolic.factorize_numeric_ldlt_scratch::<f64>(par, faer::Spec::default()),
+        )
+        .ok()?;
+        symbolic
+            .factorize_numeric_ldlt(
+                &mut values,
+                mat.as_ref(),
+                faer::Side::Lower,
+                LdltRegularization::default(),
+                par,
+                MemStack::new(&mut buffer),
+                faer::Spec::default(),
+            )
+            .ok()?;
+        Some(Self::Ldlt { symbolic, values })
+    }
+
+    fn path(&self) -> SensitivitySolverPath {
+        match self {
+            Self::Llt(_) => SensitivitySolverPath::SparseCholesky,
+            Self::Ldlt { .. } => SensitivitySolverPath::SparseLdlt,
+            Self::Lu(_) => SensitivitySolverPath::SparseLu,
+        }
     }
 
     /// Solve in place, one right hand side per column.
-    fn solve_block(&self, rhs: faer::MatMut<'_, f64>) {
+    fn solve_block(&self, mut rhs: faer::MatMut<'_, f64>) {
         use faer::linalg::solvers::Solve;
-        self.llt.solve_in_place(rhs);
+        match self {
+            Self::Llt(llt) => llt.solve_in_place(rhs),
+            Self::Lu(lu) => lu.solve_in_place(rhs),
+            Self::Ldlt { symbolic, values } => {
+                use faer::dyn_stack::{MemBuffer, MemStack};
+                let par = faer::get_global_parallelism();
+                let mut buffer =
+                    MemBuffer::new(symbolic.solve_in_place_scratch::<f64>(rhs.ncols(), par));
+                faer::sparse::linalg::cholesky::LdltRef::new(symbolic, values)
+                    .solve_in_place_with_conj(
+                        faer::Conj::No,
+                        rhs.as_mut(),
+                        par,
+                        MemStack::new(&mut buffer),
+                    );
+            }
+        }
     }
 }
 
-fn sparse_ptdf_entries(
+/// The probe a sparse factorization must solve before it is trusted: a fixed
+/// right hand side `b = A x` from a deterministic `x` with entries spread in
+/// `[-1, 1]`.
+struct Probe<'a> {
+    a: &'a CsMat<f64>,
+    x: Vec<f64>,
+    b: Vec<f64>,
+    /// `‖A‖∞`, the largest absolute row sum.
+    a_norm: f64,
+}
+
+impl<'a> Probe<'a> {
+    #[allow(clippy::cast_precision_loss)]
+    fn new(a: &'a CsMat<f64>) -> Self {
+        // Fractional parts of multiples of the golden ratio: deterministic,
+        // nonzero, and never aligned with a structured null vector.
+        let x: Vec<f64> = (0..a.rows())
+            .map(|i| ((i as f64 + 1.0) * 0.618_033_988_749_895).fract() * 2.0 - 1.0)
+            .collect();
+        let b = mat_vec(a, &x);
+        let a_norm = a
+            .outer_iterator()
+            .map(|row| row.data().iter().map(|v| v.abs()).sum::<f64>())
+            .fold(0.0, f64::max);
+        Self { a, x, b, a_norm }
+    }
+
+    /// Whether `factor` solves the probe with a finite result, a normwise
+    /// backward error `‖b − A x̂‖∞ / (‖A‖∞ ‖x̂‖∞ + ‖b‖∞)` within
+    /// [`BACKWARD_ERROR_TRUST`], and a relative forward error
+    /// `‖x̂ − x‖∞ / ‖x‖∞` within [`FORWARD_ERROR_TRUST`].
+    fn trusts(&self, factor: &SparseFactor) -> bool {
+        let n = self.b.len();
+        let mut rhs = faer::Mat::<f64>::from_fn(n, 1, |i, _| self.b[i]);
+        factor.solve_block(rhs.as_mut());
+        let x: Vec<f64> = (0..n).map(|i| rhs[(i, 0)]).collect();
+        if x.iter().any(|v| !v.is_finite()) {
+            return false;
+        }
+        let ax = mat_vec(self.a, &x);
+        let residual = self
+            .b
+            .iter()
+            .zip(&ax)
+            .map(|(b, ax)| (b - ax).abs())
+            .fold(0.0, f64::max);
+        let x_norm = x.iter().map(|v| v.abs()).fold(0.0, f64::max);
+        let b_norm = self.b.iter().map(|v| v.abs()).fold(0.0, f64::max);
+        let scale = self.a_norm * x_norm + b_norm;
+        let forward = x
+            .iter()
+            .zip(&self.x)
+            .map(|(x, exact)| (x - exact).abs())
+            .fold(0.0, f64::max);
+        let exact_norm = self.x.iter().map(|v| v.abs()).fold(0.0, f64::max);
+        scale > 0.0
+            && residual <= BACKWARD_ERROR_TRUST * scale
+            && forward <= FORWARD_ERROR_TRUST * exact_norm
+    }
+}
+
+fn mat_vec(a: &CsMat<f64>, x: &[f64]) -> Vec<f64> {
+    a.outer_iterator()
+        .map(|row| row.iter().map(|(j, &v)| v * x[j]).sum())
+        .collect()
+}
+
+/// A factorization of the grounded DC bus susceptance matrix that solves
+/// blocks of right hand sides, for the builders that solve column by column.
+enum GroundedSolver {
+    DenseCholesky(DenseCholesky),
+    /// The explicit inverse, row major, of a nonsingular indefinite matrix.
+    DenseInverse {
+        inverse: Vec<f64>,
+        n: usize,
+    },
+    Sparse(Box<SparseFactor>),
+}
+
+impl GroundedSolver {
+    /// Factor `lr` on the path `options` selects for a problem that solves
+    /// right hand sides without forming the full matrices.
+    fn factor(inc: &IncidenceParts, lr: &CsMat<f64>, options: &SensitivityOptions) -> Result<Self> {
+        let nr = lr.rows();
+        match options.select_solver_for_reduced_dimension(nr) {
+            SensitivitySolver::Dense => {
+                let dense = densify(lr, nr);
+                if let Some(chol) = DenseCholesky::factor(&dense, nr) {
+                    return Ok(Self::DenseCholesky(chol));
+                }
+                let inverse = dense_inverse(dense, nr).ok_or(Error::SingularNetwork)?;
+                Ok(Self::DenseInverse { inverse, n: nr })
+            }
+            SensitivitySolver::Sparse => {
+                ensure_finite_susceptances(inc)?;
+                Ok(Self::Sparse(Box::new(SparseFactor::factor(lr)?)))
+            }
+            SensitivitySolver::Auto => unreachable!("select_solver_for_shape resolves Auto"),
+        }
+    }
+
+    fn path(&self) -> SensitivitySolverPath {
+        match self {
+            Self::DenseCholesky(_) => SensitivitySolverPath::DenseCholesky,
+            Self::DenseInverse { .. } => SensitivitySolverPath::DenseInverse,
+            Self::Sparse(factor) => factor.path(),
+        }
+    }
+
+    /// Solve in place, one right hand side per column.
+    fn solve_block(&self, mut rhs: faer::MatMut<'_, f64>) {
+        match self {
+            Self::Sparse(factor) => factor.solve_block(rhs),
+            Self::DenseCholesky(chol) => {
+                let mut column = vec![0.0; rhs.nrows()];
+                for j in 0..rhs.ncols() {
+                    for (i, slot) in column.iter_mut().enumerate() {
+                        *slot = rhs[(i, j)];
+                    }
+                    chol.solve(&mut column);
+                    for (i, value) in column.iter().enumerate() {
+                        rhs[(i, j)] = *value;
+                    }
+                }
+            }
+            Self::DenseInverse { inverse, n } => {
+                let mut column = vec![0.0; *n];
+                for j in 0..rhs.ncols() {
+                    for (i, slot) in column.iter_mut().enumerate() {
+                        *slot = rhs[(i, j)];
+                    }
+                    for i in 0..*n {
+                        rhs[(i, j)] = inverse[i * n..i * n + n]
+                            .iter()
+                            .zip(&column)
+                            .map(|(a, b)| a * b)
+                            .sum();
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// PTDF columns for `buses`, column `position` holding bus `buses[position]`.
+/// A grounded bus's column is zero and solves nothing.
+fn ptdf_column_entries(
     inc: &IncidenceParts,
     g: &Grounding,
-    llt: &SparseLlt,
+    solver: &GroundedSolver,
     options: &SensitivityOptions,
+    buses: &[usize],
     mut ptdf_entry: impl FnMut(usize, usize, f64) -> Result<()>,
 ) -> Result<SensitivityMatrixMetadata> {
     let n = inc.n();
@@ -640,22 +1063,26 @@ fn sparse_ptdf_entries(
 
     let mut nnz = 0usize;
     let mut dropped = 0usize;
-    let reduced_buses: Vec<usize> = (0..n).filter(|&bus| g.reduced(bus).is_some()).collect();
+    let solved: Vec<(usize, usize)> = buses
+        .iter()
+        .enumerate()
+        .filter_map(|(position, &bus)| g.reduced(bus).map(|reduced| (position, reduced)))
+        .collect();
     let mut theta = vec![0.0; nr];
-    for chunk in reduced_buses.chunks(SPARSE_SOLVE_BLOCK) {
+    for chunk in solved.chunks(SPARSE_SOLVE_BLOCK) {
         let mut block = faer::Mat::<f64>::zeros(nr, chunk.len());
-        for (col, &bus) in chunk.iter().enumerate() {
-            block[(g.reduced(bus).expect("chunk holds reduced buses"), col)] = 1.0;
+        for (col, &(_, reduced)) in chunk.iter().enumerate() {
+            block[(reduced, col)] = 1.0;
         }
-        llt.solve_block(block.as_mut());
-        for (col, &bus) in chunk.iter().enumerate() {
+        solver.solve_block(block.as_mut());
+        for (col, &(position, _)) in chunk.iter().enumerate() {
             for (r, slot) in theta.iter_mut().enumerate() {
                 *slot = block[(r, col)];
             }
             for branch in 0..m {
                 let v = branch_flow(branch, &from, &to, &inc.b, g, &theta);
                 if v.abs() > options.drop_tolerance {
-                    ptdf_entry(branch, bus, v)?;
+                    ptdf_entry(branch, position, v)?;
                     nnz += 1;
                 } else if v != 0.0 {
                     dropped += 1;
@@ -666,17 +1093,20 @@ fn sparse_ptdf_entries(
 
     Ok(SensitivityMatrixMetadata {
         rows: m,
-        cols: n,
+        cols: buses.len(),
         nnz,
         dropped_entries: dropped,
     })
 }
 
-fn sparse_lodf_entries(
+/// LODF columns for `outages`, column `position` holding the outage of branch
+/// `outages[position]`.
+fn lodf_column_entries(
     inc: &IncidenceParts,
     g: &Grounding,
-    llt: &SparseLlt,
+    solver: &GroundedSolver,
     options: &SensitivityOptions,
+    outages: &[usize],
     mut lodf_entry: impl FnMut(usize, usize, f64) -> Result<()>,
 ) -> Result<SensitivityMatrixMetadata> {
     let n = inc.n();
@@ -691,81 +1121,79 @@ fn sparse_lodf_entries(
     let mut nnz = 0usize;
     let mut dropped = 0usize;
     let mut theta = vec![0.0; nr];
-    let mut start = 0usize;
-    while start < m {
-        let end = (start + SPARSE_SOLVE_BLOCK).min(m);
+    for (chunk_index, chunk) in outages.chunks(SPARSE_SOLVE_BLOCK).enumerate() {
+        let start = chunk_index * SPARSE_SOLVE_BLOCK;
         // A bridge's column is its diagonal alone, so only the other outages
         // of this block get a right hand side and a solve. Every branch of a
         // radial feeder is a bridge, which is every solve skipped here.
-        let solved: Vec<usize> = (start..end).filter(|&k| !is_bridge[k]).collect();
-        if solved.is_empty() {
-            for outage in start..end {
-                lodf_entry(outage, outage, -1.0)?;
+        let solved: Vec<usize> = chunk.iter().copied().filter(|&k| !is_bridge[k]).collect();
+        let mut block = faer::Mat::<f64>::zeros(nr, solved.len());
+        for (col, &outage) in solved.iter().enumerate() {
+            if let Some(rf) = g.reduced(from[outage]) {
+                block[(rf, col)] += 1.0;
+            }
+            if let Some(rt) = g.reduced(to[outage]) {
+                block[(rt, col)] -= 1.0;
+            }
+        }
+        if !solved.is_empty() {
+            solver.solve_block(block.as_mut());
+        }
+        let mut next = 0usize;
+        for (offset, &outage) in chunk.iter().enumerate() {
+            let position = start + offset;
+            // Neither the solve that would have produced the rest of a
+            // bridge's column nor the scan that would emit it runs: every
+            // other entry is an exact zero, which is neither above the drop
+            // tolerance nor counted as dropped.
+            if is_bridge[outage] {
+                lodf_entry(outage, position, -1.0)?;
                 nnz += 1;
+                continue;
             }
-        } else {
-            let mut block = faer::Mat::<f64>::zeros(nr, solved.len());
-            for (col, &outage) in solved.iter().enumerate() {
-                if let Some(rf) = g.reduced(from[outage]) {
-                    block[(rf, col)] += 1.0;
-                }
-                if let Some(rt) = g.reduced(to[outage]) {
-                    block[(rt, col)] -= 1.0;
-                }
+            for (r, slot) in theta.iter_mut().enumerate() {
+                *slot = block[(r, next)];
             }
-            llt.solve_block(block.as_mut());
-            let mut next = 0usize;
-            for outage in start..end {
-                // Neither the solve that would have produced the rest of a
-                // bridge's column nor the scan that would emit it runs: every
-                // other entry is an exact zero, which is neither above the
-                // drop tolerance nor counted as dropped.
-                if is_bridge[outage] {
-                    lodf_entry(outage, outage, -1.0)?;
+            next += 1;
+            let denom = 1.0 - branch_flow(outage, &from, &to, &inc.b, g, &theta);
+            let islands = denom.abs() < LODF_ISLAND_TOLERANCE;
+            for branch in 0..m {
+                let v = if branch == outage {
+                    -1.0
+                } else if islands {
+                    0.0
+                } else {
+                    branch_flow(branch, &from, &to, &inc.b, g, &theta) / denom
+                };
+                if branch == outage || v.abs() > options.drop_tolerance {
+                    lodf_entry(branch, position, v)?;
                     nnz += 1;
-                    continue;
-                }
-                for (r, slot) in theta.iter_mut().enumerate() {
-                    *slot = block[(r, next)];
-                }
-                next += 1;
-                let denom = 1.0 - branch_flow(outage, &from, &to, &inc.b, g, &theta);
-                let islands = denom.abs() < LODF_ISLAND_TOLERANCE;
-                for branch in 0..m {
-                    let v = if branch == outage {
-                        -1.0
-                    } else if islands {
-                        0.0
-                    } else {
-                        branch_flow(branch, &from, &to, &inc.b, g, &theta) / denom
-                    };
-                    if branch == outage || v.abs() > options.drop_tolerance {
-                        lodf_entry(branch, outage, v)?;
-                        nnz += 1;
-                    } else if v != 0.0 {
-                        dropped += 1;
-                    }
+                } else if v != 0.0 {
+                    dropped += 1;
                 }
             }
         }
-        start = end;
     }
 
     Ok(SensitivityMatrixMetadata {
         rows: m,
-        cols: m,
+        cols: outages.len(),
         nnz,
         dropped_entries: dropped,
     })
 }
 
-fn ensure_sparse_solver_eligible(inc: &IncidenceParts) -> Result<()> {
+/// Refuse a nonfinite branch susceptance before a sparse factorization: it
+/// poisons every entry it touches. A zero or negative susceptance is a valid
+/// network (a series capacitor has a negative one), which the factorization
+/// fallback handles.
+fn ensure_finite_susceptances(inc: &IncidenceParts) -> Result<()> {
     for (branch, &b) in inc.b.iter().enumerate() {
-        if !b.is_finite() || b <= 0.0 {
+        if !b.is_finite() {
             return Err(Error::InvalidSensitivityOptions {
                 reason: format!(
-                    "the sparse sensitivity solver requires positive finite branch susceptances; \
-                     branch {branch} has {b}; use solver=dense for nonsingular indefinite cases"
+                    "the sparse sensitivity solver requires finite branch susceptances; \\
+                     branch {branch} has {b}"
                 ),
             });
         }
