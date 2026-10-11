@@ -28,7 +28,7 @@ use serde_json::Value;
 
 use super::{
     TextEmission, branch_rating_set_drop_warning, jnum, sanitize_quoted,
-    warn_extra_branch_rating_sets,
+    warn_extra_branch_rating_sets, warn_winding_rating_sets,
 };
 use std::borrow::Cow;
 
@@ -39,7 +39,8 @@ use crate::network::{
     BusId, BusType, ComponentMetadata, DetailedConnectivity, Extras, Generator,
     GeneratorEnergySource, Hvdc, Impedance, Load, LoadVoltageModel, Shunt, ShuntBlock,
     SolverParams, SourceFormat, Switch, SwitchedShuntControl, SwitchedShuntMode, TerminalReference,
-    Transformer3W, TransformerControl, TransformerControlMode, Winding,
+    Transformer3W, TransformerControl, TransformerControlMode, WINDING_IN_SERVICE_EXTRA,
+    WINDING_RATING_SETS_EXTRA, Winding,
 };
 use crate::{Error, Result};
 
@@ -80,16 +81,19 @@ fn read_extra_branch_ratings(
     Ok(ratings)
 }
 
-fn psse_extra_rating_values(
-    branch: &Branch,
-    branch_index: usize,
-    warnings: &mut Diagnostics,
+/// Place `rating_sets` in the nine RATE4-RATE12 slots of a PSS/E v34/v35
+/// record. A set named for a free slot takes it; any other set takes the first
+/// free slot and is reported with that slot, and a set left over once every
+/// slot is taken is reported with `None`.
+fn psse_extra_rating_slots(
+    rating_sets: &[BranchRatingSet],
+    mut report: impl FnMut(&BranchRatingSet, Option<usize>),
 ) -> [f64; PSSE_EXTRA_BRANCH_RATINGS] {
     let mut values = [0.0; PSSE_EXTRA_BRANCH_RATINGS];
     let mut used = [false; PSSE_EXTRA_BRANCH_RATINGS];
     let mut deferred = Vec::new();
 
-    for rating in &branch.rating_sets {
+    for rating in rating_sets {
         if let Some(slot) = psse_extra_rating_slot(&rating.name)
             && !used[slot]
         {
@@ -101,27 +105,72 @@ fn psse_extra_rating_values(
     }
 
     for rating in deferred {
-        if let Some(slot) = used.iter().position(|is_used| !*is_used) {
+        let slot = used.iter().position(|is_used| !*is_used);
+        if let Some(slot) = slot {
             values[slot] = rating.rate_mva;
             used[slot] = true;
-            warnings.push(
-                &codes::EMIT_PSSE_RATING_SET_REMAPPED,
-                branch_rating_set_rename_warning(
-                    branch_index,
-                    branch,
-                    rating,
-                    &psse_extra_rating_name(slot),
-                ),
-            );
-        } else {
-            warnings.push(
-                &F.rating_set_dropped,
-                branch_rating_set_drop_warning("PSS/E v34/v35", branch_index, branch, rating),
-            );
         }
+        report(rating, slot);
     }
 
     values
+}
+
+fn psse_extra_rating_values(
+    branch: &Branch,
+    branch_index: usize,
+    warnings: &mut Diagnostics,
+) -> [f64; PSSE_EXTRA_BRANCH_RATINGS] {
+    psse_extra_rating_slots(&branch.rating_sets, |rating, slot| match slot {
+        Some(slot) => warnings.push(
+            &codes::EMIT_PSSE_RATING_SET_REMAPPED,
+            branch_rating_set_rename_warning(
+                branch_index,
+                branch,
+                rating,
+                &psse_extra_rating_name(slot),
+            ),
+        ),
+        None => warnings.push(
+            &F.rating_set_dropped,
+            branch_rating_set_drop_warning("PSS/E v34/v35", branch_index, branch, rating),
+        ),
+    })
+}
+
+/// The RATE4-RATE12 columns of one three winding transformer winding line.
+fn psse_winding_extra_rating_values(
+    transformer: &Transformer3W,
+    winding: usize,
+    warnings: &mut Diagnostics,
+) -> [f64; PSSE_EXTRA_BRANCH_RATINGS] {
+    let label = three_winding_label(transformer, winding);
+    let rating_sets = transformer.winding_rating_sets(winding);
+    psse_extra_rating_slots(&rating_sets, |rating, slot| {
+        let set = format!("{label} rating set {}={} MVA", rating.name, rating.rate_mva);
+        let Some(slot) = slot else {
+            let message = format!("{set} dropped: PSS/E v34/v35 has twelve ratings per winding");
+            warnings.push(&F.rating_set_dropped, message);
+            return;
+        };
+        let name = psse_extra_rating_name(slot);
+        warnings.push(
+            &codes::EMIT_PSSE_RATING_SET_REMAPPED,
+            format!(
+                "{set} emitted as {name} in PSS/E v34/v35; rating set names outside RATE4-RATE12 are not preserved"
+            ),
+        );
+    })
+}
+
+/// `three winding transformer I-J-K winding N`, naming one winding in a
+/// diagnostic.
+fn three_winding_label(transformer: &Transformer3W, winding: usize) -> String {
+    let [i, j, k] = transformer.windings.each_ref().map(|winding| winding.bus);
+    format!(
+        "three winding transformer {i}-{j}-{k} winding {}",
+        winding + 1
+    )
 }
 
 fn branch_rating_set_rename_warning(
@@ -143,6 +192,7 @@ fn branch_rating_set_rename_warning(
 
 fn warn_psse_extra_branch_ratings_dropped(net: &BalancedNetwork, warnings: &mut Diagnostics) {
     warn_extra_branch_rating_sets(&F, "PSS/E v33", net, warnings);
+    warn_winding_rating_sets(&F, "PSS/E v33", net, warnings);
 }
 
 fn warn_generator_energy_sources_dropped(net: &BalancedNetwork, warnings: &mut Diagnostics) {
@@ -911,6 +961,16 @@ fn write_psse_rev_inner(
                 ),
             );
         }
+        let stat = three_winding_stat(t).unwrap_or_else(|| {
+            warnings.push(
+                &F.value_collapsed,
+                format!(
+                    "PSS/E three winding transformer {}-{}-{} has more than one winding out of service; no STAT code states that, so it was emitted out of service (STAT 0)",
+                    t.windings[0].bus, t.windings[1].bus, t.windings[2].bus
+                ),
+            );
+            0
+        });
         let mut main = vec![
             t.windings[0].bus.to_string(),
             t.windings[1].bus.to_string(),
@@ -923,7 +983,7 @@ fn write_psse_rev_inner(
             num(t.mag_b),
             nmetr.to_string(),
             format!("'{name:<12}'"),
-            i32::from(t.in_service).to_string(),
+            stat.to_string(),
         ];
         for (owner, fraction) in owners {
             main.push(owner.to_string());
@@ -1004,11 +1064,13 @@ fn write_psse_rev_inner(
             let cr = extra_f64(&t.extras, &format!("psse_cr{suffix}")).unwrap_or(0.0);
             let cx = extra_f64(&t.extras, &format!("psse_cx{suffix}")).unwrap_or(0.0);
             if modern {
-                // v34+ winding layout (twelve ratings, NODE after CONT); the
-                // Winding model carries three ratings, so RATE4-RATE12 are 0.
+                // v34+ winding layout: twelve ratings (RATE4-RATE12 from the
+                // winding's extra rating sets), then NODE after CONT.
+                let extra_ratings =
+                    psse_winding_extra_rating_values(t, winding_index, &mut warnings);
                 let _ = writeln!(
                     s,
-                    "{}, {}, {}, {}, {}, {}, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, \
+                    "{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, \
                      {cod}, {cont}, {node}, {}, {}, {}, {}, {ntp}, {tab}, {}, {}, {}",
                     num(w.tap),
                     num(w.nominal_kv),
@@ -1016,6 +1078,15 @@ fn write_psse_rev_inner(
                     num(w.rate_a),
                     num(w.rate_b),
                     num(w.rate_c),
+                    num(extra_ratings[0]),
+                    num(extra_ratings[1]),
+                    num(extra_ratings[2]),
+                    num(extra_ratings[3]),
+                    num(extra_ratings[4]),
+                    num(extra_ratings[5]),
+                    num(extra_ratings[6]),
+                    num(extra_ratings[7]),
+                    num(extra_ratings[8]),
                     num(rma),
                     num(rmi),
                     num(vma),
@@ -1364,14 +1435,20 @@ fn write_psse_rev_inner(
     if !modern {
         warn_psse_extra_branch_ratings_dropped(net, &mut warnings);
     }
-    // This writer replays device ids and every `psse_*` key its reader
-    // retained; a foreign format's keys (LoadID, pslf_circuit, ...) have no
-    // record column and drop, declared once (#330).
+    // This writer replays device ids, every `psse_*` key its reader retained,
+    // and the three winding status and rating sets (STAT and RATE4-RATE12; the
+    // revision 33 loss is reported above); a foreign format's keys (LoadID,
+    // pslf_circuit, ...) have no record column and drop, declared once (#330).
     super::warn_dropped_extras(
         &F,
         "PSS/E .raw",
         net,
-        |key| key == "id" || key.starts_with("psse_"),
+        |key| {
+            key == "id"
+                || key.starts_with("psse_")
+                || key == WINDING_IN_SERVICE_EXTRA
+                || key == WINDING_RATING_SETS_EXTRA
+        },
         &mut warnings,
     );
     let branch_solutions = net
@@ -4253,6 +4330,16 @@ fn read_transformer_3w(
         BusId(id_at(l1, 1, 0)?),
         BusId(id_at(l1, 2, 0)?),
     ];
+    let stat = int_at(l1, 11, 1)?;
+    let (in_service, windings_in_service) = three_winding_status(stat).unwrap_or_else(|| {
+        warnings.push(
+            &codes::READ_PSSE_VALUE_SUBSTITUTED,
+            format!(
+                "PSS/E three winding transformer {label}: STAT {stat} is not a code from 0 to 4; read as 1, every winding in service"
+            ),
+        );
+        (true, [true; 3])
+    });
     let z = {
         let mut imp = |off: usize, pair: &str| -> Result<Impedance> {
             let sbase = num_at(l2, off + 2, system_base)?;
@@ -4343,26 +4430,57 @@ fn read_transformer_3w(
     for (winding, suffix) in [(l3, "1"), (l4, "2"), (l5, "3")] {
         retain_transformer_winding_extras(&mut extras, winding, raw_rev, suffix)?;
     }
-    Ok((
-        Transformer3W {
-            windings,
-            z,
-            star_vm: num_at(l2, 9, 1.0)?,
-            star_va: num_at(l2, 10, 0.0)?,
-            mag_g,
-            mag_b,
-            // STAT 0 = out of service; 1-4 mark which windings are in service. Treat
-            // any nonzero status as the transformer being in service.
-            in_service: int_at(l1, 11, 1)? != 0,
-            name: l1
-                .get(10)
-                .filter(|n| !n.is_empty())
-                .map(|n| n.trim().to_string()),
-            uid: None,
-            extras,
-        },
-        control_nodes,
-    ))
+    let mut transformer = Transformer3W {
+        windings,
+        z,
+        star_vm: num_at(l2, 9, 1.0)?,
+        star_va: num_at(l2, 10, 0.0)?,
+        mag_g,
+        mag_b,
+        in_service,
+        name: l1
+            .get(10)
+            .filter(|n| !n.is_empty())
+            .map(|n| n.trim().to_string()),
+        uid: None,
+        extras,
+    };
+    transformer.set_winding_in_service(windings_in_service);
+    for (winding, line) in [l3, l4, l5].into_iter().enumerate() {
+        transformer
+            .set_winding_rating_sets(winding, read_extra_branch_ratings(line, 3, raw_rev >= 34)?);
+    }
+    Ok((transformer, control_nodes))
+}
+
+/// The transformer and per winding status a PSS/E three winding `STAT` states:
+/// 0 takes the transformer out, 1 keeps every winding in, and 2, 3, and 4 take
+/// only winding 2, 3, or 1 out. `None` for any other code.
+fn three_winding_status(stat: i64) -> Option<(bool, [bool; 3])> {
+    match stat {
+        0 => Some((false, [true; 3])),
+        1 => Some((true, [true; 3])),
+        2 => Some((true, [true, false, true])),
+        3 => Some((true, [true, true, false])),
+        4 => Some((true, [false, true, true])),
+        _ => None,
+    }
+}
+
+/// The PSS/E three winding `STAT` for a transformer, the inverse of
+/// [`three_winding_status`]. `None` when the transformer is in service with
+/// two or three windings out, which no code states.
+fn three_winding_stat(transformer: &Transformer3W) -> Option<i64> {
+    if !transformer.in_service {
+        return Some(0);
+    }
+    match transformer.winding_in_service() {
+        [true, true, true] => Some(1),
+        [true, false, true] => Some(2),
+        [true, true, false] => Some(3),
+        [false, true, true] => Some(4),
+        _ => None,
+    }
 }
 
 /// Read a 3-line two-terminal DC line record into an [`Hvdc`].
@@ -7664,6 +7782,206 @@ Q
                 .as_ref()
                 .unwrap()
                 .controlled_bus_on_winding_side
+        );
+    }
+
+    /// A revision 35 case with one three winding transformer per STAT code
+    /// 0 to 4. Winding 1 states RATE1-RATE5 and RATE12, winding 2 all twelve
+    /// ratings, and winding 3 RATE1 only.
+    fn three_winding_status_case() -> String {
+        let mut raw = String::from(
+            "0, 100.00, 35, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'HV          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'MV          ', 115.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+3,'LV          ', 13.8,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN SYSTEM SWITCHING DEVICE DATA
+0 / END OF SYSTEM SWITCHING DEVICE DATA, BEGIN TRANSFORMER DATA
+",
+        );
+        for stat in 0..=4 {
+            let _ = write!(
+                raw,
+                "1, 2, 3, '{stat}', 1, 1, 1, 0.0, 0.0, 2, 'T3W {stat}       ', {stat}, 1, 1.0, 0, 1.0, 0, 1.0, 0, 1.0, 'YNyn0d1     ', 0
+0.01, 0.10, 100.0, 0.02, 0.20, 100.0, 0.03, 0.30, 100.0, 1.0, 0.0
+1.0, 230.0, 0.0, 100.0, 110.0, 120.0, 130.0, 140.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 190.0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0.0, 0.0, 0.0
+1.0, 115.0, 0.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 85.0, 90.0, 95.0, 100.0, 105.0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0.0, 0.0, 0.0
+1.0, 13.8, 0.0, 20.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0.0, 0.0, 0.0
+"
+            );
+        }
+        raw.push_str("0 / END OF TRANSFORMER DATA, BEGIN AREA DATA\nQ\n");
+        raw
+    }
+
+    /// The transformer and per winding status each STAT code 0 to 4 states.
+    const THREE_WINDING_STATUS: [(bool, [bool; 3]); 5] = [
+        (false, [true, true, true]),
+        (true, [true, true, true]),
+        (true, [true, false, true]),
+        (true, [true, true, false]),
+        (true, [false, true, true]),
+    ];
+
+    fn three_winding_statuses(net: &BalancedNetwork) -> Vec<(bool, [bool; 3])> {
+        net.transformers_3w()
+            .iter()
+            .map(|t| (t.in_service, t.winding_in_service()))
+            .collect()
+    }
+
+    fn rating_sets(transformer: &Transformer3W, winding: usize) -> Vec<(String, f64)> {
+        transformer
+            .winding_rating_sets(winding)
+            .into_iter()
+            .map(|set| (set.name, set.rate_mva))
+            .collect()
+    }
+
+    fn assert_three_winding_ratings(net: &BalancedNetwork) {
+        let rate = |n: u32, mva: f64| (format!("RATE{n}"), mva);
+        for t in net.transformers_3w() {
+            assert_eq!(
+                rating_sets(t, 0),
+                [rate(4, 130.0), rate(5, 140.0), rate(12, 190.0)]
+            );
+            assert_eq!(
+                rating_sets(t, 1),
+                (4..=12)
+                    .map(|n| rate(n, 45.0 + 5.0 * f64::from(n)))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(rating_sets(t, 2), []);
+            close(t.windings[1].rate_c, 60.0);
+        }
+    }
+
+    #[test]
+    fn three_winding_stat_states_each_winding_and_round_trips() {
+        let net = parse_psse(&three_winding_status_case()).unwrap();
+        assert_eq!(three_winding_statuses(&net), THREE_WINDING_STATUS);
+        assert_three_winding_ratings(&net);
+
+        for revision in [34, 35] {
+            let emitted = write_psse_rev(&net, revision);
+            let stats = emitted
+                .text
+                .lines()
+                .filter(|line| line.starts_with("1, 2, 3, '"))
+                .map(|line| fields(line)[11].to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(stats, ["0", "1", "2", "3", "4"], "revision {revision}");
+            assert!(
+                !emitted
+                    .render_diagnostics()
+                    .iter()
+                    .any(|line| line.contains("rating set")),
+                "revision {revision} states every rating: {:?}",
+                emitted.render_diagnostics()
+            );
+            let back = parse_psse(&emitted.text).unwrap();
+            assert_eq!(three_winding_statuses(&back), THREE_WINDING_STATUS);
+            assert_three_winding_ratings(&back);
+        }
+
+        // Revision 33 states the same STAT codes but only three ratings per
+        // winding, so each extra rating set is reported.
+        let rev33 = write_psse_rev(&net, 33);
+        let back = parse_psse(&rev33.text).unwrap();
+        assert_eq!(three_winding_statuses(&back), THREE_WINDING_STATUS);
+        assert!(
+            back.transformers_3w()
+                .iter()
+                .all(|t| (0..3).all(|winding| t.winding_rating_sets(winding).is_empty()))
+        );
+        let dropped = rev33
+            .render_diagnostics()
+            .iter()
+            .filter(|line| {
+                line.contains("EMIT.PSSE.RATING_SET_DROPPED")
+                    && line.contains("three winding transformer 1-2-3 winding")
+            })
+            .count();
+        assert_eq!(dropped, 5 * (3 + 9), "{:?}", rev33.render_diagnostics());
+    }
+
+    #[test]
+    fn three_winding_status_and_ratings_survive_rawx() {
+        let net = parse_psse(&three_winding_status_case()).unwrap();
+        let emitted = super::super::rawx::write_rawx(&net).unwrap();
+        let back =
+            super::super::rawx::parse_rawx_source(&emitted.text, None, &mut Diagnostics::new())
+                .unwrap();
+        assert_eq!(three_winding_statuses(&back), THREE_WINDING_STATUS);
+        assert_three_winding_ratings(&back);
+    }
+
+    #[test]
+    fn three_winding_status_the_stat_codes_cannot_state_is_diagnosed() {
+        let raw =
+            three_winding_status_case().replacen("'T3W 1       ', 1,", "'T3W 1       ', 7,", 1);
+        let mut warnings = Diagnostics::new();
+        let net = parse_psse_source(&raw, None, &mut warnings).unwrap();
+        assert_eq!(three_winding_statuses(&net)[1], (true, [true; 3]));
+        assert!(
+            warnings.lines().iter().any(|line| {
+                line.contains("READ.PSSE.VALUE_SUBSTITUTED") && line.contains("STAT 7")
+            }),
+            "{warnings:?}"
+        );
+
+        // Two windings out leaves no STAT code but 0, which the writer reports.
+        let mut net = net;
+        net.transformers_3w_mut()[1].set_winding_in_service([true, false, false]);
+        let emitted = write_psse_rev(&net, 35);
+        let back = parse_psse(&emitted.text).unwrap();
+        assert!(!back.transformers_3w()[1].in_service);
+        assert!(
+            emitted.render_diagnostics().iter().any(|line| {
+                line.contains("EMIT.PSSE.VALUE_COLLAPSED") && line.contains("STAT 0")
+            }),
+            "{:?}",
+            emitted.render_diagnostics()
+        );
+    }
+
+    #[test]
+    fn three_winding_detail_other_writers_cannot_state_is_diagnosed() {
+        let net = parse_psse(&three_winding_status_case()).unwrap();
+        let xiidm = crate::format::emit_value_text(&net, crate::TargetFormat::Xiidm).unwrap();
+        let diagnostics = xiidm.render_diagnostics();
+        assert!(
+            diagnostics.iter().any(|line| {
+                line.contains("3 out of service three winding transformer winding(s)")
+            }),
+            "{diagnostics:?}"
+        );
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|line| line.contains("RATING_SET_DROPPED")
+                    && line.contains("three winding transformer 1-2-3 winding"))
+                .count(),
+            5 * (3 + 9),
+            "{diagnostics:?}"
+        );
+
+        // PSLF declares both entries through its dropped extras line.
+        let pslf = crate::format::emit_value_text(&net, crate::TargetFormat::Pslf).unwrap();
+        assert!(
+            pslf.render_diagnostics().iter().any(|line| {
+                line.contains("EXTRAS_DROPPED")
+                    && line.contains("winding_in_service")
+                    && line.contains("winding_rating_sets")
+            }),
+            "{:?}",
+            pslf.render_diagnostics()
         );
     }
 
