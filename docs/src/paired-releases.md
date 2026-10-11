@@ -30,8 +30,12 @@ crates.io, PyPI, and Julia's General registry.
 The manifest records the source pairing, exact Julia candidate tree,
 `Artifacts.toml` hash, binary hashes, changelog hashes, and validation run.
 The tag annotation and published immutable assets identify the approved
-candidate. Validation, reconciliation, and registration execute PowerIO tooling
-from that tag and verify its commit against the annotation and manifest. Editing release-body prose does not authorize different code.
+candidate. Validation, reconciliation of published releases, and
+registration execute PowerIO tooling from that tag and verify its commit
+against the annotation and manifest. Draft recovery runs from `main`, but it
+only reruns a candidate's own build or dispatches the completion workflow,
+which runs from the tag. Editing release-body prose does not authorize
+different code.
 New `main` commits do not change the candidate or block its registration.
 
 ## Retry and recovery
@@ -94,9 +98,11 @@ settings, then `--activate` to enable immutable releases and paired dispatch.
 The activation command preserves publishing environment names and tag rules,
 and administrator-bypass settings. It removes the `crates-io` and `pypi`
 reviewer lists; `--check` prints the exact proposed payloads for maintainer
-approval before `--activate` makes any change. Activation checks that the paired
-workflow files and App configuration exist and current-main CI and App access
-have passed, then enables immutable releases in both repositories.
+approval before `--activate` makes any change. Activation checks that both
+repositories carry the `.github/paired-release.json` marker that ships with the
+paired workflows, that the App configuration exists, and that current-main CI
+and App access have passed, then enables immutable releases in both
+repositories.
 The human Publish release action then serves as the paired publication
 approval. Do not activate while a legacy release is still running.
 
