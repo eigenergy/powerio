@@ -123,10 +123,15 @@ pip install dist/*.whl && pytest python/tests  # an editable install is shadowed
 
 ## Release flow
 
-Follow `docs/src/paired-releases.md`. Before paired automation is activated,
-use the existing reviewed Julia intent and tag workflow.
-Do not tag a release until the maintainer approves its final paired diff
-and test results.
+There are two release routes; do not mix them. Until a maintainer completes
+the one-time activation in `docs/src/paired-releases.md`, which sets the
+repository variable `PAIRED_RELEASES` to `true`, follow `CONTRIBUTING.md`
+"Releasing > Before activation": the version bump and changelog, the reviewed
+PowerIO.jl release intent, the annotated tag, and the draft release a human
+publishes. After activation, follow `docs/src/paired-releases.md`.
+
+Do not mark a PowerIO.jl release intent ready or create a release tag until
+the maintainer approves the final cross repository diff and test results.
 
 After activation, version preparation opens paired PRs. Candidate preparation
 freezes reviewed commits and builds a complete draft. The maintainer's Publish
