@@ -69,6 +69,16 @@
   PowerIO's own directory listing keeps: a subdirectory 64 levels down, or
   more than 4,096 files and subdirectories not yet listed.
 
+- Agents using the MCP server see the reason a tool call was refused. The
+  server raises each refusal as the SDK's `ToolError`, so the message and its
+  diagnostic code reach the client, for example a path outside the allowed
+  roots, an unknown format, or an input over the byte limit; with mcp 2.1 and
+  later the client otherwise receives only `Error executing tool <name>`. An
+  unknown `scenario_id` lists the scenarios the ScenarioSet holds, and an out
+  of range `time_index` states the valid indices. `pip install 'powerio[mcp]'`
+  installs the NumPy and SciPy that `calc_matrix` needs, and the `about` tool
+  reports the build's feature set under `features`.
+
 - PSS/E RAW strings in double quotes now read as one field. PSS/E accepts
   either quote character, and revision 35 files double quote the rating set
   names on the system-wide `RATING` records and the blank `MNAME` that ends

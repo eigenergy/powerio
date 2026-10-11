@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -12,17 +13,18 @@ pytest.importorskip("mcp", reason="powerio[mcp] not installed (needs Python 3.10
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from powerio.mcp.sandbox import ALLOWED_ROOTS_ENV
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
 TIMEOUT = 60.0
 
 
-def _run(steps):
+def _run(steps, env=None):
     async def go():
         parameters = StdioServerParameters(
             command=sys.executable,
             args=["-m", "powerio.mcp"],
-            env=dict(os.environ),
+            env={**os.environ, **(env or {})},
         )
         async with stdio_client(parameters) as (read, write):
             async with ClientSession(
@@ -37,6 +39,52 @@ def _run(steps):
 def _payload(result):
     assert not result.is_error, result.content[0].text
     return json.loads(result.content[0].text)
+
+
+def _refusal(result):
+    assert result.is_error, result.content[0].text
+    return result.content[0].text
+
+
+def test_refusals_reach_the_client_with_their_reason(tmp_path, time_series_powerio_ir):
+    outside = tmp_path / "case9.m"
+    shutil.copy2(DATA / "case9.m", outside)
+
+    async def steps(session):
+        return [
+            _refusal(await session.call_tool("parse", {"path": str(outside)})),
+            _refusal(
+                await session.call_tool(
+                    "parse", {"content": "x", "format": "no-such-format"}
+                )
+            ),
+            _refusal(
+                await session.call_tool(
+                    "summarize",
+                    {"powerio_ir": time_series_powerio_ir, "time_index": 2},
+                )
+            ),
+            _refusal(
+                await session.call_tool(
+                    "calc_matrix",
+                    {"matrix": "ptdf", "path": str(DATA / "case9.m"),
+                     "skip_zero_impedance": True},
+                )
+            ),
+        ]
+
+    outside_roots, unknown_format, time_index, flag = _run(
+        steps, env={ALLOWED_ROOTS_ENV: str(DATA)}
+    )
+    assert "`path` is outside allowed MCP roots" in outside_roots
+    assert (
+        "REQUEST.FORMAT.UNKNOWN: unknown or unsupported case format: no-such-format"
+        in unknown_format
+    )
+    assert (
+        "`time_index` 2 is out of range: the TimeSeries has 2 time points" in time_index
+    )
+    assert "ptdf does not take skip_zero_impedance" in flag
 
 
 def test_module_round_trip_over_stdio():

@@ -9,6 +9,7 @@ use the network carried by a balanced operating point.
 from __future__ import annotations
 
 import base64
+import functools
 import io
 import json
 import os
@@ -18,15 +19,18 @@ from pathlib import Path
 from typing import (
     Annotated,
     Any,
+    Callable,
     Dict,
     Literal,
     Mapping,
     MutableMapping,
     Optional,
+    TypeVar,
     cast,
 )
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 import powerio
@@ -277,6 +281,46 @@ def _diagnostics_payload(powerio_ir: str) -> Dict[str, Any]:
     }
 
 
+class _TimeIndexOutOfRange(IndexError):
+    """A ``time_index`` outside the selected TimeSeries."""
+
+
+class _UnknownScenarioId(KeyError):
+    """A ``scenario_id`` the selected ScenarioSet does not hold."""
+
+    def __str__(self) -> str:
+        # KeyError quotes its argument; this message is already a sentence.
+        return str(self.args[0])
+
+
+# Scenario IDs an unknown `scenario_id` refusal names before it counts the rest.
+_LISTED_SCENARIO_IDS = 20
+
+
+def _time_index_out_of_range(index: int, length: int) -> _TimeIndexOutOfRange:
+    if length == 0:
+        held = "the TimeSeries has no time points"
+    elif length == 1:
+        held = "the TimeSeries has 1 time point, index 0"
+    else:
+        held = f"the TimeSeries has {length} time points, indices 0 to {length - 1}"
+    return _TimeIndexOutOfRange(f"`time_index` {index} is out of range: {held}")
+
+
+def _unknown_scenario_id(
+    scenario_id: str, scenarios: "powerio.ScenarioSet"
+) -> _UnknownScenarioId:
+    ids = list(scenarios)
+    if not ids:
+        held = "the ScenarioSet has no scenarios"
+    else:
+        listed = ", ".join(repr(item) for item in ids[:_LISTED_SCENARIO_IDS])
+        if len(ids) > _LISTED_SCENARIO_IDS:
+            listed += f", and {len(ids) - _LISTED_SCENARIO_IDS} more"
+        held = f"the ScenarioSet holds {listed}"
+    return _UnknownScenarioId(f"unknown `scenario_id` {scenario_id!r}: {held}")
+
+
 def _select_value(
     value: Any,
     *,
@@ -288,11 +332,16 @@ def _select_value(
     selection: Dict[str, Any] = {}
     while remaining_time is not None or remaining_scenario is not None:
         if isinstance(value, powerio.TimeSeries) and remaining_time is not None:
+            length = len(value)
+            if not -length <= remaining_time < length:
+                raise _time_index_out_of_range(remaining_time, length)
             selection["time_index"] = remaining_time
             value = value[remaining_time]
             remaining_time = None
             continue
         if isinstance(value, powerio.ScenarioSet) and remaining_scenario is not None:
+            if remaining_scenario not in value:
+                raise _unknown_scenario_id(remaining_scenario, value)
             selection["scenario_id"] = remaining_scenario
             value = value[remaining_scenario]
             remaining_scenario = None
@@ -718,8 +767,41 @@ _MODULE_INPUT_HELP = (
     "serialized PowerIO IR; `path` and `content` are grid exchange data."
 )
 
+# What this module raises for input the caller can correct. Every such refusal
+# is a ValueError (PowerIOError and sandbox.PathNotAllowed subclass it), apart
+# from the two collection selection errors.
+_REFUSALS = (ValueError, _TimeIndexOutOfRange, _UnknownScenarioId)
 
-@mcp.tool(
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _tool(**options: Any) -> Callable[[_F], _F]:
+    """Register a function as an MCP tool whose refusals reach the client.
+
+    The SDK sends the client the message of a ``ToolError``. From mcp 2.1 it
+    sends only ``Error executing tool <name>`` for any other exception, so a
+    refusal raised as ``ValueError`` would lose its diagnostic code and
+    reason. The registered callable raises each refusal again as a
+    ``ToolError`` with the same message. Any other exception stays a failure
+    the SDK logs with its traceback. The decorated function itself is returned
+    unchanged, so a Python caller still receives the original exception.
+    """
+
+    def register(fn: _F) -> _F:
+        @functools.wraps(fn)
+        def call(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return fn(*args, **kwargs)
+            except _REFUSALS as exc:
+                raise ToolError(str(exc)) from exc
+
+        mcp.tool(**options)(call)
+        return fn
+
+    return register
+
+
+@_tool(
     name="parse",
     description="Parse grid exchange data and return serialized PowerIO IR. "
     + _SOURCE_FORMAT_HELP,
@@ -732,7 +814,7 @@ def _parse_tool(
     return _parse_impl(path, content, format)
 
 
-@mcp.tool(
+@_tool(
     name="emit",
     description="Emit a PowerIO module in one grid exchange format. "
     + _MODULE_INPUT_HELP,
@@ -754,7 +836,7 @@ def _emit_tool(
     }
 
 
-@mcp.tool(
+@_tool(
     name="summarize",
     description="Summarize a typed PowerIO value. Collection entries use a "
     "normal time index or scenario ID. "
@@ -778,13 +860,13 @@ def _summarize_tool(
     )
 
 
-@mcp.tool(name="diagnostics")
+@_tool(name="diagnostics")
 def _diagnostics_tool(powerio_ir: str) -> dict:
     """Return the diagnostics stored on a serialized PowerIO module."""
     return _diagnostics_payload(powerio_ir)
 
 
-@mcp.tool(
+@_tool(
     name="to_normalized",
     description="Normalize a BalancedNetwork and return serialized PowerIO IR. "
     + _MODULE_INPUT_HELP,
@@ -800,7 +882,7 @@ def _to_normalized_tool(
     )
 
 
-@mcp.tool(
+@_tool(
     name="calc_matrix",
     description="Calculate a BalancedNetwork matrix in COO form, or a DC "
     "vector, with the bus ids and branch identities of every axis. "
@@ -832,7 +914,7 @@ def _calc_matrix_tool(
     )
 
 
-@mcp.tool(name="display")
+@_tool(name="display")
 def _display_tool(path: str, format: Optional[str] = None) -> dict:
     """Return the raw record of a PowerWorld display file.
 
@@ -842,7 +924,7 @@ def _display_tool(path: str, format: Optional[str] = None) -> dict:
     return _display_impl(path, format)
 
 
-@mcp.tool(
+@_tool(
     name="to_balanced_report",
     description="Report whether a MulticonductorNetwork can become a "
     "BalancedNetwork. "
@@ -865,7 +947,7 @@ def _to_balanced_report_tool(
     return report
 
 
-@mcp.tool(
+@_tool(
     name="to_balanced",
     description="Convert a MulticonductorNetwork to a BalancedNetwork and "
     "return serialized PowerIO IR. "
@@ -892,13 +974,14 @@ def _to_balanced_tool(
     }
 
 
-@mcp.tool(
+@_tool(
     name="about",
     description="Return the PowerIO version, IR version, feature set, and MCP tools.",
 )
 def _about_tool() -> dict:
     return {
         **powerio.versions(),
+        "features": powerio.features(),
         "tools": sorted(tool.name for tool in mcp._tool_manager.list_tools()),
     }
 

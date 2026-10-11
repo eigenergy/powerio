@@ -149,6 +149,29 @@ def test_collection_selector_refuses_the_wrong_collection_operation(
         server.summarize(powerio_ir=time_series_powerio_ir, scenario_id="base")
 
 
+def test_out_of_range_time_index_names_the_valid_indices(time_series_powerio_ir):
+    message = r"`time_index` 2 is out of range: the TimeSeries has 2 time points, indices 0 to 1"
+    with pytest.raises(IndexError, match=message):
+        server.summarize(powerio_ir=time_series_powerio_ir, time_index=2)
+    with pytest.raises(IndexError, match="`time_index` -3 is out of range"):
+        server.calc_matrix("bprime", powerio_ir=time_series_powerio_ir, time_index=-3)
+    last = server.summarize(powerio_ir=time_series_powerio_ir, time_index=-1)
+    assert last["selection"] == {"time_index": -1}
+
+
+def test_unknown_scenario_id_lists_the_scenarios():
+    network = powerio.parse(DATA / "case9.m").value
+    scenarios = powerio.ScenarioSet({"base": network, "high": network})
+    powerio_ir = powerio.serialize(scenarios.module).text
+    with pytest.raises(KeyError) as raised:
+        server.summarize(powerio_ir=powerio_ir, scenario_id="peak")
+    assert str(raised.value) == (
+        "unknown `scenario_id` 'peak': the ScenarioSet holds 'base', 'high'"
+    )
+    selected = server.summarize(powerio_ir=powerio_ir, scenario_id="high")
+    assert selected["selection"] == {"scenario_id": "high"}
+
+
 def test_emit_returns_artifact_inventory_and_fidelity(tmp_path):
     memory = server.emit("psse", path=str(DATA / "case9.m"))
     assert memory["layout"] == "file"
@@ -236,6 +259,12 @@ def test_about_reports_exact_tool_list():
     assert about["powerio_ir"]["schema"] == "pio-ir"
     assert "parse" in about["tools"]
     assert "export_state" not in about["tools"]
+
+
+def test_about_reports_the_feature_set():
+    about = server._about_tool()
+    assert about["features"] == powerio.features()
+    assert about["features"]["matrix"] is True
 
 
 def test_inputs_are_mutually_exclusive():

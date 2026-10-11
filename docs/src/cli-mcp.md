@@ -116,11 +116,11 @@ branches dropped under `skip_zero_impedance`, and six of the eight DC
 calculations (`incidence`, `branch_susceptances`, `bus_susceptance`,
 `branch_flow`, `branch_phase_shift_injection`, `bus_phase_shift_injection`)
 join the matrix names, a vector coming back as
-`{"format": "vector", "data": [...]}`. The other two, `branch_flow_dc` and
-`bus_injection_dc`, need voltage angles and are not matrix names. Those six
-take `skip_zero_impedance`, as do `bprime`, `bdoubleprime`, `admittance_real`,
-`admittance_imag`, and `lacpf`; `ptdf`, `lodf`, `adjacency`, and
-`weighted_laplacian` reject it rather than ignoring it.
+`{"format": "vector", "data": [...]}`. The other two, `calc_branch_flow_dc`
+and `calc_bus_injection_dc`, need voltage angles and are not matrix names.
+Those six take `skip_zero_impedance`, as do `bprime`, `bdoubleprime`,
+`admittance_real`, `admittance_imag`, and `lacpf`; `ptdf`, `lodf`,
+`adjacency`, and `weighted_laplacian` reject it rather than ignoring it.
 `emit(format, destination)` writes a file or directory, and if you omit
 `destination` it returns the artifacts in memory. Diagnostics stay structured
 records with code, severity, message, target, and source spans.
