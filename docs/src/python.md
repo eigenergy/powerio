@@ -285,7 +285,7 @@ you need the diagnostic.
 | `features()` | which build features the installed extension carries |
 | `versions()` | the release, the PowerIO IR identity, and the BMOPF schema version |
 | `parse_geo(text, name_hint=None)` | a geographic layer in canonical form with its diagnostics |
-| `parse_display(path, format=None)` | the raw PowerWorld `.pwd` display record as `DisplayData` |
+| `parse_display(path, format=None)` | the raw PowerWorld `.pwd` display record as `DisplayData`; kept only for 0.11 compatibility and removed in 0.12, so use `parse`, which returns a `GeoLayer` |
 | `from_ppc(ppc)` | a `BalancedNetwork` from a pandapower or PYPOWER case dictionary |
 | `PioModule.from_value(value)` | a module around a value built in Python |
 | `diagnostic_record(diagnostic)` | one diagnostic as a JSON-ready dictionary |

@@ -160,6 +160,9 @@ document holds at most 64 MiB, from a path or from memory. An OpenDSS case
 follows at most 4,096 includes and stops following them once they have loaded
 64 MiB of script text, counting a file again each time the case runs it.
 
+Python's `parse_display`, kept only for 0.11 compatibility, reads a display
+file whole without these limits; `parse` reads the same `.pwd` file under them.
+
 Apart from CGMES, caller-owned memory has no whole-document limit; format and
 record limits still apply. Stored solutions embed their instance and network,
 so they can exceed the raw input's size. Consumers should check the actual

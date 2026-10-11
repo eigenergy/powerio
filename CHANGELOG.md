@@ -26,6 +26,11 @@
   `POWERIO_MAX_PRIMARY_BYTES` or `POWERIO_MAX_REFERENCED_BYTES` is now refused
   before any file or directory is opened.
 
+- Python `parse_display` and the MCP `display` tool remain only for 0.11
+  compatibility and will be removed in 0.12. Read a PowerWorld `.pwd` display
+  with `parse`, which returns a `GeoLayer` with its diagnostics under the input
+  byte limits; `parse_display` reads the whole file without them.
+
 - The MCP server defaults its input byte limits to 256 MiB. When
   `powerio-mcp` or `python -m powerio.mcp` starts, it sets
   `POWERIO_MAX_PRIMARY_BYTES` and `POWERIO_MAX_REFERENCED_BYTES` to 256 MiB

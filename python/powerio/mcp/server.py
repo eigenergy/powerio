@@ -834,7 +834,11 @@ def _calc_matrix_tool(
 
 @mcp.tool(name="display")
 def _display_tool(path: str, format: Optional[str] = None) -> dict:
-    """Parse a PowerWorld display file."""
+    """Return the raw record of a PowerWorld display file.
+
+    Kept only for 0.11 compatibility and removed in 0.12; `parse` reads the
+    same file to a GeoLayer with its diagnostics.
+    """
     return _display_impl(path, format)
 
 

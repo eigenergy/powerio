@@ -101,6 +101,9 @@ records.
 `powerio-mcp` (from the Python package) calls the public Python API directly.
 Its tools are `parse`, `emit`, `summarize`, `diagnostics`, `to_normalized`,
 `calc_matrix`, `to_balanced_report`, `to_balanced`, `display`, and `about`.
+`parse` reads a PowerWorld `.pwd` display to a `GeoLayer`. `display` returns
+the raw display record and remains only for 0.11 compatibility; 0.12 removes
+it.
 `parse` returns serialized PowerIO IR, and the tools that accept `powerio_ir`
 deserialize that same IR rather than defining a network, collection,
 calculation, update, or solution representation of their own.
