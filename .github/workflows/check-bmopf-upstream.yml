@@ -25,6 +25,8 @@ jobs:
           owner: eigenergy
           repositories: powerio
       - name: Compare upstream review state and schema hashes
+        # An explicit bash shell sets pipefail, so tee cannot hide a failed check.
+        shell: bash
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: python3 scripts/check_bmopf_upstream.py | tee -a "$GITHUB_STEP_SUMMARY"
