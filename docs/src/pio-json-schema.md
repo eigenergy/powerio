@@ -130,15 +130,39 @@ refuses. Time series and scenario sets carry at most 65,536 entries each, as
 do the three winding transformer power records of a solution. A stored
 operating point names at most 64 quantities.
 
-These bounds count entries, not bytes. Path-based input defaults to 1 GiB for
-both raw formats (including BMOPF) and stored IR; `POWERIO_MAX_PRIMARY_BYTES`
-sets a different positive decimal byte count. Referenced files and expanded
-CGMES archives share `POWERIO_MAX_REFERENCED_BYTES`, also 1 GiB by default.
-Caller-owned memory has no whole-document cap; format and record limits still
-apply. Stored solutions embed their instance and network, so they can exceed
-the raw input's size. Consumers should check the actual serialized byte length
-against their reload limit before saving, and choose a smaller limit for
-memory-constrained applications. The byte limit does not bound process memory.
+These bounds count entries, not bytes. Byte limits apply when PowerIO reads
+a source. A file named by path, whether a raw format (including BMOPF) or
+stored IR, may hold up to 1 GiB; `POWERIO_MAX_PRIMARY_BYTES` sets a different
+positive decimal byte count. The files a case references and the files of a
+directory input share a cumulative limit, `POWERIO_MAX_REFERENCED_BYTES`, also
+1 GiB by default. Both settings come from the process environment. The MCP
+server sets both to 256 MiB when its operator leaves them unset; see
+[The MCP server](cli-mcp.md#the-mcp-server).
+
+CGMES XML counts against the referenced limit wherever it comes from. The
+profiles of one CGMES parse, read from files or expanded from ZIP archives,
+total at most `POWERIO_MAX_REFERENCED_BYTES`, and a CGMES XML document or
+archive larger than that limit is refused whether it comes from a path or
+from caller-owned memory. A CGMES file above 1 GiB named by path therefore
+needs both settings raised. An archive holds at most 4,096 entries, and each
+entry must lie inside the archive without overlapping another. An entry may
+declare at most 200 times its compressed size and no more than the expansion
+budget left, and it must expand to exactly the size it declares. Nested
+archives, symbolic link entries, unsafe or duplicate names, document type and
+entity declarations, and invalid UTF-8 are refused. These archive checks are
+fixed; only the byte limit is configurable.
+
+Some readers keep fixed limits below these defaults. An XIIDM or JIIDM
+document holds at most 64 MiB, from a path or from memory. An OpenDSS case
+follows at most 4,096 includes and stops following them once they have loaded
+64 MiB of script text, counting a file again each time the case runs it.
+
+Apart from CGMES, caller-owned memory has no whole-document limit; format and
+record limits still apply. Stored solutions embed their instance and network,
+so they can exceed the raw input's size. Consumers should check the actual
+serialized byte length against their reload limit before saving, and choose a
+smaller limit for memory-constrained applications. The byte limits do not
+bound process memory.
 
 ## IR versions
 

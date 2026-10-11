@@ -128,13 +128,30 @@ powerio-mcp                  # stdio transport
 ```
 
 The server accepts exactly one input source: serialized PowerIO IR, a grid
-exchange path, or grid exchange content in memory. Filesystem reads and writes default
-to the directory captured at server startup. `POWERIO_MCP_ALLOWED_ROOTS`
-selects explicit directories instead. Remote URI schemes are rejected.
+exchange path, or grid exchange content in memory. Filesystem reads and
+writes default to the directory captured at server startup.
+`POWERIO_MCP_ALLOWED_ROOTS` selects explicit directories instead. Remote URI
+schemes are rejected. A directory input may hold at most 4,096 entries and
+nest at most 64 levels deep, the bounds PowerIO's own directory reader keeps.
 
-Primary files default to a 1 GiB acquisition limit, checked before reserving
-memory. Set `POWERIO_MAX_PRIMARY_BYTES` in the host environment to a positive
-decimal byte count for larger inputs. This setting also applies to ordinary
-Rust, C, Python, and Julia path-based source acquisition. Referenced files and expanded CGMES archives
-share a separate cumulative limit, also 1 GiB by default, configurable through
-`POWERIO_MAX_REFERENCED_BYTES`.
+Tool arguments come from the client, so the server holds them to smaller
+byte limits than the 1 GiB library defaults meant for local use. When
+`powerio-mcp` or `python -m powerio.mcp` starts, it sets
+`POWERIO_MAX_PRIMARY_BYTES` and `POWERIO_MAX_REFERENCED_BYTES` to 256 MiB
+(268435456 bytes) for whichever of the two the host environment leaves unset
+or empty. That leaves room for a case such as CIM bench's RealGrid, whose
+CGMES archive expands to 82.5 MiB of XML. A file named by `path` may hold at
+most the primary limit, checked before memory is reserved, and the files a
+case references or a directory holds share the referenced limit. Inline
+`content` and `powerio_ir` arguments are held to the primary limit in UTF-8
+bytes and refused before parsing, and the `display` tool reads only a regular
+file within it. To accept larger inputs, set either variable in the server's
+environment to a positive decimal byte count; the server keeps any value the
+operator sets. Importing `powerio.mcp` changes neither setting.
+
+Outside the server, both limits default to 1 GiB for Rust, C, Python, and
+Julia path-based acquisition. CGMES XML counts against the referenced limit
+from a path or from memory, so a CGMES file above 1 GiB needs both settings
+raised. XIIDM and JIIDM documents and the scripts an OpenDSS case includes
+keep fixed 64 MiB limits.
+[Resource limits](pio-json-schema.md#resource-limits) lists every limit.
