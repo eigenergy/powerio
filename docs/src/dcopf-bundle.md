@@ -65,8 +65,10 @@ nodal balance subtracts it beside `pd`), `q`, `c`, and `c0` (the diagonal,
 linear, and constant cost terms), `pmax` and `pmin` (generation bounds),
 `e_r` (reference indicator: \\(1\\) at every reference bus, else \\(0\\)),
 `p_shift` (phase shift injection; zero only under `ReactanceOnly`, which ignores
-shifts, or when the case has no phase shifter), and `fixed_withdrawal`, equal to
-`pd + gs + p_shift`.
+shifts, or when the case has no phase shifter), `p_hvdc` (the fixed injection of
+in service HVDC lines: `-pf` at each line's from bus and `+pt` at its to bus;
+all zero under `--hvdc ignore`), and `fixed_withdrawal`, equal to
+`pd + gs + p_shift - p_hvdc`.
 
 The branch indexed vectors, of length \\(m\\), are `b` (susceptances), `shift`
 (radians), `flow_offset` (equal to `-b * shift` elementwise), `fmax` (thermal
@@ -104,8 +106,8 @@ structured metadata:
 - `index_base`: `dense = 0` for manifest bus, branch, generator, and reference
   indices; `matrix_market = 1` for `.mtx` coordinates.
 - `branch_susceptance_formula`, `units`, `build_options`, and `zero_impedance`.
-  `build_options` records both `skip_zero_impedance` and
-  `synthesize_unrated_limits`. The zero impedance block records the skip flag,
+  `build_options` records `skip_zero_impedance`, `synthesize_unrated_limits`,
+  and `hvdc_treatment` (`fixed_injection` or `ignore`). The zero impedance block records the skip flag,
   denominator rule, skipped count, and skipped source branch rows.
 - `grounding`: reference buses, removed rows and columns, the grounded operator
   (`L_grounded`), and the reference selector (`e_r`).

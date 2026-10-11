@@ -354,7 +354,9 @@ Schema definition: `Storage`.
 ### Hvdc
 
 A two terminal HVDC line in the MATPOWER `dcline` convention, whatever the
-source format.
+source format. The balanced calculations carry an in service line whose two
+terminal buses are energized as fixed bus injections: `-pf` and `+qf` at the
+from bus, `+pt` and `+qt` at the to bus.
 
 Schema definition: `Hvdc`.
 
@@ -1303,7 +1305,9 @@ Schema definition: `DcPfInstance`.
 
 The bus specifications are derived from the network: a `REF` bus contributes
 its stated angle, an `ISOLATED` bus no equation, and every other bus its net
-active injection over in service generators and loads.
+active injection over in service generators, loads, and HVDC lines. Each in
+service HVDC line is a fixed injection of `-pf` at its from bus and `+pt` at
+its to bus.
 
 ### powerio.AcPfInstance
 

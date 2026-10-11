@@ -17,6 +17,7 @@ use crate::{
 
 use crate::Result;
 use powerio_prob::DcOpfInstance;
+use powerio_tx::HvdcTreatment;
 use prep::{DcOpfOptions, apply_instance_semantics, preparation_from_view};
 
 pub use bundle::{DcOpfBundleMetadata, DcOpfBundleOptions, DcOpfOutputs, emit_dcopf_bundle};
@@ -43,6 +44,10 @@ pub struct DcOpfAssemblyOptions {
     /// Apply PowerModels' ±60 degree correction to unconstrained or unusable
     /// branch angle difference intervals in the prepared arrays.
     pub correct_angle_difference_bounds: bool,
+    /// How in service HVDC lines enter the fixed withdrawal. The default
+    /// carries each as a fixed injection at its stated terminal powers
+    /// ([`DcOpfPreparation::p_hvdc`]).
+    pub hvdc_treatment: HvdcTreatment,
 }
 
 impl Default for DcOpfAssemblyOptions {
@@ -52,6 +57,7 @@ impl Default for DcOpfAssemblyOptions {
             skip_zero_impedance: false,
             synthesize_unrated_limits: false,
             correct_angle_difference_bounds: true,
+            hvdc_treatment: HvdcTreatment::default(),
         }
     }
 }
@@ -78,6 +84,12 @@ impl DcOpfAssemblyOptions {
     #[must_use]
     pub const fn with_correct_angle_difference_bounds(mut self, correct: bool) -> Self {
         self.correct_angle_difference_bounds = correct;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_hvdc_treatment(mut self, treatment: HvdcTreatment) -> Self {
+        self.hvdc_treatment = treatment;
         self
     }
 }
@@ -117,7 +129,7 @@ pub fn calc_dc_opf_matrices(
 }
 
 /// Derive the complete matrix free DC OPF arrays from the instance: demand,
-/// shunt, and phase shift withdrawals, generator costs and bounds with their
+/// shunt, phase shift, and HVDC withdrawals, generator costs and bounds with their
 /// source row mapping, branch susceptances as positive solver edge weights,
 /// thermal limits, angle bounds, and the reference bus set. This is the one
 /// numerical assembly the matrix builders, the bundle writer, and external
@@ -141,6 +153,7 @@ pub fn build_dc_opf_preparation(
             skip_zero_impedance: options.skip_zero_impedance,
             synthesize_unrated_limits: options.synthesize_unrated_limits,
             correct_angle_difference_bounds: options.correct_angle_difference_bounds,
+            hvdc_treatment: options.hvdc_treatment,
             objective,
         },
     )?;

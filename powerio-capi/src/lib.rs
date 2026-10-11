@@ -6626,11 +6626,17 @@ pub unsafe extern "C" fn pio_build_dc_opf_preparation(
                     )
                 })?;
             let units = opf_preparation_units(required_str(units, units_len, "units")?)?;
+            // ABI 7's bus view states demand, shunt conductance, and phase
+            // shift injection, and has no column for an HVDC injection. A
+            // preparation that carried one would hand C callers a fixed
+            // withdrawal they cannot reconstruct, so this entry point keeps
+            // HVDC lines out until the view can state them.
             let options = DcOpfAssemblyOptions::default()
                 .with_units(units)
                 .with_skip_zero_impedance(skip_zero_impedance)
                 .with_synthesize_unrated_limits(synthesize_unrated_limits)
-                .with_correct_angle_difference_bounds(correct_angle_difference_bounds);
+                .with_correct_angle_difference_bounds(correct_angle_difference_bounds)
+                .with_hvdc_treatment(powerio_tx::HvdcTreatment::Ignore);
             build_dc_opf_preparation(instance, &options)
                 .map(PioDcOpfPreparation::new_raw)
                 .map_err(|failure| error_from_matrix(&failure))

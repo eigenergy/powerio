@@ -21,7 +21,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use powerio_core::Error;
-use powerio_tx::{BalancedNetwork, BranchSusceptanceFormula, BusId, BusType};
+use powerio_tx::{BalancedNetwork, BranchSusceptanceFormula, BusId, BusType, HvdcTreatment};
 use serde::{Deserialize, Serialize};
 
 use crate::OperatingPoint;
@@ -36,7 +36,8 @@ use crate::instance::objective::{Objective, ObjectiveTerm};
 #[non_exhaustive]
 pub enum DcBusSpecification {
     /// The net active power injection the bus states, MW (generation minus
-    /// demand over in service elements).
+    /// demand over in service elements, plus the fixed injection of in
+    /// service HVDC lines under [`HvdcTreatment::FixedInjection`]).
     NetActivePower { p_mw: f64 },
     /// A reference bus with its stated voltage angle, degrees.
     Reference { va_degrees: f64 },
@@ -69,21 +70,37 @@ pub struct DcPfInstance {
     network: BalancedNetwork,
     specifications: Vec<DcBusSpecification>,
     branch_susceptance_formula: BranchSusceptanceFormula,
+    hvdc_treatment: HvdcTreatment,
     initial_point: Option<OperatingPoint<BalancedNetwork>>,
 }
 
 impl DcPfInstance {
     /// Build the instance from the network's stated data: reference buses
     /// contribute their stated angle, isolated buses no equation, and every
-    /// other bus its net active injection over in service generators and
-    /// loads.
+    /// other bus its net active injection over in service generators, loads,
+    /// and HVDC lines. Each in service HVDC line is a fixed injection at its
+    /// stated terminal powers ([`HvdcTreatment::FixedInjection`]).
     ///
     /// # Errors
     /// A network with no reference bus.
-    pub fn from_network(mut network: BalancedNetwork) -> Result<Self, Error> {
+    pub fn from_network(network: BalancedNetwork) -> Result<Self, Error> {
+        Self::from_network_with_hvdc(network, HvdcTreatment::default())
+    }
+
+    /// [`from_network`](Self::from_network) under an explicit HVDC
+    /// treatment. [`HvdcTreatment::Ignore`] leaves every HVDC line out of the
+    /// stated injections; [`hvdc_diagnostics`](Self::hvdc_diagnostics) states
+    /// what that drops.
+    ///
+    /// # Errors
+    /// A network with no reference bus.
+    pub fn from_network_with_hvdc(
+        mut network: BalancedNetwork,
+        hvdc_treatment: HvdcTreatment,
+    ) -> Result<Self, Error> {
         network.assign_missing_component_ids();
         require_reference(&network)?;
-        let totals = aggregate_bus_elements(&network);
+        let totals = aggregate_bus_elements(&network, hvdc_treatment);
         let specifications = network
             .buses()
             .iter()
@@ -100,6 +117,7 @@ impl DcPfInstance {
             network,
             specifications,
             branch_susceptance_formula: BranchSusceptanceFormula::default(),
+            hvdc_treatment,
             initial_point: None,
         })
     }
@@ -120,15 +138,15 @@ impl DcPfInstance {
     }
 
     /// Replace the network and recalculate the fixed bus specifications while
-    /// preserving the branch susceptance formula and a compatible initial
-    /// point.
+    /// preserving the branch susceptance formula, the HVDC treatment, and a
+    /// compatible initial point.
     ///
     /// # Errors
     /// The replacement has no reference bus or changes an identity layout used
     /// by the initial point.
     pub fn with_network(mut self, mut network: BalancedNetwork) -> Result<Self, Error> {
         network.assign_missing_component_ids();
-        let mut replacement = Self::from_network(network.clone())?
+        let mut replacement = Self::from_network_with_hvdc(network.clone(), self.hvdc_treatment)?
             .with_branch_susceptance_formula(self.branch_susceptance_formula);
         if let Some(initial) = self.initial_point.take() {
             replacement.initial_point = Some(initial.rebind_network(network)?);
@@ -154,6 +172,22 @@ impl DcPfInstance {
         self.branch_susceptance_formula
     }
 
+    /// How the stated injections treat the network's HVDC lines.
+    #[must_use]
+    pub const fn hvdc_treatment(&self) -> HvdcTreatment {
+        self.hvdc_treatment
+    }
+
+    /// What the stated injections did with the network's HVDC lines: the
+    /// power injected or left out, and the in service lines whose terminal
+    /// bus is inactive. Empty for a network with no HVDC line.
+    #[must_use]
+    pub fn hvdc_diagnostics(&self) -> Vec<powerio_core::Diagnostic> {
+        self.network
+            .calc_hvdc_injections()
+            .to_diagnostics(self.hvdc_treatment)
+    }
+
     /// The optional solver initial point.
     #[must_use]
     pub const fn initial_point(&self) -> Option<&OperatingPoint<BalancedNetwork>> {
@@ -167,14 +201,16 @@ impl DcPfInstance {
 pub struct AcPfInstance {
     network: BalancedNetwork,
     specifications: Vec<AcBusSpecification>,
+    hvdc_treatment: HvdcTreatment,
     initial_point: Option<OperatingPoint<BalancedNetwork>>,
 }
 
 impl AcPfInstance {
     /// Build an AC power flow instance from explicit bus specifications.
     /// The specification vector follows bus table order and is retained
-    /// exactly; it is not inferred again from bus types, loads, or generator
-    /// schedules.
+    /// exactly; it is not inferred again from bus types, loads, generator
+    /// schedules, or HVDC lines. [`with_network`](Self::with_network) derives
+    /// a replacement under [`HvdcTreatment::FixedInjection`].
     ///
     /// # Errors
     /// The specification count differs from the bus count, or no
@@ -206,6 +242,7 @@ impl AcPfInstance {
         Ok(Self {
             network,
             specifications,
+            hvdc_treatment: HvdcTreatment::default(),
             initial_point: None,
         })
     }
@@ -213,16 +250,33 @@ impl AcPfInstance {
     /// Build the instance from the network's stated data. A PQ bus states
     /// its net injections; a PV bus its net active injection and the
     /// regulating generator's voltage setpoint; a reference bus its setpoint
-    /// magnitude and stated angle.
+    /// magnitude and stated angle. Net injections count in service
+    /// generators, loads, and HVDC lines; each in service HVDC line is a
+    /// fixed injection at its stated terminal powers
+    /// ([`HvdcTreatment::FixedInjection`]).
     ///
     /// # Errors
     /// A network with no reference bus, or conflicting active voltage
     /// controllers: two in service generators at one bus stating different
     /// voltage setpoints are refused until an explicit edit resolves them.
-    pub fn from_network(mut network: BalancedNetwork) -> Result<Self, Error> {
+    pub fn from_network(network: BalancedNetwork) -> Result<Self, Error> {
+        Self::from_network_with_hvdc(network, HvdcTreatment::default())
+    }
+
+    /// [`from_network`](Self::from_network) under an explicit HVDC
+    /// treatment. [`HvdcTreatment::Ignore`] leaves every HVDC line out of the
+    /// stated injections; [`hvdc_diagnostics`](Self::hvdc_diagnostics) states
+    /// what that drops.
+    ///
+    /// # Errors
+    /// As [`from_network`](Self::from_network).
+    pub fn from_network_with_hvdc(
+        mut network: BalancedNetwork,
+        hvdc_treatment: HvdcTreatment,
+    ) -> Result<Self, Error> {
         network.assign_missing_component_ids();
         require_reference(&network)?;
-        let totals = aggregate_bus_elements(&network);
+        let totals = aggregate_bus_elements(&network, hvdc_treatment);
         let specifications = network
             .buses()
             .iter()
@@ -246,7 +300,9 @@ impl AcPfInstance {
                 Ok(spec)
             })
             .collect::<Result<Vec<_>, Error>>()?;
-        Self::new(network, specifications)
+        let mut instance = Self::new(network, specifications)?;
+        instance.hvdc_treatment = hvdc_treatment;
+        Ok(instance)
     }
 
     /// Supply an optional solver initial point.
@@ -257,14 +313,14 @@ impl AcPfInstance {
     }
 
     /// Replace the network and recalculate the fixed bus specifications while
-    /// preserving a compatible initial point.
+    /// preserving the HVDC treatment and a compatible initial point.
     ///
     /// # Errors
     /// The replacement has no reference bus, has conflicting voltage
     /// controllers, or changes an identity layout used by the initial point.
     pub fn with_network(mut self, mut network: BalancedNetwork) -> Result<Self, Error> {
         network.assign_missing_component_ids();
-        let mut replacement = Self::from_network(network.clone())?;
+        let mut replacement = Self::from_network_with_hvdc(network.clone(), self.hvdc_treatment)?;
         if let Some(initial) = self.initial_point.take() {
             replacement.initial_point = Some(initial.rebind_network(network)?);
         }
@@ -281,6 +337,22 @@ impl AcPfInstance {
     #[must_use]
     pub fn specifications(&self) -> &[AcBusSpecification] {
         &self.specifications
+    }
+
+    /// How [`from_network_with_hvdc`](Self::from_network_with_hvdc) and
+    /// [`with_network`](Self::with_network) treat the network's HVDC lines.
+    #[must_use]
+    pub const fn hvdc_treatment(&self) -> HvdcTreatment {
+        self.hvdc_treatment
+    }
+
+    /// What the stated injections did with the network's HVDC lines, as
+    /// [`DcPfInstance::hvdc_diagnostics`] states it.
+    #[must_use]
+    pub fn hvdc_diagnostics(&self) -> Vec<powerio_core::Diagnostic> {
+        self.network
+            .calc_hvdc_injections()
+            .to_diagnostics(self.hvdc_treatment)
     }
 
     /// The optional solver initial point.
@@ -310,6 +382,7 @@ impl AcPfInstance {
                 })
                 .collect(),
             branch_susceptance_formula: BranchSusceptanceFormula::default(),
+            hvdc_treatment: self.hvdc_treatment,
             initial_point: self.initial_point.clone(),
         };
         let diagnostics = vec![
@@ -614,20 +687,25 @@ impl AcOpfInstance {
 }
 
 /// Net stated active injection at one bus, MW, over in service elements.
-/// Per bus totals of the in service generators and loads, plus the voltage
-/// setpoint agreement, gathered in one pass so instance construction stays
-/// linear in bus plus generator plus load count.
+/// Per bus totals of the in service generators, loads, and HVDC terminals,
+/// plus the voltage setpoint agreement, gathered in one pass so instance
+/// construction stays linear in bus plus element count.
 #[derive(Default)]
 struct BusAggregate {
     p_gen: f64,
     q_gen: f64,
     p_load: f64,
     q_load: f64,
+    p_hvdc: f64,
+    q_hvdc: f64,
     setpoint: Option<f64>,
     conflicting: Option<f64>,
 }
 
-fn aggregate_bus_elements(network: &BalancedNetwork) -> BTreeMap<BusId, BusAggregate> {
+fn aggregate_bus_elements(
+    network: &BalancedNetwork,
+    hvdc_treatment: HvdcTreatment,
+) -> BTreeMap<BusId, BusAggregate> {
     let mut totals: BTreeMap<BusId, BusAggregate> = BTreeMap::new();
     for generator in network
         .generators()
@@ -652,20 +730,27 @@ fn aggregate_bus_elements(network: &BalancedNetwork) -> BTreeMap<BusId, BusAggre
         entry.p_load += load.p;
         entry.q_load += load.q;
     }
+    if hvdc_treatment == HvdcTreatment::FixedInjection {
+        for terminal in network.calc_hvdc_injections().terminals {
+            let entry = totals.entry(terminal.bus).or_default();
+            entry.p_hvdc += terminal.p;
+            entry.q_hvdc += terminal.q;
+        }
+    }
     totals
 }
 
 fn net_active_power(totals: &BTreeMap<BusId, BusAggregate>, bus: BusId) -> f64 {
     totals
         .get(&bus)
-        .map_or(0.0, |entry| entry.p_gen - entry.p_load)
+        .map_or(0.0, |entry| entry.p_gen - entry.p_load + entry.p_hvdc)
 }
 
 /// Net stated reactive injection at one bus, MVAr, over in service elements.
 fn net_reactive_power(totals: &BTreeMap<BusId, BusAggregate>, bus: BusId) -> f64 {
     totals
         .get(&bus)
-        .map_or(0.0, |entry| entry.q_gen - entry.q_load)
+        .map_or(0.0, |entry| entry.q_gen - entry.q_load + entry.q_hvdc)
 }
 
 /// The controlled voltage magnitude at one bus: the in service generators'

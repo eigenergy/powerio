@@ -1035,6 +1035,20 @@ fn multiconductor_identity_order(
 }
 
 fn encode_dc_pf_instance(instance: &powerio_prob::DcPfInstance) -> Result<dto::DcPfInstance> {
+    // The stored instance is its network; reading it back derives the
+    // specifications under the default HVDC treatment. An instance that
+    // leaves injecting HVDC lines out would come back with them in.
+    if instance.hvdc_treatment() != powerio_tx::HvdcTreatment::FixedInjection {
+        let ignored = instance.network().calc_hvdc_injections().n_injecting();
+        if ignored > 0 {
+            return Err(invalid(format!(
+                "this DC power flow instance leaves {ignored} in service HVDC line(s) out of its \
+                 injections, and PowerIO IR stores a DC power flow instance under the fixed \
+                 injection HVDC treatment only; set the lines out of service in the network \
+                 instead"
+            )));
+        }
+    }
     let network = with_component_ids(instance.network().clone());
     Ok(dto::DcPfInstance {
         initial_point: instance
