@@ -65,5 +65,8 @@ documents through and defines no electrical data shape of its own.
 
 The 0.11.x line is for compatible fixes, performance work, and additive
 change; a break in the public Rust API that cannot be avoided goes into 0.12.
+CI checks the publishable crates against the latest 0.11 release tag with
+cargo-semver-checks (`scripts/check-semver.sh`); a pull request that carries a
+0.12 break is labeled `semver-major`.
 The Rust API stays pre-1.0 as long as public signatures expose types from the
 pre-1.0 `sprs` and `petgraph` crates.

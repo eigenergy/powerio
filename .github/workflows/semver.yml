@@ -1,0 +1,61 @@
+name: Semver
+
+# The public Rust API of every crate crates.io publishes, compared with
+# cargo-semver-checks against the newest stable release tag at or below the
+# workspace version (scripts/check-semver.sh). A release line takes compatible
+# fixes, performance work, and additive change, and a break goes into the next
+# minor release (docs/src/scope-0.11.md), so a pull request that breaks the API
+# without moving the workspace version to that minor fails here.
+#
+# A break that is meant for the next minor before the version moves carries
+# the `semver-major` label: the check still runs and lists every break, as a
+# warning. Adding or removing the label runs the check again.
+on:
+  # No branch filter: stacked PRs must run this too (see rust.yml).
+  pull_request:
+    types: [ opened, synchronize, reopened, labeled, unlabeled ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  semver:
+    name: Public Rust API (cargo-semver-checks)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        # The baseline is a release tag, built from its own commit.
+        fetch-depth: 0
+        persist-credentials: false
+    - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+    # Unpinned like cbindgen: each cargo-semver-checks release reads the
+    # rustdoc JSON of the current stable toolchain, which a pinned version
+    # stops reading when the format moves. rust-cache keeps the binary, and
+    # `cargo install` rebuilds it only when a newer release exists.
+    - name: Install cargo-semver-checks
+      run: cargo install cargo-semver-checks --locked
+    - name: Check the publishable crates against the latest release
+      env:
+        BREAK_ALLOWED: ${{ contains(github.event.pull_request.labels.*.name, 'semver-major') }}
+      run: |
+        status=0
+        bash scripts/check-semver.sh || status=$?
+        if [ "$status" -eq 0 ]; then
+          exit 0
+        fi
+        if [ "$BREAK_ALLOWED" = true ]; then
+          echo "::warning title=Public Rust API break::the semver-major label accepts the breaks above; they ship in the next minor release"
+          exit 0
+        fi
+        echo "::error title=Public Rust API break::make the change additive, or label the pull request semver-major if it belongs in the next minor release"
+        exit "$status"

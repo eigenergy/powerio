@@ -85,6 +85,13 @@
   the case again. The IR 2 schema keeps its published descriptions, which
   state the old mapping.
 
+- CI checks the public Rust API of the seven publishable crates against the
+  newest stable release tag at or below the workspace version with
+  cargo-semver-checks (the Semver workflow, `scripts/check-semver.sh`), so a
+  break meant for 0.12 cannot land in a 0.11 release unnoticed. A pull request
+  that carries such a break is labeled `semver-major`, which keeps the report
+  and turns the failure into a warning.
+
 ## 0.11.4
 
 - Out-of-service loads and shunts no longer count. `IndexedNetwork` folded

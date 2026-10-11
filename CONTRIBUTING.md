@@ -22,6 +22,20 @@ runs from the root. See
 [Testing and release checks](https://eigenergy.github.io/powerio/guide/contributor-workflow.html)
 for the full procedure.
 
+## Rust API changes
+
+A release line takes compatible fixes, performance work, and additive change;
+a break in the public Rust API goes into the next minor release. The Semver
+workflow runs `scripts/check-semver.sh` on every pull request: it compares
+each publishable crate with cargo-semver-checks against the newest stable
+release tag at or below the workspace version. A new public field on a struct
+that is not `#[non_exhaustive]`, a changed signature, or a removed item fails
+it. Add instead: a new function or options type beside the old one, or a new
+variant on a `#[non_exhaustive]` enum. A break meant for the next minor carries
+the `semver-major` label, which turns the failure into a warning that still
+lists every break; bumping the workspace version to that minor passes on its
+own.
+
 ## C ABI changes
 
 `powerio-capi/include/powerio.h` is generated, so do not edit it by hand.
