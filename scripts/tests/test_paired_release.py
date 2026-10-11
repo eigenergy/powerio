@@ -2,11 +2,14 @@
 
 import copy
 import importlib.util
+import io
 import json
+import subprocess
 import sys
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 SPEC = importlib.util.spec_from_file_location("paired_release", Path(__file__).parents[1] / "paired_release.py")
 pair = importlib.util.module_from_spec(SPEC)
@@ -345,6 +348,83 @@ class ReleaseTests(unittest.TestCase):
         with patch.object(pair, 'pages', return_value=[draft]), patch.object(pair, 'api', return_value={'workflow_runs': []}), patch.object(pair, 'tag_pair', return_value=self.frozen), patch.object(pair, 'verify', return_value=self.manifest), patch.object(pair, 'validation_succeeded', return_value=False), patch.object(pair, 'run') as run:
             pair.recover_drafts()
             run.assert_called_once_with('gh', 'workflow', 'run', 'complete-paired-release.yml', '--repo', pair.POWERIO, '--ref', 'v0.11.3', '-f', 'tag=v0.11.3')
+
+    @staticmethod
+    def failed_build(number, tag, head_sha):
+        return {'id': number, 'head_branch': tag, 'head_sha': head_sha, 'event': 'push',
+                'status': 'completed', 'conclusion': 'failure'}
+
+    def recover(self, tags, builds, drafts=(), refused_reruns=()):
+        """Run recovery over annotated paired tags. An absent tag answers 404 as gh does,
+        every draft with a manifest fails verification, and gh refuses the named reruns."""
+        objects = {f'{index:040x}': tag for index, tag in enumerate(tags, 1)}
+        refs = {tag: sha for sha, tag in objects.items()}
+        def fake_api(path, data=None, *, missing=False):
+            self.assertIsNone(data)
+            name = path.rsplit('/', 1)[1]
+            if path.endswith('/complete-paired-release.yml/runs?per_page=100'):
+                return {'workflow_runs': []}
+            if path.endswith('/release-binaries.yml/runs?per_page=100'):
+                return {'workflow_runs': builds}
+            if '/git/ref/tags/' in path:
+                if name in refs:
+                    return {'object': {'type': 'tag', 'sha': refs[name]}}
+                if missing:
+                    return None
+                raise RuntimeError(f'GitHub request failed: {path}: gh: Not Found (HTTP 404)')
+            if '/git/tags/' in path:
+                frozen = tags[objects[name]]
+                return {'message': json.dumps(frozen), 'object': {'type': 'commit', 'sha': frozen['powerio_sha']}}
+            if '/releases/tags/' in path and missing:
+                return None
+            raise AssertionError(path)
+        def fake_run(*args, **_kwargs):
+            if args[:3] == ('gh', 'run', 'rerun') and args[3] in refused_reruns:
+                raise subprocess.CalledProcessError(1, args, stderr='run cannot be rerun\n')
+            return ''
+        output = io.StringIO()
+        with patch.object(pair, 'api', side_effect=fake_api), patch.object(pair, 'pages', return_value=list(drafts)), patch.object(pair, 'verify', side_effect=ValueError('asset digest mismatch')), patch.object(pair, 'run', side_effect=fake_run) as run, redirect_stdout(output):
+            try:
+                pair.recover_drafts()
+            except SystemExit as stop:
+                status = stop.code
+            else:
+                status = 0
+        return status, output.getvalue(), run
+
+    def test_replaced_candidate_build_is_skipped_and_recovery_continues(self):
+        tags = {'v0.11.3': self.frozen, 'v0.11.4': dict(self.frozen, tag='v0.11.4', powerio_sha='c' * 40)}
+        builds = [self.failed_build(2, 'v0.11.4', 'f' * 40), self.failed_build(1, 'v0.11.3', 'a' * 40)]
+        status, output, run = self.recover(tags, builds)
+        run.assert_called_once_with('gh', 'run', 'rerun', '1', '--repo', pair.POWERIO, '--failed')
+        self.assertIn('v0.11.4: latest failed build predates the current candidate; not rerun', output)
+        self.assertEqual(status, 0)
+
+    def test_one_candidate_failure_does_not_stop_recovery_of_the_others(self):
+        tags = {tag: dict(self.frozen, tag=tag) for tag in ('v0.11.2', 'v0.11.3', 'v0.11.4', 'v0.11.5', 'v0.11.7')}
+        def draft(tag, names):
+            return {'draft': True, 'prerelease': False, 'tag_name': tag, 'body': '',
+                    'assets': [{'name': name} for name in names]}
+        drafts = [draft('v0.12.0', pair.ASSETS),                    # tag not pushed: 404
+                  draft('v0.11.5', pair.ASSETS | {pair.MANIFEST}),  # verification fails
+                  draft('v0.11.7', ()), draft('v0.11.7', ()),       # two drafts name one tag
+                  draft('v0.11.3', pair.ASSETS)]                    # completion is dispatched
+        builds = [self.failed_build(5, 'v0.11.7', 'a' * 40),  # its release is ambiguous
+                  self.failed_build(4, 'v0.11.6', 'a' * 40),  # tag deleted: 404
+                  self.failed_build(3, 'v0.11.2', 'a' * 40),  # gh refuses the rerun
+                  self.failed_build(2, 'v0.11.4', 'a' * 40)]  # rerun
+        status, output, run = self.recover(tags, builds, drafts, refused_reruns={'3'})
+        self.assertEqual(run.call_args_list, [
+            call('gh', 'workflow', 'run', 'complete-paired-release.yml', '--repo', pair.POWERIO, '--ref', 'v0.11.3', '-f', 'tag=v0.11.3'),
+            call('gh', 'run', 'rerun', '3', '--repo', pair.POWERIO, '--failed'),
+            call('gh', 'run', 'rerun', '2', '--repo', pair.POWERIO, '--failed'),
+        ])
+        self.assertEqual(status, 'Paired candidates not recovered: v0.12.0, v0.11.5, v0.11.7, v0.11.6, v0.11.2')
+        for line in ('v0.12.0: not recovered: GitHub request failed', 'v0.11.5: not recovered: asset digest mismatch',
+                     'v0.11.7: not recovered: multiple releases name the requested tag',
+                     'v0.11.6: not recovered: GitHub request failed', 'v0.11.2: not recovered: Command',
+                     '(run cannot be rerun)'):
+            self.assertIn(line, output)
 
     def test_interrupted_or_wrong_validation_is_not_publication_evidence(self):
         for evidence in (None, {'status': 'completed', 'conclusion': 'cancelled', 'path': '.github/workflows/complete-paired-release.yml'}, {'status': 'completed', 'conclusion': 'success', 'path': '.github/workflows/unrelated.yml'}):

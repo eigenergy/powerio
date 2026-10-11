@@ -476,26 +476,72 @@ def registration_status(tag, expected_sha=None):
     print(f"{tag}: {action}")
 
 
+# What checking one candidate can raise: a refused check (ValueError, which
+# includes JSON and TOML decoding), a failed GitHub request or gh command, or a
+# response without the expected fields.
+CANDIDATE_ERRORS = (ValueError, RuntimeError, KeyError, TypeError, subprocess.CalledProcessError)
+
+
+def candidate_pair(tag):
+    """Return the pair a tag freezes, or None for a tag that is not a valid
+    paired tag, such as a legacy or lightweight tag."""
+    try:
+        return tag_pair(tag)
+    except ValueError:
+        return None
+
+
+def resume_draft(rel, complete_runs):
+    tag = rel["tag_name"]
+    if candidate_pair(tag) is None:
+        return
+    names = {a["name"] for a in rel["assets"]}
+    if names == ASSETS | {MANIFEST}:
+        manifest = verify(tag, published=False, validation=False)
+        if validation_succeeded(manifest) and "## Paired release review" in (rel.get("body") or ""):
+            return
+    elif names != ASSETS:
+        return
+    active = any(r["display_title"] == "Complete paired draft " + tag and r["status"] != "completed" for r in complete_runs)
+    if not active:
+        run("gh", "workflow", "run", "complete-paired-release.yml", "--repo", POWERIO, "--ref", tag, "-f", "tag=" + tag)
+
+
+def rerun_build(build):
+    tag = build["head_branch"]
+    pair = candidate_pair(tag)
+    if pair is None:
+        return
+    if pair["powerio_sha"] != build["head_sha"]:
+        # Rerunning a replaced candidate's build would rebuild the old commit.
+        print(f"{tag}: latest failed build predates the current candidate; not rerun")
+        return
+    rel = release(tag)
+    if rel and (not rel["draft"] or any(a["name"] == MANIFEST for a in rel["assets"])):
+        return
+    options = [] if build["conclusion"] == "cancelled" else ["--failed"]
+    run("gh", "run", "rerun", str(build["id"]), "--repo", POWERIO, *options)
+
+
 def recover_drafts():
+    # A candidate that cannot be checked is reported and recovery moves on, so
+    # a deleted tag or a bad draft does not block the others. The command still
+    # fails afterwards.
+    failed = []
+
+    def report(tag, error):
+        detail = (getattr(error, "stderr", None) or "").strip()
+        print(f"{tag}: not recovered: {error}" + (f" ({detail})" if detail else ""))
+        failed.append(tag)
+
     complete_runs = api(f"repos/{POWERIO}/actions/workflows/complete-paired-release.yml/runs?per_page=100")["workflow_runs"]
     for rel in pages(f"repos/{POWERIO}/releases?per_page=100"):
         if not rel["draft"] or rel["prerelease"]:
             continue
-        tag = rel["tag_name"]
         try:
-            tag_pair(tag)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        names = {a["name"] for a in rel["assets"]}
-        if names == ASSETS | {MANIFEST}:
-            manifest = verify(tag, published=False, validation=False)
-            if validation_succeeded(manifest) and "## Paired release review" in (rel.get("body") or ""):
-                continue
-        elif names != ASSETS:
-            continue
-        active = any(r["display_title"] == "Complete paired draft " + tag and r["status"] != "completed" for r in complete_runs)
-        if not active:
-            run("gh", "workflow", "run", "complete-paired-release.yml", "--repo", POWERIO, "--ref", tag, "-f", "tag=" + tag)
+            resume_draft(rel, complete_runs)
+        except CANDIDATE_ERRORS as error:
+            report(rel["tag_name"], error)
     builds = api(f"repos/{POWERIO}/actions/workflows/release-binaries.yml/runs?per_page=100")["workflow_runs"]
     seen = set()
     for build in builds:
@@ -506,15 +552,11 @@ def recover_drafts():
         if build["status"] != "completed" or build["conclusion"] not in ("failure", "timed_out", "cancelled"):
             continue
         try:
-            pair = tag_pair(tag)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        require(pair["powerio_sha"] == build["head_sha"], "failed build no longer matches its tag")
-        rel = release(tag)
-        if rel and (not rel["draft"] or any(a["name"] == MANIFEST for a in rel["assets"])):
-            continue
-        options = [] if build["conclusion"] == "cancelled" else ["--failed"]
-        run("gh", "run", "rerun", str(build["id"]), "--repo", POWERIO, *options)
+            rerun_build(build)
+        except CANDIDATE_ERRORS as error:
+            report(tag, error)
+    if failed:
+        raise SystemExit("Paired candidates not recovered: " + ", ".join(dict.fromkeys(failed)))
     print("Incomplete paired candidates checked; retries preserve their frozen tags")
 
 

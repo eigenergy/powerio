@@ -37,6 +37,10 @@ New `main` commits do not change the candidate or block its registration.
 ## Retry and recovery
 
 The daily reconciliation also retries incomplete paired builds and drafts.
+It checks each tag separately. A tag it cannot check, such as a deleted tag or
+a draft whose assets fail verification, is named in the run summary and fails
+the run without stopping the others. A failed build of a commit the tag no
+longer names is not rerun.
 If a draft upload finishes before its validation workflow records success,
 completion reruns the Julia tests and updates only the draft manifest's validation
 reference. It verifies that every source commit, artifact hash, and note remains
