@@ -343,29 +343,41 @@ fn push_zip(
     Ok(())
 }
 
-/// Open an archive after bounding its declared entry count, then refuse
-/// entries that disagree with that count, leave the entry data, or share
-/// bytes.
+/// Open an archive after bounding its end records and the entry counts they
+/// declare, then refuse entries that disagree with the first count, leave
+/// the entry data, or share bytes.
 ///
-/// zip 8.6 reserves its entry table from the count in the end of central
-/// directory record (a Zip64 count may claim one entry per 46 archive bytes)
-/// and indexes every central record before `ZipArchive::new` returns, so
-/// the count is read and bounded first. Duplicate entry names collapse in
-/// the reader's index, which the count comparison also refuses.
+/// zip 8.6 examines end records from the last. It reserves its entry table
+/// from the count of the first record it accepts and indexes every central
+/// record before `ZipArchive::new` returns; when that fails, it falls back to
+/// an earlier record and reserves again. So before opening, the number of
+/// end records is bounded ([`MAX_END_RECORDS`]), and so is every Zip64 count
+/// any of them reaches, since a Zip64 count may claim one entry per 47
+/// archive bytes. A 16 bit count reserves at most 65,535 entries, and only
+/// the first is bounded, because an earlier signature may be chance bytes in
+/// compressed data. Duplicate entry names collapse in the reader's index,
+/// which the count comparison also refuses.
 fn open_archive<'a>(
     archive_name: &str,
     bytes: &'a [u8],
 ) -> Result<zip::ZipArchive<Cursor<&'a [u8]>>> {
-    let declared = declared_entry_count(bytes).ok_or_else(|| {
-        format_error(format!(
-            "cannot read archive {archive_name}: no end of central directory record"
-        ))
+    let declared = declared_entries(bytes).map_err(|refusal| {
+        format_error(match refusal {
+            EndRecordRefusal::Missing => format!(
+                "cannot read archive {archive_name}: no end of central directory record"
+            ),
+            EndRecordRefusal::TooMany => format!(
+                "archive {archive_name} is refused as malformed: it holds more than {MAX_END_RECORDS} end of central directory records"
+            ),
+        })
     })?;
-    if declared > MAX_FILES as u64 {
+    let largest = declared.first.max(declared.largest_zip64);
+    if largest > MAX_FILES as u64 {
         return Err(format_error(format!(
-            "archive {archive_name} declares {declared} entries, more than the {MAX_FILES} an archive may hold"
+            "archive {archive_name} declares {largest} entries, more than the {MAX_FILES} an archive may hold"
         )));
     }
+    let declared = declared.first;
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|error| format_error(format!("cannot read archive {archive_name}: {error}")))?;
     if archive.len() as u64 != declared {
@@ -415,18 +427,84 @@ const END_RECORD: &[u8] = b"PK\x05\x06";
 const ZIP64_END_LOCATOR: &[u8] = b"PK\x06\x07";
 const ZIP64_END_RECORD: &[u8] = b"PK\x06\x06";
 
-/// The entry count zip 8.6 takes from the end record it examines first: the
-/// last end record signature whose comment fits in the archive, or the Zip64
-/// record its locator names when a 16 bit field is saturated.
-///
-/// These checks are a subset of the reader's own. When it rejects a record
-/// accepted here it falls back to an earlier one, and the count comparison
-/// in [`open_archive`] refuses the result.
-fn declared_entry_count(bytes: &[u8]) -> Option<u64> {
-    memmem::rfind_iter(bytes, END_RECORD).find_map(|at| end_record_count(bytes, at))
+/// Most end records an archive may hold: its end of central directory
+/// signatures, plus the Zip64 end records zip 8.6 reads for their locators.
+/// An honest archive holds one or two, and a four byte signature occurs by
+/// chance in compressed data about once per 4 GiB. Each record can cost the
+/// reader, and the scan in [`declared_entries`], one search of the archive,
+/// so the cap keeps both linear in its size.
+const MAX_END_RECORDS: usize = 8;
+
+/// The entry counts an archive's end records declare.
+#[derive(Debug, PartialEq, Eq)]
+struct DeclaredEntries {
+    /// The count of the end record zip 8.6 examines first: the last end
+    /// record signature whose comment fits in the archive, or the Zip64
+    /// record its locator names when a 16 bit field is saturated.
+    first: u64,
+    /// The largest count of any Zip64 record an end record's locator names,
+    /// zero when there is none.
+    largest_zip64: u64,
 }
 
-fn end_record_count(bytes: &[u8], at: usize) -> Option<u64> {
+/// Why an archive's end records were refused before opening it.
+#[derive(Debug, PartialEq, Eq)]
+enum EndRecordRefusal {
+    /// The reader would accept no end record.
+    Missing,
+    /// The archive holds more than [`MAX_END_RECORDS`] end records.
+    TooMany,
+}
+
+/// What one end record declares.
+enum EndCount {
+    /// The record's own 16 bit count.
+    Zip32(u64),
+    /// The largest count of the Zip64 records its locator names.
+    Zip64(u64),
+}
+
+/// Read every end record zip 8.6 may examine, last first.
+///
+/// These checks are a subset of those the reader applies before it reserves
+/// a table, so it may reject a record accepted here and fall back to an
+/// earlier one. The count comparison in [`open_archive`] then refuses the
+/// archive unless the counts agree, and every Zip64 count the reader could
+/// reach that way is in `largest_zip64`.
+fn declared_entries(bytes: &[u8]) -> std::result::Result<DeclaredEntries, EndRecordRefusal> {
+    // memchr searches forward several times faster than in reverse.
+    let signatures: Vec<usize> = memmem::find_iter(bytes, END_RECORD)
+        .take(MAX_END_RECORDS + 1)
+        .collect();
+    let mut examined = signatures.len();
+    if examined > MAX_END_RECORDS {
+        return Err(EndRecordRefusal::TooMany);
+    }
+    let mut first = None;
+    let mut largest_zip64 = 0;
+    for &at in signatures.iter().rev() {
+        let count = end_record_count(bytes, at, &mut examined);
+        if examined > MAX_END_RECORDS {
+            return Err(EndRecordRefusal::TooMany);
+        }
+        let count = match count {
+            Some(EndCount::Zip32(count)) => count,
+            Some(EndCount::Zip64(count)) => {
+                largest_zip64 = largest_zip64.max(count);
+                count
+            }
+            None => continue,
+        };
+        first.get_or_insert(count);
+    }
+    let first = first.ok_or(EndRecordRefusal::Missing)?;
+    Ok(DeclaredEntries {
+        first,
+        largest_zip64,
+    })
+}
+
+fn end_record_count(bytes: &[u8], at: usize, examined: &mut usize) -> Option<EndCount> {
     let record = bytes.get(at..at.checked_add(22)?)?;
     let comment = usize::from(u16::from_le_bytes([record[20], record[21]]));
     if at + 22 + comment > bytes.len() {
@@ -442,12 +520,14 @@ fn end_record_count(bytes: &[u8], at: usize) -> Option<u64> {
         .checked_sub(20)
         .filter(|&locator| saturated && bytes[locator..].starts_with(ZIP64_END_LOCATOR));
     if let Some(locator) = locator {
-        return zip64_entry_count(bytes, locator);
+        return zip64_entry_count(bytes, locator, examined).map(EndCount::Zip64);
     }
-    (total == 0 || directory_offset < at as u64).then_some(on_disk)
+    (total == 0 || directory_offset < at as u64).then_some(EndCount::Zip32(on_disk))
 }
 
-fn zip64_entry_count(bytes: &[u8], locator: usize) -> Option<u64> {
+/// The largest count among the Zip64 records the reader may accept for the
+/// locator at `locator`, adding to `examined` each record it would read.
+fn zip64_entry_count(bytes: &[u8], locator: usize, examined: &mut usize) -> Option<u64> {
     let fields = &bytes[locator..locator + 20];
     let disk_with_directory = le_u32(fields, 4);
     let declared_at = le_u64(fields, 8);
@@ -455,25 +535,37 @@ fn zip64_entry_count(bytes: &[u8], locator: usize) -> Option<u64> {
         return None;
     }
     // Prepended bytes move the record forward, so the reader searches forward
-    // from the declared offset up to the locator.
+    // from the declared offset up to the locator and takes the first
+    // consistent record. The largest count is kept here, so that order never
+    // matters.
     let from = usize::try_from(declared_at).ok()?;
+    let mut largest = None;
     for found in memmem::find_iter(&bytes[from..locator], ZIP64_END_RECORD) {
         let at = from + found;
         let Some(record) = bytes.get(at..at + 56) else {
             continue;
         };
+        // The reader reads a record whole, extensible data included, once
+        // its stated size fits before the locator.
         let record_size = le_u64(record, 4);
-        let total = le_u64(record, 32);
-        if record_size < 40
-            || record_size.checked_add(12) != Some((locator - at) as u64)
-            || le_u32(record, 20) != disk_with_directory
-            || total.saturating_mul(46).saturating_add(le_u64(record, 48)) > at as u64
-        {
+        let room = (locator - at) as u64;
+        if record_size < 40 || record_size.saturating_add(12) > room {
             continue;
         }
-        return (le_u64(record, 24) <= total).then_some(total);
+        *examined += 1;
+        if *examined > MAX_END_RECORDS {
+            return None;
+        }
+        let total = le_u64(record, 32);
+        if record_size + 12 == room
+            && le_u32(record, 20) == disk_with_directory
+            && total.saturating_mul(46).saturating_add(le_u64(record, 48)) <= at as u64
+            && le_u64(record, 24) <= total
+        {
+            largest = largest.max(Some(total));
+        }
     }
-    None
+    largest
 }
 
 fn le_u16(bytes: &[u8], at: usize) -> u64 {
@@ -5989,31 +6081,52 @@ mod tests {
         bytes[at..at + 4].copy_from_slice(&u32::try_from(value).unwrap().to_le_bytes());
     }
 
+    /// An end of central directory record without a comment.
+    fn end_record(on_disk: u64, total: u64, size: u64, offset: u64) -> Vec<u8> {
+        let mut record = END_RECORD.to_vec();
+        record.extend_from_slice(&[0; 4]);
+        for (value, width) in [(on_disk, 2), (total, 2), (size, 4), (offset, 4), (0, 2)] {
+            record.extend_from_slice(&value.to_le_bytes()[..width]);
+        }
+        record
+    }
+
+    /// An end record whose 16 and 32 bit fields defer to Zip64 records.
+    fn saturated_end_record() -> Vec<u8> {
+        end_record(0xFFFF, 0xFFFF, 0xFFFF_FFFF, 0xFFFF_FFFF)
+    }
+
+    fn zip64_end_record(total: u64, size: u64, offset: u64) -> Vec<u8> {
+        let mut record = ZIP64_END_RECORD.to_vec();
+        record.extend_from_slice(&44_u64.to_le_bytes());
+        record.extend_from_slice(&[45, 0, 45, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        for value in [total, total, size, offset] {
+            record.extend_from_slice(&value.to_le_bytes());
+        }
+        record
+    }
+
+    fn zip64_end_locator(record_at: u64) -> Vec<u8> {
+        let mut locator = ZIP64_END_LOCATOR.to_vec();
+        locator.extend_from_slice(&0_u32.to_le_bytes());
+        locator.extend_from_slice(&record_at.to_le_bytes());
+        locator.extend_from_slice(&1_u32.to_le_bytes());
+        locator
+    }
+
     /// Restate an archive's end of central directory as Zip64 records.
     fn with_zip64_end(bytes: &[u8]) -> Vec<u8> {
         let end = bytes.len() - 22;
         assert!(bytes[end..].starts_with(END_RECORD));
-        let count = le_u16(bytes, end + 10);
         let mut out = bytes[..end].to_vec();
         let record_at = out.len() as u64;
-        out.extend_from_slice(ZIP64_END_RECORD);
-        out.extend_from_slice(&44_u64.to_le_bytes());
-        out.extend_from_slice(&[45, 0, 45, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-        for value in [
-            count,
-            count,
+        out.extend(zip64_end_record(
+            le_u16(bytes, end + 10),
             le_u32(bytes, end + 12),
             le_u32(bytes, end + 16),
-        ] {
-            out.extend_from_slice(&value.to_le_bytes());
-        }
-        out.extend_from_slice(ZIP64_END_LOCATOR);
-        out.extend_from_slice(&0_u32.to_le_bytes());
-        out.extend_from_slice(&record_at.to_le_bytes());
-        out.extend_from_slice(&1_u32.to_le_bytes());
-        out.extend_from_slice(END_RECORD);
-        out.extend_from_slice(&[0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF]);
-        out.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0]);
+        ));
+        out.extend(zip64_end_locator(record_at));
+        out.extend(saturated_end_record());
         out
     }
 
@@ -6087,14 +6200,23 @@ mod tests {
         }
         let accepted = archive_with(MAX_FILES);
         let refused = archive_with(MAX_FILES + 1);
-        assert_eq!(declared_entry_count(&accepted), Some(4_096));
+        assert_eq!(
+            declared_entries(&accepted),
+            Ok(DeclaredEntries {
+                first: 4_096,
+                largest_zip64: 0
+            })
+        );
         assert_eq!(acquire_archive(accepted.clone()).unwrap().len(), 1);
         assert!(archive_error(refused.clone()).contains("declares 4097 entries"));
 
         // Zip64 end records state the same counts.
         assert_eq!(
-            declared_entry_count(&with_zip64_end(&accepted)),
-            Some(4_096)
+            declared_entries(&with_zip64_end(&accepted)),
+            Ok(DeclaredEntries {
+                first: 4_096,
+                largest_zip64: 4_096
+            })
         );
         assert_eq!(acquire_archive(with_zip64_end(&accepted)).unwrap().len(), 1);
         assert!(archive_error(with_zip64_end(&refused)).contains("declares 4097 entries"));
@@ -6105,6 +6227,96 @@ mod tests {
         forged[end + 8..end + 12].copy_from_slice(&[0x01, 0x10, 0x01, 0x10]);
         assert!(archive_error(forged).contains("declares 4097 entries"));
         assert!(archive_error(b"PK\x03\x04 no directory".to_vec()).contains("no end of central"));
+    }
+
+    #[test]
+    fn every_end_record_the_reader_may_fall_back_to_is_bounded() {
+        // The last end record declares one entry, but no central record
+        // follows its directory offset, so zip 8.6 rejects it and falls back
+        // to the earlier Zip64 record, reserving a table from that count.
+        let claimed = MAX_FILES as u64 + 1;
+        let mut fallback = b"PK\x03\x04".to_vec();
+        fallback.resize(47 * (MAX_FILES + 1) + 8, 0);
+        let record_at = fallback.len() as u64;
+        fallback.extend(zip64_end_record(claimed, 46, claimed));
+        fallback.extend(zip64_end_locator(record_at));
+        fallback.extend(saturated_end_record());
+        let after = fallback.len() as u64;
+        fallback.extend_from_slice(&[0; 16]);
+        fallback.extend(end_record(1, 1, 46, after));
+        assert_eq!(
+            declared_entries(&fallback),
+            Ok(DeclaredEntries {
+                first: 1,
+                largest_zip64: claimed
+            })
+        );
+        let error = archive_error(fallback);
+        assert!(error.contains("declares 4097 entries"), "{error}");
+
+        // Signatures inside entry data are read but tolerated up to the cap.
+        let with_signatures = |count: usize| {
+            let mut data = b"<binary>".to_vec();
+            for _ in 0..count {
+                data.extend(end_record(0, 0, 0, 0));
+            }
+            zip_archive(
+                &[("EQ.xml", b"<rdf:RDF/>"), ("notes.bin", &data)],
+                zip::CompressionMethod::Stored,
+            )
+        };
+        assert_eq!(
+            acquire_archive(with_signatures(MAX_END_RECORDS - 1))
+                .unwrap()
+                .len(),
+            1
+        );
+        let error = archive_error(with_signatures(MAX_END_RECORDS));
+        assert!(
+            error.contains("holds more than 8 end of central directory records"),
+            "{error}"
+        );
+
+        // Each saturated end record below sends a search over the archive
+        // from the offset its locator names, so past the cap none is searched.
+        let searches = |count: usize| {
+            let mut bytes = b"PK\x03\x04".to_vec();
+            bytes.resize(64, 0);
+            for _ in 0..count {
+                bytes.extend(zip64_end_locator(0));
+                bytes.extend(saturated_end_record());
+            }
+            declared_entries(&bytes)
+        };
+        assert_eq!(searches(MAX_END_RECORDS), Err(EndRecordRefusal::Missing));
+        assert_eq!(
+            searches(MAX_END_RECORDS + 1),
+            Err(EndRecordRefusal::TooMany)
+        );
+
+        // Every Zip64 record the reader would read whole counts as well; only
+        // the last of these fills the room before its locator exactly.
+        let zip64_records = |count: usize| {
+            let mut bytes = b"PK\x03\x04".to_vec();
+            bytes.resize(64, 0);
+            for _ in 0..count {
+                bytes.extend(zip64_end_record(1, 46, 0));
+            }
+            bytes.extend(zip64_end_locator(64));
+            bytes.extend(saturated_end_record());
+            declared_entries(&bytes)
+        };
+        assert_eq!(
+            zip64_records(MAX_END_RECORDS - 1),
+            Ok(DeclaredEntries {
+                first: 1,
+                largest_zip64: 1
+            })
+        );
+        assert_eq!(
+            zip64_records(MAX_END_RECORDS),
+            Err(EndRecordRefusal::TooMany)
+        );
     }
 
     #[test]
