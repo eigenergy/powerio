@@ -14,6 +14,16 @@
   `POWERIO_MAX_REFERENCED_BYTES`, so a CGMES file above 1 GiB named by path
   needs both settings raised.
 
+- CGMES ZIP archives are held to what they declare. An XML entry must inflate
+  to exactly the size its header states; before, an entry that understated its
+  size could expand until the whole `POWERIO_MAX_REFERENCED_BYTES` budget was
+  spent. An archive is refused when its end records declare more than 4,096
+  entries, checked before the reader reserves its entry table, when it holds
+  more than eight end records, when two entries share a name or any bytes, or
+  when an entry lies outside the archive's entry data. An invalid
+  `POWERIO_MAX_PRIMARY_BYTES` or `POWERIO_MAX_REFERENCED_BYTES` is now refused
+  before any file or directory is opened.
+
 - The MCP server defaults its input byte limits to 256 MiB. When
   `powerio-mcp` or `python -m powerio.mcp` starts, it sets
   `POWERIO_MAX_PRIMARY_BYTES` and `POWERIO_MAX_REFERENCED_BYTES` to 256 MiB
