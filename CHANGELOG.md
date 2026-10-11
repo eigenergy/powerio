@@ -13,7 +13,11 @@
 - CGMES transformer terminals now follow winding numbers when source terminal
   sequence numbers differ, preserving winding connectivity, taps, and limits
   through fresh emission. A synthetic unequal-voltage regression covers the
-  reversed ordering found in CIM bench's RealGrid dataset.
+  reversed ordering found in CIM bench's RealGrid dataset. A stated
+  `sequenceNumber` that differs from the winding's `endNumber` is reported as
+  `READ.CGMES.FIELD_UNMAPPED`, and a terminal that several
+  `PowerTransformerEnd` records of one transformer name is refused, since its
+  winding is ambiguous.
 
 - CGMES fresh emission indexes retained component, terminal, and transformer-end
   identities once per write, avoiding repeated full-table scans on large grids.
