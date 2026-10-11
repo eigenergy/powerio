@@ -156,6 +156,6 @@ value the operator sets. Importing `powerio.mcp` changes neither setting.
 Outside the server, both limits default to 1 GiB for Rust, C, Python, and
 Julia path-based acquisition. CGMES XML counts against the referenced limit
 from a path or from memory, so a CGMES file above 1 GiB needs both settings
-raised. XIIDM and JIIDM documents and the scripts an OpenDSS case includes
-keep fixed 64 MiB limits.
+raised. XIIDM and JIIDM documents keep a fixed 64 MiB limit, and an OpenDSS
+case stops following includes once they have loaded 64 MiB of script text.
 [Resource limits](pio-json-schema.md#resource-limits) lists every limit.

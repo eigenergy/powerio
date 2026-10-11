@@ -994,7 +994,8 @@ def main() -> None:
     ``POWERIO_MAX_REFERENCED_BYTES`` to 256 MiB when the operator leaves them
     unset or empty. Importing this module leaves the environment alone, so a
     program that calls the tool functions directly keeps the library defaults
-    for path input.
+    for what PowerIO reads; the checks this module makes itself, on inline
+    arguments and display files, still default to 256 MiB.
     """
     _apply_service_limits()
     sandbox._DEFAULT_ROOT = Path.cwd().resolve(strict=True)
