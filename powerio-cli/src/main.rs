@@ -2065,8 +2065,43 @@ fn transmission_summary_json(
             "is_radial": view.is_radial(),
             "reference_buses": view.reference_bus_indices(),
             "connectivity_report": view.calc_connectivity_report(),
+            "islands": islands_json(net),
         },
         "warnings": warnings,
+    })
+}
+
+/// The AC islands of the energized buses, largest first: each island's bus
+/// count, its reference bus ids, and its in-service generators.
+fn islands_json(net: &powerio_matrix::BalancedNetwork) -> serde_json::Value {
+    let partition = net.calc_islands();
+    let islands: Vec<serde_json::Value> = partition
+        .islands
+        .iter()
+        .map(|island| {
+            json!({
+                "buses": island.buses.len(),
+                "reference_buses": island.references.iter().map(|bus| bus.0).collect::<Vec<_>>(),
+                "generators": island.generators.len(),
+                "hvdc_ties": island.hvdc.len(),
+            })
+        })
+        .collect();
+    json!({
+        "count": islands.len(),
+        "unsupplied": partition.islands.iter().filter(|island| !island.is_supplied()).count(),
+        "unsupplied_hvdc_fed": partition
+            .islands
+            .iter()
+            .filter(|island| !island.is_supplied() && !island.hvdc.is_empty())
+            .count(),
+        "without_reference": partition
+            .islands
+            .iter()
+            .filter(|island| island.references.is_empty())
+            .count(),
+        "isolated_buses": partition.isolated.len(),
+        "islands": islands,
     })
 }
 
@@ -2098,6 +2133,7 @@ fn distribution_summary_json(
             "is_radial": serde_json::Value::Null,
             "reference_buses": serde_json::Value::Null,
             "connectivity_report": serde_json::Value::Null,
+            "islands": serde_json::Value::Null,
         },
         "warnings": warnings,
     })

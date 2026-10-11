@@ -796,6 +796,7 @@ class BalancedNetwork:
         clamp_angle_bounds: bool = False,
         angle_bound_pad: Optional[float] = None,
         closed_switches: str = "merge",
+        island_references: str = "stated",
     ) -> "BalancedNetwork":
         """Return a normalized copy with per unit power and radian angles.
 
@@ -817,11 +818,19 @@ class BalancedNetwork:
         ``closed_switches=True``, since the matrix and DC calculations model
         no switches. ``"keep"`` leaves the switches as data, and ``"refuse"``
         raises :class:`PowerIODataError` with code ``BUILD.SWITCH.CLOSED``.
+
+        ``island_references="per_island"`` gives every island one reference
+        bus: an island that states none takes the bus of its largest ``pmax``
+        in-service generator, an island stating several keeps one, and an
+        island no in-service generator supplies is left out. The default
+        ``"stated"`` keeps the case's references and designates one only when
+        none survives.
         """
         if (
             not clamp_angle_bounds
             and angle_bound_pad is None
             and closed_switches == "merge"
+            and island_references == "stated"
         ):
             return BalancedNetwork(self._inner.to_normalized())
         return BalancedNetwork(
@@ -829,6 +838,7 @@ class BalancedNetwork:
                 clamp_angle_bounds=clamp_angle_bounds,
                 angle_bound_pad=angle_bound_pad,
                 closed_switches=closed_switches,
+                island_references=island_references,
             )
         )
 
