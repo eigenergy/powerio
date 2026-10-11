@@ -10,17 +10,9 @@
   native counts and fresh emission. Thanks to [Mohamed Numair](https://github.com/MohamedNumair)
   for the original CGMES implementation and the CIM bench suggestion in #456.
 
-- CGMES archives are checked against the bytes they hold, not only the sizes
-  their entries declare. An archive holds at most 4,096 entries, each entry
-  must lie inside the archive without overlapping another, and an entry must
-  declare at most 200 times its compressed size and no more than the expansion
-  budget left, then expand to exactly that size. Before, an entry that
-  understated its size could expand until the whole
-  `POWERIO_MAX_REFERENCED_BYTES` budget was spent. Nested archives, symbolic
-  link entries, unsafe or duplicate names, document type and entity
-  declarations, and invalid UTF-8 are still refused. A single CGMES XML file
-  or archive, from a path or from memory, is held to the referenced limit, so
-  a CGMES file above 1 GiB needs both settings raised.
+- A single CGMES XML file or archive, from a path or from memory, is held to
+  `POWERIO_MAX_REFERENCED_BYTES`, so a CGMES file above 1 GiB named by path
+  needs both settings raised.
 
 - The MCP server holds client input to 256 MiB. When `powerio-mcp` or
   `python -m powerio.mcp` starts, it sets `POWERIO_MAX_PRIMARY_BYTES` and

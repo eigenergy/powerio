@@ -144,13 +144,13 @@ profiles of one CGMES parse, read from files or expanded from ZIP archives,
 total at most `POWERIO_MAX_REFERENCED_BYTES`, and a CGMES XML document or
 archive larger than that limit is refused whether it comes from a path or
 from caller-owned memory. A CGMES file above 1 GiB named by path therefore
-needs both settings raised. An archive holds at most 4,096 entries, and each
-entry must lie inside the archive without overlapping another. An entry may
-declare at most 200 times its compressed size and no more than the expansion
-budget left, and it must expand to exactly the size it declares. Nested
-archives, symbolic link entries, unsafe or duplicate names, document type and
-entity declarations, and invalid UTF-8 are refused. These archive checks are
-fixed; only the byte limit is configurable.
+needs both settings raised. An archive may hold at most 4,096 distinctly
+named entries. Each file entry may declare at most the referenced limit and at
+most 200 times its compressed size. An XML entry may declare no more than the
+budget the profiles before it left, and it is refused if it expands past that
+budget. Nested archives, symbolic link entries, unsafe entry names, document
+type and entity declarations, and invalid UTF-8 are refused. These archive
+checks are fixed; only the byte limit is configurable.
 
 Some readers keep fixed limits below these defaults. An XIIDM or JIIDM
 document holds at most 64 MiB, from a path or from memory. An OpenDSS case
