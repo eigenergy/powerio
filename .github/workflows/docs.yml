@@ -217,14 +217,30 @@ jobs:
       with:
         path: target/doc
 
+  # The deploy check validates the generated artifact on PRs. Live Pages
+  # deployment remains restricted to main / explicit dispatch.
   deploy:
+    name: deploy
     needs: build
-    # PR runs build to catch doc breakage but never publish; only main / dispatch deploy.
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Confirm docs artifact build completed
+      run: echo "Documentation artifact built successfully; no live deployment performed."
+
+  release-pages-deploy:
+    name: Pages deployment gate
+    needs: build
+    # Keep this check present and green on PRs without deploying untrusted code.
+    if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     environment:
-      name: github-pages
+      name: ${{ github.event_name == 'pull_request' && 'ci-validation' || 'github-pages' }}
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+    - name: PR safety gate (no live deployment)
+      if: github.event_name == 'pull_request'
+      run: echo "PR validation passed; live GitHub Pages deployment is intentionally not performed."
     - id: deployment
+      if: github.event_name != 'pull_request'
       uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

@@ -21,7 +21,10 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 use sprs::CsMat;
 
-// Keep the many short-lived parser allocations in the extension's own heap.
+// Keep the many short-lived parser allocations in the extension's own heap
+// when the native-build mimalloc feature is enabled. Linux/aarch64 cross-wheels
+// omit the allocator until libmimalloc-sys supports the manylinux cross-compiler.
+#[cfg(feature = "mimalloc-allocator")]
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
