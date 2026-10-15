@@ -71,7 +71,8 @@ updates `Cargo.lock`. Then:
    library, checks the tag against the workspace version and that heading,
    builds the C ABI tarballs, and stages a draft GitHub release whose body is
    that section. If PowerIO.jl fails against the tag, merge the PowerIO.jl
-   fix and run the workflow again on the tag.
+   fix, then re-run the failed run. "Run workflow" builds tarballs only and
+   stages no draft.
 3. Inspect the draft and its five binary assets, then publish the release.
    The release event fires the PyPI publish
    (python.yml) and the crates.io publish (crates.yml: powerio-core,
