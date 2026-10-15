@@ -283,6 +283,9 @@ jobs:
   julia-pin:
     name: PowerIO.jl pins the packaged tarballs
     needs: build
+    # A skipped binding gate (workflow_dispatch) would otherwise skip this job
+    # too, as it skips every job downstream of it.
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -315,6 +318,7 @@ jobs:
   julia-tarballs:
     name: PowerIO.jl on ${{ matrix.platform }}
     needs: julia-pin
+    if: ${{ !cancelled() && needs.julia-pin.result == 'success' }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
