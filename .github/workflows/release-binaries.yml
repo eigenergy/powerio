@@ -270,10 +270,108 @@ jobs:
           name: libpowerio_capi.${{ matrix.triplet }}
           path: libpowerio_capi.${{ matrix.triplet }}.tar.gz
 
+  # Release gate on the packaged tarballs. After publication, PowerIO.jl's
+  # Release workflow pins the published tarballs in its Artifacts.toml and runs
+  # its tests against them. It cannot skip a version, so a tarball that fails
+  # there would leave PyPI and crates.io published and the Julia release stuck.
+  # These two jobs run that check on the tarballs `build` made, before the
+  # draft release exists. `julia-pin` runs PowerIO.jl's gen/update_artifacts.jl
+  # on them. `julia-tarballs` installs each platform's tarball as the artifact
+  # Artifacts.toml names, checking its sha256 and tree hash, and runs the
+  # PowerIO.jl tests on that platform against it. A workflow_dispatch run
+  # checks the tarballs against the workspace version and attaches nothing.
+  julia-pin:
+    name: PowerIO.jl pins the packaged tarballs
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out PowerIO.jl default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: eigenergy/PowerIO.jl
+          path: PowerIO.jl
+          token: ${{ secrets.POWERIO_JL_REPO_TOKEN || github.token }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: libpowerio_capi.*
+          path: release-assets
+          merge-multiple: true
+      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+        with:
+          version: '1'
+      - name: Pin the tarballs with gen/update_artifacts.jl
+        shell: bash
+        env:
+          TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
+        run: |
+          tag="${TAG:-v$(grep -oE '^version = "[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')}"
+          julia --project=PowerIO.jl scripts/check-julia-artifacts.jl pin PowerIO.jl release-assets "$tag"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: powerio-jl-artifacts
+          path: PowerIO.jl/Artifacts.toml
+
+  julia-tarballs:
+    name: PowerIO.jl on ${{ matrix.platform }}
+    needs: julia-pin
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: x86_64-linux-gnu
+          - runner: ubuntu-24.04-arm
+            platform: aarch64-linux-gnu
+          # x64 Julia under Rosetta; the Intel macOS runners are retired.
+          - runner: macos-14
+            platform: x86_64-apple-darwin
+            julia_arch: x64
+          - runner: macos-14
+            platform: aarch64-apple-darwin
+          - runner: windows-latest
+            platform: x86_64-w64-mingw32
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out PowerIO.jl default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: eigenergy/PowerIO.jl
+          path: PowerIO.jl
+          token: ${{ secrets.POWERIO_JL_REPO_TOKEN || github.token }}
+      - name: Use the Artifacts.toml julia-pin wrote
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: powerio-jl-artifacts
+          path: PowerIO.jl
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: libpowerio_capi.${{ matrix.platform }}
+          path: release-assets
+      - name: Install Rosetta
+        if: matrix.julia_arch == 'x64'
+        run: /usr/sbin/softwareupdate --install-rosetta --agree-to-license
+      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+        with:
+          version: '1'
+          arch: ${{ matrix.julia_arch || 'default' }}
+          force-arch: ${{ matrix.julia_arch == 'x64' }}
+      - name: Install the packaged tarball as the powerio_capi artifact
+        shell: bash
+        run: julia --project=PowerIO.jl scripts/check-julia-artifacts.jl install PowerIO.jl release-assets
+      # No POWERIO_CAPI and no library build in this job, so the binding
+      # resolves the installed artifact, and the suite fails without it.
+      - name: Test PowerIO.jl against the packaged library
+        shell: bash
+        env:
+          POWERIO_REQUIRE_LIBRARY: '1'
+        run: julia --project=PowerIO.jl -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+
   attach:
     name: attach draft release assets
     if: github.event_name == 'push'
-    needs: build
+    needs: [ build, julia-tarballs ]
     runs-on: ubuntu-latest
     permissions:
       contents: write

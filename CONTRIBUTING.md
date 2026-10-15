@@ -69,9 +69,11 @@ updates `Cargo.lock`. Then:
 2. Create an annotated `vX.Y.Z` tag on the tested main commit and push it.
    The release-binaries workflow tests PowerIO.jl `main` against the tagged
    library, checks the tag against the workspace version and that heading,
-   builds the C ABI tarballs, and stages a draft GitHub release whose body is
-   that section. If PowerIO.jl fails against the tag, merge the PowerIO.jl
-   fix, then re-run the failed run. "Run workflow" builds tarballs only and
+   and builds the C ABI tarballs. On each platform it then installs the
+   tarball the way PowerIO.jl will after publication and runs the PowerIO.jl
+   tests against it. Only then does it stage a draft GitHub release whose
+   body is that section. If PowerIO.jl fails, merge the PowerIO.jl fix, then
+   re-run the failed run. "Run workflow" builds and checks the tarballs but
    stages no draft.
 3. Inspect the draft and its five binary assets, then publish the release.
    The release event fires the PyPI publish

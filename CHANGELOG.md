@@ -6,6 +6,11 @@
   activated. A release stays a tag and a published draft, and PowerIO.jl
   releases itself after each published powerio release.
 
+- Release builds run PowerIO.jl's tests against every packaged C library
+  tarball, each on its own platform, before the draft release exists. A
+  tarball the Julia release would reject now stops the release before
+  anything is published.
+
 ## 0.11.5
 
 - Prepare paired releases from reviewed PowerIO and PowerIO.jl commits, with
