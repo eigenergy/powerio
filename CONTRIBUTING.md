@@ -57,31 +57,21 @@ generation gets a changelog entry.
 
 ## Releasing
 
-Use the [paired release procedure](https://github.com/eigenergy/powerio/blob/main/docs/src/paired-releases.md).
-It prepares both repositories for one publication approval and registers the
-exact tested Julia commit independently of later changes to `main`.
-
-Until paired automation is explicitly activated, follow the existing
-version, changelog, release-intent, and tag workflow below. Do not mix the two
-release routes. The legacy intent is not a Julia requirement and is not used
-by paired releases.
-
-### Before activation
+A release is a version bump, a tag, and a published draft. PowerIO.jl
+releases itself after each published release.
 
 The release version lives in `[workspace.package]` and the workspace dependency
 pins in `[workspace.dependencies]`. Update them together; the next Cargo command
 updates `Cargo.lock`. Then:
 
 1. Merge the bump with a `CHANGELOG.md` section headed exactly `## X.Y.Z`
-   and wait for main CI. Complete the companion PowerIO.jl review first: its
-   version, changelog, and ready release intent must identify this release,
-   and the intent digest must match the final Julia tree. Follow
-   [PowerIO.jl's release procedure](https://github.com/eigenergy/PowerIO.jl/blob/main/CONTRIBUTING.md#releasing).
+   and wait for main CI.
 2. Create an annotated `vX.Y.Z` tag on the tested main commit and push it.
-   The release-binaries workflow
-   checks the tag against the workspace version and that heading, builds the
-   C ABI tarballs, and stages a draft GitHub release whose body is that
-   section.
+   The release-binaries workflow tests PowerIO.jl `main` against the tagged
+   library, checks the tag against the workspace version and that heading,
+   builds the C ABI tarballs, and stages a draft GitHub release whose body is
+   that section. If PowerIO.jl fails against the tag, merge the PowerIO.jl
+   fix and run the workflow again on the tag.
 3. Inspect the draft and its five binary assets, then publish the release.
    The release event fires the PyPI publish
    (python.yml) and the crates.io publish (crates.yml: powerio-core,
@@ -91,13 +81,16 @@ updates `Cargo.lock`. Then:
    settings). PyPI skips files it already has and crates.io skips versions
    already in the index, so if one of them fails partway you recover by
    running it again.
-4. Check PowerIO.jl's "Update artifacts" workflow. After publication it
-   validates the release against the ready intent, tests the new library,
-   updates only `Artifacts.toml`, and dispatches registration for the tested
-   commit. The daily schedule retries if repository dispatch is unavailable.
-   Check its reported reason if the update is parked; the Julia contributing
-   guide gives recovery commands. A breaking C ABI change bumps
-   `PIO_ABI_VERSION` first; see "C ABI changes" above.
+4. Publishing also starts PowerIO.jl's "Release" workflow, which releases
+   PowerIO.jl X.Y.Z with no PowerIO.jl change: it sets the version, pins the
+   release tarballs in `Artifacts.toml`, runs the Julia tests against them,
+   pushes the release commit, and requests registration in General. Julia
+   release notes go under `## Unreleased` in PowerIO.jl's `CHANGELOG.md`.
+   [PowerIO.jl's release section](https://github.com/eigenergy/PowerIO.jl/blob/main/CONTRIBUTING.md#releasing)
+   covers a failed run and how to hold a release.
+
+A breaking C ABI change bumps `PIO_ABI_VERSION` first; see "C ABI changes"
+above.
 
 ## Naming
 

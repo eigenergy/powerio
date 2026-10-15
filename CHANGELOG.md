@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Remove the paired release workflows and scripts, which were never
+  activated. A release stays a tag and a published draft, and PowerIO.jl
+  releases itself after each published powerio release.
+
 ## 0.11.5
 
 - Prepare paired releases from reviewed PowerIO and PowerIO.jl commits, with

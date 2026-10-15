@@ -123,22 +123,44 @@ pip install dist/*.whl && pytest python/tests  # an editable install is shadowed
 
 ## Release flow
 
-There are two release routes; do not mix them. Until a maintainer completes
-the one-time activation in `docs/src/paired-releases.md`, which sets the
-repository variable `PAIRED_RELEASES` to `true`, follow `CONTRIBUTING.md`
-"Releasing > Before activation": the version bump and changelog, the reviewed
-PowerIO.jl release intent, the annotated tag, and the draft release a human
-publishes. After activation, follow `docs/src/paired-releases.md`.
+PowerIO releases are tag driven, and PowerIO.jl follows each published
+release on its own.
 
-Do not mark a PowerIO.jl release intent ready or create a release tag until
-the maintainer approves the final cross repository diff and test results.
+1. Merge the version bump with a `CHANGELOG.md` section headed exactly
+   `## X.Y.Z`, and wait for `main` CI to pass on that merge commit. The tag
+   workflow copies the section into the draft release body and fails
+   without it.
+2. Create a release tag only when the maintainer asks for the release.
+   Check that the tag does not exist, then create an annotated tag on
+   `origin/main` and push it:
 
-After activation, version preparation opens paired PRs. Candidate preparation
-freezes reviewed commits and builds a complete draft. The maintainer's Publish
-release action approves both packages. No package publication or registration
-may bypass the immutable manifest checks. Retries use the approved commits
-and assets; later `main` changes do not change the release. Keep legacy
-workflows disabled while paired automation is active.
+   ```
+   git fetch origin main --tags
+   git ls-remote --tags origin refs/tags/vX.Y.Z
+   git tag -a vX.Y.Z origin/main -m vX.Y.Z
+   git push origin vX.Y.Z
+   ```
+
+3. `.github/workflows/release-binaries.yml` runs on the tag. Its binding
+   gate tests PowerIO.jl `main` against the tagged library before it builds
+   the `powerio-capi` tarballs for `aarch64-apple-darwin`,
+   `aarch64-linux-gnu`, `x86_64-apple-darwin`, `x86_64-linux-gnu`, and
+   `x86_64-w64-mingw32` with the release features
+   `arrow,matrix,gridfm,dist,prob`. It then stages a **draft** GitHub release
+   with the five assets.
+4. A human inspects and publishes the draft. Publishing starts `python.yml`
+   (PyPI) and `crates.yml` (crates.io: `powerio-core`, `powerio-tx`,
+   `powerio-dist`, `powerio-prob`, `powerio-matrix`, `powerio`, and
+   `powerio-cli`, in dependency order). Both deploy through the `pypi` and
+   `crates-io` environments, which wait for the maintainer's approval. A
+   rerun skips files and versions already published.
+5. Publishing also runs `.github/workflows/notify-powerio-jl.yml`, which
+   starts PowerIO.jl's Release workflow; its hourly schedule is the backstop.
+   That workflow sets the Julia version, pins the release tarballs in
+   `Artifacts.toml`, runs the Julia tests against them, pushes the release
+   commit to PowerIO.jl `main`, and asks JuliaRegistrator to register it.
+   Releasing needs no PowerIO.jl change. The PowerIO.jl repository variable
+   `RELEASE_HOLD=true` pauses it.
 
 ## Layout
 
