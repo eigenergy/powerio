@@ -337,6 +337,12 @@ jobs:
           - runner: windows-latest
             platform: x86_64-w64-mingw32
     steps:
+      # Pkg installs a package from its git tree without converting line
+      # endings, so check PowerIO.jl out the same way; its tests compare
+      # emitted text with fixture bytes.
+      - name: Keep committed line endings
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check out PowerIO.jl default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -370,7 +376,12 @@ jobs:
         shell: bash
         env:
           POWERIO_REQUIRE_LIBRARY: '1'
-        run: julia --project=PowerIO.jl -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+        run: |
+          # Git Bash puts GNU tar first on PATH, and GNU tar reads the C: of a
+          # Windows path as a remote host. The tests' tar calls need Windows'
+          # own tar, which accepts drive letters.
+          if [ "$RUNNER_OS" = Windows ]; then export PATH="/c/Windows/System32:$PATH"; fi
+          julia --project=PowerIO.jl -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 
   attach:
     name: attach draft release assets
