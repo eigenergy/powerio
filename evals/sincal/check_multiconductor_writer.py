@@ -101,10 +101,10 @@ def opendss_reference(floating):
     deck = ['Clear', 'Set DefaultBaseFrequency=50',
             f'New Circuit.writer phases=3 bus1=supply.1.2.3 bus2={back} basekv={230*np.sqrt(3)/1000:.17g} pu=1 angle=0 frequency=50',
             f'Edit Vsource.source r1={EPS_OHM} x1={EPS_OHM} r0={EPS_OHM} x0={EPS_OHM}',
-            'New Linecode.cable nphases=3 units=m basefreq=50 '
-            'rmatrix=[0.0004 | 0.0001 0.0004 | 0.0001 0.0001 0.0004] '
-            'xmatrix=[0.0003 | 0.0001 0.0003 | 0.0001 0.0001 0.0003] '
-            'cmatrix=[0 | 0 0 | 0 0 0]',
+            ('New Linecode.cable nphases=3 units=m basefreq=50 '
+             + 'rmatrix=[0.0004 | 0.0001 0.0004 | 0.0001 0.0001 0.0004] '
+             + 'xmatrix=[0.0003 | 0.0001 0.0003 | 0.0001 0.0001 0.0003] '
+             + 'cmatrix=[0 | 0 0 | 0 0 0]'),
             'New Line.feeder bus1=supply.1.2.3 bus2=load.1.2.3 phases=3 linecode=cable length=120 units=m']
     for i, (p, q) in enumerate(zip([1, 2, 3], [.2, -.1, .7], strict=True), 1):
         deck.append(f'New Load.phase{i} phases=1 bus1=load.{i}.0 conn=wye kv=0.23 kw={p} kvar={q} model=2 status=fixed')
