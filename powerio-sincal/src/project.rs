@@ -29,7 +29,8 @@ impl AcquiredProject {
             .by_index(index)
             .map_err(format_error)?
             .name()
-            .to_owned();
+            .map_err(format_error)?
+            .into_owned();
         // Packages have their own namespace. Caller or disk companions must
         // never fill a missing archive reference.
         let mut retained =
@@ -40,7 +41,7 @@ impl AcquiredProject {
             if entry.is_dir() {
                 continue;
             }
-            let name = entry.name().to_owned();
+            let name = entry.name().map_err(format_error)?.into_owned();
             let bytes = read_bounded(&mut entry)?;
             actual_expanded = actual_expanded
                 .checked_add(bytes.len() as u64)
