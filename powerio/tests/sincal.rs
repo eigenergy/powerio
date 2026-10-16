@@ -193,7 +193,7 @@ fn direct_sqlite_input_has_the_same_value_and_echoes_its_database_bytes() {
         .file_names()
         .map(Result::unwrap)
         .filter(|name| name.ends_with("/database.db"))
-        .map(|name| name.into_owned())
+        .map(std::borrow::Cow::into_owned)
         .collect::<Vec<_>>();
     assert_eq!(names.len(), 1);
     let mut database = Vec::new();
