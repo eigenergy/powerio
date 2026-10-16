@@ -312,10 +312,12 @@ _BALANCED_DELEGATED_NAMES = frozenset(
         "n_generators",
         "n_hvdc",
         "n_islands",
+        "n_lines",
         "n_loads",
         "n_shunts",
         "n_static_var_compensators",
         "n_storage",
+        "n_substations",
         "n_switches",
         "n_transformers_3w",
         "name",
@@ -364,12 +366,28 @@ class BalancedNetwork:
             raise AttributeError(
                 f"{type(self).__name__!r} object has no attribute {name!r}"
             )
-        return getattr(self._inner, name)
+        value = getattr(self._inner, name)
+        # A native handle is immutable; scalar counts need no repeated FFI
+        # call. A collection entry update replaces the handle and clears them.
+        if name.startswith("n_"):
+            self.__dict__[name] = value
+        return value
 
     def __repr__(self) -> str:
         # The inner handle's __repr__ already renders the public ``BalancedNetwork(...)``
         # form, so this is a straight delegate.
         return repr(self._inner)
+
+    def component_counts(self) -> dict[str, int]:
+        """Count native lines, generators, loads, and substations.
+
+        Lines exclude transformer branches. Loads include equivalent injections
+        represented as loads. Substations count the source hierarchy, or zero
+        when the format supplies no hierarchy. No Python table rows are built.
+        Raises ValueError for normalized networks, whose unity taps no longer
+        distinguish lines from transformers. Count the source network instead.
+        """
+        return self._inner.component_counts()
 
     def calc_connectivity_report(self) -> dict[str, Any]:
         """Calculate the in-service topology summary."""
@@ -1468,6 +1486,15 @@ class PioModule:
     def __init__(self, inner: "_powerio._PioModule"):
         self._inner = inner
 
+    def sever_source(self) -> "PioModule":
+        """Copy this module without retained input bytes, forcing fresh emission.
+
+        The original module is unchanged. Values, diagnostics, source
+        descriptors, and history are preserved; preparing the copy has a cost
+        separate from emission.
+        """
+        return PioModule(self._inner.sever_source())
+
     @classmethod
     def from_value(cls, value: Any) -> "PioModule":
         """Wrap an existing typed value without serializing it."""
@@ -1585,6 +1612,10 @@ def _refresh_collection_entry(target: Any, location: _CollectionEntry) -> None:
         raise RuntimeError("a collection update changed the entry type")
     if isinstance(target, BalancedNetwork):
         target._inner = refreshed._inner
+        # Counts cached from the replaced handle may no longer hold, for
+        # example the island count after a branch status update.
+        for name in [name for name in vars(target) if name.startswith("n_")]:
+            del target.__dict__[name]
     elif isinstance(target, dist.MulticonductorNetwork):
         target._inner = refreshed._inner
     elif isinstance(target, _TypedValue):

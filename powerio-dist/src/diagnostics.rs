@@ -231,6 +231,47 @@ pub mod codes {
         EMIT_BMOPF_TRANSFORMER_WYE_WYE_DECOMPOSED = "EMIT.BMOPF.TRANSFORMER_WYE_WYE_DECOMPOSED",
             Warning, "a wye-wye transformer was decomposed into BMOPF pairs";
 
+        // READ.CIM_DIST: distribution CIM decoded, but not representable in
+        // the multiconductor model.
+        READ_CIM_DIST_CLASS_UNMAPPED = "READ.CIM_DIST.CLASS_UNMAPPED", Warning,
+            "objects of a CIM class the distribution mapping does not read were not carried";
+        READ_CIM_DIST_CONTEXT_UNMAPPED = "READ.CIM_DIST.CONTEXT_UNMAPPED", Remark,
+            "containment, naming, or base voltage context the model has no field for was not carried";
+        READ_CIM_DIST_FIELD_UNMAPPED = "READ.CIM_DIST.FIELD_UNMAPPED", Warning,
+            "a property of a mapped CIM object has no model field and was not carried";
+        READ_CIM_DIST_RECORD_DROPPED = "READ.CIM_DIST.RECORD_DROPPED", Warning,
+            "a CIM equipment record could not be mapped and was dropped";
+        READ_CIM_DIST_VALUE_DEFAULTED = "READ.CIM_DIST.VALUE_DEFAULTED", Warning,
+            "a value the model needs was absent or unusable and was defaulted";
+        READ_CIM_DIST_VALUE_UNSUPPORTED = "READ.CIM_DIST.VALUE_UNSUPPORTED", Warning,
+            "a CIM value outside the mapped set was read as the nearest one";
+        READ_CIM_DIST_VALUE_COLLAPSED = "READ.CIM_DIST.VALUE_COLLAPSED", Warning,
+            "CIM structure was reduced to what one model field can carry";
+        READ_CIM_DIST_VALUE_CONFLICT = "READ.CIM_DIST.VALUE_CONFLICT", Warning,
+            "two statements of one CIM property disagree and the first was kept";
+        READ_CIM_DIST_REFERENCE_DROPPED = "READ.CIM_DIST.REFERENCE_DROPPED", Warning,
+            "a CIM reference names an object the document set does not define";
+        READ_CIM_DIST_IDENTIFIER_SUBSTITUTED = "READ.CIM_DIST.IDENTIFIER_SUBSTITUTED", Warning,
+            "a CIM name that is empty or repeats another was replaced by the object's mRID";
+        /// A segment states no impedance (no `PerLengthImpedance` and no
+        /// series values), typically because it is described by wire
+        /// geometry, which the reader does not calculate. Severity `Error`:
+        /// the parse continued, but the segment has no series impedance.
+        READ_CIM_DIST_IMPEDANCE_UNRESOLVED = "READ.CIM_DIST.IMPEDANCE_UNRESOLVED", Error,
+            "a line segment states no impedance the reader can carry";
+
+        // EMIT.CIM_DIST: what the distribution CIM writer cannot state.
+        EMIT_CIM_DIST_FIELD_DROPPED = "EMIT.CIM_DIST.FIELD_DROPPED", Warning,
+            "a field distribution CIM has no property for was dropped";
+        EMIT_CIM_DIST_RECORD_DROPPED = "EMIT.CIM_DIST.RECORD_DROPPED", Warning,
+            "an element the distribution CIM writer does not emit was dropped";
+        EMIT_CIM_DIST_EXTRAS_DROPPED = "EMIT.CIM_DIST.EXTRAS_DROPPED", Warning,
+            "a passthrough extra with no distribution CIM property was dropped";
+        EMIT_CIM_DIST_VALUE_COLLAPSED = "EMIT.CIM_DIST.VALUE_COLLAPSED", Warning,
+            "structure was reduced to what one CIM property can carry";
+        EMIT_CIM_DIST_VALUE_SUBSTITUTED = "EMIT.CIM_DIST.VALUE_SUBSTITUTED", Warning,
+            "an identifier or value was replaced by one distribution CIM can state";
+
         // The multiconductor model itself.
         READ_MULTICONDUCTOR_VALUE_DEFAULTED = "READ.MULTICONDUCTOR.VALUE_DEFAULTED", Warning,
             "a value the document never states was defaulted while reading";

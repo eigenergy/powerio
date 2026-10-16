@@ -832,6 +832,7 @@ class DisplayData(NamedTuple):
     data: PwdDisplay
 
 class BalancedNetwork:
+    def component_counts(self) -> dict[str, int]: ...
     # Data attributes and the non-matrix methods delegate to the compiled
     # `_powerio._BalancedNetwork` handle at runtime via `BalancedNetwork.__getattr__`.
     _inner: Any
@@ -864,6 +865,8 @@ class BalancedNetwork:
     ]
     n_buses: int
     n_branches: int
+    n_lines: int
+    n_substations: int
     n_generators: int
     n_loads: int
     n_shunts: int
@@ -1165,6 +1168,7 @@ class AcScucSolution(_BalancedCalculation, _CalculationSolution):
     def objective(self) -> Optional[float]: ...
 
 class PioModule(Generic[_T]):
+    def sever_source(self) -> PioModule[_T]: ...
     _inner: Any
     def __init__(self, inner: Any) -> None: ...
     @classmethod

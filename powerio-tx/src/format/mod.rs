@@ -691,6 +691,11 @@ fn parse_to_network(
             json_target_from_class(json_class.unwrap_or_else(|| routing::classify_json_text(text)))?
         }
     };
+    if fmt == TargetFormat::Cgmes {
+        // A `.xml` profile the CGMES sniff missed arrives here rather than
+        // through `cgmes::parse_source`, and keeps the same byte limit.
+        cgmes::check_text_budget(source, text)?;
+    }
     read_source(text, fmt, stem, warnings)
 }
 

@@ -315,13 +315,14 @@ enum Command {
     },
     /// Convert a case file to another format. Transmission formats convert
     /// through the neutral hub; distribution formats (dss, pmd-json,
-    /// bmopf-json) through the wire coordinate distribution model. The two
-    /// families do not mix.
+    /// bmopf-json, cim-dist) through the wire coordinate distribution model.
+    /// The two families do not mix.
     Convert {
         /// Input case file, or a gridfm dataset directory with `--from gridfm`.
         /// The format is inferred from the extension (`.m`, `.json`, `.raw`,
-        /// `.aux`, `.dss`) unless `--from` is given. `-` reads the case from
-        /// standard input, which requires `--from`.
+        /// `.aux`, `.dss`, and `.xml` by its content) unless `--from` is
+        /// given. `-` reads the case from standard input, which requires
+        /// `--from`.
         input: PathBuf,
         /// Target format.
         #[arg(long, value_enum)]
@@ -645,6 +646,10 @@ enum FormatArg {
     /// IEEE BMOPF JSON distribution case (parse and emit).
     #[value(name = "bmopf-json", alias = "bmopf")]
     BmopfJson,
+    /// Distribution CIM, CIM100 RDF/XML (parse and emit; parse also reads a
+    /// directory of documents).
+    #[value(name = "cim-dist", alias = "cimdist")]
+    CimDist,
     /// Re-encode against the BMOPF 0.1.0 schema.
     #[value(name = "bmopf-json@0.1.0")]
     Bmopf010,
@@ -692,7 +697,8 @@ impl FormatArg {
             | FormatArg::PmdJson
             | FormatArg::BmopfJson
             | FormatArg::Bmopf010
-            | FormatArg::Bmopf020 => return None,
+            | FormatArg::Bmopf020
+            | FormatArg::CimDist => return None,
         })
     }
 
@@ -713,6 +719,7 @@ impl FormatArg {
             FormatArg::BmopfJson | FormatArg::Bmopf010 | FormatArg::Bmopf020 => {
                 Some(DistTargetFormat::BmopfJson)
             }
+            FormatArg::CimDist => Some(DistTargetFormat::CimDist),
             FormatArg::Matpower
             | FormatArg::PowerModelsJson
             | FormatArg::EgretJson
@@ -774,6 +781,7 @@ impl FormatArg {
             FormatArg::BmopfJson => "bmopf-json",
             FormatArg::Bmopf010 => "bmopf-json@0.1.0",
             FormatArg::Bmopf020 => "bmopf-json@0.2.0",
+            FormatArg::CimDist => "cim-dist",
         }
     }
 
@@ -2610,7 +2618,7 @@ fn run_geo_apply(
                     failure!(
                         REQUEST_CLI_TARGET_UNSUPPORTED,
                         "`{}` is not a distribution text target; a distribution case writes \
-                         back to dss, pmd-json, or bmopf-json",
+                         back to dss, pmd-json, bmopf-json, or cim-dist",
                         f.name()
                     )
                 })?,
@@ -3124,6 +3132,12 @@ fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<Fa
     if let Some(case) = cases::classified_json(input)? {
         return parse_classified_case(&case, input);
     }
+    if let Some(source) = cases::cim_dist_source(input) {
+        // The check already read the documents; the parse reuses them.
+        let net = module_io::load_multiconductor_source(source, None)
+            .with_context(|| format!("reading {}", input.display()))?;
+        return Ok(FamilyCase::Distribution(Box::new(net)));
+    }
     if cases::looks_like_distribution_input(input)? {
         let net = module_io::load_multiconductor_module(input, None)
             .with_context(|| format!("reading {}", input.display()))?;
@@ -3179,7 +3193,7 @@ fn reject_nontransmission_from(from: Option<FormatArg>) -> anyhow::Result<()> {
             fail_with!(
                 REQUEST_CLI_FAMILY_MISMATCH,
                 "`{}` is a distribution format; this command reads transmission cases \
-                 (use `convert` to bridge dss, pmd-json, and bmopf-json)",
+                 (use `convert` to bridge dss, pmd-json, bmopf-json, and cim-dist)",
                 f.name()
             );
         }
@@ -3322,6 +3336,25 @@ mod tests {
         .unwrap();
         assert!(!looks_like_distribution_input(&tmp).unwrap());
         let _ = std::fs::remove_file(tmp);
+    }
+
+    #[test]
+    fn cim_directories_route_by_their_top_level_documents() {
+        let cim = std::fs::read_to_string(data("dist/cim/micro_feeder.xml")).unwrap();
+        let top = tempfile::tempdir().unwrap();
+        std::fs::write(top.path().join("feeder.xml"), &cim).unwrap();
+        assert!(super::cases::cim_dist_source(top.path()).is_some());
+        assert!(looks_like_distribution_input(top.path()).unwrap());
+
+        // The CLI and the library agree that documents in a subdirectory
+        // do not make a case.
+        let nested = tempfile::tempdir().unwrap();
+        std::fs::create_dir(nested.path().join("archive")).unwrap();
+        std::fs::write(nested.path().join("archive/feeder.xml"), &cim).unwrap();
+        assert!(super::cases::cim_dist_source(nested.path()).is_none());
+        assert!(!looks_like_distribution_input(nested.path()).unwrap());
+        let source = powerio_core::Source::open(nested.path()).unwrap();
+        assert!(!powerio_dist::source_looks_like_cim_dist(&source));
     }
 
     #[test]

@@ -109,7 +109,7 @@ After deserialization, `emit` writes fresh output from the stored value.
 
 Upgrading from 0.10? Start with the
 [migration guide](https://eigenergy.github.io/powerio/guide/migration-0.11.html).
-PowerIO 0.11.4 keeps PowerIO IR version 2 and C ABI 7; these version numbers
+PowerIO 0.11.5 keeps PowerIO IR version 2 and C ABI 7; these version numbers
 describe separate interfaces.
 
 ## Formats
@@ -139,10 +139,11 @@ describe separate interfaces.
 | OpenDSS `.dss` | `dss` | yes | yes |
 | PowerModelsDistribution engineering JSON | `pmd-json` | yes | yes |
 | BMOPF JSON | `bmopf-json` | 0.1.0, 0.2.0 | 0.2.0 |
+| Distribution CIM, CIM100 RDF/XML | `cim-dist` | cim17v40, one document or a directory | cim17v40, one document |
 | Geographic layer `.geo.json` | `geo-json` | yes | yes |
 
 The balanced transmission formats parse to `BalancedNetwork`, and OpenDSS,
-PMD, and BMOPF parse to `MulticonductorNetwork`. A GO Challenge 3 problem
+PMD, BMOPF, and distribution CIM parse to `MulticonductorNetwork`. A GO Challenge 3 problem
 parses to `AcScucInstance`, a problem with its solution to `AcScucSolution`,
 an OPFData file to `AcOpfSolution`, a GridFM dataset to
 `ScenarioSet<BalancedNetwork>`, and a PyPSA directory with several snapshots
@@ -161,7 +162,7 @@ depend on just the layer they use.
 | `powerio` | `PioValue`, `parse`, `emit`, `serialize`, `deserialize` |
 | `powerio-core` | `Source`, `PioModule`, diagnostics, collections, destinations |
 | `powerio-tx` | `BalancedNetwork` and balanced format readers and writers |
-| `powerio-dist` | `MulticonductorNetwork` and OpenDSS, PMD, BMOPF converters |
+| `powerio-dist` | `MulticonductorNetwork` and OpenDSS, PMD, BMOPF, CIM converters |
 | `powerio-prob` | Operating points, updates, calculation instances and solutions |
 | `powerio-matrix` | Sparse matrices, sensitivities, DC OPF bundles and graph data |
 | `powerio-cli` | The `powerio` command and its terminal interface |

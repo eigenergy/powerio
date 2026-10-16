@@ -41,6 +41,7 @@ Pick the smallest set of gates that covers what you changed, then run the
 | Python package metadata or extras | `maturin build --release --out /tmp/powerio-wheel-check`; inspect wheel `METADATA` |
 | Julia binding compatibility | build `powerio-capi --features arrow,matrix,gridfm,dist,prob`, then run `PowerIO.jl` tests with `POWERIO_CAPI` |
 | shared surface with PowerIO.jl | push a same-named PowerIO.jl companion branch; the tandem CI job tests against it |
+| public Rust API | `bash scripts/check-semver.sh` (needs `cargo install cargo-semver-checks --locked`) |
 | CLI behavior | `cargo test -p powerio-cli --test cli` |
 | documentation or website | `mdbook build docs`; `mdbook test docs`; `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`; regenerate schemas and the C header when their source rustdoc changes; run `scripts/capi-header-parity.sh`; check links to retired guide outputs |
 

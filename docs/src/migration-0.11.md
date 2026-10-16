@@ -35,7 +35,7 @@ let module = powerio::parse(powerio::Source::from_memory("case9.m", bytes)?)?;
 | `network.to_json()` | `serialize(&PioModule::new(network), destination)` |
 | `BalancedNetwork::from_json(text)` | `deserialize(Source::from_memory("module.pio.json", text)?)?.into_value()` |
 | `parse_display(source, from)` | `parse(input)`, which returns `PioValue::GeoLayer`; `PwdDisplay` remains for the raw display record |
-| `DisplayData`, `DisplayFormat` | removed from Rust; Python keeps `parse_display` and `DisplayData` for the raw PowerWorld display record |
+| `DisplayData`, `DisplayFormat` | removed from Rust; Python keeps `parse_display` and `DisplayData` for the raw PowerWorld display record through 0.11.x, and 0.12 removes them |
 | a layer written by hand | `emit(&module, "geo-json", path)` |
 
 Python accepts a path, a file object, or a bytes-like object. A `str` is
