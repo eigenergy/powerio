@@ -60,6 +60,15 @@ else
   echo "=== skipped: wasm32-unknown-unknown target not installed ==="
 fi
 
+# semver.yml compares the public Rust API with the latest release. Skipped
+# rather than failing when cargo-semver-checks is absent
+# (cargo install cargo-semver-checks --locked).
+if cargo semver-checks --version >/dev/null 2>&1; then
+  run bash scripts/check-semver.sh
+else
+  echo "=== skipped: cargo-semver-checks not installed ==="
+fi
+
 run cargo test -p powerio -p powerio-tx -p powerio-core -p powerio-matrix -p powerio-prob -p powerio-cli \
     -p powerio-capi -p powerio-dist -p powerio-sincal
 run cargo test -p powerio --features matrix

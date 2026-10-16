@@ -101,6 +101,9 @@ records.
 `powerio-mcp` (from the Python package) calls the public Python API directly.
 Its tools are `parse`, `emit`, `summarize`, `diagnostics`, `to_normalized`,
 `calc_matrix`, `to_balanced_report`, `to_balanced`, `display`, and `about`.
+`parse` reads a PowerWorld `.pwd` display to a `GeoLayer`. `display` returns
+the raw display record and remains only for 0.11 compatibility; 0.12 removes
+it.
 `parse` returns serialized PowerIO IR, and the tools that accept `powerio_ir`
 deserialize that same IR rather than defining a network, collection,
 calculation, update, or solution representation of their own.
@@ -113,11 +116,11 @@ branches dropped under `skip_zero_impedance`, and six of the eight DC
 calculations (`incidence`, `branch_susceptances`, `bus_susceptance`,
 `branch_flow`, `branch_phase_shift_injection`, `bus_phase_shift_injection`)
 join the matrix names, a vector coming back as
-`{"format": "vector", "data": [...]}`. The other two, `branch_flow_dc` and
-`bus_injection_dc`, need voltage angles and are not matrix names. Those six
-take `skip_zero_impedance`, as do `bprime`, `bdoubleprime`, `admittance_real`,
-`admittance_imag`, and `lacpf`; `ptdf`, `lodf`, `adjacency`, and
-`weighted_laplacian` reject it rather than ignoring it.
+`{"format": "vector", "data": [...]}`. The other two, `calc_branch_flow_dc`
+and `calc_bus_injection_dc`, need voltage angles and are not matrix names.
+Those six take `skip_zero_impedance`, as do `bprime`, `bdoubleprime`,
+`admittance_real`, `admittance_imag`, and `lacpf`; `ptdf`, `lodf`,
+`adjacency`, and `weighted_laplacian` reject it rather than ignoring it.
 `emit(format, destination)` writes a file or directory, and if you omit
 `destination` it returns the artifacts in memory. Diagnostics stay structured
 records with code, severity, message, target, and source spans.
@@ -128,12 +131,34 @@ powerio-mcp                  # stdio transport
 ```
 
 The server accepts exactly one input source: serialized PowerIO IR, a grid
-exchange path, or grid exchange content in memory. Filesystem reads and writes default
-to the directory captured at server startup. `POWERIO_MCP_ALLOWED_ROOTS`
-selects explicit directories instead. Remote URI schemes are rejected.
+exchange path, or grid exchange content in memory. Filesystem reads and
+writes default to the directory captured at server startup.
+`POWERIO_MCP_ALLOWED_ROOTS` selects explicit directories instead. Remote URI
+schemes are rejected. A directory input is held to the bounds PowerIO's own
+directory listing keeps, counted the same way: no subdirectory may sit 64
+levels below it, and the files found plus the subdirectories not yet listed
+may never pass 4,096 while the server walks it.
 
-Primary files default to a 64 MiB acquisition limit, checked before reserving
-memory. Set `POWERIO_MAX_PRIMARY_BYTES` in the host environment to a positive
-decimal byte count for larger inputs. This setting also applies to ordinary
-Rust, C, Python, and Julia path-based source acquisition. Referenced files
-retain their separate cumulative limit.
+Tool arguments come from the client, so the server parses them under smaller
+byte limits than the 1 GiB library defaults meant for local use. When
+`powerio-mcp` or `python -m powerio.mcp` starts, it sets
+`POWERIO_MAX_PRIMARY_BYTES` and `POWERIO_MAX_REFERENCED_BYTES` to 256 MiB
+(268435456 bytes) for whichever of the two the host environment leaves unset
+or empty. That leaves room for a case such as CIM bench's RealGrid, whose
+CGMES archive expands to 82.5 MiB of XML. A file named by `path` may hold at
+most the primary limit, checked before memory is reserved, and the files a
+case references or a directory holds share the referenced limit. Inline
+`content` and `powerio_ir` arguments are held to the primary limit in UTF-8
+bytes and refused before parsing, and the `display` tool reads only a regular
+file within it. The stdio transport reads and decodes each request whole
+before any tool runs, so these limits bound what the server parses, not the
+size of a request. To accept larger inputs, set either variable in the
+server's environment to a positive decimal byte count; the server keeps any
+value the operator sets. Importing `powerio.mcp` changes neither setting.
+
+Outside the server, both limits default to 1 GiB for Rust, C, Python, and
+Julia path-based acquisition. CGMES XML counts against the referenced limit
+from a path or from memory, so a CGMES file above 1 GiB needs both settings
+raised. XIIDM and JIIDM documents keep a fixed 64 MiB limit, and an OpenDSS
+case stops following includes once they have loaded 64 MiB of script text.
+[Resource limits](pio-json-schema.md#resource-limits) lists every limit.

@@ -9,12 +9,29 @@ use the network carried by a balanced operating point.
 from __future__ import annotations
 
 import base64
+import functools
 import io
 import json
+import operator
+import os
+import stat
+import sys
 from pathlib import Path
-from typing import Annotated, Any, Dict, Literal, Mapping, Optional, cast
+from typing import (
+    Annotated,
+    Any,
+    Callable,
+    Dict,
+    Literal,
+    Mapping,
+    MutableMapping,
+    Optional,
+    TypeVar,
+    cast,
+)
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 import powerio
@@ -102,6 +119,66 @@ _SOURCE_FORMAT_HELP = (
     "in `content`; serialized PowerIO IR belongs in `powerio_ir`."
 )
 
+# Tool arguments come from the client, so the server holds them to service
+# sized byte limits rather than the 1 GiB library defaults meant for local use.
+_PRIMARY_BYTES_ENV = "POWERIO_MAX_PRIMARY_BYTES"
+_REFERENCED_BYTES_ENV = "POWERIO_MAX_REFERENCED_BYTES"
+_SERVICE_BYTE_LIMIT = 256 << 20
+# Characters encoded at a time while counting an argument's UTF-8 bytes.
+_UTF8_COUNT_CHUNK = 1 << 20
+
+
+def _apply_service_limits(environ: MutableMapping[str, str] = os.environ) -> None:
+    """Default both acquisition limits to 256 MiB for the server process.
+
+    Only a setting the operator left unset or empty is filled in; any other
+    value stays as it is, and PowerIO validates it when it reads a source.
+    """
+    for name in (_PRIMARY_BYTES_ENV, _REFERENCED_BYTES_ENV):
+        if not environ.get(name):
+            environ[name] = str(_SERVICE_BYTE_LIMIT)
+
+
+def _primary_byte_limit() -> int:
+    """The byte limit for inline arguments and display files.
+
+    ``POWERIO_MAX_PRIMARY_BYTES`` when it holds a positive decimal byte count
+    that PowerIO accepts; otherwise the 256 MiB service default.
+    """
+    value = os.environ.get(_PRIMARY_BYTES_ENV, "")
+    if value.isascii() and value.isdigit():
+        limit = int(value)
+        if 0 < limit <= sys.maxsize:
+            return limit
+    return _SERVICE_BYTE_LIMIT
+
+
+def _over_limit(name: str, limit: int) -> ValueError:
+    return ValueError(
+        f"READ.IO.PRIMARY_BUDGET: `{name}` exceeds the {limit} byte input limit; "
+        f"set {_PRIMARY_BYTES_ENV} to raise it"
+    )
+
+
+def _check_inline_size(name: str, value: str) -> None:
+    """Refuse an inline argument whose UTF-8 encoding exceeds the limit.
+
+    A string of ``n`` characters encodes to between ``n`` and ``4n`` bytes,
+    so only a string between those bounds is counted, a chunk at a time,
+    stopping once the count passes the limit.
+    """
+    limit = _primary_byte_limit()
+    if len(value) > limit:
+        raise _over_limit(name, limit)
+    if value.isascii() or len(value) * 4 <= limit:
+        return
+    total = 0
+    for start in range(0, len(value), _UTF8_COUNT_CHUNK):
+        chunk = value[start : start + _UTF8_COUNT_CHUNK]
+        total += len(chunk.encode("utf-8", "surrogatepass"))
+        if total > limit:
+            raise _over_limit(name, limit)
+
 
 def _fmt(value: Optional[str]) -> Optional[str]:
     return value.strip().lower().replace("_", "-") if value is not None else None
@@ -145,6 +222,10 @@ def _load_module(
     format: Optional[str] = None,
 ) -> "powerio.PioModule":
     path, content, powerio_ir = _one_module_input(path, content, powerio_ir)
+    if content is not None:
+        _check_inline_size("content", content)
+    if powerio_ir is not None:
+        _check_inline_size("powerio_ir", powerio_ir)
     try:
         if powerio_ir is not None:
             return powerio.deserialize(io.StringIO(powerio_ir))
@@ -188,6 +269,7 @@ def _diagnostics_summary(records: list[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _diagnostics_payload(powerio_ir: str) -> Dict[str, Any]:
+    _check_inline_size("powerio_ir", powerio_ir)
     try:
         module = powerio.deserialize(io.StringIO(powerio_ir))
     except (powerio.PowerIOError, ValueError, TypeError) as exc:
@@ -198,6 +280,53 @@ def _diagnostics_payload(powerio_ir: str) -> Dict[str, Any]:
         "summary": _diagnostics_summary(records),
         "diagnostics": records,
     }
+
+
+class _TimeIndexOutOfRange(IndexError):
+    """A ``time_index`` outside the selected TimeSeries."""
+
+
+class _UnknownScenarioId(KeyError):
+    """A ``scenario_id`` the selected ScenarioSet does not hold."""
+
+    def __str__(self) -> str:
+        # KeyError quotes its argument; this message is already a sentence.
+        return str(self.args[0])
+
+
+# Scenario IDs an unknown `scenario_id` refusal names before it counts the rest.
+_LISTED_SCENARIO_IDS = 20
+
+
+def _time_index_out_of_range(index: int, length: int) -> _TimeIndexOutOfRange:
+    if length == 0:
+        held = "the TimeSeries has no time points"
+    elif length == 1:
+        held = "the TimeSeries has 1 time point, index 0"
+    else:
+        held = f"the TimeSeries has {length} time points, indices 0 to {length - 1}"
+    return _TimeIndexOutOfRange(f"`time_index` {index} is out of range: {held}")
+
+
+def _unknown_scenario_id(
+    scenario_id: str, scenarios: "powerio.ScenarioSet"
+) -> _UnknownScenarioId:
+    ids = list(scenarios)
+    if not ids:
+        held = "the ScenarioSet has no scenarios"
+    else:
+        listed = ", ".join(repr(item) for item in ids[:_LISTED_SCENARIO_IDS])
+        if len(ids) > _LISTED_SCENARIO_IDS:
+            listed += f", and {len(ids) - _LISTED_SCENARIO_IDS} more"
+        held = f"the ScenarioSet holds {listed}"
+    return _UnknownScenarioId(f"unknown `scenario_id` {scenario_id!r}: {held}")
+
+
+def _integer_index(value: Any) -> Optional[int]:
+    try:
+        return operator.index(value)
+    except TypeError:
+        return None
 
 
 def _select_value(
@@ -211,11 +340,21 @@ def _select_value(
     selection: Dict[str, Any] = {}
     while remaining_time is not None or remaining_scenario is not None:
         if isinstance(value, powerio.TimeSeries) and remaining_time is not None:
+            # A selector that is not an integer goes on to the TimeSeries,
+            # which raises its own TypeError.
+            position = _integer_index(remaining_time)
+            length = len(value)
+            if position is not None and not -length <= position < length:
+                raise _time_index_out_of_range(position, length)
             selection["time_index"] = remaining_time
             value = value[remaining_time]
             remaining_time = None
             continue
         if isinstance(value, powerio.ScenarioSet) and remaining_scenario is not None:
+            # A selector that is not a string goes on to the ScenarioSet,
+            # which raises its own TypeError.
+            if isinstance(remaining_scenario, str) and remaining_scenario not in value:
+                raise _unknown_scenario_id(remaining_scenario, value)
             selection["scenario_id"] = remaining_scenario
             value = value[remaining_scenario]
             remaining_scenario = None
@@ -597,8 +736,27 @@ def _matrix_impl(
     return payload
 
 
-def _display_impl(path: str, format: Optional[str] = None) -> Dict[str, Any]:
+def _checked_display_file(path: str) -> str:
+    """Confine a display path and hold it to the primary byte limit.
+
+    The display reader reads the whole file without a byte limit of its own,
+    so the server requires a regular file no larger than the limit first.
+    """
     checked = sandbox.checked_path(path, purpose="path")
+    try:
+        info = os.stat(checked)
+    except OSError as exc:
+        raise _coded_error("display parse failed", exc) from exc
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError(f"display `path` must be a regular file: {checked}")
+    limit = _primary_byte_limit()
+    if info.st_size > limit:
+        raise _over_limit("path", limit)
+    return checked
+
+
+def _display_impl(path: str, format: Optional[str] = None) -> Dict[str, Any]:
+    checked = _checked_display_file(path)
     try:
         data = powerio.parse_display(checked, format)
     except (powerio.PowerIOError, OSError, ValueError) as exc:
@@ -622,8 +780,41 @@ _MODULE_INPUT_HELP = (
     "serialized PowerIO IR; `path` and `content` are grid exchange data."
 )
 
+# What this module raises for input the caller can correct. Every such refusal
+# is a ValueError (PowerIOError and sandbox.PathNotAllowed subclass it), apart
+# from the two collection selection errors.
+_REFUSALS = (ValueError, _TimeIndexOutOfRange, _UnknownScenarioId)
 
-@mcp.tool(
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _tool(**options: Any) -> Callable[[_F], _F]:
+    """Register a function as an MCP tool whose refusals reach the client.
+
+    The SDK sends the client the message of a ``ToolError``. From mcp 2.1 it
+    sends only ``Error executing tool <name>`` for any other exception, so a
+    refusal raised as ``ValueError`` would lose its diagnostic code and
+    reason. The registered callable raises each refusal again as a
+    ``ToolError`` with the same message. Any other exception stays a failure
+    the SDK logs with its traceback. The decorated function itself is returned
+    unchanged, so a Python caller still receives the original exception.
+    """
+
+    def register(fn: _F) -> _F:
+        @functools.wraps(fn)
+        def call(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return fn(*args, **kwargs)
+            except _REFUSALS as exc:
+                raise ToolError(str(exc)) from exc
+
+        mcp.tool(**options)(call)
+        return fn
+
+    return register
+
+
+@_tool(
     name="parse",
     description="Parse grid exchange data and return serialized PowerIO IR. "
     + _SOURCE_FORMAT_HELP,
@@ -636,7 +827,7 @@ def _parse_tool(
     return _parse_impl(path, content, format)
 
 
-@mcp.tool(
+@_tool(
     name="emit",
     description="Emit a PowerIO module in one grid exchange format. "
     + _MODULE_INPUT_HELP,
@@ -658,7 +849,7 @@ def _emit_tool(
     }
 
 
-@mcp.tool(
+@_tool(
     name="summarize",
     description="Summarize a typed PowerIO value. Collection entries use a "
     "normal time index or scenario ID. "
@@ -682,13 +873,13 @@ def _summarize_tool(
     )
 
 
-@mcp.tool(name="diagnostics")
+@_tool(name="diagnostics")
 def _diagnostics_tool(powerio_ir: str) -> dict:
     """Return the diagnostics stored on a serialized PowerIO module."""
     return _diagnostics_payload(powerio_ir)
 
 
-@mcp.tool(
+@_tool(
     name="to_normalized",
     description="Normalize a BalancedNetwork and return serialized PowerIO IR. "
     + _MODULE_INPUT_HELP,
@@ -704,7 +895,7 @@ def _to_normalized_tool(
     )
 
 
-@mcp.tool(
+@_tool(
     name="calc_matrix",
     description="Calculate a BalancedNetwork matrix in COO form, or a DC "
     "vector, with the bus ids and branch identities of every axis. "
@@ -736,13 +927,17 @@ def _calc_matrix_tool(
     )
 
 
-@mcp.tool(name="display")
+@_tool(name="display")
 def _display_tool(path: str, format: Optional[str] = None) -> dict:
-    """Parse a PowerWorld display file."""
+    """Return the raw record of a PowerWorld display file.
+
+    Kept only for 0.11 compatibility and removed in 0.12; `parse` reads the
+    same file to a GeoLayer with its diagnostics.
+    """
     return _display_impl(path, format)
 
 
-@mcp.tool(
+@_tool(
     name="to_balanced_report",
     description="Report whether a MulticonductorNetwork can become a "
     "BalancedNetwork. "
@@ -765,7 +960,7 @@ def _to_balanced_report_tool(
     return report
 
 
-@mcp.tool(
+@_tool(
     name="to_balanced",
     description="Convert a MulticonductorNetwork to a BalancedNetwork and "
     "return serialized PowerIO IR. "
@@ -792,13 +987,14 @@ def _to_balanced_tool(
     }
 
 
-@mcp.tool(
+@_tool(
     name="about",
     description="Return the PowerIO version, IR version, feature set, and MCP tools.",
 )
 def _about_tool() -> dict:
     return {
         **powerio.versions(),
+        "features": powerio.features(),
         "tools": sorted(tool.name for tool in mcp._tool_manager.list_tools()),
     }
 
@@ -892,6 +1088,15 @@ def diagnostics(powerio_ir: str) -> dict:
 
 
 def main() -> None:
-    """Serve the PowerIO MCP tools over stdio."""
+    """Serve the PowerIO MCP tools over stdio.
+
+    The server process defaults ``POWERIO_MAX_PRIMARY_BYTES`` and
+    ``POWERIO_MAX_REFERENCED_BYTES`` to 256 MiB when the operator leaves them
+    unset or empty. Importing this module leaves the environment alone, so a
+    program that calls the tool functions directly keeps the library defaults
+    for what PowerIO reads; the checks this module makes itself, on inline
+    arguments and display files, still default to 256 MiB.
+    """
+    _apply_service_limits()
     sandbox._DEFAULT_ROOT = Path.cwd().resolve(strict=True)
     mcp.run()

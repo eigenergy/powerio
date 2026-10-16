@@ -47,6 +47,152 @@
   equipment. Leakage, non-WYE connections, implicit neutral impedances, core
   losses and tap controls remain outside this matrix builder's supported profile.
 
+- Remove the paired release workflows and scripts, which were never
+  activated. A release stays a tag and a published draft, and PowerIO.jl
+  releases itself after each published powerio release.
+
+- Release builds run PowerIO.jl's tests against every packaged C library
+  tarball, each on its own platform, before the draft release exists. A
+  tarball the Julia release would reject now stops the release before
+  anything is published.
+
+- Distribution CIM reads and writes through the `cim-dist` format: CIM100
+  RDF/XML (the iec61970cim17v40 and iec61968cim13v13 release) in the profile
+  the GridAPPS-D and CIMHub tools exchange, into and from
+  `MulticonductorNetwork`. A single document, or the top level documents of a
+  directory, parse; one document is written. A `.xml` document, a nameless
+  source, or a directory with per phase CIM classes and no CGMES
+  `md:FullModel` header routes to it, and CGMES and XIIDM routing is
+  unchanged.
+
+- The CIM reader maps connectivity nodes, line segments with phase or
+  sequence impedance, loads, linear shunt compensators with their sections,
+  switches, transformers of any winding count with mesh impedances and ratio
+  tap changer positions, and energy sources with their series impedance.
+  What it does not map yet (the transformer tank form, controls, distributed
+  energy resources, wire geometry, limits) is reported through
+  `READ.CIM_DIST.*` codes, and the writer reports what CIM cannot state
+  through `EMIT.CIM_DIST.*` codes. Same format emission returns the retained
+  bytes of a single document; canonical output carries UUIDv5 mRIDs and is
+  byte stable from write to read to write.
+
+- A CIM line segment whose impedance the reader cannot read, for example one
+  described only by wire spacing and wire data, parses with an error finding,
+  and conversion to another format refuses it instead of writing a line with
+  zero impedance, as conversion already refuses OpenDSS geometry lines.
+
+- A network read from distribution CIM records `cim-dist` as its source
+  format, and PowerIO IR carries it. The schema for the next release,
+  `pio-ir/2/0.11.6/schema.json`, adds `cim-dist` to the distribution source
+  formats and changes nothing else; the IR version stays 2. A 0.11.5 reader
+  rejects an IR document whose source format is `cim-dist` and reads every
+  other document as before.
+
+## 0.11.5
+
+- Prepare paired releases from reviewed PowerIO and PowerIO.jl commits, with
+  generated version metadata, verified binary hashes, and frozen validation
+  tooling. Activation remains a separate maintainer decision.
+
+- Python adds `BalancedNetwork.n_lines` and `n_substations` alongside the other
+  native table counts. Immutable network handles cache scalar counts for repeated
+  access without rebuilding Python tables.
+
+- The Python extension uses mimalloc for Rust allocations, reducing allocation
+  overhead and memory use when loading and writing large networks. Allocator
+  license notices are included in the wheel.
+
+- CGMES transformer terminals now follow winding numbers when source terminal
+  sequence numbers differ, preserving winding connectivity, taps, and limits
+  through fresh emission. A synthetic unequal-voltage regression covers the
+  reversed ordering found in CIM bench's RealGrid dataset. A stated
+  `sequenceNumber` that differs from the winding's `endNumber` is reported as
+  `READ.CGMES.FIELD_UNMAPPED`, and a terminal that several
+  `PowerTransformerEnd` records of one transformer name is refused, since its
+  winding is ambiguous.
+
+- CGMES fresh emission indexes retained component, terminal, and transformer-end
+  identities once per write, avoiding repeated full-table scans on large grids.
+  Import tracks consumed properties with indexed flags while retaining the same
+  unmapped-field diagnostics.
+
+- Primary files and cumulative referenced-file acquisition now default to
+  1 GiB. `POWERIO_MAX_PRIMARY_BYTES` and `POWERIO_MAX_REFERENCED_BYTES` override
+  those limits; expanded CGMES archives use the latter too. This allows CIM
+  bench's RealGrid profiles to load with defaults. Python adds
+  `BalancedNetwork.component_counts()` and `PioModule.sever_source()` for
+  native counts and fresh emission. Thanks to [Mohamed Numair](https://github.com/MohamedNumair)
+  for the original CGMES implementation and the CIM bench suggestion in #456.
+
+- A single CGMES XML file or archive, from a path or from memory, is held to
+  `POWERIO_MAX_REFERENCED_BYTES`, so a CGMES file above 1 GiB named by path
+  needs both settings raised. This includes a `.xml` profile whose opening
+  16 KiB do not identify it as CGMES.
+
+- CGMES ZIP archives are held to what they declare. An XML entry must inflate
+  to exactly the size its header states; before, an entry that understated its
+  size could expand until the rest of the CGMES byte budget was spent. An
+  archive is refused when the end record the reader uses, or any Zip64 end
+  record, declares more than 4,096 entries, checked before the reader reserves
+  its entry table; when it holds more than eight end records; when two entries
+  share a name or any bytes; or when an entry lies outside the archive's entry
+  data. An invalid
+  `POWERIO_MAX_PRIMARY_BYTES` or `POWERIO_MAX_REFERENCED_BYTES` is now refused
+  before any file or directory is opened.
+
+- Python `parse_display` and the MCP `display` tool remain only for 0.11
+  compatibility and will be removed in 0.12. Read a PowerWorld `.pwd` display
+  with `parse`, which returns a `GeoLayer` with its diagnostics under the input
+  byte limits; `parse_display` reads the whole file without them.
+
+- The MCP server defaults its input byte limits to 256 MiB. When
+  `powerio-mcp` or `python -m powerio.mcp` starts, it sets
+  `POWERIO_MAX_PRIMARY_BYTES` and `POWERIO_MAX_REFERENCED_BYTES` to 256 MiB
+  unless the operator set them; the library defaults stay 1 GiB. Inline
+  `content` and `powerio_ir` arguments above the primary limit are refused
+  before parsing, although the stdio transport still reads and decodes each
+  request whole first. The `display` tool reads only a regular file within
+  that limit where it used to read a file of any size or wait on a named pipe,
+  and the server refuses a directory input once its walk passes the bounds
+  PowerIO's own directory listing keeps: a subdirectory 64 levels down, or
+  more than 4,096 files and subdirectories not yet listed.
+
+- Agents using the MCP server see the reason a tool call was refused. The
+  server raises each refusal as the SDK's `ToolError`, so the message and its
+  diagnostic code reach the client, for example a path outside the allowed
+  roots, an unknown format, or an input over the byte limit; with mcp 2.1 and
+  later the client otherwise receives only `Error executing tool <name>`. A
+  path outside the allowed roots gets the same refusal whether it exists, is
+  missing, or cannot be read, and a refusal states the operating system's
+  reason without the paths it names, which can be a link's target outside
+  the roots. An unknown `scenario_id` lists the scenarios the ScenarioSet
+  holds, and an out of range `time_index` states the valid indices.
+  `pip install 'powerio[mcp]'` installs the NumPy and SciPy that
+  `calc_matrix` needs, and the `about` tool reports the build's feature set
+  under `features`.
+
+- PSS/E RAW strings in double quotes now read as one field. PSS/E accepts
+  either quote character, and revision 35 files double quote the rating set
+  names on the system-wide `RATING` records and the blank `MNAME` that ends
+  each FACTS device record. The reader knew only single quotes, so a double
+  quoted string split at every blank and comma and ended the record at a `/`,
+  and a double quoted name or circuit id on a bus, load, or branch record
+  shifted every later column or failed the read. A field now closes only on
+  the quote character that opened it, so `'12" PIPE'` and `"OWNER'S TIE"`
+  keep the other character as text. The writer replays a retained
+  two-terminal DC tail without quotes, so it now replaces a quote character
+  or `/` in one of its fields with `_` rather than a blank, which split the
+  field and shifted the rest of the record.
+
+- The monitored element reader accepts the contingency file branch spelling.
+  `MONITOR BRANCH FROM BUS i TO BUS j [CIRCUIT c]` (also `LINE`, `CKT`, and
+  bare bus numbers) reads as a one-branch `Branches` statement, and a
+  `MONITOR BRANCHES` or `MONITOR INTERFACE` block reads
+  `[MONITOR] [BRANCH | LINE] FROM BUS i TO BUS j [CIRCUIT c]` lines beside
+  `i j [ckt]`; both were kept as text before. The writer states a one-branch
+  statement as a block, which reads back to the same set. A line naming a
+  third bus, a three winding transformer, stays text, because a monitored
+  branch reference holds two buses.
 
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW
@@ -63,6 +209,31 @@
   earlier release wrote from a PSS/E case carries the swapped mode, so read
   the case again. The IR 2 schema keeps its published descriptions, which
   state the old mapping.
+
+- PSS/E and RAWX two winding transformers whose winding 2 ratio `t2` is not
+  one now read with the admittance PSS/E solves with. `t2` is `WINDV2` under
+  `CW` 1, `WINDV2` over the winding 2 bus base kV under `CW` 2, and
+  `WINDV2·NOMV2` over that base under `CW` 3. PSS/E places the series
+  impedance between an ideal `t1 : 1` at winding 1 and an ideal `1 : t2` at
+  winding 2; the neutral branch states one tap `t1 / t2` with the impedance
+  behind it, and the reader divided the ratios without moving the impedance
+  across `t2`, so every such transformer read with an impedance off by `t2²`.
+  The impedance now scales by `t2²` and a winding 1 tap control range divides
+  by `t2`, so the branch's two port admittance equals the PSS/E circuit's, and
+  the branch `r`, `x`, and tap limits of these transformers change. A
+  transformer with `t2 = 1` reads as before. Writing back to PSS/E is
+  consistent: the same format write echoes the source record byte for byte,
+  and fresh output states the canonical `CW = 1` record with winding 2 at one
+  and the scaled impedance, which reads back to the same branch with nothing
+  scaled twice. A PowerIO IR document an earlier release wrote from such a
+  case carries the old impedance, so read the case again.
+
+- CI checks the public Rust API of the seven publishable crates against the
+  newest stable release tag at or below the workspace version with
+  cargo-semver-checks (the Semver workflow, `scripts/check-semver.sh`), so a
+  break meant for 0.12 cannot land in a 0.11 release unnoticed. A pull request
+  that carries such a break is labeled `semver-major`, which keeps the report
+  and turns the failure into a warning.
 
 ## 0.11.4
 

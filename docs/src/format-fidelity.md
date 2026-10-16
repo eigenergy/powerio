@@ -158,7 +158,11 @@ extension namespace `http://entsoe.eu/CIM/SchemaExtension/3/1#` (IEC TS
 61970-600-1/-2:2017); CGMES 3.0 uses `http://iec.ch/TC57/CIM100#` and
 `http://iec.ch/TC57/CIM100-European#` (IEC 61970-600-1/-2:2021). Both use the
 IEC 61970-552 CIMXML instance syntax, in which `rdf:ID` defines a record,
-`rdf:about` extends one, and `md:FullModel` heads each profile document. EQ is
+`rdf:about` extends one, and `md:FullModel` heads each profile document. A
+CIM100 document with no `md:FullModel` header and with per phase distribution
+classes (`ACLineSegmentPhase`, `EnergyConsumerPhase`, …) is distribution CIM
+and routes to `cim-dist` instead; see
+[Distribution networks](distribution.md#distribution-cim). EQ is
 required, and SSH, SV, and boundary profile data are used when present. SSH
 assignments take precedence over SV observations, so an SV shunt section count
 that differs from the SSH assignment is reported and not kept. A set with
@@ -314,7 +318,12 @@ read as discrete, and keep their code for PSS/E output. A two winding
 transformer's magnetizing susceptance survives a round trip through `MAG2`.
 The reader converts `CW` 1/2/3, `CZ` 1/2/3, and `CM` 1/2 into the neutral tap
 ratio, system base impedance, and magnetizing admittance, and fresh output uses
-the electrically equivalent canonical `CW = CZ = CM = 1` representation.
+the electrically equivalent canonical `CW = CZ = CM = 1` representation. A two
+winding transformer's branch tap is the winding 1 ratio over the winding 2
+ratio \\(t_1 / t_2\\), each in per unit of its bus base voltage, and its series
+impedance and tap control range are referred across \\(t_2\\): the impedance
+scales by \\(t_2^2\\) and the range divides by \\(t_2\\), so the branch states
+the same two port admittance as the PSS/E circuit.
 
 ### UCTE-DEF
 
