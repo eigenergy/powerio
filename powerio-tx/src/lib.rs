@@ -48,6 +48,7 @@ mod collect;
 pub mod contingency;
 pub mod dc;
 pub mod diagnostics;
+pub mod dynamic;
 pub mod error;
 pub mod format;
 pub mod gen_cost;
