@@ -21,6 +21,10 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 use sprs::CsMat;
 
+// Keep the many short-lived parser allocations in the extension's own heap.
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use powerio::{BalancedNetwork, BranchSusceptanceFormula, PwdDisplay};
 use powerio_matrix::matrix::{
     BuildOptions, Scheme, SensitivityOptions, SensitivitySolver, calc_adjacency_matrix,
@@ -430,6 +434,15 @@ fn core_open_pyerr(path: &std::path::Path, error: &powerio_core::Error) -> PyErr
     core_error_pyerr(error)
 }
 
+fn ensure_line_classification(network: &BalancedNetwork) -> PyResult<()> {
+    if network.is_normalized() {
+        return Err(PyValueError::new_err(
+            "line counts require an unnormalized network; normalized taps do not retain equipment classification",
+        ));
+    }
+    Ok(())
+}
+
 /// Wrap a parsed module as a `PyBalancedNetwork`, building the index core once
 /// and keeping the reader's findings on the handle.
 fn case_from_module(module: powerio_core::PioModule<BalancedNetwork>) -> PyBalancedNetwork {
@@ -592,6 +605,27 @@ impl PyBalancedNetwork {
         self.inner().branches().len()
     }
 
+    /// AC line branches in an unnormalized network, excluding transformers.
+    #[getter]
+    fn n_lines(&self) -> PyResult<usize> {
+        let network = self.inner();
+        ensure_line_classification(network)?;
+        Ok(network
+            .branches()
+            .iter()
+            .filter(|branch| !branch.is_transformer())
+            .count())
+    }
+
+    /// Substations in the retained source hierarchy.
+    #[getter]
+    fn n_substations(&self) -> usize {
+        self.inner()
+            .detailed_connectivity()
+            .as_ref()
+            .map_or(0, |details| details.substations.len())
+    }
+
     #[getter]
     fn n_generators(&self) -> usize {
         self.inner().generators().len()
@@ -635,6 +669,18 @@ impl PyBalancedNetwork {
     #[getter]
     fn n_areas(&self) -> usize {
         self.inner().areas().len()
+    }
+
+    /// Native electrical table counts, without materializing Python rows.
+    /// Lines exclude transformer branches; loads include equivalent injections
+    /// mapped to the load table. Substations are the retained source hierarchy.
+    fn component_counts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let counts = PyDict::new(py);
+        counts.set_item("lines", self.n_lines()?)?;
+        counts.set_item("generators", self.n_generators())?;
+        counts.set_item("loads", self.n_loads())?;
+        counts.set_item("substations", self.n_substations())?;
+        Ok(counts)
     }
 
     /// The exact source neutral hierarchy and connectivity records, or
@@ -1382,7 +1428,8 @@ impl PyMulticonductorNetwork {
         self.inner().name().as_deref()
     }
 
-    /// Format the case was parsed from (`dss`, `pmd-json`, `bmopf-json`).
+    /// Format the case was parsed from (`dss`, `pmd-json`, `bmopf-json`,
+    /// `cim-dist`); `None` for a network built in code.
     fn source_format(&self) -> Option<&'static str> {
         self.inner().source_format().map(|f| f.name())
     }
@@ -3733,6 +3780,13 @@ impl PyPioModule {
     fn _copy(&self) -> PyResult<Self> {
         Ok(Self {
             module: Some(self.module()?.clone()),
+        })
+    }
+
+    /// Return a copy that emits from its value instead of replaying source bytes.
+    fn sever_source(&self) -> PyResult<Self> {
+        Ok(Self {
+            module: Some(self.module()?.clone().sever_source()),
         })
     }
 

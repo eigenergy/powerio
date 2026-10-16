@@ -428,7 +428,8 @@ END
 | --- | --- | --- |
 | `MONITOR BRANCHES IN SUBSYSTEM name [3WLOWVOLTAGE]` | `BRANCHES`, `LINES`; `IN`, `FROM` | `BranchesInSubsystem { subsystem, low_voltage_3w }` |
 | `MONITOR TIES FROM SUBSYSTEM name` | `IN`, `FROM` | `TiesFromSubsystem { subsystem }` |
-| `MONITOR BRANCHES` ... `END`, holding `i j [ckt]` | `BRANCHES`, `LINES` | `Branches(Vec<BranchRef>)` |
+| `MONITOR BRANCHES` ... `END`, holding `i j [ckt]` or `[BRANCH] FROM BUS i TO BUS j [CIRCUIT c]` | `BRANCHES`, `LINES`; `LINE` | `Branches(Vec<BranchRef>)` |
+| `MONITOR BRANCH FROM BUS i TO BUS j [CIRCUIT c]` | `LINE`; `BUS` optional; `CKT` | `Branches` holding that one branch |
 | `MONITOR INTERFACE name [RATING x [MW]]` ... `END` | | `Interface { name, rating_mw, branches }` |
 | `MONITOR VOLTAGE RANGE scope lo hi` | | `VoltageRange { scope, vmin, vmax }` |
 | `MONITOR VOLTAGE DEVIATION scope down [up]` | | `VoltageDeviation { scope, down, up }` |
@@ -439,7 +440,13 @@ finite, so a value that is not keeps its line the same way.
 
 A `MONITOR BRANCHES` line with nothing after it opens a block of branch lines
 that runs to the next `END`, and `MONITOR INTERFACE` always opens one. Inside a
-block, `i j` names circuit `1` and `i j ckt` names that circuit. A scope is one
+block, `i j` names circuit `1` and `i j ckt` names that circuit, and a line in
+the contingency file spelling, `[BRANCH | LINE] FROM BUS i TO BUS j [CIRCUIT
+c]`, names the same branch, with or without a leading `MONITOR`. A `MONITOR
+BRANCH` line in that spelling outside a block is a block of one branch, and
+the writer states it as one. A third `TO BUS k`, which names
+a three winding transformer, has no `BranchRef`, so the line is kept as text. A
+scope is one
 of `ALL BUSES`, `SUBSYSTEM name`, `BUS n`, `AREA n`, `ZONE n`, `OWNER n`, and
 `KV x`.
 

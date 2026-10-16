@@ -143,8 +143,15 @@ pub(crate) fn load_multiconductor_module(
     path: &Path,
     format: Option<&str>,
 ) -> Result<powerio_core::PioModule<powerio_dist::MulticonductorNetwork>, powerio_core::Error> {
-    let source = declare_format(powerio_core::Source::open(path)?, format)?;
-    powerio_dist::parse(source)
+    load_multiconductor_source(powerio_core::Source::open(path)?, format)
+}
+
+/// Parse an already opened source, reusing the buffers it holds.
+pub(crate) fn load_multiconductor_source(
+    source: powerio_core::Source,
+    format: Option<&str>,
+) -> Result<powerio_core::PioModule<powerio_dist::MulticonductorNetwork>, powerio_core::Error> {
+    powerio_dist::parse(declare_format(source, format)?)
 }
 
 pub(crate) fn load_multiconductor_memory(
