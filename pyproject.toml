@@ -57,10 +57,15 @@ gridfm = ["polars>=1"]
 # wheels; use the Polars gridfm extra on Python 3.9.
 pandas = ["pandas>=2; python_version >= '3.10'", "pyarrow>=23.0.1; python_version >= '3.10'"]
 # The MCP server exposes the powerio.mcp tool surface. The official `mcp` SDK
-# requires Python >=3.10; the env marker keeps this extra empty on 3.9.
+# requires Python >=3.10; the env markers keep this extra empty on 3.9.
 # The server targets the 2.0 API (`mcp.server.mcpserver.MCPServer`); 1.x
 # shipped the decorator server as `mcp.server.fastmcp`, which 2.0 removed.
-mcp = ["mcp>=2,<3; python_version >= '3.10'"]
+# The `calc_matrix` tool needs the matrix extra's NumPy and SciPy.
+mcp = [
+    "mcp>=2,<3; python_version >= '3.10'",
+    "numpy>=1.21; python_version >= '3.10'",
+    "scipy>=1.7; python_version >= '3.10'",
+]
 
 [project.scripts]
 # Serves the powerio.mcp tool surface over stdio. Needs the `mcp` extra.
@@ -85,6 +90,7 @@ strip = true
 # manifest lives in the powerio-py subcrate); without these, PyPI rejects the
 # sdist for declaring a License-File it doesn't carry.
 include = [
+    { path = "python/powerio/NOTICE-mimalloc.txt", format = "sdist" },
     { path = "powerio-dist/schemas/bmopf/**/*", format = "sdist" },
     { path = "python/powerio/schemas/bmopf/**/*", format = "sdist" },
     { path = "LICENSE-APACHE", format = "sdist" },

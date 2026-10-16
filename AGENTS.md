@@ -24,8 +24,8 @@ check the current source, tests, and release notes.
   either network crate or the facade. Electrical interpretation and
   profile selection remain adapter work; public SINCAL support is unfinished.
 - **`powerio-dist`**: the multiconductor distribution model
-  (`MulticonductorNetwork`) with the OpenDSS `.dss`, PMD JSON, and BMOPF JSON
-  converters. It does **not** depend on the transmission crate; both share
+  (`MulticonductorNetwork`) with the OpenDSS `.dss`, PMD JSON, BMOPF JSON, and
+  distribution CIM (`cim-dist`) converters. It does **not** depend on the transmission crate; both share
   `powerio-core`. BMOPF network decoding lives here; construction of the
   resulting `McAcOpfInstance` lives in `powerio-prob`.
 - **`powerio-prob`**: operating points, updates, calculation instances, and
@@ -63,7 +63,8 @@ and Surge JSON parse and write. The IEEE Common Data Format, DOE GO Challenge
 a complete `AcScucSolution` writes the official GO Challenge 3 solution
 file. A PowerWorld `.pwd` display parses to `PioValue::GeoLayer`. GridFM
 Parquet directories parse and write behind the `gridfm` feature. OpenDSS
-`.dss`, PMD engineering JSON, and BMOPF JSON meet at `MulticonductorNetwork`.
+`.dss`, PMD engineering JSON, BMOPF JSON, and distribution CIM (`cim-dist`,
+CIM100 RDF/XML) meet at `MulticonductorNetwork`.
 PowerIO IR moves through `serialize` and `deserialize` and is not a grid
 exchange format; `parse` refuses it. Every balanced format maps to
 `BalancedNetwork`, so a new format needs one reader and one writer rather
@@ -128,21 +129,15 @@ pip install dist/*.whl && pytest python/tests  # an editable install is shadowed
 
 ## Release flow
 
-PowerIO releases are tag driven.
+PowerIO releases are tag driven, and PowerIO.jl follows each published
+release on its own.
 
-1. Wait for `main` CI to pass on the merge commit that should become the
-   release, and make sure `CHANGELOG.md` has a section headed exactly
-   `## X.Y.Z`; the tag workflow copies it into the draft release body and
-   fails without it.
-2. Obtain maintainer approval of the final cross repository diff and test
-   packet. Do not mark the PowerIO.jl release intent ready or create a tag
-   before this approval.
-3. Merge the reviewed PowerIO.jl release intent for the same version before
-   tagging PowerIO. PowerIO.jl's `Project.toml`, top `CHANGELOG.md` section,
-   and `.github/powerio-release.toml` must agree on the Julia version and
-   `vX.Y.Z` PowerIO tag. The intent is marked ready only after its canonical
-   source digest matches the reviewed PowerIO.jl tree.
-4. Check that the tag does not already exist, then create an annotated tag on
+1. Merge the version bump with a `CHANGELOG.md` section headed exactly
+   `## X.Y.Z`, and wait for `main` CI to pass on that merge commit. The tag
+   workflow copies the section into the draft release body and fails
+   without it.
+2. Create a release tag only when the maintainer asks for the release.
+   Check that the tag does not exist, then create an annotated tag on
    `origin/main` and push it:
 
    ```
@@ -152,34 +147,29 @@ PowerIO releases are tag driven.
    git push origin vX.Y.Z
    ```
 
-5. `.github/workflows/release-binaries.yml` runs on tag pushes. Its binding
+3. `.github/workflows/release-binaries.yml` runs on the tag. Its binding
    gate tests PowerIO.jl `main` against the tagged library before it builds
-   the `powerio-capi` release tarballs for `aarch64-apple-darwin`,
+   the `powerio-capi` tarballs for `aarch64-apple-darwin`,
    `aarch64-linux-gnu`, `x86_64-apple-darwin`, `x86_64-linux-gnu`, and
-   `x86_64-w64-mingw32`, with the release features
-   `arrow,matrix,gridfm,dist,prob`.
-6. That workflow creates or updates a **draft** GitHub release and attaches
-   the five binary assets. Do not expect a draft release to exist before the
-   tag workflow runs.
-7. A human inspects and publishes the draft release. Publishing also starts
-   the crates.io workflow, which verifies the workspace package set and
-   publishes `powerio-core`, `powerio-sincal`, `powerio-tx`, `powerio-dist`, `powerio-prob`,
-   `powerio-matrix`, `powerio`, and `powerio-cli` in dependency order. A
-   rerun skips versions already present on crates.io.
-8. Publishing the release triggers `.github/workflows/notify-powerio-jl.yml`.
-   If `POWERIO_JL_DISPATCH_TOKEN` is configured, it sends a
-   `powerio-release` repository dispatch to `eigenergy/PowerIO.jl`. If the
-   token is absent, the PowerIO.jl daily schedule or manual dispatch is the
-   fallback.
-9. PowerIO.jl's `.github/workflows/update-artifacts.yml` accepts only the tag
-   named by the ready release intent. It verifies the published release and
-   exact five assets, registry order, absence of an open `artifacts/*` PR,
-   the ABI handshake, schema report, and full Julia tests. It may change only
-   `Artifacts.toml`. After confirming that PowerIO.jl `main` is still the
-   reviewed base SHA, it commits that one file to `main` and dispatches
-   registration for the exact resulting SHA. A schedule is the backstop and a
-   manual dispatch retries the same intent; neither can override its version,
-   tag, changelog, or source digest.
+   `x86_64-w64-mingw32` with the release features
+   `arrow,matrix,gridfm,dist,prob`. It runs PowerIO.jl's
+   `gen/update_artifacts.jl` on the tarballs, installs each one as the
+   artifact PowerIO.jl will pin, and runs the PowerIO.jl tests against it on
+   its platform. Only then does it stage a **draft** GitHub release with the
+   five assets.
+4. A human inspects and publishes the draft. Publishing starts `python.yml`
+   (PyPI) and `crates.yml` (crates.io: `powerio-core`, `powerio-sincal`, `powerio-tx`,
+   `powerio-dist`, `powerio-prob`, `powerio-matrix`, `powerio`, and
+   `powerio-cli`, in dependency order). Both deploy through the `pypi` and
+   `crates-io` environments, which wait for the maintainer's approval. A
+   rerun skips files and versions already published.
+5. Publishing also runs `.github/workflows/notify-powerio-jl.yml`, which
+   starts PowerIO.jl's Release workflow; its hourly schedule is the backstop.
+   That workflow sets the Julia version, pins the release tarballs in
+   `Artifacts.toml`, runs the Julia tests against them, pushes the release
+   commit to PowerIO.jl `main`, and asks JuliaRegistrator to register it.
+   Releasing needs no PowerIO.jl change. The PowerIO.jl repository variable
+   `RELEASE_HOLD=true` pauses it.
 
 ## Layout
 
@@ -199,7 +189,7 @@ powerio-tx/src/format         mod.rs (parse, emit, TargetFormat, EmitOptions),
                               ucte/, ieee_cdf.rs, powerworld/ (aux, pwb, pwd),
                               pslf.rs, powermodels.rs, egret.rs, pandapower.rs,
                               pypsa.rs, surge.rs, goc3.rs, opfdata.rs
-powerio-dist/src              model.rs, convert.rs, dss/, pmd/, bmopf/, graph.rs,
+powerio-dist/src              model.rs, convert.rs, dss/, pmd/, bmopf/, cim/, graph.rs,
                               geo.rs, diagnostics.rs, error.rs
 powerio-prob/src              operating/, instance/, solution/, update.rs,
                               reference.rs, goc3/, formats/ (goc3, opfdata, pypsa)
@@ -261,7 +251,7 @@ docs/                         the mdBook guide, the schema archive, release note
   IR version; older readers reject types they do not implement. Existing
   type layouts and meanings stay compatible throughout 0.11.x. The DTOs in
   `powerio/src/stored/dto.rs` define the document layout. Regenerate the schema
-  named by `IR_SCHEMA_ID`, currently `docs/schema/pio-ir/2/0.11.4/schema.json`.
+  named by `IR_SCHEMA_ID`, currently `docs/schema/pio-ir/2/0.11.6/schema.json`.
   Published snapshots, including `pio-ir/2/schema.json` from 0.11.0, remain
   byte-exact. The release in a catalog path is not a new IR version.
 - **Bindings stay typed and lazy.** C calls `pio_module_value`, checks the

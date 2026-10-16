@@ -1,8 +1,8 @@
 # Distribution networks
 
 A multiconductor network is the conductor level distribution model, and
-OpenDSS, PowerModelsDistribution engineering JSON, and BMOPF JSON all parse to
-it. When you need a calculation, construct an `McAcPfInstance`,
+OpenDSS, PowerModelsDistribution engineering JSON, BMOPF JSON, and
+distribution CIM all parse to it. When you need a calculation, construct an `McAcPfInstance`,
 `McAcOpfInstance`, or `LinDist3FlowOpfInstance` from it explicitly (see
 [Calculation instances and solutions](instances.md)).
 
@@ -92,6 +92,55 @@ can be handed to a native or WebAssembly-compatible conic backend.
 The supported physical slice, rejected equipment and validation evidence are
 recorded in the
 [multiconductor LinDist3Flow design review](https://github.com/eigenergy/powerio/blob/main/docs/design/lindist3flow-multiconductor.md).
+
+## Distribution CIM
+
+The `cim-dist` format reads and writes CIM RDF/XML for unbalanced feeders in
+the profile the GridAPPS-D and CIMHub tools exchange: one document in the
+`http://iec.ch/TC57/CIM100#` namespace, the iec61970cim17v40 and
+iec61968cim13v13 release that CGMES 3.0 also uses, with `ConnectivityNode`
+connectivity and per phase equipment. The reader also accepts the older
+versioned `CIM-schema-cimNN` namespaces and refuses a document set that mixes
+CIM16 and CIM100. Input is one document, or a directory whose top level `.xml`
+documents read as one case, with `rdf:about` records extending the ones
+another document defines. Files in subdirectories are not part of the case,
+and ZIP archives are not read yet. A `.xml` document, a nameless source, or a
+directory routes here when it carries per phase classes and no CGMES
+`md:FullModel` header.
+
+| CIM | Model |
+|---|---|
+| `ConnectivityNode`, `Terminal` | buses, with the terminals the equipment uses |
+| `ACLineSegment` with `ACLineSegmentPhase` | lines, conductors in `sequenceNumber` order; each phase's `sequenceNumber` names its `PhaseImpedanceData` row and column |
+| `PerLengthPhaseImpedance`, `PerLengthSequenceImpedance`, segment `r`/`x` totals | line codes in ohm/m and S/m |
+| `EnergyConsumer` with `EnergyConsumerPhase` | loads, per phase power |
+| `LinearShuntCompensator` with its phases | shunts; sections multiply the per section admittance |
+| the `Switch` classes with `SwitchPhase` | switches with their state and rating |
+| `PowerTransformer` with `PowerTransformerEnd`, `TransformerMeshImpedance`, `RatioTapChanger` | transformers of any winding count, with taps |
+| `EnergySource` | voltage sources, with the series impedance in `rs`/`xs` extras |
+
+`SinglePhaseKind` A, B, C, and N map to terminals 1, 2, 3, and 4, and the
+split phase s1 and s2 to 1 and 2. A conductor beyond those four has no CIM
+phase, so the writer reports it. The tank form (`TransformerTank` with
+`TransformerTankInfo` catalog data), regulator controls, distributed energy
+resources, machines, wire and cable geometry, operational limits,
+`LoadResponseCharacteristic`, and `TopologicalNode` only documents are not
+mapped yet, and the reader reports each of them: a class with no mapping is
+counted per class (`READ.CIM_DIST.CLASS_UNMAPPED`), a property no mapping reads
+is counted per class and property (`READ.CIM_DIST.FIELD_UNMAPPED`), and a
+segment with no impedance is an error severity finding
+(`READ.CIM_DIST.IMPEDANCE_UNRESOLVED`). Conversion to another format refuses
+such a segment (`READINESS.CIM_DIST.IMPEDANCE_UNRESOLVED`): its placeholder
+line code has zero impedance, which would be a short circuit between its
+buses. OpenDSS geometry lines are refused for the same reason.
+
+A network read from distribution CIM records `cim-dist` as its source format.
+A same format write of a single document returns its bytes. Canonical output is
+one CIM100 document with no `md:FullModel` header. Imported mRIDs pass through
+and the rest are UUIDv5 values, and the written numbers are the ones the reader
+maps back exactly, so write, read, write is byte stable. The output is not
+yet validated against the CIM17 profile schemas or an independent
+implementation such as CIM-Graph or CIMHub.
 
 ## BMOPF schema versions
 

@@ -18,7 +18,7 @@ history, and extensions. A current document begins like this:
 
 Use `serialize` to produce it and `deserialize` to read it. PowerIO IR is not
 one of the grid exchange formats. MATPOWER, PSS/E, XIIDM, CGMES, OpenDSS, PMD
-JSON, BMOPF, and the other formats in the format registry exist to exchange
+JSON, BMOPF, distribution CIM, and the other formats in the format registry exist to exchange
 power system data with other tools, and they enter through `parse` and leave
 through `emit`. PowerIO IR preserves PowerIO types and module records instead,
 and it is deliberately left out of grid exchange format discovery. Use it when
@@ -26,8 +26,8 @@ both sides consume PowerIO values, including calculation instances, solutions,
 time series, and scenario sets.
 
 The generated JSON Schema is checked in at
-`docs/schema/pio-ir/2/0.11.4/schema.json` and served from
-`https://powerio.dev/schema/pio-ir/2/0.11.4/schema.json`. That schema, the
+`docs/schema/pio-ir/2/0.11.6/schema.json` and served from
+`https://powerio.dev/schema/pio-ir/2/0.11.6/schema.json`. That schema, the
 serializer, and the deserializer are all tested from the same Rust types.
 `docs/schema/README.md` lists the earlier `pio-package` and
 `powerio.module` documents as one history under `pio-ir`.
@@ -130,9 +130,45 @@ refuses. Time series and scenario sets carry at most 65,536 entries each, as
 do the three winding transformer power records of a solution. A stored
 operating point names at most 64 quantities.
 
-These bounds count entries, not bytes. `deserialize` applies the primary file
-limit to a path, 64 MiB unless `POWERIO_MAX_PRIMARY_BYTES` sets another byte
-count, and no byte limit to content already in memory.
+These bounds count entries, not bytes. Byte limits apply when PowerIO reads
+a source. A file named by path, whether a raw format (including BMOPF) or
+stored IR, may hold up to 1 GiB; `POWERIO_MAX_PRIMARY_BYTES` sets a different
+positive decimal byte count. The files a case references and the files of a
+directory input share a cumulative limit, `POWERIO_MAX_REFERENCED_BYTES`, also
+1 GiB by default. Both settings come from the process environment. The MCP
+server sets both to 256 MiB when its operator leaves them unset; see
+[The MCP server](cli-mcp.md#the-mcp-server).
+
+CGMES XML counts against the referenced limit wherever it comes from. The
+profiles of one CGMES parse, read from files or expanded from ZIP archives,
+total at most `POWERIO_MAX_REFERENCED_BYTES`, and a CGMES XML document or
+archive larger than that limit is refused whether it comes from a path or
+from caller-owned memory. A CGMES file above 1 GiB named by path therefore
+needs both settings raised. An archive may hold at most 4,096 entries, a
+count read from its end records before the archive is indexed, and at most
+eight end records. Entries may not share a name or any bytes, and each must
+lie inside the archive's entry data. Each file entry may declare at most the
+referenced limit and at most 200 times its compressed size. An XML entry may
+declare no more than the budget the profiles before it left, and it must
+inflate to exactly the size it declares. Nested archives, symbolic link
+entries, unsafe entry names, document type and entity declarations, and
+invalid UTF-8 are refused. These archive checks are fixed; only the byte limit
+is configurable.
+
+Some readers keep fixed limits below these defaults. An XIIDM or JIIDM
+document holds at most 64 MiB, from a path or from memory. An OpenDSS case
+follows at most 4,096 includes and stops following them once they have loaded
+64 MiB of script text, counting a file again each time the case runs it.
+
+Python's `parse_display`, kept only for 0.11 compatibility, reads a display
+file whole without these limits; `parse` reads the same `.pwd` file under them.
+
+Apart from CGMES, caller-owned memory has no whole-document limit; format and
+record limits still apply. Stored solutions embed their instance and network,
+so they can exceed the raw input's size. Consumers should check the actual
+serialized byte length against their reload limit before saving, and choose a
+smaller limit for memory-constrained applications. The byte limits do not
+bound process memory.
 
 ## IR versions
 
@@ -143,18 +179,20 @@ only when an existing representation changes incompatibly. `producer.version` re
 that wrote the document; the reader reports it and ignores it when deciding
 compatibility.
 
-PowerIO 0.11.4 keeps IR version 2. `powerio::IR_VERSION` and
+PowerIO 0.11.6 keeps IR version 2. `powerio::IR_VERSION` and
 `powerio::IR_MIN_VERSION` are both `2`. Additive structural types do not change
 the IR version: older readers continue to accept existing types and reject
-types they do not implement. An incompatible change to an existing record's
+types they do not implement. A list of allowed names can gain a name the same
+way; an older reader rejects a document that uses the new name. An incompatible change to an existing record's
 representation or meaning requires a version bump and a release decision.
 
 Schema snapshots describe the structural types available in a release.
 `pio-ir/2/schema.json` is the frozen 0.11.0 catalog,
 `pio-ir/2/0.11.1/schema.json` adds the LinDist3Flow OPF instance and solution
 types, `pio-ir/2/0.11.3/schema.json` adds the three PSS/E contingency
-analysis files, and `pio-ir/2/0.11.4/schema.json` adds the fixed-dispatch
-LinDist3Flow instance and solution types.
+analysis files, `pio-ir/2/0.11.4/schema.json` adds the fixed-dispatch
+LinDist3Flow instance and solution types, and `pio-ir/2/0.11.6/schema.json`
+adds `cim-dist` to the distribution source formats.
 The release in that path identifies the snapshot, not another document version.
 Patch releases without catalog changes can reuse the same snapshot.
 A refused document is reported with the schema name,

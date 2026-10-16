@@ -1,8 +1,9 @@
 //! Multiconductor distribution network models and converters for OpenDSS
 //! `.dss`, PowerModelsDistribution ENGINEERING
-//! JSON ("PMD JSON"), and the draft JSON schema of the IEEE PES Task Force on
+//! JSON ("PMD JSON"), the draft JSON schema of the IEEE PES Task Force on
 //! Benchmarking Multiconductor OPF ("BMOPF JSON",
-//! <https://github.com/distribution-system-opt/dsopt-schema>).
+//! <https://github.com/distribution-system-opt/dsopt-schema>), and
+//! distribution CIM (CIM100 RDF/XML, see [`cim`]).
 //!
 //! The model uses wire coordinates: string bus IDs, ordered terminal names,
 //! explicit grounding, terminal maps on every element, SI units, and radians.
@@ -48,6 +49,7 @@
 //! reformats.
 
 pub mod bmopf;
+pub mod cim;
 mod collect;
 pub mod convert;
 pub mod diagnostics;
@@ -64,6 +66,10 @@ pub mod readiness;
 pub(crate) mod testkit;
 
 pub use bmopf::{BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfEmitOptions, BmopfSchemaVersion};
+pub use cim::{
+    CIM_DIST_HEAD_BYTES, looks_like_cim_dist, looks_like_cim_dist_header,
+    source_looks_like_cim_dist,
+};
 pub use convert::{
     DistTargetFormat, EmitOptions, classify_distribution_json, emit, emit_with_options, parse,
     parse_dist_target_format,

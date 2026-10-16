@@ -184,6 +184,13 @@ fn warn_generator_energy_sources_dropped(net: &BalancedNetwork, warnings: &mut D
 /// inline-comment delimiter (a PSS/E record splits on `/` before tokenizing).
 const NAME_FORBIDDEN: &[char] = &['\'', '/'];
 
+/// Characters that would corrupt a field replayed without quotes: either quote
+/// character opens a quoted span the reader extends to the end of the record,
+/// and `/` truncates the record. They become [`BARE_REPLACEMENT`], not a blank,
+/// which would split the field in two and shift every later column.
+const BARE_FORBIDDEN: &[char] = &['\'', '"', '/'];
+const BARE_REPLACEMENT: char = '_';
+
 fn write_system_switch(
     out: &mut String,
     switch: &Switch,
@@ -1753,7 +1760,7 @@ fn dc_converter_tail(extras: &Extras, key: &str, rev: u32) -> (String, Option<St
         // record, so they go through the quoting seam like every other
         // interpolated string: a terminator here would forge a whole DC
         // record or a section end.
-        .map(|field| sanitize_quoted(field, NAME_FORBIDDEN, ' ').into_owned())
+        .map(|field| sanitize_quoted(field, BARE_FORBIDDEN, BARE_REPLACEMENT).into_owned())
         .collect::<Vec<_>>();
     let mut dropped_bridges = None;
     match (fields.len() > CONVERTER_TAIL_FIELDS_33, states_bridges) {
@@ -2725,6 +2732,16 @@ fn winding_ratio_value(
     }
 }
 
+/// The branch tap `t1 / t2` of a two winding transformer and the winding 2
+/// ratio `t2` it divides by, both in per unit of the terminal bus base
+/// voltages.
+///
+/// PSS/E places an ideal `t1 : 1` transformer at winding 1 and an ideal
+/// `1 : t2` one at winding 2, with the series impedance between them. The
+/// neutral branch has one tap at its from end and the impedance at its to
+/// end, so moving the winding 2 ratio across the impedance scales the
+/// impedance by `t2²` ([`read_transformer`] applies it). A zero `t2` is
+/// refused as a divisor and reads as 1.
 #[expect(clippy::too_many_arguments)]
 fn two_winding_tap(
     l1: &[Cow<'_, str>],
@@ -2735,7 +2752,7 @@ fn two_winding_tap(
     cw: i64,
     bus_base_kv: &BTreeMap<BusId, f64>,
     warnings: &mut Diagnostics,
-) -> Result<f64> {
+) -> Result<(f64, f64)> {
     let label = transformer_label(l1);
     let ratio1 = winding_ratio(l3, from, cw, bus_base_kv, &label, "winding 1", warnings)?;
     let ratio2 = winding_ratio(l4, to, cw, bus_base_kv, &label, "winding 2", warnings)?;
@@ -2743,9 +2760,9 @@ fn two_winding_tap(
         warnings.push(&codes::READ_PSSE_VALUE_SUBSTITUTED, format!(
             "PSS/E transformer {label}: winding 2 ratio is zero; used winding 1 ratio as the branch tap"
         ));
-        Ok(ratio1)
+        Ok((ratio1, 1.0))
     } else {
-        Ok(ratio1 / ratio2)
+        Ok((ratio1 / ratio2, ratio2))
     }
 }
 
@@ -3064,17 +3081,30 @@ fn parse_system_wide_enable(
 }
 
 /// Return the record body before an inline `/` comment, but only when the slash
-/// is outside a single-quoted PSS/E field.
+/// is outside a quoted PSS/E field.
 fn strip_inline_comment(line: &str) -> &str {
-    let mut quoted = false;
+    let mut quote = None;
     for (i, c) in line.char_indices() {
         match c {
-            '\'' => quoted = !quoted,
-            '/' if !quoted => return &line[..i],
+            '\'' | '"' if closes_or_opens(quote, c) => quote = toggle_quote(quote, c),
+            '/' if quote.is_none() => return &line[..i],
             _ => {}
         }
     }
     line
+}
+
+/// Whether quote character `c` opens or closes a quoted PSS/E field. PSS/E
+/// accepts strings in single or double quotes, and a field closes only on the
+/// character that opened it, so `'12" PIPE'` and `"OWNER'S TIE"` keep the other
+/// quote as text.
+fn closes_or_opens(quote: Option<char>, c: char) -> bool {
+    quote.is_none_or(|open| open == c)
+}
+
+/// The quote state after `c` opens or closes a field.
+fn toggle_quote(quote: Option<char>, c: char) -> Option<char> {
+    if quote.is_some() { None } else { Some(c) }
 }
 
 /// Split a PSS/E record into trimmed, unquoted fields, dropping a trailing
@@ -3087,6 +3117,8 @@ fn strip_inline_comment(line: &str) -> &str {
 /// blank padded, so `' 1'` and `'1 '` name one device and `'BUS A       '` is
 /// the name `BUS A`. The two delimiter styles used to disagree here, and the
 /// same record body tokenized differently depending on which a producer chose.
+///
+/// A field may be quoted with `'` or `"`; see [`closes_or_opens`].
 pub(super) fn fields(line: &str) -> Vec<Cow<'_, str>> {
     let code = strip_inline_comment(line);
     let comma_delimited = code.contains(',');
@@ -3101,22 +3133,22 @@ pub(super) fn fields(line: &str) -> Vec<Cow<'_, str>> {
     let mut owned: Option<String> = None;
     let mut field_start = 0usize;
     let mut segment_start = 0usize;
-    let mut quoted = false;
+    let mut quote = None;
     // A quoted span opened this field, so `''` holds its column instead of
     // vanishing and shifting every later one, as it does under commas.
     let mut was_quoted = false;
     let mut after_comma = false;
     for (i, c) in code.char_indices() {
         match c {
-            '\'' => {
+            '\'' | '"' if closes_or_opens(quote, c) => {
                 owned
                     .get_or_insert_with(String::new)
                     .push_str(&code[segment_start..i]);
                 segment_start = i + 1;
-                quoted = !quoted;
+                quote = toggle_quote(quote, c);
                 was_quoted = true;
             }
-            ',' if !quoted => {
+            ',' if quote.is_none() => {
                 let content = owned.is_some() || !code[field_start..i].trim().is_empty();
                 if content || was_quoted {
                     push_field(&mut out, owned.take(), &code[segment_start..i]);
@@ -3128,7 +3160,7 @@ pub(super) fn fields(line: &str) -> Vec<Cow<'_, str>> {
                 was_quoted = false;
                 after_comma = true;
             }
-            c if c.is_whitespace() && !quoted => {
+            c if c.is_whitespace() && quote.is_none() => {
                 let content = owned.is_some() || !code[field_start..i].trim().is_empty();
                 if content || was_quoted {
                     push_field(&mut out, owned.take(), &code[segment_start..i]);
@@ -4028,9 +4060,12 @@ fn read_transformer(
         "1-2",
         warnings,
     );
-    let tap = two_winding_tap(l1, l3, l4, from, to, cw, bus_base_kv, warnings)?;
+    let (tap, ratio2) = two_winding_tap(l1, l3, l4, from, to, cw, bus_base_kv, warnings)?;
+    // The impedance sits between the two winding ratios; the branch states it
+    // behind its one tap, on the winding 2 side of that ratio.
+    let (r, x) = (r * ratio2 * ratio2, x * ratio2 * ratio2);
     let modern = raw_rev >= 34;
-    let (control, control_node) = read_transformer_control(
+    let (mut control, control_node) = read_transformer_control(
         l3,
         raw_rev,
         sbase,
@@ -4041,6 +4076,17 @@ fn read_transformer(
         "winding 1",
         warnings,
     )?;
+    // The control moves winding 1's ratio, so in branch tap terms its range
+    // divides by the winding 2 ratio exactly as the tap does.
+    if let Some(control) = control.as_mut()
+        && matches!(
+            control.mode,
+            TransformerControlMode::Voltage | TransformerControlMode::ReactiveFlow
+        )
+    {
+        control.tap_min /= ratio2;
+        control.tap_max /= ratio2;
+    }
     let bus_kv = bus_base_kv.get(&from).copied().unwrap_or(0.0);
     let (mag_g, mag_b) = convert_transformer_magnetizing_admittance(
         num_at(l1, 7, 0.0)?,
@@ -4771,7 +4817,7 @@ fn dc_tail(extras: &Extras, key: &str, default: &str) -> String {
             // a record, so they go through the quoting seam like every other
             // interpolated string: a terminator here would forge a whole DC
             // record or a section end.
-            .map(|f| sanitize_quoted(f, NAME_FORBIDDEN, ' ').into_owned())
+            .map(|f| sanitize_quoted(f, BARE_FORBIDDEN, BARE_REPLACEMENT).into_owned())
             .collect::<Vec<_>>()
             .join(", "),
         _ => default.to_string(),
@@ -5019,6 +5065,113 @@ mod tests {
             vec!["1", "", "3"],
             "and holds under whitespace too"
         );
+    }
+
+    /// PSS/E strings may also be double quoted. A field closes only on the
+    /// quote character that opened it, so a comma, slash, or blank inside it is
+    /// text and the other quote character is kept literally.
+    #[test]
+    fn fields_accept_double_quoted_strings() {
+        assert_eq!(
+            fields(r#"1, "BUS A, N/S   ", 2.5 / trailing comment"#),
+            vec!["1", "BUS A, N/S", "2.5"]
+        );
+        assert_eq!(
+            fields(r#"1 "BUS A, N/S   " 2.5 / trailing comment"#),
+            vec!["1", "BUS A, N/S", "2.5"]
+        );
+        assert_eq!(
+            fields(r#"RATING, 1, "RATE1 ", "RATING SET 1                    ""#),
+            vec!["RATING", "1", "RATE1", "RATING SET 1"]
+        );
+        // A revision 35 FACTS device record ends with a blank double-quoted
+        // MNAME, which holds its column like a blank single-quoted field.
+        let facts = fields(
+            r#"'FACTS 1     ',3,0,1,0.0,0.0,1.0,9999.0,9999.0,0.9,1.1,1.0,0.0,0.05,100.0,1,0.0,0.0,0,0,0,"            ""#,
+        );
+        assert_eq!(facts.len(), 22);
+        assert_eq!(facts[0], "FACTS 1");
+        assert_eq!(facts[21], "");
+        assert_eq!(fields(r#"1 "" 3"#), vec!["1", "", "3"]);
+        assert_eq!(fields(r#"1, '12" PIPE', 2"#), vec!["1", r#"12" PIPE"#, "2"]);
+        assert_eq!(
+            fields(r#"1, "OWNER'S TIE", 2"#),
+            vec!["1", "OWNER'S TIE", "2"]
+        );
+        assert_eq!(
+            fields(r#"1, '12" A/B' / comment with "quotes""#),
+            vec!["1", r#"12" A/B"#]
+        );
+    }
+
+    /// A revision 35 case that double quotes its strings reads like the single
+    /// quoted spelling: every later column of a record stays in place, and the
+    /// FACTS and system-wide RATING records keep their shape.
+    #[test]
+    fn reads_double_quoted_string_fields() {
+        let raw = r#"0, 100.00, 35, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+GENERAL, THRSHZ=0.0001
+RATING, 1, "RATE1 ", "RATING SET 1                    "
+RATING, 2, "RATE2 ", "RATING SET 2                    "
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,"BUS A, N/S  ", 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'12" PIPE    ', 115.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+3,"OWNER'S TIE ", 69.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+2,"1 ",1,1,1,10.0,3.0,0.0,0.0,0.0,0.0,1,1,0,0.0,0.0,0,"            "
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+1,2,"1 ",0.01,0.05,0.001,"LINE A-B, N/S",100.0,90.0,80.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1,1,0.0,1,1.0
+0 / END OF BRANCH DATA, BEGIN FACTS DEVICE DATA
+"FACTS 1     ",3,0,1,0.0,0.0,1.0,9999.0,9999.0,0.9,1.1,1.0,0.0,0.05,100.0,1,0.0,0.0,0,0,0,"            "
+0 / END OF FACTS DEVICE DATA, BEGIN SWITCHED SHUNT DATA
+Q
+"#;
+        let mut warnings = Diagnostics::new();
+        let net = parse_psse_source(raw, None, &mut warnings).unwrap();
+
+        let names = net
+            .buses()
+            .iter()
+            .map(|bus| bus.name.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [Some("BUS A, N/S"), Some(r#"12" PIPE"#), Some("OWNER'S TIE")]
+        );
+        close(net.buses()[0].base_kv, 230.0);
+        close(net.buses()[1].base_kv, 115.0);
+        close(net.buses()[2].base_kv, 69.0);
+        close(net.loads()[0].p, 10.0);
+        close(net.loads()[0].q, 3.0);
+        let branch = &net.branches()[0];
+        assert_eq!(branch.name.as_deref(), Some("LINE A-B, N/S"));
+        close(branch.rate_a, 100.0);
+        close(branch.rate_c, 80.0);
+        assert!(branch.in_service);
+        close(
+            net.solver()
+                .as_ref()
+                .and_then(|solver| solver.zero_impedance_threshold)
+                .unwrap(),
+            0.0001,
+        );
+        assert!(
+            warnings
+                .lines()
+                .iter()
+                .any(|line| line.contains("FACTS DEVICE section (1 record line(s))")),
+            "the FACTS record is one skipped record: {warnings:?}"
+        );
+
+        // A name holding a double quote is written single quoted and reads
+        // back unchanged.
+        let again = parse_psse(&write_psse_rev(&net, 35).text).unwrap();
+        assert_eq!(again.buses()[1].name.as_deref(), Some(r#"12" PIPE"#));
+        close(again.buses()[0].base_kv, 230.0);
     }
 
     #[test]
@@ -5560,6 +5713,123 @@ Q
         close(br.r, 0.02);
         close(br.x, 0.20);
         close(br.tap, 1.05);
+    }
+
+    /// A winding 2 ratio off one moves across the series impedance: PSS/E
+    /// states `t1 : 1` at winding 1, the impedance, then `1 : t2` at winding
+    /// 2, and the branch has one tap `t1 / t2` with the impedance behind it,
+    /// so the impedance scales by `t2²`. The branch's two port admittance
+    /// must equal the PSS/E circuit's under every winding code.
+    #[test]
+    #[allow(clippy::many_single_char_names)] // the circuit's own notation
+    fn a_winding_2_ratio_scales_the_impedance_behind_the_branch_tap() {
+        let record = |cw: u8, w1: &str, w2: &str| {
+            format!(
+                "0, 100.00, 33, 0, 0, 60.00 / synthetic
+CASE
+COMMENT
+1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 115.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1,2,0,'1 ',{cw},1,1,0,0,1,'xf',1
+0.01,0.10,100.0
+{w1},0.0,100.0,90.0,80.0,1,2,1.15,0.95,1.05,0.95,33
+{w2}
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+"
+            )
+        };
+        // (CW, winding 1, winding 2, t1, t2) in per unit of the bus bases.
+        let cases = [
+            (1, "1.04, 0.0", "0.98, 0.0", 1.04, 0.98),
+            (2, "241.5, 0.0", "112.7, 0.0", 241.5 / 230.0, 112.7 / 115.0),
+            // CW 3 states the ratio on the winding's own nominal voltage.
+            (
+                3,
+                "1.0, 240.0",
+                "0.96, 120.0",
+                240.0 / 230.0,
+                0.96 * 120.0 / 115.0,
+            ),
+        ];
+        for (cw, w1, w2, t1, t2) in cases {
+            let br = parse_psse(&record(cw, w1, w2)).unwrap().branches()[0].clone();
+            let z = (0.01_f64, 0.10_f64);
+            let y = |r: f64, x: f64| {
+                let d = r * r + x * x;
+                (r / d, -x / d)
+            };
+            // PSS/E circuit: Y = y·[[1/t1², -1/(t1 t2)], [-1/(t1 t2), 1/t2²]].
+            let (g, b) = y(z.0, z.1);
+            let psse = [
+                (g / (t1 * t1), b / (t1 * t1)),
+                (-g / (t1 * t2), -b / (t1 * t2)),
+                (g / (t2 * t2), b / (t2 * t2)),
+            ];
+            // Neutral branch: Y = y'·[[1/t², -1/t], [-1/t, 1]].
+            let t = br.tap;
+            let (g2, b2) = y(br.r, br.x);
+            let branch = [(g2 / (t * t), b2 / (t * t)), (-g2 / t, -b2 / t), (g2, b2)];
+            for (a, b) in psse.iter().zip(&branch) {
+                assert!(
+                    (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9,
+                    "CW {cw}: {psse:?} vs {branch:?}"
+                );
+            }
+            assert!((br.tap - t1 / t2).abs() < 1e-12, "CW {cw}");
+            // The winding 1 tap range reads in branch tap terms too.
+            let control = br.control.as_ref().unwrap();
+            // RMA and RMI take the winding's own units: kV under CW 2.
+            let range = |v: f64| match cw {
+                2 => v / 230.0 / t2,
+                3 => v * 240.0 / 230.0 / t2,
+                _ => v / t2,
+            };
+            assert!((control.tap_max - range(1.15)).abs() < 1e-12, "CW {cw}");
+            assert!((control.tap_min - range(0.95)).abs() < 1e-12, "CW {cw}");
+
+            // Writing back to the same format echoes the source record, so its
+            // WINDV, NOMV, and impedance fields come back exactly as stated.
+            let text = record(cw, w1, w2);
+            let source = powerio_core::Source::from_memory("case.raw", text.as_bytes().to_vec())
+                .unwrap()
+                .with_format(powerio_core::FormatId::new("psse").unwrap());
+            let module = crate::format::parse(source).unwrap();
+            let echo =
+                crate::format::emit_text(&module, crate::TargetFormat::Psse { rev: 33 }).unwrap();
+            assert_eq!(echo.text, text, "CW {cw}: the same format write echoes");
+
+            // The canonical write states the same circuit with winding 2 at
+            // one, so a read of it scales nothing, and a second write and read
+            // leave the branch where the first left it.
+            let written = write_psse(&parse_psse(&text).unwrap()).text;
+            let winding2 = written
+                .lines()
+                .skip_while(|line| !line.contains("BEGIN TRANSFORMER DATA"))
+                .nth(4)
+                .unwrap();
+            assert!(winding2.starts_with("1.0, "), "CW {cw}: {winding2}");
+            let back = parse_psse(&written).unwrap().branches()[0].clone();
+            let again = parse_psse(&write_psse(&parse_psse(&written).unwrap()).text)
+                .unwrap()
+                .branches()[0]
+                .clone();
+            for (a, b) in [
+                (back.r, br.r),
+                (back.x, br.x),
+                (back.tap, br.tap),
+                (again.r, br.r),
+                (again.x, br.x),
+                (again.tap, br.tap),
+            ] {
+                assert!((a - b).abs() < 1e-12, "CW {cw}: {a} != {b}");
+            }
+        }
     }
 
     #[test]
@@ -7081,6 +7351,46 @@ Q
         assert!(dc2.in_service);
         close(dc2.pf, 350.0);
         close(dc2.pt, 348.775);
+    }
+
+    /// A retained DC tail is replayed without quotes, so a quote character in
+    /// one of its fields would open a quoted span that swallows the rest of
+    /// the record. The writer replaces it, and every later column survives.
+    #[test]
+    fn replayed_dc_tail_never_opens_a_quoted_field() {
+        let raw = r#"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+4,'B4          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+5,'B5          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+'DCLINE1', 1, 2.5, 350.0, 500.0, 0.0, 0.0, 0.0, '1"2', 0.0, 25, 1.0
+4, 1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 0, 0, 0, '1', 0.0
+5, 1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 0, 0, 0, '1', 0.0
+0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
+Q
+"#;
+        let net = parse_psse(raw).unwrap();
+        let tail = net.hvdc()[0].extras["psse_dc_control_tail"]
+            .as_array()
+            .expect("a non-default control tail is retained");
+        assert_eq!(tail[3], Value::from(r#"1"2"#));
+
+        let text = write_psse(&net).text;
+        let back = parse_psse(&text).unwrap();
+        let tail = back.hvdc()[0].extras["psse_dc_control_tail"]
+            .as_array()
+            .expect("the control tail survives the write");
+        assert_eq!(tail.len(), 7, "{text}");
+        assert_eq!(tail[3], Value::from("1_2"));
+        assert_eq!(tail[5], Value::from("25"));
     }
 
     /// The other two SETVL spellings, and the guard. A negative SETVL under

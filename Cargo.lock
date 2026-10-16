@@ -1005,7 +1005,7 @@ dependencies = [
 
 [[package]]
 name = "facade-only"
-version = "0.11.4"
+version = "0.11.5"
 dependencies = [
  "powerio",
 ]
@@ -1715,6 +1715,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "libmimalloc-sys"
+version = "0.1.49"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a45a52f43e1c16f667ccfe4dd8c85b7f7c204fd5e3bf46c5b0db9a5c3c0b8e9"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "line-clipping"
 version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1814,6 +1823,15 @@ name = "micromap"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a86d3146ed3995b5913c414f6664344b9617457320782e64f0bb44afd49d74"
+
+[[package]]
+name = "mimalloc"
+version = "0.1.52"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d4139bb28d14ad1facf21d5eb8825051b326e172d216b39f6d31df53cc97862"
+dependencies = [
+ "libmimalloc-sys",
+]
 
 [[package]]
 name = "minimal-lexical"
@@ -2381,7 +2399,7 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
 name = "powerio"
-version = "0.11.4"
+version = "0.11.5"
 dependencies = [
  "arrow",
  "bytes",
@@ -2401,7 +2419,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-capi"
-version = "0.11.4"
+version = "0.11.5"
 dependencies = [
  "powerio",
  "powerio-core",
@@ -2415,7 +2433,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-cli"
-version = "0.11.4"
+version = "0.11.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -2439,7 +2457,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-core"
-version = "0.11.4"
+version = "0.11.5"
 dependencies = [
  "errno",
  "libc",
@@ -2450,22 +2468,25 @@ dependencies = [
 
 [[package]]
 name = "powerio-dist"
-version = "0.11.4"
+version = "0.11.5"
 dependencies = [
  "jsonschema",
  "libc",
+ "memchr",
  "num-complex",
  "powerio-core",
+ "quick-xml",
  "schemars",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]
 name = "powerio-matrix"
-version = "0.11.4"
+version = "0.11.5"
 dependencies = [
  "approx",
  "arrow",
@@ -2490,7 +2511,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-prob"
-version = "0.11.4"
+version = "0.11.5"
 dependencies = [
  "powerio-core",
  "powerio-dist",
@@ -2503,8 +2524,9 @@ dependencies = [
 
 [[package]]
 name = "powerio-py"
-version = "0.11.4"
+version = "0.11.5"
 dependencies = [
+ "mimalloc",
  "powerio",
  "powerio-core",
  "powerio-dist",
@@ -2518,7 +2540,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-sincal"
-version = "0.11.4"
+version = "0.11.5"
 dependencies = [
  "powerio-core",
  "rusqlite",
@@ -2529,10 +2551,11 @@ dependencies = [
 
 [[package]]
 name = "powerio-tx"
-version = "0.11.4"
+version = "0.11.5"
 dependencies = [
  "criterion",
  "lexical-core",
+ "memchr",
  "petgraph",
  "powerio-core",
  "quick-xml",

@@ -88,6 +88,7 @@ pub fn resolve_format(name: &str) -> Option<FormatInfo> {
             "dss" => info("dss", Some("dss"), true, true),
             "pmd-json" => info("pmd-json", Some("json"), false, true),
             "bmopf-json" => info("bmopf-json", Some("json"), false, true),
+            "cim-dist" => info("cim-dist", Some("xml"), false, true),
             _ => return None,
         });
     }

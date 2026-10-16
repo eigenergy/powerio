@@ -7,6 +7,7 @@ cd "$(dirname "$0")/.."
 
 run() { echo "=== $* ==="; "$@"; }
 
+run python3 -m py_compile scripts/check_bmopf_upstream.py
 run bash scripts/check-release-versions.sh
 run bash scripts/check-release-features.sh
 run bash scripts/deprecated-inventory.sh --assert-empty
@@ -28,6 +29,13 @@ fi
 for triplet in $expected_triplets; do
     echo "asset: libpowerio_capi.$triplet.tar.gz"
 done
+# The PowerIO.jl check runs on each packaged tarball before the draft exists.
+julia_platforms=$(grep -oE 'platform: [a-z0-9_-]+' .github/workflows/release-binaries.yml \
+    | sed 's/platform: //' | sort | tr '\n' ' ' | sed 's/ $//')
+if [ "$julia_platforms" != "$expected_triplets" ]; then
+    echo "release-binaries.yml tests PowerIO.jl on \"$julia_platforms\"; the release expects \"$expected_triplets\"" >&2
+    exit 1
+fi
 
 # The publishable crate set, in dependency order, with no retired member. The
 # actual archive audit runs in ci-mirror's package step.

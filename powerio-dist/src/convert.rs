@@ -64,6 +64,9 @@ pub enum DistTargetFormat {
     Dss,
     BmopfJson,
     PmdJson,
+    /// Distribution CIM: one CIM100 RDF/XML document, or a directory of them
+    /// on input.
+    CimDist,
 }
 
 /// Format specific policies for distribution network emission.
@@ -79,7 +82,7 @@ impl EmitOptions {
         match format {
             DistTargetFormat::Dss => self.dss == crate::dss::DssEmitOptions::default(),
             DistTargetFormat::BmopfJson => self.bmopf == crate::bmopf::BmopfEmitOptions::default(),
-            DistTargetFormat::PmdJson => true,
+            DistTargetFormat::PmdJson | DistTargetFormat::CimDist => true,
         }
     }
 }
@@ -91,6 +94,7 @@ pub fn parse_dist_target_format(name: &str) -> Option<DistTargetFormat> {
         "dss" | "opendss" => Some(DistTargetFormat::Dss),
         "pmd" | "pmdjson" | "engineering" => Some(DistTargetFormat::PmdJson),
         "bmopf" | "bmopfjson" => Some(DistTargetFormat::BmopfJson),
+        "cimdist" => Some(DistTargetFormat::CimDist),
         _ => None,
     }
 }
@@ -106,13 +110,14 @@ impl std::str::FromStr for DistTargetFormat {
 }
 
 impl DistTargetFormat {
-    /// The canonical format name (`dss`, `pmd-json`, `bmopf-json`), accepted
-    /// back by [`parse_dist_target_format`].
+    /// The canonical format name (`dss`, `pmd-json`, `bmopf-json`,
+    /// `cim-dist`), accepted back by [`parse_dist_target_format`].
     pub fn name(self) -> &'static str {
         match self {
             DistTargetFormat::Dss => "dss",
             DistTargetFormat::PmdJson => "pmd-json",
             DistTargetFormat::BmopfJson => "bmopf-json",
+            DistTargetFormat::CimDist => "cim-dist",
         }
     }
 }
@@ -338,8 +343,11 @@ pub fn classify_distribution_json(text: &str) -> crate::Result<DistTargetFormat>
 /// a same format emission echoes the input bytes exactly.
 ///
 /// The format comes from the source's declared format when one was selected,
-/// the `.dss` extension otherwise, and for `.json` from
-/// [`classify_distribution_json`].
+/// the `.dss` extension otherwise, for `.json` from
+/// [`classify_distribution_json`], and for `.xml` from
+/// [`looks_like_cim_dist`](crate::cim::looks_like_cim_dist). A directory
+/// reads only as a `cim-dist` set of `.xml` documents, declared or
+/// recognized by [`source_looks_like_cim_dist`](crate::cim::source_looks_like_cim_dist).
 ///
 /// # Errors
 /// The operation failure carries the reader's findings up to the failure and
@@ -350,15 +358,13 @@ pub fn parse(
 ) -> std::result::Result<powerio_core::PioModule<MulticonductorNetwork>, powerio_core::Error> {
     let mut warnings = crate::collect::Diagnostics::new();
     match parse_to_network(&source, &mut warnings) {
-        Ok(network) => {
-            let format = *network.source_format();
+        Ok((network, format)) => {
             // Record the detected format before the common constructor builds
             // descriptors and the coarse `/value` source map.
-            let source =
-                match format.and_then(|format| powerio_core::FormatId::new(format.name()).ok()) {
-                    Some(format) => source.with_format(format),
-                    None => source,
-                };
+            let source = match powerio_core::FormatId::new(format.name()) {
+                Ok(format) => source.with_format(format),
+                Err(_) => source,
+            };
             powerio_core::PioModule::parsed(network, source, warnings.into_records())
         }
         Err(error) => {
@@ -371,17 +377,12 @@ pub fn parse(
     }
 }
 
-/// The format dispatch behind [`parse`].
+/// The format dispatch behind [`parse`]: the network and the format it was
+/// read as.
 fn parse_to_network(
     source: &powerio_core::Source,
     warnings: &mut crate::collect::Diagnostics,
-) -> crate::Result<MulticonductorNetwork> {
-    if source.is_directory() {
-        return Err(crate::Error::UnknownFormat(format!(
-            "{} is a directory, and no distribution case format is a directory; pass a case file",
-            source.name()
-        )));
-    }
+) -> crate::Result<(MulticonductorNetwork, DistTargetFormat)> {
     let declared = source
         .format()
         .map(powerio_core::FormatId::as_str)
@@ -390,8 +391,23 @@ fn parse_to_network(
                 .ok_or_else(|| crate::Error::UnknownFormat(name.to_string()))
         })
         .transpose()?;
+    if source.is_directory() {
+        let cim = declared.map_or_else(
+            || crate::cim::source_looks_like_cim_dist(source),
+            |format| format == DistTargetFormat::CimDist,
+        );
+        if !cim {
+            return Err(crate::Error::UnknownFormat(format!(
+                "{} is a directory, and the only distribution format read from a directory is \
+                 a cim-dist document set; pass a case file",
+                source.name()
+            )));
+        }
+    }
     let format = if let Some(format) = declared {
         format
+    } else if source.is_directory() {
+        DistTargetFormat::CimDist
     } else {
         let ext = std::path::Path::new(source.name())
             .extension()
@@ -404,10 +420,13 @@ fn parse_to_network(
                 let buffer = primary(source)?;
                 classify_distribution_json(source_text(&buffer)?)?
             }
+            "xml" if crate::cim::looks_like_cim_dist(primary(source)?.content_bytes()) => {
+                DistTargetFormat::CimDist
+            }
             other => return Err(crate::Error::UnknownFormat(other.to_string())),
         }
     };
-    match format {
+    let network = match format {
         DistTargetFormat::Dss => crate::dss::read::parse_dss_collecting(source, warnings),
         DistTargetFormat::BmopfJson => {
             let buffer = primary(source)?;
@@ -417,7 +436,9 @@ fn parse_to_network(
             let buffer = primary(source)?;
             crate::pmd::read::parse_pmd_collecting(source_text(&buffer)?, warnings)
         }
-    }
+        DistTargetFormat::CimDist => crate::cim::parse_cim_collecting(source, warnings),
+    }?;
+    Ok((network, format))
 }
 
 /// The retained primary buffer of a file or in-memory source.
@@ -450,6 +471,7 @@ impl DistTargetFormat {
                     Some(DistSourceFormat::BmopfJson)
                 )
                 | (DistTargetFormat::PmdJson, Some(DistSourceFormat::PmdJson))
+                | (DistTargetFormat::CimDist, Some(DistSourceFormat::CimDist))
         )
     }
 }
@@ -506,6 +528,7 @@ pub(crate) fn emit_value_text_with_options(
             crate::bmopf::emit_bmopf_json_text_with_options(net, options.bmopf)
         }
         DistTargetFormat::PmdJson => crate::pmd::emit_pmd_json_text(net),
+        DistTargetFormat::CimDist => crate::cim::emit_cim_dist_text(net),
     };
     // No distribution format carries line routes; report the loss the
     // way bus locations already do (`.pio.json` keeps them).
@@ -536,7 +559,7 @@ pub(crate) fn emit_value_text(
 
 /// Emit a parsed module to `format` through a destination.
 ///
-/// The JSON targets commit a single artifact — a path destination names the
+/// The JSON and CIM targets commit a single artifact — a path destination names the
 /// exact file, a memory destination names the artifact. The dss target is a
 /// directory inventory: the destination names the output root, the case text
 /// commits as `case.dss`, and every companion file the emitter produced
@@ -587,7 +610,7 @@ pub fn emit_with_options(
             }
             destination.__commit_artifacts(true, conv.fidelity, artifacts, conv.diagnostics)
         }
-        DistTargetFormat::BmopfJson | DistTargetFormat::PmdJson => {
+        DistTargetFormat::BmopfJson | DistTargetFormat::PmdJson | DistTargetFormat::CimDist => {
             let artifact = powerio_core::MemoryArtifact::new(
                 powerio_core::ArtifactPath::new("case")
                     .expect("static name is a valid artifact path"),
