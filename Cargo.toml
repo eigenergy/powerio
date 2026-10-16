@@ -64,7 +64,7 @@ num-complex = "0.4"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 quick-xml = { version = "0.41", features = ["encoding"] }
-zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+zip = { version = "9.0.4", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 # The browser backend preserves the existing wasm32 component build.
 # Shared SINCAL snapshot queries expose rusqlite row/connection types to the
 # family adapters; keep both their version and safety features consistent.

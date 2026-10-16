@@ -302,7 +302,14 @@ fn push_zip(
         if file.is_dir() {
             continue;
         }
-        let raw_name = file.name().to_string();
+        let raw_name = file
+            .name()
+            .map_err(|error| {
+                format_error(format!(
+                    "cannot read entry {index} name from {archive_name}: {error}"
+                ))
+            })?
+            .into_owned();
         let path = strict_archive_path(&raw_name)?;
         if file
             .unix_mode()
@@ -365,7 +372,7 @@ fn push_zip(
 /// declare, then refuse entries that disagree with the first count, leave
 /// the entry data, or share bytes.
 ///
-/// zip 8.6 examines end records from the last. It reserves its entry table
+/// The ZIP reader examines end records from the last. It reserves its entry table
 /// from the count of the first record it accepts and indexes every central
 /// record before `ZipArchive::new` returns; when that fails, it falls back to
 /// an earlier record and reserves again. So before opening, the number of
@@ -422,7 +429,9 @@ fn open_archive<'a>(
             _ => {
                 return Err(format_error(format!(
                     "archive {archive_name} is refused as malformed: entry {} lies outside the archive's entry data",
-                    entry.name()
+                    entry.name().map_err(|error| format_error(format!(
+                        "cannot read entry {index} name from {archive_name}: {error}"
+                    )))?
                 )));
             }
         }
@@ -431,11 +440,20 @@ fn open_archive<'a>(
     // (the overlapping entry bomb), so any shared byte is refused.
     regions.sort_unstable();
     if let Some(pair) = regions.windows(2).find(|pair| pair[1].0 < pair[0].1) {
-        let name = |index| archive.name_for_index(index).unwrap_or_default();
+        let name = |index| {
+            archive
+                .name_for_index(index)
+                .ok_or_else(|| format_error(format!("missing entry {index} in {archive_name}")))?
+                .map_err(|error| {
+                    format_error(format!(
+                        "cannot read entry {index} name from {archive_name}: {error}"
+                    ))
+                })
+        };
         return Err(format_error(format!(
             "archive {archive_name} is refused as unsafe: entries {} and {} overlap",
-            name(pair[0].2),
-            name(pair[1].2)
+            name(pair[0].2)?,
+            name(pair[1].2)?
         )));
     }
     Ok(archive)
@@ -446,7 +464,7 @@ const ZIP64_END_LOCATOR: &[u8] = b"PK\x06\x07";
 const ZIP64_END_RECORD: &[u8] = b"PK\x06\x06";
 
 /// Most end records an archive may hold: its end of central directory
-/// signatures, plus the Zip64 end records zip 8.6 reads for their locators.
+/// signatures, plus the Zip64 end records the ZIP reader reads for their locators.
 /// An honest archive holds one or two, and a four byte signature occurs by
 /// chance in compressed data about once per 4 GiB. Each record can cost the
 /// reader, and the scan in [`declared_entries`], one search of the archive,
@@ -456,7 +474,7 @@ const MAX_END_RECORDS: usize = 8;
 /// The entry counts an archive's end records declare.
 #[derive(Debug, PartialEq, Eq)]
 struct DeclaredEntries {
-    /// The count of the end record zip 8.6 examines first: the last end
+    /// The count of the end record the ZIP reader examines first: the last end
     /// record signature whose comment fits in the archive, or the Zip64
     /// record its locator names when a 16 bit field is saturated.
     first: u64,
@@ -6303,7 +6321,8 @@ mod tests {
         put_u32(&mut forged, central + 24, declared);
         let error = archive_error(forged);
         assert!(
-            error.contains(&format!("inflates past the {declared} bytes")),
+            error.contains(&format!("inflates past the {declared} bytes"))
+                || error.contains("File is larger than its declared uncompressed size"),
             "{error}"
         );
 
