@@ -30,11 +30,11 @@ pub type ConductorMatrix = Vec<Vec<f64>>;
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum DistSourceFormat {
-    Sincal,
     Dss,
     BmopfJson,
     PmdJson,
     CimDist,
+    Sincal,
 }
 
 impl DistSourceFormat {
