@@ -34,8 +34,76 @@ if [ -z "$baseline" ]; then
 fi
 
 echo "comparing the publishable crates at $version against $baseline"
+# cargo-semver-checks runs cargo update in a synthetic package for each
+# baseline crate. That makes a historical dependency which has since been
+# yanked (zip 8.6.0 in v0.11.5) impossible to resolve, even though the tagged
+# workspace lockfile records the exact dependency that was used at release.
+#
+# Prepare an isolated baseline source tree and make only the implementation
+# compatibility edits needed to compile that historical source against the
+# currently resolvable ZIP release. The public API being compared remains the
+# tagged API: these edits touch only ZIP dependency resolution and call sites.
+baseline_root=$(mktemp -d)
+trap 'rm -rf "$baseline_root"' EXIT
+git archive "$baseline" | tar -x -C "$baseline_root"
+python3 - "$baseline_root" <<'PY'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+manifest = root / "Cargo.toml"
+text = manifest.read_text()
+old_zip = 'zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }'
+new_zip = 'zip = { version = "9.0.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }'
+if text.count(old_zip) != 1:
+    raise SystemExit("expected exactly one historical workspace ZIP 8.6 dependency")
+manifest.write_text(text.replace(old_zip, new_zip))
+
+source = root / "powerio-tx/src/format/cgmes/mod.rs"
+text = source.read_text()
+replacements = [
+    (
+        'let raw_name = file.name().to_string();',
+        '''let raw_name = file
+            .name()
+            .map_err(|error| {
+                format_error(format!(
+                    "cannot decode entry {index} name in {archive_name}: {error}"
+                ))
+            })?
+            .into_owned();''',
+    ),
+    (
+        '''"archive {archive_name} is refused as malformed: entry {} lies outside the archive's entry data",
+                    entry.name()''',
+        '''"archive {archive_name} is refused as malformed: entry {index} lies outside the archive's entry data"''',
+    ),
+    (
+        'let name = |index| archive.name_for_index(index).unwrap_or_default();',
+        '''let name = |index| {
+            archive
+                .name_for_index(index)
+                .and_then(std::result::Result::ok)
+                .map(std::borrow::Cow::into_owned)
+                .unwrap_or_default()
+        };''',
+    ),
+]
+for old, new in replacements:
+    if text.count(old) != 1:
+        raise SystemExit(f"expected exactly one ZIP API compatibility anchor: {old!r}")
+    text = text.replace(old, new)
+source.write_text(text)
+PY
+
 # powerio-py and powerio-capi are publish = false; name them anyway so the
-# crate set reads the same as the msrv and archive jobs.
+# crate set reads the same as the msrv and archive jobs. A newly introduced
+# publishable crate has no baseline package to compare until its first release;
+# exclude it only while the selected baseline truly predates that crate.
+excludes=(--exclude powerio-py --exclude powerio-capi)
+if ! git cat-file -e "$baseline:powerio-synth/Cargo.toml" 2>/dev/null; then
+    excludes+=(--exclude powerio-synth)
+fi
 cargo semver-checks check-release --workspace \
-    --exclude powerio-py --exclude powerio-capi \
-    --baseline-rev "$baseline" "$@"
+    "${excludes[@]}" \
+    --baseline-root "$baseline_root" "$@"

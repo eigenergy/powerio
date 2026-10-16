@@ -26,9 +26,12 @@ name = "powerio_matrix"
 path = "src/lib.rs"
 
 [dependencies]
+rand = { version = "0.10", default-features = false, features = ["std"] }
+rand_chacha = { version = "0.10", default-features = false, features = ["std"] }
 powerio-core = { workspace = true }
 powerio-dist.workspace = true
 powerio-prob.workspace = true
+powerio-synth.workspace = true
 powerio-tx.workspace = true
 thiserror = "2"
 sprs.workspace = true
@@ -36,10 +39,6 @@ faer.workspace = true
 num-complex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-# Deterministic seeded generation only: default features off keeps the OS
-# randomness backend out, so the crate builds on wasm32 targets.
-rand = { version = "0.10", default-features = false, features = ["std"] }
-rand_chacha = { version = "0.10", default-features = false, features = ["std"] }
 sha2 = "0.11"
 rustc-hash = "2"
 # arrow and parquet release in lockstep and share `RecordBatch`; keep both on the

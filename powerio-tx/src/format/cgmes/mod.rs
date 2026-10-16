@@ -302,7 +302,14 @@ fn push_zip(
         if file.is_dir() {
             continue;
         }
-        let raw_name = file.name().to_string();
+        let raw_name = file
+            .name()
+            .map_err(|error| {
+                format_error(format!(
+                    "cannot decode entry {index} name in {archive_name}: {error}"
+                ))
+            })?
+            .into_owned();
         let path = strict_archive_path(&raw_name)?;
         if file
             .unix_mode()
@@ -365,7 +372,7 @@ fn push_zip(
 /// declare, then refuse entries that disagree with the first count, leave
 /// the entry data, or share bytes.
 ///
-/// zip 8.6 examines end records from the last. It reserves its entry table
+/// ZIP 9.0.3 examines end records from the last. It reserves its entry table
 /// from the count of the first record it accepts and indexes every central
 /// record before `ZipArchive::new` returns; when that fails, it falls back to
 /// an earlier record and reserves again. So before opening, the number of
@@ -421,8 +428,7 @@ fn open_archive<'a>(
             Some(end) if end <= directory_start => regions.push((start, end, index)),
             _ => {
                 return Err(format_error(format!(
-                    "archive {archive_name} is refused as malformed: entry {} lies outside the archive's entry data",
-                    entry.name()
+                    "archive {archive_name} is refused as malformed: entry {index} lies outside the archive's entry data"
                 )));
             }
         }
@@ -431,7 +437,13 @@ fn open_archive<'a>(
     // (the overlapping entry bomb), so any shared byte is refused.
     regions.sort_unstable();
     if let Some(pair) = regions.windows(2).find(|pair| pair[1].0 < pair[0].1) {
-        let name = |index| archive.name_for_index(index).unwrap_or_default();
+        let name = |index| {
+            archive
+                .name_for_index(index)
+                .and_then(std::result::Result::ok)
+                .map(std::borrow::Cow::into_owned)
+                .unwrap_or_default()
+        };
         return Err(format_error(format!(
             "archive {archive_name} is refused as unsafe: entries {} and {} overlap",
             name(pair[0].2),
@@ -6302,8 +6314,12 @@ mod tests {
         put_u32(&mut forged, 22, declared);
         put_u32(&mut forged, central + 24, declared);
         let error = archive_error(forged);
+        // zip 9 rejects an overlong deflate stream while opening the entry,
+        // before read_declared_size can observe the extra byte. Accept either
+        // layer's precise rejection, but never accept the forged archive.
         assert!(
-            error.contains(&format!("inflates past the {declared} bytes")),
+            error.contains(&format!("inflates past the {declared} bytes"))
+                || error.contains("File is larger than its declared uncompressed size"),
             "{error}"
         );
 
@@ -6497,7 +6513,13 @@ mod tests {
         let mut outside = honest.clone();
         put_u32(&mut outside, central[0] + 20, 1_000);
         let error = archive_error(outside);
-        assert!(error.contains("entry EQ.xml lies outside"), "{error}");
+        // zip 9 validates the forged local-header/data range before exposing
+        // the entry name, so this malformed archive may be rejected by index.
+        assert!(
+            error.contains("entry EQ.xml lies outside")
+                || error.contains("entry 0 lies outside the archive's entry data"),
+            "{error}"
+        );
 
         // Two directory records under one name collapse in the reader's index.
         let mut duplicate = honest;

@@ -4,6 +4,7 @@ members = [
     "powerio-tx",
     "powerio-core",
     "powerio-matrix",
+    "powerio-synth",
     "powerio-prob",
     "powerio-cli",
     "powerio-py",
@@ -22,6 +23,7 @@ default-members = [
     "powerio-tx",
     "powerio-core",
     "powerio-matrix",
+    "powerio-synth",
     "powerio-prob",
     "powerio-cli",
     "powerio-dist",
@@ -50,6 +52,7 @@ powerio = { path = "powerio", version = "0.11.5" }
 powerio-tx = { path = "powerio-tx", version = "0.11.5" }
 powerio-core = { path = "powerio-core", version = "0.11.5" }
 powerio-matrix = { path = "powerio-matrix", version = "0.11.5" }
+powerio-synth = { path = "powerio-synth", version = "0.11.5" }
 powerio-prob = { path = "powerio-prob", version = "0.11.5" }
 powerio-dist = { path = "powerio-dist", version = "0.11.5" }
 # Cross-crate type identity: `CsMat<f64>` (sprs) and the Arrow types cross crate
@@ -61,7 +64,7 @@ num-complex = "0.4"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 quick-xml = { version = "0.41", features = ["encoding"] }
-zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+zip = { version = "9.0.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 uuid = { version = "1", default-features = false, features = ["v5"] }
 schemars = { version = "1", features = ["derive"] }
 
