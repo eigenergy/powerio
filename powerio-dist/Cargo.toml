@@ -3,13 +3,13 @@ name = "powerio-dist"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Multiconductor distribution network model and lossless converters for OpenDSS, PMD JSON, and BMOPF JSON."
+description = "Multiconductor distribution network model and lossless converters for OpenDSS, PMD JSON, BMOPF JSON, and distribution CIM."
 readme = "README.md"
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/powerio-dist"
-keywords = ["opendss", "distribution", "parser", "lossless"]
+keywords = ["opendss", "distribution", "cim", "parser", "lossless"]
 categories = ["science", "parsing"]
 
 [package.metadata.docs.rs]
@@ -30,6 +30,9 @@ serde.workspace = true
 serde_json = { workspace = true, features = ["float_roundtrip"] }
 schemars = { workspace = true, optional = true }
 num-complex.workspace = true
+quick-xml.workspace = true
+uuid.workspace = true
+memchr = "2.4"
 
 [dev-dependencies]
 sha2 = "0.10"

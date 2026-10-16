@@ -100,6 +100,8 @@ pub enum DistributionFormat {
     Dss,
     PmdJson,
     BmopfJson,
+    /// Distribution CIM (CIM100 RDF/XML).
+    CimDist,
 }
 
 impl DistributionFormat {
@@ -109,6 +111,7 @@ impl DistributionFormat {
             Self::Dss => "dss",
             Self::PmdJson => "pmd-json",
             Self::BmopfJson => "bmopf-json",
+            Self::CimDist => "cim-dist",
         }
     }
 }
@@ -193,6 +196,7 @@ pub fn parse_distribution_format(name: &str) -> Option<DistributionFormat> {
         "dss" | "opendss" => Some(DistributionFormat::Dss),
         "pmd" | "pmdjson" | "engineering" => Some(DistributionFormat::PmdJson),
         "bmopf" | "bmopfjson" => Some(DistributionFormat::BmopfJson),
+        "cimdist" => Some(DistributionFormat::CimDist),
         _ => None,
     }
 }

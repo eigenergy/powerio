@@ -33,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "sincal-balanced",
         Destination::memory("copy.mdb")?,
     )?);
-    assert_eq!(echoed, original);
+    assert!(echoed == original, "native source echo differs from input");
     let ir = bytes(powerio::serialize(
         &module,
         Destination::memory("case.pio.json")?,

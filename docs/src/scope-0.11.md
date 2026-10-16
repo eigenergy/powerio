@@ -7,7 +7,11 @@
   are retained and reported rather than typed, and PyPSA NetCDF does not
   parse. Egret support is the scalar network profile with time series, with
   unit commitment fields outside it. OpenDSS support is the static circuit;
-  load shapes and solve instructions are retained and reported.
+  load shapes and solve instructions are retained and reported. Distribution
+  CIM support is the CIM100 node breaker profile with per phase equipment; the
+  transformer tank form, controls, distributed energy resources, wire geometry,
+  and limits are reported rather than mapped, and a ZIP archive does not
+  parse.
 - DOE GO Challenge 3 problem data, DeepMind OPFData, PowerWorld PWB, and the
   IEEE Common Data Format are parse only, though a complete `AcScucSolution`
   does emit the official GO Challenge 3 solution file.
@@ -65,5 +69,8 @@ documents through and defines no electrical data shape of its own.
 
 The 0.11.x line is for compatible fixes, performance work, and additive
 change; a break in the public Rust API that cannot be avoided goes into 0.12.
+CI checks the publishable crates against the latest 0.11 release tag with
+cargo-semver-checks (`scripts/check-semver.sh`); a pull request that carries a
+0.12 break is labeled `semver-major`.
 The Rust API stays pre-1.0 as long as public signatures expose types from the
 pre-1.0 `sprs` and `petgraph` crates.

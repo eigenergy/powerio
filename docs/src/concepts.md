@@ -67,7 +67,7 @@ GeoLayer
 The two network types are peers, and neither is a subtype of the other.
 `BalancedNetwork` is where MATPOWER, PSS/E, XIIDM, CGMES, and the other
 balanced formats meet; `MulticonductorNetwork` is where OpenDSS,
-PowerModelsDistribution JSON, and BMOPF meet. To get a balanced positive
+PowerModelsDistribution JSON, BMOPF, and distribution CIM meet. To get a balanced positive
 sequence equivalent from a multiconductor network you call an explicit
 transformation, which reports each assumption it made and each thing it lost.
 

@@ -34,6 +34,7 @@ pub enum DistSourceFormat {
     Dss,
     BmopfJson,
     PmdJson,
+    CimDist,
 }
 
 impl DistSourceFormat {
@@ -45,6 +46,7 @@ impl DistSourceFormat {
             DistSourceFormat::Dss => "dss",
             DistSourceFormat::PmdJson => "pmd-json",
             DistSourceFormat::BmopfJson => "bmopf-json",
+            DistSourceFormat::CimDist => "cim-dist",
         }
     }
 }
