@@ -32,9 +32,9 @@ env:
 
 jobs:
   report:
-    # A Dependabot pull request does not run the matrix: the job takes 3 to 10
-    # minutes and finishes by posting its report as a comment on the pull request.
-    if: github.event.pull_request.user.login != 'dependabot[bot]'
+    # Run the conversion matrix for every PR, including dependency updates.
+    # Dependabot's restricted token cannot reliably post PR comments, so only
+    # the optional report-comment step is excluded for its PRs.
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -50,7 +50,7 @@ jobs:
         path: ${{ env.POWERIO_CONVERSION_MATRIX_DETAILS }}
         if-no-files-found: ignore
     - name: Comment on PR
-      if: always() && github.event.pull_request.head.repo.full_name == github.repository
+      if: always() && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       with:
         script: |
