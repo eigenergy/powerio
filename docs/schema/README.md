@@ -37,8 +37,9 @@ instance and solution types added in 0.11.4 use distinct structural type names.
 A reader accepts the types it implements; an older reader rejects an
 unknown type without losing the ability to read familiar types. A list of
 allowed names can gain a name the same way: 0.11.6 adds `cim-dist` to the
-source formats a distribution network records, and an older reader rejects a
-document that uses it while still reading every document that does not. A version
+source formats a distribution network records. SINCAL adds `sincal` to both
+network families' source-format lists. An older reader rejects a document that
+uses an unknown format while still reading documents using known formats. A version
 bump requires an incompatible change to an existing representation and an
 explicit release decision. Adding fields to a record is not automatically
 compatible: readers can reject unknown fields, so existing records retain
@@ -57,11 +58,14 @@ supporting definitions, the 0.11.3 snapshot adds three more:
 `powerio.ContingencySet`, `powerio.SubsystemSet`, and `powerio.MonitoredSet`,
 the 0.11.4 snapshot adds `powerio.LinDist3FlowPfInstance`,
 `powerio.LinDist3FlowPfSolution`, and their limit-report definitions, and the
-0.11.6 snapshot adds `cim-dist` to `DistSourceFormat`.
+0.11.6 snapshot adds `cim-dist` and `sincal` to `DistSourceFormat`, `sincal`
+to `SourceFormat`, and the distinctly tagged `powerio.ReferencedVoltageSource`
+nested record. Ordinary voltage sources retain their original representation.
 The release name in the snapshot path does not create
 a new IR version. A later release without catalog changes can reuse that
 snapshot. CI checks that all existing definitions and document rules remain
-identical, except that a list of allowed names may gain names, and that
+identical, except that format lists may gain names and the voltage-source union
+may admit the new tagged record alongside its unchanged legacy branch, and that
 every earlier published snapshot keeps its exact bytes.
 
 ## Served identifiers
