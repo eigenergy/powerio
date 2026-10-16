@@ -96,12 +96,12 @@ impl TransmissionFormat {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DistributionFormat {
-    SincalMulticonductor,
     Dss,
     PmdJson,
     BmopfJson,
     /// Distribution CIM (CIM100 RDF/XML).
     CimDist,
+    SincalMulticonductor,
 }
 
 impl DistributionFormat {
