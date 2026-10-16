@@ -1354,9 +1354,6 @@ impl GenCost {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum SourceFormat {
-    /// A SINCAL project read using the explicitly selected balanced profile.
-    #[serde(rename = "sincal")]
-    Sincal,
     #[serde(rename = "matpower")]
     Matpower,
     #[serde(rename = "powermodels-json")]
@@ -1432,6 +1429,9 @@ pub enum SourceFormat {
     /// writer, so writing goes through another format's writer.
     #[serde(rename = "ieee-cdf")]
     IeeeCdf,
+    /// A SINCAL project read using the explicitly selected balanced profile.
+    #[serde(rename = "sincal")]
+    Sincal,
 }
 
 impl SourceFormat {
