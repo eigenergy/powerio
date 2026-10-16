@@ -1102,3 +1102,45 @@ fn every_distribution_fixture_writes_stable_cim() {
     }
     assert!(checked >= 10, "only {checked} fixtures checked");
 }
+
+#[test]
+fn dss_source_impedance_is_written_once_in_cim() {
+    for phases in [1, 3] {
+        let net = parse_str(
+            &format!(
+                "New Circuit.c phases={phases} bus1=s basekv=12.47 r1=0.1 x1=0.2 r0=0.3 x0=0.4"
+            ),
+            "dss",
+        )
+        .unwrap();
+        assert_eq!(net.lines().len(), 1);
+        let mut network = net.module.value().clone();
+        // Retained native metadata cannot change the typed ideal source.
+        network.sources_mut()[0]
+            .extras
+            .insert("basekv".into(), serde_json::json!(12.47));
+        let out = emit_value(&network, DistTargetFormat::CimDist);
+        assert!(!out.text.contains("<cim:EnergySource.r>"));
+        assert!(!out.text.contains("<cim:EnergySource.x>"));
+        let back = parse_str(&out.text, "cim-dist").unwrap();
+        assert_eq!(back.lines().len(), 1);
+        let original = network.linecode(&network.lines()[0].linecode).unwrap();
+        let restored = back.linecode(&back.lines()[0].linecode).unwrap();
+        for (a, b) in original
+            .r_series
+            .iter()
+            .flatten()
+            .zip(restored.r_series.iter().flatten())
+        {
+            assert!(close(*a, *b));
+        }
+        for (a, b) in original
+            .x_series
+            .iter()
+            .flatten()
+            .zip(restored.x_series.iter().flatten())
+        {
+            assert!(close(*a, *b));
+        }
+    }
+}
