@@ -87,13 +87,14 @@ fn fresh_databases_and_archives_are_deterministic_and_contain_only_input_metadat
     assert_eq!(zip.len(), 3);
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).unwrap();
+        let name = entry.name().unwrap();
         assert!(
-            !std::path::Path::new(entry.name())
+            !std::path::Path::new(name.as_ref())
                 .extension()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("sin"))
         );
         assert_eq!(entry.last_modified().unwrap().year(), 1980);
-        if entry.name().ends_with("database.ini") {
+        if name.ends_with("database.ini") {
             let mut ini = String::new();
             entry.read_to_string(&mut ini).unwrap();
             assert!(ini.contains("FILE=database.db\r\n"));

@@ -38,8 +38,6 @@ pub enum Domain {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TransmissionFormat {
-    /// Explicit positive-sequence profile of the two-family SINCAL container.
-    SincalBalanced,
     Matpower,
     PowerModelsJson,
     EgretJson,
@@ -62,6 +60,8 @@ pub enum TransmissionFormat {
     Ucte,
     /// The IEEE Common Data Format, a read only fixed column text case.
     IeeeCdf,
+    /// Explicit positive-sequence profile of the two-family SINCAL container.
+    SincalBalanced,
 }
 
 impl TransmissionFormat {
@@ -96,12 +96,12 @@ impl TransmissionFormat {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DistributionFormat {
-    SincalMulticonductor,
     Dss,
     PmdJson,
     BmopfJson,
     /// Distribution CIM (CIM100 RDF/XML).
     CimDist,
+    SincalMulticonductor,
 }
 
 impl DistributionFormat {

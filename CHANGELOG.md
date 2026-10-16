@@ -33,6 +33,10 @@
   `can_emit=false`. Native desktop acceptance and writer binding options remain
   separate work.
 
+- Update ZIP support to 9.0.4 to address extraction advisories. Archive readers
+  report filename-decoding failures explicitly and retain their bounded-input
+  and unsafe-entry checks.
+
 - Multiconductor voltage sources can prescribe voltages relative to an explicit
   terminal, preserving floating-star displacement and reference current in the
   sparse matrix constraints. IR 2 carries these as distinct tagged source

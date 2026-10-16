@@ -38,8 +38,8 @@ pub(crate) fn validated_archive(bytes: &[u8]) -> Result<(zip::ZipArchive<Cursor<
     let mut database = None;
     for index in 0..archive.len() {
         let entry = archive.by_index(index).map_err(format_error)?;
-        let name = entry.name();
-        let path = name.strip_suffix('/').unwrap_or(name);
+        let name = entry.name().map_err(format_error)?;
+        let path = name.strip_suffix('/').unwrap_or(name.as_ref());
         if path.len() > MAX_PATH_BYTES || path.split('/').count() > MAX_PATH_DEPTH {
             return Err(format_error("archive path length/depth limit exceeded"));
         }
