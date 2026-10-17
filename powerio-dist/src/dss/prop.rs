@@ -217,6 +217,54 @@ class!(
     ]
 );
 
+// Pinned DSS C-API XfmrCode.pas; codes have no bus or circuit-element fields.
+class!(
+    XFMR_CODE,
+    "xfmrcode",
+    [
+        "phases",
+        "windings",
+        "wdg",
+        "conn",
+        "kv",
+        "kva",
+        "tap",
+        "%r",
+        "rneut",
+        "xneut",
+        "conns",
+        "kvs",
+        "kvas",
+        "taps",
+        "xhl",
+        "xht",
+        "xlt",
+        "xscarray",
+        "thermal",
+        "n",
+        "m",
+        "flrise",
+        "hsrise",
+        "%loadloss",
+        "%noloadloss",
+        "normhkva",
+        "emerghkva",
+        "maxtap",
+        "mintap",
+        "numtaps",
+        "%imag",
+        "ppm_antifloat",
+        "%rs",
+        "x12",
+        "x13",
+        "x23",
+        "rdcohms",
+        "seasons",
+        "ratings",
+        "like",
+    ]
+);
+
 class!(
     VSOURCE,
     "vsource",
@@ -543,13 +591,102 @@ class!(
     ]
 );
 
-/// The Phase A classes with property tables. Anything else parses into the
-/// raw layer untyped.
+// Pinned DSS C-API ConductorData.pas (WireData adds no own fields).
+class!(
+    WIRE_DATA,
+    "wiredata",
+    [
+        "rdc",
+        "rac",
+        "runits",
+        "gmrac",
+        "gmrunits",
+        "radius",
+        "radunits",
+        "normamps",
+        "emergamps",
+        "diam",
+        "seasons",
+        "ratings",
+        "capradius",
+        "like",
+    ]
+);
+
+// CNData inherits CableData and then ConductorData in the pinned engine.
+class!(
+    CN_DATA,
+    "cndata",
+    [
+        "k",
+        "diastrand",
+        "gmrstrand",
+        "rstrand",
+        "epsr",
+        "inslayer",
+        "diains",
+        "diacable",
+        "rdc",
+        "rac",
+        "runits",
+        "gmrac",
+        "gmrunits",
+        "radius",
+        "radunits",
+        "normamps",
+        "emergamps",
+        "diam",
+        "seasons",
+        "ratings",
+        "capradius",
+        "like"
+    ]
+);
+
+class!(
+    LINE_GEOMETRY,
+    "linegeometry",
+    [
+        "nconds",
+        "nphases",
+        "cond",
+        "wire",
+        "x",
+        "h",
+        "units",
+        "normamps",
+        "emergamps",
+        "reduce",
+        "spacing",
+        "wires",
+        "cncable",
+        "tscable",
+        "cncables",
+        "tscables",
+        "seasons",
+        "ratings",
+        "linetype",
+        "like",
+    ]
+);
+
+class!(
+    LINE_SPACING,
+    "linespacing",
+    ["nconds", "nphases", "x", "h", "units", "like"]
+);
+
+/// Classes with ordered property tables; other classes remain untyped.
 static CLASSES: &[&DssClass] = &[
     &LINE,
     &LINECODE,
+    &WIRE_DATA,
+    &CN_DATA,
+    &LINE_GEOMETRY,
+    &LINE_SPACING,
     &LOAD,
     &TRANSFORMER,
+    &XFMR_CODE,
     &VSOURCE,
     &CAPACITOR,
     &REACTOR,
@@ -627,7 +764,7 @@ mod tests {
         assert!(class_by_name("Line").is_some());
         assert!(class_by_name("LINECODE").is_some());
         assert!(class_by_name("reactor").is_some());
-        assert!(class_by_name("xfmrcode").is_none());
+        assert_eq!(class_by_name("xfmrcode").unwrap().props[3], "conn");
     }
 
     #[test]

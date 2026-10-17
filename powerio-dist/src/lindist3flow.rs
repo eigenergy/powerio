@@ -479,56 +479,48 @@ fn lower_capacitors(
     Ok(())
 }
 
-// Bounded ZIP is projected only by the explicit approximation policy.
-// Strict preparation retains the complete law and its transition bounds.
-fn nominal_bounded_zip(load: &crate::DistLoad) -> Result<Option<DistLoadVoltageModel>> {
-    let DistLoadVoltageModel::BoundedZip {
-        v_nom,
-        alpha_z,
-        alpha_i,
-        alpha_p,
-        beta_z,
-        beta_i,
-        beta_p,
-        v_low_pu,
-        v_min_pu,
-        v_max_pu,
-        cutoff_pu,
-    } = &load.voltage_model
-    else {
-        return Ok(None);
+// Select only a smooth nominal branch. The existing nominal-law projection
+// handles the coefficients; the source law and bounds remain in the audit.
+fn nominal_bounded_load(load: &crate::DistLoad) -> Result<Option<DistLoadVoltageModel>> {
+    let model = &load.voltage_model;
+    let (low, min, max) = match model {
+        DistLoadVoltageModel::BoundedZip {
+            v_low_pu,
+            v_min_pu,
+            v_max_pu,
+            cutoff_pu,
+            ..
+        } if cutoff_pu.is_finite() && (0.0..1.0).contains(cutoff_pu) => {
+            (*v_low_pu, *v_min_pu, *v_max_pu)
+        }
+        DistLoadVoltageModel::BoundedExponential {
+            v_low_pu,
+            v_min_pu,
+            v_max_pu,
+            ..
+        } => (*v_low_pu, *v_min_pu, *v_max_pu),
+        _ => return Ok(None),
     };
-    if ![*v_low_pu, *v_min_pu, *v_max_pu, *cutoff_pu]
-        .iter()
-        .all(|x| x.is_finite())
-        || !(0.0..1.0).contains(v_low_pu)
-        || *v_min_pu >= 1.0
-        || *v_max_pu <= 1.0
-        || !(0.0..1.0).contains(cutoff_pu)
+    if ![low, min, max].iter().all(|value| value.is_finite())
+        || !(0.0..1.0).contains(&low)
+        || min >= 1.0
+        || max <= 1.0
     {
         return Ok(None);
     }
     let n = load.p_nom.len();
-    if n == 0 || load.q_nom.len() != n || v_nom.len() != n {
+    if n == 0 || load.q_nom.len() != n || model.v_nom().len() != n {
         return Err(fail(format!(
             "load `{}` bounded law has invalid channel dimensions",
             load.name
         )));
     }
-    for (channel, &voltage) in v_nom.iter().enumerate() {
-        load.voltage_model
+    for (channel, &voltage) in model.v_nom().iter().enumerate() {
+        model
             .power_scale(channel, voltage)
             .map_err(|error| fail(format!("load `{}`: {error}", load.name)))?;
     }
-    Ok(Some(DistLoadVoltageModel::Zip {
-        v_nom: v_nom.clone(),
-        alpha_z: alpha_z.clone(),
-        alpha_i: alpha_i.clone(),
-        alpha_p: alpha_p.clone(),
-        beta_z: beta_z.clone(),
-        beta_i: beta_i.clone(),
-        beta_p: beta_p.clone(),
-    }))
+    Ok(Some(model.without_voltage_bounds()))
 }
 
 fn approximate_loads(
@@ -545,7 +537,7 @@ fn approximate_loads(
         }
     };
     for load in network.loads_mut() {
-        let nominal = nominal_bounded_zip(load)?;
+        let nominal = nominal_bounded_load(load)?;
         let model = nominal.as_ref().unwrap_or(&load.voltage_model);
         let approximation = match model {
             DistLoadVoltageModel::ConstantCurrent { v_nom } => Some(DistLoadVoltageModel::Zip {

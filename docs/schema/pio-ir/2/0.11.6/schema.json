@@ -6112,6 +6112,130 @@
             "cutoff_pu"
           ],
           "type": "object"
+        },
+        {
+          "description": "Exponential law inside a voltage band, with nominal-impedance\ncontinuation below `v_low_pu`, current interpolation up to `v_min_pu`,\nand impedance continuation above `v_max_pu`. The continuations apply\nequally to P and Q, independently of their middle-band exponents.\nSee [`Self::power_scale`] for the equations. Arrays follow active branches.",
+          "properties": {
+            "gamma_p": {
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "gamma_q": {
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "model": {
+              "const": "bounded_exponential",
+              "type": "string"
+            },
+            "v_low_pu": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "v_max_pu": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "v_min_pu": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "v_nom": {
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "model",
+            "v_nom",
+            "gamma_p",
+            "gamma_q",
+            "v_low_pu",
+            "v_min_pu",
+            "v_max_pu"
+          ],
+          "type": "object"
         }
       ]
     },

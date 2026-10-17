@@ -1,4 +1,4 @@
-//! Immutable references to the line/linecode state visible at an assignment.
+//! Immutable references to electrical definition state at an assignment.
 //!
 //! The property and edit vectors only append. Prefix lengths therefore retain
 //! past state without cloning matrix literals or retaining another object tree.
@@ -24,6 +24,7 @@ pub(super) struct Event {
     pub position: Snapshot,
     pub frequency: f64,
     pub rebuild_only: bool,
+    pub terminal_state: Option<(usize, usize, bool)>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -47,6 +48,12 @@ pub(super) struct LineHistory {
     // Property offset -> referenced linecode prefix. None records a missing
     // reference at assignment, even if that name is declared later.
     pub linecodes: BTreeMap<usize, Option<Snapshot>>,
+    pub xfmrcodes: BTreeMap<usize, Option<Snapshot>>,
+    pub geometries: BTreeMap<usize, Option<Snapshot>>,
+    pub spacings: BTreeMap<usize, Option<Snapshot>>,
+    // Geometry conductor assignments bind identities immediately; their
+    // snapshots also preserve the ratings copied at that assignment.
+    pub wires: BTreeMap<usize, Vec<Option<Snapshot>>>,
 }
 
 impl LineHistory {
@@ -56,6 +63,10 @@ impl LineHistory {
             copies: Vec::new(),
             events: Vec::new(),
             linecodes: BTreeMap::new(),
+            geometries: BTreeMap::new(),
+            spacings: BTreeMap::new(),
+            xfmrcodes: BTreeMap::new(),
+            wires: BTreeMap::new(),
         }
     }
 }

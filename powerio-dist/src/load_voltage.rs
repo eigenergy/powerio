@@ -16,6 +16,12 @@ impl DistLoadVoltageModel {
     /// Above the low threshold, a positive cutoff multiplies the result by
     /// `(1 + tanh(500 * (u - cutoff_pu))) / 2`.
     ///
+    /// For a bounded exponential law the middle-band factors are
+    /// `u^gamma_p` and `u^gamma_q`. Both factors become `u²` below the low
+    /// threshold, `u * (low + (1/min - low) * (u-low)/(min-low))` between
+    /// low and min, and `(u/max)²` above max (using `u²` when max is zero).
+    /// These continuations need not join the exponential law continuously.
+    ///
     /// Returns an error for missing coefficients, invalid parameters or
     /// nonfinite evaluation instead of manufacturing a nominal load law.
     #[expect(
@@ -50,6 +56,18 @@ impl DistLoadVoltageModel {
             Self::Exponential {
                 gamma_p, gamma_q, ..
             } => [voltage_pu.powf(at(gamma_p)?), voltage_pu.powf(at(gamma_q)?)],
+            Self::BoundedExponential {
+                gamma_p,
+                gamma_q,
+                v_low_pu,
+                v_min_pu,
+                v_max_pu,
+                ..
+            } => bounded_exponential_scale(
+                voltage_pu,
+                [at(gamma_p)?, at(gamma_q)?],
+                [*v_low_pu, *v_min_pu, *v_max_pu],
+            )?,
             Self::Zip {
                 alpha_z,
                 alpha_i,
@@ -141,6 +159,19 @@ impl DistLoadVoltageModel {
     /// explicit diagnostic when the destination cannot carry the full law.
     #[allow(clippy::float_cmp)] // Only exact coefficient identities permit this projection.
     pub(crate) fn without_voltage_bounds(&self) -> Self {
+        if let Self::BoundedExponential {
+            v_nom,
+            gamma_p,
+            gamma_q,
+            ..
+        } = self
+        {
+            return Self::Exponential {
+                v_nom: v_nom.clone(),
+                gamma_p: gamma_p.clone(),
+                gamma_q: gamma_q.clone(),
+            };
+        }
         let Self::BoundedZip {
             v_nom,
             alpha_z,
@@ -178,4 +209,26 @@ impl DistLoadVoltageModel {
             beta_p: beta_p.clone(),
         }
     }
+}
+
+fn bounded_exponential_scale(
+    u: f64,
+    gamma: [f64; 2],
+    bounds: [f64; 3],
+) -> Result<[f64; 2], String> {
+    if bounds.iter().any(|v| !v.is_finite() || *v < 0.0) {
+        return Err("load voltage thresholds must be finite and nonnegative".into());
+    }
+    let [low, min, max] = bounds;
+    // Preserve the native branch order even when thresholds overlap.
+    let scale = if u <= low {
+        u * u
+    } else if u <= min {
+        u * (low + (1.0 / min - low) * (u - low) / (min - low))
+    } else if u > max {
+        u * u / if max == 0.0 { 1.0 } else { max * max }
+    } else {
+        return Ok(gamma.map(|exponent| u.powf(exponent)));
+    };
+    Ok([scale; 2])
 }

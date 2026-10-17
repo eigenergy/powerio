@@ -7860,7 +7860,11 @@ pub unsafe extern "C" fn pio_calculation_instance_initial_point(
 fn require_legacy_load_voltage_model(
     model: &powerio_dist::DistLoadVoltageModel,
 ) -> Result<(), *mut PioError> {
-    if matches!(model, powerio_dist::DistLoadVoltageModel::BoundedZip { .. }) {
+    if matches!(
+        model,
+        powerio_dist::DistLoadVoltageModel::BoundedZip { .. }
+            | powerio_dist::DistLoadVoltageModel::BoundedExponential { .. }
+    ) {
         return Err(boundary_error(
             &codes::REQUEST_CAPI_TYPE_MISMATCH,
             "legacy load view cannot describe voltage-band transitions or dropout",
@@ -20301,7 +20305,13 @@ mod tests {
 
     #[test]
     fn legacy_load_views_refuse_unrepresented_voltage_bands() {
-        let source = powerio_core::Source::from_memory("load.dss", b"New Circuit.c phases=1 bus1=b.1 basekv=.24\nNew Load.l phases=1 bus1=b.1.0 kv=.24 kw=1 kvar=.5 model=1\n".to_vec()).unwrap();
+        for model in [1, 3, 4] {
+            check_legacy_load_voltage_refusal(model);
+        }
+    }
+
+    fn check_legacy_load_voltage_refusal(model: u8) {
+        let source = powerio_core::Source::from_memory("load.dss", format!("New Circuit.c phases=1 bus1=b.1 basekv=.24\nNew Load.l phases=1 bus1=b.1.0 kv=.24 kw=1 kvar=.5 model={model}\n").into_bytes()).unwrap();
         let parsed = powerio_dist::parse(source).unwrap();
         let pf = powerio_prob::McAcPfInstance::from_network(parsed.value().clone()).unwrap();
         unsafe {

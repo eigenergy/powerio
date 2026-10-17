@@ -31,6 +31,7 @@ use crate::model::{
 };
 
 mod lines;
+mod open_lines;
 mod sources;
 
 /// Upper bound on any count property (`phases`, conductors, `windings`, tap
@@ -132,15 +133,6 @@ fn snapshot_network(raw: &RawDss) -> (MulticonductorNetwork, Vec<crate::diagnost
             .push((name.clone(), value.text.clone()));
     }
     for cmd in &raw.commands {
-        if matches!(cmd.verb.as_str(), "open" | "close") {
-            rd.warn(
-                &C::READ_DSS_LINE_UNRESOLVED,
-                format!(
-                    "{} {}: fixed terminal state lowering is unfinished",
-                    cmd.verb, cmd.args,
-                ),
-            );
-        }
         rd.net
             .commands_mut()
             .push((cmd.verb.clone(), cmd.args.clone()));
@@ -149,9 +141,19 @@ fn snapshot_network(raw: &RawDss) -> (MulticonductorNetwork, Vec<crate::diagnost
     if let Err(error) = rd.resolved_lines(raw) {
         rd.warn(&C::READ_DSS_LINE_UNRESOLVED, error);
     }
-    for obj in raw.of_class("transformer") {
-        let t = rd.transformer(obj);
-        rd.net.transformers_mut().push(t);
+    for (index, obj) in raw
+        .objects
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| o.class == "transformer")
+    {
+        match rd.transformer(obj, raw, index) {
+            Ok(t) => rd.net.transformers_mut().push(t),
+            Err(e) => rd.warn(
+                &C::READ_DSS_TRANSFORMER_UNRESOLVED,
+                format!("Transformer.{}: {e}", obj.name),
+            ),
+        }
     }
     for obj in raw.of_class("load") {
         let l = rd.load(obj);
@@ -674,7 +676,7 @@ impl Reader<'_> {
     }
 
     fn load_voltage_model(
-        &self,
+        &mut self,
         props: &Props<'_>,
         phases: usize,
         model: i64,
@@ -683,6 +685,24 @@ impl Reader<'_> {
     ) -> DistLoadVoltageModel {
         if model == 2 {
             return DistLoadVoltageModel::ConstantImpedance { v_nom };
+        }
+        if matches!(model, 3 | 4) {
+            let (p, q) = if model == 3 {
+                (0.0, 2.0)
+            } else {
+                (
+                    self.f64_prop(props.get("cvrwatts")).unwrap_or(1.0),
+                    self.f64_prop(props.get("cvrvars")).unwrap_or(2.0),
+                )
+            };
+            return DistLoadVoltageModel::BoundedExponential {
+                v_nom,
+                gamma_p: vec![p; phases],
+                gamma_q: vec![q; phases],
+                v_low_pu,
+                v_min_pu,
+                v_max_pu,
+            };
         }
         if !matches!(model, 1 | 5 | 8) {
             return DistLoadVoltageModel::ConstantPower { v_nom };
@@ -773,7 +793,7 @@ impl Reader<'_> {
         // fields hold explicit power per phase. phases rides too: a 2
         // phase delta load also has 3 conductors, so the terminal map
         // alone cannot reconstruct `phases=`.
-        let (v_low_pu, v_min_pu, v_max_pu) = if matches!(model, 1 | 5 | 8) {
+        let (v_low_pu, v_min_pu, v_max_pu) = if matches!(model, 1 | 3 | 4 | 5 | 8) {
             (
                 self.f64_prop(props.get("vlowpu")).unwrap_or(0.5),
                 self.f64_prop(props.get("vminpu")).unwrap_or(0.95),
@@ -798,6 +818,10 @@ impl Reader<'_> {
         let v_nom = vec![v_phase; phases];
         let voltage_model =
             self.load_voltage_model(&props, phases, model, v_nom, (v_low_pu, v_min_pu, v_max_pu));
+        if model == 4 {
+            extras.remove("cvrwatts");
+            extras.remove("cvrvars");
+        }
         DistLoad {
             name: obj.name.clone(),
             bus: spec.name,
@@ -813,7 +837,12 @@ impl Reader<'_> {
     // ----- transformer ---------------------------------------------------
 
     #[allow(clippy::too_many_lines)] // OpenDSS transformer edits must be replayed in order
-    fn transformer(&mut self, obj: &RawObject) -> DistTransformer {
+    fn transformer(
+        &mut self,
+        obj: &RawObject,
+        raw: &RawDss,
+        index: usize,
+    ) -> std::result::Result<DistTransformer, String> {
         // Order matters: wdg= switches the winding under edit, windings=
         // reallocates. Walk assignments sequentially.
         let mut phases = dd::transformer::PHASES;
@@ -831,10 +860,39 @@ impl Reader<'_> {
         let mut begin = 0;
         for end in obj.edit_bounds() {
             let mut scalar_reactance_changed = false;
-            for p in &obj.props[begin..end] {
+            for (offset, p) in obj.props.iter().enumerate().take(end).skip(begin) {
                 let Some(name) = &p.name else { continue };
                 let v = &p.value;
                 match name.as_str() {
+                    "xfmrcode" => {
+                        let point = raw.line_history[&index].xfmrcodes.get(&offset)
+                            .ok_or("missing XfmrCode binding")?
+                            .ok_or("XfmrCode did not exist at assignment")?;
+                        let code = super::xfmrcode::resolve(raw, point)?;
+                        phases = code.phases;
+                        n_windings = code.windings.len();
+                        let buses: Vec<_> = windings.iter().map(|w| w.bus.clone()).collect();
+                        windings = code.windings.iter().enumerate().map(|(i, w)| WindingRaw {
+                            bus: buses.get(i).cloned().flatten(),
+                            conn_delta: w.delta, kv: w.kv, kva: w.kva, tap: w.tap,
+                            r_pct: w.r, r_neutral: Some(w.rneut), x_neutral: Some(w.xneut),
+                            kv_specified: true, kva_specified: true,
+                        }).collect();
+                        if active >= n_windings { return Err("XfmrCode leaves an invalid winding selector".into()); }
+                        [xhl, xht, xlt] = code.x;
+                        xsc_pct = code.xsc;
+                        xhl_specified = true;
+                        // FetchXfmrCode immediately calls RecalcElementData.
+                        if scalar_reactance_changed && n_windings <= 3 {
+                            let count = xsc_pct.len();
+                            xsc_pct.clone_from_slice(&code.x[..count]);
+                        }
+                        scalar_reactance_changed = false;
+                        for (key, value) in code.extras {
+                            extras.insert(key, value.into());
+                        }
+                    }
+
                     "phases" => {
                         phases = self.usize_prop(Some(v)).unwrap_or(phases);
                     }
@@ -977,13 +1035,13 @@ impl Reader<'_> {
         }
         let out = self.finish_windings(&windings, phases, &obj.name);
 
-        DistTransformer {
+        Ok(DistTransformer {
             name: obj.name.clone(),
             windings: out,
             xsc_pct,
             phases,
             extras,
-        }
+        })
     }
 
     /// Resolves winding bus specs, terminal maps, and SI ratings, recording
@@ -2144,7 +2202,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_commands_cannot_silently_leave_the_circuit_closed() {
+    fn terminal_commands_materialize_fixed_electrical_states() {
         for command in ["Open", "Close"] {
             let source = powerio_core::Source::from_memory(
                 "state.dss",
@@ -2153,7 +2211,12 @@ mod tests {
             )
             .unwrap();
             let mut diagnostics = crate::collect::Diagnostics::new();
-            assert!(parse_dss_collecting(&source, &mut diagnostics).is_err());
+            let net = parse_dss_collecting(&source, &mut diagnostics).unwrap();
+            assert_eq!(net.shunts().len(), usize::from(command == "Open"));
+            assert_eq!(
+                net.lines().iter().any(|l| l.name == "l"),
+                command == "Close"
+            );
         }
     }
 

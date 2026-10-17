@@ -163,3 +163,154 @@ fn uniform_typed_voltage_edits_override_retained_bank_kv() {
         }
     }
 }
+
+#[test]
+fn exponential_bands_preserve_native_defaults_and_typed_edits() {
+    for (code, expected_p) in [(3, 0.0), (4, 1.0)] {
+        let mut module = parse(&format!(
+            "New Circuit.c phases=1 basekv=.24\nNew Load.l phases=1 bus1=b.1.0 kv=.24 kw=1 kvar=.5 model={code}\n"
+        ));
+        let load = &mut module.value_mut().loads_mut()[0];
+        let DistLoadVoltageModel::BoundedExponential {
+            gamma_p,
+            gamma_q,
+            v_min_pu,
+            v_max_pu,
+            ..
+        } = &mut load.voltage_model
+        else {
+            panic!("missing typed exponential law")
+        };
+        assert_eq!(gamma_p, &[expected_p]);
+        assert_eq!(gamma_q, &[2.0]);
+        *gamma_p = vec![0.7];
+        *gamma_q = vec![1.8];
+        *v_min_pu = 0.9;
+        *v_max_pu = 1.1;
+        load.extras.insert("model".into(), 2.into());
+        load.extras.insert("cvrwatts".into(), 9.0.into());
+        load.extras.insert("cvrvars".into(), 9.0.into());
+        load.extras.insert("vminpu".into(), 0.8.into());
+        let expected = load.voltage_model.clone();
+        let output = emit_value(module.value(), DistTargetFormat::Dss);
+        let back = parse(&output.text);
+        assert_eq!(back.value().loads()[0].voltage_model, expected);
+        assert_eq!(expected.power_scale(0, 120.).unwrap(), [0.25; 2]);
+        // Outside the band both powers follow the same fallback, regardless of exponent.
+        let low = expected.power_scale(0, 168.).unwrap();
+        assert!((low[0] - 0.563_888_888_888_888_9).abs() < 1e-14);
+        assert_eq!(low[0], low[1]);
+        let high = expected.power_scale(0, 288.).unwrap();
+        assert!((high[0] - (1.2_f64 / 1.1).powi(2)).abs() < 1e-14);
+        assert_eq!(high[0], high[1]);
+        assert!(expected.power_scale(1, 240.).is_err());
+        for target in [DistTargetFormat::BmopfJson, DistTargetFormat::PmdJson] {
+            let result = emit_value(module.value(), target);
+            assert!(
+                result
+                    .warnings
+                    .iter()
+                    .any(|s| s.contains("voltage-band transitions"))
+            );
+        }
+    }
+}
+
+#[test]
+fn per_branch_exponents_survive_dss_decomposition() {
+    let mut module = parse(
+        "New Circuit.c phases=3 basekv=.416\nNew Load.l phases=3 bus1=b.1.2.3.0 kv=.416 kw=3 kvar=1.5 model=4\n",
+    );
+    let DistLoadVoltageModel::BoundedExponential {
+        gamma_p, gamma_q, ..
+    } = &mut module.value_mut().loads_mut()[0].voltage_model
+    else {
+        panic!()
+    };
+    *gamma_p = vec![0.0, 0.7, 1.5];
+    *gamma_q = vec![2.0, 1.8, 3.0];
+    let expected = module.value().loads()[0].voltage_model.clone();
+    let output = emit_value(module.value(), DistTargetFormat::Dss);
+    let back = parse(&output.text);
+    assert_eq!(back.value().loads().len(), 3);
+    for (phase, load) in back.value().loads().iter().enumerate() {
+        for voltage in [90., 180., 235., 260., 310.] {
+            assert_eq!(
+                load.voltage_model.power_scale(0, voltage).unwrap(),
+                expected.power_scale(phase, voltage).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn exponential_laws_reject_nonfinite_parameters_and_misaligned_arrays() {
+    let mut module = parse(
+        "New Circuit.c phases=1 basekv=.24\nNew Load.l phases=1 bus1=b.1.0 kv=.24 kw=1 kvar=.5 model=4\n",
+    );
+    let DistLoadVoltageModel::BoundedExponential { gamma_p, .. } =
+        &mut module.value_mut().loads_mut()[0].voltage_model
+    else {
+        panic!()
+    };
+    gamma_p[0] = f64::NAN;
+    assert!(
+        module.value().loads()[0]
+            .voltage_model
+            .power_scale(0, 100.)
+            .is_err()
+    );
+    assert!(
+        powerio_dist::audit_electrical_readiness(module.value())
+            .findings
+            .iter()
+            .any(|f| f.code == "READINESS.LOAD.VOLTAGE_LAW")
+    );
+    let DistLoadVoltageModel::BoundedExponential { gamma_p, .. } =
+        &mut module.value_mut().loads_mut()[0].voltage_model
+    else {
+        panic!()
+    };
+    *gamma_p = vec![1., 2.];
+    let canonical = powerio_core::PioModule::new(module.value().clone());
+    let error = powerio_dist::emit(
+        &canonical,
+        DistTargetFormat::Dss,
+        powerio_core::Destination::memory("out").unwrap(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("voltage-law array"), "{error}");
+}
+
+#[test]
+fn empty_exponential_laws_fail_before_canonical_writing() {
+    let mut module = parse(
+        "New Circuit.c phases=1 basekv=.24\nNew Load.l phases=1 bus1=b.1.0 kv=.24 kw=1 kvar=.5 model=4\n",
+    );
+    let load = &mut module.value_mut().loads_mut()[0];
+    load.p_nom.clear();
+    load.q_nom.clear();
+    let DistLoadVoltageModel::BoundedExponential {
+        v_nom,
+        gamma_p,
+        gamma_q,
+        ..
+    } = &mut load.voltage_model
+    else {
+        panic!()
+    };
+    v_nom.clear();
+    gamma_p.clear();
+    gamma_q.clear();
+    let canonical = powerio_core::PioModule::new(module.value().clone());
+    let error = powerio_dist::emit(
+        &canonical,
+        DistTargetFormat::Dss,
+        powerio_core::Destination::memory("out").unwrap(),
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("READINESS.LOAD.VOLTAGE_LAW"),
+        "{error}"
+    );
+}

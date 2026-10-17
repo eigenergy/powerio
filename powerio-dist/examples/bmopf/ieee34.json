@@ -2596,7 +2596,13 @@
     "D808_810rb": {
       "bus": "810",
       "configuration": "SINGLE_PHASE",
-      "model": "CONSTANT_POWER",
+      "gamma_p": [
+        1.0
+      ],
+      "gamma_q": [
+        2.0
+      ],
+      "model": "EXPONENTIAL",
       "p_nom": [
         8000.0
       ],
@@ -2614,7 +2620,13 @@
     "D808_810sb": {
       "bus": "808",
       "configuration": "SINGLE_PHASE",
-      "model": "CONSTANT_POWER",
+      "gamma_p": [
+        1.0
+      ],
+      "gamma_q": [
+        2.0
+      ],
+      "model": "EXPONENTIAL",
       "p_nom": [
         8000.0
       ],

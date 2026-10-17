@@ -190,3 +190,60 @@ fn pinned_line_states() {
     )
     .unwrap();
 }
+
+#[test]
+fn fixed_terminal_history_follows_native_copy_and_resize_rules() {
+    for (commands, expected) in [
+        ("open line.a 1 2", [vec![true, false, true], vec![true; 3]]),
+        (
+            "open line.a 1\nclose line.a 1 2",
+            [vec![false, true, false], vec![true; 3]],
+        ),
+        (
+            "open line.a 2 1\nedit line.a phases=3",
+            [vec![true; 3], vec![false, true, true]],
+        ),
+        (
+            "open line.a 2 1\nedit line.a phases=2\nedit line.a phases=3",
+            [vec![true; 3], vec![true; 3]],
+        ),
+        (
+            "open line.a 2 1\nnew line.b\nedit line.a like=b",
+            [vec![true; 3], vec![false, true, true]],
+        ),
+        (
+            "new line.b\nopen line.b 1\nedit line.a like=b",
+            [vec![true; 3], vec![true; 3]],
+        ),
+        (
+            "open line.a 2\nclose line.a term=2 cond=0",
+            [vec![true; 3], vec![true; 3]],
+        ),
+    ] {
+        let raw = read(&format!("new circuit.c\nnew line.a\n{commands}\nsolve"));
+        assert_eq!(
+            resolve(&raw, point(&raw, "a")).unwrap().closed,
+            expected,
+            "{commands}"
+        );
+    }
+}
+
+#[test]
+fn terminal_command_binds_before_later_declarations_and_selects_the_line() {
+    let raw = read("new circuit.c\nopen line.a 1\nnew line.a");
+    assert!(
+        raw.warnings
+            .iter()
+            .any(|w| w.contains("requires an existing ordinary Line"))
+    );
+    let raw = read("new circuit.c\nnew line.a\nnew line.b\nopen line.a 1 2\n~ length=7");
+    assert_eq!(
+        resolve(&raw, point(&raw, "a")).unwrap().length.to_bits(),
+        7.0_f64.to_bits()
+    );
+    assert_eq!(
+        resolve(&raw, point(&raw, "b")).unwrap().length.to_bits(),
+        1.0_f64.to_bits()
+    );
+}

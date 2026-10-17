@@ -12,6 +12,12 @@ fn parameters(model: &DistLoadVoltageModel) -> Vec<&[f64]> {
             v_nom,
             gamma_p,
             gamma_q,
+        }
+        | DistLoadVoltageModel::BoundedExponential {
+            v_nom,
+            gamma_p,
+            gamma_q,
+            ..
         } => vec![v_nom, gamma_p, gamma_q],
         DistLoadVoltageModel::Zip {
             v_nom,
@@ -45,6 +51,12 @@ pub(super) fn phase_model(model: &DistLoadVoltageModel, phase: usize) -> DistLoa
             v_nom,
             gamma_p,
             gamma_q,
+        }
+        | DistLoadVoltageModel::BoundedExponential {
+            v_nom,
+            gamma_p,
+            gamma_q,
+            ..
         } => vec![v_nom, gamma_p, gamma_q],
         DistLoadVoltageModel::Zip {
             v_nom,
@@ -141,7 +153,11 @@ pub(super) fn validate(net: &MulticonductorNetwork) -> Result<(), String> {
         for (i, array) in parameters(&load.voltage_model).iter().enumerate() {
             let legacy_scalar_voltage = i == 0
                 && array.len() == 1
-                && !matches!(load.voltage_model, DistLoadVoltageModel::BoundedZip { .. });
+                && !matches!(
+                    load.voltage_model,
+                    DistLoadVoltageModel::BoundedZip { .. }
+                        | DistLoadVoltageModel::BoundedExponential { .. }
+                );
             if (i != 0 || !array.is_empty()) && array.len() != n && !legacy_scalar_voltage {
                 return Err(format!(
                     "load {}: voltage-law array must align with its {n} power branches",

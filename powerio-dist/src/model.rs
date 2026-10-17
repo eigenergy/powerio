@@ -433,6 +433,19 @@ pub enum DistLoadVoltageModel {
         v_max_pu: f64,
         cutoff_pu: f64,
     },
+    /// Exponential law inside a voltage band, with nominal-impedance
+    /// continuation below `v_low_pu`, current interpolation up to `v_min_pu`,
+    /// and impedance continuation above `v_max_pu`. The continuations apply
+    /// equally to P and Q, independently of their middle-band exponents.
+    /// See [`Self::power_scale`] for the equations. Arrays follow active branches.
+    BoundedExponential {
+        v_nom: Vec<f64>,
+        gamma_p: Vec<f64>,
+        gamma_q: Vec<f64>,
+        v_low_pu: f64,
+        v_min_pu: f64,
+        v_max_pu: f64,
+    },
 }
 
 impl Default for DistLoadVoltageModel {
@@ -450,7 +463,8 @@ impl DistLoadVoltageModel {
             | Self::ConstantImpedance { v_nom }
             | Self::Zip { v_nom, .. }
             | Self::Exponential { v_nom, .. }
-            | Self::BoundedZip { v_nom, .. } => v_nom,
+            | Self::BoundedZip { v_nom, .. }
+            | Self::BoundedExponential { v_nom, .. } => v_nom,
         }
     }
 }

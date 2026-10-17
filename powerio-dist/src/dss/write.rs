@@ -28,8 +28,8 @@ use crate::model::{
 use super::read::delta_edges;
 use super::{lex, prop};
 
+mod admittance_shunts;
 mod asymmetric_pair;
-mod asymmetric_shunts;
 mod ideal_switches;
 mod ideal_transformers;
 mod loads;
@@ -643,6 +643,20 @@ impl DssWriter {
         for (key, value) in extras {
             if matches!(key.as_str(), "bmopf_subtype") || key.starts_with("pmd_") {
                 continue; // converter bookkeeping
+            }
+            // Canonical output is a static snapshot and does not regenerate
+            // loadshape objects. Replaying these references creates dangling
+            // native dependencies even when the snapshot never uses a shape.
+            if matches!(class, "load" | "generator" | "vsource")
+                && matches!(key.as_str(), "daily" | "yearly" | "duty")
+            {
+                self.warn(
+                    &C::EMIT_DSS_EXTRAS_DROPPED,
+                    format!(
+                        "{class} {name}: extra `{key}` loadshape reference omitted from the static snapshot; its definition is not regenerated"
+                    ),
+                );
+                continue;
             }
             let known = table.is_some_and(|t| t.props.contains(&key.as_str()));
             let text = value
@@ -1452,6 +1466,9 @@ impl DssWriter {
             let _ = write!(s, " %Rs=({}) taps=({})", rs.join(", "), taps.join(", "));
             self.transformer_reactances(t, &mut s);
             let mut extras = t.extras.clone();
+            // Winding resistances are authoritative; replaying the derived
+            // total would overwrite unequal first/second winding values.
+            extras.remove("%loadloss");
             // Typed reactances determine output after an IR load or mutation.
             if t.xsc_pct.len() == nw * (nw - 1) / 2 {
                 extras.remove("xscarray");
@@ -1702,8 +1719,6 @@ impl DssWriter {
         });
         let mut extras = l.extras.clone();
         strip_emitted_extras(&mut extras, &["kv", "phases", "conn"]);
-        let retained_model = extras.remove("model");
-        let retained_zipv = extras.remove("zipv");
         // q that came from a power factor goes back as pf=, so the
         // engine recomputes its own kvar bit for bit.
         let reactive = match extras.remove("pf").and_then(|v| v.as_f64()) {
@@ -1717,8 +1732,17 @@ impl DssWriter {
             num(kv),
             num(kw),
         );
+        self.write_load_voltage_model(l, &mut extras, &mut s);
+        self.add_default_load_voltage_bounds(&mut extras);
+        s.push_str(&self.extras_tail("load", &l.name, &extras));
+        self.line_out(&s);
+    }
+
+    fn write_load_voltage_model(&mut self, l: &DistLoad, extras: &mut Extras, s: &mut String) {
+        let retained_model = extras.remove("model");
+        let retained_zipv = extras.remove("zipv");
         let nominal_model = l.voltage_model.without_voltage_bounds();
-        let bounded_cutoff = load_voltage_bounds(&l.voltage_model, &mut extras);
+        let bounded_cutoff = load_voltage_bounds(&l.voltage_model, extras);
         match &nominal_model {
             DistLoadVoltageModel::ConstantPower { .. } => {
                 if bounded_cutoff.is_none()
@@ -1766,7 +1790,26 @@ impl DssWriter {
                     );
                 }
             }
-            DistLoadVoltageModel::BoundedZip { .. } => unreachable!("bounds handled above"),
+            DistLoadVoltageModel::BoundedZip { .. }
+            | DistLoadVoltageModel::BoundedExponential { .. } => {
+                unreachable!("bounds handled above")
+            }
+            DistLoadVoltageModel::Exponential {
+                gamma_p, gamma_q, ..
+            } if matches!(
+                l.voltage_model,
+                DistLoadVoltageModel::BoundedExponential { .. }
+            ) =>
+            {
+                extras.remove("cvrwatts");
+                extras.remove("cvrvars");
+                let _ = write!(
+                    s,
+                    " model=4 cvrwatts={} cvrvars={}",
+                    num(gamma_p[0]),
+                    num(gamma_q[0])
+                );
+            }
             DistLoadVoltageModel::Exponential { .. } => {
                 self.warn(&C::EMIT_DSS_VALUE_SUBSTITUTED, format!(
                     "load {}: exponential voltage model has no OpenDSS load model code; emitted constant power",
@@ -1774,9 +1817,6 @@ impl DssWriter {
                 ));
             }
         }
-        self.add_default_load_voltage_bounds(&mut extras);
-        s.push_str(&self.extras_tail("load", &l.name, &extras));
-        self.line_out(&s);
     }
 
     fn add_default_load_voltage_bounds(&self, extras: &mut Extras) {
@@ -2163,7 +2203,7 @@ impl DssWriter {
 
     fn shunts(&mut self, net: &MulticonductorNetwork) {
         for (index, sh) in net.shunts().iter().enumerate() {
-            if self.asymmetric_shunt(net, sh, index) {
+            if self.full_admittance_shunt(net, sh, index) {
                 continue;
             }
             let stashed_delta = shunt_stashed_delta(sh);
@@ -2922,6 +2962,18 @@ fn shunt_kvar(
 }
 
 fn load_voltage_bounds(model: &DistLoadVoltageModel, extras: &mut Extras) -> Option<f64> {
+    if let DistLoadVoltageModel::BoundedExponential {
+        v_low_pu,
+        v_min_pu,
+        v_max_pu,
+        ..
+    } = model
+    {
+        extras.insert("vlowpu".into(), (*v_low_pu).into());
+        extras.insert("vminpu".into(), (*v_min_pu).into());
+        extras.insert("vmaxpu".into(), (*v_max_pu).into());
+        return Some(0.0);
+    }
     if let DistLoadVoltageModel::BoundedZip {
         v_low_pu,
         v_min_pu,
@@ -4299,23 +4351,21 @@ mod tests {
             ..MulticonductorNetworkTables::default()
         });
         let out = emit_dss_text(&net);
-        let line = out
-            .text
-            .lines()
-            .find(|l| l.contains("Capacitor.capx"))
-            .unwrap_or_else(|| panic!("no capacitor emitted in:\n{}", out.text));
-        assert!(line.contains("conn=wye"), "{line}");
+        assert!(out.text.contains("_pio_shunt_0_pair_"));
         assert!(
             out.render_diagnostics()
                 .iter()
-                .any(|w| w.contains("off diagonal")),
-            "{:?}",
-            out.render_diagnostics()
+                .any(|w| w.contains("full admittance"))
+        );
+        assert!(
+            !out.render_diagnostics()
+                .iter()
+                .any(|w| w.contains("only the diagonal"))
         );
     }
 
     #[test]
-    fn stashed_delta_matrix_warns_when_scalar_emission_is_lossy() {
+    fn stashed_delta_matrix_preserves_unequal_branches() {
         let (b, vs) = three_phase_source(2400.0);
         let bmat = vec![
             vec![0.003, -0.001, -0.002],
@@ -4341,18 +4391,16 @@ mod tests {
             ..MulticonductorNetworkTables::default()
         });
         let out = emit_dss_text(&net);
-        let line = out
-            .text
-            .lines()
-            .find(|l| l.contains("Capacitor.capx"))
-            .unwrap_or_else(|| panic!("no capacitor emitted in:\n{}", out.text));
-        assert!(line.contains("conn=delta"), "{line}");
+        assert!(out.text.contains("_pio_shunt_0_pair_"));
         assert!(
             out.render_diagnostics()
                 .iter()
-                .any(|w| w.contains("no scalar capacitor expression")),
-            "{:?}",
-            out.render_diagnostics()
+                .any(|w| w.contains("full admittance"))
+        );
+        assert!(
+            !out.render_diagnostics()
+                .iter()
+                .any(|w| w.contains("only the average"))
         );
     }
 
@@ -4415,7 +4463,7 @@ mod tests {
         let (b, vs) = three_phase_source(2400.0);
         let mut load = load_on("sb", &["1", "2", "3", "4"], Configuration::Wye);
         load.extras
-            .insert("daily".into(), serde_json::json!("a ) b"));
+            .insert("spectrum".into(), serde_json::json!("a ) b"));
         let net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
             base_frequency: 60.0,
             buses: vec![b],
@@ -4425,8 +4473,8 @@ mod tests {
         });
         let (first, second) = roundtrip(&net);
         // A paren wrapper would close at the `)` and land `b)` on the next
-        // positional property (duty); brackets survive.
-        assert!(first.contains("daily=[a ) b]"), "{first}");
+        // positional property; brackets survive.
+        assert!(first.contains("spectrum=[a ) b]"), "{first}");
         assert_eq!(
             first.lines().find(|line| line.starts_with("New Load.ld ")),
             second
@@ -4439,7 +4487,7 @@ mod tests {
         assert_eq!(
             back.loads()[0]
                 .extras
-                .get("daily")
+                .get("spectrum")
                 .and_then(serde_json::Value::as_str),
             Some("a ) b")
         );
@@ -4452,7 +4500,8 @@ mod tests {
         let bad = "a )]}\"' b";
         let (b, vs) = three_phase_source(2400.0);
         let mut load = load_on("sb", &["1", "2", "3", "4"], Configuration::Wye);
-        load.extras.insert("daily".into(), serde_json::json!(bad));
+        load.extras
+            .insert("spectrum".into(), serde_json::json!(bad));
         let mut net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
             base_frequency: 60.0,
             buses: vec![b],
@@ -4463,39 +4512,43 @@ mod tests {
         net.options_mut().push(("foo".into(), bad.into()));
         let out = emit_dss_text(&net);
         assert!(out.text.contains(&format!("Set foo={bad}")), "{}", out.text);
-        assert!(out.text.contains(&format!("daily={bad}")), "{}", out.text);
+        assert!(
+            out.text.contains(&format!("spectrum={bad}")),
+            "{}",
+            out.text
+        );
         let warned = |needle: &str| {
             out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains(needle) && w.contains("emitted as written"))
         };
         assert!(warned("option `foo`"), "{:?}", out.render_diagnostics());
-        assert!(warned("`daily`"), "{:?}", out.render_diagnostics());
+        assert!(warned("`spectrum`"), "{:?}", out.render_diagnostics());
     }
 
     #[test]
-    fn empty_extras_values_wrap_instead_of_eating_the_next_token() {
+    fn canonical_snapshot_omits_loadshape_references_with_diagnostics() {
         let dss = "clear\nnew circuit.c basekv=12.47 bus1=sb\n\
-                   new load.ld bus1=sb.1 phases=1 kv=7.2 kw=10 daily=() duty=sh\nsolve\n";
+                   new load.ld bus1=sb.1 phases=1 kv=7.2 kw=10 daily=() duty=sh yearly=annual\nsolve\n";
         let net = parse_dss_str(dss);
-        let load = &net.loads()[0];
-        assert_eq!(load.extras.get("daily").and_then(|v| v.as_str()), Some(""));
-        let w1 = emit_dss_text(&net).text;
-        let again = parse_dss_str(&w1);
-        let load2 = &again.loads()[0];
-        assert_eq!(load2.extras.get("daily").and_then(|v| v.as_str()), Some(""));
         assert_eq!(
-            load2.extras.get("duty").and_then(|v| v.as_str()),
+            net.loads()[0].extras.get("duty").and_then(|v| v.as_str()),
             Some("sh")
         );
-        let second = emit_dss_text(&again);
-        assert_eq!(
-            w1.lines().find(|line| line.starts_with("New Load.ld ")),
-            second
-                .text
-                .lines()
-                .find(|line| line.starts_with("New Load.ld "))
-        );
+        let emitted = emit_dss_text(&net);
+        for key in ["daily", "duty", "yearly"] {
+            assert!(!emitted.text.contains(&format!(" {key}=")));
+            assert!(
+                emitted
+                    .render_diagnostics()
+                    .iter()
+                    .any(|d| d.contains(&format!("`{key}` loadshape reference omitted")))
+            );
+        }
+        let again = parse_dss_str(&emitted.text);
+        assert_eq!(again.loads()[0].p_nom, net.loads()[0].p_nom);
+        assert_eq!(again.loads()[0].q_nom, net.loads()[0].q_nom);
+        assert_eq!(again.loads()[0].voltage_model, net.loads()[0].voltage_model);
     }
 
     #[test]

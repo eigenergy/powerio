@@ -2,8 +2,8 @@
 //!
 //! Parsing and electrical readiness are deliberately separate. A source can be
 //! syntactically valid while the resulting typed network is not safe to hand
-//! to a solver or semantic writer. In particular, OpenDSS line geometry is
-//! still deferred: until Carson/geometry lowering exists, a geometry-defined
+//! to a solver or semantic writer. Unresolved OpenDSS geometry metadata
+//! must remain blocked: a geometry-defined
 //! line must not be treated as electrically complete merely because the
 //! parser has a placeholder linecode.
 
@@ -157,11 +157,10 @@ impl ElectricalReadiness {
 /// topology, invent conductor counts, or replace missing electrical data with
 /// source-format defaults. OpenDSS `geometry=`, `spacing=`, `wires=`,
 /// `cncables=`, and `tscables=` metadata are treated as a hard blocker because
-/// the geometry family is not yet lowered into the canonical impedance
-/// matrices. A distribution CIM segment whose source states no impedance the
-/// reader can use is a hard blocker for the same reason. The audit therefore
-/// provides an explicit fail-closed boundary for applications that need to
-/// decide whether a parsed network is safe to analyse.
+/// those retained references have not been lowered into canonical impedance
+/// matrices. Resolved geometry carries explicit matrices instead. A CIM segment
+/// whose source states no readable impedance is a hard blocker for the same
+/// reason. The audit provides a fail-closed boundary for numerical consumers.
 #[must_use]
 pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalReadiness {
     let mut report = ElectricalReadiness::default();
@@ -272,6 +271,10 @@ fn audit_untyped(net: &MulticonductorNetwork, report: &mut ElectricalReadiness) 
             .is_some_and(|(_, value)| {
                 value.eq_ignore_ascii_case("no") || value.eq_ignore_ascii_case("false")
             });
+        if object.class.eq_ignore_ascii_case("reactor") && !explicitly_disabled {
+            report.block("READINESS.DSS.REACTOR_UNRESOLVED", &object.name,
+                "untyped reactor has unresolved electrical behavior; omitting a series reactor can disconnect the feeder");
+        }
         if object.class.eq_ignore_ascii_case("vsource") && !explicitly_disabled {
             report.block("READINESS.DSS.SOURCE_UNRESOLVED", &object.name,
                 "untyped voltage source must remain explicitly disabled; enabling it requires electrical source conversion");
@@ -481,6 +484,7 @@ fn audit_load_voltage(net: &MulticonductorNetwork, report: &mut ElectricalReadin
         if matches!(
             load.voltage_model,
             crate::DistLoadVoltageModel::BoundedZip { .. }
+                | crate::DistLoadVoltageModel::BoundedExponential { .. }
         ) {
             let n = load.p_nom.len().max(load.q_nom.len());
             if n == 0 || load.voltage_model.v_nom().len() != n {
@@ -510,6 +514,32 @@ fn audit_load_voltage(net: &MulticonductorNetwork, report: &mut ElectricalReadin
 mod tests {
     use super::*;
     use crate::{DistBus, DistLine, DistLineCode, Extras, MulticonductorNetwork};
+
+    #[test]
+    fn unresolved_series_reactor_is_a_blocker_unless_disabled() {
+        let mut net = MulticonductorNetwork::new();
+        net.untyped_objects_mut()
+            .push(crate::model::UntypedObject::new(
+                "reactor",
+                "feed",
+                vec![
+                    (Some("bus1".into()), "source".into()),
+                    (Some("bus2".into()), "feeder".into()),
+                    (Some("x".into()), "15".into()),
+                ],
+            ));
+        let report = audit_electrical_readiness(&net);
+        assert!(
+            report
+                .blockers()
+                .any(|f| f.code == "READINESS.DSS.REACTOR_UNRESOLVED")
+        );
+        assert!(require_electrical_readiness(&net).is_err());
+        net.untyped_objects_mut()[0]
+            .props
+            .push((Some("enabled".into()), "no".into()));
+        assert!(audit_electrical_readiness(&net).is_ready());
+    }
 
     #[test]
     fn inactive_source_metadata_cannot_be_reenabled_without_electrical_conversion() {

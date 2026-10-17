@@ -119,6 +119,8 @@ pub mod codes {
             "a disabled source is retained without electrical contributions";
         READ_DSS_SOURCE_UNRESOLVED = "READ.DSS.SOURCE_UNRESOLVED", Error,
             "a voltage source is invalid or outside the qualified static profile", category = Data;
+        READ_DSS_TRANSFORMER_UNRESOLVED = "READ.DSS.TRANSFORMER_UNRESOLVED", Error,
+            "a transformer definition could not be resolved into the static electrical snapshot";
         READ_DSS_LINE_UNRESOLVED = "READ.DSS.LINE_UNRESOLVED", Error,
             "a line is invalid or outside the qualified static electrical profile", category = Data;
         READ_DSS_PROPERTY_UNKNOWN = "READ.DSS.PROPERTY_UNKNOWN", Warning,

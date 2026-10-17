@@ -7,6 +7,7 @@
 
 pub mod defaults;
 mod frequency;
+mod geometry;
 pub mod lex;
 mod line;
 mod line_history;
@@ -19,6 +20,7 @@ mod rpn;
 mod solution_mode;
 mod source;
 mod write;
+mod xfmrcode;
 
 pub use lex::{BusSpec, Param, Scanner, Value, VarMap};
 pub use raw::{BusCoord, RawCommand, RawDss, RawObject, RawProp};
