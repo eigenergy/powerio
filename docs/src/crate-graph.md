@@ -19,7 +19,7 @@ powerio-prob          operating points, updates, the seven instances, the eight
 powerio-matrix        sparse matrices and graph data for both network families;
                       depends on core, tx, dist, and prob
 powerio               PioValue, parse, emit, serialize, deserialize, and the
-                      re-exports; depends on core, tx, dist, and prob, and on
+                      re-exports; depends on core, tx, dist, prob, sincal, and on
                       matrix behind the `matrix` feature
 powerio-cli, powerio-capi, powerio-py    over the facade
 ```
@@ -38,7 +38,9 @@ bytes and bounded structural schema validation without introducing a dependency
 between the network crates. It owns no electrical model, profile selection,
 mapper or solver. The balanced SINCAL profile is exposed by `powerio-tx`; the conductor-resolved
 adapter is being completed in `powerio-dist`. Both depend on this shared crate,
-never on each other. Shared structural admission does not imply that a family
+never on each other. The facade uses the shared crate to package experimental
+fresh SQLite output; electrical validation still belongs to each backend.
+Shared structural admission does not imply that a family
 adapter supports all of the admitted schemas or electrical modes.
 The architecture gate also rejects cross-dependencies between the two network
 crates and any internal workspace dependency of `powerio-sincal` other than

@@ -199,6 +199,12 @@ pub mod codes {
             "native data outside the selected steady-state profile remains in retained source";
         EMIT_SINCAL_RETAINED_SOURCE_OMITTED = "EMIT.SINCAL.RETAINED_SOURCE_OMITTED", Warning,
             "native data retained only in SINCAL source is not included in cross-format output";
+        EMIT_SINCAL_EXPERIMENTAL_UNSUPPORTED = "EMIT.SINCAL.EXPERIMENTAL_UNSUPPORTED", Error,
+            "invalid or unsupported candidate SINCAL output", category = Output;
+        EMIT_SINCAL_EXPERIMENTAL_LOSS = "EMIT.SINCAL.EXPERIMENTAL_LOSS", Warning,
+            "candidate SINCAL output omits data outside its declared profile";
+        EMIT_SINCAL_EXPERIMENTAL = "EMIT.SINCAL.EXPERIMENTAL", Remark,
+            "candidate SINCAL output has not been validated in native SINCAL";
         EMIT_SINCAL_FRESH_UNSUPPORTED = "EMIT.SINCAL.FRESH_UNSUPPORTED", Error,
             "fresh SINCAL emission is not available through the universal emitter", category = Output;
         // PARSE: the source text could not be decoded as given.

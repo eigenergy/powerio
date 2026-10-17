@@ -43,3 +43,25 @@ original Jet MDB and refuses a mismatched pair. The public multiconductor reader
 requires this check when callers explicitly supply acquired tables. It does not
 attest the table contents or launch the acquisition tool. The original MDB and
 records remain separately retained buffers; source echo returns the MDB.
+
+
+The experimental `authoring` implementation starts an in-memory schema-14.8
+input database without reading a template or retained source. Backend-owned
+code declares columns and supplies complete typed rows. The builder rejects
+text/numeric coercions, nonfinite values, unsafe identifiers, excess rows/bytes
+and invalid structural references. It supplies no electrical defaults. The
+fixed archive metadata contains only the fresh database and relative INI
+settings; there is no invented desktop `.sin` document or stored solver result.
+Repeated construction has deterministic database and ZIP bytes.
+
+This is writer infrastructure only. A backend must map its typed network and
+validate the complete constructed database with its own electrical reader
+before returning an artifact. There is no electrical-family inference here,
+and these helpers do not enable a public `can_emit` capability. The balanced
+backend now supplies a static candidate electrical emitter
+and paired-CSV/pandapower validation in `powerio-tx`; a multiconductor candidate
+now covers ideal sources, sequence lines and phase-resolved loads in
+`powerio-dist`. Transformer and other circuit coverage and the experimental
+facade remain unfinished; both typed IR edit paths have staging tests. See
+`evals/sincal/README.md` for the exact electrical profile and evidence. Native
+desktop open/save/calculate is a separate acceptance gate.

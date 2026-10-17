@@ -8,9 +8,13 @@ mod equipment;
 mod profile;
 mod rows;
 mod settings;
+mod write;
+pub use write::{ExperimentalBalancedOutput, write_experimental_balanced};
 pub(super) mod source;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod write_tests;
 
 use crate::Result;
 use crate::network::{BalancedNetwork, Bus, BusId, BusType, SourceFormat, Switch};

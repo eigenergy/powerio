@@ -30,6 +30,12 @@ pub mod codes {
             "legacy NULL source controls were explicitly assumed inactive";
         EMIT_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_OMITTED = "EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED", Warning,
             "native SINCAL source-only data are omitted from cross-format emission";
+        EMIT_SINCAL_MULTICONDUCTOR_UNSUPPORTED = "EMIT.DIST.SINCAL_UNSUPPORTED", Error,
+            "invalid or unsupported candidate multiconductor SINCAL output", category = Output;
+        EMIT_SINCAL_MULTICONDUCTOR_EXPERIMENTAL = "EMIT.DIST.SINCAL_EXPERIMENTAL", Remark,
+            "candidate multiconductor output has no native SINCAL acceptance evidence";
+        EMIT_SINCAL_MULTICONDUCTOR_LOSS = "EMIT.DIST.SINCAL_LOSS", Warning,
+            "candidate multiconductor output canonicalizes topology or omits ancillary data";
         // PARSE: the source text could not be decoded as given.
         PARSE_DSS_SOURCE_MALFORMED = "PARSE.DSS.SOURCE_MALFORMED", Warning,
             "a dss command, object spec, or property assignment does not parse";

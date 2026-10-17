@@ -182,9 +182,11 @@ def solve_mapped(model, power_tolerance=1e-13):
     raise AssertionError(f'mapped load flow failed: mismatch={mismatch}')
 
 
-def check(inspector):
-    completed = subprocess.run([str(inspector), str(FIXTURES / '1-LV-rural1--0-sw.sinx')], check=True, capture_output=True, text=True)
+def check(inspector, fresh=False):
+    extra = ['--fresh'] if fresh else []
+    completed = subprocess.run([str(inspector), str(FIXTURES / '1-LV-rural1--0-sw.sinx'), *extra], check=True, capture_output=True, text=True)
     model = json.loads(completed.stdout)
+    assert bool(model.get('fresh_diagnostics')) == fresh, "inspector did not execute requested writer path"
     net, buses, root = reference()
     check_parameters(model, root)
     actual, iterations, mismatch = solve_mapped(model)
@@ -199,8 +201,9 @@ def check(inspector):
             path.write_bytes(native_bytes)
             with sqlite3.connect(path) as connection:
                 connection.execute('UPDATE TwoWindingTransformer SET Flag_ConNode=?, roh=2', [flag])
-            mapped = subprocess.run([str(inspector), str(path)], check=True, capture_output=True, text=True)
+            mapped = subprocess.run([str(inspector), str(path), *extra], check=True, capture_output=True, text=True)
             tap_model = json.loads(mapped.stdout)
+            assert bool(tap_model.get('fresh_diagnostics')) == fresh
             tap_reference, tap_buses, _ = reference(tap_side=side, tap_position=2)
             tap_voltage, _, _ = solve_mapped(tap_model)
             expected_tap = np.array([tap_reference.res_bus.at[tap_buses[b['name']], 'vm_pu'] *
@@ -213,6 +216,7 @@ def check(inspector):
     historical_vm = max(abs(abs(v) - float(historical[b['name']]['vm'])) for b, v in zip(model['buses'],actual))
     return {
         'case': '1-LV-rural1--0-sw',
+        'fresh_writer_readback': fresh,
         'source_sha256': hashlib.sha256((FIXTURES/'1-LV-rural1--0-sw.sinx').read_bytes()).hexdigest(),
         'profile': model['profile'], 'schema': model['schema'], 'variant': model['variant'],
         'mapped_nodes': 15, 'mapped_elements': 32, 'paired_csv_parameters': 'passed',
@@ -229,7 +233,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('inspector', type=Path)
     parser.add_argument('output', type=Path)
+    parser.add_argument('--fresh', action='store_true', help='Validate fresh balanced writer output after re-reading')
     args = parser.parse_args()
-    report = check(args.inspector.resolve())
+    report = check(args.inspector.resolve(), fresh=args.fresh)
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

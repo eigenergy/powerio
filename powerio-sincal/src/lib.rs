@@ -4,6 +4,10 @@
 //! These implementation interfaces are not the public PowerIO parse API.
 
 mod acquisition;
+#[doc(hidden)]
+pub mod authoring;
+#[cfg(test)]
+mod authoring_tests;
 mod project;
 mod retention;
 mod schema;
