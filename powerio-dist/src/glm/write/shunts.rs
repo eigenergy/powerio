@@ -125,6 +125,19 @@ impl Writer<'_> {
                 return Err(unsupported("capacitor rating overflows or underflows"));
             }
             let p = super::phase_name(phase[0]);
+            if rating == 0.0 {
+                let _ = writeln!(
+                    self.out,
+                    "object load {{ name \"{}\"; parent \"{}\"; phases {p}N; nominal_voltage {voltage}; constant_power_{p} 0+0j;",
+                    shunt.name, shunt.bus
+                );
+                self.coordinates(crate::DistLocationTarget::Shunt, &shunt.name);
+                self.out.push_str("}\n");
+                self.diagnostics.push(&codes::EMIT_GLM_VALUE_REBASED, format!(
+                    "shunt {}: zero admittance emits a zero-current load because native capacitor objects require a nonzero rating; electrical state is unchanged and component class identity is rebased",
+                    shunt.name));
+                continue;
+            }
             let _ = writeln!(
                 self.out,
                 "object capacitor {{ name \"{}\"; parent \"{}\"; phases {p}; phases_connected {p}; nominal_voltage {voltage}; cap_nominal_voltage {voltage}; control MANUAL; capacitor_{p} {rating}; switch{p} CLOSED;",

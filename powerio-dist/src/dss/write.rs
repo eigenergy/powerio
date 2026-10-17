@@ -31,6 +31,7 @@ use super::{lex, prop};
 mod admittance_shunts;
 mod asymmetric_pair;
 mod common_return_shunts;
+mod current_form;
 mod ideal_switches;
 mod ideal_transformers;
 mod loads;
@@ -1196,6 +1197,9 @@ impl DssWriter {
                 continue;
             }
             if self.sequence_impedance_branch(net, l) {
+                continue;
+            }
+            if self.current_form_line(net, l) {
                 continue;
             }
             self.check_name("line", &l.name);

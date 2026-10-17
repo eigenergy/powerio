@@ -44,6 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             *q *= 1.25;
         }
     }
+    edit_injections(&mut edited);
     edit_transformers(&mut edited);
     for line in edited.lines_mut() {
         line.length *= 1.1;
@@ -85,13 +86,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ] {
         let path = output.join(format!("{label}.glm"));
         let emission = emit_canonical(&network, Destination::path(path))?;
-        if !network.transformers().is_empty() {
-            powerio_dist::emit(
-                &powerio::PioModule::new(network.clone()),
-                powerio_dist::DistTargetFormat::Dss,
-                Destination::path(output.join(format!("{label}.dss"))),
-            )?;
-        }
+        powerio_dist::emit(
+            &powerio::PioModule::new(network.clone()),
+            powerio_dist::DistTargetFormat::Dss,
+            Destination::path(output.join(format!("{label}.dss"))),
+        )?;
         reports.insert(label.into(), serde_json::json!({
             "network": network,
             "diagnostics": emission.diagnostics().iter().map(powerio::Diagnostic::code).collect::<Vec<_>>(),
@@ -146,15 +145,67 @@ fn edit_transformers(network: &mut powerio_dist::MulticonductorNetwork) {
     for transformer in network.transformers_mut() {
         if transformer.xsc_pct == [0.0] {
             transformer.windings[0].tap *= 1.02;
+        } else if transformer.phases == 1
+            && transformer.windings.len() == 2
+            && transformer.windings[0].terminal_map.len() == 2
+            && transformer.windings[0]
+                .terminal_map
+                .iter()
+                .all(|t| matches!(t.as_str(), "1" | "2" | "3"))
+        {
+            // Exercise current tap bases and leakage split on phase-pair banks.
+            transformer.windings[0].tap *= 1.02;
+            transformer.windings[1].tap *= 1.01;
+            transformer.windings[0].r_pct = transformer.windings[1].r_pct / 3.0;
         }
         for winding in &mut transformer.windings {
             winding.r_pct *= 1.2;
+        }
+        if transformer.windings.len() == 4 && transformer.xsc_pct.len() == 6 {
+            let x = [
+                transformer.xsc_pct[2] * 0.9,
+                transformer.xsc_pct[4] * 0.9,
+                transformer.xsc_pct[5] * 0.9,
+            ];
+            transformer.xsc_pct = vec![x[0] + x[1], x[0] + x[2], x[0], x[1] + x[2], x[1], x[2]];
+            for winding in &mut transformer.windings[1..3] {
+                winding.v_ref *= 1.05;
+            }
+            transformer.windings[0].tap *= 1.02;
+            transformer.windings[3].tap *= 0.97;
+            continue;
         }
         for x in &mut transformer.xsc_pct {
             *x *= 0.9;
         }
         if let Some(secondary) = transformer.windings.get_mut(1) {
             secondary.v_ref *= 1.05;
+        }
+    }
+}
+
+fn edit_injections(network: &mut powerio_dist::MulticonductorNetwork) {
+    for generator in network.generators_mut() {
+        for p in &mut generator.p_nom {
+            *p *= 1.25;
+        }
+        for q in &mut generator.q_nom {
+            *q *= 1.25;
+        }
+    }
+    for inverter in network.ibrs_mut() {
+        for values in [
+            &mut inverter.p_min,
+            &mut inverter.p_max,
+            &mut inverter.q_min,
+            &mut inverter.q_max,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            for value in values {
+                *value *= 1.25;
+            }
         }
     }
 }

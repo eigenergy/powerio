@@ -16,7 +16,6 @@ import numpy as np
 import opendssdirect as dss
 from oracle import LOCK, add, command, compare
 
-
 PATTERNS = {
     "unbalanced": np.array(
         [230 * np.exp(0.1j), 241 * np.exp(-2j), 225 * np.exp(2.15j)]
@@ -55,7 +54,7 @@ def reference(pattern, law, floating):
     rg = 3.0 if floating else 0.0
     # Solve the physical circuit without any compensating source resistance.
     sink = emf.copy()
-    for iteration in range(1000):
+    for _iteration in range(1000):
         current = load_current(sink, nominal, power, law)
         vn = -rg * sum(current)
         nxt = emf + vn - z * current
@@ -72,7 +71,7 @@ def reference(pattern, law, floating):
     if residual > 1e-9:
         raise ValueError(f"independent physical KCL residual {residual}")
     return physical_snapshot(source, sink, vn, current), {
-        "iterations": iteration + 1,
+        "iterations": _iteration + 1,
         "kcl_residual_A": residual,
     }
 

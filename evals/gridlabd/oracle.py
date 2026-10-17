@@ -36,6 +36,17 @@ TOLERANCES = {
 }
 
 
+# Whole-feeder agreement: one part per million plus SI floors for values near
+# zero. Calibration keeps the original tighter budgets; matrix fidelity does
+# not inherit the feeder voltage/current/power thresholds.
+FEEDER_TOLERANCES = {
+    **TOLERANCES,
+    "V": (1e-4, 1e-6),
+    "A": (1e-5, 1e-6),
+    "VA": (1e-2, 1e-6),
+}
+
+
 def parse_complex(value: str) -> complex:
     """GridLAB-D complex literals: rectangular j/i, polar d(deg)/r(rad)."""
     value = value.strip()
@@ -328,16 +339,49 @@ def read_dss(path: Path, n: int) -> tuple[dict, dict]:
     }
 
 
-def command(args: list[str], cwd: Path, env=None) -> str:
-    run = subprocess.run(
-        args, cwd=cwd, env=env, text=True, capture_output=True, timeout=120, check=False
-    )
+def command(args: list[str], cwd: Path, env=None, *, timeout: float = 120) -> str:
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("execution timeout must be finite and positive")
+    try:
+        run = subprocess.run(
+            args,
+            cwd=cwd,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+
+        def decoded(value):
+            return (
+                value.decode(errors="replace")
+                if isinstance(value, bytes)
+                else value or ""
+            )
+
+        with (cwd / "commands.jsonl").open("a") as log:
+            log.write(
+                json.dumps(
+                    {
+                        "argv": args,
+                        "timed_out": True,
+                        "timeout_seconds": timeout,
+                        "stdout": decoded(error.stdout),
+                        "stderr": decoded(error.stderr),
+                    }
+                )
+                + "\n"
+            )
+        raise
     with (cwd / "commands.jsonl").open("a") as log:
         log.write(
             json.dumps(
                 {
                     "argv": args,
                     "exit": run.returncode,
+                    "timeout_seconds": timeout,
                     "stdout": run.stdout,
                     "stderr": run.stderr,
                 }
@@ -357,6 +401,7 @@ def run_glm(
     pnnl_root: Path | None,
     outputs: tuple[str, ...] = ("source.csv", "sink.csv", "line.csv", "impedance.xml"),
     open_files: int | None = None,
+    execution_timeout: float = 120,
 ) -> str:
     if profile == "pnnl":
         if pnnl_root is None:
@@ -370,7 +415,7 @@ def run_glm(
         version = command([exe, "--version"], directory, env)
         if LOCK["pnnl"]["version"] not in version:
             raise ValueError("PNNL engine version mismatch")
-        command([exe, "model.glm"], directory, env)
+        command([exe, "model.glm"], directory, env, timeout=execution_timeout)
     else:
         image = LOCK["arras"]["image"]
         # The normal launcher checks GitHub after a successful command. Its
@@ -408,7 +453,11 @@ def run_glm(
             command(
                 ["docker", "cp", str(directory) + "/.", container + ":/case"], directory
             )
-            version = command(["docker", "start", "--attach", container], directory)
+            version = command(
+                ["docker", "start", "--attach", container],
+                directory,
+                timeout=execution_timeout,
+            )
             status = command(
                 ["docker", "inspect", "--format", "{{.State.ExitCode}}", container],
                 directory,

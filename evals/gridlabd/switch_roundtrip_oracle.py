@@ -68,6 +68,8 @@ def check_impedances(args, report):
     from roundtrip_oracle import instrumentation as single_instrumentation
     from switch_oracle import (
         reference as single_reference,
+    )
+    from switch_oracle import (
         variants as impedance_variants,
     )
 

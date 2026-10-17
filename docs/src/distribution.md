@@ -212,6 +212,8 @@ Fresh networks, edited modules, IR-restored modules and cross-profile writes
 generate `case.glm` from the typed network. Rust's
 `powerio_dist::glm::emit_canonical` offers single-file output directly from a
 network value. Emission validates physical support before writing any output.
+Names beginning with a digit or hyphen retain their IDs; canonical output enables
+native relaxed naming when required.
 
 The currently qualified electrical profile covers phase-to-earth sources,
 node/meter/load objects, independent P/I/Z load terms, parented loads, and
@@ -292,8 +294,19 @@ blocking without depending on a target's default transformer clock angle.
 Coil ratings use one third of total power and secondary coil voltage uses
 line-to-neutral voltage. Both pinned engines and IR-restored OpenDSS agree
 on unbalanced step-up, step-down, equal-rating and IEEE8500-parameter circuits.
-Coordinates attach to all three coils. Canonical GLM emission of these phase-pair
-coils remains unfinished and fails explicitly.
+Coordinates attach to all three coils. Canonical GLM groups a complete coherent
+three-coil bank into one native `DELTA_GWYE` transformer. Its configuration uses
+the current effective winding voltages, total rating and series impedance,
+including edits after IR restoration. Diagnostics identify the grouped coil
+names; coincident component points remain on the bank. Conflicting points fail.
+
+The coils must share effective voltages, ratings and impedance, and their phase
+pairs must match the native orientation for the current voltage ratio. Incomplete
+or unequal banks, parallel banks at the same endpoints, grounded primary returns,
+and ratio edits that cross the native orientation boundary require additional
+mappings and fail explicitly. Component qualification covers step-up, step-down,
+equal-voltage and IEEE8500 nameplate cases on both forks. Complete IEEE8500
+canonical qualification is described below; the other bank restrictions remain.
 
 NR `WYE_WYE` regulators preserve Type A/B per-phase ratios and series resistance
 as single-phase winding records. An object tap overrides its configuration tap.
@@ -312,19 +325,37 @@ uses a one-ohm winding resistance followed by its exact negative, eliminating
 both at an unloaded internal bus. This preserves the ideal ratio and external
 currents without an arbitrary small leakage. A diagnostic identifies the added
 line: physical secondary powers and total losses include it. The typed value
-and IR retain zero leakage. Canonical GLM writing of ideal regulator constraints,
-open-delta connections and banked initialization remain unfinished.
+and IR retain zero leakage.
+
+Canonical GLM now writes grounded ideal phase ratios as a series of native FBS
+manual regulator stages. Each stage changes one phase and passes the other
+connected bank phases at unity ratio. This avoids native current/loss errors
+from parallel single-phase regulator objects. Ratios come from current effective
+winding voltages; unrelated ratios do not need a common integer tap lattice.
+Generated intermediate buses are internal to the equivalent, and diagnostics
+identify the physical bank ports. Distinct component points remain on separate
+stages. Declared winding ratings are diagnosed as omitted because native
+regulator configurations have no power-rating field. Reimport absorbs redundant
+unity coils without multiplying the stage count. Open-delta connections, banked initialization and floating-return GLM
+writing remain unfinished.
 
 Plain ideal closed switches likewise use cancelling resistances in OpenDSS;
 plain open contacts are disabled and have no artificial line charging or leakage.
 Switches retaining source-specific impedance declarations use the existing
-source-aware path. Transformer cancellation currently covers complete two-coil,
+source-aware path.
+OpenDSS `Line` objects with `switch=yes` retain their finite line impedance and
+fixed terminal states. Operating-point `switch_closed` columns address typed
+ideal `DistSwitch` contacts. An application can add an explicit series contact
+while retaining the imported finite branch; this supplies contact states without
+executing an OpenDSS switching sequence.
+ Transformer cancellation currently covers complete two-coil,
 single-phase winding records with grounded or floating secondary returns and
 no core or neutral shunts. A floating return uses two cancelling conductors,
 preserving common-mode displacement. Other ideal-transformer profiles need
 further qualification.
 
-Canonical node convergence is set to `1e-9 V`. The tighter former absolute
+Canonical node convergence is set to `1e-9 V`. FBS output permits 1,000
+iterations so larger edited feeders can reach that stopping precision. The tighter former absolute
 setting could prevent IEEE13 from converging despite stable electrical values.
 This is an engine stopping criterion, not the validation comparison tolerance.
 
@@ -371,8 +402,17 @@ at all non-source, non-ground bus terminals. The original PNNL input and portabl
 static input produce identical typed circuits. Native convergence is tightened
 from a nominal-voltage fraction of `1e-4` to `1e-12` for comparison; electrical
 data and the common comparison budgets are unchanged. A deliberately wrong
-regulator tap must fail. Edited-feeder and canonical GLM qualification remain
-unfinished.
+regulator tap must fail.
+
+The pinned IEEE8500 case also qualifies fresh canonical GLM on both forks,
+including IR-restored, rebased, explicitly grounded-source and typed edited
+circuits. Reimported GLM and both DSS outputs agree at every original bus and
+physical link port. Edited circuits change load powers, winding voltages/taps,
+leakage and line lengths; their results are checked against the independent DSS
+engine and bus current balance. The harness preserves all 82,901 electrical
+observations per comparison. The ten engine/stage cases pass 38 comparisons
+and 187,550 current-balance observations without relaxing comparison budgets.
+This does not establish the remaining IEEE9500 or general OpenDSS profiles.
 
 Grounded center-tapped services import as four typed windings and a
 constant-impedance load at an auxiliary core bus. The fourth winding exposes the
@@ -397,8 +437,32 @@ equivalent, including an open auxiliary third port, when needed. Aggregate its
 physical end ports for powers and losses; internal element losses alone are not
 the original line's losses. Both forks and solvers have direct-matrix microcase
 qualification through IR and DSS, including deliberate wrong-load checks.
-Floating service neutrals, canonical GLM service output and additional geometry
-models remain unfinished and fail explicitly.
+Floating service neutrals, service switches and additional geometry models
+remain unfinished and fail explicitly. Grounded services can participate in a
+checked FBS forest with ordinary-phase ideal contacts; the private core bus is
+contracted for topology validation. Native checks cover impedance and mixed
+P/I/Z services, IEEE8500 cable parameters and direct hot matrices through edits
+and repeated output. Every contact port is included in these checks.
+
+Canonical GLM can now write grounded center-tapped services from their current
+four-winding circuit and private impedance core load. Effective winding ratios,
+leakage and core admittance set the native configuration; retained source
+parameters do not override edits. The core bus must have no additional device
+or external connection. Unequal effective leg ratios require another mapping.
+Triplex power and impedance terms keep separate load objects. Current terms
+are combined on the root triplex_load so native NR updates their voltage angle
+every iteration; diagnostics report the grouped identities. Distinct geographic
+points on grouped current terms fail instead of being merged silently.
+
+Full three-conductor triplex matrices emit a native geometry derived from the
+current coefficients, with every primitive entry checked before writing. This
+preserves grounded-neutral currents for that geometry family; it does not fit
+arbitrary edited matrices or recover the original construction. Direct
+hot-conductor matrices instead emit with the inverse leg-2 row convention and
+report that no physical neutral-current model is inferred. Line, configuration
+and transformer coordinates use the current typed points. These component
+profiles have separate complete IEEE8500 qualification above. Floating or
+arbitrary neutral circuits and unequal service leg ratios remain unsupported.
 
 Nonzero triplex `base_power_1`, `_2`, and `_12` initialize separate constant-power,
 constant-current and constant-impedance terms, overriding explicit coefficients
@@ -458,14 +522,19 @@ assignment order and unit interpretation. Canonical GLM emits finite contacts
 as overhead-line equivalents and fixed open contacts as open switches.
 
 Ideal closed contacts select FBS and emit explicit zero contact impedance.
-The complete link graph, including open contacts, must form a forest with one
-source bus per component. Links are oriented away from their sources, and
+Conducting links must form a forest with one source bus per component. The check includes grouped ideal regulators,
+delta-grounded-wye banks and grounded service transformers, with their private
+core circuits contracted. Links are oriented away from their sources, and
 disjoint switch phases between the same buses are grouped into one native
 object. Endpoint reversal and grouped identities are reported. Matching
 component points survive grouping; conflicting points fail explicitly.
-Cycles, parallel contacts on the same phase, multiple source buses in one
-component and bus phases absent from the incoming link require additional
-exact equivalents and currently fail. No small impedance replaces an ideal
+Fully open ties between already connected endpoints use unloaded child nodes
+parented to their physical endpoints. These aliases preserve both terminal
+voltages, zero currents and losses, and the switch point. They avoid native
+rank cycles and outgoing-current contamination; reimport recovers the original
+bus attachments. Other open links retain their island attachment. Closed
+cycles, parallel contacts on the same phase, connected multiple source buses
+and bus phases absent from the incoming link need additional equivalents. No small impedance replaces an ideal
 constraint, and the input network is unchanged.
 
 For noncommuting line impedance and capacitance matrices, the pinned engines
@@ -495,6 +564,28 @@ loads as well as the series link. Reimport preserves the equivalent circuit
 as separate typed loads rather than reconstructing the original line identity.
 Native `power_losses` also makes each phase's real loss positive before summing;
 with mutual coupling, physical total loss must use signed powers at both ports.
+
+Finite scalar lines with impedance magnitude between `1e-8` and `1e-5` ohm
+can emit a current-variable equivalent in NR GLM and OpenDSS. This profile
+requires matching single-conductor endpoint maps, no line end shunts and no
+unresolved electrical extras. It preserves the exact finite impedance; it does
+not replace the line with an ideal contact or add an impedance floor.
+
+The generated auxiliary voltage represents current with a one-ohm scale.
+Physical terminal currents include the generated endpoint shunts, and physical
+loss is the sum of signed terminal powers. Internal resistor losses are not
+the original line loss. Emission diagnostics identify the equivalent elements
+and report omitted thermal limits and routes. Reimport keeps the explicit
+circuit; coupled matrices and more extreme impedances retain their existing
+projection and are not covered by this qualification.
+
+Canonical NR output sets `default_maximum_voltage_error` to `1e-9` per unit
+and lets each node derive its absolute convergence limit from nominal voltage.
+This avoids an absolute nanovolt stopping threshold on large feeders. FBS keeps
+its previously qualified absolute node setting. These are engine stopping
+criteria; the independent electrical comparison budgets remain separate.
+Zero-admittance shunts emit zero-current loads with their current component
+points and a class-rebasing diagnostic. No nonzero capacitor rating is invented.
 
 Output without ideal closed contacts selects NR. The pinned engines can return NaN results for
 some valid circuits even with a successful process exit. One qualified
@@ -533,8 +624,13 @@ OpenDSS emission of generators without retained voltage bounds supplies a
 upper bound OpenDSS uses constant impedance. Generators parsed from OpenDSS
 retain their explicit bounds or native 0.9..1.1 pu defaults. Generator rating
 limits remain in IR; their OpenDSS mapping is unfinished and reports a loss.
-Canonical GLM generator writing is also unfinished. This device qualification
-is a prerequisite for IEEE9500, not qualification of that feeder.
+Canonical GLM writes current fixed generator injections as signed
+constant-power loads, preserving phase/phase-pair connections and component
+points. Reimport retains their electrical law under load identities. Ratings,
+optimization bounds and costs have no matching load fields and are diagnosed
+as omitted. Generator electrical extras or voltage/current laws outside this
+profile remain unsupported. This device qualification does not qualify the
+complete IEEE9500 feeder.
 
 Solar-fed `FOUR_QUADRANT` inverters in `CONSTANT_PF` mode read as fixed
 per-phase inverter injections, including native efficiency and rating clipping.
@@ -553,7 +649,12 @@ input and therefore zero AC injection, even if `P_Out` requests charging. Import
 preserves that idle electrical state and reports `READ.GLM.BATTERY_IDLE`; energy,
 state of charge and inactive load-following settings remain source-only. Native
 checks cover both solvers and forks. Other battery operating modes, weather files,
-multipoint efficiency and canonical GLM inverter writing remain unfinished.
+multipoint efficiency remain unfinished. Canonical GLM writes explicitly fixed
+inverter P/Q bounds as signed constant-power loads on the current ordinary or
+split-phase connection. Available power alone is not dispatch; missing or
+nonfixed bounds, active profiles and unresolved voltage/current laws fail.
+Points remain attached to the equivalent, while prime-mover, availability and
+rating metadata losses are diagnosed.
 Climate coordinates and thermal inputs remain source-only with diagnostics.
 
 OpenDSS rated wye reactors with kV/kvar and explicit R or Rp map to the
@@ -610,13 +711,22 @@ ratings are validated and retained in source; typed ampacity mapping is pending.
 
 Both original CIMHub IEEE9500 balanced and unbalanced projects now parse through
 IR and produce solvable OpenDSS circuits with their DER and fixed device states.
-Full-precision voltage and both-end current/power comparisons are available, but
-strict full-feeder qualification remains open. The native NR line-current
-reporting formula differs from physical pi-circuit currents when series
-impedance and shunt admittance matrices do not commute. The harness retains the
-raw failing comparison and independently audits that discrepancy. Small
-convergence and near-zero-impedance residuals also remain under investigation;
-no complete IEEE9500 matching claim is made yet.
+Both projects also produce canonical GLM from their current typed fixed
+injections and passive networks. This is output availability, not full-feeder
+qualification of canonical GLM. Both complete cases meet the documented
+one-part-per-million feeder accuracy profile for all 84,501 original voltage,
+current, power and loss measurements through import, IR and repeated DSS output.
+Independent external-terminal current balance also passes. The tighter analytic
+calibration comparisons remain separate and retain their discrepancies, including
+native NR line-current reporting when impedance and shunt matrices do not commute.
+Reimported disabled contacts retain inactive-state metadata; canonical DSS
+reports their omission, with zero external currents and endpoint voltages still
+checked. Physical terminal powers use endpoint voltages and boundary currents,
+not internal equivalent-source powers. Fresh canonical GLM now solves both
+complete cases on both pinned forks with the same feeder accuracy and physical
+current-balance checks. An edit that introduces source zero-sequence voltage
+still exposes a native NR delta-grounded-wye primary-stamp discrepancy; that
+profile remains unqualified. Broader format compatibility remains unfinished.
 
 GridLAB-D object latitude and longitude map to the network's typed
 `component_locations` table. Each point identifies its component table and exact
@@ -760,9 +870,9 @@ unique physical allocation of branch flows.
 policy. `Reject` keeps the strict boundary. `Lower` applies audited static
 neutral, switch, line-shunt and capacitor transformations. `Approximate` also
 linearizes supported load models and maps IBRs to static generators while
-freezing named controls. Bounded ZIP, exponential and constant-power laws can be projected only when nominal
-voltage lies strictly inside its smooth law region, above dropout and below any
-current-limiting transition. The action
+freezing named controls. Bounded ZIP, exponential and constant-power laws can
+be projected only when nominal voltage lies strictly inside a smooth law
+region, above dropout and below any current-limiting transition. The action
 retains the original `source_voltage_model` and its bounds; strict preparation
 keeps the complete piecewise law. The source network is not mutated.
 `Permissive` can additionally omit retained untyped

@@ -208,3 +208,74 @@ fn direct_triplex_matrix_preserves_native_leg_orientation_and_dss_ports() {
         );
     }
 }
+
+fn canonical(
+    text: &str,
+    edit: impl FnOnce(&mut powerio_dist::MulticonductorNetwork),
+) -> powerio_dist::MulticonductorNetwork {
+    let mut net = read(text, GlmDialect::Pnnl5_3).into_value();
+    edit(&mut net);
+    let result =
+        powerio_dist::glm::emit_canonical(&net, Destination::memory("out.glm").unwrap()).unwrap();
+    let EmittedOutput::Memory { artifacts } = result.output() else {
+        panic!()
+    };
+    read(
+        std::str::from_utf8(artifacts[0].bytes()).unwrap(),
+        GlmDialect::Pnnl5_3,
+    )
+    .into_value()
+}
+
+#[test]
+fn edited_triplex_coefficients_and_points_survive_fresh_output() {
+    let mut expected = read(deck(), GlmDialect::Pnnl5_3).into_value();
+    expected.line_codes_mut()[0].r_series[0][0] *= 1.1;
+    let actual = canonical(deck(), |net| net.line_codes_mut()[0].r_series[0][0] *= 1.1);
+    for (expected, actual) in [
+        &expected.line_codes()[0].r_series,
+        &expected.line_codes()[0].x_series,
+    ]
+    .iter()
+    .zip([
+        &actual.line_codes()[0].r_series,
+        &actual.line_codes()[0].x_series,
+    ]) {
+        for (a, b) in expected.iter().flatten().zip(actual.iter().flatten()) {
+            assert!((a - b).abs() < 1e-15);
+        }
+    }
+    assert_eq!(expected.component_locations(), actual.component_locations());
+    assert_eq!(actual.lines()[0].terminal_map_from, ["1", "2", "n"]);
+}
+
+#[test]
+fn a_full_matrix_outside_native_triplex_geometry_is_not_fitted() {
+    let mut net = read(deck(), GlmDialect::Pnnl5_3).into_value();
+    net.line_codes_mut()[0].x_series[0][2] *= 1.1;
+    net.line_codes_mut()[0].x_series[2][0] *= 1.1;
+    assert!(
+        powerio_dist::glm::emit_canonical(&net, Destination::memory("out.glm").unwrap()).is_err()
+    );
+}
+
+#[test]
+fn direct_triplex_output_preserves_the_signed_nonreciprocal_hot_matrix() {
+    let text=deck().replace("conductor_1 wire; conductor_2 wire; conductor_N neutral; diameter .368 in; insulation_thickness .08 in;", "z11 2.16454+.880800j; z12 .623542+.673688j; z21 .623542+.673688j; z22 2.16454+.880800j;");
+    let expected = read(&text, GlmDialect::Pnnl5_3).into_value();
+    let actual = canonical(&text, |_| {});
+    assert_eq!(actual.line_codes()[0].n_conductors, 2);
+    for (expected, actual) in [
+        &expected.line_codes()[0].r_series,
+        &expected.line_codes()[0].x_series,
+    ]
+    .iter()
+    .zip([
+        &actual.line_codes()[0].r_series,
+        &actual.line_codes()[0].x_series,
+    ]) {
+        for (a, b) in expected.iter().flatten().zip(actual.iter().flatten()) {
+            assert!((a - b).abs() < 1e-15);
+        }
+    }
+}

@@ -33,14 +33,32 @@ fn capacitor_coils_preserve_states_rating_voltage_and_edited_coordinates() {
         panic!()
     };
     let back = read(std::str::from_utf8(artifacts[0].bytes()).unwrap()).unwrap();
+    let active = net
+        .shunts()
+        .iter()
+        .filter(|s| s.name != "cap__glm_B")
+        .collect::<Vec<_>>();
     assert_eq!(
-        serde_json::to_value(net.shunts()).unwrap(),
+        serde_json::to_value(active).unwrap(),
         serde_json::to_value(back.value().shunts()).unwrap()
     );
-    assert_eq!(
-        net.component_locations(),
-        back.value().component_locations()
-    );
+    let idle = back
+        .value()
+        .loads()
+        .iter()
+        .find(|l| l.name == "cap__glm_B")
+        .unwrap();
+    assert_eq!(idle.bus, "source");
+    assert_eq!(idle.terminal_map, ["2", "n"]);
+    assert_eq!(idle.p_nom[0].to_bits(), 0.0_f64.to_bits());
+    assert_eq!(idle.q_nom[0].to_bits(), 0.0_f64.to_bits());
+    let mut points = net.component_locations().clone();
+    points
+        .iter_mut()
+        .find(|p| p.name == "cap__glm_B")
+        .unwrap()
+        .target = powerio_dist::DistLocationTarget::Load;
+    assert_eq!(&points, back.value().component_locations());
 }
 #[test]
 fn omitted_switch_is_open_and_omitted_rating_voltage_uses_node_voltage() {

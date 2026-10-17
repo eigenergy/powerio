@@ -10,8 +10,8 @@ import argparse
 import hashlib
 import json
 import math
-from pathlib import Path
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import numpy as np
 from oracle import LOCK, add, compare, literal, parse_complex, read_glm, run_glm

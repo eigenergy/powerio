@@ -14,8 +14,13 @@ use super::read::{nominal_phasor, phase_name};
 
 const METERS_PER_MILE: f64 = 1609.344;
 
+mod coil_banks;
+mod current_form;
 mod ideal;
+mod injections;
 mod loads;
+mod regulators;
+mod services;
 mod shunts;
 mod transformers;
 
@@ -23,9 +28,22 @@ mod transformers;
 ///
 /// The initial profile supports earth/phase-pair P/I/Z loads, ideal fixed sources,
 /// explicit phase line matrices, ordinary grounded-wye transformers and fixed
-/// contacts. Fixed resistive regulator equivalents emit manual Type B settings.
-/// Ideal closed contacts select
-/// exact FBS output on a checked forest with one source bus per component.
+/// contacts. Grounded center-tapped services with private impedance core loads
+/// emit native transformers; triplex P/I/Z terms and qualified full-neutral or
+/// direct hot-conductor line matrices emit from current typed coefficients.
+/// Fixed generator and explicitly fixed inverter injections emit signed
+/// constant-power loads; component identity and metadata losses are diagnosed.
+/// Coherent three-coil phase-pair banks emit native delta-grounded-wye
+/// configurations using current effective winding voltages and impedances.
+/// Fixed resistive regulator equivalents emit manual Type B settings.
+/// Ideal closed contacts and grounded ideal phase ratios select exact FBS
+/// output on a checked forest with one source bus per component. Independent
+/// phase ratios use native series stages; private service core circuits are
+/// contracted for the forest check. Redundant fully open ties use unloaded
+/// parented endpoint aliases to preserve their voltages and zero port currents.
+/// FBS uses a 1,000-iteration budget with unchanged node stopping precision.
+/// NR uses a nominal-voltage-scaled convergence limit of 1e-9 per unit;
+/// the electrical circuit and source constraints remain unchanged.
 /// Symmetric line end shunts use exact admittance-load equivalents when native
 /// line parameters cannot preserve their port equations. Returned diagnostics
 /// identify the generated loads that contribute to physical line port flows.
@@ -66,6 +84,9 @@ pub(crate) fn emit_text(network: &MulticonductorNetwork) -> Result<TextEmission,
             .collect(),
         written_locations: BTreeSet::new(),
         ideal_plan: None,
+        services: services::Services::discover(network)?,
+        coil_banks: coil_banks::CoilBanks::discover(network)?,
+        regulators: regulators::Regulators::discover(network)?,
     };
     writer.inventory()?;
     writer.sources()?;
@@ -77,16 +98,32 @@ pub(crate) fn emit_text(network: &MulticonductorNetwork) -> Result<TextEmission,
     } else {
         "NR"
     };
+    let precision = if writer.ideal_plan.is_some() {
+        ""
+    } else {
+        " default_maximum_voltage_error 1e-9;"
+    };
     let _ = writeln!(
         writer.out,
-        "// Canonical PowerIO static network.\nmodule powerflow {{ solver_method {solver}; line_capacitance TRUE; nominal_frequency {}; }}\n",
+        "// Canonical PowerIO static network.\nmodule powerflow {{ solver_method {solver}; line_capacitance TRUE; nominal_frequency {};{precision} }}\n",
         network.base_frequency()
     );
+    if writer.ideal_plan.is_some() {
+        writer.out.push_str("#set iteration_limit=1000;\n");
+    }
+    if writer
+        .identities
+        .iter()
+        .any(|name| !name.as_bytes()[0].is_ascii_alphabetic() && name.as_bytes()[0] != b'_')
+    {
+        writer.out.push_str("#set relax_naming_rules=1;\n");
+    }
     writer.buses()?;
     writer.lines()?;
     writer.switches()?;
     writer.transformers()?;
     writer.loads()?;
+    writer.static_injections()?;
     writer.capacitor_shunts()?;
     writer.remaining_locations();
     Ok(TextEmission::new(
@@ -107,6 +144,9 @@ struct Writer<'a> {
     locations: BTreeMap<(crate::DistLocationTarget, &'a str), &'a crate::DistComponentLocation>,
     written_locations: BTreeSet<(crate::DistLocationTarget, &'a str)>,
     ideal_plan: Option<ideal::IdealPlan<'a>>,
+    services: services::Services<'a>,
+    coil_banks: coil_banks::CoilBanks<'a>,
+    regulators: regulators::Regulators<'a>,
 }
 
 fn unsupported(message: impl Into<String>) -> Error {
@@ -114,6 +154,17 @@ fn unsupported(message: impl Into<String>) -> Error {
 }
 
 impl Writer<'_> {
+    // Native NR derives this limit from nominal_voltage times the module's
+    // fractional criterion. A fixed nanovolt threshold can prevent convergence
+    // on a large feeder. Keep the qualified FBS absolute setting unchanged.
+    fn voltage_error(&self) -> &'static str {
+        if self.ideal_plan.is_some() {
+            "1e-9"
+        } else {
+            "0"
+        }
+    }
+
     fn coordinates(&mut self, target: crate::DistLocationTarget, name: &str) {
         let Some(location) = self.locations.get(&(target, name)).copied() else {
             return;
@@ -158,9 +209,7 @@ impl Writer<'_> {
                 "nominal frequencies other than 50 or 60 Hz are not qualified",
             ));
         }
-        if !self.net.generators().is_empty()
-            || !self.net.ibrs().is_empty()
-            || !self.net.capacitors().is_empty()
+        if !self.net.capacitors().is_empty()
             || !self.net.control_profiles().is_empty()
             || !self.net.untyped_objects().is_empty()
         {
@@ -193,16 +242,19 @@ impl Writer<'_> {
                     bus.id
                 ));
             }
-            if bus.grounded.len() != 1
+            if bus.grounded.as_slice() != ["n"]
                 || bus.terminals.iter().filter(|t| t.as_str() == "n").count() != 1
-                || bus.grounded.iter().any(|t| t != "n")
-                || !bus.grounded.iter().any(|t| t == "n")
-                || !bus.terminals.iter().any(|t| t == "n")
             {
                 return Err(unsupported(format!(
                     "bus {} requires explicit conductor/ground interpretation",
                     bus.id
                 )));
+            }
+            if self.services.buses.contains_key(bus.id.as_str()) && bus.terminals != ["1", "2", "n"]
+            {
+                return Err(unsupported(
+                    "triplex buses need exactly two hot terminals and a grounded neutral",
+                ));
             }
             let phases = phases(
                 &bus.terminals
@@ -221,6 +273,12 @@ impl Writer<'_> {
         }
         for load in self.net.loads() {
             self.reserve(&load.name)?;
+        }
+        for generator in self.net.generators() {
+            self.reserve(&generator.name)?;
+        }
+        for inverter in self.net.ibrs() {
+            self.reserve(&inverter.name)?;
         }
         for shunt in self.net.shunts() {
             self.reserve(&shunt.name)?;
@@ -300,9 +358,21 @@ impl Writer<'_> {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)] // Connected propagation includes distinct native winding bases.
     fn nominal_voltages(&mut self) -> Result<(), Error> {
         let mut neighbors: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         for line in self.net.lines() {
+            if self.services.buses.contains_key(line.bus_from.as_str()) {
+                neighbors
+                    .entry(&line.bus_from)
+                    .or_default()
+                    .push(&line.bus_to);
+                neighbors
+                    .entry(&line.bus_to)
+                    .or_default()
+                    .push(&line.bus_from);
+                continue;
+            }
             self.link_phases(
                 &line.name,
                 &line.bus_from,
@@ -321,6 +391,9 @@ impl Writer<'_> {
         }
         if let Some(plan) = &self.ideal_plan {
             for group in &plan.groups {
+                if plan.open_aliases.contains(&group.name) {
+                    continue;
+                }
                 neighbors.entry(group.from).or_default().push(group.to);
                 neighbors.entry(group.to).or_default().push(group.from);
             }
@@ -337,6 +410,23 @@ impl Writer<'_> {
         }
         let mut ratios: BTreeMap<&str, Vec<(&str, f64)>> = BTreeMap::new();
         for t in self.net.transformers() {
+            if let Some(leader) = self.coil_banks.leaders.get(t.name.as_str()) {
+                if *leader != t.name {
+                    continue;
+                }
+                let bank = &self.coil_banks.banks[leader];
+                let a = &t.windings[0];
+                let b = &t.windings[1];
+                ratios
+                    .entry(&a.bus)
+                    .or_default()
+                    .push((&b.bus, bank.secondary / bank.primary));
+                ratios
+                    .entry(&b.bus)
+                    .or_default()
+                    .push((&a.bus, bank.primary / bank.secondary));
+                continue;
+            }
             let a = &t.windings[0];
             let b = &t.windings[1];
             ratios
@@ -367,7 +457,7 @@ impl Writer<'_> {
                 }
             }
         }
-        if self.nominal.len() != self.net.buses().len() {
+        if self.nominal.len() + self.services.core_buses.len() != self.net.buses().len() {
             return Err(unsupported(
                 "a GLM bus island has no fixed source from which to initialize voltage",
             ));
@@ -379,10 +469,18 @@ impl Writer<'_> {
 
     fn buses(&mut self) -> Result<(), Error> {
         for bus in self.net.buses() {
+            if self.services.core_buses.contains(bus.id.as_str()) {
+                continue;
+            }
+            if let Some(&phase) = self.services.buses.get(bus.id.as_str()) {
+                self.service_bus(bus, phase)?;
+                continue;
+            }
             let phase_flags = flags(&self.phases[bus.id.as_str()]);
+            let voltage_error = self.voltage_error();
             let _ = writeln!(
                 self.out,
-                "object node {{ name \"{}\"; phases {phase_flags}N; nominal_voltage {}; maximum_voltage_error 1e-9;",
+                "object node {{ name \"{}\"; phases {phase_flags}N; nominal_voltage {}; maximum_voltage_error {voltage_error};",
                 bus.id,
                 self.nominal[bus.id.as_str()]
             );
@@ -441,7 +539,8 @@ impl Writer<'_> {
 
     fn switches(&mut self) -> Result<(), Error> {
         if let Some(plan) = self.ideal_plan.take() {
-            self.ideal_contacts(plan);
+            self.ideal_contacts(&plan);
+            self.ideal_plan = Some(plan);
             return Ok(());
         }
         for switch in self.net.switches() {
@@ -482,6 +581,7 @@ impl Writer<'_> {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)] // A line and its coefficient/endpoint expansions stay together.
     fn lines(&mut self) -> Result<(), Error> {
         let codes: BTreeMap<_, _> = self
             .net
@@ -491,6 +591,18 @@ impl Writer<'_> {
             .collect();
         let mut used_codes = BTreeSet::new();
         for line in self.net.lines() {
+            if self.services.buses.contains_key(line.bus_from.as_str()) {
+                let code = codes
+                    .get(line.linecode.as_str())
+                    .ok_or_else(|| unsupported("service line has no linecode"))?;
+                used_codes.insert(code.name.as_str());
+                self.service_line(line, code)?;
+                continue;
+            }
+            if self.current_form_line(line, &codes)? {
+                used_codes.insert(line.linecode.as_str());
+                continue;
+            }
             let phase_order = self.link_phases(
                 &line.name,
                 &line.bus_from,
@@ -583,6 +695,13 @@ impl Writer<'_> {
 
     fn loads(&mut self) -> Result<(), Error> {
         for load in self.net.loads() {
+            if self.services.core_loads.contains(load.name.as_str()) {
+                continue;
+            }
+            if self.services.buses.contains_key(load.bus.as_str()) {
+                self.service_load(load)?;
+                continue;
+            }
             if load.configuration != Configuration::Wye {
                 self.pair_load(load)?;
                 continue;

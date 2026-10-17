@@ -59,7 +59,9 @@ mod triplex_zip;
 /// internal core impedance load; triplex P/I/Z loads retain leg polarity.
 /// Triplex geometry uses full conductor matrices with both endpoint neutrals
 /// grounded, preserving native hot-conductor and neutral-current behavior.
-/// Direct triplex matrices and canonical GLM service emission remain unfinished.
+/// Direct triplex matrices preserve their signed hot-port equations. Canonical
+/// grounded service output derives native coefficients from current typed values;
+/// floating neutrals and additional service profiles remain unfinished.
 /// Standalone substations preserve sequence-derived source phasors. Static
 /// reactors use uncoupled lines or ideal contacts, including native NR zero
 /// impedance substitution. PNNL constant-PQ generators preserve initialized

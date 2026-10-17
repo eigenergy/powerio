@@ -57,9 +57,39 @@ fn delta_grounded_uses_phase_pairs_without_an_artificial_primary_ground() {
                 .iter()
                 .any(|d| d.code() == "READ.GLM.TRANSFORMER_EQUIVALENT")
         );
-        // Canonical writing must not silently turn these phase-pair coils into
-        // phase-to-ground coils. Its corresponding GLM projection is unfinished.
-        assert!(emit_canonical(m.value(), Destination::memory("case.glm").unwrap()).is_err());
+        let result = emit_canonical(m.value(), Destination::memory("case.glm").unwrap()).unwrap();
+        let powerio_core::EmittedOutput::Memory { artifacts } = result.output() else {
+            panic!()
+        };
+        let fresh = parse(
+            Source::from_memory("fresh.glm", artifacts[0].bytes()).unwrap(),
+            PreprocessOptions {
+                dialect,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(fresh.value().transformers().len(), 3);
+        assert_eq!(
+            fresh.value().component_locations(),
+            m.value().component_locations()
+        );
+        for (expected, actual) in m
+            .value()
+            .transformers()
+            .iter()
+            .zip(fresh.value().transformers())
+        {
+            assert_eq!(
+                expected.windings[0].terminal_map,
+                actual.windings[0].terminal_map
+            );
+            assert_eq!(
+                expected.windings[1].terminal_map,
+                actual.windings[1].terminal_map
+            );
+            assert!((expected.xsc_pct[0] - actual.xsc_pct[0]).abs() < 1e-12);
+        }
     }
 }
 
@@ -106,4 +136,37 @@ fn incomplete_delta_grounded_circuits_are_rejected() {
             "accepted {new}"
         );
     }
+}
+
+#[test]
+fn canonical_banks_reject_incomplete_or_incoherent_coils() {
+    for mutation in 0..5 {
+        let mut net = read(deck(), GlmDialect::Pnnl5_3).into_value();
+        match mutation {
+            0 => {
+                net.transformers_mut().pop();
+            }
+            1 => net.transformers_mut()[1].windings[1].r_pct *= 1.1,
+            2 => net.transformers_mut()[1].windings[1].tap *= 1.01,
+            3 => net.transformers_mut()[0].windings[1].terminal_map.clear(),
+            _ => net.transformers_mut()[0].windings[0].r_neutral = Some(0.0),
+        }
+        assert!(emit_canonical(&net, Destination::memory("out.glm").unwrap()).is_err());
+    }
+}
+
+#[test]
+fn crossing_the_native_orientation_boundary_needs_an_additional_equivalent() {
+    let mut net = read(&deck().replace("115 kV", "12.47 kV"), GlmDialect::Pnnl5_3).into_value();
+    for transformer in net.transformers_mut() {
+        transformer.windings[0].tap = 1.1;
+    }
+    assert!(emit_canonical(&net, Destination::memory("out.glm").unwrap()).is_err());
+}
+
+#[test]
+fn conflicting_coil_coordinates_are_not_merged_silently() {
+    let mut net = read(deck(), GlmDialect::Pnnl5_3).into_value();
+    net.component_locations_mut()[1].point.latitude = Some(-28.0);
+    assert!(emit_canonical(&net, Destination::memory("out.glm").unwrap()).is_err());
 }

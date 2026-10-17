@@ -7,16 +7,15 @@ use std::fmt::Write as _;
 
 impl Writer<'_> {
     pub(super) fn pair_load(&mut self, load: &DistLoad) -> Result<(), Error> {
-        let connections = match (load.configuration, load.terminal_map.as_slice()) {
-            (Configuration::SinglePhase | Configuration::Delta, [a, b]) => vec![(a, b)],
-            (Configuration::Delta, [a, b, c]) => vec![(a, b), (b, c), (c, a)],
-            _ => {
-                return Err(unsupported(format!(
-                    "load {} needs an additional connection model",
-                    load.name
-                )));
-            }
-        };
+        self.pair_load_with_target(load, DistLocationTarget::Load)
+    }
+
+    pub(super) fn pair_load_with_target(
+        &mut self,
+        load: &DistLoad,
+        target: DistLocationTarget,
+    ) -> Result<(), Error> {
+        let connections = connections(load)?;
         let active = phases(
             &load
                 .terminal_map
@@ -65,7 +64,7 @@ impl Writer<'_> {
             flags(&active),
             self.nominal[load.bus.as_str()]
         );
-        self.coordinates(DistLocationTarget::Load, &load.name);
+        self.coordinates(target, &load.name);
         for (i, (a, b)) in connections.iter().enumerate() {
             let (suffix, from, to) = EXPLICIT
                 .into_iter()
@@ -105,4 +104,33 @@ impl Writer<'_> {
         }
         Ok(())
     }
+}
+
+fn connections(load: &DistLoad) -> Result<Vec<(&String, &String)>, Error> {
+    let result = match (load.configuration, load.terminal_map.as_slice()) {
+        (Configuration::SinglePhase | Configuration::Delta, [a, b]) => vec![(a, b)],
+        (Configuration::Delta, [a, b, c]) => vec![(a, b), (b, c), (c, a)],
+        (Configuration::Wye, map) if map.len() >= 2 && map.last().is_some_and(|n| n == "n") => map
+            [..map.len() - 1]
+            .iter()
+            .map(|p| (p, &map[map.len() - 1]))
+            .collect(),
+        _ => {
+            return Err(unsupported(format!(
+                "load {} needs an additional connection model",
+                load.name
+            )));
+        }
+    };
+    if load.configuration == Configuration::Wye
+        && result
+            .iter()
+            .map(|(p, _)| *p)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != result.len()
+    {
+        return Err(unsupported("wye injection has repeated phase connections"));
+    }
+    Ok(result)
 }

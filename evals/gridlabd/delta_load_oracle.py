@@ -6,7 +6,8 @@ import json
 from pathlib import Path
 
 from oracle import command, compare, read_glm, run_glm
-from pair_load_oracle import deck as pair_deck, reference
+from pair_load_oracle import deck as pair_deck
+from pair_load_oracle import reference
 from roundtrip_oracle import instrumentation
 
 

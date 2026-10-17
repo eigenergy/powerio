@@ -11,7 +11,8 @@ def interfaces(native, network):
     result = {}
     names = [b["id"].lower() for b in network["buses"]]
     for table in ("lines", "switches", "transformers", "shunts", "loads", "generators", "sources", "ibrs"):
-        for item in network.get(table, []):
+        for record in network.get(table, []):
+            item = record
             if table == "sources" and item.get("type") == "powerio.ReferencedVoltageSource":
                 item = item["value"]
             names.append(item["name"].lower())

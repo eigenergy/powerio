@@ -6,6 +6,11 @@
   report filename-decoding failures explicitly and retain their bounded-input
   and unsafe-entry checks.
 
+- CLI text failures show the retained component diagnostics, including OpenDSS
+  include refusals and unresolved line definitions. Invalid static snapshots
+  fail before electrical conversion or IR output; read errors retain their
+  original source and diagnostic records.
+
 - Read fixed wye GridLAB-D capacitor coils and emit their current shunt values.
   Qualify IEEE34 and IEEE123 NR feeders, retain unused equipment library entries
   without instantiating devices, and prevent OpenDSS low-voltage defaults from
@@ -194,6 +199,7 @@
   statement as a block, which reads back to the same set. A line naming a
   third bus, a three winding transformer, stays text, because a monitored
   branch reference holds two buses.
+
 
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW
