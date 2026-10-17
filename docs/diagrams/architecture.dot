@@ -35,6 +35,7 @@ digraph powerio_architecture {
     "powerio-sincal" [label = "powerio-sincal\ninternal transport + schema\n(no electrical model)"];
 
     "powerio-tx" -> "powerio-core";
+    "powerio-tx" -> "powerio-sincal";
     "powerio-dist" -> "powerio-core";
     "powerio-sincal" -> "powerio-core";
     "powerio-prob" -> "powerio-core";

@@ -104,3 +104,24 @@ fn schema_and_identity_failures_do_not_admit_partial_snapshots() {
     bytes[18] = 2;
     assert!(DatabaseSnapshot::decode(&bytes, None).is_err());
 }
+
+#[test]
+fn observed_modern_sqlite_schemas_share_identity_columns_but_unknown_versions_fail() {
+    for version in [15.5, 16.0] {
+        let db = DatabaseSnapshot::decode(
+            &snapshot(&format!(
+                "UPDATE Version SET Version_No={version}; UPDATE Element SET Type='Line    ';"
+            )),
+            None,
+        )
+        .unwrap();
+        assert_eq!(db.elements[&90], "Line");
+        assert_eq!(db.terminals[&70].node, 100);
+    }
+    for sql in [
+        "UPDATE Version SET Version_No=15.6",
+        "UPDATE Element SET Type='   '",
+    ] {
+        assert!(DatabaseSnapshot::decode(&snapshot(sql), None).is_err());
+    }
+}

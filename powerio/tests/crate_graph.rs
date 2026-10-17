@@ -77,7 +77,7 @@ fn the_dependency_graph_matches_the_settled_layout() {
     // The two model crates are independent siblings over the foundation.
     assert_eq!(
         workspace_deps_of(&graph, "powerio-tx"),
-        BTreeSet::from(["powerio-core"])
+        BTreeSet::from(["powerio-core", "powerio-sincal"])
     );
     assert_eq!(
         workspace_deps_of(&graph, "powerio-dist"),

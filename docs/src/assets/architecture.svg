@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
-<svg width="765pt" height="483pt"
- viewBox="0.00 0.00 765.00 483.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 479.2)">
+<svg width="657pt" height="568pt"
+ viewBox="0.00 0.00 657.00 568.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 563.8)">
 <title>powerio_architecture</title>
-<polygon fill="#f4f6f8" stroke="none" points="-4,4 -4,-479.2 760.8,-479.2 760.8,4 -4,4"/>
+<polygon fill="#f4f6f8" stroke="none" points="-4,4 -4,-563.8 652.94,-563.8 652.94,4 -4,4"/>
 <g id="clust1" class="cluster">
 <title>cluster_consumers</title>
 <polygon fill="#f4f6f8" stroke="#a0aec0" points="8,-63 8,-146.6 292,-146.6 292,-63 8,-63"/>
@@ -25,7 +25,7 @@
 <text xml:space="preserve" text-anchor="middle" x="312" y="-278.9" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">operating points, 7 instances,</text>
 <text xml:space="preserve" text-anchor="middle" x="312" y="-265.7" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">8 solutions</text>
 </g>
-<g id="edge19" class="edge">
+<g id="edge20" class="edge">
 <title>solvers&#45;&gt;powerio&#45;prob</title>
 <path fill="none" stroke="#4a5568" stroke-dasharray="5,2" d="M105.39,-138.85C118.06,-162.4 140.52,-198.65 168.96,-221.4 185.26,-234.44 204.81,-245.07 224.15,-253.55"/>
 <polygon fill="#4a5568" stroke="#4a5568" points="222.57,-256.68 233.14,-257.33 225.28,-250.23 222.57,-256.68"/>
@@ -42,7 +42,7 @@
 <text xml:space="preserve" text-anchor="middle" x="331" y="-206.7" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">powerio&#45;matrix</text>
 <text xml:space="preserve" text-anchor="middle" x="331" y="-193.5" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">sparse matrices, graph data</text>
 </g>
-<g id="edge20" class="edge">
+<g id="edge21" class="edge">
 <title>gridfm_ml&#45;&gt;powerio&#45;matrix</title>
 <path fill="none" stroke="#4a5568" stroke-dasharray="5,2" d="M240.56,-132.87C243.59,-143.86 248.95,-157.82 257.96,-167.4 262.11,-171.82 266.94,-175.74 272.09,-179.21"/>
 <polygon fill="#4a5568" stroke="#4a5568" points="269.99,-182.02 280.36,-184.19 273.6,-176.03 269.99,-182.02"/>
@@ -61,7 +61,7 @@
 <text xml:space="preserve" text-anchor="middle" x="435" y="-111.5" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">parse, emit, serialize, deserialize,</text>
 <text xml:space="preserve" text-anchor="middle" x="435" y="-98.3" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">PioValue</text>
 </g>
-<g id="edge16" class="edge">
+<g id="edge17" class="edge">
 <title>powerio&#45;cli&#45;&gt;powerio</title>
 <path fill="none" stroke="#4a5568" d="M340.28,-36.39C356.42,-49.59 379.03,-68.06 398.1,-83.65"/>
 <polygon fill="#4a5568" stroke="#4a5568" points="395.73,-86.23 405.69,-89.84 400.16,-80.81 395.73,-86.23"/>
@@ -72,7 +72,7 @@
 <text xml:space="preserve" text-anchor="middle" x="435" y="-21.3" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">powerio&#45;capi</text>
 <text xml:space="preserve" text-anchor="middle" x="435" y="-8.1" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">C ABI 7 (Julia, C, C++)</text>
 </g>
-<g id="edge17" class="edge">
+<g id="edge18" class="edge">
 <title>powerio&#45;capi&#45;&gt;powerio</title>
 <path fill="none" stroke="#4a5568" d="M435,-36.39C435,-48.45 435,-64.92 435,-79.57"/>
 <polygon fill="#4a5568" stroke="#4a5568" points="431.5,-79.29 435,-89.29 438.5,-79.29 431.5,-79.29"/>
@@ -83,114 +83,119 @@
 <text xml:space="preserve" text-anchor="middle" x="583" y="-21.3" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">powerio&#45;py</text>
 <text xml:space="preserve" text-anchor="middle" x="583" y="-8.1" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">Python package + MCP</text>
 </g>
-<g id="edge18" class="edge">
+<g id="edge19" class="edge">
 <title>powerio&#45;py&#45;&gt;powerio</title>
 <path fill="none" stroke="#4a5568" d="M555.85,-36.39C534.86,-49.84 505.31,-68.76 480.69,-84.53"/>
 <polygon fill="#4a5568" stroke="#4a5568" points="478.99,-81.47 472.45,-89.81 482.76,-87.36 478.99,-81.47"/>
 </g>
-<g id="edge15" class="edge">
+<g id="edge16" class="edge">
 <title>powerio&#45;&gt;powerio&#45;matrix</title>
 <path fill="none" stroke="#4a5568" stroke-dasharray="5,2" d="M389.82,-139.1C381.49,-144.32 373.16,-150.22 365.98,-156.6 359.6,-162.26 353.59,-169.23 348.42,-176.01"/>
 <polygon fill="#4a5568" stroke="#4a5568" points="345.83,-173.62 342.8,-183.77 351.5,-177.72 345.83,-173.62"/>
 <text xml:space="preserve" text-anchor="middle" x="393.49" y="-159.3" font-family="Helvetica,sans-Serif" font-size="9.00" fill="#2d3748">matrix feature</text>
 </g>
-<g id="edge14" class="edge">
+<g id="edge15" class="edge">
 <title>powerio&#45;&gt;powerio&#45;prob</title>
 <path fill="none" stroke="#4a5568" d="M436.23,-138.93C436.29,-161.87 433.16,-197.03 416,-221.4 407.22,-233.87 394.95,-244.1 381.91,-252.35"/>
 <polygon fill="#4a5568" stroke="#4a5568" points="380.46,-249.14 373.62,-257.24 384.01,-255.17 380.46,-249.14"/>
 </g>
 <g id="node9" class="node">
 <title>powerio&#45;tx</title>
-<path fill="#f4f6f8" stroke="#4a5568" d="M261.93,-390.6C261.93,-390.6 176.07,-390.6 176.07,-390.6 170.07,-390.6 164.07,-384.6 164.07,-378.6 164.07,-378.6 164.07,-355 164.07,-355 164.07,-349 170.07,-343 176.07,-343 176.07,-343 261.93,-343 261.93,-343 267.93,-343 273.93,-349 273.93,-355 273.93,-355 273.93,-378.6 273.93,-378.6 273.93,-384.6 267.93,-390.6 261.93,-390.6"/>
-<text xml:space="preserve" text-anchor="middle" x="219" y="-376.7" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">powerio&#45;tx</text>
-<text xml:space="preserve" text-anchor="middle" x="219" y="-363.5" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">BalancedNetwork</text>
-<text xml:space="preserve" text-anchor="middle" x="219" y="-350.3" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">+ balanced formats</text>
+<path fill="#f4f6f8" stroke="#4a5568" d="M251.93,-390.6C251.93,-390.6 166.07,-390.6 166.07,-390.6 160.07,-390.6 154.07,-384.6 154.07,-378.6 154.07,-378.6 154.07,-355 154.07,-355 154.07,-349 160.07,-343 166.07,-343 166.07,-343 251.93,-343 251.93,-343 257.93,-343 263.93,-349 263.93,-355 263.93,-355 263.93,-378.6 263.93,-378.6 263.93,-384.6 257.93,-390.6 251.93,-390.6"/>
+<text xml:space="preserve" text-anchor="middle" x="209" y="-376.7" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">powerio&#45;tx</text>
+<text xml:space="preserve" text-anchor="middle" x="209" y="-363.5" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">BalancedNetwork</text>
+<text xml:space="preserve" text-anchor="middle" x="209" y="-350.3" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">+ balanced formats</text>
 </g>
-<g id="edge12" class="edge">
+<g id="edge13" class="edge">
 <title>powerio&#45;&gt;powerio&#45;tx</title>
-<path fill="none" stroke="#4a5568" d="M365.77,-139.1C334.38,-148.97 296.61,-159.91 262,-167.4 233.28,-173.62 150.31,-163.25 131,-185.4 91.55,-230.64 145.03,-296.67 184.24,-335.03"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="181.61,-337.36 191.26,-341.74 186.44,-332.3 181.61,-337.36"/>
+<path fill="none" stroke="#4a5568" d="M365.77,-139.1C334.38,-148.97 296.61,-159.91 262,-167.4 233.28,-173.62 150.31,-163.25 131,-185.4 92.53,-229.51 140.63,-295.5 176.56,-334.25"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="173.99,-336.62 183.42,-341.45 179.06,-331.79 173.99,-336.62"/>
 </g>
 <g id="node10" class="node">
 <title>powerio&#45;dist</title>
-<path fill="#f4f6f8" stroke="#4a5568" d="M539.39,-390.6C539.39,-390.6 412.61,-390.6 412.61,-390.6 406.61,-390.6 400.61,-384.6 400.61,-378.6 400.61,-378.6 400.61,-355 400.61,-355 400.61,-349 406.61,-343 412.61,-343 412.61,-343 539.39,-343 539.39,-343 545.39,-343 551.39,-349 551.39,-355 551.39,-355 551.39,-378.6 551.39,-378.6 551.39,-384.6 545.39,-390.6 539.39,-390.6"/>
-<text xml:space="preserve" text-anchor="middle" x="476" y="-376.7" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">powerio&#45;dist</text>
-<text xml:space="preserve" text-anchor="middle" x="476" y="-363.5" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">MulticonductorNetwork</text>
-<text xml:space="preserve" text-anchor="middle" x="476" y="-350.3" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">+ OpenDSS, PMD, BMOPF</text>
+<path fill="#f4f6f8" stroke="#4a5568" d="M554.39,-390.6C554.39,-390.6 427.61,-390.6 427.61,-390.6 421.61,-390.6 415.61,-384.6 415.61,-378.6 415.61,-378.6 415.61,-355 415.61,-355 415.61,-349 421.61,-343 427.61,-343 427.61,-343 554.39,-343 554.39,-343 560.39,-343 566.39,-349 566.39,-355 566.39,-355 566.39,-378.6 566.39,-378.6 566.39,-384.6 560.39,-390.6 554.39,-390.6"/>
+<text xml:space="preserve" text-anchor="middle" x="491" y="-376.7" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">powerio&#45;dist</text>
+<text xml:space="preserve" text-anchor="middle" x="491" y="-363.5" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">MulticonductorNetwork</text>
+<text xml:space="preserve" text-anchor="middle" x="491" y="-350.3" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">+ OpenDSS, PMD, BMOPF</text>
 </g>
-<g id="edge13" class="edge">
+<g id="edge14" class="edge">
 <title>powerio&#45;&gt;powerio&#45;dist</title>
-<path fill="none" stroke="#4a5568" d="M443.43,-138.96C445.39,-144.69 447.37,-150.84 449,-156.6 469.69,-229.55 476.27,-248.38 482,-324 482.19,-326.49 482.22,-329.07 482.13,-331.65"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="478.67,-331.08 481.25,-341.36 485.64,-331.71 478.67,-331.08"/>
+<path fill="none" stroke="#4a5568" d="M443.25,-139.02C445.2,-144.74 447.23,-150.88 449,-156.6 462.84,-201.44 467.72,-212.4 477,-258.4 481.87,-282.55 485.42,-310.11 487.73,-331.27"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="484.24,-331.51 488.76,-341.1 491.2,-330.79 484.24,-331.51"/>
 </g>
 <g id="node11" class="node">
 <title>powerio&#45;core</title>
-<path fill="#f4f6f8" stroke="#4a5568" d="M472.85,-475.2C472.85,-475.2 337.15,-475.2 337.15,-475.2 331.15,-475.2 325.15,-469.2 325.15,-463.2 325.15,-463.2 325.15,-439.6 325.15,-439.6 325.15,-433.6 331.15,-427.6 337.15,-427.6 337.15,-427.6 472.85,-427.6 472.85,-427.6 478.85,-427.6 484.85,-433.6 484.85,-439.6 484.85,-439.6 484.85,-463.2 484.85,-463.2 484.85,-469.2 478.85,-475.2 472.85,-475.2"/>
-<text xml:space="preserve" text-anchor="middle" x="405" y="-461.3" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">powerio&#45;core</text>
-<text xml:space="preserve" text-anchor="middle" x="405" y="-448.1" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">Source, Diagnostic, Error,</text>
-<text xml:space="preserve" text-anchor="middle" x="405" y="-434.9" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">PioModule&lt;T&gt;, series, output</text>
+<path fill="#f4f6f8" stroke="#4a5568" d="M436.85,-559.8C436.85,-559.8 301.15,-559.8 301.15,-559.8 295.15,-559.8 289.15,-553.8 289.15,-547.8 289.15,-547.8 289.15,-524.2 289.15,-524.2 289.15,-518.2 295.15,-512.2 301.15,-512.2 301.15,-512.2 436.85,-512.2 436.85,-512.2 442.85,-512.2 448.85,-518.2 448.85,-524.2 448.85,-524.2 448.85,-547.8 448.85,-547.8 448.85,-553.8 442.85,-559.8 436.85,-559.8"/>
+<text xml:space="preserve" text-anchor="middle" x="369" y="-545.9" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">powerio&#45;core</text>
+<text xml:space="preserve" text-anchor="middle" x="369" y="-532.7" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">Source, Diagnostic, Error,</text>
+<text xml:space="preserve" text-anchor="middle" x="369" y="-519.5" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">PioModule&lt;T&gt;, series, output</text>
+</g>
+<g id="edge12" class="edge">
+<title>powerio&#45;&gt;powerio&#45;core</title>
+<path fill="none" stroke="#4a5568" d="M524.72,-132.14C560.79,-144.37 594,-165.62 594,-202.4 594,-202.4 594,-202.4 594,-452.4 594,-482.38 522.71,-504.78 460.39,-518.64"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="459.79,-515.18 450.76,-520.72 461.27,-522.03 459.79,-515.18"/>
 </g>
 <g id="edge11" class="edge">
-<title>powerio&#45;&gt;powerio&#45;core</title>
-<path fill="none" stroke="#4a5568" d="M524.56,-137.94C553.84,-150.94 579,-171.19 579,-202.4 579,-202.4 579,-202.4 579,-367.8 579,-409.25 538.2,-429.93 496.12,-440.23"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="495.6,-436.76 486.6,-442.36 497.12,-443.59 495.6,-436.76"/>
-</g>
-<g id="edge10" class="edge">
 <title>powerio&#45;matrix&#45;&gt;powerio&#45;prob</title>
 <path fill="none" stroke="#4a5568" d="M326.69,-221.83C324.85,-229.27 322.63,-238.24 320.48,-246.92"/>
 <polygon fill="#4a5568" stroke="#4a5568" points="317.1,-246 318.1,-256.55 323.9,-247.68 317.1,-246"/>
 </g>
-<g id="edge8" class="edge">
-<title>powerio&#45;matrix&#45;&gt;powerio&#45;tx</title>
-<path fill="none" stroke="#4a5568" d="M269.09,-221.87C251.25,-230.03 233.73,-241.75 223,-258.4 209.15,-279.91 208.99,-309.18 211.82,-331.74"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="208.32,-331.99 213.29,-341.34 215.24,-330.93 208.32,-331.99"/>
-</g>
 <g id="edge9" class="edge">
+<title>powerio&#45;matrix&#45;&gt;powerio&#45;tx</title>
+<path fill="none" stroke="#4a5568" d="M271.41,-221.84C253.15,-230.07 234.79,-241.83 223,-258.4 208.12,-279.31 205.13,-308.45 205.58,-331.1"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="202.08,-331.26 206.03,-341.09 209.07,-330.94 202.08,-331.26"/>
+</g>
+<g id="edge10" class="edge">
 <title>powerio&#45;matrix&#45;&gt;powerio&#45;dist</title>
-<path fill="none" stroke="#4a5568" d="M407.46,-221.24C417.26,-225.9 426.48,-231.83 434,-239.4 458.38,-263.95 468.61,-302.98 472.9,-331.18"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="469.42,-331.57 474.2,-341.03 476.36,-330.65 469.42,-331.57"/>
+<path fill="none" stroke="#4a5568" d="M406.51,-221.85C416.5,-226.41 426.03,-232.16 434,-239.4 460.94,-263.87 475.94,-303.51 483.71,-331.88"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="480.28,-332.61 486.14,-341.43 487.06,-330.87 480.28,-332.61"/>
 </g>
-<g id="edge7" class="edge">
+<g id="edge8" class="edge">
 <title>powerio&#45;matrix&#45;&gt;powerio&#45;core</title>
-<path fill="none" stroke="#4a5568" d="M365.33,-221.79C379.07,-230.71 393.42,-242.97 401,-258.4 417.68,-292.33 396.5,-305.46 392,-343 389.48,-364.01 389.74,-369.57 392,-390.6 392.89,-398.93 394.47,-407.8 396.23,-416.09"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="392.81,-416.85 398.43,-425.83 399.64,-415.3 392.81,-416.85"/>
-</g>
-<g id="edge5" class="edge">
-<title>powerio&#45;prob&#45;&gt;powerio&#45;tx</title>
-<path fill="none" stroke="#4a5568" d="M286.09,-306.21C276,-315.17 264.29,-325.58 253.5,-335.16"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="251.37,-332.37 246.22,-341.62 256.02,-337.6 251.37,-332.37"/>
+<path fill="none" stroke="#4a5568" d="M365.33,-221.79C379.07,-230.71 393.42,-242.97 401,-258.4 421.58,-300.26 392.94,-436.2 377.6,-500.58"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="374.21,-499.72 375.26,-510.26 381.01,-501.37 374.21,-499.72"/>
 </g>
 <g id="edge6" class="edge">
-<title>powerio&#45;prob&#45;&gt;powerio&#45;dist</title>
-<path fill="none" stroke="#4a5568" d="M358.12,-306.43C377.24,-316.06 399.6,-327.32 419.68,-337.43"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="418.09,-340.55 428.59,-341.92 421.23,-334.3 418.09,-340.55"/>
+<title>powerio&#45;prob&#45;&gt;powerio&#45;tx</title>
+<path fill="none" stroke="#4a5568" d="M283.03,-306.43C271.75,-315.48 258.67,-325.97 246.67,-335.59"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="244.54,-332.81 238.93,-341.8 248.92,-338.27 244.54,-332.81"/>
 </g>
-<g id="edge4" class="edge">
+<g id="edge7" class="edge">
+<title>powerio&#45;prob&#45;&gt;powerio&#45;dist</title>
+<path fill="none" stroke="#4a5568" d="M362.34,-306.43C383.49,-316.19 408.29,-327.63 430.43,-337.85"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="428.81,-340.96 439.36,-341.97 431.74,-334.6 428.81,-340.96"/>
+</g>
+<g id="edge5" class="edge">
 <title>powerio&#45;prob&#45;&gt;powerio&#45;core</title>
-<path fill="none" stroke="#4a5568" d="M316.96,-306.24C323.48,-332.86 336.77,-377.15 359,-409.6 361.24,-412.87 363.8,-416.05 366.53,-419.1"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="364.03,-421.54 373.54,-426.21 369.02,-416.63 364.03,-421.54"/>
+<path fill="none" stroke="#4a5568" d="M317.26,-306.44C327.36,-351.03 349.49,-448.8 361.27,-500.84"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="357.8,-501.36 363.42,-510.34 364.62,-499.82 357.8,-501.36"/>
 </g>
 <g id="edge1" class="edge">
 <title>powerio&#45;tx&#45;&gt;powerio&#45;core</title>
-<path fill="none" stroke="#4a5568" d="M261.88,-391C274.07,-397.3 287.45,-403.94 300,-409.6 310.1,-414.15 320.86,-418.68 331.51,-422.99"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="330.1,-426.19 340.68,-426.64 332.69,-419.69 330.1,-426.19"/>
-</g>
-<g id="edge2" class="edge">
-<title>powerio&#45;dist&#45;&gt;powerio&#45;core</title>
-<path fill="none" stroke="#4a5568" d="M456.22,-390.81C448.82,-399.42 440.28,-409.36 432.32,-418.62"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="429.77,-416.22 425.9,-426.08 435.08,-420.78 429.77,-416.22"/>
+<path fill="none" stroke="#4a5568" d="M247.79,-390.92C262.92,-401.03 279.77,-413.75 293,-427.6 317.34,-453.07 315.34,-465.66 336,-494.2 338.14,-497.15 340.41,-500.18 342.73,-503.18"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="339.84,-505.16 348.78,-510.85 345.33,-500.83 339.84,-505.16"/>
 </g>
 <g id="node12" class="node">
 <title>powerio&#45;sincal</title>
-<path fill="#f4f6f8" stroke="#4a5568" d="M744.8,-390.6C744.8,-390.6 619.2,-390.6 619.2,-390.6 613.2,-390.6 607.2,-384.6 607.2,-378.6 607.2,-378.6 607.2,-355 607.2,-355 607.2,-349 613.2,-343 619.2,-343 619.2,-343 744.8,-343 744.8,-343 750.8,-343 756.8,-349 756.8,-355 756.8,-355 756.8,-378.6 756.8,-378.6 756.8,-384.6 750.8,-390.6 744.8,-390.6"/>
-<text xml:space="preserve" text-anchor="middle" x="682" y="-376.7" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">powerio&#45;sincal</text>
-<text xml:space="preserve" text-anchor="middle" x="682" y="-363.5" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">internal transport + schema</text>
-<text xml:space="preserve" text-anchor="middle" x="682" y="-350.3" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">(no electrical model)</text>
+<path fill="#f4f6f8" stroke="#4a5568" d="M271.8,-475.2C271.8,-475.2 146.2,-475.2 146.2,-475.2 140.2,-475.2 134.2,-469.2 134.2,-463.2 134.2,-463.2 134.2,-439.6 134.2,-439.6 134.2,-433.6 140.2,-427.6 146.2,-427.6 146.2,-427.6 271.8,-427.6 271.8,-427.6 277.8,-427.6 283.8,-433.6 283.8,-439.6 283.8,-439.6 283.8,-463.2 283.8,-463.2 283.8,-469.2 277.8,-475.2 271.8,-475.2"/>
+<text xml:space="preserve" text-anchor="middle" x="209" y="-461.3" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">powerio&#45;sincal</text>
+<text xml:space="preserve" text-anchor="middle" x="209" y="-448.1" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">internal transport + schema</text>
+<text xml:space="preserve" text-anchor="middle" x="209" y="-434.9" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">(no electrical model)</text>
+</g>
+<g id="edge2" class="edge">
+<title>powerio&#45;tx&#45;&gt;powerio&#45;sincal</title>
+<path fill="none" stroke="#4a5568" d="M209,-390.81C209,-398.53 209,-407.32 209,-415.74"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="205.5,-415.71 209,-425.71 212.5,-415.71 205.5,-415.71"/>
 </g>
 <g id="edge3" class="edge">
+<title>powerio&#45;dist&#45;&gt;powerio&#45;core</title>
+<path fill="none" stroke="#4a5568" d="M475.37,-390.96C457.94,-416.57 428.69,-458.86 402,-494.2 399.8,-497.11 397.49,-500.1 395.14,-503.09"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="392.55,-500.72 389.06,-510.73 398.03,-505.08 392.55,-500.72"/>
+</g>
+<g id="edge4" class="edge">
 <title>powerio&#45;sincal&#45;&gt;powerio&#45;core</title>
-<path fill="none" stroke="#4a5568" d="M637.54,-391.08C623.55,-397.75 607.88,-404.56 593,-409.6 562.15,-420.04 527.52,-428.45 496.47,-434.86"/>
-<polygon fill="#4a5568" stroke="#4a5568" points="495.8,-431.42 486.69,-436.83 497.18,-438.28 495.8,-431.42"/>
+<path fill="none" stroke="#4a5568" d="M253.99,-475.63C272.65,-485.26 294.47,-496.52 314.05,-506.63"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="312.23,-509.63 322.72,-511.11 315.44,-503.41 312.23,-509.63"/>
 </g>
 </g>
 </svg>

@@ -480,6 +480,9 @@ impl<'a> GenCostCliOptions<'a> {
 /// PowerWorld `.pwb` and the IEEE CDF have no emitter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum FormatArg {
+    /// Explicit balanced SINCAL input; unchanged binary echo only on output.
+    #[value(name = "sincal-balanced")]
+    SincalBalanced,
     #[value(name = "matpower", alias = "m")]
     Matpower,
     #[value(name = "powermodels-json", alias = "powermodels", alias = "pm")]
@@ -603,6 +606,7 @@ impl FormatArg {
             | FormatArg::Gridfm
             | FormatArg::Pwb
             | FormatArg::IeeeCdf
+            | FormatArg::SincalBalanced
             | FormatArg::Dss
             | FormatArg::PmdJson
             | FormatArg::BmopfJson
@@ -647,13 +651,15 @@ impl FormatArg {
             | FormatArg::DeepMindOpfDataJson
             | FormatArg::Gridfm
             | FormatArg::Pwb
-            | FormatArg::IeeeCdf => None,
+            | FormatArg::IeeeCdf
+            | FormatArg::SincalBalanced => None,
         }
     }
 
     /// The canonical name the format dispatcher accepts for forcing a parser.
     fn name(self) -> &'static str {
         match self {
+            FormatArg::SincalBalanced => "sincal-balanced",
             FormatArg::Matpower => "matpower",
             FormatArg::PowerModelsJson => "powermodels-json",
             FormatArg::EgretJson => "egret-json",
@@ -2061,6 +2067,26 @@ fn convert_balanced_module(
     gen_cost_options: &GenCostCliOptions<'_>,
 ) -> anyhow::Result<()> {
     let options = gen_cost_options.emit_options()?;
+    if to == FormatArg::SincalBalanced {
+        if !options.is_default() {
+            fail_with!(
+                REQUEST_CLI_TARGET_UNSUPPORTED,
+                "SINCAL source echo cannot apply generator-cost edits; fresh writing is experimental"
+            );
+        }
+        let Some(output) = output.filter(|p| p.as_os_str() != "-") else {
+            fail_with!(
+                REQUEST_CLI_OUTPUT_REQUIRED,
+                "binary SINCAL output requires -o <file>"
+            );
+        };
+        let result = powerio::emit(
+            module,
+            "sincal-balanced",
+            powerio_core::Destination::path(output),
+        )?;
+        return finish_path_emission(module.diagnostics(), &result, output);
+    }
     if to == FormatArg::PypsaCsv {
         let Some(output) = output else {
             fail_with!(

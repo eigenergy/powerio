@@ -1429,6 +1429,9 @@ pub enum SourceFormat {
     /// writer, so writing goes through another format's writer.
     #[serde(rename = "ieee-cdf")]
     IeeeCdf,
+    /// A SINCAL project read using the explicitly selected balanced profile.
+    #[serde(rename = "sincal")]
+    Sincal,
 }
 
 impl SourceFormat {
@@ -1439,6 +1442,7 @@ impl SourceFormat {
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
+            SourceFormat::Sincal => "sincal",
             SourceFormat::Matpower => "matpower",
             SourceFormat::PowerModelsJson => "powermodels-json",
             SourceFormat::EgretJson => "egret-json",
@@ -5688,6 +5692,7 @@ mod tests {
         // The exhaustive match keeps a new enum case from shipping with a serde
         // spelling that differs from name().
         let all = [
+            SourceFormat::Sincal,
             SourceFormat::Matpower,
             SourceFormat::PowerModelsJson,
             SourceFormat::EgretJson,
@@ -5732,7 +5737,8 @@ mod tests {
                 | SourceFormat::Jiidm
                 | SourceFormat::Cgmes
                 | SourceFormat::Ucte
-                | SourceFormat::IeeeCdf => {}
+                | SourceFormat::IeeeCdf
+                | SourceFormat::Sincal => {}
             }
             let token = serde_json::to_value(f).unwrap();
             assert_eq!(token, serde_json::Value::String(f.name().to_owned()));

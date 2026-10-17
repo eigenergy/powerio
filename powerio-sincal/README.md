@@ -10,7 +10,9 @@ Its interfaces are implementation details, not a supported parsing
 API. Public SINCAL parsing and emission remain under development.
 
 Direct SQLite structural admission is pinned to observed electrical schema
-14.8. Explicit MDB Tools acquisition records admit schema 11.5. Both select an
+14.8, 15.5 and 16.0. The identity columns are checked against the pinned
+SimBench, IEEE18/33 and student databases; electrical support remains
+profile-specific. Explicit MDB Tools acquisition records admit schema 11.5. Both select an
 explicit base variant (or the sole variant); derived-variant inheritance and
 other schema versions remain unsupported. The database connection retains
 the existing query budget, attachment ban, size limits and query-only mode.
