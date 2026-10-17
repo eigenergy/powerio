@@ -38,6 +38,7 @@ pub fn emit_canonical(
 
 pub(crate) fn emit_text(network: &MulticonductorNetwork) -> Result<TextEmission, Error> {
     crate::require_electrical_readiness(network)?;
+    network.validate_component_locations()?;
     let mut writer = Writer {
         net: network,
         out: String::new(),
@@ -46,6 +47,12 @@ pub(crate) fn emit_text(network: &MulticonductorNetwork) -> Result<TextEmission,
         phases: BTreeMap::new(),
         source_voltages: BTreeMap::new(),
         nominal: BTreeMap::new(),
+        locations: network
+            .component_locations()
+            .iter()
+            .map(|p| ((p.target, p.name.as_str()), p))
+            .collect(),
+        written_locations: BTreeSet::new(),
     };
     writer.inventory()?;
     writer.sources()?;
@@ -54,6 +61,7 @@ pub(crate) fn emit_text(network: &MulticonductorNetwork) -> Result<TextEmission,
     writer.buses()?;
     writer.lines()?;
     writer.loads()?;
+    writer.remaining_locations();
     Ok(TextEmission::new(
         writer.out,
         Vec::new(),
@@ -69,6 +77,8 @@ struct Writer<'a> {
     phases: BTreeMap<&'a str, Vec<usize>>,
     source_voltages: BTreeMap<&'a str, BTreeMap<usize, Complex64>>,
     nominal: BTreeMap<&'a str, f64>,
+    locations: BTreeMap<(crate::DistLocationTarget, &'a str), &'a crate::DistComponentLocation>,
+    written_locations: BTreeSet<(crate::DistLocationTarget, &'a str)>,
 }
 
 fn unsupported(message: impl Into<String>) -> Error {
@@ -76,6 +86,41 @@ fn unsupported(message: impl Into<String>) -> Error {
 }
 
 impl Writer<'_> {
+    fn coordinates(&mut self, target: crate::DistLocationTarget, name: &str) {
+        let Some(location) = self.locations.get(&(target, name)).copied() else {
+            return;
+        };
+        if let Some(latitude) = location.point.latitude {
+            let _ = writeln!(self.out, "    latitude {latitude};");
+        }
+        if let Some(longitude) = location.point.longitude {
+            let _ = writeln!(self.out, "    longitude {longitude};");
+        }
+        self.written_locations
+            .insert((target, location.name.as_str()));
+        if location.point.datum.is_some()
+            || location
+                .kind
+                .is_some_and(|k| k != crate::DistCoordsKind::Source)
+        {
+            self.dropped(format!("{target:?} {name}: GLM has no declared coordinate datum or point-origin field; numeric angles are unchanged"));
+        }
+    }
+
+    fn remaining_locations(&mut self) {
+        for &key in self.locations.keys() {
+            if !self.written_locations.contains(&key) {
+                self.diagnostics.push(
+                    &codes::EMIT_DIST_COMPONENT_COORDINATES_DROPPED,
+                    format!(
+                        "{:?} {} has no point attachment in this GLM output profile",
+                        key.0, key.1
+                    ),
+                );
+            }
+        }
+    }
+
     fn inventory(&mut self) -> Result<(), Error> {
         if self.net.buses().is_empty() {
             return Err(unsupported("GLM output needs at least one electrical bus"));
@@ -281,6 +326,7 @@ impl Writer<'_> {
                     let _ = writeln!(self.out, "    voltage_{} {literal};", phase_name(phase));
                 }
             }
+            self.coordinates(crate::DistLocationTarget::Bus, &bus.id);
             self.out.push_str("}\n");
         }
         Ok(())
@@ -343,6 +389,7 @@ impl Writer<'_> {
             validate_line_matrices(line, code, phase_order.len())?;
             let config = self.generated_name(&format!("{}__glm_configuration", line.name));
             let _ = writeln!(self.out, "object line_configuration {{ name \"{config}\";");
+            self.coordinates(crate::DistLocationTarget::LineCode, &code.name);
             for (row, &a) in phase_order.iter().enumerate() {
                 for (col, &b) in phase_order.iter().enumerate() {
                     let z = Complex64::new(code.r_series[row][col], code.x_series[row][col])
@@ -366,13 +413,15 @@ impl Writer<'_> {
             self.out.push_str("}\n");
             let _ = writeln!(
                 self.out,
-                "object overhead_line {{ name \"{}\"; phases {}N; from \"{}\"; to \"{}\"; length {} m; configuration \"{config}\"; }}",
+                "object overhead_line {{ name \"{}\"; phases {}N; from \"{}\"; to \"{}\"; length {} m; configuration \"{config}\";",
                 line.name,
                 flags(&phase_order),
                 line.bus_from,
                 line.bus_to,
                 line.length
             );
+            self.coordinates(crate::DistLocationTarget::Line, &line.name);
+            self.out.push_str("}\n");
             self.diagnostics.push(
                 &codes::EMIT_GLM_VALUE_REBASED,
                 format!(
@@ -446,6 +495,7 @@ impl Writer<'_> {
                 flags(&phase_order),
                 self.nominal[load.bus.as_str()]
             );
+            self.coordinates(crate::DistLocationTarget::Load, &load.name);
             for (i, &phase) in phase_order.iter().enumerate() {
                 let power = Complex64::new(load.p_nom[i], load.q_nom[i]);
                 let value = match law {

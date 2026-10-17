@@ -117,8 +117,9 @@ assigned to an inactive phase.
 The reader rejects unmodeled physical properties, unknown globals, active
 device classes, geometry-dependent lines, delta/split-phase flags, conflicting
 child nominal voltages and names that collide under the current canonical
-case-insensitive lookup. Coordinates are available through the separate source
-API; network attachment remains unfinished and currently fails explicitly.
+case-insensitive lookup. Coordinates attach to root buses, parented loads,
+lines and used line configurations. Unmapped coordinate-bearing objects still
+fail explicitly rather than inheriting an unrelated parent bus's location.
 Instrumentation remains in retained source with a remark. No recorder, assertion
 or controller executes during parsing. Facade dispatch accepts `gridlabd`
 (PNNL 5.3, also inferred from `.glm`) and `gridlabd-arras` (Arras 4.3).
@@ -151,8 +152,10 @@ destination. It generates one fresh GLM file from the current typed value;
 there is no retained-source path in this API. It supports the reader's initial
 phase-to-earth P/I/Z and explicit line-matrix profile. An unsupported electrical
 feature fails before any artifact is written. Non-electrical metadata losses,
-including coordinates, optimization bounds, ratings and source cost data, are
-reported. Facade emission uses the same canonical writer for fresh, edited,
+including legacy drawing coordinates, optimization bounds, ratings and source
+cost data, are reported. Typed component geographic points are emitted on the
+mapped objects; unavailable datum/origin fields are diagnosed. Facade emission
+uses the same canonical writer for fresh, edited,
 IR-restored and cross-profile modules.
 
 The writer derives bus nominal voltages from connected fixed sources and
@@ -210,6 +213,40 @@ also cover deleting original files before replay, memory-only buffers, BOMs,
 a widened acquisition root, external definitions, and atomic refusal of
 nonportable projects. These checks add no device-family coverage to the
 initial electrical profile.
+
+## Typed geographic points and canonical output
+
+`MulticonductorNetwork::component_locations` borrows typed geographic points
+with exact component identities, optional axes and an explicitly optional
+datum. Absent datum means unknown. This is separate from legacy drawings,
+route vertices and conductor cross-section geometry. IR uses an additive
+`powerio.LocatedMulticonductorNetwork` wrapper only when points are present;
+the nested electrical body and all previous network records keep their original
+schema. The streaming decoder does not buffer a second entire JSON network.
+It checks duplicate/stale attachments, finite axis ranges and a 1,048,576 point
+bound. Legacy readers reject the new mandatory type tag.
+
+```sh
+cargo build -p powerio --example glm_locations
+python evals/gridlabd/location_roundtrip_oracle.py --pnnl-root "$PNNL_ROOT" \
+  --bridge target/debug/examples/glm_locations --output /tmp/gld-locations
+```
+
+For both engines, this checks fresh, IR-restored, edited and geography-free
+networks. Coordinates include DMS, assignment-time references, explicit zeros,
+partial pairs, independent load points and a deliberately different line point.
+Native saves independently confirm five object states per run; the initialized
+line midpoint is checked separately from the retained declared point. Native
+save rounding permits 1.4e-6 degrees; typed/source checks use 1e-12 degrees.
+Swapped axes and identities must fail. All eight electrical snapshots must
+remain equivalent and satisfy typed circuit residuals and an independent
+constant-impedance solve. Coordinate edits never set electrical line length.
+
+Mapped buses, loads, lines and used line configurations are covered. Additional
+object-only attachments, coordinate cross-format projection, geographic layer
+representation and dedicated C/Python/Julia point views remain unfinished.
+Other format writers report point loss; GLM reports unsupported point origins
+and declared datums without changing numeric angles.
 
 ## Published references and limits
 

@@ -204,12 +204,47 @@ constitute explicit line neutrals. Geometry, transformers, split-phase and
 additional static devices remain unfinished and fail explicitly. Full OpenDSS
 static compatibility is not yet established.
 
-GridLAB-D object latitude and longitude are available through the source API,
-including partial pairs and native coordinate notation. Typed network
-attachment and coordinate emission remain unfinished. Declared link locations
-are distinct from the endpoint midpoints the engines calculate at startup;
-neither establishes a line route or electrical length. No geographic datum is
-inferred from the coordinate field names.
+GridLAB-D object latitude and longitude map to the network's typed
+`component_locations` table. Each point identifies its component table and exact
+name, with optional latitude, longitude, datum and point origin. Missing axes
+are distinct from zero; an absent datum stays unknown. This geography is
+independent of legacy bus drawing positions and line routes. The current GLM
+mapping covers root buses, parented loads, lines and used line configurations.
+Coordinates on a parented node/meter without a mapped device, unused equipment
+or source-only instrumentation still require additional attachment support and
+are refused explicitly.
+
+Fresh and edited GLM emission uses current typed points. Declared link locations
+remain distinct from the endpoint midpoints the engines calculate at startup;
+neither establishes a line route or electrical length. GLM cannot declare a
+datum or point origin, so writing those fields reports their loss without
+transforming the numeric angles. Other exchange writers and the legacy
+GeoLayer extraction report omitted component geography. Cross-format coordinate
+mapping and dedicated binding accessors remain unfinished.
+
+Networks without component geography keep their existing IR body. A network
+with points uses the additive nested `"powerio.LocatedMulticonductorNetwork"`
+record; the electrical network inside it retains the legacy layout. Older IR
+readers reject this new record instead of silently losing locations. Rust
+accessors borrow the typed table; edits copy shared network tables only on the
+first write. IR preserves these points in calculation and collection modules
+as well as standalone networks.
+
+Neutral reduction and LinDist3Flow preparation validate point attachments on
+entry and exit. A replacement line, shunt or generator keeps the original
+device's point, including partial axes, datum and origin. A split line
+configuration copies its point to each derived configuration. When a component
+is removed, its complete point stays in the corresponding action's
+`details.source_location`; it is no longer an attachment in the output network.
+These actions are also retained in the network's transformation metadata for
+IR storage. Point metadata never changes the transformation's electrical data.
+When a later transformation replaces a stored audit, the previous record moves
+to the flat `powerio_transform_history` array in network metadata. Each entry
+has `metadata_key` and `record`; the established metadata keys still expose the
+latest audits. Identical records are not archived again. The archive is bounded
+at the module-history limit, and malformed or full archives cause an explicit
+error before replacing a record. Returned reports describe only the current
+call, while IR retains both current and archived records.
 
 The [GridLAB-D oracle harness](https://github.com/eigenergy/powerio/tree/main/evals/gridlabd)
 documents pinned engines, supported physics, canonical and project checks,

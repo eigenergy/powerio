@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::geo::{DistGeoMeta, DistLocation};
 
+mod located_network;
+
 pub type Extras = BTreeMap<String, serde_json::Value>;
 
 /// A square matrix in conductor order, row major.
@@ -886,6 +888,10 @@ pub(crate) struct MulticonductorNetworkTables {
     pub base_frequency: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geo: Option<DistGeoMeta>,
+    /// Component geography uses a distinct stored network wrapper. The legacy
+    /// network body and its schema remain unchanged when this table is empty.
+    #[serde(skip)]
+    pub component_locations: Vec<crate::DistComponentLocation>,
     pub buses: Vec<DistBus>,
     #[serde(rename = "linecodes")]
     pub line_codes: Vec<DistLineCode>,
@@ -928,19 +934,13 @@ pub(crate) struct MulticonductorNetworkTables {
 // as the balanced model.
 impl serde::Serialize for MulticonductorNetwork {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        MulticonductorNetworkTables::serialize(
-            &self.tables,
-            powerio_core::__implementation::nonfinite::NonFiniteSer(serializer),
-        )
+        located_network::serialize(self, serializer)
     }
 }
 
 impl<'de> serde::Deserialize<'de> for MulticonductorNetwork {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        MulticonductorNetworkTables::deserialize(
-            powerio_core::__implementation::nonfinite::NonFiniteDe(deserializer),
-        )
-        .map(MulticonductorNetwork::from_tables)
+        located_network::deserialize(deserializer)
     }
 }
 
@@ -955,7 +955,7 @@ impl schemars::JsonSchema for MulticonductorNetwork {
     }
 
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        <MulticonductorNetworkTables as schemars::JsonSchema>::json_schema(generator)
+        located_network::json_schema(generator)
     }
 }
 
@@ -983,6 +983,7 @@ macro_rules! dist_table_accessors {
 dist_table_accessors! {
     name, name_mut: Option<String>;
     geo, geo_mut: Option<DistGeoMeta>;
+    component_locations, component_locations_mut: Vec<crate::DistComponentLocation>;
     buses, buses_mut: Vec<DistBus>;
     line_codes, line_codes_mut: Vec<DistLineCode>;
     lines, lines_mut: Vec<DistLine>;
@@ -1031,6 +1032,7 @@ impl Default for MulticonductorNetworkTables {
             name: None,
             base_frequency: crate::dss::defaults::BASE_FREQUENCY,
             geo: None,
+            component_locations: Vec::new(),
             buses: Vec::new(),
             line_codes: Vec::new(),
             lines: Vec::new(),

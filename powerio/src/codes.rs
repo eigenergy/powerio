@@ -13,6 +13,9 @@ powerio_core::diagnostic_codes! {
     VALIDATE_COLLECTION_ELEMENT_TYPE = "VALIDATE.COLLECTION.ELEMENT_TYPE", Error,
         "all values in a collection must have the same supported structural type", category = Data;
     // LOWER: the multiconductor to balanced pass.
+    TRANSFORM_MULTI_TO_BALANCED_COMPONENT_COORDINATES_DROPPED =
+        "TRANSFORM.MULTI_TO_BALANCED.COMPONENT_COORDINATES_DROPPED", Warning,
+        "component geography has no equivalent attachment in the balanced projection";
     TRANSFORM_MULTI_TO_BALANCED_AMBIGUOUS_TERMINAL_MAP =
         "TRANSFORM.MULTI_TO_BALANCED.AMBIGUOUS_TERMINAL_MAP", Error,
         "a terminal map does not determine one balanced phase assignment";

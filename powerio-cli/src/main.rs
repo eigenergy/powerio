@@ -2395,7 +2395,9 @@ fn run_geo_extract(
     let layer = match parse_family_case(input, from)? {
         FamilyCase::Distribution(module) => {
             report_diagnostics(module.diagnostics());
-            powerio::dist_geo::to_dist_geo_layer(module.value())
+            let (layer, diagnostics) = powerio::dist_geo::to_dist_geo_layer_report(module.value());
+            report_diagnostics(&diagnostics);
+            layer
         }
         FamilyCase::Transmission(module) => {
             report_diagnostics(module.diagnostics());

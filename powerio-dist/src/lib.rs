@@ -65,6 +65,7 @@ pub mod pmd;
 pub mod readiness;
 #[cfg(test)]
 pub(crate) mod testkit;
+mod transform_audit;
 
 pub use bmopf::{BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfEmitOptions, BmopfSchemaVersion};
 pub use cim::{
@@ -78,7 +79,10 @@ pub use convert::{
 pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticStage};
 pub use dss::{DssEmitOptions, DssLoadVoltageBounds};
 pub use error::{Error, Result};
-pub use geo::{CoordinateSpace, DistCanvas, DistCoordsKind, DistGeoMeta, DistLocation};
+pub use geo::{
+    CoordinateSpace, DistCanvas, DistComponentLocation, DistCoordsKind, DistGeoMeta,
+    DistGeographicPoint, DistLocation, DistLocationTarget,
+};
 pub use graph::{
     DistGraph, DistGraphAttachment, DistGraphAttachmentKind, DistGraphBus, DistGraphEdge,
     DistGraphEdgeKind,
