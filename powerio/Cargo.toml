@@ -43,6 +43,7 @@ arrow = { workspace = true, optional = true }
 parquet = { version = "60", default-features = false, features = ["arrow", "snap"], optional = true }
 
 [dev-dependencies]
+rusqlite.workspace = true
 powerio-matrix = { workspace = true, features = ["gridfm"] }
 tempfile = "3"
 zip.workspace = true

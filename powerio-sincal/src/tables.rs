@@ -445,6 +445,12 @@ mod tests {
                 .is_err()
         );
         d["tables"][0]["rows"][0][1] = 12.8.into();
+        let newer = crate::DatabaseSnapshot::decode_records(&serde_json::to_vec(&d).unwrap(), None)
+            .unwrap();
+        assert_eq!(newer.version.to_bits(), 12.8_f64.to_bits());
+        assert_eq!(newer.nodes, db.nodes);
+        assert_eq!(newer.terminals, db.terminals);
+        d["tables"][0]["rows"][0][1] = 12.9.into();
         assert!(
             crate::DatabaseSnapshot::decode_records(&serde_json::to_vec(&d).unwrap(), None)
                 .is_err()

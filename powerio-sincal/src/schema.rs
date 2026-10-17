@@ -36,7 +36,7 @@ pub struct TerminalIdentity {
 impl DatabaseSnapshot {
     pub fn decode(bytes: &[u8], requested_variant: Option<i64>) -> Result<Self> {
         let connection = connect(bytes)?;
-        Self::from_connection(connection, requested_variant, &[14.8, 15.5, 16.0])
+        Self::from_connection(connection, requested_variant, &[14.8, 15.0, 15.5, 16.0])
     }
 
     /// Decode explicit Access acquisition records. This does not admit Access
@@ -47,7 +47,7 @@ impl DatabaseSnapshot {
         let excluded = records.excluded_tables().to_vec();
         let connection = records.into_connection()?;
         configure_query_snapshot(&connection)?;
-        let mut snapshot = Self::from_connection(connection, requested_variant, &[11.5])?;
+        let mut snapshot = Self::from_connection(connection, requested_variant, &[11.5, 12.8])?;
         snapshot.excluded_tables = excluded;
         snapshot.source_digest = Some(digest);
         Ok(snapshot)

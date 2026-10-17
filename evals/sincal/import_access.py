@@ -19,13 +19,14 @@ import tempfile
 import time
 
 
-DEFAULT_TABLES = (
+BASE_TABLES = (
     'Version', 'Variant', 'Node', 'Element', 'Terminal', 'VoltageLevel',
     'CalcParameter', 'Line', 'LineSeg', 'Load', 'Infeeder', 'DCInfeeder',
     'TwoWindingTransformer', 'ThreeWindingTransformer', 'ShuntImpedance',
     'CouplingData', 'CoupledLine', 'NeutralPointImp', 'OpSer', 'OpSerVal',
     'TransformerTap',
 )
+DEFAULT_TABLES = BASE_TABLES + ('ShuntReactor', 'ShuntCondensator')
 IDENTIFIER = re.compile(r'[A-Za-z_][A-Za-z_0-9]{0,127}\Z')
 
 
@@ -104,7 +105,7 @@ def columns_from_schema(text, table):
             raise ValueError(f'unsupported column declaration in {table}: {line!r}')
         name = identifier(match[1])
         native_type = match[2].strip()
-        if not re.fullmatch(r'(?:INTEGER|REAL|varchar|DateTime|BLOB|NUMERIC)(?: NOT NULL)?',
+        if not re.fullmatch(r'(?:INTEGER|REAL|varchar|TEXT|DateTime|BLOB|NUMERIC)(?: NOT NULL)?',
                             native_type, re.IGNORECASE):
             raise ValueError(f'unsupported column type in {table}: {native_type!r}')
         if name.casefold() in seen:

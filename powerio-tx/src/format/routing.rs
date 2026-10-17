@@ -101,11 +101,13 @@ pub enum DistributionFormat {
     BmopfJson,
     /// Distribution CIM (CIM100 RDF/XML).
     CimDist,
+    SincalMulticonductor,
 }
 
 impl DistributionFormat {
     pub fn name(self) -> &'static str {
         match self {
+            Self::SincalMulticonductor => "sincal-multiconductor",
             Self::Dss => "dss",
             Self::PmdJson => "pmd-json",
             Self::BmopfJson => "bmopf-json",
@@ -190,6 +192,7 @@ pub fn parse_transmission_format(name: &str) -> Option<TransmissionFormat> {
 pub fn parse_distribution_format(name: &str) -> Option<DistributionFormat> {
     let key = canonical_key(name);
     match key.as_str() {
+        "sincalmulticonductor" => Some(DistributionFormat::SincalMulticonductor),
         "dss" | "opendss" => Some(DistributionFormat::Dss),
         "pmd" | "pmdjson" | "engineering" => Some(DistributionFormat::PmdJson),
         "bmopf" | "bmopfjson" => Some(DistributionFormat::BmopfJson),

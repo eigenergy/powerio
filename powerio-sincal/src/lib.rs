@@ -5,6 +5,7 @@
 
 mod acquisition;
 mod project;
+mod retention;
 mod schema;
 #[cfg(test)]
 mod schema_tests;
@@ -14,6 +15,7 @@ mod tests;
 
 pub use acquisition::{MAX_BYTES, SQLITE_MAGIC, database_bytes};
 pub use project::AcquiredProject;
+pub use retention::attach_retention_details;
 pub use schema::{DatabaseSnapshot, TerminalIdentity, require_table};
 pub use tables::TableRecords;
 

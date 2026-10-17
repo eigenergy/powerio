@@ -243,10 +243,12 @@ where
     });
     if from_sincal
         && !is_sincal_format(format)
-        && !result
-            .diagnostics()
-            .iter()
-            .any(|d| d.code() == "EMIT.SINCAL.RETAINED_SOURCE_OMITTED")
+        && !result.diagnostics().iter().any(|d| {
+            matches!(
+                d.code(),
+                "EMIT.SINCAL.RETAINED_SOURCE_OMITTED" | "EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED"
+            )
+        })
     {
         Ok(result.__with_diagnostics(vec![Diagnostic::of(
             &powerio_tx::diagnostics::codes::EMIT_SINCAL_RETAINED_SOURCE_OMITTED,
@@ -1061,16 +1063,33 @@ fn emit_versioned_bmopf(
 }
 
 fn is_sincal_format(format: &str) -> bool {
-    crate::resolve_format(format).is_some_and(|f| matches!(f.token, "sincal" | "sincal-balanced"))
+    crate::resolve_format(format).is_some_and(|f| {
+        matches!(
+            f.token,
+            "sincal" | "sincal-balanced" | "sincal-multiconductor"
+        )
+    })
 }
 
 /// Binary retained-source echo is separate from fresh electrical writing.
 fn echo_sincal(
     module: &PioModule<PioValue>,
+    format: &str,
     destination: Destination,
 ) -> Result<EmitResult, Error> {
-    if !matches!(module.value(), PioValue::BalancedNetwork(_)) {
+    if !matches!(
+        module.value(),
+        PioValue::BalancedNetwork(_) | PioValue::MulticonductorNetwork(_)
+    ) {
         return Err(unsupported_type(module, "sincal"));
+    }
+    let target = crate::resolve_format(format).map(|f| f.token);
+    if matches!(
+        (target, module.value()),
+        (Some("sincal-balanced"), PioValue::MulticonductorNetwork(_))
+            | (Some("sincal-multiconductor"), PioValue::BalancedNetwork(_))
+    ) {
+        return Err(unsupported_type(module, format));
     }
     let source = module.source().filter(|source| source.format().is_some_and(|f| is_sincal_format(f.as_str())))
         .ok_or_else(|| Error::new(&powerio_tx::diagnostics::codes::EMIT_SINCAL_FRESH_UNSUPPORTED,
@@ -1105,7 +1124,7 @@ fn emit_dynamic(
     destination: Destination,
 ) -> Result<EmitResult, Error> {
     if is_sincal_format(format) {
-        return echo_sincal(module, destination);
+        return echo_sincal(module, format, destination);
     }
     if let Some(version) = format.strip_prefix("bmopf-json@") {
         return emit_versioned_bmopf(module, version, destination);

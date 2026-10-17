@@ -1280,3 +1280,158 @@ fn sincal_balanced_cli_parses_converts_and_echoes_without_inference() {
     let stdin = run_with_stdin(&["summary", "-", "--from", "sincal-balanced"], &native);
     assert_success(&stdin);
 }
+
+#[test]
+fn sincal_multiconductor_cli_preserves_family_and_binary_echo() {
+    let tmp = tempfile::tempdir().unwrap();
+    let case = tmp.path().join("case.db");
+    let connection = rusqlite::Connection::open(&case).unwrap();
+    connection
+        .execute_batch(include_str!(
+            "../../tests/data/sincal/synthetic-multiconductor.sql"
+        ))
+        .unwrap();
+    drop(connection);
+    let path = case.to_str().unwrap();
+    let summary = run(&["summary", path, "--from", "sincal-multiconductor"]);
+    assert_success(&summary);
+    let converted = run(&[
+        "convert",
+        path,
+        "--from",
+        "sincal-multiconductor",
+        "--to",
+        "pmd-json",
+    ]);
+    assert_success(&converted);
+    let json: serde_json::Value = serde_json::from_slice(&converted.stdout).unwrap();
+    assert_eq!(json["data_model"], "ENGINEERING");
+    let copy = tmp.path().join("copy.db");
+    let echo = run(&[
+        "convert",
+        path,
+        "--from",
+        "sincal-multiconductor",
+        "--to",
+        "sincal-multiconductor",
+        "-o",
+        copy.to_str().unwrap(),
+    ]);
+    assert_success(&echo);
+    assert_eq!(std::fs::read(copy).unwrap(), std::fs::read(&case).unwrap());
+    assert_failure(&run(&[
+        "convert",
+        path,
+        "--from",
+        "sincal-multiconductor",
+        "--to",
+        "sincal-balanced",
+    ]));
+}
+
+#[test]
+fn sincal_cli_selection_reaches_the_reader_and_requires_its_profile() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("case.db");
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch(include_str!(
+        "../../tests/data/sincal/synthetic-multiconductor.sql"
+    ))
+    .unwrap();
+    drop(db);
+    for command in ["summary", "serialize", "convert"] {
+        let mut args = vec![
+            command,
+            path.to_str().unwrap(),
+            "--from",
+            "sincal-multiconductor",
+            "--sincal-variant",
+            "1",
+            "--sincal-snapshot-hours",
+            "6",
+        ];
+        if command == "convert" {
+            args.extend(["--to", "pmd-json"]);
+        }
+        assert_success(&run(&args));
+        let position = args.iter().position(|arg| *arg == "1").unwrap();
+        args[position] = "999";
+        assert_failure(&run(&args));
+    }
+    for from in ["matpower", "dss"] {
+        let output = run(&[
+            "--diagnostics-format",
+            "json",
+            "summary",
+            path.to_str().unwrap(),
+            "--from",
+            from,
+            "--sincal-snapshot-hours",
+            "6",
+        ]);
+        assert_failure(&output);
+        assert!(
+            json_diagnostics(&output)
+                .iter()
+                .any(|d| d["code"] == "REQUEST.CLI.OPTION_INVALID")
+        );
+    }
+    for hours in ["NaN", "inf", "-1"] {
+        assert_failure(&run(&[
+            "summary",
+            path.to_str().unwrap(),
+            "--from",
+            "sincal-multiconductor",
+            "--sincal-snapshot-hours",
+            hours,
+        ]));
+    }
+    assert_failure(&run(&[
+        "summary",
+        path.to_str().unwrap(),
+        "--from",
+        "sincal-multiconductor",
+        "--sincal-acquired-tables",
+        "missing.json",
+    ]));
+}
+
+#[test]
+fn balanced_sincal_cli_selections_reach_the_balanced_reader() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../tests/data/sincal/1-LV-rural1--0-sw.sinx");
+    for command in ["summary", "serialize", "convert"] {
+        let mut args = vec![
+            command,
+            path.to_str().unwrap(),
+            "--from",
+            "sincal-balanced",
+            "--sincal-variant",
+            "1",
+        ];
+        if command == "convert" {
+            args.extend(["--to", "matpower"]);
+        }
+        assert_success(&run(&args));
+        args[5] = "999";
+        assert_failure(&run(&args));
+    }
+    // A declared balanced profile reaches the balanced reader. It must not
+    // reject all selections at the CLI boundary or retry another family.
+    let output = run(&[
+        "--diagnostics-format",
+        "json",
+        "summary",
+        path.to_str().unwrap(),
+        "--from",
+        "sincal-balanced",
+        "--sincal-snapshot-hours",
+        "6",
+    ]);
+    assert_failure(&output);
+    assert!(
+        json_diagnostics(&output)
+            .iter()
+            .any(|d| d["code"] == "PARSE.SINCAL.MALFORMED")
+    );
+}

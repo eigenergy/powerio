@@ -2422,6 +2422,7 @@ dependencies = [
  "powerio-matrix",
  "powerio-prob",
  "powerio-tx",
+ "rusqlite",
  "schemars",
  "serde",
  "serde_json",
@@ -2439,7 +2440,9 @@ dependencies = [
  "powerio-matrix",
  "powerio-prob",
  "powerio-tx",
+ "rusqlite",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
 ]
 
@@ -2457,6 +2460,7 @@ dependencies = [
  "powerio-prob",
  "powerio-tx",
  "ratatui",
+ "rusqlite",
  "schemars",
  "serde",
  "serde_json",
@@ -2487,13 +2491,17 @@ dependencies = [
  "memchr",
  "num-complex",
  "powerio-core",
+ "powerio-sincal",
  "quick-xml",
+ "rusqlite",
  "schemars",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
  "uuid",
+ "zip",
 ]
 
 [[package]]
@@ -2546,6 +2554,7 @@ dependencies = [
  "powerio-prob",
  "powerio-tx",
  "pyo3",
+ "rusqlite",
  "serde_json",
  "sprs",
 ]

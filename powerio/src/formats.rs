@@ -56,6 +56,11 @@ pub fn resolve_format(name: &str) -> Option<FormatInfo> {
     if name.eq_ignore_ascii_case("sincal") {
         return Some(info("sincal", Some("sinx"), false, false));
     }
+    if powerio_tx::format::routing::parse_distribution_format(name)
+        == Some(powerio_tx::format::routing::DistributionFormat::SincalMulticonductor)
+    {
+        return Some(info("sincal-multiconductor", Some("sinx"), false, false));
+    }
     match name {
         "bmopf-json@0.1.0" => return Some(info("bmopf-json@0.1.0", Some("json"), false, true)),
         "bmopf-json@0.2.0" => return Some(info("bmopf-json@0.2.0", Some("json"), false, true)),

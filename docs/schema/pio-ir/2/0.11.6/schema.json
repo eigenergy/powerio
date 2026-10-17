@@ -5947,7 +5947,8 @@
         "dss",
         "bmopf-json",
         "pmd-json",
-        "cim-dist"
+        "cim-dist",
+        "sincal"
       ],
       "type": "string"
     },
