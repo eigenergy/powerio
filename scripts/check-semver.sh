@@ -36,6 +36,14 @@ fi
 echo "comparing the publishable crates at $version against $baseline"
 # powerio-py and powerio-capi are publish = false; name them anyway so the
 # crate set reads the same as the msrv and archive jobs.
+excluded=(--exclude powerio-py --exclude powerio-capi)
+# This crate is introduced by the SINCAL stack, so older release trees have
+# no API for it to compare. Once a release contains its manifest, it joins
+# the ordinary workspace comparison automatically.
+if [ -f powerio-sincal/Cargo.toml ] \
+    && ! git cat-file -e "$baseline:powerio-sincal/Cargo.toml" 2>/dev/null; then
+    echo "powerio-sincal is new since $baseline; no previous API to compare"
+    excluded+=(--exclude powerio-sincal)
+fi
 cargo semver-checks check-release --workspace \
-    --exclude powerio-py --exclude powerio-capi \
-    --baseline-rev "$baseline" "$@"
+    "${excluded[@]}" --baseline-rev "$baseline" "$@"

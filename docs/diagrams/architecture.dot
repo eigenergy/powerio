@@ -32,9 +32,11 @@ digraph powerio_architecture {
     "powerio-dist" [label = "powerio-dist\nMulticonductorNetwork\n+ OpenDSS, PMD, BMOPF"];
 
     "powerio-core" [label = "powerio-core\nSource, Diagnostic, Error,\nPioModule<T>, series, output"];
+    "powerio-sincal" [label = "powerio-sincal\ninternal transport + schema\n(no electrical model)"];
 
     "powerio-tx" -> "powerio-core";
     "powerio-dist" -> "powerio-core";
+    "powerio-sincal" -> "powerio-core";
     "powerio-prob" -> "powerio-core";
     "powerio-prob" -> "powerio-tx";
     "powerio-prob" -> "powerio-dist";

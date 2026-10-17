@@ -67,6 +67,13 @@ fn the_dependency_graph_matches_the_settled_layout() {
     // The foundation depends on no workspace crate.
     assert_eq!(workspace_deps_of(&graph, "powerio-core"), BTreeSet::new());
 
+    // Native transport/schema support is model neutral. Family adapters can
+    // depend on it without depending on one another.
+    assert_eq!(
+        workspace_deps_of(&graph, "powerio-sincal"),
+        BTreeSet::from(["powerio-core"])
+    );
+
     // The two model crates are independent siblings over the foundation.
     assert_eq!(
         workspace_deps_of(&graph, "powerio-tx"),
