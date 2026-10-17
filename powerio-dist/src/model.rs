@@ -409,6 +409,13 @@ pub enum DistLoadVoltageModel {
         beta_i: Vec<f64>,
         beta_p: Vec<f64>,
     },
+    /// Exponential voltage model by active phase. `v_nom` is volts per active
+    /// phase.
+    Exponential {
+        v_nom: Vec<f64>,
+        gamma_p: Vec<f64>,
+        gamma_q: Vec<f64>,
+    },
     /// ZIP law with low-voltage current interpolation and high-voltage
     /// impedance continuation. See [`Self::power_scale`] for the equations.
     /// Below `v_low_pu` the entire nominal load is constant impedance;
@@ -425,13 +432,6 @@ pub enum DistLoadVoltageModel {
         v_min_pu: f64,
         v_max_pu: f64,
         cutoff_pu: f64,
-    },
-    /// Exponential voltage model by active phase. `v_nom` is volts per active
-    /// phase.
-    Exponential {
-        v_nom: Vec<f64>,
-        gamma_p: Vec<f64>,
-        gamma_q: Vec<f64>,
     },
 }
 
