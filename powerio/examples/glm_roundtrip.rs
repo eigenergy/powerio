@@ -6,19 +6,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let input = args
         .next()
-        .ok_or("usage: glm_roundtrip FILE OUTPUT_DIRECTORY [pnnl|arras] [LINE_SHUNTS_JSON]")?;
+        .ok_or("usage: glm_roundtrip FILE OUTPUT_DIRECTORY [pnnl|arras] [LINE_SHUNTS_JSON] [--acquisition-root DIRECTORY]")?;
     let output = std::path::PathBuf::from(args.next().ok_or("missing output directory")?);
     let dialect = match args.next().as_deref() {
         None | Some("pnnl") => GlmDialect::Pnnl5_3,
         Some("arras") => GlmDialect::Arras4_3,
         _ => return Err("expected pnnl or arras dialect".into()),
     };
-    let shunts = args.next();
-    if args.next().is_some() {
-        return Err("too many arguments".into());
-    }
+    let (source, shunts) = source_options(&mut args, Source::open(input)?)?;
     let mut module = parse(
-        Source::open(input)?,
+        source,
         PreprocessOptions {
             dialect,
             ..Default::default()
@@ -47,6 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             *q *= 1.25;
         }
     }
+    edit_transformers(&mut edited);
     for line in edited.lines_mut() {
         line.length *= 1.1;
     }
@@ -87,6 +85,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ] {
         let path = output.join(format!("{label}.glm"));
         let emission = emit_canonical(&network, Destination::path(path))?;
+        if !network.transformers().is_empty() {
+            powerio_dist::emit(
+                &powerio::PioModule::new(network.clone()),
+                powerio_dist::DistTargetFormat::Dss,
+                Destination::path(output.join(format!("{label}.dss"))),
+            )?;
+        }
         reports.insert(label.into(), serde_json::json!({
             "network": network,
             "diagnostics": emission.diagnostics().iter().map(powerio::Diagnostic::code).collect::<Vec<_>>(),
@@ -94,6 +99,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("{}", serde_json::to_string_pretty(&reports)?);
     Ok(())
+}
+
+fn source_options(
+    args: &mut impl Iterator<Item = String>,
+    mut source: Source,
+) -> Result<(Source, Option<String>), Box<dyn std::error::Error>> {
+    let mut shunts = None;
+    while let Some(arg) = args.next() {
+        if arg == "--acquisition-root" {
+            source =
+                source.with_acquisition_root(args.next().ok_or("missing acquisition root")?)?;
+        } else if shunts.is_none() && !arg.starts_with("--") {
+            shunts = Some(arg);
+        } else {
+            return Err("unexpected argument".into());
+        }
+    }
+    Ok((source, shunts))
 }
 
 fn override_shunts(
@@ -117,4 +140,21 @@ fn override_shunts(
     code.g_to = shunts.g_to;
     code.b_to = shunts.b_to;
     Ok(())
+}
+
+fn edit_transformers(network: &mut powerio_dist::MulticonductorNetwork) {
+    for transformer in network.transformers_mut() {
+        if transformer.xsc_pct == [0.0] {
+            transformer.windings[0].tap *= 1.02;
+        }
+        for winding in &mut transformer.windings {
+            winding.r_pct *= 1.2;
+        }
+        for x in &mut transformer.xsc_pct {
+            *x *= 0.9;
+        }
+        if let Some(secondary) = transformer.windings.get_mut(1) {
+            secondary.v_ref *= 1.05;
+        }
+    }
 }

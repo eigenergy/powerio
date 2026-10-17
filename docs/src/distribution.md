@@ -200,6 +200,11 @@ replay reports that those inputs must accompany the files; the module's
 source descriptors. The legacy network `source_format` field stays unset so
 the existing IR 2 record remains compatible.
 
+Unused passive equipment definitions remain in source with a diagnostic. The
+reader follows configuration, conductor and spacing references from instantiated
+objects; a connected unsupported device still fails. This lets shared equipment
+libraries contain unused transformer or triplex definitions.
+
 Fresh networks, edited modules, IR-restored modules and cross-profile writes
 generate `case.glm` from the typed network. Rust's
 `powerio_dist::glm::emit_canonical` offers single-file output directly from a
@@ -230,7 +235,74 @@ calculated matrices, so it does not reinterpret geometry under the target fork.
 
 Numerical `iteration_limit` settings and voltage/current dump objects remain in
 retained source and are reported; they do not become network components.
-Other geometry/earth models, transformers, split-phase and
+Ordinary transformers support three-phase `WYE_WYE` (also numeric `1`) and
+single-phase `SINGLE_PHASE` connections with explicit voltages and positive series
+resistance/reactance. They map to grounded winding records and retain device
+coordinates. Canonical output uses the current winding voltage, resistance and
+reactance; source-only configuration objects are not required after an IR round
+trip. OpenDSS output explicitly disables its additional anti-floating admittance
+for these imported circuits. The total rating can be explicit or the sum of
+phase ratings; conflicting totals beyond the native 1% limit fail. Individual
+phase nameplate declarations remain in source and are reported.
+
+FBS grounded-wye transformers preserve the finite default core admittance in
+the existing `no_load_shunt` winding-2 record. Canonical NR GLM represents it
+as a constant-impedance load at the secondary bus, with a diagnostic identifying
+its contribution to the transformer port current. OpenDSS uses its equivalent
+winding-2 exciting branch. A connected directed FBS tree without an explicit
+source uses its unique upstream root's phasors; ambiguous roots, cycles and
+implicit-source switch/regulator networks fail. Other transformer connections,
+non-unit ordinary-transformer taps and explicit source magnetizing parameters
+still need qualification.
+
+For both pinned engines, NR `DELTA_DELTA` (also numeric `2`) stamps three
+grounded-wye branches, including zero-sequence transfer. The reader preserves
+that native circuit in existing winding records and issues
+`READ.GLM.TRANSFORMER_EQUIVALENT`. The `gridlabd_declared_connection` extra keeps
+the original label across IR; it does not carry electrical parameters. Canonical
+GLM writes the effective `WYE_WYE` circuit and diagnoses the label change.
+This is native-engine compatibility, not physical delta winding isolation;
+physical delta export and FBS delta transformers still require their own mappings.
+
+NR `WYE_WYE` regulators preserve Type A/B per-phase ratios and series resistance
+as single-phase winding records. An object tap overrides its configuration tap.
+Manual missing taps use the native neutral position; an active controller needs
+explicit taps on every active phase and produces a frozen-control warning.
+Unit suffixes follow the selected engine: PNNL's `regulation` field has no unit,
+while Arras publishes `%`. Bare numeric values retain their native meaning.
+The winding's 1 VA normalization base is marked as defaulted and is not a declared
+nameplate rating. The `rating_is_normalization_base` extra preserves that fact in
+IR; cross-format writers diagnose loss of that metadata. Device coordinates attach to every resulting phase record.
+Canonical GLM emits manual regulator equivalents from current winding values;
+OpenDSS uses `xscarray=(0)` to avoid its scalar zero-reactance substitution.
+FBS regulators, open-delta connections and banked initialization remain unfinished.
+
+Canonical node convergence is set to `1e-9 V`. The tighter former absolute
+setting could prevent IEEE13 from converging despite stable electrical values.
+This is an engine stopping criterion, not the validation comparison tolerance.
+
+The pinned IEEE13 and IEEE37 NR feeders are qualified against PNNL, Arras and OpenDSS for
+all bus-phase voltages, source currents, line/transformer terminal currents,
+terminal powers and losses, and original load-object currents/powers. Checks
+include independently edited input, IR-restored canonical output and current
+balance at every bus. This evidence applies to those feeders and their documented
+edits; it does not establish the unfinished profiles above. IEEE37 starts downstream
+of its regulator; its NR delta transformer uses the equivalent described above.
+Its parent-directory include uses the existing explicit acquisition-root API. See
+`evals/gridlabd/README.md` for the reproducible oracle and measurement conventions.
+
+The legacy IEEE4 grounded-wye step-down feeder has fixed-state qualification
+with its original default FBS solver and implicit upstream source. Both pinned
+forks and OpenDSS agree on all bus and device-port measurements; deliberately
+omitting its small default core current fails the comparison. This does not
+qualify every IEEE4 transformer configuration.
+
+IEEE34 and IEEE123 NR also have fixed-state qualification across both forks and
+OpenDSS, including per-phase manual capacitor admittances and switch/regulator
+states. Their edited-state qualification remains pending. The harness documents
+per-feeder stopping settings and numerical comparison budgets.
+
+Other geometry/earth models, split-phase and
 additional static devices remain unfinished and fail explicitly. Full OpenDSS
 static compatibility is not yet established.
 

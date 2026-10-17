@@ -272,3 +272,31 @@ fn dialect_changes_if_left_operand_and_arras_settings_are_applied() {
     .unwrap();
     assert!(literal.text().contains("object node"));
 }
+
+#[test]
+fn explicit_project_root_allows_parent_include_without_losing_primary_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let cases = root.path().join("cases");
+    std::fs::create_dir(&cases).unwrap();
+    let main = cases.join("main.glm");
+    std::fs::write(
+        &main,
+        "#include \"../config.glm\";\n#include \"local.glm\";\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("config.glm"),
+        "object node { name from_parent; }\n",
+    )
+    .unwrap();
+    std::fs::write(cases.join("local.glm"), "object node { name from_case; }\n").unwrap();
+    assert!(preprocess_source(Source::open(&main).unwrap(), PreprocessOptions::default()).is_err());
+    let source = Source::open(&main)
+        .unwrap()
+        .with_acquisition_root(root.path())
+        .unwrap();
+    let prepared = preprocess_source(source, PreprocessOptions::default()).unwrap();
+    assert!(prepared.text().contains("name from_parent;"));
+    assert!(prepared.text().contains("name from_case;"));
+    assert_eq!(prepared.dependencies().len(), 3);
+}

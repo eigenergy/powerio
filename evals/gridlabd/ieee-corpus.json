@@ -1,0 +1,736 @@
+{
+  "description": "Discovery catalog of public distribution feeder inputs and reference results. Pins identify source versions, not compatibility claims. Dataset contents remain outside the repository.",
+  "repositories_licenses": {
+    "gridlab-d/gridlab-d": "LICENSE",
+    "GRIDAPPSD/CIMHub": "license.md",
+    "dss-extensions/electricdss-tst": "License.txt",
+    "GRIDAPPSD/Powergrid-Models": "No repository-wide license located in this inventory; do not vendor inputs.",
+    "ieee-pes-amps/dtf-dev": "LICENSE.md is a three-byte placeholder; do not treat it as redistribution permission."
+  },
+  "families": [
+    {
+      "id": "ieee13",
+      "sources": [
+        {
+          "repository": "https://github.com/gridlab-d/gridlab-d",
+          "commit": "1b2e463d3c149e999a2c5f04213477f545e01dc6",
+          "files": [
+            {
+              "path": "powerflow/autotest/test_IEEE_13_NR.glm",
+              "git_blob_sha1": "c594da8c3fb50157715693b21f3c7f310885e0ec",
+              "bytes": 14063
+            },
+            {
+              "path": "powerflow/autotest/test_IEEE_13_FBS.glm",
+              "git_blob_sha1": "24f7d685f090efecd50009852e8b2fe34838b31e",
+              "bytes": 14065
+            }
+          ]
+        }
+      ],
+      "note": "Keep solver variants distinct; do not substitute NR for FBS implicitly."
+    },
+    {
+      "id": "ieee34",
+      "sources": [
+        {
+          "repository": "https://github.com/gridlab-d/gridlab-d",
+          "commit": "1b2e463d3c149e999a2c5f04213477f545e01dc6",
+          "files": [
+            {
+              "path": "powerflow/autotest/test_IEEE_34_NR.glm",
+              "git_blob_sha1": "d7d052cd19507f14a926ba36c1acb767bb359ed6",
+              "bytes": 17527
+            },
+            {
+              "path": "powerflow/autotest/test_IEEE_34_FBS.glm",
+              "git_blob_sha1": "13f09df28f303933e7fd2c9207b07fc425d29e3b",
+              "bytes": 17528
+            },
+            {
+              "path": "powerflow/autotest/data_configurations_34_node.glm",
+              "git_blob_sha1": "0be619019344f11a0b877cc73dc5ba1a13a4c67e",
+              "bytes": 2873
+            }
+          ]
+        }
+      ],
+      "note": "Keep solver variants distinct; do not substitute NR for FBS implicitly."
+    },
+    {
+      "id": "ieee37",
+      "sources": [
+        {
+          "repository": "https://github.com/gridlab-d/gridlab-d",
+          "commit": "1b2e463d3c149e999a2c5f04213477f545e01dc6",
+          "files": [
+            {
+              "path": "powerflow/autotest/test_IEEE_37_NR.glm",
+              "git_blob_sha1": "864284119211fdc155f749f87cff1fcab1e3460d",
+              "bytes": 10550
+            },
+            {
+              "path": "powerflow/autotest/test_IEEE_37_FBS.glm",
+              "git_blob_sha1": "5f74a47d186e4bc3b3a9d6cb65f77cd8f96c0b64",
+              "bytes": 10551
+            },
+            {
+              "path": "powerflow/autotest/data_configurations_37_node.glm",
+              "git_blob_sha1": "21e6a6981f683673aadc8cccb6786d132e60ba06",
+              "bytes": 2637
+            }
+          ]
+        }
+      ],
+      "note": "Keep solver variants distinct; do not substitute NR for FBS implicitly."
+    },
+    {
+      "id": "ieee123",
+      "sources": [
+        {
+          "repository": "https://github.com/gridlab-d/gridlab-d",
+          "commit": "1b2e463d3c149e999a2c5f04213477f545e01dc6",
+          "files": [
+            {
+              "path": "powerflow/autotest/test_IEEE-123_FBS.glm",
+              "git_blob_sha1": "6a243657ea937313a75f64df247532bdfa9473f3",
+              "bytes": 64330
+            },
+            {
+              "path": "powerflow/autotest/test_IEEE123_zero_voltages_NR.glm",
+              "git_blob_sha1": "bda144fad5a1dce4aa7942f7ac56dfd0aec0d8d9",
+              "bytes": 35848
+            },
+            {
+              "path": "powerflow/autotest/test_IEEE123_zero_voltages_FBS.glm",
+              "git_blob_sha1": "50e325fd43d1961fb5cda10bc57f265cf288cca0",
+              "bytes": 35849
+            },
+            {
+              "path": "powerflow/autotest/data_configurations_delta_123node.glm",
+              "git_blob_sha1": "3769e4f733f2679cb927aba20b61889eddc00715",
+              "bytes": 7577
+            },
+            {
+              "path": "powerflow/autotest/test_IEEE123_run.glm",
+              "git_blob_sha1": "a3c5524b4abd513b334b57b255aad86ee4050240",
+              "bytes": 1845
+            },
+            {
+              "path": "powerflow/autotest/IEEE123_base.inc",
+              "git_blob_sha1": "cfa0ecf6fd4d6fac7c4633222bc4a9664b0f1f64",
+              "bytes": 57032
+            }
+          ]
+        }
+      ],
+      "note": "Zero-voltage regression assertions cover absent phases, not a complete positive load-flow reference. Switching schedules require an explicitly selected static state."
+    },
+    {
+      "id": "ieee4",
+      "sources": [
+        {
+          "repository": "https://github.com/gridlab-d/gridlab-d",
+          "commit": "1b2e463d3c149e999a2c5f04213477f545e01dc6",
+          "files": [
+            {
+              "path": "models/powerflow_IEEE_4node.glm",
+              "git_blob_sha1": "38c6332934c661ba697c33706e8a5faa56fc5942",
+              "bytes": 2283
+            }
+          ]
+        },
+        {
+          "repository": "https://github.com/GRIDAPPSD/CIMHub",
+          "commit": "5ba4c63fa525108928942d564fddc022c3fb031f",
+          "files": [
+            {
+              "path": "ieee4/base/Auto1bus.dss",
+              "git_blob_sha1": "5237bf27cf60990bfa2b9a9610d3ab369d306d85",
+              "bytes": 1411
+            },
+            {
+              "path": "ieee4/base/Auto3bus.dss",
+              "git_blob_sha1": "c3beb25dfbd9251b037d540728bfda6346542ba1",
+              "bytes": 1219
+            },
+            {
+              "path": "ieee4/base/AutoAuto.dss",
+              "git_blob_sha1": "907c598b632a2ded0f791c0aaf7837c3e7d594c2",
+              "bytes": 777
+            },
+            {
+              "path": "ieee4/base/AutoHLT.dss",
+              "git_blob_sha1": "e0ecf3551c6c18c974ae27eeba5bd50d21133838",
+              "bytes": 740
+            },
+            {
+              "path": "ieee4/base/AutoHLTCode.dss",
+              "git_blob_sha1": "7cb4daf527eaf4a8dfbf20ac0532abdfe18d42ad",
+              "bytes": 875
+            },
+            {
+              "path": "ieee4/base/DDBal.dss",
+              "git_blob_sha1": "7b77ca4ffc40456d56cd2609f28c34356be416f8",
+              "bytes": 1350
+            },
+            {
+              "path": "ieee4/base/DDUnBal.dss",
+              "git_blob_sha1": "6a6c38760294ca6f9e45109186a4534b93616e2b",
+              "bytes": 1560
+            },
+            {
+              "path": "ieee4/base/DYBal.dss",
+              "git_blob_sha1": "2a6dbff06a483ebb07b5f8040342894b5374b6ac",
+              "bytes": 1305
+            },
+            {
+              "path": "ieee4/base/DYUnBal.dss",
+              "git_blob_sha1": "b6d0dbe61a608e638f8db1eacefbe77af48ae287",
+              "bytes": 1466
+            },
+            {
+              "path": "ieee4/base/GYDBal.dss",
+              "git_blob_sha1": "ab90286668a3a5dc1c9e38d52ae33eab98787f20",
+              "bytes": 1375
+            },
+            {
+              "path": "ieee4/base/GYDUnBal.dss",
+              "git_blob_sha1": "2cb0b757957786320b7fb7a7af8e59b8f60539fc",
+              "bytes": 1509
+            },
+            {
+              "path": "ieee4/base/IMODOD.dss",
+              "git_blob_sha1": "05dea966abdc81b9cc418073b48842489725b0e3",
+              "bytes": 1999
+            },
+            {
+              "path": "ieee4/base/IMOYODlag.dss",
+              "git_blob_sha1": "48d7653c57230bd9a8d597f9c1aebca9bf1502e6",
+              "bytes": 2031
+            },
+            {
+              "path": "ieee4/base/IMOYODlead.dss",
+              "git_blob_sha1": "a87f3a32d62effa7a5eee360eeb685c4baf0dd07",
+              "bytes": 2030
+            },
+            {
+              "path": "ieee4/base/IMYD.dss",
+              "git_blob_sha1": "bc17b690e93db4df6629e042e24b9e6cbf8cd7f8",
+              "bytes": 2137
+            },
+            {
+              "path": "ieee4/base/OYODBal.dss",
+              "git_blob_sha1": "df229226a236b567dd223fe6db995da7a6450002",
+              "bytes": 1648
+            },
+            {
+              "path": "ieee4/base/OYODUnBal.dss",
+              "git_blob_sha1": "53727f61d9f00492d6bb008d88ca16dd632ead0c",
+              "bytes": 1492
+            },
+            {
+              "path": "ieee4/base/OnePh.dss",
+              "git_blob_sha1": "415afee60e2e55077e3fff84508a43da2f953b67",
+              "bytes": 1121
+            },
+            {
+              "path": "ieee4/base/SCTBal.dss",
+              "git_blob_sha1": "86396018e793e2550286bf6af8337f116a4815f0",
+              "bytes": 1248
+            },
+            {
+              "path": "ieee4/base/SCTUnBal.dss",
+              "git_blob_sha1": "094c185422a39db79e09de5e1336864caf0c7c80",
+              "bytes": 1250
+            },
+            {
+              "path": "ieee4/base/YDBal.dss",
+              "git_blob_sha1": "02584002787b3a5a91f2832f7635275475885cfb",
+              "bytes": 1401
+            },
+            {
+              "path": "ieee4/base/YDUnBal.dss",
+              "git_blob_sha1": "3d5913411462d7b6591d13b2787732f62f63894d",
+              "bytes": 1611
+            },
+            {
+              "path": "ieee4/base/YYBal.dss",
+              "git_blob_sha1": "c77b8bbb5ca5c6164f399934dcc682397cb019eb",
+              "bytes": 1097
+            },
+            {
+              "path": "ieee4/base/YYD.dss",
+              "git_blob_sha1": "f5ccf044a9641a5f73dac50141d112f2abe03267",
+              "bytes": 2495
+            },
+            {
+              "path": "ieee4/base/YYD1Tank.dss",
+              "git_blob_sha1": "74637a7d9eb5c654837c66030a87bd65ba79d891",
+              "bytes": 2162
+            },
+            {
+              "path": "ieee4/base/YYDXn.dss",
+              "git_blob_sha1": "1b2c9caf1d48dc29430b50fad022e61dc49a3325",
+              "bytes": 2140
+            },
+            {
+              "path": "ieee4/base/YYUnBal.dss",
+              "git_blob_sha1": "79a824e44a9293ea26c106451f92b33e5423a257",
+              "bytes": 1258
+            }
+          ]
+        }
+      ],
+      "note": "Balanced/unbalanced winding-connection cases; some CIMHub examples extend the IEEE4 family."
+    },
+    {
+      "id": "ieee8500",
+      "sources": [
+        {
+          "repository": "https://github.com/GRIDAPPSD/Powergrid-Models",
+          "commit": "f5cc029ff31cd8e4a8338109b781c95fd01a00f4",
+          "files": [
+            {
+              "path": "archive/GLM/IEEE_8500node.glm",
+              "git_blob_sha1": "08fa86d37b8a46dc9667d3d95f521a3634cbef87",
+              "bytes": 1366160
+            }
+          ]
+        },
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/AddBusXY.py",
+              "git_blob_sha1": "3457138fec5621a2ae58df503be558a2c9eb54aa",
+              "bytes": 1582
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Buscoords.dss",
+              "git_blob_sha1": "20934f5bf66717bbc5cd6da9153d877c542d0adf",
+              "bytes": 215233
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/CapControls.DSS",
+              "git_blob_sha1": "5651e6213ebb085d4045a26f9d5ee723b238169d",
+              "bytes": 2084
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Capacitors.dss",
+              "git_blob_sha1": "465ae7e5442afc9e6a70cd579e69e7ea98ba9157",
+              "bytes": 927
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/CloudTransient.dss",
+              "git_blob_sha1": "35dbb095da58e50bb1a983c41648309b94b6ae46",
+              "bytes": 358
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Feeder_Loads.dss",
+              "git_blob_sha1": "0ffcc589e1cd83854fb17d509c8e19c622f5e556",
+              "bytes": 188
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Fuses.DSS",
+              "git_blob_sha1": "31c270eb814090fefd9d73520b289d68976e47ac",
+              "bytes": 2423
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Generators.dss",
+              "git_blob_sha1": "5ceae62407cf74435dce046bfe2773a6bfa03e6f",
+              "bytes": 794
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/LineCodes.dss",
+              "git_blob_sha1": "26d73b6f48a1f4bb73a8fd4e899255f33407cb81",
+              "bytes": 358423
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/LineCodes2.DSS",
+              "git_blob_sha1": "64d6130e821fadf8aaff04a413fef23540b728c4",
+              "bytes": 12249
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/LineGeometry.dss",
+              "git_blob_sha1": "71ec92b37394ead4ae1a79fb639c1b94c69905dd",
+              "bytes": 13891
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Lines-Geometry.dss",
+              "git_blob_sha1": "4d9d46dbd1689f5176fb15d9aedcc013c7dd1389",
+              "bytes": 390575
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Lines.dss",
+              "git_blob_sha1": "1055b0f1fe72f666671bdadf2eafc43f98af4a6e",
+              "bytes": 389011
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/LoadXfmrCodes.dss",
+              "git_blob_sha1": "5037b3e3af5a51bf23ac76b3abecb59c9e4e9844",
+              "bytes": 118289
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/LoadXfmrs.dss",
+              "git_blob_sha1": "e163c9419908d69784a63a45e923720dfe6b52d1",
+              "bytes": 292247
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Loads.dss",
+              "git_blob_sha1": "168baf1e1a2f26052e58da1a63fec6178dbc8ab7",
+              "bytes": 149061
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Master-unbal.dss",
+              "git_blob_sha1": "1b2257008dd157213be42d1f22d0de5921855340",
+              "bytes": 823
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Master.dss",
+              "git_blob_sha1": "656acebe0b95b4ef51086930cc778ce39e0b1193",
+              "bytes": 829
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Normalized-1s-2900-pts.CSV",
+              "git_blob_sha1": "b00459583774da91dfcb1f446fe0d466bb07d7c7",
+              "bytes": 36988
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/P174_Run_360kW_PV.DSS",
+              "git_blob_sha1": "f14f1e4608a48fe1199510342795662183e6bd63",
+              "bytes": 1483
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/P174_Run_Voltage_Profile.DSS",
+              "git_blob_sha1": "93a8fde5f1c9723d1ef688776c6e1ec77a7f8286",
+              "bytes": 415
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Regulators.dss",
+              "git_blob_sha1": "fc99f78522f8d307a055f87c4231a7402c1c5965",
+              "bytes": 3033
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Run_8500Node.dss",
+              "git_blob_sha1": "7341fabe8778376a23631062377ace550f330f8c",
+              "bytes": 1531
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Run_8500Node_Unbal.dss",
+              "git_blob_sha1": "b2b26a486d1a50796224e062e67dc8332bed0a78",
+              "bytes": 1652
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Run_RecloserSiting.DSS",
+              "git_blob_sha1": "12bedd306ab3c51b7455a4783b27da879f48c025",
+              "bytes": 612
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/TplxFaultrate.dss",
+              "git_blob_sha1": "4df602e2b7b40698e3cecfab3b58569cebc80994",
+              "bytes": 36332
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Transformers.dss",
+              "git_blob_sha1": "800b47278f005b5596488371569ce9aaaf35018a",
+              "bytes": 1607
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Triplex_Linecodes.dss",
+              "git_blob_sha1": "e2c72223e5243220a3bf778f53ed142bf0463163",
+              "bytes": 786
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Triplex_Lines.DSS",
+              "git_blob_sha1": "78ac3463a8f212e6e2f82138edf58f5e5e7120c2",
+              "bytes": 128587
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/UnbalancedLoads.DSS",
+              "git_blob_sha1": "63eed942694dad3e87915a64b9dd1492080fd456",
+              "bytes": 334482
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/WireData.dss",
+              "git_blob_sha1": "cfc8d15c8e88744edcdb1bb5cecfb9ee8fcd9198",
+              "bytes": 15848
+            }
+          ]
+        },
+        {
+          "repository": "https://github.com/ieee-pes-amps/dtf-dev",
+          "commit": "030a22772c3e8ef5d55bebcec1960fd4325ce44f",
+          "files": [
+            {
+              "path": "8500-bus/Additional Information/Solutions/Solution-Balanced.xls",
+              "git_blob_sha1": "53059589724fac47696c2b063fcfce3a6a6d17b0",
+              "bytes": 4036608
+            },
+            {
+              "path": "8500-bus/Additional Information/Solutions/Solution-unBalanced.xls",
+              "git_blob_sha1": "c8dcea622c706e31e99234d8346924df383ceb58",
+              "bytes": 4445184
+            }
+          ]
+        }
+      ],
+      "note": "Balanced/unbalanced service loads and controller state must be aligned before comparison. Published result files belong to their original baseline."
+    },
+    {
+      "id": "ieee9500",
+      "sources": [
+        {
+          "repository": "https://github.com/GRIDAPPSD/CIMHub",
+          "commit": "5ba4c63fa525108928942d564fddc022c3fb031f",
+          "files": [
+            {
+              "path": "ieee9500/ieee9500bal_glm.zip",
+              "git_blob_sha1": "1ac8bab6e2c7f2d135b3bd23ef6ee68c69658a33",
+              "bytes": 168520
+            },
+            {
+              "path": "ieee9500/ieee9500bal_dss.zip",
+              "git_blob_sha1": "d9819852ace7417d89f9b2864dd0f10fd412cb66",
+              "bytes": 325095
+            },
+            {
+              "path": "ieee9500/ieee9500bal_compare.zip",
+              "git_blob_sha1": "a2a9eb471f2457ed87899b24e8ade659169d4901",
+              "bytes": 1361187
+            },
+            {
+              "path": "ieee9500/ieee9500unbal_glm.zip",
+              "git_blob_sha1": "27ed32f02e7b032f54cf5976845c5db771e8ac92",
+              "bytes": 179473
+            },
+            {
+              "path": "ieee9500/ieee9500unbal_dss.zip",
+              "git_blob_sha1": "4f1080fe30a79653cdc8376c32320c8c4dd7c724",
+              "bytes": 385460
+            },
+            {
+              "path": "ieee9500/ieee9500unbal_compare.zip",
+              "git_blob_sha1": "bf5c95e3471a4feb1ad3337322503600d608217f",
+              "bytes": 1445129
+            }
+          ]
+        }
+      ],
+      "note": "Archives include paired engine results. GLM wrappers include climate/generator/reliability modules; do not silently discard their effects."
+    },
+    {
+      "id": "european_lv",
+      "sources": [
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Master.dss",
+              "git_blob_sha1": "21e4d7f3610558718da7b4f94d3352878ed6cbfd",
+              "bytes": 1600
+            }
+          ]
+        }
+      ],
+      "note": "OpenDSS corpus source; this catalog does not imply an available GLM equivalent or validated PowerIO support."
+    },
+    {
+      "id": "north_american_lv_network",
+      "sources": [
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCaseNorthAmerican/Master.dss",
+              "git_blob_sha1": "359f282e2593aba15abae0b9fd7f738e69315143",
+              "bytes": 164108
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCaseNorthAmerican/SecPar.dss",
+              "git_blob_sha1": "19d1b9f52e0a4b54d0f86902d689f6dd05efcb47",
+              "bytes": 87789
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCaseNorthAmerican/energy_meters.dss",
+              "git_blob_sha1": "701ecf6e231a16c19d3a42175e730b6e7b20a04b",
+              "bytes": 6555
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCaseNorthAmerican/network_protectors.dss",
+              "git_blob_sha1": "8c6b9412fc96b2cd811aacb85f7c2ff75df5a48a",
+              "bytes": 12448
+            }
+          ]
+        }
+      ],
+      "note": "OpenDSS corpus source; this catalog does not imply an available GLM equivalent or validated PowerIO support."
+    },
+    {
+      "id": "neutral_earth_voltage",
+      "sources": [
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/Capacitors.DSS",
+              "git_blob_sha1": "6c3a44d3e7cb81e0590c7450d6144bdb053405a9",
+              "bytes": 523
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/Grounds.DSS",
+              "git_blob_sha1": "74aa1c07f5f9b855b37be48ba34fc6c3a950479e",
+              "bytes": 7423
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/LineCodes.DSS",
+              "git_blob_sha1": "9b691a25e640f061d82525dd604d35d698ce7b0e",
+              "bytes": 749
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/LineConstantsCode.DSS",
+              "git_blob_sha1": "d24dd5199d6fd046a632982ab296dfabb1d22993",
+              "bytes": 7384
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/LineGeometry.DSS",
+              "git_blob_sha1": "dee12aebe4dfa26e29e51b36305fc9e14326347f",
+              "bytes": 3057
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/Lines.DSS",
+              "git_blob_sha1": "5a88063b8e909b157fcbfeaa8583b5318f309cc2",
+              "bytes": 11037
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/Loads.DSS",
+              "git_blob_sha1": "73c06969d9fcfbd58160cc0bb0445d4bde25df66",
+              "bytes": 8106
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/NEVMASTER.DSS",
+              "git_blob_sha1": "f4746c5050e9f6a7fc3563a063d6c95854bb0bd8",
+              "bytes": 324
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/Run_NEV.dss",
+              "git_blob_sha1": "95c1e83ced5bc8e64679cdd6af8bc8059e1eddba",
+              "bytes": 211
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/Spectra.DSS",
+              "git_blob_sha1": "b6d594991c21f46b9d9ed946ff3797c0b2aa5efa",
+              "bytes": 740
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/Substation.DSS",
+              "git_blob_sha1": "e54c759b713145b326c9e7705d9eaac46875256d",
+              "bytes": 1198
+            }
+          ]
+        }
+      ],
+      "note": "OpenDSS corpus source; this catalog does not imply an available GLM equivalent or validated PowerIO support."
+    },
+    {
+      "id": "four_wire_delta",
+      "sources": [
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/4wire-Delta/Kersting4wireIndMotor.dss",
+              "git_blob_sha1": "8b0a02acf2ef6aebb45c2a710755ec73f4907d81",
+              "bytes": 2148
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/4wire-Delta/Kersting4wire_Lagging.dss",
+              "git_blob_sha1": "0be5c9addb007941b3de20fb0b5e39941ea096b5",
+              "bytes": 2876
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/4wire-Delta/Kersting4wire_Leading.dss",
+              "git_blob_sha1": "ef7fb5430cad60ba15c8299d520451cf7d39fd9a",
+              "bytes": 2867
+            }
+          ]
+        }
+      ],
+      "note": "OpenDSS corpus source; this catalog does not imply an available GLM equivalent or validated PowerIO support."
+    },
+    {
+      "id": "secondary_circuit",
+      "sources": [
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/BusCoords.DSS",
+              "git_blob_sha1": "a17f460a0e0854a5a127a570cc7c6654cf113da1",
+              "bytes": 1836
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/LineCodes.DSS",
+              "git_blob_sha1": "8d2c934700944a1f898d9dada6c8033c477936b1",
+              "bytes": 1051
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/LinesTrafosLoads.dss",
+              "git_blob_sha1": "ce5fca35f4bdbb0322816abc506d7ce0a3e0abbf",
+              "bytes": 17918
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Loadshapes.dss",
+              "git_blob_sha1": "495b251ec0a73a4b00372cf955eab6b59c5e5197",
+              "bytes": 4968
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Loadshapes_VarySubV.dss",
+              "git_blob_sha1": "91dd1c34b8b979707208de5bccf4f345f4f2bbc6",
+              "bytes": 118
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Master.DSS",
+              "git_blob_sha1": "416bf35e13c0690ca8e4aef137579e9b2ebd4909",
+              "bytes": 597
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Substation.DSS",
+              "git_blob_sha1": "4e84489b379659cb3b98d2fca0cd2a49284aa407",
+              "bytes": 577
+            }
+          ]
+        }
+      ],
+      "note": "OpenDSS corpus source; this catalog does not imply an available GLM equivalent or validated PowerIO support."
+    },
+    {
+      "id": "dg_protection_static",
+      "sources": [
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/DG_Protection/DG_Prot_Fdr.dss",
+              "git_blob_sha1": "e3c1a832d64d35479c9eb836c1d9b67df938eb17",
+              "bytes": 5870
+            }
+          ]
+        }
+      ],
+      "note": "OpenDSS corpus source; this catalog does not imply an available GLM equivalent or validated PowerIO support."
+    },
+    {
+      "id": "comprehensive",
+      "source_page": "https://www.ewh.ieee.org/soc/pes/dsacom/testfeeders/Comprehensive.htm",
+      "note": "IEEE publishes model data and reference solutions; downloadable native input has not yet been acquired or pinned."
+    }
+  ]
+}

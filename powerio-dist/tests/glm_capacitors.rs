@@ -1,0 +1,67 @@
+use powerio_core::{Destination, EmittedOutput, Source};
+use powerio_dist::glm::{PreprocessOptions, emit_canonical, parse};
+
+fn deck() -> &'static str {
+    "module powerflow { solver_method NR; }
+object node { name source; phases ABCN; bustype SWING; nominal_voltage 240; }
+object capacitor { name cap; parent source; phases ABC; phases_connected ABC;
+nominal_voltage 240; cap_nominal_voltage 120; control MANUAL;
+capacitor_A 1440; capacitor_B 2880; capacitor_C 4320;
+switchA CLOSED; switchB OPEN; switchC CLOSED; latitude 0; longitude 151; }"
+}
+fn read(
+    text: &str,
+) -> Result<powerio_core::PioModule<powerio_dist::MulticonductorNetwork>, powerio_core::Error> {
+    parse(
+        Source::from_memory("capacitor.glm", text.as_bytes()).unwrap(),
+        PreprocessOptions::default(),
+    )
+}
+#[test]
+fn capacitor_coils_preserve_states_rating_voltage_and_edited_coordinates() {
+    let module = read(deck()).unwrap();
+    let mut net = module.into_value();
+    assert_eq!(net.shunts().len(), 3);
+    for (shunt, b) in net.shunts().iter().zip([0.1, 0.0, 0.3]) {
+        assert!((shunt.b[0][0] - b).abs() < 1e-15);
+        assert_eq!(shunt.bus, "source");
+    }
+    assert_eq!(net.component_locations().len(), 3);
+    net.shunts_mut()[0].b[0][0] *= 1.25;
+    let output = emit_canonical(&net, Destination::memory("out.glm").unwrap()).unwrap();
+    let EmittedOutput::Memory { artifacts } = output.output() else {
+        panic!()
+    };
+    let back = read(std::str::from_utf8(artifacts[0].bytes()).unwrap()).unwrap();
+    assert_eq!(
+        serde_json::to_value(net.shunts()).unwrap(),
+        serde_json::to_value(back.value().shunts()).unwrap()
+    );
+    assert_eq!(
+        net.component_locations(),
+        back.value().component_locations()
+    );
+}
+#[test]
+fn omitted_switch_is_open_and_omitted_rating_voltage_uses_node_voltage() {
+    let input = deck()
+        .replace("cap_nominal_voltage 120;", "")
+        .replace("switchA CLOSED;", "");
+    let m = read(&input).unwrap();
+    assert_eq!(m.value().shunts()[0].b, [vec![0.0]]);
+    assert!((m.value().shunts()[2].b[0][0] - 0.075).abs() < 1e-15);
+}
+#[test]
+fn unqualified_capacitor_physics_and_controls_are_not_silently_ignored() {
+    for (from, to) in [
+        ("control MANUAL", "control VOLT"),
+        ("phases_connected ABC", "phases_connected ABCD"),
+        ("switchA CLOSED", "switchA UNKNOWN"),
+        ("capacitor_A 1440", "capacitor_A -1440"),
+    ] {
+        assert!(read(&deck().replace(from, to)).is_err(), "{to}");
+    }
+    let mut net = read(deck()).unwrap().into_value();
+    net.shunts_mut()[0].g[0][0] = 1.0;
+    assert!(emit_canonical(&net, Destination::memory("out.glm").unwrap()).is_err());
+}

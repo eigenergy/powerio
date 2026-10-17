@@ -1432,7 +1432,7 @@ impl DssWriter {
             self.transformer_reactances(t, &mut s);
             let mut extras = t.extras.clone();
             // Typed reactances determine output after an IR load or mutation.
-            if nw > 3 && t.xsc_pct.len() == nw * (nw - 1) / 2 {
+            if t.xsc_pct.len() == nw * (nw - 1) / 2 {
                 extras.remove("xscarray");
             }
             if let Some((loss, imag)) = crate::model::transformer_no_load_percentages(t) {
@@ -1462,7 +1462,11 @@ impl DssWriter {
     /// Emit the complete pair table for four or more windings.
     fn transformer_reactances(&mut self, t: &DistTransformer, output: &mut String) {
         let nw = t.windings.len();
-        if nw > 3 {
+        // Scalar XHL=0 is trapped to 7 percent by the native setter.
+        // The complete array sets an actual zero without adding leakage.
+        if nw == 2 && t.xsc_pct.as_slice() == [0.0] {
+            output.push_str(" xscarray=(0)");
+        } else if nw > 3 {
             let expected = nw * (nw - 1) / 2;
             if t.xsc_pct.len() != expected {
                 self.warn(
@@ -1756,6 +1760,11 @@ impl DssWriter {
 
     fn add_default_load_voltage_bounds(&self, extras: &mut Extras) {
         if let Some(bounds) = self.options.default_load_voltage_bounds {
+            if bounds.vminpu == 0.0 {
+                // Vminpu=0 alone leaves the native Vlowpu=.5 impedance fallback.
+                // Unbounded P/I laws must retain their behavior below that threshold.
+                extras.entry("vlowpu".into()).or_insert_with(|| 0.0.into());
+            }
             extras
                 .entry("vminpu".into())
                 .or_insert_with(|| bounds.vminpu.into());
@@ -3066,6 +3075,7 @@ mod tests {
         let out = emit_dss_text(&net);
         let line = out.text.lines().find(|l| l.contains("Load.ld")).unwrap();
         assert!(line.contains("vminpu=0"), "{line}");
+        assert!(line.contains("vlowpu=0"), "{line}");
         assert!(line.contains("vmaxpu=2"), "{line}");
     }
 

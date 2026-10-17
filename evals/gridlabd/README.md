@@ -777,3 +777,158 @@ with `POWERIO_LOAD_VOLTAGE_SAMPLES` set to the resulting `report.json` to verify
 the Rust evaluator against the same independent native samples. The report
 records the pinned engine version and CLI/input hashes. These microcases do
 not by themselves qualify a complete feeder or the remaining load models.
+
+## Ordinary transformer conversion
+
+`transformer_roundtrip_oracle.py` uses independent ideal-coil and series-impedance
+equations to check loaded single-phase A/C and unbalanced three-phase grounded
+wye transformers. Both pinned GridLAB-D forks run the original, fresh canonical
+and edited network; OpenDSS runs fresh and edited conversions. Edits change
+source voltage, load demand, winding voltage, resistance and reactance. A wrong
+turns ratio must fail, and IR-restored GLM must equal fresh canonical output.
+
+```sh
+cargo build -p powerio --example glm_roundtrip
+python evals/gridlabd/transformer_roundtrip_oracle.py --bridge target/debug/examples/glm_roundtrip --pnnl-root "$PNNL_ROOT" --output /tmp/gld-transformers
+```
+
+This qualifies ordinary NR series-coil behavior, not FBS, magnetizing branches,
+regulators, split-phase services or a complete public feeder. The earlier
+`transformer_oracle.py` calibrates engine coil conventions without PowerIO.
+
+## Fixed regulators and IEEE13
+
+`regulator_oracle.py` compares Type A/B phase ratios and series resistance with
+independent coil equations. It exercises unequal taps, phase subsets, object tap
+overrides, native default resistance, edited winding values and OpenDSS output.
+Every case must detect a deliberately wrong turns ratio.
+
+`feeder_oracle.py` defaults to the hash-pinned IEEE13 NR input in `upstream.json`;
+its IEEE37 profile is described below.
+It compares 257 complex quantities under both pinned GridLAB-D forks and the
+pinned OpenDSS engine: all 38 bus-phase voltages, three source currents,
+156 line/transformer terminal current, power and loss quantities, and 60
+per-phase current/power quantities for the ten original load objects. Canonical
+load pieces are aggregated by their original object identity. Every bus also
+passes Kirchhoff current balance, including the independently metered root.
+
+Fresh and IR-restored GLM must be byte-identical. Edited output is compared
+with independently edited original GLM, without reading the converted electrical
+parameters: loads change by 25%, line lengths/contact impedances by 10%,
+winding resistances by 20%, reactances by -10%, secondary ratings by 5%,
+regulator primary taps by 2%, and source phase A by 3%. The edited native
+regulator reference uses Type A; canonical output uses Type B. Removing a
+regulator boost and substituting stale unedited output must both be detected.
+
+The harness removes only the incompatible output-only `voltdump`, replaces the
+root node by an electrically equivalent meter, and instruments the existing
+parent relationships. Native original voltage assertions remain enabled;
+assertions are removed for deliberate edits. Both original and canonical GLM
+use a 1e-9 V convergence threshold. OpenDSS uses controls off, tolerance 1e-12
+and at most 100 iterations; its default-solve measurements remain separately
+recorded, not used as strict acceptance evidence.
+
+For original lines, native a/b impedance dumps and solved voltages determine
+physical pi-circuit ports. GridLAB-D's published input-current calculation uses
+a different matrix order for noncommuting shunts; its raw output is preserved
+and independently checked against native a/b/c/d equations. Canonical generated
+end shunts and P/I/Z loads use native coefficient readback and solved voltages,
+without inserting meters that change NR parent topology. Loss means the sum of
+terminal powers; published phase-clamped `power_losses` is retained separately.
+
+```sh
+cargo build -p powerio --example glm_roundtrip
+python evals/gridlabd/regulator_oracle.py --bridge target/debug/examples/glm_roundtrip --pnnl-root "$PNNL_ROOT" --output /tmp/gld-regulators
+python evals/gridlabd/feeder_oracle.py --bridge target/debug/examples/glm_roundtrip --source /path/to/autotest/test_IEEE_13_NR.glm --pnnl-root "$PNNL_ROOT" --output /tmp/gld-ieee13
+```
+
+This qualifies the pinned IEEE13 NR case and these edits, including all its
+static device ports. It does not qualify other feeders, FBS, explicit-neutral
+networks, split-phase services or the remaining transformer/load profiles.
+
+
+## IEEE37 and native NR delta declarations
+
+The same full-feeder harness accepts `--case ieee37`, with the pinned IEEE37
+input and its configuration file kept in the `upstream.py` directory layout.
+The bridge passes that directory as an explicit `Source` acquisition root;
+ordinary parsing never widens containment automatically. The profiler flag is
+retained as an output-only setting. Native instrumentation flattens only the
+hash-checked configuration include and overrides the source's polar output
+setting to match the recorder's rectangular format.
+
+```sh
+python evals/gridlabd/feeder_oracle.py --case ieee37 --bridge target/debug/examples/glm_roundtrip --source /path/to/autotest/test_IEEE_37_NR.glm --pnnl-root "$PNNL_ROOT" --output /tmp/gld-ieee37
+python evals/gridlabd/transformer_roundtrip_oracle.py --connection DELTA_DELTA --bridge target/debug/examples/glm_roundtrip --pnnl-root "$PNNL_ROOT" --output /tmp/gld-nr-delta
+```
+
+IEEE37 acceptance covers 732 complex quantities: 111 bus-phase voltages, three
+source currents, 468 branch terminal current/power/loss quantities, and 150
+phase current/power quantities across 25 original load objects. The same
+independent edits, every-bus current balance and native reporting-law checks
+apply. A wrong transformer ratio and stale unedited output must fail. Original
+input retains all six published line-line voltage assertions; the feeder begins
+downstream of its regulator, so this is not open-delta regulator qualification.
+
+Both pinned engines implement NR `DELTA_DELTA` with grounded-wye port equations.
+The reader records that effective circuit and diagnoses the equivalent; the
+canonical writer emits `WYE_WYE`. `transformer_roundtrip_oracle.py` additionally
+checks this behavior with unequal ground-referenced impedances, witnessing
+nonzero zero-sequence current. A physical OpenDSS delta/delta winding is an
+explicit negative control. Matching this native profile does not establish
+physical delta isolation or the separate FBS transformer equations. The pinned
+[PNNL transformer implementation](https://github.com/gridlab-d/gridlab-d/blob/1b2e463d3c149e999a2c5f04213477f545e01dc6/powerflow/transformer.cpp)
+and [link stamps](https://github.com/gridlab-d/gridlab-d/blob/1b2e463d3c149e999a2c5f04213477f545e01dc6/powerflow/link.cpp)
+provide the native equations; the engine checks independently verify the mapping.
+
+### IEEE feeder corpus
+
+`ieee-corpus.json` catalogs pinned public feeder inputs and published result
+sources, including IEEE4/13/34/37/123/8500/9500 and low-voltage/neutral cases.
+It is an acquisition inventory, not a compatibility claim. Keep downloaded
+models outside the repository; review the source license before redistributing.
+
+The `upstream.py` downloader includes IEEE4 and the IEEE34/IEEE123 NR cases and
+their configuration includes. Files without assertions are acquired only;
+the feeder oracle adds bounded recorder runs. Run a fixed-state conversion check with:
+
+```sh
+python evals/gridlabd/feeder_oracle.py --case ieee34 --baseline-only \
+  --source /path/to/upstream/autotest/test_IEEE_34_NR.glm \
+  --bridge /path/to/glm_roundtrip --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-report-directory
+```
+
+For IEEE4 use `--case ieee4 --baseline-only` and source
+`models/powerflow_IEEE_4node.glm`. Its default FBS solver, implicit upstream
+source, numeric grounded-wye connection and declared phase ratings are retained.
+Instrumentation names its three numeric-ID links for measurement. The legacy
+clock parses its timestamp before its EST timezone; the recorder stops one
+second after that actual start. The native default core admittance remains in
+fresh output. Omitting it must fail, as must a wrong transformer ratio.
+
+For IEEE123 use `--case ieee123 --baseline-only` and source
+`autotest/test_IEEE123_zero_voltages_NR.glm`. The original IEEE123 assertions
+check absent-phase zero voltages; the oracle measures the energized circuit too.
+
+| Fixed-state profile | Buses | Lines | Winding equivalents | Loads | Capacitor coils | Complex quantities |
+|---|---:|---:|---:|---:|---:|---:|
+| IEEE4 FBS grounded-wye step-down | 4 | 2 | 1 | 1 | 0 | 60 |
+| IEEE34 NR | 55 | 51 | 7 | 70 | 6 | 1,000 |
+| IEEE123 NR | 130 | 124 | 10 | 89 | 6 | 2,029 |
+
+Each fork compares the complete inventory with canonical GLM and OpenDSS and
+checks current balance at every bus. These profiles do not yet qualify edited
+IEEE4/34/123 states or other IEEE4 transformer variants. IEEE13/37 retain their edited-state checks. Fresh and
+IR-restored canonical GLM must be identical. IEEE123's unused center-tapped and
+triplex equipment definitions stay in source; no service circuit is instantiated.
+
+IEEE34 needs a native stopping tolerance of `1e-6 V`; tighter settings failed
+convergence on the pinned engine. Voltage/current acceptance limits remain those
+in `oracle.py`. Its absolute power budget is twice the maximum source voltage
+multiplied by the absolute current tolerance, to account for subtracting two
+terminal powers at roughly 15 kV. The report also retains results against the
+stricter microcase power threshold. Native source-meter current, which follows
+GridLAB-D's noncommuting line-shunt reporting law, is retained separately;
+compared source current sums physical native ports. Recorder runs are bounded
+to one second and use 17 significant digits.

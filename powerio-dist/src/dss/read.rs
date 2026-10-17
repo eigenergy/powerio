@@ -916,15 +916,18 @@ impl Reader<'_> {
                     }
                     "xhl" | "x12" => {
                         xhl = self.f64_prop(Some(v)).unwrap_or(xhl);
+                        if xhl == 0.0 { xhl = dd::transformer::XHL; }
                         xhl_specified = true;
                         scalar_reactance_changed = true;
                     }
                     "xht" | "x13" => {
                         xht = self.f64_prop(Some(v)).unwrap_or(xht);
+                        if xht == 0.0 { xht = dd::transformer::XHT; }
                         scalar_reactance_changed = true;
                     }
                     "xlt" | "x23" => {
                         xlt = self.f64_prop(Some(v)).unwrap_or(xlt);
+                        if xlt == 0.0 { xlt = dd::transformer::XLT; }
                         scalar_reactance_changed = true;
                     }
                     "xscarray" => match v.to_vector(Some(self.vars)) {

@@ -16,9 +16,14 @@ use crate::{
 const METERS_PER_MILE: f64 = 1609.344;
 
 mod cables;
+mod capacitors;
 mod geometry;
 mod loads;
+mod regulators;
+mod sources;
 mod switches;
+mod templates;
+mod transformers;
 
 /// Read the initial static GLM electrical profile. Unknown physical
 /// classes, properties and globals fail explicitly; they are not silently
@@ -28,6 +33,11 @@ mod switches;
 /// fixed source phasors, P/I/Z loads, overhead and underground line matrices
 /// or conductor geometry, and fixed ordinary-phase switch contacts. Finite
 /// contacts use exact line equivalents; ideal and open contacts remain typed switches.
+/// Ordinary single-phase and three-phase grounded-wye transformers use winding
+/// records; FBS additionally preserves its finite default winding-2 core shunt.
+/// A connected directed FBS tree may use its implicit upstream voltage source.
+/// Wye regulators preserve fixed phase taps and NR resistance in winding equivalents.
+/// Manual wye capacitors use fixed per-phase shunt admittances.
 /// Other conductor/device profiles remain under implementation.
 pub fn parse(
     source: Source,
@@ -66,6 +76,9 @@ pub fn parse(
     reader.loads_and_sources()?;
     reader.lines()?;
     reader.switches()?;
+    reader.transformers()?;
+    reader.regulators()?;
+    reader.capacitors()?;
     reader.coordinates()?;
     crate::require_electrical_readiness(&reader.net)
         .map_err(|e| e.with_source(project.source().clone()))?;
@@ -168,40 +181,7 @@ impl Reader<'_> {
                     if header
                         .first()
                         .is_some_and(|t| matches!(t.text(), "object" | "clock")) => {}
-                Statement::Directive(token) => {
-                    let text = token.text().trim();
-                    let setting = text.strip_prefix("#set ").and_then(|s| s.split_once('='));
-                    if let Some(("iteration_limit", value)) =
-                        setting.map(|(k, v)| (k.trim(), v.trim().trim_end_matches(';')))
-                    {
-                        if value.parse::<u32>().ok().is_none_or(|v| v == 0) {
-                            return Err(self.project.electrical_error(
-                                &token.span(),
-                                "iteration_limit requires a positive integer",
-                            ));
-                        }
-                        self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_SOURCE_ONLY,
-                            "iteration_limit is retained in source; canonical output uses its own solver settings"));
-                        continue;
-                    }
-                    if !setting.is_some_and(|(name, _)| {
-                        matches!(
-                            name.trim(),
-                            "complex_format"
-                                | "complex_output_format"
-                                | "double_format"
-                                | "savefile"
-                                | "reinclude"
-                                | "literal_if"
-                                | "relax_undefined_if"
-                        )
-                    }) {
-                        return Err(self.project.electrical_error(
-                            &token.span(),
-                            "unqualified global directive in static GLM input",
-                        ));
-                    }
-                }
+                Statement::Directive(token) => self.global_directive(token)?,
                 Statement::Simple { span, .. } | Statement::Block { span, .. } => {
                     return Err(self
                         .project
@@ -215,6 +195,56 @@ impl Reader<'_> {
                 "GLM static network requires the powerflow module",
             )
             .with_source(self.project.source().clone()));
+        }
+        Ok(())
+    }
+
+    fn global_directive(&mut self, token: &super::Token) -> Result<(), Error> {
+        let text = token.text().trim();
+        let setting = text.strip_prefix("#set ").and_then(|s| s.split_once('='));
+        if let Some(("iteration_limit", value)) =
+            setting.map(|(k, v)| (k.trim(), v.trim().trim_end_matches(';')))
+        {
+            if value.parse::<u32>().ok().is_none_or(|v| v == 0) {
+                return Err(self.project.electrical_error(
+                    &token.span(),
+                    "iteration_limit requires a positive integer",
+                ));
+            }
+            self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_SOURCE_ONLY,
+                "iteration_limit is retained in source; canonical output uses its own solver settings"));
+            return Ok(());
+        }
+        if let Some((name @ ("profiler" | "relax_naming_rules"), value)) =
+            setting.map(|(k, v)| (k.trim(), v.trim().trim_end_matches(';')))
+        {
+            if !matches!(value, "0" | "1" | "TRUE" | "FALSE" | "true" | "false") {
+                return Err(self
+                    .project
+                    .electrical_error(&token.span(), format!("{name} requires a boolean")));
+            }
+            self.diagnostics.push(Diagnostic::of(
+                &codes::READ_GLM_SOURCE_ONLY,
+                format!("{name} is a non-electrical engine setting retained in source; object identities remain literal"),
+            ));
+            return Ok(());
+        }
+        if !setting.is_some_and(|(name, _)| {
+            matches!(
+                name.trim(),
+                "complex_format"
+                    | "complex_output_format"
+                    | "double_format"
+                    | "savefile"
+                    | "reinclude"
+                    | "literal_if"
+                    | "relax_undefined_if"
+            )
+        }) {
+            return Err(self.project.electrical_error(
+                &token.span(),
+                "unqualified global directive in static GLM input",
+            ));
         }
         Ok(())
     }
@@ -267,7 +297,7 @@ impl Reader<'_> {
         Ok(())
     }
 
-    fn inventory(&mut self) -> Result<(), Error> {
+    fn reserve_explicit_names(&mut self) -> Result<(), Error> {
         for object in self.index.objects() {
             if let Some(name) = object.name()
                 && !self.identities.insert(name.to_ascii_lowercase())
@@ -278,6 +308,12 @@ impl Reader<'_> {
                 ));
             }
         }
+        Ok(())
+    }
+
+    fn inventory(&mut self) -> Result<(), Error> {
+        let used_templates = self.used_templates()?;
+        self.reserve_explicit_names()?;
         for object in self.index.objects() {
             let name = object.name().map_or_else(
                 || {
@@ -290,6 +326,11 @@ impl Reader<'_> {
             );
             self.names.insert(object.key(), name);
             let class = class(object);
+            if templates::is_template(class) && !used_templates.contains(&object.key()) {
+                self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_SOURCE_ONLY,
+                    format!("unused {class} {} is retained in source; it contributes no network equipment", self.names[&object.key()])));
+                continue;
+            }
             if matches!(
                 class,
                 "recorder"
@@ -326,10 +367,10 @@ impl Reader<'_> {
                         format!("unmapped property {class}.{name}"),
                     ));
                 }
-                if let Some((kind, unit)) = quantity_spec(class, name) {
+                if let Some((kind, unit)) = quantity_spec(class, name, self.project.dialect()) {
                     // Native setters run in source order, even if a later
                     // assignment overwrites the value or its phase is absent.
-                    let result = self.project.quantity(property, kind, Some(unit))?;
+                    let result = self.project.quantity(property, kind, unit)?;
                     self.diagnostics.extend(result.diagnostics);
                     Self::assign_quantity(
                         &mut self.quantities,
@@ -423,7 +464,14 @@ impl Reader<'_> {
         name: &str,
         value: Complex64,
     ) {
-        if let Some((canonical, Some(imaginary), _, _)) =
+        if class == "transformer_configuration" && matches!(name, "resistance" | "reactance") {
+            let previous = quantities.entry((key, "impedance".into())).or_default();
+            if name == "resistance" {
+                previous.re = value.re;
+            } else {
+                previous.im = value.re;
+            }
+        } else if let Some((canonical, Some(imaginary), _, _)) =
             (class == "load").then(|| loads::property(name)).flatten()
         {
             let previous = quantities.entry((key, canonical.to_owned())).or_default();
@@ -438,6 +486,7 @@ impl Reader<'_> {
     }
 
     fn loads_and_sources(&mut self) -> Result<(), Error> {
+        let implicit_source = self.implicit_fbs_source()?;
         let entries: Vec<_> = self.roots.iter().map(|(&k, &r)| (k, r)).collect();
         for (key, root) in entries {
             let phases = if key == root {
@@ -463,7 +512,7 @@ impl Reader<'_> {
                 return Err(self.error(key, "child nominal voltage conflicts with its parent"));
             }
             let bustype = self.text(key, "bustype")?.unwrap_or_else(|| "PQ".into());
-            if bustype == "SWING" {
+            if bustype == "SWING" || (bustype == "PQ" && implicit_source == Some(key)) {
                 if key != root {
                     return Err(self.error(key, "parented SWING source is not qualified"));
                 }
@@ -814,10 +863,14 @@ fn supported_class(name: &str) -> bool {
                 | "switch"
                 | "overhead_line_conductor"
                 | "line_spacing"
+                | "transformer"
+                | "transformer_configuration"
+                | "regulator"
+                | "regulator_configuration"
         )
 }
 fn bus_class(name: &str) -> bool {
-    matches!(name, "node" | "load" | "meter")
+    matches!(name, "node" | "load" | "meter" | "capacitor")
 }
 fn matrix_property(name: &str) -> bool {
     let bytes = name.as_bytes();
@@ -830,7 +883,7 @@ fn allowed_property(class: &str, name: &str) -> bool {
     matches!(
         name,
         "name" | "parent" | "groupid" | "latitude" | "longitude"
-    ) || (matches!(class, "node" | "meter" | "load")
+    ) || (bus_class(class)
         && matches!(
             name,
             "phases"
@@ -845,6 +898,9 @@ fn allowed_property(class: &str, name: &str) -> bool {
         || (matches!(class, "overhead_line" | "underground_line")
             && matches!(name, "phases" | "from" | "to" | "length" | "configuration"))
         || (class == "line_configuration" && matrix_property(name))
+        || capacitors::allowed(class, name)
+        || regulators::allowed(class, name)
+        || transformers::allowed(class, name)
         || geometry::allowed(class, name)
         || cables::unit(class, name).is_some()
         || (class == "switch"
@@ -863,36 +919,59 @@ fn allowed_property(class: &str, name: &str) -> bool {
                     | "switch_reactance"
             ))
 }
-fn quantity_spec(class: &str, name: &str) -> Option<(GlmQuantityKind, &'static str)> {
+fn quantity_spec(
+    class: &str,
+    name: &str,
+    dialect: super::GlmDialect,
+) -> Option<(GlmQuantityKind, Option<&'static str>)> {
     use GlmQuantityKind::{Complex, Real};
-    if let Some(unit) = geometry::unit(class, name).or_else(|| cables::unit(class, name)) {
-        return Some((Real, unit));
+    if let Some(spec) = transformers::quantity_spec(class, name)
+        .map(|(kind, unit)| (kind, Some(unit)))
+        .or_else(|| regulators::quantity_spec(class, name))
+    {
+        // Arras publishes regulation in percent; PNNL has no unit.
+        return Some(
+            if class == "regulator_configuration"
+                && name == "regulation"
+                && dialect == super::GlmDialect::Arras4_3
+            {
+                (spec.0, Some("%"))
+            } else {
+                spec
+            },
+        );
+    }
+    if let Some(unit) = capacitors::unit(class, name)
+        .or_else(|| geometry::unit(class, name))
+        .or_else(|| cables::unit(class, name))
+    {
+        return Some((Real, Some(unit)));
     }
     if class == "switch" {
         match name {
-            "switch_impedance" => return Some((Complex, "Ohm")),
-            "switch_resistance" | "switch_reactance" => return Some((Real, "Ohm")),
+            "switch_impedance" => return Some((Complex, Some("Ohm"))),
+            "switch_resistance" | "switch_reactance" => return Some((Real, Some("Ohm"))),
             _ => {}
         }
     }
     if bus_class(class) {
         match name {
-            "nominal_voltage" | "maximum_voltage_error" => return Some((Real, "V")),
-            "voltage_A" | "voltage_B" | "voltage_C" => return Some((Complex, "V")),
+            "nominal_voltage" | "maximum_voltage_error" => return Some((Real, Some("V"))),
+            "voltage_A" | "voltage_B" | "voltage_C" => return Some((Complex, Some("V"))),
             _ => {}
         }
     }
     if class == "load" {
-        return loads::property(name).map(|(_, _, kind, unit)| (kind, unit));
+        return loads::property(name).map(|(_, _, kind, unit)| (kind, Some(unit)));
     }
     if matches!(class, "overhead_line" | "underground_line") && name == "length" {
-        return Some((Real, "ft"));
+        return Some((Real, Some("ft")));
     }
     if class == "line_configuration" && matrix_property(name) {
         return Some(if name.starts_with('z') {
-            (Complex, "Ohm/mile")
+            (Complex, Some("Ohm/mile"))
         } else {
-            (Real, "nF/mile")
+            (Real, Some("nF/mile"))
         });
     }
     None

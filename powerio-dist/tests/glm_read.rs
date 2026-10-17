@@ -207,3 +207,39 @@ fn underflowing_load_power_is_not_mistaken_for_an_open_circuit() {
     );
     assert!(error.to_string().contains("underflows"));
 }
+
+#[test]
+fn unused_equipment_templates_are_source_only_but_connected_devices_still_fail() {
+    let templates = "
+object transformer_configuration { name unused; connect_type SINGLE_PHASE_CENTER_TAPPED;
+primary_voltage 2400; secondary_voltage 120; powerB_rating 25; }
+object triplex_line_conductor { name wire; resistance .5; geometric_mean_radius .01; }
+object triplex_line_configuration { name service; conductor_1 wire; conductor_2 wire; conductor_N wire; diameter .5; }
+";
+    let m = read(&format!("{SINGLE}{templates}")).unwrap();
+    assert_eq!(m.value().lines().len(), 1);
+    assert_eq!(
+        m.diagnostics()
+            .iter()
+            .filter(|d| d.code() == "READ.GLM.SOURCE_ONLY")
+            .count(),
+        3
+    );
+    let connected = format!(
+        "{SINGLE}{templates} object transformer {{ name service_xf; from source; to sink; phases AN; configuration unused; }}"
+    );
+    assert!(read(&connected).is_err());
+    assert!(
+        read(&format!(
+            "{SINGLE}{templates} object triplex_line {{ name t; configuration service; }}"
+        ))
+        .is_err()
+    );
+}
+
+#[test]
+fn naming_rule_flag_is_validated_without_rewriting_identities() {
+    let m = read(&format!("#set relax_naming_rules=1\n{SINGLE}")).unwrap();
+    assert_eq!(m.value().buses()[0].id, "source");
+    assert!(read(&format!("#set relax_naming_rules=maybe\n{SINGLE}")).is_err());
+}

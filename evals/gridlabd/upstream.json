@@ -8,7 +8,11 @@
       "local": "autotest/test_IEEE_13_NR.glm",
       "sha256": "d897e1a730932f5c485bcf89981f34a5d4a9217110268fc73690724b6056e180",
       "assertions": 32,
-      "tolerances_V": {"2": 27, "8": 4, "10": 1},
+      "tolerances_V": {
+        "2": 27,
+        "8": 4,
+        "10": 1
+      },
       "qualification": "Published regression tolerances include four 8 V and one 10 V assertions; this is not a high precision cross-format reference."
     },
     {
@@ -16,7 +20,11 @@
       "local": "autotest/test_IEEE_13_FBS.glm",
       "sha256": "05eac2cf4bd1db6cbe6815abbda046c01c2eff8e430a1bd281966468dd99c0b2",
       "assertions": 32,
-      "tolerances_V": {"2": 27, "8": 4, "10": 1},
+      "tolerances_V": {
+        "2": 27,
+        "8": 4,
+        "10": 1
+      },
       "qualification": "Same published reference tolerances as NR; FBS warns about switch behavior."
     },
     {
@@ -24,7 +32,9 @@
       "local": "autotest/test_IEEE_37_NR.glm",
       "sha256": "a497537d68dc5ed5a74847b1460c43bdba18681b3f8d9d45ab5f2bc4c6ed704b",
       "assertions": 6,
-      "tolerances_V": {"0.5": 6},
+      "tolerances_V": {
+        "0.5": 6
+      },
       "qualification": "Begins downstream of the regulator; checks six line-line voltages and constant-current rotation."
     },
     {
@@ -32,6 +42,44 @@
       "local": "data_configurations_37_node.glm",
       "sha256": "06224e5f123396cb5bc08ff767411a7a8c3e60a537cf5ed0bd6878cb9545ca72",
       "qualification": "Placed one directory above the test to satisfy its literal relative include, without modifying either file."
+    },
+    {
+      "source": "powerflow/autotest/test_IEEE_34_NR.glm",
+      "local": "autotest/test_IEEE_34_NR.glm",
+      "sha256": "b6153bbcb86bbbc9f82af4ecdf6479d177b28ed28f8b93fc411773b9aad21a71",
+      "assertions": 3,
+      "tolerances_V": {
+        "1.0": 2,
+        "1.5": 1
+      },
+      "qualification": "Static NR feeder with two manual regulator banks and fixed wye capacitors; published assertions do not cover every node."
+    },
+    {
+      "source": "powerflow/autotest/data_configurations_34_node.glm",
+      "local": "data_configurations_34_node.glm",
+      "sha256": "f90d71b4237ee155d4c30e19724583635e72f0c316d10ae0d8b98a8c58203d99"
+    },
+    {
+      "source": "powerflow/autotest/test_IEEE123_zero_voltages_NR.glm",
+      "local": "autotest/test_IEEE123_zero_voltages_NR.glm",
+      "sha256": "035a54d8ae1c47271dcdcc1acc35362d556830bed4017c4cb5171b63861338cd",
+      "assertions": 28,
+      "tolerances_V": {
+        "0.01": 28
+      },
+      "qualification": "Static NR IEEE123 with manual regulator/capacitor states. Original assertions test absent-phase zero voltages; full electrical comparison is separate."
+    },
+    {
+      "source": "powerflow/autotest/data_configurations_delta_123node.glm",
+      "local": "data_configurations_delta_123node.glm",
+      "sha256": "5b7e97d954e3fac99cc7eaca8d488cad402ef4dc641377f808f1cfaa1fcea959"
+    },
+    {
+      "source": "models/powerflow_IEEE_4node.glm",
+      "local": "models/powerflow_IEEE_4node.glm",
+      "sha256": "1d10ac44ec30fa2a84a8f59d9ef11a859fcdfd6e66292b9c8b3a155ce98aec22",
+      "assertions": 0,
+      "qualification": "Legacy balanced grounded-wye step-down IEEE4; default FBS and implicit upstream source. Reference measurements require native engine runs."
     }
   ]
 }

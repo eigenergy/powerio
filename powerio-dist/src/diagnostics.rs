@@ -41,12 +41,20 @@ pub mod codes {
             "native quantity conversion ignores a stated unit suffix";
         READ_GLM_ELECTRICAL_UNSUPPORTED = "READ.GLM.ELECTRICAL_UNSUPPORTED", Error,
             "a GLM electrical feature has no verified static mapping", category = Data;
+        READ_GLM_IMPLICIT_SOURCE = "READ.GLM.IMPLICIT_SOURCE", Remark,
+            "a connected directed FBS tree has one implicit upstream voltage source";
         READ_GLM_SOURCE_ONLY = "READ.GLM.SOURCE_ONLY", Remark,
             "non-electrical GLM data remains in the retained source";
         READ_GLM_SWITCH_STATE_NORMALIZED = "READ.GLM.SWITCH_STATE_NORMALIZED", Remark,
             "static switch status and banked initialization determine contact states";
         READ_GLM_SWITCH_EQUIVALENT = "READ.GLM.SWITCH_EQUIVALENT", Remark,
             "finite closed switch contacts use an exact static line equivalent";
+        READ_GLM_REGULATOR_EQUIVALENT = "READ.GLM.REGULATOR_EQUIVALENT", Remark,
+            "fixed regulator phases use equivalent winding records on explicit normalization bases";
+        READ_GLM_TRANSFORMER_EQUIVALENT = "READ.GLM.TRANSFORMER_EQUIVALENT", Warning,
+            "native NR delta-delta transformer equations use an equivalent grounded-wye circuit";
+        READ_GLM_CONTROL_FROZEN = "READ.GLM.CONTROL_FROZEN", Warning,
+            "active regulator behavior is omitted while declared fixed tap states are preserved";
         READ_GLM_NATIVE_LINE_DISCREPANCY = "READ.GLM.NATIVE_LINE_DISCREPANCY", Warning,
             "native reported line currents differ from the physical pi-line model for noncommuting matrices";
         READ_GLM_GEOMETRY_MATERIALIZED = "READ.GLM.GEOMETRY_MATERIALIZED", Remark,
@@ -59,6 +67,8 @@ pub mod codes {
             "a GLM nominal voltage or identity was materialized without changing electrical behavior";
         EMIT_GLM_IDEAL_CONTACTS = "EMIT.GLM.IDEAL_CONTACTS", Remark,
             "ideal contacts use source-oriented FBS with exact zero impedance and explicit phase grouping";
+        EMIT_GLM_TRANSFORMER_SHUNT_EQUIVALENT = "EMIT.GLM.TRANSFORMER_SHUNT_EQUIVALENT", Remark,
+            "a transformer terminal core shunt uses an exact admittance load";
         EMIT_GLM_LINE_SHUNT_EQUIVALENT = "EMIT.GLM.LINE_SHUNT_EQUIVALENT", Remark,
             "line end shunts use exact phase-pair and earth-return admittance loads";
         EMIT_GLM_PROJECT_UNREPRESENTABLE = "EMIT.GLM.PROJECT_UNREPRESENTABLE", Error,

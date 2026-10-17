@@ -95,3 +95,44 @@ impl Writer<'_> {
         Ok(())
     }
 }
+
+impl Writer<'_> {
+    pub(super) fn capacitor_shunts(&mut self) -> Result<(), Error> {
+        for shunt in self.net.shunts() {
+            let phase = super::phases(&shunt.terminal_map)?;
+            if phase.len() != 1
+                || shunt.g != [vec![0.0]]
+                || shunt.b.len() != 1
+                || shunt.b[0].len() != 1
+                || !shunt.b[0][0].is_finite()
+                || shunt.b[0][0] < 0.0
+                || !shunt.extras.is_empty()
+            {
+                return Err(unsupported(
+                    "GLM capacitor output requires a single grounded capacitive coil",
+                ));
+            }
+            let available = self
+                .phases
+                .get(shunt.bus.as_str())
+                .ok_or_else(|| unsupported("capacitor shunt has no bus"))?;
+            if !available.contains(&phase[0]) {
+                return Err(unsupported("capacitor shunt phase is absent at its bus"));
+            }
+            let voltage = self.nominal[shunt.bus.as_str()];
+            let rating = shunt.b[0][0] * voltage * voltage;
+            if !rating.is_finite() || (shunt.b[0][0] > 0.0 && rating == 0.0) {
+                return Err(unsupported("capacitor rating overflows or underflows"));
+            }
+            let p = super::phase_name(phase[0]);
+            let _ = writeln!(
+                self.out,
+                "object capacitor {{ name \"{}\"; parent \"{}\"; phases {p}; phases_connected {p}; nominal_voltage {voltage}; cap_nominal_voltage {voltage}; control MANUAL; capacitor_{p} {rating}; switch{p} CLOSED;",
+                shunt.name, shunt.bus
+            );
+            self.coordinates(crate::DistLocationTarget::Shunt, &shunt.name);
+            self.out.push_str("}\n");
+        }
+        Ok(())
+    }
+}
