@@ -1589,7 +1589,10 @@ const DISTRIBUTION_FORMATS: [DistributionFormat; 3] = [
 // Typed load bounds: DSS->BMOPF adds 21 nominal-law projection notices and
 // removes 14 aggregated vmin/vmax extra notices (+7). DSS->PMD adds the same
 // 21 notices and removes 42 per-load vmin/vmax extra notices (-21).
-const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[28, 128, 302], [51, 0, 26], [57, 46, 0]];
+// Generator voltage bounds: DSS->BMOPF/PMD each adds two disclosures for
+// retained native vminpu/vmaxpu defaults. BMOPF/PMD->DSS each adds one
+// disclosure for the explicit 0..2 pu band on the format-neutral generator.
+const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[28, 130, 304], [52, 0, 26], [58, 46, 0]];
 
 const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 7] = [
     (

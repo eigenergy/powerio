@@ -54,7 +54,7 @@ fn omitted_switch_is_open_and_omitted_rating_voltage_uses_node_voltage() {
 #[test]
 fn unqualified_capacitor_physics_and_controls_are_not_silently_ignored() {
     for (from, to) in [
-        ("control MANUAL", "control VOLT"),
+        ("control MANUAL", "control UNKNOWN"),
         ("phases_connected ABC", "phases_connected ABCD"),
         ("switchA CLOSED", "switchA UNKNOWN"),
         ("capacitor_A 1440", "capacitor_A -1440"),
@@ -64,4 +64,47 @@ fn unqualified_capacitor_physics_and_controls_are_not_silently_ignored() {
     let mut net = read(deck()).unwrap().into_value();
     net.shunts_mut()[0].g[0][0] = 1.0;
     assert!(emit_canonical(&net, Destination::memory("out.glm").unwrap()).is_err());
+}
+
+#[test]
+fn controlled_capacitors_require_declared_individual_states_and_report_freezing() {
+    let manual = read(deck()).unwrap();
+    for control in ["VAR", "VOLT", "VARVOLT", "CURRENT"] {
+        let source = deck().replace("control MANUAL", &format!("control {control}; control_level INDIVIDUAL; pt_phase ABC; voltage_set_high .25 kV; voltage_set_low 230 V; VAr_set_high 475 kVAr; VAr_set_low -350 kVAr; time_delay 480 s; lockout_time 1 s"));
+        let m = read(&source).unwrap();
+        assert_eq!(
+            serde_json::to_value(m.value()).unwrap(),
+            serde_json::to_value(manual.value()).unwrap()
+        );
+        assert!(
+            m.diagnostics()
+                .iter()
+                .any(|d| d.code() == "READ.GLM.CONTROL_FROZEN")
+        );
+        assert!(read(&source.replace("switchB OPEN;", "")).is_err());
+        assert!(read(&source.replace("control_level INDIVIDUAL", "control_level BANK")).is_err());
+        assert!(read(&source.replace("480 s", "broken s")).is_err());
+    }
+}
+
+#[test]
+fn single_phase_manual_bank_inherits_parent_voltage_unless_rating_is_explicit() {
+    let text = "module powerflow { solver_method NR; }
+object node { name source; phases ABCN; bustype SWING; nominal_voltage 240; }
+object capacitor { name cap; parent source; phases BN; nominal_voltage 120;
+control MANUAL; control_level BANK; pt_phase B; capacitor_B 1440; switchB CLOSED; }";
+    let m = read(text).unwrap();
+    assert_eq!(m.value().shunts().len(), 1);
+    let cap = &m.value().shunts()[0];
+    assert_eq!(cap.terminal_map, ["2"]);
+    assert!((cap.b[0][0] - 0.025).abs() < 1e-15);
+    let explicit = read(&text.replace(
+        "nominal_voltage 120;",
+        "nominal_voltage 120; cap_nominal_voltage 120;",
+    ))
+    .unwrap();
+    assert!((explicit.value().shunts()[0].b[0][0] - 0.1).abs() < 1e-15);
+    assert_eq!(cap.bus, "source");
+    assert!(read(&text.replace("pt_phase B", "pt_phase A")).is_err());
+    assert!(read(&text.replace("nominal_voltage 120", "nominal_voltage 0")).is_err());
 }

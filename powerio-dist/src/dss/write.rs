@@ -28,8 +28,13 @@ use crate::model::{
 use super::read::delta_edges;
 use super::{lex, prop};
 
+mod asymmetric_pair;
+mod asymmetric_shunts;
+mod ideal_switches;
+mod ideal_transformers;
 mod loads;
 mod sources;
+mod terminal_voltage;
 
 /// Options for canonical OpenDSS output.
 #[derive(Clone, Debug, PartialEq)]
@@ -105,6 +110,7 @@ fn emit_snapshot(net: &MulticonductorNetwork, options: &DssEmitOptions) -> TextE
             .map(|b| (b.id.to_ascii_lowercase(), b.terminals.clone()))
             .collect(),
         kv_estimate: estimate_bus_kv(net),
+        terminal_kv: terminal_voltage::estimate(net),
     };
     w.network(net);
     TextEmission::new(w.out, w.sidecars, w.warnings)
@@ -127,6 +133,7 @@ struct DssWriter {
     terminals: BTreeMap<String, Vec<String>>,
     /// Bus id (lowercase) → phase to neutral voltage estimate, volts.
     kv_estimate: BTreeMap<String, f64>,
+    terminal_kv: terminal_voltage::TerminalVoltages,
 }
 
 #[derive(Clone, Copy)]
@@ -1268,6 +1275,7 @@ impl DssWriter {
     }
 
     fn switches(&mut self, net: &MulticonductorNetwork) {
+        let mut used = ideal_transformers::used_names(net);
         for sw in net.switches() {
             self.check_name("line", &sw.name);
             // #307: a switch is ideal — no conductor indexed matrices — so an
@@ -1309,6 +1317,12 @@ impl DssWriter {
                 map_from = sw.terminal_map_from.clone();
                 map_to = sw.terminal_map_to.clone();
             }
+            let mut mapped = sw.clone();
+            mapped.terminal_map_from.clone_from(&map_from);
+            mapped.terminal_map_to.clone_from(&map_to);
+            if self.ideal_closed_switch(&mapped, &mut used) {
+                continue;
+            }
             let phases = sw.terminal_map_from.len();
             let mut s = format!(
                 "New Line.{} bus1={} bus2={} phases={phases} switch=y",
@@ -1316,6 +1330,10 @@ impl DssWriter {
                 self.bus_ref(&sw.bus_from, &map_from),
                 self.bus_ref(&sw.bus_to, &map_to),
             );
+            if sw.open && sw.extras.is_empty() {
+                // A disconnected ideal contact has no line-charging shunts.
+                s.push_str(" c1=0 c0=0 enabled=no");
+            }
             match sw.i_max.as_deref() {
                 Some([amps, ..]) if amps.is_finite() => {
                     let _ = write!(s, " emergamps={}", num(*amps));
@@ -1365,7 +1383,10 @@ impl DssWriter {
     }
 
     fn transformers(&mut self, net: &MulticonductorNetwork) {
-        for t in net.transformers() {
+        let mut used = ideal_transformers::used_names(net);
+        for original in net.transformers() {
+            let projected = self.ideal_transformer(original, &mut used);
+            let t = projected.as_ref().unwrap_or(original);
             self.check_name("transformer", &t.name);
             let nw = t.windings.len();
             let buses: Vec<String> = t
@@ -2141,7 +2162,10 @@ impl DssWriter {
     }
 
     fn shunts(&mut self, net: &MulticonductorNetwork) {
-        for sh in net.shunts() {
+        for (index, sh) in net.shunts().iter().enumerate() {
+            if self.asymmetric_shunt(net, sh, index) {
+                continue;
+            }
             let stashed_delta = shunt_stashed_delta(sh);
             let inferred_phases =
                 extras_usize(&sh.extras, "phases").unwrap_or_else(|| sh.terminal_map.len().max(1));
@@ -2200,7 +2224,9 @@ impl DssWriter {
                     configuration: g.configuration,
                     name: &g.name,
                     class: "generator",
-                    typed_kv: None,
+                    typed_kv: (phases == 1)
+                        .then(|| terminal_voltage::get(&self.terminal_kv, &g.bus, &g.terminal_map))
+                        .flatten(),
                 },
             );
             let mut s = format!(
@@ -2226,8 +2252,8 @@ impl DssWriter {
                     ),
                 );
             }
-            // Rating fields await the kVA mapping decision (#266); dropping
-            // them stays loud in the meantime.
+            // Rating fields need a separate kVA mapping; dropping them
+            // stays loud in the meantime.
             for (key, present) in [("s_max", g.s_max.is_some()), ("i_max", g.i_max.is_some())] {
                 if present {
                     self.warn(
@@ -2240,6 +2266,14 @@ impl DssWriter {
                 }
             }
             let mut extras = g.extras.clone();
+            if !extras.contains_key("vminpu") || !extras.contains_key("vmaxpu") {
+                extras.entry("vminpu".into()).or_insert(0.0.into());
+                extras.entry("vmaxpu".into()).or_insert(2.0.into());
+                self.warn(
+                    &C::EMIT_DSS_VALUE_SUBSTITUTED,
+                    format!("generator {}: missing voltage bounds use 0..2 pu for the declared power law; OpenDSS switches to constant impedance above the emitted vmaxpu", g.name),
+                );
+            }
             strip_emitted_extras(&mut extras, &["kv", "phases", "conn"]);
             s.push_str(&self.extras_tail("generator", &g.name, &extras));
             self.line_out(&s);
@@ -2604,7 +2638,9 @@ impl DssWriter {
                 configuration,
                 name: &ibr.name,
                 class,
-                typed_kv: None,
+                typed_kv: (phases == 1)
+                    .then(|| terminal_voltage::get(&self.terminal_kv, &ibr.bus, &ibr.terminal_map))
+                    .flatten(),
             },
         )
     }
@@ -3813,7 +3849,8 @@ mod tests {
             "New Generator.gen bus1=lv.1.3.0 ",
             "New Generator.fixed_ibr bus1=lv.1.3.0 ",
             "New PVSystem.pv_ibr bus1=lv.1.3.0 ",
-            "New Line.sw1 bus1=lv.1.3.0 bus2=lv.1.3.0 phases=3 switch=y",
+            "New Line.sw1 bus1=lv.1.3.0 bus2=_pio_switch_sw1.1.2.0 phases=3 switch=y",
+            "New Line._pio_switch_sw1 bus1=_pio_switch_sw1.1.2.0 bus2=lv.1.3.0 phases=3",
             "New Line.l1 bus1=lv.1.0.3 bus2=lv.1.0.3 phases=3 linecode=lc ",
         ] {
             assert!(

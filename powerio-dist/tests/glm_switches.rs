@@ -429,13 +429,13 @@ fn unequal_conductive_shunts_keep_physical_ends_under_fbs_reversal() {
 }
 
 #[test]
-fn source_noncommuting_line_reports_native_discrepancy_in_both_solvers() {
+fn source_noncommuting_line_keeps_each_solver_equations() {
     let text = "module powerflow { solver_method FBS; line_capacitance TRUE; }
 object node { name a; phases ABN; bustype SWING; nominal_voltage 240; }
 object node { name b; phases ABN; nominal_voltage 240; }
 object line_configuration { name c; z11 1+0j; z22 2+0j; c11 100; c22 100; c12 -10; c21 -10; }
 object overhead_line { name l; phases ABN; from a; to b; configuration c; length 1 mile; }";
-    for (solver, expected) in [("FBS", true), ("NR", true)] {
+    for (solver, expected) in [("FBS", false), ("NR", true)] {
         let module = parse(
             Source::from_memory("case.glm", text.replace("FBS", solver).as_bytes()).unwrap(),
             PreprocessOptions::default(),
@@ -448,5 +448,27 @@ object overhead_line { name l; phases ABN; from a; to b; configuration c; length
                 .any(|d| d.code() == "READ.GLM.NATIVE_LINE_DISCREPANCY"),
             expected
         );
+        if solver == "FBS" {
+            assert_eq!(module.value().lines().as_slice(), []);
+            assert_eq!(module.value().shunts()[0].terminal_map.len(), 6);
+            assert_eq!(module.value().switches().len(), 2);
+            assert!(
+                module
+                    .diagnostics()
+                    .iter()
+                    .any(|d| d.code() == "READ.GLM.LINE_EQUIVALENT")
+            );
+        } else {
+            assert_eq!(module.value().lines().len(), 1);
+            assert!(
+                module
+                    .diagnostics()
+                    .iter()
+                    .find(|d| d.code() == "READ.GLM.NATIVE_LINE_DISCREPANCY")
+                    .unwrap()
+                    .message()
+                    .contains("physical pi-line law")
+            );
+        }
     }
 }

@@ -49,14 +49,30 @@ pub mod codes {
             "static switch status and banked initialization determine contact states";
         READ_GLM_SWITCH_EQUIVALENT = "READ.GLM.SWITCH_EQUIVALENT", Remark,
             "finite closed switch contacts use an exact static line equivalent";
+        READ_GLM_REDUCED_TRIPLEX = "READ.GLM.REDUCED_TRIPLEX", Warning,
+            "a direct triplex matrix does not specify physical neutral or ground current";
+        READ_GLM_LOAD_NORMALIZED = "READ.GLM.LOAD_NORMALIZED", Remark,
+            "native ZIP initialization defines the typed load voltage-law terms";
+        READ_GLM_BATTERY_IDLE = "READ.GLM.BATTERY_IDLE", Remark,
+            "Internal battery has zero fixed injection in constant-PF mode; energy and inactive control metadata remain in source";
+        READ_GLM_SOLAR_EQUIVALENT = "READ.GLM.SOLAR_EQUIVALENT", Remark,
+            "a static solar and inverter snapshot uses fixed typed inverter injections";
+        READ_GLM_REACTOR_EQUIVALENT = "READ.GLM.REACTOR_EQUIVALENT", Remark,
+            "a static reactor uses an exact line or ideal-contact equivalent";
+        READ_GLM_SUBSTATION_EQUIVALENT = "READ.GLM.SUBSTATION_EQUIVALENT", Remark,
+            "a standalone substation supplies initialized sequence-derived phase voltages";
+        READ_GLM_GENERATOR_EQUIVALENT = "READ.GLM.GENERATOR_EQUIVALENT", Remark,
+            "initialized static generator powers and ratings use phase-resolved records";
         READ_GLM_REGULATOR_EQUIVALENT = "READ.GLM.REGULATOR_EQUIVALENT", Remark,
             "fixed regulator phases use equivalent winding records on explicit normalization bases";
         READ_GLM_TRANSFORMER_EQUIVALENT = "READ.GLM.TRANSFORMER_EQUIVALENT", Warning,
             "native NR delta-delta transformer equations use an equivalent grounded-wye circuit";
         READ_GLM_CONTROL_FROZEN = "READ.GLM.CONTROL_FROZEN", Warning,
-            "active regulator behavior is omitted while declared fixed tap states are preserved";
+            "active control behavior is omitted while declared fixed electrical states are preserved";
+        READ_GLM_LINE_EQUIVALENT = "READ.GLM.LINE_EQUIVALENT", Remark,
+            "native FBS noncommuting line equations use an exact admittance equivalent";
         READ_GLM_NATIVE_LINE_DISCREPANCY = "READ.GLM.NATIVE_LINE_DISCREPANCY", Warning,
-            "native reported line currents differ from the physical pi-line model for noncommuting matrices";
+            "native line reporting and FBS solved states can differ from the physical pi-line model for noncommuting matrices";
         READ_GLM_GEOMETRY_MATERIALIZED = "READ.GLM.GEOMETRY_MATERIALIZED", Remark,
             "overhead conductor geometry is materialized as phase matrices with explicit reduction provenance";
         EMIT_GLM_UNSUPPORTED = "EMIT.GLM.UNSUPPORTED", Error,
@@ -128,6 +144,10 @@ pub mod codes {
             "a line names a linecode the case does not declare";
 
         // EMIT.DSS: what the canonical dss writer cannot state.
+        EMIT_DSS_IDEAL_SWITCH_EQUIVALENT = "EMIT.DSS.IDEAL_SWITCH_EQUIVALENT", Remark,
+            "an ideal closed switch is emitted using exact impedance cancellation";
+        EMIT_DSS_IDEAL_TRANSFORMER_EQUIVALENT = "EMIT.DSS.IDEAL_TRANSFORMER_EQUIVALENT", Remark,
+            "an ideal transformer is emitted using exact leakage cancellation";
         EMIT_DSS_SOURCE_EQUIVALENT = "EMIT.DSS.SOURCE_EQUIVALENT", Remark,
             "an ideal source is emitted as an exact finite-impedance circuit equivalent";
         EMIT_DSS_IMPEDANCE_EQUIVALENT = "EMIT.DSS.IMPEDANCE_EQUIVALENT", Remark,

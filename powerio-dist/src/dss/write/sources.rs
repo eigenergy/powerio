@@ -75,11 +75,30 @@ pub(super) fn validate(net: &MulticonductorNetwork) -> Result<(), String> {
         }
     }
     loads::validate(net)?;
+    super::asymmetric_shunts::validate(net)?;
+    ideal_transformers::validate(net)?;
     for code in net.line_codes().iter().filter(|c| asymmetric(c)) {
-        if sequence_impedance(code, 1.0).is_none() {
+        if sequence_impedance(code, 1.0).is_none()
+            && super::asymmetric_pair::equivalent(code, 1.0).is_none()
+        {
             return Err(format!(
                 "linecode {}: asymmetric matrix has no qualified DSS equivalent",
                 code.name
+            ));
+        }
+    }
+    for line in net.lines() {
+        if let Some(code) = net
+            .line_codes()
+            .iter()
+            .find(|c| c.name.eq_ignore_ascii_case(&line.linecode))
+            && asymmetric(code)
+            && sequence_impedance(code, line.length).is_none()
+            && super::asymmetric_pair::equivalent(code, line.length).is_none()
+        {
+            return Err(format!(
+                "line {}: scaled asymmetric impedance has no finite DSS equivalent",
+                line.name
             ));
         }
     }
@@ -96,7 +115,7 @@ pub(super) fn asymmetric(code: &DistLineCode) -> bool {
     })
 }
 
-fn sequence_impedance(code: &DistLineCode, length: f64) -> Option<[Complex64; 3]> {
+pub(super) fn sequence_impedance(code: &DistLineCode, length: f64) -> Option<[Complex64; 3]> {
     if code.n_conductors != 3
         || !length.is_finite()
         || length <= 0.0
@@ -123,17 +142,24 @@ fn sequence_impedance(code: &DistLineCode, length: f64) -> Option<[Complex64; 3]
             }
         }
     }
-    let alpha = Complex64::new(-0.5, 0.866_025);
-    let first_rotation = alpha - 1.0;
-    let second_rotation = alpha * alpha - 1.0;
-    let upper_delta = 3.0 * (z[0][1] - z[0][0]);
-    let lower_delta = 3.0 * (z[0][2] - z[0][0]);
-    let denominator = first_rotation * first_rotation - second_rotation * second_rotation;
-    let positive = (upper_delta * first_rotation - lower_delta * second_rotation) / denominator;
-    let negative = (lower_delta * first_rotation - upper_delta * second_rotation) / denominator;
-    let zero = 3.0 * z[0][0] - positive - negative;
-    let result = [zero, positive, negative];
-    if positive == Complex64::default()
+    let result = if z[0][1] == z[0][2] {
+        // DSS's Z1=Z2 branch uses exact (Z0-Z1)/3 mutual impedance.
+        // The truncated rotation constants below apply only to Z1!=Z2.
+        let sequence = z[0][0] - z[0][1];
+        [z[0][0] + 2.0 * z[0][1], sequence, sequence]
+    } else {
+        let alpha = Complex64::new(-0.5, 0.866_025);
+        let first_rotation = alpha - 1.0;
+        let second_rotation = alpha * alpha - 1.0;
+        let upper_delta = 3.0 * (z[0][1] - z[0][0]);
+        let lower_delta = 3.0 * (z[0][2] - z[0][0]);
+        let denominator = first_rotation * first_rotation - second_rotation * second_rotation;
+        let positive = (upper_delta * first_rotation - lower_delta * second_rotation) / denominator;
+        let negative = (lower_delta * first_rotation - upper_delta * second_rotation) / denominator;
+        let zero = 3.0 * z[0][0] - positive - negative;
+        [zero, positive, negative]
+    };
+    if result[1] == Complex64::default()
         || result
             .iter()
             .any(|v| !v.re.is_finite() || !v.im.is_finite())
@@ -159,22 +185,27 @@ impl DssWriter {
         if !asymmetric(code) {
             return false;
         }
-        let z = sequence_impedance(code, line.length).expect("validated exact impedance profile");
-        let mut text = format!(
-            "New Vsource._pio_coupled_{} phases=3 bus1={} bus2={} basekv=1 pu=0 frequency={} basefreq={}",
-            line.name,
-            self.bus_ref(&line.bus_from, &line.terminal_map_from),
-            self.bus_ref(&line.bus_to, &line.terminal_map_to),
-            num(net.base_frequency()),
-            num(net.base_frequency()),
-        );
-        for (i, value) in z.iter().enumerate() {
-            let _ = write!(text, " z{i}=[{} {}]", num(value.re), num(value.im));
-        }
-        self.line_out(&text);
-        self.warn(&C::EMIT_DSS_IMPEDANCE_EQUIVALENT, format!(
+        if code.n_conductors == 2 {
+            self.asymmetric_pair_branch(net, line, code);
+        } else {
+            let z =
+                sequence_impedance(code, line.length).expect("validated exact impedance profile");
+            let mut text = format!(
+                "New Vsource._pio_coupled_{} phases=3 bus1={} bus2={} basekv=1 pu=0 frequency={} basefreq={}",
+                line.name,
+                self.bus_ref(&line.bus_from, &line.terminal_map_from),
+                self.bus_ref(&line.bus_to, &line.terminal_map_to),
+                num(net.base_frequency()),
+                num(net.base_frequency()),
+            );
+            for (i, value) in z.iter().enumerate() {
+                let _ = write!(text, " z{i}=[{} {}]", num(value.re), num(value.im));
+            }
+            self.line_out(&text);
+            self.warn(&C::EMIT_DSS_IMPEDANCE_EQUIVALENT, format!(
             "line {}: complete asymmetric sequence impedance emitted as zero-EMF Vsource._pio_coupled_{}", line.name, line.name,
         ));
+        }
         if code.i_max.is_some()
             || code.s_max.is_some()
             || line.i_max.is_some()

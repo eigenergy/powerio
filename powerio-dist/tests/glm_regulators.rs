@@ -94,7 +94,6 @@ fn native_singular_or_unqualified_regulator_profiles_fail() {
             "configuration cfg; latitude",
             "configuration cfg; regulator_resistance 0; latitude",
         ),
-        ("solver_method NR", "solver_method FBS"),
         ("connect_type 1", "connect_type OPEN_DELTA_ABBC"),
     ] {
         assert!(read(&deck().replace(a, b)).is_err(), "accepted {b}");
@@ -184,4 +183,50 @@ fn arras_regulation_uses_its_published_percent_unit() {
     {
         assert!((ratio(a) - ratio(b)).abs() < 1e-14);
     }
+}
+
+#[test]
+fn fbs_regulators_keep_ideal_ratios_and_ignore_declared_series_resistance() {
+    let baseline = read(deck()).unwrap();
+    let text = deck()
+        .replace("solver_method NR", "solver_method FBS")
+        .replace(
+            "configuration cfg; latitude",
+            "configuration cfg; regulator_resistance 7.3; latitude",
+        );
+    let module = read(&text).unwrap();
+    for (a, b) in baseline
+        .value()
+        .transformers()
+        .iter()
+        .zip(module.value().transformers())
+    {
+        assert!((ratio(a) - ratio(b)).abs() < 1e-14);
+        assert!(b.windings.iter().all(|w| w.r_pct == 0.0));
+        assert_eq!(b.xsc_pct, [0.0]);
+    }
+    assert_eq!(
+        baseline.value().component_locations(),
+        module.value().component_locations()
+    );
+    assert!(emit_canonical(module.value(), Destination::memory("ideal.glm").unwrap()).is_err());
+    let output = powerio_dist::emit(
+        &powerio_core::PioModule::new(module.into_value()),
+        powerio_dist::DistTargetFormat::Dss,
+        Destination::memory("ideal.dss").unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        output
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code() == "EMIT.DSS.IDEAL_TRANSFORMER_EQUIVALENT")
+            .count(),
+        3
+    );
+    let EmittedOutput::Memory { artifacts } = output.output() else {
+        panic!()
+    };
+    let text = std::str::from_utf8(artifacts[0].bytes()).unwrap();
+    assert_eq!(text.matches("rmatrix=(-1)").count(), 3);
 }

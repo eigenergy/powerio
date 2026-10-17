@@ -88,12 +88,6 @@ impl Reader<'_> {
     }
 
     fn regulator(&mut self, key: ObjectKey) -> Result<(), Error> {
-        if !self.newton_raphson {
-            return Err(self.error(
-                key,
-                "FBS ideal regulator constraints still require a qualified mapping",
-            ));
-        }
         let cfg = self.geometry_reference(key, "configuration", "regulator_configuration")?;
         if !matches!(
             self.text(cfg, "connect_type")?.as_deref(),
@@ -127,12 +121,14 @@ impl Reader<'_> {
         }
         let step = self.real(cfg, "regulation").unwrap_or(0.0) / f64::from(raise);
         let declared_r = self.real(key, "regulator_resistance").unwrap_or(-1.0);
-        let resistance = if declared_r < 0.0 {
+        let resistance = if !self.newton_raphson {
+            0.0
+        } else if declared_r < 0.0 {
             self.switch_default_resistance
         } else {
             declared_r
         };
-        if resistance <= 0.0 {
+        if self.newton_raphson && resistance <= 0.0 {
             return Err(self.error(
                 key,
                 "zero regulator_resistance produces a singular native NR circuit",
@@ -154,14 +150,16 @@ impl Reader<'_> {
                 .roots
                 .get(&object)
                 .ok_or_else(|| self.error(key, "regulator endpoint must be a bus"))?;
-            if phases.iter().any(|p| !self.phases[&root].contains(p)) {
+            if self.triplex.contains_key(&root)
+                || phases.iter().any(|p| !self.phases[&root].contains(p))
+            {
                 return Err(self.error(key, "regulator phase absent at endpoint"));
             }
             endpoints.push(root);
         }
         let nominal = self.nominal[&endpoints[0]];
         let r_pct = 100.0 * resistance / nominal.powi(2);
-        if !r_pct.is_finite() || r_pct <= 0.0 {
+        if !r_pct.is_finite() || (resistance > 0.0 && r_pct == 0.0) {
             return Err(self.error(
                 key,
                 "regulator winding normalization overflows or underflows",
@@ -179,7 +177,12 @@ impl Reader<'_> {
                 phases.len() == 1,
             );
         }
-        self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_REGULATOR_EQUIVALENT, format!("regulator {}: phase windings preserve declared fixed ratios and {resistance} ohm NR series resistance; 1 VA is a normalization base, not a source nameplate rating; control configuration remains in source",self.names[&key])));
+        let circuit = if self.newton_raphson {
+            "NR series resistance"
+        } else {
+            "FBS ideal constraint (declared resistance is unused)"
+        };
+        self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_REGULATOR_EQUIVALENT, format!("regulator {}: phase windings preserve declared fixed ratios and {resistance} ohm {circuit}; 1 VA is a normalization base, not a source nameplate rating; control configuration remains in source",self.names[&key])));
         if control != "MANUAL" {
             self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_CONTROL_FROZEN,format!("regulator {}: {control} execution is excluded; stated taps are used without settling",self.names[&key])));
         }

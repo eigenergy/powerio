@@ -1412,6 +1412,14 @@ impl Reader<'_> {
         let per_phase = |total_kw: f64| vec![total_kw * 1e3 / phases as f64; phases];
         let mut extras = extras_from_leftovers(&props);
         self.stash_kv_and_phases(&props, &mut extras, kv, phases);
+        // Preserve native voltage-law defaults when a parsed generator is
+        // subsequently emitted from the typed value or restored from IR.
+        extras
+            .entry("vminpu".into())
+            .or_insert_with(|| dd::generator::VMINPU.to_string().into());
+        extras
+            .entry("vmaxpu".into())
+            .or_insert_with(|| dd::generator::VMAXPU.to_string().into());
         DistGenerator {
             name: obj.name.clone(),
             bus: spec.name,

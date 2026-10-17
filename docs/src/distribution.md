@@ -235,6 +235,10 @@ calculated matrices, so it does not reinterpret geometry under the target fork.
 
 Numerical `iteration_limit` settings and voltage/current dump objects remain in
 retained source and are reported; they do not become network components.
+`line_limits`, positive default voltage convergence tolerances and
+`multi_recorder` objects are also retained and reported. Passive equipment
+names resolve case-sensitively, including names differing only by case;
+typed component names still need distinct case-insensitive identities.
 Ordinary transformers support three-phase `WYE_WYE` (also numeric `1`) and
 single-phase `SINGLE_PHASE` connections with explicit voltages and positive series
 resistance/reactance. They map to grounded winding records and retain device
@@ -262,7 +266,31 @@ that native circuit in existing winding records and issues
 the original label across IR; it does not carry electrical parameters. Canonical
 GLM writes the effective `WYE_WYE` circuit and diagnoses the label change.
 This is native-engine compatibility, not physical delta winding isolation;
-physical delta export and FBS delta transformers still require their own mappings.
+physical delta export still requires its own mapping.
+
+FBS `DELTA_DELTA` instead imports its native hybrid equations as a nine-terminal
+admittance with two ideal external contacts. Three auxiliary voltages encode
+scaled output currents: the native law removes common-mode input voltage but
+transfers common-mode current. This preserves the pinned solver's behavior for
+unbalanced grounded loads without substituting physical delta isolation.
+Coordinates follow the equivalent's shunt and contacts; ratings remain
+source-only and are diagnosed. Twelve native comparisons cover both forks,
+step-up/down/equal voltages, and wye/delta loads through IR and OpenDSS.
+OpenDSS writing preserves the full asymmetric admittance with coupled two-port
+blocks and exact diagonal corrections. Internal negative-element losses are
+not physical device losses; measure the aggregate external ports. Canonical
+GLM writing of this auxiliary-node equivalent remains unsupported.
+
+`DELTA_GWYE` (also numeric `3`) imports for NR and FBS as three single-phase
+coils. Each primary joins two phase terminals; each secondary joins its phase
+to ground. The native step-up and step-down orientations differ, including
+their phase shifts. The mapping preserves that orientation and zero-sequence
+blocking without depending on a target's default transformer clock angle.
+Coil ratings use one third of total power and secondary coil voltage uses
+line-to-neutral voltage. Both pinned engines and IR-restored OpenDSS agree
+on unbalanced step-up, step-down, equal-rating and IEEE8500-parameter circuits.
+Coordinates attach to all three coils. Canonical GLM emission of these phase-pair
+coils remains unfinished and fails explicitly.
 
 NR `WYE_WYE` regulators preserve Type A/B per-phase ratios and series resistance
 as single-phase winding records. An object tap overrides its configuration tap.
@@ -275,7 +303,23 @@ nameplate rating. The `rating_is_normalization_base` extra preserves that fact i
 IR; cross-format writers diagnose loss of that metadata. Device coordinates attach to every resulting phase record.
 Canonical GLM emits manual regulator equivalents from current winding values;
 OpenDSS uses `xscarray=(0)` to avoid its scalar zero-reactance substitution.
-FBS regulators, open-delta connections and banked initialization remain unfinished.
+FBS `WYE_WYE` regulators instead retain ideal zero-leakage winding constraints;
+the native FBS solver ignores declared regulator resistance. OpenDSS emission
+uses a one-ohm winding resistance followed by its exact negative, eliminating
+both at an unloaded internal bus. This preserves the ideal ratio and external
+currents without an arbitrary small leakage. A diagnostic identifies the added
+line: physical secondary powers and total losses include it. The typed value
+and IR retain zero leakage. Canonical GLM writing of ideal regulator constraints,
+open-delta connections and banked initialization remain unfinished.
+
+Plain ideal closed switches likewise use cancelling resistances in OpenDSS;
+plain open contacts are disabled and have no artificial line charging or leakage.
+Switches retaining source-specific impedance declarations use the existing
+source-aware path. Transformer cancellation currently covers complete two-coil,
+single-phase winding records with grounded or floating secondary returns and
+no core or neutral shunts. A floating return uses two cancelling conductors,
+preserving common-mode displacement. Other ideal-transformer profiles need
+further qualification.
 
 Canonical node convergence is set to `1e-9 V`. The tighter former absolute
 setting could prevent IEEE13 from converging despite stable electrical values.
@@ -302,8 +346,69 @@ OpenDSS, including per-phase manual capacitor admittances and switch/regulator
 states. Their edited-state qualification remains pending. The harness documents
 per-feeder stopping settings and numerical comparison budgets.
 
-Other geometry/earth models, split-phase and
-additional static devices remain unfinished and fail explicitly. Full OpenDSS
+Capacitor `VAR`, `VOLT`, `VARVOLT` and `CURRENT` controls import as fixed
+snapshots only when every phase has an explicit switch state and control is
+individual. `READ.GLM.CONTROL_FROZEN` reports excluded control execution.
+Thresholds, sensing references and delays remain in source; canonical output
+uses manual coils with the current typed admittances. Missing switch states and
+unqualified banked initialization fail. A single-phase manual bank sensing its own phase is supported. An explicit `cap_nominal_voltage` sets its admittance base; otherwise native initialization uses the parent bus nominal voltage.
+
+The IEEE8500 native reference harness compares its original PNNL input with
+explicit static configurations on both forks. Arras requires `triplex_load` constant
+power declarations where this older input uses `triplex_node.power_1/power_2`.
+The harness also handles different dump-mode spellings. That initial dump-only
+reference remains separate from full-precision import qualification.
+
+The complete pinned IEEE8500 fixed-state case now has native-to-OpenDSS import
+qualification through IR, across both forks. The full-feeder harness compares
+all 4,879 native bus objects and 4,876 device ports, including center-tapped
+services, triplex neutral currents and ideal regulators/switches. It verifies
+physical powers and losses, native loss-report conventions, and current balance
+at all non-source, non-ground bus terminals. The original PNNL input and portable
+static input produce identical typed circuits. Native convergence is tightened
+from a nominal-voltage fraction of `1e-4` to `1e-12` for comparison; electrical
+data and the common comparison budgets are unchanged. A deliberately wrong
+regulator tap must fail. Edited-feeder and canonical GLM qualification remain
+unfinished.
+
+Grounded center-tapped services import as four typed windings and a
+constant-impedance load at an auxiliary core bus. The fourth winding exposes the
+internal core branch after primary leakage; the two secondary windings preserve
+opposite polarity. Configuration phase ratings determine the impedance base.
+Triplex loads retain separate leg and line-to-line P/I/Z terms. These circuits
+have native-to-OpenDSS import qualification on both pinned forks, including
+IEEE8500 service parameters and an IR round trip. The internal core load must be
+included when aggregating physical transformer losses.
+
+Triplex line geometry imports as a full three-conductor impedance matrix with
+neutral grounded at both endpoints. This is equivalent to the native grounded
+neutral reduction and retains its reconstructed neutral current. Unequal
+conductors, 50/60 Hz, NR/FBS, mixed loads and connected IEEE8500 service parameters
+have native-to-OpenDSS qualification, including both-end powers and losses.
+Direct triplex 2×2 matrices also import. GridLAB-D's reversed leg-2 voltage
+convention requires negating the second matrix row to obtain physical terminal
+voltages and currents. The resulting matrix can be nonreciprocal; import preserves
+it and reports `READ.GLM.REDUCED_TRIPLEX`. Such input does not define a physical
+neutral/ground-current model. OpenDSS output uses an exact source-and-line
+equivalent, including an open auxiliary third port, when needed. Aggregate its
+physical end ports for powers and losses; internal element losses alone are not
+the original line's losses. Both forks and solvers have direct-matrix microcase
+qualification through IR and DSS, including deliberate wrong-load checks.
+Floating service neutrals, canonical GLM service output and additional geometry
+models remain unfinished and fail explicitly.
+
+Nonzero triplex `base_power_1`, `_2`, and `_12` initialize separate constant-power,
+constant-current and constant-impedance terms, overriding explicit coefficients
+on that connection. Import reproduces native power-fraction normalization and
+signed power factors, with `READ.GLM.LOAD_NORMALIZED`. Zero base power leaves
+explicit P/I/Z coefficients in effect.
+
+A missing or zero overhead mutual spacing produces zero mutual impedance in the
+pinned engines. Import preserves this behavior and reports it instead of
+inventing a spacing. Capacitance geometry still requires its qualified positive
+dimensions. Seasonal conductor/configuration ampacities are validated and
+retained in source with `READ.GLM.SOURCE_ONLY`; projection into typed ampacity
+limits remains unfinished. Full OpenDSS
 static compatibility is not yet established.
 
 Electrical parents are zero-length bus attachments. Qualified node/meter/load
@@ -361,9 +466,21 @@ exact equivalents and currently fail. No small impedance replaces an ideal
 constraint, and the input network is unchanged.
 
 For noncommuting line impedance and capacitance matrices, the pinned engines
-report incorrect source-end currents in NR and FBS despite correct receiving voltages.
-Import reports this native discrepancy and retains the physical pi-line model.
-Canonical output replaces native line capacitance with exact phase-pair and
+use a source-end current equation that differs from the physical pi-line law.
+NR uses it for reporting, so NR import retains the physical circuit and warns
+about the reporting discrepancy. FBS uses it during its solve: FBS import now
+preserves the native equations as a conductor admittance with auxiliary current
+variables and ideal external contacts, reporting `READ.GLM.LINE_EQUIVALENT`.
+Line coordinates follow the shunt and contacts; configuration coordinates and
+calculated coefficients remain on the retained linecode. OpenDSS output
+preserves this nonreciprocal circuit. Eight analytic/native/IR/DSS cases cover
+two- and three-phase examples, and IEEE13 FBS matches both pinned engines.
+IEEE34 still has two loss comparisons just above the strict tolerance; IEEE123's
+zero-voltage configuration has one undeclared-phase voltage discrepancy. Neither is
+claimed as a complete raw match. Canonical GLM writing of these native FBS
+auxiliary-node equivalents remains unsupported.
+
+For physical pi-line networks, canonical output replaces native line capacitance with exact phase-pair and
 earth-return impedance loads at each end. Conductive or unequal end shunts use
 the same equivalent in either solver. End-shunt expansion requires symmetric
 matrices; a nonreciprocal equivalent needs additional mapping and fails explicitly.
@@ -382,6 +499,77 @@ impedance case reproduces this with either a native switch or its line
 equivalent; FBS solves the same circuit and matches the analytic solution.
 Engine validation therefore checks finite voltages, currents and powers, and
 reports these NR failures separately from successful electrical comparisons.
+
+Standalone `substation` objects can supply fixed zero-, positive- and
+negative-sequence voltages. The reader applies the native `reference_phase`
+rotation and keeps the resulting phase voltages. Nonzero sequences require an
+explicit ABC SWING bus and override phase-voltage declarations. With all
+sequences zero, ordinary node initialization applies. Parented substations and
+external transmission coupling remain unsupported; standalone reporting settings
+are retained with a diagnostic.
+
+Static `series_reactor` objects map to uncoupled line impedances with unit
+normalization length. Scalar resistance/reactance aliases apply in source order.
+Zero impedance uses an ideal contact in FBS; NR uses the pinned native fallback
+`1 / (10000 + j10000)` ohm. Mixed ideal and finite phases remain separate typed
+components with their source coordinates. Current ratings remain in source with
+a diagnostic; typed rating projection and open reactor states remain unfinished.
+Canonical GLM output uses the existing line, switch and fixed-source equivalents.
+
+PNNL 5.3 `diesel_dg` in `CONSTANT_PQ` mode reads as three single-phase
+constant-power generators, retaining unequal signed P/Q, the initialized
+per-phase rating limit, and component coordinates. Scalar power fields override
+the complex fields at initialization; the native `-1` sentinel leaves that
+component unchanged. Missing or nonpositive `Rated_VA` uses the pinned engine's
+500 kVA default. Positive `Rated_V` must match the parent's line-line nominal
+voltage within 1%. An ordinary ABC parent and `module generators;` are required.
+Dynamic modes and Arras's different diesel model remain unsupported.
+
+OpenDSS emission of generators without retained voltage bounds supplies a
+0..2 pu constant-power band and reports the substitution. Above the emitted
+upper bound OpenDSS uses constant impedance. Generators parsed from OpenDSS
+retain their explicit bounds or native 0.9..1.1 pu defaults. Generator rating
+limits remain in IR; their OpenDSS mapping is unfinished and reports a loss.
+Canonical GLM generator writing is also unfinished. This device qualification
+is a prerequisite for IEEE9500, not qualification of that feeder.
+
+Solar-fed `FOUR_QUADRANT` inverters in `CONSTANT_PF` mode read as fixed
+per-phase inverter injections, including native efficiency and rating clipping.
+The supported solar profile is `BASEEFFICIENT` with default orientation and
+static climate temperature and direct irradiance. The reader evaluates its
+thermal equation; the inverter's declared `P_Out` does not set dispatch in this
+mode. Split-phase inverters connect across the two hot terminals. OpenDSS
+emission derives their line-line voltage base from winding polarity and
+conductor mappings; retained OpenDSS voltage bases still take precedence.
+Component coordinates remain attached to the typed inverter records.
+
+Both pinned forks are checked on ordinary and split-phase circuits, including
+the IEEE9500 solar parameters. Arras requires a meter or triplex-meter parent.
+An internal `LI_ION` battery on this inverter profile initializes with zero DC
+input and therefore zero AC injection, even if `P_Out` requests charging. Import
+preserves that idle electrical state and reports `READ.GLM.BATTERY_IDLE`; energy,
+state of charge and inactive load-following settings remain source-only. Native
+checks cover both solvers and forks. Other battery operating modes, weather files,
+multipoint efficiency and canonical GLM inverter writing remain unfinished.
+Climate coordinates and thermal inputs remain source-only with diagnostics.
+
+The PNNL NR profile accepts future manual reliability events only when their
+start date is strictly after the complete clock window, all references resolve,
+and every declared phase reaches a fixed source. Connected `SWING_PQ` buses in
+the grid-association profile remain PQ buses, as in native initialization. Island
+promotion, active outages and protection execution remain unsupported. These
+choices produce explicit static-state diagnostics. Per-phase link current
+ratings are validated and retained in source; typed ampacity mapping is pending.
+
+Both original CIMHub IEEE9500 balanced and unbalanced projects now parse through
+IR and produce solvable OpenDSS circuits with their DER and fixed device states.
+Full-precision voltage and both-end current/power comparisons are available, but
+strict full-feeder qualification remains open. The native NR line-current
+reporting formula differs from physical pi-circuit currents when series
+impedance and shunt admittance matrices do not commute. The harness retains the
+raw failing comparison and independently audits that discrepancy. Small
+convergence and near-zero-impedance residuals also remain under investigation;
+no complete IEEE9500 matching claim is made yet.
 
 GridLAB-D object latitude and longitude map to the network's typed
 `component_locations` table. Each point identifies its component table and exact

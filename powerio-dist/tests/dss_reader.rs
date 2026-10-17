@@ -1056,3 +1056,29 @@ fn calculation_constructs_are_named_outside_the_static_profile() {
     // The solve command is preserved without execution.
     assert!(parsed.commands().iter().any(|(verb, _)| verb == "solve"));
 }
+
+#[test]
+fn generator_voltage_law_defaults_survive_typed_emission() {
+    for (source, lo, hi) in [("", "0.9", "1.1"), ("vminpu=0.7 vmaxpu=1.4", "0.7", "1.4")] {
+        let net = parse_dss_str(&format!(
+            "new circuit.c basekv=12.47\nnew generator.g bus1=sourcebus kw=10 kvar=2 {source}"
+        ));
+        let emitted = emit_dss(&net);
+        let line = emitted
+            .text
+            .lines()
+            .find(|l| l.starts_with("New Generator.g "))
+            .unwrap();
+        assert!(line.contains(&format!("vminpu={lo}")), "{line}");
+        assert!(line.contains(&format!("vmaxpu={hi}")), "{line}");
+        let restored = parse_dss_str(&emitted.text);
+        assert_eq!(
+            net.generators()[0].extras["vminpu"],
+            restored.generators()[0].extras["vminpu"]
+        );
+        assert_eq!(
+            net.generators()[0].extras["vmaxpu"],
+            restored.generators()[0].extras["vmaxpu"]
+        );
+    }
+}

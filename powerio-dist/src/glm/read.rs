@@ -15,15 +15,28 @@ use crate::{
 
 const METERS_PER_MILE: f64 = 1609.344;
 
+mod batteries;
 mod cables;
 mod capacitors;
+mod delta_delta;
+mod delta_grounded;
+mod fbs_lines;
+mod generators;
 mod geometry;
+mod inverters;
 mod loads;
+mod reactors;
 mod regulators;
+mod reliability;
+mod solar;
 mod sources;
+mod split_phase;
+mod substations;
 mod switches;
 mod templates;
 mod transformers;
+mod triplex_lines;
+mod triplex_zip;
 
 /// Read the initial static GLM electrical profile. Unknown physical
 /// classes, properties and globals fail explicitly; they are not silently
@@ -36,9 +49,21 @@ mod transformers;
 /// Ordinary single-phase and three-phase grounded-wye transformers use winding
 /// records; FBS additionally preserves its finite default winding-2 core shunt.
 /// A connected directed FBS tree may use its implicit upstream voltage source.
-/// Wye regulators preserve fixed phase taps and NR resistance in winding equivalents.
-/// Manual wye capacitors use fixed per-phase shunt admittances.
-/// Other conductor/device profiles remain under implementation.
+/// Wye regulators preserve fixed phase taps, NR resistance and FBS ideal
+/// ratios in winding equivalents.
+/// Wye capacitors use fixed per-phase shunt admittances. Active controls require
+/// explicit individual switch states and produce a frozen-control diagnostic.
+/// Delta–grounded-wye transformers use phase-pair primary coils with grounded
+/// secondaries, preserving native step-up/down polarity in both solvers.
+/// Center-tapped services with grounded neutrals use typed windings and an
+/// internal core impedance load; triplex P/I/Z loads retain leg polarity.
+/// Triplex geometry uses full conductor matrices with both endpoint neutrals
+/// grounded, preserving native hot-conductor and neutral-current behavior.
+/// Direct triplex matrices and canonical GLM service emission remain unfinished.
+/// Standalone substations preserve sequence-derived source phasors. Static
+/// reactors use uncoupled lines or ideal contacts, including native NR zero
+/// impedance substitution. PNNL constant-PQ generators preserve initialized
+/// per-phase injections and ratings. Other device profiles remain unfinished.
 pub fn parse(
     source: Source,
     options: PreprocessOptions,
@@ -62,6 +87,7 @@ pub fn parse(
         quantities: BTreeMap::new(),
         phases: BTreeMap::new(),
         nominal: BTreeMap::new(),
+        triplex: BTreeMap::new(),
         attachments: BTreeMap::new(),
         line_capacitance: false,
         newton_raphson: false,
@@ -75,10 +101,15 @@ pub fn parse(
     reader.buses()?;
     reader.loads_and_sources()?;
     reader.lines()?;
+    reader.reactors()?;
+    reader.triplex_lines()?;
     reader.switches()?;
     reader.transformers()?;
     reader.regulators()?;
     reader.capacitors()?;
+    reader.generators()?;
+    reader.fixed_inverters()?;
+    reader.inactive_reliability()?;
     reader.coordinates()?;
     crate::require_electrical_readiness(&reader.net)
         .map_err(|e| e.with_source(project.source().clone()))?;
@@ -111,6 +142,7 @@ struct Reader<'a> {
     quantities: BTreeMap<(ObjectKey, String), Complex64>,
     phases: BTreeMap<ObjectKey, Vec<usize>>,
     nominal: BTreeMap<ObjectKey, f64>,
+    triplex: BTreeMap<ObjectKey, usize>,
     attachments: BTreeMap<ObjectKey, Vec<(crate::DistLocationTarget, String)>>,
     line_capacitance: bool,
     newton_raphson: bool,
@@ -139,11 +171,19 @@ impl Reader<'_> {
 
     fn top_level(&mut self) -> Result<(), Error> {
         let mut powerflow = false;
+        let mut generators = false;
+        let mut climate = false;
+        let mut reliability = false;
         for statement in self.project.statements() {
             match statement {
                 Statement::Block { header, body, span }
                     if header.first().is_some_and(|t| t.text() == "module") =>
                 {
+                    if header.len() == 2 && header[1].text() == "reliability" {
+                        self.reliability_module(body, span)?;
+                        reliability = true;
+                        continue;
+                    }
                     if header.len() != 2 || header[1].text() != "powerflow" {
                         return Err(self
                             .project
@@ -168,7 +208,15 @@ impl Reader<'_> {
                     if tokens.first().is_some_and(|t| t.text() == "module") =>
                 {
                     if tokens.len() != 2
-                        || !matches!(tokens[1].text(), "powerflow" | "tape" | "assert")
+                        || !matches!(
+                            tokens[1].text(),
+                            "powerflow"
+                                | "tape"
+                                | "assert"
+                                | "generators"
+                                | "climate"
+                                | "reliability"
+                        )
                     {
                         return Err(self.project.electrical_error(
                             span,
@@ -176,6 +224,9 @@ impl Reader<'_> {
                         ));
                     }
                     powerflow |= tokens[1].text() == "powerflow";
+                    generators |= tokens[1].text() == "generators";
+                    climate |= tokens[1].text() == "climate";
+                    reliability |= tokens[1].text() == "reliability";
                 }
                 Statement::Block { header, .. }
                     if header
@@ -188,6 +239,28 @@ impl Reader<'_> {
                         .electrical_error(span, "unsupported top-level electrical declaration"));
                 }
             }
+        }
+        if !generators
+            && let Some(object) = self
+                .index
+                .objects()
+                .iter()
+                .find(|o| matches!(class(o), "diesel_dg" | "solar" | "inverter" | "battery"))
+        {
+            return Err(self.error(
+                object.key(),
+                "generator objects require the generators module",
+            ));
+        }
+        if !climate
+            && let Some(object) = self.index.objects().iter().find(|o| class(o) == "climate")
+        {
+            return Err(self.error(object.key(), "climate object requires the climate module"));
+        }
+        if !reliability
+            && let Some(object) = self.index.objects().iter().find(|o| class(o) == "eventgen")
+        {
+            return Err(self.error(object.key(), "eventgen requires the reliability module"));
         }
         if !powerflow {
             return Err(Error::new(
@@ -258,6 +331,27 @@ impl Reader<'_> {
         match (name, value) {
             ("solver_method", "NR") => self.newton_raphson = true,
             ("solver_method", "FBS") => self.newton_raphson = false,
+            ("line_limits", value)
+                if matches!(
+                    value.to_ascii_lowercase().as_str(),
+                    "true" | "false" | "0" | "1"
+                ) =>
+            {
+                self.diagnostics.push(Diagnostic::of(
+                    &codes::READ_GLM_SOURCE_ONLY,
+                    "line_limits controls native limit reporting; the setting remains in source",
+                ));
+            }
+            ("default_maximum_voltage_error" | "maximum_voltage_error", value) => {
+                if !value.parse::<f64>().is_ok_and(|v| v.is_finite() && v > 0.0) {
+                    return Err(self.project.electrical_error(
+                        span,
+                        "default voltage convergence tolerance requires a finite positive scalar",
+                    ));
+                }
+                self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_SOURCE_ONLY,
+                    "native voltage convergence tolerance remains in source; canonical output uses its own solver settings"));
+            }
             ("default_resistance", value) => {
                 self.switch_default_resistance = value
                     .parse::<f64>()
@@ -298,14 +392,20 @@ impl Reader<'_> {
     }
 
     fn reserve_explicit_names(&mut self) -> Result<(), Error> {
+        let mut components = BTreeSet::new();
         for object in self.index.objects() {
-            if let Some(name) = object.name()
-                && !self.identities.insert(name.to_ascii_lowercase())
-            {
-                return Err(self.error(
-                    object.key(),
-                    "object identities collide under current canonical case-insensitive lookup",
-                ));
+            if let Some(name) = object.name() {
+                let folded = name.to_ascii_lowercase();
+                // Passive templates resolve by native case-sensitive identity.
+                // Their names never become typed component/linecode identities.
+                // Still reserve them against generated names for canonical output.
+                self.identities.insert(folded.clone());
+                if !templates::is_template(class(object)) && !components.insert(folded) {
+                    return Err(self.error(
+                        object.key(),
+                        "object identities collide under current canonical case-insensitive lookup",
+                    ));
+                }
             }
         }
         Ok(())
@@ -334,6 +434,7 @@ impl Reader<'_> {
             if matches!(
                 class,
                 "recorder"
+                    | "multi_recorder"
                     | "impedance_dump"
                     | "voltdump"
                     | "currdump"
@@ -360,8 +461,7 @@ impl Reader<'_> {
             }
             for property in object.properties() {
                 let name = property.name;
-                let allowed = allowed_property(class, name);
-                if !allowed {
+                if !allowed_property(class, name) {
                     return Err(self.project.electrical_error(
                         property.span,
                         format!("unmapped property {class}.{name}"),
@@ -380,6 +480,9 @@ impl Reader<'_> {
                         result.value,
                     );
                 }
+            }
+            if let Some(diagnostic) = self.rating_metadata(object.key())? {
+                self.diagnostics.push(diagnostic);
             }
         }
         let keys: Vec<_> = self
@@ -430,12 +533,16 @@ impl Reader<'_> {
     fn buses(&mut self) -> Result<(), Error> {
         let roots: BTreeSet<_> = self.roots.values().copied().collect();
         for key in roots {
-            let phases = parse_bus_phases(
-                self.text(key, "phases")?
-                    .as_deref()
-                    .ok_or_else(|| self.error(key, "explicit phases are required"))?,
-            )
-            .map_err(|m| self.error(key, m))?;
+            let flags = self
+                .text(key, "phases")?
+                .ok_or_else(|| self.error(key, "explicit phases are required"))?;
+            let phases = if split_phase::bus_class(class(&self.index.objects()[key.ordinal()])) {
+                let anchor = split_phase::anchor(&flags).map_err(|m| self.error(key, m))?;
+                self.triplex.insert(key, anchor);
+                vec![0, 1]
+            } else {
+                parse_bus_phases(&flags).map_err(|m| self.error(key, m))?
+            };
             let nominal = self
                 .real(key, "nominal_voltage")
                 .ok_or_else(|| self.error(key, "nominal_voltage is required"))?;
@@ -464,16 +571,30 @@ impl Reader<'_> {
         name: &str,
         value: Complex64,
     ) {
-        if class == "transformer_configuration" && matches!(name, "resistance" | "reactance") {
-            let previous = quantities.entry((key, "impedance".into())).or_default();
-            if name == "resistance" {
-                previous.re = value.re;
-            } else {
+        if let Some((canonical, imaginary)) = reactors::alias(class, name) {
+            let previous = quantities.entry((key, canonical)).or_default();
+            if imaginary {
                 previous.im = value.re;
+            } else {
+                previous.re = value.re;
             }
-        } else if let Some((canonical, Some(imaginary), _, _)) =
-            (class == "load").then(|| loads::property(name)).flatten()
+        } else if let Some((canonical, imaginary, default)) = (class == "transformer_configuration")
+            .then(|| transformers::alias(name))
+            .flatten()
         {
+            let previous = quantities.entry((key, canonical.into())).or_insert(default);
+            if imaginary {
+                previous.im = value.re;
+            } else {
+                previous.re = value.re;
+            }
+        } else if let Some((canonical, Some(imaginary), _, _)) = if class == "load" {
+            loads::property(name)
+        } else if split_phase::bus_class(class) {
+            split_phase::property(class, name)
+        } else {
+            None
+        } {
             let previous = quantities.entry((key, canonical.to_owned())).or_default();
             if imaginary {
                 previous.im = value.re;
@@ -489,6 +610,16 @@ impl Reader<'_> {
         let implicit_source = self.implicit_fbs_source()?;
         let entries: Vec<_> = self.roots.iter().map(|(&k, &r)| (k, r)).collect();
         for (key, root) in entries {
+            if self.triplex.contains_key(&root) {
+                if implicit_source == Some(key) {
+                    return Err(self.error(key, "implicit triplex voltage source is not qualified"));
+                }
+                self.triplex_loads(key, root)?;
+                continue;
+            }
+            if split_phase::bus_class(class(&self.index.objects()[key.ordinal()])) {
+                return Err(self.error(key, "triplex child requires a triplex parent"));
+            }
             let phases = if key == root {
                 self.phases[&root].clone()
             } else {
@@ -504,13 +635,17 @@ impl Reader<'_> {
                 phases
             };
             let nominal = self.nominal[&root];
+            // Native capacitor initialization copies the parent's node
+            // voltage; an explicit cap_nominal_voltage sets its device rating.
             if key != root
+                && class(&self.index.objects()[key.ordinal()]) != "capacitor"
                 && self
                     .real(key, "nominal_voltage")
                     .is_some_and(|v| v.total_cmp(&nominal).is_ne())
             {
                 return Err(self.error(key, "child nominal voltage conflicts with its parent"));
             }
+            let sequence = self.substation_voltages(key)?;
             let bustype = self.text(key, "bustype")?.unwrap_or_else(|| "PQ".into());
             if bustype == "SWING" || (bustype == "PQ" && implicit_source == Some(key)) {
                 if key != root {
@@ -519,10 +654,14 @@ impl Reader<'_> {
                 let mut magnitudes = Vec::new();
                 let mut angles = Vec::new();
                 for &phase in &phases {
-                    let value = self
-                        .quantity(key, &format!("voltage_{}", phase_name(phase)))
-                        .filter(|v| *v != Complex64::default())
-                        .unwrap_or_else(|| nominal_phasor(nominal, phase));
+                    let value = sequence.as_ref().map_or_else(
+                        || {
+                            self.quantity(key, &format!("voltage_{}", phase_name(phase)))
+                                .filter(|v| *v != Complex64::default())
+                                .unwrap_or_else(|| nominal_phasor(nominal, phase))
+                        },
+                        |v| v[phase],
+                    );
                     magnitudes.push(value.norm());
                     angles.push(value.arg());
                 }
@@ -533,6 +672,8 @@ impl Reader<'_> {
                     magnitudes,
                     angles,
                 ));
+            } else if bustype == "SWING_PQ" {
+                self.connected_swing_pq(key, root)?;
             } else if bustype != "PQ" {
                 return Err(self.error(
                     key,
@@ -668,6 +809,9 @@ impl Reader<'_> {
                 .roots
                 .get(&to)
                 .ok_or_else(|| self.error(key, "line to is not an electrical bus"))?;
+            if self.triplex.contains_key(&from) || self.triplex.contains_key(&to) {
+                return Err(self.error(key, "ordinary line cannot connect triplex buses"));
+            }
             if phases
                 .iter()
                 .any(|p| !self.phases[&from].contains(p) || !self.phases[&to].contains(p))
@@ -701,8 +845,13 @@ impl Reader<'_> {
                 }
             };
             if !super::line_physics::line_shunts_commute(&code) {
-                self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_NATIVE_LINE_DISCREPANCY,
-                    format!("line {}: this source has noncommuting impedance/capacitance matrices; the typed network preserves the physical pi-line law, while pinned PNNL/Arras native reported line currents and losses differ in NR and FBS; canonical output uses exact end-shunt equivalents", self.names[&key])));
+                if !self.newton_raphson {
+                    self.fbs_line(key, &phases, &code, length)?;
+                    self.net.line_codes_mut().push(code);
+                    self.attach(config, crate::DistLocationTarget::LineCode, code_name);
+                    continue;
+                }
+                self.warn_native_line_reporting(key);
             }
             self.net.line_codes_mut().push(code);
             self.attach(
@@ -781,6 +930,10 @@ impl Reader<'_> {
             if point.latitude.is_none() && point.longitude.is_none() {
                 continue;
             }
+            if class(object) == "climate" {
+                self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_SOURCE_ONLY, format!("climate {}: weather-station coordinates remain in source; no electrical component is created", self.names[&object.key()])));
+                continue;
+            }
             let Some(targets) = self.attachments.get(&object.key()) else {
                 return Err(self.error(
                     object.key(),
@@ -856,9 +1009,20 @@ fn supported_class(name: &str) -> bool {
     bus_class(name)
         || matches!(
             name,
-            "overhead_line"
+            "diesel_dg"
+                | "inverter"
+                | "solar"
+                | "battery"
+                | "climate"
+                | "series_reactor"
+                | "fault_check"
+                | "eventgen"
+                | "overhead_line"
                 | "underground_line"
                 | "underground_line_conductor"
+                | "triplex_line"
+                | "triplex_line_configuration"
+                | "triplex_line_conductor"
                 | "line_configuration"
                 | "switch"
                 | "overhead_line_conductor"
@@ -870,7 +1034,8 @@ fn supported_class(name: &str) -> bool {
         )
 }
 fn bus_class(name: &str) -> bool {
-    matches!(name, "node" | "load" | "meter" | "capacitor")
+    matches!(name, "node" | "load" | "meter" | "capacitor" | "substation")
+        || split_phase::bus_class(name)
 }
 fn matrix_property(name: &str) -> bool {
     let bytes = name.as_bytes();
@@ -898,6 +1063,17 @@ fn allowed_property(class: &str, name: &str) -> bool {
         || (matches!(class, "overhead_line" | "underground_line")
             && matches!(name, "phases" | "from" | "to" | "length" | "configuration"))
         || (class == "line_configuration" && matrix_property(name))
+        || triplex_zip::quantity_spec(class, name).is_some()
+        || split_phase::allowed(class, name)
+        || triplex_lines::allowed(class, name)
+        || geometry::rating_property(class, name)
+        || reliability::allowed(class, name)
+        || batteries::allowed(class, name)
+        || solar::allowed(class, name)
+        || inverters::allowed(class, name)
+        || reactors::allowed(class, name)
+        || substations::allowed(class, name)
+        || generators::allowed(class, name)
         || capacitors::allowed(class, name)
         || regulators::allowed(class, name)
         || transformers::allowed(class, name)
@@ -925,6 +1101,21 @@ fn quantity_spec(
     dialect: super::GlmDialect,
 ) -> Option<(GlmQuantityKind, Option<&'static str>)> {
     use GlmQuantityKind::{Complex, Real};
+    if let Some(spec) = solar::quantity_spec(class, name)
+        .or_else(|| batteries::quantity_spec(class, name))
+        .or_else(|| inverters::quantity_spec(class, name))
+    {
+        return Some(spec);
+    }
+    if let Some(spec) = triplex_zip::quantity_spec(class, name)
+        .or_else(|| split_phase::quantity_spec(class, name))
+        .or_else(|| triplex_lines::quantity_spec(class, name))
+        .or_else(|| generators::quantity_spec(class, name))
+        .or_else(|| reactors::quantity_spec(class, name))
+        .or_else(|| substations::quantity_spec(class, name))
+    {
+        return Some((spec.0, Some(spec.1)));
+    }
     if let Some(spec) = transformers::quantity_spec(class, name)
         .map(|(kind, unit)| (kind, Some(unit)))
         .or_else(|| regulators::quantity_spec(class, name))

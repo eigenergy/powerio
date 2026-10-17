@@ -130,3 +130,30 @@ fn explicit_matrices_take_native_precedence_over_geometry() {
     assert!((code.r_series[0][0] * 1609.344 - 2.0).abs() < 1e-12);
     assert!((code.x_series[0][0] * 1609.344 - 3.0).abs() < 1e-12);
 }
+
+#[test]
+fn missing_or_zero_spacing_preserves_native_zero_mutual_impedance() {
+    for replacement in ["", "distance_AN 0 ft;"] {
+        let text = deck(true, false).replace("distance_AN 7.810249675906654 ft;", replacement);
+        let module = parse(
+            Source::from_memory("case.glm", text.as_bytes()).unwrap(),
+            PreprocessOptions::default(),
+        )
+        .unwrap();
+        let code = &module.value().line_codes()[0];
+        let expected = Complex64::new(
+            0.306 + 0.001_588_36 * 50.0,
+            0.002_022_37 * 50.0 * ((100.0_f64 / 50.0).ln() / 2.0 + 7.6786 - 0.0244_f64.ln()),
+        );
+        assert!(
+            (Complex64::new(code.r_series[0][0], code.x_series[0][0]) * 1609.344 - expected).norm()
+                < 1e-12
+        );
+        assert!(
+            module
+                .diagnostics()
+                .iter()
+                .any(|d| d.message().contains("zero native mutual impedance"))
+        );
+    }
+}

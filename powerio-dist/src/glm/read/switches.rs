@@ -23,8 +23,8 @@ impl Reader<'_> {
                     .ok_or_else(|| self.error(key, "switch requires explicit phases"))?,
             )
             .map_err(|m| self.error(key, m))?;
-            let from = self.switch_endpoint(key, "from", &phases)?;
-            let to = self.switch_endpoint(key, "to", &phases)?;
+            let from = self.ordinary_link_endpoint(key, "from", &phases)?;
+            let to = self.ordinary_link_endpoint(key, "to", &phases)?;
             let (closed, impedance) = self.switch_state(key, &phases)?;
             let name = self.names[&key].clone();
             for state in [true, false] {
@@ -62,7 +62,7 @@ impl Reader<'_> {
         Ok(())
     }
 
-    fn switch_endpoint(
+    pub(super) fn ordinary_link_endpoint(
         &self,
         key: ObjectKey,
         field: &str,
@@ -71,13 +71,14 @@ impl Reader<'_> {
         let object = self
             .index
             .resolve_property(key, field)?
-            .ok_or_else(|| self.error(key, format!("missing switch {field} reference")))?;
+            .ok_or_else(|| self.error(key, format!("missing link {field} reference")))?;
         let root = self
             .roots
             .get(&object)
-            .ok_or_else(|| self.error(key, format!("switch {field} is not an electrical bus")))?;
-        if phases.iter().any(|p| !self.phases[root].contains(p)) {
-            return Err(self.error(key, "switch phases are absent at an endpoint"));
+            .ok_or_else(|| self.error(key, format!("link {field} is not an electrical bus")))?;
+        if self.triplex.contains_key(root) || phases.iter().any(|p| !self.phases[root].contains(p))
+        {
+            return Err(self.error(key, "link phases are absent at an endpoint"));
         }
         Ok(self.names[root].clone())
     }

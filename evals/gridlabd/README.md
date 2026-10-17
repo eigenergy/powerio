@@ -932,3 +932,413 @@ stricter microcase power threshold. Native source-meter current, which follows
 GridLAB-D's noncommuting line-shunt reporting law, is retained separately;
 compared source current sums physical native ports. Recorder runs are bounded
 to one second and use 17 significant digits.
+
+
+### IEEE8500 static reference
+
+`ieee8500_reference.py` pins the IEEE8500 input catalogued from
+`GRIDAPPSD/Powergrid-Models/archive/GLM/IEEE_8500node.glm`. It compares the
+original PNNL circuit with explicit static versions on PNNL and Arras. Three
+VARVOLT capacitor banks use their declared switch states; the fourth bank and
+all regulator taps are already manual. All four banks and all regulator taps
+are recorded. The 1,177 loaded `triplex_node` objects become `triplex_load`
+objects with `constant_power_1/constant_power_2`, because Arras hides the older
+node `power_1/power_2` properties. Source bytes must match the pinned digest.
+
+The original lowercase voltage/current dump modes are not portable: PNNL uses
+`RECT` for voltage, Arras uses `rect`, and both use `RECT` for current. Correcting
+these output settings changes no electrical fields. Runs stop after one second;
+recorders use one-second intervals. The three controlled banks are frozen only
+in the static variants. Complete inventories contain 4,879 voltage rows and
+4,876 current rows, giving 29,265 complex values including absent phases.
+
+```sh
+python evals/gridlabd/ieee8500_reference.py --source /path/to/IEEE_8500node.glm \
+  --pnnl-root /path/to/GridLAB-D --output /path/to/new-reference-directory
+```
+
+This is native reference preparation at six-decimal dump precision. It is not
+PowerIO conversion qualification, a full-precision port/loss comparison, or an
+edited-model check. Original engine failures and source adaptations must remain
+distinct from converter results. Dataset contents remain outside git.
+
+
+### Center-tapped service import
+
+`split_phase_import_oracle.py` validates actual GLM import, IR restoration and
+OpenDSS emission for the grounded service circuit used by IEEE8500. Six small
+synthetic circuits cover primary phases A/B/C, NR and FBS, unequal secondary
+impedances, mixed P/I/Z terms, default/copy rules and IEEE8500 service parameters.
+Both pinned forks supply native reference measurements. The linear cases also
+compare against the independent ideal-core circuit equations. Deliberately
+reversing a secondary, removing core loss or changing the rating must fail.
+
+```sh
+cargo build -p powerio --example glm_network
+python evals/gridlabd/split_phase_import_oracle.py \
+  --bridge target/debug/examples/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-service-import-directory
+```
+
+The typed equivalent uses four windings and a constant-impedance load at an
+auxiliary core bus. Its zero-leakage fourth winding exposes the internal core;
+placing that load at an external terminal changes primary copper losses.
+Loss measurements aggregate the three external ports, including the separate
+core load. Secondary leg 2 has reversed terminal order, matching the native
+`voltage_2` convention. The comparison uses the existing full-precision V/A/VA
+budgets, not the IEEE8500 dump precision.
+
+This qualifies grounded service import and OpenDSS emission only. Triplex geometry
+has separate qualification below. Direct triplex matrices, floating neutrals,
+canonical GLM service writing and complete IEEE8500 feeder conversion remain
+unfinished. PNNL's legacy `triplex_node.power_*` inputs are
+accepted only by the PNNL import profile; Arras requires `triplex_load` fields.
+
+
+### Connected triplex geometry import
+
+`triplex_import_oracle.py` extends the grounded service circuit with a triplex
+line. It compares 30 complex observables per case: transformer ports, both line
+ends including neutral current, load voltages and losses. The six cases cover
+A/B/C primaries, NR/FBS, unequal wires, 50/60 Hz, mixed P/I/Z loads, IEEE8500
+parameters and an upstream overhead line with omitted mutual spacing. Two
+linear cases also use independent ideal-core and three-conductor circuit
+solutions. Floating the receiving neutral deliberately must fail.
+
+```sh
+cargo build -p powerio --example glm_network
+python evals/gridlabd/triplex_import_oracle.py \
+  --bridge target/debug/examples/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-triplex-import-directory
+```
+
+The typed line keeps the full primitive impedance matrix and both neutral
+terminals are grounded. The native hot-port reduction is its Schur complement;
+the primitive also recovers the native neutral current. Ground current can flow
+at a bus independently of current in the neutral conductor. These conventions
+must not be replaced with a floating-neutral series circuit.
+
+The missing-spacing case preserves the pinned engine's zero mutual impedance,
+with an import diagnostic. Seasonal ampacities remain in source with an explicit
+projection diagnostic. This evidence does not qualify direct triplex 2×2
+matrices, floating-neutral service import, canonical GLM service writing or the
+complete IEEE8500 feeder.
+
+
+### Delta–grounded-wye import
+
+`delta_grounded_import_oracle.py` validates the native `DELTA_GWYE` connection
+through actual import, IR restoration and OpenDSS emission. Seven circuits
+cover NR/FBS step-down, step-up, equal line-voltage ratings and IEEE8500's
+115/12.47 kV, 27.5 MVA, 0.01344+j0.1551 pu substation parameters. Each uses
+unbalanced impedances and source phasors with a common-mode component.
+
+```sh
+cargo build -p powerio --example glm_network
+python evals/gridlabd/delta_grounded_import_oracle.py \
+  --bridge target/debug/examples/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-delta-grounded-import-directory
+```
+
+Each case compares 19 complex V/A/VA observables: both buses' phase voltages,
+all physical phase-port currents and powers, and total transformer losses.
+An independent ideal-coil circuit provides a linear reference. A deliberately
+grounded primary coil must fail, guarding against loss of delta isolation.
+The typed equivalent consists of three ordinary phase-pair primary coils with
+grounded secondary coils. It adds no internal buses or new model types.
+Native step-down and step-up orientations differ; equal line-voltage ratings
+use the step-up orientation. Neither solver adds a core branch for this connection.
+
+This qualifies the reader and OpenDSS projection, not canonical GLM writing of
+phase-pair coils or the complete IEEE8500 feeder. The full feeder now has separate import qualification below.
+
+
+### FBS regulator and complete IEEE8500 import
+
+`fbs_regulator_import_oracle.py` checks Type A/B taps, phase subsets, object tap
+overrides and ignored FBS resistance against both pinned forks and independent
+ideal-ratio equations. The reader stores zero leakage. OpenDSS's directly zero
+transformer impedance is singular, so emission uses one-ohm secondary leakage
+and an equal negative series resistance. At the unloaded internal node, KCL
+cancels them exactly. Physical to-port powers and total losses include the added
+line. The oracle removes cancellation deliberately and requires a mismatch.
+
+```sh
+cargo build -p powerio --example glm_network
+python evals/gridlabd/fbs_regulator_import_oracle.py \
+  --bridge target/debug/examples/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-fbs-regulator-directory
+python evals/gridlabd/ieee8500_import_oracle.py \
+  --source /path/to/IEEE_8500node.glm \
+  --bridge target/debug/examples/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-ieee8500-import-directory
+```
+
+The IEEE8500 harness uses the external file pinned by `ieee8500_reference.py`;
+no dataset contents are vendored. It retains the documented portable static
+adaptations, compares the original PNNL import with that circuit, and checks
+actual IR-restored OpenDSS emission against both native engines. It compares
+82,901 complex observations and checks current balance at 8,525 non-source,
+non-ground bus terminals in each solution. These include all 4,879 native bus
+objects and 4,876 links, with explicit aggregation of transformer and switch
+circuit equivalents. A 1% error in one feeder-regulator tap must fail.
+
+The native default voltage error is a fraction of nominal voltage: the source
+file's `1e-4` permits much larger differences than the comparison budget. This
+harness uses `1e-12` and full-precision rectangular recordings. OpenDSS uses
+`tolerance=1e-12`, `maxiterations=1000`, and disabled controls. The shared V/A/VA
+comparison budgets are unchanged.
+
+Physical losses are the signed sum of external port powers. Native GridLAB-D
+ordinary links instead take the absolute real loss on each phase before summing;
+mutual coupling can make that reported value differ from dissipation. Both
+physical losses and that native reported quantity are checked separately. The
+delta-grounded-wye bank reports the signed total. No phase-power differences are
+discarded to make aggregate losses agree.
+
+PNNL records groups of properties. The pinned Arras group recorder truncates
+rows because its write uses the pointer size as the buffer bound. Arras instead
+uses bounded multi-recorder property lists under 900 characters, in a temporary
+output directory, with the validation container's file-descriptor limit set to
+65,536. Complete identity and column inventories are checked before comparison.
+
+Plain ideal closed contacts emit exact cancelling resistances, avoiding the
+OpenDSS `switch=y` dummy impedance. Plain open contacts are disabled and do not
+introduce line charging or numerical leakage. Broader source-specific switch
+profiles remain separate compatibility work.
+This qualifies fixed-state feeder import and OpenDSS emission; canonical GLM
+service writing and edited IEEE8500 feeder qualification remain unfinished.
+
+`ideal_transformer_oracle.py --powerio /path/to/powerio --output /path/to/new-directory`
+checks grounded and floating secondary returns, nominal and unequal winding taps,
+through public DSS import, IR, emission and reimport. Analytic resistive circuits
+check return displacement, voltage ratios, currents, powers and total losses.
+Deliberately incomplete cancellation must fail. The floating return uses two
+negative half-ohm conductors to cancel the one-ohm differential leakage without
+adding a ground connection. Core and neutral shunts remain outside this profile.
+
+
+### IEEE13/34 FBS native-equation audit
+
+`fbs_feeder_import_oracle.py` now delegates to the common original-feeder
+harness, preserving its command-line entry point. The obsolete audit assumed
+that imported lines were all physical pi circuits. Native FBS instead sets
+`d=a` in its hybrid transfer equations, and import now preserves that law using
+existing admittance records. NR still solves a physical circuit and uses the
+noncommuting equation only for reporting.
+
+```sh
+python evals/gridlabd/fbs_feeder_import_oracle.py \
+  --case ieee34 --source /path/to/autotest/test_IEEE_34_FBS.glm \
+  --bridge /path/to/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-fbs-audit-directory
+```
+
+IEEE13 FBS passes the raw bus and physical external-port comparisons on both
+forks. IEEE34 currently retains two failed line-loss comparisons, about
+0.00011 VA each, with unchanged common tolerances. It is not declared a complete
+raw match. Both retain deliberately incorrect output checks. Canonical writing
+of the auxiliary-node native FBS line equivalent remains unfinished.
+
+
+### PNNL constant-PQ generators
+
+`diesel_import_oracle.py` checks seven circuits with both NR and FBS: unequal
+signed phase powers, a parent-meter alias, native per-phase clipping, scalar
+initialization overrides, the native default rating, and low/high voltages.
+Each circuit compares nine complex voltage/current/power observations against
+an independent diagonal-line solution, then against actual PowerIO import,
+IR restoration and OpenDSS emission. A deliberately wrong phase power must
+fail the comparison. Arras's different diesel class is not substituted.
+
+```sh
+python evals/gridlabd/diesel_import_oracle.py \
+  --bridge /path/to/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-diesel-validation-directory
+```
+
+The high/low cases exercise voltages outside OpenDSS's default generator band.
+Format-neutral generators emit a diagnosed 0..2 pu band; parsed OpenDSS
+generators retain their own bounds. This does not promise constant power above
+2 pu or qualify the complete IEEE9500 feeder. Canonical GLM generator writing
+and OpenDSS generator rating-limit mapping remain unfinished.
+
+### Static reactors and standalone substations
+
+`reactor_source_oracle.py` checks eight diagonal circuits under NR and FBS on
+both pinned forks. It covers unequal reactor impedances, mixed/all-zero phases,
+single-phase and phase-pair links, sequence voltages, reference-phase rotations,
+and the IEEE9500 source/reactor parameter values (66,395.28 V nominal,
+69,715.045 V positive-sequence input, and 14.7983 ohm per-phase reactance). Each phase compares complex
+source/sink voltages, both-end currents and powers against an independent
+analytic circuit and actual import, IR and OpenDSS output. Deliberately changed
+load power must fail. The IEEE9500 parameter probe is not a full-feeder result.
+
+```sh
+python evals/gridlabd/reactor_source_oracle.py \
+  --bridge /path/to/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-reactor-import-results
+python evals/gridlabd/reactor_canonical_oracle.py \
+  --powerio /path/to/powerio --bridge /path/to/glm_network \
+  --pnnl-root /path/to/GridLAB-D \
+  --import-results /path/to/new-reactor-import-results \
+  --output /path/to/new-reactor-canonical-results
+```
+
+The second harness takes the qualified IR for the reference-B and IEEE9500
+parameter circuits, emits fresh GLM, solves it natively, reimports it and solves
+its OpenDSS output. A second pass edits source angles and reactor impedances in
+the public IR, then requires agreement with changed analytic results and
+disagreement with the original circuit. Both forks are checked independently.
+
+Reactor current ratings remain source-only with diagnostics. Open reactor states,
+parented substations and external transmission coupling need further mapping.
+
+### Static solar-fed inverters
+
+`solar_import_oracle.py` checks eight circuits on each pinned fork. The cases
+cover signed power factors, pure reactive output, clipping, offline state,
+static weather, all three split-phase anchors, and the IEEE9500 PV parameters
+on a service transformer. The harness independently evaluates the solar
+thermal equation and inverter dispatch, compares native complex electrical
+results with actual PowerIO import, IR and OpenDSS emission, and requires a
+wrong-power negative control to fail.
+
+```sh
+python evals/gridlabd/solar_import_oracle.py \
+  --bridge /path/to/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-solar-import-results
+```
+
+The high-output service case checks the 240 V hot-to-hot base: a 120 V base
+would incorrectly trigger OpenDSS's generator voltage-law transition. The
+IEEE9500 solar block produces 13,989.345858367315 W under its static climate,
+which differs from the declared 13,990 W inverter schedule. Comparisons use
+native inverter `VA_Out`; Arras does not update solar `P_Out` in this path.
+The profile covers `BASEEFFICIENT` solar with default orientation and simple
+inverter efficiency in `FOUR_QUADRANT CONSTANT_PF` mode. Other control modes, weather files and canonical GLM inverter output remain unfinished. The idle battery profile and full IEEE9500 audit are described below.
+
+
+### IEEE9500 prerequisites and complete feeder audit
+
+`battery_import_oracle.py` qualifies the internal lithium-ion battery's idle
+`CONSTANT_PF` state: eight native/import comparisons across both solvers and
+forks, including different SOC and scheduled powers, with wrong-power negatives.
+`triplex_zip_import_oracle.py` checks sixteen service circuits covering the
+IEEE9500 load parameters, mixed ZIP terms, signed power factors, native fraction
+normalization, explicit-term overrides and zero base power.
+`direct_triplex_import_oracle.py` checks eight direct-matrix services, including
+the IEEE9500 matrix and a reciprocal physical variant. It compares physical hot
+ports and signed losses through IR and DSS; undefined neutral currents stay
+outside that comparison. Native absolute-real loss telemetry is recorded
+separately. Every wrong-load negative must fail.
+
+`fixed_state_import_oracle.py` checks inherited and explicit capacitor rating
+voltages and single-phase manual banks on both forks, plus the connected PNNL NR
+`SWING_PQ`/future-outage case. Five native comparisons and wrong-impedance
+negatives qualify these device states. It does not execute active controls.
+
+Each device harness takes `--bridge`, `--pnnl-root`, and a new `--output` directory.
+For the complete externally cached CIMHub projects:
+
+```sh
+python evals/gridlabd/ieee9500_import_oracle.py \
+  --source /path/to/CIMHub/ieee9500 \
+  --bridge /path/to/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-ieee9500-results
+```
+
+The harness pins each original base, wrapper and edits file by SHA-256, parses
+both complete projects, verifies IR equality and runs their DSS outputs. It
+records every native bus and both ends of every native link at full precision.
+Native instrumentation extends the zero-duration clock by one second and uses
+`default_maximum_voltage_error=1e-8`; electrical declarations remain unchanged.
+Direct triplex neutral currents are unspecified and are explicitly excluded.
+Source bytes remain external; this change vendors no public feeder files.
+
+**The strict full-feeder comparison currently fails and the harness exits 1.**
+Initial whole-feeder voltages agree within tens of microvolts; reported branch
+currents/powers have additional discrepancies. The largest observed current
+difference is explained by pinned native `line.cpp` using `d=a=I+ZY/2`, while
+physical pi ports require `d=I+YZ/2`. The independently evaluated difference
+`(ZY-YZ) Iout / 2` predicts the observed reporting offset. The audit records that
+explanation separately and never overwrites measurements, loosens tolerances,
+or converts a failed comparison into a pass. Near-zero impedances and native
+convergence floors still need qualification. Deliberate wrong-tap output must
+fail. No full matching claim, edited-feeder qualification, or Arras IEEE9500
+portability is implied; the original Arras input also has unsupported properties
+and different diesel semantics.
+
+### FBS delta-delta imports and remaining IEEE variants
+
+`delta_delta_import_oracle.py` validates the native FBS `DELTA_DELTA` equations
+against an independent analytic solve and the actual PowerIO → IR → DSS path.
+Its twelve cases cover both pinned forks, step-up/down/equal ratios, wye/delta
+loads, and unbalanced source phasors. Deliberately damaged output must fail.
+The equivalent uses existing admittance and ideal-contact records, including
+three scaled-current auxiliary variables. It does not claim physical delta
+zero-sequence isolation or canonical GLM output support.
+
+```sh
+python evals/gridlabd/delta_delta_import_oracle.py \
+  --bridge /path/to/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-delta-results
+python evals/gridlabd/ieee_fbs_delta_import_oracle.py \
+  --case ieee37 --source /path/to/autotest/test_IEEE_37_FBS.glm \
+  --bridge /path/to/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-ieee37-results
+```
+
+The feeder harness also accepts `--case ieee123` with either
+`test_IEEE-123_FBS.glm` or `test_IEEE123_zero_voltages_FBS.glm`. It inventories
+objects with numeric IDs and nested assertions, resolves source aliases, and
+records every node and both ends of every link. Unnamed objects receive stable
+recorder names. It preserves electrical declarations, fixed states and native
+assertions, tightens the FBS stopping fraction to `1e-12`, and supplies one
+recorder timestep. Arras's `voltdump` formatting keyword is spelled `rect`;
+this telemetry-only spelling is adjusted explicitly. Both forks use pinned
+engines, and no feeder bytes are vendored.
+
+IEEE37 FBS passes all 579 raw complex measurements on both forks, with a
+wrong-line-length negative. The two IEEE123 variants parse, preserve IR and
+solve in DSS, but their complete raw comparisons remain **failed**:
+
+- The standard case has 2,157 measurements. Four isolated native nodes retain
+  initialized voltages and have no DSS bus; these remain missing-measurement
+  failures. A regulator reports an undeclared phase voltage. An open switch
+  reports downstream load current/power despite zero input; DSS reports zero
+  at both open ports. These sixteen raw failures remain visible.
+- The zero-voltage variant has 2,079 measurements. With the native FBS line
+  equivalent, only its undeclared-phase voltage remains a raw failure on each
+  fork. All line/port comparisons pass. The inconsistent voltage observable
+  remains in the comparison, so the full case is not declared a pass.
+
+Together with earlier support, thirteen of fourteen cached original GLM entry
+points now parse with IR equality. This is an entry-point count, not fourteen
+feeder families or thirteen electrical qualifications. The remaining
+`test_IEEE123_run.glm` is a switching-schedule simulation; it still needs explicit
+static-snapshot handling rather than silently executing or stripping controls.
+
+### Analytic FBS line equivalents
+
+`fbs_line_import_oracle.py` exercises eight combinations of two/three phases,
+line length, and pinned engine fork. It compares an independent analytic hybrid
+solve with native outputs and the actual import → IR → DSS path. Wrong contact
+impedance must fail. The native equations are `Vfrom=a Vto+Z Iout` and
+`Iin=c Vto+a Iout`, with `a=I+ZY/2`, `c=Y+YZY/4`, and Y the total shunt.
+No matrix symmetrization, epsilon impedance, or tolerance widening is used.
+Configuration coefficients/coordinates remain on a linecode; line coordinates
+follow the equivalent's shunt and contacts. FBS import uses these equations only
+when Z/Y do not commute; NR retains the physical circuit.
+
+```sh
+python evals/gridlabd/fbs_line_import_oracle.py \
+  --bridge /path/to/glm_network --pnnl-root /path/to/GridLAB-D \
+  --output /path/to/new-fbs-line-results
+```
+
+The OpenDSS source writer also distinguishes its native symmetric (`Z1=Z2`)
+and asymmetric sequence-source formulas. Only the latter needs compensation
+for the pinned engine's truncated rotation constants. Using that compensation
+for symmetric blocks introduced a measurable projection error; the line
+microcases exercise both branches and catch it.

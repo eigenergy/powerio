@@ -232,3 +232,111 @@ pub fn assert_source_constraints(a: &MulticonductorNetwork, b: &MulticonductorNe
         );
     }
 }
+
+/// Eliminate a transformer leakage/cancelling-line pair only after proving its
+/// differential impedance is zero and its internal ports have no other use.
+/// For two floating conductors, equal opposite currents make the differential
+/// impedance z11 + z22 - z12 - z21; no ground constraint is introduced.
+#[allow(dead_code)] // The CLI suite includes this file for source constraints only.
+pub fn contract_transformer_pairs(network: &MulticonductorNetwork) -> MulticonductorNetwork {
+    let mut net = network.clone();
+    for index in 0..net.transformers().len() {
+        let t = &net.transformers()[index];
+        if t.phases != 1
+            || t.windings.len() != 2
+            || t.xsc_pct != [0.0]
+            || t.windings[0].r_pct != 0.0
+            || t.windings.iter().any(|w| {
+                w.terminal_map.len() != 2
+                    || w.conn != powerio_dist::DistWindingConn::Wye
+                    || w.r_neutral.is_some_and(|r| r != 0.0)
+                    || w.x_neutral.is_some_and(|x| x != 0.0)
+            })
+            || t.extras.iter().any(|(key, value)| match key.as_str() {
+                "ppm_antifloat" => {
+                    value.as_f64().or_else(|| value.as_str()?.parse().ok()) != Some(0.0)
+                }
+                _ => true,
+            })
+        {
+            continue;
+        }
+        let secondary = &t.windings[1];
+        let r = secondary.r_pct / 100.0 * (secondary.v_ref * secondary.tap).powi(2)
+            / secondary.s_rating;
+        if !r.is_finite() || r <= 0.0 {
+            continue;
+        }
+        let grounded_return = grounded(&net, &node(&secondary.bus, &secondary.terminal_map[1]));
+        let count = if grounded_return { 1 } else { 2 };
+        let usage = uses(&net);
+        if secondary.terminal_map[..count].iter().any(|terminal| {
+            let port = node(&secondary.bus, terminal);
+            usage.get(&port) != Some(&2) || grounded(&net, &port)
+        }) {
+            continue;
+        }
+        let Some((line_index, line)) = net.lines().iter().enumerate().find(|(_, line)| {
+            line.bus_from.eq_ignore_ascii_case(&secondary.bus)
+                && line.terminal_map_from == secondary.terminal_map[..count]
+                && line.terminal_map_to.len() == count
+                && !line.bus_to.eq_ignore_ascii_case(&secondary.bus)
+        }) else {
+            continue;
+        };
+        let code = net.linecode(&line.linecode).unwrap();
+        if code.n_conductors != count
+            || [
+                &code.x_series,
+                &code.g_from,
+                &code.g_to,
+                &code.b_from,
+                &code.b_to,
+            ]
+            .iter()
+            .any(|m| m.iter().flatten().any(|&v| v != 0.0))
+        {
+            continue;
+        }
+        let differential = if count == 1 {
+            code.r_series[0][0]
+        } else {
+            code.r_series[0][0] + code.r_series[1][1] - code.r_series[0][1] - code.r_series[1][0]
+        } * line.length;
+        if (differential + r).abs() > 1e-12 * r {
+            continue;
+        }
+        let mut terminals = line.terminal_map_to.clone();
+        if grounded_return {
+            let Some(ground) = net.bus(&line.bus_to).unwrap().grounded.first() else {
+                continue;
+            };
+            terminals.push(ground.clone());
+        }
+        let internal_bus = secondary.bus.clone();
+        let destination = line.bus_to.clone();
+        let code_name = line.linecode.clone();
+        let secondary = &mut net.transformers_mut()[index].windings[1];
+        secondary.bus = destination;
+        secondary.terminal_map = terminals;
+        secondary.r_pct = 0.0;
+        net.lines_mut().remove(line_index);
+        if !net
+            .lines()
+            .iter()
+            .any(|line| line.linecode.eq_ignore_ascii_case(&code_name))
+        {
+            net.line_codes_mut()
+                .retain(|code| !code.name.eq_ignore_ascii_case(&code_name));
+        }
+        let remaining = uses(&net);
+        net.buses_mut().retain(|bus| {
+            !bus.id.eq_ignore_ascii_case(&internal_bus)
+                || bus.location.is_some()
+                || remaining
+                    .keys()
+                    .any(|(name, _)| name.eq_ignore_ascii_case(&bus.id))
+        });
+    }
+    net
+}
