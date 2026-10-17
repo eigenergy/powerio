@@ -31,14 +31,36 @@ reject this new physics; ordinary earth-referenced records are unchanged.
 `McAcPfInstance::source_boundary` borrows both voltage endpoints and their
 phasor differences. The additive C `PioVoltageSourceBoundaryView` serves
 network and PF instance callers without changing the existing ABI 7 layouts.
-Legacy C source views reject references they cannot describe. Exchange-format
-writers, balanced/LinDist3Flow projections and neutral Kron reduction also
-reject referenced sources until their integration is complete.
+Legacy C source views reject references they cannot describe. The OpenDSS writer preserves referenced constraints using exact equivalent
+circuits. Other exchange writers accept an already perfectly grounded reference
+but reject floating references. Balanced/LinDist3Flow projections and neutral
+Kron reduction still require their own reference-source integration.
 
 The OpenDSS profile is the static circuit, meaning the element definitions
 and their electrical data. Load shapes, solve commands, monitors, and other
 calculation instructions are outside it; they stay in the retained source,
 are reported as uninterpreted, and survive a same format write byte for byte.
+
+OpenDSS imports represent source impedances as coupled branches with ideal
+voltage constraints, and each ordinary line carries its effective matrices at
+the snapshot frequency. LineCode assignment and later edits follow script
+order. Native `switch=yes` lines retain their finite impedance. Unknown length
+units are reported; electrical equivalents do not invent a physical distance.
+Canonical DSS output uses the typed frequency, snapshot mode and disabled
+controls. It preserves unequal phase voltages, zero EMFs and floating source
+returns using exact equivalent circuits. Reimport can introduce auxiliary
+components, so canonical output is electrically equivalent rather than a text
+fixed point. Unchanged source replay remains byte exact.
+
+Direct `Open`/`Close` commands and explicit `SwtControl.State` are not yet
+lowered and cause a parse error. Active `Action`/`Normal` control execution is
+excluded and reported. Deferred geometry remains source-only and blocks
+numerical use or canonical conversion. These restrictions are compatibility
+gaps; they do not establish complete static OpenDSS support. Load voltage-band
+transitions also need typed support: a native OpenDSS load can change behavior
+outside its nominal voltage band, whereas the current constant-power/current
+records describe only the nominal law. The canonical writer's default widened
+band can therefore change feeder results when the source did not state bounds.
 
 ```julia
 emit(feeder, "dss", "copy.dss")            # the source bytes, sidecars included

@@ -1201,6 +1201,18 @@ fn print_error_chain(error: &anyhow::Error) {
         eprintln!("{prefix}: {text}");
         prefix = "Caused by";
     }
+    // The primary finding appears in the cause frames above. Include the
+    // remaining records so a parse failure does not hide its source findings.
+    if let Some(failure) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<powerio_core::Error>())
+    {
+        for line in
+            powerio_core::render_diagnostics(failure.diagnostics().get(1..).unwrap_or_default())
+        {
+            eprintln!("{line}");
+        }
+    }
 }
 
 /// Read one text file through a PowerIO source, so a missing or unreadable
@@ -3094,7 +3106,8 @@ mod tests {
         assert_eq!(value["domain"], "distribution");
         assert_eq!(value["model"], "multiconductor");
         assert_eq!(value["json_format"], "bmopf-json");
-        assert_eq!(value["elements"]["buses"], 2);
+        // The finite source impedance has a separate internal EMF bus.
+        assert_eq!(value["elements"]["buses"], 3);
         assert!(value["topology"]["connected_components"].is_null());
     }
 

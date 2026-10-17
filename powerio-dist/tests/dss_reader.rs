@@ -36,6 +36,7 @@ fn temp_case_dir(name: &str) -> PathBuf {
 fn phase_terminals(net: &MulticonductorNetwork) -> BTreeMap<String, Vec<String>> {
     net.buses()
         .iter()
+        .filter(|b| !b.id.starts_with("_pio_vsource_"))
         .map(|b| {
             (
                 b.id.to_ascii_lowercase(),
@@ -130,13 +131,19 @@ fn ieee13_matches_the_engine_bus_map() {
     assert_eq!(net.sources().len(), 1);
     assert_eq!(net.transformers().len(), 5);
     assert_eq!(net.loads().len(), 15);
-    assert_eq!(net.switches().len(), 1);
+    assert_eq!(net.switches().as_slice(), []);
     assert_eq!(net.shunts().len(), 2);
-    assert_eq!(net.lines().len(), 11); // 12 line objects minus the switch
+    assert_eq!(net.lines().len(), 13); // 12 native lines plus source impedance
 
     // Source: 115 kV, pu=1.0001, 30 degrees.
     let vs = &net.sources()[0];
-    assert_eq!(vs.bus, "SourceBus");
+    let source_impedance = net
+        .lines()
+        .iter()
+        .find(|l| l.name == "_pio_vsource_source_impedance")
+        .unwrap();
+    assert_eq!(source_impedance.bus_from, vs.bus);
+    assert_eq!(source_impedance.bus_to, "SourceBus");
     let vln = 115_000.0 / 3f64.sqrt() * 1.0001;
     assert!((vs.v_magnitude[0] - vln).abs() < 1e-6);
     assert!((vs.v_angle[0] - 30f64.to_radians()).abs() < 1e-12);
@@ -151,9 +158,9 @@ fn ieee13_matches_the_engine_bus_map() {
     assert!((r11_total - 0.3465 * 2000.0 / 5280.0).abs() < 1e-9);
 
     // The switch line 671692 carries its ampacity.
-    let sw = &net.switches()[0];
-    assert_eq!(sw.name, "671692");
-    assert!(!sw.open);
+    let sw = net.lines().iter().find(|l| l.name == "671692").unwrap();
+    let code = net.linecode(&sw.linecode).unwrap();
+    assert!(code.r_series[0][0] * sw.length > 0.0);
 
     // Bus coordinates promote out of extras into the typed field.
     let b = net.bus("611").unwrap();
@@ -191,14 +198,14 @@ fn ieee13_matches_the_engine_bus_map() {
 #[test]
 fn ieee34_and_ieee123_bus_counts_match_the_engine() {
     let net34 = parse("opendss/ieee34/ieee34Mod1.dss");
-    assert_eq!(net34.buses().len(), 37);
+    assert_eq!(phase_terminals(&net34).len(), 37);
     let t34 = phase_terminals(&net34);
     assert_eq!(t34["810"], vec!["2"]);
     assert_eq!(t34["864"], vec!["1"]);
     assert_eq!(t34["890"], vec!["1", "2", "3"]);
 
     let net123 = parse("opendss/ieee123/IEEE123Master.dss");
-    assert_eq!(net123.buses().len(), 132);
+    assert_eq!(phase_terminals(&net123).len(), 132);
     let t123 = phase_terminals(&net123);
     assert_eq!(t123["25r"], vec!["1", "3"]);
     assert_eq!(t123["36"], vec!["1", "2"]);
@@ -249,7 +256,14 @@ fn defaults_materialize_with_provenance() {
     // The default circuit source.
     let vs = &net.sources()[0];
     assert!((vs.v_magnitude[0] - 115_000.0 / 3f64.sqrt()).abs() < 1e-9);
-    assert_eq!(vs.bus, "sourcebus");
+    assert_eq!(
+        net.lines()
+            .iter()
+            .find(|l| l.bus_from == vs.bus)
+            .unwrap()
+            .bus_to,
+        "sourcebus"
+    );
 }
 
 #[test]
@@ -339,41 +353,41 @@ fn micro_transformers_type_correctly() {
 }
 
 #[test]
-fn switch_states_follow_swtcontrol() {
+fn switch_control_actions_remain_excluded_from_the_fixed_circuit() {
     let net = parse("micro/switch.dss");
-    let closed = net
-        .switches()
-        .iter()
-        .find(|s| s.name == "sw_closed")
-        .unwrap();
-    let open = net.switches().iter().find(|s| s.name == "sw_open").unwrap();
-    assert!(!closed.open);
-    assert!(open.open);
+    assert_eq!(net.switches().as_slice(), []);
+    for name in ["sw_closed", "sw_open"] {
+        let line = net.lines().iter().find(|l| l.name == name).unwrap();
+        assert!(net.linecode(&line.linecode).unwrap().r_series[0][0] > 0.0);
+    }
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("active control execution is excluded"))
+    );
 }
 
 #[test]
-fn swtcontrol_last_action_or_state_wins() {
-    use crate::helpers::parse_dss_str;
-    let base = "New Circuit.c basekv=12.47\nNew Line.sw bus1=sourcebus bus2=b2 switch=y\n";
-    // The later `state` overrides the earlier `action`.
-    let net = parse_dss_str(&format!(
-        "{base}New SwtControl.s1 SwitchedObj=Line.sw action=close state=open"
-    ));
-    assert!(net.switches()[0].open);
-    // Source order reversed: `action` wins.
-    let net = parse_dss_str(&format!(
-        "{base}New SwtControl.s1 SwitchedObj=Line.sw state=open action=close"
-    ));
-    assert!(!net.switches()[0].open);
-    // `normal` applies only when neither action nor state is written.
-    let net = parse_dss_str(&format!(
-        "{base}New SwtControl.s1 SwitchedObj=Line.sw normal=open"
-    ));
-    assert!(net.switches()[0].open);
-    let net = parse_dss_str(&format!(
-        "{base}New SwtControl.s1 SwitchedObj=Line.sw normal=open action=close"
-    ));
-    assert!(!net.switches()[0].open);
+fn explicit_switch_state_is_not_silently_replaced_by_control_action() {
+    for props in [
+        "action=close state=open",
+        "state=open action=close",
+        "state=closed",
+    ] {
+        let text = format!(
+            "New Circuit.c\nNew Line.sw bus1=sourcebus bus2=b2 switch=y\nNew SwtControl.s1 SwitchedObj=Line.sw {props}"
+        );
+        let error = powerio_dist::parse(
+            powerio_core::Source::from_memory("state.dss", text.into_bytes()).unwrap(),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .diagnostics()
+                .iter()
+                .any(|d| d.code() == "READ.DSS.LINE_UNRESOLVED")
+        );
+    }
 }
 
 #[test]
@@ -383,11 +397,11 @@ fn four_wire_line_keeps_the_neutral() {
     let line = net.lines().iter().find(|l| l.name == "l1").unwrap();
     assert_eq!(line.terminal_map_from, vec!["1", "2", "3", "4"]);
     assert_eq!(line.terminal_map_to, vec!["1", "2", "3", "4"]);
-    let code = net.linecode("lc4").unwrap();
+    let code = net.linecode(&line.linecode).unwrap();
     assert_eq!(code.n_conductors, 4);
     // km units: 0.211 ohm/km = 2.11e-4 ohm/m on the diagonal.
     assert!((code.r_series[0][0] - 0.211e-3).abs() < 1e-12);
-    assert_eq!(code.i_max.as_ref().unwrap()[0], 240.0);
+    assert_eq!(line.i_max.as_ref().unwrap()[0], 240.0);
     // The load on phase 1 returns through terminal 4, not ground.
     let la = net.loads().iter().find(|l| l.name == "la").unwrap();
     assert_eq!(la.terminal_map, vec!["1", "4"]);
@@ -419,11 +433,21 @@ fn line_conductor_count_follows_linecode() {
     ));
     assert_eq!(net.lines()[0].terminal_map_to, vec!["1", "2", "3", "4"]);
 
-    // Properties apply in order; the later of `phases=`/`linecode=` wins.
-    let net = parse_dss_str(&format!(
+    // Native error 18101 refuses resizing a matrix line after LineCode.
+    let invalid = format!(
         "{base}New Line.l1 bus1=src.1.2.3.4 bus2=lb.1.2.3.4 linecode=4w phases=3 length=500 units=m\n"
-    ));
-    assert_eq!(net.lines()[0].terminal_map_to, vec!["1", "2", "3"]);
+    );
+    let error = powerio_dist::parse(
+        powerio_core::Source::from_memory("invalid.dss", invalid.into_bytes()).unwrap(),
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .diagnostics()
+            .iter()
+            .any(|d| d.code() == "READ.DSS.LINE_UNRESOLVED")
+    );
+    // A later LineCode assignment supplies its own conductor count.
     let net = parse_dss_str(&format!(
         "{base}New Line.l1 bus1=src.1.2.3.4 bus2=lb.1.2.3.4 phases=3 linecode=4w length=500 units=m\n"
     ));
@@ -434,8 +458,9 @@ fn line_conductor_count_follows_linecode() {
     let net = parse_dss_str(&format!(
         "{base}New Line.s1 bus1=src.1.2.3.4 bus2=lb.1.2.3.4 linecode=4w switch=yes\n"
     ));
-    assert_eq!(net.switches()[0].terminal_map_to, vec!["1", "2", "3", "4"]);
-    assert_eq!(net.switches()[0].i_max.as_ref().unwrap().len(), 4);
+    let switch_line = net.lines().iter().find(|l| l.name == "s1").unwrap();
+    assert_eq!(switch_line.terminal_map_to, vec!["1", "2", "3", "4"]);
+    assert_eq!(switch_line.i_max.as_ref().unwrap().len(), 4);
 }
 
 #[test]
@@ -495,7 +520,8 @@ fn pvsystem_and_invcontrol_type_to_ibr_profile() {
 #[test]
 fn ten_conductor_linecode_types() {
     let net = parse("micro/linecode_10x10.dss");
-    let code = net.linecode("lc10").unwrap();
+    let line = net.lines().iter().find(|l| l.name == "l10").unwrap();
+    let code = net.linecode(&line.linecode).unwrap();
     assert_eq!(code.n_conductors, 10);
     assert_eq!(code.r_series.len(), 10);
     assert!((code.r_series[9][9] - 0.25e-3).abs() < 1e-12);
@@ -638,7 +664,9 @@ fn default_phase_single_terminal_reactor_preserves_physical_neutral() {
     assert_eq!(source.grounded, vec!["5"]);
 
     let vs = &net.sources()[0];
-    assert_eq!(vs.terminal_map, vec!["1", "2", "3", "5"]);
+    assert_eq!(vs.terminal_map, vec!["1", "2", "3"]);
+    assert_ne!(vs.bus, source.id);
+    assert!(vs.reference_terminal.is_none());
 
     let line = net.lines().iter().find(|l| l.name == "l1").unwrap();
     assert_eq!(line.terminal_map_from, vec!["1", "2", "3", "4"]);
@@ -653,7 +681,11 @@ fn default_phase_single_terminal_reactor_preserves_physical_neutral() {
     assert_eq!(sh.b[0][0], 0.0);
 
     let out = emit_dss(&net);
-    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+    assert!(
+        !out.warnings.iter().any(|w| w.contains("source_neutral")),
+        "{:?}",
+        out.warnings
+    );
     assert!(out.text.contains("New Line.l1 bus1=sourcebus.1.2.3.4"));
     assert!(
         out.text
@@ -759,14 +791,19 @@ fn a_self_redirecting_case_file_returns() {
     std::fs::write(dir.join("a.dss"), "Redirect a.dss\nRedirect a.dss\n").unwrap();
     std::fs::write(dir.join("root.dss"), "New Circuit.bomb\nRedirect a.dss\n").unwrap();
 
-    let net = parse_dss_file(dir.join("root.dss")).expect("the parse returns");
+    let error =
+        powerio_dist::parse(powerio_core::Source::open(dir.join("root.dss")).unwrap()).unwrap_err();
     assert!(
-        net.warnings.iter().any(|w| w.contains("include budget")),
+        error
+            .diagnostics()
+            .iter()
+            .any(|w| w.message().contains("include budget")),
         "{:?}",
-        net.warnings
+        error.diagnostics()
     );
     assert_eq!(
-        net.diagnostics
+        error
+            .diagnostics()
             .iter()
             .filter(|d| d.code() == "READ.DSS.INCLUDE_BUDGET")
             .count(),
@@ -791,18 +828,19 @@ fn a_clear_after_the_include_budget_does_not_erase_the_refusal() {
     )
     .unwrap();
 
-    let net = parse_dss_file(dir.join("root.dss")).expect("the parse returns");
+    let error =
+        powerio_dist::parse(powerio_core::Source::open(dir.join("root.dss")).unwrap()).unwrap_err();
     assert!(
-        net.lines().iter().all(|l| l.name != "after"),
-        "the budget is spent, so the include after the Clear is still refused"
-    );
-    assert!(
-        net.warnings.iter().any(|w| w.contains("include budget")),
+        error
+            .diagnostics()
+            .iter()
+            .any(|w| w.message().contains("include budget")),
         "the refusal survives the Clear: {:?}",
-        net.warnings
+        error.diagnostics()
     );
     assert_eq!(
-        net.diagnostics
+        error
+            .diagnostics()
             .iter()
             .filter(|d| d.code() == "READ.DSS.INCLUDE_BUDGET")
             .count(),
@@ -831,7 +869,13 @@ fn a_widened_include_root_admits_a_shared_sibling_include() {
     std::fs::write(root.join("shared/linecodes.dss"), SHARED_LINECODES).unwrap();
 
     let net = parse_dss_file_with_root(root.join("feeder/f.dss"), &root).unwrap();
-    assert!(net.warnings.is_empty(), "{:?}", net.warnings);
+    assert!(
+        !net.diagnostics
+            .iter()
+            .any(|d| d.severity() == powerio_core::DiagnosticSeverity::Error),
+        "{:?}",
+        net.diagnostics
+    );
 
     let merged = crate::helpers::parse_dss_str(&FEEDER_DECK.replace(
         "Redirect ../shared/linecodes.dss",
@@ -857,17 +901,24 @@ fn a_widened_include_root_still_refuses_escapes_past_it() {
     )
     .unwrap();
 
-    let net = parse_dss_file_with_root(root.join("feeder/f.dss"), &root).unwrap();
-    assert!(net.lines().iter().all(|l| l.name != "leaked"));
+    let error = powerio_dist::parse(
+        powerio_core::Source::open(root.join("feeder/f.dss"))
+            .unwrap()
+            .with_acquisition_root(&root)
+            .unwrap(),
+    )
+    .unwrap_err();
     assert!(
-        net.warnings
+        error
+            .diagnostics()
             .iter()
-            .any(|w| w.contains("escapes the include root")),
+            .any(|w| w.message().contains("escapes the include root")),
         "{:?}",
-        net.warnings
+        error.diagnostics()
     );
     assert_eq!(
-        net.diagnostics
+        error
+            .diagnostics()
             .iter()
             .filter(|d| d.code() == "READ.DSS.INCLUDE_REFUSED")
             .count(),
@@ -891,12 +942,20 @@ fn a_widened_include_root_still_refuses_symlink_escapes() {
     .unwrap();
     std::os::unix::fs::symlink(outer.join("secret.dss"), root.join("feeder/linked.dss")).unwrap();
 
-    let net = parse_dss_file_with_root(root.join("feeder/f.dss"), &root).unwrap();
-    assert!(net.lines().iter().all(|l| l.name != "leaked"));
+    let error = powerio_dist::parse(
+        powerio_core::Source::open(root.join("feeder/f.dss"))
+            .unwrap()
+            .with_acquisition_root(&root)
+            .unwrap(),
+    )
+    .unwrap_err();
     assert!(
-        net.warnings.iter().any(|w| w.contains("symbolic link")),
+        error
+            .diagnostics()
+            .iter()
+            .any(|w| w.message().contains("symbolic link")),
         "{:?}",
-        net.warnings
+        error.diagnostics()
     );
 }
 

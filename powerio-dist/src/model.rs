@@ -1318,32 +1318,6 @@ pub(crate) fn pair_keys(n: usize) -> Vec<(usize, usize)> {
     pairs
 }
 
-/// Builds an `n`x`n` matrix from lower triangle rows (the OpenDSS matrix
-/// entry convention) or full rows; symmetric completion for the triangle.
-pub(crate) fn square_from_rows(rows: &[Vec<f64>], n: usize) -> Option<ConductorMatrix> {
-    let mut m = vec![vec![0.0; n]; n];
-    if rows.len() != n {
-        return None;
-    }
-    let lower = rows.iter().enumerate().all(|(i, r)| r.len() == i + 1);
-    let full = rows.iter().all(|r| r.len() == n);
-    if lower {
-        for (i, row) in rows.iter().enumerate() {
-            for (j, &v) in row.iter().enumerate() {
-                m[i][j] = v;
-                m[j][i] = v;
-            }
-        }
-    } else if full {
-        for (i, row) in rows.iter().enumerate() {
-            m[i].clone_from_slice(&row[..n]);
-        }
-    } else {
-        return None;
-    }
-    Some(m)
-}
-
 /// Actual coil voltage base, including the fixed winding tap.
 pub(crate) fn winding_coil_voltage(winding: &DistWinding, phases: usize) -> f64 {
     let divisor = if winding.conn == DistWindingConn::Wye && matches!(phases, 2 | 3) {
@@ -1381,32 +1355,6 @@ pub(crate) fn transformer_no_load_percentages(t: &DistTransformer) -> Option<(f6
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    #[allow(clippy::float_cmp)]
-    fn lower_triangle_completes_symmetrically() {
-        let rows = vec![vec![1.0], vec![0.5, 2.0], vec![0.3, 0.4, 3.0]];
-        let m = square_from_rows(&rows, 3).unwrap();
-        assert_eq!(m[0][1], 0.5);
-        assert_eq!(m[1][0], 0.5);
-        assert_eq!(m[2][2], 3.0);
-        assert_eq!(m[0][2], 0.3);
-    }
-
-    #[test]
-    #[allow(clippy::float_cmp)]
-    fn full_rows_pass_through() {
-        let rows = vec![vec![1.0, 9.0], vec![8.0, 2.0]];
-        let m = square_from_rows(&rows, 2).unwrap();
-        assert_eq!(m[0][1], 9.0);
-        assert_eq!(m[1][0], 8.0);
-    }
-
-    #[test]
-    fn wrong_shape_is_rejected() {
-        assert!(square_from_rows(&[vec![1.0], vec![2.0]], 2).is_none());
-        assert!(square_from_rows(&[vec![1.0, 2.0]], 2).is_none());
-    }
 
     #[test]
     fn multiconductor_json_uses_only_final_nonfinite_spellings() {

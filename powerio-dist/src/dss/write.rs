@@ -28,6 +28,8 @@ use crate::model::{
 use super::read::delta_edges;
 use super::{lex, prop};
 
+mod sources;
+
 /// Options for canonical OpenDSS output.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -77,6 +79,15 @@ pub(crate) fn emit_dss_text_with_options(
     net: &MulticonductorNetwork,
     options: &DssEmitOptions,
 ) -> TextEmission {
+    emit_snapshot(net, options)
+}
+
+pub(crate) fn validate_emission(net: &MulticonductorNetwork) -> Result<(), powerio_core::Error> {
+    sources::validate(net)
+        .map_err(|message| powerio_core::Error::new(&C::BUILD_DIST_ELECTRICAL_INCOMPLETE, message))
+}
+
+fn emit_snapshot(net: &MulticonductorNetwork, options: &DssEmitOptions) -> TextEmission {
     let mut w = DssWriter {
         out: String::new(),
         sidecars: Vec::new(),
@@ -96,6 +107,12 @@ pub(crate) fn emit_dss_text_with_options(
     };
     w.network(net);
     TextEmission::new(w.out, w.sidecars, w.warnings)
+}
+
+#[cfg(test)]
+pub(super) fn emit_staged_sources(net: &MulticonductorNetwork) -> Result<TextEmission, String> {
+    sources::validate(net)?;
+    Ok(emit_snapshot(net, &DssEmitOptions::default()))
 }
 
 struct DssWriter {
@@ -126,20 +143,13 @@ struct ElementKv<'a> {
 /// estimate feeds load/capacitor `kv` and `Set VoltageBases` when the
 /// source format did not carry them.
 ///
-/// The seed is not the model voltage directly: it is the basekv the writer
-/// will emit (the stashed token when the source carried one), run through
-/// the reader's basekv → per phase formula. A reparse then reproduces the
-/// same floats bit for bit; seeding from `v_magnitude` is not a fixed
-/// point of the sqrt round trip and `Set VoltageBases` would drift one ulp
-/// per write. Transformer ratios use `(v_ref / 1e3) * 1e3`, the value a
-/// reparse of the emitted `kvs=` rebuilds, for the same reason.
+/// Seeds follow the current typed source magnitudes. Retained source tokens
+/// must not override edits to those constraints. Transformer ratios use the
+/// voltage values reconstructed from emitted winding ratings.
 fn estimate_bus_kv(net: &MulticonductorNetwork) -> BTreeMap<String, f64> {
     let mut kv: BTreeMap<String, f64> = BTreeMap::new();
     for vs in net.sources() {
-        let phases = source_phases(net, vs);
-        let basekv = extras_f64(&vs.extras, "basekv").unwrap_or_else(|| source_basekv(vs, phases));
-        let pu = extras_f64(&vs.extras, "pu").unwrap_or(1.0);
-        let vln = basekv * 1e3 * pu / source_chord(phases);
+        let vln = vs.v_magnitude.iter().copied().fold(0.0_f64, f64::max);
         if vln > 0.0 {
             kv.insert(vs.bus.to_ascii_lowercase(), vln);
         }
@@ -304,23 +314,6 @@ fn winding_array(
     }
 }
 
-/// VSource.cpp's per phase magnitude divisor: the chord of the n-gon
-/// (1 for a single phase source, sqrt(3) at n = 3). Division by the
-/// 1 phase chord is exact, so one expression serves both reader branches.
-fn source_chord(phases: usize) -> f64 {
-    if phases <= 1 {
-        1.0
-    } else {
-        2.0 * (std::f64::consts::PI / phases as f64).sin()
-    }
-}
-
-/// The basekv a source without a stashed token emits: the model magnitude
-/// through the inverse of the reader's chord formula.
-fn source_basekv(vs: &crate::model::VoltageSource, phases: usize) -> f64 {
-    vs.v_magnitude.iter().copied().fold(0.0_f64, f64::max) * source_chord(phases) / 1e3
-}
-
 /// An extra as a number: the reader stashes written tokens as strings and
 /// materialized defaults as numbers.
 fn extras_f64(extras: &Extras, key: &str) -> Option<f64> {
@@ -408,36 +401,6 @@ fn dss_value_out(value: &str) -> (String, bool) {
         }
     }
     (value.to_string(), false)
-}
-
-/// Emitted source `phases=`: the stashed token when the source carried
-/// one, otherwise the terminal map entries outside the bus's grounded
-/// set. The engine counts conductors, not energized phases, so a phase
-/// at v_magnitude 0 keeps its place on the dot list; the emission site
-/// warns about the disagreement.
-fn source_phases(net: &MulticonductorNetwork, vs: &crate::model::VoltageSource) -> usize {
-    if let Some(p) = extras_usize(&vs.extras, "phases") {
-        return p.max(1);
-    }
-    let energized = vs.v_magnitude.iter().filter(|&&v| v > 0.0).count();
-    if energized > 0
-        && vs.v_magnitude.len() == vs.terminal_map.len()
-        && energized + 1 == vs.v_magnitude.len()
-        && vs.v_magnitude.last().is_some_and(|&v| v == 0.0)
-    {
-        return energized;
-    }
-    let grounded = net
-        .buses()
-        .iter()
-        .find(|b| b.id.eq_ignore_ascii_case(&vs.bus))
-        .map(|b| b.grounded.as_slice())
-        .unwrap_or_default();
-    vs.terminal_map
-        .iter()
-        .filter(|t| !grounded.contains(t))
-        .count()
-        .max(1)
 }
 
 /// First row (self, mutual) of a series matrix extra, without consuming it.
@@ -598,26 +561,6 @@ impl DssWriter {
         .expect("writer-built details stay within the record bounds");
         crate::diagnostics::attach_target(&mut diagnostic, format!("{class} {name}"));
         self.warnings.record(diagnostic);
-    }
-
-    /// A numeric source extra. A present token that does not parse warns;
-    /// the derived value substitutes and the extra is consumed either way.
-    fn source_extra_f64(&mut self, vs: &crate::model::VoltageSource, key: &str) -> Option<f64> {
-        let v = vs.extras.get(key)?;
-        let parsed = v
-            .as_f64()
-            .or_else(|| v.as_str().and_then(|s| s.parse().ok()));
-        if parsed.is_none() {
-            self.warn(
-                &C::EMIT_DSS_VALUE_DEFAULTED,
-                format!(
-                    "vsource {}: {key} extra `{v}` does not parse as a number; \
-                 using the derived value",
-                    vs.name
-                ),
-            );
-        }
-        parsed
     }
 
     fn line_out(&mut self, s: &str) {
@@ -838,21 +781,7 @@ impl DssWriter {
         ));
         self.out.push('\n');
 
-        for source in net
-            .sources()
-            .iter()
-            .filter(|source| source.energy_cost_rate.is_some())
-        {
-            self.warn(
-                &C::EMIT_DSS_FIELD_DROPPED,
-                format!(
-                    "voltage source {}: energy_cost_rate has no target field",
-                    source.name
-                ),
-            );
-        }
-        self.buscoords(net);
-        self.sources(net);
+        self.source_elements(net);
         self.line_codes(net);
         self.lines(net);
         self.switches(net);
@@ -901,6 +830,12 @@ impl DssWriter {
             // Calcvoltagebases is a command, never a Set option, so it does
             // not belong here.
             let key_lc = key.to_ascii_lowercase();
+            if matches!(super::frequency::option_position(&key_lc), 6 | 53 | 73) {
+                self.warn(&C::EMIT_DSS_RECORD_DROPPED, format!(
+                    "option {key}={value}: source frequency history is replaced by the typed snapshot frequency",
+                ));
+                continue;
+            }
             if "voltagebases".starts_with(&key_lc)
                 || (key_lc.len() >= "defaultb".len() && "defaultbasefrequency".starts_with(&key_lc))
             {
@@ -933,6 +868,10 @@ impl DssWriter {
                 format!("command `{shown}` is not regenerated in canonical dss output"),
             );
         }
+        // Regenerated cases represent a fixed electrical snapshot. Source
+        // options cannot restart controls or override the materialized frequency.
+        self.line_out("Set Mode=Snapshot ControlMode=Off");
+        self.line_out(&format!("Set Frequency={}", num(net.base_frequency())));
         let mut bases: Vec<f64> = self
             .kv_estimate
             .values()
@@ -945,6 +884,12 @@ impl DssWriter {
             self.line_out(&format!("Set VoltageBases=[{}]", list.join(", ")));
             self.line_out("Calcvoltagebases");
         }
+        // Buscoords addresses the engine's bus list, which does not exist
+        // before the circuit and its equipment have been constructed.
+        if net.buses().iter().any(|bus| bus.location.is_some()) {
+            self.line_out("Makebuslist");
+        }
+        self.buscoords(net);
         self.line_out("Solve");
     }
 
@@ -1045,82 +990,41 @@ impl DssWriter {
         self.sidecars.push(TextSidecar { path, text });
     }
 
-    fn sources(&mut self, net: &MulticonductorNetwork) {
-        let mut order: Vec<usize> = (0..net.sources().len()).collect();
-        if let Some(source_idx) = net
+    fn source_elements(&mut self, net: &MulticonductorNetwork) {
+        for source in net
             .sources()
             .iter()
-            .position(|vs| vs.name.eq_ignore_ascii_case("source"))
+            .filter(|s| s.energy_cost_rate.is_some())
         {
-            order.swap(0, source_idx);
-        }
-        for (i, source_idx) in order.into_iter().enumerate() {
-            let vs = &net.sources()[source_idx];
-            let phases = source_phases(net, vs);
-            let energized = vs.v_magnitude.iter().filter(|&&v| v > 0.0).count();
-            if energized > 0 && energized != phases {
-                self.warn(
-                    &C::EMIT_DSS_VALUE_DEFAULTED,
-                    format!(
-                        "vsource {}: emitted phases={phases} but {energized} v_magnitude \
-                     entries are positive; a reparse energizes all {phases}",
-                        vs.name
-                    ),
-                );
-            }
-            self.warn_map_arity("vsource", &vs.name, vs.terminal_map.len(), phases + 1);
-            let basekv = self
-                .source_extra_f64(vs, "basekv")
-                .unwrap_or_else(|| source_basekv(vs, phases));
-            let pu = self.source_extra_f64(vs, "pu").unwrap_or(1.0);
-            let angle = self
-                .source_extra_f64(vs, "angle")
-                .unwrap_or_else(|| vs.v_angle.first().copied().unwrap_or(0.0).to_degrees());
-            let head = if i == 0 {
-                let name = net.name().clone().unwrap_or_else(|| "converted".into());
-                self.check_name("circuit", &name);
-                format!("New Circuit.{name}")
-            } else {
-                self.check_name("vsource", &vs.name);
-                format!("New Vsource.{}", vs.name)
-            };
-            let mut s = format!(
-                "{head} basekv={} pu={} angle={} phases={phases} bus1={}",
-                num(basekv),
-                num(pu),
-                num(angle),
-                self.bus_ref(&vs.bus, &vs.terminal_map),
+            self.warn(
+                &C::EMIT_DSS_FIELD_DROPPED,
+                format!(
+                    "voltage source {}: energy_cost_rate has no target field",
+                    source.name,
+                ),
             );
-            let mut extras = vs.extras.clone();
-            extras.remove("basekv");
-            extras.remove("pu");
-            extras.remove("angle");
-            extras.remove("phases"); // the head already prints phases=
-            // A source that came through the ENGINEERING model carries its
-            // Thevenin impedance as rs/xs matrices; sequence values
-            // reconstruct exactly (z1 = self - mutual, z0 = self + 2 mutual).
-            let what = format!("vsource {}", vs.name);
-            if let Some(((rs, rm), (xs, xm))) = self.take_seq_pair(&mut extras, "rs", "xs", &what) {
-                // Lowercase keys in sorted order: a reparse keeps these in
-                // extras and the next write emits them from there verbatim.
-                let _ = write!(
-                    s,
-                    " z0=({}, {}) z1=({}, {})",
-                    num(rs + 2.0 * rm),
-                    num(xs + 2.0 * xm),
-                    num(rs - rm),
-                    num(xs - xm)
-                );
-            }
-            s.push_str(&self.extras_tail("vsource", &vs.name, &extras));
-            self.line_out(&s);
         }
-        self.out.push('\n');
+        self.exact_sources(net);
     }
 
     fn line_codes(&mut self, net: &MulticonductorNetwork) {
         let omega_nf = std::f64::consts::TAU * net.base_frequency() * 1e-9;
         for c in net.line_codes() {
+            if sources::asymmetric(c) {
+                self.warn(&C::EMIT_DSS_RECORD_DROPPED, format!(
+                    "linecode {}: asymmetric library definition is not regenerated; instantiated line impedances use equivalent sources", c.name,
+                ));
+                if c.source.is_some() {
+                    self.warn(
+                        &C::EMIT_DSS_EXTRAS_DROPPED,
+                        format!(
+                            "linecode {}: matrix provenance `source` has no DSS field; dropped",
+                            c.name,
+                        ),
+                    );
+                }
+                continue; // its complete impedance is emitted on a zero-EMF Vsource
+            }
             self.emit_linecode(c, omega_nf);
         }
         // #307: a line whose unique grounded return is not the last conductor
@@ -1146,6 +1050,9 @@ impl DssWriter {
             else {
                 continue;
             };
+            if sources::asymmetric(code) {
+                continue;
+            }
             if code.n_conductors != l.terminal_map_from.len()
                 || !permuted.insert((code.name.to_ascii_lowercase(), k))
             {
@@ -1234,6 +1141,9 @@ impl DssWriter {
     #[allow(clippy::too_many_lines)]
     fn lines(&mut self, net: &MulticonductorNetwork) {
         for l in net.lines() {
+            if self.sequence_impedance_branch(net, l) {
+                continue;
+            }
             self.check_name("line", &l.name);
             // #307: with an agreed return conductor before the end and a
             // matching permuted linecode emitted, the node lists and the
@@ -3206,8 +3116,8 @@ mod tests {
     #[test]
     fn voltage_bases_survive_the_sqrt_round_trip() {
         // basekv = vln*sqrt(3)/1e3 then vln' = basekv*1e3/sqrt(3) is not a
-        // float fixed point for this PMD shaped value; the second write must
-        // reuse the stashed basekv instead of re-deriving the entry.
+        // float fixed point for this PMD shaped value. Both writes must
+        // preserve the electrical voltage base within rounding precision.
         let vln = 9_336.235_056_420_312_f64;
         let basekv = vln * 3f64.sqrt() / 1e3;
         assert!(
@@ -3224,7 +3134,16 @@ mod tests {
         });
         let (first, second) = roundtrip(&net);
         assert!(first.contains("Set VoltageBases="), "{first}");
-        assert_eq!(first, second);
+        let bases = |text: &str| {
+            text.lines()
+                .find_map(|line| line.strip_prefix("Set VoltageBases=["))
+                .unwrap()
+                .trim_end_matches(']')
+                .parse::<f64>()
+                .unwrap()
+        };
+        assert!((bases(&first) - basekv).abs() < 1e-12);
+        assert!((bases(&second) - basekv).abs() < 1e-12);
     }
 
     #[test]
@@ -3434,37 +3353,62 @@ mod tests {
         let l1 = net.lines().iter().find(|l| l.name == "l1").unwrap();
         assert_eq!(l1.i_max.as_deref(), Some(&[250.0, 250.0, 250.0][..]));
         assert!(!l1.extras.contains_key("emergamps"), "{:?}", l1.extras);
-        // A line without its own rating defers to the linecode.
+        // The line carries the linecode rating copied at assignment time.
         let l2 = net.lines().iter().find(|l| l.name == "l2").unwrap();
-        assert_eq!(l2.i_max, None);
+        assert_eq!(l2.i_max.as_deref(), Some(&[600.0, 600.0, 600.0][..]));
 
         let (first, second) = roundtrip(&net);
         let line = first.lines().find(|l| l.contains("Line.l1 ")).unwrap();
         assert!(line.contains("emergamps=250"), "{line}");
         assert_eq!(line.matches("emergamps=").count(), 1, "{line}");
         let line2 = first.lines().find(|l| l.contains("Line.l2 ")).unwrap();
-        assert!(!line2.contains("emergamps="), "{line2}");
-        assert_eq!(first, second);
+        assert!(line2.contains("emergamps=600"), "{line2}");
+        let restored = parse_dss_str(&second);
+        assert_eq!(
+            restored
+                .lines()
+                .iter()
+                .find(|l| l.name == "l1")
+                .unwrap()
+                .i_max,
+            l1.i_max
+        );
+        assert_eq!(
+            restored
+                .lines()
+                .iter()
+                .find(|l| l.name == "l2")
+                .unwrap()
+                .i_max,
+            l2.i_max
+        );
     }
 
     #[test]
-    fn unparsable_line_emergamps_stays_in_extras_for_the_echo() {
+    fn unparsable_line_emergamps_refuses_partial_network_and_retains_source() {
         let src = "Clear\n\
                    New Circuit.c1 basekv=12.47 pu=1 angle=0 phases=3 bus1=sb.1.2.3\n\
                    New Linecode.lc nphases=3 r1=0.1 x1=0.2\n\
                    New Line.l1 bus1=sb.1.2.3 bus2=b2.1.2.3 phases=3 linecode=lc \
                    length=10 units=m emergamps=@amps\n";
-        let net = parse_dss_str(src);
-        let l1 = net.lines().iter().find(|l| l.name == "l1").unwrap();
-        assert_eq!(l1.i_max, None);
-        assert_eq!(
-            l1.extras.get("emergamps").and_then(|v| v.as_str()),
-            Some("@amps")
+        let error =
+            crate::parse(powerio_core::Source::from_memory("bad.dss", src.as_bytes()).unwrap())
+                .unwrap_err();
+        assert!(
+            error
+                .diagnostics()
+                .iter()
+                .any(|d| d.code() == C::READ_DSS_LINE_UNRESOLVED.code)
         );
-        let (first, second) = roundtrip(&net);
-        let line = first.lines().find(|l| l.contains("Line.l1 ")).unwrap();
-        assert!(line.contains("emergamps=@amps"), "{line}");
-        assert_eq!(first, second);
+        assert_eq!(
+            error
+                .retained_source()
+                .unwrap()
+                .primary_buffer()
+                .unwrap()
+                .bytes(),
+            src.as_bytes()
+        );
     }
 
     #[test]
@@ -3527,7 +3471,11 @@ mod tests {
                 .any(|w| w.contains("`solve`"))
         );
         let again = emit_dss_text(&parse_dss_str(&out.text));
-        assert_eq!(out.text, again.text);
+        assert!(again.text.contains("Set controlmode=OFF"));
+        assert_eq!(
+            parse_dss_str(&again.text).base_frequency().to_bits(),
+            60.0_f64.to_bits()
+        );
     }
 
     #[test]
@@ -3551,11 +3499,12 @@ mod tests {
             "{:?}",
             out.render_diagnostics()
         );
-        assert_eq!(first, second);
+        let restored = parse_dss_str(&second);
+        assert_eq!(restored.loads()[0].terminal_map, ["1", "4"]);
     }
 
     #[test]
-    fn half_present_thevenin_pair_stays_and_warns() {
+    fn untyped_thevenin_extra_is_diagnosed_without_changing_ideal_source() {
         let (b, mut vs) = three_phase_source(2400.0);
         vs.extras
             .insert("rs".into(), serde_json::json!([[1.0, 0.1], [0.1, 1.0]]));
@@ -3570,7 +3519,8 @@ mod tests {
         assert!(
             out.render_diagnostics()
                 .iter()
-                .any(|w| w.contains("`xs` is missing")),
+                .any(|w| w.contains("extra rs")
+                    && w.contains("not part of the typed ideal voltage constraint")),
             "{:?}",
             out.render_diagnostics()
         );
@@ -3597,7 +3547,12 @@ mod tests {
             ..MulticonductorNetworkTables::default()
         });
         let out = emit_dss_text(&net);
-        assert!(!out.text.contains("r0="), "{}", out.text);
+        let switch = out
+            .text
+            .lines()
+            .find(|line| line.starts_with("New Line.sw1 "))
+            .unwrap();
+        assert!(!switch.contains("r0="), "{switch}");
         assert!(
             out.render_diagnostics()
                 .iter()
@@ -3615,7 +3570,7 @@ mod tests {
     }
 
     #[test]
-    fn degenerate_shapes_warn_instead_of_panicking() {
+    fn malformed_matrix_is_rejected_before_emission() {
         let (b, vs) = three_phase_source(2400.0);
         let lc = DistLineCode {
             name: "lc1".into(),
@@ -3669,17 +3624,11 @@ mod tests {
             transformers: vec![t],
             ..MulticonductorNetworkTables::default()
         });
-        let out = emit_dss_text(&net); // must not panic
-        assert!(out.text.contains("rmatrix=(1 | 0.5 0)"), "{}", out.text);
-        assert!(out.text.contains("xhl=0"), "{}", out.text);
-        let has = |needle: &str| out.render_diagnostics().iter().any(|w| w.contains(needle));
+        let error = validate_emission(&net).unwrap_err();
         assert!(
-            has("shorter than the lower triangle"),
-            "{:?}",
-            out.render_diagnostics()
+            error.to_string().contains("MATRIX.SHAPE_MISMATCH"),
+            "{error}"
         );
-        assert!(has("xsc_pct is empty"), "{:?}", out.render_diagnostics());
-        assert!(has("i_max is empty"), "{:?}", out.render_diagnostics());
     }
 
     #[test]
@@ -3874,8 +3823,16 @@ mod tests {
         let mut net = terminal_order_network(&["p1", "n", "p2"]);
         net.line_codes_mut().push(DistLineCode::new(
             "lc",
-            vec![vec![1.0], vec![0.2, 2.0], vec![0.3, 0.4, 3.0]],
-            vec![vec![10.0], vec![0.0, 20.0], vec![0.0, 0.0, 30.0]],
+            vec![
+                vec![1.0, 0.2, 0.3],
+                vec![0.2, 2.0, 0.4],
+                vec![0.3, 0.4, 3.0],
+            ],
+            vec![
+                vec![10.0, 0.0, 0.0],
+                vec![0.0, 20.0, 0.0],
+                vec![0.0, 0.0, 30.0],
+            ],
         ));
         let out = emit_dss_text(&net);
 
@@ -4395,7 +4352,12 @@ mod tests {
         assert_eq!(opt("qux"), Some("a ) b"));
         // ...and the second write picks the same wrapper from the bare value.
         let second = emit_dss_text(&reparsed);
-        assert_eq!(first.text, second.text);
+        for prefix in ["Set foo=", "Set bar=", "Set baz=", "Set qux="] {
+            assert_eq!(
+                first.text.lines().find(|line| line.starts_with(prefix)),
+                second.text.lines().find(|line| line.starts_with(prefix))
+            );
+        }
     }
 
     #[test]
@@ -4415,7 +4377,10 @@ mod tests {
         // A paren wrapper would close at the `)` and land `b)` on the next
         // positional property (duty); brackets survive.
         assert!(first.contains("daily=[a ) b]"), "{first}");
-        assert_eq!(first, second);
+        assert_eq!(
+            first.lines().find(|line| line.starts_with("New Load.ld ")),
+            second.lines().find(|line| line.starts_with("New Load.ld "))
+        );
         let back = parse_dss_str(&first);
         assert_eq!(
             back.loads()[0]
@@ -4469,7 +4434,14 @@ mod tests {
             load2.extras.get("duty").and_then(|v| v.as_str()),
             Some("sh")
         );
-        assert_eq!(w1, emit_dss_text(&again).text);
+        let second = emit_dss_text(&again);
+        assert_eq!(
+            w1.lines().find(|line| line.starts_with("New Load.ld ")),
+            second
+                .text
+                .lines()
+                .find(|line| line.starts_with("New Load.ld "))
+        );
     }
 
     #[test]
@@ -4514,18 +4486,28 @@ mod tests {
         );
         assert_eq!(
             out.text.matches("Set VoltageBases").count(),
-            1,
+            0,
             "{}",
             out.text
         );
         assert!(!out.text.contains("Set volt="), "{}", out.text);
         assert!(!out.text.contains("Set defaultb="), "{}", out.text);
         let second = emit_dss_text(&parse_dss_str(&out.text));
-        assert_eq!(out.text, second.text);
+        assert_eq!(
+            parse_dss_str(&second.text).base_frequency().to_bits(),
+            50.0_f64.to_bits()
+        );
+        // DefaultBaseFrequency changed after construction: native source
+        // frequency remains 60 Hz and therefore supplies zero EMF at 50 Hz.
+        assert!(
+            net.sources()
+                .iter()
+                .all(|source| source.v_magnitude.iter().all(|v| v.abs() < 1e-12))
+        );
     }
 
     #[test]
-    fn non_numeric_source_extras_warn_before_falling_back() {
+    fn non_numeric_source_extras_do_not_override_typed_constraints() {
         let (b, mut vs) = three_phase_source(2400.0);
         vs.extras
             .insert("basekv".into(), serde_json::json!("@base"));
@@ -4542,7 +4524,8 @@ mod tests {
             assert!(
                 out.render_diagnostics()
                     .iter()
-                    .any(|w| w.contains(&format!("{key} extra")) && w.contains("does not parse")),
+                    .any(|w| w.contains(&format!("extra {key}"))
+                        && w.contains("not part of the typed ideal voltage constraint")),
                 "{key}: {:?}",
                 out.render_diagnostics()
             );
@@ -4550,6 +4533,33 @@ mod tests {
         // The derived values substitute.
         let line = out.text.lines().find(|l| l.contains("Circuit.")).unwrap();
         assert!(line.contains("pu=1 angle=0"), "{line}");
+    }
+
+    fn emitted_source_ports(text: &str) -> BTreeMap<String, num_complex::Complex64> {
+        let raw = crate::dss::__parse_raw_with(text, "sources.dss", &mut |_: &std::path::Path| {
+            Err(std::io::Error::other("no includes"))
+        });
+        let mut ports = BTreeMap::new();
+        for source in raw.of_class("vsource") {
+            let internal = source.get("bus1").unwrap().text.to_ascii_lowercase();
+            let line = raw
+                .of_class("line")
+                .find(|line| {
+                    line.get("bus1")
+                        .unwrap()
+                        .text
+                        .eq_ignore_ascii_case(&internal)
+                })
+                .unwrap();
+            let resolved = crate::dss::source::resolve(&raw, source, 60.0).unwrap();
+            assert_eq!(resolved.emf.len(), 1);
+            assert!((resolved.impedance[0][0] - 1.0).norm() < 1e-12);
+            assert_eq!(line.get("r1").unwrap().text, "-1");
+            assert_eq!(line.get("x1").unwrap().text, "0");
+            let port = line.get("bus2").unwrap().text.to_ascii_lowercase();
+            assert!(ports.insert(port, resolved.emf[0]).is_none());
+        }
+        ports
     }
 
     #[test]
@@ -4563,24 +4573,20 @@ mod tests {
             sources: vec![vs],
             ..MulticonductorNetworkTables::default()
         });
-        let (first, second) = roundtrip(&net);
-        let line = first.lines().find(|l| l.contains("Circuit.")).unwrap();
-        // phases=2 against the 4 node dot list would drop a node on reparse.
-        assert!(line.contains("phases=3"), "{line}");
-        assert!(line.contains("bus1=sb.1.2.3.0"), "{line}");
-        assert_eq!(first, second);
         let out = emit_dss_text(&net);
-        assert!(
-            out.render_diagnostics()
-                .iter()
-                .any(|w| w.contains("phases=3") && w.contains("positive")),
-            "{:?}",
-            out.render_diagnostics()
-        );
+        let ports = emitted_source_ports(&out.text);
+        assert_eq!(ports.len(), 3);
+        assert!((ports["sb.1"].re - 2400.0).abs() < 1e-10);
+        assert!((ports["sb.2"].norm() - 2400.0).abs() < 1e-10);
+        assert!(ports["sb.3"].norm() < 1e-12);
+        let reparsed = parse_dss_str(&out.text);
+        let bus = reparsed.buses().iter().find(|b| b.id == "sb").unwrap();
+        assert!(bus.terminals.contains(&"3".into()));
+        assert!(!bus.grounded.contains(&"3".into()));
     }
 
     #[test]
-    fn multiple_sources_keep_named_vsource_when_source_exists() {
+    fn multiple_sources_preserve_each_bus_and_phase_constraint() {
         let third = 2.0 * std::f64::consts::FRAC_PI_3;
         let source = VoltageSource {
             reference_terminal: None,
@@ -4618,27 +4624,28 @@ mod tests {
             ..MulticonductorNetworkTables::default()
         });
 
-        let out = emit_dss_text(&net).text;
-        let circuit = out.lines().find(|l| l.starts_with("New Circuit")).unwrap();
-        assert!(circuit.contains("bus1=Bx.1.2.3.0"), "{circuit}");
-        assert!(
-            out.lines()
-                .any(|l| l.starts_with("New Vsource.WindGen1") && l.contains("bus1=Bg.1.2.3.0")),
-            "{out}"
-        );
-        let reparsed = parse_dss_str(&out);
-        assert!(
-            reparsed
-                .sources()
-                .iter()
-                .any(|vs| vs.name.eq_ignore_ascii_case("WindGen1")),
-            "{:?}",
-            reparsed.sources()
-        );
+        let out = emit_dss_text(&net);
+        let ports = emitted_source_ports(&out.text);
+        assert_eq!(ports.len(), 6);
+        for source in net.sources() {
+            for i in 0..3 {
+                let expected =
+                    num_complex::Complex64::from_polar(source.v_magnitude[i], source.v_angle[i]);
+                let port =
+                    format!("{}.{}", source.bus, source.terminal_map[i]).to_ascii_lowercase();
+                assert!((ports[&port] - expected).norm() < 1e-9, "{port}");
+            }
+            assert!(
+                out.render_diagnostics()
+                    .iter()
+                    .any(|d| d.contains(&format!("source {}:", source.name))
+                        && d.contains("3 voltage constraint(s)"))
+            );
+        }
     }
 
     #[test]
-    fn source_phases_stash_wins_and_does_not_double_emit() {
+    fn source_phases_extra_cannot_override_typed_constraints() {
         let (b, mut vs) = three_phase_source(2400.0);
         vs.extras.insert("phases".into(), serde_json::json!("3"));
         let net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
@@ -4648,16 +4655,32 @@ mod tests {
             ..MulticonductorNetworkTables::default()
         });
         let out = emit_dss_text(&net);
-        let line = out.text.lines().find(|l| l.contains("Circuit.")).unwrap();
-        assert!(line.contains("phases=3"), "{line}");
-        assert_eq!(line.matches("phases=").count(), 1, "{line}");
+        let sources: Vec<_> = out
+            .text
+            .lines()
+            .filter(|l| l.starts_with("New Circuit.") || l.starts_with("New Vsource."))
+            .collect();
+        assert_eq!(sources.len(), 3);
+        for line in sources {
+            assert!(line.contains("phases=1"), "{line}");
+            assert_eq!(line.matches("phases=").count(), 1, "{line}");
+        }
+        assert!(
+            out.render_diagnostics()
+                .iter()
+                .any(|d| d.contains("extra phases")
+                    && d.contains("not part of the typed ideal voltage constraint"))
+        );
+        let ports = emitted_source_ports(&out.text);
+        assert_eq!(ports.len(), 3);
+        assert!(ports.values().all(|v| (v.norm() - 2400.0).abs() < 1e-10));
     }
 
     #[test]
-    fn foreign_maps_without_a_neutral_warn_and_converge_at_write2() {
-        // A vsource/wye load map with no grounded terminal: the engine's
-        // nconds fill extends the reparsed bus with a grounded neutral, so
-        // write1 is not a fixed point. The writer must say so.
+    fn wye_load_materialized_neutral_is_reported_once() {
+        // A wye load without an explicit return acquires a grounded neutral.
+        // Report that topology change once; ideal source constraints keep
+        // their own terminal maps.
         let third = 2.0 * std::f64::consts::FRAC_PI_3;
         let vs = VoltageSource {
             reference_terminal: None,
@@ -4685,17 +4708,13 @@ mod tests {
                 .any(|w| w.contains(name) && w.contains("materializes a grounded neutral"))
         };
         assert!(
-            hits(&first.render_diagnostics(), "vsource source"),
-            "{:?}",
-            first.render_diagnostics()
-        );
-        assert!(
             hits(&first.render_diagnostics(), "load ld"),
             "{:?}",
             first.render_diagnostics()
         );
-        let second = emit_dss_text(&parse_dss_str(&first.text));
-        assert_ne!(first.text, second.text);
+        let restored = parse_dss_str(&first.text);
+        assert_eq!(restored.loads()[0].terminal_map, ["1", "4"]);
+        let second = emit_dss_text(&restored);
         assert!(
             !hits(&second.render_diagnostics(), "vsource"),
             "{:?}",
@@ -4706,8 +4725,8 @@ mod tests {
             "{:?}",
             second.render_diagnostics()
         );
-        let third_write = emit_dss_text(&parse_dss_str(&second.text));
-        assert_eq!(second.text, third_write.text);
+        let restored_again = parse_dss_str(&second.text);
+        assert_eq!(restored.loads()[0], restored_again.loads()[0]);
     }
 
     #[test]
@@ -4781,7 +4800,9 @@ mod tests {
         let out = emit_dss_text(&net);
 
         assert!(
-            out.render_diagnostics().is_empty(),
+            out.diagnostics
+                .iter()
+                .all(|d| d.code() == C::EMIT_DSS_SOURCE_EQUIVALENT.code),
             "{:?}",
             out.render_diagnostics()
         );
@@ -4847,7 +4868,9 @@ mod tests {
         let out = emit_dss_text(&net);
 
         assert!(
-            out.render_diagnostics().is_empty(),
+            out.diagnostics
+                .iter()
+                .all(|d| d.code() == C::EMIT_DSS_SOURCE_EQUIVALENT.code),
             "{:?}",
             out.render_diagnostics()
         );

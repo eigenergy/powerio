@@ -23,12 +23,15 @@ use crate::geo::{CoordinateSpace, DistCoordsKind, DistGeoMeta, DistLocation};
 use crate::model::{
     ActivePowerReference, ActivePowerUnit, ConductorMatrix, Configuration, ControlVoltageReference,
     DistBus, DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
-    DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, DistWinding,
+    DistLoadVoltageModel, DistShunt, DistSourceFormat, DistTransformer, DistWinding,
     DistWindingConn, Extras, IbrPrimeMover, IbrTopology, MulticonductorNetwork,
     MulticonductorNetworkTables, PowerFactorControl, ReactivePowerReference, ReactivePowerUnit,
     UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, open_delta_connection,
-    open_delta_pairable, pair_keys, square_from_rows, winding_phase_pair,
+    open_delta_pairable, pair_keys, winding_phase_pair,
 };
+
+mod lines;
+mod sources;
 
 /// Upper bound on any count property (`phases`, conductors, `windings`, tap
 /// counts). `phases` sizes a dense n×n matrix and the winding count drives a
@@ -78,8 +81,18 @@ pub(crate) fn parse_dss_collecting(
     diags: &mut crate::collect::Diagnostics,
 ) -> Result<MulticonductorNetwork> {
     let raw = super::raw::parse_raw_from_source(source)?;
-    let (net, found) = to_network_from_raw(&raw);
+    let (net, found) = snapshot_network(&raw);
+    let invalid = found.iter().any(|d| {
+        d.severity() == powerio_core::DiagnosticSeverity::Error
+            && d.code() != C::READ_DSS_GEOMETRY_UNRESOLVED.code
+    });
     diags.absorb(found);
+    if invalid {
+        return Err(crate::error::Error::FormatRead {
+            format: "OpenDSS",
+            message: "the static electrical snapshot could not be materialized; see the component diagnostics".into(),
+        });
+    }
     Ok(net)
 }
 
@@ -91,59 +104,50 @@ pub(crate) fn parse_dss_collecting(
 pub fn to_network_from_raw(
     raw: &RawDss,
 ) -> (MulticonductorNetwork, Vec<crate::diagnostics::Diagnostic>) {
+    snapshot_network(raw)
+}
+
+#[allow(clippy::too_many_lines)]
+fn snapshot_network(raw: &RawDss) -> (MulticonductorNetwork, Vec<crate::diagnostics::Diagnostic>) {
     let mut diags = crate::collect::Diagnostics::new();
     diags.absorb(raw.diagnostics.iter().cloned());
     let mut rd = Reader {
         net: MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
             name: raw.circuit_name.clone(),
-            base_frequency: dd::BASE_FREQUENCY,
+            base_frequency: raw.snapshot_frequency(),
             source_format: Some(DistSourceFormat::Dss),
             ..MulticonductorNetworkTables::default()
         }),
         diags,
         buses: BTreeMap::new(),
         bus_order: Vec::new(),
-        linecode_units: BTreeMap::new(),
-        linecode_nconds: BTreeMap::new(),
         xycurves: BTreeMap::new(),
         regulated: BTreeSet::new(),
         vars: &raw.vars,
     };
 
     for (name, value) in &raw.options {
-        // Set option names resolve by first match in the engine's option
-        // table order (Command.cpp Getcommand → HashList FindAbbrev), so
-        // `Set defaultb=50` is DefaultBaseFrequency but anything shorter
-        // ("default", "d") binds DefaultDaily; the bound sits at the unique
-        // resolution point.
-        if name.len() >= "defaultb".len()
-            && "defaultbasefrequency".starts_with(name.as_str())
-            && let Ok(f) = value.to_f64(Some(rd.vars))
-        {
-            *rd.net.base_frequency_mut() = f;
-        }
         rd.net
             .options_mut()
             .push((name.clone(), value.text.clone()));
     }
     for cmd in &raw.commands {
+        if matches!(cmd.verb.as_str(), "open" | "close") {
+            rd.warn(
+                &C::READ_DSS_LINE_UNRESOLVED,
+                format!(
+                    "{} {}: fixed terminal state lowering is unfinished",
+                    cmd.verb, cmd.args,
+                ),
+            );
+        }
         rd.net
             .commands_mut()
             .push((cmd.verb.clone(), cmd.args.clone()));
     }
 
-    // Linecodes first: lines reference them. Then everything else in script
-    // order per class.
-    for obj in raw.of_class("linecode") {
-        let lc = rd.linecode(obj);
-        rd.net.line_codes_mut().push(lc);
-    }
-    for obj in raw.of_class("vsource") {
-        let vs = rd.vsource(obj);
-        rd.net.sources_mut().push(vs);
-    }
-    for obj in raw.of_class("line") {
-        rd.line(obj);
+    if let Err(error) = rd.resolved_lines(raw) {
+        rd.warn(&C::READ_DSS_LINE_UNRESOLVED, error);
     }
     for obj in raw.of_class("transformer") {
         let t = rd.transformer(obj);
@@ -171,6 +175,10 @@ pub fn to_network_from_raw(
         rd.regcontrol(obj);
     }
     rd.classify_regulators();
+    // Register all original terminals before allocating virtual source nodes.
+    if let Err(error) = rd.resolved_sources(raw) {
+        rd.warn(&C::READ_DSS_SOURCE_UNRESOLVED, error);
+    }
     let mut outside_profile: std::collections::BTreeMap<&str, usize> =
         std::collections::BTreeMap::new();
     for obj in &raw.objects {
@@ -319,6 +327,9 @@ fn finish_buses(
     }
     for v in net.sources_mut() {
         rewrite(&v.bus, &mut v.terminal_map);
+        if let Some(reference) = &mut v.reference_terminal {
+            rewrite(&v.bus, std::slice::from_mut(reference));
+        }
     }
     for t in net.transformers_mut() {
         for w in &mut t.windings {
@@ -364,14 +375,6 @@ struct Reader<'a> {
     diags: crate::collect::Diagnostics,
     buses: BTreeMap<String, BusState>,
     bus_order: Vec<String>,
-    /// Linecode name (lowercase) → meters per its length unit, `None` when
-    /// the linecode has no units. Lines need it: `ConvertLineUnits` couples
-    /// the two sides' units.
-    linecode_units: BTreeMap<String, Option<f64>>,
-    /// Linecode name (lowercase) → conductor count. Lines need it:
-    /// `linecode=` sets the line's phase count in the engine
-    /// (Line.cpp FetchLineCode), exactly like `phases=`.
-    linecode_nconds: BTreeMap<String, usize>,
     xycurves: BTreeMap<String, XyCurveRaw>,
     /// Transformer names (lowercase) a regcontrol targets, for the BMOPF
     /// regulator subtype classification pass.
@@ -497,24 +500,6 @@ impl Reader<'_> {
         })
     }
 
-    /// Meters per source length unit, or `None` when no conversion applies:
-    /// the property is missing, `none`, or a code `GetUnitsCode`
-    /// (Shared/LineUnits.cpp) does not recognize — the engine maps unknown
-    /// codes to UNITS_NONE. Unknown codes warn.
-    fn units_code(&mut self, units: Option<&str>, class: &str, name: &str) -> Option<f64> {
-        let u = units?;
-        if let Some(f) = dd::calc_meters_per_unit(u) {
-            return Some(f);
-        }
-        if !u.to_ascii_lowercase().starts_with("no") {
-            self.diags.push(
-                &crate::diagnostics::codes::READ_DSS_VALUE_UNSUPPORTED,
-                format!("{class} {name}: unknown units `{u}`; treated as none"),
-            );
-        }
-        None
-    }
-
     /// Extras value for a written numeric token: the literal text when it
     /// is already a plain number, otherwise the evaluated value — RPN or
     /// `@var` text is no use to the dss writer, which needs an argument the
@@ -615,461 +600,6 @@ impl Reader<'_> {
         }
         nodes.truncate(keep);
         nodes.iter().map(ToString::to_string).collect()
-    }
-
-    // ----- linecode ------------------------------------------------------
-
-    fn linecode(&mut self, obj: &RawObject) -> DistLineCode {
-        let props = Props::new(obj);
-        let n = self.usize_or(
-            &props,
-            "nphases",
-            "linecode",
-            &obj.name,
-            dd::linecode::NPHASES,
-        );
-        let units = props.get("units").map(|v| v.text.clone());
-        let units_m = self.units_code(units.as_deref(), "linecode", &obj.name);
-        let per_meter = units_m.unwrap_or(1.0);
-        self.linecode_units
-            .insert(obj.name.to_ascii_lowercase(), units_m);
-        self.linecode_nconds
-            .insert(obj.name.to_ascii_lowercase(), n);
-
-        let freq = self
-            .f64_prop(props.get("basefreq"))
-            .unwrap_or(self.net.base_frequency());
-
-        let z = self.impedance_matrices(
-            &props,
-            n,
-            "linecode",
-            &obj.name,
-            dd::line::R1,
-            dd::line::X1,
-            dd::line::R0,
-            dd::line::X0,
-            dd::line::C1_NF,
-            dd::line::C0_NF,
-        );
-        if z.all_default {
-            self.defaulted("linecode", &obj.name, "rmatrix");
-        }
-
-        // Half the total line charging susceptance at each end; OpenDSS
-        // carries one C matrix for the whole pi section.
-        let b_half = scale_mat(
-            &z.c_nf,
-            std::f64::consts::TAU * freq * 1e-9 / per_meter / 2.0,
-        );
-        let zero = vec![vec![0.0; n]; n];
-
-        // i_max carries the emergency rating: PMD's cm_ub and the public
-        // BMOPF examples both use emergamps. normamps stays in extras.
-        let amps = self.f64_or(
-            &props,
-            "emergamps",
-            "linecode",
-            &obj.name,
-            dd::line::EMERGAMPS,
-        );
-        let i_max = Some(vec![amps; n]);
-
-        let mut extras = extras_from_leftovers(&props);
-        if let Some(u) = units {
-            extras.insert("units".into(), u.into());
-        }
-        for (key, text) in z.malformed {
-            extras.insert(key.to_string(), text.into());
-        }
-        DistLineCode {
-            name: obj.name.clone(),
-            n_conductors: n,
-            r_series: scale_mat(&z.r, 1.0 / per_meter),
-            x_series: scale_mat(&z.x, 1.0 / per_meter),
-            g_from: zero.clone(),
-            b_from: b_half.clone(),
-            g_to: zero,
-            b_to: b_half,
-            i_max,
-            s_max: None,
-            source: None,
-            extras,
-        }
-    }
-
-    /// R, X (ohm per unit length) and C (nF per unit length) matrices from
-    /// either explicit matrices or sequence values.
-    #[allow(clippy::too_many_arguments)]
-    fn impedance_matrices(
-        &mut self,
-        props: &Props,
-        n: usize,
-        class: &str,
-        name: &str,
-        r1d: f64,
-        x1d: f64,
-        r0d: f64,
-        x0d: f64,
-        c1d: f64,
-        c0d: f64,
-    ) -> SeriesImpedance {
-        let mut malformed: Vec<(&'static str, String)> = Vec::new();
-        let mut rows = |key: &'static str| -> Option<ConductorMatrix> {
-            let v = props.get(key)?;
-            let parsed = v
-                .to_rows(Some(self.vars))
-                .ok()
-                .and_then(|rows| square_from_rows(&rows, n));
-            if parsed.is_none() {
-                malformed.push((key, v.text.clone()));
-            }
-            parsed
-        };
-        let rm = rows("rmatrix");
-        let xm = rows("xmatrix");
-        let cm = rows("cmatrix");
-        // The engine rejects the whole script on a bad matrix; the liberal
-        // reader falls back to the sequence values but says so and keeps
-        // the text. A written property is never reported as defaulted.
-        for (key, _) in &malformed {
-            self.warn(
-                &C::READ_DSS_RETAINED_SOURCE_ONLY,
-                format!(
-                    "{class} {name}: `{key}` does not parse as a {n}x{n} matrix; \
-                 sequence values apply and the text is kept in extras"
-                ),
-            );
-        }
-        let any_written = [
-            "rmatrix", "xmatrix", "cmatrix", "r1", "x1", "r0", "x0", "c1", "c0", "b1", "b0",
-        ]
-        .iter()
-        .any(|k| props.by_name.contains_key(*k));
-
-        let seq = |props: &Props, k1: &'static str, k0: &'static str, d1: f64, d0: f64| {
-            let v1 = props
-                .get(k1)
-                .and_then(|v| v.to_f64(Some(self.vars)).ok())
-                .unwrap_or(d1);
-            let v0 = props
-                .get(k0)
-                .and_then(|v| v.to_f64(Some(self.vars)).ok())
-                .unwrap_or(d0);
-            if n == 1 {
-                return vec![vec![v1]];
-            }
-            // Symmetric component to phase: diagonal (2 z1 + z0)/3,
-            // off-diagonal (z0 - z1)/3.
-            let s = (2.0 * v1 + v0) / 3.0;
-            let m = (v0 - v1) / 3.0;
-            let mut mat = vec![vec![m; n]; n];
-            for (i, row) in mat.iter_mut().enumerate() {
-                row[i] = s;
-            }
-            mat
-        };
-
-        SeriesImpedance {
-            r: rm.unwrap_or_else(|| seq(props, "r1", "r0", r1d, r0d)),
-            x: xm.unwrap_or_else(|| seq(props, "x1", "x0", x1d, x0d)),
-            c_nf: cm.unwrap_or_else(|| seq(props, "c1", "c0", c1d, c0d)),
-            all_default: !any_written,
-            malformed,
-        }
-    }
-
-    // ----- vsource -------------------------------------------------------
-
-    fn vsource(&mut self, obj: &RawObject) -> VoltageSource {
-        let props = Props::new(obj);
-        let phases = self.usize_or(&props, "phases", "vsource", &obj.name, dd::vsource::PHASES);
-        let basekv = self.f64_or(&props, "basekv", "vsource", &obj.name, dd::vsource::BASEKV);
-        let pu = self.f64_or(&props, "pu", "vsource", &obj.name, dd::vsource::PU);
-        let angle_deg = self.f64_or(
-            &props,
-            "angle",
-            "vsource",
-            &obj.name,
-            dd::vsource::ANGLE_DEG,
-        );
-        let spec = if let Some(v) = props.get("bus1") {
-            v.to_bus_spec()
-        } else {
-            self.defaulted("vsource", &obj.name, "bus1");
-            Value::new(dd::vsource::BUS1).to_bus_spec()
-        };
-        let map = self.terminals(&spec, phases, phases + 1, phases + 1);
-
-        // VSource.cpp ~995-1003: one phase takes basekv outright, otherwise
-        // the per phase magnitude is basekv / (2 sin(pi/n)) — the chord of
-        // the n-gon, which is sqrt(3) only at n = 3. Angles space at
-        // -360/n degrees (positive sequence, ~1272), wrapped to (-180, 180]
-        // in radians, matching the reference conversion.
-        let v_ln = if phases == 1 {
-            basekv * 1e3 * pu
-        } else {
-            basekv * 1e3 * pu / (2.0 * (std::f64::consts::PI / phases as f64).sin())
-        };
-        let mut v_magnitude = vec![v_ln; phases];
-        let mut v_angle: Vec<f64> = (0..phases)
-            .map(|k| {
-                let deg = angle_deg - 360.0 / phases as f64 * k as f64;
-                let a = deg.to_radians();
-                // rem_euclid yields [0, tau); shifting puts the result in
-                // [-pi, pi), and the reference maps the open end to +pi.
-                let shifted = (a + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU);
-                if shifted <= 0.0 {
-                    std::f64::consts::PI
-                } else {
-                    shifted - std::f64::consts::PI
-                }
-            })
-            .collect();
-        // The neutral conductor rides at ground.
-        v_magnitude.push(0.0);
-        v_angle.push(0.0);
-
-        // The raw base voltage rides in extras: the magnitudes fold in pu,
-        // and downstream writers need the unscaled base.
-        let mut extras = extras_from_leftovers(&props);
-        extras.insert("basekv".into(), basekv.into());
-        extras.insert("angle".into(), angle_deg.into());
-        if (pu - 1.0).abs() > 0.0 {
-            extras.insert("pu".into(), pu.into());
-        }
-        VoltageSource {
-            reference_terminal: None,
-            name: obj.name.clone(),
-            bus: spec.name,
-            terminal_map: map,
-            v_magnitude,
-            v_angle,
-            energy_cost_rate: None,
-            extras,
-        }
-    }
-
-    // ----- line / switch -------------------------------------------------
-
-    // One block per object field; splitting it would scatter a list that
-    // reads end to end.
-    #[expect(clippy::too_many_lines)]
-    fn line(&mut self, obj: &RawObject) {
-        let props = Props::new(obj);
-        if crate::readiness::DEFERRED_GEOMETRY_KEYS
-            .iter()
-            .any(|key| props.by_name.contains_key(*key))
-        {
-            self.warn(&C::READ_DSS_GEOMETRY_UNRESOLVED, format!(
-                "line {}: geometry-derived conductor impedances are unresolved; the complete source object is retained without a synthetic linecode or terminal map",
-                obj.name
-            ));
-            self.net
-                .untyped_objects_mut()
-                .push(UntypedObject::from(obj));
-            return;
-        }
-        // `linecode=` assigns the line's phase count from the code
-        // (Line.cpp FetchLineCode) exactly like `phases=`; properties
-        // apply in order, so the later of the two wins. Bus node lists
-        // materialize after the whole script parses (MakeBusList), so
-        // they always see the final count regardless of where the bus
-        // properties sit.
-        let explicit = self.usize_prop(props.get("phases"));
-        let from_code = props.get("linecode").and_then(|c| {
-            self.linecode_nconds
-                .get(&c.text.to_ascii_lowercase())
-                .copied()
-        });
-        let linecode_last = obj
-            .props
-            .iter()
-            .rev()
-            .find_map(|p| match p.name.as_deref() {
-                Some("phases") => Some(false),
-                Some("linecode") => Some(true),
-                _ => None,
-            })
-            .unwrap_or(false);
-        let phases = match (explicit, from_code) {
-            (Some(_), Some(n)) if linecode_last => n,
-            (Some(p), _) => p,
-            (None, Some(n)) => n,
-            (None, None) => dd::line::PHASES,
-        };
-        let spec1 = bus_spec(props.get("bus1"), "");
-        let spec2 = bus_spec(props.get("bus2"), "");
-        // A line has no neutral conductor of its own: nconds == phases.
-        let map_from = self.terminals(&spec1, phases, phases, phases);
-        let map_to = self.terminals(&spec2, phases, phases, phases);
-
-        let is_switch = props.get("switch").is_some_and(super::lex::Value::to_bool);
-        if is_switch {
-            let amps = self.f64_or(&props, "emergamps", "line", &obj.name, dd::line::EMERGAMPS);
-            let i_max = Some(vec![amps; phases]);
-            let mut extras = extras_from_leftovers(&props);
-            // OpenDSS replaces a switch line's impedance with fixed dummy
-            // values; record anything written so nothing drops silently.
-            for k in ["linecode", "length", "r1", "x1", "rmatrix", "xmatrix"] {
-                if let Some(v) = props.by_name.get(k) {
-                    extras.insert(k.to_string(), v.text.clone().into());
-                    self.warn(
-                        &C::READ_DSS_RETAINED_SOURCE_ONLY,
-                        format!(
-                            "line {}: `{k}` is ignored by OpenDSS on switch=yes; kept in extras",
-                            obj.name
-                        ),
-                    );
-                }
-            }
-            self.net.switches_mut().push(DistSwitch {
-                name: obj.name.clone(),
-                bus_from: spec1.name,
-                bus_to: spec2.name,
-                terminal_map_from: map_from,
-                terminal_map_to: map_to,
-                open: false,
-                i_max,
-                extras,
-            });
-            return;
-        }
-
-        let length_units = props.get("units").map(|v| v.text.clone());
-        let line_units_m = self.units_code(length_units.as_deref(), "line", &obj.name);
-        let length = self.f64_or(&props, "length", "line", &obj.name, dd::line::LENGTH);
-
-        // ConvertLineUnits (Shared/LineUnits.cpp ~166) is 1.0 when either
-        // side is UNITS_NONE, and the engine scales the linecode matrices
-        // by Len / FUnitsConvert (Line.cpp ~1177). A unitless line length
-        // is therefore in the linecode's units, and a unitless linecode is
-        // per line length unit, so the raw length preserves the Z·length
-        // product.
-        let mut malformed: Vec<(&'static str, String)> = Vec::new();
-        let (linecode, length_factor, synthesized) = if let Some(code) = props.get("linecode") {
-            let lc_units_m = self
-                .linecode_units
-                .get(&code.text.to_ascii_lowercase())
-                .copied()
-                .flatten();
-            let factor = match (lc_units_m, line_units_m) {
-                (Some(_), Some(lf)) => lf,
-                (Some(lcf), None) => lcf,
-                (None, _) => 1.0,
-            };
-            (code.text.clone(), factor, false)
-        } else {
-            let factor = line_units_m.unwrap_or(1.0);
-            let (code, bad) = self.synthesize_linecode(&props, phases, factor, &obj.name);
-            malformed = bad;
-            (code, factor, true)
-        };
-
-        let (i_max, raw_emergamps) = self.line_rating(&props, phases, synthesized);
-        let mut extras = extras_from_leftovers(&props);
-        if let Some(u) = length_units {
-            extras.insert("units".into(), u.into());
-        }
-        if let Some(text) = raw_emergamps {
-            extras.insert("emergamps".into(), text.into());
-        }
-        for (key, text) in malformed {
-            extras.insert(key.to_string(), text.into());
-        }
-        self.net.lines_mut().push(DistLine {
-            name: obj.name.clone(),
-            bus_from: spec1.name,
-            bus_to: spec2.name,
-            terminal_map_from: map_from,
-            terminal_map_to: map_to,
-            linecode,
-            length: length * length_factor,
-            route: None,
-            i_max,
-            s_max: None,
-            extras,
-        });
-    }
-
-    /// The line's own `i_max`, and the raw `emergamps` token to keep in extras.
-    ///
-    /// A line with no `linecode=` gets a synthetic one holding its own
-    /// impedance, and `synthesize_linecode` already read `emergamps` into that
-    /// linecode's `i_max`. Repeating it on the line would state a per line
-    /// override of a shared default that does not exist: the synthetic
-    /// linecode belongs to this line alone.
-    fn line_rating(
-        &self,
-        props: &Props,
-        phases: usize,
-        synthesized_linecode: bool,
-    ) -> (Option<Vec<f64>>, Option<String>) {
-        // `emergamps` on a Line reads as that line's `i_max`, one entry for
-        // each phase, the same mapping a linecode uses. An absent property
-        // leaves the linecode rating in control; an unparsable token returns
-        // as text.
-        if synthesized_linecode {
-            return (None, None);
-        }
-        let Some(v) = props.get("emergamps") else {
-            return (None, None);
-        };
-        match v.to_f64(Some(self.vars)) {
-            Ok(amps) => (Some(vec![amps; phases]), None),
-            Err(_) => (None, Some(v.text.clone())),
-        }
-    }
-
-    /// A line without `linecode=` carries inline or default impedance;
-    /// materialize it as a linecode named `_line_<name>` in the line's own
-    /// length units. Malformed matrix texts return for the line's extras.
-    fn synthesize_linecode(
-        &mut self,
-        props: &Props,
-        phases: usize,
-        length_factor: f64,
-        line_name: &str,
-    ) -> (String, Vec<(&'static str, String)>) {
-        let z = self.impedance_matrices(
-            props,
-            phases,
-            "line",
-            line_name,
-            dd::line::R1,
-            dd::line::X1,
-            dd::line::R0,
-            dd::line::X0,
-            dd::line::C1_NF,
-            dd::line::C0_NF,
-        );
-        if z.all_default {
-            self.defaulted("line", line_name, "r1");
-            self.defaulted("line", line_name, "x1");
-        }
-        let b_half = scale_mat(
-            &z.c_nf,
-            std::f64::consts::TAU * self.net.base_frequency() * 1e-9 / length_factor / 2.0,
-        );
-        let zero = vec![vec![0.0; phases]; phases];
-        let amps = self.f64_or(props, "emergamps", "line", line_name, dd::line::EMERGAMPS);
-        let i_max = Some(vec![amps; phases]);
-        let name = format!("_line_{line_name}");
-        self.net.line_codes_mut().push(DistLineCode {
-            name: name.clone(),
-            n_conductors: phases,
-            r_series: scale_mat(&z.r, 1.0 / length_factor),
-            x_series: scale_mat(&z.x, 1.0 / length_factor),
-            g_from: zero.clone(),
-            b_from: b_half.clone(),
-            g_to: zero,
-            b_to: b_half,
-            i_max,
-            s_max: None,
-            source: None,
-            extras: Extras::new(),
-        });
-        (name, z.malformed)
     }
 
     // ----- load ----------------------------------------------------------
@@ -2214,49 +1744,34 @@ impl Reader<'_> {
 
     fn swtcontrol(&mut self, obj: &RawObject) {
         let props = Props::new(obj);
-        let Some(target) = props.get("switchedobj").map(|v| v.text.clone()) else {
+        let target = props.get("switchedobj").map_or("", |v| v.text.as_str());
+        let line_name = target.split_once('.').map_or(target, |(_, name)| name);
+        if !self
+            .net
+            .lines()
+            .iter()
+            .any(|line| line.name.eq_ignore_ascii_case(line_name))
+        {
             self.warn(
                 &C::READ_DSS_REFERENCE_DROPPED,
-                format!("swtcontrol {}: no SwitchedObj; ignored", obj.name),
-            );
-            return;
-        };
-        // Element references compare class names case insensitively, like
-        // every dss identifier.
-        let line_name = match target.split_once('.') {
-            Some((class, rest)) if class.eq_ignore_ascii_case("line") => rest,
-            _ => target.as_str(),
-        };
-        // The present setting follows the last `action`/`state` assignment in
-        // source order; `normal` applies only when neither was written.
-        let mut open = None;
-        for p in &obj.props {
-            match p.name.as_deref() {
-                Some("action" | "state") => {
-                    open = Some(p.value.text.to_ascii_lowercase().starts_with('o'));
-                }
-                Some("normal") if open.is_none() => {
-                    open = Some(p.value.text.to_ascii_lowercase().starts_with('o'));
-                }
-                _ => {}
-            }
-        }
-        let open = open.unwrap_or(false);
-        match self
-            .net
-            .switches_mut()
-            .iter_mut()
-            .find(|s| s.name.eq_ignore_ascii_case(line_name))
-        {
-            Some(sw) => sw.open = open,
-            None => self.warn(
-                &C::READ_DSS_REFERENCE_DROPPED,
                 format!(
-                    "swtcontrol {}: switched object `{target}` is not a switch line",
-                    obj.name
+                    "swtcontrol {}: switched object `{target}` has no typed line",
+                    obj.name,
                 ),
-            ),
+            );
         }
+        if props.get("state").is_some() {
+            self.warn(&C::READ_DSS_LINE_UNRESOLVED, format!(
+                "swtcontrol {}: explicit State changes line terminals; fixed open/close state lowering is unfinished", obj.name,
+            ));
+        } else {
+            self.warn(&C::READ_DSS_RETAINED_SOURCE_ONLY, format!(
+                "swtcontrol {}: active control execution is excluded; Action and Normal do not set the initial line state, so its fixed circuit state is retained", obj.name,
+            ));
+        }
+        self.net
+            .untyped_objects_mut()
+            .push(UntypedObject::from(obj));
     }
 
     fn regcontrol(&mut self, obj: &RawObject) {
@@ -2521,19 +2036,6 @@ struct LoadPower {
     pf_written: bool,
 }
 
-/// Series impedance of a linecode or inline line, per source length unit.
-struct SeriesImpedance {
-    r: ConductorMatrix,
-    x: ConductorMatrix,
-    c_nf: ConductorMatrix,
-    /// No matrix or sequence property was written at all.
-    all_default: bool,
-    /// Matrix properties written but unparseable as n x n, with their raw
-    /// text (the engine rejects the whole script; the reader keeps them
-    /// in extras).
-    malformed: Vec<(&'static str, String)>,
-}
-
 #[derive(Clone)]
 struct WindingRaw {
     bus: Option<BusSpec>,
@@ -2605,6 +2107,20 @@ mod tests {
     }
 
     #[test]
+    fn terminal_commands_cannot_silently_leave_the_circuit_closed() {
+        for command in ["Open", "Close"] {
+            let source = powerio_core::Source::from_memory(
+                "state.dss",
+                format!("New Circuit.c\nNew Line.l bus1=sourcebus bus2=load\n{command} Line.l 1 2")
+                    .into_bytes(),
+            )
+            .unwrap();
+            let mut diagnostics = crate::collect::Diagnostics::new();
+            assert!(parse_dss_collecting(&source, &mut diagnostics).is_err());
+        }
+    }
+
+    #[test]
     fn vsource_magnitude_is_the_polygon_chord() {
         // VSource.cpp ~999-1002: one phase takes basekv outright, n > 1
         // divides by 2 sin(pi/n); sqrt(3) is the n = 3 special case.
@@ -2615,9 +2131,10 @@ mod tests {
         );
         let two = &net.sources()[0];
         assert!((two.v_magnitude[0] - 12.47e3 * 1.05 / 2.0).abs() < 1e-9);
-        // Spacing is -360/n degrees: the second phase of a 2 phase source
-        // wraps to +pi.
-        assert!((two.v_angle[1] - std::f64::consts::PI).abs() < 1e-12);
+        // The second phase is opposite the first; either sign of pi denotes
+        // the same phasor at the argument branch cut.
+        assert!((two.v_angle[1].cos() + 1.0).abs() < 1e-12);
+        assert!(two.v_angle[1].sin().abs() < 1e-12);
         let four = &net.sources()[1];
         let chord = 2.0 * (std::f64::consts::PI / 4.0).sin();
         assert!((four.v_magnitude[0] - 12.47e3 / chord).abs() < 1e-9);
@@ -2658,10 +2175,10 @@ mod tests {
 
     #[test]
     fn unitless_linecode_is_per_line_unit() {
-        // The mirror case: a unitless linecode is per line length unit,
-        // so the raw length carries and the total is again 1 ohm.
+        // A unitless linecode is per line length unit. Physical length is
+        // retained in metres while the total remains 1 ohm.
         let (r, len) = r_and_length("", " length=2 units=km");
-        assert!((len - 2.0).abs() < 1e-12);
+        assert!((len - 2000.0).abs() < 1e-12);
         assert!((r * len - 1.0).abs() < 1e-12);
     }
 
@@ -2681,7 +2198,9 @@ mod tests {
         );
         let line = net.lines().iter().find(|l| l.name == "l1").unwrap();
         let code = net.linecode(&line.linecode).unwrap();
-        assert!((line.length - 500.0).abs() < 1e-9);
+        // The later sequence setters reset native units. The typed line is
+        // a one-metre electrical equivalent, with no inferred distance.
+        assert!((line.length - 1.0).abs() < 1e-9);
         assert!((code.r_series[0][0] * line.length - 0.25).abs() < 1e-12);
         assert!((code.x_series[0][0] * line.length - 0.1).abs() < 1e-12);
     }
@@ -2689,7 +2208,7 @@ mod tests {
     #[test]
     fn no_units_anywhere_takes_the_raw_product() {
         let (r, len) = r_and_length("", " length=2");
-        assert!((len - 2.0).abs() < 1e-12);
+        assert!((len - 1.0).abs() < 1e-12);
         assert!((r * len - 1.0).abs() < 1e-12);
     }
 
@@ -2899,50 +2418,33 @@ mod tests {
     }
 
     #[test]
-    fn malformed_matrix_warns_and_keeps_text() {
-        // The engine rejects a bad rmatrix outright; the reader keeps
-        // going on sequence values but must not call the property
-        // defaulted, and the text must survive in extras.
-        let net = parse_dss_str(
-            "New Circuit.c\n\
-             New Linecode.bad nphases=2 rmatrix=(1 2 3) units=m\n\
-             New Line.l2 bus1=a.1.2 bus2=b.1.2 phases=2 rmatrix=(bogus) length=10",
-        );
-        assert!(has_warning(&net, "linecode bad") && has_warning(&net, "rmatrix"));
+    fn malformed_matrix_refuses_a_partial_electrical_network() {
+        let source = powerio_core::Source::from_memory(
+            "bad.dss",
+            b"New Circuit.c\nNew Line.l2 bus1=a.1.2 bus2=b.1.2 phases=2 rmatrix=(bogus) length=10"
+                .as_slice(),
+        )
+        .unwrap();
+        let error = crate::parse(source).unwrap_err();
         assert!(
-            !net.defaulted()
-                .get("linecode.bad")
-                .is_some_and(|f| f.contains(&"rmatrix"))
-        );
-        let code = net.linecode("bad").unwrap();
-        assert!(
-            code.extras
-                .get("rmatrix")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|s| s.contains("1 2 3"))
-        );
-        // Sequence defaults filled in: diag (2 r1 + r0) / 3.
-        let diag = (2.0 * dd::line::R1 + dd::line::R0) / 3.0;
-        assert!((code.r_series[0][0] - diag).abs() < 1e-12);
-        // The inline line path lands the text on the line's extras.
-        assert!(has_warning(&net, "line l2"));
-        let l2 = net.lines().iter().find(|l| l.name == "l2").unwrap();
-        assert!(
-            l2.extras
-                .get("rmatrix")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|s| s.contains("bogus"))
+            error
+                .diagnostics()
+                .iter()
+                .any(|d| d.code() == C::READ_DSS_LINE_UNRESOLVED.code)
         );
     }
 
     #[test]
-    fn switchedobj_class_prefix_is_case_insensitive() {
+    fn switch_action_does_not_change_fixed_line_state() {
         let net = parse_dss_str(
             "New Circuit.c\n\
              New Line.sw1 bus1=a.1 bus2=b.1 phases=1 switch=y\n\
              New SwtControl.s1 SwitchedObj=LINE.sw1 Action=open",
         );
-        assert!(net.switches()[0].open);
+        assert_eq!(net.switches().as_slice(), []);
+        assert!(net.lines().iter().any(|line| line.name == "sw1"));
+        assert!(has_warning(&net, "active control execution is excluded"));
+        assert!(!has_warning(&net, "has no typed line"));
     }
 
     #[test]
@@ -2996,27 +2498,27 @@ mod tests {
         // Untrusted string input must not read local files: an in-memory
         // source has no filesystem, so an absolute include is refused as an
         // escape and a relative one finds no named buffer. Both are loud.
-        let net = parse_dss_str(
-            "New Circuit.c basekv=12.47\nRedirect /etc/passwd\nBuscoords /etc/hosts\n\
-             Redirect extra.dss\n",
-        );
+        let input = "New Circuit.c basekv=12.47\nRedirect /etc/passwd\nBuscoords /etc/hosts\n\
+             Redirect extra.dss\n";
+        let error =
+            crate::parse(powerio_core::Source::from_memory("case.dss", input.as_bytes()).unwrap())
+                .unwrap_err();
+        let warnings = crate::diagnostics::render_diagnostics(error.diagnostics());
         assert_eq!(
-            net.warnings
+            warnings
                 .iter()
                 .filter(|w| w.contains("READ.DSS.INCLUDE_REFUSED"))
                 .count(),
             2,
-            "absolute includes are refused as escapes: {:?}",
-            net.warnings
+            "absolute includes are refused as escapes: {warnings:?}"
         );
         assert_eq!(
-            net.warnings
+            warnings
                 .iter()
                 .filter(|w| w.contains("READ.DSS.INCLUDE_LOAD_FAILED"))
                 .count(),
             1,
-            "a relative include finds no named buffer: {:?}",
-            net.warnings
+            "a relative include finds no named buffer: {warnings:?}"
         );
     }
 

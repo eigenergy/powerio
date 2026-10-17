@@ -44,11 +44,13 @@ pub fn require_electrical_readiness(
 pub fn require_earth_referenced_sources(
     net: &MulticonductorNetwork,
 ) -> Result<(), powerio_core::Error> {
-    if let Some(source) = net
-        .sources()
-        .iter()
-        .find(|s| s.reference_terminal.is_some())
-    {
+    if let Some(source) = net.sources().iter().find(|s| {
+        s.reference_terminal.as_ref().is_some_and(|reference| {
+            !net.buses()
+                .iter()
+                .any(|bus| bus.id.eq_ignore_ascii_case(&s.bus) && bus.grounded.contains(reference))
+        })
+    }) {
         return Err(powerio_core::Error::new(
             &crate::diagnostics::codes::BUILD_DIST_ELECTRICAL_INCOMPLETE,
             format!(
@@ -182,20 +184,7 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
             value.to_owned()
         }
     };
-    for object in net.untyped_objects() {
-        if object.class.eq_ignore_ascii_case("line")
-            && object.props.iter().any(|(key, _)| {
-                key.as_ref().is_some_and(|key| {
-                    DEFERRED_GEOMETRY_KEYS
-                        .iter()
-                        .any(|candidate| key.eq_ignore_ascii_case(candidate))
-                })
-            })
-        {
-            report.block("READINESS.DSS.GEOMETRY_DEFERRED", &object.name,
-                "source line geometry has no calculated conductor impedances or resolved terminal map");
-        }
-    }
+    audit_untyped(net, &mut report);
     for (element, fields) in net.defaulted() {
         report.warn(
             "READINESS.SOURCE.DEFAULTED",
@@ -266,6 +255,42 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
     }
 
     report
+}
+
+fn audit_untyped(net: &MulticonductorNetwork, report: &mut ElectricalReadiness) {
+    for object in net.untyped_objects() {
+        let explicitly_disabled = object
+            .props
+            .iter()
+            .rev()
+            .find(|(key, _)| {
+                key.as_ref()
+                    .is_some_and(|key| key.eq_ignore_ascii_case("enabled"))
+            })
+            .is_some_and(|(_, value)| {
+                value.eq_ignore_ascii_case("no") || value.eq_ignore_ascii_case("false")
+            });
+        if object.class.eq_ignore_ascii_case("vsource") && !explicitly_disabled {
+            report.block("READINESS.DSS.SOURCE_UNRESOLVED", &object.name,
+                "untyped voltage source must remain explicitly disabled; enabling it requires electrical source conversion");
+        }
+        if object.class.eq_ignore_ascii_case("line")
+            && !explicitly_disabled
+            && object.props.iter().any(|(key, _)| {
+                key.as_ref().is_some_and(|key| {
+                    DEFERRED_GEOMETRY_KEYS
+                        .iter()
+                        .any(|candidate| key.eq_ignore_ascii_case(candidate))
+                })
+            })
+        {
+            report.block("READINESS.DSS.GEOMETRY_DEFERRED", &object.name,
+                "source line geometry has no calculated conductor impedances or resolved terminal map");
+        } else if object.class.eq_ignore_ascii_case("line") && !explicitly_disabled {
+            report.block("READINESS.DSS.LINE_UNRESOLVED", &object.name,
+                "untyped line must remain explicitly disabled; enabling it requires electrical line conversion");
+        }
+    }
 }
 
 fn audit_lines(
@@ -453,6 +478,62 @@ fn audit_square_matrix(
 mod tests {
     use super::*;
     use crate::{DistBus, DistLine, DistLineCode, Extras, MulticonductorNetwork};
+
+    #[test]
+    fn inactive_source_metadata_cannot_be_reenabled_without_electrical_conversion() {
+        let mut net = MulticonductorNetwork::new();
+        net.untyped_objects_mut()
+            .push(crate::model::UntypedObject::new(
+                "vsource",
+                "off",
+                vec![(Some("enabled".into()), "no".into())],
+            ));
+        assert!(audit_electrical_readiness(&net).is_ready());
+        net.untyped_objects_mut()[0]
+            .props
+            .push((Some("enabled".into()), "yes".into()));
+        assert!(!audit_electrical_readiness(&net).is_ready());
+        net.untyped_objects_mut()[0].props.clear();
+        assert!(!audit_electrical_readiness(&net).is_ready());
+    }
+
+    #[test]
+    fn grounded_voltage_reference_is_earth_but_a_floating_reference_is_not() {
+        let mut net = MulticonductorNetwork::new();
+        let mut bus = DistBus::new("feed", vec!["1".into(), "4".into()]);
+        bus.grounded.push("4".into());
+        net.buses_mut().push(bus);
+        let mut source =
+            crate::VoltageSource::new("s", "feed", vec!["1".into()], vec![240.0], vec![0.0]);
+        source.reference_terminal = Some("4".into());
+        net.sources_mut().push(source);
+        assert!(require_earth_referenced_sources(&net).is_ok());
+        net.buses_mut()[0].grounded.clear();
+        assert!(require_earth_referenced_sources(&net).is_err());
+    }
+
+    #[test]
+    fn inactive_line_metadata_cannot_be_reenabled_without_electrical_conversion() {
+        let mut net = MulticonductorNetwork::new();
+        net.untyped_objects_mut()
+            .push(crate::model::UntypedObject::new(
+                "line",
+                "off",
+                vec![(Some("enabled".into()), "no".into())],
+            ));
+        assert!(audit_electrical_readiness(&net).is_ready());
+        net.untyped_objects_mut()[0]
+            .props
+            .push((Some("enabled".into()), "yes".into()));
+        let report = audit_electrical_readiness(&net);
+        assert!(
+            report
+                .blockers()
+                .any(|f| f.code == "READINESS.DSS.LINE_UNRESOLVED")
+        );
+        net.untyped_objects_mut()[0].props.clear();
+        assert!(!audit_electrical_readiness(&net).is_ready());
+    }
 
     fn network_with_line(extras: Extras) -> MulticonductorNetwork {
         let mut net = MulticonductorNetwork::new();

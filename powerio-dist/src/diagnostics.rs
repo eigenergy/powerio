@@ -59,6 +59,12 @@ pub mod codes {
             "a property value outside the modeled set was read as the nearest one";
         READ_DSS_OBJECT_UNTYPED = "READ.DSS.OBJECT_UNTYPED", Warning,
             "an object shape the model does not type yet is kept untyped";
+        READ_DSS_SOURCE_DISABLED = "READ.DSS.SOURCE_DISABLED", Remark,
+            "a disabled source is retained without electrical contributions";
+        READ_DSS_SOURCE_UNRESOLVED = "READ.DSS.SOURCE_UNRESOLVED", Error,
+            "a voltage source is invalid or outside the qualified static profile", category = Data;
+        READ_DSS_LINE_UNRESOLVED = "READ.DSS.LINE_UNRESOLVED", Error,
+            "a line is invalid or outside the qualified static electrical profile", category = Data;
         READ_DSS_PROPERTY_UNKNOWN = "READ.DSS.PROPERTY_UNKNOWN", Warning,
             "a property this reader does not model is kept as written";
         READ_DSS_REFERENCE_DROPPED = "READ.DSS.REFERENCE_DROPPED", Warning,
@@ -82,6 +88,10 @@ pub mod codes {
             "a line names a linecode the case does not declare";
 
         // EMIT.DSS: what the canonical dss writer cannot state.
+        EMIT_DSS_SOURCE_EQUIVALENT = "EMIT.DSS.SOURCE_EQUIVALENT", Remark,
+            "an ideal source is emitted as an exact finite-impedance circuit equivalent";
+        EMIT_DSS_IMPEDANCE_EQUIVALENT = "EMIT.DSS.IMPEDANCE_EQUIVALENT", Remark,
+            "a conductor impedance is emitted as an exact zero-EMF source equivalent";
         EMIT_DSS_FIELD_DROPPED = "EMIT.DSS.FIELD_DROPPED", Warning,
             "a field the dss object model has no property for was dropped";
         EMIT_DSS_RECORD_DROPPED = "EMIT.DSS.RECORD_DROPPED", Warning,
