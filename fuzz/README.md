@@ -10,7 +10,7 @@ structured `Err`, with no panic and no undefined behavior.
 | `pwb`, `pwd` | raw bytes for the PowerWorld binary decoders |
 | `json_classify` | arbitrary bytes for the `.json` classifier and its C entry point; every answer must be a documented family, since a file picker dispatches on it |
 | `stored_module` | the PowerIO IR reader; a document that deserializes must serialize and deserialize again |
-| `cgmes`, `cgmes_zip`, `ucte` | CGMES XML, CGMES ZIP acquisition, and UCTE text |
+| `cgmes`, `cgmes_zip`, `ucte`, `ieee_cdf` | CGMES XML, CGMES ZIP acquisition, UCTE text, and IEEE Common Data Format text |
 | `dss`, `pmd_json` | the distribution readers, which also write the parsed network back and project its graph, so a count cap that a consumer sizes an allocation from is exercised on both sides |
 | `dist_classify` | the distribution `.json` classifier, which runs before any reader cap applies, and the reader and writers it names |
 | `dss_includes`, `dss_includes_fs` | OpenDSS include resolution over in-memory buffers and over a real filesystem tree with an escaping symbolic link |

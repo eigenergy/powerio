@@ -115,3 +115,9 @@ name = "ucte"
 path = "fuzz_targets/ucte.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "ieee_cdf"
+path = "fuzz_targets/ieee_cdf.rs"
+test = false
+bench = false
