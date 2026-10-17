@@ -1182,9 +1182,8 @@ fn sequence_impedance(source: &VoltageSource) -> Option<(f64, f64, f64, f64)> {
             .unwrap_or(0.0);
         Some((self_z, mutual))
     };
-    let ((rs, rm), (xs, xm)) = match (parts("rs"), parts("xs")) {
-        (Some(r), Some(x)) => (r, x),
-        _ => return None,
+    let (Some((rs, rm)), Some((xs, xm))) = (parts("rs"), parts("xs")) else {
+        return None;
     };
     Some((rs - rm, xs - xm, rs + 2.0 * rm, xs + 2.0 * xm))
 }
