@@ -39,6 +39,11 @@ jobs:
           workspaces: fuzz
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
+      # fuzz/ is a detached Cargo workspace. Seed its lockfile with the tested
+      # workspace resolution so yanked-but-locked ZIP 8.6.0 remains resolvable;
+      # Cargo may add the fuzz-only packages without re-resolving that version.
+      - name: Seed fuzz lockfile from workspace
+        run: cp Cargo.lock fuzz/Cargo.lock
       - name: Run every target
         working-directory: fuzz
         run: |
