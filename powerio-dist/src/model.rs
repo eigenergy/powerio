@@ -416,6 +416,23 @@ pub enum DistLoadVoltageModel {
         gamma_p: Vec<f64>,
         gamma_q: Vec<f64>,
     },
+    /// ZIP law with low-voltage current interpolation and high-voltage
+    /// impedance continuation. See [`Self::power_scale`] for the equations.
+    /// Below `v_low_pu` the entire nominal load is constant impedance;
+    /// the dropout curve applies only above that threshold.
+    BoundedZip {
+        v_nom: Vec<f64>,
+        alpha_z: Vec<f64>,
+        alpha_i: Vec<f64>,
+        alpha_p: Vec<f64>,
+        beta_z: Vec<f64>,
+        beta_i: Vec<f64>,
+        beta_p: Vec<f64>,
+        v_low_pu: f64,
+        v_min_pu: f64,
+        v_max_pu: f64,
+        cutoff_pu: f64,
+    },
 }
 
 impl Default for DistLoadVoltageModel {
@@ -432,7 +449,8 @@ impl DistLoadVoltageModel {
             | Self::ConstantCurrent { v_nom }
             | Self::ConstantImpedance { v_nom }
             | Self::Zip { v_nom, .. }
-            | Self::Exponential { v_nom, .. } => v_nom,
+            | Self::Exponential { v_nom, .. }
+            | Self::BoundedZip { v_nom, .. } => v_nom,
         }
     }
 }

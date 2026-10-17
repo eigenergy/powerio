@@ -162,6 +162,8 @@ fn ir_version_2_schemas_only_add() {
                         "{earlier}: type {type_name} changed"
                     );
                 }
+            } else if name == "DistLoadVoltageModel" {
+                assert_additive_load_law(earlier, definition, &current_defs[name]);
             } else if name == "MulticonductorNetwork" {
                 // Component geography uses a new mandatory nested type tag.
                 // The legacy network branch and the nested electrical body
@@ -265,4 +267,51 @@ fn every_powerio_ir_property_is_typed() {
     let mut bad = Vec::new();
     walk(&schema, "$", &mut bad);
     assert!(bad.is_empty(), "untyped properties: {bad:?}");
+}
+
+fn assert_additive_load_law(
+    earlier: &str,
+    published: &serde_json::Value,
+    current: &serde_json::Value,
+) {
+    // A new discriminator is an additive electrical law, not new
+    // optional fields on a published law that old readers ignore.
+    // Preserve every old variant exactly and pin the sole addition.
+    let old = published["oneOf"].as_array().unwrap();
+    let new = current["oneOf"].as_array().unwrap();
+    assert_eq!(new.len(), old.len() + 1);
+    for variant in old {
+        let tag = &variant["properties"]["model"]["const"];
+        assert_eq!(
+            new.iter()
+                .find(|candidate| candidate["properties"]["model"]["const"] == *tag),
+            Some(variant),
+            "{earlier}: load law {tag} changed"
+        );
+    }
+    let bounded = new
+        .iter()
+        .find(|variant| variant["properties"]["model"]["const"] == "bounded_zip")
+        .unwrap();
+    assert!(
+        !old.iter()
+            .any(|variant| variant["properties"]["model"]["const"] == "bounded_zip")
+    );
+    assert_eq!(
+        bounded["required"],
+        serde_json::json!([
+            "model",
+            "v_nom",
+            "alpha_z",
+            "alpha_i",
+            "alpha_p",
+            "beta_z",
+            "beta_i",
+            "beta_p",
+            "v_low_pu",
+            "v_min_pu",
+            "v_max_pu",
+            "cutoff_pu"
+        ])
+    );
 }

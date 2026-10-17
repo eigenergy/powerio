@@ -673,6 +673,48 @@ impl Reader<'_> {
         s
     }
 
+    fn load_voltage_model(
+        &self,
+        props: &Props<'_>,
+        phases: usize,
+        model: i64,
+        v_nom: Vec<f64>,
+        (v_low_pu, v_min_pu, v_max_pu): (f64, f64, f64),
+    ) -> DistLoadVoltageModel {
+        if model == 2 {
+            return DistLoadVoltageModel::ConstantImpedance { v_nom };
+        }
+        if !matches!(model, 1 | 5 | 8) {
+            return DistLoadVoltageModel::ConstantPower { v_nom };
+        }
+        let coefficients = match model {
+            1 => vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+            5 => vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            _ => props
+                .get("zipv")
+                .and_then(|v| v.to_vector(Some(self.vars)).ok())
+                .unwrap_or_default(),
+        };
+        let repeated = |index| {
+            coefficients
+                .get(index)
+                .map_or_else(Vec::new, |v| vec![*v; phases])
+        };
+        DistLoadVoltageModel::BoundedZip {
+            v_nom,
+            alpha_z: repeated(0),
+            alpha_i: repeated(1),
+            alpha_p: repeated(2),
+            beta_z: repeated(3),
+            beta_i: repeated(4),
+            beta_p: repeated(5),
+            v_low_pu,
+            v_min_pu,
+            v_max_pu,
+            cutoff_pu: coefficients.get(6).copied().unwrap_or(0.0),
+        }
+    }
+
     fn load(&mut self, obj: &RawObject) -> DistLoad {
         let props = Props::new(obj);
         let phases = self.usize_or(&props, "phases", "load", &obj.name, dd::load::PHASES);
@@ -731,6 +773,15 @@ impl Reader<'_> {
         // fields hold explicit power per phase. phases rides too: a 2
         // phase delta load also has 3 conductors, so the terminal map
         // alone cannot reconstruct `phases=`.
+        let (v_low_pu, v_min_pu, v_max_pu) = if matches!(model, 1 | 5 | 8) {
+            (
+                self.f64_prop(props.get("vlowpu")).unwrap_or(0.5),
+                self.f64_prop(props.get("vminpu")).unwrap_or(0.95),
+                self.f64_prop(props.get("vmaxpu")).unwrap_or(1.05),
+            )
+        } else {
+            (0.5, 0.95, 1.05)
+        };
         let mut extras = extras_from_leftovers(&props);
         self.stash_kv_and_phases(&props, &mut extras, kv, phases);
         if let Some(pf) = pf_source {
@@ -745,33 +796,8 @@ impl Reader<'_> {
             kv * 1e3
         };
         let v_nom = vec![v_phase; phases];
-        let zipv = props
-            .get("zipv")
-            .and_then(|v| v.to_vector(Some(self.vars)).ok())
-            .unwrap_or_default();
-        let voltage_model = match model {
-            2 => DistLoadVoltageModel::ConstantImpedance { v_nom },
-            5 => DistLoadVoltageModel::ConstantCurrent { v_nom },
-            8 if zipv.len() >= 6 => DistLoadVoltageModel::Zip {
-                v_nom,
-                alpha_z: vec![zipv[0]; phases],
-                alpha_i: vec![zipv[1]; phases],
-                alpha_p: vec![zipv[2]; phases],
-                beta_z: vec![zipv[3]; phases],
-                beta_i: vec![zipv[4]; phases],
-                beta_p: vec![zipv[5]; phases],
-            },
-            8 => DistLoadVoltageModel::Zip {
-                v_nom,
-                alpha_z: Vec::new(),
-                alpha_i: Vec::new(),
-                alpha_p: Vec::new(),
-                beta_z: Vec::new(),
-                beta_i: Vec::new(),
-                beta_p: Vec::new(),
-            },
-            _ => DistLoadVoltageModel::ConstantPower { v_nom },
-        };
+        let voltage_model =
+            self.load_voltage_model(&props, phases, model, v_nom, (v_low_pu, v_min_pu, v_max_pu));
         DistLoad {
             name: obj.name.clone(),
             bus: spec.name,
@@ -2134,7 +2160,11 @@ mod tests {
         // The second phase is opposite the first; either sign of pi denotes
         // the same phasor at the argument branch cut.
         assert!((two.v_angle[1].cos() + 1.0).abs() < 1e-12);
-        assert!(two.v_angle[1].sin().abs() < 1e-12);
+        assert!(
+            (two.v_angle[1].sin() - (180.0 / crate::dss::source::NATIVE_DEGREES_PER_RADIAN).sin())
+                .abs()
+                < 1e-12
+        );
         let four = &net.sources()[1];
         let chord = 2.0 * (std::f64::consts::PI / 4.0).sin();
         assert!((four.v_magnitude[0] - 12.47e3 / chord).abs() < 1e-9);

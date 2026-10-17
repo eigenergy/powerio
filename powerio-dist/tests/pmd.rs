@@ -1306,7 +1306,8 @@ fn dss_source_impedance_is_applied_once_through_pmd() {
         source["xs"][0][0].as_f64().unwrap(),
     );
     let actual = emf * 24.0 / (24.0 + z + source_z);
-    let expected = Complex64::new(240.0, 0.0) * 24.0 / Complex64::new(27.0, 4.0);
+    let expected =
+        Complex64::from_polar(240.0, 360.0 / 57.295_779_51) * 24.0 / Complex64::new(27.0, 4.0);
     assert!((actual - expected).norm() < 1e-10);
 }
 

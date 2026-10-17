@@ -7857,6 +7857,18 @@ pub unsafe extern "C" fn pio_calculation_instance_initial_point(
     }
 }
 
+fn require_legacy_load_voltage_model(
+    model: &powerio_dist::DistLoadVoltageModel,
+) -> Result<(), *mut PioError> {
+    if matches!(model, powerio_dist::DistLoadVoltageModel::BoundedZip { .. }) {
+        return Err(boundary_error(
+            &codes::REQUEST_CAPI_TYPE_MISMATCH,
+            "legacy load view cannot describe voltage-band transitions or dropout",
+        ));
+    }
+    Ok(())
+}
+
 fn dist_load_voltage_model_name(model: &powerio_dist::DistLoadVoltageModel) -> &'static str {
     match model {
         powerio_dist::DistLoadVoltageModel::ConstantPower { .. } => "constant_power",
@@ -7906,6 +7918,7 @@ pub unsafe extern "C" fn pio_mc_ac_pf_instance_load_at(
                     format!("prescribed load index {index} is out of range"),
                 )
             })?;
+            require_legacy_load_voltage_model(&load.voltage_model)?;
             *require_output(output, "output")? = PioPrescribedTerminalPowerView {
                 load: PioStringView::new(&load.load),
                 terminal_count: load.terminals.len(),
@@ -7952,6 +7965,7 @@ pub unsafe extern "C" fn pio_mc_ac_pf_instance_load_terminal_at(
                     format!("prescribed load index {load_index} is out of range"),
                 )
             })?;
+            require_legacy_load_voltage_model(&load.voltage_model)?;
             let terminal = load.terminals.get(terminal_index).ok_or_else(|| {
                 boundary_error(
                     &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
@@ -15810,6 +15824,7 @@ pub unsafe extern "C" fn pio_multiconductor_network_load_at(
                     format!("multiconductor load index {index} is out of range"),
                 )
             })?;
+            require_legacy_load_voltage_model(&load.voltage_model)?;
             *require_output(output, "output")? = multiconductor_load_view(load);
             Ok(true)
         })
@@ -20281,6 +20296,56 @@ mod tests {
             );
             pio_error_release(null_error);
             pio_multiconductor_network_release(retained);
+        }
+    }
+
+    #[test]
+    fn legacy_load_views_refuse_unrepresented_voltage_bands() {
+        let source = powerio_core::Source::from_memory("load.dss", b"New Circuit.c phases=1 bus1=b.1 basekv=.24\nNew Load.l phases=1 bus1=b.1.0 kv=.24 kw=1 kvar=.5 model=1\n".to_vec()).unwrap();
+        let parsed = powerio_dist::parse(source).unwrap();
+        let pf = powerio_prob::McAcPfInstance::from_network(parsed.value().clone()).unwrap();
+        unsafe {
+            let module = module_handle(powerio::PioModule::new(PioValue::from(pf)));
+            let value = pio_module_value(module);
+            let mut error = std::ptr::null_mut();
+            let instance = pio_value_mc_ac_pf_instance(value, &mut error);
+            assert!(!instance.is_null());
+            let network = pio_calculation_instance_multiconductor_network(instance, &mut error);
+            assert!(!network.is_null());
+            let mut load = std::mem::MaybeUninit::<PioMulticonductorLoadView>::uninit();
+            assert!(!pio_multiconductor_network_load_at(
+                network,
+                0,
+                load.as_mut_ptr(),
+                &mut error
+            ));
+            assert!(error_text(error).contains("voltage-band"));
+            pio_error_release(error);
+            error = std::ptr::null_mut();
+            let mut prescribed = std::mem::MaybeUninit::<PioPrescribedTerminalPowerView>::uninit();
+            assert!(!pio_mc_ac_pf_instance_load_at(
+                instance,
+                0,
+                prescribed.as_mut_ptr(),
+                &mut error
+            ));
+            assert!(error_text(error).contains("voltage-band"));
+            pio_error_release(error);
+            error = std::ptr::null_mut();
+            let mut terminal = std::mem::MaybeUninit::<PioTerminalPowerView>::uninit();
+            assert!(!pio_mc_ac_pf_instance_load_terminal_at(
+                instance,
+                0,
+                0,
+                terminal.as_mut_ptr(),
+                &mut error
+            ));
+            assert!(error_text(error).contains("voltage-band"));
+            pio_error_release(error);
+            pio_multiconductor_network_release(network);
+            pio_calculation_instance_release(instance);
+            pio_value_release(value);
+            pio_module_release(module);
         }
     }
 

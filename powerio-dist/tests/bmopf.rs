@@ -1099,7 +1099,6 @@ fn bmopf_coordinates_keep_schema_valid_geometry_after_mutation() {
 
 #[test]
 fn opendss_split_sources_preserve_separate_impedances_in_bmopf() {
-    let third = 2.0 * std::f64::consts::FRAC_PI_3;
     for count in [2, 3] {
         let mut text = String::from(
             "Clear\nNew Circuit.split phases=1 basekv=7.2 angle=0 bus1=SourceBus.1 r1=1 x1=2 r0=1 x0=2\n\
@@ -1123,7 +1122,17 @@ fn opendss_split_sources_preserve_separate_impedances_in_bmopf() {
             let vs = again.sources().iter().find(|s| s.name == *name).unwrap();
             assert_eq!(vs.v_magnitude.len(), 1);
             assert!((vs.v_magnitude[0] - 7200.0).abs() < 1e-10);
-            assert!((vs.v_angle[0] - [0.0, -third, third][i]).abs() < 1e-12);
+            assert!(
+                (vs.v_angle[0]
+                    - net
+                        .sources()
+                        .iter()
+                        .find(|s| s.name == *name)
+                        .unwrap()
+                        .v_angle[0])
+                    .abs()
+                    < 1e-12
+            );
             let line = again.lines().iter().find(|l| l.bus_from == vs.bus).unwrap();
             assert_eq!(line.terminal_map_from, vs.terminal_map);
             assert!(line.bus_to.eq_ignore_ascii_case("sourcebus"));

@@ -74,6 +74,7 @@ pub(super) fn validate(net: &MulticonductorNetwork) -> Result<(), String> {
             }
         }
     }
+    loads::validate(net)?;
     for code in net.line_codes().iter().filter(|c| asymmetric(c)) {
         if sequence_impedance(code, 1.0).is_none() {
             return Err(format!(
@@ -241,7 +242,7 @@ impl DssWriter {
                 self.line_out(&format!(
                     "{head} phases=1 bus1={name}.1 bus2={reference} basekv={} pu={} angle={} frequency={} basefreq={} r1=1 x1=0 r0=1 x0=0",
                     num(if magnitude == 0.0 { 0.001 } else { magnitude / 1000.0 }),
-                    i32::from(magnitude != 0.0), num(angle.to_degrees()),
+                    i32::from(magnitude != 0.0), num(angle * crate::dss::source::NATIVE_DEGREES_PER_RADIAN - 360.0),
                     num(net.base_frequency()), num(net.base_frequency()),
                 ));
                 self.line_out(&format!(

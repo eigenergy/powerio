@@ -146,8 +146,8 @@ fn ieee13_matches_the_engine_bus_map() {
     assert_eq!(source_impedance.bus_to, "SourceBus");
     let vln = 115_000.0 / 3f64.sqrt() * 1.0001;
     assert!((vs.v_magnitude[0] - vln).abs() < 1e-6);
-    assert!((vs.v_angle[0] - 30f64.to_radians()).abs() < 1e-12);
-    assert!((vs.v_angle[1] - (-90f64).to_radians()).abs() < 1e-12);
+    assert!((vs.v_angle[0].sin() - (390.0_f64 / 57.295_779_51).sin()).abs() < 1e-12);
+    assert!((vs.v_angle[1].sin() - (270.0_f64 / 57.295_779_51).sin()).abs() < 1e-12);
 
     // Line 650632: mtx601 (ohm per mile), 2000 ft. r11 = 0.3465/1609.344
     // ohm/m; length = 2000*0.3048 m. Product must match the engine.

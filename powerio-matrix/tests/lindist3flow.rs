@@ -474,13 +474,38 @@ fn opendss_lindist_oracle_fixture() -> (MulticonductorNetwork, serde_json::Value
 #[test]
 fn opendss_oracle_bounds_the_lossless_linear_voltage_approximation() {
     let (network, oracle) = opendss_lindist_oracle_fixture();
-    // This prerequisite retains finite source impedance. The later bounded
-    // load profile adds its own explicit nominal approximation policy.
+    // The native load retains its voltage band. Nominal linearization is an
+    // explicit approximation, never a change made by the reader or strict LP.
+    assert!(
+        LinDist3FlowOpfInstance::from_network(
+            network.clone(),
+            LinDist3FlowBuildOptions::default().with_required_neutral_provenance(true),
+        )
+        .is_err()
+    );
     let instance = LinDist3FlowOpfInstance::from_network(
-        network,
-        LinDist3FlowBuildOptions::default().with_required_neutral_provenance(true),
+        network.clone(),
+        LinDist3FlowBuildOptions::default()
+            .with_required_neutral_provenance(true)
+            .with_unsupported(powerio_prob::LinDist3FlowUnsupported::Approximate),
     )
     .unwrap();
+    let action = instance
+        .preparation()
+        .actions
+        .iter()
+        .find(|action| {
+            action.kind == powerio_dist::LinDist3FlowPreparationActionKind::LoadApproximated
+        })
+        .unwrap();
+    assert_eq!(
+        action.details["source_voltage_model"]["model"],
+        "bounded_zip"
+    );
+    assert!(matches!(
+        instance.source_instance().network().loads()[0].voltage_model,
+        powerio_dist::DistLoadVoltageModel::BoundedZip { .. }
+    ));
     let form = build_lindist3flow_standard_form(&instance).unwrap();
 
     // Native Model=Ideal still has finite impedance. Its independent YPrim

@@ -1,0 +1,165 @@
+#![allow(clippy::float_cmp)]
+mod helpers;
+use helpers::emit_value;
+use powerio_core::Source;
+use powerio_dist::{DistLoadVoltageModel, DistTargetFormat};
+
+fn parse(text: &str) -> powerio_core::PioModule<powerio_dist::MulticonductorNetwork> {
+    powerio_dist::parse(Source::from_memory("load.dss", text.as_bytes().to_vec()).unwrap()).unwrap()
+}
+
+#[test]
+fn native_limits_are_typed_and_edits_override_source_extras() {
+    let mut module = parse(
+        "New Circuit.c phases=1 basekv=0.24\nNew Load.l phases=1 bus1=b.1.0 kv=0.24 kw=1 kvar=0.5 model=1\n",
+    );
+    let load = &mut module.value_mut().loads_mut()[0];
+    let DistLoadVoltageModel::BoundedZip {
+        v_low_pu,
+        v_min_pu,
+        v_max_pu,
+        ..
+    } = &mut load.voltage_model
+    else {
+        panic!("missing typed voltage law")
+    };
+    assert_eq!((*v_low_pu, *v_min_pu, *v_max_pu), (0.5, 0.95, 1.05));
+    *v_min_pu = 0.9;
+    *v_max_pu = 1.1;
+    load.extras.insert("vminpu".into(), 0.8.into());
+    let emitted = emit_value(module.value(), DistTargetFormat::Dss);
+    let back = parse(&emitted.text);
+    assert_eq!(
+        back.value().loads()[0].voltage_model,
+        module.value().loads()[0].voltage_model
+    );
+    let law = &back.value().loads()[0].voltage_model;
+    assert_eq!(law.power_scale(0, 120.).unwrap(), [0.25, 0.25]);
+    assert_eq!(law.power_scale(0, 240.).unwrap(), [1., 1.]);
+    assert!(law.power_scale(0, -1.).is_err());
+    assert!(law.power_scale(1, 240.).is_err());
+}
+
+#[test]
+fn dropout_is_typed_and_applies_only_above_the_low_voltage_threshold() {
+    let module = parse(
+        "New Circuit.c phases=1 basekv=0.24\nNew Load.l phases=1 bus1=b.1.0 kv=0.24 kw=1 kvar=0.5 model=8 zipv=[0 0 1 0 0 1 0.8]\n",
+    );
+    let law = &module.value().loads()[0].voltage_model;
+    assert_eq!(law.power_scale(0, 120.).unwrap(), [0.25, 0.25]);
+    assert!(law.power_scale(0, 168.).unwrap()[0] < 1e-12);
+    let emitted = emit_value(module.value(), DistTargetFormat::Dss);
+    assert!(emitted.text.contains("model=8"));
+    assert_eq!(parse(&emitted.text).value().loads()[0].voltage_model, *law);
+}
+
+#[test]
+fn bounded_laws_report_loss_when_projected_to_nominal_json_models() {
+    let module = parse(
+        "New Circuit.c phases=1 basekv=0.24\nNew Load.l phases=1 bus1=b.1.0 kv=0.24 kw=1 kvar=0.5 model=5\n",
+    );
+    for target in [DistTargetFormat::BmopfJson, DistTargetFormat::PmdJson] {
+        let emitted = emit_value(module.value(), target);
+        assert!(
+            emitted
+                .warnings
+                .iter()
+                .any(|s| s.contains("voltage-band transitions"))
+        );
+    }
+}
+
+#[test]
+fn per_phase_voltage_laws_and_generated_names_survive_canonical_output() {
+    let mut module = parse(
+        "New Circuit.c phases=3 bus1=b.1.2.3 basekv=.416\n\
+         New Load.bank phases=3 bus1=b.1.2.3.0 conn=wye kv=.416 kw=3 kvar=1.5 model=8 zipv=[.2 .3 .5 .1 .4 .5 .8]\n\
+         New Load.BANK_1 phases=1 bus1=b.1.0 kv=.24 kw=.1 kvar=0 model=2\n",
+    );
+    let DistLoadVoltageModel::BoundedZip {
+        v_nom,
+        alpha_z,
+        alpha_p,
+        ..
+    } = &mut module.value_mut().loads_mut()[0].voltage_model
+    else {
+        panic!()
+    };
+    *v_nom = vec![240., 250., 260.];
+    *alpha_z = vec![0.2, 0.3, 0.4];
+    *alpha_p = vec![0.5, 0.4, 0.3];
+    let expected = module.value().loads()[0].clone();
+    let emitted = emit_value(module.value(), DistTargetFormat::Dss);
+    let back = parse(&emitted.text);
+    assert_eq!(back.value().loads().len(), 4, "{}", emitted.text);
+    assert!(
+        emitted.text.contains("New Load.bank_1_2 "),
+        "{}",
+        emitted.text
+    );
+    for (phase, terminal) in ["1", "2", "3"].iter().enumerate() {
+        let load = back
+            .value()
+            .loads()
+            .iter()
+            .find(|l| l.name != "bank_1" && l.terminal_map[0] == *terminal)
+            .unwrap();
+        assert_eq!(load.p_nom, [expected.p_nom[phase]]);
+        assert_eq!(load.q_nom, [expected.q_nom[phase]]);
+        assert_eq!(
+            load.voltage_model.v_nom(),
+            [expected.voltage_model.v_nom()[phase]]
+        );
+        for voltage in [90., 180., 235., 260., 310.] {
+            assert_eq!(
+                load.voltage_model.power_scale(0, voltage).unwrap(),
+                expected.voltage_model.power_scale(phase, voltage).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn malformed_phase_arrays_cannot_be_silently_truncated() {
+    let mut module = parse(
+        "New Circuit.c phases=3 basekv=.416\n\
+         New Load.l phases=3 bus1=b.1.2.3.0 kv=.416 kw=3 kvar=1.5 model=8 zipv=[.2 .3 .5 .1 .4 .5 .8]\n",
+    );
+    let DistLoadVoltageModel::BoundedZip { alpha_z, .. } =
+        &mut module.value_mut().loads_mut()[0].voltage_model
+    else {
+        panic!()
+    };
+    alpha_z.push(0.7);
+    // No retained source: exercise the public canonical validation path.
+    let canonical = powerio_core::PioModule::new(module.value().clone());
+    let error = powerio_dist::emit(
+        &canonical,
+        DistTargetFormat::Dss,
+        powerio_core::Destination::memory("out").unwrap(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("voltage-law array"), "{error}");
+}
+
+#[test]
+fn uniform_typed_voltage_edits_override_retained_bank_kv() {
+    for phases in [1, 3] {
+        let text = format!(
+            "New Circuit.c phases=3 basekv=.416\nNew Load.l phases={phases} bus1=b.1.2.3.0 kv=.24 kw=3 kvar=1 model=5\n"
+        );
+        let mut module = parse(&text);
+        let DistLoadVoltageModel::BoundedZip { v_nom, .. } =
+            &mut module.value_mut().loads_mut()[0].voltage_model
+        else {
+            panic!()
+        };
+        *v_nom = vec![260.; phases];
+        let output = emit_value(module.value(), DistTargetFormat::Dss);
+        let back = parse(&output.text);
+        assert_eq!(back.value().loads().len(), 1);
+        for v in back.value().loads()[0].voltage_model.v_nom() {
+            assert!((*v - 260.).abs() < 1e-10);
+        }
+    }
+}

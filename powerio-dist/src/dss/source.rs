@@ -5,6 +5,11 @@
 
 use num_complex::Complex64;
 
+// Pinned DSS C-API 87d85c26, DSSUcomplex.PDEGtoComplex. VSource adds
+// 360 degrees before this conversion. Reducing modulo 360 or using PI/180
+// changes source phasors because this native constant is rounded.
+pub(super) const NATIVE_DEGREES_PER_RADIAN: f64 = 57.295_779_51;
+
 use super::lex::{Value, VarMap};
 use super::raw::{RawDss, RawObject};
 
@@ -340,8 +345,8 @@ impl State {
             .map(|i| {
                 Complex64::from_polar(
                     magnitude,
-                    (self.angle - self.sequence * i as f64 * 360.0 / self.phases as f64)
-                        .to_radians(),
+                    (360.0 + self.angle - self.sequence * i as f64 * 360.0 / self.phases as f64)
+                        / NATIVE_DEGREES_PER_RADIAN,
                 )
             })
             .collect();
@@ -473,7 +478,12 @@ mod tests {
             "New Circuit.c phases=3 basekv=0.4156921938165305 sequence=negative z1=[1 2] z0=[4 5]",
         )
         .unwrap();
-        assert!((source.emf[1].arg() - std::f64::consts::TAU / 3.0).abs() < 1e-12);
+        assert!(
+            (source.emf[1] / source.emf[1].norm()
+                - Complex64::from_polar(1.0, 480.0 / NATIVE_DEGREES_PER_RADIAN))
+            .norm()
+                < 1e-12
+        );
         assert!((source.impedance[0][0] - Complex64::new(2.0, 3.0)).norm() < 1e-12);
         assert!((source.impedance[0][1] - Complex64::new(1.0, 1.0)).norm() < 1e-12);
     }
