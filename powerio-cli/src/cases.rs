@@ -15,14 +15,14 @@ pub const TRANSMISSION_EXTENSIONS: &[&str] = &["m", "raw", "aux", "epc", "pwb", 
 
 /// Extensions (lowercase) that identify a distribution case file. `.pwd` is
 /// the PowerWorld display sibling with no case data and stays excluded.
-pub const DISTRIBUTION_EXTENSIONS: &[&str] = &["dss"];
+pub const DISTRIBUTION_EXTENSIONS: &[&str] = &["dss", "glm"];
 
 /// `.json` carries no family signal; the shared JSON shape classifier decides.
 const JSON_EXTENSION: &str = "json";
 
 /// Extension list for error and empty-state messages; a unit test keeps it in
 /// sync with the constants above.
-pub const CASE_EXTENSIONS_LABEL: &str = ".m, .raw, .aux, .epc, .pwb, .uct, .cdf, .json, .dss";
+pub const CASE_EXTENSIONS_LABEL: &str = ".m, .raw, .aux, .epc, .pwb, .uct, .cdf, .json, .dss, .glm";
 
 /// Infer the case family from clear extensions, for `.json` the shared JSON
 /// shape classifier, and for `.xml` files and directories the distribution

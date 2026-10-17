@@ -1,8 +1,10 @@
 # GridLAB-D and OpenDSS oracle calibration
 
-These tools check independent engines against analytic static circuits before
-using those engines to validate PowerIO conversion. They currently make **no
-claim of PowerIO GLM support or full format compatibility**.
+These tools calibrate independent engines against analytic static circuits,
+then validate specific PowerIO conversion profiles. Electrical reader and IR
+checks cover the initial profile described below, including canonical GLM
+output. They do not establish full format compatibility or OpenDSS conversion
+equivalence.
 
 `engines.json` pins the PNNL 5.3.0 macOS archive and runtime files, the Arras
 4.3.17 Linux amd64 container by digest, and OpenDSSDirect 0.9.4 with DSS C-API
@@ -99,6 +101,116 @@ warning that a supplied 2×2 matrix cannot determine neutral/ground currents.
 The center-tapped tests establish grounded service-terminal conventions; they
 do not establish floating-neutral or triplex-cable equivalence.
 
+## Electrical reader and IR
+
+`powerio_dist::glm::parse` returns `PioModule<MulticonductorNetwork>` for an
+initial static profile: phase-to-earth node/meter/load objects, fixed SWING
+phasors, independent constant P/I/Z load terms, and overhead lines with explicit
+phase impedance matrices. It materializes an earth return on buses; this is
+not an explicit line-neutral model. Phase subsets retain their A/B/C identities.
+Parented loads share their root electrical bus. Line impedances become ohms
+per meter; enabled line capacitance becomes half the shunt admittance at each
+end. Quoted unit suffixes retain their native interpretation and diagnostics.
+Numeric setters are validated in source order even when later overwritten or
+assigned to an inactive phase.
+
+The reader rejects unmodeled physical properties, unknown globals, active
+device classes, geometry-dependent lines, delta/split-phase flags, conflicting
+child nominal voltages and names that collide under the current canonical
+case-insensitive lookup. Coordinates are available through the separate source
+API; network attachment remains unfinished and currently fails explicitly.
+Instrumentation remains in retained source with a remark. No recorder, assertion
+or controller executes during parsing. Facade dispatch accepts `gridlabd`
+(PNNL 5.3, also inferred from `.glm`) and `gridlabd-arras` (Arras 4.3).
+
+Build and run the reader qualification with:
+
+```sh
+cargo build -p powerio --example glm_network
+python evals/gridlabd/network_oracle.py --pnnl-root "$PNNL_ROOT" \
+  --reader target/debug/examples/glm_network --output /tmp/gld-network-reader
+```
+
+The bridge serializes the imported network to PowerIO IR, deserializes it and
+requires identical network data. The evaluator uses the restored typed tables
+to independently calculate branch currents, powers, losses and load-current
+balance at each engine's solved voltages. It covers eight circuits per engine:
+single-phase and coupled three-phase constant impedance, phase C alone, mixed
+P/I/Z, a shifted source phasor, enabled line charging, and parented loads with
+NR and FBS. The original constant-impedance circuits additionally match the
+independent linear solve. Deliberate resistance, load-power, source-angle and
+capacitance errors must fail. Reports include engine identity, input hashes,
+typed network data, IR equality and each residual's absolute-plus-relative
+bound. This qualifies reader physics and IR preservation; fresh/edited GLM
+output and cross-format engine validation need separate checks.
+
+## Canonical GLM output
+
+`powerio_dist::glm::emit_canonical` takes a `MulticonductorNetwork` and a
+destination. It generates one fresh GLM file from the current typed value;
+there is no retained-source path in this API. It supports the reader's initial
+phase-to-earth P/I/Z and explicit line-matrix profile. An unsupported electrical
+feature fails before any artifact is written. Non-electrical metadata losses,
+including coordinates, optimization bounds, ratings and source cost data, are
+reported. Facade emission uses the same canonical writer for fresh, edited,
+IR-restored and cross-profile modules.
+
+The writer derives bus nominal voltages from connected fixed sources and
+reconstructs each load's coefficients using its own stated nominal voltage.
+Nonuniform load bases therefore retain the same physical law. Matrix indices
+and source/load properties follow explicit phase identities even when model
+terminal order differs from native A/B/C order. A source reference on an
+already perfectly grounded terminal has the exact earth-referenced equivalent;
+floating references are refused. Source zero phasors, noncapacitive or unequal
+line end shunts, non-60-Hz cases, uninterpreted electrical extras, additional
+device families and unqualified object-name escaping remain explicit gaps.
+
+```sh
+cargo build -p powerio --example glm_roundtrip
+python evals/gridlabd/roundtrip_oracle.py --pnnl-root "$PNNL_ROOT" \
+  --bridge target/debug/examples/glm_roundtrip --output /tmp/gld-canonical
+```
+
+For each of the eight reader cases and both engines, this bridge emits five
+variants: fresh, IR-restored, edited, electrically equivalent load-base changes
+and grounded source references. The harness runs the bare canonical file as
+well as a separately instrumented copy. Fresh and IR-restored files must be
+byte-identical; native electrical results of equivalent variants must match the
+original case. Edits to loads, line length and source voltage must change the
+result and satisfy the edited network equations. Constant-impedance cases also
+match a separately solved analytic circuit. These checks qualify 80 canonical
+engine solves, not just parser acceptance or retained-source echo. OpenDSS
+cross-format equivalence remains unqualified.
+
+## Facade profiles and source-project replay
+
+Normal `powerio::parse` / `emit`, distribution dispatch and CLI conversion use
+the explicit profiles above. GLM targets emit directory inventories: retained
+same-profile projects keep their entrypoint and acquired includes under their
+original relative names; canonical output is `case.glm`. The retained project
+is never reopened from disk. Literal absolute includes cannot be relocated
+byte exactly and are refused. Explicit preprocessing inputs are stored in the
+module's `org.powerio.gridlabd` extension and replay reports when those external
+inputs are required. Profile identity is module source metadata, preserving the
+frozen IR network record and its existing `source_format` enum.
+
+```sh
+cargo build -p powerio --example glm_dispatch
+python evals/gridlabd/dispatch_oracle.py --pnnl-root "$PNNL_ROOT" \
+  --bridge target/debug/examples/glm_dispatch --output /tmp/gld-dispatch
+```
+
+This checks an included conditional that selects different load impedances
+under the two native profiles. Same-profile replay must preserve both files
+exactly. IR-restored, edited and cross-profile output must independently solve
+with the declared target engine and satisfy the typed equations and analytic
+circuit solution. The cross-profile result preserves the interpreted circuit,
+not the source conditional's different meaning in the other fork. Rust tests
+also cover deleting original files before replay, memory-only buffers, BOMs,
+a widened acquisition root, external definitions, and atomic refusal of
+nonportable projects. These checks add no device-family coverage to the
+initial electrical profile.
+
 ## Published references and limits
 
 `object_oracle.py` checks the explicit object index against both native engines.
@@ -115,7 +227,7 @@ independent analytic reference.
 `GlmProject` maps syntax/reference errors back to original project buffers.
 `ObjectIndex` borrows its properties and keeps explicit numeric IDs separate
 from local ordinals. It retains repeated scalar properties and uninterpreted
-syntax. This is not yet an electrical reader: dynamic object creation,
+syntax. The index alone does not establish electrical support: dynamic object creation,
 namespaces, relative/wildcard-selection references, reassigned identities and
 deferred repeated-reference ordering remain unqualified and are not silently
 resolved by guessing. Duplicate numeric IDs are rejected, including Arras

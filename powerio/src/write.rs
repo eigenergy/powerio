@@ -635,7 +635,17 @@ fn emit_multiconductor_network(
         return Err(unknown_format(format));
     };
     let typed = typed_sibling(module, network)?;
-    let typed = if preserve_retained_source && retained_source_matches_case_format(module, format) {
+    let glm_project = matches!(
+        target,
+        powerio_dist::DistTargetFormat::Gridlabd | powerio_dist::DistTargetFormat::GridlabdArras
+    ) && module
+        .source()
+        .and_then(|s| s.format())
+        .and_then(|id| powerio_dist::parse_dist_target_format(id.as_str()))
+        == Some(target);
+    let typed = if preserve_retained_source
+        && (glm_project || retained_source_matches_case_format(module, format))
+    {
         typed
     } else {
         typed.sever_source()

@@ -42,6 +42,10 @@ impl GlmProject {
         self.prepared.dependencies()
     }
 
+    pub(super) fn has_absolute_include(&self) -> bool {
+        self.prepared.has_absolute_include()
+    }
+
     /// Translate a span from this project's syntax into original source spans.
     #[must_use]
     pub fn original_spans(&self, span: &SourceSpan) -> Vec<SourceSpan> {
@@ -51,6 +55,15 @@ impl GlmProject {
 
     pub(crate) fn fail(&self, span: &SourceSpan, message: impl Into<String>) -> Error {
         mapped_error(&self.prepared, &codes::PARSE_GLM_OBJECT, span, message)
+    }
+
+    pub(super) fn electrical_error(&self, span: &SourceSpan, message: impl Into<String>) -> Error {
+        mapped_error(
+            &self.prepared,
+            &codes::READ_GLM_ELECTRICAL_UNSUPPORTED,
+            span,
+            message,
+        )
     }
 
     pub(super) fn quantity_error(&self, span: &SourceSpan, message: &str) -> Error {

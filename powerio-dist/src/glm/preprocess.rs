@@ -50,6 +50,7 @@ pub struct PreparedGlm {
     origins: Vec<ExpansionOrigin>,
     /// Buffers visited in first-use order; excludes unused supplied buffers.
     dependencies: Vec<SourceId>,
+    absolute_include: bool,
 }
 
 impl PreparedGlm {
@@ -66,6 +67,10 @@ impl PreparedGlm {
     #[must_use]
     pub fn dependencies(&self) -> &[SourceId] {
         &self.dependencies
+    }
+
+    pub(super) const fn has_absolute_include(&self) -> bool {
+        self.absolute_include
     }
 
     /// Translate an expanded byte range to its original source segments.
@@ -137,6 +142,7 @@ pub fn preprocess_source(source: Source, options: PreprocessOptions) -> Result<P
             output: String::new(),
             origins: Vec::new(),
             dependencies: Vec::new(),
+            absolute_include: false,
             visited: BTreeSet::new(),
             active: BTreeSet::new(),
             input_bytes: 0,
@@ -145,14 +151,20 @@ pub fn preprocess_source(source: Source, options: PreprocessOptions) -> Result<P
         };
         context.check_defines(&primary, 0..0)?;
         context.file(&primary, 0)?;
-        Ok((context.output, context.origins, context.dependencies))
+        Ok((
+            context.output,
+            context.origins,
+            context.dependencies,
+            context.absolute_include,
+        ))
     })();
     match result {
-        Ok((text, origins, dependencies)) => Ok(PreparedGlm {
+        Ok((text, origins, dependencies, absolute_include)) => Ok(PreparedGlm {
             source,
             text,
             origins,
             dependencies,
+            absolute_include,
         }),
         Err(error) => Err(error.with_source(source)),
     }
@@ -165,6 +177,7 @@ struct Context<'a> {
     output: String,
     origins: Vec<ExpansionOrigin>,
     dependencies: Vec<SourceId>,
+    absolute_include: bool,
     visited: BTreeSet<SourceId>,
     active: BTreeSet<SourceId>,
     input_bytes: usize,
@@ -509,6 +522,7 @@ impl Context<'_> {
                     .source
                     .referenced_buffer(&self.include_base, path)
                     .map_err(|e| e.with_span(span(buffer, range.clone())))?;
+                self.absolute_include |= path.starts_with('/');
                 self.file(&included, depth + 1)?;
                 if !self.boundary.ready() {
                     return Err(error(

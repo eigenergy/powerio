@@ -86,6 +86,8 @@ pub fn resolve_format(name: &str) -> Option<FormatInfo> {
     if let Some(format) = powerio_dist::parse_dist_target_format(name) {
         return Some(match format.name() {
             "dss" => info("dss", Some("dss"), true, true),
+            "gridlabd" => info("gridlabd", Some("glm"), true, true),
+            "gridlabd-arras" => info("gridlabd-arras", Some("glm"), true, true),
             "pmd-json" => info("pmd-json", Some("json"), false, true),
             "bmopf-json" => info("bmopf-json", Some("json"), false, true),
             "cim-dist" => info("cim-dist", Some("xml"), false, true),

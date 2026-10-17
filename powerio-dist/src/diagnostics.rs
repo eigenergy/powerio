@@ -39,6 +39,20 @@ pub mod codes {
             "a GLM quantity or unit cannot be interpreted in the static profile", category = Parse;
         READ_GLM_UNIT_IGNORED = "READ.GLM.UNIT_IGNORED", Warning,
             "native quantity conversion ignores a stated unit suffix";
+        READ_GLM_ELECTRICAL_UNSUPPORTED = "READ.GLM.ELECTRICAL_UNSUPPORTED", Error,
+            "a GLM electrical feature has no verified static mapping", category = Data;
+        READ_GLM_SOURCE_ONLY = "READ.GLM.SOURCE_ONLY", Remark,
+            "non-electrical GLM data remains in the retained source";
+        EMIT_GLM_UNSUPPORTED = "EMIT.GLM.UNSUPPORTED", Error,
+            "the GLM writer cannot yet represent this electrical feature", category = Data;
+        EMIT_GLM_FIELD_DROPPED = "EMIT.GLM.FIELD_DROPPED", Warning,
+            "non-electrical metadata has no expression in canonical GLM output";
+        EMIT_GLM_VALUE_REBASED = "EMIT.GLM.VALUE_REBASED", Remark,
+            "a GLM nominal voltage or identity was materialized without changing electrical behavior";
+        EMIT_GLM_PROJECT_UNREPRESENTABLE = "EMIT.GLM.PROJECT_UNREPRESENTABLE", Error,
+            "retained GLM project bytes cannot be replayed as a portable output inventory", category = Output;
+        EMIT_GLM_REPLAY_CONTEXT_REQUIRED = "EMIT.GLM.REPLAY_CONTEXT_REQUIRED", Remark,
+            "exact GLM project replay requires the original explicit preprocessing inputs";
 
         // READ.DSS: decoded, but not representable in the multiconductor model.
         /// A `Redirect`/`Compile`/`Buscoords` include the reader refused
