@@ -493,6 +493,44 @@ typedef struct {
 } PioPrescribedTerminalPowerView;
 
 /**
+ * Complete borrowed load voltage law, including piecewise transitions.
+ * Presence flags distinguish absent transition parameters from zero.
+ */
+typedef struct {
+    PioStringView model;
+    PioF64View nominal_voltage_v;
+    PioF64View active_power_constant_impedance;
+    PioF64View active_power_constant_current;
+    PioF64View active_power_constant_power;
+    PioF64View reactive_power_constant_impedance;
+    PioF64View reactive_power_constant_current;
+    PioF64View reactive_power_constant_power;
+    PioF64View active_power_exponent;
+    PioF64View reactive_power_exponent;
+    double voltage_low_pu;
+    bool has_voltage_low;
+    double voltage_min_pu;
+    bool has_voltage_min;
+    double voltage_max_pu;
+    bool has_voltage_max;
+    double cutoff_pu;
+    bool has_cutoff;
+    double current_limit_pu;
+    bool has_current_limit;
+} PioDistLoadVoltageModelView;
+
+/**
+ * Prescribed terminal powers and the full borrowed voltage law of one PF load.
+ */
+typedef struct {
+    PioStringView load;
+    size_t terminal_count;
+    PioF64View active_power_w;
+    PioF64View reactive_power_var;
+    PioDistLoadVoltageModelView voltage_model;
+} PioPrescribedLoadDetailsView;
+
+/**
  * One terminal of a prescribed multiconductor load.
  */
 typedef struct {
@@ -2029,6 +2067,20 @@ typedef struct {
     PioF64View active_power_exponent;
     PioF64View reactive_power_exponent;
 } PioMulticonductorLoadView;
+
+/**
+ * One multiconductor load with its complete voltage law. Existing load views
+ * retain their ABI layout and continue to reject laws they cannot describe.
+ */
+typedef struct {
+    PioStringView name;
+    PioStringView bus;
+    size_t terminal_map_count;
+    PioStringView configuration;
+    PioF64View active_power_nominal_w;
+    PioF64View reactive_power_nominal_var;
+    PioDistLoadVoltageModelView voltage_model;
+} PioMulticonductorLoadDetailsView;
 
 /**
  * One multiconductor generator.
@@ -3828,6 +3880,29 @@ bool pio_mc_ac_pf_instance_load_at(const PioCalculationInstance *instance,
                                    size_t index,
                                    PioPrescribedTerminalPowerView *output,
                                    PioError **error);
+
+/**
+ * Borrow prescribed powers and their full voltage law from a PF instance.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_mc_ac_pf_instance_load_details_at(const PioCalculationInstance *instance,
+                                           size_t index,
+                                           PioPrescribedLoadDetailsView *output,
+                                           PioError **error);
+
+/**
+ * Borrow one prescribed load terminal name, including for bounded laws.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_mc_ac_pf_instance_load_terminal_name_at(const PioCalculationInstance *instance,
+                                                 size_t load_index,
+                                                 size_t terminal_index,
+                                                 PioStringView *output,
+                                                 PioError **error);
 
 /**
  *
@@ -5716,6 +5791,17 @@ bool pio_multiconductor_network_load_at(const PioMulticonductorNetwork *network,
                                         size_t index,
                                         PioMulticonductorLoadView *output,
                                         PioError **error);
+
+/**
+ * Borrow a load and its complete voltage law, without cloning or serializing its network.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_multiconductor_network_load_details_at(const PioMulticonductorNetwork *network,
+                                                size_t index,
+                                                PioMulticonductorLoadDetailsView *output,
+                                                PioError **error);
 
 /**
  *

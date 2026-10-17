@@ -1481,6 +1481,58 @@ pub struct PioMulticonductorLoadView {
     pub reactive_power_exponent: PioF64View,
 }
 
+/// Complete borrowed load voltage law, including piecewise transitions.
+/// Presence flags distinguish absent transition parameters from zero.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioDistLoadVoltageModelView {
+    pub model: PioStringView,
+    pub nominal_voltage_v: PioF64View,
+    pub active_power_constant_impedance: PioF64View,
+    pub active_power_constant_current: PioF64View,
+    pub active_power_constant_power: PioF64View,
+    pub reactive_power_constant_impedance: PioF64View,
+    pub reactive_power_constant_current: PioF64View,
+    pub reactive_power_constant_power: PioF64View,
+    pub active_power_exponent: PioF64View,
+    pub reactive_power_exponent: PioF64View,
+    pub voltage_low_pu: f64,
+    pub has_voltage_low: bool,
+    pub voltage_min_pu: f64,
+    pub has_voltage_min: bool,
+    pub voltage_max_pu: f64,
+    pub has_voltage_max: bool,
+    pub cutoff_pu: f64,
+    pub has_cutoff: bool,
+    pub current_limit_pu: f64,
+    pub has_current_limit: bool,
+}
+
+/// One multiconductor load with its complete voltage law. Existing load views
+/// retain their ABI layout and continue to reject laws they cannot describe.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioMulticonductorLoadDetailsView {
+    pub name: PioStringView,
+    pub bus: PioStringView,
+    pub terminal_map_count: usize,
+    pub configuration: PioStringView,
+    pub active_power_nominal_w: PioF64View,
+    pub reactive_power_nominal_var: PioF64View,
+    pub voltage_model: PioDistLoadVoltageModelView,
+}
+
+/// Prescribed terminal powers and the full borrowed voltage law of one PF load.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioPrescribedLoadDetailsView {
+    pub load: PioStringView,
+    pub terminal_count: usize,
+    pub active_power_w: PioF64View,
+    pub reactive_power_var: PioF64View,
+    pub voltage_model: PioDistLoadVoltageModelView,
+}
+
 /// One multiconductor generator.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -7881,6 +7933,9 @@ fn dist_load_voltage_model_name(model: &powerio_dist::DistLoadVoltageModel) -> &
         powerio_dist::DistLoadVoltageModel::ConstantImpedance { .. } => "constant_impedance",
         powerio_dist::DistLoadVoltageModel::Zip { .. } => "zip",
         powerio_dist::DistLoadVoltageModel::Exponential { .. } => "exponential",
+        powerio_dist::DistLoadVoltageModel::BoundedZip { .. } => "bounded_zip",
+        powerio_dist::DistLoadVoltageModel::BoundedExponential { .. } => "bounded_exponential",
+        powerio_dist::DistLoadVoltageModel::BoundedConstantPower { .. } => "bounded_constant_power",
         _ => "unknown",
     }
 }
@@ -7931,6 +7986,80 @@ pub unsafe extern "C" fn pio_mc_ac_pf_instance_load_at(
                     &load.voltage_model,
                 )),
             };
+            Ok(true)
+        })
+    }
+}
+
+/// Borrow prescribed powers and their full voltage law from a PF instance.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_mc_ac_pf_instance_load_details_at(
+    instance: *const PioCalculationInstance,
+    index: usize,
+    output: *mut PioPrescribedLoadDetailsView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let instance = require_calculation_instance(instance)?
+                .mc_ac_pf()
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                        "the calculation instance is not powerio.McAcPfInstance",
+                    )
+                })?;
+            let load = instance.loads().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("prescribed load index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = PioPrescribedLoadDetailsView {
+                load: PioStringView::new(&load.load),
+                terminal_count: load.terminals.len(),
+                active_power_w: PioF64View::new(&load.p_w),
+                reactive_power_var: PioF64View::new(&load.q_var),
+                voltage_model: dist_load_voltage_model_view(&load.voltage_model),
+            };
+            Ok(true)
+        })
+    }
+}
+
+/// Borrow one prescribed load terminal name, including for bounded laws.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_mc_ac_pf_instance_load_terminal_name_at(
+    instance: *const PioCalculationInstance,
+    load_index: usize,
+    terminal_index: usize,
+    output: *mut PioStringView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let instance = require_calculation_instance(instance)?
+                .mc_ac_pf()
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                        "the calculation instance is not powerio.McAcPfInstance",
+                    )
+                })?;
+            let load = instance.loads().get(load_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("prescribed load index {load_index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? =
+                string_slice_at(&load.terminals, terminal_index, "prescribed load terminal")?;
             Ok(true)
         })
     }
@@ -14602,96 +14731,122 @@ fn multiconductor_switch_view(switch: &powerio_dist::DistSwitch) -> PioMulticond
     }
 }
 
-fn multiconductor_load_view(load: &powerio_dist::DistLoad) -> PioMulticonductorLoadView {
+fn dist_load_voltage_model_view(
+    model: &powerio_dist::DistLoadVoltageModel,
+) -> PioDistLoadVoltageModelView {
+    use powerio_dist::DistLoadVoltageModel as M;
     let empty = PioF64View::EMPTY;
-    let (
-        voltage_model,
-        nominal_voltage,
-        alpha_z,
-        alpha_i,
-        alpha_p,
-        beta_z,
-        beta_i,
-        beta_p,
-        gamma_p,
-        gamma_q,
-    ) = match &load.voltage_model {
-        powerio_dist::DistLoadVoltageModel::ConstantPower { v_nom } => (
-            "constant_power",
-            PioF64View::new(v_nom),
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-        ),
-        powerio_dist::DistLoadVoltageModel::ConstantCurrent { v_nom } => (
-            "constant_current",
-            PioF64View::new(v_nom),
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-        ),
-        powerio_dist::DistLoadVoltageModel::ConstantImpedance { v_nom } => (
-            "constant_impedance",
-            PioF64View::new(v_nom),
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-        ),
-        powerio_dist::DistLoadVoltageModel::Zip {
-            v_nom,
+    let mut view = PioDistLoadVoltageModelView {
+        model: PioStringView::new(dist_load_voltage_model_name(model)),
+        nominal_voltage_v: PioF64View::new(model.v_nom()),
+        active_power_constant_impedance: empty,
+        active_power_constant_current: empty,
+        active_power_constant_power: empty,
+        reactive_power_constant_impedance: empty,
+        reactive_power_constant_current: empty,
+        reactive_power_constant_power: empty,
+        active_power_exponent: empty,
+        reactive_power_exponent: empty,
+        voltage_low_pu: 0.0,
+        has_voltage_low: false,
+        voltage_min_pu: 0.0,
+        has_voltage_min: false,
+        voltage_max_pu: 0.0,
+        has_voltage_max: false,
+        cutoff_pu: 0.0,
+        has_cutoff: false,
+        current_limit_pu: 0.0,
+        has_current_limit: false,
+    };
+    match model {
+        M::Zip {
             alpha_z,
             alpha_i,
             alpha_p,
             beta_z,
             beta_i,
             beta_p,
-        } => (
-            "zip",
-            PioF64View::new(v_nom),
-            PioF64View::new(alpha_z),
-            PioF64View::new(alpha_i),
-            PioF64View::new(alpha_p),
-            PioF64View::new(beta_z),
-            PioF64View::new(beta_i),
-            PioF64View::new(beta_p),
-            empty,
-            empty,
-        ),
-        powerio_dist::DistLoadVoltageModel::Exponential {
-            v_nom,
-            gamma_p,
-            gamma_q,
-        } => (
-            "exponential",
-            PioF64View::new(v_nom),
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            PioF64View::new(gamma_p),
-            PioF64View::new(gamma_q),
-        ),
-        _ => (
-            "unknown", empty, empty, empty, empty, empty, empty, empty, empty, empty,
-        ),
-    };
+            ..
+        }
+        | M::BoundedZip {
+            alpha_z,
+            alpha_i,
+            alpha_p,
+            beta_z,
+            beta_i,
+            beta_p,
+            ..
+        } => {
+            view.active_power_constant_impedance = PioF64View::new(alpha_z);
+            view.active_power_constant_current = PioF64View::new(alpha_i);
+            view.active_power_constant_power = PioF64View::new(alpha_p);
+            view.reactive_power_constant_impedance = PioF64View::new(beta_z);
+            view.reactive_power_constant_current = PioF64View::new(beta_i);
+            view.reactive_power_constant_power = PioF64View::new(beta_p);
+        }
+        M::Exponential {
+            gamma_p, gamma_q, ..
+        }
+        | M::BoundedExponential {
+            gamma_p, gamma_q, ..
+        } => {
+            view.active_power_exponent = PioF64View::new(gamma_p);
+            view.reactive_power_exponent = PioF64View::new(gamma_q);
+        }
+        _ => {}
+    }
+    match model {
+        M::BoundedZip {
+            v_low_pu,
+            v_min_pu,
+            v_max_pu,
+            cutoff_pu,
+            ..
+        } => {
+            view.voltage_low_pu = *v_low_pu;
+            view.has_voltage_low = true;
+            view.voltage_min_pu = *v_min_pu;
+            view.has_voltage_min = true;
+            view.voltage_max_pu = *v_max_pu;
+            view.has_voltage_max = true;
+            view.cutoff_pu = *cutoff_pu;
+            view.has_cutoff = true;
+        }
+        M::BoundedExponential {
+            v_low_pu,
+            v_min_pu,
+            v_max_pu,
+            ..
+        } => {
+            view.voltage_low_pu = *v_low_pu;
+            view.has_voltage_low = true;
+            view.voltage_min_pu = *v_min_pu;
+            view.has_voltage_min = true;
+            view.voltage_max_pu = *v_max_pu;
+            view.has_voltage_max = true;
+        }
+        M::BoundedConstantPower {
+            v_min_pu,
+            v_max_pu,
+            current_limit_pu,
+            ..
+        } => {
+            view.voltage_min_pu = *v_min_pu;
+            view.has_voltage_min = true;
+            view.voltage_max_pu = *v_max_pu;
+            view.has_voltage_max = true;
+            if let Some(limit) = current_limit_pu {
+                view.current_limit_pu = *limit;
+                view.has_current_limit = true;
+            }
+        }
+        _ => {}
+    }
+    view
+}
+
+fn multiconductor_load_view(load: &powerio_dist::DistLoad) -> PioMulticonductorLoadView {
+    let model = dist_load_voltage_model_view(&load.voltage_model);
     PioMulticonductorLoadView {
         name: PioStringView::new(&load.name),
         bus: PioStringView::new(&load.bus),
@@ -14699,16 +14854,16 @@ fn multiconductor_load_view(load: &powerio_dist::DistLoad) -> PioMulticonductorL
         configuration: PioStringView::new(multiconductor_configuration_name(load.configuration)),
         active_power_nominal_w: PioF64View::new(&load.p_nom),
         reactive_power_nominal_var: PioF64View::new(&load.q_nom),
-        voltage_model: PioStringView::new(voltage_model),
-        nominal_voltage_v: nominal_voltage,
-        active_power_constant_impedance: alpha_z,
-        active_power_constant_current: alpha_i,
-        active_power_constant_power: alpha_p,
-        reactive_power_constant_impedance: beta_z,
-        reactive_power_constant_current: beta_i,
-        reactive_power_constant_power: beta_p,
-        active_power_exponent: gamma_p,
-        reactive_power_exponent: gamma_q,
+        voltage_model: model.model,
+        nominal_voltage_v: model.nominal_voltage_v,
+        active_power_constant_impedance: model.active_power_constant_impedance,
+        active_power_constant_current: model.active_power_constant_current,
+        active_power_constant_power: model.active_power_constant_power,
+        reactive_power_constant_impedance: model.reactive_power_constant_impedance,
+        reactive_power_constant_current: model.reactive_power_constant_current,
+        reactive_power_constant_power: model.reactive_power_constant_power,
+        active_power_exponent: model.active_power_exponent,
+        reactive_power_exponent: model.reactive_power_exponent,
     }
 }
 
@@ -15831,6 +15986,44 @@ pub unsafe extern "C" fn pio_multiconductor_network_load_at(
             })?;
             require_legacy_load_voltage_model(&load.voltage_model)?;
             *require_output(output, "output")? = multiconductor_load_view(load);
+            Ok(true)
+        })
+    }
+}
+
+/// Borrow a load and its complete voltage law, without cloning or serializing its network.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_load_details_at(
+    network: *const PioMulticonductorNetwork,
+    index: usize,
+    output: *mut PioMulticonductorLoadDetailsView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let load = require_multiconductor_network(network)?
+                .loads()
+                .get(index)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        format!("multiconductor load index {index} is out of range"),
+                    )
+                })?;
+            *require_output(output, "output")? = PioMulticonductorLoadDetailsView {
+                name: PioStringView::new(&load.name),
+                bus: PioStringView::new(&load.bus),
+                terminal_map_count: load.terminal_map.len(),
+                configuration: PioStringView::new(multiconductor_configuration_name(
+                    load.configuration,
+                )),
+                active_power_nominal_w: PioF64View::new(&load.p_nom),
+                reactive_power_nominal_var: PioF64View::new(&load.q_nom),
+                voltage_model: dist_load_voltage_model_view(&load.voltage_model),
+            };
             Ok(true)
         })
     }
@@ -20306,7 +20499,7 @@ mod tests {
 
     #[test]
     fn legacy_load_views_refuse_unrepresented_voltage_bands() {
-        for model in [0, 1, 3, 4] {
+        for model in [0, 1, 3, 4, 8] {
             check_legacy_load_voltage_refusal(model);
         }
     }
@@ -20316,7 +20509,12 @@ mod tests {
             "New Storage.l phases=1 bus1=b.1.0 kv=.24 kwrated=100 kva=100 limitcurrent=yes"
                 .to_owned()
         } else {
-            format!("New Load.l phases=1 bus1=b.1.0 kv=.24 kw=1 kvar=.5 model={model}")
+            let zip = if model == 8 {
+                " zipv=[0 .5 .5 0 .3 .7 .2]"
+            } else {
+                ""
+            };
+            format!("New Load.l phases=1 bus1=b.1.0 kv=.24 kw=1 kvar=.5 model={model}{zip}")
         };
         let source = powerio_core::Source::from_memory(
             "load.dss",
@@ -20363,10 +20561,82 @@ mod tests {
             ));
             assert!(error_text(error).contains("voltage-band"));
             pio_error_release(error);
-            pio_multiconductor_network_release(network);
-            pio_calculation_instance_release(instance);
+            error = std::ptr::null_mut();
+            // Child handles keep the owner alive; each detailed view borrows
+            // the original coefficients and bounds after parent release.
             pio_value_release(value);
             pio_module_release(module);
+            let mut details = std::mem::MaybeUninit::<PioMulticonductorLoadDetailsView>::uninit();
+            assert!(pio_multiconductor_network_load_details_at(
+                network,
+                0,
+                details.as_mut_ptr(),
+                &mut error
+            ));
+            let details = details.assume_init();
+            let expected = match model {
+                3 | 4 => "bounded_exponential",
+                0 => "bounded_constant_power",
+                _ => "bounded_zip",
+            };
+            assert_eq!(view_text(details.voltage_model.model), expected);
+            assert_eq!(details.active_power_nominal_w.len, 1);
+            assert_eq!(details.reactive_power_nominal_var.len, 1);
+            assert_eq!(details.voltage_model.nominal_voltage_v.len, 1);
+            assert!(details.voltage_model.has_voltage_min);
+            assert!(details.voltage_model.has_voltage_max);
+            assert_eq!(details.voltage_model.has_cutoff, expected == "bounded_zip");
+            assert_eq!(details.voltage_model.has_current_limit, model == 0);
+            let original = &require_multiconductor_network(network).unwrap().loads()[0];
+            assert_eq!(details.active_power_nominal_w.data, original.p_nom.as_ptr());
+            assert_eq!(
+                details.voltage_model.nominal_voltage_v.data,
+                original.voltage_model.v_nom().as_ptr()
+            );
+            let mut powers = std::mem::MaybeUninit::<PioPrescribedLoadDetailsView>::uninit();
+            assert!(pio_mc_ac_pf_instance_load_details_at(
+                instance,
+                0,
+                powers.as_mut_ptr(),
+                &mut error
+            ));
+            let powers = powers.assume_init();
+            let pf = require_calculation_instance(instance)
+                .unwrap()
+                .mc_ac_pf()
+                .unwrap();
+            assert_eq!(powers.terminal_count, pf.loads()[0].terminals.len());
+            assert_eq!(view_text(powers.voltage_model.model), expected);
+            assert_eq!(powers.active_power_w.len, pf.loads()[0].p_w.len());
+            assert_eq!(powers.reactive_power_var.len, pf.loads()[0].q_var.len());
+            assert_eq!(powers.active_power_w.data, pf.loads()[0].p_w.as_ptr());
+            assert_eq!(powers.reactive_power_var.data, pf.loads()[0].q_var.as_ptr());
+            let mut terminal_name = std::mem::MaybeUninit::<PioStringView>::uninit();
+            assert!(pio_mc_ac_pf_instance_load_terminal_name_at(
+                instance,
+                0,
+                0,
+                terminal_name.as_mut_ptr(),
+                &mut error
+            ));
+            let pf = require_calculation_instance(instance)
+                .unwrap()
+                .mc_ac_pf()
+                .unwrap();
+            assert_eq!(
+                view_text(terminal_name.assume_init()),
+                pf.loads()[0].terminals[0]
+            );
+            assert!(!pio_multiconductor_network_load_details_at(
+                network,
+                1,
+                std::ptr::null_mut(),
+                &mut error
+            ));
+            assert!(error_text(error).contains("out of range"));
+            pio_error_release(error);
+            pio_multiconductor_network_release(network);
+            pio_calculation_instance_release(instance);
         }
     }
 

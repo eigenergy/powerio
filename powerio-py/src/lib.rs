@@ -407,11 +407,13 @@ fn core_error_pyerr(error: &powerio_core::Error) -> PyErr {
         powerio_core::ErrorCategory::Data => PowerIODataError::new_err(error.to_string()),
         _ => PowerIOError::new_err(error.to_string()),
     };
-    if let Some(code) = error.diagnostics().first().map(|d| d.code().to_owned()) {
-        Python::attach(|py| {
-            let _ = err.value(py).setattr("code", code);
-        });
-    }
+    Python::attach(|py| {
+        if let Some(diagnostic) = error.diagnostics().first() {
+            let _ = err.value(py).setattr("code", diagnostic.code());
+        }
+        let diagnostics: Vec<_> = error.diagnostics().iter().map(PyDiagnostic::from).collect();
+        let _ = err.value(py).setattr("diagnostics", diagnostics);
+    });
     err
 }
 
