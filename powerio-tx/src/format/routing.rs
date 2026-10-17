@@ -94,12 +94,12 @@ impl TransmissionFormat {
 #[non_exhaustive]
 pub enum DistributionFormat {
     Dss,
-    Gridlabd,
-    GridlabdArras,
     PmdJson,
     BmopfJson,
     /// Distribution CIM (CIM100 RDF/XML).
     CimDist,
+    Gridlabd,
+    GridlabdArras,
 }
 
 impl DistributionFormat {

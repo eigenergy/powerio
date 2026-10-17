@@ -62,13 +62,13 @@ impl TextEmission {
 #[non_exhaustive]
 pub enum DistTargetFormat {
     Dss,
-    Gridlabd,
-    GridlabdArras,
     BmopfJson,
     PmdJson,
     /// Distribution CIM: one CIM100 RDF/XML document, or a directory of them
     /// on input.
     CimDist,
+    Gridlabd,
+    GridlabdArras,
 }
 
 /// Format specific policies for distribution network emission.
