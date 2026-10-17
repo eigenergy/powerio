@@ -153,6 +153,7 @@ fn regulator_allowed_extras() -> Vec<&'static str> {
         .iter()
         .chain(REGULATOR_EXTENSION_EXTRAS.iter())
         .chain(REGULATOR_STATED_OHMS.iter())
+        .chain(["bmopf_open_delta"].iter())
         .copied()
         .collect()
 }
@@ -1543,14 +1544,47 @@ impl Writer {
         }
         for legs in groups.into_values() {
             let [a, b] = legs[..] else { continue };
-            let pair = |t: &DistTransformer| winding_phase_pair(&t.windings[0]);
+            let pair = |t: &DistTransformer| {
+                if let Some(meta) = t.extras.get("bmopf_open_delta") {
+                    let pairs = match meta["connection"].as_str()? {
+                        "ABBC" => [(1, 2), (2, 3)],
+                        "BCAC" => [(2, 3), (1, 3)],
+                        "CABA" => [(3, 1), (2, 1)],
+                        _ => return None,
+                    };
+                    let pair = *pairs.get(usize::try_from(meta["leg"].as_u64()?).ok()?)?;
+                    for (winding, key) in t.windings.iter().zip(["from", "to"]) {
+                        let map = meta[key].as_array()?;
+                        let expected = [
+                            map.get(pair.0 - 1)?.as_str()?,
+                            map.get(pair.1 - 1)?.as_str()?,
+                        ];
+                        if winding.terminal_map.iter().map(String::as_str).ne(expected) {
+                            return None;
+                        }
+                    }
+                    Some((u8::try_from(pair.0).ok()?, u8::try_from(pair.1).ok()?))
+                } else {
+                    winding_phase_pair(&t.windings[0])
+                }
+            };
             let (Some(pa), Some(pb)) = (pair(a), pair(b)) else {
                 continue;
             };
             let Some((connection, swapped)) = open_delta_connection(pa, pb) else {
                 continue;
             };
-            if !open_delta_pairable(a, b) {
+            let metadata_agrees = match (
+                a.extras.get("bmopf_open_delta"),
+                b.extras.get("bmopf_open_delta"),
+            ) {
+                (Some(a), Some(b)) => ["from", "to", "connection"]
+                    .iter()
+                    .all(|key| a[*key] == b[*key]),
+                (None, None) => true,
+                _ => false,
+            };
+            if !metadata_agrees || !open_delta_pairable(a, b) {
                 continue;
             }
             let (first, second) = if swapped { (b, a) } else { (a, b) };
@@ -1620,8 +1654,19 @@ impl Writer {
         let mut o = self.regulator_fields(first, from, to);
         // The pairing check pins the legs to phases {1, 2, 3}; the object
         // spans the whole phase set on both sides.
-        o.insert("terminal_map_from".into(), json!(["1", "2", "3"]));
-        o.insert("terminal_map_to".into(), json!(["1", "2", "3"]));
+        let meta = first.extras.get("bmopf_open_delta");
+        o.insert(
+            "terminal_map_from".into(),
+            meta.and_then(|v| v.get("from"))
+                .cloned()
+                .unwrap_or_else(|| json!(["1", "2", "3"])),
+        );
+        o.insert(
+            "terminal_map_to".into(),
+            meta.and_then(|v| v.get("to"))
+                .cloned()
+                .unwrap_or_else(|| json!(["1", "2", "3"])),
+        );
         o.insert("connection".into(), json!(connection));
         let a1 = self.regulator_tap_ratio(first, from, to);
         let a2 = self.regulator_tap_ratio(second, &second.windings[0], &second.windings[1]);

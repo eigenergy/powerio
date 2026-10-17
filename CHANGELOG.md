@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Preserve BMOPF per-coil capacitor ratings as exact terminal shunts shared by
+  matrix and distribution preparation consumers. Retain custom open-delta
+  terminal maps and n-winding apparent-power bounds; edited winding maps cannot
+  be overwritten by retained source metadata during emission. Scalar single-coil
+  IBR bounds are retained, including zero available PV power.
+
 - Update ZIP support to 9.0.4 to address extraction advisories. Archive readers
   report filename-decoding failures explicitly and retain their bounded-input
   and unsafe-entry checks.
