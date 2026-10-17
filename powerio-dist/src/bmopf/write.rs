@@ -1143,8 +1143,9 @@ impl Writer {
     ) {
         match model {
             DistLoadVoltageModel::BoundedZip { .. }
-            | DistLoadVoltageModel::BoundedExponential { .. } => {
-                self.warn(&C::EMIT_BMOPF_VALUE_SUBSTITUTED, format!("{what}: voltage-band transitions and dropout have no BMOPF load-law field; emitted the nominal law"));
+            | DistLoadVoltageModel::BoundedExponential { .. }
+            | DistLoadVoltageModel::BoundedConstantPower { .. } => {
+                self.warn(&C::EMIT_BMOPF_VALUE_SUBSTITUTED, format!("{what}: voltage-band transitions, current limits and dropout have no BMOPF load-law field; emitted the nominal law"));
                 self.load_voltage_model(o, &model.without_voltage_bounds(), what);
             }
 

@@ -158,7 +158,7 @@ impl Reader<'_> {
             2 * n,
             2 * n,
         );
-        self.net.shunts_mut().push(DistShunt::new(
+        let mut shunt = DistShunt::new(
             &stem,
             &bus,
             terms.clone(),
@@ -170,7 +170,18 @@ impl Reader<'_> {
                 .iter()
                 .map(|r| r.iter().map(|v| v.im).collect())
                 .collect(),
-        ));
+        );
+        // Provenance identifies the boundary of the multi-element equivalent.
+        // Keep it off contact extras, which describe retained impedances.
+        shunt.extras.insert(
+            "dss_original_element".into(),
+            format!("line.{}", line.name).into(),
+        );
+        shunt.extras.insert(
+            "dss_external_contacts".into(),
+            serde_json::json!([format!("{stem}_from"), format!("{stem}_to")]),
+        );
+        self.net.shunts_mut().push(shunt);
         for (label, endpoint, original, offset) in [
             ("from", &line.bus_from, &line.terminal_map_from, 0),
             ("to", &line.bus_to, &line.terminal_map_to, n),

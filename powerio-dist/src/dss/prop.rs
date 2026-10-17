@@ -102,6 +102,39 @@ class!(
     ]
 );
 
+// DSS C-API 87d85c2622c8281b92255335bc7c09b11191b21d,
+// General/LoadShape.pas: TLoadShapePropLegacy plus inherited Like.
+// This table also enables bounded BatchEdit through the ordinary assignment path.
+class!(
+    LOADSHAPE,
+    "loadshape",
+    [
+        "npts",
+        "interval",
+        "mult",
+        "hour",
+        "mean",
+        "stddev",
+        "csvfile",
+        "sngfile",
+        "dblfile",
+        "action",
+        "qmult",
+        "useactual",
+        "pmax",
+        "qmax",
+        "sinterval",
+        "minterval",
+        "pbase",
+        "qbase",
+        "pmult",
+        "pqcsvfile",
+        "memorymapping",
+        "interpolation",
+        "like",
+    ]
+);
+
 class!(
     LOAD,
     "load",
@@ -685,6 +718,7 @@ static CLASSES: &[&DssClass] = &[
     &LINE_GEOMETRY,
     &LINE_SPACING,
     &LOAD,
+    &LOADSHAPE,
     &TRANSFORMER,
     &XFMR_CODE,
     &VSOURCE,

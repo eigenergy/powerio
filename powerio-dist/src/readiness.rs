@@ -186,6 +186,18 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
     audit_untyped(net, &mut report);
     audit_load_voltage(net, &mut report);
 
+    for generator in net.generators() {
+        let model = generator.extras.get("model").and_then(|value| {
+            value
+                .as_f64()
+                .or_else(|| value.as_str().and_then(|s| s.parse::<f64>().ok()))
+        });
+        if model.is_some_and(|value| value.round() as i64 == 6) {
+            report.block("READINESS.DSS.GENERATOR_USER_MODEL_UNRESOLVED", &generator.name,
+                "generator model 6 has no typed voltage/current law; retained user-library settings and nominal P/Q do not establish an electrical equivalent");
+        }
+    }
+
     for (element, fields) in net.defaulted() {
         report.warn(
             "READINESS.SOURCE.DEFAULTED",
@@ -259,6 +271,30 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
 }
 
 fn audit_untyped(net: &MulticonductorNetwork, report: &mut ElectricalReadiness) {
+    let autotrans_state_command = net.commands().iter().any(|(verb, args)| {
+        matches!(verb.as_str(), "enable" | "disable" | "open" | "close")
+            && crate::dss::lex::Scanner::new(args, None)
+                .next_param()
+                .is_some_and(|p| p.value.text.to_ascii_lowercase().starts_with("autotrans."))
+    });
+    let reactor_state_command = net.commands().iter().any(|(verb, args)| {
+        matches!(verb.as_str(), "enable" | "disable" | "open" | "close")
+            && crate::dss::lex::Scanner::new(args, None)
+                .next_param()
+                .is_some_and(|p| p.value.text.to_ascii_lowercase().starts_with("reactor."))
+    });
+    let capacitor_state_command = net.commands().iter().any(|(verb, args)| {
+        matches!(verb.as_str(), "enable" | "disable" | "open" | "close")
+            && crate::dss::lex::Scanner::new(args, None)
+                .next_param()
+                .is_some_and(|p| p.value.text.to_ascii_lowercase().starts_with("capacitor."))
+    });
+    let storage_state_command = net.commands().iter().any(|(verb, args)| {
+        matches!(verb.as_str(), "enable" | "disable" | "open" | "close")
+            && crate::dss::lex::Scanner::new(args, None)
+                .next_param()
+                .is_some_and(|p| p.value.text.to_ascii_lowercase().starts_with("storage."))
+    });
     for object in net.untyped_objects() {
         let explicitly_disabled = object
             .props
@@ -271,9 +307,36 @@ fn audit_untyped(net: &MulticonductorNetwork, report: &mut ElectricalReadiness) 
             .is_some_and(|(_, value)| {
                 value.eq_ignore_ascii_case("no") || value.eq_ignore_ascii_case("false")
             });
-        if object.class.eq_ignore_ascii_case("reactor") && !explicitly_disabled {
+        if object.class.eq_ignore_ascii_case("autotrans")
+            && (!explicitly_disabled || autotrans_state_command)
+        {
+            report.block("READINESS.DSS.AUTOTRANS_UNRESOLVED", &object.name,
+                "untyped autotransformer has unresolved winding behavior; omitting it can disconnect the feeder");
+        }
+        if object.class.eq_ignore_ascii_case("reactor")
+            && (!explicitly_disabled || reactor_state_command)
+        {
             report.block("READINESS.DSS.REACTOR_UNRESOLVED", &object.name,
                 "untyped reactor has unresolved electrical behavior; omitting a series reactor can disconnect the feeder");
+        }
+        if object.class.eq_ignore_ascii_case("capacitor")
+            && (!explicitly_disabled || capacitor_state_command)
+        {
+            report.block("READINESS.DSS.CAPACITOR_UNRESOLVED", &object.name,
+                "untyped capacitor has unresolved electrical behavior; omitting it changes the feeder");
+        }
+        if object.class.eq_ignore_ascii_case("storage")
+            && (!explicitly_disabled || storage_state_command)
+        {
+            report.block(
+                "READINESS.DSS.STORAGE_UNRESOLVED",
+                &object.name,
+                "untyped storage has unresolved static power exchange, including idling losses",
+            );
+        }
+        if object.class.eq_ignore_ascii_case("fault") && !explicitly_disabled {
+            report.block("READINESS.DSS.FAULT_UNRESOLVED", &object.name,
+                "enabled fault has unresolved static admittance and switching state; omitting it changes the circuit");
         }
         if object.class.eq_ignore_ascii_case("vsource") && !explicitly_disabled {
             report.block("READINESS.DSS.SOURCE_UNRESOLVED", &object.name,
@@ -485,6 +548,7 @@ fn audit_load_voltage(net: &MulticonductorNetwork, report: &mut ElectricalReadin
             load.voltage_model,
             crate::DistLoadVoltageModel::BoundedZip { .. }
                 | crate::DistLoadVoltageModel::BoundedExponential { .. }
+                | crate::DistLoadVoltageModel::BoundedConstantPower { .. }
         ) {
             let n = load.p_nom.len().max(load.q_nom.len());
             if n == 0 || load.voltage_model.v_nom().len() != n {

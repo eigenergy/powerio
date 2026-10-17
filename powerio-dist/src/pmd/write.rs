@@ -730,12 +730,14 @@ impl Writer {
                     l.voltage_model,
                     DistLoadVoltageModel::BoundedZip { .. }
                         | DistLoadVoltageModel::BoundedExponential { .. }
+                        | DistLoadVoltageModel::BoundedConstantPower { .. }
                 ) {
-                    self.warn(&C::EMIT_PMD_VALUE_SUBSTITUTED, format!("{what}: voltage-band transitions and dropout have no PMD load-law field; emitted the nominal law"));
+                    self.warn(&C::EMIT_PMD_VALUE_SUBSTITUTED, format!("{what}: voltage-band transitions, current limits and dropout have no PMD load-law field; emitted the nominal law"));
                 }
                 let model = match &nominal_model {
                     DistLoadVoltageModel::BoundedZip { .. }
-                    | DistLoadVoltageModel::BoundedExponential { .. } => {
+                    | DistLoadVoltageModel::BoundedExponential { .. }
+                    | DistLoadVoltageModel::BoundedConstantPower { .. } => {
                         unreachable!("bounds handled above")
                     }
                     DistLoadVoltageModel::ConstantImpedance { v_nom } => {

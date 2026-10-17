@@ -22,6 +22,10 @@ impl DistLoadVoltageModel {
     /// low and min, and `(u/max)²` above max (using `u²` when max is zero).
     /// These continuations need not join the exponential law continuously.
     ///
+    /// For bounded constant power, the scale is `(u/min)²` at or below
+    /// min, `1` inside the band, and `(u/max)²` above max. An optional
+    /// current limit caps this scale at `u * current_limit_pu`.
+    ///
     /// Returns an error for missing coefficients, invalid parameters or
     /// nonfinite evaluation instead of manufacturing a nominal load law.
     #[expect(
@@ -56,6 +60,29 @@ impl DistLoadVoltageModel {
             Self::Exponential {
                 gamma_p, gamma_q, ..
             } => [voltage_pu.powf(at(gamma_p)?), voltage_pu.powf(at(gamma_q)?)],
+            Self::BoundedConstantPower {
+                v_min_pu,
+                v_max_pu,
+                current_limit_pu,
+                ..
+            } => {
+                if !v_min_pu.is_finite()
+                    || *v_min_pu <= 0.0
+                    || !v_max_pu.is_finite()
+                    || *v_max_pu < *v_min_pu
+                    || current_limit_pu.is_some_and(|v| !v.is_finite() || v <= 0.0)
+                {
+                    return Err("constant-power bounds and current limit must be positive, finite and ordered".into());
+                }
+                let scale = if voltage_pu <= *v_min_pu {
+                    (voltage_pu / v_min_pu).powi(2)
+                } else if voltage_pu > *v_max_pu {
+                    (voltage_pu / v_max_pu).powi(2)
+                } else {
+                    1.0
+                };
+                [current_limit_pu.map_or(scale, |limit| scale.min(voltage_pu * limit)); 2]
+            }
             Self::BoundedExponential {
                 gamma_p,
                 gamma_q,
@@ -159,6 +186,11 @@ impl DistLoadVoltageModel {
     /// explicit diagnostic when the destination cannot carry the full law.
     #[allow(clippy::float_cmp)] // Only exact coefficient identities permit this projection.
     pub(crate) fn without_voltage_bounds(&self) -> Self {
+        if let Self::BoundedConstantPower { v_nom, .. } = self {
+            return Self::ConstantPower {
+                v_nom: v_nom.clone(),
+            };
+        }
         if let Self::BoundedExponential {
             v_nom,
             gamma_p,

@@ -13,6 +13,7 @@ from pathlib import Path
 
 import opendssdirect as dss
 from oracle import HERE, LOCK, add, command, compare
+from physical_ports import observe
 
 
 def pairs(values):
@@ -35,7 +36,66 @@ def run(path):
     return engine
 
 
-def snapshot(engine, buses, elements, *, canonical):
+def node_inventory(engine, buses):
+    result = {}
+    for bus in buses:
+        engine.Circuit.SetActiveBus(bus)
+        result[bus] = list(engine.Bus.Nodes())
+    return result
+
+
+def source_inventory(engine):
+    engine.Circuit.SetActiveElement("vsource.source")
+    count = engine.CktElement.NumConductors()
+    return dict(bus=engine.CktElement.BusNames()[0].split(".", 1)[0].lower(),
+                nodes=list(engine.CktElement.NodeOrder()[:count]))
+
+
+def source_boundary(engine, expected):
+    # Imported source equivalents can gain another internal source/branch on
+    # reimport. Select one declared compiler interface at the original port;
+    # never substitute an arbitrary incident feeder line or sum of bus flows.
+    candidates = []
+    individual = {node: [] for node in expected["nodes"]}
+    for name in engine.Circuit.AllElementNames():
+        key = name.lower()
+        if key != "vsource.source" and not key.startswith(("line._pio_vsource_", "vsource._pio_coupled_", "vsource._pio_ideal_")):
+            continue
+        engine.Circuit.SetActiveElement(name)
+        if not engine.CktElement.Enabled():
+            continue
+        count = engine.CktElement.NumConductors()
+        for terminal, bus in enumerate(engine.CktElement.BusNames()):
+            if key == "vsource.source" and terminal != 0:
+                continue
+            nodes = engine.CktElement.NodeOrder()[terminal * count : (terminal + 1) * count]
+            if bus.split(".", 1)[0].lower() != expected["bus"]:
+                continue
+            # Reimport of a general coupled source inserts one ideal voltage
+            # constraint per original conductor. Observe those actual terminal
+            # currents, not inferred KCL sums or currents at auxiliary nodes.
+            if key.startswith("vsource._pio_ideal_") and count == 1:
+                if nodes[0] in individual:
+                    individual[nodes[0]].append((name, terminal, 0))
+                continue
+            if sorted(nodes) != sorted(expected["nodes"]):
+                continue
+            if nodes == expected["nodes"]:
+                order = list(range(count))
+            elif len(set(nodes)) == count:
+                order = [nodes.index(node) for node in expected["nodes"]]
+            else:
+                raise ValueError("ambiguous source conductor permutation")
+            candidates.append((name, terminal, order))
+    if len(candidates) == 1 and not any(individual.values()):
+        name, terminal, order = candidates[0]
+        return [(name, terminal, index) for index in order]
+    if not candidates and len(individual) == len(expected["nodes"]) and all(len(ports) == 1 for ports in individual.values()):
+        return [individual[node][0] for node in expected["nodes"]]
+    raise ValueError(f"ambiguous or missing source interface at {expected}: {candidates}, {individual}")
+
+
+def snapshot(engine, buses, elements, *, canonical, aliases=None, port_maps=None, bus_nodes=None, source_port=None):
     result = {}
     known_buses = {bus.lower() for bus in engine.Circuit.AllBusNames()}
     known_elements = {name.lower() for name in engine.Circuit.AllElementNames()}
@@ -46,11 +106,21 @@ def snapshot(engine, buses, elements, *, canonical):
         for node, voltage in zip(
             engine.Bus.Nodes(), pairs(engine.Bus.Voltages()), strict=True
         ):
-            add(result, f"bus.{bus}.{node}.voltage", "V", voltage)
+            if bus_nodes is None or node in bus_nodes[bus]:
+                add(result, f"bus.{bus}.{node}.voltage", "V", voltage)
     for name in elements:
-        if name not in known_elements:
+        if canonical and name in (port_maps or {}):
+            ports, loss = observe(engine, port_maps[name])
+            for terminal, port in enumerate(ports, 1):
+                for quantity, unit, values in [("current", "A", port["currents"]), ("power", "VA", port["powers"])]:
+                    for conductor, (node, value) in enumerate(zip(port["nodes"], values, strict=True), 1):
+                        add(result, f"{name}.terminal{terminal}.conductor{conductor}.node{node}.{quantity}", unit, value)
+            add(result, f"{name}.loss", "VA", loss)
             continue
-        engine.Circuit.SetActiveElement(name)
+        physical = (aliases or {}).get(name, name) if canonical else name
+        if physical not in known_elements:
+            continue
+        engine.Circuit.SetActiveElement(physical)
         if not engine.CktElement.Enabled():
             continue
         nodes = engine.CktElement.NodeOrder()
@@ -65,18 +135,31 @@ def snapshot(engine, buses, elements, *, canonical):
         add(result, f"{name}.loss", "VA", complex(*engine.CktElement.Losses()))
     # Observe the source's physical feeder port. Its internal equivalent has
     # auxiliary EMF buses; those are not original circuit observables.
-    source = "line._pio_vsource_source_impedance" if canonical else "vsource.source"
-    if source in known_elements:
+    if canonical and source_port is not None:
+        ports = source_boundary(engine, source_port)
+        bus, nodes = source_port["bus"], source_port["nodes"]
+    else:
+        equivalents = ("line._pio_vsource_source_impedance", "vsource._pio_coupled__pio_vsource_source_impedance")
+        equivalent = next((name for name in equivalents if canonical and name in known_elements), None)
+        source = equivalent or "vsource.source"
+        terminal = 1 if equivalent else 0
+        if source not in known_elements:
+            return result
         engine.Circuit.SetActiveElement(source)
-        if engine.CktElement.NumConductors() != 3:
-            raise ValueError("source conductor inventory changed")
+        count = engine.CktElement.NumConductors()
+        bus = engine.CktElement.BusNames()[terminal].split(".", 1)[0].lower()
+        nodes = engine.CktElement.NodeOrder()[terminal * count : (terminal + 1) * count]
+        order = list(range(count))
+        ports = [(source, terminal, index) for index in order]
+    for i, (node, (source, terminal, index)) in enumerate(zip(nodes, ports, strict=True), 1):
+        engine.Circuit.SetActiveElement(source)
+        count = engine.CktElement.NumConductors()
         for quantity, unit, values in [
             ("current", "A", engine.CktElement.Currents()),
             ("power", "VA", [1000 * x for x in engine.CktElement.Powers()]),
         ]:
-            port = pairs(values)[3:6] if canonical else pairs(values)[:3]
-            for i, value in enumerate(port):
-                add(result, f"source.feeder.{i + 1}.{quantity}", unit, value)
+            value = pairs(values)[terminal * count + index]
+            add(result, f"source.feeder.{bus}.conductor{i}.node{node}.{quantity}", unit, value)
     return result
 
 
@@ -119,19 +202,21 @@ def evaluate(source, bridge, output):
     if len(buses) != 907 or len(elements) != 961:
         raise ValueError("native feeder inventory changed")
     expected = snapshot(native, buses, elements, canonical=False)
+    bus_nodes = node_inventory(native, buses)
+    source_port = source_inventory(native)
     canonical = run(imported / "dss/case.dss")
-    actual = snapshot(canonical, buses, elements, canonical=True)
+    actual = snapshot(canonical, buses, elements, canonical=True, bus_nodes=bus_nodes, source_port=source_port)
     # A second canonical import must also solve and match the original.
     reimported = output / "reimported"
     command(
         [str(bridge.resolve()), str(imported / "dss/case.dss"), str(reimported)], output
     )
-    again = snapshot(run(reimported / "dss/case.dss"), buses, elements, canonical=True)
+    again = snapshot(run(reimported / "dss/case.dss"), buses, elements, canonical=True, bus_nodes=bus_nodes, source_port=source_port)
     canonical.Text.Command("edit line.line1 length=20")
     canonical.Text.Command("solve")
     if not canonical.Solution.Converged():
         raise ValueError("negative-control circuit did not converge")
-    wrong = snapshot(canonical, buses, elements, canonical=True)
+    wrong = snapshot(canonical, buses, elements, canonical=True, bus_nodes=bus_nodes, source_port=source_port)
     comparison, repeated, negative = (
         compare(expected, values) for values in (actual, again, wrong)
     )

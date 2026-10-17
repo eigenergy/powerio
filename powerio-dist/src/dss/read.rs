@@ -17,6 +17,7 @@ use crate::diagnostics::codes as C;
 
 use super::defaults as dd;
 use super::lex::{BusSpec, Value, VarMap};
+use super::load_power::LoadPower;
 use super::raw::{RawDss, RawObject};
 use crate::error::Result;
 use crate::geo::{CoordinateSpace, DistCoordsKind, DistGeoMeta, DistLocation};
@@ -30,9 +31,15 @@ use crate::model::{
     open_delta_pairable, pair_keys, winding_phase_pair,
 };
 
+mod autotrans;
+mod capacitors;
 mod lines;
+mod motors;
 mod open_lines;
+mod open_transformers;
+mod reactors;
 mod sources;
+mod storage;
 
 /// Upper bound on any count property (`phases`, conductors, `windings`, tap
 /// counts). `phases` sizes a dense n×n matrix and the winding count drives a
@@ -62,11 +69,13 @@ const TYPED_DSS_CLASSES: &[&str] = &[
     "vsource",
     "line",
     "transformer",
+    "autotrans",
     "load",
     "capacitor",
     "reactor",
     "generator",
     "pvsystem",
+    "storage",
     "xycurve",
     "invcontrol",
     "swtcontrol",
@@ -80,8 +89,10 @@ const TYPED_DSS_CLASSES: &[&str] = &[
 pub(crate) fn parse_dss_collecting(
     source: &powerio_core::Source,
     diags: &mut crate::collect::Diagnostics,
+    replay: &mut Option<bool>,
 ) -> Result<MulticonductorNetwork> {
     let raw = super::raw::parse_raw_from_source(source)?;
+    *replay = Some(raw.absolute_dependency);
     let (net, found) = snapshot_network(&raw);
     let invalid = found.iter().any(|d| {
         d.severity() == powerio_core::DiagnosticSeverity::Error
@@ -155,21 +166,26 @@ fn snapshot_network(raw: &RawDss) -> (MulticonductorNetwork, Vec<crate::diagnost
             ),
         }
     }
+    rd.autotrans_objects(raw);
     for obj in raw.of_class("load") {
-        let l = rd.load(obj);
+        let l = rd.load(obj, raw);
         rd.net.loads_mut().push(l);
     }
     for obj in raw.of_class("capacitor") {
-        rd.capacitor(obj);
+        rd.capacitor(obj, raw);
     }
     for obj in raw.of_class("reactor") {
-        rd.reactor(obj);
+        rd.reactor(obj, raw);
     }
     for obj in raw.of_class("generator") {
+        if rd.fixed_motor(obj, raw) {
+            continue;
+        }
         let g = rd.generator(obj);
         rd.net.generators_mut().push(g);
     }
     read_ibr_objects(&mut rd, raw);
+    rd.static_storage_objects(raw);
     for obj in raw.of_class("swtcontrol") {
         rd.swtcontrol(obj);
     }
@@ -200,6 +216,12 @@ fn snapshot_network(raw: &RawDss) -> (MulticonductorNetwork, Vec<crate::diagnost
     // parse cannot present itself as having interpreted a time series or a
     // solve. A `.dss` script parse never claims a solve occurred.
     for (class, count) in outside_profile {
+        if class == "loadshape" {
+            rd.diags.push(&C::READ_DSS_RETAINED_SOURCE_ONLY, format!(
+                "{count} `loadshape` object(s): static Load UseActual assignments are resolved when referenced; time-varying simulation remains source-only"
+            ));
+            continue;
+        }
         rd.diags.push(
             &C::READ_DSS_RETAINED_SOURCE_ONLY,
             format!(
@@ -421,9 +443,9 @@ impl<'a> Props<'a> {
     }
 }
 
-/// Reactor properties that set the impedance directly. When any is present
-/// the engine takes its SpecType from the impedance and ignores `kvar`/`kv`,
-/// so the kvar-shunt typing does not apply and the object stays untyped.
+/// Reactor impedance inputs that the legacy kvar-only path cannot interpret.
+/// R alone does not select a new SpecType; rated banks with R are resolved
+/// separately. Competing mode setters require ordered specification replay.
 /// `parallel` (series vs parallel R-X) and `rp` (a parallel damping
 /// resistance) are modifiers, not a SpecType of their own: a `kvar` reactor
 /// that also sets them is still a kvar shunt, so they are not listed here.
@@ -628,6 +650,7 @@ impl Reader<'_> {
             spec_kvar: false, // LoadSpecType: false = 0, true = 1
             kw_written: false,
             pf_written: false,
+            pf_specified: false,
         };
         let mut start = 0;
         for end in obj.edit_bounds() {
@@ -735,7 +758,7 @@ impl Reader<'_> {
         }
     }
 
-    fn load(&mut self, obj: &RawObject) -> DistLoad {
+    fn load(&mut self, obj: &RawObject, raw: &RawDss) -> DistLoad {
         let props = Props::new(obj);
         let phases = self.usize_or(&props, "phases", "load", &obj.name, dd::load::PHASES);
         let conn_delta = props.get("conn").is_some_and(|v| {
@@ -749,7 +772,11 @@ impl Reader<'_> {
             spec_kvar,
             kw_written,
             pf_written,
-        } = self.load_power(obj);
+            ..
+        } = raw
+            .load_power(&obj.name)
+            .cloned()
+            .unwrap_or_else(|| self.load_power(obj));
         if !kw_written {
             self.defaulted("load", &obj.name, "kw");
         }
@@ -923,8 +950,21 @@ impl Reader<'_> {
                                 w.kv_specified = true;
                             }
                             "kva" => {
-                                w.kva = parsed.unwrap_or(w.kva);
+                                let rating = parsed.unwrap_or(w.kva);
+                                w.kva = rating;
                                 w.kva_specified = true;
+                                // Native scalar setters synchronize all windings
+                                // from winding1, or winding1 from winding2 on a
+                                // two-winding unit. The kvas array does not.
+                                if active == 0 {
+                                    for other in &mut windings[1..] {
+                                        other.kva = rating;
+                                        other.kva_specified = true;
+                                    }
+                                } else if n_windings == 2 {
+                                    windings[0].kva = rating;
+                                    windings[0].kva_specified = true;
+                                }
                             }
                             "tap" => w.tap = parsed.unwrap_or(w.tap),
                             "%r" => w.r_pct = parsed.unwrap_or(w.r_pct),
@@ -1033,15 +1073,39 @@ impl Reader<'_> {
         if !xhl_specified {
             self.defaulted("transformer", &obj.name, "xhl");
         }
+        let native_ports: Vec<Vec<String>> = if raw.line_history[&index]
+            .events
+            .iter()
+            .any(|e| e.terminal_state.is_some())
+        {
+            windings
+                .iter()
+                .enumerate()
+                .map(|(i, w)| {
+                    let spec = w.bus.clone().unwrap_or_else(|| {
+                        Value::new(format!("{}_w{}", obj.name, i + 1)).to_bus_spec()
+                    });
+                    self.terminals(&spec, phases, phases + 1, phases + 1)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let out = self.finish_windings(&windings, phases, &obj.name);
 
-        Ok(DistTransformer {
-            name: obj.name.clone(),
-            windings: out,
-            xsc_pct,
-            phases,
-            extras,
-        })
+        self.transformer_terminal_state(
+            obj,
+            raw,
+            index,
+            DistTransformer {
+                name: obj.name.clone(),
+                windings: out,
+                xsc_pct,
+                phases,
+                extras,
+            },
+            &native_ports,
+        )
     }
 
     /// Resolves winding bus specs, terminal maps, and SI ratings, recording
@@ -1064,13 +1128,13 @@ impl Reader<'_> {
                 .bus
                 .clone()
                 .unwrap_or_else(|| Value::new(format!("{name}_w{}", i + 1)).to_bus_spec());
-            // Each winding terminal has phases + 1 conductors; wye keeps the
-            // neutral in the map, delta leaves the unused conductor out. A
-            // delta winding is wired line to line, so a single phase delta leg
-            // (an open delta secondary, bus spec `.1.2`) still spans two phase
-            // terminals; keep both rather than collapsing to one.
-            let keep = if w.conn_delta {
-                phases.max(2)
+            // Each winding terminal has phases + 1 conductors; wye keeps its
+            // neutral in the map. Delta with one or two phases uses an open
+            // chain: it needs the
+            // additional hot terminal. Only a closed three-phase delta has
+            // an unused trailing conductor.
+            let keep = if w.conn_delta && phases >= 3 {
+                phases
             } else {
                 phases + 1
             };
@@ -1096,8 +1160,10 @@ impl Reader<'_> {
 
     // ----- capacitor → shunt ---------------------------------------------
 
-    fn capacitor(&mut self, obj: &RawObject) {
-        self.kvar_shunt(obj, CAPACITOR_KVAR_SHUNT);
+    fn capacitor(&mut self, obj: &RawObject, raw: &RawDss) {
+        if !self.common_return_capacitor(obj, raw) {
+            self.kvar_shunt(obj, CAPACITOR_KVAR_SHUNT);
+        }
     }
 
     // ----- reactor → shunt -----------------------------------------------
@@ -1106,8 +1172,11 @@ impl Reader<'_> {
     /// with inductive (negative) susceptance, the sign mirror of a capacitor.
     /// A reactor from a bus terminal to the same bus's node 0 is also a shunt;
     /// when it uses `r`/`x`, store the equivalent conductance and susceptance.
-    /// Other `bus2` reactors are series elements and stay untyped.
-    fn reactor(&mut self, obj: &RawObject) {
+    /// Explicit scalar series reactors use a conductor-resolved impedance branch.
+    fn reactor(&mut self, obj: &RawObject, raw: &RawDss) {
+        if self.rated_resistive_reactor(obj, raw) {
+            return;
+        }
         let props = Props::new(obj);
         let phases = self.usize_or(&props, "phases", "reactor", &obj.name, dd::reactor::PHASES);
         if phases == 0 {
@@ -1133,17 +1202,16 @@ impl Reader<'_> {
                 .as_ref()
                 .is_some_and(|return_bus| same_bus_ground_return(&bus, return_bus, phases));
 
-        if bus2.is_some() && !grounding_return {
-            self.warn(
-                &C::READ_DSS_OBJECT_UNTYPED,
-                format!(
-                    "reactor {}: series reactors (bus2) are not typed yet; kept untyped",
-                    obj.name
-                ),
-            );
-            self.net
-                .untyped_objects_mut()
-                .push(UntypedObject::from(obj));
+        if let Some(bus2) = bus2.as_ref().filter(|_| !grounding_return) {
+            if let Err(reason) = self.series_reactor(obj, &props, &bus, bus2, phases, raw) {
+                self.warn(
+                    &C::READ_DSS_OBJECT_UNTYPED,
+                    format!("reactor {}: {reason}; kept untyped", obj.name),
+                );
+                self.net
+                    .untyped_objects_mut()
+                    .push(UntypedObject::from(obj));
+            }
             return;
         }
 
@@ -1391,6 +1459,18 @@ impl Reader<'_> {
 
     // ----- generator -----------------------------------------------------
 
+    fn retain_generator_model(&mut self, obj: &RawObject, extras: &mut Extras) {
+        if obj
+            .get("model")
+            .is_some_and(|v| v.to_i64(Some(self.vars)) == Ok(6))
+        {
+            // Resolve expressions now; readiness cannot reconstruct source variables.
+            extras.insert("model".into(), 6.into());
+            self.warn(&C::READ_DSS_RETAINED_SOURCE_ONLY, format!(
+                "generator {}: model 6 user-library voltage/current behavior is source-only; nominal P/Q is not a typed electrical equivalent", obj.name));
+        }
+    }
+
     fn generator(&mut self, obj: &RawObject) -> DistGenerator {
         let props = Props::new(obj);
         let phases = self.usize_or(
@@ -1470,6 +1550,7 @@ impl Reader<'_> {
         let per_phase = |total_kw: f64| vec![total_kw * 1e3 / phases as f64; phases];
         let mut extras = extras_from_leftovers(&props);
         self.stash_kv_and_phases(&props, &mut extras, kv, phases);
+        self.retain_generator_model(obj, &mut extras);
         // Preserve native voltage-law defaults when a parsed generator is
         // subsequently emitted from the typed value or restored from IR.
         extras
@@ -2024,7 +2105,7 @@ pub(super) fn delta_edges(n: usize, phases: usize) -> Vec<(usize, usize)> {
     }
 }
 
-fn kvar_shunt_matrix(
+pub(super) fn kvar_shunt_matrix(
     map: &[String],
     phases: usize,
     conn_delta: bool,
@@ -2118,19 +2199,6 @@ fn x_pair_key(name: &str) -> Option<(usize, usize)> {
     Some((i.min(j) - 1, i.max(j) - 1))
 }
 
-/// A load's power assignment after the last edit boundary: the engine's
-/// (kWBase, kvarBase, PFNominal, LoadSpecType), plus which of kw/pf were
-/// ever written (for default provenance).
-struct LoadPower {
-    kw: f64,
-    kvar: f64,
-    pf: f64,
-    /// LoadSpecType: false = 0 (kW + PF), true = 1 (kW + kvar).
-    spec_kvar: bool,
-    kw_written: bool,
-    pf_written: bool,
-}
-
 #[derive(Clone)]
 struct WindingRaw {
     bus: Option<BusSpec>,
@@ -2211,7 +2279,7 @@ mod tests {
             )
             .unwrap();
             let mut diagnostics = crate::collect::Diagnostics::new();
-            let net = parse_dss_collecting(&source, &mut diagnostics).unwrap();
+            let net = parse_dss_collecting(&source, &mut diagnostics, &mut None).unwrap();
             assert_eq!(net.shunts().len(), usize::from(command == "Open"));
             assert_eq!(
                 net.lines().iter().any(|l| l.name == "l"),

@@ -15,7 +15,7 @@ fn byte_order_marks_are_retained_and_never_reach_the_reader() {
     .unwrap();
     let master_text = format!(
         "\u{feff}clear\nnew circuit.c basekv=12.47 bus1=src\nredirect {}\n",
-        linecodes.display()
+        linecodes.file_name().unwrap().to_str().unwrap()
     );
     let master = tmp.path().join("master.dss");
     std::fs::write(&master, &master_text).unwrap();

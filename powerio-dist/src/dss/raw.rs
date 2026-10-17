@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 
 use super::lex::{Scanner, Value, VarMap};
 use super::prop::{self, DssClass};
+
+mod static_loads;
 use crate::diagnostics::codes as C;
 use crate::error::{Error, Result};
 
@@ -237,6 +239,19 @@ pub struct RawDss {
     pub commands: Vec<RawCommand>,
     pub buscoords: Vec<BusCoord>,
     pub vars: VarMap,
+    pub(super) absolute_dependency: bool,
+    load_powers: BTreeMap<usize, super::load_power::LoadPower>,
+    load_shapes: BTreeMap<usize, super::loadshape::Shape>,
+    /// AutoTrans MakeLike copies derived winding state not reconstructed yet.
+    pub(super) autotrans_copies: std::collections::BTreeSet<String>,
+    /// Capacitor MakeLike copies connection and step state not reconstructed yet.
+    pub(super) capacitor_copies: std::collections::BTreeSet<String>,
+    /// Storage MakeLike copies hidden inverter state not reconstructed yet.
+    pub(super) storage_copies: std::collections::BTreeSet<String>,
+    /// Reactor MakeLike copies hidden specification state.
+    pub(super) reactor_copies: std::collections::BTreeSet<String>,
+    /// Generator MakeLike may copy hidden user-library state.
+    pub(super) generator_copies: std::collections::BTreeSet<String>,
     /// Bumped by `clear`, so `run_command` can tell whether a `Clear` ran
     /// during the command it just dispatched and, if so, skip restoring the
     /// pre-command var snapshot over the empty table `clear` installed.
@@ -413,6 +428,7 @@ impl RawDss {
         frequency.clear();
         let earth_model = self.earth_model.take();
         *self = RawDss {
+            absolute_dependency: self.absolute_dependency,
             vars_generation,
             warnings,
             diagnostics,
@@ -429,6 +445,12 @@ impl RawDss {
 /// Supplies included file text, so tests can run without a filesystem.
 pub trait Loader {
     fn load(&mut self, path: &Path) -> std::io::Result<String>;
+
+    /// Binary profile data. Text-only test loaders retain their existing API;
+    /// filesystem/named-buffer acquisition overrides this without UTF-8 decoding.
+    fn load_bytes(&mut self, path: &Path) -> std::io::Result<Vec<u8>> {
+        self.load(path).map(String::into_bytes)
+    }
 }
 
 impl<F> Loader for F
@@ -630,6 +652,7 @@ impl<L: Loader> Executor<'_, L> {
         match command_index(&verb).map(|i| COMMANDS[i]) {
             Some("new") => self.do_new(scan, ctx),
             Some("edit") => self.do_edit(scan, ctx),
+            Some("batchedit") => self.do_batch_edit(scan, ctx),
             Some("more" | "m" | "~") => self.do_more(scan, ctx),
             Some("select") => self.do_select(scan, ctx),
             Some(canonical @ ("open" | "close")) => self.do_terminal_state(canonical, scan, ctx),
@@ -830,7 +853,7 @@ impl<L: Loader> Executor<'_, L> {
             &mut self.raw,
             ctx,
         ));
-        self.apply_props(idx, props, ctx);
+        self.apply_props(idx, props, scan.vars(), ctx);
     }
 
     fn do_new(&mut self, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
@@ -880,6 +903,126 @@ impl<L: Loader> Executor<'_, L> {
         self.consume_and_apply(idx, scan, ctx);
     }
 
+    fn batch_targets(&mut self, class: &str, ctx: &dyn Fn(String) -> String) -> Option<Vec<usize>> {
+        // Charge the selection scan, including objects in other classes, so
+        // repeated empty matches cannot evade the whole-script work bound.
+        let cost = self.raw.objects.len();
+        if self.raw.total_props.saturating_add(cost) > MAX_TOTAL_PROPS {
+            self.raw.halt(ctx(
+                "BatchEdit selection exceeds the whole-script work budget".into(),
+            ));
+            return None;
+        }
+        self.raw.total_props += cost;
+        Some(
+            self.raw
+                .objects
+                .iter()
+                .enumerate()
+                .filter(|(_, object)| object.class == class)
+                .map(|(i, _)| i)
+                .collect(),
+        )
+    }
+
+    fn do_batch_edit(&mut self, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
+        let Some((class, pattern)) = self.object_spec(scan, ctx) else {
+            self.raw.warn(
+                &C::READ_DSS_BATCH_UNRESOLVED,
+                ctx("BatchEdit requires Class.Pattern".into()),
+            );
+            return;
+        };
+        if class.eq_ignore_ascii_case("circuit") {
+            return; // Native BatchEdit deliberately ignores Circuit.
+        }
+        let class = class.to_ascii_lowercase();
+        let Some(table) = prop_table(&class) else {
+            self.raw.warn(
+                &C::READ_DSS_BATCH_UNRESOLVED,
+                ctx(format!("BatchEdit class {class} is not supported")),
+            );
+            return;
+        };
+        // The native regular expression searches names case-insensitively;
+        // it is not a shell glob and is not implicitly anchored. Unsupported
+        // backreferences/lookarounds fail explicitly rather than being skipped.
+        let Some(expression) = batch_expression(&pattern) else {
+            self.raw.warn(
+                &C::READ_DSS_BATCH_UNRESOLVED,
+                ctx("BatchEdit needs a supported ASCII regular expression".into()),
+            );
+            return;
+        };
+        let props = collect_props_for(Some(table), scan, None, &mut self.raw, ctx);
+        let Some(targets) = self.batch_targets(&class, ctx) else {
+            return;
+        };
+        let mut cursor = 0;
+        while let Some(&idx) = targets.get(cursor) {
+            if self.raw.halted {
+                return;
+            }
+            if self.raw.total_props >= MAX_TOTAL_PROPS {
+                self.raw.halt(ctx(
+                    "BatchEdit iterator exceeds the whole-script work budget".into(),
+                ));
+                return;
+            }
+            self.raw.total_props += 1;
+            cursor += 1;
+            if !self.raw.objects[idx].name.is_ascii() {
+                self.raw.warn(
+                    &C::READ_DSS_BATCH_UNRESOLVED,
+                    ctx("BatchEdit matching of non-ASCII object names is not qualified".into()),
+                );
+                return;
+            }
+            // Native First/Next selects every visited object, including the
+            // last unmatched name. A following continuation edits that object.
+            self.raw.active = Some(idx);
+            if expression.is_match(self.raw.objects[idx].name.as_bytes()) {
+                if self
+                    .raw
+                    .total_props
+                    .saturating_add(props.len())
+                    .saturating_add(1)
+                    > MAX_TOTAL_PROPS
+                    || self
+                        .retained_property_count(idx)
+                        .saturating_add(props.len())
+                        .saturating_add(1)
+                        > MAX_OBJECT_PROPS
+                {
+                    self.raw.halt(ctx(
+                        "BatchEdit assignments exceed the property/work budget".into()
+                    ));
+                    return;
+                }
+                self.apply_props(idx, props.clone(), scan.vars(), ctx);
+                // Native MakeLike locates the template through the same
+                // class iterator. Next resumes after that template, which
+                // can skip names or revisit earlier ones; visits stay bounded.
+                for property in props.iter().filter(|p| p.name.as_deref() == Some("like")) {
+                    if let Some(position) = self
+                        .raw
+                        .index
+                        .get(&(class.clone(), property.value.text.to_ascii_lowercase()))
+                        .and_then(|target| targets.binary_search(target).ok())
+                    {
+                        cursor = position + 1;
+                    } else {
+                        self.raw.warn(
+                            &C::READ_DSS_BATCH_UNRESOLVED,
+                            ctx("BatchEdit copy template does not exist".into()),
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     fn do_more(&mut self, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
         let Some(idx) = self.raw.active else {
             self.raw.warn(
@@ -912,13 +1055,18 @@ impl<L: Loader> Executor<'_, L> {
             return;
         };
         let key = (class.to_ascii_lowercase(), name.to_ascii_lowercase());
+        let diagnostic = if class.eq_ignore_ascii_case("transformer") {
+            &C::READ_DSS_TRANSFORMER_UNRESOLVED
+        } else {
+            &C::READ_DSS_LINE_UNRESOLVED
+        };
         let Some(&idx) = self
             .raw
             .index
             .get(&key)
-            .filter(|_| class.eq_ignore_ascii_case("line"))
+            .filter(|_| matches!(class.to_ascii_lowercase().as_str(), "line" | "transformer"))
         else {
-            self.raw.warn(&C::READ_DSS_LINE_UNRESOLVED, ctx(format!("{verb} {class}.{name}: terminal state requires an existing ordinary Line; other classes remain unresolved")));
+            self.raw.warn(diagnostic, ctx(format!("{verb} {class}.{name}: terminal state requires an existing Line or Transformer; other classes remain unresolved")));
             return;
         };
         // The native command consumes positional values even when they have
@@ -938,16 +1086,29 @@ impl<L: Loader> Executor<'_, L> {
                 _ => None,
             }
         };
-        let (Some(terminal @ 1..=2), Some(conductor)) = (number(terminal, 0), number(conductor, 0))
-        else {
-            self.raw.warn(&C::READ_DSS_LINE_UNRESOLVED, ctx(format!("{verb} Line.{name}: explicit terminal 1 or 2 and a nonnegative conductor index are required")));
+        let limit = if class.eq_ignore_ascii_case("line") {
+            2
+        } else {
+            32
+        };
+        let (Some(terminal), Some(conductor)) = (number(terminal, 0), number(conductor, 0)) else {
+            self.raw.warn(diagnostic, ctx(format!("{verb} {class}.{name}: explicit terminal and a nonnegative conductor index are required")));
             return;
         };
+        if terminal == 0 || terminal > limit {
+            self.raw.warn(
+                diagnostic,
+                ctx(format!(
+                    "{verb} {class}.{name}: terminal index is outside the supported range"
+                )),
+            );
+            return;
+        }
         if self.raw.total_props >= MAX_TOTAL_PROPS
             || self.retained_property_count(idx) >= MAX_OBJECT_PROPS
         {
             self.raw.halt(ctx(
-                "line terminal history exceeds the supported work budget".into(),
+                "element terminal history exceeds the supported work budget".into(),
             ));
             return;
         }
@@ -964,14 +1125,16 @@ impl<L: Loader> Executor<'_, L> {
             .unwrap()
             .events
             .push(event);
-        self.raw
-            .geometry_timeline
-            .push(super::geometry::timeline::Action::Terminal {
-                object: idx,
-                terminal,
-                conductor,
-                closed: verb == "close",
-            });
+        if class.eq_ignore_ascii_case("line") {
+            self.raw
+                .geometry_timeline
+                .push(super::geometry::timeline::Action::Terminal {
+                    object: idx,
+                    terminal,
+                    conductor,
+                    closed: verb == "close",
+                });
+        }
         self.raw.active = Some(idx);
     }
 
@@ -1029,6 +1192,15 @@ impl<L: Loader> Executor<'_, L> {
         let Some((class, name)) = parameter.value.text.split_once('.') else {
             return; // Native Enable/Disable requires an explicit class.
         };
+        if class.eq_ignore_ascii_case("fault") {
+            self.raw.warn(
+                &C::READ_DSS_FAULT_UNRESOLVED,
+                ctx(format!(
+                    "{canonical} Fault.{name}: switching state is not materialized"
+                )),
+            );
+            return;
+        }
         if class.eq_ignore_ascii_case("line") {
             self.do_line_enabled(name, canonical == "enable", ctx);
             return;
@@ -1062,6 +1234,7 @@ impl<L: Loader> Executor<'_, L> {
                     name: Some("enabled".into()),
                     value: Value::new(if enabled { "true" } else { "false" }),
                 }],
+                None,
                 ctx,
             );
         } else {
@@ -1117,6 +1290,7 @@ impl<L: Loader> Executor<'_, L> {
                     name: Some("enabled".into()),
                     value: Value::new(if enabled { "true" } else { "false" }),
                 }],
+                None,
                 ctx,
             );
         }
@@ -1167,6 +1341,7 @@ impl<L: Loader> Executor<'_, L> {
         file_arg: &str,
         ctx: &dyn Fn(String) -> String,
     ) -> Option<PathBuf> {
+        self.raw.absolute_dependency |= Path::new(&file_arg.replace('\\', "/")).is_absolute();
         let resolved = self.resolve(file_arg);
         if resolved.is_none() {
             let message = ctx(format!(
@@ -1513,7 +1688,7 @@ impl<L: Loader> Executor<'_, L> {
             &mut self.raw,
             ctx,
         );
-        self.apply_props(idx, props, ctx);
+        self.apply_props(idx, props, scan.vars(), ctx);
     }
 
     fn retained_property_count(&self, idx: usize) -> usize {
@@ -1647,6 +1822,23 @@ impl<L: Loader> Executor<'_, L> {
         }
     }
 
+    fn copied_properties(&self, target: usize, source: usize) -> Vec<RawProp> {
+        let mut cloned = self.raw.objects[source].props.clone();
+        if self.raw.objects[target].class == "load" {
+            // TLoadObj.MakeLike keeps the destination's physical connection.
+            let bus = self.raw.objects[target]
+                .get("bus1")
+                .cloned()
+                .unwrap_or_default();
+            for property in &mut cloned {
+                if property.name.as_deref() == Some("bus1") {
+                    property.value.clone_from(&bus);
+                }
+            }
+        }
+        cloned
+    }
+
     fn apply_like(&mut self, idx: usize, value: &Value, ctx: &dyn Fn(String) -> String) {
         let class = self.raw.objects[idx].class.clone();
         let key = (class.clone(), value.text.to_ascii_lowercase());
@@ -1723,9 +1915,10 @@ impl<L: Loader> Executor<'_, L> {
                         },
                     );
                 }
+                self.copy_static_load(idx, src);
                 self.copy_transformer_bindings(idx, src, base);
                 self.append_source_resets(idx, src, base);
-                let cloned = self.raw.objects[src].props.clone();
+                let cloned = self.copied_properties(idx, src);
                 let bounds: Vec<usize> = self.raw.objects[src]
                     .edit_bounds()
                     .map(|e| base + e)
@@ -1839,7 +2032,17 @@ impl<L: Loader> Executor<'_, L> {
         true
     }
 
-    fn apply_props(&mut self, idx: usize, props: Vec<RawProp>, ctx: &dyn Fn(String) -> String) {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keep ordered assignment dispatch and the native edit boundary together"
+    )]
+    fn apply_props(
+        &mut self,
+        idx: usize,
+        props: Vec<RawProp>,
+        vars: Option<&VarMap>,
+        ctx: &dyn Fn(String) -> String,
+    ) {
         self.raw.active = Some(idx);
         if self.raw.line_history.contains_key(&idx) {
             if self.retained_property_count(idx) > MAX_OBJECT_PROPS
@@ -1857,6 +2060,18 @@ impl<L: Loader> Executor<'_, L> {
             // Stateful source/line readers also use reset/copy records to
             // recover hidden defaults and the state visible during MakeLike.
             if p.name.as_deref() == Some("like") {
+                let object = &self.raw.objects[idx];
+                let copies = match object.class.as_str() {
+                    "autotrans" => Some(&mut self.raw.autotrans_copies),
+                    "capacitor" => Some(&mut self.raw.capacitor_copies),
+                    "storage" => Some(&mut self.raw.storage_copies),
+                    "generator" => Some(&mut self.raw.generator_copies),
+                    "reactor" => Some(&mut self.raw.reactor_copies),
+                    _ => None,
+                };
+                if let Some(copies) = copies {
+                    copies.insert(object.name.to_ascii_lowercase());
+                }
                 self.apply_like(idx, &p.value, ctx);
                 continue;
             }
@@ -1915,6 +2130,7 @@ impl<L: Loader> Executor<'_, L> {
             if !self.bind_geometry_references(idx, &p, ctx) {
                 return;
             }
+            self.static_load_property(idx, &p, vars, ctx);
             self.source_reference(idx, &p);
             if let Some(replay) = self.raw.source_replay.get_mut(&idx) {
                 replay.record_property(&p);
@@ -1932,11 +2148,25 @@ impl<L: Loader> Executor<'_, L> {
                     });
             }
         }
+        self.finish_static_load(idx);
         // This command line was one engine Edit; it ends in
         // RecalcElementData, so record the boundary.
         let end = self.raw.objects[idx].props.len();
         self.raw.objects[idx].edits.push(end);
     }
+}
+
+fn batch_expression(pattern: &str) -> Option<regex::bytes::Regex> {
+    if !pattern.is_ascii() {
+        return None;
+    }
+    regex::bytes::RegexBuilder::new(pattern)
+        .case_insensitive(true)
+        .unicode(false)
+        .size_limit(1 << 20)
+        .dfa_size_limit(1 << 20)
+        .build()
+        .ok()
 }
 
 fn prop_table(class: &str) -> Option<&'static DssClass> {
@@ -2048,34 +2278,47 @@ fn include_acquisition_error(error: &powerio_core::Error) -> std::io::Error {
 /// and acquired by that root relative name; an in-memory source consults its
 /// named buffers under the same names. A leading byte order mark on an
 /// included file is not decoded (the retained bytes keep it).
-fn source_include_loader(
-    source: &powerio_core::Source,
+struct SourceLoader<'a> {
+    source: &'a powerio_core::Source,
     lexical_root: PathBuf,
-) -> impl FnMut(&Path) -> std::io::Result<String> {
-    move |p: &Path| {
-        let relative = p.strip_prefix(&lexical_root).map_err(|_| {
-            Containment::refused(format!(
-                "{} does not sit under the confinement root",
-                p.display()
-            ))
-        })?;
-        let mut name = String::new();
-        for component in relative.components() {
-            if !name.is_empty() {
-                name.push('/');
-            }
-            name.push_str(&component.as_os_str().to_string_lossy());
-        }
-        let buffer = source
-            .root_buffer(&name)
-            .map_err(|error| include_acquisition_error(&error))?;
-        let text = std::str::from_utf8(buffer.content_bytes()).map_err(|e| {
+}
+
+fn source_include_loader(source: &powerio_core::Source, lexical_root: PathBuf) -> SourceLoader<'_> {
+    SourceLoader {
+        source,
+        lexical_root,
+    }
+}
+
+impl Loader for SourceLoader<'_> {
+    fn load(&mut self, path: &Path) -> std::io::Result<String> {
+        let bytes = self.load_bytes(path)?;
+        let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
+        String::from_utf8(bytes.to_vec()).map_err(|error| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("stream did not contain valid UTF-8: {e}"),
+                format!("stream did not contain valid UTF-8: {}", error.utf8_error()),
             )
+        })
+    }
+
+    fn load_bytes(&mut self, path: &Path) -> std::io::Result<Vec<u8>> {
+        let relative = path.strip_prefix(&self.lexical_root).map_err(|_| {
+            Containment::refused(format!(
+                "{} does not sit under the confinement root",
+                path.display()
+            ))
         })?;
-        Ok(text.to_owned())
+        let name = relative
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        let buffer = self
+            .source
+            .root_buffer(&name)
+            .map_err(|error| include_acquisition_error(&error))?;
+        Ok(buffer.bytes().to_vec())
     }
 }
 
@@ -2344,6 +2587,38 @@ mod tests {
 
     fn parse(text: &str) -> RawDss {
         __parse_raw_with(text, "test.dss", &mut no_files)
+    }
+
+    #[test]
+    fn batch_edit_matches_names_and_keeps_native_last_visited_object_active() {
+        let raw =
+            parse("new load.alpha kw=1\nnew load.beta kw=2\nbatchedit load.ALP kw=3\n~ kvar=4\n");
+        assert_eq!(
+            raw.find("load", "alpha").unwrap().get("kw").unwrap().text,
+            "3"
+        );
+        assert_eq!(
+            raw.find("load", "beta").unwrap().get("kw").unwrap().text,
+            "2"
+        );
+        assert_eq!(
+            raw.find("load", "beta").unwrap().get("kvar").unwrap().text,
+            "4"
+        );
+        assert!(raw.commands.iter().all(|c| c.verb != "batchedit"));
+    }
+
+    #[test]
+    fn unsupported_batch_selectors_are_errors() {
+        for selector in ["load.(?=alpha)", "load.(a)\\1", "missing..*", "load.é"] {
+            let raw = parse(&format!("new load.alpha kw=1\nbatchedit {selector} kw=3\n"));
+            assert!(
+                raw.diagnostics
+                    .iter()
+                    .any(|d| d.code() == C::READ_DSS_BATCH_UNRESOLVED.code),
+                "{selector}"
+            );
+        }
     }
 
     #[test]

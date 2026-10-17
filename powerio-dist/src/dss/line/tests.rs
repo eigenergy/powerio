@@ -235,7 +235,7 @@ fn terminal_command_binds_before_later_declarations_and_selects_the_line() {
     assert!(
         raw.warnings
             .iter()
-            .any(|w| w.contains("requires an existing ordinary Line"))
+            .any(|w| w.contains("requires an existing Line or Transformer"))
     );
     let raw = read("new circuit.c\nnew line.a\nnew line.b\nopen line.a 1 2\n~ length=7");
     assert_eq!(

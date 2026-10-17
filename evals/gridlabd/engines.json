@@ -54,5 +54,89 @@
     "dss-python": "0.15.7",
     "dss-python-backend": "0.14.5",
     "numpy": "2.5.3"
+  },
+  "indmach012a": {
+    "repository": "https://github.com/tshort/OpenDSS",
+    "commit": "5005c668a72d20775f4c2d060feebb2866ba1d38",
+    "license": "BSD-3-Clause",
+    "compiler_version": "3.2.2",
+    "qualified_build_platform": "Darwin arm64",
+    "files": [
+      {
+        "path": "License.txt",
+        "bytes": 1675,
+        "git_blob_sha1": "8c5a969ec0f78902c1817923aee93704b03d25d1"
+      },
+      {
+        "path": "Source/Common/DSSCallBackStructDef.pas",
+        "bytes": 4271,
+        "git_blob_sha1": "eb172c2e29ed5344c3e55b5dd08588ea36667e5e"
+      },
+      {
+        "path": "Source/IndMach012a/IndMach012Model.pas",
+        "bytes": 20225,
+        "git_blob_sha1": "f9698980c39df637954bd75e1e26ce85d59739f4"
+      },
+      {
+        "path": "Source/IndMach012a/IndMach012a.dpr",
+        "bytes": 1461,
+        "git_blob_sha1": "ddf07044b522aff9372f610f3c58f6e4016e8c35"
+      },
+      {
+        "path": "Source/IndMach012a/MainUnit.pas",
+        "bytes": 10009,
+        "git_blob_sha1": "64d1f9433ef5eaae81a1ac8c540f359cf80f99f4"
+      },
+      {
+        "path": "Source/IndMach012a/ParserDel.pas",
+        "bytes": 21352,
+        "git_blob_sha1": "bf7a0da56b7f77ae88b412f00d1b742a6186b1fc"
+      },
+      {
+        "path": "Source/PCElements/GeneratorVars.pas",
+        "bytes": 2283,
+        "git_blob_sha1": "f2442949054b634441fa14fa1f91eaa3608cd611"
+      },
+      {
+        "path": "Source/Parser/RPN.pas",
+        "bytes": 4381,
+        "git_blob_sha1": "d67496b4b2dc2fa61f63e460159ce1e99088edf1"
+      },
+      {
+        "path": "Source/Shared/Arraydef.pas",
+        "bytes": 1794,
+        "git_blob_sha1": "675a5cdf23bd79622c5a60dbc203e5b2e3d3a686"
+      },
+      {
+        "path": "Source/Shared/Command.pas",
+        "bytes": 1982,
+        "git_blob_sha1": "845da4502d835438e1e79da3b427c2e3f78850bc"
+      },
+      {
+        "path": "Source/Shared/Dynamics.pas",
+        "bytes": 1674,
+        "git_blob_sha1": "51d66316f2dfdacc4ff82ec52d9cab7166342cd2"
+      },
+      {
+        "path": "Source/Shared/HashList.pas",
+        "bytes": 13078,
+        "git_blob_sha1": "4650be6f5e334b095b09268330c7c139c759ddcd"
+      },
+      {
+        "path": "Source/Shared/Ucmatrix.pas",
+        "bytes": 11018,
+        "git_blob_sha1": "928ac9a716030856188a40a6d9d6ddeeca7e663f"
+      },
+      {
+        "path": "Source/Shared/Ucomplex.pas",
+        "bytes": 7242,
+        "git_blob_sha1": "68c358f80c7fa960f295c6e9c1fd064238ff5e52"
+      },
+      {
+        "path": "Source/Shared/mathutil.pas",
+        "bytes": 13822,
+        "git_blob_sha1": "103ad9f54bfb68d2186eef5f61c4a460c058e71a"
+      }
+    ]
   }
 }

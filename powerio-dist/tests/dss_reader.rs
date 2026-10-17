@@ -627,13 +627,19 @@ fn grounding_reactor_bus2_uses_the_dss_fill_rule() {
         "New Circuit.c basekv=4.16\n\
          New Reactor.rz bus1=b2.1.2.3 bus2=b2.0 phases=3 r=3 x=4\n",
     );
-    assert!(net.untyped_objects().iter().any(|o| o.name == "rz"));
+    // Only the first return is ground: native fills the remaining entries
+    // with phases 2 and 3, so this is a series-port equivalent, not a bank of
+    // three grounding shunts.
+    let line = net
+        .lines()
+        .iter()
+        .find(|line| line.name == "_pio_reactor_rz")
+        .unwrap();
+    assert_eq!(line.bus_from, "b2");
+    assert_eq!(line.bus_to, "b2");
+    assert_eq!(line.terminal_map_from, ["1", "2", "3"]);
+    assert_eq!(line.terminal_map_to, ["4", "2", "3"]);
     assert!(net.shunts().iter().all(|s| s.name != "rz"));
-    assert!(
-        net.warnings
-            .iter()
-            .any(|w| w.contains("reactor rz") && w.contains("series"))
-    );
 
     let net = parse_dss_str(
         "New Circuit.c basekv=4.16\n\
@@ -1040,9 +1046,9 @@ fn calculation_constructs_are_named_outside_the_static_profile() {
     let parsed = parse_dss_str(dss);
     let rendered = &parsed.warnings;
     assert!(
-        rendered
-            .iter()
-            .any(|w| w.contains("2 `loadshape` object(s) are outside the static circuit profile")),
+        rendered.iter().any(|w| w
+            .contains("2 `loadshape` object(s): static Load UseActual assignments")
+            && w.contains("time-varying simulation remains source-only")),
         "{rendered:?}"
     );
     assert!(
@@ -1051,7 +1057,7 @@ fn calculation_constructs_are_named_outside_the_static_profile() {
             .any(|w| w.contains("1 `monitor` object(s) are outside the static circuit profile")),
         "{rendered:?}"
     );
-    // Retained, not interpreted: the objects survive for exact writing.
+    // Definitions survive for exact writing; no time-series execution occurs.
     assert_eq!(parsed.untyped_objects().len(), 3);
     // The solve command is preserved without execution.
     assert!(parsed.commands().iter().any(|(verb, _)| verb == "solve"));
@@ -1081,4 +1087,24 @@ fn generator_voltage_law_defaults_survive_typed_emission() {
             restored.generators()[0].extras["vmaxpu"]
         );
     }
+}
+
+#[test]
+fn static_load_emission_diagnoses_omitted_harmonic_spectrum_reference() {
+    let net = parse_dss_str(
+        "new circuit.c basekv=12.47\nnew spectrum.third numharm=1 harmonic=[3] %mag=[8] angle=[0]\nnew load.l bus1=sourcebus kv=12.47 kw=10 spectrum=third",
+    );
+    assert_eq!(net.loads()[0].extras["spectrum"], "third");
+    assert!(net.untyped_objects().iter().any(|o| o.class == "spectrum"));
+    let emitted = emit_dss(&net);
+    assert!(!emitted.text.to_ascii_lowercase().contains("spectrum="));
+    assert!(
+        emitted
+            .warnings
+            .iter()
+            .any(|w| w.contains("harmonic spectrum reference omitted"))
+    );
+    let restored = parse_dss_str(&emitted.text);
+    assert_eq!(net.loads()[0].p_nom, restored.loads()[0].p_nom);
+    assert_eq!(net.loads()[0].q_nom, restored.loads()[0].q_nom);
 }

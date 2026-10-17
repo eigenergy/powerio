@@ -117,12 +117,20 @@ pub mod codes {
             "an object shape the model does not type yet is kept untyped";
         READ_DSS_SOURCE_DISABLED = "READ.DSS.SOURCE_DISABLED", Remark,
             "a disabled source is retained without electrical contributions";
+        EMIT_DSS_PROJECT_UNREPRESENTABLE = "EMIT.DSS.PROJECT_UNREPRESENTABLE", Error,
+            "retained DSS dependencies cannot be replayed as a portable project", category = Output;
+        READ_DSS_LOADSHAPE_UNRESOLVED = "READ.DSS.LOADSHAPE_UNRESOLVED", Error,
+            "static UseActual loadshape power could not be resolved";
         READ_DSS_SOURCE_UNRESOLVED = "READ.DSS.SOURCE_UNRESOLVED", Error,
             "a voltage source is invalid or outside the qualified static profile", category = Data;
+        READ_DSS_FAULT_UNRESOLVED = "READ.DSS.FAULT_UNRESOLVED", Error,
+            "a fault switching state could not be resolved into the static electrical snapshot", category = Data;
         READ_DSS_TRANSFORMER_UNRESOLVED = "READ.DSS.TRANSFORMER_UNRESOLVED", Error,
             "a transformer definition could not be resolved into the static electrical snapshot";
         READ_DSS_LINE_UNRESOLVED = "READ.DSS.LINE_UNRESOLVED", Error,
             "a line is invalid or outside the qualified static electrical profile", category = Data;
+        READ_DSS_BATCH_UNRESOLVED = "READ.DSS.BATCH_UNRESOLVED", Error,
+            "a BatchEdit selector could not be executed faithfully", category = Data;
         READ_DSS_PROPERTY_UNKNOWN = "READ.DSS.PROPERTY_UNKNOWN", Warning,
             "a property this reader does not model is kept as written";
         READ_DSS_REFERENCE_DROPPED = "READ.DSS.REFERENCE_DROPPED", Warning,

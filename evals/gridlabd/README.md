@@ -745,6 +745,67 @@ The complete static compatibility target still includes additional neutral,
 geometry, transformer and device profiles; these are not completed by source and
 line snapshot qualification alone.
 
+
+Matrix parsing follows the pinned native `ParseAsSymMatrix` rules: start with
+zeros and mirror supplied entries in row order. Later entries overwrite both
+symmetric positions; missing cells retain earlier writes or zero. Extra numeric
+rows beyond the conductor count are unread, and an empty property token keeps
+the previous matrix. An oversized consumed row remains an error. The line and
+linecode oracles include short, asymmetric, empty and partially specified rows.
+`IMYD.dss` imports its four-wire capacitance matrix. Full-feeder comparisons are
+reported separately; matching its matrix alone does not qualify the feeder.
+
+
+Source resolution preserves native arithmetic order when positive and negative
+sequence impedances agree. Diagonal impedance uses `(2 Z1 + Z0) / 3`;
+sequence-specified mutual reactance uses `Xs - X1`, while short-circuit inputs
+use `(X0 - X1) / 3`. The source-state oracle includes the modified secondary
+source, and a bit-level regression pins the distinction.
+
+
+## Compact native Thevenin emission
+
+An isolated imported three-phase source can emit as native `Vsource.source`
+when its current typed EMF phasors and series impedance have a representable
+native sequence form. This avoids additional ideal-source cancellation circuits.
+The writer derives the voltage, angle, sequence and impedance from typed values;
+retained parameters never override edits. Matrix reconstruction must be exact
+under the pinned engine's arithmetic. Phasor reconstruction allows only its
+floating-point roundoff, not material unbalance.
+
+The source must have a grounded return and no other attachment at its internal
+EMF bus. Bounds, location, route, ratings, shunts, asymmetric impedance or
+unrepresentable voltage changes retain the general equivalent. The source
+branch provenance identifies the compiler-created component but supplies no
+physics. This changes no network, IR or ABI type.
+
+Short-circuit MVA inputs have a distinct mutual-reactance arithmetic path.
+When the explicit sequence form cannot reconstruct the matrix exactly, the
+writer derives MVA and X/R parameters from the current typed impedance. A
+bounded search of nearby floating-point values must reproduce both native
+sequence impedances exactly under shared reader/writer equations. It never
+replays retained MVA parameters, and unsuccessful inversions keep the general
+source equivalent.
+
+```sh
+cargo build -p powerio-cli
+cargo build -p powerio --example dist_network
+python evals/gridlabd/dss_thevenin_oracle.py \
+  --bridge target/debug/examples/dist_network --powerio target/debug/powerio \
+  --output /tmp/new-thevenin-results
+```
+
+Twenty-five native checks cover 50/60 Hz, positive/negative/zero sequences, phase
+permutation, the secondary feeder source, short-circuit specification, unequal
+sequence and explicit-return fallbacks. Public IR conversions verify edits to
+voltage, resistance and branch length against separately changed native inputs.
+The MVA path also verifies a doubled typed source voltage with its impedance
+unchanged against an independently adjusted native short-circuit definition.
+All original voltages, equipment quantities and source conductors pass both
+canonical cycles. Changed-line, moved-source-port and unedited-model controls
+must fail. The observer follows explicit compiler source terminals when a
+fallback reimport splits the original port; it never substitutes bus KCL sums.
+
 ## Underground cable conversion
 
 `cable_oracle.py` compares conductor geometry with native impedance dumps and an
@@ -1543,41 +1604,81 @@ of a deliberately changed line. It compares every original bus voltage and
 Line/Transformer/AutoTrans/Load/Capacitor/Reactor terminal current, power and loss, plus the physical
 source feeder port. Source bytes and generated evidence stay external.
 
-Fourteen cases qualify: `DDBal`, `DDUnBal`, `DYBal`, `DYUnBal`, `GYDBal`,
-`GYDUnBal`, `OYODBal`, `OnePh`, `SCTBal`, `SCTUnBal`, `YDBal`, `YDUnBal`,
-`YYBal`, and `YYUnBal`. Together they provide 953 complex observables per
-conversion pass. These are IEEE4 variants, not fourteen distinct feeder
-families. Thirteen remain unqualified. The three geometry cases retain these
-failures:
+Twenty cases qualify: `DDBal`, `DDUnBal`, `DYBal`, `DYUnBal`, `GYDBal`,
+`GYDUnBal`, `IMODOD`, `IMOYODlag`, `IMOYODlead`, `IMYD`, `OYODBal`,
+`OYODUnBal`, `OnePh`, `SCTBal`, `SCTUnBal`, `YDBal`, `YDUnBal`, `YYBal`,
+and `YYUnBal`, plus `YYDXn`. Together they provide 1,545 complex observables per
+conversion pass. These are IEEE4 variants, not twenty distinct feeder families.
+Seven remain unqualified:
 
 - `YYD` retains delta-side voltage/power mismatches (maximum about
-  `1.37e-4 V` and `0.0788 VA`).
-- `YYD1Tank` does not converge in the converted native solve.
-- `YYDXn` retains eighteen electrical mismatches, including a maximum voltage
-  difference of about `4.53e-6 V` and power difference of `0.00261 VA`.
-
-For these three cases, native and canonical transformer admittance matrices
-are identical, and the largest line admittance difference is `7.95e-15 S`.
-The delta-side voltage differences are a common offset across phases; removing
-that offset leaves less than `2.3e-12 V`. This diagnostic does not change the
-qualification criteria or excuse nonconvergence.
-
-The ten additional cases exposed by the wider scan are also reported:
-
+  `1.68e-5 V` and `0.00967 VA`).
+- `YYD1Tank` currently fails canonical convergence at the pinned solve criterion.
+  Earlier converged checkpoints also failed strict electrical comparisons.
 - `Auto1bus`, `Auto3bus`, `AutoHLT`, and `AutoHLTCode` retain strict electrical
   mismatches, particularly at the very short connecting lines.
-- `AutoAuto` loses the native `AutoTrans` component during conversion.
-- `IMODOD`, `IMOYODlag`, and `IMOYODlead` retain substantive four-wire
-  voltage/current/power mismatches.
-- `IMYD` fails import on an inconsistent LineCode capacitance dimension.
-- `OYODUnBal` passes its first comparison but its repeated conversion fails
-  native convergence, so it does not qualify.
+- `AutoAuto` retains all original observations and its typed autotransformer
+  quantities match; the complete feeder still fails source/switch comparisons.
+
+The four newly passing `IM*` cases use a native Thevenin source reconstructed
+from current typed voltages and impedance. The same observer run against the
+previous writer still qualifies 15/27, so the gain is not an observation change.
+Every original bus node and source conductor remains observed. Source keys
+include the original bus and node identities, and ambiguous interfaces fail.
+Compiler-created auxiliary nodes are not original feeder observables.
+
+`OYODUnBal` passes after the native source arithmetic correction described
+above. Its 77 observations pass canonical output and reimport, with a failing
+changed-line control; three additional fresh runs reproduce that result.
+Direct line normalization and exact MVA source emission additionally qualify
+`YYDXn` across all 111 observations. Fresh repeats confirm `GYDBal`, `YDBal`
+and `YYDXn`; the current `GYDBal` first pass matches every observation exactly.
+No threshold was relaxed or observation removed.
 
 The broader external script audit recognizes both `New Circuit` and
-`New object=Circuit` spellings: 53 of 61 entry points parse and retain typed
+`New object=Circuit` spellings: 56 of 61 entry points parse and retain typed
 network equality through IR. The expanded inventory includes IEEE34, IEEE37
 and IEEE123 master cases previously missed by that scan. It also includes
 auxiliary and fault-study scripts; these counts are not qualified-feeder totals.
+
+The reproducible inventory verifies all 351 acquired files against repository
+commits in the catalog and their byte, SHA-256 and Git-blob hashes. Fifty-four
+entries can emit canonical DSS; the variable-slip induction-machine case
+remains blocked. Five parse refusals involve fault-study/direct-mode state.
+The DG protection case now reads its fixed open transformer through IR, but
+its enabled Fault remains unresolved and blocks electrical emission. None of
+these counts proves a native electrical match. Canonical GLM remains unavailable
+for this DSS inventory.
+
+```sh
+python evals/gridlabd/dss_corpus_audit.py --source-root /path/to/acquisition-with-manifest --bridge /path/to/dist_network --output /tmp/new-dss-audit
+```
+
+`dss_order_sensitivity.py` compares the native engine with itself after moving
+unchanged transformer declarations or reversing unchanged line declarations.
+It verifies exact element, terminal, bus/node and primitive-admittance
+inventories before reporting numerical sensitivity. No electrical parameter
+or comparison tolerance is changed.
+
+```sh
+python evals/gridlabd/dss_order_sensitivity.py --run-directory /path/to/ieee_distribution_import_oracle-output --output /tmp/new-order-diagnostic
+```
+
+All eight permutations of IEEE34mod2, IEEE13, IEEE123 and IEEE123Switches have
+identical native primitives but exceed at least one current strict threshold.
+Maximum native-to-native differences across the two permutations are:
+
+| Case | Voltage (V) | Current (A) | Power/loss (VA) |
+| --- | ---: | ---: | ---: |
+| IEEE34mod2 | 2.06e-8 | 7.45e-9 | 1.84e-4 |
+| IEEE13 | 7.07e-6 | 1.10e-5 | 1.70e-2 |
+| IEEE123 | 7.30e-7 | 1.43e-6 | 4.10e-3 |
+| IEEE123Switches | 7.31e-7 | 9.57e-7 | 4.48e-3 |
+
+This establishes an ordering-dependent numerical effect; it does not prove
+that every import residual is harmless. These feeders remain unqualified under
+the unchanged strict comparison. The diagnostic does not choose a favorable
+ordering, remove ports or replace native losses with inferred values.
 
 The native and generated solves all use controls off, at most 1,000 iterations,
 and tolerance `1e-11`, stricter than the original files' `1e-8`. The balanced
@@ -1613,9 +1714,9 @@ POWERIO_XFMRCODE_ORACLE=/tmp/new-xfmrcode-states/observations.json \
 ```
 
 
-## Public IEEE13, IEEE34, IEEE37, IEEE123, IEEE9500 and North American LV profiles
+## Public IEEE and low-voltage fixed-state profiles
 
-`ieee_distribution_import_oracle.py` compares nine public feeder entries with
+`ieee_distribution_import_oracle.py` compares sixteen public feeder entries with
 canonical output and repeated conversion. Sources and dependencies are pinned
 in `ieee-corpus.json`; public bytes remain in an external checkout. Run:
 
@@ -1633,6 +1734,194 @@ The common IEEE4 comparator checks complex bus voltages and device terminal
 currents, powers and losses, source ports, IR equality, repeated conversion and
 a changed-line negative control. Missing ports and nonconvergence fail. Each
 case reports its result independently; a parser success is not qualification.
+
+
+The suite includes both IEEE 8500 variants, the neutral-earth-voltage case,
+three four-wire delta induction-machine cases, and the modified secondary test
+circuit. Use `--case NAME` to select an entry; repeat the option for several.
+The secondary circuit's 74 binary load profiles are pinned by size and Git blob
+hash and remain external. Its explicit `sngfile`/`dblfile` path separators are
+normalized for the POSIX engine, with every change recorded in the report.
+
+Both IEEE 8500 variants now pass canonical output, IR and repeated conversion,
+with 60,595 balanced and 64,126 unbalanced observations in each pass. Independent
+fresh runs reproduce both qualifications, including changed-line negative
+controls. The former line-loss mismatches disappear after direct normalization
+of whole-line series impedance. The whole-case requirements now qualify seven
+of sixteen entries: IEEE34mod1, IEEE37, both IEEE8500 variants, NEV and the
+four-wire lagging/leading fixed-slip motor feeders.
+
+NEV now reaches electrical comparison: canonical load records omit harmonic
+spectrum references with a diagnostic. The pinned engine uses those spectra
+only in non-fundamental harmonic mode; changing every native NEV load to the
+default spectrum leaves all 3,044 native observations unchanged in the snapshot.
+NEV now passes all 3,031 compared observations through canonical emission and
+reimport. Its four wye capacitor banks retain their common neutral conductor
+(`Bus2=.10.10.10`) in the existing shunt admittance matrix. Canonical emission
+recognizes a uniform star, derives its kvar from the typed matrix and preserves
+the original capacitor identity and both terminals. Edits to the matrix take
+precedence over retained kvar. Other matrix shapes use the general admittance
+writer. There is no new network or IR type.
+
+`dss_capacitor_oracle.py` isolates this connection in twelve native cases:
+one, two and three phases, phase permutations, and independent 50/60 Hz operating
+and base frequencies. It checks typed and emitted primitives, all 660 electrical
+observations, IR/reimport, and changed-line and grounded-return negative controls:
+
+```sh
+python evals/gridlabd/dss_capacitor_oracle.py \
+  --bridge /path/to/dist_network --output /new/path
+```
+
+The newly qualified common-return profile is a single energized kvar/kV bank.
+Filtered/stepped banks, capacitance specification, copy or repeated connection
+history, separate return buses and terminal commands remain explicit gaps.
+Untyped active capacitors block electrical readiness. Explicitly disabled
+capacitors remain source-only unless a command could change that state.
+The native equations and connection convention are pinned to DSS C-API
+`87d85c2622c8281b92255335bc7c09b11191b21d`, `src/PDElements/Capacitor.pas`
+(Git blob `4e5d4557fcb47394a03c3906ce50b55c93059c08`).
+
+The modified secondary circuit now resolves its 74 binary load profiles and
+static `UseActual` assignments. Scalar transformer kVA assignments also follow
+the native winding synchronization rules. It still fails 20 of 953 observations
+through canonical output and reimport. All bus voltages pass, with a maximum
+voltage difference of `5.29e-9 V`. The remaining current and power differences
+occur only on the two near-zero-impedance substation links; the maximum power
+difference is about 927 VA. The feeder remains unqualified.
+
+The reader normalizes resolved whole-line series impedance with `Z / length`,
+avoiding the separately rounded reciprocal in `Z * (1 / length)`. On the short
+substation link, this preserves native total impedance and its primitive
+admittance exactly. Native source MVA reconstruction also avoids unnecessary
+source-equivalent cancellation. These changes improve floating-point fidelity;
+they do not round away impedance, replace equipment with ideal connections,
+change acceptance thresholds, or omit difficult terminal observations.
+
+The three four-wire induction-machine baselines now run with the actual upstream
+`IndMach012a` library. `build_indmach_oracle.py` fetches the BSD-3 source at
+`tshort/OpenDSS` commit `5005c668a72d20775f4c2d060feebb2866ba1d38`, verifies every
+pinned Git blob, and builds it with Free Pascal 3.2.2 on macOS arm64. The only
+source changes are local include paths, removal of the unused Windows resource,
+and Darwin C export names. Original and patched hashes, compiler output and the
+library hash remain in the external build directory. No motor equations change.
+The generator/dynamics records use the same packed ABI as the pinned C-API engine.
+
+```sh
+python evals/gridlabd/build_indmach_oracle.py --output /tmp/new-indmach-oracle
+DYLD_LIBRARY_PATH=/tmp/new-indmach-oracle/build \
+python evals/gridlabd/ieee_distribution_import_oracle.py \
+  --source-root /path/to/pinned/electricdss-tst \
+  --bridge /path/to/dist_network \
+  --indmach-manifest /tmp/new-indmach-oracle/manifest.json \
+  --output /tmp/new-ieee-with-motors
+```
+
+The native motor, lagging and leading cases converge at the unchanged strict
+settings and expose 109, 96 and 96 electrical observations. The runner saves
+these original reference snapshots even when typed conversion is blocked.
+The fixed-slip lagging/leading feeders now qualify all 96 observations each
+through typed import, IR, canonical output and reimport. Their full phase
+admittance is nonreciprocal and uses the existing `DistShunt` matrix; canonical
+DSS writes the existing exact coupled-impedance decomposition. The comparator
+sums only the explicitly declared equivalent's external terminal currents and
+powers, validates every component's bus/node inventory, and follows the typed
+source-impedance branch on reimport. It does not use unrelated bus flows or
+internal negative-element losses as the motor's electrical observations.
+
+The reader reproduces the pinned library's actual sequence transform: its
+rotation constant is `0.866025403` and it explicitly inverts that matrix.
+Replacing the inverse with conjugate/3 causes observable zero-slip errors.
+Userdata before library creation is ignored; library reloads reset state;
+successive userdata edits persist. Slip clamps when assigned, using the current
+maximum slip. Changing the maximum afterward does not retroactively clamp.
+The profile requires three-phase delta, explicit positive kV/kVA, and named
+numeric userdata. Unqualified parameters, copied hidden state and variable slip
+retain the explicit `READINESS.DSS.GENERATOR_USER_MODEL_UNRESOLVED` blocker.
+Same-format byte echo remains available. Static variable-slip behavior remains
+an unresolved compatibility requirement, not an excluded active control.
+
+`dss_fixed_motor_oracle.py` checks nine parameter/state histories at 0.9, 1.0 and
+1.1 pu. All 27 cases pass typed matrix current evaluation, canonical output,
+reimport and changed-line negative controls (999 observations per conversion).
+An ignored Rust test multiplies each actual typed matrix by 1.17 and emits from
+a fresh module. All 27 edited circuits match independently increased native
+motor kVA ratings and differ from their original circuits (another 999
+observations). The maximum native current-law difference is below 2e-9 A.
+No acceptance thresholds change.
+
+```sh
+DYLD_LIBRARY_PATH=/tmp/new-indmach-oracle/build \
+python evals/gridlabd/dss_fixed_motor_oracle.py prepare \
+  --bridge /path/to/dist_network \
+  --indmach-manifest /tmp/new-indmach-oracle/manifest.json \
+  --output /tmp/new-fixed-motor-sweep
+POWERIO_FIXED_MOTOR_CASES=/tmp/new-fixed-motor-sweep \
+  cargo test -p powerio-dist --test dss_user_model \
+  export_edited_fixed_motor_matrices -- --ignored
+DYLD_LIBRARY_PATH=/tmp/new-indmach-oracle/build \
+python evals/gridlabd/dss_fixed_motor_oracle.py check-edits \
+  --bridge /path/to/dist_network \
+  --indmach-manifest /tmp/new-indmach-oracle/manifest.json \
+  --output /tmp/new-fixed-motor-sweep
+```
+
+The earlier native baseline also exposed a writer ordering bug: `UserData` was
+emitted before `UserModel`, leaving constructor defaults. The internal writer
+now loads the library first. `export_generator_user_model_native_probe` remains
+a diagnostic replay check for the unresolved variable-slip source, invoked
+with `POWERIO_MOTOR_INPUT` and `POWERIO_MOTOR_OUTPUT`. Internal replay is not
+public typed qualification.
+
+### Static load-profile assignments
+
+Assigning a `UseActual=yes` LoadShape to a Load's `daily`, `yearly`, or `duty`
+property changes its nominal power even in snapshot mode. The reader applies
+that change at the assignment, using the shape's state at that point in the
+script. Later shape edits do not retroactively change an already assigned load.
+The peak uses the first maximum absolute P sample, retaining its sign and Q at
+that same index. An explicit Qmax overrides the sampled Q; absent Q data gives
+zero. Explicit PF, kvar, ordered edits and MakeLike follow the pinned native
+assignment rules. No time-series execution is performed.
+
+Supported profile data includes inline arrays, CSV columns with an optional
+header, direct CSV/PQCSV input, and little-endian single/double precision binary
+files. Direct variable-interval binary files contain time/value pairs. The
+reader preserves the native distinction between direct single-precision
+storage and binary arrays promoted to double precision, including copied shapes.
+Acquisition uses the existing source-root confinement and include budgets;
+shapes are limited to 1,048,576 points. Unsupported transformations, memory
+mapping, invalid data, or short Q files produce an error when an actual-power
+assignment depends on them. They cannot silently leave the old load power.
+
+`dss_useactual_oracle.py` compares nominal P/Q and native electrical results in
+55 cases, including ordered references and copies, signed/tied peaks, PF
+precedence, binary/CSV inputs, and scalar versus array transformer ratings.
+All cases require canonical output, IR equality, reimport, and a changed-line
+negative control.
+
+LoadShape has a native ordered property table, so bounded `BatchEdit`,
+abbreviations and positional assignments use the same stateful path as ordinary
+edits. This restores the European LV master's `BatchEdit LoadShape..*
+useactual=no` before load creation. Later shape edits affect future load
+assignments; they do not retroactively change an already assigned nominal power.
+Unsupported actions still produce explicit errors when an actual shape is used.
+The complete European LV feeder again passes all 14,784 electrical observations
+through canonical output and reimport.
+
+```sh
+python evals/gridlabd/dss_useactual_oracle.py \
+  --bridge /path/to/dist_network --output /new/path
+```
+
+Same-format DSS project emission includes every acquired dependency, including
+binary profiles, byte for byte under its original relative name. Root-level
+projects also provide the established `case.dss` entrypoint; nested entrypoints
+keep their relative location. Emission does not reopen source files. Absolute
+dependencies, missing dependency context, or portable filename collisions are
+refused because a byte-exact project cannot safely be relocated in those cases.
+Canonical emission from the typed value remains available. Binary input is
+never decoded as text or stripped of bytes that resemble a UTF-8 BOM.
 
 
 ### Public North American spacing definitions
@@ -1747,11 +2036,273 @@ python evals/gridlabd/ieee9500_archive_import_oracle.py \
 ```
 
 The archive bytes are checked against the catalog before extraction. Both
-fixed-state native cases converge, but their first converted comparisons left
-almost every downstream bus de-energized. The source path contains a series
-`Reactor.hvmv_sub_hsb` with `r=0` and `x=14.798307` ohms; that reactor was
-retained untyped and omitted from canonical electrical equipment. These are
-failed comparisons, not valid all-zero solutions. The readiness audit now
-blocks active untyped reactors explicitly, so these feeder imports correctly
-remain incomplete after their line geometry is resolved. Series-reactor
-conversion is the next required electrical feature for these public cases.
+fixed-state native cases converge. Their source-path series reactor now lowers
+to an existing conductor-resolved impedance branch, restoring the downstream
+connection in canonical output. No public network or IR type is added.
+
+The scalar series-reactor profile requires explicit `x`, permits `r`, preserves
+phase and terminal order, and scales reactance from `basefreq` to the snapshot
+frequency. Default and explicit current ratings are retained. Competing
+impedance specifications, delta connections, damping/curves, copy histories,
+non-default creation-frequency history and terminal/enable commands remain
+explicitly unqualified. Active untyped reactors block electrical readiness;
+a disabled property cannot hide an unresolved enable command. The comparator
+uses the typed branch's original-element identity to compare the reactor's
+physical ports even though its canonical class is Line.
+
+```sh
+python evals/gridlabd/dss_series_reactor_oracle.py \
+  --bridge /path/to/dist_network --output /tmp/new-series-reactor
+```
+
+Fifteen native cases cover single-, two- and three-phase ports, resistance,
+frequency scaling, assignment-time current ratings, IR, repeated canonical
+conversion and changed-line negative controls. All pass. Both complete CIMHub
+IEEE9500 canonical cases energize the feeder, but remain unqualified.
+
+Rated wye shunt reactors with explicit series resistance or parallel damping
+also use the existing shunt matrix. Native Reactor.R does not change the
+kV/kvar specification mode: X still comes from the rating, with R retained.
+This includes the R=0 declarations in the public IEEE118 case. Rp contributes
+parallel conductance, including when series R is omitted. The reader evaluates
+the inductance at the snapshot frequency and preserves normal/emergency
+current ratings. Competing impedance specifications, copied state, explicit
+return buses, delta resistance, curves and terminal commands remain outside
+this added profile; existing series/grounding profiles are unchanged.
+
+```sh
+python evals/gridlabd/dss_rated_reactor_oracle.py --bridge /path/to/dist_network --output /tmp/new-rated-reactors
+POWERIO_RATED_REACTOR_CASES=/tmp/new-rated-reactors cargo test -p powerio-dist --test dss_rated_reactor export_edited_rated_reactor_matrices -- --ignored
+python evals/gridlabd/dss_rated_reactor_oracle.py --bridge /path/to/dist_network --output /tmp/new-rated-reactors --check-edits
+```
+
+Thirty cases cover one/two/three phases, 50/60 Hz, zero/nonzero resistance,
+parallel damping and implicit R. Checks include canonical output, reimport,
+current ratings and changed-line negative controls. Independent native edits
+reduce resistance/damping and increase kvar to match actual edited typed
+matrices; ratings are explicitly held fixed, as in the typed edit. Scalar
+shunt emission reuses a retained kvar only when its projection exactly equals
+the current matrix, so stale metadata cannot undo an edit.
+
+IEEE118 now parses through IR and emits canonical DSS. Its original native
+baseline does not converge at the pinned validation settings, so no whole-case
+electrical qualification is claimed. Its PV-generator behavior and the broader
+generator-model audit remain separate work.
+
+### Fixed OpenDSS transformer terminals
+
+Explicit Open/Close commands bind an existing Transformer and materialize its
+final conductor states. A conductor index of zero changes phase conductors
+only; the neutral remains in its current state. The unchanged typed winding
+circuit moves open ports to internal zero-current nodes. Closed non-grounded
+ports use ideal contacts; closed grounded returns stay directly on earth.
+Every external conductor receives the pinned engine's 1e-12 S stabilization
+when any port opens. Delta's unused conductor does not create an isolated
+internal node. Two-phase delta retains all three hot terminals of its open
+chain, including an explicit third bus node.
+
+The native oracle measures every original terminal/conductor, including the
+neutral and unused slots, plus aggregate external power and losses. It verifies
+the declared winding/contact/stabilization inventory and observes only those
+components. Internal element losses do not replace the original port loss.
+
+```sh
+python evals/gridlabd/dss_open_transformer_oracle.py --bridge /path/to/dist_network --output /tmp/new-open-transformers
+POWERIO_OPEN_TRANSFORMER_CASES=/tmp/new-open-transformers cargo test -p powerio-dist --test dss_open_transformer export_edited_open_transformer_windings -- --ignored
+python evals/gridlabd/dss_open_transformer_oracle.py --bridge /path/to/dist_network --output /tmp/new-open-transformers --check-edits
+```
+
+Eighty-four cases cover one/two/three phases, delta/wye connections, either
+terminal, phase/neutral/unused-slot openings and three-winding units. All pass
+canonical output, IR equality, reimport and changed-line negative controls.
+All 84 actual typed winding-resistance/primary-tap edits also match independent
+native edits, with 4,408 complex observations per pass. The unchanged input
+fails each edited comparison as a negative control.
+
+Layout/XfmrCode/copy changes after terminal commands and disabled transformers
+with terminal commands still fail explicitly. Ordinary parameter edits preserve
+the materialized state; reclosed ports use the ordinary transformer mapping.
+Active protection execution is excluded. Enabled unconverted Fault objects now
+block electrical use and canonical emission instead of being omitted. The
+public DG protection input therefore gains parsing/IR support, without a
+whole-case electrical qualification or canonical DSS claim.
+
+### IEEE9500 PV phases and static BatchEdit commands
+
+PVSystem and fixed-dispatch inverter output uses the typed per-phase rating
+count. A two-phase wye inverter has two phases and a separate return terminal;
+the return does not become a third generating phase. Thirteen native cases
+cover wye/delta connections, phase permutations, power factors and a split-phase
+service, with IR, repeated output and negative controls.
+
+`BatchEdit` applies properties to the objects present at that point in the
+script, in native visit order. Name matching is case-insensitive regular
+expression search, without implicit anchoring. The reader uses the existing
+ordered property/copy machinery and charges visits and assignments against its
+work budgets. Supported ASCII expressions include anchors, alternation,
+character classes and repetitions. Unsupported expressions such as lookarounds
+or backreferences, non-ASCII matching and unknown classes report
+`READ.DSS.BATCH_UNRESOLVED`; they are not ignored. A continuation following a
+batch edits the last visited object, even when its name did not match. Load
+copies preserve the destination's bus connection.
+
+```sh
+python evals/gridlabd/dss_pv_phase_oracle.py \
+  --bridge /path/to/dist_network --output /tmp/new-pv-phases
+python evals/gridlabd/dss_batch_edit_oracle.py \
+  --bridge /path/to/dist_network --output /tmp/new-batch-edits
+```
+
+In the balanced CIMHub9500 case, fixing the PV phase count restores total PV
+output from 2,303.11 kW to the native 2,954.66 kW. Applying the feeder's
+`BatchEdit load..* vminpu=0.88` restores the native total load of 13,668.991 kW.
+Maximum voltage differences fall from 88.8 V to 9.86 V after the PV fix, then to
+0.638 V after the load edit. The unbalanced case reaches 0.638 V as well.
+These are still failed comparisons under unchanged thresholds. Matched passive
+admittance entries agree within `9.1e-13` S in the balanced diagnostic.
+
+### IEEE9500 fixed battery power
+
+The two idling Storage objects in each CIMHub IEEE9500 archive consume 2.5 kW
+each. The reader represents their AC demand as typed `BoundedConstantPower` loads: constant power inside the
+voltage band, impedance continuation outside it, and an optional current limit.
+The law survives IR and typed edits. Canonical DSS writes a fixed Storage
+equivalent, using discharging for negative demand and idling for positive or
+zero demand; it does not reconstruct battery dispatch or energy capacity.
+
+The qualified profile covers one-phase wye and two-/three-phase wye or delta,
+voltage model 1, and fixed idling, charging or discharging P/Q setpoints within
+inverter ratings. Voltage base, kW/rating and reactive-mode assignment order are
+preserved. State-of-charge guards run at each native edit boundary: a full
+battery requested to charge becomes idling, and a later SOC edit alone does not
+restart it. The pinned constructor initially has zero absolute reserve despite
+its displayed 20% setting; an explicit `kWhRated` or `%Reserve` setter updates
+the absolute reserve. Charge/discharge percentages use the default rated-kW cap.
+Efficiency settings without an inverter curve do not alter the fixed AC power.
+Efficiency curves, forced balance, copied inverter state, one-phase delta,
+negative charge/discharge percentages and inverter P/Q clipping remain explicit
+electrical blockers. Untyped active storage reports `READINESS.DSS.STORAGE_UNRESOLVED`. PMD/BMOPF projections report
+the loss of voltage bounds and current limits. Legacy C load views reject this
+law rather than presenting it as unbounded constant power.
+
+```sh
+python evals/gridlabd/dss_storage_oracle.py \
+  --bridge /path/to/dist_network --output /tmp/new-storage-sweeps
+POWERIO_STORAGE_SAMPLES=/tmp/new-storage-sweeps/report.json \
+  cargo test -p powerio --test load_voltage_ir \
+  typed_static_storage_powers_match_native_voltage_sweeps -- --ignored
+```
+
+The 239-case sweep compares original, canonical and reimported bus voltages,
+terminal currents, powers and losses with unchanged thresholds. It covers all
+three states, five connection layouts, both current-limit settings, seven
+voltage levels, reactive-only output, and assignment/edit histories. An altered
+line negative control must fail. The Rust check separately evaluates typed branch powers at
+the native voltages, including high-voltage current limiting and low-voltage
+impedance continuation. Zero-power cases include an independent background load
+so the changed-line control still exercises an energized line. Typed edits may
+mix consuming, generating and reactive-only branches; canonical output splits
+them without losing terminal mappings.
+
+The separate electricdss-tst IEEE9500 entry now imports through IR and emits
+canonical DSS without readiness blockers. Its two batteries default to 25 kW
+ratings and each draws 0.25 kW at the written state, including the first battery's
+full-SOC transition from charging to idling. The original native feeder still
+does not converge at the pinned strict snapshot settings, so this entry remains
+unqualified. Parser success is recorded separately from electrical matching.
+
+Including the idle demand reduces maximum voltage differences to approximately
+0.00111 V (balanced) and 0.00118 V (unbalanced), from 0.638 V. Both complete
+IEEE9500 comparisons still fail. The current comparisons retain all 68,720
+balanced and 72,545 unbalanced observations, including the original switch
+ports through the mappings below. There are 26,368 and 30,706 strict failures,
+respectively, in both canonical passes. Aggregate power and native convergence
+do not qualify a feeder.
+
+### External ports of fixed-open Line equivalents
+
+Fixed-open Lines retain their original element identity and the names of their
+two external contacts on the reduced-admittance shunt. The native comparator
+checks those contacts against the original bus/conductor inventory and the
+typed equivalent's internal terminals. It compares each external current and
+power, and sums boundary power for total complex loss. It does not compare an
+internal negative resistance's loss as if it were the whole original device.
+Aliased reactors also retain original conductor identities when canonical DSS
+moves a ground return to the last conductor. Ambiguous repeated-node
+permutations are refused.
+
+```sh
+python evals/gridlabd/dss_open_ports_oracle.py \
+  --bridge /path/to/dist_network --output /tmp/new-open-port-results
+```
+
+Ten native cases cover single phase, permuted three phase, explicit neutrals,
+partial/whole terminal openings, generated-name collisions and reactor return
+permutations. Wrong interface bus, node and element mappings must be rejected;
+the altered-line electrical negative control must also fail. Both IEEE9500
+archive comparisons now include all original observations, including the 85
+previously missing switch observations in each case. Strict electrical residuals
+remain failures.
+
+### Native declaration-order sensitivity
+
+The following diagnostic reorders only independent, explicitly parameterized
+fixed-switch declarations in already acquired IEEE9500 profiles. It verifies
+original profile hashes, component bus/node inventories and every native YPrim
+entry before comparing solutions. It performs no PowerIO conversion and never
+qualifies a feeder.
+
+```sh
+python evals/gridlabd/ieee9500_native_order_oracle.py \
+  --profile-run /path/to/ieee9500-archive-results \
+  --output /tmp/new-native-order-results
+```
+
+With identical native admittance entries, the balanced and unbalanced controls
+show maximum voltage differences of about 0.00225 V and 0.00291 V. Their maximum
+power differences are about 17.5 VA and 13.7 VA. This establishes native numerical
+sensitivity under the existing strict thresholds. It does not establish that
+all conversion residuals are numerical, widen tolerances, or replace missing
+model validation with a passing classification.
+
+
+### IEEE 4 AutoTrans coil equivalents
+
+The DSS reader supports the three-phase series/common-wye AutoTrans profile
+with two windings or a delta tertiary, grounded common returns and unity taps.
+It requires explicit scalar leakage measurements and winding buses. Arrays,
+MakeLike, terminal operations, non-unity taps and other connections remain
+untyped with an electrical-readiness blocker. Disabled unsupported equipment
+can remain source-only. This is a bounded static profile, not full AutoTrans
+support.
+
+The typed representation uses three existing single-phase transformers and
+ideal contacts. Series-coil voltage and leakage parameters use the native
+HV-minus-LV base correction. Creation frequency, core losses and antifloat
+admittance are retained. Each coil uses the existing two-ended delta connection;
+ordinary single-phase wye would add a neutral admittance absent from AutoTrans.
+
+```sh
+python evals/gridlabd/dss_autotrans_oracle.py \
+  --bridge /path/to/dist_network --output /tmp/new-autotrans-results
+```
+
+Eight energized native cases check two/three windings, phase permutations,
+unequal loading, core-loss settings and 50/60 Hz snapshots. They compare native
+primitive admittances, voltages, all reported terminal currents and powers,
+losses, IR round trips and repeated canonical output. Wrong contact nodes,
+coil buses and missing banks are rejected. Altering a feeder line must fail the
+electrical comparison.
+
+Native AutoTrans reporting needs special treatment: common hot currents include
+the series return, but the series-return slots remain in the API output.
+`Powers` uses these adjusted currents; `Losses` uses the unadjusted primitive.
+The observer reproduces both conventions without dropping the duplicated slots
+or replacing losses with the sum of reported powers.
+
+The public CIMHub IEEE 4 `AutoAuto.dss` now parses into typed equipment and
+retains all 77 electrical observations. Its autotransformer observations match,
+but the complete feeder still fails strict source/switch comparisons (about
+0.000503 A and 100.23 VA maximum residual in the pinned run). It remains a failed
+feeder qualification. The broader IEEE 4 suite is 20/27 qualified; no
+thresholds have changed.

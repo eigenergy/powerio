@@ -27,6 +27,7 @@ def cases():
     specs = {
         "default": "",
         "r_x": "r1=0.8 x1=1.7 r0=2.1 x0=3.4",
+        "ieee_secondary": "r1=1.036 x1=10.1433 r0=5.462 x0=34.1897",
         "z_equal": "z1=[0.8 1.7] z0=[2.1 3.4]",
         "z_distinct": "z1=[0.8 1.7] z2=[1.2 2.3] z0=[2.1 3.4]",
         "pu_z": "basemva=5 puz1=[0.08 0.17] puz0=[0.21 0.34] puz2=[0.12 0.23]",
@@ -189,7 +190,8 @@ def main():
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     report = {"scope": __doc__, "cases": {}}
-    for name, constructor, operating, target, script in cases():
+    for name, constructor, requested_operating, target, script in cases():
+        operating = requested_operating
         d = dss.NewContext()
         d.Basic.AllowChangeDir(False)
         version = d.Basic.Version()

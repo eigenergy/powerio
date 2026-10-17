@@ -393,7 +393,8 @@ pub fn parse(
         );
     }
     let mut warnings = crate::collect::Diagnostics::new();
-    match parse_to_network(&source, &mut warnings) {
+    let mut dss_replay = None;
+    match parse_to_network(&source, &mut warnings, &mut dss_replay) {
         Ok((network, format)) => {
             // Record the detected format before the common constructor builds
             // descriptors and the coarse `/value` source map.
@@ -401,7 +402,17 @@ pub fn parse(
                 Ok(format) => source.with_format(format),
                 Err(_) => source,
             };
-            powerio_core::PioModule::parsed(network, source, warnings.into_records())
+            let mut module =
+                powerio_core::PioModule::parsed(network, source, warnings.into_records())?;
+            if let Some(absolute_dependency) = dss_replay {
+                module.insert_extension(
+                    "org.powerio.opendss",
+                    serde_json::json!({
+                        "version": 1, "absolute_dependency": absolute_dependency,
+                    }),
+                )?;
+            }
+            Ok(module)
         }
         Err(error) => {
             let core = powerio_core::Error::new(error.code(), error.to_string());
@@ -418,6 +429,7 @@ pub fn parse(
 fn parse_to_network(
     source: &powerio_core::Source,
     warnings: &mut crate::collect::Diagnostics,
+    dss_replay: &mut Option<bool>,
 ) -> crate::Result<(MulticonductorNetwork, DistTargetFormat)> {
     let declared = source
         .format()
@@ -466,7 +478,9 @@ fn parse_to_network(
         DistTargetFormat::Gridlabd | DistTargetFormat::GridlabdArras => Err(
             crate::Error::UnknownFormat("GLM project requires the project parser".into()),
         ),
-        DistTargetFormat::Dss => crate::dss::read::parse_dss_collecting(source, warnings),
+        DistTargetFormat::Dss => {
+            crate::dss::read::parse_dss_collecting(source, warnings, dss_replay)
+        }
         DistTargetFormat::BmopfJson => {
             let buffer = primary(source)?;
             crate::bmopf::read::parse_bmopf_collecting(source_text(&buffer)?, warnings)
@@ -671,6 +685,17 @@ pub fn emit_with_options(
             powerio_core::Fidelity::ExactSameFormat,
             project.artifacts,
             project.diagnostics,
+        );
+    }
+    if format == DistTargetFormat::Dss
+        && options.is_default_for(format)
+        && let Some(artifacts) = crate::dss::retained_project(module)?
+    {
+        return destination.__commit_artifacts(
+            true,
+            powerio_core::Fidelity::ExactSameFormat,
+            artifacts,
+            Vec::new(),
         );
     }
     let conv = emit_text_with_options(module, format, options)?;

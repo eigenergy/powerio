@@ -7864,10 +7864,11 @@ fn require_legacy_load_voltage_model(
         model,
         powerio_dist::DistLoadVoltageModel::BoundedZip { .. }
             | powerio_dist::DistLoadVoltageModel::BoundedExponential { .. }
+            | powerio_dist::DistLoadVoltageModel::BoundedConstantPower { .. }
     ) {
         return Err(boundary_error(
             &codes::REQUEST_CAPI_TYPE_MISMATCH,
-            "legacy load view cannot describe voltage-band transitions or dropout",
+            "legacy load view cannot describe voltage-band transitions, current limits or dropout",
         ));
     }
     Ok(())
@@ -20305,13 +20306,23 @@ mod tests {
 
     #[test]
     fn legacy_load_views_refuse_unrepresented_voltage_bands() {
-        for model in [1, 3, 4] {
+        for model in [0, 1, 3, 4] {
             check_legacy_load_voltage_refusal(model);
         }
     }
 
     fn check_legacy_load_voltage_refusal(model: u8) {
-        let source = powerio_core::Source::from_memory("load.dss", format!("New Circuit.c phases=1 bus1=b.1 basekv=.24\nNew Load.l phases=1 bus1=b.1.0 kv=.24 kw=1 kvar=.5 model={model}\n").into_bytes()).unwrap();
+        let device = if model == 0 {
+            "New Storage.l phases=1 bus1=b.1.0 kv=.24 kwrated=100 kva=100 limitcurrent=yes"
+                .to_owned()
+        } else {
+            format!("New Load.l phases=1 bus1=b.1.0 kv=.24 kw=1 kvar=.5 model={model}")
+        };
+        let source = powerio_core::Source::from_memory(
+            "load.dss",
+            format!("New Circuit.c phases=1 bus1=b.1 basekv=.24\n{device}\n").into_bytes(),
+        )
+        .unwrap();
         let parsed = powerio_dist::parse(source).unwrap();
         let pf = powerio_prob::McAcPfInstance::from_network(parsed.value().clone()).unwrap();
         unsafe {

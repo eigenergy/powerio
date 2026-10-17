@@ -556,6 +556,50 @@ checks cover both solvers and forks. Other battery operating modes, weather file
 multipoint efficiency and canonical GLM inverter writing remain unfinished.
 Climate coordinates and thermal inputs remain source-only with diagnostics.
 
+OpenDSS rated wye reactors with kV/kvar and explicit R or Rp map to the
+existing shunt admittance. R=0 retains the rating-based reactance; R does not
+select the explicit-X specification mode. The profile preserves resistance,
+parallel damping and the snapshot-frequency admittance. Canonical output uses
+the current typed matrix, including edits after reimport. Copied state,
+competing specifications, curves and delta resistance remain unsupported in
+this profile. Native tests cover thirty phase/frequency/impedance cases.
+
+OpenDSS Transformer Open/Close commands preserve fixed conductor states for
+one-, two- and three-phase circuits. Open ports move to internal zero-current
+terminals while retaining editable winding parameters; ideal contacts preserve
+closed connections. The equivalent includes the native external diagonal
+stabilization. A whole-terminal command changes phase conductors, leaving the
+neutral state unchanged. Two-phase delta windings retain their third hot
+terminal. Native checks cover 84 cases through IR, canonical DSS and reimport,
+including three-winding units. Aggregate losses must use the external ports.
+Layout, XfmrCode or copy changes after terminal commands, and disabled units
+with terminal commands, remain unresolved. Canonical GLM mapping of these
+circuits remains unfinished. Enabled unconverted Fault objects block electrical
+emission until their static admittance and switching state are represented.
+
+OpenDSS Generator model 6 delegates its voltage/current law to an external
+library. The three-phase delta `IndMach012a` fixed-slip profile reads into the
+existing full shunt admittance, including positive- and negative-sequence
+behavior. Canonical DSS derives its equivalent circuit from the current typed
+matrix. Native checks qualify both public four-wire lagging/leading feeders,
+including IR, canonical reimport and all original motor terminals. A separate
+27-case native sweep covers voltage, slip, initialization order and typed
+matrix edits. Explicit positive kV/kVA bases and named numeric userdata are
+required; library reloads, successive edits and slip-limit setter order are
+preserved. Variable slip, copied hidden state, other connections/user libraries
+and unsupported parameters remain blocked by
+`READINESS.DSS.GENERATOR_USER_MODEL_UNRESOLVED`. Retained same-format source
+emission remains available. No new network type or IR schema is needed.
+
+OpenDSS Storage voltage model 1 reads fixed idling, charging and discharging
+power as signed `BoundedConstantPower` loads. The profile covers one-phase wye
+and two-/three-phase wye or delta, including reactive-only states. It preserves
+voltage bounds, current limits, setter order and end-of-edit state-of-charge
+guards. Canonical DSS derives fixed equivalents from the current typed powers,
+including edits that mix consuming and generating branches. Energy integration
+and dispatch remain source-only. Inverter curves, P/Q clipping, copied inverter
+state and one-phase delta remain unsupported and block electrical readiness.
+
 The PNNL NR profile accepts future manual reliability events only when their
 start date is strictly after the complete clock window, all references resolve,
 and every declared phase reaches a fixed source. Connected `SWING_PQ` buses in
@@ -716,8 +760,9 @@ unique physical allocation of branch flows.
 policy. `Reject` keeps the strict boundary. `Lower` applies audited static
 neutral, switch, line-shunt and capacitor transformations. `Approximate` also
 linearizes supported load models and maps IBRs to static generators while
-freezing named controls. Bounded ZIP and exponential laws can be projected only when nominal
-voltage lies strictly inside its smooth law region, above dropout. The action
+freezing named controls. Bounded ZIP, exponential and constant-power laws can be projected only when nominal
+voltage lies strictly inside its smooth law region, above dropout and below any
+current-limiting transition. The action
 retains the original `source_voltage_model` and its bounds; strict preparation
 keeps the complete piecewise law. The source network is not mutated.
 `Permissive` can additionally omit retained untyped

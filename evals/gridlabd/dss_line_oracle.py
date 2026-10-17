@@ -147,6 +147,18 @@ def layouts():
         )
     cases["units_repeated"] = a + seq + " units=km units=ft units=m"
     cases["matrix_units_reset"] = a + "units=km " + mat + " units=ft"
+    cases.update({
+        "ieee4_short_cmatrix": a + "phases=4 cmatrix=(2.849 | -.922454 3.00287 | -.353318 -.587272 2.70828)\nNew Reactor.matrix_reference phases=1 bus1=sourcebus.4 r=.1 x=0",
+        "short_rmatrix": a + "rmatrix=(1|.2 2)",
+        "short_xmatrix": a + "xmatrix=(1|.2 2)",
+        "upper_entries_retained": a + "rmatrix=(1 .7 .8|.2 2)",
+        "asymmetric_rows_overwrite": a + "rmatrix=(1 .7 .8|.2 2 .9|.3 .4 3)",
+        "empty_middle_row": a + "cmatrix=(1||.3 .4 3)",
+        "empty_first_row": a + "cmatrix=(|.2 2|.3 .4 3)",
+        "extra_matrix_row": a + "cmatrix=(1|.2 2|.3 .4 3|99)",
+        "empty_matrix_token": a + mat + " rmatrix=() cmatrix=()",
+        "blank_matrix_token": a + "cmatrix=( )",
+    })
     return cases
 
 

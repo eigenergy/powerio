@@ -241,6 +241,10 @@ impl DssWriter {
             .collect();
         let mut count = 0;
         for source in net.sources() {
+            if count == 0 && self.native_thevenin_source(net, source) {
+                count += 1;
+                continue;
+            }
             let reference = source.reference_terminal.as_ref().map_or_else(
                 || format!("{}.0", source.bus),
                 |r| self.bus_ref(&source.bus, std::slice::from_ref(r)),

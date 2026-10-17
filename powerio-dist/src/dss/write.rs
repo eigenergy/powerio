@@ -30,11 +30,14 @@ use super::{lex, prop};
 
 mod admittance_shunts;
 mod asymmetric_pair;
+mod common_return_shunts;
 mod ideal_switches;
 mod ideal_transformers;
 mod loads;
 mod sources;
+mod storage;
 mod terminal_voltage;
+mod thevenin;
 
 /// Options for canonical OpenDSS output.
 #[derive(Clone, Debug, PartialEq)]
@@ -111,6 +114,8 @@ fn emit_snapshot(net: &MulticonductorNetwork, options: &DssEmitOptions) -> TextE
             .collect(),
         kv_estimate: estimate_bus_kv(net),
         terminal_kv: terminal_voltage::estimate(net),
+        native_source_line: None,
+        native_source_code: None,
     };
     w.network(net);
     TextEmission::new(w.out, w.sidecars, w.warnings)
@@ -134,6 +139,8 @@ struct DssWriter {
     /// Bus id (lowercase) → phase to neutral voltage estimate, volts.
     kv_estimate: BTreeMap<String, f64>,
     terminal_kv: terminal_voltage::TerminalVoltages,
+    native_source_line: Option<String>,
+    native_source_code: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -641,8 +648,23 @@ impl DssWriter {
         let table = prop::class_by_name(class);
         let mut tail = String::new();
         for (key, value) in extras {
-            if matches!(key.as_str(), "bmopf_subtype") || key.starts_with("pmd_") {
+            if matches!(
+                key.as_str(),
+                "bmopf_subtype"
+                    | "dss_autotrans_original"
+                    | "dss_autotrans_banks"
+                    | "dss_autotrans_contacts"
+            ) || key.starts_with("pmd_")
+            {
                 continue; // converter bookkeeping
+            }
+            // Load spectra are consulted only in non-fundamental harmonic
+            // mode (pinned Load.CalcLoadModelContribution), not power flow.
+            if class == "load" && key == "spectrum" {
+                self.warn(&C::EMIT_DSS_EXTRAS_DROPPED, format!(
+                    "load {name}: harmonic spectrum reference omitted from the static snapshot; its definition is not regenerated"
+                ));
+                continue;
             }
             // Canonical output is a static snapshot and does not regenerate
             // loadshape objects. Replaying these references creates dangling
@@ -1032,6 +1054,13 @@ impl DssWriter {
     fn line_codes(&mut self, net: &MulticonductorNetwork) {
         let omega_nf = std::f64::consts::TAU * net.base_frequency() * 1e-9;
         for c in net.line_codes() {
+            if self
+                .native_source_code
+                .as_ref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(&c.name))
+            {
+                continue;
+            }
             if sources::asymmetric(c) {
                 self.warn(&C::EMIT_DSS_RECORD_DROPPED, format!(
                     "linecode {}: asymmetric library definition is not regenerated; instantiated line impedances use equivalent sources", c.name,
@@ -1163,6 +1192,9 @@ impl DssWriter {
     #[allow(clippy::too_many_lines)]
     fn lines(&mut self, net: &MulticonductorNetwork) {
         for l in net.lines() {
+            if self.native_source_line.as_deref() == Some(l.name.as_str()) {
+                continue;
+            }
             if self.sequence_impedance_branch(net, l) {
                 continue;
             }
@@ -1688,6 +1720,13 @@ impl DssWriter {
     /// One `New Load.<name>` record. A [`DistLoad`] emits one of these, or one
     /// per phase when [`Self::load_parts`] split it.
     fn write_load(&mut self, l: &DistLoad) {
+        if matches!(
+            l.voltage_model,
+            DistLoadVoltageModel::BoundedConstantPower { .. }
+        ) {
+            self.write_static_storage(l);
+            return;
+        }
         self.check_name("load", &l.name);
         let phases =
             self.element_phases(&l.extras, &l.terminal_map, l.configuration, "load", &l.name);
@@ -1791,7 +1830,8 @@ impl DssWriter {
                 }
             }
             DistLoadVoltageModel::BoundedZip { .. }
-            | DistLoadVoltageModel::BoundedExponential { .. } => {
+            | DistLoadVoltageModel::BoundedExponential { .. }
+            | DistLoadVoltageModel::BoundedConstantPower { .. } => {
                 unreachable!("bounds handled above")
             }
             DistLoadVoltageModel::Exponential {
@@ -2110,8 +2150,7 @@ impl DssWriter {
                 typed_kv: None,
             },
         );
-        let kvar = extras_f64(&sh.extras, "kvar")
-            .unwrap_or_else(|| shunt_kvar(sh, phases, conn_delta, &edges, b_phase, kv));
+        let kvar = shunt_kvar(sh, phases, conn_delta, &edges, b_phase, kv);
         let mut extras = sh.extras.clone();
         strip_shunt_extras(&mut extras);
         let conn = if conn_delta { "delta" } else { "wye" };
@@ -2203,7 +2242,7 @@ impl DssWriter {
 
     fn shunts(&mut self, net: &MulticonductorNetwork) {
         for (index, sh) in net.shunts().iter().enumerate() {
-            if self.full_admittance_shunt(net, sh, index) {
+            if self.common_return_shunt(net, sh) || self.full_admittance_shunt(net, sh, index) {
                 continue;
             }
             let stashed_delta = shunt_stashed_delta(sh);
@@ -2315,9 +2354,24 @@ impl DssWriter {
                 );
             }
             strip_emitted_extras(&mut extras, &["kv", "phases", "conn"]);
-            s.push_str(&self.extras_tail("generator", &g.name, &extras));
+            s.push_str(&self.generator_extras(&g.name, extras));
             self.line_out(&s);
         }
+    }
+
+    fn generator_extras(&mut self, name: &str, mut extras: Extras) -> String {
+        // Native UserData is an immediate call into the loaded library;
+        // alphabetic extras order discards it before UserModel exists.
+        let user_data = extras.remove("userdata");
+        let mut tail = self.extras_tail("generator", name, &extras);
+        if let Some(data) = user_data {
+            tail.push_str(&self.extras_tail(
+                "generator",
+                name,
+                &[("userdata".into(), data)].into(),
+            ));
+        }
+        tail
     }
 
     fn ibrs(&mut self, net: &MulticonductorNetwork) {
@@ -2741,6 +2795,12 @@ fn ibr_profile<'a>(
 }
 
 fn ibr_phases(ibr: &DistIbr) -> usize {
+    // Ratings are per electrical phase; topology identifies the connection,
+    // and a wye terminal map includes a return conductor. In particular a
+    // two-phase wye inverter has three terminals but only two phase ratings.
+    if !ibr.s_max.is_empty() {
+        return ibr.s_max.len();
+    }
     match ibr.topology {
         IbrTopology::SinglePhase => 1,
         IbrTopology::ThreeLeg | IbrTopology::FourLeg => 3,
@@ -2948,6 +3008,27 @@ fn shunt_kvar(
     b_phase: f64,
     kv: f64,
 ) -> f64 {
+    let v_ref = if conn_delta || !matches!(phases, 2 | 3) {
+        kv * 1e3
+    } else {
+        kv * 1e3 / 3f64.sqrt()
+    };
+    if let Some(saved) = extras_f64(&sh.extras, "kvar")
+        && super::read::kvar_shunt_matrix(
+            &sh.terminal_map,
+            phases,
+            conn_delta,
+            saved,
+            v_ref,
+            b_phase.signum(),
+        )
+        .as_ref()
+            == Some(&sh.b)
+    {
+        // Retain the exact rating only while it still describes every matrix
+        // entry. An edit to typed B must not be overwritten by stale metadata.
+        return saved;
+    }
     if conn_delta {
         let b_branch = delta_branch_abs(&sh.b, edges).unwrap_or(b_phase.abs());
         b_branch * (kv * 1e3) * (kv * 1e3) * edges.len() as f64 / 1e3
@@ -3001,6 +3082,21 @@ mod tests {
         IbrTopology, ReactivePowerReference, ReactivePowerUnit, VoltVarControl, VoltageSource,
     };
     use crate::testkit::parse_dss_str;
+
+    #[test]
+    #[ignore = "writes diagnostic native replay files; requires pinned external four-wire inputs"]
+    fn export_generator_user_model_native_probe() {
+        let input = std::path::PathBuf::from(std::env::var("POWERIO_MOTOR_INPUT").unwrap());
+        let output = std::path::PathBuf::from(std::env::var("POWERIO_MOTOR_OUTPUT").unwrap());
+        std::fs::create_dir(&output).unwrap();
+        let name = "Kersting4wireIndMotor.dss";
+        let net = parse_dss_str(&std::fs::read_to_string(input.join(name)).unwrap());
+        assert!(!crate::audit_electrical_readiness(&net).is_ready());
+        // Deliberately exercise only the low-level writer. Public canonical
+        // emission remains blocked until the motor law is typed; this probe
+        // diagnoses source-property replay, never feeder qualification.
+        std::fs::write(output.join(name), emit_dss_text(&net).text).unwrap();
+    }
 
     fn strings(v: &[&str]) -> Vec<String> {
         v.iter().map(ToString::to_string).collect()
@@ -4460,32 +4556,31 @@ mod tests {
 
     #[test]
     fn extras_tail_values_wrap_like_options() {
-        let (b, vs) = three_phase_source(2400.0);
-        let mut load = load_on("sb", &["1", "2", "3", "4"], Configuration::Wye);
-        load.extras
+        // Spectrum remains an emitted extra for generators. Static loads
+        // deliberately omit it because its harmonic definition is not emitted.
+        let mut net = parse_dss_str(
+            "new circuit.c basekv=4.16\nnew generator.g phases=3 bus1=sourcebus kv=4.16 kw=1 kvar=0\n",
+        );
+        net.generators_mut()[0]
+            .extras
             .insert("spectrum".into(), serde_json::json!("a ) b"));
-        let net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
-            base_frequency: 60.0,
-            buses: vec![b],
-            sources: vec![vs],
-            loads: vec![load],
-            ..MulticonductorNetworkTables::default()
-        });
         let (first, second) = roundtrip(&net);
         // A paren wrapper would close at the `)` and land `b)` on the next
         // positional property; brackets survive.
         assert!(first.contains("spectrum=[a ) b]"), "{first}");
         assert_eq!(
-            first.lines().find(|line| line.starts_with("New Load.ld ")),
+            first
+                .lines()
+                .find(|line| line.starts_with("New Generator.g ")),
             second
                 .lines()
-                .find(|line| line.starts_with("New Load.ld "))
+                .find(|line| line.starts_with("New Generator.g "))
                 .map(|line| line.replace(" vlowpu=0.5", ""))
                 .as_deref()
         );
         let back = parse_dss_str(&first);
         assert_eq!(
-            back.loads()[0]
+            back.generators()[0]
                 .extras
                 .get("spectrum")
                 .and_then(serde_json::Value::as_str),
@@ -4498,17 +4593,12 @@ mod tests {
         // Every quote closer appears, and the spaces split a bare scan: no
         // emitted form reparses to this value.
         let bad = "a )]}\"' b";
-        let (b, vs) = three_phase_source(2400.0);
-        let mut load = load_on("sb", &["1", "2", "3", "4"], Configuration::Wye);
-        load.extras
+        let mut net = parse_dss_str(
+            "new circuit.c basekv=4.16\nnew generator.g phases=3 bus1=sourcebus kv=4.16 kw=1 kvar=0\n",
+        );
+        net.generators_mut()[0]
+            .extras
             .insert("spectrum".into(), serde_json::json!(bad));
-        let mut net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
-            base_frequency: 60.0,
-            buses: vec![b],
-            sources: vec![vs],
-            loads: vec![load],
-            ..MulticonductorNetworkTables::default()
-        });
         net.options_mut().push(("foo".into(), bad.into()));
         let out = emit_dss_text(&net);
         assert!(out.text.contains(&format!("Set foo={bad}")), "{}", out.text);
@@ -4529,7 +4619,7 @@ mod tests {
     #[test]
     fn canonical_snapshot_omits_loadshape_references_with_diagnostics() {
         let dss = "clear\nnew circuit.c basekv=12.47 bus1=sb\n\
-                   new load.ld bus1=sb.1 phases=1 kv=7.2 kw=10 daily=() duty=sh yearly=annual\nsolve\n";
+                   new load.ld bus1=sb.1 phases=1 kv=7.2 kw=10 daily=() duty=sh yearly=annual spectrum=custom\nsolve\n";
         let net = parse_dss_str(dss);
         assert_eq!(
             net.loads()[0].extras.get("duty").and_then(|v| v.as_str()),
@@ -4545,6 +4635,13 @@ mod tests {
                     .any(|d| d.contains(&format!("`{key}` loadshape reference omitted")))
             );
         }
+        assert!(!emitted.text.contains(" spectrum="));
+        assert!(
+            emitted
+                .render_diagnostics()
+                .iter()
+                .any(|d| d.contains("harmonic spectrum reference omitted"))
+        );
         let again = parse_dss_str(&emitted.text);
         assert_eq!(again.loads()[0].p_nom, net.loads()[0].p_nom);
         assert_eq!(again.loads()[0].q_nom, net.loads()[0].q_nom);
@@ -4873,6 +4970,41 @@ mod tests {
             .unwrap();
         assert!(line.contains("phases=2 conn=delta"), "{line}");
         assert_eq!(line.matches("phases=").count(), 1, "{line}");
+    }
+
+    #[test]
+    fn inverter_phase_count_uses_typed_ratings_instead_of_topology_or_stale_extras() {
+        for (phases, conn, nodes) in [
+            (1, "wye", "1.0"),
+            (2, "wye", "1.2.0"),
+            (2, "delta", "1.2.3"),
+            (3, "wye", "1.2.3.0"),
+        ] {
+            let mut net = parse_dss_str(&format!(
+                "new circuit.c\nnew pvsystem.pv bus1=sourcebus.{nodes} phases={phases} conn={conn} kv=12.47 kva=90 pmpp=60\n"
+            ));
+            net.ibrs_mut()[0]
+                .extras
+                .insert("phases".into(), "99".into());
+            for fixed in [false, true] {
+                if fixed {
+                    let ibr = &mut net.ibrs_mut()[0];
+                    ibr.p_min.clone_from(&ibr.p_max);
+                    ibr.q_min = Some(vec![0.0; phases]);
+                    ibr.q_max.clone_from(&ibr.q_min);
+                }
+                let output = emit_dss_text(&net);
+                let class = if fixed { "Generator" } else { "PVSystem" };
+                let prefix = format!("New {class}.pv ");
+                let line = output
+                    .text
+                    .lines()
+                    .find(|l| l.starts_with(&prefix))
+                    .unwrap();
+                assert!(line.contains(&format!("phases={phases} ")), "{line}");
+                assert_eq!(line.matches("phases=").count(), 1);
+            }
+        }
     }
 
     #[test]

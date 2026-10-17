@@ -252,3 +252,43 @@ fn pinned_linecode_matrices() {
     let output = std::env::var("POWERIO_LINECODE_RESULT").expect("comparison path");
     std::fs::write(output, serde_json::to_vec_pretty(&findings).unwrap()).unwrap();
 }
+
+#[test]
+fn short_rows_and_overwrites_follow_native_symmetric_matrix_rules() {
+    let raw = read(
+        "New Circuit.c\nNew Linecode.a nphases=4 cmatrix=(2.849 | -.922454 3.00287 | -.353318 -.587272 2.70828)",
+    );
+    let state = resolve(&raw, point(&raw, "a")).unwrap();
+    assert!(state.b[3].iter().all(|v| *v == 0.0));
+    assert!(state.b.iter().all(|row| row[3] == 0.0));
+    assert!((state.b[1][2] + 0.587_272 * TAU * 60.0 * 1e-9).abs() < 1e-18);
+    let matrix = symmetric_matrix(&[vec![1.0, 0.7, 0.8], vec![0.2, 2.0]], 3).unwrap();
+    assert_eq!(
+        matrix,
+        vec![
+            vec![1.0, 0.2, 0.8],
+            vec![0.2, 2.0, 0.0],
+            vec![0.8, 0.0, 0.0]
+        ]
+    );
+    assert_eq!(
+        symmetric_matrix(&[vec![1.0], vec![], vec![0.3, 0.4, 3.0], vec![99.0]], 3).unwrap(),
+        vec![
+            vec![1.0, 0.0, 0.3],
+            vec![0.0, 0.0, 0.4],
+            vec![0.3, 0.4, 3.0]
+        ]
+    );
+    assert!(symmetric_matrix(&[vec![1.0, 2.0, 3.0, 4.0]], 3).is_err());
+    assert!(symmetric_matrix(&[vec![f64::NAN]], 3).is_err());
+}
+
+#[test]
+fn an_empty_matrix_token_retains_prior_electrical_state() {
+    let raw =
+        read("New Circuit.c\nNew Linecode.a nphases=2 rmatrix=(1|.2 2) cmatrix=() rmatrix=()");
+    let state = resolve(&raw, point(&raw, "a")).unwrap();
+    assert_eq!(state.r, vec![vec![1.0, 0.2], vec![0.2, 2.0]]);
+    assert!(!state.sequence);
+    assert!((state.b[0][0] - TAU * 60.0 * 2.8e-9).abs() < 1e-18);
+}
