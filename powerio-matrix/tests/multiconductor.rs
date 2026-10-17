@@ -270,7 +270,7 @@ fn unsupported_stamps_are_structured_diagnostics() {
         1,
     ));
     let error = calc_multiconductor_admittance_matrix(&net).unwrap_err();
-    assert!(error.to_string().contains("outside the ideal grounded-WYE"));
+    assert!(error.to_string().contains("outside the ideal WYE"));
 }
 
 #[test]
@@ -344,4 +344,137 @@ fn transformer_leakage_requires_a_series_equation() {
     ));
     let error = calc_multiconductor_admittance_matrix(&net).unwrap_err();
     assert_eq!(error.code().code, "BUILD.MULTI.PHYSICS_UNSUPPORTED");
+}
+
+#[test]
+fn one_open_line_terminal_preserves_remote_charging_without_bus_injection() {
+    use num_complex::Complex64;
+
+    let mut net = MulticonductorNetwork::new();
+    for id in ["source", "external", "line-end"] {
+        net.buses_mut().push(DistBus::new(id, strings(&["1"])));
+    }
+    let mut code = DistLineCode::new("pi", vec![vec![1.0]], vec![vec![2.0]]);
+    code.b_from = vec![vec![0.01]];
+    code.b_to = vec![vec![0.01]];
+    net.line_codes_mut().push(code);
+    net.lines_mut().push(DistLine::new(
+        "line",
+        "source",
+        "line-end",
+        strings(&["1"]),
+        strings(&["1"]),
+        "pi",
+        1.0,
+    ));
+    net.switches_mut().push(DistSwitch::new(
+        "terminal",
+        "external",
+        "line-end",
+        strings(&["1"]),
+        strings(&["1"]),
+        true,
+    ));
+
+    let system = calc_multiconductor_admittance_matrix(&net).unwrap();
+    let node = |bus| match system.index().resolve(bus, "1").unwrap() {
+        NodeRef::Node(index) => index,
+        NodeRef::Ground => panic!("unexpected grounding"),
+    };
+    let source = node("source");
+    let end = node("line-end");
+    let external = node("external");
+    assert_ne!(end, external);
+    let g = dense(system.conductance());
+    let b = dense(system.susceptance());
+    let y = |i: usize, j: usize| Complex64::new(g[i][j], b[i][j]);
+    for i in 0..system.index().len() {
+        assert!(y(external, i).norm() < 1e-14);
+        assert!(y(i, external).norm() < 1e-14);
+    }
+    // Zero current at the open line end determines its floating voltage.
+    // Both pi charging halves contribute to the source current through Z.
+    let voltage = Complex64::new(230.0, 0.0);
+    let open_voltage = -y(end, source) * voltage / y(end, end);
+    let open_current = y(end, source) * voltage + y(end, end) * open_voltage;
+    assert!(open_current.norm() < 1e-12);
+    let source_current = y(source, source) * voltage + y(source, end) * open_voltage;
+    let z = Complex64::new(1.0, 2.0);
+    let half = Complex64::new(0.0, 0.01);
+    let expected = (half + half / (Complex64::new(1.0, 0.0) + z * half)) * voltage;
+    assert!((source_current - expected).norm() < 1e-12);
+    assert!(
+        (source_current - half * voltage).norm() > 2.0,
+        "remote charging was lost"
+    );
+
+    // Closing the terminal merges the external and internal line-end nodes
+    // exactly, with no artificial series impedance introduced by the switch.
+    net.switches_mut()[0].open = false;
+    let closed = calc_multiconductor_admittance_matrix(&net).unwrap();
+    assert_eq!(
+        closed.index().resolve("external", "1"),
+        closed.index().resolve("line-end", "1")
+    );
+}
+
+#[test]
+fn coupled_dielectric_shunts_dissipate_unbalanced_power_but_not_common_mode() {
+    let mut net = MulticonductorNetwork::new();
+    for id in ["a", "b"] {
+        // Deliberately differ from the line's phase-coordinate ordering.
+        net.buses_mut()
+            .push(DistBus::new(id, strings(&["3", "1", "2"])));
+    }
+    let mut code = DistLineCode::new(
+        "pi",
+        vec![
+            vec![0.5, 0.2, 0.2],
+            vec![0.2, 0.5, 0.2],
+            vec![0.2, 0.2, 0.5],
+        ],
+        vec![vec![0.0; 3]; 3],
+    );
+    // G1=G2=1e-5 S/m, G0=0, divided into two pi halves. This is
+    // a positive-semidefinite phase matrix despite negative mutual terms.
+    code.g_from = vec![vec![-1e-5 / 6.0; 3]; 3];
+    for i in 0..3 {
+        code.g_from[i][i] = 1e-5 / 3.0;
+    }
+    code.g_to.clone_from(&code.g_from);
+    net.line_codes_mut().push(code);
+    net.lines_mut().push(DistLine::new(
+        "l",
+        "a",
+        "b",
+        strings(&["1", "2", "3"]),
+        strings(&["1", "2", "3"]),
+        "pi",
+        250.0,
+    ));
+    let system = calc_multiconductor_admittance_matrix(&net).unwrap();
+    let g = dense(system.conductance());
+    for (phase_voltages, expected_watts) in [
+        ([230.0, 100.0, -20.0], 78.166_666_666_666_67),
+        ([230.0; 3], 0.0),
+    ] {
+        let mut voltage = vec![0.0; system.index().len()];
+        for bus in ["a", "b"] {
+            for (phase, value) in ["1", "2", "3"].into_iter().zip(phase_voltages) {
+                let NodeRef::Node(index) = system.index().resolve(bus, phase).unwrap() else {
+                    panic!("unexpected grounding");
+                };
+                voltage[index] = value;
+            }
+        }
+        // Equal voltages at both ends remove series losses. V' G V must
+        // equal the documented shunt power, including mutual conductance.
+        let mut power = 0.0;
+        for i in 0..voltage.len() {
+            for j in 0..voltage.len() {
+                power += voltage[i] * g[i][j] * voltage[j];
+            }
+        }
+        assert!((power - expected_watts).abs() < 1e-9);
+    }
 }

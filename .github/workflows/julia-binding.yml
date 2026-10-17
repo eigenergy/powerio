@@ -7,6 +7,11 @@ name: Julia binding
 # POWERIO_JL_REPO_TOKEN secret. With neither, the job prints a skip notice and
 # passes, so missing external access never blocks a PR.
 #
+# Explicit fork companions: PRs may pin a reviewed commit in
+# .github/powerio-jl-companion.json. This takes precedence over branch discovery,
+# is inherited through the stack, and is ignored on pushes to main. Fork checkout
+# uses only the read-only workflow token and never persists credentials.
+#
 # Companion branches: a PR that moves the shared surface (JSON shapes, schema
 # versions, pio_* behavior) pushes a PowerIO.jl branch with the SAME name; this
 # job tests against that branch when it exists, then against the companion of
@@ -22,10 +27,10 @@ name: Julia binding
 on:
   push:
     branches: [ "main" ]
-    paths: [ "powerio/**", "powerio-core/**", "powerio-tx/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml" ]
+    paths: [ "powerio/**", "powerio-core/**", "powerio-tx/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml", ".github/powerio-jl-companion.json", "scripts/*julia-companion.py" ]
   # No branch filter: stacked PRs must run this too (see rust.yml).
   pull_request:
-    paths: [ "powerio/**", "powerio-core/**", "powerio-tx/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml" ]
+    paths: [ "powerio/**", "powerio-core/**", "powerio-tx/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml", ".github/powerio-jl-companion.json", "scripts/*julia-companion.py" ]
 
 # One run per workflow per branch. A force push to a stacked pull request
 # otherwise leaves the superseded run going: it finishes, it fails or it
@@ -86,9 +91,17 @@ jobs:
       # surface bind against real symbols rather than skipping behind feature
       # probes.
       run: cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
+    - name: Read pinned PowerIO.jl companion
+      id: powerio-jl-pin
+      if: steps.powerio-jl.outputs.available == 'true'
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+      run: |
+        python3 scripts/test-julia-companion.py
+        python3 scripts/julia-companion.py "$EVENT_NAME" .github/powerio-jl-companion.json >> "$GITHUB_OUTPUT"
     - name: Resolve PowerIO.jl companion branch
       id: powerio-jl-ref
-      if: steps.powerio-jl.outputs.available == 'true'
+      if: steps.powerio-jl.outputs.available == 'true' && steps.powerio-jl-pin.outputs.enabled != 'true'
       env:
         BRANCH: ${{ github.head_ref || github.ref_name }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -163,11 +176,12 @@ jobs:
       if: steps.powerio-jl.outputs.available == 'true'
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
-        repository: eigenergy/PowerIO.jl
+        repository: ${{ steps.powerio-jl-pin.outputs.repository || 'eigenergy/PowerIO.jl' }}
         path: PowerIO.jl
-        ref: ${{ steps.powerio-jl-ref.outputs.ref }}
-        # Falls back to the workflow token, which suffices once the repo is public.
-        token: ${{ secrets.POWERIO_JL_REPO_TOKEN || github.token }}
+        ref: ${{ steps.powerio-jl-pin.outputs.ref || steps.powerio-jl-ref.outputs.ref }}
+        # Never send the upstream repository secret to a fork.
+        token: ${{ steps.powerio-jl-pin.outputs.enabled == 'true' && github.token || secrets.POWERIO_JL_REPO_TOKEN || github.token }}
+        persist-credentials: false
     - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
       if: steps.powerio-jl.outputs.available == 'true'
       with:
