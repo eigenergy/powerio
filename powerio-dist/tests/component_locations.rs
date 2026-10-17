@@ -102,7 +102,7 @@ fn published_schema_accepts_legacy_body_and_rejects_located_network() {
     let old: serde_json::Value =
         serde_json::from_str(include_str!("../../docs/schema/pio-ir/2/schema.json")).unwrap();
     let current: serde_json::Value = serde_json::from_str(include_str!(
-        "../../docs/schema/pio-ir/2/0.11.4/schema.json"
+        "../../docs/schema/pio-ir/2/0.11.6/schema.json"
     ))
     .unwrap();
     let schema = |document: serde_json::Value| {
