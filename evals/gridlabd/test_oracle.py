@@ -5,6 +5,7 @@ import math
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 from coordinate_oracle import check as check_coordinates
@@ -12,9 +13,109 @@ from coordinate_oracle import expected as expected_coordinates
 from object_oracle import source_graph
 from oracle import add, analytic, cases, compare, parse_complex, recorded
 from quantity_oracle import check_values, reference as quantity_reference
+from switch_roundtrip_oracle import impedance_run
+from ideal_switch_oracle import (
+    parameters as ideal_parameters,
+    reference as ideal_reference,
+    variants as ideal_variants,
+)
+from pair_load_oracle import reference as pair_reference, variants as pair_variants
+from line_shunt_oracle import reference as shunt_reference
+from shunt_measurement import measurements as shunt_measurements
 
 
 class OracleTests(unittest.TestCase):
+    def test_line_shunt_reference_rejects_omission_and_swapped_ends(self):
+        for case in ("source_only", "sink_only", "unequal_lossy", "reversed_lossy"):
+            for edited in (False, True):
+                expected, residual = shunt_reference(case, edited)
+                self.assertLess(residual, 1e-9)
+                for defect in ("omit", "swap"):
+                    wrong, _ = shunt_reference(case, edited, defect)
+                    self.assertFalse(compare(expected, wrong)["passed"])
+
+    def test_native_shunt_readback_stamps_pair_and_earth_currents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "model.glm").write_text(
+                'module powerflow { solver_method NR; } object load { name "line__glm_shunt_from"; parent "source"; }'
+            )
+            (directory / "line__glm_shunt_from.csv").write_text(
+                "# timestamp,voltage_A,voltage_B,voltage_C,constant_impedance_AB,constant_impedance_BC,constant_impedance_CA,constant_impedance_AN,constant_impedance_BN,constant_impedance_CN\nt0,12+0j,8+0j,0+0j,2+0j,0+0j,0+0j,4+0j,0+0j,0+0j\n"
+            )
+            result = list(shunt_measurements(directory, "ABC"))
+            self.assertEqual(
+                result,
+                [
+                    (
+                        "line__glm_shunt_from",
+                        "source",
+                        [12 + 0j, 8 + 0j, 0j],
+                        [5 + 0j, -2 + 0j, 0j],
+                    )
+                ],
+            )
+
+    def test_phase_pair_reference_detects_wrong_connections_and_fixed_current(self):
+        for name, terms in pair_variants().items():
+            for edited in (False, True):
+                with self.subTest(case=name, edited=edited):
+                    result, metadata = pair_reference(terms, edited)
+                    self.assertLess(metadata["kcl_residual_amperes"], 1e-9)
+                    wrong, _ = pair_reference(terms, edited, wrong_connection=True)
+                    self.assertFalse(compare(result, wrong)["passed"])
+                    if any(law == "current" for law, _, _ in terms):
+                        fixed, _ = pair_reference(terms, edited, fixed_current=True)
+                        self.assertFalse(compare(result, fixed)["passed"])
+
+    def test_passive_pair_terminal_reversal_is_electrically_identical(self):
+        # A negative control must move the connection, not merely reverse the
+        # two terminals of a passive impedance (which leaves its stamp equal).
+        forward, _ = pair_reference([("impedance", "AB", 80 + 20j)])
+        reverse, _ = pair_reference([("impedance", "BA", 80 + 20j)])
+        self.assertTrue(compare(forward, reverse)["passed"])
+
+    def test_ideal_contact_reference_satisfies_zip_kcl_and_detects_epsilon(self):
+        for spec in ideal_variants():
+            for edited in (False, True):
+                _, phases, closed, zip_load, coupled, _ = spec
+                _, _, loads, power, amps, _, _ = ideal_parameters(
+                    phases, closed, zip_load, coupled, edited
+                )
+                result = ideal_reference(spec, edited)
+                for i, phase in enumerate(phases):
+                    v = complex(*result[f"sink.{phase}"]["value"])
+                    current = complex(*result[f"contact.current_in_{phase}"]["value"])
+                    if phase in closed:
+                        demand = (
+                            v / loads[i]
+                            + amps[i] * v / abs(v)
+                            + (power[i] / v).conjugate()
+                        )
+                        self.assertLess(abs(current - demand), 1e-10)
+                        self.assertEqual(
+                            result[f"middle.{phase}"], result[f"sink.{phase}"]
+                        )
+                    else:
+                        self.assertEqual((v, current), (0j, 0j))
+                self.assertFalse(
+                    compare(ideal_reference(spec, edited, 1e-4), result)["passed"]
+                )
+
+    def test_successful_engine_exit_does_not_hide_a_nonfinite_switch_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / "nonfinite"
+            with (
+                patch("switch_roundtrip_oracle.run_glm", return_value="pinned engine"),
+                patch("switch_oracle.snapshot", side_effect=ValueError("nannand")),
+            ):
+                result = impedance_run("pnnl", directory, "input", {}, {}, None)
+            self.assertFalse(result["passed"])
+            self.assertEqual(result["version"], "pinned engine")
+            self.assertEqual(result["error"], "nannand")
+            self.assertEqual(len(result["input_sha256"]), 64)
+            self.assertEqual((directory / "model.glm").read_text(), "input")
+
     def test_quantity_comparator_rejects_units_notation_and_missing_values(self):
         reference = quantity_reference()
         check_values(reference, reference, 1e-12)
@@ -91,7 +192,16 @@ class OracleTests(unittest.TestCase):
             ("1e-3-2e-4j", 0.001 - 0.0002j),
         ):
             self.assertAlmostEqual(parse_complex(text), expected)
-        for text in ("nan", "inf+0j", "bad", "1+2x", "1+2+3d"):
+        for text in (
+            "nan",
+            "inf+0j",
+            "bad",
+            "1+2x",
+            "1+2+3d",
+            "nannand",
+            "-nan-nand",
+            "-nan-nanj",
+        ):
             with self.assertRaises(ValueError):
                 parse_complex(text)
 

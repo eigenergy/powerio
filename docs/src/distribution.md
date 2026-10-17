@@ -204,12 +204,88 @@ constitute explicit line neutrals. Geometry, transformers, split-phase and
 additional static devices remain unfinished and fail explicitly. Full OpenDSS
 static compatibility is not yet established.
 
+Electrical parents are zero-length bus attachments. Qualified node/meter/load
+chains flatten onto their root bus while retaining each load's own P/I/Z law
+and geographic point. Canonical output attaches loads directly to that bus.
+PNNL 5.3 NR and both FBS profiles are qualified for two- and three-level chains,
+including phase subsets, reversed declaration order and intermediate demands.
+Arras 4.3 NR rejects electrical parent chains deeper than one level: the pinned
+engine can omit descendants or crash, so flattening would not preserve its
+source behavior. Direct child loads remain supported. This native profile gap
+is unresolved; parsing never silently turns omitted descendants into zero loads.
+
+Loads support legacy A/B/C terms and explicit AB/BC/CA/AN/BN/CN power,
+current and impedance terms. Terms add independently, including legacy and
+explicit terms on the same connection. Explicit pairs map to two-terminal
+typed loads; current terms follow the connection voltage angle. Canonical
+output preserves each load's voltage base and can express a complete typed
+three-channel delta load as explicit pairs. It reports the resulting component
+identity split and any terminal orientation normalization. A load's traditional
+`D` flag maps legacy A/B/C terms to AB/BC/CA respectively; its stated nominal
+voltage remains phase-to-earth, so the pair voltage base is √3 times that value.
+Real/reactive setters (`_real`, `_reac`) update the corresponding complex part
+in source order, with native units. They work for legacy and explicit channels.
+The `D` flag on node/meter/load objects does not create a neutral conductor or
+change the source phasor reference. Incomplete typed delta channel layouts,
+split-phase services and explicit line neutrals remain under implementation.
+
+Ordinary-phase `switch` objects import their fixed status, banked or individual
+phase states and native contact impedance. Finite closed contacts become exact
+uncoupled line equivalents with unit normalization length and a diagnostic;
+open and ideal closed contacts remain typed switches. A mixed state splits
+into closed and open phase groups, each retaining the original object's point.
+Banked initialization applies majority state, uses overall status to break a
+two-phase tie, and honors an overall open status. Any change from the stated
+phase states is reported; no controller or protection sequence is executed.
+
+The solver setting affects impedance defaults. Both pinned profiles default to
+FBS, whose unspecified contacts are ideal. NR uses the module's
+`default_resistance` (default `1e-4` ohm); unspecified resistance/reactance become
+`+default_resistance` and `-default_resistance`, while explicitly zero NR
+components become positive `default_resistance`. Supported numeric global
+overrides must be finite and positive. Scalar impedance aliases follow native
+assignment order and unit interpretation. Canonical GLM emits finite contacts
+as overhead-line equivalents and fixed open contacts as open switches.
+
+Ideal closed contacts select FBS and emit explicit zero contact impedance.
+The complete link graph, including open contacts, must form a forest with one
+source bus per component. Links are oriented away from their sources, and
+disjoint switch phases between the same buses are grouped into one native
+object. Endpoint reversal and grouped identities are reported. Matching
+component points survive grouping; conflicting points fail explicitly.
+Cycles, parallel contacts on the same phase, multiple source buses in one
+component and bus phases absent from the incoming link require additional
+exact equivalents and currently fail. No small impedance replaces an ideal
+constraint, and the input network is unchanged.
+
+For noncommuting line impedance and capacitance matrices, the pinned FBS engines
+compute incorrect source-end currents despite correct receiving voltages.
+Import reports this native discrepancy and retains the physical pi-line model.
+Canonical FBS output replaces native line capacitance with exact phase-pair and
+earth-return impedance loads at each end. Conductive or unequal end shunts use
+the same equivalent in either solver. End-shunt expansion requires symmetric
+matrices; a nonreciprocal equivalent needs additional mapping and fails explicitly.
+
+Generated shunts remain attached to their physical ends when a line reverses
+for FBS. Line coordinates stay on the series link. Diagnostics name the
+generated loads: physical line port currents, powers and losses include these
+loads as well as the series link. Reimport preserves the equivalent circuit
+as separate typed loads rather than reconstructing the original line identity.
+
+Output without ideal closed contacts selects NR. The pinned engines can return NaN results for
+some valid circuits even with a successful process exit. One qualified
+impedance case reproduces this with either a native switch or its line
+equivalent; FBS solves the same circuit and matches the analytic solution.
+Engine validation therefore checks finite voltages, currents and powers, and
+reports these NR failures separately from successful electrical comparisons.
+
 GridLAB-D object latitude and longitude map to the network's typed
 `component_locations` table. Each point identifies its component table and exact
 name, with optional latitude, longitude, datum and point origin. Missing axes
 are distinct from zero; an absent datum stays unknown. This geography is
 independent of legacy bus drawing positions and line routes. The current GLM
-mapping covers root buses, parented loads, lines and used line configurations.
+mapping covers root buses, parented loads, lines, fixed switch groups and used
+line configurations.
 Coordinates on a parented node/meter without a mapped device, unused equipment
 or source-only instrumentation still require additional attachment support and
 are refused explicitly.

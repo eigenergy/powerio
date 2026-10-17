@@ -43,12 +43,22 @@ pub mod codes {
             "a GLM electrical feature has no verified static mapping", category = Data;
         READ_GLM_SOURCE_ONLY = "READ.GLM.SOURCE_ONLY", Remark,
             "non-electrical GLM data remains in the retained source";
+        READ_GLM_SWITCH_STATE_NORMALIZED = "READ.GLM.SWITCH_STATE_NORMALIZED", Remark,
+            "static switch status and banked initialization determine contact states";
+        READ_GLM_SWITCH_EQUIVALENT = "READ.GLM.SWITCH_EQUIVALENT", Remark,
+            "finite closed switch contacts use an exact static line equivalent";
+        READ_GLM_NATIVE_LINE_DISCREPANCY = "READ.GLM.NATIVE_LINE_DISCREPANCY", Warning,
+            "native FBS line currents differ from the physical pi-line model for noncommuting matrices";
         EMIT_GLM_UNSUPPORTED = "EMIT.GLM.UNSUPPORTED", Error,
             "the GLM writer cannot yet represent this electrical feature", category = Data;
         EMIT_GLM_FIELD_DROPPED = "EMIT.GLM.FIELD_DROPPED", Warning,
             "non-electrical metadata has no expression in canonical GLM output";
         EMIT_GLM_VALUE_REBASED = "EMIT.GLM.VALUE_REBASED", Remark,
             "a GLM nominal voltage or identity was materialized without changing electrical behavior";
+        EMIT_GLM_IDEAL_CONTACTS = "EMIT.GLM.IDEAL_CONTACTS", Remark,
+            "ideal contacts use source-oriented FBS with exact zero impedance and explicit phase grouping";
+        EMIT_GLM_LINE_SHUNT_EQUIVALENT = "EMIT.GLM.LINE_SHUNT_EQUIVALENT", Remark,
+            "line end shunts use exact phase-pair and earth-return admittance loads";
         EMIT_GLM_PROJECT_UNREPRESENTABLE = "EMIT.GLM.PROJECT_UNREPRESENTABLE", Error,
             "retained GLM project bytes cannot be replayed as a portable output inventory", category = Output;
         EMIT_GLM_REPLAY_CONTEXT_REQUIRED = "EMIT.GLM.REPLAY_CONTEXT_REQUIRED", Remark,

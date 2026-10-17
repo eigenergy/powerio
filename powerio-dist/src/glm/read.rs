@@ -15,12 +15,17 @@ use crate::{
 
 const METERS_PER_MILE: f64 = 1609.344;
 
+mod loads;
+mod switches;
+
 /// Read the initial static GLM electrical profile. Unknown physical
 /// classes, properties and globals fail explicitly; they are not silently
 /// omitted from an apparently usable network. The source project is retained.
 ///
 /// This initial profile covers ordinary phase-to-earth node/load/meter objects,
-/// fixed source phasors, P/I/Z loads and explicitly parameterized overhead lines.
+/// fixed source phasors, P/I/Z loads, explicitly parameterized overhead lines
+/// and fixed ordinary-phase switch contacts. Finite contacts use exact line
+/// equivalents; ideal and open contacts remain typed switches.
 /// Other conductor/device profiles remain under implementation.
 pub fn parse(
     source: Source,
@@ -47,6 +52,8 @@ pub fn parse(
         nominal: BTreeMap::new(),
         attachments: BTreeMap::new(),
         line_capacitance: false,
+        newton_raphson: false,
+        switch_default_resistance: 1e-4,
     };
     // Profile identity belongs to the module's source descriptors and context.
     // Extending the legacy network source-format enum would change a frozen
@@ -56,6 +63,7 @@ pub fn parse(
     reader.buses()?;
     reader.loads_and_sources()?;
     reader.lines()?;
+    reader.switches()?;
     reader.coordinates()?;
     crate::require_electrical_readiness(&reader.net)
         .map_err(|e| e.with_source(project.source().clone()))?;
@@ -90,6 +98,8 @@ struct Reader<'a> {
     nominal: BTreeMap<ObjectKey, f64>,
     attachments: BTreeMap<ObjectKey, Vec<(crate::DistLocationTarget, String)>>,
     line_capacitance: bool,
+    newton_raphson: bool,
+    switch_default_resistance: f64,
 }
 
 impl Reader<'_> {
@@ -137,7 +147,14 @@ impl Reader<'_> {
                                 .electrical_error(span, "powerflow setting requires one value"));
                         }
                         match (tokens[0].text(), tokens[1].text()) {
-                            ("solver_method", "NR" | "FBS") => {}
+                            ("solver_method", "NR") => self.newton_raphson = true,
+                            ("solver_method", "FBS") => self.newton_raphson = false,
+                            ("default_resistance", value) => {
+                                self.switch_default_resistance = value.parse::<f64>().ok()
+                                    .filter(|v| v.is_finite() && *v > 0.0)
+                                    .ok_or_else(|| self.project.electrical_error(span,
+                                        "default_resistance requires a finite positive scalar in ohms"))?;
+                            }
                             ("line_capacitance", "TRUE") => self.line_capacitance = true,
                             ("line_capacitance", "FALSE") => self.line_capacitance = false,
                             _ => {
@@ -242,7 +259,7 @@ impl Reader<'_> {
             }
             if !matches!(
                 class,
-                "node" | "meter" | "load" | "overhead_line" | "line_configuration"
+                "node" | "meter" | "load" | "overhead_line" | "line_configuration" | "switch"
             ) {
                 return Err(self.error(
                     object.key(),
@@ -266,8 +283,13 @@ impl Reader<'_> {
                     // assignment overwrites the value or its phase is absent.
                     let result = self.project.quantity(property, kind, Some(unit))?;
                     self.diagnostics.extend(result.diagnostics);
-                    self.quantities
-                        .insert((object.key(), name.to_owned()), result.value);
+                    Self::assign_quantity(
+                        &mut self.quantities,
+                        object.key(),
+                        class,
+                        name,
+                        result.value,
+                    );
                 }
             }
         }
@@ -299,13 +321,27 @@ impl Reader<'_> {
                 self.roots.insert(descendant, root);
             }
         }
+        self.validate_parent_profile()
+    }
+
+    fn validate_parent_profile(&self) -> Result<(), Error> {
+        if self.newton_raphson && self.project.dialect() == super::GlmDialect::Arras4_3 {
+            for (&key, &root) in &self.roots {
+                if key != root && self.index.parent(key) != Some(root) {
+                    return Err(self.error(key, format!(
+                        "Arras 4.3 NR nested electrical parents are not qualified: {} has a parent below root {}; the pinned engine can omit descendant loads or fail; flattening would change source behavior",
+                        self.names[&key], self.names[&root]
+                    )));
+                }
+            }
+        }
         Ok(())
     }
 
     fn buses(&mut self) -> Result<(), Error> {
         let roots: BTreeSet<_> = self.roots.values().copied().collect();
         for key in roots {
-            let phases = parse_phases(
+            let phases = parse_bus_phases(
                 self.text(key, "phases")?
                     .as_deref()
                     .ok_or_else(|| self.error(key, "explicit phases are required"))?,
@@ -332,13 +368,34 @@ impl Reader<'_> {
         Ok(())
     }
 
+    fn assign_quantity(
+        quantities: &mut BTreeMap<(ObjectKey, String), Complex64>,
+        key: ObjectKey,
+        class: &str,
+        name: &str,
+        value: Complex64,
+    ) {
+        if let Some((canonical, Some(imaginary), _, _)) =
+            (class == "load").then(|| loads::property(name)).flatten()
+        {
+            let previous = quantities.entry((key, canonical.to_owned())).or_default();
+            if imaginary {
+                previous.im = value.re;
+            } else {
+                previous.re = value.re;
+            }
+        } else {
+            quantities.insert((key, name.to_owned()), value);
+        }
+    }
+
     fn loads_and_sources(&mut self) -> Result<(), Error> {
         let entries: Vec<_> = self.roots.iter().map(|(&k, &r)| (k, r)).collect();
         for (key, root) in entries {
             let phases = if key == root {
                 self.phases[&root].clone()
             } else {
-                let phases = parse_phases(
+                let phases = parse_bus_phases(
                     self.text(key, "phases")?
                         .as_deref()
                         .ok_or_else(|| self.error(key, "child requires explicit phases"))?,
@@ -388,7 +445,13 @@ impl Reader<'_> {
             if class(&self.index.objects()[key.ordinal()]) != "load" {
                 continue;
             }
-            self.load_terms(key, root, &phases, nominal)?;
+            let delta = self
+                .text(key, "phases")?
+                .is_some_and(|flags| flags.contains('D'));
+            if !delta {
+                self.load_terms(key, root, &phases, nominal)?;
+            }
+            self.connected_load_terms(key, root, &phases, nominal, delta)?;
         }
         Ok(())
     }
@@ -409,7 +472,8 @@ impl Reader<'_> {
                         .is_some()
                 })
             })
-            .count();
+            .count()
+            + self.explicit_load_term_count(key);
         for law in laws {
             let mut values = Vec::new();
             let mut stated = false;
@@ -534,6 +598,10 @@ impl Reader<'_> {
                 &format!("{}__glm_linecode", self.names[&key]),
             );
             let code = self.line_code(config, &phases, &code_name)?;
+            if !self.newton_raphson && !super::line_physics::fbs_shunts_commute(&code) {
+                self.diagnostics.push(Diagnostic::of(&codes::READ_GLM_NATIVE_LINE_DISCREPANCY,
+                    format!("line {}: this FBS source has noncommuting impedance/capacitance matrices; the typed network preserves the physical pi-line law, while pinned PNNL/Arras native line currents and losses differ; canonical FBS output uses exact end-shunt equivalents", self.names[&key])));
+            }
             self.net.line_codes_mut().push(code);
             self.attach(
                 config,
@@ -708,23 +776,35 @@ fn allowed_property(class: &str, name: &str) -> bool {
                 | "voltage_B"
                 | "voltage_C"
         ))
-        || (class == "load"
-            && [
-                "constant_power_",
-                "constant_current_",
-                "constant_impedance_",
-            ]
-            .iter()
-            .any(|prefix| {
-                name.strip_prefix(prefix)
-                    .is_some_and(|v| matches!(v, "A" | "B" | "C"))
-            }))
+        || (class == "load" && loads::property(name).is_some())
         || (class == "overhead_line"
             && matches!(name, "phases" | "from" | "to" | "length" | "configuration"))
         || (class == "line_configuration" && matrix_property(name))
+        || (class == "switch"
+            && matches!(
+                name,
+                "phases"
+                    | "from"
+                    | "to"
+                    | "status"
+                    | "operating_mode"
+                    | "phase_A_state"
+                    | "phase_B_state"
+                    | "phase_C_state"
+                    | "switch_impedance"
+                    | "switch_resistance"
+                    | "switch_reactance"
+            ))
 }
 fn quantity_spec(class: &str, name: &str) -> Option<(GlmQuantityKind, &'static str)> {
     use GlmQuantityKind::{Complex, Real};
+    if class == "switch" {
+        match name {
+            "switch_impedance" => return Some((Complex, "Ohm")),
+            "switch_resistance" | "switch_reactance" => return Some((Real, "Ohm")),
+            _ => {}
+        }
+    }
     if bus_class(class) {
         match name {
             "nominal_voltage" | "maximum_voltage_error" => return Some((Real, "V")),
@@ -733,18 +813,7 @@ fn quantity_spec(class: &str, name: &str) -> Option<(GlmQuantityKind, &'static s
         }
     }
     if class == "load" {
-        for (prefix, unit) in [
-            ("constant_power_", "VA"),
-            ("constant_current_", "A"),
-            ("constant_impedance_", "Ohm"),
-        ] {
-            if name
-                .strip_prefix(prefix)
-                .is_some_and(|phase| matches!(phase, "A" | "B" | "C"))
-            {
-                return Some((Complex, unit));
-            }
-        }
+        return loads::property(name).map(|(_, _, kind, unit)| (kind, unit));
     }
     if class == "overhead_line" && name == "length" {
         return Some((Real, "ft"));
@@ -771,6 +840,13 @@ pub(super) fn nominal_phasor(magnitude: f64, phase: usize) -> Complex64 {
         ][phase],
     )
 }
+fn parse_bus_phases(text: &str) -> Result<Vec<usize>, &'static str> {
+    if text.bytes().filter(|&c| c == b'D').count() > 1 {
+        return Err("duplicate delta phase flag");
+    }
+    parse_phases(&text.replace('D', ""))
+}
+
 fn parse_phases(text: &str) -> Result<Vec<usize>, &'static str> {
     let mut phases = BTreeSet::new();
     let mut neutral = false;

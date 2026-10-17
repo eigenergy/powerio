@@ -14,10 +14,19 @@ use super::read::{nominal_phasor, phase_name};
 
 const METERS_PER_MILE: f64 = 1609.344;
 
+mod ideal;
+mod loads;
+mod shunts;
+
 /// Emit fresh GLM from the current typed network, without retained-source echo.
 ///
-/// The initial profile supports phase-to-earth P/I/Z loads, ideal fixed sources
-/// and explicit phase line matrices. Unsupported electrical behavior fails
+/// The initial profile supports earth/phase-pair P/I/Z loads, ideal fixed sources,
+/// explicit phase line matrices and fixed contacts. Ideal closed contacts select
+/// exact FBS output on a checked forest with one source bus per component.
+/// Symmetric line end shunts use exact admittance-load equivalents when native
+/// line parameters cannot preserve their port equations. Returned diagnostics
+/// identify the generated loads that contribute to physical line port flows.
+/// Unsupported electrical behavior fails
 /// before the destination is written; omitted non-electrical metadata is
 /// reported. This entry point deliberately takes a value, not a source module.
 pub fn emit_canonical(
@@ -53,13 +62,24 @@ pub(crate) fn emit_text(network: &MulticonductorNetwork) -> Result<TextEmission,
             .map(|p| ((p.target, p.name.as_str()), p))
             .collect(),
         written_locations: BTreeSet::new(),
+        ideal_plan: None,
     };
     writer.inventory()?;
     writer.sources()?;
+    writer.prepare_ideal_contacts()?;
     writer.nominal_voltages()?;
-    writer.out.push_str("// Canonical PowerIO static network.\nmodule powerflow { solver_method NR; line_capacitance TRUE; }\n\n");
+    let solver = if writer.ideal_plan.is_some() {
+        "FBS"
+    } else {
+        "NR"
+    };
+    let _ = writeln!(
+        writer.out,
+        "// Canonical PowerIO static network.\nmodule powerflow {{ solver_method {solver}; line_capacitance TRUE; }}\n"
+    );
     writer.buses()?;
     writer.lines()?;
+    writer.switches()?;
     writer.loads()?;
     writer.remaining_locations();
     Ok(TextEmission::new(
@@ -79,6 +99,7 @@ struct Writer<'a> {
     nominal: BTreeMap<&'a str, f64>,
     locations: BTreeMap<(crate::DistLocationTarget, &'a str), &'a crate::DistComponentLocation>,
     written_locations: BTreeSet<(crate::DistLocationTarget, &'a str)>,
+    ideal_plan: Option<ideal::IdealPlan<'a>>,
 }
 
 fn unsupported(message: impl Into<String>) -> Error {
@@ -131,7 +152,6 @@ impl Writer<'_> {
             ));
         }
         if !self.net.transformers().is_empty()
-            || !self.net.switches().is_empty()
             || !self.net.generators().is_empty()
             || !self.net.ibrs().is_empty()
             || !self.net.shunts().is_empty()
@@ -193,6 +213,9 @@ impl Writer<'_> {
         }
         for load in self.net.loads() {
             self.reserve(&load.name)?;
+        }
+        for switch in self.net.switches() {
+            self.reserve(&switch.name)?;
         }
         Ok(())
     }
@@ -269,7 +292,13 @@ impl Writer<'_> {
     fn nominal_voltages(&mut self) -> Result<(), Error> {
         let mut neighbors: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         for line in self.net.lines() {
-            self.line_phases(line)?;
+            self.link_phases(
+                &line.name,
+                &line.bus_from,
+                &line.bus_to,
+                &line.terminal_map_from,
+                &line.terminal_map_to,
+            )?;
             neighbors
                 .entry(&line.bus_from)
                 .or_default()
@@ -278,6 +307,12 @@ impl Writer<'_> {
                 .entry(&line.bus_to)
                 .or_default()
                 .push(&line.bus_from);
+        }
+        if let Some(plan) = &self.ideal_plan {
+            for group in &plan.groups {
+                neighbors.entry(group.from).or_default().push(group.to);
+                neighbors.entry(group.to).or_default().push(group.from);
+            }
         }
         let mut queue = VecDeque::new();
         for (&bus, voltages) in &self.source_voltages {
@@ -332,26 +367,87 @@ impl Writer<'_> {
         Ok(())
     }
 
-    fn line_phases(&self, line: &DistLine) -> Result<Vec<usize>, Error> {
-        if line.terminal_map_from != line.terminal_map_to {
+    fn link_phases(
+        &self,
+        name: &str,
+        from: &str,
+        to: &str,
+        from_map: &[String],
+        to_map: &[String],
+    ) -> Result<Vec<usize>, Error> {
+        if from_map != to_map {
             return Err(unsupported(format!(
-                "line {} permutes endpoint phase identities",
-                line.name
+                "link {name} permutes endpoint phase identities"
             )));
         }
-        let terminals = phases(&line.terminal_map_from)?;
-        for bus in [&line.bus_from, &line.bus_to] {
-            let available = self.phases.get(bus.as_str()).ok_or_else(|| {
-                unsupported(format!("line {} has no exact endpoint {bus}", line.name))
-            })?;
+        let terminals = phases(from_map)?;
+        for bus in [from, to] {
+            let available = self
+                .phases
+                .get(bus)
+                .ok_or_else(|| unsupported(format!("link {name} has no exact endpoint {bus}")))?;
             if terminals.iter().any(|p| !available.contains(p)) {
                 return Err(unsupported(format!(
-                    "line {} uses an absent endpoint phase",
-                    line.name
+                    "link {name} uses an absent endpoint phase"
                 )));
             }
         }
         Ok(terminals)
+    }
+
+    fn link_endpoints<'b>(&self, name: &str, from: &'b str, to: &'b str) -> (&'b str, &'b str) {
+        if self
+            .ideal_plan
+            .as_ref()
+            .is_some_and(|p| p.reversed.contains(name))
+        {
+            (to, from)
+        } else {
+            (from, to)
+        }
+    }
+
+    fn switches(&mut self) -> Result<(), Error> {
+        if let Some(plan) = self.ideal_plan.take() {
+            self.ideal_contacts(plan);
+            return Ok(());
+        }
+        for switch in self.net.switches() {
+            if !switch.extras.is_empty() {
+                return Err(unsupported(format!(
+                    "switch {} has uninterpreted electrical extras",
+                    switch.name
+                )));
+            }
+            let phase_order = self.link_phases(
+                &switch.name,
+                &switch.bus_from,
+                &switch.bus_to,
+                &switch.terminal_map_from,
+                &switch.terminal_map_to,
+            )?;
+            let phase_flags: String = phase_order
+                .iter()
+                .map(|&p| super::read::phase_name(p))
+                .collect();
+            let _ = writeln!(
+                self.out,
+                "object switch {{\n    name {};\n    phases {phase_flags}N;\n    from {};\n    to {};\n    operating_mode INDIVIDUAL;\n    status OPEN;",
+                switch.name, switch.bus_from, switch.bus_to
+            );
+            for phase in phase_flags.chars() {
+                let _ = writeln!(self.out, "    phase_{phase}_state OPEN;");
+            }
+            self.coordinates(crate::DistLocationTarget::Switch, &switch.name);
+            self.out.push_str("}\n\n");
+            if switch.i_max.is_some() {
+                self.dropped(format!(
+                    "switch {}: contact current ratings are not emitted",
+                    switch.name
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn lines(&mut self) -> Result<(), Error> {
@@ -363,7 +459,13 @@ impl Writer<'_> {
             .collect();
         let mut used_codes = BTreeSet::new();
         for line in self.net.lines() {
-            let phase_order = self.line_phases(line)?;
+            let phase_order = self.link_phases(
+                &line.name,
+                &line.bus_from,
+                &line.bus_to,
+                &line.terminal_map_from,
+                &line.terminal_map_to,
+            )?;
             let code = codes.get(line.linecode.as_str()).ok_or_else(|| {
                 unsupported(format!("line {} has no exact linecode identity", line.name))
             })?;
@@ -387,6 +489,7 @@ impl Writer<'_> {
                 ));
             }
             validate_line_matrices(line, code, phase_order.len())?;
+            let expanded_shunts = self.expand_line_shunts(code);
             let config = self.generated_name(&format!("{}__glm_configuration", line.name));
             let _ = writeln!(self.out, "object line_configuration {{ name \"{config}\";");
             self.coordinates(crate::DistLocationTarget::LineCode, &code.name);
@@ -395,7 +498,11 @@ impl Writer<'_> {
                     let z = Complex64::new(code.r_series[row][col], code.x_series[row][col])
                         * METERS_PER_MILE;
                     let literal = complex_literal(z)?;
-                    let capacitance = code.b_from[row][col] * METERS_PER_MILE
+                    let capacitance = if expanded_shunts {
+                        0.0
+                    } else {
+                        code.b_from[row][col]
+                    } * METERS_PER_MILE
                         / (std::f64::consts::PI * self.net.base_frequency() * 1e-9);
                     if !capacitance.is_finite() {
                         return Err(unsupported("line capacitance conversion overflows"));
@@ -411,17 +518,21 @@ impl Writer<'_> {
                 }
             }
             self.out.push_str("}\n");
+            let (from, to) = self.link_endpoints(&line.name, &line.bus_from, &line.bus_to);
             let _ = writeln!(
                 self.out,
                 "object overhead_line {{ name \"{}\"; phases {}N; from \"{}\"; to \"{}\"; length {} m; configuration \"{config}\";",
                 line.name,
                 flags(&phase_order),
-                line.bus_from,
-                line.bus_to,
+                from,
+                to,
                 line.length
             );
             self.coordinates(crate::DistLocationTarget::Line, &line.name);
             self.out.push_str("}\n");
+            if expanded_shunts {
+                self.line_shunts(line, code, &phase_order)?;
+            }
             self.diagnostics.push(
                 &codes::EMIT_GLM_VALUE_REBASED,
                 format!(
@@ -440,6 +551,10 @@ impl Writer<'_> {
 
     fn loads(&mut self) -> Result<(), Error> {
         for load in self.net.loads() {
+            if load.configuration != Configuration::Wye {
+                self.pair_load(load)?;
+                continue;
+            }
             if load.configuration != Configuration::Wye
                 || load.terminal_map.last().map(String::as_str) != Some("n")
             {
@@ -583,19 +698,6 @@ fn validate_line_matrices(line: &DistLine, code: &DistLineCode, n: usize) -> Res
                 line.name
             )));
         }
-    }
-    if code
-        .g_from
-        .iter()
-        .flatten()
-        .chain(code.g_to.iter().flatten())
-        .any(|&v| v != 0.0)
-        || code.b_from != code.b_to
-    {
-        return Err(unsupported(format!(
-            "line {} needs noncapacitive or unequal end-shunt equivalents",
-            line.name
-        )));
     }
     if (0..n).all(|i| code.r_series[i][i] == 0.0 && code.x_series[i][i] == 0.0) {
         return Err(unsupported(format!(

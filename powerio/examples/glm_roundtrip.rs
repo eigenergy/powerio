@@ -6,23 +6,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let input = args
         .next()
-        .ok_or("usage: glm_roundtrip FILE OUTPUT_DIRECTORY [pnnl|arras]")?;
+        .ok_or("usage: glm_roundtrip FILE OUTPUT_DIRECTORY [pnnl|arras] [LINE_SHUNTS_JSON]")?;
     let output = std::path::PathBuf::from(args.next().ok_or("missing output directory")?);
     let dialect = match args.next().as_deref() {
         None | Some("pnnl") => GlmDialect::Pnnl5_3,
         Some("arras") => GlmDialect::Arras4_3,
         _ => return Err("expected pnnl or arras dialect".into()),
     };
+    let shunts = args.next();
     if args.next().is_some() {
         return Err("too many arguments".into());
     }
-    let module = parse(
+    let mut module = parse(
         Source::open(input)?,
         PreprocessOptions {
             dialect,
             ..Default::default()
         },
     )?;
+    if let Some(path) = shunts {
+        override_shunts(&mut module, &path)?;
+    }
+
     let ir_path = output.join("network.pio.json");
     powerio::serialize(&module, ir_path.as_path())?;
     let restored = powerio::deserialize(ir_path.as_path())?;
@@ -88,5 +93,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }));
     }
     println!("{}", serde_json::to_string_pretty(&reports)?);
+    Ok(())
+}
+
+fn override_shunts(
+    module: &mut powerio::PioModule<powerio_dist::MulticonductorNetwork>,
+    path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct EndShunts {
+        g_from: Vec<Vec<f64>>,
+        b_from: Vec<Vec<f64>>,
+        g_to: Vec<Vec<f64>>,
+        b_to: Vec<Vec<f64>>,
+    }
+    let shunts: EndShunts = serde_json::from_slice(&std::fs::read(path)?)?;
+    let [code] = module.value_mut().line_codes_mut().as_mut_slice() else {
+        return Err("shunt oracle override requires exactly one linecode".into());
+    };
+    code.g_from = shunts.g_from;
+    code.b_from = shunts.b_from;
+    code.g_to = shunts.g_to;
+    code.b_to = shunts.b_to;
     Ok(())
 }
