@@ -612,6 +612,8 @@ fn a_segment_without_impedance_is_not_converted() {
         DistTargetFormat::PmdJson,
         DistTargetFormat::BmopfJson,
         DistTargetFormat::CimDist,
+        DistTargetFormat::Gridlabd,
+        DistTargetFormat::GridlabdArras,
     ] {
         let error = powerio_dist::emit_with_options(
             &powerio_core::PioModule::new((*net).clone()),
@@ -1143,4 +1145,34 @@ fn dss_source_impedance_is_written_once_in_cim() {
             assert!(close(*a, *b));
         }
     }
+}
+
+#[test]
+fn both_glm_profiles_write_cim_loads_and_sources() {
+    let text = "module powerflow { solver_method FBS; }\nobject node { name 1; phases AN; bustype SWING; nominal_voltage 240; }\nobject load { name 2; parent 1; phases AN; nominal_voltage 240; constant_power_A 100+20j; }";
+    for format in ["gridlabd", "gridlabd-arras"] {
+        let net = parse_str(text, format).unwrap();
+        let out = emit_value(&net, DistTargetFormat::CimDist);
+        let back = parse_str(&out.text, "cim-dist").unwrap();
+        assert_eq!(back.sources().len(), net.sources().len());
+        assert_eq!(back.loads().len(), net.loads().len());
+        assert!(close(back.loads()[0].p_nom[0], 100.0));
+        assert!(close(back.loads()[0].q_nom[0], 20.0));
+        assert!(close(back.sources()[0].v_magnitude[0], 240.0));
+    }
+}
+
+#[test]
+fn cim_reports_bounded_load_law_loss() {
+    let net = parse_str(
+        "New Circuit.c bus1=s basekv=12.47\nNew Load.l bus1=s phases=3 kv=12.47 kw=10 model=8 zipv=[0.2 0.3 0.5 0.2 0.3 0.5 0.7]",
+        "dss",
+    ).unwrap();
+    let out = emit_value(&net, DistTargetFormat::CimDist);
+    assert!(
+        out.warnings
+            .iter()
+            .any(|finding| finding.starts_with("EMIT.CIM_DIST.FIELD_DROPPED")
+                && finding.contains("voltage dependence model"))
+    );
 }
