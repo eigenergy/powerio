@@ -56,6 +56,7 @@ pub mod diagnostics;
 pub mod dss;
 pub mod error;
 pub mod geo;
+pub mod glm;
 pub mod graph;
 pub mod kron;
 pub mod lindist3flow;

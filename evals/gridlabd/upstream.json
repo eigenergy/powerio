@@ -1,0 +1,37 @@
+{
+  "repository": "https://github.com/gridlab-d/gridlab-d",
+  "commit": "1b2e463d3c149e999a2c5f04213477f545e01dc6",
+  "license": "https://github.com/gridlab-d/gridlab-d/blob/1b2e463d3c149e999a2c5f04213477f545e01dc6/LICENSE",
+  "files": [
+    {
+      "source": "powerflow/autotest/test_IEEE_13_NR.glm",
+      "local": "autotest/test_IEEE_13_NR.glm",
+      "sha256": "d897e1a730932f5c485bcf89981f34a5d4a9217110268fc73690724b6056e180",
+      "assertions": 32,
+      "tolerances_V": {"2": 27, "8": 4, "10": 1},
+      "qualification": "Published regression tolerances include four 8 V and one 10 V assertions; this is not a high precision cross-format reference."
+    },
+    {
+      "source": "powerflow/autotest/test_IEEE_13_FBS.glm",
+      "local": "autotest/test_IEEE_13_FBS.glm",
+      "sha256": "05eac2cf4bd1db6cbe6815abbda046c01c2eff8e430a1bd281966468dd99c0b2",
+      "assertions": 32,
+      "tolerances_V": {"2": 27, "8": 4, "10": 1},
+      "qualification": "Same published reference tolerances as NR; FBS warns about switch behavior."
+    },
+    {
+      "source": "powerflow/autotest/test_IEEE_37_NR.glm",
+      "local": "autotest/test_IEEE_37_NR.glm",
+      "sha256": "a497537d68dc5ed5a74847b1460c43bdba18681b3f8d9d45ab5f2bc4c6ed704b",
+      "assertions": 6,
+      "tolerances_V": {"0.5": 6},
+      "qualification": "Begins downstream of the regulator; checks six line-line voltages and constant-current rotation."
+    },
+    {
+      "source": "powerflow/autotest/data_configurations_37_node.glm",
+      "local": "data_configurations_37_node.glm",
+      "sha256": "06224e5f123396cb5bc08ff767411a7a8c3e60a537cf5ed0bd6878cb9545ca72",
+      "qualification": "Placed one directory above the test to satisfy its literal relative include, without modifying either file."
+    }
+  ]
+}

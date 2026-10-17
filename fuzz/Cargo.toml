@@ -77,6 +77,12 @@ test = false
 bench = false
 
 [[bin]]
+name = "glm_source"
+path = "fuzz_targets/glm_source.rs"
+test = false
+bench = false
+
+[[bin]]
 name = "pmd_json"
 path = "fuzz_targets/pmd_json.rs"
 test = false
@@ -113,5 +119,17 @@ bench = false
 [[bin]]
 name = "ucte"
 path = "fuzz_targets/ucte.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "glm_preprocess"
+path = "fuzz_targets/glm_preprocess.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "glm_objects"
+path = "fuzz_targets/glm_objects.rs"
 test = false
 bench = false

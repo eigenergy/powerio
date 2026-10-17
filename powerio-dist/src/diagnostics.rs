@@ -27,6 +27,18 @@ pub mod codes {
             "a distribution document is not valid JSON for its format", category = Parse;
         PARSE_DIST_SOURCE_MALFORMED = "PARSE.DIST.SOURCE_MALFORMED", Error,
             "a distribution reader refused the source it was given", category = Parse;
+        PARSE_GLM_SYNTAX = "PARSE.GLM.SYNTAX", Error,
+            "a GLM source contains invalid or incomplete syntax", category = Parse;
+        PARSE_GLM_LIMIT_EXCEEDED = "PARSE.GLM.LIMIT_EXCEEDED", Error,
+            "a GLM source exceeds the bounded parser resources", category = Parse;
+        PARSE_GLM_PREPROCESSING = "PARSE.GLM.PREPROCESSING", Error,
+            "a GLM preprocessing operation is invalid or requires unsupported external semantics", category = Parse;
+        PARSE_GLM_OBJECT = "PARSE.GLM.OBJECT", Error,
+            "a GLM object identity, declaration or reference cannot be resolved", category = Parse;
+        PARSE_GLM_QUANTITY = "PARSE.GLM.QUANTITY", Error,
+            "a GLM quantity or unit cannot be interpreted in the static profile", category = Parse;
+        READ_GLM_UNIT_IGNORED = "READ.GLM.UNIT_IGNORED", Warning,
+            "native quantity conversion ignores a stated unit suffix";
 
         // READ.DSS: decoded, but not representable in the multiconductor model.
         /// A `Redirect`/`Compile`/`Buscoords` include the reader refused
