@@ -249,7 +249,7 @@ def recorded(path: Path) -> dict:
     return {k: parse_complex(v) for k, v in rows[-1].items() if k != "timestamp"}
 
 
-def read_glm(directory: Path, n: int) -> dict:
+def read_glm(directory: Path, n: int, line_class="overhead_line") -> dict:
     result = {}
     for bus in ("source", "sink"):
         values = recorded(directory / f"{bus}.csv")
@@ -266,7 +266,7 @@ def read_glm(directory: Path, n: int) -> dict:
                     sign * values[f"{quantity}_{suffix}_{phase}"],
                 )
     add(result, "line.loss", "VA", values["power_losses"])
-    link = ET.parse(directory / "impedance.xml").find("overhead_line")
+    link = ET.parse(directory / "impedance.xml").find(line_class)
     if link is None or link.findtext("name") != "line":
         raise ValueError("missing line impedance export")
     # For this series-only line, b is the full series impedance. The general

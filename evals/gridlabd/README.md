@@ -101,6 +101,114 @@ warning that a supplied 2×2 matrix cannot determine neutral/ground currents.
 The center-tapped tests establish grounded service-terminal conventions; they
 do not establish floating-neutral or triplex-cable equivalence.
 
+## Overhead conductor geometry calibration
+
+`overhead_geometry_oracle.py` checks synthetic A/AN, BC/BCN and ABC/ABCN
+cross sections at 60 Hz, plus ABCN at 50 Hz. These conductor positions are
+cross-section dimensions in feet; they are unrelated to geographic component
+latitude/longitude. The harness does not yet qualify PowerIO geometry import.
+
+```sh
+python evals/gridlabd/overhead_geometry_oracle.py --pnnl-root "$PNNL_ROOT" \
+  --output /tmp/gld-overhead
+```
+
+The seven circuits exercise both pinned GridLAB-D forks using NR with/without
+capacitance and FBS without capacitance: 42 native runs. Independent modified
+Carson and image-potential calculations check series impedance, total shunt
+admittance, complex voltages, both-end currents/powers and losses. The shunt
+readback comes from the native `a` and `b` matrices, without inserting expected
+capacitances into the observations. Neutral-removal negative controls expose
+the effect of the return conductor.
+
+Fourteen OpenDSS checks cover full and explicitly reduced conductor matrices
+under SimpleCarson. The engine's rounded SI constants differ from GridLAB-D's
+rounded imperial constants; each profile is checked against its own equations.
+Setting the OpenDSS default earth model alone does not activate that model for
+the geometry API. The harness first solves a line explicitly selecting Carson,
+then reads its geometry matrices. Deri and FullCarson remain outside this
+calibration, rather than being relabeled equivalent.
+
+For both pinned GridLAB-D forks, series neutral reduction is the Schur
+complement and shunt reduction takes the phase block of the full admittance.
+An independent four-conductor calculation verifies the corresponding
+zero-neutral-voltage boundary condition, including nonzero neutral current.
+This does not establish arbitrary floating-neutral or finite-grounding support.
+
+All 42 native matrix/voltage cases match, but only 28 match every physical port
+quantity. Fourteen retain reported-current or loss discrepancies: coupled
+capacitance uses `d=a=I+ZY/2` in native link-current reporting where a physical
+pi circuit requires `d=I+YZ/2`; NR's matching bus voltages do not validate those
+reported currents. Native total loss also sums the absolute real loss of each
+phase, overstating dissipation when mutual coupling transfers real power
+between phases. Separate `native_readback_equations` comparisons reproduce
+these behaviors in all 42 cases. They never replace the physical comparisons.
+The complete calibration intentionally exits nonzero while those physical
+discrepancies remain. FBS with coupled capacitance has separate earlier
+qualification and is not covered by these 42 runs.
+
+`--native-evidence /tmp/gld-overhead` rechecks acquired native results after
+verifying every generated input hash and pinned version; OpenDSS matrix checks
+still execute. Both the original evidence hash and each native output directory
+are recorded. No failed physical comparison becomes a successful conversion.
+
+The equations and readback behavior were audited in the commits pinned by
+`engines.json`: GridLAB-D `overhead_line.cpp`, `line.h`, `line.cpp` and
+`link.cpp`; DSS `LineConstants.pas`, `LineGeometry.pas` and
+`CAPI_LineGeometries.pas`. Geometry-derived neutral reduction, native readback
+discrepancies and cross-engine earth-model differences require explicit
+provenance or diagnostics when conversion support is added.
+
+## Overhead geometry conversion
+
+The reader materializes `overhead_line_conductor` and `line_spacing` references
+as linecode phase matrices, retaining the native reduced-neutral calculation
+in linecode provenance and reporting `READ.GLM.GEOMETRY_MATERIALIZED`.
+GMR, resistance, diameter and spacing use native units with normal unit
+conversion. Explicit nonzero diagonal configuration impedances select the
+native matrix path before geometry. Active geometry requires positive finite
+GMR/resistance/distances; enabled capacitance additionally requires diameters
+and heights. Unsupported native invalid-value fallbacks fail explicitly.
+
+Ordinary 50/60-Hz module globals survive import, IR and canonical output.
+Canonical geometry output uses current matrices, with a diagnostic for the
+original conductor/spacing provenance that cannot be reconstructed. Map points
+on the line/configuration retain their typed attachment. Points on conductor
+or spacing objects without a typed attachment still fail explicitly.
+
+```sh
+python evals/gridlabd/overhead_roundtrip_oracle.py --pnnl-root "$PNNL_ROOT" \
+  --bridge target/debug/examples/glm_roundtrip --output /tmp/gld-geometry-roundtrip
+```
+
+Seven phase/frequency cases, each with capacitance on/off, run in both forks.
+Fresh, IR-restored, edited, voltage-rebased and grounded-source-reference output
+is checked against independent physical circuit equations. Edits change source
+voltage, load admittance and line length (both series and shunt quantities).
+Noncommuting shunts use exact endpoint load equivalents in NR as well as FBS.
+The oracle aggregates native series currents and native end-shunt coefficient
+readback, then separately checks an independent root-meter source current.
+Total physical loss is the signed sum of observed physical port powers; native
+`power_losses` remains recorded separately. Geometry neutral reduction is
+verified for its stated source boundary condition, not claimed as full
+explicit-neutral or arbitrary-grounding support.
+
+The companion cross-format audit uses the existing CLI and preserves the
+original fixed-source reference:
+
+```sh
+python evals/gridlabd/overhead_dss_oracle.py --powerio target/debug/powerio \
+  --output /tmp/gld-geometry-dss
+```
+
+All 14 line-matrix comparisons pass, but all 14 complete-circuit comparisons
+currently fail. The DSS writer leaves unspecified source impedance at native
+finite defaults, and B/C sources emitted as two-phase acquire a 180-degree
+phase separation instead of the original 120 degrees. Actual source settings
+and voltages are recorded. No tolerance relaxation or substitution of observed
+source voltage is used to declare cross-format success. These source-export
+gaps remain unresolved and prevent an OpenDSS compatibility claim.
+
 ## Electrical reader and IR
 
 `powerio_dist::glm::parse` returns `PioModule<MulticonductorNetwork>` for an
@@ -116,7 +224,7 @@ Numeric setters are validated in source order even when later overwritten or
 assigned to an inactive phase.
 
 The reader rejects unmodeled physical properties, unknown globals, active
-device classes, geometry-dependent lines, split-phase flags, conflicting
+device classes, unqualified geometry/cable models, split-phase flags, conflicting
 child nominal voltages and names that collide under the current canonical
 case-insensitive lookup. Coordinates attach to root buses, parented loads,
 lines and used line configurations. Unmapped coordinate-bearing objects still
@@ -195,7 +303,7 @@ and source/load properties follow explicit phase identities even when model
 terminal order differs from native A/B/C order. A source reference on an
 already perfectly grounded terminal has the exact earth-referenced equivalent;
 floating references are refused. Source zero phasors, nonreciprocal end-shunt
-equivalents, non-60-Hz cases, uninterpreted electrical extras, additional
+equivalents, frequencies outside 50/60 Hz, uninterpreted electrical extras, additional
 device families and unqualified object-name escaping remain explicit gaps.
 
 ```sh
@@ -636,3 +744,24 @@ protection sequences, load schedules and behavioral simulation are not executed.
 The complete static compatibility target still includes additional neutral,
 geometry, transformer and device profiles; these are not completed by source and
 line snapshot qualification alone.
+
+## Underground cable conversion
+
+`cable_oracle.py` compares conductor geometry with native impedance dumps and an
+independent block-matrix reduction. It checks voltages, currents, powers and
+charging admittances for native inputs, canonical output and edited networks.
+IR-restored output must match fresh canonical bytes. Source root meters witness
+physical current independently of native link reporting; removing return paths
+(or perturbing bare-cable resistance) must fail the comparison.
+
+```sh
+cargo build -p powerio --example glm_roundtrip
+python evals/gridlabd/cable_oracle.py --bridge target/debug/examples/glm_roundtrip --pnnl-root "$PNNL_ROOT" --output /tmp/gld-cables
+```
+
+The cases include IEEE13's CN606/CN607 parameters, phase subsets, a separate
+neutral, tape shields, capacitance and 50/60 Hz. PNNL and Arras have different
+neutral reductions, so each uses its own reference profile. PNNL unshielded
+geometry and Arras shield geometry without N are checked as native-invalid
+inputs, separately from supported electrical cases. These results do not yet
+qualify triplex cables, OpenDSS CNData/TSData decoding or a complete feeder.

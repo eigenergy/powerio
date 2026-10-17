@@ -157,7 +157,7 @@ fn physical_gaps_fail_instead_of_becoming_a_partial_network() {
             "nominal_voltage .24 kV",
             "nominal_voltage .24 kV; base_power_A 100",
         ),
-        SINGLE.replace("solver_method NR", "solver_method NR; nominal_frequency 50"),
+        SINGLE.replace("solver_method NR", "solver_method NR; nominal_frequency 25"),
         SINGLE.replace("bustype SWING", "bustype PV"),
         SINGLE.replace("name sink", "name SOURCE"),
         format!("{SINGLE}\nobject regulator {{ name active; }}"),

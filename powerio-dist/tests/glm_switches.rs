@@ -429,13 +429,13 @@ fn unequal_conductive_shunts_keep_physical_ends_under_fbs_reversal() {
 }
 
 #[test]
-fn source_fbs_noncommuting_line_reports_native_discrepancy() {
+fn source_noncommuting_line_reports_native_discrepancy_in_both_solvers() {
     let text = "module powerflow { solver_method FBS; line_capacitance TRUE; }
 object node { name a; phases ABN; bustype SWING; nominal_voltage 240; }
 object node { name b; phases ABN; nominal_voltage 240; }
 object line_configuration { name c; z11 1+0j; z22 2+0j; c11 100; c22 100; c12 -10; c21 -10; }
 object overhead_line { name l; phases ABN; from a; to b; configuration c; length 1 mile; }";
-    for (solver, expected) in [("FBS", true), ("NR", false)] {
+    for (solver, expected) in [("FBS", true), ("NR", true)] {
         let module = parse(
             Source::from_memory("case.glm", text.replace("FBS", solver).as_bytes()).unwrap(),
             PreprocessOptions::default(),

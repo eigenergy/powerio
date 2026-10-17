@@ -75,7 +75,8 @@ pub(crate) fn emit_text(network: &MulticonductorNetwork) -> Result<TextEmission,
     };
     let _ = writeln!(
         writer.out,
-        "// Canonical PowerIO static network.\nmodule powerflow {{ solver_method {solver}; line_capacitance TRUE; }}\n"
+        "// Canonical PowerIO static network.\nmodule powerflow {{ solver_method {solver}; line_capacitance TRUE; nominal_frequency {}; }}\n",
+        network.base_frequency()
     );
     writer.buses()?;
     writer.lines()?;
@@ -146,9 +147,9 @@ impl Writer<'_> {
         if self.net.buses().is_empty() {
             return Err(unsupported("GLM output needs at least one electrical bus"));
         }
-        if (self.net.base_frequency() - 60.0).abs() > f64::EPSILON {
+        if ![50.0, 60.0].contains(&self.net.base_frequency()) {
             return Err(unsupported(
-                "nominal frequencies other than 60 Hz need explicit module-global support",
+                "nominal frequencies other than 50 or 60 Hz are not qualified",
             ));
         }
         if !self.net.transformers().is_empty()
@@ -489,7 +490,7 @@ impl Writer<'_> {
                 ));
             }
             validate_line_matrices(line, code, phase_order.len())?;
-            let expanded_shunts = self.expand_line_shunts(code);
+            let expanded_shunts = Self::expand_line_shunts(code);
             let config = self.generated_name(&format!("{}__glm_configuration", line.name));
             let _ = writeln!(self.out, "object line_configuration {{ name \"{config}\";");
             self.coordinates(crate::DistLocationTarget::LineCode, &code.name);
