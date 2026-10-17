@@ -5,6 +5,7 @@
 #[cfg(test)]
 mod access_tests;
 mod equipment;
+mod geometry;
 mod profile;
 mod rows;
 mod settings;

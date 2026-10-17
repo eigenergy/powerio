@@ -19,6 +19,7 @@ mod connection_tests;
 mod dc_infeeder;
 #[cfg(test)]
 mod dc_infeeder_tests;
+mod geometry;
 mod grounding;
 mod infeeder;
 #[cfg(test)]
