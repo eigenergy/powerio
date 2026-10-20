@@ -51,7 +51,7 @@
     <cim:PerLengthPhaseImpedance.conductorCount>3</cim:PerLengthPhaseImpedance.conductorCount>
   </cim:PerLengthPhaseImpedance>
   <cim:PhaseImpedanceData rdf:ID="_d11">
-    <cim:PhaseImpedanceData.PerLengthPhaseImpedance rdf:resource="#_pli1"/>
+    <cim:PhaseImpedanceData.PhaseImpedance rdf:resource="#_pli1"/>
     <cim:PhaseImpedanceData.row>1</cim:PhaseImpedanceData.row>
     <cim:PhaseImpedanceData.column>1</cim:PhaseImpedanceData.column>
     <cim:PhaseImpedanceData.r>0.001</cim:PhaseImpedanceData.r>
@@ -59,7 +59,7 @@
     <cim:PhaseImpedanceData.b>1e-08</cim:PhaseImpedanceData.b>
   </cim:PhaseImpedanceData>
   <cim:PhaseImpedanceData rdf:ID="_d21">
-    <cim:PhaseImpedanceData.PerLengthPhaseImpedance rdf:resource="#_pli1"/>
+    <cim:PhaseImpedanceData.PhaseImpedance rdf:resource="#_pli1"/>
     <cim:PhaseImpedanceData.row>2</cim:PhaseImpedanceData.row>
     <cim:PhaseImpedanceData.column>1</cim:PhaseImpedanceData.column>
     <cim:PhaseImpedanceData.r>0.0004</cim:PhaseImpedanceData.r>
@@ -67,7 +67,7 @@
     <cim:PhaseImpedanceData.b>0.0</cim:PhaseImpedanceData.b>
   </cim:PhaseImpedanceData>
   <cim:PhaseImpedanceData rdf:ID="_d22">
-    <cim:PhaseImpedanceData.PerLengthPhaseImpedance rdf:resource="#_pli1"/>
+    <cim:PhaseImpedanceData.PhaseImpedance rdf:resource="#_pli1"/>
     <cim:PhaseImpedanceData.row>2</cim:PhaseImpedanceData.row>
     <cim:PhaseImpedanceData.column>2</cim:PhaseImpedanceData.column>
     <cim:PhaseImpedanceData.r>0.001</cim:PhaseImpedanceData.r>
@@ -75,7 +75,7 @@
     <cim:PhaseImpedanceData.b>1e-08</cim:PhaseImpedanceData.b>
   </cim:PhaseImpedanceData>
   <cim:PhaseImpedanceData rdf:ID="_d31">
-    <cim:PhaseImpedanceData.PerLengthPhaseImpedance rdf:resource="#_pli1"/>
+    <cim:PhaseImpedanceData.PhaseImpedance rdf:resource="#_pli1"/>
     <cim:PhaseImpedanceData.row>3</cim:PhaseImpedanceData.row>
     <cim:PhaseImpedanceData.column>1</cim:PhaseImpedanceData.column>
     <cim:PhaseImpedanceData.r>0.0004</cim:PhaseImpedanceData.r>
@@ -83,7 +83,7 @@
     <cim:PhaseImpedanceData.b>0.0</cim:PhaseImpedanceData.b>
   </cim:PhaseImpedanceData>
   <cim:PhaseImpedanceData rdf:ID="_d32">
-    <cim:PhaseImpedanceData.PerLengthPhaseImpedance rdf:resource="#_pli1"/>
+    <cim:PhaseImpedanceData.PhaseImpedance rdf:resource="#_pli1"/>
     <cim:PhaseImpedanceData.row>3</cim:PhaseImpedanceData.row>
     <cim:PhaseImpedanceData.column>2</cim:PhaseImpedanceData.column>
     <cim:PhaseImpedanceData.r>0.0004</cim:PhaseImpedanceData.r>
@@ -91,7 +91,7 @@
     <cim:PhaseImpedanceData.b>0.0</cim:PhaseImpedanceData.b>
   </cim:PhaseImpedanceData>
   <cim:PhaseImpedanceData rdf:ID="_d33">
-    <cim:PhaseImpedanceData.PerLengthPhaseImpedance rdf:resource="#_pli1"/>
+    <cim:PhaseImpedanceData.PhaseImpedance rdf:resource="#_pli1"/>
     <cim:PhaseImpedanceData.row>3</cim:PhaseImpedanceData.row>
     <cim:PhaseImpedanceData.column>3</cim:PhaseImpedanceData.column>
     <cim:PhaseImpedanceData.r>0.001</cim:PhaseImpedanceData.r>

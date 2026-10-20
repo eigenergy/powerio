@@ -877,10 +877,8 @@ impl<'a> Mapper<'a> {
     fn lines(&mut self) -> (Vec<DistLineCode>, Vec<DistLine>) {
         let phase_children =
             self.children_of("ACLineSegmentPhase", "ACLineSegmentPhase.ACLineSegment");
-        let impedance_data = self.children_of(
-            "PhaseImpedanceData",
-            "PhaseImpedanceData.PerLengthPhaseImpedance",
-        );
+        let impedance_data =
+            self.children_of("PhaseImpedanceData", "PhaseImpedanceData.PhaseImpedance");
         let mut line_codes: Vec<DistLineCode> = Vec::new();
         // (impedance object, its matrix rows in segment phase order) to line
         // code name.
@@ -1566,7 +1564,7 @@ impl<'a> Mapper<'a> {
         }
         let sum: f64 = values.iter().sum();
         if let Some(total) = total
-            && (sum - total).abs() > 1e-9 * sum.abs().max(total.abs()).max(1.0)
+            && (sum - total).abs() > 1e-6 * sum.abs().max(total.abs()).max(1.0)
         {
             self.note(
                 &C::READ_CIM_DIST_VALUE_CONFLICT,

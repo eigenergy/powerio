@@ -638,7 +638,7 @@ fn feeder_on_pli(extra: &str) -> String {
 fn impedance_entry(row: usize, col: usize, r: f64, x: f64) -> String {
     format!(
         r##"<cim:PhaseImpedanceData rdf:ID="_d{row}{col}">
-    <cim:PhaseImpedanceData.PerLengthPhaseImpedance rdf:resource="#_pli"/>
+    <cim:PhaseImpedanceData.PhaseImpedance rdf:resource="#_pli"/>
     <cim:PhaseImpedanceData.row>{row}</cim:PhaseImpedanceData.row>
     <cim:PhaseImpedanceData.column>{col}</cim:PhaseImpedanceData.column>
     <cim:PhaseImpedanceData.r>{r}</cim:PhaseImpedanceData.r>
@@ -867,13 +867,11 @@ fn an_impedance_object_without_data_leaves_the_segment_unresolved() {
     );
 }
 
-/// A consumer whose phase records state only their phase shares its stated
-/// total, and a total that disagrees with the phases is reported.
-#[test]
-fn consumer_totals_and_phase_powers_are_reconciled() {
-    let consumer = |id: &str, total: &str, phase_p: &str| {
-        let mut out = format!(
-            r##"<cim:EnergyConsumer rdf:ID="_{id}">
+/// A wye consumer `id` on n2 stating `total`, with phase records A, B and C
+/// that each state `phase_p`.
+fn consumer(id: &str, total: &str, phase_p: &str) -> String {
+    let mut out = format!(
+        r##"<cim:EnergyConsumer rdf:ID="_{id}">
     <cim:IdentifiedObject.name>{id}</cim:IdentifiedObject.name>
     <cim:EnergyConsumer.phaseConnection rdf:resource="http://iec.ch/TC57/CIM100#PhaseShuntConnectionKind.Y"/>
     {total}
@@ -883,19 +881,24 @@ fn consumer_totals_and_phase_powers_are_reconciled() {
     <cim:Terminal.ConnectivityNode rdf:resource="#_n2"/>
     <cim:ACDCTerminal.sequenceNumber>1</cim:ACDCTerminal.sequenceNumber>
   </cim:Terminal>"##
-        );
-        for phase in ["A", "B", "C"] {
-            let _ = write!(
-                out,
-                r##"<cim:EnergyConsumerPhase rdf:ID="_{id}_{phase}">
+    );
+    for phase in ["A", "B", "C"] {
+        let _ = write!(
+            out,
+            r##"<cim:EnergyConsumerPhase rdf:ID="_{id}_{phase}">
     <cim:EnergyConsumerPhase.EnergyConsumer rdf:resource="#_{id}"/>
     <cim:EnergyConsumerPhase.phase rdf:resource="http://iec.ch/TC57/CIM100#SinglePhaseKind.{phase}"/>
     {phase_p}
   </cim:EnergyConsumerPhase>"##
-            );
-        }
-        out
-    };
+        );
+    }
+    out
+}
+
+/// A consumer whose phase records state only their phase shares its stated
+/// total, and a total that disagrees with the phases is reported.
+#[test]
+fn consumer_totals_and_phase_powers_are_reconciled() {
     let text = feeder(&format!(
         "{}\n{}",
         consumer(
@@ -929,6 +932,48 @@ fn consumer_totals_and_phase_powers_are_reconciled() {
         "{:#?}",
         net.warnings
     );
+}
+
+/// A total that differs from its phases' sum only by rounding in the
+/// seventh significant figure, as the GridAPPS-D feeders state, is not a
+/// conflict; a difference beyond one part in a million still is.
+#[test]
+fn consumer_totals_within_tolerance_are_not_conflicts() {
+    let phase_p = "<cim:EnergyConsumerPhase.p>487.880653333</cim:EnergyConsumerPhase.p><cim:EnergyConsumerPhase.q>0</cim:EnergyConsumerPhase.q>";
+    let text = feeder(&format!(
+        "{}\n{}",
+        consumer(
+            "near",
+            "<cim:EnergyConsumer.p>1463.642</cim:EnergyConsumer.p><cim:EnergyConsumer.q>0</cim:EnergyConsumer.q>",
+            phase_p,
+        ),
+        consumer(
+            "far",
+            "<cim:EnergyConsumer.p>1463.65</cim:EnergyConsumer.p><cim:EnergyConsumer.q>0</cim:EnergyConsumer.q>",
+            phase_p,
+        ),
+    ));
+    let net = parse_str(&text, "cim-dist").unwrap();
+    let conflicts = findings(&net.warnings, "READ.CIM_DIST.VALUE_CONFLICT");
+    assert_eq!(conflicts.len(), 1, "{conflicts:#?}");
+    assert!(conflicts[0].contains("far"), "{conflicts:#?}");
+}
+
+/// Written phase impedance data names its matrix through the standard
+/// `PhaseImpedanceData.PhaseImpedance` association.
+#[test]
+fn written_phase_impedance_uses_the_standard_role() {
+    let net = parse_file(fixture(), None).unwrap();
+    let text = emit_value(&net, DistTargetFormat::CimDist).text;
+    let entries = text.matches("<cim:PhaseImpedanceData rdf:").count();
+    assert!(entries > 0, "{text}");
+    assert_eq!(
+        text.matches("<cim:PhaseImpedanceData.PhaseImpedance rdf:resource=")
+            .count(),
+        entries,
+        "{text}"
+    );
+    assert!(!text.contains("PhaseImpedanceData.PerLengthPhaseImpedance"));
 }
 
 /// Each transformer takes the mesh impedance between its own ends, and a

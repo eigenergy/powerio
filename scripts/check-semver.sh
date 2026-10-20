@@ -34,8 +34,25 @@ if [ -z "$baseline" ]; then
 fi
 
 echo "comparing the publishable crates at $version against $baseline"
-# powerio-py and powerio-capi are publish = false; name them anyway so the
-# crate set reads the same as the msrv and archive jobs.
+# cargo-semver-checks runs cargo update in synthetic consumers generated from
+# the current checkout as well as the baseline. Since ZIP 8.6.0 was yanked,
+# those consumers cannot resolve the current workspace's ^8.6 dependency.
+# Apply the same narrow compatibility adjustment to temporary source archives
+# on both sides of the comparison; neither the real checkout nor the published
+# API is changed by this workaround.
+baseline_root=$(mktemp -d)
+current_root=$(mktemp -d)
+trap 'rm -rf "$baseline_root" "$current_root"' EXIT
+git archive "$baseline" | tar -x -C "$baseline_root"
+git archive HEAD | tar -x -C "$current_root"
+# Exercise the old-baseline/new-current dependency combination explicitly, then
+# apply the same preparation to the isolated source archives.
+python3 scripts/semver_zip_compat.py --self-test
+python3 scripts/semver_zip_compat.py "$baseline_root" "$current_root"
+# Run SemVer against the isolated current checkout. cargo-semver-checks creates
+# synthetic consumer packages from this workspace, so running it against the
+# original checkout would still attempt to resolve the yanked ^8.6 dependency.
+cd "$current_root"
 cargo semver-checks check-release --workspace \
     --exclude powerio-py --exclude powerio-capi \
-    --baseline-rev "$baseline" "$@"
+    --baseline-root "$baseline_root" "$@"
