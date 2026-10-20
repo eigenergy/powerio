@@ -8,7 +8,11 @@ commands are below.
 ## Validation gates
 
 Every fixture passes the first three independent checks, run from `tests/` and
-`tools/`; the fourth is an opt in gate over a local OpenDSS corpus:
+`tools/`: round trips, OpenDSS re-solves, and PMD cross-checks. The fourth is
+an opt in gate over a local OpenDSS corpus. None of these results establishes
+support for unresolved line geometry: canonical conversion and numerical
+calculations reject those lines, as
+[Electrical readiness](../../docs/src/electrical-readiness.md) describes.
 
 - **Round trip** (`tests/matrix.rs`). Each case goes dss → model → {dss, BMOPF,
   PMD} and back. Writing to the source format reproduces the file byte for byte
@@ -26,15 +30,18 @@ Every fixture passes the first three independent checks, run from `tests/` and
   `POWERIO_DIST_LOCAL_DSS_CORPUS`). Every `.dss` under the supplied tree parses,
   writes BMOPF JSON, validates against the vendored schema, reparses, writes DSS,
   reparses that DSS, and writes a second BMOPF JSON. The second BMOPF document
-  must be schema valid and stable up to JSON numeric rounding. Against
-  electricdss r4161 `IEEETestCases`, the gate passes all 91 `.dss` files:
-  12,274 parse warnings, 290,393 BMOPF warnings, and 9,756 counted real network
-  losses.
+  must be schema valid and stable up to JSON numeric rounding. A run recorded
+  in June 2026 (#138), before the electrical readiness gate, passed all 91
+  `.dss` files of electricdss r4161 `IEEETestCases`: 12,274 parse warnings,
+  290,393 BMOPF warnings, and 9,756 counted real network losses. Those counts
+  are historical until the gate runs again under the current readiness rules.
 
 ## Dataset coverage
 
 Against the OpenDSS `IEEETestCases` distribution (electricdss r4161; the set
-Frederik Geth pointed to, also at `github.com/tshort/OpenDSS`).
+Frederik Geth pointed to, also at `github.com/tshort/OpenDSS`), as recorded
+before the electrical readiness gate. A case whose lines are defined by
+geometry no longer converts until it states explicit conductor impedances.
 
 ### Converts today (typed: line, linecode, load, transformer, vsource, capacitor, generator, reactor, switch/swtcontrol, regcontrol)
 
@@ -65,7 +72,7 @@ ten conductor micro-fixtures exercise the same gates; see `conversion-matrix.md`
 | IEEE 37 | delta-delta transformers and regulators | BMOPF JSON is schema valid and stable through DSS regeneration; unsupported transformer buses and terminals are pruned with warnings |
 | 8500-Node | transformer model extension, plus `Fuse`/`Recloser`/`Relay`/`CapControl` instrumentation | center tap secondaries preserve grounding through BMOPF → DSS; unsupported banks, control, and protection elements drop with warnings |
 | NEVTestCase | transformer model extension for the remaining transformer banks; series and impedance form reactors | grounding reactors with `kvar`/`kv` map to BMOPF `shunt`; the remaining reactor forms and transformer banks drop with warnings |
-| LVTestCase / LVTestCaseNorthAmerican | `LoadShape`/`Monitor`/`EnergyMeter` time series; `CNData`/`LineGeometry`/`LineSpacing` geometry | the core network parses; instrumentation drops with warnings, and a line defined by geometry blocks canonical conversion and numerical use until geometry lowering exists (see the guide's Electrical readiness chapter) |
+| LVTestCase / LVTestCaseNorthAmerican | `LoadShape`/`Monitor`/`EnergyMeter` time series; `CNData`/`LineGeometry`/`LineSpacing` geometry | the core network parses and instrumentation drops with warnings; unresolved geometry blocks canonical conversion and numerical calculations, so provide explicit conductor impedances first ([Electrical readiness](../../docs/src/electrical-readiness.md)) |
 
 Unsupported OpenDSS classes never fail a parse: they fall through to the `untyped`
 store and the writer reports them, so coverage grows additively without silent
