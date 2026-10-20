@@ -8,7 +8,7 @@ history, and extensions. A current document begins like this:
 {
   "schema": "pio-ir",
   "version": 2,
-  "producer": { "name": "powerio", "version": "0.11.3" },
+  "producer": { "name": "powerio", "version": "0.11.5" },
   "value": {
     "type": "powerio.BalancedNetwork",
     "data": {}
@@ -163,7 +163,7 @@ follows at most 4,096 includes and stops following them once they have loaded
 Python's `parse_display`, kept only for 0.11 compatibility, reads a display
 file whole without these limits; `parse` reads the same `.pwd` file under them.
 
-Apart from CGMES, caller-owned memory has no whole-document limit; format and
+Apart from CGMES, XIIDM, and JIIDM, caller-owned memory has no whole-document limit; format and
 record limits still apply. Stored solutions embed their instance and network,
 so they can exceed the raw input's size. Consumers should check the actual
 serialized byte length against their reload limit before saving, and choose a
@@ -191,10 +191,12 @@ Schema snapshots describe the structural types available in a release.
 `pio-ir/2/0.11.1/schema.json` adds the LinDist3Flow OPF instance and solution
 types, `pio-ir/2/0.11.3/schema.json` adds the three PSS/E contingency
 analysis files, `pio-ir/2/0.11.4/schema.json` adds the fixed-dispatch
-LinDist3Flow instance and solution types, and `pio-ir/2/0.11.6/schema.json`
-adds `cim-dist` to the distribution source formats.
-The release in that path identifies the snapshot, not another document version.
-Patch releases without catalog changes can reuse the same snapshot.
+LinDist3Flow instance and solution types, `pio-ir/2/0.11.5/schema.json`
+republishes the 0.11.4 catalog under its own identifier, and
+`pio-ir/2/0.11.6/schema.json` adds `cim-dist` to the distribution source
+formats. The release in that path identifies the snapshot, not another
+document version. A release without catalog changes can reuse the previous
+snapshot, as 0.11.2 did.
 A refused document is reported with the schema name,
 IR version, and producer it claims and the remedy: a later IR version needs a
 newer PowerIO, and an earlier schema name or IR version has to be regenerated
@@ -207,9 +209,10 @@ differently. LLVM bitcode carries no explicit version number, and a newer
 reader upgrades any older bitcode on load; there is no forward compatibility.
 MLIR bytecode carries an explicit version number with per-dialect upgrade
 hooks. PowerIO IR carries an explicit version integer and reads the window
-from `IR_MIN_VERSION` through `IR_VERSION`, both 2 in 0.11.3, so a version 1
+from `IR_MIN_VERSION` through `IR_VERSION`, both 2 throughout 0.11, so a version 1
 document from 0.10.x is refused rather than upgraded, and an upgrade path for
 those documents would be a later addition. Structural types are added without
 a version bump, and a type this build does not implement is rejected. The
 catalog snapshots under `pio-ir/2/<release>/` are the type catalogs of one IR
-version, published when a release adds types; they are not versions.
+version, published when a release adds types or allowed names; they are not
+versions.

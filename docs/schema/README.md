@@ -24,7 +24,7 @@ The current document begins:
 {
   "schema": "pio-ir",
   "version": 2,
-  "producer": { "name": "powerio", "version": "0.11.3" }
+  "producer": { "name": "powerio", "version": "0.11.5" }
 }
 ```
 
@@ -56,11 +56,11 @@ structural types. The 0.11.1 snapshot adds two structural types and their
 supporting definitions, the 0.11.3 snapshot adds three more:
 `powerio.ContingencySet`, `powerio.SubsystemSet`, and `powerio.MonitoredSet`,
 the 0.11.4 snapshot adds `powerio.LinDist3FlowPfInstance`,
-`powerio.LinDist3FlowPfSolution`, and their limit-report definitions, and the
-0.11.6 snapshot adds `cim-dist` to `DistSourceFormat`.
-The release name in the snapshot path does not create
-a new IR version. A later release without catalog changes can reuse that
-snapshot. CI checks that all existing definitions and document rules remain
+`powerio.LinDist3FlowPfSolution`, and their limit-report definitions, the
+0.11.5 snapshot republishes the 0.11.4 catalog under its own identifier, and
+the 0.11.6 snapshot adds `cim-dist` to `DistSourceFormat`. The release name in
+the snapshot path does not create a new IR version. A later release without
+catalog changes can reuse the previous snapshot, as 0.11.2 reused 0.11.1. CI checks that all existing definitions and document rules remain
 identical, except that a list of allowed names may gain names, and that
 every earlier published snapshot keeps its exact bytes.
 
