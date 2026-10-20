@@ -15,7 +15,7 @@
 - [Rust, Python, Julia, and C](languages.md)
   - [Python API](python.md)
   - [C ABI](capi.md)
-- [Command line and MCP](cli-mcp.md)
+- [CLI and MCP](cli-mcp.md)
 - [Known limits and versions](scope-0.11.md)
 - [Developer guides](developer.md)
   - [From 0.10 to 0.11](migration-0.11.md)

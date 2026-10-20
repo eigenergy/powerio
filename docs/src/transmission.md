@@ -1,7 +1,7 @@
 # Transmission networks
 
 A balanced network is the positive sequence transmission model. All of the
-balanced formats in the [format table](format-fidelity.md) parse to it, so
+balanced formats in the [format table](https://github.com/eigenergy/powerio#formats) parse to it, so
 one reader and one writer per format cover all the conversions between them.
 
 ```julia
