@@ -24,13 +24,13 @@ automatic specifications, as described in
 [PSS/E contingency analysis files](contingency-files.md#command-line),
 `corpus`, the private corpus harness described in
 [Corpus harness](corpus-harness.md), and `tui`. `dcopf` accepts the alias
-`dc-opf`. `--from` and `--to` take the network and calculation format tokens
-and aliases of the [format table](https://github.com/eigenergy/powerio#formats);
-`iidm` and `rawx` are accepted as input spellings only, and the formats that
-have no writer are refused as `--to`, as is `gridfm`, whose datasets the
-`gridfm` subcommand writes. The geographic layer, PowerWorld
-display, and PSS/E contingency file tokens are not `--from` values: the `geo`
-and `contingency` subcommands read those files.
+`dc-opf`. `--from` accepts the network and calculation format tokens and
+aliases in the [format table](https://github.com/eigenergy/powerio#formats).
+`--to` accepts their supported output formats except GridFM; use the
+`gridfm` subcommand to write those datasets. `iidm` and `rawx` are input
+spellings only. The geographic layer, PowerWorld display, and PSS/E
+contingency file tokens are not `--from` values: the `geo` and `contingency`
+subcommands read those files.
 
 Format names, structural value types, and diagnostic codes are the same
 strings the language APIs use. Diagnostics print one per line on stderr as
