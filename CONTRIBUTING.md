@@ -51,9 +51,11 @@ job. `scripts/capi-header-regen.sh` regenerates the header with cbindgen and
 diffs it, which is what catches a reordered argument, a changed type, or a
 changed struct field; it runs once. A breaking change to an existing `pio_*`
 signature bumps `PIO_ABI_VERSION` (in `powerio-capi/src/lib.rs`; the header
-`#define` follows from regeneration) and needs a lockstep PowerIO.jl release
-that targets the new version. Adding symbols does not bump it. Each ABI
-generation gets a changelog entry.
+`#define` follows from regeneration) and updates `scripts/check-capi-v7.sh`,
+which pins the ABI number. The PowerIO.jl change that targets the new version
+merges to PowerIO.jl `main` before the release tag, because the release
+workflow tests PowerIO.jl `main` against the tagged library. Adding symbols
+does not bump it. Each ABI generation gets a changelog entry.
 
 ## Releasing
 
@@ -65,7 +67,10 @@ pins in `[workspace.dependencies]`. Update them together; the next Cargo command
 updates `Cargo.lock`. Then:
 
 1. Merge the bump with a `CHANGELOG.md` section headed exactly `## X.Y.Z`
-   and wait for main CI.
+   and release notes at `docs/release-notes/X.Y.Z.md` titled
+   `# PowerIO X.Y.Z release notes`, and wait for main CI.
+   `bash scripts/release-preflight.sh` fails on anything that still states
+   the old version, such as the C ABI goldens under `tests/data/capi_matrix`.
 2. Create an annotated `vX.Y.Z` tag on the tested main commit and push it.
    The release-binaries workflow tests PowerIO.jl `main` against the tagged
    library, checks the tag against the workspace version and that heading,
@@ -105,9 +110,11 @@ transformations.
 
 ## Text encoding
 
-Use UTF-8 with LF line endings and no BOM. CI rejects a BOM or cp1252 mojibake
-anywhere outside `tests/data`; vendored fixtures keep their committed bytes
-exactly as they are. If you work on Windows, configure your editor
+Use UTF-8 with LF line endings and no BOM. CI rejects a UTF-8 BOM in any
+file, and cp1252 mojibake in any file outside `tests/data`, where vendored
+fixtures keep their committed bytes exactly as they are. It also rejects a
+path that Windows cannot check out, such as a file named after a reserved
+device (`aux`, `con`, `nul`). If you work on Windows, configure your editor
 accordingly.
 
 ## Test fixtures
@@ -131,8 +138,8 @@ statistics.
 Public documentation describes behavior, inputs, outputs, conventions, and
 failure conditions before it gets into implementation detail. Keep sentences
 about ownership, units, indices, feature gates, and errors short. Use these
-terms consistently: network, package, payload, problem instance, source ID,
-dense index, operating point, and study commit.
+terms consistently: module, value, network, calculation instance, solution,
+operating point, source ID, dense index, and diagnostic code.
 
 Define an architectural rule once and link to it from everywhere else. Keep
 design debate, implementation history, and proposed APIs in issues. Remove
@@ -142,15 +149,20 @@ phrase blacklist.
 
 After changing public prose or examples, run `mdbook build docs`,
 `mdbook test docs`, and
-`RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`. Regenerate the
+`RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features`;
+CI documents with every feature on, so a doc comment behind a feature gate
+can fail it while a default build passes. Regenerate the
 committed schemas when their source rustdoc changes, and regenerate
 `powerio.h` and run `scripts/capi-header-parity.sh` when C doc comments
 change.
 
 ## PRs
 
-Use conventional commit subjects (`feat:`, `fix:`, `refactor:`). PRs are
-squash merged.
+Use conventional commit subjects (`feat:`, `fix:`, `refactor:`) for commits
+and for the PR title. Most PRs are squash merged, so the title becomes the
+commit subject on `main`. A branch that carries commits from several people,
+such as one the maintainer finished, may be merged with a merge commit so
+that each author keeps their commits.
 
 ## Tandem changes with PowerIO.jl
 
