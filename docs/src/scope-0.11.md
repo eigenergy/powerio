@@ -54,9 +54,9 @@
 One PowerIO release version covers the Rust crates, the Python distribution,
 and PowerIO.jl. The boundaries checked independently are:
 
-| Boundary | Value at 0.11.1 | Checked where | Moves when |
+| Boundary | Value in 0.11 | Checked where | Moves when |
 |---|---|---|---|
-| PowerIO release | 0.11.1 | the manifests, `powerio::VERSION`, `powerio.versions()`, `pio_version` | every release |
+| PowerIO release | 0.11.x | the manifests, `powerio::VERSION`, `powerio.versions()`, `pio_version` | every release |
 | C ABI | 7 | the `pio_abi_version` handshake at load | an existing C signature or documented behavior changes |
 | PowerIO IR version | 2, unchanged | the document header, `powerio::IR_VERSION`, `powerio::IR_MIN_VERSION` | an existing representation changes incompatibly |
 | Rust toolchain | 1.88 | `rust-version` in the workspace manifest, checked by CI | a dependency in the locked graph requires a newer compiler |
