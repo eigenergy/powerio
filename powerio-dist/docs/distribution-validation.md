@@ -7,7 +7,8 @@ commands are below.
 
 ## Validation gates
 
-Every fixture passes three independent checks, run from `tests/` and `tools/`:
+Every fixture passes the first three independent checks, run from `tests/` and
+`tools/`; the fourth is an opt in gate over a local OpenDSS corpus:
 
 - **Round trip** (`tests/matrix.rs`). Each case goes dss → model → {dss, BMOPF,
   PMD} and back. Writing to the source format reproduces the file byte for byte

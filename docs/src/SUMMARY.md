@@ -6,6 +6,7 @@
 - [Core concepts](concepts.md)
 - [Transmission networks](transmission.md)
 - [Distribution networks](distribution.md)
+  - [Electrical readiness](electrical-readiness.md)
 - [Time series and scenarios](time-series.md)
 - [Calculation instances and solutions](instances.md)
 - [Matrices and graphs](matrices.md)
