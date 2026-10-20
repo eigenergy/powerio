@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Everything rust.yml runs, in the same feature combinations.
+# The Linux side of rust.yml, docs.yml, and python.yml, in the same feature
+# combinations. docs/src/contributor-workflow.md lists what stays CI only.
 #
-# `cargo test --workspace` is not this: it builds powerio-capi with default
-# features only, so every test behind `arrow`, `gridfm`, `matrix` or `prob` is
-# skipped, and powerio-py is excluded entirely on a machine without the Python
-# library to link against.
+# `cargo test --workspace` is not this: it builds every crate with default
+# features only, so the tests behind `matrix` and `gridfm` are skipped, and
+# powerio-py is excluded entirely on a machine without the Python library to
+# link against.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
