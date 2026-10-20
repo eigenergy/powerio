@@ -65,7 +65,7 @@ ten conductor micro-fixtures exercise the same gates; see `conversion-matrix.md`
 | IEEE 37 | delta-delta transformers and regulators | BMOPF JSON is schema valid and stable through DSS regeneration; unsupported transformer buses and terminals are pruned with warnings |
 | 8500-Node | transformer model extension, plus `Fuse`/`Recloser`/`Relay`/`CapControl` instrumentation | center tap secondaries preserve grounding through BMOPF → DSS; unsupported banks, control, and protection elements drop with warnings |
 | NEVTestCase | transformer model extension for the remaining transformer banks; series and impedance form reactors | grounding reactors with `kvar`/`kv` map to BMOPF `shunt`; the remaining reactor forms and transformer banks drop with warnings |
-| LVTestCase / LVTestCaseNorthAmerican | `LoadShape`/`Monitor`/`EnergyMeter` time series; `CNData`/`LineGeometry`/`LineSpacing` geometry | core network converts; instrumentation and geometry drop with warnings |
+| LVTestCase / LVTestCaseNorthAmerican | `LoadShape`/`Monitor`/`EnergyMeter` time series; `CNData`/`LineGeometry`/`LineSpacing` geometry | the core network parses; instrumentation drops with warnings, and a line defined by geometry blocks canonical conversion and numerical use until geometry lowering exists (see the guide's Electrical readiness chapter) |
 
 Unsupported OpenDSS classes never fail a parse: they fall through to the `untyped`
 store and the writer reports them, so coverage grows additively without silent
