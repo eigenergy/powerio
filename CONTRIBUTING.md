@@ -22,8 +22,7 @@ the process.
    lines of hand written code and tests, agree on the size in the issue first.
 4. Run the checks for what you changed while you work, and the full set in
    [Before you push](#before-you-push) before you ask for review.
-5. Keep at most three pull requests open for review at a time, unless the
-   maintainer agrees to more.
+5. By default, keep at most three pull requests awaiting review at a time.
 6. Push follow ups to the same branch. Never open a second pull request for
    a change that already has one.
 
@@ -44,24 +43,23 @@ describes.
 
 ### Changes that need a plan
 
-Open an issue, or comment on the existing one, and wait for the maintainer's
-answer before you write code when the change makes a design decision others
-will build on:
+Discuss the plan in an issue, and resolve the maintainer's open design
+questions, before you start substantial implementation when the change:
 
-- it adds a format, a crate, a `PioValue` type, or a `pio_*` entry point;
-- it adds a public Rust type or module, rather than a function beside an
-  existing one;
-- it changes the PowerIO IR layout, the C ABI, or a convention results depend
-  on, such as a sign, a unit, a per unit base, or an index order;
-- it changes CI or the release workflows beyond the coverage the change itself
-  needs, or the dependency policy;
-- it implements an issue whose title starts with `RFC:`. An RFC stays open
-  until the maintainer says how it concludes, and code written before then
-  usually has to be redone.
+- adds a format, a crate, a `PioValue` type, or a substantial public API;
+- changes the PowerIO IR layout, the C ABI, a numerical convention (a sign, a
+  unit, a per unit base, an index order), or the fidelity rules a conversion
+  follows;
+- changes CI, release, or dependency policy;
+- implements an unresolved issue whose title starts with `RFC:`. Code written
+  before an RFC concludes usually has to be redone.
 
-A bug fix needs no plan, even when it changes numbers or a conversion matrix
-baseline, as long as the description shows the evidence: the convention or
-reference tool the old result disagreed with.
+A small fix that restores documented behavior goes straight to a pull
+request with a regression test and the evidence for the expected behavior,
+even when it changes numbers or a conversion matrix baseline. If the intended
+behavior is unclear, discuss it first. An agreed plan covers the follow ups
+it lists; they need another agreement only when their scope or design
+changes.
 
 The plan names the target (format version, profile, or standard), says which
 PowerIO types the source data maps to and what is reported as a diagnostic
@@ -92,32 +90,32 @@ before you take over someone else's.
 
 - A bug fix gets its own pull request against `main`. It never rides inside a
   feature or sits at the bottom of a stack, so it can merge first.
-- Workflows under `.github/`, the CI and release scripts under `scripts/`, and
-  dependency versions in `Cargo.toml` change only as far as the change needs:
-  a new crate's build and publish steps, a validation job for a new format.
-  Other CI, release, and dependency changes go in their own pull request,
-  after an issue. Never weaken, skip, or work around an existing check to get
-  green.
-- A dependency bump rides with a change only when that change cannot build
-  without it, and the description says so.
+- Unrelated changes to workflows, the CI and release scripts under
+  `scripts/`, or dependency versions go in a separate pull request, with an
+  issue when they change policy. Changes required to build, test, or ship the
+  implementation, such as a new crate's build and publish steps, a validation
+  job for a new format, or the dependency a new reader uses, go in the same
+  pull request, each explained in the description. Never weaken or bypass a
+  check to make a feature or fix pass.
 - Code you are not otherwise changing stays as it is: no reformatting,
   renames, or moves on the side.
 
 ### Size
 
-A reviewer should be able to read a pull request in one sitting, which in
-practice means up to about 1,000 changed lines of hand written code and
-tests. The number starts a conversation rather than setting a limit: past it,
-agree on the size in the issue before you open the pull request, and do not
-split a coherent change only to get under it. Generated files do not count, as long as the description names them and the command
+Aim for a pull request a reviewer can understand in one sitting. If it
+exceeds about 1,000 changed lines of hand written code and tests, explain why
+it forms one coherent change and agree on a review approach with the
+maintainer. Split work at boundaries that can be tested and reviewed on their
+own; do not leave out tests or split an atomic change only to meet the line
+count. Generated files do not count, as long as the description names them and the command
 that regenerates them: the IR schema snapshot under `docs/schema/`,
 `powerio-capi/include/powerio.h`, and regenerated examples and goldens.
 Fixtures do not count either; they have their own limit under
 [Test fixtures](#test-fixtures).
 
-Larger work splits along the lines the plan agreed. A new format can land as
-the model change, then the reader, then the writer, then the bindings, each
-merged before the next one is opened for review.
+Larger work splits along the lines the plan agreed. For example, a new format
+can land as the model change, then the reader, then the writer, then the
+bindings, each merged before the next one is opened for review.
 
 ### Stacks
 
@@ -132,12 +130,13 @@ the next one as a draft until the first merges.
 
 ### Open pull requests per author
 
-Keep at most three pull requests open for review at a time, maintainers
-included, unless the maintainer agrees to more for a planned series. Further
-work waits as a draft or on a branch. Ten green pull
-requests opened in one afternoon do not merge sooner than three: they wait in
-the same queue, touch the same files, and conflict with each other as each
-one lands. Dependabot and the release bot are exempt.
+By default, keep at most three pull requests awaiting review per author,
+maintainers included. Keep further work on a branch, or in a draft that says
+it is not asking for review. Agree with the maintainer before you go past the
+limit, for example for an urgent fix or an agreed set of independent changes.
+Ten green pull requests opened in one afternoon do not merge sooner than
+three: they wait in the same queue, and the ones that touch the same files
+conflict as each one lands. Dependabot and the release bot are exempt.
 
 ### Update in place
 
@@ -151,9 +150,10 @@ branch is beyond repair, close the old pull request in the same step, with a
 link to the new one, so two versions of one change are never open together.
 
 Do not update a branch only to keep up with `main`: each push reruns about
-forty CI jobs. If the only conflict is in `CHANGELOG.md`, resolve it in your
-next push that changes the branch anyway, or once the reviewer says the pull
-request is otherwise ready.
+forty CI jobs. If a conflict is limited to `CHANGELOG.md`, note it and wait
+until the pull request is otherwise ready to merge. The author resolves it
+when asked, or the maintainer may resolve it while merging. Keep every
+unreleased entry when you resolve it.
 
 ## Writing the pull request
 
@@ -197,11 +197,7 @@ notes. Never add to a released `## X.Y.Z` section.
 
 ## Before you push
 
-While you work, run the checks that cover what you changed. Before you ask
-for review, run the full set for your kind of change and list it in the
-description.
-
-For a change to Rust code, run:
+Before you open a Rust or C ABI pull request for review, run:
 
 ```
 cargo fmt --all --check
@@ -212,14 +208,20 @@ cargo test -p powerio-capi
 
 CI denies clippy warnings and requires Rust code formatted for edition 2024.
 The clippy script covers the same feature combinations CI uses, including the
-Python extension and the optional C features. For a change to documentation
-only, run the checks under [Documentation prose](#documentation-prose) and
-`bash scripts/terminology-gate.sh` instead.
+Python extension and the optional C features.
+
+During review, rerun the checks each change affects, and before you ask for
+another review, make sure the checks cover the current diff. For a change to
+prose only, run the checks under [Documentation prose](#documentation-prose)
+and `bash scripts/terminology-gate.sh`; the compilation suites are needed
+only when the change touches code examples or generated API files. List any
+check you could not run and why.
 
 `bash scripts/ci-mirror.sh` runs most of the Rust, Docs, and Python workflows
 locally: the suites for each feature configuration CI tests, the terminology
 and header gates, schema regeneration, packaging, the book, and the Python
-tests. Run it before you mark a larger pull request ready. It leaves to CI the
+tests. Run it before you mark a larger implementation change ready for
+review. It leaves to CI the
 MSRV build, `cargo deny`, Miri, the macOS, Windows, and FreeBSD jobs, and the
 Julia binding, validation, PowSybl, and fuzz workflows.
 [Testing and release checks](https://eigenergy.github.io/powerio/guide/contributor-workflow.html)

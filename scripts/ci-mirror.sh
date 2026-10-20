@@ -7,8 +7,8 @@
 # facade and matrix crates, so no build without it is checked, and nothing
 # turns on the facade's matrix feature or the C ABI's gridfm feature. The
 # commands below exercise each configuration CI supports, minimal builds
-# included. powerio-py is excluded entirely on a machine without the Python
-# library to link against.
+# included. `--workspace` also selects powerio-py, which needs a Python
+# installation to build.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

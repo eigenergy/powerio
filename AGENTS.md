@@ -211,10 +211,11 @@ docs/                         the mdBook guide, the schema archive, release note
 ## Things to know before editing
 
 - **How a change reaches review.** Follow CONTRIBUTING.md: an agreed plan in
-  an issue for anything beyond a small fix, one change per pull request
-  against `main`, at most three pull requests open for review per author,
-  checks run locally before pushing, and a description that covers the
-  whole diff. Agent-written pull requests follow it the same way.
+  an issue before a design decision (a small fix that restores documented
+  behavior goes straight to a pull request), one change per pull request
+  against `main`, by default at most three pull requests awaiting review per
+  author, the checks for the change run locally, and a description that
+  covers the whole diff. Agent-written pull requests follow it the same way.
 - **Workspace split.** `powerio-matrix` depends on `powerio-core`,
   `powerio-tx`, `powerio-dist`, and `powerio-prob`; the `powerio` facade
   re-exports matrix types behind the `matrix` feature. Do not introduce a
