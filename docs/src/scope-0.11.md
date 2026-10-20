@@ -23,8 +23,8 @@
 - The multiconductor to balanced transformation is Rust and Python only.
   Multiconductor admittance assembly,
   `powerio_matrix::calc_multiconductor_admittance_matrix`, is Rust only.
-- Only the MATPOWER and PSS/E readers attach source spans, marking the record
-  each finding is about. Findings from the other readers, from
+- Only the MATPOWER, PSS/E RAW, UCTE-DEF, and IEEE CDF readers attach source
+  spans, marking the record each finding is about. Findings from the other readers, from
   transformations, and from writers have no byte range, and the text rendering
   of a diagnostic is still `CODE: message`.
 - There is no one call `convert` in the library; you compose `parse` with

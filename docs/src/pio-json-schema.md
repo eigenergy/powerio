@@ -53,10 +53,10 @@ buffer is separate from the stored module.
 The deserializer checks the cross references before it returns a module:
 diagnostic source references and source mappings must name declared source
 IDs, byte ranges must fit the declared source length, and history references
-must name records in the same document. The MATPOWER and PSS/E readers attach
-the byte range of the record a finding is about to every diagnostic they raise
-at a known record, so a document serialized from one of their modules has
-those spans; the other readers attach none yet.
+must name records in the same document. The MATPOWER, PSS/E RAW, UCTE-DEF,
+and IEEE CDF readers attach the byte range of the record a finding is about to
+every diagnostic they raise at a known record, so a document serialized from
+one of their modules has those spans; the other readers attach none yet.
 
 ## Typed values
 
