@@ -2,10 +2,13 @@
 # The Linux side of rust.yml, docs.yml, and python.yml, in the same feature
 # combinations. docs/src/contributor-workflow.md lists what stays CI only.
 #
-# `cargo test --workspace` is not this: it builds every crate with default
-# features only, so the tests behind `matrix` and `gridfm` are skipped, and
-# powerio-py is excluded entirely on a machine without the Python library to
-# link against.
+# `cargo test --workspace` is not this: Cargo unifies features across the
+# workspace, so it tests one configuration. powerio-cli turns gridfm on in the
+# facade and matrix crates, so no build without it is checked, and nothing
+# turns on the facade's matrix feature or the C ABI's gridfm feature. The
+# commands below exercise each configuration CI supports, minimal builds
+# included. powerio-py is excluded entirely on a machine without the Python
+# library to link against.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
