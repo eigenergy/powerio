@@ -7,9 +7,10 @@ layers, resolves and expands PSS/E contingency files, runs the private corpus
 harness, and opens a terminal interface. `convert` reads the network and
 calculation formats in the
 [format table](https://github.com/eigenergy/powerio#formats) and writes each
-one that has a writer; the `geo` and `contingency` subcommands handle
-geographic layers and the PSS/E `.con`, `.sub`, and `.mon` files, and the
-`gridfm` subcommand writes GridFM datasets.
+one that has a writer, except GridFM: `convert --to gridfm` is refused, and
+the `gridfm` subcommand writes GridFM datasets instead. The `geo` and
+`contingency` subcommands handle geographic layers and the PSS/E `.con`,
+`.sub`, and `.mon` files.
 
 ```
 powerio convert tests/data/case14.m --to psse -o case14.raw

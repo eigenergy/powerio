@@ -27,7 +27,8 @@ automatic specifications, as described in
 `dc-opf`. `--from` and `--to` take the network and calculation format tokens
 and aliases of the [format table](https://github.com/eigenergy/powerio#formats);
 `iidm` and `rawx` are accepted as input spellings only, and the formats that
-have no writer are refused as `--to`. The geographic layer, PowerWorld
+have no writer are refused as `--to`, as is `gridfm`, whose datasets the
+`gridfm` subcommand writes. The geographic layer, PowerWorld
 display, and PSS/E contingency file tokens are not `--from` values: the `geo`
 and `contingency` subcommands read those files.
 
