@@ -1,5 +1,6 @@
 """Offline release-helper safety tests. These never call GitHub or publish."""
 
+import base64
 import importlib.util
 import subprocess
 import unittest
@@ -182,6 +183,44 @@ class ReleaseSafety(unittest.TestCase):
                 helper.follow_publication(SHA, "b" * 40, "0.11.6", "v0.11.6", 0)
             api.assert_not_called()
             registry.assert_not_called()
+
+    def test_julia_uses_resolved_commit_and_canonical_asset_origin(self):
+        released = "d" * 40
+        tree = "e" * 40
+        general = base64.b64encode(
+            f'["0.11.6"]\ngit-tree-sha1 = "{tree}"\n'.encode()
+        ).decode()
+        values = [
+            {"object": {"type": "commit", "sha": released}},
+            {"content": general},
+            {"status": "ahead", "base_commit": {"sha": SHA}},
+            {"tree": {"sha": tree}},
+        ]
+        for origin, valid in (
+            ("https://github.com/eigenergy/powerio", True),
+            ("https://example.org/eigenergy/powerio", False),
+        ):
+            artifacts = "\n".join(
+                f"{origin}/releases/download/v0.11.6/libpowerio_capi.{p}.tar.gz"
+                for p in helper.PLATFORMS
+            )
+            with (
+                self.subTest(origin=origin),
+                patch.object(helper, "api", side_effect=values),
+                patch.object(
+                    helper, "contents", side_effect=['version = "0.11.6"', artifacts]
+                ) as content,
+            ):
+                if valid:
+                    self.assertTrue(
+                        helper.julia_registered_release("0.11.6", "v0.11.6", SHA)
+                    )
+                else:
+                    with self.assertRaises(helper.ReleaseError):
+                        helper.julia_registered_release("0.11.6", "v0.11.6", SHA)
+                self.assertTrue(
+                    all(c.args[2] == released for c in content.call_args_list)
+                )
 
     def test_timeout_does_not_invent_success(self):
         with self.assertRaises(helper.ReleaseError):

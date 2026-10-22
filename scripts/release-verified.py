@@ -269,16 +269,17 @@ def julia_registered_release(version, tag, julia_candidate):
         commit["tree"]["sha"] == tree[1],
         "Julia tag and General registry trees disagree.",
     )
-    project = contents(JULIA_REPO, "Project.toml", tag)
+    project = contents(JULIA_REPO, "Project.toml", obj["sha"])
     require(
         re.search(r'^version = "' + re.escape(version) + r'"$', project, re.M)
         is not None,
         "Julia release tag has the wrong package version.",
     )
-    artifacts = contents(JULIA_REPO, "Artifacts.toml", tag)
+    artifacts = contents(JULIA_REPO, "Artifacts.toml", obj["sha"])
     for platform in PLATFORMS:
         require(
-            f"/releases/download/{tag}/libpowerio_capi.{platform}.tar.gz" in artifacts,
+            f"https://github.com/{REPO}/releases/download/{tag}/libpowerio_capi.{platform}.tar.gz"
+            in artifacts,
             f"Julia tag does not pin the matching {platform} release archive.",
         )
     return True
