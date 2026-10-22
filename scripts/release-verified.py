@@ -224,7 +224,21 @@ def public_json(url):
         ) from error
 
 
-def julia_registered_release(version, tag):
+def published_pypi_version(document, version):
+    if not document or document.get("info", {}).get("version") != version:
+        return False
+    files = [item for item in document.get("urls", []) if item.get("yanked") is False]
+    return any(item.get("packagetype") == "bdist_wheel" for item in files) and any(
+        item.get("packagetype") == "sdist" for item in files
+    )
+
+
+def published_crate_version(document, version):
+    item = (document or {}).get("version", {})
+    return item.get("num") == version and item.get("yanked") is False
+
+
+def julia_registered_release(version, tag, julia_candidate):
     ref = api(f"repos/{JULIA_REPO}/git/ref/tags/{tag}", missing_ok=True)
     general = api(
         "repos/JuliaRegistries/General/contents/P/PowerIO/Versions.toml",
@@ -244,6 +258,12 @@ def julia_registered_release(version, tag):
     if obj["type"] == "tag":
         obj = api(f"repos/{JULIA_REPO}/git/tags/{obj['sha']}")["object"]
     require(obj["type"] == "commit", "Unexpected Julia release tag target.")
+    ancestry = api(f"repos/{JULIA_REPO}/compare/{julia_candidate}...{obj['sha']}")
+    require(
+        ancestry["status"] in ("ahead", "identical")
+        and ancestry["base_commit"]["sha"] == julia_candidate,
+        "Julia release is not descended from the reviewed companion commit.",
+    )
     commit = api(f"repos/{JULIA_REPO}/git/commits/{obj['sha']}")
     require(
         commit["tree"]["sha"] == tree[1],
@@ -264,7 +284,7 @@ def julia_registered_release(version, tag):
     return True
 
 
-def follow_publication(candidate, version, tag, deadline):
+def follow_publication(candidate, julia_candidate, version, tag, deadline):
     """Stop truthfully at required human approvals, never approve them ourselves."""
     while True:
         ready = True
@@ -275,7 +295,12 @@ def follow_publication(candidate, version, tag, deadline):
                 for run in collection(endpoint, "workflow_runs")
                 if run["event"] == "release"
                 and run["head_sha"] == candidate
-                and tag in run.get("display_title", "")
+                and run.get("display_title", "")
+                == (
+                    f"PowerIO crates.io {tag}"
+                    if workflow == "crates.yml"
+                    else f"PowerIO Python {tag}"
+                )
             ]
             if not runs:
                 ready = False
@@ -299,15 +324,19 @@ def follow_publication(candidate, version, tag, deadline):
                     f"GitHub release is published, but package publication failed: {run['html_url']}",
                 )
         if ready:
-            registries = (
-                public_json(f"https://pypi.org/pypi/powerio/{version}/json") is not None
+            registries = published_pypi_version(
+                public_json(f"https://pypi.org/pypi/powerio/{version}/json"), version
             )
             for crate in CRATES:
                 registries = (
-                    public_json(f"https://crates.io/api/v1/crates/{crate}/{version}")
-                    is not None
+                    published_crate_version(
+                        public_json(
+                            f"https://crates.io/api/v1/crates/{crate}/{version}"
+                        ),
+                        version,
+                    )
                 ) and registries
-            if registries and julia_registered_release(version, tag):
+            if registries and julia_registered_release(version, tag, julia_candidate):
                 print(
                     f"Verified: {tag} GitHub release, eight crates, PyPI, Julia General registration and Julia tag are present."
                 )
@@ -430,6 +459,16 @@ def main(argv=None):
         "Tag moved during packaging; refusing publication.",
     )
     if release["draft"]:
+        current_run = api(f"repos/{REPO}/actions/runs/{run['id']}")
+        require(
+            current_run["run_attempt"] == run["run_attempt"]
+            and current_run["status"] == "completed"
+            and current_run["conclusion"] == "success"
+            and current_run["head_sha"] == args.candidate
+            and current_run["event"] == "push"
+            and current_run["head_branch"] == tag,
+            "Tag build changed or was rerun after validation; rerun this command after it passes.",
+        )
         require(
             api(f"repos/{JULIA_REPO}/branches/main")["commit"]["sha"]
             == args.julia_candidate,
@@ -447,7 +486,9 @@ def main(argv=None):
         "Publication was not confirmed; inspect the release before retrying.",
     )
     print(f"GitHub release publication confirmed: {release['html_url']}", flush=True)
-    return follow_publication(args.candidate, args.version, tag, deadline)
+    return follow_publication(
+        args.candidate, args.julia_candidate, args.version, tag, deadline
+    )
 
 
 if __name__ == "__main__":

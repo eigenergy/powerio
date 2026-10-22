@@ -137,6 +137,52 @@ class ReleaseSafety(unittest.TestCase):
             with self.assertRaises(helper.ReleaseError):
                 helper.wait_for_tag_run(SHA, "v0.11.6", 0)
 
+    def test_registry_verification_rejects_empty_wrong_or_yanked_versions(self):
+        for value in (None, {}, {"info": {"version": "0.11.60"}, "urls": []}):
+            self.assertFalse(helper.published_pypi_version(value, "0.11.6"))
+        document = {
+            "info": {"version": "0.11.6"},
+            "urls": [
+                {"packagetype": "bdist_wheel", "yanked": False},
+                {"packagetype": "sdist", "yanked": False},
+            ],
+        }
+        self.assertTrue(helper.published_pypi_version(document, "0.11.6"))
+        document["urls"][0]["yanked"] = True
+        self.assertFalse(helper.published_pypi_version(document, "0.11.6"))
+        self.assertTrue(
+            helper.published_crate_version(
+                {"version": {"num": "0.11.6", "yanked": False}}, "0.11.6"
+            )
+        )
+        for value in (
+            None,
+            {},
+            {"version": {"num": "0.11.60", "yanked": False}},
+            {"version": {"num": "0.11.6", "yanked": True}},
+        ):
+            self.assertFalse(helper.published_crate_version(value, "0.11.6"))
+
+    def test_neighboring_patch_package_run_is_not_accepted(self):
+        run = source_run(
+            "python.yml",
+            event="release",
+            head_branch="v0.11.60",
+            display_title="PowerIO Python v0.11.60",
+        )
+        with (
+            patch.object(helper, "collection", return_value=[run]),
+            patch.object(helper, "api") as api,
+            patch.object(helper, "public_json") as registry,
+            patch.object(
+                helper, "wait_pause", side_effect=helper.ReleaseError("pending")
+            ),
+        ):
+            with self.assertRaises(helper.ReleaseError):
+                helper.follow_publication(SHA, "b" * 40, "0.11.6", "v0.11.6", 0)
+            api.assert_not_called()
+            registry.assert_not_called()
+
     def test_timeout_does_not_invent_success(self):
         with self.assertRaises(helper.ReleaseError):
             helper.wait_pause(0, "pending gate")
