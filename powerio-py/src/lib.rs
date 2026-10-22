@@ -1750,7 +1750,7 @@ fn balanced_field_to_py<'py>(
     field: &str,
 ) -> PyResult<Bound<'py, PyAny>> {
     let mut value = serde_json::to_value(model).map_err(serialize_pyerr)?;
-    // Python exposes physical table rows, not the IR compatibility envelope.
+    // Python exposes physical table rows, not the tagged IR representation.
     // Partial three-winding transformers keep the same dictionary fields as
     // ordinary transformers even though their durable IR must fail closed in
     // older readers that do not implement per-winding status.

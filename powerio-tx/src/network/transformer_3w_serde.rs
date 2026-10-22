@@ -2,7 +2,7 @@
 //!
 //! Only nondefault winding states need a new representation. Nesting every
 //! historical required field makes older readers reject it rather than silently
-//! energizing a disconnected winding. This applies inside every IR envelope.
+//! energizing a disconnected winding. This applies inside every IR document.
 
 use std::fmt;
 
