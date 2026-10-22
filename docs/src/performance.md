@@ -9,7 +9,7 @@ questions, so keep their numbers separate when you publish them.
 | Matrix microbenchmarks | `cargo bench -p powerio-matrix --bench matrix` | sparse matrix, DC OPF component, and dense sensitivity builder timing after parse/indexing |
 | Cross tool parser and matrix comparison | `julia --project=evals/validation evals/performance/bench_julia.jl --json` | powerio through the C ABI against ExaPowerIO.jl and PowerModels.jl, including parse plus Y bus construction |
 | Python parser comparison | `.venv/bin/python evals/performance/bench_parse.py --json <cases>` | Python package parse and matrix path against pandapower reader paths |
-| C ABI release size | three `cargo build -p powerio-capi --release` feature sets plus `stat` | binary size for core, `arrow,matrix`, and all release features |
+| C ABI release size | two `cargo build -p powerio-capi --release` builds plus `stat` | binary size without and with the `gridfm` feature, the only feature that changes the binary |
 
 The published tables come from `evals/performance/render_tables.py`, which
 renders the JSON the harnesses write, and this page is the reference for how
@@ -77,8 +77,8 @@ large cases were present.
 
 Before you publish a C ABI change, measure the release binary size. ABI 7
 exports one symbol set and only the `gridfm` feature changes the binary, so
-two builds cover the range (the library suffix is `.so` on Linux, `.dylib` on
-macOS, and `.dll` on Windows):
+two builds cover the range (the library is `libpowerio_capi.so` on Linux,
+`libpowerio_capi.dylib` on macOS, and `powerio_capi.dll` on Windows):
 
 ```sh
 cargo build -p powerio-capi --release --no-default-features
