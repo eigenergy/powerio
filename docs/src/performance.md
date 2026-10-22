@@ -5,11 +5,18 @@ questions, so keep their numbers separate when you publish them.
 
 | tier | command | what it answers |
 | --- | --- | --- |
-| Rust microbenchmarks | `cargo bench -p powerio-tx --bench parse` | parser, writer, and PowerWorld reader timing inside one process |
+| Rust microbenchmarks | `cargo bench -p powerio-tx --bench parse` and `--bench large_case` | parser, writer, and PowerWorld reader timing inside one process, and the PSS/E reader and indexed view on a continental-size case |
 | Matrix microbenchmarks | `cargo bench -p powerio-matrix --bench matrix` | sparse matrix, DC OPF component, and dense sensitivity builder timing after parse/indexing |
 | Cross tool parser and matrix comparison | `julia --project=evals/validation evals/performance/bench_julia.jl --json` | powerio through the C ABI against ExaPowerIO.jl and PowerModels.jl, including parse plus Y bus construction |
 | Python parser comparison | `.venv/bin/python evals/performance/bench_parse.py --json <cases>` | Python package parse and matrix path against pandapower reader paths |
-| C ABI release size | two `cargo build -p powerio-capi --release` feature sets plus `stat` | binary size with and without `gridfm` |
+| C ABI release size | two `cargo build -p powerio-capi --release` builds plus `stat` | binary size without and with the `gridfm` feature, the only feature that changes the binary |
+
+`large_case` generates a PSS/E revision 35 case of about 100,000 buses in
+memory, with 29,000 transformers and 13,000 generators, and times the reader
+and `IndexedNetwork::new` on it. Point `POWERIO_PGLIB_CASE78484` at PGLib's
+`pglib_opf_case78484_epigrids.m` to time the same two steps on that case,
+and `POWERIO_LARGE_CASE_WRITE` at a path to keep the generated text for
+profiling.
 
 The published tables come from `evals/performance/render_tables.py`, which
 renders the JSON the harnesses write, and this page is the reference for how
@@ -77,8 +84,8 @@ large cases were present.
 
 Before you publish a C ABI change, measure the release binary size. ABI 7
 exports one symbol set and only the `gridfm` feature changes the binary, so
-two builds cover the range (the library suffix is `.so` on Linux, `.dylib` on
-macOS, and `.dll` on Windows):
+two builds cover the range (the library is `libpowerio_capi.so` on Linux,
+`libpowerio_capi.dylib` on macOS, and `powerio_capi.dll` on Windows):
 
 ```sh
 cargo build -p powerio-capi --release --no-default-features

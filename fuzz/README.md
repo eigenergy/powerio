@@ -8,7 +8,7 @@ structured `Err`, with no panic and no undefined behavior.
 |---|---|
 | `matpower`, `psse`, `pslf`, `powerworld_aux` | memory sources for the corresponding readers |
 | `pwb`, `pwd` | raw bytes for the PowerWorld binary decoders |
-| `json_classify` | arbitrary bytes for the `.json` classifier and its C entry point; every answer must be a documented family, since a file picker dispatches on it |
+| `json_classify` | arbitrary bytes for the `.json` classifier's byte and text entry points, which must agree; every answer must be a documented family, since a file picker dispatches on it |
 | `stored_module` | the PowerIO IR reader; a document that deserializes must serialize and deserialize again |
 | `cgmes`, `cgmes_zip`, `ucte`, `ieee_cdf` | CGMES XML, CGMES ZIP acquisition, UCTE text, and IEEE Common Data Format text |
 | `rawx` | PSS/E RAWX 35 JSON tables; accepted inputs must survive IR serialization/deserialization, and successful fresh RAWX output must parse again |
