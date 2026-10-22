@@ -84,8 +84,9 @@ the value a reader takes when a field is absent.
 Typed floating point fields spell nonfinite values as `"Infinity"`,
 `"-Infinity"`, and `"NaN"`. JSON `null` is not a floating point value.
 
-A transformer with nondefault per-winding service flags is stored as
-`{"type":"powerio.PartialTransformer3W","value":{...}}` in its physical table.
+A transformer with nondefault per-winding service flags is stored as a nested
+record in its physical table, with `type` equal to `"powerio.PartialTransformer3W"`
+and the complete transformer body under `value`.
 The nested body preserves every original field and all three winding rows; it
 is not a star expansion or an altered electrical network. Earlier readers reject
 this new record because its required transformer fields are not at the outer
