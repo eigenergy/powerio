@@ -5,6 +5,11 @@
 - Add PowerIO Convert at `powerio.dev/convert/`: local WebAssembly batch
   conversion with mixed-format detection, project folders and ZIPs, multiple
   outputs, native diagnostics, private downloads, and optional error statistics.
+- Apply bounded MATPOWER post-literal demand and impedance conversions, fixing
+  case33bw's kW-to-MW and ohm-to-per-unit interpretation. Unsupported or ambiguous
+  blocks keep literal values with source-span warnings; unchanged source echo
+  stays byte exact and canonical/cross-format output uses converted values.
+
 - Parse caller-supplied file trees entirely in memory, including PyPSA folders
   and OpenDSS projects with nested references.
 - Keep included files and their original paths when copying unchanged OpenDSS
@@ -264,6 +269,16 @@
   statement as a block, which reads back to the same set. A line naming a
   third bus, a three winding transformer, stays text, because a monitored
   branch reference holds two buses.
+- PSS/E reading no longer slows quadratically with the generator count. The
+  reader attached each generator's retained source fields by searching the
+  metadata already attached, so a case with tens of thousands of machines
+  spent about a quarter of its read in that search; one hash lookup per
+  generator replaces it. On the new synthetic 100,000 bus benchmark case the
+  read drops from 1.09 s to 0.84 s. The indexed view no longer copies a network whose three winding transformers
+  are all out of service, and a cached `IndexCore` serves such a network
+  directly. A new `large_case` benchmark times the PSS/E reader and the
+  indexed view on a synthetic 100,000 bus revision 35 case, and on PGLib's
+  case78484 when `POWERIO_PGLIB_CASE78484` names it.
 
 - PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
   discrete and 2 is continuous adjustment of the regulated voltage. The RAW

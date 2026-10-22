@@ -4,8 +4,8 @@
 //! Subcommands: `convert`, `summary`, `serialize` (PowerIO IR), `verify`,
 //! `batch` (matrix families), `dcopf` (DC OPF bundle), `sensitivities` (PTDF
 //! and LODF), `gridfm` (GridFM Parquet), `gen` (synthetic cases), `geo`
-//! (geographic layers), and `corpus` (the private corpus harness). With no
-//! subcommand it opens the TUI. Run `powerio --help` for the full surface.
+//! (geographic layers), `contingency` (PSS/E contingency files), `corpus` (the
+//! private corpus harness), and `tui`. With no subcommand it opens the TUI. Run `powerio --help` for the full surface.
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};

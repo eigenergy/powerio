@@ -329,3 +329,56 @@ test('indexed MATLAB mutations stay visible through conversion, report and exact
   const start = source.indexOf(Buffer.from(mutation));
   expect(warning.spans[0]).toMatchObject({ start, end: start + Buffer.byteLength(mutation) });
 });
+
+
+for (const unsupported of [false, true]) {
+  test(`MATPOWER case33bw ${unsupported ? 'unsupported postprocessing preserves literals and warnings' : 'supported conversions export interpreted values'} through real WASM`, async ({ page }) => {
+    const original = await readFile(`${root}tests/data/case33bw.m`);
+    const mutation = 'mpc.bus(:, 3) = unknown();';
+    const source = unsupported ? Buffer.concat([original, Buffer.from(mutation)]) : original;
+    await ready(page);
+    await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'case33bw.m', mimeType: 'text/plain', buffer: source });
+    await expect(page.getByRole('button', { name: 'Convert', exact: true })).toBeEnabled();
+    const job = page.getByRole('article');
+    if (unsupported) {
+      await job.locator('details.diagnostics > summary').click();
+      await expect(job.getByText('READ.MATPOWER.INDEXED_ASSIGNMENT', { exact: true })).toHaveCount(3);
+      await expect(job.getByText('READ.MATPOWER.INDEXED_ASSIGNMENT', { exact: true }).first()).toBeVisible();
+    } else {
+      await expect(job.getByText('Ready to convert', { exact: true })).toBeVisible();
+      await expect(job.getByText('READ.MATPOWER.INDEXED_ASSIGNMENT', { exact: true })).toHaveCount(0);
+    }
+    const targets = page.getByRole('complementary', { name: 'Convert to' });
+    for (const checkbox of await targets.getByRole('checkbox').all()) if (await checkbox.isEnabled()) await checkbox.uncheck();
+    await targets.getByRole('checkbox', { name: 'MATPOWER', exact: true }).check();
+    await targets.getByRole('checkbox', { name: 'PowerModels JSON', exact: true }).check();
+    await page.getByRole('button', { name: 'Convert', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Download all', exact: false })).toBeEnabled();
+    const downloaded = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Download all', exact: false }).click();
+    const archive = await entries(await downloadBytes(await downloaded));
+    const echoed = Object.entries(archive).find(([path]) => path.endsWith('.m'));
+    expect(echoed).toBeTruthy();
+    expect(Buffer.from(echoed![1])).toEqual(source);
+    const projected = Object.entries(archive).find(([path]) => path.startsWith('powermodels-json/') && path.endsWith('.json'));
+    expect(projected).toBeTruthy();
+    const network = JSON.parse(new TextDecoder().decode(projected![1]));
+    expect(network.per_unit).toBe(true);
+    const loads = Object.values(network.load) as { pd: number; qd: number }[];
+    expect(loads.reduce((sum, load) => sum + load.pd, 0) * network.baseMVA).toBeCloseTo(unsupported ? 3715 : 3.715, 10);
+    expect(loads.reduce((sum, load) => sum + load.qd, 0) * network.baseMVA).toBeCloseTo(unsupported ? 2300 : 2.3, 10);
+    const firstBranch = Object.values(network.branch).find(branch => (branch as { f_bus: number; t_bus: number }).f_bus === 1 && (branch as { t_bus: number }).t_bus === 2) as { br_r: number; br_x: number };
+    expect(firstBranch).toBeTruthy();
+    const zbase = 12.66 ** 2 / 10;
+    expect(firstBranch.br_r).toBeCloseTo(unsupported ? 0.0922 : 0.0922 / zbase, 12);
+    expect(firstBranch.br_x).toBeCloseTo(unsupported ? 0.047 : 0.047 / zbase, 12);
+    const report = JSON.parse(new TextDecoder().decode(archive['conversion-report.json']));
+    expect(report.cases).toHaveLength(1);
+    const warnings = report.cases[0].diagnostics.filter((item: { code: string }) => item.code === 'READ.MATPOWER.INDEXED_ASSIGNMENT');
+    expect(warnings).toHaveLength(unsupported ? 3 : 0);
+    if (unsupported) {
+      for (const warning of warnings) expect(warning).toMatchObject({ severity: 'warning' });
+      expect(warnings[2].spans[0]).toMatchObject({ start: original.length, end: source.length });
+    }
+  });
+}

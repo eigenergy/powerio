@@ -2557,14 +2557,14 @@ mpc.branch = [
     }
 
     #[test]
-    fn indexed_assignment_warning_reaches_public_module_without_mutating_literals_or_echo() {
+    fn unsupported_indexed_assignment_warning_preserves_public_literals_and_echo() {
         let case = "function mpc = t\n\
                     mpc.version = '2';\n\
                     mpc.baseMVA = 100;\n\
                     mpc.bus = [1 3 12 4 0 0 1 1.0 0 345 1 1.1 0.9;];\n\
                     mpc.gen = [];\n\
                     mpc.branch = [];\n\
-                    mpc.bus(:, [3 4]) = mpc.bus(:, [3 4]) / 1000;\n";
+                    mpc.bus(:, [3 4]) = mpc.bus(:, [3 4]) / unknown_scale;\n";
         let source = powerio_core::Source::from_memory("case.m", case.as_bytes().to_vec()).unwrap();
         let module = parse(source.with_format(powerio_core::FormatId::new("matpower").unwrap()))
             .expect("literal case parses with a diagnostic");
@@ -2579,7 +2579,7 @@ mpc.branch = [
         let demand: f64 = module.value().loads().iter().map(|load| load.p).sum();
         assert!(
             (demand - 12.0).abs() < 1e-12,
-            "warning-only policy must not mutate literal values: {demand}"
+            "unsupported conversion must not mutate literal values: {demand}"
         );
         assert_eq!(
             emit_text(&module, TargetFormat::Matpower).unwrap().text,

@@ -1,11 +1,14 @@
 //! MATPOWER `.m` case file parser. Standard MATPOWER 7.x format.
 
+mod conversions;
 mod locate;
 mod matlab;
 mod rows;
 mod tokens;
 mod writer;
 
+#[cfg(test)]
+mod conversion_tests;
 #[cfg(test)]
 mod tests;
 
@@ -69,23 +72,25 @@ fn parse_matpower_named(
     name: &str,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    warn_indexed_assignments(source, warnings);
     // Locate each assignment's text directly in `source` and build the network
     // from those borrowed slices in one pass; the typed model owns its data, so
     // the borrows end with `located` and the source Arc moves into the network.
-    let net = {
-        let located = locate::locate_assignments(source);
-        build_case(
-            name,
-            |field| {
-                located
-                    .iter()
-                    .find(|assignment| assignment.field == field)
-                    .copied()
-            },
-            warnings,
-        )?
-    };
+    let located = locate::locate_assignments(source);
+    let mut net = build_case(
+        name,
+        |field| {
+            located
+                .iter()
+                .find(|assignment| assignment.field == field)
+                .copied()
+        },
+        warnings,
+    )?;
+    if !indexed_assignment_spans(source).is_empty()
+        && !conversions::apply(source, &located, &mut net)
+    {
+        warn_indexed_assignments(source, warnings);
+    }
     // The other format readers validate references; the MATPOWER path must too,
     // or a duplicate or dangling bus id reaches `IndexedNetwork` as silently
     // collapsed aggregates (the dense bus-id map only debug-asserts uniqueness).
@@ -93,18 +98,16 @@ fn parse_matpower_named(
     Ok(net)
 }
 
-/// Warn about direct indexed assignments without evaluating MATLAB expressions.
-///
-/// This is diagnostic-only: the literal values are not corrected, including
-/// unevaluated unit conversions in cases such as case33bw. Issue #662 tracks
-/// the broader conversion/scope disposition.
+/// Warn when the bounded conversion profile cannot interpret every statement.
+/// No conversions are applied to an ambiguous case; the original literal values
+/// remain available, accompanied by one diagnostic per indexed assignment.
 fn warn_indexed_assignments(source: &str, warnings: &mut Diagnostics) {
     for (start, end, field) in indexed_assignment_spans(source) {
         warnings.enter_record(start, end);
         warnings.push(
             &READ_MATPOWER_INDEXED_ASSIGNMENT,
             format!(
-                "indexed assignment to mpc.{field} is not evaluated; parsed values may differ from MATLAB execution"
+                "indexed assignment to mpc.{field} is not evaluated; no post-literal conversions were applied; parsed values may differ from MATLAB execution"
             ),
         );
         warnings.leave_record();
@@ -116,7 +119,7 @@ fn indexed_assignment_spans(source: &str) -> Vec<(usize, usize, &str)> {
     let b = source.as_bytes();
     let mut out = Vec::new();
     let (mut i, mut statement, mut line_start) = (0, 0, 0);
-    let mut block = false;
+    let mut block_depth = 0usize;
     let mut quote = None;
     let (mut p, mut square, mut brace) = (0usize, 0usize, 0usize);
 
@@ -131,9 +134,12 @@ fn indexed_assignment_spans(source: &str) -> Vec<(usize, usize, &str)> {
                 .position(|x| *x == b'\n')
                 .map_or(b.len(), |n| first + n);
 
-            if block {
-                if b.get(first..first + 2) == Some(b"%}") {
-                    block = false;
+            let delimiter = source[first..end].trim();
+            if block_depth > 0 {
+                match delimiter {
+                    "%{" => block_depth += 1,
+                    "%}" => block_depth -= 1,
+                    _ => {}
                 }
                 i = end;
                 if i < b.len() {
@@ -145,8 +151,8 @@ fn indexed_assignment_spans(source: &str) -> Vec<(usize, usize, &str)> {
                 }
                 continue;
             }
-            if b.get(first..first + 2) == Some(b"%{") {
-                block = true;
+            if delimiter == "%{" {
+                block_depth = 1;
                 i = end;
                 if i < b.len() {
                     i += 1;
@@ -168,7 +174,7 @@ fn indexed_assignment_spans(source: &str) -> Vec<(usize, usize, &str)> {
             i += 1;
             continue;
         }
-        if c == b'"' || (c == b'\'' && !is_transpose_quote(b, i)) {
+        if c == b'"' || (c == b'\'' && !is_transpose_quote(b, i, square > 0 || brace > 0)) {
             quote = Some(c);
             i += 1;
             continue;
@@ -185,7 +191,7 @@ fn indexed_assignment_spans(source: &str) -> Vec<(usize, usize, &str)> {
             continue;
         }
 
-        if b.get(i..i + 4) == Some(b"mpc.")
+        if mpc_field_start(b, i).is_some()
             && source[statement..i].trim().is_empty()
             && let Some((lhs_end, field)) = indexed_assignment_at(source, i)
         {
@@ -210,7 +216,13 @@ fn indexed_assignment_spans(source: &str) -> Vec<(usize, usize, &str)> {
     out
 }
 
-fn is_transpose_quote(b: &[u8], at: usize) -> bool {
+fn is_transpose_quote(b: &[u8], at: usize, in_array: bool) -> bool {
+    // Within matrix/cell construction whitespace separates elements. A quote
+    // after that separator opens a character literal, not a transpose of the
+    // previous element (which might itself be a quoted literal).
+    if in_array && at > 0 && b[at - 1].is_ascii_whitespace() {
+        return false;
+    }
     let mut j = at;
     while j > 0 && b[j - 1].is_ascii_whitespace() {
         j -= 1;
@@ -250,9 +262,20 @@ fn skip_matlab_assignment_trivia(b: &[u8], mut at: usize) -> usize {
     }
 }
 
+fn mpc_field_start(b: &[u8], start: usize) -> Option<usize> {
+    if b.get(start..start + 3) != Some(b"mpc") {
+        return None;
+    }
+    let dot = skip_matlab_assignment_trivia(b, start + 3);
+    if b.get(dot) != Some(&b'.') {
+        return None;
+    }
+    Some(skip_matlab_assignment_trivia(b, dot + 1))
+}
+
 fn indexed_assignment_at(source: &str, start: usize) -> Option<(usize, &str)> {
     let b = source.as_bytes();
-    let mut i = start + 4;
+    let mut i = mpc_field_start(b, start)?;
     let field_start = i;
     while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
         i += 1;
@@ -267,6 +290,7 @@ fn indexed_assignment_at(source: &str, start: usize) -> Option<(usize, &str)> {
     }
     i += 1;
     let mut depth = 0usize;
+    let (mut square, mut brace) = (0usize, 0usize);
     let mut quote = None;
 
     while i < b.len() {
@@ -282,7 +306,7 @@ fn indexed_assignment_at(source: &str, start: usize) -> Option<(usize, &str)> {
             i += 1;
             continue;
         }
-        if c == b'"' || (c == b'\'' && !is_transpose_quote(b, i)) {
+        if c == b'"' || (c == b'\'' && !is_transpose_quote(b, i, square > 0 || brace > 0)) {
             quote = Some(c);
             i += 1;
             continue;
@@ -299,6 +323,10 @@ fn indexed_assignment_at(source: &str, start: usize) -> Option<(usize, &str)> {
         }
 
         match c {
+            b'[' => square += 1,
+            b']' => square = square.saturating_sub(1),
+            b'{' => brace += 1,
+            b'}' => brace = brace.saturating_sub(1),
             b'(' => depth += 1,
             b')' if depth == 0 => {
                 let end = i + 1;
@@ -341,7 +369,7 @@ fn matlab_statement_end(source: &str, start: usize) -> usize {
             i += 1;
             continue;
         }
-        if c == b'"' || (c == b'\'' && !is_transpose_quote(b, i)) {
+        if c == b'"' || (c == b'\'' && !is_transpose_quote(b, i, square > 0 || brace > 0)) {
             quote = Some(c);
             i += 1;
             continue;

@@ -18,11 +18,19 @@ powerio geo extract case.aux -o layer.geo.json     # standalone geographic layer
 
 The other subcommands are `batch`, which writes matrix families for every
 case in a directory, `gen`, which writes synthetic cases, `geo apply` and
-`geo convert`, `corpus`, the private corpus harness described in
+`geo convert`, `contingency resolve` and `contingency expand`, which bind
+PSS/E `.con`, `.sub`, and `.mon` files to a case and expand a `.con` file's
+automatic specifications, as described in
+[PSS/E contingency analysis files](contingency-files.md#command-line),
+`corpus`, the private corpus harness described in
 [Corpus harness](corpus-harness.md), and `tui`. `dcopf` accepts the alias
-`dc-opf`. `--from` and `--to` take the format tokens and aliases of the
-[format table](format-fidelity.md); `iidm` and `rawx` are accepted as
-input spellings only.
+`dc-opf`. `--from` accepts the network and calculation format tokens and
+aliases in the [format table](https://github.com/eigenergy/powerio#formats).
+`--to` accepts their supported output formats except GridFM; use the
+`gridfm` subcommand to write those datasets. `iidm` and `rawx` are input
+spellings only. The geographic layer, PowerWorld display, and PSS/E
+contingency file tokens are not `--from` values: the `geo` and `contingency`
+subcommands read those files.
 
 `convert`, `summary`, and `verify` take `--merge-buses SPEC`, which merges
 buses before the command runs (see
