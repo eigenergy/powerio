@@ -262,6 +262,48 @@ fn the_current_powerio_ir_schema_is_committed() {
     );
 }
 
+fn assert_partial_transformer_schema_preserved(
+    definition: &serde_json::Value,
+    current_defs: &serde_json::Value,
+    earlier: &str,
+) {
+    // Nondefault winding states have their own tagged nested record;
+    // the complete historical transformer body stays unchanged.
+    let branches = current_defs["Transformer3W"]["anyOf"].as_array().unwrap();
+    assert_eq!(branches.len(), 2);
+    assert_eq!(
+        &branches[0], definition,
+        "{earlier}: legacy transformer changed"
+    );
+    assert_eq!(branches[1]["$ref"], "#/$defs/PartialTransformer3WWire");
+    let partial = &current_defs["PartialTransformer3WWire"]["oneOf"][0];
+    assert_eq!(
+        partial["properties"]["type"]["const"],
+        "powerio.PartialTransformer3W"
+    );
+    assert_eq!(partial["required"], serde_json::json!(["type", "value"]));
+    assert_eq!(
+        partial["properties"]["value"]["$ref"],
+        "#/$defs/PartialTransformer3WFields"
+    );
+    let mut partial_body = current_defs["PartialTransformer3WFields"].clone();
+    let extras = partial_body["properties"]["extras"]
+        .as_object_mut()
+        .unwrap();
+    assert_eq!(
+        extras.remove("required"),
+        Some(serde_json::json!(["winding_in_service"]))
+    );
+    assert_eq!(
+        extras.remove("properties"),
+        Some(serde_json::json!({
+            "winding_in_service": {"type": "array", "minItems": 3, "maxItems": 3,
+                "items": {"type": "boolean"}, "not": {"const": [true, true, true]}}
+        }))
+    );
+    assert_eq!(&partial_body, definition);
+}
+
 /// Each earlier IR version 2 schema file is checked against the current one.
 /// A release can add structural types and definitions, and a list of allowed
 /// string values (such as the distribution source formats) can gain values.
@@ -336,6 +378,8 @@ fn ir_version_2_schemas_only_add() {
                     "powerio.ReferencedVoltageSource"
                 );
                 assert_eq!(new_source["required"], serde_json::json!(["type", "value"]));
+            } else if name == "Transformer3W" {
+                assert_partial_transformer_schema_preserved(definition, &current_defs, earlier);
             } else if name == "MonitorScope" || name == "MonitorStatement" {
                 assert_monitor_schema_preserved(
                     definition,

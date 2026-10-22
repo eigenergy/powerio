@@ -22,6 +22,8 @@ use serde_json::Value;
 use crate::geo::{GeoMeta, Location};
 use crate::{Error, Result};
 
+mod transformer_3w_serde;
+
 /// Source format fields the neutral model does not name, kept for round trips
 /// and cross format conversion. Keys are field names; values are JSON scalars.
 pub type Extras = BTreeMap<String, Value>;
@@ -3626,8 +3628,7 @@ impl Winding {
 /// star bus plus three branches for a consumer that works in the bus-branch model;
 /// [`IndexedNetwork`](crate::IndexedNetwork) applies it before building any matrix,
 /// so a 3-winding transformer contributes to `Y_bus` and connectivity.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Transformer3W {
     /// The three windings, in order (primary, secondary, tertiary).
@@ -3645,7 +3646,6 @@ pub struct Transformer3W {
     pub in_service: bool,
     pub name: Option<String>,
     /// Stable row identity; see [`Bus::uid`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
     pub extras: Extras,
 }

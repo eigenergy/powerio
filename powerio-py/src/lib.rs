@@ -1749,7 +1749,27 @@ fn balanced_field_to_py<'py>(
     model: &BalancedNetwork,
     field: &str,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let value = serde_json::to_value(model).map_err(serialize_pyerr)?;
+    let mut value = serde_json::to_value(model).map_err(serialize_pyerr)?;
+    // Python exposes physical table rows, not the IR compatibility envelope.
+    // Partial three-winding transformers keep the same dictionary fields as
+    // ordinary transformers even though their durable IR must fail closed in
+    // older readers that do not implement per-winding status.
+    if field == "transformers_3w"
+        && let Some(rows) = value
+            .get_mut(field)
+            .and_then(serde_json::Value::as_array_mut)
+    {
+        for row in rows {
+            if row.get("type").and_then(serde_json::Value::as_str)
+                == Some("powerio.PartialTransformer3W")
+            {
+                *row = row
+                    .get_mut("value")
+                    .expect("partial transformer body")
+                    .take();
+            }
+        }
+    }
     serialized_value_field_to_py(py, value, field)
 }
 
