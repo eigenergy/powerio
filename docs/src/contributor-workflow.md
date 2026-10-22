@@ -6,7 +6,7 @@ after measurements.
 
 ## Baseline checks
 
-`scripts/ci-mirror.sh` runs everything `rust.yml` runs, in the same feature combinations: format, clippy, the terminology and symbol gates, header parity, every crate's tests in each gated feature set, the C smoke and header programs, schema generation, packaging checks, and the docs build. Run it before pushing rather than assembling your own subset, because a hand assembled subset misses the feature gated suites. `cargo test --workspace`, for example, skips the C ABI release-feature diagnostic tests and does not test each crate's opt-in features in isolation. The removed C ABI `arrow` flag added no code or tests; source-build commands must omit it.
+`scripts/ci-mirror.sh` runs everything `rust.yml` runs, in the same feature combinations: format, clippy, the terminology and symbol gates, header parity, every crate's tests in each gated feature set, the C smoke and header programs, schema generation, packaging checks, and the docs build. Run it before pushing rather than assembling your own subset, because a hand assembled subset misses the feature gated suites. `cargo test --workspace`, for example, skips the C ABI release-feature diagnostic tests and does not test each crate's opt-in features in isolation. The deprecated C ABI `arrow` compatibility flag adds no code or tests. Legacy commands remain accepted in 0.11.x, but maintained source-build commands omit it; [#673](https://github.com/eigenergy/powerio/issues/673) tracks its eventual breaking removal.
 
 Point `POWERIO_JL` at a PowerIO.jl checkout to include the Julia binding suite against the freshly built library, or set `POWERIO_JL_OPTIONAL=1` to run without one.
 

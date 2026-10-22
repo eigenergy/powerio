@@ -26,9 +26,11 @@ version (`powerio_ir` with `schema` and `version`), the BMOPF schema
 version, the compiled features, and the diagnostic namespaces and error
 categories.
 
-The Arrow C export was removed in 0.11.0. The unused `arrow` build flag has
-also been removed; omit it from source-build commands. This does not affect
-the Arrow record batches and Parquet support behind `gridfm`.
+The Arrow C export was removed in 0.11.0. The inert `arrow` build flag is
+deprecated but remains accepted for 0.11.x source-build compatibility; omit
+it from new commands. It enables no code. Its planned breaking removal is
+tracked in [#673](https://github.com/eigenergy/powerio/issues/673). This does
+not affect the Arrow record batches and Parquet support behind `gridfm`.
 
 ## Parse and inspect a module
 

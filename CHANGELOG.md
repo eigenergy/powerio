@@ -2,10 +2,12 @@
 
 ## Unreleased
 
-- Remove the unused `powerio-capi` `arrow` feature, its redundant CI job, and
-  stale Arrow-export build guidance. Source-build commands and the shared
-  release feature tuple now omit `arrow`, coordinated with PowerIO.jl tooling.
-  ABI 7 and real Arrow/Parquet support behind `gridfm` are unchanged.
+- Deprecate the inert `powerio-capi` `arrow` feature and remove its redundant
+  CI job and stale Arrow-export build guidance. Maintained source-build commands
+  and the shared release feature tuple now omit `arrow`, coordinated with
+  PowerIO.jl tooling. The alias remains accepted for 0.11.x patch compatibility;
+  its breaking removal is tracked in #673. ABI 7 and real Arrow/Parquet support
+  behind `gridfm` are unchanged.
 
 - Apply bounded MATPOWER post-literal demand and impedance conversions, fixing
   case33bw's kW-to-MW and ohm-to-per-unit interpretation. Unsupported or ambiguous
