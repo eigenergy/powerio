@@ -18,7 +18,6 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 default = []
 # Retained build-feature names for release tooling. ABI 7 exposes one fixed
 # symbol set; none of these names gates a C function.
-arrow = []
 matrix = []
 dist = []
 prob = []

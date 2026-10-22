@@ -2,9 +2,9 @@
 # Everything rust.yml runs, in the same feature combinations.
 #
 # `cargo test --workspace` is not this: it builds powerio-capi with default
-# features only, so every test behind `arrow`, `gridfm`, `matrix` or `prob` is
-# skipped, and powerio-py is excluded entirely on a machine without the Python
-# library to link against.
+# features only, so the C ABI release-feature diagnostic tests are skipped.
+# It also does not test each crate's opt-in features in isolation, and the
+# powerio-py tests require the Python library to link against.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -36,7 +36,7 @@ fi
 # The build job documents the workspace under -D warnings, so a doc comment can
 # fail CI while every test passes. An intra-doc link from a public item to a
 # private one is the easy way to do it. --all-features, matching docs.yml: a
-# doc comment behind arrow, gridfm, matrix or prob is unreachable without it.
+# doc comment behind an opt-in feature is unreachable without it.
 RUSTDOCFLAGS="-D warnings" run cargo doc --workspace --no-deps --all-features
 
 # powerio-prob sits below the matrix crate: it may reach the model crates
@@ -75,11 +75,10 @@ run cargo test -p powerio --features matrix
 run cargo test -p powerio --features gridfm
 run cargo test -p powerio-matrix --features gridfm
 
-# The four powerio-capi combinations rust.yml builds.
+# The three powerio-capi combinations rust.yml builds.
 run cargo test -p powerio-capi --no-default-features
-run cargo test -p powerio-capi --features arrow
 run cargo test -p powerio-capi --features dist
-run cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,prob
+run cargo test -p powerio-capi --features matrix,gridfm,dist,prob
 
 # The C smoke test and the C++ header check, in the two configurations that
 # exercise the most surface. `cargo test` compiles neither, so a stale
@@ -97,7 +96,7 @@ c++ -std=c++17 -I powerio-capi/include powerio-capi/examples/header_cpp.cpp \
    -L target/release -lpowerio_capi -o "$smoke_dir/header_cpp_dist"
 run env "$lib_path_var=target/release" "$smoke_dir/header_cpp_dist"
 
-run cargo build -q -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
+run cargo build -q -p powerio-capi --release --features matrix,gridfm,dist,prob
 cc -DPIO_GRIDFM \
    -I powerio-capi/include powerio-capi/examples/smoke.c \
    -L target/release -lpowerio_capi -o "$smoke_dir/smoke_release"

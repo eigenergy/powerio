@@ -18,13 +18,17 @@ not exported and have no aliases. Compare `pio_abi_version()` with
 `PIO_ABI_VERSION` before you use the library.
 
 The exported symbol set is fixed. The `gridfm` cargo feature adds GridFM
-Parquet parsing and emission behind the same entry points, and the `arrow`,
-`matrix`, `dist`, and `prob` feature names are still accepted by the build but
+Parquet parsing and emission behind the same entry points, and the `matrix`,
+`dist`, and `prob` feature names are still accepted by the build but
 gate nothing. `pio_schema_report` returns a JSON document with the release
 (`powerio_version`), the ABI (`abi`), the PowerIO IR schema name and
 version (`powerio_ir` with `schema` and `version`), the BMOPF schema
 version, the compiled features, and the diagnostic namespaces and error
 categories.
+
+The Arrow C export was removed in 0.11.0. The unused `arrow` build flag has
+also been removed; omit it from source-build commands. This does not affect
+the Arrow record batches and Parquet support behind `gridfm`.
 
 ## Parse and inspect a module
 

@@ -9,7 +9,7 @@ questions, so keep their numbers separate when you publish them.
 | Matrix microbenchmarks | `cargo bench -p powerio-matrix --bench matrix` | sparse matrix, DC OPF component, and dense sensitivity builder timing after parse/indexing |
 | Cross tool parser and matrix comparison | `julia --project=evals/validation evals/performance/bench_julia.jl --json` | powerio through the C ABI against ExaPowerIO.jl and PowerModels.jl, including parse plus Y bus construction |
 | Python parser comparison | `.venv/bin/python evals/performance/bench_parse.py --json <cases>` | Python package parse and matrix path against pandapower reader paths |
-| C ABI release size | three `cargo build -p powerio-capi --release` feature sets plus `stat` | binary size for core, `arrow,matrix`, and all release features |
+| C ABI release size | two `cargo build -p powerio-capi --release` feature sets plus `stat` | binary size with and without `gridfm` |
 
 The published tables come from `evals/performance/render_tables.py`, which
 renders the JSON the harnesses write, and this page is the reference for how
@@ -20,7 +20,7 @@ inputs first, then render:
 
 ```sh
 bash evals/validation/fetch_cases.sh
-cargo build --release -p powerio-capi --features arrow,matrix
+cargo build --release -p powerio-capi
 python3.11 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip maturin -r evals/validation/requirements.txt
 env VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop --release

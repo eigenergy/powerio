@@ -10,8 +10,7 @@ Targets:
   workspace       Root Rust CI clippy for non extension crates.
   matrix-gridfm   powerio-matrix with the gridfm feature.
   capi-no-default powerio-capi with no default features.
-  capi-arrow      powerio-capi with arrow.
-  capi-release    powerio-capi with arrow,matrix,gridfm,dist,prob.
+  capi-release    powerio-capi with matrix,gridfm,dist,prob.
   capi-dist       powerio-capi with dist.
   powerio-py      PyO3 extension with extension-module,gridfm.
 
@@ -35,7 +34,6 @@ case "$target" in
     bash "$0" workspace
     bash "$0" matrix-gridfm
     bash "$0" capi-no-default
-    bash "$0" capi-arrow
     bash "$0" capi-release
     bash "$0" capi-dist
     bash "$0" powerio-py
@@ -59,11 +57,8 @@ case "$target" in
   capi-no-default)
     run cargo clippy -p powerio-capi --all-targets --no-default-features -- -D warnings
     ;;
-  capi-arrow)
-    run cargo clippy -p powerio-capi --all-targets --features arrow -- -D warnings
-    ;;
   capi-release)
-    run cargo clippy -p powerio-capi --all-targets --features arrow,matrix,gridfm,dist,prob -- -D warnings
+    run cargo clippy -p powerio-capi --all-targets --features matrix,gridfm,dist,prob -- -D warnings
     ;;
   capi-dist)
     run cargo clippy -p powerio-capi --all-targets --features dist -- -D warnings

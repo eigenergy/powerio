@@ -152,7 +152,7 @@ release on its own.
    the `powerio-capi` tarballs for `aarch64-apple-darwin`,
    `aarch64-linux-gnu`, `x86_64-apple-darwin`, `x86_64-linux-gnu`, and
    `x86_64-w64-mingw32` with the release features
-   `arrow,matrix,gridfm,dist,prob`. It runs PowerIO.jl's
+   `matrix,gridfm,dist,prob`. It runs PowerIO.jl's
    `gen/update_artifacts.jl` on the tarballs, installs each one as the
    artifact PowerIO.jl will pin, and runs the PowerIO.jl tests against it on
    its platform. Only then does it stage a **draft** GitHub release with the
