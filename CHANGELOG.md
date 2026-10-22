@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.11.6
+
+- Restore Python `BalancedNetwork` panic conversion for methods and delegated
+  properties, preserving `PowerIOError` and its `BIND.PY.PANIC` diagnostic.
+- Store nondefault three-winding service states in a distinct nested IR record.
+  Older readers reject that representation instead of silently energizing an
+  inactive winding. Ordinary legacy all-on/all-off records keep their legacy layout;
+  Python table rows retain their existing shape.
 
 - Deprecate the inert `powerio-capi` `arrow` feature and remove its redundant
   CI job and stale Arrow-export build guidance. Maintained source-build commands
@@ -164,9 +171,11 @@
 - A network read from distribution CIM records `cim-dist` as its source
   format, and PowerIO IR carries it. The schema for the next release,
   `pio-ir/2/0.11.6/schema.json`, adds `cim-dist` to the distribution source
-  formats and changes nothing else; the IR version stays 2. A 0.11.5 reader
-  rejects an IR document whose source format is `cim-dist` and reads every
-  other document as before.
+  formats alongside the fail-closed structural alternatives described above;
+  the IR version stays 2. A 0.11.5 reader rejects an IR document whose source
+  format is `cim-dist` or whose referenced sources or partial three-winding
+  records require the newer representation. Ordinary legacy records retain
+  their published layout.
 
 ## 0.11.5
 

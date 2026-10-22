@@ -1005,7 +1005,7 @@ dependencies = [
 
 [[package]]
 name = "facade-only"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "powerio",
 ]
@@ -2411,7 +2411,7 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
 name = "powerio"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "arrow",
  "bytes",
@@ -2433,7 +2433,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-capi"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "powerio",
  "powerio-core",
@@ -2449,7 +2449,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-cli"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -2474,7 +2474,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-core"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "errno",
  "libc",
@@ -2485,7 +2485,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-dist"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "jsonschema",
  "libc",
@@ -2507,7 +2507,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-matrix"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "approx",
  "arrow",
@@ -2532,7 +2532,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-prob"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "powerio-core",
  "powerio-dist",
@@ -2545,7 +2545,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-py"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "mimalloc",
  "powerio",
@@ -2562,7 +2562,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-sincal"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "powerio-core",
  "rusqlite",
@@ -2574,7 +2574,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-tx"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "criterion",
  "lexical-core",
@@ -2595,7 +2595,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-wasm"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "powerio",
  "rusqlite",

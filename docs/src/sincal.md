@@ -173,10 +173,11 @@ dielectric losses, parallel counts, rating factors, rated frequency and active
 temperature coefficients. Required impedances and sequence declarations remain
 strict. Ideal connections record their applied defaults as well.
 
-PowerIO's primary-file limit remains 64 MiB by default. For a known larger input,
-use its existing explicit `POWERIO_MAX_PRIMARY_BYTES` setting. CSIRO09 is
-69,181,440 bytes; its validation uses that exact bound. Acquired table documents
-retain their separate 64 MiB limit. The library does not silently raise either.
+Access MDB inputs use the core primary-file limit, which defaults to 1 GiB;
+`POWERIO_MAX_PRIMARY_BYTES` can set an explicit bound. CSIRO09 is 69,181,440
+bytes, and its validation uses that exact, tighter bound. Native SQLite/`.sinx`
+acquisition and acquired table documents retain their separate fixed 64 MiB
+limits. These are distinct limits; the library does not silently raise them.
 
 ## Fidelity and output
 
