@@ -6,7 +6,11 @@ transfers each artifact to JavaScript. The browser worker releases the case
 after conversion. No filesystem or network access is part of this binding.
 
 Build the browser module with `npm run wasm` from `apps/converter`. The command
-requires `wasm-pack` 0.15.0 and the `wasm32-unknown-unknown` Rust target.
+requires `wasm-pack` 0.15.0, the `wasm32-unknown-unknown` Rust target, and a
+Clang/LLVM C compiler with the WebAssembly backend for SQLite. Verify that
+`clang --print-targets` lists `wasm32`; when using a separate LLVM installation,
+set `CC_wasm32_unknown_unknown` and `AR_wasm32_unknown_unknown` to its `clang`
+and `llvm-ar`. Apple's system Clang may not include that backend.
 
 `cargo test -p powerio-wasm` compares native facade output with binding output,
 including artifact bytes and diagnostic codes. The converter workflow also

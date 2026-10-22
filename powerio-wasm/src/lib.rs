@@ -309,7 +309,10 @@ mod tests {
         let result: Value =
             serde_json::from_str(&converter.inspect(Some("missing.m".into()), None)).unwrap();
         assert_eq!(result["ok"], false);
-        assert!(!result["diagnostics"].as_array().unwrap().is_empty());
+        assert_ne!(
+            result["diagnostics"].as_array().unwrap().as_slice(),
+            &[] as &[Value]
+        );
     }
 
     #[test]

@@ -103,7 +103,7 @@ test('distribution outputs have explicit BMOPF profiles', async ({ page }) => {
   for (const checkbox of await settings.getByRole('checkbox').all()) await checkbox.check();
   await page.getByRole('button', { name: 'Convert', exact: true }).click();
   await expect(page.getByText('Conversion finished. Review any warnings, then download your files.', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: /^Download feeder.dss as / })).toHaveCount(4);
+  await expect(page.getByRole('button', { name: /^Download feeder.dss as / })).toHaveCount(5);
   await expect(page.getByRole('link', { name: /BMOPF task force/ }).first()).toHaveAttribute('href', 'https://github.com/distribution-system-opt');
   for (const button of await page.getByRole('button', { name: /^Download feeder.dss as / }).all()) {
     const completed = page.waitForEvent('download');
