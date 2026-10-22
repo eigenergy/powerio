@@ -6238,6 +6238,34 @@ mod tests {
         writer.finish().unwrap().into_inner()
     }
 
+    #[test]
+    fn zip_entry_names_preserve_utf8_and_cp437_identity() {
+        let utf8 = zip_archive(
+            &[("café.xml", b"<rdf:RDF/>")],
+            zip::CompressionMethod::Stored,
+        );
+        let mut cp437 = zip_archive(
+            &[("cafe.xml", b"<rdf:RDF/>")],
+            zip::CompressionMethod::Stored,
+        );
+        let names: Vec<_> = cp437
+            .windows(8)
+            .enumerate()
+            .filter_map(|(index, name)| (name == b"cafe.xml").then_some(index))
+            .collect();
+        assert_eq!(names.len(), 2);
+        for index in names {
+            cp437[index + 3] = 0x82; // CP437 é in both local and central names.
+        }
+        for archive in [utf8, cp437] {
+            let documents = acquire_archive(archive).unwrap();
+            assert_eq!(
+                documents,
+                [("case.zip/café.xml".to_string(), "<rdf:RDF/>".to_string())]
+            );
+        }
+    }
+
     fn acquire_archive(bytes: Vec<u8>) -> Result<Vec<(String, String)>> {
         let source = Source::from_memory("case.zip", bytes).unwrap();
         acquire_documents_with_limit(&source, 1 << 20)

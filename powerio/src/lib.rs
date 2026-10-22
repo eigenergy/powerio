@@ -110,16 +110,22 @@ pub const IR_MIN_VERSION: u64 = 2;
 /// The release in the path identifies the catalog, not a new IR version.
 pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/2/0.11.6/schema.json";
 
+/// Loss-preserving PSS/E transient-stability parsing and explicit study pairing.
+pub use powerio_tx::dynamic::{
+    DynamicCase, DynamicRecord, DynamicStudy, DyrError, UnresolvedBusReference, parse_dyr,
+    parse_dyr_bytes,
+};
+
 use powerio_tx::format;
 pub use powerio_tx::{
     Area, AutomaticOrder, AutomaticSpec, AutomaticTarget, BalancedNetwork, Branch, BranchCharging,
     BranchCurrentRatings, BranchRatingSet, BranchRef, BranchSolution, BranchSusceptanceFormula,
-    Bus, BusId, BusType, Canvas, Change, ChangeOp, ChangeUnit, ContingencyAction, ContingencyCase,
-    ContingencyParsed, ContingencyResolution, ContingencySet, CoordinateSpace, CoordsKind,
-    DEFAULT_BASE_FREQUENCY, Detection, ElementKey, Expanded, Extras, GenCaps, GenCost, Generator,
-    GeoApplyReport, GeoFeature, GeoGeometry, GeoLayer, GeoMeta, GeoParsed, GeoTarget, Hvdc,
-    Impedance, IndexCore, IndexedNetwork, InterfaceMember, JSON_CLASSES, JoinName, JsonClass, Load,
-    LoadVoltageModel, Location, MonitorScope, MonitorStatement, MonitoredParsed,
+    Bus, BusId, BusSubset, BusType, Canvas, Change, ChangeOp, ChangeUnit, ContingencyAction,
+    ContingencyCase, ContingencyParsed, ContingencyResolution, ContingencySet, CoordinateSpace,
+    CoordsKind, DEFAULT_BASE_FREQUENCY, Detection, ElementKey, Expanded, Extras, GenCaps, GenCost,
+    Generator, GeoApplyReport, GeoFeature, GeoGeometry, GeoLayer, GeoMeta, GeoParsed, GeoTarget,
+    Hvdc, Impedance, IndexCore, IndexedNetwork, InterfaceMember, JSON_CLASSES, JoinName, JsonClass,
+    Load, LoadVoltageModel, Location, MonitorScope, MonitorStatement, MonitoredParsed,
     MonitoredResolution, MonitoredSet, PsseEquipmentIndex, PwdDisplay, PwdSubstation, ResolvedCase,
     ResolvedComponent, ResolvedInterface, ResolvedVoltageScope, RetainedStatement, Selector,
     SelectorGroup, Shunt, ShuntBlock, SkipRule, SolverParams, SourceFormat, Storage, Subsystem,
@@ -133,7 +139,7 @@ pub use powerio_tx::{
 /// Derived indexes, normalization data, solver tables, and component error
 /// types remain available from `powerio-tx` rather than being duplicated at
 /// the facade root.
-pub use powerio_tx::{contingency, geo, network, version};
+pub use powerio_tx::{contingency, dynamic, geo, network, version};
 
 pub use powerio_core::diagnostic_codes;
 /// The common module records and containers. These explicit facade exports
@@ -204,7 +210,9 @@ pub mod dist_geo;
 pub use __gridfm::codes as gridfm_codes;
 mod stored;
 mod write;
-pub use write::emit;
+pub use write::{EmitOptions, emit, emit_with_options};
+mod sincal_write;
+pub use sincal_write::{SincalContainer, SincalExperimentalOptions};
 mod ir;
 #[cfg(feature = "schema")]
 pub use ir::generate_ir_schema;
@@ -385,6 +393,11 @@ pub use value::{PioScenarioSet, PioTimeSeries, PioValue};
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct ParseOptions {
+    /// Explicit native selections for the sincal-balanced format only.
+    pub sincal_balanced: Option<powerio_tx::format::SincalBalancedReadOptions>,
+    /// Explicit native-variant, daily-snapshot and Access-acquisition options.
+    /// Valid only with the sincal-multiconductor format selection.
+    pub sincal_multiconductor: Option<powerio_dist::SincalReadOptions>,
     /// The parser selected by its stable format token rather than inferred
     /// from the input's name and content.
     pub format: Option<powerio_core::FormatId>,
@@ -481,6 +494,31 @@ pub fn parse_with_options(
     }
     if let Some(format) = &options.format {
         source = source.with_format(format.clone());
+    }
+    if options.sincal_balanced.is_some() && options.sincal_multiconductor.is_some() {
+        return Err(powerio_core::Error::new(
+            &codes::REQUEST_SINCAL_OPTIONS_PROFILE,
+            "SINCAL selections must name exactly one electrical family",
+        )
+        .with_source(source));
+    }
+    if let Some(sincal) = &options.sincal_balanced {
+        return powerio_tx::format::parse_sincal_balanced_with_options(source, sincal)
+            .map(|m| m.map_value(PioValue::from));
+    }
+    if let Some(sincal) = &options.sincal_multiconductor {
+        if source
+            .format()
+            .and_then(|f| format::routing::parse_distribution_format(f.as_str()))
+            != Some(format::routing::DistributionFormat::SincalMulticonductor)
+        {
+            return Err(powerio_core::Error::new(
+                &codes::REQUEST_SINCAL_OPTIONS_PROFILE,
+                "sincal_multiconductor options require explicit format sincal-multiconductor",
+            )
+            .with_source(source));
+        }
+        return powerio_dist::parse_sincal(source, sincal).map(|m| m.map_value(PioValue::from));
     }
     match routed_family(&source)? {
         RoutedFamily::Goc3 => parse_goc3(source),
@@ -1056,8 +1094,8 @@ fn family_of_token(token: &str) -> RoutedFamily {
         return RoutedFamily::Contingency(kind);
     }
 
-    if powerio_dist::parse_dist_target_format(token).is_some() {
-        return RoutedFamily::Distribution(None);
+    if let Some(format) = format::routing::parse_distribution_format(token) {
+        return RoutedFamily::Distribution(Some(format));
     }
     if format::is_pypsa_csv_name(token) {
         return RoutedFamily::PypsaDirectory;

@@ -83,7 +83,7 @@ if [ "$schema_name" != "pio-ir" ]; then
 fi
 
 for manifest in powerio/Cargo.toml powerio-core/Cargo.toml powerio-tx/Cargo.toml \
-                powerio-dist/Cargo.toml powerio-matrix/Cargo.toml powerio-prob/Cargo.toml \
+                powerio-dist/Cargo.toml powerio-sincal/Cargo.toml powerio-matrix/Cargo.toml powerio-prob/Cargo.toml \
                 powerio-cli/Cargo.toml; do
     grep -q '^version.workspace = true' "$manifest" \
         || { echo "$manifest does not take the workspace version" >&2; exit 1; }

@@ -22,6 +22,12 @@ working evidence for that period and are kept only in the repository history.
 
 Later focused design reviews live beside that 1.0 record:
 
+- [PSS SINCAL](pss-sincal.md) records the delivery roadmap for balanced and multiconductor native
+  reading and writing through the existing backends, prioritizes unbalanced
+  verification, records example-file provenance, and identifies interoperability gaps.
+- [SINCAL coordinates and geometry](pss-sincal-geospatial.md) plans the sixth
+  SINCAL PR: source-backed locations and verified line routes through both
+  existing network families. Implementation and georeference validation remain pending.
 - [Multiconductor LinDist3Flow](lindist3flow-multiconductor.md) records the
   pre-merge acceptance review, supported physical slice, crate boundaries and
   external OpenDSS validation for issue #151.

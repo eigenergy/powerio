@@ -40,6 +40,13 @@ echo "comparing the publishable crates at $version against $baseline"
 # Apply the same narrow compatibility adjustment to temporary source archives
 # on both sides of the comparison; neither the real checkout nor the published
 # API is changed by this workaround.
+# Compare the new crate once the selected release baseline contains it.
+excluded=(--exclude powerio-py --exclude powerio-capi)
+if [ -f powerio-sincal/Cargo.toml ] \
+    && ! git cat-file -e "$baseline:powerio-sincal/Cargo.toml" 2>/dev/null; then
+    echo "powerio-sincal is new since $baseline; no previous API to compare"
+    excluded+=(--exclude powerio-sincal)
+fi
 baseline_root=$(mktemp -d)
 current_root=$(mktemp -d)
 trap 'rm -rf "$baseline_root" "$current_root"' EXIT
@@ -54,5 +61,5 @@ python3 scripts/semver_zip_compat.py "$baseline_root" "$current_root"
 # original checkout would still attempt to resolve the yanked ^8.6 dependency.
 cd "$current_root"
 cargo semver-checks check-release --workspace \
-    --exclude powerio-py --exclude powerio-capi \
+    "${excluded[@]}" \
     --baseline-root "$baseline_root" "$@"

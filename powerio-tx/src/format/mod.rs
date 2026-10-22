@@ -43,7 +43,9 @@ use powerio_core::PioModule;
 
 use crate::diagnostics::{Diagnostic, DiagnosticInfo, Diagnostics, EmitFamily, codes};
 use crate::gen_cost::{GenCostPatch, MissingGenCostPolicy};
-use crate::network::{BalancedNetwork, Branch, BranchRatingSet, Bus, BusId, BusType, SourceFormat};
+use crate::network::{
+    BalancedNetwork, Branch, BranchRatingSet, Bus, BusId, BusType, SourceFormat, Transformer3W,
+};
 use crate::{Error, Result};
 use routing::{Detection, JsonClass, SourceFormat as DetectedFormat, TransmissionFormat};
 
@@ -62,7 +64,20 @@ pub(crate) mod psse;
 mod pypsa;
 mod rawx;
 pub mod routing;
+mod sincal;
 mod surge;
+
+#[doc(hidden)]
+pub use sincal::read_balanced_snapshot as __read_sincal_balanced_snapshot;
+#[doc(hidden)]
+pub use sincal::read_balanced_snapshot_at as __read_sincal_balanced_snapshot_at;
+pub use sincal::source::{
+    SincalBalancedReadOptions, parse_with_options as parse_sincal_balanced_with_options,
+};
+#[doc(hidden)]
+pub use sincal::{
+    ExperimentalBalancedOutput, write_experimental_balanced as __write_sincal_balanced_experimental,
+};
 mod ucte;
 mod union_find;
 mod xiidm;
@@ -260,6 +275,7 @@ pub fn parse_target_format(name: &str) -> Option<TargetFormat> {
         TransmissionFormat::Cgmes => TargetFormat::Cgmes,
         TransmissionFormat::Ucte => TargetFormat::Ucte,
         TransmissionFormat::PypsaCsv
+        | TransmissionFormat::SincalBalanced
         | TransmissionFormat::Pwb
         | TransmissionFormat::Gridfm
         | TransmissionFormat::IeeeCdf => {
@@ -386,6 +402,9 @@ pub fn parse_with_json_class(
     source: powerio_core::Source,
     json_class: Option<routing::JsonClass>,
 ) -> std::result::Result<PioModule<BalancedNetwork>, powerio_core::Error> {
+    if sincal::source::handles(&source) {
+        return sincal::source::parse(source);
+    }
     // Classify JSON once so the facade can pass the answer through without a
     // second scan over the same bytes.
     let json_class = json_class.or_else(|| {
@@ -1086,6 +1105,13 @@ fn echo_text(module: &PioModule<BalancedNetwork>, target: TargetFormat) -> Optio
     Some(text.to_owned())
 }
 
+fn sincal_source_omitted(net: &BalancedNetwork) -> Option<Diagnostic> {
+    (net.source_format() == SourceFormat::Sincal).then(|| Diagnostic::of(
+        &codes::EMIT_SINCAL_RETAINED_SOURCE_OMITTED,
+        "Cross-format emission includes the typed electrical profile; fault, dynamic, protection, diagram, result and other native source-only data are omitted.",
+    ))
+}
+
 /// Serialize a typed network to `format` with no source echo.
 pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Result<TextEmission> {
     let mut conv = match format {
@@ -1132,6 +1158,7 @@ pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Re
         }
         TargetFormat::Ucte => ucte::write_ucte(net)?,
     };
+    conv.diagnostics.extend(sincal_source_omitted(net));
     warn_normalized_tap(net, format, &mut conv);
     warn_missing_reference(net, format, &mut conv);
     warn_dropped_frequency(net, format, &mut conv);
@@ -1246,6 +1273,12 @@ pub fn emit_with_options(
         };
         let (artifacts, format_diagnostics) = cgmes::artifacts(&working).map_err(core_error)?;
         diagnostics.extend(format_diagnostics.into_records());
+        diagnostics.extend(sincal_source_omitted(&working));
+        powerio_sincal::attach_retention_details(
+            module.diagnostics(),
+            &mut diagnostics,
+            "EMIT.SINCAL.RETAINED_SOURCE_OMITTED",
+        )?;
         return destination.__commit_artifacts(
             true,
             powerio_core::Fidelity::Canonical,
@@ -1253,7 +1286,12 @@ pub fn emit_with_options(
             diagnostics,
         );
     }
-    let conv = emit_text_with_options(module, format, options)?;
+    let mut conv = emit_text_with_options(module, format, options)?;
+    powerio_sincal::attach_retention_details(
+        module.diagnostics(),
+        &mut conv.diagnostics,
+        "EMIT.SINCAL.RETAINED_SOURCE_OMITTED",
+    )?;
     let artifact = powerio_core::MemoryArtifact::new(
         powerio_core::ArtifactPath::new("case").expect("static name is a valid artifact path"),
         conv.text.into_bytes(),
@@ -1297,6 +1335,12 @@ pub fn __emit_pypsa_csv_with_options(
     let (artifacts, format_diagnostics) =
         pypsa::pypsa_csv_artifacts(working.as_ref().unwrap_or(module.value()));
     diagnostics.extend(format_diagnostics);
+    diagnostics.extend(sincal_source_omitted(module.value()));
+    powerio_sincal::attach_retention_details(
+        module.diagnostics(),
+        &mut diagnostics,
+        "EMIT.SINCAL.RETAINED_SOURCE_OMITTED",
+    )?;
     let artifacts = artifacts
         .into_iter()
         .map(|(name, text)| {
@@ -1863,6 +1907,58 @@ pub(super) fn warn_extra_branch_rating_sets(
                 branch_rating_set_drop_warning(target, branch_index, branch, rating),
             );
         }
+    }
+}
+
+/// Warn for every three winding transformer winding rating set `target` has
+/// no field for, the winding counterpart of [`warn_extra_branch_rating_sets`].
+pub(super) fn warn_winding_rating_sets(
+    family: &'static EmitFamily,
+    target: &str,
+    net: &BalancedNetwork,
+    warnings: &mut Diagnostics,
+) {
+    for transformer in net.transformers_3w() {
+        let [i, j, k] = transformer.windings.each_ref().map(|winding| winding.bus);
+        for index in 0..3 {
+            for rating in transformer.winding_rating_sets(index) {
+                warnings.push(
+                    &family.rating_set_dropped,
+                    format!(
+                        "three winding transformer {i}-{j}-{k} winding {} rating set {}={} MVA dropped: {target} has no field for winding rating sets beyond rate_a, rate_b, and rate_c",
+                        index + 1,
+                        rating.name,
+                        rating.rate_mva
+                    ),
+                );
+            }
+        }
+    }
+}
+
+/// Warn once when the `target` writer states one status per three winding
+/// transformer, so a winding out of service in an in service transformer is
+/// written in service.
+pub(super) fn warn_winding_status_collapsed(
+    family: &'static EmitFamily,
+    target: &str,
+    net: &BalancedNetwork,
+    warnings: &mut Diagnostics,
+) {
+    let windings = net
+        .transformers_3w()
+        .iter()
+        .filter(|transformer| transformer.in_service)
+        .flat_map(Transformer3W::winding_in_service)
+        .filter(|in_service| !in_service)
+        .count();
+    if windings > 0 {
+        warnings.push(
+            &family.value_collapsed,
+            format!(
+                "{windings} out of service three winding transformer winding(s) written in service: the {target} writer states one status per three winding transformer"
+            ),
+        );
     }
 }
 
@@ -2458,5 +2554,37 @@ mpc.branch = [
         ] {
             assert_eq!(parse_target_format(sf.name()), None);
         }
+    }
+
+    #[test]
+    fn indexed_assignment_warning_reaches_public_module_without_mutating_literals_or_echo() {
+        let case = "function mpc = t\n\
+                    mpc.version = '2';\n\
+                    mpc.baseMVA = 100;\n\
+                    mpc.bus = [1 3 12 4 0 0 1 1.0 0 345 1 1.1 0.9;];\n\
+                    mpc.gen = [];\n\
+                    mpc.branch = [];\n\
+                    mpc.bus(:, [3 4]) = mpc.bus(:, [3 4]) / 1000;\n";
+        let source = powerio_core::Source::from_memory("case.m", case.as_bytes().to_vec()).unwrap();
+        let module = parse(source.with_format(powerio_core::FormatId::new("matpower").unwrap()))
+            .expect("literal case parses with a diagnostic");
+        assert!(
+            module.diagnostics().iter().any(|d| {
+                d.code() == "READ.MATPOWER.INDEXED_ASSIGNMENT"
+                    && d.severity() == powerio_core::DiagnosticSeverity::Warning
+            }),
+            "the warning must be present on the returned public module: {:?}",
+            module.diagnostics()
+        );
+        let demand: f64 = module.value().loads().iter().map(|load| load.p).sum();
+        assert!(
+            (demand - 12.0).abs() < 1e-12,
+            "warning-only policy must not mutate literal values: {demand}"
+        );
+        assert_eq!(
+            emit_text(&module, TargetFormat::Matpower).unwrap().text,
+            case,
+            "same-format emission must preserve the exact source bytes"
+        );
     }
 }

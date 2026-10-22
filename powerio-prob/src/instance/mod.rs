@@ -37,8 +37,8 @@ pub use lindist3flow::{
 };
 pub use merge::{ZeroImpedanceMerge, merge_zero_impedance_buses};
 pub use multiconductor::{
-    ActiveControlMode, McAcOpfInstance, McAcPfInstance, PrescribedSourceVoltage,
-    PrescribedTerminalPower,
+    ActiveControlMode, McAcOpfInstance, McAcPfInstance, PrescribedSourceBoundary,
+    PrescribedSourceVoltage, PrescribedTerminalPower,
 };
 pub use objective::{Objective, ObjectiveTerm};
 pub use powerio_dist::{

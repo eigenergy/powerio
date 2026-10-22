@@ -50,6 +50,7 @@ case "$target" in
       -p powerio-cli \
       -p powerio-capi \
       -p powerio-dist \
+      -p powerio-sincal \
       -- -D warnings
     ;;
   matrix-gridfm)

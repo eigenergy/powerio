@@ -226,6 +226,19 @@ Schema definition: `Branch`.
 | `route` | array of `Location` or null | network coordinate space | | | null |
 | `extras` | object | | | | required |
 
+A transformer's impedance correction table rides in `extras`.
+`impedance_correction` holds `{table, variable, points}`. `variable` is
+`ratio` or `angle` (degrees), and each point is `{value, factor_re,
+factor_im}`, the complex factor that multiplies the nominal series impedance
+at that ratio or angle. A three winding transformer keeps three such entries,
+one per winding or `null`, and its factor scales that winding's star
+impedance. With `psse_zcod = 1`, entries 0/1/2 instead scale Z12/Z23/Z31,
+using the sole winding whose control mode is not fixed (regulation may be
+disabled). Ratio coordinates on a branch are in its effective t1/t2 tap
+units; three-winding ratio coordinates are bus-base per-unit winding taps. `impedance_correction_nominal` holds the nominal impedance once
+`apply_impedance_correction` has scaled it: `[r, x]` on a branch and the three
+pairwise `[r, x]` on a three winding transformer.
+
 Schema definition: `BranchCharging`.
 
 | field | type | unit | sign | invariant | if absent |
@@ -439,6 +452,14 @@ Schema definition: `Transformer3W`.
 | `in_service` | boolean | | | | required |
 | `uid` | string or null | | | unique within `transformers_3w` | assigned at serialization |
 | `extras` | object | | | | required |
+
+Two `extras` entries carry per winding data, in winding order. Each is present
+only when it differs from its default. `winding_in_service` holds three
+booleans; a winding that is out leaves the other two coupled through the star
+point, and an absent entry means every winding is in service.
+`winding_rating_sets` holds three arrays of `{name, rate_mva}` objects with the
+MVA ratings beyond `rate_a`, `rate_b`, and `rate_c`, named as in
+`Branch.rating_sets`.
 
 Schema definition: `Winding`.
 
@@ -868,7 +889,11 @@ Schema definition: `PowerFactorControl`.
 
 ### VoltageSource
 
-Schema definition: `VoltageSource`.
+An earth-referenced source retains the original record below. A source with
+an explicit reference terminal uses the separately tagged record described
+after it; it must not add a bare reference field to this legacy record.
+
+Schema definition: `VoltageSource/anyOf/0` (the earth-referenced branch).
 
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
@@ -879,6 +904,38 @@ Schema definition: `VoltageSource`.
 | `v_angle` | array of float | radians per terminal | | same length as `terminal_map` | required |
 | `energy_cost_rate` | optional array of float | $/kWh | positive injection supplies the network | one entry per phase in terminal-map order; excludes neutral terminals | no stated source-price term |
 | `extras` | object | | | | required |
+
+### ReferencedVoltageSource
+
+The second source-record alternative has structural identity
+`"powerio.ReferencedVoltageSource"`. Older IR 2 readers reject this wrapper
+because the legacy source fields are absent at its root. Existing records
+remain unchanged. The source can occur anywhere a multiconductor network
+is stored, including collections and calculation instances.
+
+Schema definition: `ReferencedSourceWire/oneOf/0`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `type` | string | | | exactly `"powerio.ReferencedVoltageSource"` | required |
+| `value` | object | | | referenced source body below | required |
+
+Schema definition: `ReferencedSourceFields`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `name` | string | | | unique within `sources` | required |
+| `bus` | string | | | names a bus | required |
+| `terminal_map` | array of string | | | distinct declared terminals of `bus`; excludes the reference | required |
+| `v_magnitude` | array of float | volts per terminal-to-reference difference | | same length as `terminal_map`; a grounded phase can have a nonzero difference | required |
+| `v_angle` | array of float | radians per terminal-to-reference difference | | same length as `terminal_map` | required |
+| `reference_terminal` | string | | | another declared terminal on `bus`; does not imply grounding | required |
+| `energy_cost_rate` | optional array of float | $/kWh | positive injection supplies the network | per phase in terminal-map order | no stated source-price term |
+| `extras` | object | | | | required |
+
+The voltage constraint is `V(terminal) - V(reference) = magnitude * exp(i*angle)`.
+Every phase-source current has an equal opposite contribution at the reference.
+Neither an external neutral connection nor an earth path is inferred.
 
 ### UntypedObject
 

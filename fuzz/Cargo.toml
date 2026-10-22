@@ -127,3 +127,9 @@ name = "rawx"
 path = "fuzz_targets/rawx.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "psse_dyr"
+path = "fuzz_targets/psse_dyr.rs"
+test = false
+bench = false

@@ -267,13 +267,21 @@ transformer `VECGRP` field, and the winding `CNXA` field that revision 33
 added, so the reader lays each record out by the header revision, defaults
 those fields, and reports a revision 32 record that ends before its last typed
 field as `READ.PSSE.VALUE_DEFAULTED` with the record's byte range. RAW 34 maps
-its substation section. RAW 35 and RAWX 35 map and freshly emit substations,
-nodes, switches, busbar sections, and equipment terminal references. Fresh RAW
-34/35 and RAWX output preserves AC line and transformer names, and RAWX
-terminal rows use the exact type, buses, and local identifier chosen for their
-electrical equipment row. When a source neutral connectivity node has no PSS/E
-number, fresh RAWX allocates a positive number within its substation before
-resolving exact regulation targets, and reports the default.
+its substation section, and RAW 34 and 35 both carry a system switching device
+section between branch and transformer data, which fresh output writes at
+either revision. The two revisions place their node columns differently: PSS/E
+34 appends the transformer winding `NOD` after `CNXA`, the generator `NREG`
+after `WPF`, the switched shunt `NREG` after the eighth step pair, and the
+two-terminal DC converter `NDR`/`NDI` after `XCAPR`, and revision 35 moves
+each next to the bus it qualifies. The reader and fresh output follow each
+revision's layout, and fresh revision 34 output keeps a switched shunt to the
+eight step pairs before `NREG` and reports the rest. RAW 35 and RAWX 35 map and freshly emit
+substations, nodes, switches, busbar sections, and equipment terminal
+references. Fresh RAW 34/35 and RAWX output preserves AC line and transformer
+names, and RAWX terminal rows use the exact type, buses, and local identifier
+chosen for their electrical equipment row. When a source neutral connectivity
+node has no PSS/E number, fresh RAWX allocates a positive number within its
+substation before resolving exact regulation targets, and reports the default.
 
 An explicit RAW revision outside 32 through 35, an invalid system base or
 frequency, or a nonfinite record value is rejected. Fresh output accepts only
@@ -314,16 +322,42 @@ the neutral HVDC model. A switched shunt keeps its steady state susceptance
 `BINIT` as the shunt `b` along with its mode, voltage band, regulated bus, and
 step blocks. `MODSW` 0 reads as locked, 1 as discrete, and 2 as continuous
 voltage control; 3 to 6 adjust in discrete steps to control another quantity,
-read as discrete, and keep their code for PSS/E output. A two winding
-transformer's magnetizing susceptance survives a round trip through `MAG2`.
-The reader converts `CW` 1/2/3, `CZ` 1/2/3, and `CM` 1/2 into the neutral tap
-ratio, system base impedance, and magnetizing admittance, and fresh output uses
-the electrically equivalent canonical `CW = CZ = CM = 1` representation. A two
+read as discrete, and keep their code for PSS/E output. PSS/E connects a two
+winding transformer's magnetizing admittance `MAG1 + jMAG2` from bus I to
+ground, outside winding 1's ratio, while the neutral branch charging sits
+inside the tap. The reader therefore stores the admittance times the square of
+the tap, so bus I sees exactly the stated admittance, and the writer divides
+the square of the tap back out as the shortest decimal that reads back to
+the same charging, so the admittance survives a round trip through
+`MAG1`/`MAG2`. The indexed view still places a three winding transformer's
+magnetizing admittance at its star bus. The reader converts `CW` 1/2/3, `CZ`
+1/2/3, and `CM` 1/2 into the neutral tap ratio, system base impedance, and
+magnetizing admittance, and fresh output uses the electrically equivalent
+canonical `CW = CZ = CM = 1` representation. Fresh two-winding output
+usually puts winding 2 at one; if that would change a retained correction
+table from ratio to angle, it writes equivalent nonunit winding ratios and
+impedance instead. A two
 winding transformer's branch tap is the winding 1 ratio over the winding 2
 ratio \\(t_1 / t_2\\), each in per unit of its bus base voltage, and its series
 impedance and tap control range are referred across \\(t_2\\): the impedance
 scales by \\(t_2^2\\) and the range divides by \\(t_2\\), so the branch states
 the same two port admittance as the PSS/E circuit.
+
+### PSS/E DYR dynamics
+
+PSS/E `.dyr` is parsed separately from `.raw`/RAWX because it describes
+transient-stability models, not the steady-state electrical network. Use
+`parse_dyr` (or `parse_dyr_bytes`) to obtain a `DynamicCase`; the parser
+keeps original source text for exact write-back and retains unknown/custom
+model names and ordered parameter tokens. `DynamicStudy::new(network,
+dynamics)` explicitly pairs that data with a parsed `BalancedNetwork`.
+
+The current study link check only reports DYR bus IDs absent from the static
+case. It intentionally does not infer that a record's second key is a
+generator ID, and does not claim model-specific device references are
+resolved. Typed model schemas, dynamic-device linking, DYR-to-AUX/DYD/SWI
+conversion, and transient simulation are not provided yet. See
+[Dynamics and DYR](dynamics.md) for the API definition.
 
 ### UCTE-DEF
 

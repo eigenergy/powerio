@@ -185,9 +185,35 @@ pub mod codes {
     emit_family!(EMIT_UNSUPPORTED, "UNSUPPORTED", "a read only format");
 
     powerio_core::diagnostic_codes! {
+        REQUEST_SINCAL_PROFILE_REQUIRED = "REQUEST.SINCAL.PROFILE_REQUIRED", Error,
+            "SINCAL requires an explicit electrical profile", category = Request;
+        PARSE_SINCAL_MALFORMED = "PARSE.SINCAL.MALFORMED", Error,
+            "a required SINCAL record or electrical mode is invalid or unsupported", category = Parse;
+        READ_SINCAL_CONVERSION_BASE = "READ.SINCAL.CONVERSION_BASE", Remark,
+            "physical SINCAL quantities use a declared internal MVA conversion base";
+        READ_SINCAL_GEOMETRY = "READ.SINCAL.GEOMETRY", Warning,
+            "optional SINCAL drawing geometry retains native view metadata and reports mapping limits";
+        READ_SINCAL_VALUE_DEFAULTED = "READ.SINCAL.VALUE_DEFAULTED", Warning,
+            "a versioned SINCAL field default was applied";
+        READ_SINCAL_LIMITS_UNSPECIFIED = "READ.SINCAL.LIMITS_UNSPECIFIED", Remark,
+            "inactive native generator capability limits are represented as unbounded";
+        READ_SINCAL_RETAINED_SOURCE_ONLY = "READ.SINCAL.RETAINED_SOURCE_ONLY", Remark,
+            "native data outside the selected steady-state profile remains in retained source";
+        EMIT_SINCAL_RETAINED_SOURCE_OMITTED = "EMIT.SINCAL.RETAINED_SOURCE_OMITTED", Warning,
+            "native data retained only in SINCAL source is not included in cross-format output";
+        EMIT_SINCAL_EXPERIMENTAL_UNSUPPORTED = "EMIT.SINCAL.EXPERIMENTAL_UNSUPPORTED", Error,
+            "invalid or unsupported candidate SINCAL output", category = Output;
+        EMIT_SINCAL_EXPERIMENTAL_LOSS = "EMIT.SINCAL.EXPERIMENTAL_LOSS", Warning,
+            "candidate SINCAL output omits data outside its declared profile";
+        EMIT_SINCAL_EXPERIMENTAL = "EMIT.SINCAL.EXPERIMENTAL", Remark,
+            "candidate SINCAL output has not been validated in native SINCAL";
+        EMIT_SINCAL_FRESH_UNSUPPORTED = "EMIT.SINCAL.FRESH_UNSUPPORTED", Error,
+            "fresh SINCAL emission is not available through the universal emitter", category = Output;
         // PARSE: the source text could not be decoded as given.
         PARSE_MATPOWER_MALFORMED = "PARSE.MATPOWER.MALFORMED", Error,
             "a MATPOWER matrix is missing, short, unparseable, or unbalanced", category = Parse;
+        READ_MATPOWER_INDEXED_ASSIGNMENT = "READ.MATPOWER.INDEXED_ASSIGNMENT", Warning,
+            "a MATPOWER indexed assignment is not evaluated by the literal reader";
         PARSE_SOURCE_MALFORMED = "PARSE.SOURCE.MALFORMED", Error,
             "a format reader refused the source it was given", category = Parse;
         PARSE_GOC3_MALFORMED = "PARSE.GOC3.MALFORMED", Error,
@@ -382,6 +408,46 @@ pub mod codes {
             "a normalize option is outside the range it is defined on", category = Data;
         CANONICALIZE_NORMALIZE_INVALID_BASE_MVA = "CANONICALIZE.NORMALIZE.INVALID_BASE_MVA", Error,
             "the case base MVA is not a positive finite number", category = Data;
+        CANONICALIZE_NORMALIZE_GENERATOR_BUS_RETYPED =
+            "CANONICALIZE.NORMALIZE.GENERATOR_BUS_RETYPED", Warning,
+            "PQ buses hosting an in-service generator were retyped PV, so the generator holds the bus voltage";
+
+        // CANONICALIZE.ISLAND: one reference bus per island.
+        CANONICALIZE_ISLAND_REFERENCE_DESIGNATED =
+            "CANONICALIZE.ISLAND.REFERENCE_DESIGNATED", Warning,
+            "an island stated no reference bus, so its largest generator's bus was designated";
+        CANONICALIZE_ISLAND_REFERENCE_DEMOTED = "CANONICALIZE.ISLAND.REFERENCE_DEMOTED", Warning,
+            "an island stated several reference buses; one was kept and the others demoted";
+        CANONICALIZE_ISLAND_DE_ENERGIZED = "CANONICALIZE.ISLAND.DE_ENERGIZED", Warning,
+            "an island no in-service generator supplies was de-energized";
+        CANONICALIZE_ISLAND_HVDC_FED_DE_ENERGIZED =
+            "CANONICALIZE.ISLAND.HVDC_FED_DE_ENERGIZED", Warning,
+            "an island fed only by HVDC, with no in-service generator, was de-energized with its HVDC lines";
+
+        // CANONICALIZE.MERGE: the explicit bus merge.
+        CANONICALIZE_MERGE_ZERO_IMPEDANCE = "CANONICALIZE.MERGE.ZERO_IMPEDANCE", Warning,
+            "zero impedance branches were merged and their flows are no longer network variables";
+        CANONICALIZE_MERGE_CLOSED_SWITCH = "CANONICALIZE.MERGE.CLOSED_SWITCH", Warning,
+            "closed switches were merged and their flows are no longer network variables";
+        CANONICALIZE_MERGE_ATTRIBUTE_CONFLICT = "CANONICALIZE.MERGE.ATTRIBUTE_CONFLICT", Warning,
+            "merged buses stated different attributes; the surviving bus's values were kept";
+        CANONICALIZE_MERGE_ELEMENT_SHORTED = "CANONICALIZE.MERGE.ELEMENT_SHORTED", Warning,
+            "an element the rule did not select had both ends merged into one bus";
+        CANONICALIZE_MERGE_WINDING_PAIR_KEPT = "CANONICALIZE.MERGE.WINDING_PAIR_KEPT", Warning,
+            "an element was not merged because it would join two windings of one three winding transformer";
+        CANONICALIZE_MERGE_DETAIL_DROPPED = "CANONICALIZE.MERGE.DETAIL_DROPPED", Warning,
+            "the detailed connectivity's calculated bus assignments were dropped because the merge joined buses its hierarchy keeps apart";
+        CANONICALIZE_MERGE_FLOW_UNDETERMINED = "CANONICALIZE.MERGE.FLOW_UNDETERMINED", Warning,
+            "a removed element's recovered flow is not fixed by the network, so a minimum norm split is reported";
+        CANONICALIZE_MERGE_FLOW_RESIDUAL = "CANONICALIZE.MERGE.FLOW_RESIDUAL", Warning,
+            "a merged group's injections from the solution do not balance its stated devices";
+        CANONICALIZE_MERGE_INVALID_RULE = "CANONICALIZE.MERGE.INVALID_RULE", Error,
+            "a bus merge rule cannot be applied to this network", category = Data;
+        CANONICALIZE_MERGE_FLOW_SHAPE_MISMATCH = "CANONICALIZE.MERGE.FLOW_SHAPE_MISMATCH", Error,
+            "a merged network solution does not match the merge's tables", category = Data;
+        CANONICALIZE_NORMALIZE_WINDING_TAKEN_OUT =
+            "CANONICALIZE.NORMALIZE.WINDING_TAKEN_OUT", Warning,
+            "a three winding transformer winding on a bus normalization drops was taken out of service";
 
         // BUILD: assembling a derived object from a network that already parsed.
         BUILD_INDEX_UNKNOWN_BUS = "BUILD.INDEX.UNKNOWN_BUS", Error,
@@ -390,6 +456,9 @@ pub mod codes {
             "the index needs exactly one reference bus", category = Data;
         BUILD_INDEX_UNGROUNDED_COMPONENT = "BUILD.INDEX.UNGROUNDED_COMPONENT", Error,
             "a connected component has no reference bus to ground", category = Data;
+        BUILD_SWITCH_CLOSED = "BUILD.SWITCH.CLOSED", Error,
+            "a closed switch joins two buses that a calculation which models no switches would leave apart",
+            category = Data;
         BUILD_BRANCH_ZERO_IMPEDANCE = "BUILD.BRANCH.ZERO_IMPEDANCE", Error,
             "a branch has a zero matrix denominator under the selected build options",
             category = Data;
