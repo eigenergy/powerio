@@ -161,7 +161,8 @@ pub use network::{
     calc_series_admittance_of, repair_values,
 };
 pub use normalize::{
-    ClosedSwitchPolicy, NormalizeOptions, NormalizeReport, NormalizeSettings, NormalizeSourceRows,
-    NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD, correct_angle_difference_bounds,
+    AngleDifferenceBounds, ClosedSwitchPolicy, NormalizeOptions, NormalizeReport,
+    NormalizeSettings, NormalizeSourceRows, NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD,
+    correct_angle_difference_bounds, stated_angle_difference_bounds,
 };
 pub use operations::{BusSubset, Selector};

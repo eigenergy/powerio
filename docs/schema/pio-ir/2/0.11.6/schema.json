@@ -9377,6 +9377,40 @@
             "kv"
           ],
           "type": "object"
+        },
+        {
+          "description": "Subsystem buses filtered to a single base-kV level.",
+          "properties": {
+            "kind": {
+              "const": "subsystem_kv",
+              "type": "string"
+            },
+            "kv": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name",
+            "kv"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -9599,6 +9633,209 @@
             "kind",
             "scope",
             "down"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Every branch with both terminals in a subsystem and an inclusive kV band.",
+          "properties": {
+            "kind": {
+              "const": "branches_in_subsystem_kv_range",
+              "type": "string"
+            },
+            "kv_range": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "anyOf": [
+                    {
+                      "format": "double",
+                      "type": "number"
+                    },
+                    {
+                      "enum": [
+                        "Infinity",
+                        "-Infinity",
+                        "NaN"
+                      ],
+                      "type": "string"
+                    }
+                  ]
+                },
+                {
+                  "anyOf": [
+                    {
+                      "format": "double",
+                      "type": "number"
+                    },
+                    {
+                      "enum": [
+                        "Infinity",
+                        "-Infinity",
+                        "NaN"
+                      ],
+                      "type": "string"
+                    }
+                  ]
+                }
+              ],
+              "type": "array"
+            },
+            "low_voltage_3w": {
+              "type": "boolean"
+            },
+            "subsystem": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "subsystem",
+            "low_voltage_3w",
+            "kv_range"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Every tie from a subsystem where the inside terminal is within an inclusive kV band.",
+          "properties": {
+            "kind": {
+              "const": "ties_from_subsystem_kv_range",
+              "type": "string"
+            },
+            "kv_range": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "anyOf": [
+                    {
+                      "format": "double",
+                      "type": "number"
+                    },
+                    {
+                      "enum": [
+                        "Infinity",
+                        "-Infinity",
+                        "NaN"
+                      ],
+                      "type": "string"
+                    }
+                  ]
+                },
+                {
+                  "anyOf": [
+                    {
+                      "format": "double",
+                      "type": "number"
+                    },
+                    {
+                      "enum": [
+                        "Infinity",
+                        "-Infinity",
+                        "NaN"
+                      ],
+                      "type": "string"
+                    }
+                  ]
+                }
+              ],
+              "type": "array"
+            },
+            "subsystem": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "subsystem",
+            "kv_range"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A four-value voltage range with distinct pre-contingency limits.",
+          "properties": {
+            "kind": {
+              "const": "voltage_range_with_pre",
+              "type": "string"
+            },
+            "pre_max": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "pre_min": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "scope": {
+              "$ref": "#/$defs/MonitorScope"
+            },
+            "vmax": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "vmin": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "scope",
+            "vmin",
+            "vmax",
+            "pre_min",
+            "pre_max"
           ],
           "type": "object"
         }

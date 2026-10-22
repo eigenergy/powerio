@@ -11,6 +11,19 @@
   projects.
 - Discover grid format names, electrical families, and reader/writer capabilities
   through the Rust facade.
+- Add explicit angle-difference policies to DC OPF, AC OPF and AC power-flow
+  preparation and `powerio dcopf --angle-difference-bounds`. `PowerModelsPad`
+  remains the default zero-centered ±60° policy; `ShiftCenteredPad` centers
+  that pad on each branch's phase shift. `Stated` preserves finite stated
+  bounds and represents absent sides as infinities; `None` removes both
+  bounds. The legacy correction flag still selects the default pad when true
+  and `Stated` when false. With padding disabled, the MATPOWER `0`/`0` pair
+  and sides at or beyond ±360° now produce absent limits instead of zero-width
+  or artificial ±360° constraints. All bounds remain on `theta_from - theta_to`.
+  Preparation JSON preserves absent sides as `"-Infinity"`/`"Infinity"`;
+  bundle vectors use `-inf`/`inf`. The manifest records the selected policy.
+  ABI 7 and IR 2 are unchanged.
+
 - Read optional SINCAL drawing locations and line routes through both electrical
   backends. Native bus/terminal identities, derived busbar midpoints and bounded
   omission diagnostics preserve the existing model split and source echo.
