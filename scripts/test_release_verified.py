@@ -1,0 +1,146 @@
+"""Offline release-helper safety tests. These never call GitHub or publish."""
+
+import importlib.util
+import subprocess
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+SPEC = importlib.util.spec_from_file_location(
+    "release_verified", Path(__file__).with_name("release-verified.py")
+)
+helper = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(helper)
+SHA = "a" * 40
+
+
+def source_run(name, **overrides):
+    value = {
+        "id": 1,
+        "path": f".github/workflows/{name}",
+        "head_sha": SHA,
+        "event": "push",
+        "head_branch": "main",
+        "status": "completed",
+        "conclusion": "success",
+        "html_url": "https://github.com/example/run",
+    }
+    value.update(overrides)
+    return value
+
+
+class ReleaseSafety(unittest.TestCase):
+    def test_source_workflows_require_exact_head_and_success(self):
+        runs = [source_run(name) for name in helper.MAIN_WORKFLOWS]
+        helper.validate_source_runs(runs, SHA)
+        for change in (
+            {"head_sha": "b" * 40},
+            {"event": "pull_request"},
+            {"conclusion": "failure"},
+            {"status": "in_progress"},
+        ):
+            with self.subTest(change=change), self.assertRaises(helper.ReleaseError):
+                helper.validate_source_runs([dict(runs[0], **change)] + runs[1:], SHA)
+
+    def test_newer_failed_run_cannot_hide_behind_old_success(self):
+        runs = [source_run(name) for name in helper.MAIN_WORKFLOWS]
+        runs.append(dict(runs[0], id=2, conclusion="failure"))
+        with self.assertRaises(helper.ReleaseError):
+            helper.validate_source_runs(runs, SHA)
+
+    def test_every_packaged_platform_and_binding_gate_is_required(self):
+        names = {
+            "PowerIO.jl main against this tag",
+            "PowerIO.jl pins the packaged tarballs",
+            "attach draft release assets",
+            *helper.PLATFORMS,
+            *(f"PowerIO.jl on {p}" for p in helper.PLATFORMS),
+        }
+        jobs = [{"name": name, "conclusion": "success"} for name in names]
+        helper.validate_release_jobs(jobs)
+        for index in range(len(jobs)):
+            with self.subTest(missing=index), self.assertRaises(helper.ReleaseError):
+                helper.validate_release_jobs(jobs[:index] + jobs[index + 1 :])
+            with self.subTest(skipped=index), self.assertRaises(helper.ReleaseError):
+                helper.validate_release_jobs(
+                    jobs[:index]
+                    + [dict(jobs[index], conclusion="skipped")]
+                    + jobs[index + 1 :]
+                )
+
+    def test_exact_nonempty_native_assets_required(self):
+        release = {
+            "tag_name": "v0.11.6",
+            "prerelease": False,
+            "body": "Reviewed notes",
+            "assets": [
+                {"name": f"libpowerio_capi.{p}.tar.gz", "state": "uploaded", "size": 1}
+                for p in helper.PLATFORMS
+            ],
+        }
+        helper.validate_release(release, "v0.11.6")
+        for change in (
+            {"prerelease": True},
+            {"tag_name": "v0.11.5"},
+            {"body": ""},
+            {"assets": release["assets"][:-1]},
+            {"assets": [dict(a, size=0) for a in release["assets"]]},
+        ):
+            with self.subTest(change=change), self.assertRaises(helper.ReleaseError):
+                helper.validate_release(dict(release, **change), "v0.11.6")
+
+    def test_only_get_404_is_absence_not_auth_or_write_failure(self):
+        with patch.object(
+            helper.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(
+                [], 1, "", "gh: Not Found (HTTP 404)"
+            ),
+        ):
+            self.assertIsNone(helper.api("read", missing_ok=True))
+            with self.assertRaises(helper.ReleaseError):
+                helper.api("write", "POST", {}, missing_ok=True)
+        with patch.object(
+            helper.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(
+                [], 1, "", "gh: Bad credentials (HTTP 401)"
+            ),
+        ):
+            with self.assertRaises(helper.ReleaseError):
+                helper.api("read", missing_ok=True)
+
+    def test_lightweight_tag_never_accepted_or_replaced(self):
+        with patch.object(
+            helper, "api", return_value={"object": {"type": "commit", "sha": SHA}}
+        ):
+            with self.assertRaises(helper.ReleaseError):
+                helper.tag_commit("v0.11.6")
+
+    def test_existing_annotated_tag_is_resolved_without_writes(self):
+        values = [
+            {"object": {"type": "tag", "sha": "c" * 40}},
+            {"tag": "v0.11.6", "object": {"type": "commit", "sha": SHA}},
+        ]
+        with patch.object(helper, "api", side_effect=values) as api:
+            self.assertEqual(helper.tag_commit("v0.11.6"), SHA)
+            self.assertTrue(all(len(call.args) == 1 for call in api.call_args_list))
+
+    def test_workflow_dispatch_is_not_a_tag_gate(self):
+        run = source_run(
+            "release-binaries.yml", event="workflow_dispatch", head_branch="v0.11.6"
+        )
+        with (
+            patch.object(helper, "collection", return_value=[run]),
+            patch.object(helper, "wait_pause", side_effect=helper.ReleaseError("stop")),
+        ):
+            with self.assertRaises(helper.ReleaseError):
+                helper.wait_for_tag_run(SHA, "v0.11.6", 0)
+
+    def test_timeout_does_not_invent_success(self):
+        with self.assertRaises(helper.ReleaseError):
+            helper.wait_pause(0, "pending gate")
+
+
+if __name__ == "__main__":
+    unittest.main()

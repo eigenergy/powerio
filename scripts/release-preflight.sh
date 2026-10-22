@@ -8,6 +8,7 @@ cd "$(dirname "$0")/.."
 run() { echo "=== $* ==="; "$@"; }
 
 run python3 -m py_compile scripts/check_bmopf_upstream.py
+run python3 scripts/test_release_verified.py
 run bash scripts/check-release-versions.sh
 run bash scripts/check-release-features.sh
 run bash scripts/deprecated-inventory.sh --assert-empty
