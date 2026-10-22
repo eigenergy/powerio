@@ -293,7 +293,8 @@ review. The size, stack, and open pull request limits exist for that reason.
   this repository. Run
   `cargo test -p powerio-cli --test conversion_matrix_report -- --nocapture`
   to see it locally.
-- A PowerIO.jl companion branch has to exist in `eigenergy/PowerIO.jl`; see
+- A PowerIO.jl companion in a fork is pinned by commit rather than found by
+  branch name; see
   [Tandem changes with PowerIO.jl](#tandem-changes-with-poweriojl).
 
 ## Rules every change follows
@@ -374,8 +375,9 @@ does not bump it. Each ABI generation gets a changelog entry.
 ### Tandem changes with PowerIO.jl
 
 The `Julia binding` CI job builds this repository's C ABI and runs PowerIO.jl's
-test suite against it. It runs when a pull request touches one of the library
-crates the C ABI builds from. A pull request that changes something the two
+test suite against it. It runs when a pull request touches the workspace
+manifests, one of the library crates the C ABI builds from, or the companion
+pin described below. A pull request that changes something the two
 projects share (JSON shapes, schema versions, `pio_*` behavior) can fail that
 job against PowerIO.jl `main`. When that happens, push a PowerIO.jl branch
 with the same name as the powerio branch; the job tests against the companion
@@ -384,12 +386,17 @@ companion. A new `pio_*` entry point fails that job until the companion
 branch calls it or lists it in PowerIO.jl's `gen/unbound_entry_points.txt`
 with a reason. Open both pull requests and merge them in either order.
 
-The job looks for the companion only in `eigenergy/PowerIO.jl`. From a fork,
-open the PowerIO.jl pull request from your fork with the same branch name and
-ask on both pull requests for a maintainer to push the branch; do not change
-the workflow to look elsewhere. Keep PowerIO.jl's test assertions on the
-shared pieces at schema strength (same major, shape present) rather than byte
-equality, so additive powerio changes do not fail the tandem job.
+The job looks for companion branches only in `eigenergy/PowerIO.jl`. A pull
+request can instead pin a reviewed PowerIO.jl commit, including one in a fork,
+in `.github/powerio-jl-companion.json`: the `repository` (`owner/PowerIO.jl`),
+the full 40 character `sha`, and the `pull_request` link to its
+`eigenergy/PowerIO.jl` review. On pull requests the pin takes precedence over
+branch discovery, and on pushes to `main` it is ignored. A pin that reaches
+`main` still applies to every pull request opened from `main` after it, so
+remove it once the PowerIO.jl pull request merges. Keep PowerIO.jl's test
+assertions on the shared pieces at schema strength (same major, shape present)
+rather than byte equality, so additive powerio changes do not fail the tandem
+job.
 
 ### Test fixtures
 
@@ -474,8 +481,8 @@ updates `Cargo.lock`. Then:
 3. Inspect the draft and its five binary assets, then publish the release.
    The release event fires the PyPI publish
    (python.yml) and the crates.io publish (crates.yml: powerio-core,
-   powerio-tx, powerio-dist, powerio-prob, powerio-matrix, powerio, and
-   powerio-cli, in dependency order). Both deploy through reviewer protected
+   powerio-sincal, powerio-tx, powerio-dist, powerio-prob, powerio-matrix,
+   powerio, and powerio-cli, in dependency order). Both deploy through reviewer protected
    environments (`pypi` and `crates-io`; the protection lives in the repo
    settings). PyPI skips files it already has and crates.io skips versions
    already in the index, so if one of them fails partway you recover by
