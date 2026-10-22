@@ -298,3 +298,34 @@ test('two DSS projects keep their contents and companions after batch download a
   await expect(page.getByRole('article')).toHaveCount(2);
   await expect(page.getByText('Ready to convert', { exact: true })).toHaveCount(2);
 });
+
+
+test('indexed MATLAB mutations stay visible through conversion, report and exact source download', async ({ page }) => {
+  const mutation = "mpc.bus(:, [3 4]) ... ignored ) ' ; ,\n = mpc.bus(:, [3 4]) / 1000;";
+  const source = Buffer.concat([case9, Buffer.from(`\nx = [1 2].';\n${mutation}\n`)]);
+  await ready(page);
+  await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'mutated.m', mimeType: 'text/plain', buffer: source });
+  await expect(page.getByRole('button', { name: 'Convert', exact: true })).toBeEnabled();
+  const job = page.getByRole('article');
+  await job.locator('details.diagnostics > summary').click();
+  await expect(job.getByText('READ.MATPOWER.INDEXED_ASSIGNMENT', { exact: true })).toBeVisible();
+  await expect(job.getByText(/indexed assignment to mpc.bus is not evaluated/)).toBeVisible();
+  const targets = page.getByRole('complementary', { name: 'Convert to' });
+  for (const checkbox of await targets.getByRole('checkbox').all()) if (await checkbox.isEnabled()) await checkbox.uncheck();
+  await targets.getByRole('checkbox', { name: 'MATPOWER', exact: true }).check();
+  await page.getByRole('button', { name: 'Convert', exact: true }).click();
+  await expect(job.getByText('Converted with warnings', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Download all', exact: false })).toBeEnabled();
+  const downloaded = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download all', exact: false }).click();
+  const archive = await entries(await downloadBytes(await downloaded));
+  const original = Object.entries(archive).find(([path]) => path.endsWith('.m'));
+  expect(original).toBeTruthy();
+  expect(Buffer.from(original![1])).toEqual(source);
+  const report = JSON.parse(new TextDecoder().decode(archive['conversion-report.json']));
+  expect(report.cases).toHaveLength(1);
+  const warning = report.cases[0].diagnostics.find((item: { code: string }) => item.code === 'READ.MATPOWER.INDEXED_ASSIGNMENT');
+  expect(warning).toMatchObject({ severity: 'warning' });
+  const start = source.indexOf(Buffer.from(mutation));
+  expect(warning.spans[0]).toMatchObject({ start, end: start + Buffer.byteLength(mutation) });
+});
