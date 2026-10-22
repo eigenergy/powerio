@@ -437,6 +437,7 @@ class BusMerge:
         )
 
 
+@_guard_class
 class BalancedNetwork:
     """A parsed balanced power network.
 
