@@ -1,9 +1,9 @@
 """Public wrappers convert native panics into ordinary coded exceptions."""
 
 import pytest
+from powerio._powerio import PanicException
 
 import powerio
-from powerio._powerio import PanicException
 
 
 class _PanickingNetwork:
