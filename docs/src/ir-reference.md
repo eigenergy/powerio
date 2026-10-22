@@ -436,9 +436,11 @@ Schema definition: `Switch`.
 ### Transformer3W
 
 Three windings joined at a star point; the indexed view star-lowers the
-record for matrix calculations.
+record for matrix calculations. Default per-winding service states use this
+body directly. Nondefault states use the tagged record described below, whose
+nested body has the same physical fields.
 
-Schema definition: `Transformer3W`.
+Schema definitions: `Transformer3W/anyOf/0`, `PartialTransformer3WFields`.
 
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
@@ -460,6 +462,24 @@ point, and an absent entry means every winding is in service.
 `winding_rating_sets` holds three arrays of `{name, rate_mva}` objects with the
 MVA ratings beyond `rate_a`, `rate_b`, and `rate_c`, named as in
 `Branch.rating_sets`.
+
+### PartialTransformer3W
+
+A nondefault winding state uses structural identity
+`"powerio.PartialTransformer3W"`, including when the whole transformer is off.
+The nested body requires `extras.winding_in_service` to contain exactly three
+booleans, not all true. An explicit all-false state is therefore also tagged.
+Older IR 2 readers reject this record because its required physical transformer
+fields are absent at the root. The body preserves all winding rows, identifiers,
+units, and extension data; no winding is dropped or assigned a fake impedance.
+Bare nondefault states and malformed tagged records are rejected.
+
+Schema definition: `PartialTransformer3WWire/oneOf/0`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `type` | string | | | exactly `"powerio.PartialTransformer3W"` | required |
+| `value` | object | | | complete transformer body above with nondefault winding flags | required |
 
 Schema definition: `Winding`.
 
