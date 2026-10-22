@@ -44,6 +44,38 @@ CRATES = (
 )
 
 
+_REPORTED = {}
+
+
+def report(key, message):
+    """Show every state change once, without repeating unchanged polling output."""
+    if _REPORTED.get(key) != message:
+        print(message, flush=True)
+        _REPORTED[key] = message
+
+
+def report_run(run):
+    report(
+        f"run:{run['id']}",
+        f"{run.get('name', run.get('display_title', 'Workflow'))} "
+        f"(attempt {run.get('run_attempt', 1)}): "
+        f"{run.get('conclusion') or run['status']} | {run['html_url']}",
+    )
+
+
+def report_jobs(run):
+    jobs = collection(
+        f"repos/{REPO}/actions/runs/{run['id']}/jobs?filter=latest", "jobs"
+    )
+    for job in jobs:
+        report(
+            f"job:{job['id']}",
+            f"  {job['name']}: {job.get('conclusion') or job['status']} "
+            f"| {job.get('html_url', run['html_url'])}",
+        )
+    return jobs
+
+
 class ReleaseError(RuntimeError):
     pass
 
@@ -124,6 +156,7 @@ def validate_source_runs(runs, candidate):
         "Required final-main source workflows are missing.",
     )
     for name, run in latest.items():
+        report_run(run)
         require(
             run["status"] == "completed" and run["conclusion"] == "success",
             f"Final-main {name} is not successful: {run['html_url']}",
@@ -173,7 +206,7 @@ def wait_pause(deadline, message):
         time.monotonic() < deadline,
         f"Timed out: {message}. Rerun this same pinned command; do not move the tag.",
     )
-    print(message, flush=True)
+    report("wait", message)
     time.sleep(30)
 
 
@@ -189,17 +222,15 @@ def wait_for_tag_run(candidate, tag, deadline):
         ]
         if runs:
             run = max(runs, key=lambda value: value["id"])
+            report_run(run)
+            jobs = report_jobs(run)
             if run["status"] == "completed":
                 require(
                     run["conclusion"] == "success",
                     f"Tag build failed: {run['html_url']}. No draft was published.",
                 )
-                jobs = collection(
-                    f"repos/{REPO}/actions/runs/{run['id']}/jobs?filter=latest", "jobs"
-                )
                 validate_release_jobs(jobs)
                 return run
-            print(run["html_url"], flush=True)
         wait_pause(
             deadline,
             f"Waiting for the exact {tag} push build and all five packaged Julia tests",
@@ -307,6 +338,8 @@ def follow_publication(candidate, julia_candidate, version, tag, deadline):
                 ready = False
                 continue
             run = max(runs, key=lambda value: value["id"])
+            report_run(run)
+            report_jobs(run)
             pending = api(f"repos/{REPO}/actions/runs/{run['id']}/pending_deployments")
             if pending:
                 names = ", ".join(item["environment"]["name"] for item in pending)
@@ -328,16 +361,28 @@ def follow_publication(candidate, julia_candidate, version, tag, deadline):
             registries = published_pypi_version(
                 public_json(f"https://pypi.org/pypi/powerio/{version}/json"), version
             )
+            report(
+                "registry:pypi",
+                f"PyPI {version}: {'verified' if registries else 'pending'} | https://pypi.org/project/powerio/{version}/",
+            )
             for crate in CRATES:
-                registries = (
-                    published_crate_version(
-                        public_json(
-                            f"https://crates.io/api/v1/crates/{crate}/{version}"
-                        ),
-                        version,
-                    )
-                ) and registries
-            if registries and julia_registered_release(version, tag, julia_candidate):
+                present = published_crate_version(
+                    public_json(f"https://crates.io/api/v1/crates/{crate}/{version}"),
+                    version,
+                )
+                report(
+                    f"registry:{crate}",
+                    f"crates.io {crate} {version}: {'verified' if present else 'pending'} | https://crates.io/crates/{crate}/{version}",
+                )
+                registries = present and registries
+            julia = registries and julia_registered_release(
+                version, tag, julia_candidate
+            )
+            report(
+                "registry:julia",
+                f"Julia General/TagBot {version}: {'verified' if julia else 'pending'} | https://github.com/{JULIA_REPO}/actions",
+            )
+            if julia:
                 print(
                     f"Verified: {tag} GitHub release, eight crates, PyPI, Julia General registration and Julia tag are present."
                 )
@@ -352,7 +397,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate", required=True)
     parser.add_argument("--julia-candidate", required=True)
-    parser.add_argument("--version", default="0.11.6")
+    parser.add_argument(
+        "--version",
+        required=True,
+        help="Stable release version; must match the reviewed candidate",
+    )
     parser.add_argument(
         "--timeout", type=int, default=10800, help="Total wait seconds; reruns are safe"
     )
@@ -366,10 +415,21 @@ def main(argv=None):
         "A full immutable Julia commit SHA is required.",
     )
     require(
-        re.fullmatch(r"0\.11\.[0-9]+", args.version) is not None,
-        "This helper is limited to the 0.11 patch line.",
+        re.fullmatch(
+            r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", args.version
+        )
+        is not None,
+        "Use an explicit stable MAJOR.MINOR.PATCH version.",
     )
     require(args.timeout > 0, "Timeout must be positive.")
+    print(
+        f"Release {args.version} | Rust {args.candidate} | Julia {args.julia_candidate}",
+        flush=True,
+    )
+    print(
+        "Phase 1: verify existing authentication, candidate identity and source CI.",
+        flush=True,
+    )
     require(
         subprocess.run(
             ["gh", "auth", "status", "--hostname", "github.com"],
@@ -414,6 +474,10 @@ def main(argv=None):
         args.candidate,
     )
     tag = f"v{args.version}"
+    print(
+        f"Phase 2: reconcile annotated tag {tag}; never move an existing tag.",
+        flush=True,
+    )
     current = tag_commit(tag)
     require(
         current is None or current == args.candidate,
@@ -450,6 +514,10 @@ def main(argv=None):
         tag_commit(tag) == args.candidate,
         "Tag readback differs from the reviewed candidate.",
     )
+    print(
+        "Phase 3: wait for exact tag build, native archives and five packaged Julia tests.",
+        flush=True,
+    )
     deadline = time.monotonic() + args.timeout
     run = wait_for_tag_run(args.candidate, tag, deadline)
     print(f"All tagged source/build/packaged gates passed: {run['html_url']}")
@@ -459,6 +527,7 @@ def main(argv=None):
         tag_commit(tag) == args.candidate,
         "Tag moved during packaging; refusing publication.",
     )
+    print("Phase 4: reconcile draft and publish only after verified gates.", flush=True)
     if release["draft"]:
         current_run = api(f"repos/{REPO}/actions/runs/{run['id']}")
         require(
@@ -487,6 +556,10 @@ def main(argv=None):
         "Publication was not confirmed; inspect the release before retrying.",
     )
     print(f"GitHub release publication confirmed: {release['html_url']}", flush=True)
+    print(
+        "Phase 5: follow crates/PyPI publication and Julia registration/TagBot.",
+        flush=True,
+    )
     return follow_publication(
         args.candidate, args.julia_candidate, args.version, tag, deadline
     )

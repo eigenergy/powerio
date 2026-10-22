@@ -2,8 +2,10 @@
 
 import base64
 import importlib.util
+import io
 import subprocess
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -221,6 +223,40 @@ class ReleaseSafety(unittest.TestCase):
                 self.assertTrue(
                     all(c.args[2] == released for c in content.call_args_list)
                 )
+
+    def test_version_is_required_and_stable_versions_are_not_patch_line_locked(self):
+        args = ["--candidate", SHA, "--julia-candidate", "b" * 40]
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+            helper.main(args)
+        self.assertEqual(error.exception.code, 2)
+        for version in ("0.11.6", "0.12.0", "1.0.0"):
+            with (
+                self.subTest(version=version),
+                redirect_stdout(io.StringIO()),
+                patch.object(
+                    helper.subprocess,
+                    "run",
+                    return_value=subprocess.CompletedProcess([], 1, "", ""),
+                ) as gh,
+                self.assertRaisesRegex(helper.ReleaseError, "authentication"),
+            ):
+                helper.main(args + ["--version", version])
+            gh.assert_called_once()
+        for version in ("v0.11.6", "01.2.3", "1.0", "1.0.0-rc1", "1.0.0/unsafe"):
+            with (
+                self.subTest(version=version),
+                patch.object(helper.subprocess, "run") as gh,
+                self.assertRaisesRegex(helper.ReleaseError, "MAJOR.MINOR.PATCH"),
+            ):
+                helper.main(args + ["--version", version])
+            gh.assert_not_called()
+
+    def test_progress_displays_state_changes_without_duplicate_polling_noise(self):
+        with patch.object(helper, "_REPORTED", {}), patch("builtins.print") as output:
+            helper.report("job:1", "Build: queued | https://github.com/example")
+            helper.report("job:1", "Build: queued | https://github.com/example")
+            helper.report("job:1", "Build: success | https://github.com/example")
+            self.assertEqual(output.call_count, 2)
 
     def test_timeout_does_not_invent_success(self):
         with self.assertRaises(helper.ReleaseError):
