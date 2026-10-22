@@ -93,7 +93,7 @@ fn goc3_parses_to_the_scuc_instance() {
     assert_eq!(instance.inputs().branch_switching_costs.len(), 3);
 
     // The scheduling categories and nested time data arrived typed.
-    assert!(!instance.inputs().interval_durations.is_empty());
+    assert_ne!(instance.inputs().interval_durations, [] as [f64; 0]);
     assert_eq!(instance.inputs().devices[0].periods.len(), 2);
     assert!(module.diagnostics().iter().all(|diagnostic| {
         diagnostic.code() != powerio_tx::diagnostics::codes::READ_GOC3_RETAINED_SOURCE_ONLY.code

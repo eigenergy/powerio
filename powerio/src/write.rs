@@ -209,6 +209,16 @@ fn unknown_format(format: &str) -> Error {
     )
 }
 
+/// Facade emission options. Defaults preserve the ordinary source-echo and
+/// canonical writer behavior for every format.
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct EmitOptions {
+    /// Fresh SINCAL generation is experimental and must be requested explicitly.
+    /// When present, this bypasses retained-source echo even for unchanged input.
+    pub sincal_experimental: Option<crate::SincalExperimentalOptions>,
+}
+
 /// Emit one module as `format` into `output`. The concrete value routes to its
 /// grid exchange format implementation. PowerIO IR uses [`crate::serialize`]
 /// instead.
@@ -234,8 +244,52 @@ pub fn emit<T>(
 where
     T: Clone + Into<PioValue>,
 {
+    emit_with_options(module, format, &EmitOptions::default(), output)
+}
+
+/// Emit with explicit facade options. An experimental SINCAL request always
+/// creates fresh typed output; it does not fall back to retained source echo.
+/// The default options are equivalent to [`emit`].
+///
+/// # Errors
+/// The same failures as [`emit`], invalid options for the selected format/value,
+/// or unsupported physics in the explicitly selected experimental profile.
+pub fn emit_with_options<T>(
+    module: &PioModule<T>,
+    format: &str,
+    options: &EmitOptions,
+    output: impl powerio_core::IntoDestination,
+) -> Result<EmitResult, Error>
+where
+    T: Clone + Into<PioValue>,
+{
     let module = module.clone().map_value(Into::into);
-    emit_dynamic(&module, format, output.into_destination()?)
+    let destination = output.into_destination()?;
+    if let Some(options) = &options.sincal_experimental {
+        return crate::sincal_write::emit(&module, format, options, destination);
+    }
+    let result = emit_dynamic(&module, format, destination)?;
+    let from_sincal = module.sources().iter().any(|source| {
+        source
+            .format()
+            .is_some_and(|f| is_sincal_format(f.as_str()))
+    });
+    if from_sincal
+        && !is_sincal_format(format)
+        && !result.diagnostics().iter().any(|d| {
+            matches!(
+                d.code(),
+                "EMIT.SINCAL.RETAINED_SOURCE_OMITTED" | "EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED"
+            )
+        })
+    {
+        Ok(result.__with_diagnostics(vec![Diagnostic::of(
+            &powerio_tx::diagnostics::codes::EMIT_SINCAL_RETAINED_SOURCE_OMITTED,
+            "Cross-format emission includes the typed electrical profile; fault, dynamic, protection, diagram, result and other native source-only data are omitted.",
+        )]))
+    } else {
+        Ok(result)
+    }
 }
 
 fn calculation_data_omitted(value_type: &str, format: &str) -> Diagnostic {
@@ -716,6 +770,88 @@ fn emit_geo_layer(
     )
 }
 
+/// The three PSS/E contingency analysis files that a module value can be, or
+/// `None` for every other value.
+fn contingency_file_of_value(value: &PioValue) -> Option<crate::ContingencyFile> {
+    match value {
+        PioValue::ContingencySet(_) => Some(crate::ContingencyFile::Con),
+        PioValue::SubsystemSet(_) => Some(crate::ContingencyFile::Sub),
+        PioValue::MonitoredSet(_) => Some(crate::ContingencyFile::Mon),
+        _ => None,
+    }
+}
+
+/// The module's retained source bytes when the value is a PSS/E contingency
+/// analysis file and `format` names that same file. The three tokens are not
+/// grid case names, so `retained_source_matches_case_format` never claims
+/// them; this is the same rule stated over the contingency tokens.
+fn retained_contingency_source(module: &PioModule<PioValue>, format: &str) -> Option<Vec<u8>> {
+    let kind = contingency_file_of_value(module.value())?;
+    if crate::contingency_file_of_token(format)? != kind {
+        return None;
+    }
+    let source = module.source()?;
+    if source.acquired_buffers().len() != 1 {
+        return None;
+    }
+    if crate::contingency_file_of_token(source.format()?.as_str())? != kind {
+        return None;
+    }
+    Some(source.primary_buffer().ok()?.bytes().to_vec())
+}
+
+/// Write one PSS/E contingency analysis file as canonical text. Each of the
+/// three files is its own target: a `.con` written as `psse-sub` would state
+/// a different grammar, so only the token naming this value's own file is
+/// accepted.
+fn emit_contingency_file(
+    value: &PioValue,
+    kind: crate::ContingencyFile,
+    format: &str,
+    destination: Destination,
+) -> Result<EmitResult, Error> {
+    if crate::contingency_file_of_token(format) != Some(kind) {
+        return Err(if crate::contingency_file_of_token(format).is_some() {
+            Error::new(
+                &codes::REQUEST_EMIT_UNSUPPORTED_VALUE_TYPE,
+                format!(
+                    "{format} names another PSS/E contingency analysis file, not {}; write this one as `{}`",
+                    kind.type_name(),
+                    kind.token()
+                ),
+            )
+        } else if known_format_name(format) {
+            Error::new(
+                &codes::REQUEST_EMIT_UNSUPPORTED_VALUE_TYPE,
+                format!(
+                    "{format} states a grid case, not {}; write this file as `{}`",
+                    kind.type_name(),
+                    kind.token()
+                ),
+            )
+        } else {
+            unknown_format(format)
+        });
+    }
+    let text = match value {
+        PioValue::ContingencySet(set) => set.to_con(),
+        PioValue::SubsystemSet(set) => set.to_sub(),
+        PioValue::MonitoredSet(set) => set.to_mon(),
+        _ => unreachable!("the value variant selected the file kind"),
+    };
+    let artifact = powerio_core::MemoryArtifact::new(
+        powerio_core::ArtifactPath::new(kind.artifact_name())
+            .expect("static name is a valid artifact path"),
+        text.into_bytes(),
+    );
+    destination.__commit_artifacts(
+        false,
+        powerio_core::Fidelity::Canonical,
+        vec![artifact],
+        Vec::new(),
+    )
+}
+
 fn balanced_calculation_network(value: &PioValue) -> Option<&BalancedNetwork> {
     match value {
         PioValue::DcPfInstance(instance) => Some(instance.network()),
@@ -733,7 +869,10 @@ fn multiconductor_calculation_network(
     match value {
         PioValue::McAcPfInstance(instance) => Some(instance.network()),
         PioValue::McAcOpfInstance(instance) => Some(instance.network()),
-        PioValue::LinDist3FlowOpfInstance(instance) => Some(instance.network()),
+        // The source network, not the prepared formulation network: emitting
+        // the latter would silently drop lowered and omitted components.
+        PioValue::LinDist3FlowPfInstance(instance) => Some(instance.source_network()),
+        PioValue::LinDist3FlowOpfInstance(instance) => Some(instance.source_network()),
         _ => None,
     }
 }
@@ -866,9 +1005,18 @@ fn emit_solution(
         PioValue::McAcOpfSolution(solution) => {
             emit_multiconductor_solution_network(module, solution.network(), format, destination)
         }
-        PioValue::LinDist3FlowOpfSolution(solution) => {
-            emit_multiconductor_solution_network(module, solution.network(), format, destination)
-        }
+        PioValue::LinDist3FlowPfSolution(solution) => emit_multiconductor_solution_network(
+            module,
+            solution.instance().source_network(),
+            format,
+            destination,
+        ),
+        PioValue::LinDist3FlowOpfSolution(solution) => emit_multiconductor_solution_network(
+            module,
+            solution.instance().source_network(),
+            format,
+            destination,
+        ),
         PioValue::AcScucSolution(solution) if is_goc3(format) => {
             emit_goc3_solution(solution, destination)
         }
@@ -909,8 +1057,15 @@ fn emit_versioned_bmopf(
                 &format,
             )],
         ),
+        PioValue::LinDist3FlowPfInstance(instance) => (
+            instance.source_network().clone(),
+            vec![calculation_data_omitted(
+                module.value().type_name(),
+                &format,
+            )],
+        ),
         PioValue::LinDist3FlowOpfInstance(instance) => (
-            instance.network().clone(),
+            instance.source_network().clone(),
             vec![calculation_data_omitted(
                 module.value().type_name(),
                 &format,
@@ -927,8 +1082,12 @@ fn emit_versioned_bmopf(
             solution.instance().network().clone(),
             vec![solution_data_omitted(module.value().type_name(), &format)],
         ),
+        PioValue::LinDist3FlowPfSolution(solution) => (
+            solution.instance().source_network().clone(),
+            vec![solution_data_omitted(module.value().type_name(), &format)],
+        ),
         PioValue::LinDist3FlowOpfSolution(solution) => (
-            solution.instance().network().clone(),
+            solution.instance().source_network().clone(),
             vec![solution_data_omitted(module.value().type_name(), &format)],
         ),
         _ => return Err(unsupported_type(module, &format)),
@@ -945,11 +1104,70 @@ fn emit_versioned_bmopf(
     .map(|result| result.__with_diagnostics(diagnostics))
 }
 
+fn is_sincal_format(format: &str) -> bool {
+    crate::resolve_format(format).is_some_and(|f| {
+        matches!(
+            f.token,
+            "sincal" | "sincal-balanced" | "sincal-multiconductor"
+        )
+    })
+}
+
+/// Binary retained-source echo is separate from fresh electrical writing.
+fn echo_sincal(
+    module: &PioModule<PioValue>,
+    format: &str,
+    destination: Destination,
+) -> Result<EmitResult, Error> {
+    if !matches!(
+        module.value(),
+        PioValue::BalancedNetwork(_) | PioValue::MulticonductorNetwork(_)
+    ) {
+        return Err(unsupported_type(module, "sincal"));
+    }
+    let target = crate::resolve_format(format).map(|f| f.token);
+    if matches!(
+        (target, module.value()),
+        (Some("sincal-balanced"), PioValue::MulticonductorNetwork(_))
+            | (Some("sincal-multiconductor"), PioValue::BalancedNetwork(_))
+    ) {
+        return Err(unsupported_type(module, format));
+    }
+    let source = module.source().filter(|source| source.format().is_some_and(|f| is_sincal_format(f.as_str())))
+        .ok_or_else(|| Error::new(&powerio_tx::diagnostics::codes::EMIT_SINCAL_FRESH_UNSUPPORTED,
+            "SINCAL currently supports unchanged retained-source echo only. Edited, constructed, or IR-restored networks require the separate experimental fresh writer."))?;
+    let primary = source.primary_buffer()?;
+    // deserialize retains the IR document as its acquired source. A caller
+    // supplying a native format hint must not relabel those JSON bytes as a
+    // SINCAL project and enable an invalid native echo.
+    if !primary.bytes().starts_with(b"SQLite format 3\0")
+        && !primary.bytes().starts_with(b"PK\x03\x04")
+        && !primary.bytes().starts_with(b"\0\x01\0\0Standard Jet DB\0")
+    {
+        return Err(Error::new(
+            &powerio_tx::diagnostics::codes::EMIT_SINCAL_FRESH_UNSUPPORTED,
+            "The retained bytes are not a native SINCAL database or archive; source metadata alone cannot enable native echo.",
+        ));
+    }
+    destination.__commit_artifacts(
+        false,
+        powerio_core::Fidelity::ExactSameFormat,
+        vec![powerio_core::MemoryArtifact::new(
+            powerio_core::ArtifactPath::new("case.sinx")?,
+            primary.bytes().to_vec(),
+        )],
+        Vec::new(),
+    )
+}
+
 fn emit_dynamic(
     module: &PioModule<PioValue>,
     format: &str,
     destination: Destination,
 ) -> Result<EmitResult, Error> {
+    if is_sincal_format(format) {
+        return echo_sincal(module, format, destination);
+    }
     if let Some(version) = format.strip_prefix("bmopf-json@") {
         return emit_versioned_bmopf(module, version, destination);
     }
@@ -986,6 +1204,23 @@ fn emit_dynamic(
         return emit_geo_layer(layer, format, destination);
     }
 
+    if let Some(kind) = contingency_file_of_value(module.value()) {
+        if let Some(bytes) = retained_contingency_source(module, format) {
+            let artifact = powerio_core::MemoryArtifact::new(
+                powerio_core::ArtifactPath::new(kind.artifact_name())
+                    .expect("static name is a valid artifact path"),
+                bytes,
+            );
+            return destination.__commit_artifacts(
+                false,
+                powerio_core::Fidelity::ExactSameFormat,
+                vec![artifact],
+                Vec::new(),
+            );
+        }
+        return emit_contingency_file(module.value(), kind, format, destination);
+    }
+
     match &module.value() {
         PioValue::BalancedNetwork(_)
         | PioValue::MulticonductorNetwork(_)
@@ -997,6 +1232,7 @@ fn emit_dynamic(
         | PioValue::AcOpfInstance(_)
         | PioValue::McAcPfInstance(_)
         | PioValue::McAcOpfInstance(_)
+        | PioValue::LinDist3FlowPfInstance(_)
         | PioValue::LinDist3FlowOpfInstance(_)
         | PioValue::AcScucInstance(_) => emit_network_or_calculation(module, format, destination),
         PioValue::DcPfSolution(_)
@@ -1006,6 +1242,7 @@ fn emit_dynamic(
         | PioValue::SocwrOpfSolution(_)
         | PioValue::McAcPfSolution(_)
         | PioValue::McAcOpfSolution(_)
+        | PioValue::LinDist3FlowPfSolution(_)
         | PioValue::LinDist3FlowOpfSolution(_)
         | PioValue::AcScucSolution(_) => emit_solution(module, format, destination),
         _ => {

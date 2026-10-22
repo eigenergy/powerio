@@ -17,7 +17,7 @@ import powerio
 
 SCHEMAS = {
     "0.1.0": Path("tests/data/dist/bmopf/draft_bmopf_schema.json"),
-    "0.2.0": Path("tests/data/dist/bmopf/bmopf-0.2.0.schema.json"),
+    "0.2.0": Path("powerio-dist/schemas/bmopf/0.2.0/bmopf.schema.json"),
 }
 SCHEMA_ALIASES = {
     # The original ENWL case names the draft schema's repository directory,

@@ -9,7 +9,8 @@ Three checks, plus one conditional check for the retired Arrow bridge:
 2. `out_*` names in a function's doc comment must be parameters of that
    function (catches a doc naming a parameter that was renamed away).
 3. A doc that says to release something with pio_string_release must sit on
-   a declaration that actually hands out a `char *`.
+   a declaration that actually hands out owned text: a `PioString *` or a
+   `char *`.
 4. Comment lint: unbalanced parentheses in a doc block, an immediately
    repeated word or short phrase (up to three words, so "the handle's the
    handle's" is caught the same way "the the" is), and a Rust module path
@@ -107,13 +108,16 @@ def check_out_params_and_release_verbs() -> None:
                 errors.append(f"{name}: doc names `{token}`, not a parameter of it")
         if "pio_string_release" in text and name != "pio_string_release":
             hands_out_string = (
-                "-> *mut c_char" in sig
+                "-> *mut PioString" in sig
+                or "*mut *mut PioString" in sig
+                or "-> *mut c_char" in sig
                 or "*mut *mut c_char" in sig
                 or re.search(r"char\s*\*", sig) is not None
             )
             if not hands_out_string:
                 errors.append(
-                    f"{name}: doc directs pio_string_release but the signature hands out no char *"
+                    f"{name}: doc directs pio_string_release but the signature hands out"
+                    " no PioString * or char *"
                 )
 
 

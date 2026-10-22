@@ -31,9 +31,9 @@ EXPECTED_PYPOWSYBL_VERSION = "1.16.1"
 EXPECTED_POWSYBL_CORE_VERSION = "7.3.0"
 EXPECTED_POWSYBL_CORE_COMMIT = "0939bfcc2c0c094de907dc818dd688b4cbfb7281"
 EXPECTED_RUNTIME_VERSIONS = {
-    "pandas": "3.0.5",
-    "numpy": "2.5.2",
-    "networkx": "3.6.1",
+    "pandas": "3.0.6",
+    "numpy": "2.5.4",
+    "networkx": "3.7",
     "prettytable": "3.18.0",
 }
 

@@ -19,17 +19,17 @@ Benchmarking Multiconductor OPF.
   `48707ea839c20032c88df715587e50d097637cd0cc8a17b2d213d4591eea8bc7`
 - `example_enwl_n1_f2.json` sha256
   `24d2c054b70b5e09d179f785cb09ff90cddbf73c859756154e9eb604782b69f1`
-- The released schemas live in
-  <https://github.com/distribution-system-opt/dsopt-schema>. `draft_bmopf_schema.json`
-  is the 0.1.0 draft the two examples validate against, kept beside them.
-- `bmopf-0.2.0.schema.json` is the 0.2.0 proposal, from
-  <https://github.com/distribution-system-opt/dsopt-schema> at commit
-  `202b7b59ae3ea97b81cded0b6d428234f6c536c2` on branch
-  `propose-bmopf-0.2.0`, unchanged. sha256
-  `2744afb88a036783a6d22f5e830fe254321a6a68e203d31c6ff2e084d27b20cc`. It is
-  the version the writer targets by default, so the writer's output is
-  validated against it; the proposal is CC BY 4.0. Re-vendor it when that
-  proposal changes.
+- Versioned schemas are under `powerio-dist/schemas/bmopf/`, with their exact
+  source revisions, hashes, and CC BY 4.0 license. The historical schema stays
+  beside the examples for source-fidelity tests. Its rules match archived
+  0.1.0; only the embedded identifier differs. Archived 0.2.0 is a proposal.
+
+## cim/
+
+`micro_feeder.xml` is a synthetic, hand written distribution CIM feeder
+original to this repository (CIM100 namespace, 243 lines, 13,883 bytes). It
+exercises the mapped element set with hand computed expected values, pinned in
+`powerio-dist/tests/cim.rs`. See `cim/README.md`.
 
 ## opendss/
 
@@ -98,8 +98,9 @@ dict. Regenerate with the same command when bumping the PMD version.
 
 Each directory carries its own license file next to the data it covers:
 `bmopf/License.md`, `opendss/License.txt` (the BSD 3 clause notice retained
-from the upstream distribution), `micro/License.md` (CC BY 4.0), and
-`pmd/License.md` (derivatives carry their sources' licenses). The repository
+from the upstream distribution), `micro/License.md` (CC BY 4.0),
+`cim/License.md` (MIT OR Apache-2.0), and `pmd/License.md` (derivatives carry
+their sources' licenses). The repository
 code license does not apply to vendored data.
 
 The two BMOPF examples carry different licenses, so `bmopf/License.md` states
@@ -108,6 +109,6 @@ release it derives from, and `example_ieee13.json` is governed by the OpenDSS
 distribution license in `opendss/License.txt`.
 
 `micro/lindist3flow-solution.pio.json` is a synthetic two-bus, one-phase
-PowerIO IR generation-2 fixture for typed binding access and lifetime tests.
+PowerIO IR version 2 fixture for typed binding access and lifetime tests.
 It is original test data, released under the micro directory's CC BY 4.0
 license, with no upstream case data.

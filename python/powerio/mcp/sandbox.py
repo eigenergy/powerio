@@ -12,7 +12,8 @@ at all, can apply the same rules. Use :func:`checked_path` for one file,
 
 When the primary variable is unset or empty, `POWERIO_MCP_ROOT` and then
 `POWERIO_MCP_ALLOWED_ROOT` provide the allowed roots. The first nonempty value
-wins. With none configured, every path is allowed.
+wins. With none configured, paths stay beneath the directory captured when
+the server initializes.
 
     >>> from powerio.mcp.sandbox import checked_path
     >>> checked_path("case9.m", purpose="path")            # doctest: +SKIP
@@ -37,9 +38,22 @@ ALLOWED_ROOTS_ENV = "POWERIO_MCP_ALLOWED_ROOTS"
 LEGACY_ROOT_ENVS = ("POWERIO_MCP_ROOT", "POWERIO_MCP_ALLOWED_ROOT")
 """Compatibility spellings, read in order when the primary is unset."""
 
+MAX_TREE_ENTRIES = 4_096
+"""Entries a directory input may hold, the budget PowerIO's own listing keeps.
+
+Counted as that listing counts them: the files found so far plus the
+directories found and not yet listed, never more than this at any point of
+the walk.
+"""
+
+MAX_TREE_DEPTH = 64
+"""Directory levels a directory input may nest, PowerIO's own listing bound."""
+
 __all__ = [
     "ALLOWED_ROOTS_ENV",
     "LEGACY_ROOT_ENVS",
+    "MAX_TREE_DEPTH",
+    "MAX_TREE_ENTRIES",
     "PathNotAllowed",
     "admitting_root",
     "allowed_roots",
@@ -53,6 +67,7 @@ __all__ = [
 ]
 
 _T = TypeVar("_T")
+_DEFAULT_ROOT = Path.cwd().resolve(strict=True)
 
 
 class PathNotAllowed(ValueError):
@@ -62,16 +77,18 @@ class PathNotAllowed(ValueError):
 
 
 def allowed_roots() -> tuple[Path, ...]:
-    """Roots the policy confines paths to, empty when the policy is off."""
+    """Configured roots, or the captured startup directory."""
     raw = next((os.environ[name] for name in (ALLOWED_ROOTS_ENV, *LEGACY_ROOT_ENVS)
                 if os.environ.get(name)), "")
     if not raw:
-        return ()
+        return (_DEFAULT_ROOT,)
     roots = []
     for entry in raw.split(os.pathsep):
         item = entry.strip()
         if item:
             roots.append(Path(item).expanduser().resolve(strict=False))
+    if not roots:
+        raise PathNotAllowed("allowed MCP roots must name at least one directory")
     return tuple(roots)
 
 
@@ -104,6 +121,15 @@ def decode_local_path(value: str, *, purpose: str = "path") -> Path:
     return Path(str(value)).expanduser()
 
 
+def _reason(exc: OSError) -> str:
+    """The operating system's reason for ``exc``, without the paths it names.
+
+    A failure while following a link names the link's target, which can lie
+    outside the allowed roots.
+    """
+    return exc.strerror or type(exc).__name__
+
+
 def _path_for_policy(path: Path, *, for_write: bool) -> Path:
     try:
         if for_write and not path.exists():
@@ -125,28 +151,34 @@ def _path_for_policy(path: Path, *, for_write: bool) -> Path:
 
 def admitting_root(
     path: Path, *, for_write: bool = False, purpose: str = "path"
-) -> Path | None:
-    """The allowed root that contains ``path``, ``None`` when the policy is off.
+) -> Path:
+    """The allowed root that contains ``path``.
 
-    Raises :class:`PathNotAllowed` when roots are configured and ``path``
+    Raises :class:`PathNotAllowed` when ``path``
     resolves outside all of them. Symlinks are resolved first, including a
     dangling final component under ``for_write``, so a link inside a root
     cannot redirect a write out of it.
     """
     roots = allowed_roots()
-    if not roots:
-        return None
+    root_list = ", ".join(str(root) for root in roots)
+    outside = PathNotAllowed(f"`{purpose}` is outside allowed MCP roots: {root_list}")
     try:
         resolved = _path_for_policy(path, for_write=for_write)
     except OSError as exc:
+        # The reason resolution failed describes the filesystem along the
+        # path, so it is reported only for a path that leads into a root.
+        # Outside the roots the refusal is the same whether the path exists,
+        # is missing, or cannot be read.
+        followed = Path(os.path.realpath(path))
+        if not any(_inside(followed, root) for root in roots):
+            raise outside from exc
         raise PathNotAllowed(
-            f"cannot resolve `{purpose}` against allowed MCP roots: {exc}"
+            f"cannot resolve `{purpose}` against allowed MCP roots: {_reason(exc)}"
         ) from exc
     for root in roots:
-        if resolved == root or root in resolved.parents:
+        if _inside(resolved, root):
             return root
-    root_list = ", ".join(str(root) for root in roots)
-    raise PathNotAllowed(f"`{purpose}` is outside allowed MCP roots: {root_list}")
+    raise outside
 
 
 def check_allowed_path(
@@ -168,6 +200,8 @@ def checked_path(value: str, *, purpose: str = "path", for_write: bool = False) 
     containment check.
     """
     path = decode_local_path(value, purpose=purpose)
+    if not path.is_absolute():
+        path = Path.cwd() / path
     check_allowed_path(path, for_write=for_write, purpose=purpose)
     return str(path)
 
@@ -186,7 +220,9 @@ def _check_tree_target(
     except FileNotFoundError as exc:
         raise PathNotAllowed(f"`{purpose}` contains a broken link: {path}") from exc
     except OSError as exc:
-        raise PathNotAllowed(f"cannot inspect `{purpose}` entry {path}: {exc}") from exc
+        raise PathNotAllowed(
+            f"cannot inspect `{purpose}` entry {path}: {_reason(exc)}"
+        ) from exc
     if root is not None and not _inside(resolved, root):
         raise PathNotAllowed(
             f"`{purpose}` contains a link outside its allowed MCP root: {path}"
@@ -206,16 +242,28 @@ def check_allowed_read_tree(path: Path, *, purpose: str = "path") -> None:
     cycle detection; broken links and special files are refused. A regular
     file is accepted as a one-entry tree.
 
+    The walk keeps PowerIO's own directory budgets and counts entries as its
+    listing does. It refuses a tree with a directory :data:`MAX_TREE_DEPTH`
+    levels below the input, or one where the files found plus the
+    directories found and not yet listed pass :data:`MAX_TREE_ENTRIES` at any
+    point of the depth first walk; listing a directory takes it off the count
+    and adds its entries. For plain files and directories with UTF-8 names,
+    it accepts the trees PowerIO's listing accepts. It also follows contained
+    directory links, which that listing names without following, and counts
+    each one it follows as a directory. It stops reading entries as soon as a
+    budget is spent.
+
     This closes the gap between checking a directory name and handing that
     directory to a reader which opens its children. It is still a path
     preflight, not a kernel sandbox: another process can replace an entry
     between this check and the reader's later ``open`` call.
     """
     root = admitting_root(path, purpose=purpose)
-    stack = [path]
+    stack = [(path, 0)]
     visited: set[tuple[int, int]] = set()
+    seen = 0
     while stack:
-        current = stack.pop()
+        current, depth = stack.pop()
         info = _check_tree_target(current, root, purpose=purpose)
         if stat.S_ISREG(info.st_mode):
             continue
@@ -223,14 +271,29 @@ def check_allowed_read_tree(path: Path, *, purpose: str = "path") -> None:
         if identity in visited:
             continue
         visited.add(identity)
+        if depth >= MAX_TREE_DEPTH:
+            raise PathNotAllowed(
+                f"`{purpose}` nests directories more than {MAX_TREE_DEPTH} "
+                f"levels deep: {current}"
+            )
+        if depth:
+            # A listed directory leaves the count and its entries join it,
+            # the way PowerIO's listing charges only directories it has not
+            # yet descended into. The input itself was never counted.
+            seen -= 1
         try:
             with os.scandir(current) as entries:
-                children = [Path(entry.path) for entry in entries]
+                for entry in entries:
+                    seen += 1
+                    if seen > MAX_TREE_ENTRIES:
+                        raise PathNotAllowed(
+                            f"`{purpose}` holds more than {MAX_TREE_ENTRIES} entries"
+                        )
+                    stack.append((Path(entry.path), depth + 1))
         except OSError as exc:
             raise PathNotAllowed(
                 f"cannot inspect `{purpose}` directory {current}: {exc}"
             ) from exc
-        stack.extend(children)
 
 
 def checked_read_tree(value: str, *, purpose: str = "path") -> str:
@@ -368,6 +431,11 @@ def staged_directory_write(
 ) -> _T:
     """Run a directory writer privately, preflight it, then install it.
 
+    ``write`` receives a staging path inside a private workspace. That path
+    does not exist yet and the writer creates it, as PowerIO's emitters do. It
+    is never the workspace directory itself, so a writer that refuses an
+    existing target needs no change.
+
     A new output is installed by one same-filesystem rename. Updating an
     existing directory builds a complete sibling replacement, preserving
     unrelated files, then swaps it in. If the second rename fails, the original
@@ -389,10 +457,7 @@ def staged_directory_write(
 
     workspace = Path(tempfile.mkdtemp(prefix=f".{output.name}.stage-", dir=parent))
     staging_installed = False
-    os.chmod(workspace, 0o755)
-    # The writers stage and commit themselves and refuse an existing target,
-    # so the path handed to the writer must not exist yet: it is a child of
-    # the private workspace, never the workspace directory itself.
+    # A child of the private workspace, so the writer's target does not exist.
     staging = workspace / "out"
     replacement: Path | None = None
     backup: Path | None = None
@@ -426,7 +491,7 @@ def staged_directory_write(
                 )
 
         replacement = Path(
-            tempfile.mkdtemp(prefix=f".{output.name}.install-", dir=parent)
+            tempfile.mkdtemp(prefix=f".{output.name}.install-", dir=workspace)
         )
         replacement.rmdir()
         shutil.copytree(output, replacement, copy_function=shutil.copy2)
@@ -437,7 +502,7 @@ def staged_directory_write(
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(staging / relative, target)
 
-        backup = Path(tempfile.mkdtemp(prefix=f".{output.name}.backup-", dir=parent))
+        backup = Path(tempfile.mkdtemp(prefix=f".{output.name}.backup-", dir=workspace))
         backup.rmdir()
         os.replace(output, backup)
         try:
@@ -451,7 +516,7 @@ def staged_directory_write(
         backup = None
         return _rebase_writer_result(result, staging, output)
     finally:
-        if not staging_installed:
+        if not staging_installed and backup is None:
             shutil.rmtree(workspace, ignore_errors=True)
         if replacement is not None:
             shutil.rmtree(replacement, ignore_errors=True)

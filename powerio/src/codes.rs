@@ -2,6 +2,8 @@
 //! rather than a loose string.
 
 powerio_core::diagnostic_codes! {
+    REQUEST_SINCAL_OPTIONS_PROFILE = "REQUEST.PARSE.SINCAL_OPTIONS_PROFILE", Error,
+        "multiconductor SINCAL options require the matching explicit profile", category = Request;
     REQUEST_PARSE_POWERIO_IR = "REQUEST.PARSE.POWERIO_IR", Error,
         "PowerIO IR is decoded with deserialize, not parse", category = Request;
     READ_MODULE_UNSUPPORTED = "READ.MODULE.UNSUPPORTED", Error,
@@ -93,6 +95,11 @@ powerio_core::diagnostic_codes! {
         "the module does not carry a multiconductor payload to lower",
         category = Request;
 
+    REQUEST_EMIT_INVALID_OPTIONS = "REQUEST.EMIT.INVALID_OPTIONS", Error,
+        "emission options do not apply to the requested format or value", category = Request;
+    EMIT_SINCAL_PACKAGING_FAILED = "EMIT.MODULE.SINCAL_PACKAGING_FAILED", Error,
+        "experimental native SINCAL container construction failed", category = Output;
+
     // Failures.
     REQUEST_MODULE_WRONG_MODEL_KIND = "REQUEST.MODULE.WRONG_MODEL_KIND", Error,
         "the call asks for a model family the document does not carry", category = Request;
@@ -101,6 +108,9 @@ powerio_core::diagnostic_codes! {
         "serializing LinDist3Flow options for transform history failed", category = Output;
     EMIT_MODULE_SERIALIZE_FAILED = "EMIT.MODULE.SERIALIZE_FAILED", Error,
         "serializing the stored document to JSON failed", category = Output;
+    EMIT_MODULE_RECORD_CAP = "EMIT.MODULE.RECORD_CAP", Error,
+        "a stored record would exceed a bound the PowerIO IR reader enforces",
+        category = Request;
 }
 
 /// Every code this crate declares.

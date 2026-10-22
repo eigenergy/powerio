@@ -3,13 +3,13 @@ name = "powerio-dist"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Multiconductor distribution network model and lossless converters for OpenDSS, PMD JSON, and BMOPF JSON."
+description = "Multiconductor distribution network model and lossless converters for OpenDSS, PMD JSON, BMOPF JSON, and distribution CIM."
 readme = "README.md"
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/powerio-dist"
-keywords = ["opendss", "distribution", "parser", "lossless"]
+keywords = ["opendss", "distribution", "cim", "parser", "lossless"]
 categories = ["science", "parsing"]
 
 [package.metadata.docs.rs]
@@ -20,6 +20,8 @@ schema = ["dep:schemars"]
 
 [dependencies]
 powerio-core = { workspace = true }
+powerio-sincal = { workspace = true }
+rusqlite.workspace = true
 thiserror = "2"
 serde.workspace = true
 # float_roundtrip: the default float parser can be one ULP off the shortest
@@ -28,10 +30,15 @@ serde.workspace = true
 serde_json = { workspace = true, features = ["float_roundtrip"] }
 schemars = { workspace = true, optional = true }
 num-complex.workspace = true
+quick-xml.workspace = true
+uuid.workspace = true
+memchr = "2.4"
 
 [dev-dependencies]
+sha2 = "0.10"
+zip.workspace = true
 # Draft 2020-12 validation against the vendored BMOPF schema in tests.
-jsonschema = { version = "0.46", default-features = false }
+jsonschema = { version = "0.56", default-features = false }
 tempfile = "3"
 
 [target.'cfg(unix)'.dev-dependencies]

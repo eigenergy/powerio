@@ -11,6 +11,673 @@
   projects.
 - Discover grid format names, electrical families, and reader/writer capabilities
   through the Rust facade.
+- Read optional SINCAL drawing locations and line routes through both electrical
+  backends. Native bus/terminal identities, derived busbar midpoints and bounded
+  omission diagnostics preserve the existing model split and source echo.
+  Declared schematic views use Diagram space; other views remain Unknown.
+  Ordered bends follow the native manual, and module extensions preserve view
+  origin, dimensions, scale and optional CRS fields without transforming them.
+  Access acquisition can opt into graphics with `--include-graphics`.
+  IR and existing geo-layer extraction retain the mapped geometry.
+
+- Add the explicit `sincal-balanced` parser profile for schema-14.8/15.5/16.0 SQLite
+  projects and `.sinx` archives, producing `BalancedNetwork`. The first complete
+  validated cases include SimBench LV, IEEE18/33 and the student static model.
+  Fixed capacitor banks, ideal source voltage modes and inactive profiles are
+  supported; active profiles remain explicit mapping work. Unqualified SINCAL input
+  requires profile selection; unsupported phase modes never fall back to a
+  balanced projection. Unchanged modules echo native bytes exactly, while
+  ordinary emission of edited and IR-restored modules refuses fresh native output.
+  Cross-format emission reports omitted source-only data; other schemas and
+  unbalanced reading are in progress.
+
+- Add Rust facade `emit_with_options` with an explicit experimental SINCAL writer
+  option. It creates fresh schema-14.8 SQLite or candidate `.sinx` output from
+  either existing network family, using separate electrical backends. The static
+  subset supports source/line/load/transformer circuits, including selected
+  finite multiconductor transformers and verified primitive read/edit/rewrite.
+  Distribution bus nominal voltages must be supplied explicitly. Unsupported
+  physics fails before output is committed; permitted losses are diagnosed.
+  Default emission and exact-source echo are unchanged; format metadata remains
+  `can_emit=false`. Native desktop acceptance and writer binding options remain
+  separate work.
+
+- Add solver-independent AC multiconductor IVR preparation in `powerio-matrix`,
+  including explicit terminal/coil axes, bases, selected bounds, winding-current
+  transformer descriptors and supported nonlinear load/IBR controls. Unsupported
+  formulation profiles, including terminal-referenced voltage sources, fail
+  explicitly; no optimizer or AD dependency is added. Star-device current caps
+  follow terminal identities, and inverter control laws retain selected reactive
+  capability bounds.
+
+- Multiconductor voltage sources can prescribe voltages relative to an explicit
+  terminal, preserving floating-star displacement and reference current in the
+  sparse matrix constraints. IR 2 carries these as distinct tagged source
+  records that older readers reject; ordinary source records keep their
+  original shape. Prescribed PF boundaries and additive C source views expose
+  both voltage endpoints; existing C layouts remain unchanged. Canonical
+  exchange writers, balanced/LinDist3Flow projections, neutral Kron reduction
+  and legacy C source views reject referenced sources they cannot represent.
+
+- Multiconductor AC power-flow and OPF instance construction now requires a
+  voltage source on every physical bus island, including after network
+  replacement. An open switch cannot leave an island implicitly anchored by
+  a source elsewhere. Resolve de-energized islands explicitly before building
+  an instance; parsing preserves those devices and their data. This bus-level
+  check is necessary but does not establish conductor coverage or solvability.
+
+- Preserve explicit floating neutrals in ideal two-winding WYE multiconductor
+  transformer constraints. Phase-to-neutral voltage ratios now carry neutral
+  currents into nodal balance, including fixed taps and grounding switches.
+  Invalid winding maps and voltage ratios fail instead of silently omitting
+  equipment. Leakage, non-WYE connections, implicit neutral impedances, core
+  losses and tap controls remain outside this matrix builder's supported profile.
+
+- PSS/E transformer impedance correction tables are read, retained and freshly
+  written. `apply_impedance_correction` interpolates their complex factors
+  from a cached nominal impedance, so repeated application is idempotent.
+  Original table ranges select angle versus ratio; ratio points always use
+  bus-base per-unit winding ratios, independently of CW=1/2/3. Two-winding
+  tables follow winding 1 while accounting for the branch's t1/t2 tap.
+  Fresh output preserves that function and table classification, choosing an
+  equivalent nonunit winding 2 when needed. Three-winding ZCOD=0 corrects
+  star impedances; ZCOD=1 corrects Z12/Z23/Z31 at the sole adjustable winding.
+  Ambiguous ZCOD=1 controls are refused. RAW33/34 output freezes ZCOD=1 at
+  its current setting with a diagnostic. Partial-winding statuses and all
+  twelve ratings remain intact. Apply correction before bus merging or
+  switch normalization so folded admittance uses the corrected impedance.
+  RAWX table support remains deferred and reports dropped corrections.
+  Tables and nominal caches live in extras; the IR schema is unchanged.
+- Island cuts preserve normalized power and angle units. Normalization projects
+  detailed connectivity alongside removed buses and equipment, including
+  unsupplied islands and dead-winding stubs, while retaining row provenance.
+
+- Island cuts return `BusSubset` with source-to-result row maps for all eleven
+  electrical tables, including retained dead-winding stub buses. Cuts filter
+  detailed connectivity and equipment references consistently and preserve
+  selected buses through fresh XIIDM and CGMES emission. Per-island reference
+  selection and de-energization use the per-winding behavior already supported
+  by normalization, retaining the other two live windings.
+
+- Preserve BMOPF per-coil capacitor ratings as exact terminal shunts shared by
+  matrix and distribution preparation consumers. Retain custom open-delta
+  terminal maps and n-winding apparent-power bounds; edited winding maps cannot
+  be overwritten by retained source metadata during emission. Scalar single-coil
+  IBR bounds are retained, including zero available PV power.
+
+- Remove the paired release workflows and scripts, which were never
+  activated. A release stays a tag and a published draft, and PowerIO.jl
+  releases itself after each published powerio release.
+
+- Release builds run PowerIO.jl's tests against every packaged C library
+  tarball, each on its own platform, before the draft release exists. A
+  tarball the Julia release would reject now stops the release before
+  anything is published.
+
+- Distribution CIM reads and writes through the `cim-dist` format: CIM100
+  RDF/XML (the iec61970cim17v40 and iec61968cim13v13 release) in the profile
+  the GridAPPS-D and CIMHub tools exchange, into and from
+  `MulticonductorNetwork`. A single document, or the top level documents of a
+  directory, parse; one document is written. A `.xml` document, a nameless
+  source, or a directory with per phase CIM classes and no CGMES
+  `md:FullModel` header routes to it, and CGMES and XIIDM routing is
+  unchanged.
+
+- The CIM reader maps connectivity nodes, line segments with phase or
+  sequence impedance, loads, linear shunt compensators with their sections,
+  switches, transformers of any winding count with mesh impedances and ratio
+  tap changer positions, and energy sources with their series impedance.
+  What it does not map yet (the transformer tank form, controls, distributed
+  energy resources, wire geometry, limits) is reported through
+  `READ.CIM_DIST.*` codes, and the writer reports what CIM cannot state
+  through `EMIT.CIM_DIST.*` codes. Same format emission returns the retained
+  bytes of a single document; canonical output carries UUIDv5 mRIDs and is
+  byte stable from write to read to write.
+
+- A CIM line segment whose impedance the reader cannot read, for example one
+  described only by wire spacing and wire data, parses with an error finding,
+  and conversion to another format refuses it instead of writing a line with
+  zero impedance, as conversion already refuses OpenDSS geometry lines.
+
+- A network read from distribution CIM records `cim-dist` as its source
+  format, and PowerIO IR carries it. The schema for the next release,
+  `pio-ir/2/0.11.6/schema.json`, adds `cim-dist` to the distribution source
+  formats and changes nothing else; the IR version stays 2. A 0.11.5 reader
+  rejects an IR document whose source format is `cim-dist` and reads every
+  other document as before.
+
+## 0.11.5
+
+- Prepare paired releases from reviewed PowerIO and PowerIO.jl commits, with
+  generated version metadata, verified binary hashes, and frozen validation
+  tooling. Activation remains a separate maintainer decision.
+
+- Python adds `BalancedNetwork.n_lines` and `n_substations` alongside the other
+  native table counts. Immutable network handles cache scalar counts for repeated
+  access without rebuilding Python tables.
+
+- The Python extension uses mimalloc for Rust allocations, reducing allocation
+  overhead and memory use when loading and writing large networks. Allocator
+  license notices are included in the wheel.
+
+- CGMES transformer terminals now follow winding numbers when source terminal
+  sequence numbers differ, preserving winding connectivity, taps, and limits
+  through fresh emission. A synthetic unequal-voltage regression covers the
+  reversed ordering found in CIM bench's RealGrid dataset. A stated
+  `sequenceNumber` that differs from the winding's `endNumber` is reported as
+  `READ.CGMES.FIELD_UNMAPPED`, and a terminal that several
+  `PowerTransformerEnd` records of one transformer name is refused, since its
+  winding is ambiguous.
+
+- CGMES fresh emission indexes retained component, terminal, and transformer-end
+  identities once per write, avoiding repeated full-table scans on large grids.
+  Import tracks consumed properties with indexed flags while retaining the same
+  unmapped-field diagnostics.
+
+- Primary files and cumulative referenced-file acquisition now default to
+  1 GiB. `POWERIO_MAX_PRIMARY_BYTES` and `POWERIO_MAX_REFERENCED_BYTES` override
+  those limits; expanded CGMES archives use the latter too. This allows CIM
+  bench's RealGrid profiles to load with defaults. Python adds
+  `BalancedNetwork.component_counts()` and `PioModule.sever_source()` for
+  native counts and fresh emission. Thanks to [Mohamed Numair](https://github.com/MohamedNumair)
+  for the original CGMES implementation and the CIM bench suggestion in #456.
+
+- A single CGMES XML file or archive, from a path or from memory, is held to
+  `POWERIO_MAX_REFERENCED_BYTES`, so a CGMES file above 1 GiB named by path
+  needs both settings raised. This includes a `.xml` profile whose opening
+  16 KiB do not identify it as CGMES.
+
+- CGMES ZIP archives are held to what they declare. An XML entry must inflate
+  to exactly the size its header states; before, an entry that understated its
+  size could expand until the rest of the CGMES byte budget was spent. An
+  archive is refused when the end record the reader uses, or any Zip64 end
+  record, declares more than 4,096 entries, checked before the reader reserves
+  its entry table; when it holds more than eight end records; when two entries
+  share a name or any bytes; or when an entry lies outside the archive's entry
+  data. An invalid
+  `POWERIO_MAX_PRIMARY_BYTES` or `POWERIO_MAX_REFERENCED_BYTES` is now refused
+  before any file or directory is opened.
+
+- Python `parse_display` and the MCP `display` tool remain only for 0.11
+  compatibility and will be removed in 0.12. Read a PowerWorld `.pwd` display
+  with `parse`, which returns a `GeoLayer` with its diagnostics under the input
+  byte limits; `parse_display` reads the whole file without them.
+
+- The MCP server defaults its input byte limits to 256 MiB. When
+  `powerio-mcp` or `python -m powerio.mcp` starts, it sets
+  `POWERIO_MAX_PRIMARY_BYTES` and `POWERIO_MAX_REFERENCED_BYTES` to 256 MiB
+  unless the operator set them; the library defaults stay 1 GiB. Inline
+  `content` and `powerio_ir` arguments above the primary limit are refused
+  before parsing, although the stdio transport still reads and decodes each
+  request whole first. The `display` tool reads only a regular file within
+  that limit where it used to read a file of any size or wait on a named pipe,
+  and the server refuses a directory input once its walk passes the bounds
+  PowerIO's own directory listing keeps: a subdirectory 64 levels down, or
+  more than 4,096 files and subdirectories not yet listed.
+
+- Agents using the MCP server see the reason a tool call was refused. The
+  server raises each refusal as the SDK's `ToolError`, so the message and its
+  diagnostic code reach the client, for example a path outside the allowed
+  roots, an unknown format, or an input over the byte limit; with mcp 2.1 and
+  later the client otherwise receives only `Error executing tool <name>`. A
+  path outside the allowed roots gets the same refusal whether it exists, is
+  missing, or cannot be read, and a refusal states the operating system's
+  reason without the paths it names, which can be a link's target outside
+  the roots. An unknown `scenario_id` lists the scenarios the ScenarioSet
+  holds, and an out of range `time_index` states the valid indices.
+  `pip install 'powerio[mcp]'` installs the NumPy and SciPy that
+  `calc_matrix` needs, and the `about` tool reports the build's feature set
+  under `features`.
+
+- PSS/E RAW strings in double quotes now read as one field. PSS/E accepts
+  either quote character, and revision 35 files double quote the rating set
+  names on the system-wide `RATING` records and the blank `MNAME` that ends
+  each FACTS device record. The reader knew only single quotes, so a double
+  quoted string split at every blank and comma and ended the record at a `/`,
+  and a double quoted name or circuit id on a bus, load, or branch record
+  shifted every later column or failed the read. A field now closes only on
+  the quote character that opened it, so `'12" PIPE'` and `"OWNER'S TIE"`
+  keep the other character as text. The writer replays a retained
+  two-terminal DC tail without quotes, so it now replaces a quote character
+  or `/` in one of its fields with `_` rather than a blank, which split the
+  field and shifted the rest of the record.
+
+- The monitored element reader accepts the contingency file branch spelling.
+  `MONITOR BRANCH FROM BUS i TO BUS j [CIRCUIT c]` (also `LINE`, `CKT`, and
+  bare bus numbers) reads as a one-branch `Branches` statement, and a
+  `MONITOR BRANCHES` or `MONITOR INTERFACE` block reads
+  `[MONITOR] [BRANCH | LINE] FROM BUS i TO BUS j [CIRCUIT c]` lines beside
+  `i j [ckt]`; both were kept as text before. The writer states a one-branch
+  statement as a block, which reads back to the same set. A line naming a
+  third bus, a three winding transformer, stays text, because a monitored
+  branch reference holds two buses.
+
+- PSS/E switched shunt `MODSW` 1 and 2 now read as PSS/E defines them: 1 is
+  discrete and 2 is continuous adjustment of the regulated voltage. The RAW
+  and RAWX readers had the two swapped, so a continuously adjusted shunt, such
+  as 152 of the 153 switched shunts in ACTIVSg2000 (MODSW 2, half of them with
+  a BINIT between block steps), read as `discrete`, a MODSW 1 shunt read as
+  `continuous`, and PSS/E output of a discrete shunt from another format, such
+  as a regulating CGMES or XIIDM shunt compensator, stated MODSW 2. CGMES and
+  XIIDM output of a PSS/E case follow the corrected mode. Codes 3 to 6, which
+  adjust in discrete steps to control a plant, a VSC dc converter, another
+  switched shunt, or a FACTS device, still read as `discrete` and keep their
+  code in the `psse_modsw` extra for PSS/E output. A RAW or RAWX case written
+  back to PSS/E kept its codes before and still does. A PowerIO IR document an
+  earlier release wrote from a PSS/E case carries the swapped mode, so read
+  the case again. The IR 2 schema keeps its published descriptions, which
+  state the old mapping.
+
+- PSS/E and RAWX two winding transformers whose winding 2 ratio `t2` is not
+  one now read with the admittance PSS/E solves with. `t2` is `WINDV2` under
+  `CW` 1, `WINDV2` over the winding 2 bus base kV under `CW` 2, and
+  `WINDV2·NOMV2` over that base under `CW` 3. PSS/E places the series
+  impedance between an ideal `t1 : 1` at winding 1 and an ideal `1 : t2` at
+  winding 2; the neutral branch states one tap `t1 / t2` with the impedance
+  behind it, and the reader divided the ratios without moving the impedance
+  across `t2`, so every such transformer read with an impedance off by `t2²`.
+  The impedance now scales by `t2²` and a winding 1 tap control range divides
+  by `t2`, so the branch's two port admittance equals the PSS/E circuit's, and
+  the branch `r`, `x`, and tap limits of these transformers change. A
+  transformer with `t2 = 1` reads as before. Writing back to PSS/E is
+  consistent: the same format write echoes the source record byte for byte,
+  and fresh output states the canonical `CW = 1` record with winding 2 at one
+  and the scaled impedance, which reads back to the same branch with nothing
+  scaled twice. A PowerIO IR document an earlier release wrote from such a
+  case carries the old impedance, so read the case again.
+
+- CI checks the public Rust API of the seven publishable crates against the
+  newest stable release tag at or below the workspace version with
+  cargo-semver-checks (the Semver workflow, `scripts/check-semver.sh`), so a
+  break meant for 0.12 cannot land in a 0.11 release unnoticed. A pull request
+  that carries such a break is labeled `semver-major`, which keeps the report
+  and turns the failure into a warning.
+
+### Changed results
+
+- Default switch normalization returns `BUILD.SWITCH.CLOSED` if a selected
+  merge is refused, including direct or chained connections between windings
+  of one three winding transformer. It reports the original switch row and
+  endpoints and the count of remaining eligible switches. Explicit `Keep`
+  behavior is unchanged. Switches on isolated or undeclared buses are filtered
+  before merging, with row maps and removed-switch identities composed back
+  to the original input; they no longer cause a dangling-reference panic.
+
+- Closed switches count as connections. `IndexedNetwork::calc_island_labels`,
+  `calc_island_count`, `check_reference_coverage`, `is_radial`, and
+  `calc_connectivity_report`, and `BalancedNetwork::retype_isolated_buses`,
+  join the two buses of a closed switch, so a bus reached only through one is
+  no longer its own island or retyped isolated. Open switches change nothing.
+
+- `to_normalized` and `to_normalized_with_options` merge the buses closed
+  switches join before normalizing, with `BusMergeRule::closed_switches`, and
+  report the merge under `CANONICALIZE.MERGE`. The matrix builders, the DC
+  operators, the DC and AC OPF preparations, and the GridFM export stamp
+  branches only, so on a normalized network they used to leave a closed
+  switch's buses apart without a word, and a bus reached only through one
+  became its own island. A network with no closed switch normalizes exactly
+  as before, and a closed switch on an isolated bus is still dropped with that
+  bus. `ClosedSwitchPolicy::Keep` keeps the switches as data, as before.
+
+- The contingency resolver binds a branch statement that names no line or two
+  winding transformer to a system switching device on the same buses and
+  circuit id, so `OPEN BRANCH FROM BUS i TO BUS j CIRCUIT '@1'` resolves to
+  component type `switch`. `PsseEquipmentIndex` gains `switch_ids` and
+  `switch_rows`, using the RAW writer's switching device id allocation.
+
+- Bus merging preserves the complete equivalent admittance of a finite
+  transformer bypassed by a closed switch or jumper, including off-nominal
+  taps, phase shifts, and tap-scaled terminal charging. `MergedCharging::Drop`
+  drops only terminal charging; the series equivalent remains. Bypassing an
+  ideal transformer with a nonunity tap or phase shift returns an error
+  instead of silently deleting its voltage constraint.
+
+- `reduce_zero_impedance` and `merge_zero_impedance_buses` now run through
+  `merge_buses`, so they are linear rather than quadratic in the bus count and
+  rewrite every element reference: `merge_zero_impedance_buses` used to leave
+  switches, HVDC lines, storage, three winding transformer windings, and
+  control buses on the merged bus. Each keeps the survivor it always kept, the
+  from bus and the smallest id respectively, and the survivor takes the
+  strongest bus kind of its group, as `reduce_zero_impedance` already did;
+  `merge_zero_impedance_buses` promoted only a reference bus, so a PV bus
+  merged into a PQ bus left a generator on a PQ bus. Both remove a branch
+  whose two buses the merge joined through other branches instead of leaving
+  a self loop, report it in `removed_branches`, and fold a removed in-service
+  branch's line charging and line shunts onto the survivor as a fixed shunt
+  instead of dropping them. `merge_zero_impedance_buses` no longer merges
+  across an off-nominal ideal transformer. The
+  `CANONICALIZE.MERGE.ZERO_IMPEDANCE` and
+  `CANONICALIZE.MERGE.ATTRIBUTE_CONFLICT` codes moved to the `powerio-tx`
+  registry; `powerio_prob::diagnostics::codes` keeps both constants.
+
+
+- PSS/E loads read as PSS/E defines them. `YQ` is the reactive power of the
+  constant admittance part at 1 p.u. voltage and is negative for an inductive
+  load, so a load draws `QL + IQ·V − YQ·V²` Mvar. The RAW and RAWX readers
+  added `YQ` instead, so every load with an admittance part read `2·YQ` Mvar
+  off in `Load::q`, and `q_constant_impedance` had the wrong sign. Revision 34
+  and 35 loads also state distributed generation: while `DGENF` is 1, `DGENP`
+  and `DGENQ` serve part of the constant power demand, and the readers now
+  subtract them from `PL` and `QL`. They used to keep them only as extras.
+  `Load::p`, `Load::q`, and the ZIP parts therefore change for any PSS/E load
+  with a nonzero `YQ` or with distributed generation switched on. The writer
+  reverses both, so a RAW or RAWX case written back states its own `PL`, `QL`,
+  `YQ`, `DGENP`, `DGENQ`, and `DGENF`. Revision 33 output, which has no
+  distributed generation columns, states the load net of it and reports that.
+  A PowerIO IR document an earlier release wrote from a PSS/E case carries the
+  old values, so read the case again.
+
+- PSS/E RAW revision 34 node columns now sit where PSS/E 34 writes them.
+  PSS/E 34 appends each node column to the end of its record: the
+  transformer winding `NOD` after `CNXA`, the generator `NREG` after `WPF`,
+  the switched shunt `NREG` after the eighth step pair, and the two-terminal
+  DC converter `NDR`/`NDI` after `XCAPR`. Revision 35 moved each next to the
+  bus it qualifies. The RAW reader and writer used the revision 35 winding
+  layout at revision 34, so on a winding line PSS/E 34 wrote, the reader took
+  `RMA` as the node and read each of `RMA` through `CNXA` from the column
+  after it: each of the 12 transformers in a PSS/E 34.8 export of the 39 bus
+  New England case read wrong ratio and voltage limits and a step count of 0
+  instead of 8, and raised a spurious `READ.PSSE.REFERENCE_DROPPED`. The
+  reader also ignored the revision 34 generator and switched shunt `NREG`,
+  and the revision 34 writer dropped them and left out the system switching
+  device section that PSS/E 34 reads between branch and transformer data.
+  Revision 34 output now writes that section, reports what a switching
+  device record cannot carry as revision 35 output does, and keeps a switched
+  shunt to the eight step pairs that come before `NREG`, reporting the rest.
+  The writer placed the DC converter node column by the length of the
+  retained converter line rather than by its revision, and between `IFR` and
+  `ITR` when it added one, so fresh output that changed revision moved `IFR`,
+  `ITR`, or the node into a neighbouring column, and a revision 33 downgrade
+  could drop `IFR` or `ITR` in place of the node. The reader now keeps a
+  converter line in revision 35 order whatever revision stated it, fills its
+  blank or omitted trailing fields with PSS/E's defaults, and reports a
+  field past its last column. Revision 33 output now reports a switched
+  shunt's dropped `NREG` as it already did a generator's. Revision 35 output
+  is otherwise unchanged.
+  A revision 34 file an earlier PowerIO release wrote states the winding node
+  after `CONT`, so each winding field from `RMA` through `CNXA` now reads from
+  the column before it and nothing is reported: the limits shift, the step
+  count reads the old `VMI`, and `TAB` reads the old `NTP`. Its two-terminal
+  DC converter lines state the node before `ITR` and read shifted too.
+  Convert its source to revision 34 again, and read again a PowerIO IR
+  document an earlier release wrote from a revision 34 DC line (#592).
+
+- A PSS/E two winding transformer's magnetizing admittance now reaches bus I
+  as PSS/E states it. PSS/E connects `MAG1 + jMAG2` from bus I to ground,
+  outside winding 1's ratio, while the neutral branch charging sits inside
+  the tap, `Y_ff = (y_s + y_fr) / tap²`. The RAW and RAWX readers stored the
+  admittance as given, so bus I saw it divided by the square of the tap:
+  5.97 % too much for a tap of 1.02/1.05. The reader now stores the
+  admittance times the square of the tap, and the writer divides it back out
+  and states the shortest decimal that reads back to the same charging, so
+  RAW and RAWX output of a PSS/E case state a `MAG1`/`MAG2` given with up to
+  15 significant digits as the source did; a 16 or 17 digit value can come
+  back as a neighbouring decimal that reads to the same charging.
+  `Branch::b`, the branch charging, the matrices, and every other format's
+  output of a PSS/E transformer with an off nominal tap change accordingly;
+  XIIDM output now carries the magnetizing admittance PowSybl's own PSS/E
+  import gives at the stated tap (PowSybl keeps `g` and `b` at `MAG1`/`MAG2`
+  and applies the square of the ratio through a ratio tap changer step, while
+  PowerIO folds it into `g` and `b`). PSS/E output of a transformer read from
+  another format, such as a MATPOWER branch with a nonzero `BR_B` and an off
+  nominal `TAP`, now states its total charging divided by the square of the
+  tap, which reads back to the same charging. PSS/E has one magnetizing
+  admittance at bus I, so the half of a MATPOWER `BR_B` at the to end still
+  moves to bus I, now divided by the square of the tap as well. A PowerIO IR
+  document an earlier release wrote from a PSS/E case carries the unscaled
+  admittance, so read the case again. A three winding transformer's
+  magnetizing admittance is unchanged (#592).
+
+- Normalization keeps the surviving connection of a three winding transformer
+  when one terminal bus is removed. The removed winding is taken out of
+  service; fewer than two surviving windings still drops the transformer.
+  Newly disabled windings report `CANONICALIZE.NORMALIZE.WINDING_TAKEN_OUT`.
+  This brings forward the focused correction from #596 without its island
+  policy changes.
+
+- PSS/E three winding transformers keep each winding's status and all
+  twelve winding ratings. The three winding `STAT` codes 2, 3, and 4 take only
+  winding 2, 3, or 1 out of service, but the RAW and RAWX readers read every
+  nonzero code as all three windings in service, so a transformer with one
+  winding open still coupled all three buses in `IndexedNetwork`, the Y-bus,
+  and every analysis built on them. The reader now records the status per
+  winding, read through `Transformer3W::winding_in_service`, and the star
+  lowering gives a winding that is out an out of service branch while the
+  other two stay coupled through the star point. Revision 34 and 35 winding
+  lines state RATE1 to RATE12; the reader kept only the first three and the
+  writer wrote zeros for the rest. RATE4 to RATE12 are now read through
+  `Transformer3W::winding_rating_sets`, named as on branches, carry through
+  normalization and the star lowering, and write back. Both are kept in the
+  transformer's `extras` (`winding_in_service` and `winding_rating_sets`),
+  present only when a winding is out or states a rating set, so the PowerIO
+  IR schema and the C ABI winding view are unchanged. The writer states each
+  STAT code back. A transformer in service with two windings out has no code,
+  so it is written as STAT 0 with a diagnostic. PSS/E revision 33, PSLF,
+  XIIDM, and CGMES output report the winding detail they cannot state. A STAT
+  code outside 0 to 4 reads as 1, as before, and is now reported.
+
+### Added
+
+- `BalancedNetwork::to_normalized_with` takes `NormalizeSettings`, the
+  `NormalizeOptions` repairs plus `with_closed_switches`: `ClosedSwitchPolicy`
+  `Merge` (the default), `Refuse`, which fails with `BUILD.SWITCH.CLOSED`, or
+  `Keep`. It returns a `NormalizeReport` beside the normalized network, whose
+  `bus_merge` holds the closed switch merge's bus map, removed switches, and
+  row maps. Python takes
+  `to_normalized(closed_switches="merge"|"refuse"|"keep")`.
+  `IndexedNetwork::closed_switches` lists the closed switches that join two
+  buses, and `check_closed_switches` refuses them with `BUILD.SWITCH.CLOSED`,
+  for a caller that builds matrices from a network it did not normalize.
+
+- `BalancedNetwork::merge_buses` merges the buses that closed switches and
+  zero impedance branches join, under an explicit `BusMergeRule`: closed
+  switches, and branches that are exact zeros (`ZeroImpedanceRule::Exact`),
+  PSS/E zero impedance lines (`PsseThreshold`: non-transformer, `r == 0`,
+  `|x|` at most the threshold; `BusMergeRule::psse` reads the `THRSHZ` the
+  case states), or under an impedance magnitude (`ImpedanceMagnitude`). One
+  union find pass joins the buses. The survivor is the reference bus, else a
+  generator bus, else a regulated bus, smallest id first
+  (`MergeSurvivor::Strongest`; `BusMergeRule::with_survivor` selects
+  `SmallestId` or `FromBus`), and every element reference follows it. The
+  returned `BusMerge` lists the merged buses and their groups, every removed
+  branch and switch with its source row, identity, and ratings, and the source
+  to merged row maps. A removed in-service branch's line charging and line
+  shunts become a fixed shunt at the survivor (`MergedCharging::FoldToShunt`,
+  the default, which reproduces a solved PSS/E case's reactive balance at each
+  merged group), or go with the branch under `MergedCharging::Drop`.
+  Diagnostics under `CANONICALIZE.MERGE.*` report merged buses of different
+  base voltage, branches the merge shorts, and jumpers kept because they would
+  join two windings of one three winding transformer.
+  `BusMerge::calc_removed_flows` recovers the active power on the removed
+  elements from a merged solution: exactly by Kirchhoff's current law where
+  they form a tree, by reactance on a loop, and by minimum norm with a
+  diagnostic on a loop of zero reactance elements. Python has
+  `BalancedNetwork.merge_buses` and `BusMerge`, and `powerio convert`,
+  `summary`, and `verify` take `--merge-buses SPEC`.
+
+
+- `BalancedNetwork::calc_islands` partitions the energized buses into AC
+  islands joined by in-service branches, closed switches, and in-service three
+  winding transformers, each with its buses, reference buses, in-service
+  generators, and HVDC ties to other islands.
+  `assign_island_references(IslandReferencePolicy::PerIsland)` gives every
+  island one reference bus: an island that states none takes its largest
+  `pmax` generator's bus, an island stating several keeps the one with the
+  most generation and demotes the others, and an island no in-service
+  generator supplies is de-energized. Each change is reported under
+  `CANONICALIZE.ISLAND`; an island that only an HVDC line feeds has its own
+  code, `CANONICALIZE.ISLAND.HVDC_FED_DE_ENERGIZED`, naming the lines and the
+  power they scheduled into it. `NormalizeSettings::with_island_references`
+  applies the same rule during `to_normalized_with` and leaves the unsupplied
+  islands out; its default, `Stated`, keeps today's behavior. A three winding
+  transformer joins the buses of its connected windings, so a dead tertiary (a
+  winding on an isolated bus, or one `extras["winding_in_service"]` states
+  out) does not cut an island, and `subset_buses` carves out one island whole,
+  keeping such a transformer with the dead winding's bus as an isolated stub.
+  Python takes `to_normalized(island_references="per_island")`, and
+  `powerio summary` lists the islands under `topology.islands`.
+
+- Normalization reports a PQ bus it retypes PV because it hosts an in-service
+  generator as `CANONICALIZE.NORMALIZE.GENERATOR_BUS_RETYPED`. The retyping
+  itself is unchanged.
+
+## 0.11.4
+
+- Out-of-service loads and shunts no longer count. `IndexedNetwork` folded
+  every load and shunt onto its bus whatever its `in_service` flag, so a PSS/E
+  load or fixed shunt with STATUS 0 still entered `pd`, `qd`, `gs`, and `bs`
+  and, through them, the Y-bus diagonal, the AC power flow Jacobian, the DC
+  and AC OPF preparations, the matrix pipeline's shunt sidecar and injection,
+  and the GridFM bus table. `IndexCore::build` now sums in-service elements
+  only, the rule the power flow instances already applied to loads and
+  generators, and the OPFData residual check does the same. A network whose
+  loads and shunts are all in service builds exactly what it built before.
+
+- Read back multiconductor solutions over more than 65,536 bus terminals.
+  Operating point and solution vectors carry up to 4,194,304 (2^22) entries
+  each, required and optional arrays alike, so a 106,038 terminal
+  `McAcPfSolution` that `serialize` wrote no longer fails `deserialize` with
+  `READ.MODULE.INVALID`. Time series, scenario sets, and three winding
+  transformer power records keep the 65,536 entry bound. Decoding still
+  refuses the first entry past a bound, and `serialize` refuses a longer
+  operating point or solution vector with the new `EMIT.MODULE.RECORD_CAP`
+  error instead of writing a document the reader refuses. The IR version and
+  the schema are unchanged.
+
+- `scripts/check-capi-v7.sh` checks the C entry point names in both
+  directions against a paired PowerIO.jl checkout. Every entry point ABI 7
+  declares must be called by the binding or listed in the binding's
+  `gen/unbound_entry_points.txt` with a reason, and an exemption for a name
+  the header no longer declares or the binding now calls fails as well. A new
+  `pio_*` entry point therefore fails `julia-binding.yml` until the companion
+  branch binds or exempts it, and `release-binaries.yml` runs the same check
+  against PowerIO.jl `main` before it builds a tag.
+
+- The documentation, the release scripts, and the C API reference call the
+  PowerIO IR integer its version rather than a generation: `IR_VERSION` and
+  `IR_MIN_VERSION` name the window a build reads, and a release in a catalog
+  snapshot path names a type catalog of that version. This changelog has an
+  open section again.
+
+- Accept LinDist3Flow conductor cycles and parallel lines while retaining each
+  line's nodal-balance and squared-voltage-drop equations. Meshed instances
+  report that angle and loop-consistency equations are intentionally absent.
+
+- Implement the LinDist3Flow preparation-policy ladder with typed provenance:
+  lower neutral, switch, line-shunt and capacitor data; approximate supported
+  loads and static IBRs; and preserve the source network through IR round trips.
+
+- Add distinct fixed-dispatch LinDist3Flow instance and solution types with a
+  zero objective, monitored rather than enforced line thermal ratings, SI
+  loading reports, and Rust/Python APIs. The IR version stays 2; the schema
+  `pio-ir/2/0.11.4/schema.json` describes the two new structural types.
+
+- Dependencies: thiserror 2.0.21 and rand 0.10.3 in the Rust lockfile, and
+  pandas 3.0.6 and networkx 3.7 in the PowSybl interoperability check, whose
+  pinned runtime versions follow.
+
+C ABI 7 and PowerIO IR version 2 remain unchanged.
+
+## 0.11.3
+
+- Read and write PSS/E contingency description files (`.con`) through
+  `powerio_tx::contingency`. `ContingencySet::parse` states cases, automatic
+  specifications, and `SKIP` rules as typed values and keeps a statement
+  outside the grammar as its trimmed line, reported under `READ.CON.*`;
+  `ContingencySet::to_con` writes the set back, statements the file states
+  after its `END` included.
+- Resolve a contingency set against a network with `ContingencySet::resolve`.
+  Every action either binds to network elements, named by `ComponentId` and
+  table row, or is kept with a structured reason, and an unresolved case is
+  reported as `BUILD.CON.CASE_UNRESOLVED`. `PsseEquipmentIndex` recomputes the
+  PSS/E machine and circuit id of every element with the RAW writer's own
+  allocation, so a statement binds to the element PSS/E would address.
+- Read and write the other two PSS/E contingency analysis files through
+  `powerio_tx::contingency`: `SubsystemSet` for the subsystem description file
+  (`.sub`) and `MonitoredSet` for the monitored element file (`.mon`), reported
+  under `READ.SUB.*` and `READ.MON.*`. A `JOIN` group states its name through
+  `SelectorGroup::join`, which keeps a group with no name apart from the
+  subsystem's implicit group. `Subsystem::select_buses` names the buses of a
+  subsystem in a network, `MonitoredSet::resolve` binds monitored branches,
+  interfaces, and voltage scopes to table rows, with each interface member's
+  orientation against the row it bound to, and `ContingencySet::expand` turns a
+  `.con` file's automatic specifications into explicit cases over those
+  subsystems, reporting one that expands into nothing as
+  `BUILD.CON.SPECIFICATION_EMPTY`. `MonitoredSet::resolve_with` and
+  `ContingencySet::expand_with` read a `PsseEquipmentIndex` built once.
+- Expose the three PSS/E contingency analysis files through the `powerio`
+  facade. A `.con`, `.sub`, or `.mon` file parses to `PioValue::ContingencySet`,
+  `PioValue::SubsystemSet`, or `PioValue::MonitoredSet` by extension or under
+  the tokens `psse-con`, `psse-sub`, and `psse-mon`; `emit` returns the parsed
+  file for a same format write and canonical text otherwise; `serialize` and
+  `deserialize` carry each one. `powerio contingency resolve` reports what a
+  set bound to and `powerio contingency expand` writes the expanded set. IR
+  generation 2 is kept and the additive catalog `pio-ir/2/0.11.3/schema.json`
+  states the three new structural types. A document stating what no reader
+  could have read, from a line number of 0 to a band whose ends run the wrong
+  way round, is refused rather than decoded.
+- Reach the three PSS/E contingency analysis files from Python and C. Python
+  gains the `ContingencySet`, `SubsystemSet`, and `MonitoredSet` value classes,
+  each with a `text` property, and the `BalancedNetwork` methods
+  `resolve_contingencies`, `expand_contingencies`, and
+  `select_subsystem_buses`. Rust gains
+  `ContingencyAction::to_con_statement`, the one line statement a single
+  action writes, which both bindings report for an action that bound to
+  nothing. C ABI 7 gains the additive symbols `pio_value_contingency_set`,
+  `pio_value_subsystem_set`, `pio_value_monitored_set`, which borrow the
+  module value and hold its owner rather than copying the set;
+  `pio_contingency_set_parse`, the set and subsystem accessors, the writers
+  `pio_contingency_set_to_con`, `pio_subsystem_set_to_sub`, and
+  `pio_monitored_set_to_mon`, which return owned text so an expanded set
+  reaches a file from C; and `pio_contingency_set_resolve` with the
+  `PioContingencyResolution` accessors, including
+  `pio_contingency_resolution_case_unresolved_action` for the statement of an
+  action that bound to nothing, and `pio_contingency_set_expand`. Each element
+  a case bound to reports the table its row indexes and the identity the
+  network states for that row, which is optional: C reads the table from
+  `PioContingencyComponentView.id.component_type` and reads a `local_id` of
+  length 0 for a row the network states no identity for, and Python reads the
+  table from `"type"` and `"id": None` for that row.
+  `pio_balanced_network_select_subsystem_buses` returns the buses one named
+  subsystem selects on a network as an owned `PioVector` of bus numbers, and
+  `pio_geo_layer_to_geojson` returns a geographic layer's canonical
+  `.geo.json` document as owned text, so C reaches what Python reaches through
+  `select_subsystem_buses` and `GeoLayer.geojson`. The ABI version is
+  unchanged.
+- Report the canonical structural name of a module's value from Python as
+  `PioModule.type_name`. The string is the one the C ABI and PowerIO IR use,
+  so a caller states the type in a message or a machine-readable result
+  without reading a private attribute.
+- Build JSON-ready diagnostic records from Python with
+  `powerio.diagnostic_record` and `powerio.diagnostic_records`. Each record
+  keeps `code`, `severity`, `message`, and `target`, and adds `id`,
+  `suggested_action`, `related`, `details`, and `spans` when the diagnostic
+  carries them. The MCP server reports its diagnostics through them.
+- Update dependencies to their current majors: arrow and parquet to 60,
+  criterion to 0.8, jsonschema to 0.56, rand and rand_chacha to 0.10, and sha2
+  to 0.11, with the rest of the lockfile refreshed. Public APIs are unchanged.
+- Fail CI on a RUSTSEC advisory against the dependency graph. `deny.toml`
+  records the single accepted finding.
+
+C ABI 7 and PowerIO IR generation 2 remain unchanged.
+
+## 0.11.2
+
+- Maintenance updates and regression coverage.
+- With neither `POWERIO_MCP_ALLOWED_ROOTS` nor the compatibility variables
+  `POWERIO_MCP_ROOT` and `POWERIO_MCP_ALLOWED_ROOT` set, the MCP path policy
+  confines reads and writes to the directory captured when the server
+  initializes. Earlier releases allowed every path. `allowed_roots()` returns
+  that directory, `admitting_root()` always returns a root, a variable that
+  names no directory raises `PathNotAllowed`, and a relative path resolves
+  against the working directory.
+- Bundle the supported BMOPF schema snapshots, license, and provenance with
+  the Rust, Python, and native-library distributions. Fresh output references
+  PowerIO's archived schema bytes independently of upstream review branches.
+- Preserve the historical v0.1.0 baseline and mark v0.2.0 as a proposal.
+  Supporting a profile does not establish Task Force acceptance.
+
+C ABI 7 and PowerIO IR generation 2 remain unchanged.
 
 ## 0.11.1
 

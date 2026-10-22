@@ -100,7 +100,7 @@ fn activsg200_values_survive_tokenizing() {
 fn activsg200_echo_is_byte_exact() {
     let parsed = parse_file(fixture("ACTIVSg200.aux"), None).unwrap();
     let echo = parsed.emit(TargetFormat::PowerWorld).unwrap();
-    assert!(echo.diagnostics.is_empty());
+    assert_eq!(echo.diagnostics, [] as [powerio_core::Diagnostic; 0]);
     assert_eq!(echo.text, activsg200());
 }
 

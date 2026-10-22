@@ -7,6 +7,11 @@ name: Julia binding
 # POWERIO_JL_REPO_TOKEN secret. With neither, the job prints a skip notice and
 # passes, so missing external access never blocks a PR.
 #
+# Explicit fork companions: PRs may pin a reviewed commit in
+# .github/powerio-jl-companion.json. This takes precedence over branch discovery,
+# is inherited through the stack, and is ignored on pushes to main. Fork checkout
+# uses only the read-only workflow token and never persists credentials.
+#
 # Companion branches: a PR that moves the shared surface (JSON shapes, schema
 # versions, pio_* behavior) pushes a PowerIO.jl branch with the SAME name; this
 # job tests against that branch when it exists, then against the companion of
@@ -22,10 +27,10 @@ name: Julia binding
 on:
   push:
     branches: [ "main" ]
-    paths: [ "powerio/**", "powerio-core/**", "powerio-tx/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml" ]
+    paths: [ "Cargo.toml", "Cargo.lock", "powerio/**", "powerio-core/**", "powerio-sincal/**", "powerio-tx/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml", ".github/powerio-jl-companion.json", "scripts/*julia-companion.py" ]
   # No branch filter: stacked PRs must run this too (see rust.yml).
   pull_request:
-    paths: [ "powerio/**", "powerio-core/**", "powerio-tx/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml" ]
+    paths: [ "Cargo.toml", "Cargo.lock", "powerio/**", "powerio-core/**", "powerio-sincal/**", "powerio-tx/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml", ".github/powerio-jl-companion.json", "scripts/*julia-companion.py" ]
 
 # One run per workflow per branch. A force push to a stacked pull request
 # otherwise leaves the superseded run going: it finishes, it fails or it
@@ -48,6 +53,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  JULIA_NUM_THREADS: "4"
+  POWERIO_REQUIRE_LIBRARY: "1"
 
 jobs:
   compatibility:
@@ -67,15 +74,15 @@ jobs:
           echo "available=false" >> "$GITHUB_OUTPUT"
           echo "eigenergy/PowerIO.jl is unreachable (no POWERIO_JL_REPO_TOKEN secret, and the repo is not public); skipping the compatibility test."
         fi
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       if: steps.powerio-jl.outputs.available == 'true'
       with:
         # Full history: the companion step below asks whether a branch tip is
         # already in this head, and a shallow clone cannot answer that.
         fetch-depth: 0
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       if: steps.powerio-jl.outputs.available == 'true'
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       if: steps.powerio-jl.outputs.available == 'true'
     - name: Build powerio-capi
       if: steps.powerio-jl.outputs.available == 'true'
@@ -84,9 +91,17 @@ jobs:
       # surface bind against real symbols rather than skipping behind feature
       # probes.
       run: cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
+    - name: Read pinned PowerIO.jl companion
+      id: powerio-jl-pin
+      if: steps.powerio-jl.outputs.available == 'true'
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+      run: |
+        python3 scripts/test-julia-companion.py
+        python3 scripts/julia-companion.py "$EVENT_NAME" .github/powerio-jl-companion.json >> "$GITHUB_OUTPUT"
     - name: Resolve PowerIO.jl companion branch
       id: powerio-jl-ref
-      if: steps.powerio-jl.outputs.available == 'true'
+      if: steps.powerio-jl.outputs.available == 'true' && steps.powerio-jl-pin.outputs.enabled != 'true'
       env:
         BRANCH: ${{ github.head_ref || github.ref_name }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -159,22 +174,25 @@ jobs:
         fi
     - name: Check out PowerIO.jl
       if: steps.powerio-jl.outputs.available == 'true'
-      uses: actions/checkout@v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
-        repository: eigenergy/PowerIO.jl
+        repository: ${{ steps.powerio-jl-pin.outputs.repository || 'eigenergy/PowerIO.jl' }}
         path: PowerIO.jl
-        ref: ${{ steps.powerio-jl-ref.outputs.ref }}
-        # Falls back to the workflow token, which suffices once the repo is public.
-        token: ${{ secrets.POWERIO_JL_REPO_TOKEN || github.token }}
-    - uses: julia-actions/setup-julia@v3
+        ref: ${{ steps.powerio-jl-pin.outputs.ref || steps.powerio-jl-ref.outputs.ref }}
+        # Never send the upstream repository secret to a fork.
+        token: ${{ steps.powerio-jl-pin.outputs.enabled == 'true' && github.token || secrets.POWERIO_JL_REPO_TOKEN || github.token }}
+        persist-credentials: false
+    - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
       if: steps.powerio-jl.outputs.available == 'true'
       with:
         version: '1'
-    - uses: julia-actions/cache@v3
+    - uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8 # v3.3.0
       if: steps.powerio-jl.outputs.available == 'true'
-    # Every pio_* entry point named by the paired binding must be declared by
-    # ABI 7.
-    - name: ABI 7 companion coverage
+    # The entry point names in both directions: every pio_* the companion binding
+    # calls is declared by ABI 7, and every entry point ABI 7 declares is
+    # either called by the binding or listed in its
+    # gen/unbound_entry_points.txt with a reason.
+    - name: ABI 7 companion coverage in both directions
       if: steps.powerio-jl.outputs.available == 'true'
       run: POWERIO_JL=PowerIO.jl bash scripts/check-capi-v7.sh
     # The Julia column of the language guide and the Julia diagnostic
@@ -186,11 +204,13 @@ jobs:
         POWERIO_JL=PowerIO.jl python3 scripts/check-doc-symbols.py
         POWERIO_JL=PowerIO.jl bash scripts/check-diagnostic-parity.sh
     # PowerIO.jl's ccall tests skip themselves when the cdylib is absent.
-    # POWERIO_CAPI points them at the library just built.
+    # POWERIO_CAPI points them at the library just built, and POWERIO_HEADER at
+    # this commit's header, which its own entry point coverage test reads.
     - name: Test PowerIO.jl against the built library
       if: steps.powerio-jl.outputs.available == 'true'
       env:
         POWERIO_CAPI: ${{ github.workspace }}/target/release/libpowerio_capi.so
+        POWERIO_HEADER: ${{ github.workspace }}/powerio-capi/include/powerio.h
       run: julia --project=PowerIO.jl -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
     - name: Probe PowerIO.jl against a library without prob
       if: steps.powerio-jl.outputs.available == 'true'

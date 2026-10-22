@@ -20,6 +20,24 @@ pub use powerio_core::{
 
 pub mod codes {
     powerio_core::diagnostic_codes! {
+        PARSE_SINCAL_MULTICONDUCTOR = "PARSE.DIST.SINCAL", Error,
+            "the selected conductor-resolved SINCAL profile cannot be parsed", category = Parse;
+        READ_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_ONLY = "READ.DIST.SINCAL_RETAINED_SOURCE_ONLY", Remark,
+            "native data outside the selected conductor-resolved profile remain only in source";
+        READ_SINCAL_GEOMETRY = "READ.DIST.SINCAL_GEOMETRY", Warning,
+            "optional SINCAL drawing geometry retains native view metadata and reports mapping limits";
+        READ_SINCAL_UNCONNECTED_NODES = "READ.DIST.SINCAL_UNCONNECTED_NODES", Remark,
+            "native nodes with no declared conductors remain in network extras";
+        READ_SINCAL_ASSUMED_INACTIVE_SOURCE_CONTROLS = "READ.DIST.SINCAL_ASSUMED_INACTIVE_SOURCE_CONTROLS", Warning,
+            "legacy NULL source controls were explicitly assumed inactive";
+        EMIT_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_OMITTED = "EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED", Warning,
+            "native SINCAL source-only data are omitted from cross-format emission";
+        EMIT_SINCAL_MULTICONDUCTOR_UNSUPPORTED = "EMIT.DIST.SINCAL_UNSUPPORTED", Error,
+            "invalid or unsupported candidate multiconductor SINCAL output", category = Output;
+        EMIT_SINCAL_MULTICONDUCTOR_EXPERIMENTAL = "EMIT.DIST.SINCAL_EXPERIMENTAL", Remark,
+            "candidate multiconductor output has no native SINCAL acceptance evidence";
+        EMIT_SINCAL_MULTICONDUCTOR_LOSS = "EMIT.DIST.SINCAL_LOSS", Warning,
+            "candidate multiconductor output canonicalizes topology or omits ancillary data";
         // PARSE: the source text could not be decoded as given.
         PARSE_DSS_SOURCE_MALFORMED = "PARSE.DSS.SOURCE_MALFORMED", Warning,
             "a dss command, object spec, or property assignment does not parse";
@@ -63,6 +81,9 @@ pub mod codes {
             "line geometry remains source data without calculated conductor impedances";
         BUILD_DIST_ELECTRICAL_INCOMPLETE = "BUILD.DIST.ELECTRICAL_INCOMPLETE", Error,
             "distribution equipment lacks the electrical data required for numerical use", category = Data;
+        TRANSFORM_DIST_LINDIST3FLOW_PREPARATION_FAILED =
+            "TRANSFORM.DIST.LINDIST3FLOW_PREPARATION_FAILED", Error,
+            "a distribution component cannot be prepared for LinDist3Flow", category = Data;
         READ_DSS_LINECODE_UNKNOWN = "READ.DSS.LINECODE_UNKNOWN", Warning,
             "a line names a linecode the case does not declare";
 
@@ -123,6 +144,8 @@ pub mod codes {
             "a BMOPF field with no canonical home was dropped";
         READ_BMOPF_RECORD_DROPPED = "READ.BMOPF.RECORD_DROPPED", Warning,
             "a BMOPF object or winding beyond the modeled set was dropped";
+        READ_BMOPF_CAPACITOR_LOWERED = "READ.BMOPF.CAPACITOR_LOWERED", Remark,
+            "a per-coil capacitor was represented exactly by a terminal shunt";
         READ_BMOPF_VALUE_COLLAPSED = "READ.BMOPF.VALUE_COLLAPSED", Warning,
             "a per phase or per terminal BMOPF value was collapsed to one entry";
         READ_BMOPF_TRANSFORMER_OPEN_DELTA_SPLIT = "READ.BMOPF.TRANSFORMER_OPEN_DELTA_SPLIT", Warning,
@@ -217,6 +240,47 @@ pub mod codes {
             Warning, "a transformer's winding count was clamped to what BMOPF carries";
         EMIT_BMOPF_TRANSFORMER_WYE_WYE_DECOMPOSED = "EMIT.BMOPF.TRANSFORMER_WYE_WYE_DECOMPOSED",
             Warning, "a wye-wye transformer was decomposed into BMOPF pairs";
+
+        // READ.CIM_DIST: distribution CIM decoded, but not representable in
+        // the multiconductor model.
+        READ_CIM_DIST_CLASS_UNMAPPED = "READ.CIM_DIST.CLASS_UNMAPPED", Warning,
+            "objects of a CIM class the distribution mapping does not read were not carried";
+        READ_CIM_DIST_CONTEXT_UNMAPPED = "READ.CIM_DIST.CONTEXT_UNMAPPED", Remark,
+            "containment, naming, or base voltage context the model has no field for was not carried";
+        READ_CIM_DIST_FIELD_UNMAPPED = "READ.CIM_DIST.FIELD_UNMAPPED", Warning,
+            "a property of a mapped CIM object has no model field and was not carried";
+        READ_CIM_DIST_RECORD_DROPPED = "READ.CIM_DIST.RECORD_DROPPED", Warning,
+            "a CIM equipment record could not be mapped and was dropped";
+        READ_CIM_DIST_VALUE_DEFAULTED = "READ.CIM_DIST.VALUE_DEFAULTED", Warning,
+            "a value the model needs was absent or unusable and was defaulted";
+        READ_CIM_DIST_VALUE_UNSUPPORTED = "READ.CIM_DIST.VALUE_UNSUPPORTED", Warning,
+            "a CIM value outside the mapped set was read as the nearest one";
+        READ_CIM_DIST_VALUE_COLLAPSED = "READ.CIM_DIST.VALUE_COLLAPSED", Warning,
+            "CIM structure was reduced to what one model field can carry";
+        READ_CIM_DIST_VALUE_CONFLICT = "READ.CIM_DIST.VALUE_CONFLICT", Warning,
+            "two statements of one CIM property disagree and the first was kept";
+        READ_CIM_DIST_REFERENCE_DROPPED = "READ.CIM_DIST.REFERENCE_DROPPED", Warning,
+            "a CIM reference names an object the document set does not define";
+        READ_CIM_DIST_IDENTIFIER_SUBSTITUTED = "READ.CIM_DIST.IDENTIFIER_SUBSTITUTED", Warning,
+            "a CIM name that is empty or repeats another was replaced by the object's mRID";
+        /// A segment states no impedance (no `PerLengthImpedance` and no
+        /// series values), typically because it is described by wire
+        /// geometry, which the reader does not calculate. Severity `Error`:
+        /// the parse continued, but the segment has no series impedance.
+        READ_CIM_DIST_IMPEDANCE_UNRESOLVED = "READ.CIM_DIST.IMPEDANCE_UNRESOLVED", Error,
+            "a line segment states no impedance the reader can carry";
+
+        // EMIT.CIM_DIST: what the distribution CIM writer cannot state.
+        EMIT_CIM_DIST_FIELD_DROPPED = "EMIT.CIM_DIST.FIELD_DROPPED", Warning,
+            "a field distribution CIM has no property for was dropped";
+        EMIT_CIM_DIST_RECORD_DROPPED = "EMIT.CIM_DIST.RECORD_DROPPED", Warning,
+            "an element the distribution CIM writer does not emit was dropped";
+        EMIT_CIM_DIST_EXTRAS_DROPPED = "EMIT.CIM_DIST.EXTRAS_DROPPED", Warning,
+            "a passthrough extra with no distribution CIM property was dropped";
+        EMIT_CIM_DIST_VALUE_COLLAPSED = "EMIT.CIM_DIST.VALUE_COLLAPSED", Warning,
+            "structure was reduced to what one CIM property can carry";
+        EMIT_CIM_DIST_VALUE_SUBSTITUTED = "EMIT.CIM_DIST.VALUE_SUBSTITUTED", Warning,
+            "an identifier or value was replaced by one distribution CIM can state";
 
         // The multiconductor model itself.
         READ_MULTICONDUCTOR_VALUE_DEFAULTED = "READ.MULTICONDUCTOR.VALUE_DEFAULTED", Warning,

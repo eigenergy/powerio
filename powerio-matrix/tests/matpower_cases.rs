@@ -117,6 +117,43 @@ fn ybus_split_matches_complex_invariants() {
 }
 
 #[test]
+fn ybus_leaves_out_an_out_of_service_shunt() {
+    // A shunt switched out (PSS/E STATUS 0) keeps its record but adds no
+    // admittance. case30 has bus shunts, so taking one out of service must
+    // lower that bus's diagonal by exactly its admittance and leave every
+    // other entry alone.
+    let net = parse_matpower_file(fixture("case30.m")).unwrap();
+    let mut off = net.clone();
+    let shunt = off
+        .shunts_mut()
+        .iter_mut()
+        .find(|s| s.b != 0.0)
+        .expect("case30 has a bus shunt");
+    shunt.in_service = false;
+    let (g, b, bus) = (shunt.g, shunt.b, shunt.bus);
+    let opts = BuildOptions::default();
+    let view = IndexedNetwork::new(&net);
+    let k = view.bus_index(bus).unwrap();
+    let base = view.per_unit_base();
+    let on = calc_admittance_matrix(&view, &opts).unwrap();
+    let out = calc_admittance_matrix(&IndexedNetwork::new(&off), &opts).unwrap();
+    let (g_on, g_out) = (on.g.to_dense(), out.g.to_dense());
+    let (b_on, b_out) = (on.b.to_dense(), out.b.to_dense());
+    let n = net.buses().len();
+    for i in 0..n {
+        for j in 0..n {
+            let (dg, db) = if i == k && j == k {
+                (g / base, b / base)
+            } else {
+                (0.0, 0.0)
+            };
+            assert!((g_on[[i, j]] - g_out[[i, j]] - dg).abs() < 1e-12);
+            assert!((b_on[[i, j]] - b_out[[i, j]] - db).abs() < 1e-12);
+        }
+    }
+}
+
+#[test]
 fn ybus_invariant_to_normalization_on_case30() {
     // The per-unit Y_bus is identical whether built from the raw case or its
     // normalized (already per-unit) form: per_unit_base() is 1.0 for a normalized

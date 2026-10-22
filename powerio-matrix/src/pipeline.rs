@@ -485,7 +485,7 @@ mod tests {
         let base = tempfile::tempdir().unwrap();
         let fresh = base.path().join("matrices");
         let outputs = pipeline.run(&net, &fresh).unwrap();
-        assert!(!outputs.files.is_empty());
+        assert_ne!(outputs.files, [] as [std::path::PathBuf; 0]);
         for file in &outputs.files {
             assert!(file.is_file(), "{file:?}");
         }
@@ -570,7 +570,7 @@ mod tests {
                 2,
                 "{name:?} -> {stem:?} escaped out_dir as {joined:?}"
             );
-            assert!(!stem.is_empty());
+            assert_ne!(stem, "");
             assert!(stem != "." && stem != "..");
         }
     }

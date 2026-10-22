@@ -42,7 +42,7 @@ fn aux_text_preserves_empty_and_malformed_results() {
         "DATA (Substation, [SubNum, Latitude, Longitude])\n{\n7 nan -80\n}\n",
     )
     .unwrap();
-    assert!(empty.features.is_empty());
+    assert_eq!(empty.features, [] as [powerio::GeoFeature; 0]);
 
     let error = powerio::to_geo_layer_from_aux_text(
         "DATA (Substation, [SubNum, Latitude, Longitude])\n{\n7 34 -80 99\n}\n",
@@ -96,7 +96,7 @@ fn a_display_file_parses_serializes_and_emits_as_a_layer() {
     let powerio::PioValue::GeoLayer(layer) = &module.value() else {
         panic!("a .pwd reads as a layer");
     };
-    assert!(!layer.features.is_empty());
+    assert_ne!(layer.features, [] as [powerio::GeoFeature; 0]);
     assert!(matches!(
         layer.space,
         CoordinateSpace::Diagram { canvas: Some(_) }

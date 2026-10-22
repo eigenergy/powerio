@@ -60,7 +60,15 @@ pub fn grid_formats() -> impl Iterator<Item = GridFormatInfo> {
             true,
         ),
         ("goc3-json", "GO Challenge 3", Transmission, true),
+        ("sincal-balanced", "SINCAL balanced", Transmission, true),
+        (
+            "sincal-multiconductor",
+            "SINCAL multiconductor",
+            Distribution,
+            true,
+        ),
         ("dss", "OpenDSS", Distribution, true),
+        ("cim-dist", "CIM distribution", Distribution, true),
         ("pmd-json", "PMD JSON", Distribution, true),
         (
             "bmopf-json",
@@ -127,12 +135,21 @@ const fn info(
 
 /// Resolve a format token or common alias to facade owned metadata.
 ///
-/// This includes transmission and distribution grid exchange formats and the
-/// standalone geographic layer document. PowerIO IR is not a grid exchange
-/// format and therefore is not returned here.
+/// This includes transmission and distribution grid exchange formats, the
+/// standalone geographic layer document, and the three PSS/E contingency
+/// analysis files. PowerIO IR is not a grid exchange format and therefore is
+/// not returned here.
 ///
 #[must_use]
 pub fn resolve_format(name: &str) -> Option<FormatInfo> {
+    if name.eq_ignore_ascii_case("sincal") {
+        return Some(info("sincal", Some("sinx"), false, false));
+    }
+    if powerio_tx::format::routing::parse_distribution_format(name)
+        == Some(powerio_tx::format::routing::DistributionFormat::SincalMulticonductor)
+    {
+        return Some(info("sincal-multiconductor", Some("sinx"), false, false));
+    }
     match name {
         "bmopf-json@0.1.0" => return Some(info("bmopf-json@0.1.0", Some("json"), false, true)),
         "bmopf-json@0.2.0" => return Some(info("bmopf-json@0.2.0", Some("json"), false, true)),
@@ -150,6 +167,9 @@ pub fn resolve_format(name: &str) -> Option<FormatInfo> {
     if crate::is_pwd_display_token(name) {
         return Some(info("powerworld-pwd", Some("pwd"), false, false));
     }
+    if let Some(kind) = crate::contingency_file_of_token(name) {
+        return Some(info(kind.token(), Some(kind.extension()), false, true));
+    }
     if let Some(format) = powerio_tx::format::parse_target_format(name) {
         let is_cgmes = format == powerio_tx::TargetFormat::Cgmes;
         return Some(info(
@@ -165,11 +185,15 @@ pub fn resolve_format(name: &str) -> Option<FormatInfo> {
             "dss" => info("dss", Some("dss"), true, true),
             "pmd-json" => info("pmd-json", Some("json"), false, true),
             "bmopf-json" => info("bmopf-json", Some("json"), false, true),
+            "cim-dist" => info("cim-dist", Some("xml"), false, true),
             _ => return None,
         });
     }
 
     match powerio_tx::format::routing::parse_transmission_format(name) {
+        Some(TransmissionFormat::SincalBalanced) => {
+            Some(info("sincal-balanced", Some("sinx"), false, false))
+        }
         Some(TransmissionFormat::PypsaCsv) => Some(info("pypsa-csv", None, true, true)),
         Some(TransmissionFormat::Pwb) => Some(info("pwb", Some("pwb"), false, false)),
         Some(TransmissionFormat::Gridfm) => Some(info("gridfm", None, true, true)),
@@ -196,6 +220,9 @@ mod tests {
         assert_eq!(resolve_format("iidm"), None);
         assert_eq!(resolve_format("rawx"), None);
         assert_eq!(resolve_format("psse-rawx").unwrap().token, "psse-rawx");
+        assert_eq!(resolve_format("con"), resolve_format("PSSE_CON"));
+        assert_eq!(resolve_format("subsystem").unwrap().token, "psse-sub");
+        assert_eq!(resolve_format("mon").unwrap().extension, Some("mon"));
     }
 
     #[test]

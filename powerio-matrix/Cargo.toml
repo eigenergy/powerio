@@ -38,18 +38,18 @@ serde.workspace = true
 serde_json.workspace = true
 # Deterministic seeded generation only: default features off keeps the OS
 # randomness backend out, so the crate builds on wasm32 targets.
-rand = { version = "0.9", default-features = false, features = ["std"] }
-rand_chacha = { version = "0.9", default-features = false, features = ["std"] }
-sha2 = "0.10"
+rand = { version = "0.10", default-features = false, features = ["std"] }
+rand_chacha = { version = "0.10", default-features = false, features = ["std"] }
+sha2 = "0.11"
 rustc-hash = "2"
 # arrow and parquet release in lockstep and share `RecordBatch`; keep both on the
 # same major. `snap` matches the Snappy compression pandas/datakit write by default.
 arrow = { workspace = true, optional = true }
-parquet = { version = "59", default-features = false, features = ["arrow", "snap"], optional = true }
+parquet = { version = "60", default-features = false, features = ["arrow", "snap"], optional = true }
 
 [dev-dependencies]
 approx = "0.5"
-criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 powerio-dist.workspace = true
 tempfile = "3"
 

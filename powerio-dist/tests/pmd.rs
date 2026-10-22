@@ -1009,7 +1009,7 @@ fn a_two_megabyte_dss_case_writes_pmd_json_within_a_time_budget() {
         elapsed < std::time::Duration::from_secs(8),
         "writing a {n}-line, {n}-load network took {elapsed:?}"
     );
-    assert!(!out.text.is_empty());
+    assert_ne!(out.text, "");
 }
 
 #[test]

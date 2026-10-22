@@ -7989,6 +7989,8 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
     for message in converter_model_losses {
         diagnostics.push(&codes::EMIT_XIIDM.field_dropped, message);
     }
+    super::warn_winding_rating_sets(&codes::EMIT_XIIDM, "XIIDM", network, &mut diagnostics);
+    super::warn_winding_status_collapsed(&codes::EMIT_XIIDM, "XIIDM", network, &mut diagnostics);
     validate_xiidm_hvdc_emission(network)?;
     let metadata = network.case_metadata();
     let case_date = metadata.case_date.as_deref().unwrap_or_else(|| {
@@ -14809,7 +14811,7 @@ mod tests {
         let source =
             powerio_core::Source::from_memory("empty.xiidm", source.as_bytes().to_vec()).unwrap();
         let module = crate::format::parse(source).unwrap();
-        assert!(module.value().buses().is_empty());
+        assert_eq!(module.value().buses().as_slice(), []);
         assert_eq!(
             module
                 .value()
@@ -15090,13 +15092,14 @@ mod tests {
                 && diagnostic.message().contains("hierarchy was derived")
         }));
         let reparsed = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
-        assert!(
-            !reparsed
+        assert_ne!(
+            reparsed
                 .detailed_connectivity()
                 .as_ref()
                 .unwrap()
                 .voltage_levels
-                .is_empty()
+                .as_slice(),
+            []
         );
     }
 
@@ -15393,7 +15396,7 @@ mod tests {
   <iidm:dcLine id="L" dcNode1="N1" dcNode2="N2" r="4" connected1="true" connected2="true" dcP1="100" dcI1="200" dcP2="-98" dcI2="-195"/>
 </iidm:network>"#;
         let network = parse_xiidm_source(source, &mut Diagnostics::new()).unwrap();
-        assert!(network.buses().is_empty());
+        assert_eq!(network.buses().as_slice(), []);
         let detailed = network.detailed_connectivity().as_ref().unwrap();
         assert_eq!(detailed.dc_nodes.len(), 2);
         assert_eq!(detailed.dc_grounds.len(), 1);
@@ -15410,7 +15413,7 @@ mod tests {
         assert_eq!(metadata.properties["owner"], "RTE");
 
         let restored = crate::network::serde_round_trip(&network);
-        assert!(restored.buses().is_empty());
+        assert_eq!(restored.buses().as_slice(), []);
         assert_eq!(
             restored.detailed_connectivity().as_ref().unwrap().dc_nodes,
             detailed.dc_nodes

@@ -172,7 +172,7 @@ fn canonical_api_names_parse_and_convert() {
 
     let same = parse_file_and_emit(&path, TargetFormat::Matpower, None).unwrap();
     assert_eq!(same.text, src);
-    assert!(same.render_diagnostics().is_empty());
+    assert_eq!(same.render_diagnostics(), [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -982,11 +982,13 @@ Q
     else {
         panic!("PSS/E ZIP load pieces were not typed");
     };
-    close(*p_constant_power, 10.0);
+    // DGENF 1 nets DGENP 4 and DGENQ 2 out of PL and QL, and YQ 1.5 is
+    // capacitive: P = 10 - 4 + 1 + 2 and Q = 3 - 2 + 0.5 - 1.5.
+    close(*p_constant_power, 6.0);
     close(*q_constant_current, 0.5);
     close(*p_constant_impedance, 2.0);
-    close(net.loads()[0].p, 13.0);
-    close(net.loads()[0].q, 5.0);
+    close(net.loads()[0].p, 9.0);
+    close(net.loads()[0].q, 0.0);
 }
 
 #[test]
@@ -1561,7 +1563,7 @@ fn readers_reject_malformed_input() {
 fn matpower_target_round_trips() {
     let parsed = parse_file(data("case14.m"), Some("matpower")).unwrap();
     let conv = parsed.emit(TargetFormat::Matpower).unwrap();
-    assert!(conv.render_diagnostics().is_empty());
+    assert_eq!(conv.render_diagnostics(), [] as [std::string::String; 0]);
     // The matpower target of an unchanged parsed module is the lossless
     // echo: byte-identical to the source.
     let src = std::fs::read_to_string(data("case14.m")).unwrap();
@@ -2011,11 +2013,11 @@ fn parse_and_emit_diagnostics_stay_in_their_own_channels() {
     );
 
     // A total reader yields no warnings.
-    assert!(
+    assert_eq!(
         parse_file(data("case9.m"), None)
             .unwrap()
-            .render_diagnostics()
-            .is_empty()
+            .render_diagnostics(),
+        [] as [std::string::String; 0]
     );
 
     // Parse findings stay on the module. Emission reports only fidelity
@@ -2031,7 +2033,7 @@ fn parse_and_emit_diagnostics_stay_in_their_own_channels() {
         "{:?}",
         conv.render_diagnostics()
     );
-    assert!(!conv.render_diagnostics().is_empty());
+    assert_ne!(conv.render_diagnostics(), [] as [std::string::String; 0]);
 
     // A same format echo reproduces the source bytes and has no emission
     // findings; the module still owns its parse findings.

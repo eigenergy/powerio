@@ -27,10 +27,12 @@ mod read;
 mod write;
 mod xml;
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::io::{Cursor, Read};
 use std::path::{Component, Path};
 
+use memchr::memmem;
 use powerio_core::{ArtifactPath, DiagnosticInfo, MemoryArtifact, Source};
 
 use crate::diagnostics::{Diagnostics, codes};
@@ -38,8 +40,12 @@ use crate::network::BalancedNetwork;
 use crate::{Error, Result};
 
 const MAX_FILES: usize = 4_096;
-const MAX_BYTES: u64 = 64 << 20;
+/// Fixed bomb guard on each archive entry's declared expansion; the inflated
+/// stream is then held to the declared size. Real CGMES profiles compress
+/// between 4.6:1 and 28:1.
 const MAX_COMPRESSION_RATIO: u64 = 200;
+/// The variable that sets the expansion budget, named in size refusals.
+const ACQUISITION_LIMIT_VARIABLE: &str = "POWERIO_MAX_REFERENCED_BYTES";
 /// The modeling authority set fresh CGMES output states. A header carrying it
 /// was synthesized by this writer, so its identity, version, creation time,
 /// and profile dependencies state nothing a source document stated.
@@ -172,7 +178,7 @@ pub(crate) fn parse_text(
     text: &str,
     diagnostics: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    reject_unsafe_xml(text.as_bytes())?;
+    reject_unsafe_xml(text)?;
     read_documents(
         vec![(name.to_string(), text.to_string())],
         None,
@@ -181,6 +187,30 @@ pub(crate) fn parse_text(
 }
 
 fn acquire_documents(source: &Source) -> Result<Vec<(String, String)>> {
+    let max_bytes = source
+        .acquisition_byte_limit()
+        .map_err(|error| source_error(&error))?;
+    acquire_documents_with_limit(source, max_bytes)
+}
+
+/// Hold one CGMES document the content sniff did not recognise, which the
+/// text reader passes to [`parse_text`], to the byte limit every other CGMES
+/// route counts in [`push_xml`].
+pub(crate) fn check_text_budget(source: &Source, text: &str) -> Result<()> {
+    let max_bytes = source
+        .acquisition_byte_limit()
+        .map_err(|error| source_error(&error))?;
+    let size = text.len() as u64;
+    if size > max_bytes {
+        return Err(format_error(format!(
+            "CGMES profile data would reach {size} bytes with {}, above the {max_bytes} byte input limit set by {ACQUISITION_LIMIT_VARIABLE}",
+            source.name()
+        )));
+    }
+    Ok(())
+}
+
+fn acquire_documents_with_limit(source: &Source, max_bytes: u64) -> Result<Vec<(String, String)>> {
     let mut documents = Vec::new();
     let mut names = BTreeSet::new();
     let mut total = 0_u64;
@@ -196,6 +226,7 @@ fn acquire_documents(source: &Source) -> Result<Vec<(String, String)>> {
                         &mut documents,
                         &mut names,
                         &mut total,
+                        max_bytes,
                     )?;
                 }
                 Some("zip") => {
@@ -206,6 +237,7 @@ fn acquire_documents(source: &Source) -> Result<Vec<(String, String)>> {
                         &mut documents,
                         &mut names,
                         &mut total,
+                        max_bytes,
                     )?;
                 }
                 _ => {}
@@ -224,6 +256,7 @@ fn acquire_documents(source: &Source) -> Result<Vec<(String, String)>> {
                 &mut documents,
                 &mut names,
                 &mut total,
+                max_bytes,
             )?;
         } else {
             push_xml(
@@ -233,6 +266,7 @@ fn acquire_documents(source: &Source) -> Result<Vec<(String, String)>> {
                 &mut documents,
                 &mut names,
                 &mut total,
+                max_bytes,
             )?;
         }
     }
@@ -250,19 +284,15 @@ fn push_zip(
     documents: &mut Vec<(String, String)>,
     names: &mut BTreeSet<String>,
     total: &mut u64,
+    max_bytes: u64,
 ) -> Result<()> {
-    if bytes.len() as u64 > MAX_BYTES {
+    let length = bytes.len() as u64;
+    if length > max_bytes {
         return Err(format_error(format!(
-            "archive {archive_name} exceeds the {MAX_BYTES} byte input limit"
+            "archive {archive_name} is {length} bytes, above the {max_bytes} byte input limit set by {ACQUISITION_LIMIT_VARIABLE}"
         )));
     }
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
-        .map_err(|error| format_error(format!("cannot read archive {archive_name}: {error}")))?;
-    if archive.len() > MAX_FILES {
-        return Err(format_error(format!(
-            "archive {archive_name} contains more than {MAX_FILES} entries"
-        )));
-    }
+    let mut archive = open_archive(archive_name, bytes)?;
     for index in 0..archive.len() {
         let mut file = archive.by_index(index).map_err(|error| {
             format_error(format!(
@@ -272,7 +302,12 @@ fn push_zip(
         if file.is_dir() {
             continue;
         }
-        let raw_name = file.name().to_string();
+        let raw_name = file
+            .name()
+            .map_err(|error| {
+                format_error(format!("cannot read entry name in {archive_name}: {error}"))
+            })?
+            .into_owned();
         let path = strict_archive_path(&raw_name)?;
         if file
             .unix_mode()
@@ -284,45 +319,373 @@ fn push_zip(
         }
         let size = file.size();
         let compressed = file.compressed_size();
-        if size > MAX_BYTES || exceeds_compression_ratio(size, compressed) {
+        if size > max_bytes {
             return Err(format_error(format!(
-                "archive entry {raw_name} exceeds the CGMES decompression limits"
+                "archive entry {archive_name}/{raw_name} declares {size} bytes, above the {max_bytes} byte input limit set by {ACQUISITION_LIMIT_VARIABLE}"
             )));
         }
+        if exceeds_compression_ratio(size, compressed) {
+            return Err(format_error(format!(
+                "archive {archive_name} is refused as unsafe: entry {raw_name} declares {size} bytes from {compressed} compressed bytes, above the fixed {MAX_COMPRESSION_RATIO}:1 expansion ratio"
+            )));
+        }
+        // The probe reads at most the declared size. An XML entry carries it
+        // into the exact length read below, so a nested archive cannot hide
+        // behind a short declared size; other entries are never inflated.
         let prefix_length = usize::try_from(size.min(4)).expect("four bytes fit usize");
         let mut prefix = vec![0_u8; prefix_length];
         file.read_exact(&mut prefix)
             .map_err(|error| format_error(format!("cannot decompress {raw_name}: {error}")))?;
         if is_zip_signature(&prefix) {
             return Err(format_error(format!(
-                "archive {archive_name} contains nested archive {raw_name}"
+                "archive {archive_name} is refused as unsafe: it contains nested archive {raw_name}"
             )));
         }
         if extension(path.as_str()) != Some("xml") {
             continue;
         }
-        let remaining = MAX_BYTES.saturating_sub(*total);
+        let remaining = max_bytes.saturating_sub(*total);
         if size > remaining {
-            return Err(format_error(
-                "CGMES profile data exceeds the 64 MiB input limit",
-            ));
+            return Err(format_error(format!(
+                "CGMES profile data would reach {} bytes with {archive_name}/{raw_name}, above the {max_bytes} byte input limit set by {ACQUISITION_LIMIT_VARIABLE}",
+                total.saturating_add(size)
+            )));
         }
-        let mut content = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
-        content.extend_from_slice(&prefix);
-        file.by_ref()
-            .take(remaining.saturating_sub(prefix.len() as u64) + 1)
-            .read_to_end(&mut content)
-            .map_err(|error| format_error(format!("cannot decompress {raw_name}: {error}")))?;
+        let content = read_declared_size(&mut file, &prefix, size)
+            .map_err(|failure| failure.into_error(archive_name, &raw_name, size))?;
         push_xml(
             &format!("{archive_name}/{raw_name}"),
             path.as_str(),
-            &content,
+            content,
             documents,
             names,
             total,
+            max_bytes,
         )?;
     }
     Ok(())
+}
+
+/// Open an archive after bounding its end records and the entry counts they
+/// declare, then refuse entries that disagree with the first count, leave
+/// the entry data, or share bytes.
+///
+/// zip 8.6 examines end records from the last. It reserves its entry table
+/// from the count of the first record it accepts and indexes every central
+/// record before `ZipArchive::new` returns; when that fails, it falls back to
+/// an earlier record and reserves again. So before opening, the number of
+/// end records is bounded ([`MAX_END_RECORDS`]), and so is every Zip64 count
+/// any of them reaches, since a Zip64 count may claim one entry per 47
+/// archive bytes. A 16 bit count reserves at most 65,535 entries, and only
+/// the first is bounded, because an earlier signature may be chance bytes in
+/// compressed data. Duplicate entry names collapse in the reader's index,
+/// which the count comparison also refuses.
+fn open_archive<'a>(
+    archive_name: &str,
+    bytes: &'a [u8],
+) -> Result<zip::ZipArchive<Cursor<&'a [u8]>>> {
+    let declared = declared_entries(bytes).map_err(|refusal| {
+        format_error(match refusal {
+            EndRecordRefusal::Missing => format!(
+                "cannot read archive {archive_name}: no end of central directory record"
+            ),
+            EndRecordRefusal::TooMany => format!(
+                "archive {archive_name} is refused as malformed: it holds more than {MAX_END_RECORDS} end of central directory records"
+            ),
+        })
+    })?;
+    let largest = declared.first.max(declared.largest_zip64);
+    if largest > MAX_FILES as u64 {
+        return Err(format_error(format!(
+            "archive {archive_name} declares {largest} entries, more than the {MAX_FILES} an archive may hold"
+        )));
+    }
+    let declared = declared.first;
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+        .map_err(|error| format_error(format!("cannot read archive {archive_name}: {error}")))?;
+    if archive.len() as u64 != declared {
+        return Err(format_error(format!(
+            "archive {archive_name} is refused as malformed: its end record declares {declared} entries but its central directory holds {} distinct names",
+            archive.len()
+        )));
+    }
+    let directory_start = archive.central_directory_start();
+    let mut regions = Vec::with_capacity(archive.len());
+    for index in 0..archive.len() {
+        let entry = archive.by_index_raw(index).map_err(|error| {
+            format_error(format!(
+                "cannot read entry {index} from {archive_name}: {error}"
+            ))
+        })?;
+        // An entry spans its local header through its compressed data.
+        let start = entry.header_start();
+        match entry
+            .data_start()
+            .and_then(|data| data.checked_add(entry.compressed_size()))
+        {
+            Some(end) if end <= directory_start => regions.push((start, end, index)),
+            _ => {
+                let entry_name = entry.name().map_err(|error| {
+                    format_error(format!("cannot read entry name in {archive_name}: {error}"))
+                })?;
+                return Err(format_error(format!(
+                    "archive {archive_name} is refused as malformed: entry {entry_name} lies outside the archive's entry data"
+                )));
+            }
+        }
+    }
+    // Entries that share compressed bytes expand without growing the archive
+    // (the overlapping entry bomb), so any shared byte is refused.
+    regions.sort_unstable();
+    if let Some(pair) = regions.windows(2).find(|pair| pair[1].0 < pair[0].1) {
+        let name = |index| {
+            archive
+                .name_for_index(index)
+                .and_then(std::result::Result::ok)
+                .map(std::borrow::Cow::into_owned)
+                .unwrap_or_default()
+        };
+        return Err(format_error(format!(
+            "archive {archive_name} is refused as unsafe: entries {} and {} overlap",
+            name(pair[0].2),
+            name(pair[1].2)
+        )));
+    }
+    Ok(archive)
+}
+
+const END_RECORD: &[u8] = b"PK\x05\x06";
+const ZIP64_END_LOCATOR: &[u8] = b"PK\x06\x07";
+const ZIP64_END_RECORD: &[u8] = b"PK\x06\x06";
+
+/// Most end records an archive may hold: its end of central directory
+/// signatures, plus the Zip64 end records zip 8.6 reads for their locators.
+/// An honest archive holds one or two, and a four byte signature occurs by
+/// chance in compressed data about once per 4 GiB. Each record can cost the
+/// reader, and the scan in [`declared_entries`], one search of the archive,
+/// so the cap keeps both linear in its size.
+const MAX_END_RECORDS: usize = 8;
+
+/// The entry counts an archive's end records declare.
+#[derive(Debug, PartialEq, Eq)]
+struct DeclaredEntries {
+    /// The count of the end record zip 8.6 examines first: the last end
+    /// record signature whose comment fits in the archive, or the Zip64
+    /// record its locator names when a 16 bit field is saturated.
+    first: u64,
+    /// The largest count of any Zip64 record an end record's locator names,
+    /// zero when there is none.
+    largest_zip64: u64,
+}
+
+/// Why an archive's end records were refused before opening it.
+#[derive(Debug, PartialEq, Eq)]
+enum EndRecordRefusal {
+    /// The reader would accept no end record.
+    Missing,
+    /// The archive holds more than [`MAX_END_RECORDS`] end records.
+    TooMany,
+}
+
+/// What one end record declares.
+enum EndCount {
+    /// The record's own 16 bit count.
+    Zip32(u64),
+    /// The largest count of the Zip64 records its locator names.
+    Zip64(u64),
+}
+
+/// Read every end record zip 8.6 may examine, last first.
+///
+/// These checks are a subset of those the reader applies before it reserves
+/// a table, so it may reject a record accepted here and fall back to an
+/// earlier one. The count comparison in [`open_archive`] then refuses the
+/// archive unless the counts agree, and every Zip64 count the reader could
+/// reach that way is in `largest_zip64`.
+fn declared_entries(bytes: &[u8]) -> std::result::Result<DeclaredEntries, EndRecordRefusal> {
+    // memchr searches forward several times faster than in reverse.
+    let signatures: Vec<usize> = memmem::find_iter(bytes, END_RECORD)
+        .take(MAX_END_RECORDS + 1)
+        .collect();
+    let mut examined = signatures.len();
+    if examined > MAX_END_RECORDS {
+        return Err(EndRecordRefusal::TooMany);
+    }
+    let mut first = None;
+    let mut largest_zip64 = 0;
+    for &at in signatures.iter().rev() {
+        let count = end_record_count(bytes, at, &mut examined);
+        if examined > MAX_END_RECORDS {
+            return Err(EndRecordRefusal::TooMany);
+        }
+        let count = match count {
+            Some(EndCount::Zip32(count)) => count,
+            Some(EndCount::Zip64(count)) => {
+                largest_zip64 = largest_zip64.max(count);
+                count
+            }
+            None => continue,
+        };
+        first.get_or_insert(count);
+    }
+    let first = first.ok_or(EndRecordRefusal::Missing)?;
+    Ok(DeclaredEntries {
+        first,
+        largest_zip64,
+    })
+}
+
+fn end_record_count(bytes: &[u8], at: usize, examined: &mut usize) -> Option<EndCount> {
+    let record = bytes.get(at..at.checked_add(22)?)?;
+    let comment = usize::from(u16::from_le_bytes([record[20], record[21]]));
+    if at + 22 + comment > bytes.len() {
+        return None;
+    }
+    let on_disk = le_u16(record, 8);
+    let total = le_u16(record, 10);
+    let directory_offset = le_u32(record, 16);
+    let saturated = total == u64::from(u16::MAX)
+        || le_u32(record, 12) == u64::from(u32::MAX)
+        || directory_offset == u64::from(u32::MAX);
+    let locator = at
+        .checked_sub(20)
+        .filter(|&locator| saturated && bytes[locator..].starts_with(ZIP64_END_LOCATOR));
+    if let Some(locator) = locator {
+        return zip64_entry_count(bytes, locator, examined).map(EndCount::Zip64);
+    }
+    (total == 0 || directory_offset < at as u64).then_some(EndCount::Zip32(on_disk))
+}
+
+/// The largest count among the Zip64 records the reader may accept for the
+/// locator at `locator`, adding to `examined` each record it would read.
+fn zip64_entry_count(bytes: &[u8], locator: usize, examined: &mut usize) -> Option<u64> {
+    let fields = &bytes[locator..locator + 20];
+    let disk_with_directory = le_u32(fields, 4);
+    let declared_at = le_u64(fields, 8);
+    if declared_at >= locator as u64 || le_u32(fields, 16) > 1 {
+        return None;
+    }
+    // Prepended bytes move the record forward, so the reader searches forward
+    // from the declared offset up to the locator and takes the first
+    // consistent record. The largest count is kept here, so that order never
+    // matters.
+    let from = usize::try_from(declared_at).ok()?;
+    let mut largest = None;
+    for found in memmem::find_iter(&bytes[from..locator], ZIP64_END_RECORD) {
+        let at = from + found;
+        let Some(record) = bytes.get(at..at + 56) else {
+            continue;
+        };
+        // The reader reads a record whole, extensible data included, once
+        // its stated size fits before the locator.
+        let record_size = le_u64(record, 4);
+        let room = (locator - at) as u64;
+        if record_size < 40 || record_size.saturating_add(12) > room {
+            continue;
+        }
+        *examined += 1;
+        if *examined > MAX_END_RECORDS {
+            return None;
+        }
+        let total = le_u64(record, 32);
+        if record_size + 12 == room
+            && le_u32(record, 20) == disk_with_directory
+            && total.saturating_mul(46).saturating_add(le_u64(record, 48)) <= at as u64
+            && le_u64(record, 24) <= total
+        {
+            largest = largest.max(Some(total));
+        }
+    }
+    largest
+}
+
+fn le_u16(bytes: &[u8], at: usize) -> u64 {
+    u64::from(u16::from_le_bytes([bytes[at], bytes[at + 1]]))
+}
+
+fn le_u32(bytes: &[u8], at: usize) -> u64 {
+    u64::from(u32::from_le_bytes(
+        bytes[at..at + 4].try_into().expect("four bytes"),
+    ))
+}
+
+fn le_u64(bytes: &[u8], at: usize) -> u64 {
+    u64::from_le_bytes(bytes[at..at + 8].try_into().expect("eight bytes"))
+}
+
+/// Why an entry's inflated stream was refused.
+#[derive(Debug)]
+enum DeclaredSizeFailure {
+    Read(std::io::Error),
+    Allocation,
+    Short(u64),
+    Long,
+}
+
+impl DeclaredSizeFailure {
+    fn from_read_error(error: std::io::Error) -> Self {
+        // zip 9.x rejects an inflater that produces more bytes than the
+        // central directory declared before our one-byte overrun probe runs.
+        // Preserve the reader's stable malformed-archive diagnostic instead
+        // of leaking the ZIP implementation's internal error text.
+        if error
+            .to_string()
+            .contains("larger than its declared uncompressed size")
+        {
+            Self::Long
+        } else {
+            Self::Read(error)
+        }
+    }
+
+    fn into_error(self, archive_name: &str, raw_name: &str, size: u64) -> Error {
+        format_error(match self {
+            Self::Read(error) => format!("cannot decompress {raw_name}: {error}"),
+            Self::Allocation => format!("cannot allocate {size} bytes for {raw_name}"),
+            Self::Short(produced) => format!(
+                "archive {archive_name} is refused as malformed: entry {raw_name} inflates to {produced} bytes, fewer than the {size} its header declares"
+            ),
+            Self::Long => format!(
+                "archive {archive_name} is refused as malformed: entry {raw_name} inflates past the {size} bytes its header declares"
+            ),
+        })
+    }
+}
+
+/// Inflate exactly the `size` bytes an entry declares, after the `prefix`
+/// already read from it. One more byte is requested to confirm that the
+/// stream ends there, which is also when the reader checks the CRC. A stream
+/// longer or shorter than declared is refused, so the declared size the
+/// ratio and budget checks used is the size produced, and the buffer is
+/// reserved once at that size.
+fn read_declared_size(
+    entry: &mut impl Read,
+    prefix: &[u8],
+    size: u64,
+) -> std::result::Result<Vec<u8>, DeclaredSizeFailure> {
+    let capacity = usize::try_from(size).map_err(|_| DeclaredSizeFailure::Allocation)?;
+    let mut content = Vec::new();
+    content
+        .try_reserve_exact(capacity)
+        .map_err(|_| DeclaredSizeFailure::Allocation)?;
+    content.extend_from_slice(prefix);
+    entry
+        .by_ref()
+        .take(size - prefix.len() as u64)
+        .read_to_end(&mut content)
+        .map_err(DeclaredSizeFailure::from_read_error)?;
+    let produced = content.len() as u64;
+    if produced != size {
+        return Err(DeclaredSizeFailure::Short(produced));
+    }
+    if entry
+        .read(&mut [0_u8; 1])
+        .map_err(DeclaredSizeFailure::from_read_error)?
+        != 0
+    {
+        return Err(DeclaredSizeFailure::Long);
+    }
+    Ok(content)
 }
 
 fn exceeds_compression_ratio(size: u64, compressed: u64) -> bool {
@@ -336,14 +699,16 @@ fn is_zip_signature(bytes: &[u8]) -> bool {
     )
 }
 
-fn push_xml(
+fn push_xml<'a>(
     name: &str,
     normalized_name: &str,
-    bytes: &[u8],
+    bytes: impl Into<Cow<'a, [u8]>>,
     documents: &mut Vec<(String, String)>,
     names: &mut BTreeSet<String>,
     total: &mut u64,
+    max_bytes: u64,
 ) -> Result<()> {
+    let bytes = bytes.into();
     if documents.len() >= MAX_FILES {
         return Err(format_error(format!(
             "CGMES profile set contains more than {MAX_FILES} XML documents"
@@ -352,18 +717,28 @@ fn push_xml(
     let size = bytes.len() as u64;
     *total = total
         .checked_add(size)
-        .filter(|sum| *sum <= MAX_BYTES)
-        .ok_or_else(|| format_error("CGMES profile data exceeds the 64 MiB input limit"))?;
-    reject_unsafe_xml(bytes)?;
+        .filter(|sum| *sum <= max_bytes)
+        .ok_or_else(|| {
+            format_error(format!(
+                "CGMES profile data would reach {} bytes with {name}, above the {max_bytes} byte input limit set by {ACQUISITION_LIMIT_VARIABLE}",
+                total.saturating_add(size)
+            ))
+        })?;
+    let text = match bytes {
+        Cow::Borrowed(bytes) => std::str::from_utf8(bytes)
+            .map(str::to_owned)
+            .map_err(|error| format_error(format!("{name} is not UTF-8 XML: {error}")))?,
+        Cow::Owned(bytes) => String::from_utf8(bytes)
+            .map_err(|error| format_error(format!("{name} is not UTF-8 XML: {error}")))?,
+    };
+    reject_unsafe_xml(&text)?;
     let key = normalized_name.replace('\\', "/").to_ascii_lowercase();
     if !names.insert(key) {
         return Err(format_error(format!(
             "CGMES profile set contains duplicate normalized name {normalized_name}"
         )));
     }
-    let text = std::str::from_utf8(bytes)
-        .map_err(|error| format_error(format!("{name} is not UTF-8 XML: {error}")))?;
-    documents.push((name.to_string(), text.to_string()));
+    documents.push((name.to_string(), text));
     Ok(())
 }
 
@@ -382,9 +757,16 @@ fn strict_archive_path(name: &str) -> Result<ArtifactPath> {
     ArtifactPath::new(name.to_string()).map_err(|error| source_error(&error))
 }
 
-fn reject_unsafe_xml(bytes: &[u8]) -> Result<()> {
-    let text = String::from_utf8_lossy(bytes).to_ascii_lowercase();
-    if text.contains("<!doctype") || text.contains("<!entity") {
+fn reject_unsafe_xml(text: &str) -> Result<()> {
+    if text.match_indices("<!").any(|(at, _)| {
+        let declaration = &text.as_bytes()[at..];
+        declaration
+            .get(..9)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"<!doctype"))
+            || declaration
+                .get(..8)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"<!entity"))
+    }) {
         return Err(format_error(
             "CGMES XML must not contain a DTD or entity declaration",
         ));
@@ -2396,6 +2778,123 @@ mod tests {
     }
 
     #[test]
+    fn transformer_winding_order_is_independent_of_terminal_sequence() {
+        let mut network = network();
+        network.buses_mut()[1].base_kv = 115.0;
+        network.branches_mut()[0].tap = 1.05;
+        let mut files = write::write_cgmes(&network, CgmesVersion::V3_0)
+            .unwrap()
+            .files;
+        let eq = files
+            .iter_mut()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .unwrap();
+        let transformer =
+            eq.1.lines()
+                .find_map(|line| {
+                    line.trim()
+                        .strip_prefix("<cim:PowerTransformer rdf:ID=\"")
+                        .and_then(|tail| tail.split('"').next())
+                        .map(str::to_owned)
+                })
+                .unwrap();
+        eq.1 =
+            eq.1.split("</cim:Terminal>")
+                .map(|part| {
+                    if part.contains(&format!(
+                        "<cim:Terminal.ConductingEquipment rdf:resource=\"#{transformer}\""
+                    )) {
+                        part.replace("sequenceNumber>1<", "sequenceNumber>TEMP<")
+                            .replace("sequenceNumber>2<", "sequenceNumber>1<")
+                            .replace("sequenceNumber>TEMP<", "sequenceNumber>2<")
+                    } else {
+                        part.to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("</cim:Terminal>");
+        let original = read::read_cgmes_documents(files, Some("reversed-terminal-sequence"))
+            .unwrap()
+            .network;
+        let fresh = write::write_cgmes(&original, CgmesVersion::V3_0).unwrap();
+        let reparsed = read::read_cgmes_documents(fresh.files, Some("fresh-transformer"))
+            .unwrap()
+            .network;
+        let before = &original.branches()[0];
+        let after = &reparsed.branches()[0];
+        let bus_uid = |net: &BalancedNetwork, bus| {
+            net.buses()
+                .iter()
+                .find(|b| b.id == bus)
+                .unwrap()
+                .uid
+                .clone()
+        };
+        assert_eq!(
+            bus_uid(&original, before.from),
+            bus_uid(&reparsed, after.from)
+        );
+        assert_eq!(bus_uid(&original, before.to), bus_uid(&reparsed, after.to));
+        assert!(
+            (before.tap - after.tap).abs() < 1e-10,
+            "tap {} became {}",
+            before.tap,
+            after.tap
+        );
+        assert!((before.rate_a - after.rate_a).abs() < 1e-10);
+    }
+
+    #[test]
+    fn transformer_terminal_without_sequence_number_states_no_difference() {
+        let mut network = network();
+        network.buses_mut()[1].base_kv = 115.0;
+        network.branches_mut()[0].tap = 1.05;
+        let mut files = write::write_cgmes(&network, CgmesVersion::V3_0)
+            .unwrap()
+            .files;
+        let eq = files
+            .iter_mut()
+            .find(|(name, _)| name.ends_with("_EQ.xml"))
+            .unwrap();
+        let transformer =
+            eq.1.lines()
+                .find_map(|line| {
+                    line.trim()
+                        .strip_prefix("<cim:PowerTransformer rdf:ID=\"")
+                        .and_then(|tail| tail.split('"').next())
+                        .map(str::to_owned)
+                })
+                .unwrap();
+        eq.1 =
+            eq.1.split("</cim:Terminal>")
+                .map(|part| {
+                    if part.contains(&format!(
+                        "<cim:Terminal.ConductingEquipment rdf:resource=\"#{transformer}\""
+                    )) {
+                        part.lines()
+                            .filter(|line| !line.contains("ACDCTerminal.sequenceNumber"))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    } else {
+                        part.to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("</cim:Terminal>");
+        let parsed =
+            read::read_cgmes_documents(files, Some("unsequenced-transformer-terminals")).unwrap();
+        assert!(
+            !parsed
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("differs from its transformer winding")),
+            "an absent sequenceNumber was reported as differing"
+        );
+        let branch = &parsed.network.branches()[0];
+        assert!((branch.tap - 1.05).abs() < 1e-10, "tap {}", branch.tap);
+    }
+
+    #[test]
     fn imported_power_transformer_end_identities_round_trip_exactly() {
         let mut network = network();
         network.branches_mut()[0].tap = 1.05;
@@ -2896,7 +3395,7 @@ mod tests {
         let mut network =
             crate::format::xiidm::parse_xiidm_source(source, &mut xiidm_diagnostics).unwrap();
         let detailed = network.detailed_connectivity().as_deref().unwrap();
-        assert!(detailed.bus_breaker_buses.is_empty());
+        assert_eq!(detailed.bus_breaker_buses.as_slice(), []);
         assert_eq!(detailed.calculated_buses.len(), 1);
         assert_eq!(detailed.calculated_buses[0].nodes.len(), 3);
         let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
@@ -5605,6 +6104,40 @@ mod tests {
     }
 
     #[test]
+    fn configurable_acquisition_limit_bounds_directory_and_archive_xml() {
+        let output = write::write_cgmes(&network(), CgmesVersion::V3_0).unwrap();
+        let limit = output.files.iter().map(|(_, text)| text.len() as u64).sum();
+        let directory = tempfile::tempdir().unwrap();
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, text) in &output.files {
+            std::fs::write(directory.path().join(name), text).unwrap();
+            writer
+                .start_file(
+                    name,
+                    zip::write::SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Deflated),
+                )
+                .unwrap();
+            writer.write_all(text.as_bytes()).unwrap();
+        }
+        let archive =
+            Source::from_memory("profiles.zip", writer.finish().unwrap().into_inner()).unwrap();
+        let directory = Source::open(directory.path()).unwrap();
+        for source in [directory, archive] {
+            assert_eq!(
+                acquire_documents_with_limit(&source, limit).unwrap().len(),
+                output.files.len()
+            );
+            assert!(
+                acquire_documents_with_limit(&source, limit - 1)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("input limit")
+            );
+        }
+    }
+
+    #[test]
     fn zip_profile_set_parses_and_unsafe_entries_are_refused() {
         let output = write::write_cgmes(&network(), CgmesVersion::V3_0).unwrap();
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
@@ -5695,14 +6228,411 @@ mod tests {
         assert!(exceeds_compression_ratio(1, 0));
     }
 
+    fn zip_archive(entries: &[(&str, &[u8])], method: zip::CompressionMethod) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default().compression_method(method);
+        for (name, bytes) in entries {
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn zip_entry_names_preserve_utf8_and_cp437_identity() {
+        let utf8 = zip_archive(
+            &[("café.xml", b"<rdf:RDF/>")],
+            zip::CompressionMethod::Stored,
+        );
+        let mut cp437 = zip_archive(
+            &[("cafe.xml", b"<rdf:RDF/>")],
+            zip::CompressionMethod::Stored,
+        );
+        let names: Vec<_> = cp437
+            .windows(8)
+            .enumerate()
+            .filter_map(|(index, name)| (name == b"cafe.xml").then_some(index))
+            .collect();
+        assert_eq!(names.len(), 2);
+        for index in names {
+            cp437[index + 3] = 0x82; // CP437 é in both local and central names.
+        }
+        for archive in [utf8, cp437] {
+            let documents = acquire_archive(archive).unwrap();
+            assert_eq!(
+                documents,
+                [("case.zip/café.xml".to_string(), "<rdf:RDF/>".to_string())]
+            );
+        }
+    }
+
+    fn acquire_archive(bytes: Vec<u8>) -> Result<Vec<(String, String)>> {
+        let source = Source::from_memory("case.zip", bytes).unwrap();
+        acquire_documents_with_limit(&source, 1 << 20)
+    }
+
+    fn archive_error(bytes: Vec<u8>) -> String {
+        acquire_archive(bytes).unwrap_err().to_string()
+    }
+
+    fn offsets_of(bytes: &[u8], needle: &[u8]) -> Vec<usize> {
+        (0..=bytes.len() - needle.len())
+            .filter(|&at| bytes[at..].starts_with(needle))
+            .collect()
+    }
+
+    fn put_u32(bytes: &mut [u8], at: usize, value: u64) {
+        bytes[at..at + 4].copy_from_slice(&u32::try_from(value).unwrap().to_le_bytes());
+    }
+
+    /// An end of central directory record without a comment.
+    fn end_record(on_disk: u64, total: u64, size: u64, offset: u64) -> Vec<u8> {
+        let mut record = END_RECORD.to_vec();
+        record.extend_from_slice(&[0; 4]);
+        for (value, width) in [(on_disk, 2), (total, 2), (size, 4), (offset, 4), (0, 2)] {
+            record.extend_from_slice(&value.to_le_bytes()[..width]);
+        }
+        record
+    }
+
+    /// An end record whose 16 and 32 bit fields defer to Zip64 records.
+    fn saturated_end_record() -> Vec<u8> {
+        end_record(0xFFFF, 0xFFFF, 0xFFFF_FFFF, 0xFFFF_FFFF)
+    }
+
+    fn zip64_end_record(total: u64, size: u64, offset: u64) -> Vec<u8> {
+        let mut record = ZIP64_END_RECORD.to_vec();
+        record.extend_from_slice(&44_u64.to_le_bytes());
+        record.extend_from_slice(&[45, 0, 45, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        for value in [total, total, size, offset] {
+            record.extend_from_slice(&value.to_le_bytes());
+        }
+        record
+    }
+
+    fn zip64_end_locator(record_at: u64) -> Vec<u8> {
+        let mut locator = ZIP64_END_LOCATOR.to_vec();
+        locator.extend_from_slice(&0_u32.to_le_bytes());
+        locator.extend_from_slice(&record_at.to_le_bytes());
+        locator.extend_from_slice(&1_u32.to_le_bytes());
+        locator
+    }
+
+    /// Restate an archive's end of central directory as Zip64 records.
+    fn with_zip64_end(bytes: &[u8]) -> Vec<u8> {
+        let end = bytes.len() - 22;
+        assert!(bytes[end..].starts_with(END_RECORD));
+        let mut out = bytes[..end].to_vec();
+        let record_at = out.len() as u64;
+        out.extend(zip64_end_record(
+            le_u16(bytes, end + 10),
+            le_u32(bytes, end + 12),
+            le_u32(bytes, end + 16),
+        ));
+        out.extend(zip64_end_locator(record_at));
+        out.extend(saturated_end_record());
+        out
+    }
+
+    #[test]
+    fn forged_entry_sizes_are_held_to_the_inflated_stream() {
+        struct Endless(u64);
+        impl Read for Endless {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                buffer.fill(b' ');
+                self.0 += buffer.len() as u64;
+                Ok(buffer.len())
+            }
+        }
+        let mut body = b"<rdf:RDF>".to_vec();
+        body.resize(200_000, b' ');
+        body.extend_from_slice(b"</rdf:RDF>");
+        let honest = zip_archive(&[("EQ.xml", &body)], zip::CompressionMethod::Deflated);
+        assert!(archive_error(honest.clone()).contains("refused as unsafe"));
+
+        // Understating the size in both headers passes the ratio check, so the
+        // inflated stream itself must stop at the declared size.
+        let mut forged = honest;
+        let central = offsets_of(&forged, b"PK\x01\x02")[0];
+        let declared = le_u32(&forged, central + 20) * 2;
+        put_u32(&mut forged, 22, declared);
+        put_u32(&mut forged, central + 24, declared);
+        let error = archive_error(forged);
+        assert!(
+            error.contains(&format!("inflates past the {declared} bytes")),
+            "{error}"
+        );
+
+        let small = zip_archive(
+            &[("EQ.xml", b"<rdf:RDF/>")],
+            zip::CompressionMethod::Deflated,
+        );
+        assert_eq!(acquire_archive(small.clone()).unwrap().len(), 1);
+        let mut forged = small;
+        let central = offsets_of(&forged, b"PK\x01\x02")[0];
+        put_u32(&mut forged, 22, 17);
+        put_u32(&mut forged, central + 24, 17);
+        let error = archive_error(forged);
+        assert!(
+            error.contains("inflates to 10 bytes, fewer than the 17"),
+            "{error}"
+        );
+
+        // At most one byte past the declared size is ever pulled, and an
+        // honest entry fills a buffer reserved once at its declared size.
+        let mut endless = Endless(0);
+        let failure = read_declared_size(&mut endless, b"<rdf", 1_000).unwrap_err();
+        assert!(matches!(failure, DeclaredSizeFailure::Long));
+        assert_eq!(endless.0, 1_000 - 4 + 1);
+        let content = read_declared_size(&mut &b":RDF/>"[..], b"<rdf", 10).unwrap();
+        assert_eq!(content, b"<rdf:RDF/>");
+        assert_eq!(content.capacity(), 10);
+    }
+
+    #[test]
+    fn archive_entry_counts_are_bounded_before_the_reader_indexes_them() {
+        fn archive_with(count: usize) -> Vec<u8> {
+            let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            writer.start_file("EQ.xml", options).unwrap();
+            writer.write_all(b"<rdf:RDF/>").unwrap();
+            for index in 1..count {
+                writer.start_file(format!("{index}.txt"), options).unwrap();
+            }
+            writer.finish().unwrap().into_inner()
+        }
+        let accepted = archive_with(MAX_FILES);
+        let refused = archive_with(MAX_FILES + 1);
+        assert_eq!(
+            declared_entries(&accepted),
+            Ok(DeclaredEntries {
+                first: 4_096,
+                largest_zip64: 0
+            })
+        );
+        assert_eq!(acquire_archive(accepted.clone()).unwrap().len(), 1);
+        assert!(archive_error(refused.clone()).contains("declares 4097 entries"));
+
+        // Zip64 end records state the same counts.
+        assert_eq!(
+            declared_entries(&with_zip64_end(&accepted)),
+            Ok(DeclaredEntries {
+                first: 4_096,
+                largest_zip64: 4_096
+            })
+        );
+        assert_eq!(acquire_archive(with_zip64_end(&accepted)).unwrap().len(), 1);
+        assert!(archive_error(with_zip64_end(&refused)).contains("declares 4097 entries"));
+
+        // A forged count is refused before the reader reserves a table for it.
+        let mut forged = archive_with(1);
+        let end = forged.len() - 22;
+        forged[end + 8..end + 12].copy_from_slice(&[0x01, 0x10, 0x01, 0x10]);
+        assert!(archive_error(forged).contains("declares 4097 entries"));
+        assert!(archive_error(b"PK\x03\x04 no directory".to_vec()).contains("no end of central"));
+    }
+
+    #[test]
+    fn every_end_record_the_reader_may_fall_back_to_is_bounded() {
+        // The last end record declares one entry, but no central record
+        // follows its directory offset, so zip 8.6 rejects it and falls back
+        // to the earlier Zip64 record, reserving a table from that count.
+        let claimed = MAX_FILES as u64 + 1;
+        let mut fallback = b"PK\x03\x04".to_vec();
+        fallback.resize(47 * (MAX_FILES + 1) + 8, 0);
+        let record_at = fallback.len() as u64;
+        fallback.extend(zip64_end_record(claimed, 46, claimed));
+        fallback.extend(zip64_end_locator(record_at));
+        fallback.extend(saturated_end_record());
+        let after = fallback.len() as u64;
+        fallback.extend_from_slice(&[0; 16]);
+        fallback.extend(end_record(1, 1, 46, after));
+        assert_eq!(
+            declared_entries(&fallback),
+            Ok(DeclaredEntries {
+                first: 1,
+                largest_zip64: claimed
+            })
+        );
+        let error = archive_error(fallback);
+        assert!(error.contains("declares 4097 entries"), "{error}");
+
+        // Signatures inside entry data are read but tolerated up to the cap.
+        let with_signatures = |count: usize| {
+            let mut data = b"<binary>".to_vec();
+            for _ in 0..count {
+                data.extend(end_record(0, 0, 0, 0));
+            }
+            zip_archive(
+                &[("EQ.xml", b"<rdf:RDF/>"), ("notes.bin", &data)],
+                zip::CompressionMethod::Stored,
+            )
+        };
+        assert_eq!(
+            acquire_archive(with_signatures(MAX_END_RECORDS - 1))
+                .unwrap()
+                .len(),
+            1
+        );
+        let error = archive_error(with_signatures(MAX_END_RECORDS));
+        assert!(
+            error.contains("holds more than 8 end of central directory records"),
+            "{error}"
+        );
+
+        // Each saturated end record below sends a search over the archive
+        // from the offset its locator names, so past the cap none is searched.
+        let searches = |count: usize| {
+            let mut bytes = b"PK\x03\x04".to_vec();
+            bytes.resize(64, 0);
+            for _ in 0..count {
+                bytes.extend(zip64_end_locator(0));
+                bytes.extend(saturated_end_record());
+            }
+            declared_entries(&bytes)
+        };
+        assert_eq!(searches(MAX_END_RECORDS), Err(EndRecordRefusal::Missing));
+        assert_eq!(
+            searches(MAX_END_RECORDS + 1),
+            Err(EndRecordRefusal::TooMany)
+        );
+
+        // Every Zip64 record the reader would read whole counts as well; only
+        // the last of these fills the room before its locator exactly.
+        let zip64_records = |count: usize| {
+            let mut bytes = b"PK\x03\x04".to_vec();
+            bytes.resize(64, 0);
+            for _ in 0..count {
+                bytes.extend(zip64_end_record(1, 46, 0));
+            }
+            bytes.extend(zip64_end_locator(64));
+            bytes.extend(saturated_end_record());
+            declared_entries(&bytes)
+        };
+        assert_eq!(
+            zip64_records(MAX_END_RECORDS - 1),
+            Ok(DeclaredEntries {
+                first: 1,
+                largest_zip64: 1
+            })
+        );
+        assert_eq!(
+            zip64_records(MAX_END_RECORDS),
+            Err(EndRecordRefusal::TooMany)
+        );
+    }
+
+    #[test]
+    fn overlapping_duplicate_and_out_of_range_entries_are_refused() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        writer.add_directory("profiles/", options).unwrap();
+        writer.start_file("profiles/EQ.xml", options).unwrap();
+        writer.write_all(b"<rdf:RDF/>").unwrap();
+        let nested = writer.finish().unwrap().into_inner();
+        assert_eq!(acquire_archive(nested).unwrap().len(), 1);
+
+        let profile: &[u8] = b"<rdf:RDF/>";
+        let honest = zip_archive(
+            &[("EQ.xml", profile), ("TP.xml", profile)],
+            zip::CompressionMethod::Stored,
+        );
+        assert_eq!(acquire_archive(honest.clone()).unwrap().len(), 2);
+        let central = offsets_of(&honest, b"PK\x01\x02");
+
+        // Both directory records name the first local header and its data.
+        let mut overlapping = honest.clone();
+        put_u32(&mut overlapping, central[1] + 42, 0);
+        let error = archive_error(overlapping);
+        assert!(
+            error.contains("entries EQ.xml and TP.xml overlap"),
+            "{error}"
+        );
+
+        let mut outside = honest.clone();
+        put_u32(&mut outside, central[0] + 20, 1_000);
+        let error = archive_error(outside);
+        assert!(error.contains("entry EQ.xml lies outside"), "{error}");
+
+        // Two directory records under one name collapse in the reader's index.
+        let mut duplicate = honest;
+        for at in offsets_of(&duplicate, b"TP.xml") {
+            duplicate[at..at + 2].copy_from_slice(b"EQ");
+        }
+        let error = archive_error(duplicate);
+        assert!(
+            error.contains("declares 2 entries but its central directory holds 1"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn symbolic_links_and_entries_above_the_limit_are_refused() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .add_symlink(
+                "EQ.xml",
+                "/etc/passwd",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+        assert!(archive_error(bytes).contains("contains symbolic link EQ.xml"));
+
+        // Hexadecimal noise deflates about two to one, so the archive fits the
+        // limit while the entry it holds does not.
+        let mut state = 0x2545_f491_u32;
+        let body: Vec<u8> = (0..4_000)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                b"0123456789abcdef"[(state >> 28) as usize]
+            })
+            .collect();
+        let bytes = zip_archive(&[("EQ.xml", &body)], zip::CompressionMethod::Deflated);
+        assert!(bytes.len() < 3_000);
+        let source = Source::from_memory("case.zip", bytes).unwrap();
+        let error = acquire_documents_with_limit(&source, 3_000)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(
+                "declares 4000 bytes, above the 3000 byte input limit set by POWERIO_MAX_REFERENCED_BYTES"
+            ),
+            "{error}"
+        );
+        let error = acquire_documents_with_limit(&source, 100)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(
+                "bytes, above the 100 byte input limit set by POWERIO_MAX_REFERENCED_BYTES"
+            ),
+            "{error}"
+        );
+    }
+
     #[test]
     fn xml_declarations_that_enable_entities_are_refused() {
         for xml in [
             "<!DOCTYPE rdf:RDF SYSTEM \"file:///etc/passwd\"><rdf:RDF/>",
             "<!DOCTYPE rdf:RDF [<!ENTITY x \"expanded\">]><rdf:RDF>&x;</rdf:RDF>",
+            "<!-- Ångström -->\n<!DoCtYpE rdf:RDF><rdf:RDF/>",
+            "<!-- 東京 -->\n<!EnTiTy x \"expanded\">",
         ] {
-            assert!(reject_unsafe_xml(xml.as_bytes()).is_err());
+            assert!(reject_unsafe_xml(xml).is_err());
         }
+        for xml in ["<!", "<!-- ordinary comment -->", "<![CDATA[Ångström]]>"] {
+            assert!(reject_unsafe_xml(xml).is_ok());
+        }
+    }
+
+    #[test]
+    fn invalid_utf8_profile_is_refused_before_xml_parsing() {
+        let source =
+            Source::from_memory("invalid.xml", b"<rdf:RDF>\xff</rdf:RDF>".to_vec()).unwrap();
+        let error = acquire_documents(&source).unwrap_err();
+        assert!(error.to_string().contains("not UTF-8 XML"));
     }
 
     #[test]
@@ -5907,6 +6837,30 @@ mod tests {
                 .all(|warning| !warning.contains("omitted field record")),
             "supported omission records must be consumed by the writer"
         );
+    }
+
+    #[test]
+    fn omission_records_match_generators_by_uid_or_bus_position() {
+        let mut network = detailed_network();
+        let bus = network.generators()[0].bus;
+        let position = network.generators().len();
+        network.generators_mut().push(Generator::new(bus));
+        let named = component("generator", network.generators()[0].uid.as_deref().unwrap());
+        let positional = component("generator", &format!("{bus}-{position}"));
+        let absent = component("generator", &format!("{bus}-{}", position + 1));
+        Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap()).omitted_fields = vec![
+            OmittedField::new(named, OmittedFieldName::RatedApparentPower),
+            OmittedField::new(positional, OmittedFieldName::RatedApparentPower),
+            OmittedField::new(absent.clone(), OmittedFieldName::RatedApparentPower),
+        ];
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let unmatched = output
+            .warnings
+            .iter()
+            .filter(|warning| warning.contains("omitted field record"))
+            .collect::<Vec<_>>();
+        assert_eq!(unmatched.len(), 1, "{unmatched:?}");
+        assert!(unmatched[0].contains(&format!("component `{absent}`")));
     }
 
     #[test]
@@ -6479,7 +7433,7 @@ mod tests {
         assert_eq!(uids(network), uids(&again.network));
 
         let detailed = network.detailed_connectivity().as_deref().unwrap();
-        assert!(detailed.bus_breaker_buses.is_empty());
+        assert_eq!(detailed.bus_breaker_buses.as_slice(), []);
         assert_eq!(detailed.calculated_buses.len(), 3);
         let joined = detailed
             .calculated_buses
@@ -6532,7 +7486,7 @@ mod tests {
             .collect();
         let parsed = read::read_cgmes_documents(closed, Some("closed")).unwrap();
         assert_eq!(parsed.network.buses().len(), 2);
-        assert!(parsed.network.switches().is_empty());
+        assert_eq!(parsed.network.switches().as_slice(), []);
         let bb1 = bus_named(&parsed.network, "BB1").id;
         assert_eq!(
             parsed

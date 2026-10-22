@@ -22,7 +22,7 @@ Parquet parsing and emission behind the same entry points, and the `arrow`,
 `matrix`, `dist`, and `prob` feature names are still accepted by the build but
 gate nothing. `pio_schema_report` returns a JSON document with the release
 (`powerio_version`), the ABI (`abi`), the PowerIO IR schema name and
-generation (`powerio_ir` with `schema` and `version`), the BMOPF schema
+version (`powerio_ir` with `schema` and `version`), the BMOPF schema
 version, the compiled features, and the diagnostic namespaces and error
 categories.
 
@@ -58,6 +58,15 @@ Use `pio_source_from_memory` for text or binary bytes you already hold in
 memory; both source constructors feed the same `pio_parse`.
 `pio_geo_layer_parse` reads a geographic layer straight from text, with no
 source object, for callers that have the layer document in memory.
+`pio_geo_layer_diagnostics` reports what that reader found, and
+`pio_geo_layer_to_geojson` writes the layer back as the canonical `.geo.json`
+document, the GeoJSON FeatureCollection with the `powerio_geo` member that
+`pio_geo_layer_parse` reads.
+
+```c
+PioString *document = pio_geo_layer_to_geojson(layer, &error);
+PioStringView geojson = pio_string_view(document); /* release with pio_string_release */
+```
 
 `pio_module_value` returns an owner rooted value handle, and the exact typed
 accessors return owner rooted views without serializing or copying the module
@@ -108,8 +117,129 @@ pio_destination_release(destination);
 it. PowerIO 0.11.1 writes `"schema": "pio-ir"` with integer `"version": 2`, and
 `pio_schema_report` reports both; the producer record names the PowerIO
 release separately. `pio_module_deserialize` refuses an unsupported schema
-name or generation and reports what it found. The reader accepts generation 2
+name or version and reports what it found. The reader accepts IR version 2
 and the structural types implemented by the library. C ABI 7 has no module JSON aliases.
+
+## PSS/E contingency analysis files
+
+A contingency set is the content of a PSS/E `.con` file: named cases, each a
+list of outage actions. A subsystem is PSS/E's name for a bus selection stated
+in a `.sub` file through bus, area, zone, owner and kV range selectors; a
+`.con` automatic specification and a `.mon` statement refer to a subsystem by
+name, and selecting a subsystem's buses evaluates its selectors against a
+network. A monitored set is the content of a `.mon` file: the elements whose
+loading and voltage a study reports. A geo layer is a coordinate document kept
+beside a case: points for buses and routes for branches in one coordinate
+space, keyed by element identity, read from five text forms and written as a
+GeoJSON FeatureCollection carrying a `powerio_geo` member.
+
+A `.con`, `.sub`, or `.mon` file parses through `pio_parse` like any other
+source; `pio_value_contingency_set`, `pio_value_subsystem_set`, and
+`pio_value_monitored_set` take the typed handle from the module value, and
+`pio_contingency_set_parse` reads a contingency file straight from an acquired
+source with `pio_contingency_set_diagnostics` for the reader's notes.
+`pio_emit` writes each one back under `psse-con`, `psse-sub`, or `psse-mon`.
+
+A handle from `pio_value_contingency_set`, `pio_value_subsystem_set`, or
+`pio_value_monitored_set` borrows the module value rather than copying it, and
+holds the module owner alive, so it stays readable after the module handle is
+released. A handle from `pio_contingency_set_parse` or
+`pio_contingency_set_expand` owns its set instead.
+
+`pio_contingency_set_resolve` binds every case to a balanced network and
+returns a `PioContingencyResolution`. It reports rather than refuses: a case
+naming an element the network does not hold is counted unresolved and keeps
+its reason. `pio_contingency_set_expand` turns the automatic specifications
+into explicit cases against a network and a subsystem set.
+
+```c
+PioContingencySet *cases = pio_contingency_set_parse(source, &error);
+PioContingencyResolution *resolution =
+    pio_contingency_set_resolve(cases, network, &error);
+
+printf("%zu of %zu cases bound\n",
+       pio_contingency_resolution_resolved_count(resolution),
+       pio_contingency_resolution_case_count(resolution));
+
+for (size_t i = 0; i < pio_contingency_resolution_case_count(resolution); i++) {
+    size_t bound =
+        pio_contingency_resolution_case_component_count(resolution, i);
+    for (size_t j = 0; j < bound; j++) {
+        PioContingencyComponentView component;
+        if (!pio_contingency_resolution_case_component(resolution, i, j,
+                                                       &component, &error)) {
+            break;
+        }
+        /* component.id.component_type names the table component.row
+           indexes; component.id.local_id is the element's own identity,
+           and its len is 0 when the network states none for that row */
+    }
+
+    size_t missing =
+        pio_contingency_resolution_case_unresolved_count(resolution, i);
+    for (size_t j = 0; j < missing; j++) {
+        PioStringView statement =
+            pio_contingency_resolution_case_unresolved_action(resolution, i, j,
+                                                              &error);
+        PioStringView reason =
+            pio_contingency_resolution_case_unresolved_reason(resolution, i, j,
+                                                             &error);
+        /* statement is the `.con` line of the action; reason is a fixed name
+           such as "no_such_branch", the same name Python reports */
+        printf("%.*s: %.*s\n", (int)statement.len, statement.data,
+               (int)reason.len, reason.data);
+    }
+}
+
+PioDiagnostics *notes = NULL;
+PioContingencySet *expanded =
+    pio_contingency_set_expand(cases, network, subsystems, &notes, &error);
+PioString *text = pio_contingency_set_to_con(expanded, &error);
+PioStringView view = pio_string_view(text);
+printf("%.*s", (int)view.len, view.data);
+
+pio_string_release(text);
+pio_diagnostics_release(notes);
+pio_contingency_set_release(expanded);
+pio_contingency_resolution_release(resolution);
+pio_contingency_set_release(cases);
+```
+
+`pio_balanced_network_select_subsystem_buses` evaluates one named subsystem's
+selectors against a network and returns the buses it selects, in ascending
+order, as an owned `PioVector` whose values are bus numbers.
+
+```c
+PioVector *buses =
+    pio_balanced_network_select_subsystem_buses(network, subsystems, "A1", 2, &error);
+PioF64View numbers = pio_vector_values(buses); /* release with pio_vector_release */
+```
+
+The set accessors are `pio_contingency_set_case_count`,
+`pio_contingency_set_case_name`, `pio_contingency_set_diagnostics`, and
+`pio_contingency_set_to_con`; `pio_subsystem_set_count`,
+`pio_subsystem_set_name`, and `pio_subsystem_set_to_sub`; and
+`pio_monitored_set_statement_count` and `pio_monitored_set_to_mon`. Each of
+the three writers returns owned text, read with `pio_string_view` and released
+with `pio_string_release`, which is how an expanded set reaches a file.
+`pio_balanced_network_select_subsystem_buses` reads a network and a subsystem
+set together and hands back an owned `PioVector`, read with
+`pio_vector_values` and released with `pio_vector_release`. The
+resolution accessors are `pio_contingency_resolution_case_count`,
+`pio_contingency_resolution_resolved_count`,
+`pio_contingency_resolution_unresolved_count`,
+`pio_contingency_resolution_unrecognized_statement_count`,
+`pio_contingency_resolution_case_name`,
+`pio_contingency_resolution_case_is_resolved`,
+`pio_contingency_resolution_case_component_count`,
+`pio_contingency_resolution_case_component`,
+`pio_contingency_resolution_case_unresolved_count`,
+`pio_contingency_resolution_case_unresolved_reason`, and
+`pio_contingency_resolution_case_unresolved_action`. Each handle has its own
+`pio_contingency_set_retain` and `pio_contingency_set_release`,
+`pio_subsystem_set_retain` and `pio_subsystem_set_release`,
+`pio_monitored_set_retain` and `pio_monitored_set_release`, and
+`pio_contingency_resolution_retain` and `pio_contingency_resolution_release`.
 
 ## Collections, updates, and calculations
 

@@ -3,7 +3,7 @@
 use powerio_core::{Scenario, ScenarioSet, TimePoint, TimeSeries};
 use powerio_dist::MulticonductorNetwork;
 use powerio_prob::OperatingPoint;
-use powerio_tx::{BalancedNetwork, GeoLayer};
+use powerio_tx::{BalancedNetwork, ContingencySet, GeoLayer, MonitoredSet, SubsystemSet};
 
 /// A dynamically typed time series at the universal parser boundary.
 ///
@@ -287,6 +287,16 @@ pub enum PioValue {
     /// element identity, placed onto a network by
     /// [`crate::apply_geo_layer`].
     GeoLayer(GeoLayer),
+    /// A PSS/E contingency description file (`.con`): the outages a
+    /// contingency analysis runs, bound to a network by
+    /// [`ContingencySet::resolve`].
+    ContingencySet(ContingencySet),
+    /// A PSS/E subsystem description file (`.sub`): the named bus groups a
+    /// contingency description file and a monitored element file draw on.
+    SubsystemSet(SubsystemSet),
+    /// A PSS/E monitored element file (`.mon`): the branch flows, interface
+    /// flows, and bus voltages a contingency analysis reports on.
+    MonitoredSet(MonitoredSet),
     BalancedOperatingPoint(OperatingPoint<BalancedNetwork>),
     MulticonductorOperatingPoint(OperatingPoint<MulticonductorNetwork>),
     TimeSeries(PioTimeSeries),
@@ -297,6 +307,7 @@ pub enum PioValue {
     AcOpfInstance(powerio_prob::AcOpfInstance),
     McAcPfInstance(powerio_prob::McAcPfInstance),
     McAcOpfInstance(powerio_prob::McAcOpfInstance),
+    LinDist3FlowPfInstance(powerio_prob::LinDist3FlowPfInstance),
     LinDist3FlowOpfInstance(powerio_prob::LinDist3FlowOpfInstance),
     AcScucInstance(powerio_prob::AcScucInstance),
     DcPfSolution(powerio_prob::DcPfSolution),
@@ -306,6 +317,7 @@ pub enum PioValue {
     SocwrOpfSolution(powerio_prob::solution::SocwrOpfSolution),
     McAcPfSolution(powerio_prob::McAcPfSolution),
     McAcOpfSolution(powerio_prob::McAcOpfSolution),
+    LinDist3FlowPfSolution(powerio_prob::LinDist3FlowPfSolution),
     LinDist3FlowOpfSolution(powerio_prob::LinDist3FlowOpfSolution),
     AcScucSolution(powerio_prob::AcScucSolution),
 }
@@ -318,6 +330,9 @@ impl PioValue {
             Self::BalancedNetwork(_) => "powerio.BalancedNetwork",
             Self::MulticonductorNetwork(_) => "powerio.MulticonductorNetwork",
             Self::GeoLayer(_) => "powerio.GeoLayer",
+            Self::ContingencySet(_) => "powerio.ContingencySet",
+            Self::SubsystemSet(_) => "powerio.SubsystemSet",
+            Self::MonitoredSet(_) => "powerio.MonitoredSet",
             Self::BalancedOperatingPoint(_) => "powerio.OperatingPoint<powerio.BalancedNetwork>",
             Self::MulticonductorOperatingPoint(_) => {
                 "powerio.OperatingPoint<powerio.MulticonductorNetwork>"
@@ -330,6 +345,7 @@ impl PioValue {
             Self::AcOpfInstance(_) => "powerio.AcOpfInstance",
             Self::McAcPfInstance(_) => "powerio.McAcPfInstance",
             Self::McAcOpfInstance(_) => "powerio.McAcOpfInstance",
+            Self::LinDist3FlowPfInstance(_) => "powerio.LinDist3FlowPfInstance",
             Self::LinDist3FlowOpfInstance(_) => "powerio.LinDist3FlowOpfInstance",
             Self::AcScucInstance(_) => "powerio.AcScucInstance",
             Self::DcPfSolution(_) => "powerio.DcPfSolution",
@@ -339,6 +355,7 @@ impl PioValue {
             Self::SocwrOpfSolution(_) => "powerio.SocwrOpfSolution",
             Self::McAcPfSolution(_) => "powerio.McAcPfSolution",
             Self::McAcOpfSolution(_) => "powerio.McAcOpfSolution",
+            Self::LinDist3FlowPfSolution(_) => "powerio.LinDist3FlowPfSolution",
             Self::LinDist3FlowOpfSolution(_) => "powerio.LinDist3FlowOpfSolution",
             Self::AcScucSolution(_) => "powerio.AcScucSolution",
         }
@@ -363,6 +380,9 @@ impl From<BalancedNetwork> for PioValue {
 }
 value_conversion!(MulticonductorNetwork, MulticonductorNetwork);
 value_conversion!(GeoLayer, GeoLayer);
+value_conversion!(ContingencySet, ContingencySet);
+value_conversion!(SubsystemSet, SubsystemSet);
+value_conversion!(MonitoredSet, MonitoredSet);
 value_conversion!(OperatingPoint<BalancedNetwork>, BalancedOperatingPoint);
 value_conversion!(
     OperatingPoint<MulticonductorNetwork>,
@@ -374,6 +394,7 @@ value_conversion!(powerio_prob::DcOpfInstance, DcOpfInstance);
 value_conversion!(powerio_prob::AcOpfInstance, AcOpfInstance);
 value_conversion!(powerio_prob::McAcPfInstance, McAcPfInstance);
 value_conversion!(powerio_prob::McAcOpfInstance, McAcOpfInstance);
+value_conversion!(powerio_prob::LinDist3FlowPfInstance, LinDist3FlowPfInstance);
 value_conversion!(
     powerio_prob::LinDist3FlowOpfInstance,
     LinDist3FlowOpfInstance
@@ -386,6 +407,7 @@ value_conversion!(powerio_prob::AcOpfSolution, AcOpfSolution);
 value_conversion!(powerio_prob::solution::SocwrOpfSolution, SocwrOpfSolution);
 value_conversion!(powerio_prob::McAcPfSolution, McAcPfSolution);
 value_conversion!(powerio_prob::McAcOpfSolution, McAcOpfSolution);
+value_conversion!(powerio_prob::LinDist3FlowPfSolution, LinDist3FlowPfSolution);
 value_conversion!(
     powerio_prob::LinDist3FlowOpfSolution,
     LinDist3FlowOpfSolution

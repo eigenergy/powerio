@@ -110,7 +110,7 @@ fn subdata_attaches_to_the_row_above() {
     assert_eq!(d.rows[0].subdata.len(), 1);
     assert_eq!(d.rows[0].subdata[0].name, "CTGElement");
     assert_eq!(d.rows[0].subdata[0].lines, ["  BRANCH 1 2 1"]);
-    assert!(d.rows[1].subdata.is_empty());
+    assert_eq!(d.rows[1].subdata.as_slice(), []);
 }
 
 #[test]

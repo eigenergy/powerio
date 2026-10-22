@@ -13,6 +13,7 @@ powerio.ActivePowerControl
 powerio.BoundaryLine
 powerio.BoundaryLineGeneration
 powerio.BusBreakerBus
+powerio.BusGroup
 powerio.BusbarSection
 powerio.CalculatedBus
 powerio.CaseMetadata
@@ -54,6 +55,10 @@ powerio.ReactiveCapabilityCurveRecord
 powerio.ReactiveLimits
 powerio.BalancedNetwork.reference_bus_index
 powerio.BalancedNetwork.reference_bus_indices
+powerio.RemovedBranch
+powerio.RemovedFlow
+powerio.RemovedFlows
+powerio.RemovedSwitch
 powerio.Scheme
 powerio.SensitivitySolver
 powerio.Shunt
@@ -78,6 +83,7 @@ powerio.mcp.server._Scheme
 powerio.VoltageLevel
 powerio.VoltageSourceConverter
 powerio._powerio._BalancedNetwork
+powerio._powerio._BusMerge
 powerio._powerio._MulticonductorNetwork
 powerio._powerio._PioModule
 powerio._powerio.Diagnostic

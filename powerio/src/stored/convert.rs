@@ -9,6 +9,7 @@ use powerio_core::{
 };
 
 use super::dto::{self, StoredF64, StoredModule, StoredQuantity};
+
 use crate::codes;
 use crate::value::{PioScenarioSet, PioTimeSeries, PioValue};
 use powerio_prob::{
@@ -17,6 +18,20 @@ use powerio_prob::{
 };
 
 type Result<T> = std::result::Result<T, powerio_core::Error>;
+
+/// Refuse outer IR collections that exceed the reader's bounded-vector limit.
+fn check_collection_len(what: &str, len: usize) -> Result<()> {
+    if len > dto::MAX_STORED_COLLECTION_ENTRIES {
+        return Err(powerio_core::Error::new(
+            &codes::EMIT_MODULE_RECORD_CAP,
+            format!(
+                "a stored {what} would carry {len} entries; PowerIO IR reads at most {}",
+                dto::MAX_STORED_COLLECTION_ENTRIES
+            ),
+        ));
+    }
+    Ok(())
+}
 
 fn invalid(message: impl Into<String>) -> powerio_core::Error {
     powerio_core::Error::new(&codes::READ_MODULE_INVALID, message)
@@ -58,7 +73,7 @@ pub fn emit_module(module: &PioModule<PioValue>) -> Result<String> {
     serde_json::to_string_pretty(&stored).map_err(|error| invalid(error.to_string()))
 }
 
-/// Decode one current PowerIO IR document. Any other identity or generation
+/// Decode one current PowerIO IR document. Any other identity or version
 /// is refused with what was found named.
 ///
 /// # Errors
@@ -67,7 +82,7 @@ pub fn read_module(text: &str) -> Result<PioModule<PioValue>> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     // One scan decodes the current shape. Only a document that is not one is
     // scanned again, for its header alone, so the refusal can say whether it
-    // is another PowerIO IR generation, a current document that is invalid,
+    // is another PowerIO IR version, a current document that is invalid,
     // or not PowerIO IR at all.
     let decode_error = match serde_json::from_str::<StoredModule>(text) {
         Ok(stored) if is_readable(&stored.schema, stored.version) => {
@@ -116,7 +131,7 @@ fn describe_producer(producer: &serde_json::Value) -> Option<String> {
     }
 }
 
-/// The refusal for an identity or generation this build does not read. It
+/// The refusal for an identity or version this build does not read. It
 /// names what the document states, producer included, and the remedy.
 fn unsupported(
     schema: &str,
@@ -128,13 +143,13 @@ fn unsupported(
             .and_then(dto::StoredVersion::as_integer)
             .is_some_and(|version| version > crate::IR_VERSION)
     {
-        "upgrade PowerIO to a release that supports this later IR generation".to_owned()
+        "upgrade PowerIO to a release that supports this later IR version".to_owned()
     } else {
         let reads = if crate::IR_MIN_VERSION == crate::IR_VERSION {
-            format!("generation {}", crate::IR_VERSION)
+            format!("version {}", crate::IR_VERSION)
         } else {
             format!(
-                "generations {} through {}",
+                "versions {} through {}",
                 crate::IR_MIN_VERSION,
                 crate::IR_VERSION
             )
@@ -164,11 +179,14 @@ fn encode_value(value: &PioValue) -> Result<dto::StoredValue> {
             dto::StoredValue::MulticonductorNetwork(Box::new(network.clone()))
         }
         PioValue::GeoLayer(layer) => dto::StoredValue::GeoLayer(Box::new(layer.clone())),
+        PioValue::ContingencySet(set) => dto::StoredValue::ContingencySet(Box::new(set.clone())),
+        PioValue::SubsystemSet(set) => dto::StoredValue::SubsystemSet(Box::new(set.clone())),
+        PioValue::MonitoredSet(set) => dto::StoredValue::MonitoredSet(Box::new(set.clone())),
         PioValue::BalancedOperatingPoint(point) => {
             dto::StoredValue::BalancedOperatingPoint(encode_balanced_point(point)?)
         }
         PioValue::MulticonductorOperatingPoint(point) => {
-            dto::StoredValue::MulticonductorOperatingPoint(encode_mc_point(point))
+            dto::StoredValue::MulticonductorOperatingPoint(encode_mc_point(point)?)
         }
         PioValue::TimeSeries(series) => encode_time_series(series)?,
         PioValue::ScenarioSet(set) => encode_scenario_set(set)?,
@@ -185,10 +203,13 @@ fn encode_value(value: &PioValue) -> Result<dto::StoredValue> {
             dto::StoredValue::AcOpfInstance(encode_ac_opf_instance(instance)?)
         }
         PioValue::McAcPfInstance(instance) => {
-            dto::StoredValue::McAcPfInstance(encode_mc_ac_pf_instance(instance))
+            dto::StoredValue::McAcPfInstance(encode_mc_ac_pf_instance(instance)?)
         }
         PioValue::McAcOpfInstance(instance) => {
             dto::StoredValue::McAcOpfInstance(encode_mc_ac_opf_instance(instance)?)
+        }
+        PioValue::LinDist3FlowPfInstance(instance) => {
+            dto::StoredValue::LinDist3FlowPfInstance(encode_lindist3flow_pf_instance(instance)?)
         }
         PioValue::LinDist3FlowOpfInstance(instance) => {
             dto::StoredValue::LinDist3FlowOpfInstance(encode_lindist3flow_opf_instance(instance)?)
@@ -215,11 +236,14 @@ fn encode_value(value: &PioValue) -> Result<dto::StoredValue> {
             dto::StoredValue::SocwrOpfSolution(Box::new(encode_socwr_opf_solution(solution)?))
         }
         PioValue::McAcPfSolution(solution) => {
-            dto::StoredValue::McAcPfSolution(Box::new(encode_mc_ac_pf_solution(solution)))
+            dto::StoredValue::McAcPfSolution(Box::new(encode_mc_ac_pf_solution(solution)?))
         }
         PioValue::McAcOpfSolution(solution) => {
             dto::StoredValue::McAcOpfSolution(Box::new(encode_mc_ac_opf_solution(solution)?))
         }
+        PioValue::LinDist3FlowPfSolution(solution) => dto::StoredValue::LinDist3FlowPfSolution(
+            Box::new(encode_lindist3flow_pf_solution(solution)?),
+        ),
         PioValue::LinDist3FlowOpfSolution(solution) => dto::StoredValue::LinDist3FlowOpfSolution(
             Box::new(encode_lindist3flow_opf_solution(solution)?),
         ),
@@ -242,6 +266,8 @@ const MULTICONDUCTOR_POINT_SERIES_TYPE: &str =
     "powerio.TimeSeries<powerio.OperatingPoint<powerio.MulticonductorNetwork>>";
 
 fn encode_time_series(series: &PioTimeSeries) -> Result<dto::StoredValue> {
+    check_collection_len("time points", series.time_points().len())?;
+    check_collection_len("time-series values", series.values().len())?;
     Ok(match series.element_type() {
         BALANCED_NETWORK_TYPE => {
             dto::StoredValue::BalancedNetworkTimeSeries(encode_balanced_network_series(series)?)
@@ -266,6 +292,8 @@ fn encode_time_series(series: &PioTimeSeries) -> Result<dto::StoredValue> {
 fn encode_balanced_network_series(
     series: &PioTimeSeries,
 ) -> Result<dto::StoredTimeSeries<crate::BalancedNetwork>> {
+    check_collection_len("time points", series.time_points().len())?;
+    check_collection_len("time-series values", series.values().len())?;
     let values = series
         .values()
         .values()
@@ -284,6 +312,8 @@ fn encode_balanced_network_series(
 fn encode_multiconductor_network_series(
     series: &PioTimeSeries,
 ) -> Result<dto::StoredTimeSeries<powerio_dist::MulticonductorNetwork>> {
+    check_collection_len("time points", series.time_points().len())?;
+    check_collection_len("time-series values", series.values().len())?;
     let values = series
         .values()
         .values()
@@ -337,6 +367,7 @@ fn encode_scenario_entries<T>(
     set: &PioScenarioSet,
     mut encode: impl FnMut(&PioValue) -> Result<T>,
 ) -> Result<dto::StoredScenarioSet<T>> {
+    check_collection_len("scenario entries", set.values().len())?;
     let scenarios = set
         .values()
         .iter()
@@ -479,15 +510,38 @@ fn dc_formula_from_name(name: &str) -> Result<crate::BranchSusceptanceFormula> {
     }
 }
 
-fn stored_numbers<'a>(values: impl IntoIterator<Item = (&'a str, f64)>) -> StoredQuantity {
+/// Refuse an operating point or solution vector longer than the reader
+/// accepts, so `serialize` never writes a document `deserialize` refuses.
+fn check_operating_point_len(len: usize) -> Result<()> {
+    if len > dto::MAX_STORED_OPERATING_POINT_VALUES {
+        return Err(powerio_core::Error::new(
+            &codes::EMIT_MODULE_RECORD_CAP,
+            format!(
+                "a stored record would carry {len} operating point values; PowerIO IR reads at \
+                 most {}",
+                dto::MAX_STORED_OPERATING_POINT_VALUES
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn bounded_values(values: Vec<StoredF64>) -> Result<Vec<StoredF64>> {
+    check_operating_point_len(values.len())?;
+    Ok(values)
+}
+
+fn stored_numbers<'a>(values: impl IntoIterator<Item = (&'a str, f64)>) -> Result<StoredQuantity> {
     let (identities, values) = values
         .into_iter()
         .map(|(identity, value)| (dto::StoredIdentity(identity.to_string()), StoredF64(value)))
         .unzip();
-    StoredQuantity { identities, values }
+    let quantity = StoredQuantity { identities, values };
+    check_operating_point_len(quantity.identities.len())?;
+    Ok(quantity)
 }
 
-fn stored_flags<'a>(values: impl IntoIterator<Item = (&'a str, bool)>) -> StoredQuantity {
+fn stored_flags<'a>(values: impl IntoIterator<Item = (&'a str, bool)>) -> Result<StoredQuantity> {
     let (identities, values) = values
         .into_iter()
         .map(|(identity, value)| {
@@ -497,41 +551,43 @@ fn stored_flags<'a>(values: impl IntoIterator<Item = (&'a str, bool)>) -> Stored
             )
         })
         .unzip();
-    StoredQuantity { identities, values }
+    let quantity = StoredQuantity { identities, values };
+    check_operating_point_len(quantity.identities.len())?;
+    Ok(quantity)
 }
 
 fn encode_balanced_point_assignment(
     point: &powerio_prob::OperatingPoint<crate::BalancedNetwork>,
-) -> dto::StoredOperatingPointAssignment {
+) -> Result<dto::StoredOperatingPointAssignment> {
     let mut quantities = BTreeMap::new();
     for quantity in BALANCED_NUMERIC_QUANTITIES {
         if let Some(values) = point.values(quantity) {
-            quantities.insert(quantity.name().to_string(), stored_numbers(values));
+            quantities.insert(quantity.name().to_string(), stored_numbers(values)?);
         }
     }
     for flag in BALANCED_FLAGS {
         if let Some(values) = point.flags(flag) {
-            quantities.insert(flag.name().to_string(), stored_flags(values));
+            quantities.insert(flag.name().to_string(), stored_flags(values)?);
         }
     }
-    dto::StoredOperatingPointAssignment { quantities }
+    Ok(dto::StoredOperatingPointAssignment { quantities })
 }
 
 fn encode_mc_point_assignment(
     point: &powerio_prob::OperatingPoint<powerio_dist::MulticonductorNetwork>,
-) -> dto::StoredOperatingPointAssignment {
+) -> Result<dto::StoredOperatingPointAssignment> {
     let mut quantities = BTreeMap::new();
     for quantity in MULTICONDUCTOR_NUMERIC_QUANTITIES {
         if let Some(values) = point.values(quantity) {
-            quantities.insert(quantity.name().to_string(), stored_numbers(values));
+            quantities.insert(quantity.name().to_string(), stored_numbers(values)?);
         }
     }
     for flag in MULTICONDUCTOR_FLAGS {
         if let Some(values) = point.flags(flag) {
-            quantities.insert(flag.name().to_string(), stored_flags(values));
+            quantities.insert(flag.name().to_string(), stored_flags(values)?);
         }
     }
-    dto::StoredOperatingPointAssignment { quantities }
+    Ok(dto::StoredOperatingPointAssignment { quantities })
 }
 
 /// Assign the persistent identities written with a balanced network while
@@ -560,7 +616,7 @@ fn encode_balanced_point(
     let network = with_component_ids(point.network().clone());
     let quantities = align_balanced_quantity_identities(
         &network,
-        encode_balanced_point_assignment(point).quantities,
+        encode_balanced_point_assignment(point)?.quantities,
     )?;
     Ok(dto::StoredOperatingPoint {
         network: Box::new(network),
@@ -570,11 +626,11 @@ fn encode_balanced_point(
 
 fn encode_mc_point(
     point: &powerio_prob::OperatingPoint<powerio_dist::MulticonductorNetwork>,
-) -> dto::StoredOperatingPoint<powerio_dist::MulticonductorNetwork> {
-    dto::StoredOperatingPoint {
+) -> Result<dto::StoredOperatingPoint<powerio_dist::MulticonductorNetwork>> {
+    Ok(dto::StoredOperatingPoint {
         network: Box::new(point.network().clone()),
-        quantities: encode_mc_point_assignment(point).quantities,
-    }
+        quantities: encode_mc_point_assignment(point)?.quantities,
+    })
 }
 
 fn ensure_same_network<'a, N: serde::Serialize + 'a>(
@@ -596,6 +652,8 @@ fn ensure_same_network<'a, N: serde::Serialize + 'a>(
 fn encode_balanced_operating_point_series(
     series: &TimeSeries<powerio_prob::OperatingPoint<crate::BalancedNetwork>>,
 ) -> Result<dto::StoredOperatingPointTimeSeries<crate::BalancedNetwork>> {
+    check_collection_len("time-series time points", series.time_points().len())?;
+    check_collection_len("time-series values", series.values().len())?;
     let Some(first) = series.values().first() else {
         return Ok(dto::StoredOperatingPointTimeSeries {
             network: None,
@@ -617,7 +675,7 @@ fn encode_balanced_operating_point_series(
         .map(|point| {
             align_balanced_quantity_identities(
                 &network,
-                encode_balanced_point_assignment(point).quantities,
+                encode_balanced_point_assignment(point)?.quantities,
             )
             .map(|quantities| dto::StoredOperatingPointAssignment { quantities })
         })
@@ -632,6 +690,8 @@ fn encode_balanced_operating_point_series(
 fn encode_multiconductor_operating_point_series(
     series: &TimeSeries<powerio_prob::OperatingPoint<powerio_dist::MulticonductorNetwork>>,
 ) -> Result<dto::StoredOperatingPointTimeSeries<powerio_dist::MulticonductorNetwork>> {
+    check_collection_len("time-series time points", series.time_points().len())?;
+    check_collection_len("time-series values", series.values().len())?;
     let Some(first) = series.values().first() else {
         return Ok(dto::StoredOperatingPointTimeSeries {
             network: None,
@@ -650,7 +710,7 @@ fn encode_multiconductor_operating_point_series(
         .values()
         .iter()
         .map(encode_mc_point_assignment)
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     Ok(dto::StoredOperatingPointTimeSeries {
         network: Some(Box::new(first.network().clone())),
         time_points: series.time_points().iter().map(encode_time_point).collect(),
@@ -661,6 +721,7 @@ fn encode_multiconductor_operating_point_series(
 fn encode_balanced_point_scenarios(
     set: &PioScenarioSet,
 ) -> Result<dto::StoredOperatingPointScenarioSet<crate::BalancedNetwork>> {
+    check_collection_len("scenario entries", set.values().len())?;
     let first = set.values().iter().next().map(|scenario| {
         let PioValue::BalancedOperatingPoint(point) = scenario.value() else {
             return Err(collection_element_mismatch(
@@ -694,7 +755,7 @@ fn encode_balanced_point_scenarios(
         .map(|(scenario, point)| {
             let quantities = align_balanced_quantity_identities(
                 &network,
-                encode_balanced_point_assignment(point).quantities,
+                encode_balanced_point_assignment(point)?.quantities,
             )?;
             Ok(dto::StoredOperatingPointScenario {
                 id: scenario.id().as_str().to_string(),
@@ -712,6 +773,7 @@ fn encode_balanced_point_scenarios(
 fn encode_multiconductor_point_scenarios(
     set: &PioScenarioSet,
 ) -> Result<dto::StoredOperatingPointScenarioSet<powerio_dist::MulticonductorNetwork>> {
+    check_collection_len("scenario entries", set.values().len())?;
     let first = set.values().iter().next().map(|scenario| {
         let PioValue::MulticonductorOperatingPoint(point) = scenario.value() else {
             return Err(collection_element_mismatch(
@@ -741,12 +803,14 @@ fn encode_multiconductor_point_scenarios(
     )?;
     let scenarios = points
         .into_iter()
-        .map(|(scenario, point)| dto::StoredOperatingPointScenario {
-            id: scenario.id().as_str().to_string(),
-            probability: scenario.probability().map(StoredF64),
-            quantities: encode_mc_point_assignment(point).quantities,
+        .map(|(scenario, point)| {
+            Ok(dto::StoredOperatingPointScenario {
+                id: scenario.id().as_str().to_string(),
+                probability: scenario.probability().map(StoredF64),
+                quantities: encode_mc_point_assignment(point)?.quantities,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     Ok(dto::StoredOperatingPointScenarioSet {
         network: Some(Box::new(first.network().clone())),
         scenarios,
@@ -1006,7 +1070,7 @@ fn encode_dc_pf_instance(instance: &powerio_prob::DcPfInstance) -> Result<dto::D
             .map(|point| {
                 align_balanced_quantity_identities(
                     &network,
-                    encode_balanced_point_assignment(point).quantities,
+                    encode_balanced_point_assignment(point)?.quantities,
                 )
                 .map(|quantities| dto::StoredOperatingPointAssignment { quantities })
             })
@@ -1024,7 +1088,7 @@ fn encode_ac_pf_instance(instance: &powerio_prob::AcPfInstance) -> Result<dto::A
             .map(|point| {
                 align_balanced_quantity_identities(
                     &network,
-                    encode_balanced_point_assignment(point).quantities,
+                    encode_balanced_point_assignment(point)?.quantities,
                 )
                 .map(|quantities| dto::StoredOperatingPointAssignment { quantities })
             })
@@ -1042,7 +1106,7 @@ fn encode_dc_opf_instance(instance: &powerio_prob::DcOpfInstance) -> Result<dto:
             .map(|point| {
                 align_balanced_quantity_identities(
                     &network,
-                    encode_balanced_point_assignment(point).quantities,
+                    encode_balanced_point_assignment(point)?.quantities,
                 )
                 .map(|quantities| dto::StoredOperatingPointAssignment { quantities })
             })
@@ -1062,7 +1126,7 @@ fn encode_ac_opf_instance(instance: &powerio_prob::AcOpfInstance) -> Result<dto:
             .map(|point| {
                 align_balanced_quantity_identities(
                     &network,
-                    encode_balanced_point_assignment(point).quantities,
+                    encode_balanced_point_assignment(point)?.quantities,
                 )
                 .map(|quantities| dto::StoredOperatingPointAssignment { quantities })
             })
@@ -1073,11 +1137,16 @@ fn encode_ac_opf_instance(instance: &powerio_prob::AcOpfInstance) -> Result<dto:
     })
 }
 
-fn encode_mc_ac_pf_instance(instance: &powerio_prob::McAcPfInstance) -> dto::McAcPfInstance {
-    dto::McAcPfInstance {
+fn encode_mc_ac_pf_instance(
+    instance: &powerio_prob::McAcPfInstance,
+) -> Result<dto::McAcPfInstance> {
+    Ok(dto::McAcPfInstance {
         network: Box::new(instance.network().clone()),
-        initial_point: instance.initial_point().map(encode_mc_point_assignment),
-    }
+        initial_point: instance
+            .initial_point()
+            .map(encode_mc_point_assignment)
+            .transpose()?,
+    })
 }
 
 fn encode_mc_ac_opf_instance(
@@ -1087,7 +1156,10 @@ fn encode_mc_ac_opf_instance(
         network: Box::new(instance.network().clone()),
         objective: encode_objective(instance.objective())?,
         constraints: instance.constraints().clone(),
-        initial_point: instance.initial_point().map(encode_mc_point_assignment),
+        initial_point: instance
+            .initial_point()
+            .map(encode_mc_point_assignment)
+            .transpose()?,
     })
 }
 
@@ -1095,7 +1167,7 @@ fn encode_lindist3flow_opf_instance(
     instance: &powerio_prob::LinDist3FlowOpfInstance,
 ) -> Result<dto::LinDist3FlowOpfInstance> {
     Ok(dto::LinDist3FlowOpfInstance {
-        base: encode_mc_ac_opf_instance(instance.base_instance())?,
+        base: encode_mc_ac_opf_instance(instance.source_instance())?,
         options: dto::LinDist3FlowBuildOptions {
             reference_policy: match instance.options().reference_policy {
                 powerio_prob::LinDist3FlowReferencePolicy::Auto => {
@@ -1124,6 +1196,14 @@ fn encode_lindist3flow_opf_instance(
             },
             require_neutral_provenance: instance.options().require_neutral_provenance,
         },
+    })
+}
+
+fn encode_lindist3flow_pf_instance(
+    instance: &powerio_prob::LinDist3FlowPfInstance,
+) -> Result<dto::LinDist3FlowPfInstance> {
+    Ok(dto::LinDist3FlowPfInstance {
+        formulation: encode_lindist3flow_opf_instance(instance.formulation())?,
     })
 }
 
@@ -1187,6 +1267,11 @@ fn stored_row(values: &[f64]) -> Vec<StoredF64> {
     values.iter().copied().map(StoredF64).collect()
 }
 
+/// A solution vector the reader bounds as operating point values.
+fn stored_values(values: &[f64]) -> Result<Vec<StoredF64>> {
+    bounded_values(stored_row(values))
+}
+
 fn plain_row(values: &[StoredF64]) -> Vec<f64> {
     values.iter().map(|value| value.0).collect()
 }
@@ -1204,12 +1289,14 @@ fn plain_grid(rows: &[Vec<StoredF64>]) -> Vec<Vec<f64>> {
 fn bus_column(
     network: &crate::BalancedNetwork,
     read: impl Fn(crate::BusId) -> Option<f64>,
-) -> Vec<StoredF64> {
-    network
-        .buses()
-        .iter()
-        .map(|bus| StoredF64(read(bus.id).unwrap_or(f64::NAN)))
-        .collect()
+) -> Result<Vec<StoredF64>> {
+    bounded_values(
+        network
+            .buses()
+            .iter()
+            .map(|bus| StoredF64(read(bus.id).unwrap_or(f64::NAN)))
+            .collect(),
+    )
 }
 
 fn branch_identity(network: &crate::BalancedNetwork, row: usize) -> String {
@@ -1229,45 +1316,54 @@ fn generator_identity(network: &crate::BalancedNetwork, row: usize) -> String {
 fn branch_column(
     network: &crate::BalancedNetwork,
     read: impl Fn(&str) -> Option<f64>,
-) -> Vec<StoredF64> {
-    (0..network.branches().len())
-        .map(|row| StoredF64(read(&branch_identity(network, row)).unwrap_or(f64::NAN)))
-        .collect()
+) -> Result<Vec<StoredF64>> {
+    bounded_values(
+        (0..network.branches().len())
+            .map(|row| StoredF64(read(&branch_identity(network, row)).unwrap_or(f64::NAN)))
+            .collect(),
+    )
 }
 
 fn generator_column(
     network: &crate::BalancedNetwork,
     read: impl Fn(&str) -> Option<f64>,
-) -> Vec<StoredF64> {
-    (0..network.generators().len())
-        .map(|row| StoredF64(read(&generator_identity(network, row)).unwrap_or(f64::NAN)))
-        .collect()
+) -> Result<Vec<StoredF64>> {
+    bounded_values(
+        (0..network.generators().len())
+            .map(|row| StoredF64(read(&generator_identity(network, row)).unwrap_or(f64::NAN)))
+            .collect(),
+    )
 }
 
 /// An optional solution column, already in the network's table order.
-fn optional_column(values: Option<&[f64]>) -> Option<Vec<StoredF64>> {
-    values.map(|column| column.iter().copied().map(StoredF64).collect())
+fn optional_column(values: Option<&[f64]>) -> Result<Option<Vec<StoredF64>>> {
+    values.map(stored_values).transpose()
 }
 
 fn encode_dispatch(
     dispatch: Option<&powerio_prob::GeneratorDispatch>,
-) -> Option<dto::GeneratorDispatch> {
-    dispatch.map(|dispatch| dto::GeneratorDispatch {
-        p_mw: stored_row(&dispatch.p_mw),
-        q_mvar: stored_row(&dispatch.q_mvar),
-    })
+) -> Result<Option<dto::GeneratorDispatch>> {
+    dispatch
+        .map(|dispatch| {
+            Ok(dto::GeneratorDispatch {
+                p_mw: stored_values(&dispatch.p_mw)?,
+                q_mvar: stored_values(&dispatch.q_mvar)?,
+            })
+        })
+        .transpose()
 }
 
 fn encode_three_winding_transformer_terminal_powers(
     values: &[powerio_prob::ThreeWindingTransformerTerminalPower],
-) -> Vec<dto::ThreeWindingTransformerTerminalPower> {
-    values
+) -> Result<Vec<dto::ThreeWindingTransformerTerminalPower>> {
+    check_collection_len("three-winding transformer terminal powers", values.len())?;
+    Ok(values
         .iter()
         .map(|value| dto::ThreeWindingTransformerTerminalPower {
             p_mw: value.p_mw.map(StoredF64),
             q_mvar: value.q_mvar.map(StoredF64),
         })
-        .collect()
+        .collect())
 }
 
 fn decode_three_winding_transformer_terminal_powers(
@@ -1286,13 +1382,17 @@ fn decode_three_winding_transformer_terminal_powers(
 
 fn encode_three_winding_transformer_terminal_active_powers(
     values: &[powerio_prob::ThreeWindingTransformerTerminalActivePower],
-) -> Vec<dto::ThreeWindingTransformerTerminalActivePower> {
-    values
+) -> Result<Vec<dto::ThreeWindingTransformerTerminalActivePower>> {
+    check_collection_len(
+        "three-winding transformer terminal active powers",
+        values.len(),
+    )?;
+    Ok(values
         .iter()
         .map(|value| dto::ThreeWindingTransformerTerminalActivePower {
             p_mw: value.p_mw.map(StoredF64),
         })
-        .collect()
+        .collect())
 }
 
 fn decode_three_winding_transformer_terminal_active_powers(
@@ -1315,15 +1415,15 @@ fn encode_dc_pf_solution(solution: &powerio_prob::DcPfSolution) -> Result<dto::D
         termination: solution.termination().clone(),
         residuals: *solution.residuals(),
         producer: solution.producer().map(str::to_string),
-        bus_voltage_angle: bus_column(network, |bus| solution.bus_voltage_angle(bus)),
-        bus_active_injection: bus_column(network, |bus| solution.bus_active_injection(bus)),
-        branch_from_active_flow: branch_column(network, |id| solution.branch_from_active_flow(id)),
-        branch_to_active_flow: branch_column(network, |id| solution.branch_to_active_flow(id)),
+        bus_voltage_angle: bus_column(network, |bus| solution.bus_voltage_angle(bus))?,
+        bus_active_injection: bus_column(network, |bus| solution.bus_active_injection(bus))?,
+        branch_from_active_flow: branch_column(network, |id| solution.branch_from_active_flow(id))?,
+        branch_to_active_flow: branch_column(network, |id| solution.branch_to_active_flow(id))?,
         three_winding_transformer_terminal_active_powers:
             encode_three_winding_transformer_terminal_active_powers(
                 solution.three_winding_transformer_terminal_active_powers(),
-            ),
-        generator_dispatch: encode_dispatch(solution.generator_dispatch()),
+            )?,
+        generator_dispatch: encode_dispatch(solution.generator_dispatch())?,
     })
 }
 
@@ -1334,20 +1434,21 @@ fn encode_ac_pf_solution(solution: &powerio_prob::AcPfSolution) -> Result<dto::A
         termination: solution.termination().clone(),
         residuals: *solution.residuals(),
         producer: solution.producer().map(str::to_string),
-        bus_voltage_magnitude: bus_column(network, |bus| solution.bus_voltage_magnitude(bus)),
-        bus_voltage_angle: bus_column(network, |bus| solution.bus_voltage_angle(bus)),
-        bus_active_injection: bus_column(network, |bus| solution.bus_active_injection(bus)),
-        bus_reactive_injection: bus_column(network, |bus| solution.bus_reactive_injection(bus)),
-        branch_from_active_flow: branch_column(network, |id| solution.branch_from_active_flow(id)),
+        bus_voltage_magnitude: bus_column(network, |bus| solution.bus_voltage_magnitude(bus))?,
+        bus_voltage_angle: bus_column(network, |bus| solution.bus_voltage_angle(bus))?,
+        bus_active_injection: bus_column(network, |bus| solution.bus_active_injection(bus))?,
+        bus_reactive_injection: bus_column(network, |bus| solution.bus_reactive_injection(bus))?,
+        branch_from_active_flow: branch_column(network, |id| solution.branch_from_active_flow(id))?,
         branch_from_reactive_flow: branch_column(network, |id| {
             solution.branch_from_reactive_flow(id)
-        }),
-        branch_to_active_flow: branch_column(network, |id| solution.branch_to_active_flow(id)),
-        branch_to_reactive_flow: branch_column(network, |id| solution.branch_to_reactive_flow(id)),
-        three_winding_transformer_terminal_powers: encode_three_winding_transformer_terminal_powers(
-            solution.three_winding_transformer_terminal_powers(),
-        ),
-        generator_dispatch: encode_dispatch(solution.generator_dispatch()),
+        })?,
+        branch_to_active_flow: branch_column(network, |id| solution.branch_to_active_flow(id))?,
+        branch_to_reactive_flow: branch_column(network, |id| solution.branch_to_reactive_flow(id))?,
+        three_winding_transformer_terminal_powers:
+            encode_three_winding_transformer_terminal_powers(
+                solution.three_winding_transformer_terminal_powers(),
+            )?,
+        generator_dispatch: encode_dispatch(solution.generator_dispatch())?,
     })
 }
 
@@ -1358,19 +1459,21 @@ fn encode_dc_opf_solution(solution: &powerio_prob::DcOpfSolution) -> Result<dto:
         termination: solution.termination().clone(),
         residuals: *solution.residuals(),
         producer: solution.producer().map(str::to_string),
-        bus_voltage_angle: bus_column(network, |bus| solution.bus_voltage_angle(bus)),
-        bus_active_injection: bus_column(network, |bus| solution.bus_active_injection(bus)),
-        branch_from_active_flow: branch_column(network, |id| solution.branch_from_active_flow(id)),
-        branch_to_active_flow: branch_column(network, |id| solution.branch_to_active_flow(id)),
-        generator_active_power: generator_column(network, |id| solution.generator_active_power(id)),
+        bus_voltage_angle: bus_column(network, |bus| solution.bus_voltage_angle(bus))?,
+        bus_active_injection: bus_column(network, |bus| solution.bus_active_injection(bus))?,
+        branch_from_active_flow: branch_column(network, |id| solution.branch_from_active_flow(id))?,
+        branch_to_active_flow: branch_column(network, |id| solution.branch_to_active_flow(id))?,
+        generator_active_power: generator_column(network, |id| {
+            solution.generator_active_power(id)
+        })?,
         three_winding_transformer_terminal_active_powers:
             encode_three_winding_transformer_terminal_active_powers(
                 solution.three_winding_transformer_terminal_active_powers(),
-            ),
+            )?,
         objective: StoredF64(solution.objective()),
-        bus_active_power_marginal: optional_column(solution.bus_active_power_marginals()),
-        branch_from_limit_multiplier: optional_column(solution.branch_from_limit_multipliers()),
-        branch_to_limit_multiplier: optional_column(solution.branch_to_limit_multipliers()),
+        bus_active_power_marginal: optional_column(solution.bus_active_power_marginals())?,
+        branch_from_limit_multiplier: optional_column(solution.branch_from_limit_multipliers())?,
+        branch_to_limit_multiplier: optional_column(solution.branch_to_limit_multipliers())?,
     })
 }
 
@@ -1381,28 +1484,31 @@ fn encode_ac_opf_solution(solution: &powerio_prob::AcOpfSolution) -> Result<dto:
         termination: solution.termination().clone(),
         residuals: *solution.residuals(),
         producer: solution.producer().map(str::to_string),
-        bus_voltage_magnitude: bus_column(network, |bus| solution.bus_voltage_magnitude(bus)),
-        bus_voltage_angle: bus_column(network, |bus| solution.bus_voltage_angle(bus)),
-        bus_active_injection: bus_column(network, |bus| solution.bus_active_injection(bus)),
-        bus_reactive_injection: bus_column(network, |bus| solution.bus_reactive_injection(bus)),
-        branch_from_active_flow: branch_column(network, |id| solution.branch_from_active_flow(id)),
+        bus_voltage_magnitude: bus_column(network, |bus| solution.bus_voltage_magnitude(bus))?,
+        bus_voltage_angle: bus_column(network, |bus| solution.bus_voltage_angle(bus))?,
+        bus_active_injection: bus_column(network, |bus| solution.bus_active_injection(bus))?,
+        bus_reactive_injection: bus_column(network, |bus| solution.bus_reactive_injection(bus))?,
+        branch_from_active_flow: branch_column(network, |id| solution.branch_from_active_flow(id))?,
         branch_from_reactive_flow: branch_column(network, |id| {
             solution.branch_from_reactive_flow(id)
-        }),
-        branch_to_active_flow: branch_column(network, |id| solution.branch_to_active_flow(id)),
-        branch_to_reactive_flow: branch_column(network, |id| solution.branch_to_reactive_flow(id)),
-        generator_active_power: generator_column(network, |id| solution.generator_active_power(id)),
+        })?,
+        branch_to_active_flow: branch_column(network, |id| solution.branch_to_active_flow(id))?,
+        branch_to_reactive_flow: branch_column(network, |id| solution.branch_to_reactive_flow(id))?,
+        generator_active_power: generator_column(network, |id| {
+            solution.generator_active_power(id)
+        })?,
         generator_reactive_power: generator_column(network, |id| {
             solution.generator_reactive_power(id)
-        }),
-        three_winding_transformer_terminal_powers: encode_three_winding_transformer_terminal_powers(
-            solution.three_winding_transformer_terminal_powers(),
-        ),
+        })?,
+        three_winding_transformer_terminal_powers:
+            encode_three_winding_transformer_terminal_powers(
+                solution.three_winding_transformer_terminal_powers(),
+            )?,
         objective: StoredF64(solution.objective()),
-        bus_active_power_marginal: optional_column(solution.bus_active_power_marginals()),
-        bus_reactive_power_marginal: optional_column(solution.bus_reactive_power_marginals()),
-        branch_from_limit_multiplier: optional_column(solution.branch_from_limit_multipliers()),
-        branch_to_limit_multiplier: optional_column(solution.branch_to_limit_multipliers()),
+        bus_active_power_marginal: optional_column(solution.bus_active_power_marginals())?,
+        bus_reactive_power_marginal: optional_column(solution.bus_reactive_power_marginals())?,
+        branch_from_limit_multiplier: optional_column(solution.branch_from_limit_multipliers())?,
+        branch_to_limit_multiplier: optional_column(solution.branch_to_limit_multipliers())?,
     })
 }
 
@@ -1417,34 +1523,43 @@ fn encode_socwr_opf_solution(
         residuals: *solution.residuals(),
         producer: solution.producer().map(str::to_string),
         values: dto::SocwrOpfValues {
-            bus_voltage_magnitude_squared: stored_row(&values.bus_voltage_magnitude_squared),
-            branch_voltage_product_real: stored_row(&values.branch_voltage_product_real),
-            branch_voltage_product_imaginary: stored_row(&values.branch_voltage_product_imaginary),
-            generator_active_power: stored_row(&values.generator_active_power),
-            generator_reactive_power: stored_row(&values.generator_reactive_power),
-            branch_from_active_power: stored_row(&values.branch_from_active_power),
-            branch_from_reactive_power: stored_row(&values.branch_from_reactive_power),
-            branch_to_active_power: stored_row(&values.branch_to_active_power),
-            branch_to_reactive_power: stored_row(&values.branch_to_reactive_power),
+            bus_voltage_magnitude_squared: stored_values(&values.bus_voltage_magnitude_squared)?,
+            branch_voltage_product_real: stored_values(&values.branch_voltage_product_real)?,
+            branch_voltage_product_imaginary: stored_values(
+                &values.branch_voltage_product_imaginary,
+            )?,
+            generator_active_power: stored_values(&values.generator_active_power)?,
+            generator_reactive_power: stored_values(&values.generator_reactive_power)?,
+            branch_from_active_power: stored_values(&values.branch_from_active_power)?,
+            branch_from_reactive_power: stored_values(&values.branch_from_reactive_power)?,
+            branch_to_active_power: stored_values(&values.branch_to_active_power)?,
+            branch_to_reactive_power: stored_values(&values.branch_to_reactive_power)?,
             three_winding_transformer_terminal_powers:
                 encode_three_winding_transformer_terminal_powers(
                     &values.three_winding_transformer_terminal_powers,
-                ),
+                )?,
         },
         duals: dto::SocwrOpfDuals {
-            bus_active_power_marginal: duals.bus_active_power_marginal.as_deref().map(stored_row),
+            bus_active_power_marginal: duals
+                .bus_active_power_marginal
+                .as_deref()
+                .map(stored_values)
+                .transpose()?,
             bus_reactive_power_marginal: duals
                 .bus_reactive_power_marginal
                 .as_deref()
-                .map(stored_row),
+                .map(stored_values)
+                .transpose()?,
             branch_from_thermal_limit_multiplier: duals
                 .branch_from_thermal_limit_multiplier
                 .as_deref()
-                .map(stored_row),
+                .map(stored_values)
+                .transpose()?,
             branch_to_thermal_limit_multiplier: duals
                 .branch_to_thermal_limit_multiplier
                 .as_deref()
-                .map(stored_row),
+                .map(stored_values)
+                .transpose()?,
         },
         objective_lower_bound: StoredF64(solution.objective_lower_bound()),
     })
@@ -1455,21 +1570,21 @@ fn encode_socwr_opf_solution(
 fn terminal_column(
     network: &powerio_dist::MulticonductorNetwork,
     read: impl Fn(&str, &str) -> Option<f64>,
-) -> Vec<StoredF64> {
+) -> Result<Vec<StoredF64>> {
     let mut column = Vec::new();
     for bus in network.buses() {
         for terminal in &bus.terminals {
             column.push(StoredF64(read(&bus.id, terminal).unwrap_or(f64::NAN)));
         }
     }
-    column
+    bounded_values(column)
 }
 
 /// The optional terminal columns are present when any terminal answers.
 fn optional_terminal_column(
     network: &powerio_dist::MulticonductorNetwork,
     read: impl Fn(&str, &str) -> Option<f64>,
-) -> Option<Vec<StoredF64>> {
+) -> Result<Option<Vec<StoredF64>>> {
     let mut any = false;
     let mut column = Vec::new();
     for bus in network.buses() {
@@ -1483,30 +1598,32 @@ fn optional_terminal_column(
             }
         }
     }
-    any.then_some(column)
+    any.then(|| bounded_values(column)).transpose()
 }
 
-fn encode_mc_ac_pf_solution(solution: &powerio_prob::McAcPfSolution) -> dto::McAcPfSolution {
+fn encode_mc_ac_pf_solution(
+    solution: &powerio_prob::McAcPfSolution,
+) -> Result<dto::McAcPfSolution> {
     let network = solution.network();
-    dto::McAcPfSolution {
-        instance: encode_mc_ac_pf_instance(solution.instance()),
+    Ok(dto::McAcPfSolution {
+        instance: encode_mc_ac_pf_instance(solution.instance())?,
         termination: solution.termination().clone(),
         residuals: *solution.residuals(),
         producer: solution.producer().map(str::to_string),
         terminal_voltage_magnitude: terminal_column(network, |bus, terminal| {
             solution.terminal_voltage_magnitude(bus, terminal)
-        }),
+        })?,
         terminal_voltage_angle: terminal_column(network, |bus, terminal| {
             solution.terminal_voltage_angle(bus, terminal)
-        }),
+        })?,
         terminal_current_magnitude: optional_terminal_column(network, |bus, terminal| {
             solution.terminal_current_magnitude(bus, terminal)
-        }),
+        })?,
         terminal_active_power: optional_terminal_column(network, |bus, terminal| {
             solution.terminal_active_power(bus, terminal)
-        }),
-        source_active_injection: stored_row(solution.source_active_injections()),
-    }
+        })?,
+        source_active_injection: stored_values(solution.source_active_injections())?,
+    })
 }
 
 fn encode_mc_ac_opf_solution(
@@ -1520,18 +1637,18 @@ fn encode_mc_ac_opf_solution(
         producer: solution.producer().map(str::to_string),
         terminal_voltage_magnitude: terminal_column(network, |bus, terminal| {
             solution.terminal_voltage_magnitude(bus, terminal)
-        }),
+        })?,
         terminal_voltage_angle: terminal_column(network, |bus, terminal| {
             solution.terminal_voltage_angle(bus, terminal)
-        }),
+        })?,
         terminal_current_magnitude: optional_terminal_column(network, |bus, terminal| {
             solution.terminal_current_magnitude(bus, terminal)
-        }),
+        })?,
         terminal_active_power: optional_terminal_column(network, |bus, terminal| {
             solution.terminal_active_power(bus, terminal)
-        }),
-        source_active_injection: stored_row(solution.source_active_injections()),
-        generator_active_power: stored_row(solution.generator_active_powers()),
+        })?,
+        source_active_injection: stored_values(solution.source_active_injections())?,
+        generator_active_power: stored_values(solution.generator_active_powers())?,
         objective: StoredF64(solution.objective()),
     })
 }
@@ -1539,24 +1656,55 @@ fn encode_mc_ac_opf_solution(
 fn encode_lindist3flow_opf_solution(
     solution: &powerio_prob::LinDist3FlowOpfSolution,
 ) -> Result<dto::LinDist3FlowOpfSolution> {
-    let values = solution.values();
     Ok(dto::LinDist3FlowOpfSolution {
         instance: encode_lindist3flow_opf_instance(solution.instance())?,
         termination: solution.termination().clone(),
         residuals: *solution.residuals(),
         producer: solution.producer().map(str::to_string),
-        values: dto::LinDist3FlowOpfValues {
-            terminal_voltage_magnitude_squared: stored_row(
-                &values.terminal_voltage_magnitude_squared,
-            ),
-            line_active_power: stored_row(&values.line_active_power),
-            line_reactive_power: stored_row(&values.line_reactive_power),
-            generator_active_power: stored_row(&values.generator_active_power),
-            generator_reactive_power: stored_row(&values.generator_reactive_power),
-            source_active_power: stored_row(&values.source_active_power),
-            source_reactive_power: stored_row(&values.source_reactive_power),
-        },
+        values: encode_lindist3flow_values(solution.values())?,
         objective: StoredF64(solution.objective()),
+    })
+}
+
+fn encode_lindist3flow_values(
+    values: &powerio_prob::LinDist3FlowOpfValues,
+) -> Result<dto::LinDist3FlowOpfValues> {
+    Ok(dto::LinDist3FlowOpfValues {
+        terminal_voltage_magnitude_squared: stored_values(
+            &values.terminal_voltage_magnitude_squared,
+        )?,
+        line_active_power: stored_values(&values.line_active_power)?,
+        line_reactive_power: stored_values(&values.line_reactive_power)?,
+        generator_active_power: stored_values(&values.generator_active_power)?,
+        generator_reactive_power: stored_values(&values.generator_reactive_power)?,
+        source_active_power: stored_values(&values.source_active_power)?,
+        source_reactive_power: stored_values(&values.source_reactive_power)?,
+    })
+}
+
+fn encode_lindist3flow_pf_solution(
+    solution: &powerio_prob::LinDist3FlowPfSolution,
+) -> Result<dto::LinDist3FlowPfSolution> {
+    Ok(dto::LinDist3FlowPfSolution {
+        instance: encode_lindist3flow_pf_instance(solution.instance())?,
+        termination: solution.termination().clone(),
+        residuals: *solution.residuals(),
+        producer: solution.producer().map(str::to_string),
+        values: encode_lindist3flow_values(solution.values())?,
+        limit_checks: solution
+            .limit_checks()
+            .iter()
+            .map(|check| dto::LinDist3FlowLimitCheck {
+                line: check.line.clone(),
+                conductor: check.conductor,
+                kind: check.kind,
+                value: StoredF64(check.value),
+                limit: StoredF64(check.limit),
+                loading_ratio: StoredF64(check.loading_ratio),
+                overloaded: check.overloaded,
+                constraint_enforced: check.constraint_enforced,
+            })
+            .collect(),
     })
 }
 
@@ -1617,9 +1765,12 @@ fn validate_decoded_networks(value: &PioValue) -> Result<()> {
     match value {
         PioValue::BalancedNetwork(network) => balanced(network),
         PioValue::MulticonductorNetwork(network) => multiconductor(network),
-        // A layer carries no network to validate; its own rules run in the
-        // stored document validator.
-        PioValue::GeoLayer(_) => Ok(()),
+        // A layer and the three contingency analysis files carry no network to
+        // validate; their own rules run in the stored document validator.
+        PioValue::GeoLayer(_)
+        | PioValue::ContingencySet(_)
+        | PioValue::SubsystemSet(_)
+        | PioValue::MonitoredSet(_) => Ok(()),
         PioValue::BalancedOperatingPoint(point) => balanced(point.network()),
         PioValue::MulticonductorOperatingPoint(point) => multiconductor(point.network()),
         PioValue::TimeSeries(series) => series
@@ -1635,6 +1786,7 @@ fn validate_decoded_networks(value: &PioValue) -> Result<()> {
         PioValue::AcScucInstance(instance) => balanced(instance.network()),
         PioValue::McAcPfInstance(instance) => multiconductor(instance.network()),
         PioValue::McAcOpfInstance(instance) => multiconductor(instance.network()),
+        PioValue::LinDist3FlowPfInstance(instance) => multiconductor(instance.network()),
         PioValue::LinDist3FlowOpfInstance(instance) => multiconductor(instance.network()),
         PioValue::DcPfSolution(solution) => balanced(solution.network()),
         PioValue::AcPfSolution(solution) => balanced(solution.network()),
@@ -1643,6 +1795,7 @@ fn validate_decoded_networks(value: &PioValue) -> Result<()> {
         PioValue::SocwrOpfSolution(solution) => balanced(solution.network()),
         PioValue::McAcPfSolution(solution) => multiconductor(solution.network()),
         PioValue::McAcOpfSolution(solution) => multiconductor(solution.network()),
+        PioValue::LinDist3FlowPfSolution(solution) => multiconductor(solution.network()),
         PioValue::LinDist3FlowOpfSolution(solution) => multiconductor(solution.network()),
         PioValue::AcScucSolution(solution) => balanced(solution.instance().network()),
     }
@@ -1916,6 +2069,9 @@ fn decode_value(value: dto::StoredValue) -> Result<PioValue> {
             PioValue::MulticonductorNetwork(*network)
         }
         dto::StoredValue::GeoLayer(layer) => PioValue::GeoLayer(*layer),
+        dto::StoredValue::ContingencySet(set) => PioValue::ContingencySet(*set),
+        dto::StoredValue::SubsystemSet(set) => PioValue::SubsystemSet(*set),
+        dto::StoredValue::MonitoredSet(set) => PioValue::MonitoredSet(*set),
         dto::StoredValue::BalancedOperatingPoint(point) => {
             PioValue::BalancedOperatingPoint(decode_balanced_point(point)?)
         }
@@ -1976,6 +2132,9 @@ fn decode_value(value: dto::StoredValue) -> Result<PioValue> {
         dto::StoredValue::McAcOpfInstance(instance) => {
             PioValue::McAcOpfInstance(decode_mc_ac_opf_instance(instance)?)
         }
+        dto::StoredValue::LinDist3FlowPfInstance(instance) => {
+            PioValue::LinDist3FlowPfInstance(decode_lindist3flow_pf_instance(instance)?)
+        }
         dto::StoredValue::LinDist3FlowOpfInstance(instance) => {
             PioValue::LinDist3FlowOpfInstance(decode_lindist3flow_opf_instance(instance)?)
         }
@@ -2002,6 +2161,9 @@ fn decode_value(value: dto::StoredValue) -> Result<PioValue> {
         }
         dto::StoredValue::McAcOpfSolution(solution) => {
             PioValue::McAcOpfSolution(decode_mc_ac_opf_solution(*solution)?)
+        }
+        dto::StoredValue::LinDist3FlowPfSolution(solution) => {
+            PioValue::LinDist3FlowPfSolution(decode_lindist3flow_pf_solution(*solution)?)
         }
         dto::StoredValue::LinDist3FlowOpfSolution(solution) => {
             PioValue::LinDist3FlowOpfSolution(decode_lindist3flow_opf_solution(*solution)?)
@@ -2237,15 +2399,7 @@ fn decode_lindist3flow_opf_solution(
     solution: dto::LinDist3FlowOpfSolution,
 ) -> Result<powerio_prob::LinDist3FlowOpfSolution> {
     let instance = std::sync::Arc::new(decode_lindist3flow_opf_instance(solution.instance)?);
-    let mut values = powerio_prob::LinDist3FlowOpfValues::default();
-    values.terminal_voltage_magnitude_squared =
-        plain_row(&solution.values.terminal_voltage_magnitude_squared);
-    values.line_active_power = plain_row(&solution.values.line_active_power);
-    values.line_reactive_power = plain_row(&solution.values.line_reactive_power);
-    values.generator_active_power = plain_row(&solution.values.generator_active_power);
-    values.generator_reactive_power = plain_row(&solution.values.generator_reactive_power);
-    values.source_active_power = plain_row(&solution.values.source_active_power);
-    values.source_reactive_power = plain_row(&solution.values.source_reactive_power);
+    let values = decode_lindist3flow_values(&solution.values);
     let mut value = powerio_prob::LinDist3FlowOpfSolution::new(
         instance,
         solution.termination,
@@ -2254,6 +2408,63 @@ fn decode_lindist3flow_opf_solution(
     )
     .map_err(|error| invalid(error.to_string()))?
     .with_residuals(solution.residuals);
+    if let Some(producer) = solution.producer {
+        value = value.with_producer(producer);
+    }
+    Ok(value)
+}
+
+fn decode_lindist3flow_values(
+    values: &dto::LinDist3FlowOpfValues,
+) -> powerio_prob::LinDist3FlowOpfValues {
+    let mut decoded = powerio_prob::LinDist3FlowOpfValues::default();
+    decoded.terminal_voltage_magnitude_squared =
+        plain_row(&values.terminal_voltage_magnitude_squared);
+    decoded.line_active_power = plain_row(&values.line_active_power);
+    decoded.line_reactive_power = plain_row(&values.line_reactive_power);
+    decoded.generator_active_power = plain_row(&values.generator_active_power);
+    decoded.generator_reactive_power = plain_row(&values.generator_reactive_power);
+    decoded.source_active_power = plain_row(&values.source_active_power);
+    decoded.source_reactive_power = plain_row(&values.source_reactive_power);
+    decoded
+}
+
+fn decode_lindist3flow_pf_solution(
+    solution: dto::LinDist3FlowPfSolution,
+) -> Result<powerio_prob::LinDist3FlowPfSolution> {
+    let instance = std::sync::Arc::new(decode_lindist3flow_pf_instance(solution.instance)?);
+    let values = decode_lindist3flow_values(&solution.values);
+    let reported_checks = solution
+        .limit_checks
+        .into_iter()
+        .map(|check| {
+            let decoded = powerio_prob::LinDist3FlowLimitCheck::monitored(
+                check.line,
+                check.conductor,
+                check.kind,
+                check.value.0,
+                check.limit.0,
+            );
+            if (decoded.loading_ratio - check.loading_ratio.0).abs() > 1e-10
+                || decoded.overloaded != check.overloaded
+                || check.constraint_enforced
+            {
+                return Err(invalid(
+                    "stored LinDist3Flow limit check has inconsistent ratio, overload flag, or enforcement state",
+                ));
+            }
+            Ok(decoded)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut value =
+        powerio_prob::LinDist3FlowPfSolution::new(instance, solution.termination, values)
+            .map_err(|error| invalid(error.to_string()))?;
+    if value.limit_checks() != reported_checks {
+        return Err(invalid(
+            "stored LinDist3Flow limit checks do not match the converged values and retained ratings",
+        ));
+    }
+    value = value.with_residuals(solution.residuals);
     if let Some(producer) = solution.producer {
         value = value.with_producer(producer);
     }
@@ -2444,6 +2655,15 @@ fn decode_lindist3flow_opf_instance(
         .with_required_neutral_provenance(instance.options.require_neutral_provenance);
     powerio_prob::LinDist3FlowOpfInstance::from_mc_ac(base, options)
         .map_err(|error| invalid(error.to_string()))
+}
+
+fn decode_lindist3flow_pf_instance(
+    instance: dto::LinDist3FlowPfInstance,
+) -> Result<powerio_prob::LinDist3FlowPfInstance> {
+    powerio_prob::LinDist3FlowPfInstance::from_formulation(decode_lindist3flow_opf_instance(
+        instance.formulation,
+    )?)
+    .map_err(|error| invalid(error.to_string()))
 }
 
 // ---- record encoding / decoding --------------------------------------------
@@ -3003,6 +3223,29 @@ mod collection_ir_tests {
         assert_eq!(
             decoded.history()[0].output_type(),
             Some(BALANCED_NETWORK_TYPE)
+        );
+    }
+}
+
+#[cfg(test)]
+mod write_bound_tests {
+    use super::*;
+
+    #[test]
+    fn a_vector_past_the_reader_bound_is_refused_at_write() {
+        let bound = dto::MAX_STORED_OPERATING_POINT_VALUES;
+        assert!(check_operating_point_len(bound).is_ok());
+
+        let mut values = powerio_prob::LinDist3FlowOpfValues::default();
+        values.line_active_power = vec![0.0; bound + 1];
+        let error = encode_lindist3flow_values(&values).unwrap_err();
+        assert_eq!(
+            error.info().map(|info| info.code),
+            Some(codes::EMIT_MODULE_RECORD_CAP.code)
+        );
+        assert!(
+            error.to_string().contains("4194305 operating point values"),
+            "{error}"
         );
     }
 }

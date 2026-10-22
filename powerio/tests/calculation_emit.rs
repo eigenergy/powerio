@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use powerio::{
     AcOpfInstance, AcOpfSolution, DcOpfInstance, LinDist3FlowBuildOptions, LinDist3FlowOpfInstance,
-    LinDist3FlowOpfSolution, LinDist3FlowOpfValues, PioModule, PioValue, Source, Termination, emit,
+    LinDist3FlowOpfSolution, LinDist3FlowOpfValues, LinDist3FlowPfInstance, PioModule, PioValue,
+    Source, Termination, emit,
 };
 use powerio_core::{Destination, EmittedOutput};
 
@@ -208,4 +209,59 @@ fn lindist3flow_instance_and_solution_emit_their_network_with_diagnostics() {
             .iter()
             .any(|diagnostic| diagnostic.code() == "EMIT.SOLUTION.DATA_OMITTED")
     );
+}
+
+#[test]
+fn lindist3flow_instances_emit_the_source_network_not_the_prepared_one() {
+    let terminal = vec!["a".to_owned()];
+    let mut network = multiconductor_network();
+    network
+        .buses_mut()
+        .push(powerio::dist::DistBus::new("load", terminal.clone()));
+    network
+        .line_codes_mut()
+        .push(powerio::dist::DistLineCode::new(
+            "code",
+            vec![vec![0.1]],
+            vec![vec![0.05]],
+        ));
+    network.lines_mut().push(powerio::dist::DistLine::new(
+        "feeder",
+        "source",
+        "load",
+        terminal.clone(),
+        terminal.clone(),
+        "code",
+        10.0,
+    ));
+    network
+        .capacitors_mut()
+        .push(powerio::dist::DistCapacitor::new(
+            "bank",
+            "load",
+            terminal,
+            powerio::dist::Configuration::Wye,
+            1_000.0,
+            230.0,
+        ));
+
+    // Preparation lowers the capacitor to a synthetic `__l3f-` shunt; the
+    // emitted network is still the one the caller supplied.
+    let options = LinDist3FlowBuildOptions::default()
+        .with_unsupported(powerio::LinDist3FlowUnsupported::Lower);
+    let opf = LinDist3FlowOpfInstance::from_network(network.clone(), options).unwrap();
+    let pf = LinDist3FlowPfInstance::from_network(network, options).unwrap();
+    assert_eq!(opf.network().capacitors().as_slice(), []);
+    for module in [
+        PioModule::new(PioValue::from(opf)),
+        PioModule::new(PioValue::from(pf)),
+    ] {
+        let result = emit(&module, "dss", Destination::memory("case.dss").unwrap()).unwrap();
+        let text = String::from_utf8(memory_bytes(&result)).unwrap();
+        assert!(
+            text.to_ascii_lowercase().contains("capacitor.bank"),
+            "{text}"
+        );
+        assert!(!text.contains("__l3f-"), "{text}");
+    }
 }

@@ -20,6 +20,8 @@ from typing import (
     overload,
 )
 
+from ._sincal import SincalBalancedReadOptions as SincalBalancedReadOptions
+
 _T = TypeVar("_T")
 __all__ = [
     "AcOpfInstance",
@@ -32,8 +34,10 @@ __all__ = [
     "ApparentPower",
     "Artifact",
     "BalancedNetwork",
+    "BusMerge",
     "CalculationUpdate",
     "ComponentId",
+    "ContingencySet",
     "DcOpfInstance",
     "DcOpfSolution",
     "DcPfInstance",
@@ -43,10 +47,15 @@ __all__ = [
     "EmitResult",
     "FormatInfo",
     "GeoLayer",
+    "LinDist3FlowOpfInstance",
+    "LinDist3FlowOpfSolution",
+    "LinDist3FlowPfInstance",
+    "LinDist3FlowPfSolution",
     "McAcOpfInstance",
     "McAcOpfSolution",
     "McAcPfInstance",
     "McAcPfSolution",
+    "MonitoredSet",
     "MulticonductorNetwork",
     "NetworkUpdate",
     "OperatingPoint",
@@ -84,6 +93,7 @@ __all__ = [
     "ScucViolationCosts",
     "SocwrOpfSolution",
     "SourceSpan",
+    "SubsystemSet",
     "TimePoint",
     "TimeSeries",
     "UpdateChange",
@@ -92,6 +102,8 @@ __all__ = [
     "apply_bus_load_active_power",
     "apply_updates",
     "deserialize",
+    "diagnostic_record",
+    "diagnostic_records",
     "dist",
     "emit",
     "features",
@@ -820,7 +832,79 @@ class DisplayData(NamedTuple):
     kind: Literal["powerworld"]
     data: PwdDisplay
 
+class BusGroup(TypedDict):
+    survivor: int
+    members: List[int]
+
+class RemovedBranch(TypedDict):
+    row: int
+    id: str
+    from_id: int
+    to_id: int
+    survivor: int
+    reason: Literal["zero_impedance", "closed_switch", "shorted"]
+    in_service: bool
+    r: float
+    x: float
+    b: float
+    rate_a: float
+    rate_b: float
+    rate_c: float
+
+class RemovedSwitch(TypedDict):
+    row: int
+    id: str
+    from_id: int
+    to_id: int
+    survivor: int
+    reason: Literal["zero_impedance", "closed_switch", "shorted"]
+    closed: bool
+    thermal_rating: Optional[float]
+
+class RemovedFlow(TypedDict):
+    p_from: float
+    method: Literal["out_of_service", "tree", "reactance", "minimum_norm"]
+
+class RemovedFlows(TypedDict):
+    branches: List[RemovedFlow]
+    switches: List[RemovedFlow]
+    diagnostics: List[Diagnostic]
+
+class BusMerge:
+    _inner: Any
+    def __init__(self, inner: Any) -> None: ...
+    @property
+    def network(self) -> "BalancedNetwork": ...
+    @property
+    def rule(self) -> str: ...
+    @property
+    def merged_buses(self) -> Dict[int, int]: ...
+    @property
+    def groups(self) -> List[BusGroup]: ...
+    @property
+    def removed_branches(self) -> List[RemovedBranch]: ...
+    @property
+    def removed_switches(self) -> List[RemovedSwitch]: ...
+    @property
+    def branch_rows(self) -> List[Optional[int]]: ...
+    @property
+    def switch_rows(self) -> List[Optional[int]]: ...
+    @property
+    def charging_shunts(self) -> List[int]: ...
+    @property
+    def diagnostics(self) -> List[Diagnostic]: ...
+    def survivor(self, bus: int) -> int: ...
+    def calc_removed_flows(
+        self,
+        branch_p_from: Any,
+        branch_p_to: Any,
+        *,
+        generator_p: Any = ...,
+        transformer_3w_p: Any = ...,
+    ) -> RemovedFlows: ...
+
 class BalancedNetwork:
+    def component_counts(self) -> dict[str, int]: ...
     # Data attributes and the non-matrix methods delegate to the compiled
     # `_powerio._BalancedNetwork` handle at runtime via `BalancedNetwork.__getattr__`.
     _inner: Any
@@ -853,6 +937,8 @@ class BalancedNetwork:
     ]
     n_buses: int
     n_branches: int
+    n_lines: int
+    n_substations: int
     n_generators: int
     n_loads: int
     n_shunts: int
@@ -883,6 +969,16 @@ class BalancedNetwork:
     def apply_geo_layer(
         self, text: str, name_hint: Optional[str] = ...
     ) -> Tuple["BalancedNetwork", Dict[str, Any]]: ...
+    # The resolution dict states `cases`, `resolved`, `unresolved`, and
+    # `unrecognized_statements` as counts, `case_results`, and
+    # `diagnostics`. Each component of a case result states `type`, `row`,
+    # `in_service`, and `id`, which is `None` when the network states no
+    # identity for that row.
+    def resolve_contingencies(self, text: str) -> Dict[str, Any]: ...
+    def expand_contingencies(
+        self, con_text: str, sub_text: str
+    ) -> Tuple[str, List[Diagnostic]]: ...
+    def select_subsystem_buses(self, sub_text: str, name: str) -> List[int]: ...
     def calc_bprime_matrix(
         self, scheme: Scheme = ..., *, skip_zero_impedance: bool = ...
     ) -> Any: ...
@@ -945,11 +1041,21 @@ class BalancedNetwork:
         self,
         formula: BranchSusceptanceFormula = ...,
     ) -> Any: ...
+    def merge_buses(
+        self,
+        *,
+        closed_switches: bool = ...,
+        zero_impedance: Optional[Literal["exact", "psse", "impedance"]] = ...,
+        threshold: Optional[float] = ...,
+        charging: Literal["fold", "drop"] = ...,
+    ) -> "BusMerge": ...
     def to_normalized(
         self,
         *,
         clamp_angle_bounds: bool = ...,
         angle_bound_pad: Optional[float] = ...,
+        closed_switches: Literal["merge", "refuse", "keep"] = ...,
+        island_references: Literal["stated", "per_island"] = ...,
     ) -> "BalancedNetwork": ...
     def to_ppc(self) -> Dict[str, Any]: ...
     def to_networkx(self) -> Any: ...
@@ -1055,6 +1161,9 @@ class DcOpfInstance(_BalancedCalculation): ...
 class AcOpfInstance(_BalancedCalculation): ...
 class McAcPfInstance(_MulticonductorCalculation): ...
 class McAcOpfInstance(_MulticonductorCalculation): ...
+class LinDist3FlowPfInstance(_MulticonductorCalculation):
+    @property
+    def metadata(self) -> dict[str, Any]: ...
 class LinDist3FlowOpfInstance(_MulticonductorCalculation):
     @property
     def metadata(self) -> dict[str, Any]: ...
@@ -1065,6 +1174,14 @@ class LinDist3FlowOpfSolution(_MulticonductorCalculation, _CalculationSolution):
     def termination(self) -> str: ...
     @property
     def objective(self) -> float: ...
+    def __getitem__(self, quantity: str) -> list[float]: ...
+class LinDist3FlowPfSolution(_MulticonductorCalculation, _CalculationSolution):
+    @property
+    def instance(self) -> LinDist3FlowPfInstance: ...
+    @property
+    def termination(self) -> str: ...
+    @property
+    def limit_checks(self) -> list[dict[str, Any]]: ...
     def __getitem__(self, quantity: str) -> list[float]: ...
 class AcScucInstance(_BalancedCalculation):
     @property
@@ -1082,6 +1199,18 @@ class DcOpfSolution(_BalancedCalculation, _CalculationSolution):
 class GeoLayer(_TypedValue):
     @property
     def geojson(self) -> str: ...
+
+class ContingencySet(_TypedValue):
+    @property
+    def text(self) -> str: ...
+
+class SubsystemSet(_TypedValue):
+    @property
+    def text(self) -> str: ...
+
+class MonitoredSet(_TypedValue):
+    @property
+    def text(self) -> str: ...
 
 class AcOpfSolution(_BalancedCalculation, _CalculationSolution):
     @property
@@ -1121,6 +1250,7 @@ class AcScucSolution(_BalancedCalculation, _CalculationSolution):
     def objective(self) -> Optional[float]: ...
 
 class PioModule(Generic[_T]):
+    def sever_source(self) -> PioModule[_T]: ...
     _inner: Any
     def __init__(self, inner: Any) -> None: ...
     @classmethod
@@ -1137,6 +1267,8 @@ class PioModule(Generic[_T]):
     @property
     def value(self) -> _T: ...
     @property
+    def type_name(self) -> str: ...
+    @property
     def diagnostics(self) -> List[Diagnostic]: ...
     def to_balanced_report(self, base_mva: float = ...) -> Any: ...
     def to_balanced(self, base_mva: float = ...) -> PioModule[BalancedNetwork]: ...
@@ -1147,6 +1279,7 @@ class PioModule(Generic[_T]):
     def to_mc_ac_pf_instance(self) -> PioModule[McAcPfInstance]: ...
     def to_mc_ac_opf_instance(self) -> PioModule[McAcOpfInstance]: ...
     def to_lindist3flow_opf_instance(self) -> PioModule[LinDist3FlowOpfInstance]: ...
+    def to_lindist3flow_pf_instance(self) -> PioModule[LinDist3FlowPfInstance]: ...
 
 def apply_updates(
     target: Union[
@@ -1171,7 +1304,11 @@ def apply_bus_load_active_power(
 ) -> UpdateReport: ...
 
 def parse(
-    source: Any, *, format: Optional[Format] = ..., name: Optional[str] = ...
+    source: Any, *, format: Optional[Format] = ..., name: Optional[str] = ...,
+    sincal_multiconductor: Optional[dist.SincalReadOptions] = ...,
+    sincal_balanced: Optional[SincalBalancedReadOptions] = ...,
+    acquisition_root: Optional[Any] = ...,
+    named_buffers: Optional[Mapping[str, bytes]] = ...,
 ) -> PioModule[Any]: ...
 def emit(
     module: PioModule[Any], format: Format, destination: Optional[Any] = ...
@@ -1179,3 +1316,7 @@ def emit(
 def serialize(module: PioModule[Any], destination: Optional[Any] = ...) -> EmitResult: ...
 def deserialize(source: Any) -> PioModule[Any]: ...
 def features() -> Dict[str, bool]: ...
+def diagnostic_record(diagnostic: Diagnostic) -> Dict[str, Any]: ...
+def diagnostic_records(
+    diagnostics: Iterable[Diagnostic],
+) -> List[Dict[str, Any]]: ...

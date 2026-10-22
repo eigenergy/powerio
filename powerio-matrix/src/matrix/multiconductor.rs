@@ -14,9 +14,12 @@
 //! the linecode), shunts, and capacitor banks. Ideal equipment — two winding
 //! transformer coupling and voltage sources — enters the augmented system as
 //! exact constraint rows over the node voltages with their coupled ideal
-//! currents. Transformer leakage, non-WYE connections, floating winding
-//! neutrals, core shunts and tap decisions require a different augmented
-//! formulation and return an unsupported-physics error before assembly.
+//! currents. Ideal WYE windings retain explicit floating or grounded neutral
+//! terminals. Transformer leakage, non-WYE connections, implicit neutral
+//! impedances, core shunts and tap decisions return an unsupported-physics
+//! error before assembly.
+
+mod transformer;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -338,43 +341,7 @@ pub fn calc_multiconductor_admittance_matrix(
 ) -> Result<MulticonductorAdmittance> {
     powerio_dist::require_electrical_readiness(network)?;
     let index = MulticonductorNodeIndex::build(network)?;
-    for transformer in network.transformers() {
-        let supported = transformer.windings.len() == 2
-            && transformer.xsc_pct.iter().all(|&x| x == 0.0)
-            && transformer.windings.iter().all(|w| {
-                w.conn == powerio_dist::DistWindingConn::Wye
-                    && w.r_pct == 0.0
-                    && w.r_neutral.is_none_or(|r| r == 0.0)
-                    && w.x_neutral.is_none_or(|x| x == 0.0)
-                    && (w.terminal_map.len() == 1
-                        || w.terminal_map.last().is_some_and(|terminal| {
-                            index.resolve(&w.bus, terminal) == Some(NodeRef::Ground)
-                        }))
-            })
-            && transformer.windings[0].terminal_map.len()
-                == transformer.windings[1].terminal_map.len()
-            && transformer.extras.get("no_load_shunt").is_none_or(|shunt| {
-                ["g", "b"]
-                    .iter()
-                    .all(|key| shunt.get(key).and_then(serde_json::Value::as_f64) == Some(0.0))
-            })
-            && ["g_no_load", "b_no_load", "%noloadloss", "%imag"]
-                .iter()
-                .all(|key| {
-                    transformer
-                        .extras
-                        .get(*key)
-                        .and_then(serde_json::Value::as_f64)
-                        .is_none_or(|v| v == 0.0)
-                })
-            && !["tap_min", "tap_max", "tap_ratio_min", "tap_ratio_max"]
-                .iter()
-                .any(|key| transformer.extras.contains_key(*key));
-        if !supported {
-            return Err(powerio_core::Error::new(&codes::BUILD_MULTI_PHYSICS_UNSUPPORTED,
-                format!("transformer `{}` requires leakage, winding connection, neutral, core-loss, or tap-control equations outside the ideal grounded-WYE admittance profile", transformer.name)).into());
-        }
-    }
+    let transformer_constraints = transformer::ideal_wye_constraints(network, &index)?;
     let n = index.len();
     let mut stamper = Stamper::new(n);
     let mut diagnostics = Vec::new();
@@ -572,17 +539,39 @@ pub fn calc_multiconductor_admittance_matrix(
     let mut labels = Vec::new();
     let mut rows = 0usize;
 
-    // Voltage sources: v(terminal) = stated complex voltage, one row per
-    // ungrounded source terminal.
+    // Each source specifies a voltage difference. The transpose of the
+    // incidence rows supplies equal opposite reference-terminal currents.
     for source in network.sources() {
+        let reference =
+            source
+                .reference_terminal
+                .as_ref()
+                .map_or(Ok(NodeRef::Ground), |terminal| {
+                    resolve(
+                        &source.bus,
+                        terminal,
+                        &format!("source `{}` reference", source.name),
+                    )
+                })?;
         for (position, terminal) in source.terminal_map.iter().enumerate() {
             let node = resolve(&source.bus, terminal, &format!("source `{}`", source.name))?;
-            let NodeRef::Node(dense) = node else {
-                continue;
-            };
-            constraint_re.push((rows, dense, 1.0));
             let magnitude = source.v_magnitude.get(position).copied().unwrap_or(0.0);
             let angle = source.v_angle.get(position).copied().unwrap_or(0.0);
+            if node == reference {
+                if source.reference_terminal.is_some() && magnitude != 0.0 {
+                    return Err(Error::Mtx(format!(
+                        "source `{}` has a nonzero voltage across electrically identical terminals",
+                        source.name
+                    )));
+                }
+                continue;
+            }
+            if let NodeRef::Node(dense) = node {
+                constraint_re.push((rows, dense, 1.0));
+            }
+            if let NodeRef::Node(dense) = reference {
+                constraint_re.push((rows, dense, -1.0));
+            }
             rhs_re.push(magnitude * angle.cos());
             rhs_im.push(magnitude * angle.sin());
             labels.push(format!("source:{}:{terminal}", source.name));
@@ -590,79 +579,16 @@ pub fn calc_multiconductor_admittance_matrix(
         }
     }
 
-    // Grounded WYE winding pairs use an exact voltage-ratio constraint.
-    // Unsupported transformer physics is rejected before assembly.
-    for transformer in network.transformers() {
-        if transformer.windings.len() != 2 {
-            diagnostics.push(
-                Diagnostic::of(
-                    &codes::BUILD_MULTI_UNSUPPORTED_STAMP,
-                    format!(
-                        "transformer `{}` has {} windings; only the two winding ideal plus leakage stamp is supported",
-                        transformer.name,
-                        transformer.windings.len()
-                    ),
-                )
-                ,
-            );
-            continue;
+    // WYE constraints use phase-to-neutral voltages on each side. The
+    // transpose carries each winding's neutral current into nodal balance.
+    for constraint in transformer_constraints {
+        for (column, coefficient) in constraint.coefficients {
+            constraint_re.push((rows, column, coefficient));
         }
-        let primary = &transformer.windings[0];
-        let secondary = &transformer.windings[1];
-        let pairs = primary.terminal_map.len().min(secondary.terminal_map.len());
-        let ratio = if secondary.v_ref == 0.0 {
-            0.0
-        } else {
-            (primary.v_ref * primary.tap) / (secondary.v_ref * secondary.tap)
-        };
-        if !ratio.is_finite() || ratio == 0.0 {
-            diagnostics.push(Diagnostic::of(
-                &codes::BUILD_MULTI_UNSUPPORTED_STAMP,
-                format!(
-                    "transformer `{}` states no finite winding ratio; its stamp is omitted",
-                    transformer.name
-                ),
-            ));
-            continue;
-        }
-        for pair in 0..pairs {
-            let p = resolve(
-                &primary.bus,
-                &primary.terminal_map[pair],
-                &format!("transformer `{}`", transformer.name),
-            )?;
-            let s = resolve(
-                &secondary.bus,
-                &secondary.terminal_map[pair],
-                &format!("transformer `{}`", transformer.name),
-            )?;
-            match (p, s) {
-                (NodeRef::Node(dense_p), NodeRef::Node(dense_s)) => {
-                    constraint_re.push((rows, dense_p, 1.0));
-                    constraint_re.push((rows, dense_s, -ratio));
-                    rhs_re.push(0.0);
-                    rhs_im.push(0.0);
-                    labels.push(format!("transformer:{}:{pair}", transformer.name));
-                    rows += 1;
-                }
-                // A grounded terminal fixes that side of the relation.
-                (NodeRef::Node(dense_p), NodeRef::Ground) => {
-                    constraint_re.push((rows, dense_p, 1.0));
-                    rhs_re.push(0.0);
-                    rhs_im.push(0.0);
-                    labels.push(format!("transformer:{}:{pair}", transformer.name));
-                    rows += 1;
-                }
-                (NodeRef::Ground, NodeRef::Node(dense_s)) => {
-                    constraint_re.push((rows, dense_s, 1.0));
-                    rhs_re.push(0.0);
-                    rhs_im.push(0.0);
-                    labels.push(format!("transformer:{}:{pair}", transformer.name));
-                    rows += 1;
-                }
-                (NodeRef::Ground, NodeRef::Ground) => {}
-            }
-        }
+        rhs_re.push(0.0);
+        rhs_im.push(0.0);
+        labels.push(constraint.label);
+        rows += 1;
     }
 
     // Injections (loads, generators) are boundary data, never admittance;

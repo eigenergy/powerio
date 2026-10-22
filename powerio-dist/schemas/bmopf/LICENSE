@@ -1,0 +1,48 @@
+Creative Commons Attribution 4.0 International (CC BY 4.0)
+
+Copyright (c) 2026 IEEE PES Task Force on Benchmarking Multiconductor OPF for
+Distribution Systems and contributors.
+
+This work, meaning every JSON Schema document, example case, test, and
+accompanying text in this repository, is licensed under the Creative Commons
+Attribution 4.0 International License (CC BY 4.0).
+
+Network cases published elsewhere against these schemas are not covered. Each
+carries the license of the data it derives from, recorded in its own
+meta.license field.
+
+You are free to:
+
+  - Share — copy and redistribute the material in any medium or format.
+  - Adapt — remix, transform, and build upon the material for any purpose,
+    even commercially.
+
+The licensor cannot revoke these freedoms as long as you follow the license
+terms.
+
+Under the following terms:
+
+  - Attribution — You must give appropriate credit, provide a link to the
+    license, and indicate if changes were made. You may do so in any reasonable
+    manner, but not in any way that suggests the licensor endorses you or your
+    use.
+  - No additional restrictions — You may not apply legal terms or technological
+    measures that legally restrict others from doing anything the license
+    permits.
+
+Notices:
+
+  - You do not have to comply with the license for elements of the material in
+    the public domain or where your use is permitted by an applicable exception
+    or limitation.
+  - No warranties are given. The license may not give you all of the permissions
+    necessary for your intended use. For example, other rights such as publicity,
+    privacy, or moral rights may limit how you use the material.
+
+SPDX-License-Identifier: CC-BY-4.0
+
+The full legal code of this license is available at:
+  https://creativecommons.org/licenses/by/4.0/legalcode
+
+A human-readable summary (which is not a substitute for the license) is at:
+  https://creativecommons.org/licenses/by/4.0/

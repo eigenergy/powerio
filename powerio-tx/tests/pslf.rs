@@ -349,7 +349,7 @@ fn pslf_reads_and_writes_a_three_winding_transformer() {
     // Round trip through the writer keeps the buses, impedances, and primary tap.
     let net2 = parse_pslf(&emit_pslf(&net).text).unwrap();
     assert_eq!(net2.transformers_3w().len(), 1);
-    assert!(net2.branches().is_empty());
+    assert_eq!(net2.branches().as_slice(), []);
     let t2 = &net2.transformers_3w()[0];
     assert!((t2.z[2].x - 0.07).abs() < 1e-9);
     assert!((t2.windings[0].tap - 1.05).abs() < 1e-9);

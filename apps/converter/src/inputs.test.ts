@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, test } from 'vitest';
 import { BlobReader, BlobWriter, ZipWriter } from '@zip.js/zip.js';
 import { groupInputs, safeName, unpack } from './inputs';
 const entry = (path: string, content = '') => ({ path, file: new File([content], path.split('/').at(-1)!) });
@@ -38,4 +38,37 @@ describe('project discovery', () => {
     expect(safeName('CON')).toBe('case-CON');
     expect(safeName('')).toBe('case');
   });
+});
+
+
+test('retains nonstandard DSS companions and opaque assets', async () => {
+  const [project] = await groupInputs([
+    entry('one/Master.dss', 'Redirect "loads.inc"'), entry('one/loads.inc'), entry('one/notes.asset'), entry('one/metadata.json'),
+  ]);
+  expect(project.primary).toBe('Master.dss');
+  expect(project.entries.map(file => file.path)).toEqual(['Master.dss', 'loads.inc', 'notes.asset', 'metadata.json']);
+});
+
+test('separates DSS projects beneath a batch wrapper', async () => {
+  const projects = await groupInputs(['one', 'two'].flatMap(id => [
+    entry(`batch/dss/${id}/case.dss`, 'Redirect source/Master.dss'),
+    entry(`batch/dss/${id}/source/Master.dss`, 'Redirect loads.inc'),
+    entry(`batch/dss/${id}/source/loads.inc`), entry(`batch/dss/${id}/notes.asset`),
+  ]));
+  expect(projects).toHaveLength(2);
+  for (const project of projects) {
+    expect(project.primary).toBe('case.dss');
+    expect(project.entries.map(file => file.path)).toEqual(['case.dss', 'source/Master.dss', 'source/loads.inc', 'notes.asset']);
+  }
+});
+
+test('retains parent-relative references without absorbing another project', async () => {
+  const projects = await groupInputs([
+    entry('batch/one/Master.dss', 'Redirect ../shared/loads.inc'), entry('batch/one/note.asset'),
+    entry('batch/shared/loads.inc'), entry('batch/two/Master.dss'), entry('batch/two/other.asset'),
+  ]);
+  expect(projects).toHaveLength(2);
+  const one = projects.find(project => project.primary === 'one/Master.dss')!;
+  expect(one.entries.map(file => file.path)).toEqual(['one/Master.dss', 'one/note.asset', 'shared/loads.inc']);
+  expect(projects.find(project => project.primary === 'Master.dss')!.entries).toHaveLength(2);
 });

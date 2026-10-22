@@ -293,7 +293,7 @@ fn ieee30_matches_case30_up_to_its_documented_edits() {
 
     // The archive copy places its one interchange record after the `-9`
     // terminator, so it is reported and no area is read.
-    assert!(cdf.areas().is_empty());
+    assert_eq!(cdf.areas().as_slice(), []);
     let malformed: Vec<_> = parsed
         .diagnostics
         .iter()

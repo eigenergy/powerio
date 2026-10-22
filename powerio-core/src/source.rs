@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -11,8 +12,87 @@ use crate::{Error, SourceId};
 /// budget the distribution reader has enforced since 0.7.
 const MAX_REFERENCED_FILES: usize = 4_096;
 
-/// Total bytes of referenced files one source may acquire.
-const MAX_REFERENCED_BYTES: u64 = 64 << 20;
+// One default for primary input and cumulative acquisition, including archives.
+const DEFAULT_SOURCE_BYTES: u64 = 1 << 30;
+const MAX_REFERENCED_BYTES: u64 = DEFAULT_SOURCE_BYTES;
+const DEFAULT_PRIMARY_BYTES: u64 = DEFAULT_SOURCE_BYTES;
+
+const PRIMARY_LIMIT_VAR: &str = "POWERIO_MAX_PRIMARY_BYTES";
+const REFERENCED_LIMIT_VAR: &str = "POWERIO_MAX_REFERENCED_BYTES";
+
+/// Both byte limits a filesystem source applies, read together so that an
+/// invalid setting is refused before any input is opened or read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SourceLimits {
+    primary: u64,
+    referenced: u64,
+}
+
+impl SourceLimits {
+    /// Read each limit through `lookup`, which maps a variable name to its
+    /// value. [`Source::open`] passes `std::env::var_os`; tests pass a fixed
+    /// table so they never touch the process environment.
+    fn from_lookup(lookup: impl Fn(&'static str) -> Option<OsString>) -> Result<Self, Error> {
+        Ok(Self {
+            primary: parse_primary_limit(lookup(PRIMARY_LIMIT_VAR).as_deref())?,
+            referenced: parse_referenced_limit(lookup(REFERENCED_LIMIT_VAR).as_deref())?,
+        })
+    }
+}
+
+fn referenced_byte_limit() -> Result<u64, Error> {
+    parse_referenced_limit(std::env::var_os(REFERENCED_LIMIT_VAR).as_deref())
+}
+
+fn parse_referenced_limit(value: Option<&OsStr>) -> Result<u64, Error> {
+    parse_byte_limit(REFERENCED_LIMIT_VAR, value, MAX_REFERENCED_BYTES)
+}
+
+fn parse_primary_limit(value: Option<&OsStr>) -> Result<u64, Error> {
+    parse_byte_limit(PRIMARY_LIMIT_VAR, value, DEFAULT_PRIMARY_BYTES)
+}
+
+fn parse_byte_limit(name: &str, value: Option<&OsStr>, default: u64) -> Result<u64, Error> {
+    let Some(value) = value else {
+        return Ok(default);
+    };
+    let limit = value
+        .to_str()
+        .filter(|value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|&limit| limit > 0 && isize::try_from(limit).is_ok());
+    limit.ok_or_else(|| Error::new(&crate::codes::REQUEST_SOURCE_INVALID_LIMIT,
+        format!("{name} must be a positive decimal byte count within this platform's allocation limit")))
+}
+
+#[derive(Clone, Copy)]
+enum ReadBudget {
+    Primary(u64),
+    Referenced { remaining: u64, total: u64 },
+}
+
+impl ReadBudget {
+    fn bytes(self) -> u64 {
+        match self {
+            Self::Primary(n) => n,
+            Self::Referenced { remaining, .. } => remaining,
+        }
+    }
+    fn exceeded(self, name: &str) -> Error {
+        match self {
+            Self::Primary(limit) => Error::new(
+                &crate::codes::READ_IO_PRIMARY_BUDGET,
+                format!("primary source `{name}` exceeds its {limit} byte limit"),
+            ),
+            Self::Referenced { total, .. } => Error::new(
+                &crate::codes::READ_IO_REFERENCE_BUDGET,
+                format!(
+                    "referenced file `{name}` would take this source past its {total} byte acquisition budget"
+                ),
+            ),
+        }
+    }
+}
 
 /// Deepest resolved or walked path beneath one acquisition root, in segments.
 const MAX_REFERENCED_DEPTH: usize = 64;
@@ -167,6 +247,7 @@ impl SourceBuffer {
 #[derive(Debug)]
 struct FileAcquisition {
     root_display: PathBuf,
+    max_bytes: u64,
     /// True when the root was selected with [`Source::with_acquisition_root`]
     /// rather than defaulted to the containing directory.
     selected: bool,
@@ -238,21 +319,38 @@ pub struct Source {
 
 impl Source {
     /// Acquire a file eagerly or a directory lazily.
+    ///
+    /// Primary files are limited to 1 GiB unless `POWERIO_MAX_PRIMARY_BYTES`
+    /// supplies a positive decimal byte count. The limit is checked before
+    /// allocation. Referenced files have a separate cumulative budget.
+    /// `POWERIO_MAX_REFERENCED_BYTES` overrides that budget (1 GiB by default).
+    /// Both variables are read and validated once, before the path is opened,
+    /// for file and directory sources alike; the budget is shared by every
+    /// clone of the source.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, Error> {
-        let path = path.into();
+        let path: PathBuf = path.into();
+        Self::open_with_limits(&path, std::env::var_os)
+    }
+
+    fn open_with_limits(
+        path: &Path,
+        lookup: impl Fn(&'static str) -> Option<OsString>,
+    ) -> Result<Self, Error> {
         if path.as_os_str().is_empty() {
             return Err(Error::new(
                 &crate::codes::REQUEST_SOURCE_INVALID_PATH,
                 "source path cannot be empty",
             ));
         }
+        // Refuse an invalid setting before anything is opened or read.
+        let limits = SourceLimits::from_lookup(lookup)?;
         let name: Arc<str> = path.to_string_lossy().into_owned().into();
 
         // The open itself refuses a symbolic link at the named path, so there
         // is no metadata inspection that a concurrent replacement could
         // invalidate before the read; the file or directory decision reads
         // the already opened handle.
-        let file = match platform::open_no_follow(&path) {
+        let file = match platform::open_no_follow(path) {
             Ok(file) => file,
             Err(error) if platform::is_symlink_refusal(&error) => {
                 return Err(Error::new(
@@ -260,20 +358,20 @@ impl Source {
                     format!("source `{}` is a symbolic link", path.display()),
                 ));
             }
-            Err(error) if platform::is_directory_open_failure(&error, &path) => {
-                return Self::open_directory(name, &path);
+            Err(error) if platform::is_directory_open_failure(&error, path) => {
+                return Self::open_directory(name, path, limits.referenced);
             }
-            Err(cause) => return Err(open_error(&crate::codes::READ_IO_OPEN, &path, cause)),
+            Err(cause) => return Err(open_error(&crate::codes::READ_IO_OPEN, path, cause)),
         };
         let metadata = file
             .metadata()
-            .map_err(|cause| open_error(&crate::codes::READ_IO_METADATA, &path, cause))?;
+            .map_err(|cause| open_error(&crate::codes::READ_IO_METADATA, path, cause))?;
         if metadata.is_dir() {
             drop(file);
-            return Self::open_directory(name, &path);
+            return Self::open_directory(name, path, limits.referenced);
         }
-        let bytes = read_open_file(file, &name, u64::MAX)?;
-        let root_display = canonical_parent(&path)?;
+        let bytes = read_open_file(file, &name, ReadBudget::Primary(limits.primary))?;
+        let root_display = canonical_parent(path)?;
         let primary = SourceBuffer::new(
             SourceId::new(PRIMARY_SOURCE_ID)?,
             name.to_string(),
@@ -286,6 +384,7 @@ impl Source {
                 primary,
                 acquisition: FileAcquisition {
                     root_display,
+                    max_bytes: limits.referenced,
                     selected: false,
                     state: Mutex::new(AcquisitionState::default()),
                 },
@@ -294,7 +393,7 @@ impl Source {
         })
     }
 
-    fn open_directory(name: Arc<str>, path: &Path) -> Result<Self, Error> {
+    fn open_directory(name: Arc<str>, path: &Path, max_bytes: u64) -> Result<Self, Error> {
         let root_display = std::fs::canonicalize(path)
             .map_err(|cause| open_error(&crate::codes::READ_IO_METADATA, path, cause))?;
         Ok(Self {
@@ -302,6 +401,7 @@ impl Source {
             provider: Arc::new(SourceProvider::Directory {
                 acquisition: FileAcquisition {
                     root_display,
+                    max_bytes,
                     selected: false,
                     state: Mutex::new(AcquisitionState::default()),
                 },
@@ -491,6 +591,7 @@ impl Source {
                 primary,
                 acquisition: FileAcquisition {
                     root_display: canonical,
+                    max_bytes: acquisition.max_bytes,
                     selected: true,
                     state: Mutex::new(AcquisitionState::default()),
                 },
@@ -522,6 +623,17 @@ impl Source {
             &*self.provider,
             SourceProvider::Directory { .. } | SourceProvider::Memory { primary: None, .. }
         )
+    }
+
+    /// Byte limit for cumulative acquisition and expanded archive contents.
+    /// Filesystem sources capture `POWERIO_MAX_REFERENCED_BYTES` when opened;
+    /// memory sources read it when a parser requests expansion. Defaults to 1 GiB.
+    pub fn acquisition_byte_limit(&self) -> Result<u64, Error> {
+        match &*self.provider {
+            SourceProvider::File { acquisition, .. }
+            | SourceProvider::Directory { acquisition } => Ok(acquisition.max_bytes),
+            SourceProvider::Memory { .. } => referenced_byte_limit(),
+        }
     }
 
     /// Borrow the sole primary buffer of a file or memory source.
@@ -850,7 +962,7 @@ impl FileAcquisition {
                 format!("this source already acquired {MAX_REFERENCED_FILES} referenced files"),
             ));
         }
-        let remaining = MAX_REFERENCED_BYTES.saturating_sub(state.bytes);
+        let remaining = self.max_bytes.saturating_sub(state.bytes);
         let root = state.pinned_root(&self.root_display)?;
         let file = root.open_beneath(segments).map_err(|error| {
             if platform::is_symlink_refusal(&error) {
@@ -866,7 +978,14 @@ impl FileAcquisition {
                 .with_cause(error)
             }
         })?;
-        let bytes = read_open_file(file, &key, remaining)?;
+        let bytes = read_open_file(
+            file,
+            &key,
+            ReadBudget::Referenced {
+                remaining,
+                total: self.max_bytes,
+            },
+        )?;
         let directory = segments[..segments.len() - 1].to_vec();
         let buffer = SourceBuffer::new(SourceId::new(&key)?, key.clone(), bytes, directory);
         state.files += 1;
@@ -1031,11 +1150,12 @@ fn listing_error(display: &str, cause: std::io::Error) -> Error {
 
 /// Read an already opened regular file completely. The handle was opened with
 /// symbolic links refused, and the regular file check runs on the open
-/// descriptor, so no path is consulted twice. `max_bytes` bounds the
+/// descriptor, so no path is consulted twice. The budget bounds the
 /// allocation itself: a file whose declared length exceeds it is refused
 /// before any bytes are reserved, and the reader is capped so a file that
 /// grows past the bound during the read is refused rather than read.
-fn read_open_file(file: std::fs::File, name: &str, max_bytes: u64) -> Result<Arc<[u8]>, Error> {
+fn read_open_file(file: std::fs::File, name: &str, budget: ReadBudget) -> Result<Arc<[u8]>, Error> {
+    let max_bytes = budget.bytes();
     let metadata = file.metadata().map_err(|cause| {
         Error::new(
             &crate::codes::READ_IO_METADATA,
@@ -1051,12 +1171,7 @@ fn read_open_file(file: std::fs::File, name: &str, max_bytes: u64) -> Result<Arc
     }
     let declared_length = metadata.len();
     if declared_length > max_bytes {
-        return Err(Error::new(
-            &crate::codes::READ_IO_REFERENCE_BUDGET,
-            format!(
-                "referenced file `{name}` would take this source past its {MAX_REFERENCED_BYTES} byte acquisition budget"
-            ),
-        ));
+        return Err(budget.exceeded(name));
     }
     let capacity = usize::try_from(declared_length).map_err(|cause| {
         Error::new(
@@ -1385,23 +1500,7 @@ mod platform {
     }
 
     fn errno_clear() {
-        // SAFETY: writing 0 to the calling thread's errno location.
-        unsafe {
-            *errno_location() = 0;
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn errno_location() -> *mut libc::c_int {
-        // SAFETY: `__error` returns the calling thread's errno location.
-        unsafe { libc::__error() }
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    fn errno_location() -> *mut libc::c_int {
-        // SAFETY: `__errno_location` returns the calling thread's errno
-        // location.
-        unsafe { libc::__errno_location() }
+        errno::set_errno(errno::Errno(0));
     }
 
     /// Clear `O_NONBLOCK` on an opened descriptor before it is read.
@@ -2086,6 +2185,155 @@ mod tests {
             crate::ErrorCategory::Request
         );
         assert_eq!(sibling.unwrap(), b"real");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn default_budget_accepts_a_primary_and_reference_larger_than_64_mib() {
+        assert_eq!(DEFAULT_SOURCE_BYTES, 1_073_741_824);
+        let root = test_root("large-default-budget");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("large.dat");
+        let size = (64 << 20) + 1;
+        std::fs::File::create(&path).unwrap().set_len(size).unwrap();
+        let source = Source::open(&path).unwrap();
+        assert_eq!(source.primary_buffer().unwrap().bytes().len() as u64, size);
+        drop(source);
+        let directory = Source::open(&root).unwrap();
+        let name = crate::ArtifactPath::new("large.dat").unwrap();
+        assert_eq!(directory.buffer(&name).unwrap().bytes().len() as u64, size);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn primary_limits_validate_configuration_and_bound_allocation() {
+        use std::ffi::OsStr;
+        assert_eq!(parse_primary_limit(None).unwrap(), DEFAULT_PRIMARY_BYTES);
+        assert_eq!(parse_primary_limit(Some(OsStr::new("32"))).unwrap(), 32);
+        for value in ["", "0", "-1", "+1", " 32", "3KiB", "18446744073709551615"] {
+            assert!(parse_primary_limit(Some(OsStr::new(value))).is_err());
+        }
+        let root = test_root("primary-budget");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("input");
+        std::fs::write(&path, b"abcd").unwrap();
+        for limit in [4, 5] {
+            let bytes = read_open_file(
+                std::fs::File::open(&path).unwrap(),
+                "input",
+                ReadBudget::Primary(limit),
+            )
+            .unwrap();
+            assert_eq!(&*bytes, b"abcd");
+        }
+        assert!(
+            read_open_file(
+                std::fs::File::open(&path).unwrap(),
+                "input",
+                ReadBudget::Primary(3)
+            )
+            .is_err()
+        );
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len(DEFAULT_PRIMARY_BYTES * 4)
+            .unwrap();
+        let (error, allocated) = measured_bytes(|| {
+            read_open_file(
+                std::fs::File::open(&path).unwrap(),
+                "input",
+                ReadBudget::Primary(DEFAULT_PRIMARY_BYTES),
+            )
+            .unwrap_err()
+        });
+        assert!(error.to_string().contains("primary source"));
+        assert!(allocated < 4096);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn open_validates_both_limits_before_reading_files_or_directories() {
+        // A fixed table stands in for the process environment, so this test
+        // never races another test that reads or sets the variables.
+        fn lookup(
+            primary: Option<&'static str>,
+            referenced: Option<&'static str>,
+        ) -> impl Fn(&'static str) -> Option<OsString> {
+            move |name| match name {
+                PRIMARY_LIMIT_VAR => primary.map(OsString::from),
+                REFERENCED_LIMIT_VAR => referenced.map(OsString::from),
+                other => panic!("unexpected variable {other}"),
+            }
+        }
+        fn code(result: Result<Source, Error>) -> &'static str {
+            result
+                .err()
+                .and_then(|e| e.info())
+                .expect("registered")
+                .code
+        }
+        let invalid = crate::codes::REQUEST_SOURCE_INVALID_LIMIT.code;
+
+        assert_eq!(
+            SourceLimits::from_lookup(lookup(None, None)).unwrap(),
+            SourceLimits {
+                primary: DEFAULT_PRIMARY_BYTES,
+                referenced: MAX_REFERENCED_BYTES,
+            }
+        );
+        let root = test_root("limit-validation");
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("input");
+        std::fs::write(&file, b"abcd").unwrap();
+
+        // A directory open used to ignore the primary variable entirely.
+        for (primary, referenced) in [(Some("0"), None), (None, Some("-1"))] {
+            let opened = Source::open_with_limits(&root, lookup(primary, referenced));
+            assert_eq!(code(opened), invalid);
+        }
+        // A primary over its limit would fail with PRIMARY_BUDGET once read;
+        // INVALID_LIMIT shows that both settings are checked first.
+        let opened = Source::open_with_limits(&file, lookup(Some("3"), Some("1KiB")));
+        assert_eq!(code(opened), invalid);
+        let opened = Source::open_with_limits(&file, lookup(Some("3"), Some("9")));
+        assert_eq!(code(opened), crate::codes::READ_IO_PRIMARY_BUDGET.code);
+
+        let source = Source::open_with_limits(&file, lookup(Some("4"), Some("7"))).unwrap();
+        assert_eq!(source.primary_buffer().unwrap().bytes(), b"abcd");
+        assert_eq!(source.acquisition_byte_limit().unwrap(), 7);
+        let directory = Source::open_with_limits(&root, lookup(Some("1"), Some("5"))).unwrap();
+        assert_eq!(directory.acquisition_byte_limit().unwrap(), 5);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn referenced_limits_are_aggregate_and_cached_reads_are_free() {
+        use std::ffi::OsStr;
+        assert_eq!(parse_byte_limit("limit", None, 8).unwrap(), 8);
+        assert_eq!(
+            parse_byte_limit("limit", Some(OsStr::new("12")), 8).unwrap(),
+            12
+        );
+        for value in ["", "0", "-1", "+1", " 8", "8MiB", "18446744073709551615"] {
+            assert!(parse_byte_limit("limit", Some(OsStr::new(value)), 8).is_err());
+        }
+        let root = test_root("small-referenced-budget");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.xml"), b"abcd").unwrap();
+        std::fs::write(root.join("b.xml"), b"efgh").unwrap();
+        std::fs::write(root.join("c.xml"), b"i").unwrap();
+        let mut source = Source::open(&root).unwrap();
+        let SourceProvider::Directory { acquisition } = Arc::get_mut(&mut source.provider).unwrap()
+        else {
+            panic!("directory provider");
+        };
+        acquisition.max_bytes = 8;
+        let name = |s: &str| crate::ArtifactPath::new(s).unwrap();
+        source.buffer(&name("a.xml")).unwrap();
+        source.clone().buffer(&name("a.xml")).unwrap();
+        source.buffer(&name("b.xml")).unwrap();
+        let error = source.buffer(&name("c.xml")).unwrap_err();
+        assert!(error.to_string().contains("8 byte acquisition budget"));
         std::fs::remove_dir_all(root).unwrap();
     }
 

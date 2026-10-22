@@ -5,6 +5,7 @@ interpreter the wheel supports, with or without ``powerio[mcp]`` installed.
 """
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -12,12 +13,15 @@ from pathlib import Path
 import pytest
 from powerio.mcp import sandbox
 
+import powerio
+
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
 ENV_NAMES = ("POWERIO_MCP_ALLOWED_ROOTS", "POWERIO_MCP_ROOT", "POWERIO_MCP_ALLOWED_ROOT")
 
 
 @pytest.fixture(autouse=True)
-def _clear_roots(monkeypatch):
+def _clear_roots(monkeypatch, tmp_path):
+    monkeypatch.setattr(sandbox, "_DEFAULT_ROOT", tmp_path.resolve())
     for name in ENV_NAMES:
         monkeypatch.delenv(name, raising=False)
 
@@ -34,8 +38,8 @@ def test_importing_the_sandbox_does_not_pull_in_the_mcp_sdk():
     assert out.stdout.strip() == "[]"
 
 
-def test_no_roots_configured_allows_any_path(tmp_path):
-    assert sandbox.allowed_roots() == ()
+def test_no_roots_configured_uses_startup_directory(tmp_path):
+    assert sandbox.allowed_roots() == (tmp_path.resolve(),)
     assert sandbox.checked_path(str(tmp_path / "case9.m")) == str(tmp_path / "case9.m")
 
 
@@ -119,6 +123,53 @@ def test_a_write_into_a_missing_directory_raises(monkeypatch, tmp_path):
         )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions and symlinks")
+def test_a_refusal_does_not_describe_the_filesystem_outside_the_roots(
+    monkeypatch, tmp_path
+):
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "case9.m").write_text("x")
+    a_file = tmp_path / "file.m"
+    a_file.write_text("x")
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    os.symlink(blocked / "target.m", root / "link.m")
+    tree = root / "tree"
+    tree.mkdir()
+    os.symlink(blocked / "target.m", tree / "link.m")
+    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, str(root))
+
+    blocked.chmod(0)
+    try:
+        refusals = set()
+        for path, for_write in [
+            (tmp_path / "missing" / "x.m", False),
+            (a_file / "x.m", False),
+            (blocked / "x.m", False),
+            (root / "link.m", False),
+            (tmp_path / "missing" / "out.raw", True),
+            (blocked / "out.raw", True),
+        ]:
+            with pytest.raises(sandbox.PathNotAllowed) as raised:
+                sandbox.checked_path(str(path), for_write=for_write)
+            refusals.add(str(raised.value))
+        with pytest.raises(sandbox.PathNotAllowed) as through_a_file:
+            sandbox.checked_path(str(root / "case9.m" / "x.m"))
+        with pytest.raises(sandbox.PathNotAllowed) as tree_link:
+            sandbox.checked_read_tree(str(tree))
+    finally:
+        blocked.chmod(0o700)
+
+    assert refusals == {f"`path` is outside allowed MCP roots: {root.resolve()}"}
+    # Inside a root the reason stays, without the paths the OS error names.
+    assert str(through_a_file.value) == (
+        "cannot resolve `path` against allowed MCP roots: Not a directory"
+    )
+    assert str(tree / "link.m") in str(tree_link.value)
+    assert str(blocked) not in str(tree_link.value)
+
+
 def test_refusals_raise_the_exported_type(monkeypatch, tmp_path):
     # Consumers match on the type; the prose is free to change.
     assert "PathNotAllowed" in sandbox.__all__
@@ -147,8 +198,8 @@ def test_admitting_root_names_the_containing_root(monkeypatch, tmp_path):
         sandbox.admitting_root(tmp_path / "elsewhere.dss")
 
 
-def test_admitting_root_is_none_when_the_policy_is_off(tmp_path):
-    assert sandbox.admitting_root(tmp_path / "case.dss") is None
+def test_admitting_root_uses_startup_directory(tmp_path):
+    assert sandbox.admitting_root(tmp_path / "case.dss") == tmp_path.resolve()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
@@ -197,6 +248,71 @@ def test_read_tree_refuses_special_files(monkeypatch, tmp_path):
 
     with pytest.raises(sandbox.PathNotAllowed, match="non-file, non-directory"):
         sandbox.check_allowed_read_tree(root)
+
+
+def test_read_tree_keeps_the_acquisition_entry_budget(monkeypatch, tmp_path):
+    assert sandbox.MAX_TREE_ENTRIES == 4_096
+    root = tmp_path / "allowed"
+    case = root / "case"
+    (case / "tables").mkdir(parents=True)
+    (case / "buses.csv").write_text("bus")
+    (case / "generators.csv").write_text("gen")
+    (case / "tables" / "lines.csv").write_text("line")
+    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, str(root))
+    monkeypatch.setattr(sandbox, "MAX_TREE_ENTRIES", 3)
+
+    # Listing `tables` takes it off the count and adds its file, so the walk
+    # never holds more than three entries, as PowerIO's listing counts them.
+    assert sandbox.checked_read_tree(str(case)) == str(case)
+    (case / "loads.csv").write_text("load")
+    with pytest.raises(sandbox.PathNotAllowed, match="more than 3 entries"):
+        sandbox.check_allowed_read_tree(case)
+
+    # A directory found and not yet listed counts, even an empty one.
+    (case / "loads.csv").unlink()
+    (case / "empty").mkdir()
+    with pytest.raises(sandbox.PathNotAllowed, match="more than 3 entries"):
+        sandbox.check_allowed_read_tree(case)
+
+
+def test_read_tree_accepts_the_trees_powerio_lists(monkeypatch, tmp_path):
+    root = tmp_path / "allowed"
+    case = root / "case"
+    shutil.copytree(DATA / "pypsa" / "example", case)
+    # 4,096 files and directories below the input in all, but PowerIO's
+    # listing holds at most the case files and the 2,048 subdirectories it
+    # has not yet listed.
+    for index in range(2_048):
+        notes = case / f"notes{index:04d}"
+        notes.mkdir()
+        (notes / "note.txt").write_text("x")
+    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, str(root))
+
+    assert isinstance(powerio.parse(str(case)).value, powerio.BalancedNetwork)
+    assert sandbox.checked_read_tree(str(case)) == str(case)
+
+    # Enough files beside them to pass the budget while the root is listed.
+    for index in range(sandbox.MAX_TREE_ENTRIES - 2_048):
+        (case / f"extra{index:04d}.txt").write_text("x")
+    with pytest.raises(powerio.PowerIOError, match="more than 4096 entries"):
+        powerio.parse(str(case))
+    with pytest.raises(sandbox.PathNotAllowed, match="more than 4096 entries"):
+        sandbox.check_allowed_read_tree(case)
+
+
+def test_read_tree_keeps_the_acquisition_depth_bound(monkeypatch, tmp_path):
+    assert sandbox.MAX_TREE_DEPTH == 64
+    root = tmp_path / "allowed"
+    case = root / "case"
+    deepest = case.joinpath(*["d"] * (sandbox.MAX_TREE_DEPTH - 1))
+    deepest.mkdir(parents=True)
+    (deepest / "buses.csv").write_text("bus")
+    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, str(root))
+
+    assert sandbox.checked_read_tree(str(case)) == str(case)
+    (deepest / "d").mkdir()
+    with pytest.raises(sandbox.PathNotAllowed, match="more than 64 levels deep"):
+        sandbox.check_allowed_read_tree(case)
 
 
 def _write_tree(staging: str, files: dict[str, str]) -> dict:
@@ -336,3 +452,56 @@ def test_compatibility_root_settings_keep_containment(name, monkeypatch, tmp_pat
         sandbox.checked_path(str(tmp_path / "outside.txt"))
     monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(tmp_path))
     assert sandbox.allowed_roots() == (tmp_path,)
+
+
+def test_default_root_survives_working_directory_change(monkeypatch, tmp_path):
+    elsewhere = tmp_path.parent / (tmp_path.name + "-elsewhere")
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    assert sandbox.checked_path(str(tmp_path / "case.m")) == str(tmp_path / "case.m")
+    with pytest.raises(sandbox.PathNotAllowed):
+        sandbox.checked_path("case.m")
+    with pytest.raises(sandbox.PathNotAllowed):
+        sandbox.checked_path(str(elsewhere / "out.m"), for_write=True)
+
+
+def test_empty_root_entries_are_rejected(monkeypatch, tmp_path):
+    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, " " + os.pathsep + " ")
+    with pytest.raises(sandbox.PathNotAllowed, match="at least one directory"):
+        sandbox.checked_path(str(tmp_path / "case.m"))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions")
+def test_directory_assembly_remains_private(monkeypatch, tmp_path):
+    out = tmp_path / "dataset"
+    out.mkdir(mode=0o755)
+    (out / "keep").write_text("old")
+    copytree = sandbox.shutil.copytree
+
+    def inspect_copy(source, target, *args, **kwargs):
+        assert Path(target).parent.stat().st_mode & 0o777 == 0o700
+        return copytree(source, target, *args, **kwargs)
+
+    def write(staging):
+        assert Path(staging).parent.stat().st_mode & 0o777 == 0o700
+        return _write_tree(staging, {"new": "data"})
+
+    monkeypatch.setattr(sandbox.shutil, "copytree", inspect_copy)
+    sandbox.staged_directory_write(str(out), True, write)
+    assert (out / "keep").read_text() == "old"
+    assert (out / "new").read_text() == "data"
+    assert out.stat().st_mode & 0o777 == 0o755
+
+
+def test_checked_path_keeps_parent_segments_after_symlinks(monkeypatch, tmp_path):
+    nested = tmp_path / "inner" / "nested"
+    nested.mkdir(parents=True)
+    (tmp_path / "case.m").write_text("root case")
+    (nested.parent / "case.m").write_text("inner case")
+    (tmp_path / "link").symlink_to(nested, target_is_directory=True)
+    monkeypatch.chdir(tmp_path)
+    for request in ("link/../case.m", str(tmp_path / "link/../case.m"),
+                    (tmp_path / "link/../case.m").as_uri()):
+        checked = Path(sandbox.checked_path(request))
+        assert checked.is_absolute()
+        assert checked.read_text() == "inner case"

@@ -93,7 +93,7 @@ fn component_ids_survive_serde_round_trip_once_assigned() {
     let bus_uid = v["buses"][0]["uid"]
         .as_str()
         .expect("an assigned bus identity is written");
-    assert!(!bus_uid.is_empty());
+    assert_ne!(bus_uid, "");
 
     let parsed = serde_round_trip(&net);
     assert_eq!(parsed.generators()[0].uid.as_deref(), Some("gen-a"));

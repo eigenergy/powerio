@@ -287,8 +287,19 @@ fn bounded_history<'de, D: Deserializer<'de>>(
     )
 }
 
-const MAX_STORED_COLLECTION_ENTRIES: usize = 65_536;
+pub(super) const MAX_STORED_COLLECTION_ENTRIES: usize = 65_536;
 const MAX_STORED_OPERATING_POINT_QUANTITIES: usize = 64;
+
+/// Entries one stored operating point or solution vector may carry, values
+/// and identities alike. These vectors run over network elements, and a
+/// multiconductor vector has one entry per bus terminal, so the bound is
+/// dimensional rather than the generic collection bound: a 27,239 bus BMOPF
+/// feeder already has 106,038 terminals. 2^22 is about six times the
+/// 676,529 terminals of the largest real distribution model measured. A
+/// vector at the bound holds 32 MiB of `f64`, and decoding still refuses the
+/// first entry past it. The writer refuses a longer vector, so `serialize`
+/// never writes one that `deserialize` rejects.
+pub(super) const MAX_STORED_OPERATING_POINT_VALUES: usize = 4_194_304;
 
 fn bounded_collection_entries<'de, T: Deserialize<'de>, D: Deserializer<'de>>(
     deserializer: D,
@@ -306,7 +317,7 @@ fn bounded_operating_point_identities<'de, D: Deserializer<'de>>(
     limits::bounded_vec(
         deserializer,
         "operating point identities",
-        MAX_STORED_COLLECTION_ENTRIES,
+        MAX_STORED_OPERATING_POINT_VALUES,
     )
 }
 
@@ -316,7 +327,7 @@ fn bounded_operating_point_values<'de, D: Deserializer<'de>>(
     limits::bounded_vec(
         deserializer,
         "operating point values",
-        MAX_STORED_COLLECTION_ENTRIES,
+        MAX_STORED_OPERATING_POINT_VALUES,
     )
 }
 
@@ -692,6 +703,13 @@ pub struct LinDist3FlowOpfInstance {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
+pub struct LinDist3FlowPfInstance {
+    pub formulation: LinDist3FlowOpfInstance,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct AcScucInstance {
     pub network: Box<BalancedNetwork>,
     /// The complete SCUC inputs, in the calculation crate's own
@@ -1052,6 +1070,33 @@ pub struct LinDist3FlowOpfSolution {
     pub objective: StoredF64,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct LinDist3FlowLimitCheck {
+    pub line: String,
+    pub conductor: usize,
+    pub kind: powerio_prob::LinDist3FlowLimitKind,
+    pub value: StoredF64,
+    pub limit: StoredF64,
+    pub loading_ratio: StoredF64,
+    pub overloaded: bool,
+    pub constraint_enforced: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct LinDist3FlowPfSolution {
+    pub instance: LinDist3FlowPfInstance,
+    pub termination: powerio_prob::Termination,
+    pub residuals: powerio_prob::Residuals,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub producer: Option<String>,
+    pub values: LinDist3FlowOpfValues,
+    pub limit_checks: Vec<LinDist3FlowLimitCheck>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -1119,6 +1164,12 @@ pub enum StoredValue {
     MulticonductorNetwork(Box<MulticonductorNetwork>),
     #[serde(rename = "powerio.GeoLayer")]
     GeoLayer(Box<powerio_tx::GeoLayer>),
+    #[serde(rename = "powerio.ContingencySet")]
+    ContingencySet(Box<powerio_tx::ContingencySet>),
+    #[serde(rename = "powerio.SubsystemSet")]
+    SubsystemSet(Box<powerio_tx::SubsystemSet>),
+    #[serde(rename = "powerio.MonitoredSet")]
+    MonitoredSet(Box<powerio_tx::MonitoredSet>),
     #[serde(rename = "powerio.OperatingPoint<powerio.BalancedNetwork>")]
     BalancedOperatingPoint(StoredOperatingPoint<BalancedNetwork>),
     #[serde(rename = "powerio.OperatingPoint<powerio.MulticonductorNetwork>")]
@@ -1169,6 +1220,8 @@ pub enum StoredValue {
     McAcPfInstance(McAcPfInstance),
     #[serde(rename = "powerio.McAcOpfInstance")]
     McAcOpfInstance(McAcOpfInstance),
+    #[serde(rename = "powerio.LinDist3FlowPfInstance")]
+    LinDist3FlowPfInstance(LinDist3FlowPfInstance),
     #[serde(rename = "powerio.LinDist3FlowOpfInstance")]
     LinDist3FlowOpfInstance(LinDist3FlowOpfInstance),
     #[serde(rename = "powerio.AcScucInstance")]
@@ -1187,6 +1240,8 @@ pub enum StoredValue {
     McAcPfSolution(Box<McAcPfSolution>),
     #[serde(rename = "powerio.McAcOpfSolution")]
     McAcOpfSolution(Box<McAcOpfSolution>),
+    #[serde(rename = "powerio.LinDist3FlowPfSolution")]
+    LinDist3FlowPfSolution(Box<LinDist3FlowPfSolution>),
     #[serde(rename = "powerio.LinDist3FlowOpfSolution")]
     LinDist3FlowOpfSolution(Box<LinDist3FlowOpfSolution>),
     #[serde(rename = "powerio.AcScucSolution")]
@@ -1718,6 +1773,157 @@ fn validate_geo_layer(layer: &powerio_tx::GeoLayer) -> Result<(), String> {
     Ok(())
 }
 
+/// Every statement kept as text states the 1-based line it was read from, so
+/// line 0 names no line of any file.
+fn validate_retained(
+    what: &str,
+    statements: &[powerio_tx::RetainedStatement],
+) -> Result<(), String> {
+    for statement in statements {
+        if statement.line == 0 {
+            return Err(format!(
+                "{what} states a statement kept as text whose line is 0, and lines are 1 based"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// What the `.con` reader admits into a typed statement: every case names
+/// itself, every automatic specification names a subsystem, every change
+/// states a finite amount, and every statement kept as text states its line.
+fn validate_contingency_set(set: &powerio_tx::ContingencySet) -> Result<(), String> {
+    validate_retained("the contingency set", &set.retained)?;
+    for (index, case) in set.cases.iter().enumerate() {
+        if case.name.trim().is_empty() {
+            return Err(format!("contingency case {index} has no name"));
+        }
+        for action in &case.actions {
+            let (powerio_tx::ContingencyAction::ChangeLoad { change, .. }
+            | powerio_tx::ContingencyAction::ChangeGeneration { change, .. }) = action
+            else {
+                continue;
+            };
+            if !change.amount.is_finite() {
+                return Err(format!(
+                    "contingency case `{}` states a change amount that is not finite",
+                    case.name
+                ));
+            }
+        }
+    }
+    for (index, spec) in set.automatic.iter().enumerate() {
+        if spec.subsystem.trim().is_empty() {
+            return Err(format!(
+                "automatic specification {index} names no subsystem"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// What the `.sub` reader admits into a typed selector: every subsystem names
+/// itself, every base kV band runs low to high on finite ends, and every
+/// statement kept as text, on the set, on a subsystem, or in a selector group,
+/// states its line.
+fn validate_subsystem_set(set: &powerio_tx::SubsystemSet) -> Result<(), String> {
+    validate_retained("the subsystem set", &set.retained)?;
+    for (index, subsystem) in set.subsystems.iter().enumerate() {
+        if subsystem.name.trim().is_empty() {
+            return Err(format!("subsystem {index} has no name"));
+        }
+        validate_retained(
+            &format!("subsystem `{}`", subsystem.name),
+            &subsystem.retained,
+        )?;
+        for group in &subsystem.groups {
+            validate_retained(
+                &format!("a selector group of subsystem `{}`", subsystem.name),
+                &group.retained,
+            )?;
+            for selector in &group.selectors {
+                if let powerio_tx::SubsystemSelector::KvRange { lo, hi } = selector
+                    && !(lo.is_finite() && hi.is_finite() && lo <= hi)
+                {
+                    return Err(format!(
+                        "subsystem `{}` states a base kV band that does not run low to high",
+                        subsystem.name
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The buses a voltage statement applies to are named by a subsystem the
+/// `.sub` file states or by a finite base kV level.
+fn validate_monitor_scope(index: usize, scope: &powerio_tx::MonitorScope) -> Result<(), String> {
+    match scope {
+        powerio_tx::MonitorScope::Subsystem { name } if name.trim().is_empty() => Err(format!(
+            "monitor statement {index} states a scope that names no subsystem"
+        )),
+        powerio_tx::MonitorScope::Kv { kv } if !kv.is_finite() => Err(format!(
+            "monitor statement {index} states a scope whose base kV is not finite"
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// What the `.mon` reader admits into a typed statement: every voltage range
+/// runs low to high on finite ends, every deviation and every interface rating
+/// is finite, every statement and every scope naming a subsystem names one,
+/// every interface names itself, and every statement kept as text, on the set
+/// or inside a block, states its line.
+fn validate_monitored_set(set: &powerio_tx::MonitoredSet) -> Result<(), String> {
+    validate_retained("the monitored element set", &set.retained)?;
+    for (index, statement) in set.statements.iter().enumerate() {
+        if let powerio_tx::MonitorStatement::Branches { retained, .. }
+        | powerio_tx::MonitorStatement::Interface { retained, .. } = statement
+        {
+            validate_retained(&format!("monitor statement {index}"), retained)?;
+        }
+        match statement {
+            powerio_tx::MonitorStatement::VoltageRange { scope, vmin, vmax } => {
+                if !(vmin.is_finite() && vmax.is_finite() && vmin <= vmax) {
+                    return Err(format!(
+                        "monitor statement {index} states a voltage range that does not run low to high"
+                    ));
+                }
+                validate_monitor_scope(index, scope)?;
+            }
+            powerio_tx::MonitorStatement::VoltageDeviation { scope, down, up } => {
+                if !down.is_finite() || up.is_some_and(|up| !up.is_finite()) {
+                    return Err(format!(
+                        "monitor statement {index} states a voltage deviation that is not finite"
+                    ));
+                }
+                validate_monitor_scope(index, scope)?;
+            }
+            powerio_tx::MonitorStatement::BranchesInSubsystem { subsystem, .. }
+            | powerio_tx::MonitorStatement::TiesFromSubsystem { subsystem } => {
+                if subsystem.trim().is_empty() {
+                    return Err(format!("monitor statement {index} names no subsystem"));
+                }
+            }
+            powerio_tx::MonitorStatement::Interface {
+                name, rating_mw, ..
+            } => {
+                if name.trim().is_empty() {
+                    return Err(format!("monitor statement {index} names no interface"));
+                }
+                if rating_mw.is_some_and(|rating| !rating.is_finite()) {
+                    return Err(format!(
+                        "monitor statement {index} states an interface rating that is not finite"
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 fn validate_value(value: &StoredValue) -> Result<(), String> {
     match value {
@@ -1726,6 +1932,9 @@ fn validate_value(value: &StoredValue) -> Result<(), String> {
         | StoredValue::AcScucInstance(_)
         | StoredValue::AcScucSolution(_) => Ok(()),
         StoredValue::GeoLayer(layer) => validate_geo_layer(layer),
+        StoredValue::ContingencySet(set) => validate_contingency_set(set),
+        StoredValue::SubsystemSet(set) => validate_subsystem_set(set),
+        StoredValue::MonitoredSet(set) => validate_monitored_set(set),
         StoredValue::BalancedOperatingPoint(point) => validate_quantities(&point.quantities, 1),
         StoredValue::MulticonductorOperatingPoint(point) => {
             validate_quantities(&point.quantities, 1)
@@ -1778,6 +1987,9 @@ fn validate_value(value: &StoredValue) -> Result<(), String> {
         StoredValue::McAcOpfInstance(instance) => {
             validate_stored_assignment(instance.initial_point.as_ref())
         }
+        StoredValue::LinDist3FlowPfInstance(instance) => {
+            validate_stored_assignment(instance.formulation.base.initial_point.as_ref())
+        }
         StoredValue::LinDist3FlowOpfInstance(instance) => {
             validate_stored_assignment(instance.base.initial_point.as_ref())
         }
@@ -1801,6 +2013,9 @@ fn validate_value(value: &StoredValue) -> Result<(), String> {
         }
         StoredValue::McAcOpfSolution(solution) => {
             validate_stored_assignment(solution.instance.initial_point.as_ref())
+        }
+        StoredValue::LinDist3FlowPfSolution(solution) => {
+            validate_stored_assignment(solution.instance.formulation.base.initial_point.as_ref())
         }
         StoredValue::LinDist3FlowOpfSolution(solution) => {
             validate_stored_assignment(solution.instance.base.initial_point.as_ref())
@@ -1891,6 +2106,36 @@ mod decode_bound_tests {
                 .contains("more than 65536 collection entries"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn operating_point_values_are_refused_past_the_dimensional_bound() {
+        let quantity = |count: usize| {
+            let values = vec!["0"; count].join(",");
+            format!(r#"{{"identities":[],"values":[{values}]}}"#)
+        };
+        let accepted =
+            serde_json::from_str::<StoredQuantity>(&quantity(MAX_STORED_OPERATING_POINT_VALUES))
+                .unwrap();
+        assert_eq!(accepted.values.len(), MAX_STORED_OPERATING_POINT_VALUES);
+        let error = serde_json::from_str::<StoredQuantity>(&quantity(
+            MAX_STORED_OPERATING_POINT_VALUES + 1,
+        ))
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("more than 4194304 operating point values"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn operating_point_identities_pass_the_generic_collection_bound() {
+        let identities = vec![r#""t""#; MAX_STORED_COLLECTION_ENTRIES + 1].join(",");
+        let text = format!(r#"{{"identities":[{identities}],"values":[]}}"#);
+        let quantity = serde_json::from_str::<StoredQuantity>(&text).unwrap();
+        assert_eq!(quantity.identities.len(), MAX_STORED_COLLECTION_ENTRIES + 1);
     }
 
     #[test]

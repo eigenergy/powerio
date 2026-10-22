@@ -93,7 +93,7 @@ fn facade_uses_power_system_names_and_universal_emission() {
             .bytes()
             .starts_with(b"function mpc = api_conformance")
     );
-    assert!(written.diagnostics().is_empty());
+    assert_eq!(written.diagnostics(), []);
 }
 
 #[test]
@@ -136,8 +136,8 @@ fn bmopf_parses_to_a_network_and_calculation_construction_is_explicit() {
     let PioValue::MulticonductorNetwork(network) = &module.value() else {
         panic!("BMOPF input did not produce a multiconductor network");
     };
-    assert!(!network.buses().is_empty());
-    assert!(!network.sources().is_empty());
+    assert_ne!(network.buses().as_slice(), []);
+    assert_ne!(network.sources().as_slice(), []);
 
     let instance = powerio::to_mc_ac_opf_instance(&module).unwrap();
     assert_eq!(

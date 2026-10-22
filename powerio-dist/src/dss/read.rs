@@ -839,6 +839,7 @@ impl Reader<'_> {
             extras.insert("pu".into(), pu.into());
         }
         VoltageSource {
+            reference_terminal: None,
             name: obj.name.clone(),
             bus: spec.name,
             terminal_map: map,
@@ -2730,7 +2731,7 @@ mod tests {
              New Capacitor.cap bus1=b.1 phases=0 kv=7.2 kvar=300\n\
              New Reactor.rea bus1=b.2 phases=0 kv=7.2 kvar=300",
         );
-        assert!(net.shunts().is_empty());
+        assert_eq!(net.shunts().as_slice(), []);
         assert!(
             net.untyped_objects()
                 .iter()

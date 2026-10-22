@@ -1,0 +1,9 @@
+# Only `cargo deny check advisories` runs in CI; the licenses, bans and sources
+# checks are not configured here because nothing evaluates them.
+[graph]
+all-features = true
+
+[advisories]
+ignore = [
+    { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained and is reached only through faer -> gemm -> paste and faer -> pulp -> paste. faer 0.24.4, gemm 0.19.0 and pulp 0.22.3 are the newest published versions; there is no release that drops the dependency." },
+]

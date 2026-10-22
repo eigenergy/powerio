@@ -2318,11 +2318,12 @@ mod tests {
                 ("stores.csv", "name,bus,e_nom\n"),
             ],
         );
-        assert!(
+        assert_eq!(
             read_pypsa_csv_folder(&dir)
                 .unwrap()
                 .render_diagnostics()
-                .is_empty()
+                .as_slice(),
+            [] as [String; 0]
         );
         let dir = folder(
             "stores-nonempty",

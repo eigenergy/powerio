@@ -3,13 +3,17 @@
 import asyncio
 import io
 import json
+import os
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("mcp", reason="powerio[mcp] not installed (needs Python 3.10+)")
 
+from mcp.server.mcpserver.exceptions import ToolError
 from powerio.mcp import sandbox, server
 
 import powerio
@@ -26,6 +30,11 @@ New Transformer.t1 phases=3 windings=2 buses=(src, sec) conns=(delta, wye) kvs=(
 New Load.l1 bus1=sec phases=3 conn=wye kv=0.416 kw=90 pf=0.95 model=1
 Set VoltageBases=[12.47, 0.416]
 """
+
+
+@pytest.fixture(autouse=True)
+def configured_test_roots(monkeypatch, tmp_path):
+    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, os.pathsep.join((str(DATA), str(tmp_path))))
 
 
 def test_tool_surface_uses_powerio_operations_and_types():
@@ -141,6 +150,29 @@ def test_collection_selector_refuses_the_wrong_collection_operation(
         server.summarize(powerio_ir=time_series_powerio_ir, scenario_id="base")
 
 
+def test_out_of_range_time_index_names_the_valid_indices(time_series_powerio_ir):
+    message = r"`time_index` 2 is out of range: the TimeSeries has 2 time points, indices 0 to 1"
+    with pytest.raises(IndexError, match=message):
+        server.summarize(powerio_ir=time_series_powerio_ir, time_index=2)
+    with pytest.raises(IndexError, match="`time_index` -3 is out of range"):
+        server.calc_matrix("bprime", powerio_ir=time_series_powerio_ir, time_index=-3)
+    last = server.summarize(powerio_ir=time_series_powerio_ir, time_index=-1)
+    assert last["selection"] == {"time_index": -1}
+
+
+def test_unknown_scenario_id_lists_the_scenarios():
+    network = powerio.parse(DATA / "case9.m").value
+    scenarios = powerio.ScenarioSet({"base": network, "high": network})
+    powerio_ir = powerio.serialize(scenarios.module).text
+    with pytest.raises(KeyError) as raised:
+        server.summarize(powerio_ir=powerio_ir, scenario_id="peak")
+    assert str(raised.value) == (
+        "unknown `scenario_id` 'peak': the ScenarioSet holds 'base', 'high'"
+    )
+    selected = server.summarize(powerio_ir=powerio_ir, scenario_id="high")
+    assert selected["selection"] == {"scenario_id": "high"}
+
+
 def test_emit_returns_artifact_inventory_and_fidelity(tmp_path):
     memory = server.emit("psse", path=str(DATA / "case9.m"))
     assert memory["layout"] == "file"
@@ -228,6 +260,34 @@ def test_about_reports_exact_tool_list():
     assert about["powerio_ir"]["schema"] == "pio-ir"
     assert "parse" in about["tools"]
     assert "export_state" not in about["tools"]
+
+
+def test_about_reports_the_feature_set():
+    about = server._about_tool()
+    assert about["features"] == powerio.features()
+    assert about["features"]["matrix"] is True
+
+
+def test_every_tool_reports_refusals_to_the_client():
+    tools = server.mcp._tool_manager.list_tools()
+    # Every tool is registered through `_tool`, so all share its wrapper.
+    assert len({tool.fn.__code__ for tool in tools}) == 1
+    assert all(hasattr(tool.fn, "__wrapped__") for tool in tools)
+    summarize = next(tool for tool in tools if tool.name == "summarize")
+    with pytest.raises(ToolError, match="provide exactly one"):
+        summarize.fn()
+
+
+def test_selectors_of_the_wrong_type_keep_the_collection_type_error(
+    time_series_powerio_ir,
+):
+    network = powerio.parse(DATA / "case9.m").value
+    scenarios = powerio.ScenarioSet({"base": network, "high": network})
+    scenario_ir = powerio.serialize(scenarios.module).text
+    with pytest.raises(TypeError, match="scenario keys must be strings"):
+        server.summarize(powerio_ir=scenario_ir, scenario_id=1)
+    with pytest.raises(TypeError, match="time series indices must be integers"):
+        server.summarize(powerio_ir=time_series_powerio_ir, time_index=5.0)
 
 
 def test_inputs_are_mutually_exclusive():
@@ -418,3 +478,141 @@ def test_matrix_tool_computes_over_an_operating_point_entry(time_series_powerio_
     summary = server.summarize(powerio_ir=time_series_powerio_ir, time_index=1)
     assert summary["value_type"] == "OperatingPoint"
     assert summary["network"]["elements"]["buses"] == 9
+
+
+LIMIT_ENVS = ("POWERIO_MAX_PRIMARY_BYTES", "POWERIO_MAX_REFERENCED_BYTES")
+
+
+def test_server_start_defaults_unset_limits_to_256_mib(monkeypatch):
+    environ = {"POWERIO_MAX_PRIMARY_BYTES": ""}
+    server._apply_service_limits(environ)
+    assert environ == {name: str(256 << 20) for name in LIMIT_ENVS}
+
+    # Values the operator set stay as they are, valid or not; PowerIO
+    # validates them when it reads a source.
+    environ = {"POWERIO_MAX_PRIMARY_BYTES": "2048", "POWERIO_MAX_REFERENCED_BYTES": "x"}
+    server._apply_service_limits(environ)
+    assert environ == {
+        "POWERIO_MAX_PRIMARY_BYTES": "2048",
+        "POWERIO_MAX_REFERENCED_BYTES": "x",
+    }
+
+    # `main` applies the defaults to the process before it serves. Setting
+    # each variable through monkeypatch first restores the original afterward.
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", "")
+    monkeypatch.setenv("POWERIO_MAX_REFERENCED_BYTES", "4096")
+    monkeypatch.setattr(sandbox, "_DEFAULT_ROOT", sandbox._DEFAULT_ROOT)
+    served = []
+    monkeypatch.setattr(server.mcp, "run", lambda *args, **kwargs: served.append(True))
+    server.main()
+    assert served == [True]
+    assert os.environ["POWERIO_MAX_PRIMARY_BYTES"] == str(256 << 20)
+    assert os.environ["POWERIO_MAX_REFERENCED_BYTES"] == "4096"
+
+
+def test_importing_the_server_keeps_the_library_limits():
+    code = (
+        "import os; from powerio.mcp import server; "
+        "print([os.environ.get(name) for name in "
+        "('POWERIO_MAX_PRIMARY_BYTES', 'POWERIO_MAX_REFERENCED_BYTES')])"
+    )
+    env = {key: value for key, value in os.environ.items() if key not in LIMIT_ENVS}
+    out = subprocess.run(
+        [sys.executable, "-c", code], check=True, capture_output=True, text=True, env=env
+    )
+    assert out.stdout.strip() == "[None, None]"
+
+
+@pytest.mark.parametrize(
+    "value,limit",
+    [(None, 256 << 20), ("", 256 << 20), ("0", 256 << 20), ("-1", 256 << 20),
+     (" 7", 256 << 20), ("1e3", 256 << 20), ("١", 256 << 20), ("123", 123)],
+)
+def test_primary_limit_falls_back_to_the_service_default(monkeypatch, value, limit):
+    if value is None:
+        monkeypatch.delenv("POWERIO_MAX_PRIMARY_BYTES", raising=False)
+    else:
+        monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", value)
+    assert server._primary_byte_limit() == limit
+
+
+def test_inline_arguments_are_refused_past_the_primary_limit_before_parsing(
+    monkeypatch,
+):
+    text = (DATA / "case9.m").read_text()
+    powerio_ir = powerio.serialize(powerio.parse(DATA / "case9.m")).text
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", str(len(text.encode())))
+    assert server.parse(content=text, format="matpower")["summary"]["elements"][
+        "buses"
+    ] == 9
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("an oversize argument reached the reader")
+
+    monkeypatch.setattr(powerio, "parse", refuse)
+    monkeypatch.setattr(powerio, "deserialize", refuse)
+    limit = len(text.encode()) - 1
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", str(limit))
+    message = rf"`content` exceeds the {limit} byte .*POWERIO_MAX_PRIMARY_BYTES"
+    with pytest.raises(ValueError, match=message):
+        server.parse(content=text, format="matpower")
+    with pytest.raises(ValueError, match=message):
+        server.emit("psse", content=text, source_format="matpower")
+
+    limit = len(powerio_ir.encode()) - 1
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", str(limit))
+    message = rf"`powerio_ir` exceeds the {limit} byte .*POWERIO_MAX_PRIMARY_BYTES"
+    for call in (
+        lambda: server.summarize(powerio_ir=powerio_ir),
+        lambda: server.diagnostics(powerio_ir),
+        lambda: server.calc_matrix("bprime", powerio_ir=powerio_ir),
+        lambda: server._to_balanced_tool(powerio_ir=powerio_ir),
+    ):
+        with pytest.raises(ValueError, match=message):
+            call()
+
+
+def test_inline_size_counts_utf8_bytes(monkeypatch):
+    # Ten two-byte characters and one lone surrogate, which counts as the
+    # three bytes it would take if it were encoded.
+    value = "é" * 10 + "\ud800"
+    monkeypatch.setattr(server, "_UTF8_COUNT_CHUNK", 3)
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", "23")
+    server._check_inline_size("content", value)
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", "22")
+    with pytest.raises(ValueError, match="`content` exceeds the 22 byte"):
+        server._check_inline_size("content", value)
+    # More characters than the limit has bytes is refused without counting,
+    # and a limit of four bytes per character is accepted without counting.
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", "10")
+    with pytest.raises(ValueError, match="exceeds the 10 byte"):
+        server._check_inline_size("content", value)
+    monkeypatch.setattr(server, "_UTF8_COUNT_CHUNK", None)
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", "44")
+    server._check_inline_size("content", value)
+
+
+def test_display_requires_a_regular_file_within_the_primary_limit(
+    monkeypatch, tmp_path
+):
+    size = PWD.stat().st_size
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", str(size))
+    assert server.display(str(PWD))["format"] == "powerworld-pwd"
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("the display reader ran")
+
+    monkeypatch.setattr(powerio, "parse_display", refuse)
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", str(size - 1))
+    with pytest.raises(
+        ValueError, match=rf"exceeds the {size - 1} byte .*POWERIO_MAX_PRIMARY_BYTES"
+    ):
+        server.display(str(PWD))
+    with pytest.raises(ValueError, match="regular file"):
+        server.display(str(tmp_path))
+    if os.name != "nt":
+        # A named pipe is refused from its metadata, without opening it.
+        fifo = tmp_path / "display.pwd"
+        os.mkfifo(fifo)
+        with pytest.raises(ValueError, match="regular file"):
+            server.display(str(fifo))

@@ -1,0 +1,787 @@
+{
+    "$schema":"https://json-schema.org/draft/2020-12/schema",
+    "$id":"https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.1.0/bmopf.schema.json",
+    "title":"BMOPF OPF test case schema",
+    "version": "0.1.0",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": "Test case name"
+        },
+        "meta": {
+            "type": "object",
+            "description": "Case metadata block",
+            "properties": {
+                "$schema":     { "type": "string" },
+                "version":     { "type": "string" },
+                "title":       { "type": "string" },
+                "description": { "type": "string" },
+                "created":     { "type": "string" },
+                "modified":    { "type": "string" },
+                "license":     { "type": "string" },
+                "frequency":   {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "description": "Nominal system frequency [Hz]; it never defaults or rescales anything"
+                },
+                "authors": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name":  { "type": "string" },
+                            "email": { "type": "string" },
+                            "orcid": { "type": "string" }
+                        },
+                        "additionalProperties": false
+                    }
+                },
+                "data_sources": {
+                    "type": "array",
+                    "description": "Upstream data sources from which this case was derived",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name":    { "type": "string" },
+                            "url":     { "type": "string" },
+                            "format":  { "type": "string" },
+                            "doi":     { "type": "string" },
+                            "version": { "type": "string" }
+                        },
+                        "additionalProperties": false
+                    }
+                },
+                "case_study_generator": {
+                    "type": "object",
+                    "description": "Tool that generated this case file",
+                    "properties": {
+                        "tool":    { "type": "string" },
+                        "version": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                },
+                "provenance": {
+                    "type": "object",
+                    "description": "Free-form conversion/audit provenance written by tooling (e.g. a fidelity-loss inventory, migration notes, or earth-terminal routing)."
+                }
+            },
+            "additionalProperties": false
+        },
+        "extras": {
+            "type": "object",
+            "description": "Free-form escape hatch for case-level fields not (yet) covered by the schema. The rest of the document stays strict (additionalProperties:false); consumers that need to attach custom fields (e.g. mapping to an external struct) put them here rather than at the top level."
+        },
+        "bus": {
+            "type": "object",
+            "description": "Collection of buses",
+            "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "terminal_names": {
+                        "type": "array",
+                        "items": {
+                            "type":"string"
+                        },
+                        "description": "Ordered array of terminal names for this bus"
+                        },
+                    "perfectly_grounded_terminals": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Array of terminal names which are perfectly grounded"
+                        },
+                    "v_min": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/$defs/nonnegative_number"
+                        },
+                        "description": "Minimum per-terminal voltage magnitude(s) at bus, phase-to-ground, one entry per bus terminal [V]"
+                    },
+                    "v_max": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/$defs/nonnegative_number"
+                        },
+                        "description": "Maximum per-terminal voltage magnitude(s) at bus, phase-to-ground, one entry per bus terminal [V]"
+                    },
+                    "vn_max": {
+                        "$ref": "#/$defs/nonnegative_number",
+                        "description": "Maximum neutral-to-ground voltage magnitude [V]; only valid when the bus has a neutral terminal"
+                    },
+                    "vpn_min": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/$defs/nonnegative_number"
+                        },
+                        "description": "Minimum phase-neutral voltage(s) [V]"
+                    },
+                    "vpn_max": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/$defs/nonnegative_number"
+                        },
+                        "description": "Maximum phase-neutral voltage(s) [V]"
+                    },
+                    "vpp_min": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/$defs/nonnegative_number"
+                        },
+                        "description": "Minimum phase-phase voltage magnitude [V]"
+                    },
+                    "vpp_max": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/$defs/nonnegative_number"
+                        },
+                        "description": "Maximum phase-phase voltage magnitude [V]"
+                    },
+                    "vpos_min": {
+                        "$ref": "#/$defs/nonnegative_number",
+                        "description": "Minimum positive-sequence voltage magnitude [V] (three-phase buses)"
+                    },
+                    "vpos_max": {
+                        "$ref": "#/$defs/nonnegative_number",
+                        "description": "Maximum positive-sequence voltage magnitude [V] (three-phase buses)"
+                    },
+                    "vneg_max": {
+                        "$ref": "#/$defs/nonnegative_number",
+                        "description": "Maximum negative-sequence voltage magnitude [V] (three-phase buses); the lower bound is always 0"
+                    },
+                    "vzero_max": {
+                        "$ref": "#/$defs/nonnegative_number",
+                        "description": "Maximum zero-sequence voltage magnitude [V] (three-phase buses); the lower bound is always 0"
+                    }
+                },
+                "required": ["terminal_names"]
+            }
+        },
+        "line": {
+            "type": "object",
+            "description": "Line objects",
+            "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "length": {
+                        "$ref": "#/$defs/nonnegative_number",
+                        "description": "Line length [m]. Required with `linecode` (impedance = per-metre matrices x length); optional and purely descriptive when the line carries inline absolute matrices"
+                    },
+                    "linecode": {
+                        "type": "string",
+                        "description": "Linecode of line (per-metre matrices). A line carries EXACTLY ONE impedance source: either this reference (+ length), or inline absolute R_series_/X_series_ matrices in Ohm"
+                    },
+                    "terminal_map_to": {
+                        "$ref": "#/$defs/terminal_map_type"
+                    },
+                    "terminal_map_from": {
+                        "$ref": "#/$defs/terminal_map_type"
+                    },
+                    "bus_from": {
+                        "type": "string",
+                        "description": "'from' bus for the element"
+                    },
+                    "bus_to": {
+                        "type": "string",
+                        "description": "'to' bus for the element"
+                    },
+                    "i_max": {
+                        "type": "array",
+                        "items": { "$ref": "#/$defs/nonnegative_number" },
+                        "description": "Per-conductor current-magnitude limit [A]; overrides the linecode's i_max for this line"
+                    },
+                    "s_max": {
+                        "type": "array",
+                        "items": { "$ref": "#/$defs/nonnegative_number" },
+                        "description": "Per-phase apparent-power limit [VA]; overrides the linecode's s_max for this line"
+                    }
+                },
+                "patternProperties": {
+                    "^R_series_\\d+_\\d+$": {
+                        "type": "number",
+                        "description": "Element of the TOTAL series resistance matrix of this line section [Ohm]. Units by location: linecode matrices are per metre, line matrices are absolute - never scaled by length"
+                    },
+                    "^X_series_\\d+_\\d+$": {
+                        "type": "number",
+                        "description": "Element of the TOTAL series reactance matrix of this line section [Ohm]"
+                    },
+                    "^G_from_\\d+_\\d+$": {
+                        "type": "number",
+                        "description": "Element of the TOTAL from-side shunt conductance matrix [S]"
+                    },
+                    "^G_to_\\d+_\\d+$": {
+                        "type": "number",
+                        "description": "Element of the TOTAL to-side shunt conductance matrix [S]"
+                    },
+                    "^B_from_\\d+_\\d+$": {
+                        "type": "number",
+                        "description": "Element of the TOTAL from-side shunt susceptance matrix [S]"
+                    },
+                    "^B_to_\\d+_\\d+$": {
+                        "type": "number",
+                        "description": "Element of the TOTAL to-side shunt susceptance matrix [S]"
+                    }
+                },
+                "required": [
+                        "bus_from",
+                        "bus_to",
+                        "terminal_map_from",
+                        "terminal_map_to"
+                ],
+                "oneOf": [
+                    { "required": ["linecode", "length"] },
+                    { "required": ["R_series_1_1", "X_series_1_1"],
+                      "not": { "required": ["linecode"] } }
+                ]
+            }
+        },
+        "voltage_source": {
+            "type": "object",
+            "description": "Voltage source element",
+            "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "v_magnitude": {
+                        "type": "array",
+                        "description": "Voltage magnitude of each terminal of the voltage source [V]",
+                        "items": {
+                            "$ref": "#/$defs/nonnegative_number"
+                        }
+                    },
+                    "v_angle": {
+                        "type": "array",
+                        "description": "Voltage angle of each terminal of the source [radians]",
+                        "items": {
+                            "type": "number"
+                        }
+                    },
+                    "terminal_map": {
+                        "$ref": "#/$defs/terminal_map_type"
+                    },
+                    "bus": {
+                        "$ref": "#/$defs/bus_type"
+                    }
+                },
+                "required": [
+                    "v_angle",
+                    "v_magnitude",
+                    "bus",
+                    "terminal_map"
+                ]
+            }
+        },
+        "shunt": {
+            "type": "object",
+            "description": "Passive shunt admittance elements, including grounding impedances",
+            "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties":{
+                    "bus": {
+                        "$ref": "#/$defs/bus_type"
+                    },
+                    "terminal_map": {
+                        "$ref": "#/$defs/terminal_map_type"
+                    }
+                },
+                "patternProperties": {
+                    "^G_\\d+_\\d+$": {
+                        "type": "number",
+                        "description": "Array elements of the conductance [S]"
+                    },
+                    "^B_\\d+_\\d+$": {
+                        "type": "number",
+                        "description": "Array elements of the susceptance [S]"
+                    }
+                },
+                "required": [
+                    "bus",
+                    "terminal_map",
+                    "G_1_1",
+                    "B_1_1"
+                ]
+            }
+        },
+        "capacitor": {
+            "type": "object",
+            "description": "Fixed (nameplate-rated) shunt capacitor banks. See the math and data model for the element definitions and the q_rated/v_nom conventions per configuration.",
+            "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "bus": { "$ref": "#/$defs/bus_type" },
+                    "terminal_map": { "$ref": "#/$defs/terminal_map_type" },
+                    "configuration": {
+                        "$ref": "#/$defs/configuration_type"
+                    },
+                    "q_rated": {
+                        "$ref": "#/$defs/nonnegative_number",
+                        "description": "Nameplate rated reactive power of the whole bank [var], delivered when the voltage across the capacitor element terminals equals v_nom. For WYE and DELTA this is the total across all three elements, not a per-element rating."
+                    },
+                    "v_nom": {
+                        "$ref": "#/$defs/nonnegative_number",
+                        "description": "Nameplate nominal voltage [V]: line-to-line for the three-phase configurations (both WYE and DELTA); for SINGLE_PHASE, the nominal voltage across the terminals of the individual capacitor element."
+                    }
+                },
+                "required": ["bus", "terminal_map", "configuration", "q_rated", "v_nom"]
+            }
+        },
+        "load": {
+            "type": "object",
+            "description": "Load elements. p_nom/q_nom are the nominal active/reactive powers; the ZIP and exponential voltage-dependence models and their coefficients are defined in the math and data model.",
+            "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "p_nom": {
+                        "type": "array",
+                        "items": {
+                            "type": "number",
+                            "description": "Nominal load active power [W]"
+                        }
+                    },
+                    "q_nom": {
+                        "type": "array",
+                        "items": {
+                            "type": "number",
+                            "description": "Nominal load reactive power [var]"
+                        }
+                    },
+                    "bus": {
+                        "$ref": "#/$defs/bus_type"
+                    },
+                    "configuration": {
+                        "$ref": "#/$defs/configuration_type"
+                    },
+                    "terminal_map": {
+                        "$ref": "#/$defs/terminal_map_type"
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Voltage dependence of the load (default CONSTANT_POWER); see the math and data model for the definitions.",
+                        "enum": ["CONSTANT_POWER", "CONSTANT_CURRENT", "CONSTANT_IMPEDANCE", "ZIP", "EXPONENTIAL"]
+                    },
+                    "v_nom": {
+                        "type": "array",
+                        "items": {
+                            "type": "number",
+                            "description": "Nominal voltage at which p_nom/q_nom are specified [V]: line-to-line for the three-phase configurations (both WYE and DELTA); for SINGLE_PHASE, the nominal voltage across the load terminals. Required unless model is CONSTANT_POWER; see the math and data model for the voltage-dependence formulation."
+                        }
+                    },
+                    "alpha_z": {
+                        "type": "array",
+                        "items": {"type": "number", "description": "Active-power constant-impedance fraction (ZIP)"}
+                    },
+                    "alpha_i": {
+                        "type": "array",
+                        "items": {"type": "number", "description": "Active-power constant-current fraction (ZIP)"}
+                    },
+                    "alpha_p": {
+                        "type": "array",
+                        "items": {"type": "number", "description": "Active-power constant-power fraction (ZIP)"}
+                    },
+                    "beta_z": {
+                        "type": "array",
+                        "items": {"type": "number", "description": "Reactive-power constant-impedance fraction (ZIP)"}
+                    },
+                    "beta_i": {
+                        "type": "array",
+                        "items": {"type": "number", "description": "Reactive-power constant-current fraction (ZIP)"}
+                    },
+                    "beta_p": {
+                        "type": "array",
+                        "items": {"type": "number", "description": "Reactive-power constant-power fraction (ZIP)"}
+                    },
+                    "gamma_p": {
+                        "type": "array",
+                        "items": {"type": "number", "description": "Active-power voltage exponent (exponential model)"}
+                    },
+                    "gamma_q": {
+                        "type": "array",
+                        "items": {"type": "number", "description": "Reactive-power voltage exponent (exponential model)"}
+                    }
+                },
+                "required": [
+                    "p_nom",
+                    "q_nom",
+                    "bus",
+                    "configuration",
+                    "terminal_map"
+                ]
+            }
+        },
+        "generator": {
+            "type": "object",
+            "description": "Generator elements",
+            "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "p_min": {
+                        "type": "array",
+                        "items": {
+                            "type": "number",
+                            "description": "Minimum active power value [W]"
+                        }
+                    },
+                    "p_max": {
+                        "type": "array",
+                        "items": {
+                            "type": "number",
+                            "description": "Maximum active power value [W]"
+                        }
+                    },
+                    "q_min": {
+                        "type": "array",
+                        "items": {
+                            "type": "number",
+                            "description": "Minimum reactive power value [var]"
+                        }
+                    },
+                    "q_max": {
+                        "type": "array",
+                        "items": {
+                            "type": "number",
+                            "description": "Maximum reactive power value [var]"
+                        }
+                    },
+                    "s_max": {
+                        "type": "array",
+                        "description": "Optional per-phase apparent-power rating [VA]; one entry per phase conductor (length = terminal_map - 1). Stamps the apparent-power circle pg^2 + qg^2 <= s_max^2",
+                        "items": {
+                            "$ref": "#/$defs/nonnegative_number"
+                        }
+                    },
+                    "i_max": {
+                        "type": "array",
+                        "description": "Optional per-conductor current-magnitude limits [A]. WYE accepts one entry per phase and an optional final neutral-return entry; SINGLE_PHASE accepts one or two entries. DELTA generators are future work. See the BMOPF math and data specification for the generator current-limit constraint.",
+                        "items": {
+                            "$ref": "#/$defs/nonnegative_number"
+                        }
+                    },
+                    "cost": {
+                        "type": "array",
+                        "description": "Per-phase linear generating cost [$/kWh], one entry per phase conductor",
+                        "items": {
+                            "type": "number"
+                        }
+                    },
+                    "bus": {
+                        "$ref": "#/$defs/bus_type"
+                    },
+                    "configuration": {
+                        "$ref": "#/$defs/configuration_type"
+                    },
+                    "terminal_map": {
+                        "$ref": "#/$defs/terminal_map_type"
+                    }
+                },
+                "required": [
+                    "cost",
+                    "bus",
+                    "configuration",
+                    "terminal_map"
+                ]
+            }
+        },
+        "linecode": {
+            "type": "object",
+            "description": "Linecodes",
+            "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "i_max": {
+                        "type": "array",
+                        "description": "Array of the maximum current that can pass into each conductor at either end of a line [A]",
+                        "items": {
+                            "$ref": "#/$defs/nonnegative_number"
+                        }
+                    },
+                    "s_max": {
+                        "type": "array",
+                        "description": "Array of the maximum apparent power that can pass into each conductor at either end of a line [VA]",
+                        "items": {
+                            "$ref": "#/$defs/nonnegative_number"
+                        }
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "Origin of the impedance matrices, e.g. \"fem\" (finite-element derived), \"datasheet\", \"import\""
+                    }
+                },
+                "patternProperties":{
+                    "^R_series_\\d+_\\d+$": {
+                        "type": "number",
+                        "description": "Element of the series resistance matrix [Ohm/m]"
+                    },
+                    "^X_series_\\d+_\\d+$": {
+                        "type": "number",
+                        "description": "Element of the series reactance matrix [Ohm/m]"
+                    },
+                    "^G_from_\\d+_\\d+$": {
+                        "type": "number",
+                        "description": "Element of the shunt conductance matrix [S/m]"
+                    },
+                    "^G_to_\\d+_\\d+$": {
+                        "type": "number",
+                        "description": "Element of the shunt conductance matrix [S/m]"
+                    },
+                    "^B_from_\\d+_\\d+$": {
+                        "type": "number",
+                        "description": "Element of the shunt susceptance matrix [S/m]"
+                    },
+                    "^B_to_\\d+_\\d+$": {
+                        "type": "number",
+                        "description": "Element of the shunt susceptance matrix [S/m]"
+                    }
+                },
+                "required": [
+                    "R_series_1_1",
+                    "X_series_1_1"
+                ]
+            }
+        },
+        "switch": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "bus_from": {
+                        "type": "string",
+                        "description": "'from' bus for the element"
+                    },
+                    "bus_to": {
+                        "type": "string",
+                        "description": "'to' bus for the element"
+                    },
+                    "terminal_map_to": {
+                        "$ref": "#/$defs/terminal_map_type"
+                    },
+                    "terminal_map_from": {
+                        "$ref": "#/$defs/terminal_map_type"
+                    },
+                    "open_switch": {
+                        "type": "boolean",
+                        "description": "Indicator of switch state, true if switch is open (nonconducting)"
+                    },
+                    "i_max": {
+                        "type": "array",
+                        "description": "Maximum permitted current passing through each conductor of the switch [A]",
+                        "items": { "$ref": "#/$defs/nonnegative_number" }
+                    }
+                },
+                "required": [
+                    "bus_from",
+                    "bus_to",
+                    "open_switch",
+                    "terminal_map_from",
+                    "terminal_map_to"
+                ]
+            }
+        },
+        "transformer": {
+            "type": "object",
+            "properties": {
+                "single_phase": {
+                    "$ref": "#/$defs/single_phase_or_center_tap_transformer",
+                    "description": "Single phase transformer object"
+                },
+                "center_tap": {
+                    "$ref": "#/$defs/single_phase_or_center_tap_transformer",
+                    "description": "Center tap transformer object, with a single-phase winding on the 'from' side and split winding on the 'to' side."
+                },
+                "wye_delta": {
+                    "$ref": "#/$defs/three_phase_transformer",
+                    "description": "Wye-to-Delta transformer object, with series impedance defined on the wye-side"
+                },
+                "delta_wye": {
+                    "$ref": "#/$defs/three_phase_transformer",
+                    "description": "Delta-to-Wye transformer object, with series impedance defined on the wye-side"
+                }
+            }
+        },
+        "terminal_conventions": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Case-wide classification of the terminal-name labels used across all AC buses into phase and neutral roles. Optional: when present it is the authoritative source of truth for which labels are neutral/phase (ingestion and the OPF resolve roles from it rather than guessing); when absent, roles are inferred from the naming convention (a label 'n'/'N' is neutral, all others phase) and W.CONV.TERMINAL_ROLES_INFERRED is raised. Exported on every write.",
+            "properties": {
+                "phase": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Terminal-name labels that denote a phase conductor (e.g. [\"a\",\"b\",\"c\"], or split-phase legs). A bus terminal in neither list is treated as a phase and W.CONV.TERMINAL_UNCLASSIFIED is raised."
+                },
+                "neutral": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Terminal-name labels that denote a neutral conductor (typically [\"n\"]). A bus is expected to carry at most one neutral terminal."
+                }
+            }
+        }
+    },
+    "required": [
+        "bus",
+        "voltage_source"
+    ],
+    "$defs": {
+        "configuration_type": {
+            "type": "string",
+            "description": "Element configuration, as WYE, DELTA, or SINGLE_PHASE",
+            "enum": ["WYE", "DELTA", "SINGLE_PHASE"]
+        },
+        "terminal_map_type":{
+            "type": "array",
+            "description": "Mapping of terminals of an element to the corresponding terminals of its corresponding bus",
+            "items": {
+                "type": "string"
+            }
+        },
+        "bus_type":{
+            "type": "string",
+            "description": "bus the element is connected to"
+        },
+        "nonnegative_number":{
+            "type": "number",
+            "minimum": 0,
+            "description": "Non-negative number"
+        },
+        "single_phase_or_center_tap_transformer":{
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "s_rating": {
+                        "$ref": "#/$defs/nonnegative_number",
+                        "description": "Transformer power base [VA]"
+                    },
+                    "r_series_from": {
+                        "$ref": "#/$defs/nonnegative_number",
+                        "description": "Transformer series resistance on the 'from' side [Ohm]"
+                    },
+                    "x_series_from": {
+                        "$ref": "#/$defs/nonnegative_number",
+                        "description": "Transformer series reactance on the 'from' side [Ohm]"
+                    },
+                    "r_series_to": {
+                        "$ref": "#/$defs/nonnegative_number",
+                        "description": "Transformer series resistance on the 'to' side [Ohm]"
+                    },
+                    "x_series_to": {
+                        "$ref": "#/$defs/nonnegative_number",
+                        "description": "Transformer series reactance on the 'to' side [Ohm]"
+                    },
+                    "bus_from": {
+                        "type": "string",
+                        "description": "'from' bus for the element"
+                    },
+                    "bus_to": {
+                        "type": "string",
+                        "description": "'to' bus for the element"
+                    },
+                    "terminal_map_to": {
+                        "$ref": "#/$defs/terminal_map_type"
+                    },
+                    "terminal_map_from": {
+                        "$ref": "#/$defs/terminal_map_type"
+                    },
+                    "v_nom_to": {
+                        "$ref": "#/$defs/nonnegative_number",
+                        "description": "Nominal voltage of the 'to'-side winding [V]"
+                    },
+                    "v_nom_from": {
+                        "$ref": "#/$defs/nonnegative_number",
+                        "description": "Nominal voltage of the 'from'-side winding [V]"
+                    },
+                    "i_max_from": {
+                        "type": "array",
+                        "items": { "$ref": "#/$defs/nonnegative_number" },
+                        "description": "Per-conductor 'from'-side current limit [A]"
+                    },
+                    "i_max_to": {
+                        "type": "array",
+                        "items": { "$ref": "#/$defs/nonnegative_number" },
+                        "description": "Per-conductor 'to'-side current limit [A]"
+                    }
+                },
+                "required": [
+                    "bus_from",
+                    "bus_to",
+                    "terminal_map_from",
+                    "terminal_map_to",
+                    "s_rating",
+                    "v_nom_from",
+                    "v_nom_to"
+                ]
+            }
+        },
+        "three_phase_transformer": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "s_rating": {
+                        "$ref": "#/$defs/nonnegative_number",
+                        "description": "Transformer power base [VA]"
+                    },
+                    "r_series": {
+                        "$ref": "#/$defs/nonnegative_number",
+                        "description": "Transformer series resistance, defined on the wye-side winding [Ohm]"
+                    },
+                    "x_series": {
+                        "$ref": "#/$defs/nonnegative_number",
+                        "description": "Transformer series reactance, defined on the wye-side winding [Ohm]"
+                    },
+                    "i_max_from": {
+                        "type": "array",
+                        "items": { "$ref": "#/$defs/nonnegative_number" },
+                        "description": "Per-conductor 'from'-side current limit [A]"
+                    },
+                    "i_max_to": {
+                        "type": "array",
+                        "items": { "$ref": "#/$defs/nonnegative_number" },
+                        "description": "Per-conductor 'to'-side current limit [A]"
+                    },
+                    "bus_from": {
+                        "type": "string",
+                        "description": "'from' bus for the element"
+                    },
+                    "bus_to": {
+                        "type": "string",
+                        "description": "'to' bus for the element"
+                    },
+                    "terminal_map_to": {
+                        "$ref": "#/$defs/terminal_map_type"
+                    },
+                    "terminal_map_from": {
+                        "$ref": "#/$defs/terminal_map_type"
+                    },
+                    "v_nom_to": {
+                        "$ref": "#/$defs/nonnegative_number",
+                        "description": "Nominal phase-to-phase voltage of the 'to'-side winding [V]"
+                    },
+                    "v_nom_from": {
+                        "$ref": "#/$defs/nonnegative_number",
+                        "description": "Nominal phase-to-phase voltage of the 'from'-side winding [V]"
+                    }
+                },
+                "required": [
+                    "bus_from",
+                    "bus_to",
+                    "terminal_map_from",
+                    "terminal_map_to",
+                    "s_rating",
+                    "v_nom_from",
+                    "v_nom_to"
+                ]
+            }
+        }
+    }
+}

@@ -200,6 +200,26 @@ fn format_catalog_tokens_resolve_and_read_only_targets_stay_read_only() {
 }
 
 #[test]
+fn catalog_includes_explicit_cim_and_sincal_reader_families() {
+    use powerio::NetworkFamily::{Distribution, Transmission};
+    let catalog: Vec<_> = powerio::grid_formats().collect();
+    for (token, family, can_emit) in [
+        ("cim-dist", Distribution, true),
+        ("sincal-balanced", Transmission, false),
+        ("sincal-multiconductor", Distribution, false),
+    ] {
+        let entry = catalog
+            .iter()
+            .find(|entry| entry.format.token == token)
+            .unwrap();
+        assert_eq!(entry.family, family, "{token}");
+        assert!(entry.can_read, "{token}");
+        assert_eq!(entry.format.can_emit, can_emit, "{token}");
+    }
+    assert!(!catalog.iter().any(|entry| entry.format.token == "sincal"));
+}
+
+#[test]
 fn dss_project_entry_names_reparse_or_are_refused() {
     for name in ["model/entry\"file.dss", "model/entry\"')] }file.dss"] {
         let module = powerio::parse(tree(

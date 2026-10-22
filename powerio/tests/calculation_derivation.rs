@@ -68,9 +68,9 @@ fn neutral_network_module(grounded: bool) -> powerio::PioModule<powerio::PioValu
 fn check_records<T>(module: &powerio::PioModule<T>, output_type: &str) {
     assert_eq!(module.producer().name(), "powerio");
     assert_eq!(module.producer().version(), powerio::VERSION);
-    assert!(!module.sources().is_empty());
+    assert_ne!(module.sources(), []);
     assert!(module.source().is_none());
-    assert!(module.source_map().is_empty());
+    assert_eq!(module.source_map(), []);
     let history = module.history().last().unwrap();
     assert_eq!(history.kind(), HistoryKind::Transform);
     assert_eq!(history.input_type(), Some("powerio.BalancedNetwork"));
@@ -201,6 +201,38 @@ fn multiconductor_module_derives_and_reextracts_lindist3flow_instance() {
     assert_eq!(
         extracted.value().reference().provenance,
         powerio::LinDist3FlowReferenceProvenance::SourcePropagated
+    );
+}
+
+#[test]
+fn multiconductor_module_derives_and_reextracts_fixed_dispatch_lindist3flow() {
+    let source = lindist3flow_network_module();
+    let derived = powerio::to_lindist3flow_pf_instance_with_options(
+        &source,
+        powerio::LinDist3FlowBuildOptions::default()
+            .with_reference_policy(powerio::LinDist3FlowReferencePolicy::SourcePropagated),
+    )
+    .unwrap();
+    let history = derived.history().last().unwrap();
+    assert_eq!(history.name(), "to_lindist3flow_pf_instance");
+    assert_eq!(history.input_type(), Some("powerio.MulticonductorNetwork"));
+    assert_eq!(
+        history.output_type(),
+        Some("powerio.LinDist3FlowPfInstance")
+    );
+
+    let history_len = derived.history().len();
+    let dynamic = derived.map_value(powerio::PioValue::from);
+    let extracted = powerio::to_lindist3flow_pf_instance(&dynamic).unwrap();
+    assert_eq!(extracted.history().len(), history_len);
+    assert_eq!(
+        extracted
+            .value()
+            .formulation()
+            .base_instance()
+            .objective()
+            .terms(),
+        []
     );
 }
 

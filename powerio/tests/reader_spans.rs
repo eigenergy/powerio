@@ -95,7 +95,7 @@ fn a_malformed_matpower_token_names_its_row() {
 #[test]
 fn a_matpower_failure_without_a_record_carries_no_span() {
     let error = parse_failure("nobus.m", "mpc.baseMVA = 100;\n", "matpower");
-    assert!(error.diagnostics()[0].spans().is_empty());
+    assert_eq!(error.diagnostics()[0].spans(), []);
 }
 
 const RAW_HEADER: &str = "0, 100.00, 33, 0, 0, 60.00\nSPANS\nCOMMENT\n";

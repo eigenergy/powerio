@@ -301,7 +301,7 @@ BBBBBB11 BBBBBB11 1 7 0.0000 0.0000 0.000000   2000 BABAA\n\
 ##R\n";
     let module = parse_ucte_text("self-coupler.uct", text);
 
-    assert!(module.value().switches().is_empty());
+    assert_eq!(module.value().switches().as_slice(), []);
     assert!(
         messages(&module).iter().any(|message| message
             .starts_with("READ.UCTE.RECORD_IGNORED: line 6:")

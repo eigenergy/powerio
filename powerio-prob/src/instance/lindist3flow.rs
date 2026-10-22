@@ -1,19 +1,26 @@
 //! Solver-neutral LinDist3Flow OPF instance front end.
 //!
 //! This module owns formulation semantics that precede numerical coefficient
-//! assembly: applicability, conductor-resolved radial topology, and the fixed
+//! assembly: applicability, conductor-resolved topology, and the fixed
 //! voltage phasor reference. Sparse matrices and affine/SOC preparation remain
 //! in `powerio-matrix`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use powerio_core::{Diagnostic, DiagnosticInfo, DiagnosticSeverity, Error};
-use powerio_dist::{Configuration, DistLoadVoltageModel, MulticonductorNetwork};
+use powerio_dist::{
+    Configuration, DistLoadVoltageModel, LinDist3FlowPreparationAction,
+    LinDist3FlowPreparationActionKind, LinDist3FlowPreparationReport, MulticonductorNetwork,
+    prepare_lindist3flow_network,
+};
 use serde::{Deserialize, Serialize};
 
 use super::McAcOpfInstance;
 use crate::diagnostics::codes;
-use crate::{MulticonductorOperatingPointQuantity, ObjectiveTerm};
+use crate::{
+    ConstraintSelection, MulticonductorActiveConstraints, MulticonductorOperatingPointQuantity,
+    Objective, ObjectiveTerm,
+};
 
 /// Selection of the fixed phasors used to form LinDist3Flow coefficients.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,18 +38,7 @@ pub enum LinDist3FlowReferencePolicy {
     SourcePropagated,
 }
 
-/// Policy for network features outside the canonical affine model.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum LinDist3FlowUnsupported {
-    #[default]
-    Reject,
-    Lower,
-    Approximate,
-    Permissive,
-}
+pub use powerio_dist::LinDist3FlowPreparationPolicy as LinDist3FlowUnsupported;
 
 /// Semantic choices used while creating a LinDist3Flow instance.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,7 +81,7 @@ pub struct LinDist3FlowNode {
     pub terminal: String,
 }
 
-/// One line conductor oriented away from its conductor island's source.
+/// One line conductor in a deterministic source-rooted orientation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -99,7 +95,7 @@ pub struct LinDist3FlowOrientedConductor {
     pub reversed: bool,
 }
 
-/// The source-rooted conductor forest used by the formulation.
+/// The source-covered conductor graph used by the formulation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -108,6 +104,9 @@ pub struct LinDist3FlowTopology {
     pub conductors: Vec<LinDist3FlowOrientedConductor>,
     pub roots: Vec<LinDist3FlowNode>,
     pub islands: Vec<Vec<LinDist3FlowNode>>,
+    /// Whether at least one retained conductor closes a cycle or parallels an
+    /// existing conductor connection.
+    pub meshed: bool,
 }
 
 /// Whether applicability checks permit instance construction.
@@ -183,11 +182,13 @@ impl LinDist3FlowReferenceState {
 /// Matrix-free LinDist3Flow OPF instance.
 #[derive(Clone, Debug)]
 pub struct LinDist3FlowOpfInstance {
+    source_base: McAcOpfInstance,
     base: McAcOpfInstance,
     topology: LinDist3FlowTopology,
     reference: LinDist3FlowReferenceState,
     applicability: LinDist3FlowApplicability,
     options: LinDist3FlowBuildOptions,
+    preparation: LinDist3FlowPreparationReport,
 }
 
 impl LinDist3FlowOpfInstance {
@@ -211,7 +212,9 @@ impl LinDist3FlowOpfInstance {
         base: McAcOpfInstance,
         options: LinDist3FlowBuildOptions,
     ) -> Result<Self, Error> {
-        let (applicability, topology, reference) = assess(&base, options);
+        let source_base = base;
+        let (base, preparation) = prepare_base(&source_base, options)?;
+        let (applicability, topology, reference) = assess(&base, options, &preparation);
         if let Some(diagnostic) = applicability
             .diagnostics
             .iter()
@@ -232,12 +235,26 @@ impl LinDist3FlowOpfInstance {
             )
         })?;
         Ok(Self {
+            source_base,
             base,
             topology,
             reference,
             applicability,
             options,
+            preparation,
         })
+    }
+
+    /// The unmodified multiconductor OPF instance supplied by the caller.
+    #[must_use]
+    pub fn source_instance(&self) -> &McAcOpfInstance {
+        &self.source_base
+    }
+
+    /// The unmodified distribution network supplied by the caller.
+    #[must_use]
+    pub fn source_network(&self) -> &MulticonductorNetwork {
+        self.source_base.network()
     }
 
     #[must_use]
@@ -268,6 +285,206 @@ impl LinDist3FlowOpfInstance {
     #[must_use]
     pub const fn options(&self) -> LinDist3FlowBuildOptions {
         self.options
+    }
+
+    /// Typed provenance for every component transformation and omission.
+    #[must_use]
+    pub const fn preparation(&self) -> &LinDist3FlowPreparationReport {
+        &self.preparation
+    }
+}
+
+/// Fixed-dispatch LinDist3Flow instance.
+///
+/// Generator/IBR active and reactive powers are fixed by nominal values or
+/// equal lower/upper bounds. Line thermal limits are monitored after a
+/// converged solve instead of entering the conic feasibility problem. Voltage
+/// and generator-capability selections remain active.
+#[derive(Clone, Debug)]
+pub struct LinDist3FlowPfInstance {
+    formulation: LinDist3FlowOpfInstance,
+}
+
+impl LinDist3FlowPfInstance {
+    /// Build a fixed-dispatch instance from a multiconductor network.
+    ///
+    /// # Errors
+    /// As [`LinDist3FlowOpfInstance::from_network`], or a generator/IBR states
+    /// a dispatch range rather than fixed active and reactive power.
+    pub fn from_network(
+        network: MulticonductorNetwork,
+        options: LinDist3FlowBuildOptions,
+    ) -> Result<Self, Error> {
+        Self::from_mc_ac(McAcOpfInstance::from_network(network)?, options)
+    }
+
+    /// Build from a multiconductor OPF container while discarding its
+    /// objective and monitoring, rather than enforcing, conductor limits.
+    ///
+    /// # Errors
+    /// As [`LinDist3FlowOpfInstance::from_mc_ac`], or dispatch is not fixed.
+    pub fn from_mc_ac(
+        base: McAcOpfInstance,
+        options: LinDist3FlowBuildOptions,
+    ) -> Result<Self, Error> {
+        let mut constraints: MulticonductorActiveConstraints = base.constraints().clone();
+        constraints.conductor_limits = ConstraintSelection::None;
+        constraints.generator_capability = ConstraintSelection::All;
+        let base = base
+            .with_objective(Objective::default())
+            .with_constraints(constraints);
+        let formulation = LinDist3FlowOpfInstance::from_mc_ac(base, options)?;
+        require_fixed_dispatch(&formulation)?;
+        Ok(Self { formulation })
+    }
+
+    /// Restore a fixed-dispatch instance from its canonical formulation.
+    ///
+    /// # Errors
+    /// The formulation carries an objective, enforces conductor limits, or
+    /// contains dispatch ranges rather than fixed active/reactive powers.
+    pub fn from_formulation(formulation: LinDist3FlowOpfInstance) -> Result<Self, Error> {
+        if !formulation.base_instance().objective().terms().is_empty()
+            || !matches!(
+                formulation.base_instance().constraints().conductor_limits,
+                ConstraintSelection::None
+            )
+            || !matches!(
+                formulation
+                    .base_instance()
+                    .constraints()
+                    .generator_capability,
+                ConstraintSelection::All
+            )
+        {
+            return Err(Error::new(
+                &codes::BUILD_LINDIST3FLOW_FIXED_DISPATCH_REQUIRED,
+                "a fixed-dispatch formulation must have no objective, enforce every generator's fixed capability bounds, and monitor rather than enforce conductor limits",
+            ));
+        }
+        require_fixed_dispatch(&formulation)?;
+        Ok(Self { formulation })
+    }
+
+    /// The internal zero-objective formulation used by matrix builders.
+    #[must_use]
+    pub const fn formulation(&self) -> &LinDist3FlowOpfInstance {
+        &self.formulation
+    }
+
+    #[must_use]
+    pub fn network(&self) -> &MulticonductorNetwork {
+        self.formulation.network()
+    }
+
+    #[must_use]
+    pub fn source_network(&self) -> &MulticonductorNetwork {
+        self.formulation.source_network()
+    }
+
+    #[must_use]
+    pub const fn topology(&self) -> &LinDist3FlowTopology {
+        self.formulation.topology()
+    }
+
+    #[must_use]
+    pub const fn reference(&self) -> &LinDist3FlowReferenceState {
+        self.formulation.reference()
+    }
+
+    #[must_use]
+    pub const fn applicability(&self) -> &LinDist3FlowApplicability {
+        self.formulation.applicability()
+    }
+
+    #[must_use]
+    pub const fn options(&self) -> LinDist3FlowBuildOptions {
+        self.formulation.options()
+    }
+
+    #[must_use]
+    pub const fn preparation(&self) -> &LinDist3FlowPreparationReport {
+        self.formulation.preparation()
+    }
+}
+
+#[allow(clippy::float_cmp)] // Equal bounds are the explicit fixed-dispatch representation.
+fn fixed_bounds(lower: Option<&[f64]>, upper: Option<&[f64]>, channels: usize) -> bool {
+    match (lower, upper) {
+        (None, None) => true,
+        (Some(lower), Some(upper)) if lower.len() == channels && upper.len() == channels => lower
+            .iter()
+            .zip(upper)
+            .all(|(lower, upper)| lower.is_finite() && lower == upper),
+        _ => false,
+    }
+}
+
+fn require_fixed_dispatch(instance: &LinDist3FlowOpfInstance) -> Result<(), Error> {
+    for generator in instance.network().generators() {
+        let channels = generator.p_nom.len();
+        let nominal = channels != 0
+            && generator.q_nom.len() == channels
+            && generator.p_nom.iter().all(|value| value.is_finite())
+            && generator.q_nom.iter().all(|value| value.is_finite());
+        if !nominal
+            || !fixed_bounds(
+                generator.p_min.as_deref(),
+                generator.p_max.as_deref(),
+                channels,
+            )
+            || !fixed_bounds(
+                generator.q_min.as_deref(),
+                generator.q_max.as_deref(),
+                channels,
+            )
+        {
+            return Err(Error::new(
+                &codes::BUILD_LINDIST3FLOW_FIXED_DISPATCH_REQUIRED,
+                format!(
+                    "generator `{}` must state finite nominal P/Q or equal per-channel lower and upper bounds",
+                    generator.name
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn prepare_base(
+    source: &McAcOpfInstance,
+    options: LinDist3FlowBuildOptions,
+) -> Result<(McAcOpfInstance, LinDist3FlowPreparationReport), Error> {
+    let prepared =
+        prepare_lindist3flow_network(source.network(), options.unsupported).map_err(|error| {
+            Error::new(
+                &codes::BUILD_LINDIST3FLOW_PREPARATION_FAILED,
+                error.to_string(),
+            )
+        })?;
+    let (network, mut report) = prepared.into_parts();
+    if report.actions.is_empty() {
+        return Ok((source.clone(), report));
+    }
+    match source.clone().with_network(network.clone()) {
+        Ok(base) => Ok((base, report)),
+        Err(error) if source.initial_point().is_some() => {
+            let base = McAcOpfInstance::from_network(network)?
+                .with_objective(source.objective().clone())
+                .with_constraints(source.constraints().clone());
+            let mut action = LinDist3FlowPreparationAction::new(
+                LinDist3FlowPreparationActionKind::InitialPointOmitted,
+                "initial_point",
+                None,
+            );
+            action.details.insert(
+                "reason".to_owned(),
+                serde_json::Value::String(error.to_string()),
+            );
+            report.actions.push(action);
+            Ok((base, report))
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -506,7 +723,8 @@ fn check_device_shapes(instance: &McAcOpfInstance, diagnostics: &mut Vec<Diagnos
 
     for (row, source) in network.sources().iter().enumerate() {
         let channels = source.terminal_map.len();
-        let valid = channels != 0
+        let valid = source.reference_terminal.is_none()
+            && channels != 0
             && source.v_magnitude.len() == channels
             && source.v_angle.len() == channels
             && source
@@ -539,17 +757,6 @@ fn check_supported_slice(
     let network = instance.network();
     check_objective(instance, diagnostics);
     check_device_shapes(instance, diagnostics);
-    if options.unsupported != LinDist3FlowUnsupported::Reject {
-        diagnostics.push(finding(
-            &codes::BUILD_LINDIST3FLOW_POLICY_UNAVAILABLE,
-            format!(
-                "the {:?} unsupported-data policy is reserved but not implemented yet",
-                options.unsupported
-            ),
-            None,
-        ));
-    }
-
     let conventions = network.extras().get("bmopf_terminal_conventions");
     for (row, bus) in network.buses().iter().enumerate() {
         if bus.phase_indices(conventions).len() != bus.terminals.len() {
@@ -644,21 +851,76 @@ pub fn check_lindist3flow_applicability(
     instance: &McAcOpfInstance,
     options: LinDist3FlowBuildOptions,
 ) -> LinDist3FlowApplicability {
-    assess(instance, options).0
+    match prepare_base(instance, options) {
+        Ok((prepared, report)) => assess(&prepared, options, &report).0,
+        Err(error) => LinDist3FlowApplicability {
+            status: LinDist3FlowApplicabilityStatus::Inapplicable,
+            diagnostics: error.into_diagnostics(),
+            roots: Vec::new(),
+            islands: Vec::new(),
+            reference_provenance: None,
+            kron_reduced: false,
+            lowered: false,
+        },
+    }
+}
+
+fn preparation_findings(report: &LinDist3FlowPreparationReport) -> Vec<Diagnostic> {
+    report
+        .actions
+        .iter()
+        .map(|action| {
+            let info = match action.kind {
+                LinDist3FlowPreparationActionKind::LoadApproximated
+                | LinDist3FlowPreparationActionKind::IbrApproximated
+                | LinDist3FlowPreparationActionKind::StaticControlFrozen => {
+                    &codes::BUILD_LINDIST3FLOW_COMPONENT_APPROXIMATED
+                }
+                LinDist3FlowPreparationActionKind::UntypedObjectOmitted
+                | LinDist3FlowPreparationActionKind::InitialPointOmitted => {
+                    &codes::BUILD_LINDIST3FLOW_COMPONENT_OMITTED
+                }
+                _ => &codes::BUILD_LINDIST3FLOW_COMPONENT_LOWERED,
+            };
+            finding(
+                info,
+                format!(
+                    "`{}` was prepared by {:?}{}",
+                    action.source,
+                    action.kind,
+                    action
+                        .target
+                        .as_ref()
+                        .map_or_else(String::new, |target| format!(" as `{target}`"))
+                ),
+                Some(action.source.clone()),
+            )
+        })
+        .collect()
 }
 
 fn assess(
     instance: &McAcOpfInstance,
     options: LinDist3FlowBuildOptions,
+    preparation: &LinDist3FlowPreparationReport,
 ) -> (
     LinDist3FlowApplicability,
     Option<LinDist3FlowTopology>,
     Option<LinDist3FlowReferenceState>,
 ) {
-    let mut diagnostics = Vec::new();
+    let mut diagnostics = preparation_findings(preparation);
     check_supported_slice(instance, options, &mut diagnostics);
     let topology = match build_topology(instance.network()) {
-        Ok(topology) => Some(topology),
+        Ok(topology) => {
+            if topology.meshed {
+                diagnostics.push(finding(
+                    &codes::BUILD_LINDIST3FLOW_MESH_APPROXIMATION,
+                    "the retained conductor graph contains a cycle or parallel connection; the model keeps every line but adds no angle, loop-consistency, circulating-flow, or radialisation constraint",
+                    None,
+                ));
+            }
+            Some(topology)
+        }
         Err(message) => {
             diagnostics.push(finding(
                 &codes::BUILD_LINDIST3FLOW_TOPOLOGY_INVALID,
@@ -702,7 +964,7 @@ fn assess(
                 .network()
                 .extras()
                 .contains_key("powerio_neutral_kron"),
-            lowered: false,
+            lowered: !preparation.actions.is_empty(),
         },
         topology,
         reference,
@@ -788,9 +1050,10 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
         return Err("the network has no retained bus terminals".to_owned());
     }
 
-    let mut forest = UnionFind::new(nodes.len());
-    let mut bus_forest = UnionFind::new(bus_positions.len());
+    let mut components = UnionFind::new(nodes.len());
+    let mut bus_components = UnionFind::new(bus_positions.len());
     let mut edges = Vec::new();
+    let mut meshed = false;
     for (line_row, line) in network.lines().iter().enumerate() {
         if line.terminal_map_from.len() != line.terminal_map_to.len()
             || line.terminal_map_from.is_empty()
@@ -816,7 +1079,9 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
                     line.name, line.bus_to
                 )
             })?;
-        bus_forest.join(from_bus, to_bus);
+        // Bus-level loops whose lines carry disjoint conductors are still a
+        // conductor forest; only conductor joins below decide `meshed`.
+        bus_components.join(from_bus, to_bus);
         for (conductor, (from_terminal, to_terminal)) in line
             .terminal_map_from
             .iter()
@@ -839,13 +1104,7 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
                         line.name, line.bus_to
                     )
                 })?;
-            if !forest.join(from, to) {
-                return Err(format!(
-                    "line `{}` conductor {} closes a cycle in the conductor-resolved graph",
-                    line.name,
-                    conductor + 1
-                ));
-            }
+            meshed |= !components.join(from, to);
             edges.push(Edge {
                 from,
                 to,
@@ -858,12 +1117,13 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
     let mut island_indices: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for node in 0..nodes.len() {
         island_indices
-            .entry(forest.find(node))
+            .entry(components.find(node))
             .or_default()
             .push(node);
     }
     let mut source_nodes: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     let mut island_sources: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
+    let mut source_bus_roots = Vec::new();
     for source in network.sources() {
         let bus = *bus_positions
             .get(&source.bus.to_ascii_lowercase())
@@ -874,9 +1134,10 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
                 )
             })?;
         island_sources
-            .entry(bus_forest.find(bus))
+            .entry(bus_components.find(bus))
             .or_default()
             .push(&source.name);
+        source_bus_roots.push(bus);
         for terminal in &source.terminal_map {
             let node = *positions
                 .get(&node_key(&source.bus, terminal))
@@ -887,7 +1148,7 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
                     )
                 })?;
             source_nodes
-                .entry(forest.find(node))
+                .entry(components.find(node))
                 .or_default()
                 .push(node);
         }
@@ -896,7 +1157,7 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
     for bus in network.buses() {
         let position = bus_positions[&bus.id.to_ascii_lowercase()];
         physical_islands
-            .entry(bus_forest.find(position))
+            .entry(bus_components.find(position))
             .or_default()
             .push(&bus.id);
     }
@@ -915,7 +1176,7 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
     ordered_islands.sort_by_key(|island| island[0]);
     let mut root_indices = Vec::with_capacity(ordered_islands.len());
     for island in &ordered_islands {
-        let component = forest.find(island[0]);
+        let component = components.find(island[0]);
         let roots: &[usize] = source_nodes.get(&component).map_or(&[], Vec::as_slice);
         if roots.len() != 1 {
             return Err(format!(
@@ -928,51 +1189,71 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
         root_indices.push(roots[0]);
     }
 
-    let mut adjacency = vec![Vec::<(usize, usize)>::new(); nodes.len()];
-    for (edge_index, edge) in edges.iter().enumerate() {
-        adjacency[edge.from].push((edge_index, edge.to));
-        adjacency[edge.to].push((edge_index, edge.from));
+    let mut bus_adjacency = vec![Vec::new(); bus_positions.len()];
+    for line in network.lines() {
+        let from = bus_positions[&line.bus_from.to_ascii_lowercase()];
+        let to = bus_positions[&line.bus_to.to_ascii_lowercase()];
+        bus_adjacency[from].push(to);
+        bus_adjacency[to].push(from);
     }
-    let mut directions = vec![None; edges.len()];
-    for &root in &root_indices {
-        let mut stack = vec![(root, usize::MAX)];
-        while let Some((parent, incoming)) = stack.pop() {
-            for &(edge_index, child) in &adjacency[parent] {
-                if edge_index == incoming {
-                    continue;
-                }
-                directions[edge_index] = Some((parent, child));
-                stack.push((child, edge_index));
+    let mut bus_distances = vec![usize::MAX; bus_positions.len()];
+    let mut frontier = std::collections::VecDeque::new();
+    for root in source_bus_roots {
+        bus_distances[root] = 0;
+        frontier.push_back(root);
+    }
+    while let Some(parent) = frontier.pop_front() {
+        for &child in &bus_adjacency[parent] {
+            if bus_distances[child] == usize::MAX {
+                bus_distances[child] = bus_distances[parent] + 1;
+                frontier.push_back(child);
             }
         }
     }
-    let mut line_directions = BTreeMap::new();
-    for (edge, direction) in edges.iter().zip(&directions) {
-        let (parent, _) = direction.expect("each source-rooted forest edge is visited");
-        let reversed = parent != edge.from;
-        if line_directions
-            .insert(edge.line, reversed)
-            .is_some_and(|previous| previous != reversed)
-        {
-            return Err(format!(
-                "line `{}` is reached in conflicting directions across its coupled conductors",
-                network.lines()[edge.line].name
-            ));
-        }
+    if let Some(bus) = bus_distances
+        .iter()
+        .position(|distance| *distance == usize::MAX)
+    {
+        let id = network
+            .buses()
+            .iter()
+            .find(|candidate| bus_positions[&candidate.id.to_ascii_lowercase()] == bus)
+            .map_or("<unknown>", |candidate| candidate.id.as_str());
+        return Err(format!(
+            "bus `{id}` was not reached from its physical-island source"
+        ));
     }
+    let directions = edges
+        .iter()
+        .map(|edge| {
+            let line = &network.lines()[edge.line];
+            let from_bus = bus_positions[&line.bus_from.to_ascii_lowercase()];
+            let to_bus = bus_positions[&line.bus_to.to_ascii_lowercase()];
+            match bus_distances[from_bus].cmp(&bus_distances[to_bus]) {
+                std::cmp::Ordering::Less => (edge.from, edge.to),
+                std::cmp::Ordering::Greater => (edge.to, edge.from),
+                std::cmp::Ordering::Equal => {
+                    let from = line.bus_from.to_ascii_lowercase();
+                    let to = line.bus_to.to_ascii_lowercase();
+                    if from <= to {
+                        (edge.from, edge.to)
+                    } else {
+                        (edge.to, edge.from)
+                    }
+                }
+            }
+        })
+        .collect::<Vec<_>>();
     let conductors = edges
         .iter()
         .zip(directions)
-        .map(|(edge, direction)| {
-            let (parent, child) = direction.expect("each source-rooted forest edge is visited");
-            LinDist3FlowOrientedConductor {
-                line: network.lines()[edge.line].name.clone(),
-                source_line_row: edge.line,
-                conductor_position: edge.conductor,
-                parent: nodes[parent].clone(),
-                child: nodes[child].clone(),
-                reversed: parent != edge.from,
-            }
+        .map(|(edge, (parent, child))| LinDist3FlowOrientedConductor {
+            line: network.lines()[edge.line].name.clone(),
+            source_line_row: edge.line,
+            conductor_position: edge.conductor,
+            parent: nodes[parent].clone(),
+            child: nodes[child].clone(),
+            reversed: parent != edge.from,
         })
         .collect();
     Ok(LinDist3FlowTopology {
@@ -986,6 +1267,7 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
             .collect(),
         nodes,
         conductors,
+        meshed,
     })
 }
 
@@ -1091,25 +1373,31 @@ fn propagated_reference(
         }
     }
 
-    let mut children = vec![Vec::new(); topology.nodes.len()];
+    let mut adjacency = vec![Vec::new(); topology.nodes.len()];
     for conductor in &topology.conductors {
         let parent = positions[&node_key(&conductor.parent.bus, &conductor.parent.terminal)];
         let child = positions[&node_key(&conductor.child.bus, &conductor.child.terminal)];
-        children[parent].push(child);
+        adjacency[parent].push(child);
+        adjacency[child].push(parent);
     }
     for root in &topology.roots {
         let root = positions[&node_key(&root.bus, &root.terminal)];
         let mut stack = vec![root];
-        while let Some(parent) = stack.pop() {
-            let value = values[parent].ok_or_else(|| {
+        let mut visited = vec![false; topology.nodes.len()];
+        visited[root] = true;
+        while let Some(node) = stack.pop() {
+            let value = values[node].ok_or_else(|| {
                 invalid_reference(format!(
                     "source root `{}/{}` has no phasor",
-                    topology.nodes[parent].bus, topology.nodes[parent].terminal
+                    topology.nodes[root].bus, topology.nodes[root].terminal
                 ))
             })?;
-            for &child in &children[parent] {
-                values[child] = Some(value);
-                stack.push(child);
+            for &neighbor in &adjacency[node] {
+                if !visited[neighbor] {
+                    visited[neighbor] = true;
+                    values[neighbor] = Some(value);
+                    stack.push(neighbor);
+                }
             }
         }
     }

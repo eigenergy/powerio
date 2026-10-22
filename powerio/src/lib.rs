@@ -56,6 +56,13 @@
 //! PowerWorld `.pwd` display all parse to [`PioValue::GeoLayer`], `emit`
 //! writes one as `geo-json`, and [`apply_geo_layer`] places one onto a case.
 //!
+//! The three files a PSS/E contingency analysis reads are values of the same
+//! kind. A `.con` parses to [`PioValue::ContingencySet`], a `.sub` to
+//! [`PioValue::SubsystemSet`], and a `.mon` to [`PioValue::MonitoredSet`];
+//! `emit` writes each back under its own token, and `ContingencySet::resolve`,
+//! `Subsystem::select_buses`, and `MonitoredSet::resolve` bind one to a
+//! network.
+//!
 //! [`parse_with_options`] selects the parser explicitly and widens the
 //! directory a format may refer to further files beneath. [`Source`] and
 //! [`Destination`] remain the advanced input and output: a source carrying
@@ -76,51 +83,57 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The `schema` discriminator of every PowerIO IR document.
 pub const IR_SCHEMA_NAME: &str = "pio-ir";
 
-/// The PowerIO IR generation this build writes.
+/// The PowerIO IR version this build writes.
 ///
-/// The generation is an integer that advances only when the serialized
+/// The IR version is an integer that advances only when the serialized
 /// representation changes incompatibly for an existing value type. It is
 /// independent of the PowerIO release, which the `producer` record of a
 /// document names, and of the C ABI version.
 ///
-/// | Generation | First release | Change |
+/// | IR version | First release | Change |
 /// |---|---|---|
 /// | 1 | v0.10.0 | the `PioModule` serialization, under the identity `powerio.module` |
-/// | 2 | v0.11.0 | the identity `pio-ir`; the producer release recorded apart from the generation; retained source bytes left out |
+/// | 2 | v0.11.0 | the identity `pio-ir`; the producer release recorded apart from the IR version; retained source bytes left out |
 ///
-/// Additive structural types keep the generation unchanged. A reader accepts
+/// Additive structural types keep the IR version unchanged. A reader accepts
 /// the types it implements; an unknown type requires a newer reader.
-/// [`IR_MIN_VERSION`] is the oldest generation this build reads.
+/// [`IR_MIN_VERSION`] is the oldest IR version this build reads.
 pub const IR_VERSION: u64 = 2;
 
-/// The oldest PowerIO IR generation this build reads.
+/// The oldest PowerIO IR version this build reads.
 ///
 /// The floor rises only at a minor release boundary. PowerIO 0.11 writes and
-/// reads generation 2.
+/// reads IR version 2.
 pub const IR_MIN_VERSION: u64 = 2;
 
 /// The `$id` of the schema snapshot describing this build's structural types.
-/// The release in the path identifies the catalog, not a new IR generation.
-pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/2/0.11.1/schema.json";
+/// The release in the path identifies the catalog, not a new IR version.
+pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/2/0.11.6/schema.json";
 
 use powerio_tx::format;
 pub use powerio_tx::{
-    Area, BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet,
-    BranchSolution, BranchSusceptanceFormula, Bus, BusId, BusType, Canvas, CoordinateSpace,
-    CoordsKind, DEFAULT_BASE_FREQUENCY, Detection, ElementKey, Extras, GenCaps, GenCost, Generator,
-    GeoApplyReport, GeoFeature, GeoGeometry, GeoLayer, GeoMeta, GeoParsed, GeoTarget, Hvdc,
-    Impedance, IndexCore, IndexedNetwork, JSON_CLASSES, JsonClass, Load, LoadVoltageModel,
-    Location, PwdDisplay, PwdSubstation, Selector, Shunt, ShuntBlock, SolverParams, SourceFormat,
-    Storage, Switch, SwitchedShuntControl, SwitchedShuntMode, Transformer3W, TransformerControl,
-    TransformerControlMode, Winding, apply_substation_points, calc_series_admittance_of,
-    classify_json_bytes, classify_json_text, repair_values, to_geo_layer_from_pwd,
-    to_lonlat_from_pwd_mercator,
+    Area, AutomaticOrder, AutomaticSpec, AutomaticTarget, BalancedNetwork, Branch, BranchCharging,
+    BranchCurrentRatings, BranchRatingSet, BranchRef, BranchSolution, BranchSusceptanceFormula,
+    Bus, BusId, BusSubset, BusType, Canvas, Change, ChangeOp, ChangeUnit, ContingencyAction,
+    ContingencyCase, ContingencyParsed, ContingencyResolution, ContingencySet, CoordinateSpace,
+    CoordsKind, DEFAULT_BASE_FREQUENCY, Detection, ElementKey, Expanded, Extras, GenCaps, GenCost,
+    Generator, GeoApplyReport, GeoFeature, GeoGeometry, GeoLayer, GeoMeta, GeoParsed, GeoTarget,
+    Hvdc, Impedance, IndexCore, IndexedNetwork, InterfaceMember, JSON_CLASSES, JoinName, JsonClass,
+    Load, LoadVoltageModel, Location, MonitorScope, MonitorStatement, MonitoredParsed,
+    MonitoredResolution, MonitoredSet, PsseEquipmentIndex, PwdDisplay, PwdSubstation, ResolvedCase,
+    ResolvedComponent, ResolvedInterface, ResolvedVoltageScope, RetainedStatement, Selector,
+    SelectorGroup, Shunt, ShuntBlock, SkipRule, SolverParams, SourceFormat, Storage, Subsystem,
+    SubsystemParsed, SubsystemSelector, SubsystemSet, Switch, SwitchedShuntControl,
+    SwitchedShuntMode, Transformer3W, TransformerControl, TransformerControlMode, UnresolvedAction,
+    UnresolvedMonitor, UnresolvedMonitorReason, UnresolvedReason, Winding, apply_substation_points,
+    calc_series_admittance_of, classify_json_bytes, classify_json_text, repair_values,
+    to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
 };
 /// Balanced network records and the public network and geographic submodules.
 /// Derived indexes, normalization data, solver tables, and component error
 /// types remain available from `powerio-tx` rather than being duplicated at
 /// the facade root.
-pub use powerio_tx::{geo, network, version};
+pub use powerio_tx::{contingency, geo, network, version};
 
 pub use powerio_core::diagnostic_codes;
 /// The common module records and containers. These explicit facade exports
@@ -157,14 +170,17 @@ pub use powerio_prob::{
     AcScucSolution, ActivePower, ActivePowerUnit, ApparentPower, ApparentPowerUnit,
     BalancedCalculationInstance, CalculationUpdate, DcBusSpecification, DcOpfInstance,
     DcOpfSolution, DcPfInstance, DcPfSolution, LinDist3FlowApplicability,
-    LinDist3FlowApplicabilityStatus, LinDist3FlowBuildOptions, LinDist3FlowNode,
-    LinDist3FlowOpfInstance, LinDist3FlowOpfSolution, LinDist3FlowOpfValues,
-    LinDist3FlowReferencePolicy, LinDist3FlowReferenceProvenance, LinDist3FlowReferenceState,
-    LinDist3FlowTopology, LinDist3FlowUnsupported, LoadAllocation, McAcOpfInstance,
-    McAcOpfSolution, McAcPfInstance, McAcPfSolution, NetworkUpdate, OperatingPointUpdate,
-    ReactivePower, ReactivePowerUnit, Termination, ThreeWindingTransformerTerminalActivePower,
-    ThreeWindingTransformerTerminalPower, UpdateChange, UpdateReport, UpdatedField,
-    apply_bus_load_active_power, apply_updates,
+    LinDist3FlowApplicabilityStatus, LinDist3FlowBuildOptions, LinDist3FlowLimitCheck,
+    LinDist3FlowLimitKind, LinDist3FlowNode, LinDist3FlowOpfInstance, LinDist3FlowOpfSolution,
+    LinDist3FlowOpfValues, LinDist3FlowPfInstance, LinDist3FlowPfSolution,
+    LinDist3FlowPreparationAction, LinDist3FlowPreparationActionKind,
+    LinDist3FlowPreparationReport, LinDist3FlowReferencePolicy, LinDist3FlowReferenceProvenance,
+    LinDist3FlowReferenceState, LinDist3FlowTopology, LinDist3FlowUnsupported, LoadAllocation,
+    McAcOpfInstance, McAcOpfSolution, McAcPfInstance, McAcPfSolution, NetworkUpdate,
+    OperatingPointUpdate, ReactivePower, ReactivePowerUnit, Termination,
+    ThreeWindingTransformerTerminalActivePower, ThreeWindingTransformerTerminalPower, UpdateChange,
+    UpdateReport, UpdatedField, apply_bus_load_active_power, apply_updates,
+    evaluate_lindist3flow_pf_limits,
 };
 
 /// Matrix and graph data, re-exported from `powerio-matrix` under the
@@ -188,7 +204,9 @@ pub mod dist_geo;
 pub use __gridfm::codes as gridfm_codes;
 mod stored;
 mod write;
-pub use write::emit;
+pub use write::{EmitOptions, emit, emit_with_options};
+mod sincal_write;
+pub use sincal_write::{SincalContainer, SincalExperimentalOptions};
 mod ir;
 #[cfg(feature = "schema")]
 pub use ir::generate_ir_schema;
@@ -197,7 +215,8 @@ pub mod transform;
 pub use transform::{
     apply_geo_layer, network_with_operating_point, neutral_kron, neutral_kron_with_options,
     to_ac_opf_instance, to_ac_pf_instance, to_dc_opf_instance, to_dc_pf_instance,
-    to_lindist3flow_opf_instance, to_lindist3flow_opf_instance_with_options, to_mc_ac_opf_instance,
+    to_lindist3flow_opf_instance, to_lindist3flow_opf_instance_with_options,
+    to_lindist3flow_pf_instance, to_lindist3flow_pf_instance_with_options, to_mc_ac_opf_instance,
     to_mc_ac_pf_instance,
 };
 
@@ -368,6 +387,11 @@ pub use value::{PioScenarioSet, PioTimeSeries, PioValue};
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct ParseOptions {
+    /// Explicit native selections for the sincal-balanced format only.
+    pub sincal_balanced: Option<powerio_tx::format::SincalBalancedReadOptions>,
+    /// Explicit native-variant, daily-snapshot and Access-acquisition options.
+    /// Valid only with the sincal-multiconductor format selection.
+    pub sincal_multiconductor: Option<powerio_dist::SincalReadOptions>,
     /// The parser selected by its stable format token rather than inferred
     /// from the input's name and content.
     pub format: Option<powerio_core::FormatId>,
@@ -404,7 +428,7 @@ impl ParseOptions {
 /// Parse one source into a compiled module of whichever built in family
 /// claims it. Balanced network formats produce
 /// [`PioValue::BalancedNetwork`]; network only distribution formats (OpenDSS
-/// `.dss`, PMD ENGINEERING JSON, and BMOPF JSON) produce
+/// `.dss`, PMD ENGINEERING JSON, BMOPF JSON, and distribution CIM) produce
 /// [`PioValue::MulticonductorNetwork`]. A source that defines a particular
 /// calculation produces that calculation's value. One DOE GO Challenge 3
 /// problem data file produces [`PioValue::AcScucInstance`]. One source that
@@ -429,8 +453,11 @@ impl ParseOptions {
 /// distribution parser, a `.json` document routes by its top level markers
 /// ([`format::routing::classify_json_text`]), a name with no recognized
 /// extension whose content opens a JSON document (an in-memory source has no
-/// extension) routes the same way, and every other name routes to
-/// the balanced network hub, whose own detection and refusals apply.
+/// extension) routes the same way, a `.xml` document, a name with no
+/// recognized extension, or a directory member that reads as distribution CIM
+/// ([`powerio_dist::source_looks_like_cim_dist`]) routes to the distribution parser,
+/// and every other name routes to the balanced network hub, whose own
+/// detection and refusals apply.
 ///
 /// PowerIO IR is not a grid exchange format: [`parse`] refuses it and
 /// [`deserialize`] reads the current PowerIO IR document.
@@ -462,6 +489,31 @@ pub fn parse_with_options(
     if let Some(format) = &options.format {
         source = source.with_format(format.clone());
     }
+    if options.sincal_balanced.is_some() && options.sincal_multiconductor.is_some() {
+        return Err(powerio_core::Error::new(
+            &codes::REQUEST_SINCAL_OPTIONS_PROFILE,
+            "SINCAL selections must name exactly one electrical family",
+        )
+        .with_source(source));
+    }
+    if let Some(sincal) = &options.sincal_balanced {
+        return powerio_tx::format::parse_sincal_balanced_with_options(source, sincal)
+            .map(|m| m.map_value(PioValue::from));
+    }
+    if let Some(sincal) = &options.sincal_multiconductor {
+        if source
+            .format()
+            .and_then(|f| format::routing::parse_distribution_format(f.as_str()))
+            != Some(format::routing::DistributionFormat::SincalMulticonductor)
+        {
+            return Err(powerio_core::Error::new(
+                &codes::REQUEST_SINCAL_OPTIONS_PROFILE,
+                "sincal_multiconductor options require explicit format sincal-multiconductor",
+            )
+            .with_source(source));
+        }
+        return powerio_dist::parse_sincal(source, sincal).map(|m| m.map_value(PioValue::from));
+    }
     match routed_family(&source)? {
         RoutedFamily::Goc3 => parse_goc3(source),
         RoutedFamily::OpfData => powerio_prob::__internal::__decode_opfdata_solution(source)
@@ -480,6 +532,7 @@ pub fn parse_with_options(
         RoutedFamily::Gridfm => parse_gridfm(source),
         RoutedFamily::Egret => parse_egret(source),
         RoutedFamily::Geo => parse_geo_layer(source),
+        RoutedFamily::Contingency(kind) => parse_contingency_file(source, kind),
         RoutedFamily::Balanced(json_class) => format::parse_with_json_class(source, json_class)
             .map(|module| module.map_value(PioValue::from)),
     }
@@ -594,6 +647,51 @@ fn parse_geo_layer(
         })?),
     };
     powerio_core::PioModule::parsed(PioValue::from(layer), source, diagnostics)
+}
+
+/// Read one PSS/E contingency analysis file into its own value. The reader
+/// keeps a statement outside its grammar as the original line and reports it;
+/// those notes become the module's diagnostics, so nothing the file states is
+/// lost between the text and the value.
+fn parse_contingency_file(
+    source: powerio_core::Source,
+    kind: ContingencyFile,
+) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
+    let buffer = match source.primary_buffer() {
+        Ok(buffer) => buffer,
+        Err(error) => return Err(error.with_source(source)),
+    };
+    let text = match std::str::from_utf8(buffer.content_bytes()) {
+        Ok(text) => text,
+        Err(cause) => {
+            return Err(Error::new(
+                kind.not_text_code(),
+                format!("{} is not valid UTF-8: {cause}", kind.description()),
+            )
+            .with_source(source));
+        }
+    };
+    let parsed = match kind {
+        ContingencyFile::Con => powerio_tx::ContingencySet::parse(text)
+            .map(|parsed| (PioValue::from(parsed.set), parsed.diagnostics)),
+        ContingencyFile::Sub => powerio_tx::SubsystemSet::parse(text)
+            .map(|parsed| (PioValue::from(parsed.set), parsed.diagnostics)),
+        ContingencyFile::Mon => powerio_tx::MonitoredSet::parse(text)
+            .map(|parsed| (PioValue::from(parsed.set), parsed.diagnostics)),
+    };
+    let (value, diagnostics) = match parsed {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return Err(Error::new(error.code(), error.to_string())
+                .with_cause(error)
+                .with_source(source));
+        }
+    };
+    let source = match source.format() {
+        Some(_) => source,
+        None => source.with_format(powerio_core::FormatId::new(kind.token())?),
+    };
+    powerio_core::PioModule::parsed(value, source, diagnostics)
 }
 
 /// PyPSA CSV dispatch: one snapshot with no series siblings is the scalar
@@ -720,6 +818,8 @@ enum RoutedFamily {
     /// aliased CSV or JSON records, headerless buscoords CSV, or a PowerWorld
     /// `.pwd` display lifted into a diagram space layer.
     Geo,
+    /// One of the three text files a PSS/E contingency analysis reads.
+    Contingency(ContingencyFile),
     #[cfg(feature = "gridfm")]
     Gridfm,
 }
@@ -754,6 +854,13 @@ fn routed_family(
         {
             return Ok(RoutedFamily::Gridfm);
         }
+        // Distribution CIM documents carry per phase classes and no CGMES
+        // model header; a CGMES profile directory has neither.
+        if powerio_dist::source_looks_like_cim_dist(source) {
+            return Ok(RoutedFamily::Distribution(Some(
+                format::routing::DistributionFormat::CimDist,
+            )));
+        }
         return Ok(RoutedFamily::Balanced(None));
     }
     let extension = std::path::Path::new(source.name())
@@ -769,11 +876,19 @@ fn routed_family(
             format::routing::DistributionFormat::Dss,
         ))),
         "json" => json_family(source),
+        // CIM RDF/XML is CGMES unless the document reads as distribution
+        // CIM; XIIDM never declares the RDF and CIM namespaces.
+        "xml" if powerio_dist::source_looks_like_cim_dist(source) => Ok(
+            RoutedFamily::Distribution(Some(format::routing::DistributionFormat::CimDist)),
+        ),
         // Extensions with dedicated non-JSON readers keep them; anything
         // else (a nameless in-memory source above all) can still carry a
         // JSON document, so content that opens one routes by classification,
         // mirroring the balanced hub's own sniff.
         "pwd" | "geojson" => Ok(RoutedFamily::Geo),
+        "con" => Ok(RoutedFamily::Contingency(ContingencyFile::Con)),
+        "sub" => Ok(RoutedFamily::Contingency(ContingencyFile::Sub)),
+        "mon" => Ok(RoutedFamily::Contingency(ContingencyFile::Mon)),
         "m" | "raw" | "aux" | "epc" | "pwb" | "uct" => Ok(RoutedFamily::Balanced(None)),
         _ => {
             let jsonish = source.primary_buffer().is_ok_and(|buffer| {
@@ -788,6 +903,10 @@ fn routed_family(
             });
             if jsonish {
                 json_family(source)
+            } else if powerio_dist::source_looks_like_cim_dist(source) {
+                Ok(RoutedFamily::Distribution(Some(
+                    format::routing::DistributionFormat::CimDist,
+                )))
             } else {
                 Ok(RoutedFamily::Balanced(None))
             }
@@ -830,6 +949,91 @@ pub(crate) fn is_pwd_display_token(token: &str) -> bool {
 /// Whether `token` names a document that reads into [`PioValue::GeoLayer`].
 fn is_geo_token(token: &str) -> bool {
     is_geo_layer_token(token) || is_pwd_display_token(token)
+}
+
+/// Which of the three PSS/E contingency analysis files a source holds. Each
+/// is its own format token, its own value type, and its own writer; the three
+/// never cross.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ContingencyFile {
+    /// The contingency description file, `.con`.
+    Con,
+    /// The subsystem description file, `.sub`.
+    Sub,
+    /// The monitored element file, `.mon`.
+    Mon,
+}
+
+impl ContingencyFile {
+    /// The canonical format token.
+    pub(crate) const fn token(self) -> &'static str {
+        match self {
+            Self::Con => "psse-con",
+            Self::Sub => "psse-sub",
+            Self::Mon => "psse-mon",
+        }
+    }
+
+    /// The conventional filename suffix, without a leading dot.
+    pub(crate) const fn extension(self) -> &'static str {
+        match self {
+            Self::Con => "con",
+            Self::Sub => "sub",
+            Self::Mon => "mon",
+        }
+    }
+
+    /// The name of the one artifact an emission writes. A path destination
+    /// uses the caller's own path; a memory destination uses its root name.
+    /// `con` alone is a reserved device name on Windows, so every name here
+    /// carries a stem.
+    pub(crate) const fn artifact_name(self) -> &'static str {
+        match self {
+            Self::Con => "contingency.con",
+            Self::Sub => "subsystem.sub",
+            Self::Mon => "monitored.mon",
+        }
+    }
+
+    /// The structural type name the file reads into.
+    pub(crate) const fn type_name(self) -> &'static str {
+        match self {
+            Self::Con => "powerio.ContingencySet",
+            Self::Sub => "powerio.SubsystemSet",
+            Self::Mon => "powerio.MonitoredSet",
+        }
+    }
+
+    /// The code for input that is not UTF-8 text.
+    const fn not_text_code(self) -> &'static powerio_core::DiagnosticInfo {
+        use powerio_tx::diagnostics::codes;
+        match self {
+            Self::Con => &codes::READ_CON_NOT_TEXT,
+            Self::Sub => &codes::READ_SUB_NOT_TEXT,
+            Self::Mon => &codes::READ_MON_NOT_TEXT,
+        }
+    }
+
+    /// How the refusal names the file, in prose.
+    const fn description(self) -> &'static str {
+        match self {
+            Self::Con => "a PSS/E contingency description file",
+            Self::Sub => "a PSS/E subsystem description file",
+            Self::Mon => "a PSS/E monitored element file",
+        }
+    }
+}
+
+/// The PSS/E contingency analysis file a format token names, or `None` for
+/// every other token. Case, hyphens, and underscores do not distinguish
+/// spellings, so `psse-con`, `psse_con`, `PSSECon`, and `con` are one name.
+pub(crate) fn contingency_file_of_token(token: &str) -> Option<ContingencyFile> {
+    match token.to_ascii_lowercase().replace(['-', '_'], "").as_str() {
+        "con" | "pssecon" | "contingency" => Some(ContingencyFile::Con),
+        "sub" | "pssesub" | "subsystem" => Some(ContingencyFile::Sub),
+        "mon" | "pssemon" | "monitored" => Some(ContingencyFile::Mon),
+        _ => None,
+    }
 }
 
 /// The family a JSON document's content markers select.
@@ -880,9 +1084,12 @@ fn family_of_token(token: &str) -> RoutedFamily {
     if is_geo_token(token) {
         return RoutedFamily::Geo;
     }
+    if let Some(kind) = contingency_file_of_token(token) {
+        return RoutedFamily::Contingency(kind);
+    }
 
-    if powerio_dist::parse_dist_target_format(token).is_some() {
-        return RoutedFamily::Distribution(None);
+    if let Some(format) = format::routing::parse_distribution_format(token) {
+        return RoutedFamily::Distribution(Some(format));
     }
     if format::is_pypsa_csv_name(token) {
         return RoutedFamily::PypsaDirectory;
@@ -1026,6 +1233,70 @@ mod tests {
             );
         };
         assert_eq!(network.name().as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn distribution_cim_routes_by_content_and_echoes_its_bytes() {
+        let fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/data/dist/cim/micro_feeder.xml"
+        );
+        let bytes = std::fs::read(fixture).unwrap();
+        // By the `.xml` extension, with no name at all, and from a
+        // directory holding the document.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("feeder.xml"), &bytes).unwrap();
+        for source in [
+            Source::from_memory("feeder.xml", bytes.clone()).unwrap(),
+            Source::from_memory("<memory>", bytes.clone()).unwrap(),
+            Source::open(dir.path()).unwrap(),
+        ] {
+            let module = parse(source).expect("distribution CIM parses");
+            assert_value_type(&module, "powerio.MulticonductorNetwork");
+            assert_eq!(
+                module
+                    .source()
+                    .and_then(Source::format)
+                    .map(FormatId::as_str),
+                Some("cim-dist")
+            );
+        }
+        let module = parse(Source::from_memory("feeder.xml", bytes.clone()).unwrap()).unwrap();
+        let emitted = emit(
+            &module,
+            "cim-dist",
+            Destination::memory("copy.xml").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(emitted.fidelity(), Fidelity::ExactSameFormat);
+        let EmittedOutput::Memory { artifacts } = emitted.into_output() else {
+            panic!("memory destination returned a path output");
+        };
+        assert_eq!(artifacts[0].bytes(), bytes);
+
+        // The network records where it came from, and the IR carries it.
+        let PioValue::MulticonductorNetwork(network) = module.value() else {
+            panic!("distribution CIM parses to a multiconductor network");
+        };
+        assert_eq!(
+            *network.source_format(),
+            Some(powerio_dist::DistSourceFormat::CimDist)
+        );
+        let stored = serialize(&module, Destination::memory("feeder.pio.json").unwrap()).unwrap();
+        let EmittedOutput::Memory { artifacts } = stored.into_output() else {
+            panic!("memory destination returned a path output");
+        };
+        let back = deserialize(
+            Source::from_memory("feeder.pio.json", artifacts[0].bytes().to_vec()).unwrap(),
+        )
+        .unwrap();
+        let PioValue::MulticonductorNetwork(network) = back.value() else {
+            panic!("the IR keeps the multiconductor network");
+        };
+        assert_eq!(
+            *network.source_format(),
+            Some(powerio_dist::DistSourceFormat::CimDist)
+        );
     }
 
     #[test]

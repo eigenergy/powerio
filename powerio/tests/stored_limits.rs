@@ -1,10 +1,15 @@
 //! Decode time limits on PowerIO IR. Hostile documents are refused
-//! at their stated bounds, and record decode scales past six figure counts.
+//! at their stated bounds, record decode scales past six figure counts, and
+//! a solution over six figure terminal counts round trips.
+
+use std::sync::Arc;
 
 use powerio::{BalancedNetwork, PioValue};
-use powerio_core::{PioModule, TimePoint};
+use powerio_core::{PioModule, Scenario, ScenarioId, ScenarioSet, TimePoint, TimeSeries};
+use powerio_dist::{DistBus, DistLine, DistLineCode, MulticonductorNetwork, VoltageSource};
 use powerio_prob::{
     BalancedOperatingPointBuilder, BalancedOperatingPointFlag, BalancedOperatingPointQuantity,
+    McAcPfInstance, McAcPfSolution, Termination,
 };
 use powerio_tx::{Bus, BusId, BusType, Generator, Load, Switch};
 
@@ -540,4 +545,225 @@ fn six_figure_unidentified_diagnostics_encode_within_the_ceiling() {
     let back = deserialize_module_text(&text).unwrap();
     assert_eq!(back.diagnostics().len(), COUNT);
     assert_eq!(serialize_module_text(&back).unwrap(), text);
+}
+
+/// Four wire and two wire bus counts of the BMOPF feeder in #544: 27,239
+/// buses carrying 106,038 terminals.
+const FOUR_WIRE_BUSES: usize = 25_780;
+const TWO_WIRE_BUSES: usize = 1_459;
+const FEEDER_TERMINALS: usize = 4 * FOUR_WIRE_BUSES + 2 * TWO_WIRE_BUSES;
+
+fn diagonal(n: usize, value: f64) -> Vec<Vec<f64>> {
+    (0..n)
+        .map(|row| {
+            (0..n)
+                .map(|col| if row == col { value } else { 0.0 })
+                .collect()
+        })
+        .collect()
+}
+
+/// A radial feeder of the #544 dimensions, generated rather than committed:
+/// the four wire buses form a binary tree under a three phase source, and
+/// each two wire bus hangs off one of them through phase 1 and the neutral.
+fn large_feeder() -> MulticonductorNetwork {
+    let four: Vec<String> = ["1", "2", "3", "4"].map(String::from).to_vec();
+    let two: Vec<String> = ["1", "4"].map(String::from).to_vec();
+    let mut net = MulticonductorNetwork::named("large-feeder");
+    net.line_codes_mut()
+        .push(DistLineCode::new("lc4", diagonal(4, 0.2), diagonal(4, 0.4)));
+    net.line_codes_mut()
+        .push(DistLineCode::new("lc2", diagonal(2, 0.3), diagonal(2, 0.5)));
+    for index in 0..FOUR_WIRE_BUSES {
+        net.buses_mut()
+            .push(DistBus::new(format!("b{index}"), four.clone()));
+        if index > 0 {
+            net.lines_mut().push(DistLine::new(
+                format!("l{index}"),
+                format!("b{}", (index - 1) / 2),
+                format!("b{index}"),
+                four.clone(),
+                four.clone(),
+                "lc4",
+                100.0,
+            ));
+        }
+    }
+    for index in 0..TWO_WIRE_BUSES {
+        net.buses_mut()
+            .push(DistBus::new(format!("s{index}"), two.clone()));
+        net.lines_mut().push(DistLine::new(
+            format!("t{index}"),
+            format!("b{}", FOUR_WIRE_BUSES - 1 - index),
+            format!("s{index}"),
+            two.clone(),
+            two.clone(),
+            "lc2",
+            30.0,
+        ));
+    }
+    net.sources_mut().push(VoltageSource::new(
+        "vs",
+        "b0",
+        four[..3].to_vec(),
+        vec![2_400.0; 3],
+        vec![0.0, -2.094, 2.094],
+    ));
+    net
+}
+
+/// One distinct, non integral value per feeder terminal.
+fn terminal_values(offset: f64, step: f64) -> Vec<f64> {
+    (0..FEEDER_TERMINALS)
+        .map(|index| offset + step * index as f64)
+        .collect()
+}
+
+/// #544: a multiconductor solution whose terminal count passes the generic
+/// stored collection bound round trips through `serialize` and `deserialize`,
+/// optional current and power columns included.
+#[test]
+fn a_solution_over_106038_terminals_round_trips() {
+    let network = large_feeder();
+    let terminals: Vec<(String, String)> = network
+        .buses()
+        .iter()
+        .flat_map(|bus| {
+            bus.terminals
+                .iter()
+                .map(|terminal| (bus.id.clone(), terminal.clone()))
+        })
+        .collect();
+    assert_eq!(network.buses().len(), 27_239);
+    assert_eq!(terminals.len(), 106_038);
+
+    let instance = Arc::new(McAcPfInstance::from_network(network).unwrap());
+    let solution = McAcPfSolution::new(
+        instance,
+        Termination::Converged,
+        terminal_values(2_400.0, 1.0e-3),
+        terminal_values(-2.094, 1.0e-5),
+        vec![1.0e5, 0.9e5, 1.1e5],
+    )
+    .unwrap()
+    .with_terminal_currents(terminal_values(0.25, 0.5))
+    .unwrap()
+    .with_terminal_powers(terminal_values(-1.0e4, 0.125))
+    .unwrap();
+
+    let text =
+        serialize_module_text(&PioModule::new(PioValue::McAcPfSolution(solution.clone()))).unwrap();
+    let back = deserialize_module_text(&text).unwrap();
+    let PioValue::McAcPfSolution(decoded) = back.value() else {
+        panic!("wrong kind: {}", back.value().type_name());
+    };
+    for (bus, terminal) in &terminals {
+        assert_eq!(
+            decoded.terminal_voltage_magnitude(bus, terminal),
+            solution.terminal_voltage_magnitude(bus, terminal)
+        );
+        assert_eq!(
+            decoded.terminal_voltage_angle(bus, terminal),
+            solution.terminal_voltage_angle(bus, terminal)
+        );
+        assert_eq!(
+            decoded.terminal_current_magnitude(bus, terminal),
+            solution.terminal_current_magnitude(bus, terminal)
+        );
+        assert_eq!(
+            decoded.terminal_active_power(bus, terminal),
+            solution.terminal_active_power(bus, terminal)
+        );
+    }
+    let (bus, terminal) = terminals.last().unwrap();
+    assert_eq!(
+        decoded.terminal_active_power(bus, terminal),
+        Some(-1.0e4 + 0.125 * (FEEDER_TERMINALS - 1) as f64)
+    );
+    assert_eq!(
+        decoded.source_active_injections(),
+        solution.source_active_injections()
+    );
+}
+
+fn repeated_time_points(count: usize) -> Vec<TimePoint> {
+    (0..count)
+        .map(|index| TimePoint::new(format!("h{index}"), None).unwrap())
+        .collect()
+}
+
+fn nested_balanced_network_series_module(count: usize) -> PioModule<PioValue> {
+    let series = TimeSeries::new(repeated_time_points(count), vec![small_network(); count])
+        .expect("time points and values have equal lengths");
+    let scenarios = ScenarioSet::new(vec![Scenario::new(
+        ScenarioId::new("base").unwrap(),
+        Some(1.0),
+        series,
+    )])
+    .unwrap();
+    PioModule::new(PioValue::from(scenarios))
+}
+
+fn small_multiconductor_network() -> MulticonductorNetwork {
+    let terminals: Vec<String> = ["1", "2", "3", "n"].map(String::from).to_vec();
+    let mut network = MulticonductorNetwork::named("stored-nested-series");
+    network
+        .line_codes_mut()
+        .push(DistLineCode::new("lc", diagonal(4, 0.2), diagonal(4, 0.4)));
+    network
+        .buses_mut()
+        .push(DistBus::new("b0", terminals.clone()));
+    network.sources_mut().push(VoltageSource::new(
+        "vs",
+        "b0",
+        terminals[..3].to_vec(),
+        vec![2_400.0; 3],
+        vec![0.0, -2.094, 2.094],
+    ));
+    network
+}
+
+fn nested_multiconductor_network_series_module(count: usize) -> PioModule<PioValue> {
+    let network = small_multiconductor_network();
+    let series = TimeSeries::new(repeated_time_points(count), vec![network; count])
+        .expect("time points and values have equal lengths");
+    let scenarios = ScenarioSet::new(vec![Scenario::new(
+        ScenarioId::new("base").unwrap(),
+        Some(1.0),
+        series,
+    )])
+    .unwrap();
+    PioModule::new(PioValue::from(scenarios))
+}
+
+fn assert_emit_record_cap(module: &PioModule<PioValue>) {
+    let error = serialize_module_text(module)
+        .expect_err("the writer must reject a nested series over the reader's bound");
+    assert_eq!(
+        error.info().map(|info| info.code),
+        Some("EMIT.MODULE.RECORD_CAP"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn nested_balanced_network_series_observes_the_storage_bound() {
+    const LIMIT: usize = 65_536;
+    let module = nested_balanced_network_series_module(LIMIT);
+    let text = serialize_module_text(&module).expect("the exact limit is accepted");
+    deserialize_module_text(&text).expect("the reader accepts the exact limit");
+
+    let oversized = nested_balanced_network_series_module(LIMIT + 1);
+    assert_emit_record_cap(&oversized);
+}
+
+#[test]
+fn nested_multiconductor_network_series_observes_the_storage_bound() {
+    const LIMIT: usize = 65_536;
+    let module = nested_multiconductor_network_series_module(LIMIT);
+    let text = serialize_module_text(&module).expect("the exact limit is accepted");
+    deserialize_module_text(&text).expect("the reader accepts the exact limit");
+
+    let oversized = nested_multiconductor_network_series_module(LIMIT + 1);
+    assert_emit_record_cap(&oversized);
 }

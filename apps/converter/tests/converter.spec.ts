@@ -247,3 +247,54 @@ test('unchanged CGMES archives download as the original ZIP', async ({ page }) =
   expect(echoed.suggestedFilename()).toBe('network.zip');
   expect(await downloadBytes(echoed)).toEqual(archive);
 });
+
+test('CIM distribution and explicit SINCAL profiles reach ready jobs', async ({ page }) => {
+  await ready(page);
+  await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({
+    name: 'feeder.xml', mimeType: 'application/xml', buffer: await readFile(`${root}tests/data/dist/cim/micro_feeder.xml`),
+  });
+  await page.getByText('Case settings', { exact: true }).click();
+  await page.getByRole('combobox', { name: 'Input format' }).selectOption('cim-dist');
+  await expect(page.getByText('Ready to convert', { exact: true })).toHaveCount(1);
+  await page.getByRole('button', { name: 'Clear all', exact: true }).click();
+  await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({
+    name: 'case.sinx', mimeType: 'application/octet-stream', buffer: await readFile(`${root}tests/data/sincal/1-LV-rural1--0-sw.sinx`),
+  });
+  await page.getByText('Case settings', { exact: true }).click();
+  await page.getByRole('combobox', { name: 'Input format' }).selectOption('sincal-balanced');
+  await expect(page.getByText('Ready to convert', { exact: true })).toHaveCount(1);
+  await expect(page.getByRole('complementary', { name: 'Convert to' }).getByRole('checkbox', { name: /SINCAL/ })).toHaveCount(0);
+});
+
+test('two DSS projects keep their contents and companions after batch download and re-import', async ({ page }) => {
+  const source = new ZipWriter(new Uint8ArrayWriter(), { useWebWorkers: false });
+  for (const [id, kw] of [['one', 10], ['two', 20]] as const) {
+    await source.add(`${id}/Master.dss`, new Uint8ArrayReader(Buffer.from(`New Circuit.${id} basekv=12.47 bus1=source\nRedirect loads.inc\n`)));
+    await source.add(`${id}/loads.inc`, new Uint8ArrayReader(Buffer.from(`New Load.${id} bus1=source phases=3 kv=12.47 kw=${kw} kvar=2\n`)));
+    await source.add(`${id}/notes.asset`, new Uint8ArrayReader(Buffer.from(`companion ${id}`)));
+  }
+  await ready(page);
+  await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'projects.zip', mimeType: 'application/zip', buffer: Buffer.from(await source.close()) });
+  await expect(page.getByText('Ready to convert', { exact: true })).toHaveCount(2);
+  const targets = page.getByRole('complementary', { name: 'Convert to' });
+  for (const checkbox of await targets.getByRole('checkbox').all()) if (await checkbox.isEnabled()) await checkbox.uncheck();
+  await targets.getByRole('checkbox', { name: 'OpenDSS', exact: true }).check();
+  await page.getByRole('button', { name: 'Convert', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Download all', exact: false })).toBeEnabled();
+  const downloaded = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download all', exact: false }).click();
+  const archive = await entries(await downloadBytes(await downloaded));
+  for (const id of ['one', 'two']) {
+    const asset = Object.entries(archive).find(([path]) => path.includes(`/${id}/`) && path.endsWith('notes.asset'));
+    expect(asset).toBeTruthy();
+    expect(Buffer.from(asset![1]).toString()).toBe(`companion ${id}`);
+    const load = Object.entries(archive).find(([path]) => path.includes(`/${id}/`) && path.endsWith('loads.inc'));
+    expect(Buffer.from(load![1]).toString()).toContain(`kw=${id === 'one' ? 10 : 20}`);
+  }
+  const grids = new ZipWriter(new Uint8ArrayWriter(), { useWebWorkers: false });
+  for (const [path, bytes] of Object.entries(archive)) if (path !== 'conversion-report.json') await grids.add(path, new Uint8ArrayReader(bytes));
+  await page.getByRole('button', { name: 'Clear all', exact: true }).click();
+  await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'batch.zip', mimeType: 'application/zip', buffer: Buffer.from(await grids.close()) });
+  await expect(page.getByRole('article')).toHaveCount(2);
+  await expect(page.getByText('Ready to convert', { exact: true })).toHaveCount(2);
+});

@@ -128,7 +128,7 @@ fn detects_aliases_and_echoes_the_official_source_exactly() {
     let parsed = parse_file(fixture(), None).unwrap();
     let echo = parsed.emit(TargetFormat::DeepMindOpfDataJson).unwrap();
     assert_eq!(echo.text, source);
-    assert!(echo.render_diagnostics().is_empty());
+    assert_eq!(echo.render_diagnostics(), [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -149,7 +149,10 @@ fn converts_to_classical_json_and_matpower_with_fidelity_warnings() {
     assert_eq!(back.generators().len(), 5);
     assert_eq!(back.branches().len(), 20);
     assert_close(back.generators()[0].pg, 286.070_948_069_333_44);
-    assert!(power_models.render_diagnostics().is_empty());
+    assert_eq!(
+        power_models.render_diagnostics(),
+        [] as [std::string::String; 0]
+    );
 
     let matpower = parsed.emit(TargetFormat::Matpower).unwrap();
     assert!(matpower.text.contains("mpc.bus"));

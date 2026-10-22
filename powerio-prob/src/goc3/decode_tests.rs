@@ -364,7 +364,7 @@ fn empty_device_sections_are_schema_valid() {
     document["network"]["simple_dispatchable_device"] = serde_json::json!([]);
     document["time_series_input"]["simple_dispatchable_device"] = serde_json::json!([]);
     let inputs = build_from_value(&document).expect("empty device sections");
-    assert!(inputs.devices.is_empty());
+    assert_eq!(inputs.devices.as_slice(), []);
 }
 
 #[test]

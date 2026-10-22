@@ -374,7 +374,7 @@ fn pwd_promotes_to_a_diagram_layer_and_joins_on_subnum() {
         layer.space,
         CoordinateSpace::Diagram { canvas: Some(_) }
     ));
-    assert!(!layer.features.is_empty());
+    assert_ne!(layer.features, [] as [powerio_tx::GeoFeature; 0]);
     assert!(
         layer
             .features
@@ -419,7 +419,7 @@ fn aux_substations_lift_into_a_geographic_layer_that_joins_on_subnum() {
         layer.space,
         CoordinateSpace::Geographic { crs: None }
     ));
-    assert!(!layer.features.is_empty());
+    assert_ne!(layer.features, [] as [powerio_tx::GeoFeature; 0]);
     assert!(
         layer
             .features

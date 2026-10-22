@@ -33,6 +33,8 @@ test('every collected parser code is declared in the source and engine version i
   const cargo = readFileSync(new URL('../../../Cargo.toml', import.meta.url), 'utf8');
   const version = cargo.match(/^version = "([^"]+)"/m)![1];
   expect(normalize('batch_started', { version })?.data.version).toBe(version);
+  expect(normalize('engine_result', { version })?.data.version).toBe(version);
+  expect(normalize('engine_result', { version: `${version}-untrusted` })?.data.version).toBeUndefined();
 });
 
 test('problem events are deduplicated and capped independently of usage events', () => {

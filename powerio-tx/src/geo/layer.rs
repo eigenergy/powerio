@@ -1200,7 +1200,7 @@ mod bmopftools_geo_tests {
     fn identities_endpoints_and_crs_follow_bmopftools_geojson() {
         let source = r#"{"type":"FeatureCollection","crs":"EPSG:2193","features":[{"type":"Feature","properties":{"kind":"bus","id":"a"},"geometry":{"type":"Point","coordinates":[1700000,5400000]}},{"type":"Feature","properties":{"kind":"line","id":"21","bus_from":"a","bus_to":"b"},"geometry":{"type":"LineString","coordinates":[[1700000,5400000],[1700010,5400000]]}}]}"#;
         let p = GeoLayer::parse(source, None).unwrap();
-        assert!(p.diagnostics.is_empty());
+        assert_eq!(p.diagnostics.as_slice(), []);
         assert!(
             matches!(&p.layer.space,CoordinateSpace::Projected {crs:Some(s)} if s=="EPSG:2193")
         );
@@ -1218,6 +1218,6 @@ mod bmopftools_geo_tests {
         let source = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"kind":"bus","id":"a"},"geometry":{"type":"Point","coordinates":[-80,35]}},{"type":"Feature","properties":{"kind":"line","id":"a"},"geometry":{"type":"LineString","coordinates":[[-80,35],["bad",36],[-81,37]]}}]}"#;
         let p = GeoLayer::parse(source, None).unwrap();
         assert_eq!(p.layer.features.len(), 1);
-        assert!(!p.diagnostics.is_empty());
+        assert_ne!(p.diagnostics.as_slice(), []);
     }
 }

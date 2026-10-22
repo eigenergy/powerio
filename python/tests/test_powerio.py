@@ -116,6 +116,29 @@ Q
 """
 
 
+def test_primary_file_limit_is_host_configurable(monkeypatch, tmp_path):
+    path = tmp_path / "input.m"
+    payload = TINY.encode()
+    path.write_bytes(payload)
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", str(len(payload)))
+    assert powerio.parse(path).value.n_buses == 3
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", str(len(payload) - 1))
+    with pytest.raises(powerio.PowerIOError) as failure:
+        powerio.parse(path)
+    assert failure.value.code == "READ.IO.PRIMARY_BUDGET"
+    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", "invalid")
+    with pytest.raises(powerio.PowerIOError) as failure:
+        powerio.parse(path)
+    assert failure.value.code == "REQUEST.SOURCE.INVALID_LIMIT"
+    monkeypatch.delenv("POWERIO_MAX_PRIMARY_BYTES")
+    assert powerio.parse(path).value.n_buses == 3
+    with path.open("wb") as stream:
+        stream.truncate((1 << 30) + 1)
+    with pytest.raises(powerio.PowerIOError) as failure:
+        powerio.parse(path)
+    assert failure.value.code == "READ.IO.PRIMARY_BUDGET"
+
+
 def load(name):
     return powerio.parse(DATA / f"{name}.m").value
 
@@ -795,7 +818,7 @@ def test_parse_goc3_problem_and_solution_with_one_parse(tmp_path):
     assert value.objective is None
     with pytest.raises(AttributeError):
         value.network_outputs.bus_vm = ()  # type: ignore[misc]
-    assert solution._inner._type_name == "powerio.AcScucSolution"
+    assert solution.type_name == "powerio.AcScucSolution"
     document = json.loads(powerio.serialize(solution).text)
     assert document["schema"] == "pio-ir"
     assert document["version"] == powerio.versions()["powerio_ir"]["version"]
@@ -988,6 +1011,64 @@ def test_parse_diagnostics_are_module_records():
     assert _parse(DATA / "case9.m").diagnostics == []
 
 
+def test_module_type_name_is_the_canonical_structural_name(time_series_powerio_ir):
+    network_module = _parse(DATA / "case9.m")
+    assert network_module.type_name == "powerio.BalancedNetwork"
+    assert (
+        powerio.PioModule.from_value(network_module.value).type_name
+        == network_module.type_name
+    )
+    assert _parse_module(time_series_powerio_ir).type_name == (
+        "powerio.TimeSeries<powerio.OperatingPoint<powerio.BalancedNetwork>>"
+    )
+
+
+def test_diagnostic_records_are_json_ready():
+    path = DATA / "dist" / "micro" / "xfmr_single_phase.dss"
+    doc = json.loads(_emit_module(powerio.parse(path)))
+    source_id = doc["sources"][0]["id"]
+    doc["diagnostics"] = [
+        {
+            "id": "d1",
+            "severity": "error",
+            "code": "D.E.F",
+            "message": "in range span",
+            "spans": [{"source": source_id, "byte_start": 0, "byte_end": 10}],
+        }
+    ]
+    spanned = _parse_module(json.dumps(doc)).diagnostics
+    records = powerio.diagnostic_records(spanned)
+    assert records == [
+        {
+            "code": "D.E.F",
+            "severity": "error",
+            "message": "in range span",
+            "target": None,
+            "id": "d1",
+            "spans": [{"source": source_id, "byte_start": 0, "byte_end": 10}],
+        }
+    ]
+    assert list(records[0]) == [
+        "code",
+        "severity",
+        "message",
+        "target",
+        "id",
+        "spans",
+    ]
+    assert json.loads(json.dumps(records)) == records
+
+    reported = _parse(
+        DATA / "pandapower" / "example.json", value_type=powerio.BalancedNetwork
+    ).diagnostics
+    record = powerio.diagnostic_record(reported[0])
+    assert list(record) == ["code", "severity", "message", "target"]
+    assert record["code"] == "READ.PANDAPOWER.TABLE_UNSUPPORTED"
+    assert record["severity"] == "warning"
+    assert record["target"] is None
+    assert len(powerio.diagnostic_records(reported)) == len(reported)
+
+
 def test_pio_module_multiconductor_accessor_keeps_every_diagnostic():
     """A module's diagnostics, including one whose span references the
     module's own declared source, survive `as_multiconductor_network` in
@@ -1177,6 +1258,18 @@ def test_typed_collection_protocols_use_contained_values(time_series_powerio_ir)
     assert peak.branches[0]["rate_a"] == 321.0
     assert scenarios["peak"].branches[0]["rate_a"] == 321.0
     assert scenarios["base"].branches[0]["rate_a"] == original_base_rating
+
+    # A count read before an entry update is not served stale afterwards.
+    assert peak.n_islands == 1
+    powerio.apply_updates(
+        peak,
+        [
+            powerio.OperatingPointUpdate.set_branch_in_service(
+                powerio.ComponentId("branch", "1-2"), False
+            )
+        ],
+    )
+    assert peak.n_islands == 2
 
 
 def test_typed_collections_construct_without_powerio_ir():

@@ -466,7 +466,7 @@ fn read_maps_unit_tap_lines_back_to_zero() {
         read_xfmr, n_xfmr,
         "transformers must keep their off-nominal ratio"
     );
-    assert!(diagnostic_lines(&read).is_empty());
+    assert_eq!(diagnostic_lines(&read), [] as [std::string::String; 0]);
 }
 
 #[test]
@@ -490,7 +490,7 @@ fn read_allows_a_case_with_no_generators() {
         net.name(),
     )
     .unwrap();
-    assert!(read.network.generators().is_empty());
+    assert_eq!(read.network.generators().as_slice(), []);
     assert_eq!(read.network.branches().len(), 1);
 }
 
@@ -518,7 +518,7 @@ fn read_all_zero_cost_as_the_stated_polynomial() {
         read.network.generators()[0].cost.as_ref().unwrap().coeffs,
         vec![0.0, 0.0, 0.0]
     );
-    assert!(diagnostic_lines(&read).is_empty());
+    assert_eq!(diagnostic_lines(&read), [] as [std::string::String; 0]);
 }
 
 #[test]

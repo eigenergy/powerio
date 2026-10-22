@@ -233,8 +233,8 @@ fn unresolved_geometry_cannot_reach_instances_matrices_or_canonical_exports() {
     let PioValue::MulticonductorNetwork(network) = module.value() else {
         panic!("expected network")
     };
-    assert!(network.lines().is_empty());
-    assert!(network.line_codes().is_empty());
+    assert_eq!(network.lines().as_slice(), []);
+    assert_eq!(network.line_codes().as_slice(), []);
     assert!(powerio_prob::McAcPfInstance::from_network(network.clone()).is_err());
     assert!(powerio_prob::McAcOpfInstance::from_network(network.clone()).is_err());
     assert!(powerio_matrix::calc_multiconductor_admittance_matrix(network).is_err());

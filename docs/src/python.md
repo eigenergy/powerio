@@ -71,21 +71,33 @@ module.
 
 ```python
 module = powerio.parse("case9.m")
+print(module.type_name)                      # powerio.BalancedNetwork
 
 if isinstance(module.value, powerio.BalancedNetwork):
     print(module.value.n_buses)
 
 for diagnostic in module.diagnostics:
     print(diagnostic.code, diagnostic.severity, diagnostic.message)
+
+records = powerio.diagnostic_records(module.diagnostics)
 ```
 
 Diagnostics live on the module rather than on the contained network or
-solution. To find out what you have, use Python's normal type system; there is
-no `.kind` property, kind enum, or typed narrowing helper.
+solution. Branch on `module.value` with `isinstance`; there is no `.kind`
+property, kind enum, or typed narrowing helper. `module.type_name` is the
+canonical structural name of the value, the same string the C ABI and PowerIO
+IR use, for messages and machine-readable results.
+
+`powerio.diagnostic_records` turns those diagnostics into JSON-ready
+dictionaries, and `powerio.diagnostic_record` turns one. Each record keeps
+`code`, `severity`, `message`, and `target`, and adds `id`,
+`suggested_action`, `related`, `details`, and `spans` when the diagnostic
+carries them.
 
 The value classes are `BalancedNetwork`, `dist.MulticonductorNetwork`,
-`OperatingPoint`, `TimeSeries`, `ScenarioSet`, `GeoLayer`, the PF, OPF, and
-SCUC instances and solutions, and `SocwrOpfSolution`.
+`OperatingPoint`, `TimeSeries`, `ScenarioSet`, `GeoLayer`, `ContingencySet`,
+`SubsystemSet`, `MonitoredSet`, the PF, OPF, and SCUC instances and solutions,
+and `SocwrOpfSolution`.
 
 ## Emit grid exchange formats
 
@@ -119,6 +131,64 @@ The IR header is `"schema": "pio-ir"` with the integer `"version": 2`, and
 `powerio.__version__` separately. `deserialize` refuses a document whose schema
 or version it does not support and reports what it found. PowerIO IR is not a
 grid exchange format, so it does not appear in format discovery.
+
+## PSS/E contingency analysis files
+
+A contingency set is the content of a PSS/E `.con` file: named cases, each a
+list of outage actions. A subsystem is PSS/E's name for a bus selection stated
+in a `.sub` file through bus, area, zone, owner and kV range selectors; a
+`.con` automatic specification and a `.mon` statement refer to a subsystem by
+name, and selecting a subsystem's buses evaluates its selectors against a
+network. A monitored set is the content of a `.mon` file: the elements whose
+loading and voltage a study reports. A geo layer is a coordinate document kept
+beside a case: points for buses and routes for branches in one coordinate
+space, keyed by element identity, read from five text forms and written as a
+GeoJSON FeatureCollection carrying a `powerio_geo` member.
+
+A `.con`, `.sub`, or `.mon` file parses to `ContingencySet`, `SubsystemSet`,
+or `MonitoredSet`. Each has a `text` property holding the file. A contingency
+set and a subsystem set also reach a network through a `BalancedNetwork`
+method.
+
+```python
+case = powerio.parse("case.raw").value
+cases = powerio.parse("cases.con").value
+print(cases.text.splitlines()[0])
+
+resolution = case.resolve_contingencies(cases.text)
+print(resolution["resolved"], "of", resolution["cases"], "cases bound")
+for result in resolution["case_results"]:
+    if not result["resolved"]:
+        print(result["name"], result["unresolved"][0]["reason"])
+
+groups = powerio.parse("groups.sub").value
+expanded, notes = case.expand_contingencies(cases.text, groups.text)
+print(expanded)
+print(case.select_subsystem_buses(groups.text, "A1"))
+```
+
+`resolve_contingencies` reports rather than refuses: a case naming an element
+the network does not hold is counted unresolved and listed in `case_results`
+with the reason each action did not bind. Each reason is a fixed name such as
+`no_such_branch`; C reports the same names.
+
+Each element a case bound to states its `type`, which names the table, the
+`row` it occupies there, the element's own `in_service` flag, and its `id`.
+`id` is `None` when the network states no identity for that row, and `type`
+and `row` name the element either way.
+
+`expand_contingencies` turns an automatic specification such as `SINGLE
+BRANCH IN SUBSYSTEM 'A1'` into one explicit case per element, and returns the
+expanded `.con` text with the readers' and the expansion's notes.
+
+`MonitoredSet` is text only in Python. It carries the file as its `text`
+property and has no method that binds it to a network, because binding a
+monitored element file to a network and a subsystem set is a Rust operation.
+C reads a monitored set's statement count with
+`pio_monitored_set_statement_count` and its text with
+`pio_monitored_set_to_mon`. C selects a subsystem's buses with
+`pio_balanced_network_select_subsystem_buses`, which names the same buses as
+`select_subsystem_buses`.
 
 ## Collections
 
@@ -215,10 +285,16 @@ you need the diagnostic.
 | `features()` | which build features the installed extension carries |
 | `versions()` | the release, the PowerIO IR identity, and the BMOPF schema version |
 | `parse_geo(text, name_hint=None)` | a geographic layer in canonical form with its diagnostics |
-| `parse_display(path, format=None)` | the raw PowerWorld `.pwd` display record as `DisplayData` |
+| `parse_display(path, format=None)` | the raw PowerWorld `.pwd` display record as `DisplayData`; kept only for 0.11 compatibility and removed in 0.12, so use `parse`, which returns a `GeoLayer` |
 | `from_ppc(ppc)` | a `BalancedNetwork` from a pandapower or PYPOWER case dictionary |
 | `PioModule.from_value(value)` | a module around a value built in Python |
+| `diagnostic_record(diagnostic)` | one diagnostic as a JSON-ready dictionary |
+| `diagnostic_records(diagnostics)` | every diagnostic as a JSON-ready dictionary, in order |
 | `module.to_balanced_report()`, `module.to_balanced()` | the multiconductor to balanced transformation |
+
+`GeoLayer.geojson` returns the canonical `.geo.json` document for a layer, the
+GeoJSON FeatureCollection with the `powerio_geo` member that `parse_geo` reads.
+C returns the same text from `pio_geo_layer_to_geojson`.
 
 ## Errors
 
@@ -236,7 +312,9 @@ and serialized PowerIO modules through the `powerio_ir` field. Electrical
 inputs and outputs stay PowerIO types and PowerIO IR; the server does not
 define another network, calculation, update, or solution schema.
 
-Filesystem access is off unless `POWERIO_MCP_ALLOWED_ROOTS` lists the
-directories the server may read, and remote URI schemes are rejected. Host
+Filesystem reads and writes default to the directory captured at server startup.
+`POWERIO_MCP_ALLOWED_ROOTS` selects explicit directories instead; the compatibility
+settings `POWERIO_MCP_ROOT` and `POWERIO_MCP_ALLOWED_ROOT` follow it in precedence.
+Remote URI schemes are rejected. Host
 approval, request identifiers, timeouts, and cancellation are MCP transport
 concerns and do not touch the PowerIO data.

@@ -60,7 +60,7 @@ fn a_time_series_kind_echoes_its_retained_source_on_a_same_format_write() {
         text, EGRET_TIME_SERIES,
         "the write must echo the source byte for byte"
     );
-    assert!(diagnostics.is_empty());
+    assert_eq!(diagnostics, []);
 }
 
 #[test]
@@ -174,7 +174,7 @@ fn a_pypsa_network_time_series_emits_its_complete_directory_byte_exactly() {
 
     let result = emit(&module, "pypsa-csv", Destination::memory("copy").unwrap())
         .expect("same format directory emission succeeds");
-    assert!(result.diagnostics().is_empty());
+    assert_eq!(result.diagnostics(), []);
 
     let actual = memory_directory(&result);
     let expected: BTreeMap<_, _> = FILES
@@ -230,7 +230,7 @@ fn a_gridfm_scenario_set_emits_its_complete_directory_byte_exactly() {
 
     let result = emit(&module, "gridfm", Destination::memory("copy").unwrap())
         .expect("same format directory emission succeeds");
-    assert!(result.diagnostics().is_empty());
+    assert_eq!(result.diagnostics(), []);
     assert_eq!(memory_directory(&result), expected);
 }
 

@@ -95,13 +95,15 @@ pub fn branch_keys(branches: &[powerio_tx::Branch]) -> Vec<(usize, usize, String
         .collect()
 }
 
-/// The path a label resolves to in the gitignored local corpus manifest
-/// (`tests/data/local_pwb_corpus.tsv`); `None` when the manifest, the label,
-/// or the file is absent, so tests on machine specific corpus files skip
-/// instead of fail.
+/// The path a label resolves to in a gitignored local corpus manifest under
+/// `tests/data/`. A manifest is a TSV of `label<TAB>absolute path` lines.
+/// `None` when the manifest, the label, or the file is absent, so tests on
+/// machine specific corpus files skip instead of fail.
 #[allow(dead_code)]
-pub fn local_corpus_path(label: &str) -> Option<PathBuf> {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/local_pwb_corpus.tsv");
+pub fn local_manifest_path(manifest_file: &str, label: &str) -> Option<PathBuf> {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../tests/data")
+        .join(manifest_file);
     let text = std::fs::read_to_string(manifest).ok()?;
     let path = text.lines().find_map(|line| {
         let mut f = line.split('\t');
@@ -109,4 +111,11 @@ pub fn local_corpus_path(label: &str) -> Option<PathBuf> {
     })?;
     let p = PathBuf::from(path);
     p.exists().then_some(p)
+}
+
+/// The path a label resolves to in the local PowerWorld binary corpus
+/// manifest.
+#[allow(dead_code)]
+pub fn local_corpus_path(label: &str) -> Option<PathBuf> {
+    local_manifest_path("local_pwb_corpus.tsv", label)
 }

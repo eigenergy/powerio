@@ -1,10 +1,11 @@
 // Both the converter and its isolated analytics frame apply this closed vocabulary.
 // Electrical diagnostic identities, component properties, and free text are excluded.
 (() => {
+  const engineVersions = [__POWERIO_ENGINE_VERSION__];
   const formats = ['unknown', 'matpower', 'psse', 'psse34', 'psse35', 'psse-rawx',
     'powermodels-json', 'pandapower-json', 'pypsa-csv', 'egret-json', 'powerworld',
     'pslf', 'xiidm', 'jiidm', 'cgmes', 'ucte', 'surge-json', 'ieee-cdf', 'pwb',
-    'opfdata-json', 'goc3-json', 'dss', 'pmd-json', 'bmopf-json',
+    'opfdata-json', 'goc3-json', 'dss', 'cim-dist', 'sincal-balanced', 'sincal-multiconductor', 'pmd-json', 'bmopf-json',
     'bmopf-json@0.1.0', 'bmopf-json@0.2.0'];
   const codes = [
     'PARSE.MATPOWER.MALFORMED', 'PARSE.SOURCE.MALFORMED', 'PARSE.GOC3.MALFORMED',
@@ -32,13 +33,13 @@
   const operation = { source: formats, target: formats, outcome: outcomes };
   const schemas = {
     example: { kind: ['transmission', 'distribution', 'mixed'] },
-    batch_started: { count: counts, version: ['0.11.1'] },
+    batch_started: { count: counts, version: engineVersions },
     batch_completed: { count: counts, duration: ['under-10s', '10s-plus'] },
     batch_cancelled: {},
     parse_result: operation,
     convert_result: operation,
     input_result: { outcome: ['error', 'needs-primary'] },
-    engine_result: { outcome: ['ready', 'error'], version: ['0.11.1'] },
+    engine_result: { outcome: ['ready', 'error'], version: engineVersions },
     problem: { source: formats, target: formats, stage: ['input', 'parse', 'convert'], code: [...codes, 'other'] },
     download: { kind: ['single', 'batch'], target: formats, count: counts },
     settings_shared: {}, cli_opened: {}, issue_opened: {},

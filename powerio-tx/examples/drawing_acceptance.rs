@@ -19,5 +19,5 @@ fn main() {
     );
     assert_eq!(buses, 250);
     assert_eq!(branches, 339);
-    assert!(parsed.diagnostics.is_empty());
+    assert_eq!(parsed.diagnostics, [] as [powerio_tx::Diagnostic; 0]);
 }

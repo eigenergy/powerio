@@ -931,7 +931,7 @@ mod tests {
         assert_eq!(derived.producer().name(), "tellegen");
         assert_eq!(derived.sources().len(), 1);
         assert!(derived.source().is_none());
-        assert!(derived.source_map().is_empty());
+        assert_eq!(derived.source_map(), []);
         assert_eq!(derived.diagnostics().len(), 1);
         assert!(derived.diagnostics()[0].target().is_none());
         assert_eq!(derived.diagnostics()[0].spans().len(), 1);
@@ -1007,7 +1007,7 @@ mod tests {
         assert_eq!(module.value, [7, 2]);
         assert_eq!(module.producer().name(), "editor");
         assert!(module.source().is_none());
-        assert!(module.source_map().is_empty());
+        assert_eq!(module.source_map(), []);
         assert_eq!(module.sources().len(), 1);
         assert_eq!(module.diagnostics().len(), 2);
         assert_eq!(module.diagnostics()[0].target(), Some("/0"));

@@ -1,7 +1,7 @@
 //! IEEE/PEGASE-like topology: a spanning tree with extra random edges to
 //! match the average degree of a typical transmission grid (~2.5).
 
-use rand::Rng;
+use rand::RngExt;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 

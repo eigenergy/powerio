@@ -41,7 +41,7 @@ fn transformation_names_share_one_report_and_sever_the_source_echo() {
     assert_eq!(report, to_balanced_network_report(network, options));
     assert!(report.is_ready(), "{report:?}");
     let direct = to_balanced_network(network, options).unwrap();
-    assert!(!direct.network.buses().is_empty());
+    assert_ne!(direct.network.buses().as_slice(), []);
 
     let transformed = to_balanced(module, options).unwrap();
     assert!(matches!(transformed.value(), PioValue::BalancedNetwork(_)));
@@ -143,7 +143,7 @@ fn hostile_element_names_normalize_into_the_history_notes() {
     let mut saw_replacement = false;
     let mut saw_truncation = false;
     for note in entry.assumptions().iter().chain(entry.losses()) {
-        assert!(!note.is_empty());
+        assert_ne!(note, "");
         assert!(!note.contains('\0'), "NUL survived: {note:?}");
         assert!(
             note.len() <= powerio_core::limits::MAX_IDENTIFIER_BYTES,

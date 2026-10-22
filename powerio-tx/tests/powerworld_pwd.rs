@@ -307,7 +307,7 @@ fn rejects_non_display_inputs() {
     assert_eq!(display.canvas_width, 200);
     assert_eq!(display.canvas_height, 200);
     assert_eq!(display.stamp, 0xa83c);
-    assert!(display.substations.is_empty());
+    assert_eq!(display.substations, [] as [powerio_tx::PwdSubstation; 0]);
 }
 
 /// A display header can carry a canvas title, which shifts the per file
@@ -320,7 +320,7 @@ fn rejects_non_display_inputs() {
 fn a_titled_display_header_finds_the_stamp_past_its_title() {
     let bytes = fs::read(common::powerworld_vendored("ACTIVSg200.pwd")).unwrap();
     let untitled = __parse_pwd(&bytes).unwrap();
-    assert!(!untitled.is_empty());
+    assert_ne!(untitled, [] as [powerio_tx::PwdSubstation; 0]);
 
     let title = b"CANVAS";
     let mut titled = Vec::with_capacity(bytes.len() + title.len());

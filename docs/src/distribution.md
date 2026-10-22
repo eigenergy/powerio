@@ -1,10 +1,16 @@
 # Distribution networks
 
 A multiconductor network is the conductor level distribution model, and
-OpenDSS, PowerModelsDistribution engineering JSON, and BMOPF JSON all parse to
-it. When you need a calculation, construct an `McAcPfInstance`,
+OpenDSS, PowerModelsDistribution engineering JSON, BMOPF JSON, and
+distribution CIM all parse to it. When you need a calculation, construct an `McAcPfInstance`,
 `McAcOpfInstance`, or `LinDist3FlowOpfInstance` from it explicitly (see
 [Calculation instances and solutions](instances.md)).
+
+The explicit [SINCAL multiconductor profile](sincal.md) also produces this
+existing type, including when its selected powers happen to be symmetric.
+Required unsupported SINCAL components reject the entire parse rather than
+returning a partial network. Its balanced profile belongs to the separate
+transmission backend; neither path silently falls back to the other.
 
 ```julia
 using PowerIO
@@ -21,6 +27,19 @@ terminal sets, transformers list their windings with connection kinds, and
 loads and generators attach per terminal. Impedance and shunt matrices are in
 SI units, per unit length, on line codes. An element the reader has no typed
 slot for stays verbatim in the `untyped` table and is reported.
+
+Rust `VoltageSource::with_reference_terminal` specifies phase voltages relative
+to a declared terminal on the source bus. That terminal can float: it is not
+implicitly connected to earth or an external neutral. The multiconductor
+matrix builder retains the voltage differences and the equal opposite
+reference currents. IR 2 uses a distinct tagged source record, so older readers
+reject this new physics; ordinary earth-referenced records are unchanged.
+`McAcPfInstance::source_boundary` borrows both voltage endpoints and their
+phasor differences. The additive C `PioVoltageSourceBoundaryView` serves
+network and PF instance callers without changing the existing ABI 7 layouts.
+Legacy C source views reject references they cannot describe. Exchange-format
+writers, balanced/LinDist3Flow projections and neutral Kron reduction also
+reject referenced sources until their integration is complete.
 
 The OpenDSS profile is the static circuit, meaning the element definitions
 and their electrical data. Load shapes, solve commands, monitors, and other
@@ -80,11 +99,60 @@ The supported physical slice, rejected equipment and validation evidence are
 recorded in the
 [multiconductor LinDist3Flow design review](https://github.com/eigenergy/powerio/blob/main/docs/design/lindist3flow-multiconductor.md).
 
+## Distribution CIM
+
+The `cim-dist` format reads and writes CIM RDF/XML for unbalanced feeders in
+the profile the GridAPPS-D and CIMHub tools exchange: one document in the
+`http://iec.ch/TC57/CIM100#` namespace, the iec61970cim17v40 and
+iec61968cim13v13 release that CGMES 3.0 also uses, with `ConnectivityNode`
+connectivity and per phase equipment. The reader also accepts the older
+versioned `CIM-schema-cimNN` namespaces and refuses a document set that mixes
+CIM16 and CIM100. Input is one document, or a directory whose top level `.xml`
+documents read as one case, with `rdf:about` records extending the ones
+another document defines. Files in subdirectories are not part of the case,
+and ZIP archives are not read yet. A `.xml` document, a nameless source, or a
+directory routes here when it carries per phase classes and no CGMES
+`md:FullModel` header.
+
+| CIM | Model |
+|---|---|
+| `ConnectivityNode`, `Terminal` | buses, with the terminals the equipment uses |
+| `ACLineSegment` with `ACLineSegmentPhase` | lines, conductors in `sequenceNumber` order; each phase's `sequenceNumber` names its `PhaseImpedanceData` row and column |
+| `PerLengthPhaseImpedance`, `PerLengthSequenceImpedance`, segment `r`/`x` totals | line codes in ohm/m and S/m |
+| `EnergyConsumer` with `EnergyConsumerPhase` | loads, per phase power |
+| `LinearShuntCompensator` with its phases | shunts; sections multiply the per section admittance |
+| the `Switch` classes with `SwitchPhase` | switches with their state and rating |
+| `PowerTransformer` with `PowerTransformerEnd`, `TransformerMeshImpedance`, `RatioTapChanger` | transformers of any winding count, with taps |
+| `EnergySource` | voltage sources, with the series impedance in `rs`/`xs` extras |
+
+`SinglePhaseKind` A, B, C, and N map to terminals 1, 2, 3, and 4, and the
+split phase s1 and s2 to 1 and 2. A conductor beyond those four has no CIM
+phase, so the writer reports it. The tank form (`TransformerTank` with
+`TransformerTankInfo` catalog data), regulator controls, distributed energy
+resources, machines, wire and cable geometry, operational limits,
+`LoadResponseCharacteristic`, and `TopologicalNode` only documents are not
+mapped yet, and the reader reports each of them: a class with no mapping is
+counted per class (`READ.CIM_DIST.CLASS_UNMAPPED`), a property no mapping reads
+is counted per class and property (`READ.CIM_DIST.FIELD_UNMAPPED`), and a
+segment with no impedance is an error severity finding
+(`READ.CIM_DIST.IMPEDANCE_UNRESOLVED`). Conversion to another format refuses
+such a segment (`READINESS.CIM_DIST.IMPEDANCE_UNRESOLVED`): its placeholder
+line code has zero impedance, which would be a short circuit between its
+buses. OpenDSS geometry lines are refused for the same reason.
+
+A network read from distribution CIM records `cim-dist` as its source format.
+A same format write of a single document returns its bytes. Canonical output is
+one CIM100 document with no `md:FullModel` header. Imported mRIDs pass through
+and the rest are UUIDv5 values, and the written numbers are the ones the reader
+maps back exactly, so write, read, write is byte stable. The output is not
+yet validated against the CIM17 profile schemas or an independent
+implementation such as CIM-Graph or CIMHub.
+
 ## BMOPF schema versions
 
 PowerIO v0.11.0 supports **draft BMOPF 0.2**, subject to Task Force
 review. The schema version is separate from the PowerIO release and from
-PowerIO IR generation 2. Producer provenance records the proposal revision and
+PowerIO IR version 2. Producer provenance records the proposal revision and
 schema digest. Previously emitted schema identifiers remain readable aliases.
 
 An unqualified `bmopf-json` emission preserves an unchanged source byte for
@@ -104,8 +172,8 @@ Legacy output relocates proposed-only equipment and transformer fields into
 assumed to calculate the same network. Proposal output uses the declared tables
 and preserves winding ratings, taps, neutral impedances and current-limit data.
 
-Unequal bus phase bounds remain individual values through parsing, generation-2
-IR and explicit BMOPF output. Uniform values use `v_min`/`v_max`; unequal values
+Unequal bus phase bounds remain individual values through parsing, IR version 2
+and explicit BMOPF output. Uniform values use `v_min`/`v_max`; unequal values
 use `v_min_phase`/`v_max_phase` in the typed Rust model. A present scalar takes
 precedence over the corresponding vector. PMD voltage arrays instead follow
 terminal order and use engineering voltage units.
@@ -119,14 +187,21 @@ The unreleased ABI 7 layout and Julia definitions are updated together.
 Parsing, structural schema validity, semantic consistency and computational
 support are separate checks. Contradictory versions, invalid dimensions,
 unknown electrical references and inconsistent bounds produce error diagnostics.
-The native multiconductor admittance builder supports ideal grounded-WYE
-transformer coupling and rejects leakage, other winding connections, floating
-neutrals, core shunts or tap decisions that need a different formulation.
+The native multiconductor admittance builder supports ideal two-winding WYE
+transformers with grounded or explicitly floating neutral terminals. Each
+phase constrains `(Vp - Vpn) = ratio * (Vs - Vsn)`; the transpose supplies
+both phase and neutral currents to nodal balance. Fixed taps enter the ratio.
+A one-terminal single-phase winding keeps its implicit-ground meaning;
+otherwise the final terminal is the neutral, and only an explicit ground or
+closed grounding switch grounds it. The builder rejects leakage, other winding
+connections, winding-neutral impedance parameters requiring an additional
+circuit, core shunts and tap-control decisions. Malformed winding maps and
+invalid ratios fail instead of producing an incomplete matrix.
 
 The BMOPF proposal schema is pinned to
-[`fe8671a`](https://github.com/distribution-system-opt/dsopt-schema/commit/fe8671a74d2fc1a15a499c5b1f66cbb80fc22e12),
+[`664b494`](https://github.com/distribution-system-opt/dsopt-schema/commit/664b494f2ee31ee76f8f78e7852cdb1f1c9a8e7d),
 with SHA-256 `74d6c6de3637d52e42a26c4cb0584f51df70d69f360b236cf5e23afaf7669462`.
-Fresh 0.2.0 output places the immutable retrieval URL in `meta.$schema` and
+Fresh output places a PowerIO archive commit URL in `meta.$schema`. Proposal output
 records the canonical identity, proposal status, digest and revision under
 `meta.provenance.powerio_bmopf`. Existing provenance is preserved; a name
 collision uses a numbered producer entry. Reading the former canonical or
@@ -136,7 +211,7 @@ version-directory identifiers remains supported without fetching remote data.
 
 Draft BMOPF 0.2 uses `energy_cost_rate` in $/kWh. Generator entries follow phase
 order, as do voltage-source entries. Neutral terminals have no price entry. PowerIO retains source prices in `VoltageSource.energy_cost_rate` and
-in generation-2 IR. C and Julia expose `energy_cost_rate_per_kwh`; Python's
+in IR version 2. C and Julia expose `energy_cost_rate_per_kwh`; Python's
 voltage-source records expose `energy_cost_rate`.
 
 The reader also accepts the deprecated per-phase `cost` spelling. Explicit
@@ -148,11 +223,31 @@ the selected solver determines whether and how they enter its objective.
 ## LinDist3Flow bindings
 
 Python and Julia expose `LinDist3FlowOpfInstance` and `LinDist3FlowOpfSolution`
-as typed module values. `to_lindist3flow_opf_instance` constructs an instance
+as typed module values. Rust and Python also expose the distinct fixed-dispatch
+`LinDist3FlowPfInstance` and `LinDist3FlowPfSolution` types.
+`to_lindist3flow_opf_instance` constructs an instance
 from a supported phase-only network or multiconductor AC OPF instance.
 `instance.metadata` supplies the node and conductor axes, roots, and fixed
-reference voltages. Line powers follow the reported parent-to-child direction.
+reference voltages. It also reports whether the retained conductor graph is
+meshed. Line powers follow the reported parent-to-child direction.
 Python positions are zero based; Julia positions are one based.
+
+Cycles and parallel lines remain in the LinDist3Flow equations. PowerIO emits
+`BUILD.LINDIST3FLOW.MESH_APPROXIMATION` for such an instance because it does
+not add angle recovery, loop-consistency equations, circulating-flow
+regularisation, or automatic radialisation. Mesh feasibility therefore means
+feasibility of this declared linear approximation, not AC feasibility or a
+unique physical allocation of branch flows.
+
+`LinDist3FlowBuildOptions::unsupported` selects the component-preparation
+policy. `Reject` keeps the strict boundary. `Lower` applies audited static
+neutral, switch, line-shunt and capacitor transformations. `Approximate` also
+linearizes supported load models and maps IBRs to static generators while
+freezing named controls. `Permissive` can additionally omit retained untyped
+records. `instance.source_network()` remains the caller's input,
+`instance.network()` is the prepared calculation network, and
+`instance.preparation()` records every action. The serialized instance stores
+the source network and reconstructs the preparation report on read.
 
 Solutions expose their instance, termination, objective, and named primal
 columns: `terminal_voltage_magnitude_squared`, `line_active_power`,
@@ -162,6 +257,16 @@ volts and power values use watts or vars. Node and line columns follow the
 metadata axes; generator and source columns follow network table order, then
 channel order. Each returned column is an independent copy.
 
+`to_lindist3flow_pf_instance` requires finite prescribed generator/IBR P/Q
+(or equal lower and upper bounds), clears the objective, and removes conductor
+limits from the conic constraint set. After a converged solve,
+`evaluate_lindist3flow_pf_limits` reports retained line apparent-power and
+both-end current ratings in VA or A, including loading ratios and overload
+flags. These checks explicitly state `constraint_enforced = false`.
+Transformer/regulator lowering and their thermal checks remain unsupported;
+the preparation report records any selected omission rather than presenting
+an incomplete report as comprehensive.
+
 C ABI 7 adds `pio_value_lindist3flow_opf_instance`,
 `pio_value_lindist3flow_opf_solution`, and
 `pio_module_to_lindist3flow_opf_instance`. The generic calculation accessors
@@ -170,10 +275,14 @@ columns. `pio_lindist3flow_opf_instance_node_at` and
 `pio_lindist3flow_opf_instance_conductor_at` return borrowed typed axis views.
 Their strings stay valid while the instance handle remains alive.
 Sparse conic preparation and solver adapters remain Rust APIs.
+The fixed-dispatch types add no ABI 7 symbols; they remain available through
+Rust, Python, and IR version 2 until a future C ABI revision can add a
+fixed symbol set deliberately.
 
-PowerIO 0.11.1 writes these values in IR generation 2. LinDist3Flow adds new
-structural type names; readers without those types reject them, while existing
-network and calculation records keep their representation.
+PowerIO 0.11.1 writes the OPF pair in IR version 2, and 0.11.4 adds the
+fixed-dispatch pair under the same version. Readers without those structural types
+reject them, while existing network and calculation records keep their
+representation.
 
 
 ## Solver adapters, including Tellegen
@@ -198,9 +307,24 @@ projection, calculation, and result storage:
    termination, decoded values, and objective. Store the result in a module
    and call `powerio::serialize` for IR 2 output.
 
+For fixed dispatch, use `build_lindist3flow_pf_standard_form`, decode with
+`lindist3flow_pf_values_from_standard_primal`, and construct a
+`LinDist3FlowPfSolution`. Its constructor evaluates retained ratings after a
+converged result; `evaluate_lindist3flow_pf_limits` exposes the same report for
+preview. The compiled objective is identically zero; line thermal cones are
+intentionally omitted.
+
 Tellegen can reuse this Rust boundary for native and WebAssembly adapters.
 The remaining consumer work is solver dispatch, capability checks, and
 presentation of the supported distribution results. Parsing, neutral
 projection, electrical coefficients, physical axes, and primal scaling stay
 in PowerIO. New LinDist3Flow types require PowerIO 0.11.1; existing saved
 IR 2 networks require no format migration.
+
+The supported schemas ship in the Rust crate at `schemas/bmopf/`, in the
+Python package at `powerio/schemas/bmopf/`, and in each C/Julia library archive
+at `schemas/bmopf/`. Their manifests record the exact bytes and upstream
+review references. Python can read them with `importlib.resources.files("powerio")`.
+Upstream review changes do not alter an installed release's schema. A new
+schema interpretation requires a reviewed PowerIO release; a PowerIO release
+does not establish Task Force acceptance.

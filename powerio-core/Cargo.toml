@@ -24,6 +24,7 @@ schemars = { workspace = true, optional = true }
 # existing entry; std does not expose one.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+errno = "0.3"
 
 [lints]
 workspace = true

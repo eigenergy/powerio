@@ -7,8 +7,8 @@ name: Release binaries
 # version tag. A workflow_dispatch run builds the same tarballs as workflow
 # artifacts only.
 #
-# After tagging, run PowerIO.jl's gen/update_artifacts.jl <tag> to rewrite its
-# Artifacts.toml with the real sha256/git-tree-sha1 of these tarballs.
+# After the release is published, PowerIO.jl's Release workflow pins these
+# tarballs in its Artifacts.toml and registers the matching PowerIO.jl version.
 #
 # linux builds run on ubuntu-22.04 for the older glibc floor (2.35); aarch64
 # linux is cross-compiled so the job doesn't need an ARM runner label.
@@ -35,6 +35,9 @@ jobs:
   # release can break the Julia binding while both ABI integers stay the
   # same. This job tests the tag against the default branch of PowerIO.jl.
   # It gates `build`: a failure makes no tarballs and no draft release.
+  # It also checks that PowerIO.jl binds or exempts every entry point the
+  # tagged ABI declares, so a release never ships an entry point the binding
+  # has never seen.
   # For a planned binding break, merge the PowerIO.jl change first, then
   # run this workflow again on the tag.
   binding-gate:
@@ -69,30 +72,35 @@ jobs:
         Set a valid POWERIO_JL_REPO_TOKEN to release. A workflow_dispatch run builds \
         artifact-only tarballs without the gate."
         exit 1
-    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-    - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
     - name: Build powerio-capi
       run: |
         cargo build -p powerio-capi --release \
           --features arrow,matrix,gridfm,dist,prob
     - name: Check out PowerIO.jl default branch
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: eigenergy/PowerIO.jl
         path: PowerIO.jl
         token: ${{ secrets.POWERIO_JL_REPO_TOKEN || github.token }}
-    - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3
+    - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
       with:
         version: '1'
-    - uses: julia-actions/cache@a45e8fa8be21c18a06b7177052533149e61e9b38 # v3
+    - uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8 # v3.3.0
+    # Every entry point this tag declares is bound by PowerIO.jl main or
+    # listed in its gen/unbound_entry_points.txt with a reason.
+    - name: Entry point coverage of PowerIO.jl main
+      run: POWERIO_JL=PowerIO.jl bash scripts/check-capi-v7.sh
     - name: Test PowerIO.jl against this tag
       env:
         POWERIO_CAPI: ${{ github.workspace }}/target/release/libpowerio_capi.so
+        POWERIO_HEADER: ${{ github.workspace }}/powerio-capi/include/powerio.h
       run: |
         julia --project=PowerIO.jl -e 'using Pkg; Pkg.instantiate(); Pkg.test()' || {
           echo "::error::PowerIO.jl's default branch fails against this tag. Merge the \
-          paired PowerIO.jl change, then re-run this workflow on the tag. A \
+          companion PowerIO.jl change, then re-run this workflow on the tag. A \
           workflow_dispatch run builds artifact-only tarballs without the gate."
           exit 1
         }
@@ -132,11 +140,11 @@ jobs:
             triplet: x86_64-w64-mingw32
             lib: powerio_capi.dll
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           targets: ${{ matrix.rust_target }}
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ matrix.rust_target }}
       # The tarballs and the draft release are named for the tag, and PowerIO.jl
@@ -180,9 +188,12 @@ jobs:
           mkdir -p "$stage/include"
           cp powerio-capi/include/powerio.h "$stage/include/"
           cp LICENSE-MIT LICENSE-APACHE "$stage/"
+          mkdir -p "$stage/schemas"
+          cp -R powerio-dist/schemas/bmopf "$stage/schemas/"
           tar -czf "libpowerio_capi.${{ matrix.triplet }}.tar.gz" -C "$stage" .
           python3 scripts/audit-release-archives.py \
             "libpowerio_capi.${{ matrix.triplet }}.tar.gz"
+          python3 scripts/check-bmopf-archive.py --archive "libpowerio_capi.${{ matrix.triplet }}.tar.gz"
           # informational; gen/update_artifacts.jl recomputes from the release assets
           shasum -a 256 "libpowerio_capi.${{ matrix.triplet }}.tar.gz" \
             || sha256sum "libpowerio_capi.${{ matrix.triplet }}.tar.gz"
@@ -254,20 +265,133 @@ jobs:
             /Fe:release-smoke.exe
           Copy-Item stage/libpowerio_capi/bin/libpowerio_capi.dll powerio_capi.dll
           ./release-smoke.exe $version
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: libpowerio_capi.${{ matrix.triplet }}
           path: libpowerio_capi.${{ matrix.triplet }}.tar.gz
 
+  # Release gate on the packaged tarballs. After publication, PowerIO.jl's
+  # Release workflow pins the published tarballs in its Artifacts.toml and runs
+  # its tests against them. It cannot skip a version, so a tarball that fails
+  # there would leave PyPI and crates.io published and the Julia release stuck.
+  # These two jobs run that check on the tarballs `build` made, before the
+  # draft release exists. `julia-pin` runs PowerIO.jl's gen/update_artifacts.jl
+  # on them. `julia-tarballs` installs each platform's tarball as the artifact
+  # Artifacts.toml names, checking its sha256 and tree hash, and runs the
+  # PowerIO.jl tests on that platform against it. A workflow_dispatch run
+  # checks the tarballs against the workspace version and attaches nothing.
+  julia-pin:
+    name: PowerIO.jl pins the packaged tarballs
+    needs: build
+    # A skipped binding gate (workflow_dispatch) would otherwise skip this job
+    # too, as it skips every job downstream of it.
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out PowerIO.jl default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: eigenergy/PowerIO.jl
+          path: PowerIO.jl
+          token: ${{ secrets.POWERIO_JL_REPO_TOKEN || github.token }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: libpowerio_capi.*
+          path: release-assets
+          merge-multiple: true
+      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+        with:
+          version: '1'
+      - name: Pin the tarballs with gen/update_artifacts.jl
+        shell: bash
+        env:
+          TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
+        run: |
+          tag="${TAG:-v$(grep -oE '^version = "[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')}"
+          julia --project=PowerIO.jl scripts/check-julia-artifacts.jl pin PowerIO.jl release-assets "$tag"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: powerio-jl-artifacts
+          path: PowerIO.jl/Artifacts.toml
+
+  julia-tarballs:
+    name: PowerIO.jl on ${{ matrix.platform }}
+    needs: julia-pin
+    if: ${{ !cancelled() && needs.julia-pin.result == 'success' }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: x86_64-linux-gnu
+          - runner: ubuntu-24.04-arm
+            platform: aarch64-linux-gnu
+          # x64 Julia under Rosetta; the Intel macOS runners are retired.
+          - runner: macos-14
+            platform: x86_64-apple-darwin
+            julia_arch: x64
+          - runner: macos-14
+            platform: aarch64-apple-darwin
+          - runner: windows-latest
+            platform: x86_64-w64-mingw32
+    steps:
+      # Pkg installs a package from its git tree without converting line
+      # endings, so check PowerIO.jl out the same way; its tests compare
+      # emitted text with fixture bytes.
+      - name: Keep committed line endings
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out PowerIO.jl default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: eigenergy/PowerIO.jl
+          path: PowerIO.jl
+          token: ${{ secrets.POWERIO_JL_REPO_TOKEN || github.token }}
+      - name: Use the Artifacts.toml julia-pin wrote
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: powerio-jl-artifacts
+          path: PowerIO.jl
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: libpowerio_capi.${{ matrix.platform }}
+          path: release-assets
+      - name: Install Rosetta
+        if: matrix.julia_arch == 'x64'
+        run: /usr/sbin/softwareupdate --install-rosetta --agree-to-license
+      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+        with:
+          version: '1'
+          arch: ${{ matrix.julia_arch || 'default' }}
+          force-arch: ${{ matrix.julia_arch == 'x64' }}
+      - name: Install the packaged tarball as the powerio_capi artifact
+        shell: bash
+        run: julia --project=PowerIO.jl scripts/check-julia-artifacts.jl install PowerIO.jl release-assets
+      # No POWERIO_CAPI and no library build in this job, so the binding
+      # resolves the installed artifact, and the suite fails without it.
+      - name: Test PowerIO.jl against the packaged library
+        shell: bash
+        env:
+          POWERIO_REQUIRE_LIBRARY: '1'
+        run: |
+          # Git Bash puts GNU tar first on PATH, and GNU tar reads the C: of a
+          # Windows path as a remote host. The tests' tar calls need Windows'
+          # own tar, which accepts drive letters.
+          if [ "$RUNNER_OS" = Windows ]; then export PATH="/c/Windows/System32:$PATH"; fi
+          julia --project=PowerIO.jl -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+
   attach:
     name: attach draft release assets
     if: github.event_name == 'push'
-    needs: build
+    needs: [ build, julia-tarballs ]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify the tag still names this build
         shell: bash
         env:
@@ -284,7 +408,7 @@ jobs:
             echo "::error::Release tag moved or disappeared while this build ran."
             exit 1
           fi
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: libpowerio_capi.*
           path: release-assets
@@ -312,7 +436,7 @@ jobs:
             exit 1
           fi
       - name: Attach to release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: release-assets/*.tar.gz
           body_path: release-body.md

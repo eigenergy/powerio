@@ -1,0 +1,66 @@
+# Minor and patch updates arrive grouped, one pull request per ecosystem per
+# week. Major updates stay ungrouped so each one gets its own review.
+version: 2
+updates:
+  # `/` and `/fuzz` are the cargo manifest roots outside `evals/`. Only `/` has a
+  # `Cargo.lock`, so `/fuzz` updates the declared ranges. The two manifests under
+  # `evals/` sit outside the workspace and outside the required CI jobs.
+  - package-ecosystem: cargo
+    directories:
+      - "/"
+      - "/fuzz"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # quick-xml 0.42 rewrites its API from bytes to str across the XIIDM and
+    # CGMES writers and moves in its own pull request.
+    ignore:
+      - dependency-name: quick-xml
+    groups:
+      cargo-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: pip
+    directories:
+      - "/"
+      - "/evals/validation"
+      - "/evals/powsybl"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # pandapower holds at its pin because the Y_bus cross-check has not run
+    # against 3.4 or later.
+    ignore:
+      - dependency-name: pandapower
+    groups:
+      pip-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  # The three dtolnay/rust-toolchain pins point at branch tips (stable,
+  # nightly, master) rather than at a released tag. The github-actions updater
+  # advances a SHA pin only when that SHA resolves to a tag and a newer tag
+  # exists, so those three need a manual refresh.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # The three dtolnay/rust-toolchain pins point at branch tips that each
+    # default to their own channel, so they are refreshed by hand.
+    ignore:
+      - dependency-name: dtolnay/rust-toolchain
+    groups:
+      actions-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch

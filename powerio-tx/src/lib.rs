@@ -45,13 +45,17 @@
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 mod collect;
+pub mod contingency;
 pub mod dc;
 pub mod diagnostics;
+pub mod dynamic;
 pub mod error;
 pub mod format;
 pub mod gen_cost;
 pub mod geo;
 pub mod indexed;
+pub mod islands;
+pub mod merge;
 pub mod network;
 mod normalize;
 mod operations;
@@ -94,6 +98,15 @@ pub mod __internal {
     }
 }
 
+pub use contingency::{
+    AutomaticOrder, AutomaticSpec, AutomaticTarget, BranchRef, Change, ChangeOp, ChangeUnit,
+    ContingencyAction, ContingencyCase, ContingencyParsed, ContingencyResolution, ContingencySet,
+    Expanded, InterfaceMember, JoinName, MonitorScope, MonitorStatement, MonitoredParsed,
+    MonitoredResolution, MonitoredSet, PsseEquipmentIndex, ResolvedCase, ResolvedComponent,
+    ResolvedInterface, ResolvedVoltageScope, RetainedStatement, SelectorGroup, SkipRule, Subsystem,
+    SubsystemParsed, SubsystemSelector, SubsystemSet, UnresolvedAction, UnresolvedMonitor,
+    UnresolvedMonitorReason, UnresolvedReason,
+};
 pub use dc::BranchSusceptanceFormula;
 pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, EmitFamily};
 pub use error::{Error, ErrorCategory, Result};
@@ -120,6 +133,12 @@ pub use geo::{
     to_geo_layer_from_aux_substations, to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
 };
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
+pub use islands::{Island, IslandPartition, IslandReferencePolicy, IslandReferenceReport};
+pub use merge::{
+    BusGroup, BusMerge, BusMergeRule, MergeSurvivor, MergedCharging, MergedFlows,
+    PSSE_DEFAULT_ZERO_IMPEDANCE_THRESHOLD, RemovalReason, RemovedBranch, RemovedFlow,
+    RemovedFlowMethod, RemovedFlows, RemovedSwitch, ZeroImpedanceRule,
+};
 pub use network::{
     AcDcConverterControlMode, ActivePowerControl, Area, BalancedNetwork, BoundaryLine,
     BoundaryLineGeneration, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet,
@@ -129,7 +148,8 @@ pub use network::{
     DcSeriesDevice, DcSwitch, DcSwitchKind, DcTerminal, DcTopologicalNode, DetailedConnectivity,
     DroopCurve, DroopCurveSegment, ExternalIdentifier, Extras, GenCaps, GenCost, Generator,
     GeneratorEnergySource, Hvdc, HvdcConverter, HvdcConverterKind, HvdcConvertersMode, Impedance,
-    InternalConnection, Junction, LineCommutatedConverter, LineCommutatedConverterOperatingMode,
+    ImpedanceCorrection, ImpedanceCorrectionPoint, ImpedanceCorrectionVariable, InternalConnection,
+    Junction, LineCommutatedConverter, LineCommutatedConverterOperatingMode,
     LineCommutatedConverterReactiveModel, Load, LoadVoltageModel, LoadingLimits,
     MinMaxReactiveLimits, OmittedField, OmittedFieldName, OperationalLimitGroup,
     ReactiveCapabilityCurve, ReactiveCapabilityCurvePoint, ReactiveLimits, Shunt, ShuntBlock,
@@ -141,7 +161,7 @@ pub use network::{
     calc_series_admittance_of, repair_values,
 };
 pub use normalize::{
-    NormalizeOptions, NormalizeSourceRows, NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD,
-    correct_angle_difference_bounds,
+    ClosedSwitchPolicy, NormalizeOptions, NormalizeReport, NormalizeSettings, NormalizeSourceRows,
+    NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD, correct_angle_difference_bounds,
 };
-pub use operations::Selector;
+pub use operations::{BusSubset, Selector};

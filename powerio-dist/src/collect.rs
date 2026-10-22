@@ -280,7 +280,7 @@ mod tests {
         let mut d = Diagnostics::new();
         d.enter_record(0, 4);
         d.push(&DROPPED, "before any buffer is located");
-        assert!(d.records()[0].spans().is_empty());
+        assert_eq!(d.records()[0].spans(), []);
 
         d.locate_in(source.clone(), 3);
         d.enter_record(10, 20);
@@ -293,13 +293,13 @@ mod tests {
 
         d.leave_record();
         d.push(&DROPPED, "between records");
-        assert!(d.records()[2].spans().is_empty());
+        assert_eq!(d.records()[2].spans(), []);
         assert_eq!(d.record_span(), None);
 
         d.enter_record(30, 31);
         let location = d.suspend_location();
         d.push(&DROPPED, "while suspended");
-        assert!(d.records()[3].spans().is_empty());
+        assert_eq!(d.records()[3].spans(), []);
         d.resume_location(location);
         d.push(&DROPPED, "after resuming");
         assert_eq!(d.records()[4].spans()[0].byte_start(), 33);

@@ -3,7 +3,7 @@
 This page lists every structural value type in the PowerIO IR, field by
 field: each field's type, unit, and sign convention, the invariant the
 deserializer or the constructors enforce, and what a reader uses when the
-field is absent. The generated schema at `docs/schema/pio-ir/2/0.11.1/schema.json`
+field is absent. The generated schema at `docs/schema/pio-ir/2/0.11.6/schema.json`
 is the machine form of the same definitions. To keep the two from drifting
 apart, `powerio/tests/ir_reference.rs` reads this page and checks in both
 directions that each table lists the same fields the schema defines for its
@@ -50,6 +50,9 @@ schema definition beside it.
 | `powerio.BalancedNetwork` | `BalancedNetwork` |
 | `powerio.MulticonductorNetwork` | `MulticonductorNetwork` |
 | `powerio.GeoLayer` | `GeoLayer` |
+| `powerio.ContingencySet` | `ContingencySet` |
+| `powerio.SubsystemSet` | `SubsystemSet` |
+| `powerio.MonitoredSet` | `MonitoredSet` |
 | `powerio.OperatingPoint<powerio.BalancedNetwork>` | `StoredOperatingPoint` |
 | `powerio.OperatingPoint<powerio.MulticonductorNetwork>` | `StoredOperatingPoint2` |
 | `powerio.TimeSeries<powerio.BalancedNetwork>` | `StoredTimeSeries` |
@@ -70,6 +73,7 @@ schema definition beside it.
 | `powerio.AcOpfInstance` | `AcOpfInstance` |
 | `powerio.McAcPfInstance` | `McAcPfInstance` |
 | `powerio.McAcOpfInstance` | `McAcOpfInstance` |
+| `powerio.LinDist3FlowPfInstance` | `LinDist3FlowPfInstance` |
 | `powerio.LinDist3FlowOpfInstance` | `LinDist3FlowOpfInstance` |
 | `powerio.AcScucInstance` | `AcScucInstance` |
 | `powerio.DcPfSolution` | `DcPfSolution` |
@@ -79,6 +83,7 @@ schema definition beside it.
 | `powerio.SocwrOpfSolution` | `SocwrOpfSolution` |
 | `powerio.McAcPfSolution` | `McAcPfSolution` |
 | `powerio.McAcOpfSolution` | `McAcOpfSolution` |
+| `powerio.LinDist3FlowPfSolution` | `LinDist3FlowPfSolution` |
 | `powerio.LinDist3FlowOpfSolution` | `LinDist3FlowOpfSolution` |
 | `powerio.AcScucSolution` | `AcScucSolution` |
 
@@ -176,7 +181,7 @@ Schema definition: `SwitchedShuntControl`.
 
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
-| `mode` | token `locked`, `continuous`, `discrete` | | | PSS/E `MODSW` 0, 1, 2 and up | required |
+| `mode` | token `locked`, `continuous`, `discrete` | | | PSS/E `MODSW` 0, 2, and 1 or 3 to 6 | required |
 | `vhigh` | float | p.u. | | `vlow <= vhigh` | required |
 | `vlow` | float | p.u. | | | required |
 | `control_bus` | id or null | | | names a bus | null (the shunt's own bus) |
@@ -220,6 +225,19 @@ Schema definition: `Branch`.
 | `uid` | string or null | | | unique within `branches` | assigned at serialization |
 | `route` | array of `Location` or null | network coordinate space | | | null |
 | `extras` | object | | | | required |
+
+A transformer's impedance correction table rides in `extras`.
+`impedance_correction` holds `{table, variable, points}`. `variable` is
+`ratio` or `angle` (degrees), and each point is `{value, factor_re,
+factor_im}`, the complex factor that multiplies the nominal series impedance
+at that ratio or angle. A three winding transformer keeps three such entries,
+one per winding or `null`, and its factor scales that winding's star
+impedance. With `psse_zcod = 1`, entries 0/1/2 instead scale Z12/Z23/Z31,
+using the sole winding whose control mode is not fixed (regulation may be
+disabled). Ratio coordinates on a branch are in its effective t1/t2 tap
+units; three-winding ratio coordinates are bus-base per-unit winding taps. `impedance_correction_nominal` holds the nominal impedance once
+`apply_impedance_correction` has scaled it: `[r, x]` on a branch and the three
+pairwise `[r, x]` on a three winding transformer.
 
 Schema definition: `BranchCharging`.
 
@@ -435,6 +453,14 @@ Schema definition: `Transformer3W`.
 | `uid` | string or null | | | unique within `transformers_3w` | assigned at serialization |
 | `extras` | object | | | | required |
 
+Two `extras` entries carry per winding data, in winding order. Each is present
+only when it differs from its default. `winding_in_service` holds three
+booleans; a winding that is out leaves the other two coupled through the star
+point, and an absent entry means every winding is in service.
+`winding_rating_sets` holds three arrays of `{name, rate_mva}` objects with the
+MVA ratings beyond `rate_a`, `rate_b`, and `rate_c`, named as in
+`Branch.rating_sets`.
+
 Schema definition: `Winding`.
 
 | field | type | unit | sign | invariant | if absent |
@@ -607,7 +633,7 @@ Schema definition: `MulticonductorNetwork`.
 |---|---|---|---|---|---|
 | `name` | string or null | | | | null |
 | `base_frequency` | float | Hz | | positive | required |
-| `source_format` | token `dss`, `bmopf-json`, `pmd-json`, or null | | | | null |
+| `source_format` | token `dss`, `bmopf-json`, `pmd-json`, `cim-dist`, or null | | | | null |
 | `buses` | array of `DistBus` | | | `id` unique | required |
 | `linecodes` | array of `DistLineCode` | | | `name` unique | required |
 | `lines` | array of `DistLine` | | | `bus_from`, `bus_to` name buses; `linecode` names a line code | required |
@@ -863,7 +889,11 @@ Schema definition: `PowerFactorControl`.
 
 ### VoltageSource
 
-Schema definition: `VoltageSource`.
+An earth-referenced source retains the original record below. A source with
+an explicit reference terminal uses the separately tagged record described
+after it; it must not add a bare reference field to this legacy record.
+
+Schema definition: `VoltageSource/anyOf/0` (the earth-referenced branch).
 
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
@@ -874,6 +904,38 @@ Schema definition: `VoltageSource`.
 | `v_angle` | array of float | radians per terminal | | same length as `terminal_map` | required |
 | `energy_cost_rate` | optional array of float | $/kWh | positive injection supplies the network | one entry per phase in terminal-map order; excludes neutral terminals | no stated source-price term |
 | `extras` | object | | | | required |
+
+### ReferencedVoltageSource
+
+The second source-record alternative has structural identity
+`"powerio.ReferencedVoltageSource"`. Older IR 2 readers reject this wrapper
+because the legacy source fields are absent at its root. Existing records
+remain unchanged. The source can occur anywhere a multiconductor network
+is stored, including collections and calculation instances.
+
+Schema definition: `ReferencedSourceWire/oneOf/0`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `type` | string | | | exactly `"powerio.ReferencedVoltageSource"` | required |
+| `value` | object | | | referenced source body below | required |
+
+Schema definition: `ReferencedSourceFields`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `name` | string | | | unique within `sources` | required |
+| `bus` | string | | | names a bus | required |
+| `terminal_map` | array of string | | | distinct declared terminals of `bus`; excludes the reference | required |
+| `v_magnitude` | array of float | volts per terminal-to-reference difference | | same length as `terminal_map`; a grounded phase can have a nonzero difference | required |
+| `v_angle` | array of float | radians per terminal-to-reference difference | | same length as `terminal_map` | required |
+| `reference_terminal` | string | | | another declared terminal on `bus`; does not imply grounding | required |
+| `energy_cost_rate` | optional array of float | $/kWh | positive injection supplies the network | per phase in terminal-map order | no stated source-price term |
+| `extras` | object | | | | required |
+
+The voltage constraint is `V(terminal) - V(reference) = magnitude * exp(i*angle)`.
+Every phase-source current has an equal opposite contribution at the reference.
+Neither an external neutral connection nor an earth path is inferred.
 
 ### UntypedObject
 
@@ -967,6 +1029,175 @@ Schema definition: `ElementKey`.
 | `name` | string or null | | | matched case insensitively | null |
 | `index` | integer or null | | positive | 1-based row alias, accepted on read and never written | null |
 
+## powerio.ContingencySet
+
+One PSS/E contingency description file (`.con`): the outages a contingency
+analysis runs. Reading holds what the file states and touches no network;
+`ContingencySet::resolve` binds a set to the elements of a network, and
+`ContingencySet::expand` turns the automatic specifications into explicit
+cases over a subsystem set. A statement the grammar does not cover keeps its
+original line, so a document written back with `to_con` states everything the
+source did.
+
+Schema definition: `ContingencySet`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `header` | array of string | | | the comment lines ahead of the first statement, as written | empty |
+| `cases` | array of `ContingencyCase` | | | in file order | empty |
+| `automatic` | array of `AutomaticSpec` | | | in file order | empty |
+| `skips` | array of `SkipRule` | | | the branches automatic expansion leaves alone | empty |
+| `retained` | array of `RetainedStatement` | | | file level statements outside the grammar | empty |
+
+### ContingencyCase
+
+Every action of one case applies together.
+
+Schema definition: `ContingencyCase`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `name` | string | | | nonempty | required |
+| `actions` | array of `ContingencyAction` | | | in file order | empty |
+
+`ContingencyAction` is one tagged object, keyed by `kind`. `open_branch` names
+`from`, `to`, and `circuit`; `open_three_winding` names `buses`, three bus
+identifiers, and `circuit`. `remove_machine` and `add_machine` name `bus` and
+`id`. `remove_shunt` and `remove_load` name `bus` and an optional `id`, and a
+statement with no id names every such element at the bus.
+`remove_switched_shunt` and `disconnect_bus` name `bus` alone. `change_load`
+and `change_generation` name `bus` and a `Change`. `unrecognized` carries the
+original `text`, and a nested dispatch block keeps all of its lines joined
+with newlines.
+
+Schema definition: `Change`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `op` | token `increase`, `decrease`, or `set` | | | whether the amount adds to, subtracts from, or replaces the present value | required |
+| `amount` | float | MW or percent, as `unit` says | positive is the stated magnitude | finite | required |
+| `unit` | token `mw` or `percent` | | | | required |
+
+### AutomaticSpec
+
+One specification expands into one case per element of a subsystem.
+
+Schema definition: `AutomaticSpec`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `order` | token `single` or `double` | | | how many elements one case outages | required |
+| `target` | token `branch`, `unit`, or `tie` | | | the element family the expansion draws from; `tie` is the branches crossing the subsystem border | required |
+| `subsystem` | string | | | names a subsystem of the `.sub` file the expansion runs against | required |
+| `low_voltage_3w` | boolean | | | `3WLOWVOLTAGE`: a branch expansion also takes the low voltage winding of a three winding transformer | required |
+
+Schema definition: `SkipRule`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `from` | id | | | one terminal of the excluded branch | required |
+| `to` | id | | | the other terminal | required |
+| `circuit` | string | | | the branch circuit id | required |
+
+### RetainedStatement
+
+A statement outside the grammar of its file, kept as the source wrote it. The
+three contingency analysis files share this record.
+
+Schema definition: `RetainedStatement`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `line` | integer | | | the 1-based source line the statement was read from; at least 1 | required |
+| `text` | string | | | the line, with its surrounding whitespace dropped | required |
+| `after_end` | boolean | | | the statement follows the file level `END`, and the `.con` writer states it after the `END` it writes; the `.sub` and `.mon` writers state every kept statement before theirs, so it is false there | false |
+
+## powerio.SubsystemSet
+
+One PSS/E subsystem description file (`.sub`): the named bus groups a
+contingency description file and a monitored element file draw on.
+`Subsystem::select_buses` names the buses of one subsystem in a network, and
+`SubsystemSet::to_sub` writes the set back.
+
+Schema definition: `SubsystemSet`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `header` | array of string | | | the comment lines ahead of the first statement, as written | empty |
+| `subsystems` | array of `Subsystem` | | | in file order | empty |
+| `retained` | array of `RetainedStatement` | | | file level statements outside the grammar | empty |
+
+### Subsystem
+
+A subsystem is the union of its selector groups.
+
+Schema definition: `Subsystem`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `name` | string | | | nonempty; a `.con` or `.mon` statement names it without case | required |
+| `groups` | array of `SelectorGroup` | | | the implicit group comes first when it has any selector | empty |
+| `retained` | array of `RetainedStatement` | | | statements inside this subsystem, and outside any `JOIN` group, that are outside the grammar | empty |
+
+Schema definition: `SelectorGroup`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `join` | `JoinName` or null | | | how the file stated the group; null is the implicit group, which holds the selectors stated outside any `JOIN` | null |
+| `selectors` | array of `SubsystemSelector` | | | bus sets that intersect across selector types within one group | empty |
+| `retained` | array of `RetainedStatement` | | | lines read while this `JOIN` was open that are outside the grammar; the implicit group holds none | empty |
+
+`JoinName` is one tagged object, keyed by `kind`: `anonymous` has no further
+member and states a `JOIN` with no name, and `named` carries the group `name`.
+Two groups stated `anonymous` are two groups, whose bus sets union.
+
+`SubsystemSelector` is one tagged object, keyed by `kind`. `area`, `zone`, and
+`owner` name an inclusive `from` and `to` number range; `bus` names an
+inclusive range of bus identifiers; `kv_range` names an inclusive base kV band
+whose `lo` is at most its `hi`. A source statement naming one value reads as a
+range whose two ends are equal.
+
+## powerio.MonitoredSet
+
+One PSS/E monitored element file (`.mon`): the branch flows, interface flows,
+and bus voltages a contingency analysis reports on. `MonitoredSet::resolve`
+binds the statements to the rows of a network against a subsystem set, and
+`MonitoredSet::to_mon` writes the set back.
+
+Schema definition: `MonitoredSet`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `header` | array of string | | | the comment lines ahead of the first statement, as written | empty |
+| `statements` | array of `MonitorStatement` | | | in file order | empty |
+| `retained` | array of `RetainedStatement` | | | statements outside the grammar | empty |
+
+`MonitorStatement` is one tagged object, keyed by `kind`.
+`branches_in_subsystem` names a `subsystem` and `low_voltage_3w`, and takes
+every branch with both terminals in it. `ties_from_subsystem` names a
+`subsystem` and takes every branch with exactly one terminal in it.
+`branches` carries the `branches` a `MONITOR BRANCHES` block lists.
+`interface` names the interface `name`,
+an optional `rating_mw`, and the `branches` whose flows sum over it. Both
+carry the block's lines that state no branch as `retained`.
+`voltage_range` names a `scope` and a `vmin` at most its `vmax`, both in per
+unit. `voltage_deviation` names a `scope`, a `down` limit, and an optional
+`up` limit; a source statement naming one value states the downward limit
+alone.
+
+`MonitorScope` is one tagged object, keyed by `kind`: `all_buses` has no
+further member, `subsystem` carries a subsystem `name`, `bus` a `bus`
+identifier, `area`, `zone`, and `owner` a number under their own name, and
+`kv` a base kV value.
+
+Schema definition: `BranchRef`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `from` | id | | | one terminal of the monitored branch | required |
+| `to` | id | | | the other terminal | required |
+| `circuit` | string | | | the branch circuit id; an absent id in the source reads as `1` | required |
+
 ## powerio.OperatingPoint\<N\>
 
 An alternate electrical assignment, possibly partial, over the fixed
@@ -988,6 +1219,9 @@ Schema definition: `StoredQuantity`.
 |---|---|---|---|---|---|
 | `identities` | array of string | | | each names a component of the network; unique; same length as `values` | required |
 | `values` | array of float | the quantity's unit; a flag is 0 or 1 | | | required |
+
+`identities` and `values` carry at most 4,194,304 entries each; see
+[Resource limits](pio-json-schema.md#resource-limits).
 
 An operating point stored inside a collection or an instance omits the
 network, because the enclosing record gives it once.
@@ -1213,6 +1447,18 @@ Schema definition: `McAcOpfInstance`.
 | `constraints` | `MulticonductorActiveConstraints` | | | | required |
 | `initial_point` | `StoredOperatingPointAssignment` or null | | | | null |
 
+### powerio.LinDist3FlowPfInstance
+
+The fixed-dispatch instance carries the same coefficient formulation as the
+OPF type, but its objective is empty and conductor limits are monitored after
+a converged solve rather than enforced as conic constraints.
+
+Schema definition: `LinDist3FlowPfInstance`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `formulation` | `LinDist3FlowOpfInstance` | | | zero objective, fixed generator dispatch, and `conductor_limits` selected as `none` | required |
+
 ### powerio.LinDist3FlowOpfInstance
 
 Schema definition: `LinDist3FlowOpfInstance`.
@@ -1227,7 +1473,7 @@ Schema definition: `LinDist3FlowBuildOptions`.
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
 | `reference_policy` | `auto`, `explicit`, or `source_propagated` | | | selects the fixed coefficient phasors | required |
-| `unsupported` | `reject`, `lower`, `approximate`, or `permissive` | | | only `reject` is implemented; other values fail construction | required |
+| `unsupported` | `reject`, `lower`, `approximate`, or `permissive` | | | selects the audited preparation-policy level | required |
 | `require_neutral_provenance` | bool | | | requires a recorded neutral-Kron projection when true | required |
 
 Schema definition: `MulticonductorActiveConstraints`.
@@ -1463,7 +1709,10 @@ generator. Injections are net injections into the network at a bus,
 positive for generation; branch flows are measured into the branch at the
 named terminal. Each solution says how the calculation ended and what
 residuals the producer reported. `producer` is the producer's free text
-solver identity, or null.
+solver identity, or null. In the DC, AC, SOCWR, multiconductor, and
+LinDist3Flow solutions, a per bus, branch, generator, terminal, source, or
+conductor array carries at most 4,194,304 entries; see
+[Resource limits](pio-json-schema.md#resource-limits).
 
 `Termination` is tagged by `kind`: `converged`, `iteration_limit`,
 `infeasible`, `unbounded`, `failed`, or `not_reported`, for a source that
@@ -1681,6 +1930,37 @@ Schema definition: `LinDist3FlowOpfSolution`.
 | `producer` | string or null | | | | null |
 | `values` | `LinDist3FlowOpfValues` | | | physical primal values | required |
 | `objective` | float | objective units | | | required |
+
+### powerio.LinDist3FlowPfSolution
+
+The value arrays use the same physical axes and SI conventions as the OPF
+solution. Limit checks exist only for a converged point and report retained
+line/contact ratings that the fixed-dispatch problem deliberately did not
+enforce.
+
+Schema definition: `LinDist3FlowPfSolution`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `instance` | `LinDist3FlowPfInstance` | | | | required |
+| `termination` | `Termination` | | | non-converged results have no `limit_checks` | required |
+| `residuals` | `Residuals` | | | | required |
+| `producer` | string or null | | | | null |
+| `values` | `LinDist3FlowOpfValues` | | | physical primal values | required |
+| `limit_checks` | array of `LinDist3FlowLimitCheck` | | | identities name retained line conductors | required |
+
+Schema definition: `LinDist3FlowLimitCheck`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `line` | string | | | retained line identity | required |
+| `conductor` | nonnegative integer | | | position in that line's conductor order | required |
+| `kind` | `line_apparent_power`, `line_current_from`, or `line_current_to` | | | determines whether `value` and `limit` are VA or A | required |
+| `value` | float | VA or A | nonnegative | finite | required |
+| `limit` | float | VA or A | positive | finite | required |
+| `loading_ratio` | float | per unit of limit | nonnegative | equals `value / limit` | required |
+| `overloaded` | bool | | | true exactly when `loading_ratio > 1` | required |
+| `constraint_enforced` | bool | | | always false for fixed dispatch | required |
 
 Schema definition: `LinDist3FlowOpfValues`.
 

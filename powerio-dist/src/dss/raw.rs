@@ -1591,7 +1591,7 @@ mod tests {
         assert_eq!(l.get("length").unwrap().text, "0.3");
         assert_eq!(l.get("phases").unwrap().text, "2");
         assert_eq!(l.get("r1").unwrap().text, "0.1");
-        assert!(raw.warnings.is_empty());
+        assert_eq!(raw.warnings, [] as [std::string::String; 0]);
     }
 
     #[test]
@@ -1656,7 +1656,7 @@ mod tests {
         let raw = parse("New Line.l1 bus1=a\nLine.l1.Len=2.5");
         let l = raw.find("line", "l1").unwrap();
         assert_eq!(l.get("length").unwrap().text, "2.5");
-        assert!(raw.warnings.is_empty());
+        assert_eq!(raw.warnings, [] as [std::string::String; 0]);
     }
 
     #[test]
@@ -1664,7 +1664,7 @@ mod tests {
         let raw = parse("New Line.l1 bus1=a bus2=b\nlength=2.5");
         let l = raw.find("line", "l1").unwrap();
         assert_eq!(l.get("length").unwrap().text, "2.5");
-        assert!(raw.warnings.is_empty());
+        assert_eq!(raw.warnings, [] as [std::string::String; 0]);
     }
 
     #[test]
@@ -1676,7 +1676,7 @@ mod tests {
         assert_eq!(l1.get("length").unwrap().text, "7");
         assert_eq!(l1.get("phases").unwrap().text, "2");
         assert!(raw.find("line", "l2").unwrap().get("length").is_none());
-        assert!(raw.warnings.is_empty());
+        assert_eq!(raw.warnings, [] as [std::string::String; 0]);
     }
 
     #[test]
@@ -2005,7 +2005,7 @@ mod tests {
             &mut loader,
         );
         assert!(raw.find("linecode", "lc1").is_some());
-        assert!(raw.warnings.is_empty());
+        assert_eq!(raw.warnings, [] as [std::string::String; 0]);
     }
 
     /// A loader that serves `text` for every path, gives up at `give_up`

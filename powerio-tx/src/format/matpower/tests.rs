@@ -231,7 +231,7 @@ mpc.storage = [
 #[test]
 fn absent_storage_is_empty() {
     let net = parse_mpc(CASE_TINY).expect("parse tiny");
-    assert!(net.storage().is_empty());
+    assert_eq!(net.storage().as_slice(), []);
 }
 
 #[test]

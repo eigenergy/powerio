@@ -8,7 +8,7 @@ history, and extensions. A current document begins like this:
 {
   "schema": "pio-ir",
   "version": 2,
-  "producer": { "name": "powerio", "version": "0.11.1" },
+  "producer": { "name": "powerio", "version": "0.11.3" },
   "value": {
     "type": "powerio.BalancedNetwork",
     "data": {}
@@ -18,7 +18,7 @@ history, and extensions. A current document begins like this:
 
 Use `serialize` to produce it and `deserialize` to read it. PowerIO IR is not
 one of the grid exchange formats. MATPOWER, PSS/E, XIIDM, CGMES, OpenDSS, PMD
-JSON, BMOPF, and the other formats in the format registry exist to exchange
+JSON, BMOPF, distribution CIM, and the other formats in the format registry exist to exchange
 power system data with other tools, and they enter through `parse` and leave
 through `emit`. PowerIO IR preserves PowerIO types and module records instead,
 and it is deliberately left out of grid exchange format discovery. Use it when
@@ -26,8 +26,8 @@ both sides consume PowerIO values, including calculation instances, solutions,
 time series, and scenario sets.
 
 The generated JSON Schema is checked in at
-`docs/schema/pio-ir/2/0.11.1/schema.json` and served from
-`https://powerio.dev/schema/pio-ir/2/0.11.1/schema.json`. That schema, the
+`docs/schema/pio-ir/2/0.11.6/schema.json` and served from
+`https://powerio.dev/schema/pio-ir/2/0.11.6/schema.json`. That schema, the
 serializer, and the deserializer are all tested from the same Rust types.
 `docs/schema/README.md` lists the earlier `pio-package` and
 `powerio.module` documents as one history under `pio-ir`.
@@ -117,29 +117,99 @@ records, extension data, collection lengths, ID lengths, and nested value
 depth. Hitting a limit produces a structured PowerIO diagnostic rather than
 an allocation failure or a truncated result.
 
-## Generations
+Stored collections have two entry bounds. Operating point and solution
+vectors follow the network's dimensions: each `StoredQuantity`'s `identities`
+and `values`, and every bus, branch, generator, terminal, source, and
+conductor array of a DC, AC, SOCWR, multiconductor, or LinDist3Flow solution,
+optional arrays included, carries at most 4,194,304 (2^22) entries. A
+multiconductor solution has one entry per bus terminal, so solutions over up
+to 4,194,304 bus terminals round trip. The reader refuses the first entry
+past the bound with `READ.MODULE.INVALID`, and `serialize` refuses a longer
+vector with `EMIT.MODULE.RECORD_CAP` rather than write a document the reader
+refuses. Time series and scenario sets carry at most 65,536 entries each, as
+do the three winding transformer power records of a solution. A stored
+operating point names at most 64 quantities.
 
-The integer `version` is the generation of the serialized representation. It
+These bounds count entries, not bytes. Byte limits apply when PowerIO reads
+a source. A file named by path, whether a raw format (including BMOPF) or
+stored IR, may hold up to 1 GiB; `POWERIO_MAX_PRIMARY_BYTES` sets a different
+positive decimal byte count. The files a case references and the files of a
+directory input share a cumulative limit, `POWERIO_MAX_REFERENCED_BYTES`, also
+1 GiB by default. Both settings come from the process environment. The MCP
+server sets both to 256 MiB when its operator leaves them unset; see
+[The MCP server](cli-mcp.md#the-mcp-server).
+
+CGMES XML counts against the referenced limit wherever it comes from. The
+profiles of one CGMES parse, read from files or expanded from ZIP archives,
+total at most `POWERIO_MAX_REFERENCED_BYTES`, and a CGMES XML document or
+archive larger than that limit is refused whether it comes from a path or
+from caller-owned memory. A CGMES file above 1 GiB named by path therefore
+needs both settings raised. An archive may hold at most 4,096 entries, a
+count read from its end records before the archive is indexed, and at most
+eight end records. Entries may not share a name or any bytes, and each must
+lie inside the archive's entry data. Each file entry may declare at most the
+referenced limit and at most 200 times its compressed size. An XML entry may
+declare no more than the budget the profiles before it left, and it must
+inflate to exactly the size it declares. Nested archives, symbolic link
+entries, unsafe entry names, document type and entity declarations, and
+invalid UTF-8 are refused. These archive checks are fixed; only the byte limit
+is configurable.
+
+Some readers keep fixed limits below these defaults. An XIIDM or JIIDM
+document holds at most 64 MiB, from a path or from memory. An OpenDSS case
+follows at most 4,096 includes and stops following them once they have loaded
+64 MiB of script text, counting a file again each time the case runs it.
+
+Python's `parse_display`, kept only for 0.11 compatibility, reads a display
+file whole without these limits; `parse` reads the same `.pwd` file under them.
+
+Apart from CGMES, caller-owned memory has no whole-document limit; format and
+record limits still apply. Stored solutions embed their instance and network,
+so they can exceed the raw input's size. Consumers should check the actual
+serialized byte length against their reload limit before saving, and choose a
+smaller limit for memory-constrained applications. The byte limits do not
+bound process memory.
+
+## IR versions
+
+The integer `version` is the IR version of the serialized representation. It
 is a property of the document alone, separate from the Rust memory layout,
 the PowerIO release, any grid exchange format, and the C ABI, and it changes
 only when an existing representation changes incompatibly. `producer.version` records the release
 that wrote the document; the reader reports it and ignores it when deciding
 compatibility.
 
-PowerIO 0.11.1 keeps generation 2. `powerio::IR_VERSION` and
+PowerIO 0.11.6 keeps IR version 2. `powerio::IR_VERSION` and
 `powerio::IR_MIN_VERSION` are both `2`. Additive structural types do not change
-the generation: older readers continue to accept existing types and reject
-types they do not implement. An incompatible change to an existing record's
-representation or meaning requires a separate generation and release decision.
+the IR version: older readers continue to accept existing types and reject
+types they do not implement. A list of allowed names can gain a name the same
+way; an older reader rejects a document that uses the new name. An incompatible change to an existing record's
+representation or meaning requires a version bump and a release decision.
 
 Schema snapshots describe the structural types available in a release.
-`pio-ir/2/schema.json` is the frozen 0.11.0 catalog;
-`pio-ir/2/0.11.1/schema.json` adds the LinDist3Flow instance and solution types.
+`pio-ir/2/schema.json` is the frozen 0.11.0 catalog,
+`pio-ir/2/0.11.1/schema.json` adds the LinDist3Flow OPF instance and solution
+types, `pio-ir/2/0.11.3/schema.json` adds the three PSS/E contingency
+analysis files, `pio-ir/2/0.11.4/schema.json` adds the fixed-dispatch
+LinDist3Flow instance and solution types, and `pio-ir/2/0.11.6/schema.json`
+adds `cim-dist` to the distribution source formats.
 The release in that path identifies the snapshot, not another document version.
 Patch releases without catalog changes can reuse the same snapshot.
 A refused document is reported with the schema name,
-generation, and producer it claims and the remedy: a later generation needs a
-newer PowerIO, and an earlier schema name or generation has to be regenerated
+IR version, and producer it claims and the remedy: a later IR version needs a
+newer PowerIO, and an earlier schema name or IR version has to be regenerated
 from its source data.
 [`docs/schema/README.md`](https://github.com/eigenergy/powerio/blob/main/docs/schema/README.md)
-is the ledger of every generation and the archive of every published schema.
+is the ledger of every IR version and the archive of every published schema.
+
+Two other intermediate representations answer the versioning question
+differently. LLVM bitcode carries no explicit version number, and a newer
+reader upgrades any older bitcode on load; there is no forward compatibility.
+MLIR bytecode carries an explicit version number with per-dialect upgrade
+hooks. PowerIO IR carries an explicit version integer and reads the window
+from `IR_MIN_VERSION` through `IR_VERSION`, both 2 in 0.11.3, so a version 1
+document from 0.10.x is refused rather than upgraded, and an upgrade path for
+those documents would be a later addition. Structural types are added without
+a version bump, and a type this build does not implement is rejected. The
+catalog snapshots under `pio-ir/2/<release>/` are the type catalogs of one IR
+version, published when a release adds types; they are not versions.

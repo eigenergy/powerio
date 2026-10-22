@@ -416,7 +416,7 @@ fn an_unreadable_powerio_ir_generation_is_refused_with_the_remedy() {
     assert!(error.contains(&format!("version {newer}")), "{error}");
     assert!(error.contains("upgrade PowerIO"), "{error}");
 
-    // A non-integer spelling is not a released PowerIO IR generation.
+    // A non-integer spelling is not a released PowerIO IR version.
     let error = deserialize_module_text(&header("0.11.0".into()))
         .unwrap_err()
         .to_string();

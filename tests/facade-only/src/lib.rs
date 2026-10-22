@@ -30,6 +30,10 @@ mod names_resolve_through_the_facade {
     type _DcOpfInstance = powerio::DcOpfInstance;
     type _DcOpfSolution = powerio::DcOpfSolution;
     type _MulticonductorNetwork = powerio::MulticonductorNetwork;
+    type _ContingencySet = powerio::ContingencySet;
+    type _ContingencyResolution = powerio::ContingencyResolution;
+    type _SubsystemSet = powerio::SubsystemSet;
+    type _MonitoredSet = powerio::MonitoredSet;
     type _GeoLayer = powerio::GeoLayer;
     type _GeoParsed = powerio::GeoParsed;
     type _PwdDisplay = powerio::PwdDisplay;
@@ -88,7 +92,7 @@ mod tests {
                 module.value().type_name()
             );
         };
-        assert!(!network.buses().is_empty());
+        assert_ne!(network.buses().as_slice(), []);
 
         let serialized =
             powerio::serialize(&module, powerio::Destination::memory("module").unwrap()).unwrap();

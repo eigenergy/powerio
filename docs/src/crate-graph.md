@@ -8,7 +8,10 @@ network crates do not depend on each other.
 powerio-core          Source, FormatId, Diagnostic, Error, PioModule<T>,
                       TimePoint, TimeSeries<T>, ScenarioSet<T>, Destination
 ├── powerio-tx        BalancedNetwork and the balanced readers and writers
-└── powerio-dist      MulticonductorNetwork and the OpenDSS, PMD, and BMOPF converters
+└── powerio-dist      MulticonductorNetwork and the OpenDSS, PMD, BMOPF, and CIM converters
+
+powerio-sincal        internal model-neutral SINCAL transport and schema validation;
+                      depends on core; tx uses it for its explicit balanced SINCAL adapter
 
 powerio-prob          operating points, updates, the seven instances, the eight
                       solutions, and GO Challenge 3, OPFData, and BMOPF assembly;
@@ -16,7 +19,7 @@ powerio-prob          operating points, updates, the seven instances, the eight
 powerio-matrix        sparse matrices and graph data for both network families;
                       depends on core, tx, dist, and prob
 powerio               PioValue, parse, emit, serialize, deserialize, and the
-                      re-exports; depends on core, tx, dist, and prob, and on
+                      re-exports; depends on core, tx, dist, prob, sincal, and on
                       matrix behind the `matrix` feature
 powerio-cli, powerio-capi, powerio-py, powerio-wasm    over the facade
 ```
@@ -30,6 +33,19 @@ balanced model nor the matrix stack. `powerio-prob` does not depend on
 matrix crate without creating a cycle. CI checks these edges against
 `cargo metadata`, so the map below and the manifests cannot drift apart.
 
+The internal `powerio-sincal` crate shares acquisition and retained archive
+bytes and bounded structural schema validation without introducing a dependency
+between the network crates. It owns no electrical model, profile selection,
+mapper or solver. The balanced SINCAL profile is exposed by `powerio-tx`; the conductor-resolved
+adapter is being completed in `powerio-dist`. Both depend on this shared crate,
+never on each other. The facade uses the shared crate to package experimental
+fresh SQLite output; electrical validation still belongs to each backend.
+Shared structural admission does not imply that a family
+adapter supports all of the admitted schemas or electrical modes.
+The architecture gate also rejects cross-dependencies between the two network
+crates and any internal workspace dependency of `powerio-sincal` other than
+`powerio-core`, even if a proposed diagram draws such an edge.
+
 ## Components
 
 ![The PowerIO component map: powerio-core at the bottom; powerio-tx and powerio-dist as independent siblings above it; powerio-prob over both networks; powerio-matrix over the networks and prob; the powerio facade over the component crates with an optional matrix feature edge; powerio-cli, powerio-capi, powerio-py, and powerio-wasm over the facade; solvers consume instances from powerio-prob and the GridFM pipeline reads Parquet datasets from powerio-matrix.](assets/architecture.svg)
@@ -41,7 +57,7 @@ stay outside with them.
 
 ## Data flow
 
-![The PowerIO data flow: a Source of named immutable bytes enters parse, which produces a PioModule holding the typed value, retained source, diagnostics, and history; time series and scenario sets expose owner rooted typed entries through indexing and iteration; to_balanced derives a balanced module from a multiconductor module with reported assumptions and losses; calc operations return matrices and vectors with element mappings; emit produces grid exchange formats; serialize and deserialize connect the module to PowerIO IR generation 2.](assets/dataflow.svg)
+![The PowerIO data flow: a Source of named immutable bytes enters parse, which produces a PioModule holding the typed value, retained source, diagnostics, and history; time series and scenario sets expose owner rooted typed entries through indexing and iteration; to_balanced derives a balanced module from a multiconductor module with reported assumptions and losses; calc operations return matrices and vectors with element mappings; emit produces grid exchange formats; serialize and deserialize connect the module to PowerIO IR version 2.](assets/dataflow.svg)
 
 Every arrow out of the module is an explicit call that returns diagnostics;
 nothing is transformed as a side effect of something else.

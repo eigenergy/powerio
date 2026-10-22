@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// A schema version fixes which element classes exist and where they live.
 /// `0.1.0` declares the ten element classes and four transformer subtypes the
-/// task force accepts today, sets `additionalProperties: false` on every
+/// historical baseline contains, sets `additionalProperties: false` on every
 /// object, and permits free-form `extras` and `meta.provenance`; the classes outside it
 /// travel there. `0.2.0` declares those classes at the top level and gives the
 /// transformer taps, winding neutral impedance, and no load admittance their
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum BmopfSchemaVersion {
-    /// Schema 0.1.0, the version the task force accepts.
+    /// Schema 0.1.0, the historical baseline.
     Bmopf010,
     /// Schema 0.2.0, the proposal in
     /// <https://github.com/distribution-system-opt/dsopt-schema>. The default
@@ -32,12 +32,15 @@ const SCHEMA_ID_010: &str = "https://raw.githubusercontent.com/distribution-syst
 const SCHEMA_ID_020: &str = "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json";
 
 /// Immutable revision of the proposed BMOPF 0.2.0 schema.
-pub const BMOPF_PROPOSAL_COMMIT: &str = "fe8671a74d2fc1a15a499c5b1f66cbb80fc22e12";
+pub const BMOPF_PROPOSAL_COMMIT: &str = "664b494f2ee31ee76f8f78e7852cdb1f1c9a8e7d";
 /// SHA-256 of the exact UTF-8 schema document at the pinned revision.
 pub const BMOPF_PROPOSAL_SHA256: &str =
     "74d6c6de3637d52e42a26c4cb0584f51df70d69f360b236cf5e23afaf7669462";
 /// Immutable retrieval location, distinct from the schema's canonical `$id`.
-pub const BMOPF_PROPOSAL_URL: &str = "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/fe8671a74d2fc1a15a499c5b1f66cbb80fc22e12/schema/bmopf/0.2.0/bmopf.schema.json";
+pub const BMOPF_PROPOSAL_URL: &str = "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/664b494f2ee31ee76f8f78e7852cdb1f1c9a8e7d/schema/bmopf/0.2.0/bmopf.schema.json";
+
+const ARCHIVE_URL_010: &str = "https://raw.githubusercontent.com/eigenergy/powerio/5234df55cd13ad31455697cffbdc16ca50662667/powerio-dist/schemas/bmopf/0.1.0/bmopf.schema.json";
+const ARCHIVE_URL_020: &str = "https://raw.githubusercontent.com/eigenergy/powerio/5234df55cd13ad31455697cffbdc16ca50662667/powerio-dist/schemas/bmopf/0.2.0/bmopf.schema.json";
 
 impl BmopfSchemaVersion {
     /// The schema version string, as `meta.schema_version` states it.
@@ -58,12 +61,12 @@ impl BmopfSchemaVersion {
         }
     }
 
-    /// Retrieval URL for fresh output. Proposal output pins an immutable commit.
+    /// Retrieval URL for the exact schema archived by PowerIO.
     #[must_use]
     pub const fn retrieval_url(self) -> &'static str {
         match self {
-            Self::Bmopf010 => SCHEMA_ID_010,
-            Self::Bmopf020 => BMOPF_PROPOSAL_URL,
+            Self::Bmopf010 => ARCHIVE_URL_010,
+            Self::Bmopf020 => ARCHIVE_URL_020,
         }
     }
 

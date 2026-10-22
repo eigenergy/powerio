@@ -10,13 +10,18 @@ structured `Err`, with no panic and no undefined behavior.
 | `pwb`, `pwd` | raw bytes for the PowerWorld binary decoders |
 | `json_classify` | arbitrary bytes for the `.json` classifier and its C entry point; every answer must be a documented family, since a file picker dispatches on it |
 | `stored_module` | the PowerIO IR reader; a document that deserializes must serialize and deserialize again |
+| `cgmes`, `cgmes_zip`, `ucte`, `ieee_cdf` | CGMES XML, CGMES ZIP acquisition, UCTE text, and IEEE Common Data Format text |
+| `rawx` | PSS/E RAWX 35 JSON tables; accepted inputs must survive IR serialization/deserialization, and successful fresh RAWX output must parse again |
+| `psse_dyr` | bounded PSS/E DYR dynamic-model record parsing with exact-source preservation |
 | `dss`, `pmd_json` | the distribution readers, which also write the parsed network back and project its graph, so a count cap that a consumer sizes an allocation from is exercised on both sides |
 | `dist_classify` | the distribution `.json` classifier, which runs before any reader cap applies, and the reader and writers it names |
 | `dss_includes`, `dss_includes_fs` | OpenDSS include resolution over in-memory buffers and over a real filesystem tree with an escaping symbolic link |
 
 The JSON formats that ride on serde_json (PowerModels, egret, pandapower)
-have no hand written tokenizer, so between them the harnesses cover every
-hand rolled reader.
+use serde_json for tokenization. The table lists the readers with dedicated
+fuzz targets; other readers rely on their unit and integration tests.
+
+The `rawx` target includes small valid corpus seeds under `corpus/rawx/`. They let the short CI smoke pass reach RAWX's field-array and row-shape handling instead of spending its budget only on invalid JSON.
 
 You need nightly and [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz):
 

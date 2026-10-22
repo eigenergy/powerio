@@ -62,7 +62,7 @@ fn a_memory_write_returns_the_named_artifact() {
     };
     assert_eq!(artifacts.len(), 1);
     assert_eq!(artifacts[0].name().as_str(), "case9.m");
-    assert!(!artifacts[0].bytes().is_empty());
+    assert_ne!(artifacts[0].bytes(), [] as [u8; 0]);
 }
 
 #[test]

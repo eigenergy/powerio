@@ -383,7 +383,7 @@ mod tests {
         assert_eq!(params("a=1 ! trailing").len(), 1);
         assert_eq!(params("a=1 // trailing").len(), 1);
         assert_eq!(params("a=1!glued").len(), 1);
-        assert!(params("! whole line").first().unwrap().1.is_empty());
+        assert_eq!(params("! whole line").first().unwrap().1, "");
     }
 
     #[test]
@@ -459,7 +459,7 @@ mod tests {
         assert_eq!(b.nodes, vec![1, 2, 3, 0]);
         let plain = Value::new("sourcebus").to_bus_spec();
         assert_eq!(plain.name, "sourcebus");
-        assert!(plain.nodes.is_empty());
+        assert_eq!(plain.nodes, [] as [i32; 0]);
         let bad = Value::new("b.1.x").to_bus_spec();
         assert_eq!(bad.nodes, vec![1, -1]);
     }

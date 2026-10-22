@@ -1,11 +1,14 @@
 use powerio_dist::{
-    Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoadVoltageModel,
-    DistSwitch, MulticonductorNetwork, NeutralKronOptions, VoltageSource, neutral_kron_reduce,
+    Configuration, DistBus, DistCapacitor, DistGenerator, DistIbr, DistLine, DistLineCode,
+    DistLoadVoltageModel, DistSwitch, IbrPrimeMover, IbrTopology,
+    LinDist3FlowPreparationActionKind, MulticonductorNetwork, NeutralKronOptions, VoltageSource,
+    neutral_kron_reduce,
 };
 use powerio_prob::{
-    LinDist3FlowBuildOptions, LinDist3FlowOpfInstance, LinDist3FlowReferencePolicy,
-    LinDist3FlowReferenceProvenance, McAcOpfInstance, MulticonductorOperatingPointBuilder,
-    Objective, check_lindist3flow_applicability,
+    LinDist3FlowBuildOptions, LinDist3FlowOpfInstance, LinDist3FlowPfInstance,
+    LinDist3FlowReferencePolicy, LinDist3FlowReferenceProvenance, LinDist3FlowUnsupported,
+    McAcOpfInstance, MulticonductorOperatingPointBuilder, Objective,
+    check_lindist3flow_applicability,
 };
 
 fn terminals(names: &[&str]) -> Vec<String> {
@@ -62,7 +65,7 @@ fn three_phase_network(reverse_line: bool) -> MulticonductorNetwork {
     network
 }
 
-fn one_phase_mesh() -> MulticonductorNetwork {
+fn one_phase_mesh_with_lines(lines: &[(&str, &str, &str)]) -> MulticonductorNetwork {
     let terminal = terminals(&["1"]);
     let mut network = MulticonductorNetwork::named("mesh");
     for bus in ["a", "b", "c"] {
@@ -73,7 +76,7 @@ fn one_phase_mesh() -> MulticonductorNetwork {
     network
         .line_codes_mut()
         .push(DistLineCode::new("one", vec![vec![0.1]], vec![vec![0.1]]));
-    for (name, from, to) in [("ab", "a", "b"), ("bc", "b", "c"), ("ca", "c", "a")] {
+    for &(name, from, to) in lines {
         network.lines_mut().push(DistLine::new(
             name,
             from,
@@ -92,6 +95,10 @@ fn one_phase_mesh() -> MulticonductorNetwork {
         vec![0.0],
     ));
     network
+}
+
+fn one_phase_mesh() -> MulticonductorNetwork {
+    one_phase_mesh_with_lines(&[("ab", "a", "b"), ("bc", "b", "c"), ("ca", "c", "a")])
 }
 
 fn four_wire_network() -> MulticonductorNetwork {
@@ -231,17 +238,127 @@ fn kron_reduced_network_satisfies_the_optional_provenance_gate() {
 }
 
 #[test]
-fn a_conductor_cycle_is_reported_before_instance_construction() {
-    let base = McAcOpfInstance::from_network(one_phase_mesh()).unwrap();
-    let report = check_lindist3flow_applicability(&base, LinDist3FlowBuildOptions::default());
+fn a_conductor_cycle_is_retained_and_reported_as_an_approximation() {
+    let instance = LinDist3FlowOpfInstance::from_network(
+        one_phase_mesh(),
+        LinDist3FlowBuildOptions::default(),
+    )
+    .unwrap();
 
-    assert!(!report.is_applicable());
-    assert!(report.roots.is_empty());
+    assert!(instance.applicability().is_applicable());
+    assert!(instance.topology().meshed);
+    assert_eq!(instance.topology().conductors.len(), 3);
+    assert_eq!(instance.topology().roots.len(), 1);
+    assert_eq!(instance.reference().voltages.len(), 3);
     assert!(
-        report
+        instance
+            .applicability()
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code() == "BUILD.LINDIST3FLOW.TOPOLOGY_INVALID")
+            .any(|diagnostic| diagnostic.code() == "BUILD.LINDIST3FLOW.MESH_APPROXIMATION")
+    );
+}
+
+#[test]
+fn mesh_orientation_is_stable_under_line_reversal_and_reordering() {
+    let forward = LinDist3FlowOpfInstance::from_network(
+        one_phase_mesh_with_lines(&[("ab", "a", "b"), ("bc", "b", "c"), ("ca", "c", "a")]),
+        LinDist3FlowBuildOptions::default(),
+    )
+    .unwrap();
+    let changed = LinDist3FlowOpfInstance::from_network(
+        one_phase_mesh_with_lines(&[("ca", "a", "c"), ("bc", "c", "b"), ("ab", "b", "a")]),
+        LinDist3FlowBuildOptions::default(),
+    )
+    .unwrap();
+
+    let signature = |instance: &LinDist3FlowOpfInstance| {
+        let mut edges = instance
+            .topology()
+            .conductors
+            .iter()
+            .map(|edge| {
+                (
+                    edge.line.clone(),
+                    edge.parent.bus.clone(),
+                    edge.child.bus.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        edges.sort();
+        edges
+    };
+    assert_eq!(signature(&forward), signature(&changed));
+}
+
+#[test]
+fn single_phase_lines_on_different_phases_are_not_a_mesh() {
+    let phases = terminals(&["1", "2"]);
+    let mut network = MulticonductorNetwork::named("split-phase");
+    for bus in ["source", "load"] {
+        network.buses_mut().push(DistBus::new(bus, phases.clone()));
+    }
+    network
+        .line_codes_mut()
+        .push(DistLineCode::new("one", vec![vec![0.1]], vec![vec![0.1]]));
+    for phase in ["1", "2"] {
+        network.lines_mut().push(DistLine::new(
+            format!("phase-{phase}"),
+            "source",
+            "load",
+            terminals(&[phase]),
+            terminals(&[phase]),
+            "one",
+            1.0,
+        ));
+    }
+    network.sources_mut().push(VoltageSource::new(
+        "grid",
+        "source",
+        phases,
+        vec![230.0; 2],
+        vec![0.0, -2.0 * std::f64::consts::PI / 3.0],
+    ));
+
+    // The two lines join the same buses but no conductor twice, so the
+    // conductor graph is a forest.
+    let instance =
+        LinDist3FlowOpfInstance::from_network(network, LinDist3FlowBuildOptions::default())
+            .unwrap();
+    assert!(!instance.topology().meshed);
+    assert_eq!(instance.topology().conductors.len(), 2);
+    assert!(
+        instance
+            .applicability()
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code() != "BUILD.LINDIST3FLOW.MESH_APPROXIMATION")
+    );
+}
+
+#[test]
+fn parallel_lines_remain_distinct() {
+    let instance = LinDist3FlowOpfInstance::from_network(
+        one_phase_mesh_with_lines(&[
+            ("first", "a", "b"),
+            ("second", "a", "b"),
+            ("tail", "b", "c"),
+        ]),
+        LinDist3FlowBuildOptions::default(),
+    )
+    .unwrap();
+
+    assert!(instance.topology().meshed);
+    assert_eq!(instance.topology().conductors.len(), 3);
+    assert_eq!(
+        instance
+            .topology()
+            .conductors
+            .iter()
+            .filter(|edge| edge.line != "tail")
+            .map(|edge| edge.line.as_str())
+            .collect::<Vec<_>>(),
+        ["first", "second"]
     );
 }
 
@@ -328,6 +445,95 @@ fn strict_slice_reports_unsupported_components_and_load_models() {
             })
             .count(),
         2
+    );
+}
+
+#[test]
+fn lower_policy_prepares_static_switches_and_capacitors_without_mutating_source() {
+    let mut network = three_phase_network(false);
+    let mut switch = DistSwitch::new(
+        "tie",
+        "source",
+        "load",
+        terminals(&["1"]),
+        terminals(&["1"]),
+        false,
+    );
+    switch.i_max = Some(vec![100.0]);
+    network.switches_mut().push(switch);
+    network.capacitors_mut().push(DistCapacitor::new(
+        "bank",
+        "load",
+        terminals(&["1"]),
+        Configuration::Wye,
+        1_000.0,
+        230.0,
+    ));
+    let options =
+        LinDist3FlowBuildOptions::default().with_unsupported(LinDist3FlowUnsupported::Lower);
+    let instance = LinDist3FlowOpfInstance::from_network(network, options).unwrap();
+
+    assert_eq!(instance.source_network().switches().len(), 1);
+    assert_eq!(instance.source_network().capacitors().len(), 1);
+    assert_eq!(instance.network().switches().as_slice(), []);
+    assert_eq!(instance.network().capacitors().as_slice(), []);
+    assert!(instance.applicability().lowered);
+    assert!(
+        instance.preparation().actions.iter().any(|action| {
+            action.kind == LinDist3FlowPreparationActionKind::ClosedSwitchLowered
+        })
+    );
+    assert!(
+        instance
+            .preparation()
+            .actions
+            .iter()
+            .any(|action| { action.kind == LinDist3FlowPreparationActionKind::CapacitorLowered })
+    );
+}
+
+#[test]
+fn approximate_policy_prepares_current_loads_and_static_ibrs() {
+    let mut network = three_phase_network(false);
+    let mut load = powerio_dist::DistLoad::new(
+        "demand",
+        "load",
+        terminals(&["1"]),
+        Configuration::Wye,
+        vec![100.0],
+        vec![20.0],
+    );
+    load.voltage_model = DistLoadVoltageModel::ConstantCurrent { v_nom: vec![230.0] };
+    network.loads_mut().push(load);
+    let mut ibr = DistIbr::new(
+        "pv",
+        "load",
+        terminals(&["2"]),
+        IbrTopology::SinglePhase,
+        IbrPrimeMover::Pv,
+        vec![500.0],
+    );
+    ibr.p_avail = Some(400.0);
+    network.ibrs_mut().push(ibr);
+    let options =
+        LinDist3FlowBuildOptions::default().with_unsupported(LinDist3FlowUnsupported::Approximate);
+    let instance = LinDist3FlowOpfInstance::from_network(network, options).unwrap();
+
+    assert_eq!(instance.network().ibrs().as_slice(), []);
+    assert_eq!(instance.network().generators().len(), 1);
+    assert!(
+        instance
+            .preparation()
+            .actions
+            .iter()
+            .any(|action| { action.kind == LinDist3FlowPreparationActionKind::LoadApproximated })
+    );
+    assert!(
+        instance
+            .preparation()
+            .actions
+            .iter()
+            .any(|action| { action.kind == LinDist3FlowPreparationActionKind::IbrApproximated })
     );
 }
 
@@ -419,5 +625,65 @@ fn incomplete_generator_bounds_fail_before_numerical_preparation() {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code() == "BUILD.LINDIST3FLOW.DEVICE_INVALID")
+    );
+}
+
+#[test]
+fn fixed_dispatch_has_zero_objective_and_monitors_conductor_limits() {
+    let mut network = three_phase_network(false);
+    network.lines_mut()[0].i_max = Some(vec![100.0; 3]);
+    network.generators_mut().push(DistGenerator::new(
+        "pv",
+        "load",
+        terminals(&["1", "2", "3"]),
+        Configuration::Wye,
+        vec![100.0; 3],
+        vec![0.0; 3],
+    ));
+    let instance =
+        LinDist3FlowPfInstance::from_network(network, LinDist3FlowBuildOptions::default()).unwrap();
+
+    assert_eq!(
+        instance.formulation().base_instance().objective().terms(),
+        []
+    );
+    assert_eq!(
+        instance
+            .formulation()
+            .base_instance()
+            .constraints()
+            .conductor_limits,
+        powerio_prob::ConstraintSelection::None
+    );
+    assert_eq!(
+        instance
+            .formulation()
+            .base_instance()
+            .constraints()
+            .generator_capability,
+        powerio_prob::ConstraintSelection::All
+    );
+}
+
+#[test]
+fn fixed_dispatch_rejects_a_dispatch_range() {
+    let mut network = three_phase_network(false);
+    let mut generator = DistGenerator::new(
+        "pv",
+        "load",
+        terminals(&["1"]),
+        Configuration::Wye,
+        vec![100.0],
+        vec![0.0],
+    );
+    generator.p_min = Some(vec![0.0]);
+    generator.p_max = Some(vec![200.0]);
+    network.generators_mut().push(generator);
+
+    let error = LinDist3FlowPfInstance::from_network(network, LinDist3FlowBuildOptions::default())
+        .unwrap_err();
+    assert_eq!(
+        error.info().map(|info| info.code),
+        Some("BUILD.LINDIST3FLOW.FIXED_DISPATCH_REQUIRED")
     );
 }

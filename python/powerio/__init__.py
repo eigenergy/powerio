@@ -81,6 +81,7 @@ from ._powerio import (
     UpdateReport,
     __version__,
 )
+from ._sincal import SincalBalancedReadOptions
 
 __all__ = [
     "AcOpfInstance",
@@ -93,8 +94,10 @@ __all__ = [
     "ApparentPower",
     "Artifact",
     "BalancedNetwork",
+    "BusMerge",
     "CalculationUpdate",
     "ComponentId",
+    "ContingencySet",
     "DcOpfInstance",
     "DcOpfSolution",
     "DcPfInstance",
@@ -106,10 +109,13 @@ __all__ = [
     "GeoLayer",
     "LinDist3FlowOpfInstance",
     "LinDist3FlowOpfSolution",
+    "LinDist3FlowPfInstance",
+    "LinDist3FlowPfSolution",
     "McAcOpfInstance",
     "McAcOpfSolution",
     "McAcPfInstance",
     "McAcPfSolution",
+    "MonitoredSet",
     "MulticonductorNetwork",
     "NetworkUpdate",
     "OperatingPoint",
@@ -145,8 +151,10 @@ __all__ = [
     "ScucStartupLimit",
     "ScucTransformerControl",
     "ScucViolationCosts",
+    "SincalBalancedReadOptions",
     "SocwrOpfSolution",
     "SourceSpan",
+    "SubsystemSet",
     "TimePoint",
     "TimeSeries",
     "UpdateChange",
@@ -155,6 +163,8 @@ __all__ = [
     "apply_bus_load_active_power",
     "apply_updates",
     "deserialize",
+    "diagnostic_record",
+    "diagnostic_records",
     "dist",
     "emit",
     "features",
@@ -303,10 +313,12 @@ _BALANCED_DELEGATED_NAMES = frozenset(
         "n_generators",
         "n_hvdc",
         "n_islands",
+        "n_lines",
         "n_loads",
         "n_shunts",
         "n_static_var_compensators",
         "n_storage",
+        "n_substations",
         "n_switches",
         "n_transformers_3w",
         "name",
@@ -323,6 +335,106 @@ _BALANCED_DELEGATED_NAMES = frozenset(
 
 
 @_guard_class
+class BusMerge:
+    """The result of :meth:`BalancedNetwork.merge_buses`.
+
+    ``network`` is the merged network. ``merged_buses`` maps every merged
+    bus to the bus that now carries it, and ``groups`` lists each joined set
+    as ``{"survivor", "members"}``. ``removed_branches`` and
+    ``removed_switches`` describe every element the merge removed: its source
+    ``row``, ``id``, ``from_id`` and ``to_id`` buses, ``survivor``, ``reason``
+    (``"zero_impedance"``, ``"closed_switch"``, or ``"shorted"``), status, and
+    ratings. ``branch_rows`` and ``switch_rows`` map each source row to its
+    merged row, or ``None`` when removed, and ``charging_shunts`` lists the
+    merged shunt rows that hold removed branches' equivalent admittances. ``diagnostics`` holds the merge's
+    findings, which the merged network's module carries as well.
+    """
+
+    def __init__(self, inner: "_powerio._BusMerge"):
+        self._inner = inner
+
+    def __repr__(self) -> str:
+        return repr(self._inner)
+
+    @property
+    def network(self) -> "BalancedNetwork":
+        return BalancedNetwork(self._inner.network)
+
+    @property
+    def rule(self) -> str:
+        return self._inner.rule
+
+    @property
+    def merged_buses(self) -> dict[int, int]:
+        return self._inner.merged_buses
+
+    @property
+    def groups(self) -> list[dict[str, Any]]:
+        return self._inner.groups
+
+    @property
+    def removed_branches(self) -> list[dict[str, Any]]:
+        return self._inner.removed_branches
+
+    @property
+    def removed_switches(self) -> list[dict[str, Any]]:
+        return self._inner.removed_switches
+
+    @property
+    def branch_rows(self) -> list[Optional[int]]:
+        return self._inner.branch_rows
+
+    @property
+    def switch_rows(self) -> list[Optional[int]]:
+        return self._inner.switch_rows
+
+    @property
+    def charging_shunts(self) -> list[int]:
+        return self._inner.charging_shunts
+
+    @property
+    def diagnostics(self) -> list[Diagnostic]:
+        return self._inner.diagnostics
+
+    def survivor(self, bus: int) -> int:
+        """The bus that carries ``bus`` in the merged network."""
+        return self._inner.survivor(bus)
+
+    def calc_removed_flows(
+        self,
+        branch_p_from: Any,
+        branch_p_to: Any,
+        *,
+        generator_p: Any = None,
+        transformer_3w_p: Any = None,
+    ) -> dict[str, Any]:
+        """Recover the active power on every removed element.
+
+        ``branch_p_from`` and ``branch_p_to`` are the power entering each
+        merged network branch at its from and to ends; ``generator_p``
+        replaces the stated generator outputs, and ``transformer_3w_p`` gives
+        the power entering each three winding transformer winding from its
+        bus, three values per transformer. Values are in the network's units
+        (MW for a parsed network). The result has ``branches`` and
+        ``switches``, one ``{"p_from", "method"}`` per removed element in the
+        order of :attr:`removed_branches` and :attr:`removed_switches`, and
+        ``diagnostics``. ``method`` is ``"tree"`` where Kirchhoff's current
+        law fixes the flow, ``"reactance"`` on a loop split by reactance,
+        ``"minimum_norm"`` on a loop of zero reactance elements, and
+        ``"out_of_service"`` for an element that carries none.
+        """
+        return self._inner.calc_removed_flows(
+            [float(p) for p in branch_p_from],
+            [float(p) for p in branch_p_to],
+            generator_p=None
+            if generator_p is None
+            else [float(p) for p in generator_p],
+            transformer_3w_p=None
+            if transformer_3w_p is None
+            else [tuple(float(p) for p in row) for row in transformer_3w_p],
+        )
+
+
 class BalancedNetwork:
     """A parsed balanced power network.
 
@@ -355,12 +467,28 @@ class BalancedNetwork:
             raise AttributeError(
                 f"{type(self).__name__!r} object has no attribute {name!r}"
             )
-        return getattr(self._inner, name)
+        value = getattr(self._inner, name)
+        # A native handle is immutable; scalar counts need no repeated FFI
+        # call. A collection entry update replaces the handle and clears them.
+        if name.startswith("n_"):
+            self.__dict__[name] = value
+        return value
 
     def __repr__(self) -> str:
         # The inner handle's __repr__ already renders the public ``BalancedNetwork(...)``
         # form, so this is a straight delegate.
         return repr(self._inner)
+
+    def component_counts(self) -> dict[str, int]:
+        """Count native lines, generators, loads, and substations.
+
+        Lines exclude transformer branches. Loads include equivalent injections
+        represented as loads. Substations count the source hierarchy, or zero
+        when the format supplies no hierarchy. No Python table rows are built.
+        Raises ValueError for normalized networks, whose unity taps no longer
+        distinguish lines from transformers. Count the source network instead.
+        """
+        return self._inner.component_counts()
 
     def calc_connectivity_report(self) -> dict[str, Any]:
         """Calculate the in-service topology summary."""
@@ -388,6 +516,52 @@ class BalancedNetwork:
         """
         inner, report = self._inner.apply_geo_layer(text, name_hint)
         return BalancedNetwork(inner), report
+
+    def resolve_contingencies(self, text: str) -> dict[str, Any]:
+        """Read PSS/E contingency text and bind every case to this network.
+
+        ``text`` is the content of a ``.con`` file, such as
+        ``parse("cases.con").value.text``. The result carries ``cases``,
+        ``resolved``, ``unresolved``, and ``unrecognized_statements`` as
+        counts; ``case_results``, one entry per case in the file's order with
+        its ``name``, whether it ``resolved``, the ``components`` it bound to,
+        and the actions that bound to nothing as ``{"action", "reason"}``; and
+        ``diagnostics``, the reader's notes on statements it kept as text.
+
+        Each component states the ``type`` naming the table, the ``row`` it
+        occupies there, the element's own ``in_service`` flag, and the ``id``
+        the network states for it. ``id`` is ``None`` when the network states
+        no identity for that row; ``type`` and ``row`` name the element either
+        way.
+
+        Binding reports rather than refuses, so a case naming an element this
+        network does not hold is counted unresolved and listed.
+        """
+        return self._inner.resolve_contingencies(text)
+
+    def expand_contingencies(
+        self, con_text: str, sub_text: str
+    ) -> tuple[str, list[Diagnostic]]:
+        """Turn automatic contingency specifications into explicit cases.
+
+        ``con_text`` and ``sub_text`` are the contents of a ``.con`` and a
+        ``.sub`` file. A specification such as ``SINGLE BRANCH IN SUBSYSTEM
+        'A1'`` states a rule, so expanding it needs both the network and the
+        subsystem the ``.sub`` file names. Returns the expanded ``.con`` text,
+        which states every outage explicitly, and the notes from the two
+        readers followed by the expansion's own notes. Only elements this
+        network states in service expand into cases.
+        """
+        return self._inner.expand_contingencies(con_text, sub_text)
+
+    def select_subsystem_buses(self, sub_text: str, name: str) -> list[int]:
+        """The bus numbers one named subsystem of ``sub_text`` selects.
+
+        ``sub_text`` is the content of a ``.sub`` file. The numbers come back
+        in ascending order. A name the file does not state raises
+        ``ValueError``.
+        """
+        return self._inner.select_subsystem_buses(sub_text, name)
 
     # --- matrix calculations (scipy.sparse) -----------------------------
 
@@ -597,11 +771,55 @@ class BalancedNetwork:
         """Weighted Laplacian ``L = -B``. ``formula`` as in :meth:`calc_ptdf`."""
         return _to_csr(self._inner.weighted_laplacian(formula))
 
+    def merge_buses(
+        self,
+        *,
+        closed_switches: bool = True,
+        zero_impedance: Optional[str] = None,
+        threshold: Optional[float] = None,
+        charging: str = "fold",
+    ) -> "BusMerge":
+        """Merge the buses closed switches and zero impedance branches join.
+
+        ``closed_switches`` merges the two buses of every closed switch.
+        ``zero_impedance`` selects the branches merged as well: ``None``
+        merges none, ``"exact"`` merges ``r == 0`` and ``x == 0``,
+        ``"psse"`` merges non-transformer branches with ``r == 0`` and
+        ``|x| <= threshold`` (PSS/E zero impedance lines; the threshold
+        defaults to the ``THRSHZ`` the case states), and ``"impedance"``
+        merges non-transformer branches with ``|r + jx| <= threshold``.
+
+        Each joined set keeps one bus: its reference bus, else a bus with an
+        in-service generator, else a bus a generator regulates, smallest id
+        first. Every element moves onto it. The merged elements and any
+        branch the merge shorts are removed and listed with their source rows
+        and ratings. ``charging="fold"`` turns each removed branch's line
+        charging and line shunts, including tap scaling, into a fixed shunt
+        at the survivor. ``"drop"`` discards only terminal charging. Both
+        choices preserve the series equivalent of a bypassed transformer.
+        An ideal transformer with a nonunity tap or phase shift cannot be
+        bypassed and raises an error. This network is unchanged.
+
+        Raises :class:`PowerIODataError` for a threshold that is negative or
+        not finite, or for ``"psse"`` with no threshold when the case states
+        none; an unknown rule name raises ``ValueError``.
+        """
+        return BusMerge(
+            self._inner.merge_buses(
+                closed_switches=closed_switches,
+                zero_impedance=zero_impedance,
+                threshold=threshold,
+                charging=charging,
+            )
+        )
+
     def to_normalized(
         self,
         *,
         clamp_angle_bounds: bool = False,
         angle_bound_pad: Optional[float] = None,
+        closed_switches: str = "merge",
+        island_references: str = "stated",
     ) -> "BalancedNetwork":
         """Return a normalized copy with per unit power and radian angles.
 
@@ -617,12 +835,37 @@ class BalancedNetwork:
         become ``[-angle_bound_pad, angle_bound_pad]``. A repair that would
         invert the interval widens to that same window. The default pad is
         1.0472 radians.
+
+        The default ``closed_switches="merge"`` merges the buses closed
+        switches join first, as :meth:`merge_buses` does with
+        ``closed_switches=True``, since the matrix and DC calculations model
+        no switches. ``"keep"`` leaves the switches as data, and ``"refuse"``
+        raises :class:`PowerIODataError` with code ``BUILD.SWITCH.CLOSED``.
+        ``"merge"`` also raises that error when the merge cannot complete,
+        for example across two windings of one three winding transformer.
+        The error names the original switch row and endpoints; no partial
+        normalized network is returned.
+
+        ``island_references="per_island"`` gives every island one reference
+        bus: an island that states none takes the bus of its largest ``pmax``
+        in-service generator, an island stating several keeps one, and an
+        island no in-service generator supplies is left out. The default
+        ``"stated"`` keeps the case's references and designates one only when
+        none survives.
         """
-        if not clamp_angle_bounds and angle_bound_pad is None:
+        if (
+            not clamp_angle_bounds
+            and angle_bound_pad is None
+            and closed_switches == "merge"
+            and island_references == "stated"
+        ):
             return BalancedNetwork(self._inner.to_normalized())
         return BalancedNetwork(
             self._inner.to_normalized_with_options(
-                clamp_angle_bounds=clamp_angle_bounds, angle_bound_pad=angle_bound_pad
+                clamp_angle_bounds=clamp_angle_bounds,
+                angle_bound_pad=angle_bound_pad,
+                closed_switches=closed_switches,
+                island_references=island_references,
             )
         )
 
@@ -1159,6 +1402,16 @@ class McAcPfInstance(_MulticonductorCalculation):
 
 
 @_guard_class
+class LinDist3FlowPfInstance(_MulticonductorCalculation):
+    """A fixed-dispatch LinDist3Flow power-flow instance."""
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """Node/conductor axes, preparation actions, and reference phasors."""
+        return self.module._inner._lindist3flow_metadata()
+
+
+@_guard_class
 class LinDist3FlowOpfInstance(_MulticonductorCalculation):
     """A radial fixed-reference multiconductor linear OPF instance."""
 
@@ -1204,6 +1457,25 @@ class SocwrOpfSolution(_BalancedCalculation, _CalculationSolution):
 
 class McAcPfSolution(_MulticonductorCalculation, _CalculationSolution):
     """A multiconductor AC power flow solution."""
+
+
+@_guard_class
+class LinDist3FlowPfSolution(_MulticonductorCalculation, _CalculationSolution):
+    """Fixed-dispatch LinDist3Flow values and monitored SI line limits."""
+
+    @property
+    def termination(self) -> str:
+        """How the calculation ended."""
+        return self.module._inner._lindist3flow_solution_termination()
+
+    @property
+    def limit_checks(self) -> list[dict[str, Any]]:
+        """Monitored line ratings, values, loading ratios, and overload flags."""
+        return self.module._inner._lindist3flow_limit_checks()
+
+    def __getitem__(self, quantity: str) -> list[float]:
+        """Copy one named primal column in its physical instance order."""
+        return self.module._inner._lindist3flow_solution_values(quantity)
 
 
 @_guard_class
@@ -1271,7 +1543,7 @@ class GeoLayer(_TypedValue):
 
     :func:`parse` returns it for the canonical ``.geo.json``, GeoJSON, aliased
     CSV or JSON records, headerless buscoords CSV, and a PowerWorld ``.pwd``
-    display. :meth:`PioModule.emit` writes the canonical document as
+    display. :func:`powerio.emit` writes the canonical document as
     ``geo-json``, and :func:`serialize` carries the layer through PowerIO IR.
     Place a layer onto a case with
     ``network.apply_geo_layer(layer.geojson)``.
@@ -1287,9 +1559,70 @@ class GeoLayer(_TypedValue):
         return data.decode("utf-8")
 
 
+def _emitted_text(module: "PioModule[Any]", format: str) -> str:
+    """Emit ``module`` under one token and decode the single UTF-8 artifact."""
+    result = emit(module, format)
+    data = result.artifacts[0].data
+    if data is None:
+        raise ValueError(f"the {format} emission returned no artifact bytes")
+    return data.decode("utf-8")
+
+
+@_guard_class
+class ContingencySet(_TypedValue):
+    """A PSS/E contingency description file: the cases to run, the automatic
+    specifications that state cases by rule, and the ``SKIP`` rules.
+
+    :func:`parse` returns it for a ``.con`` file or for text declared as
+    ``psse-con``, :func:`powerio.emit` writes it back under that token, and
+    :func:`serialize` carries it through PowerIO IR. Bind a set to a case with
+    ``network.resolve_contingencies(cases.text)`` and turn its automatic
+    specifications into explicit cases with
+    ``network.expand_contingencies(cases.text, groups.text)``.
+    """
+
+    @property
+    def text(self) -> str:
+        """The ``.con`` text for this set."""
+        return _emitted_text(self.module, "psse-con")
+
+
+@_guard_class
+class SubsystemSet(_TypedValue):
+    """A PSS/E subsystem description file: the named bus groups a contingency
+    run and a monitored element file draw on.
+
+    :func:`parse` returns it for a ``.sub`` file or for text declared as
+    ``psse-sub``, and ``network.select_subsystem_buses(groups.text, name)``
+    names the buses one subsystem selects.
+    """
+
+    @property
+    def text(self) -> str:
+        """The ``.sub`` text for this set."""
+        return _emitted_text(self.module, "psse-sub")
+
+
+@_guard_class
+class MonitoredSet(_TypedValue):
+    """A PSS/E monitored element file: the branches, interfaces, and voltage
+    scopes a contingency run reports on.
+
+    :func:`parse` returns it for a ``.mon`` file or for text declared as
+    ``psse-mon``.
+    """
+
+    @property
+    def text(self) -> str:
+        """The ``.mon`` text for this set."""
+        return _emitted_text(self.module, "psse-mon")
+
 
 _VALUE_CLASSES: dict[str, type[_TypedValue]] = {
+    "powerio.ContingencySet": ContingencySet,
     "powerio.GeoLayer": GeoLayer,
+    "powerio.MonitoredSet": MonitoredSet,
+    "powerio.SubsystemSet": SubsystemSet,
     "powerio.OperatingPoint<powerio.BalancedNetwork>": OperatingPoint,
     "powerio.OperatingPoint<powerio.MulticonductorNetwork>": OperatingPoint,
     "powerio.DcPfInstance": DcPfInstance,
@@ -1298,6 +1631,7 @@ _VALUE_CLASSES: dict[str, type[_TypedValue]] = {
     "powerio.AcOpfInstance": AcOpfInstance,
     "powerio.McAcPfInstance": McAcPfInstance,
     "powerio.McAcOpfInstance": McAcOpfInstance,
+    "powerio.LinDist3FlowPfInstance": LinDist3FlowPfInstance,
     "powerio.LinDist3FlowOpfInstance": LinDist3FlowOpfInstance,
     "powerio.AcScucInstance": AcScucInstance,
     "powerio.DcPfSolution": DcPfSolution,
@@ -1307,6 +1641,7 @@ _VALUE_CLASSES: dict[str, type[_TypedValue]] = {
     "powerio.SocwrOpfSolution": SocwrOpfSolution,
     "powerio.McAcPfSolution": McAcPfSolution,
     "powerio.McAcOpfSolution": McAcOpfSolution,
+    "powerio.LinDist3FlowPfSolution": LinDist3FlowPfSolution,
     "powerio.LinDist3FlowOpfSolution": LinDist3FlowOpfSolution,
     "powerio.AcScucSolution": AcScucSolution,
 }
@@ -1320,6 +1655,15 @@ class PioModule:
 
     def __init__(self, inner: "_powerio._PioModule"):
         self._inner = inner
+
+    def sever_source(self) -> "PioModule":
+        """Copy this module without retained input bytes, forcing fresh emission.
+
+        The original module is unchanged. Values, diagnostics, source
+        descriptors, and history are preserved; preparing the copy has a cost
+        separate from emission.
+        """
+        return PioModule(self._inner.sever_source())
 
     @classmethod
     def from_value(cls, value: Any) -> "PioModule":
@@ -1356,6 +1700,14 @@ class PioModule:
         if value_class is None:
             raise RuntimeError(f"this binding has no Python class for {type_name}")
         return value_class(self)
+
+    @property
+    def type_name(self) -> str:
+        """The canonical structural name of the contained value, such as
+        ``powerio.OperatingPoint<powerio.BalancedNetwork>``. The C ABI and
+        PowerIO IR name the same type with the same string.
+        """
+        return str(self._inner._type_name)
 
     @property
     def diagnostics(self) -> list[Diagnostic]:
@@ -1398,6 +1750,10 @@ class PioModule:
         """Build a LinDist3Flow optimal power flow instance from a network module."""
         return PioModule(self._inner._to_lindist3flow_opf_instance())
 
+    def to_lindist3flow_pf_instance(self) -> "PioModule":
+        """Build a fixed-dispatch LinDist3Flow instance from a network module."""
+        return PioModule(self._inner._to_lindist3flow_pf_instance())
+
     def __repr__(self) -> str:
         return repr(self._inner)
 
@@ -1426,6 +1782,10 @@ def _refresh_collection_entry(target: Any, location: _CollectionEntry) -> None:
         raise RuntimeError("a collection update changed the entry type")
     if isinstance(target, BalancedNetwork):
         target._inner = refreshed._inner
+        # Counts cached from the replaced handle may no longer hold, for
+        # example the island count after a branch status update.
+        for name in [name for name in vars(target) if name.startswith("n_")]:
+            del target.__dict__[name]
     elif isinstance(target, dist.MulticonductorNetwork):
         target._inner = refreshed._inner
     elif isinstance(target, _TypedValue):
@@ -1543,19 +1903,58 @@ def parse(
     *,
     format: Optional[str] = None,
     name: Optional[str] = None,
+    sincal_multiconductor: Optional[dist.SincalReadOptions] = None,
+    sincal_balanced: Optional[SincalBalancedReadOptions] = None,
+    acquisition_root: Optional[Any] = None,
+    named_buffers: Optional[Mapping[str, bytes]] = None,
 ) -> PioModule:
     """Parse a path, file object, or bytes-like source.
 
     A string is always a path. Pass raw text through ``io.StringIO`` or
-    another file object.
+    another file object. ``sincal_multiconductor`` requires explicit format
+    ``sincal-multiconductor``; ``sincal_balanced`` requires ``sincal-balanced``.
+    File companions stay beneath the file's parent,
+    or an explicitly selected ``acquisition_root``. Memory sources use only
+    ``named_buffers`` and never acquire companions from the filesystem.
     """
+    balanced_selection = None
+    if sincal_balanced is not None:
+        if not isinstance(sincal_balanced, SincalBalancedReadOptions):
+            raise TypeError("sincal_balanced must be SincalBalancedReadOptions")
+        balanced_selection = (sincal_balanced.variant, sincal_balanced.snapshot_hours, sincal_balanced.acquired_tables)
+    selection = None
+    if sincal_multiconductor is not None:
+        if not isinstance(sincal_multiconductor, dist.SincalReadOptions):
+            raise TypeError("sincal_multiconductor must be dist.SincalReadOptions")
+        selection = (
+            sincal_multiconductor.variant,
+            sincal_multiconductor.snapshot_hours,
+            sincal_multiconductor.acquired_tables,
+            sincal_multiconductor.assume_inactive_source_controls,
+        )
     path = _path_from_source(source)
     if path is not None:
         if name is not None:
             raise ValueError("name is only valid for memory and file object sources")
-        return PioModule(_powerio._PioModule._parse_path(path, format))
+        if named_buffers is not None:
+            raise ValueError("named_buffers applies only to memory and file object sources")
+        root = _path_from_source(acquisition_root) if acquisition_root is not None else None
+        if acquisition_root is not None and root is None:
+            raise TypeError("acquisition_root must be a path")
+        return PioModule(_powerio._PioModule._parse_path(path, format, selection, root, balanced_selection))
+    if acquisition_root is not None:
+        raise ValueError("acquisition_root applies only to path sources")
+    buffers = None
+    if named_buffers is not None:
+        if not isinstance(named_buffers, Mapping):
+            raise TypeError("named_buffers must map relative names to bytes-like data")
+        buffers = []
+        for buffer_name, buffer_data in named_buffers.items():
+            if not isinstance(buffer_name, str) or not isinstance(buffer_data, (bytes, bytearray, memoryview)):
+                raise TypeError("named_buffers must map relative names to bytes-like data")
+            buffers.append((buffer_name, bytes(buffer_data)))
     data, source_name = _memory_from_source(source, name)
-    return PioModule(_powerio._PioModule._parse_memory(data, source_name, format))
+    return PioModule(_powerio._PioModule._parse_memory(data, source_name, format, selection, buffers, balanced_selection))
 
 
 def _result_from_native(result: dict[str, Any]) -> EmitResult:
@@ -1655,3 +2054,45 @@ def features() -> dict[str, bool]:
         "dist": True,
         "prob": True,
     }
+
+
+@_guard
+def diagnostic_record(diagnostic: Diagnostic) -> dict[str, Any]:
+    """One diagnostic as a JSON-ready dictionary.
+
+    ``code``, ``severity``, ``message``, and ``target`` are always present, in
+    that order. ``id``, ``suggested_action``, and ``related`` follow when the
+    diagnostic sets them, ``details`` when it is not ``None``, and ``spans``
+    as ``source``, ``byte_start``, ``byte_end`` dictionaries when the
+    diagnostic carries at least one span.
+    """
+    record: dict[str, Any] = {
+        "code": diagnostic.code,
+        "severity": diagnostic.severity,
+        "message": diagnostic.message,
+        "target": diagnostic.target,
+    }
+    if diagnostic.id:
+        record["id"] = diagnostic.id
+    if diagnostic.suggested_action:
+        record["suggested_action"] = diagnostic.suggested_action
+    if diagnostic.related:
+        record["related"] = list(diagnostic.related)
+    if diagnostic.details is not None:
+        record["details"] = diagnostic.details
+    if diagnostic.spans:
+        record["spans"] = [
+            {
+                "source": span.source,
+                "byte_start": span.byte_start,
+                "byte_end": span.byte_end,
+            }
+            for span in diagnostic.spans
+        ]
+    return record
+
+
+@_guard
+def diagnostic_records(diagnostics: Iterable[Diagnostic]) -> list[dict[str, Any]]:
+    """Every diagnostic as a JSON-ready dictionary, in the order given."""
+    return [diagnostic_record(item) for item in diagnostics]

@@ -106,7 +106,7 @@ Q
 
     // The canonical model is untouched: still three buses, no branches, one record.
     assert_eq!(net.buses().len(), 3);
-    assert!(net.branches().is_empty());
+    assert_eq!(net.branches().as_slice(), []);
     assert_eq!(net.transformers_3w().len(), 1);
 }
 

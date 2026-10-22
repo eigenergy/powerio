@@ -67,7 +67,7 @@ GeoLayer
 The two network types are peers, and neither is a subtype of the other.
 `BalancedNetwork` is where MATPOWER, PSS/E, XIIDM, CGMES, and the other
 balanced formats meet; `MulticonductorNetwork` is where OpenDSS,
-PowerModelsDistribution JSON, and BMOPF meet. To get a balanced positive
+PowerModelsDistribution JSON, BMOPF, and distribution CIM meet. To get a balanced positive
 sequence equivalent from a multiconductor network you call an explicit
 transformation, which reports each assumption it made and each thing it lost.
 
@@ -165,11 +165,11 @@ fresh writer exists. It describes formats only; values are named by
 
 `serialize` writes a module as PowerIO IR and `deserialize` reads it back
 with its types, diagnostics, sources, history, and extensions intact. The
-document has an integer generation that changes only when an existing serialized
+document has an integer version that changes only when an existing serialized
 representation changes incompatibly. Additive structural types keep the same
-generation and require a reader implementing those types. PowerIO IR is absent from grid exchange format
+IR version and require a reader implementing those types. PowerIO IR is absent from grid exchange format
 discovery, so `parse` does not accept it. [PowerIO IR](pio-json-schema.md)
-defines the document and its generation rule.
+defines the document and its version rule.
 
 ## Derived data
 

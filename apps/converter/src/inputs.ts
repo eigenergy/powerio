@@ -1,5 +1,6 @@
 import { BlobReader, BlobWriter, ZipReader, type FileEntry } from '@zip.js/zip.js';
 import type { BrowserFile } from './types';
+import { dssProjects } from './dss-projects';
 
 export interface InputCase { name: string; entries: BrowserFile[]; primary?: string; needsPrimary?: boolean }
 const directory = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf('/')));
@@ -57,14 +58,9 @@ export async function groupInputs(entries: BrowserFile[]): Promise<InputCase[]> 
     const root = directory(marker.path);
     take(basename(root) || 'PyPSA project', [...remaining].filter(file => root ? file.path.startsWith(`${root}/`) : !file.path.includes('/')), root);
   }
-  const dssRoots = new Set([...remaining].filter(file => /\.dss$/i.test(file.path)).map(file => file.path.includes('/') ? file.path.split('/')[0] : ''));
-  for (const root of dssRoots) {
-    const files = [...remaining].filter(file => (root ? file.path.startsWith(`${root}/`) : !file.path.includes('/')) && /\.(dss|csv|txt)$/i.test(file.path));
-    const dss = files.filter(file => /\.dss$/i.test(file.path));
-    const masters = dss.filter(file => /^master\.dss$/i.test(basename(file.path)));
-    const caseEntry = dss.find(file => file.path === (root ? `${root}/case.dss` : 'case.dss'));
-    const primary = caseEntry ?? (masters.length === 1 ? masters[0] : dss.length === 1 ? dss[0] : undefined);
-    take(root || primary?.file.name || 'OpenDSS project', files, root, primary?.path, !primary);
+  for (const project of await dssProjects([...remaining])) {
+    take(basename(project.root) || project.primary || 'OpenDSS project', project.files,
+      project.root, project.primary, !project.primary);
   }
   const xmlGroups = new Map<string, BrowserFile[]>();
   for (const file of remaining) {

@@ -76,12 +76,15 @@ fn contradictory_schema_versions_are_reported_as_errors() {
 /// The validator for one vendored schema version.
 fn schema_validator_for(profile: BmopfSchemaVersion) -> jsonschema::Validator {
     let file = match profile {
-        BmopfSchemaVersion::Bmopf010 => "bmopf/draft_bmopf_schema.json",
-        BmopfSchemaVersion::Bmopf020 => "bmopf/bmopf-0.2.0.schema.json",
+        BmopfSchemaVersion::Bmopf010 => "schemas/bmopf/0.1.0/bmopf.schema.json",
+        BmopfSchemaVersion::Bmopf020 => "schemas/bmopf/0.2.0/bmopf.schema.json",
         _ => unreachable!("every schema version has a vendored document"),
     };
-    let schema: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(fixture(file)).unwrap()).unwrap();
+    let schema: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file))
+            .unwrap(),
+    )
+    .unwrap();
     jsonschema::validator_for(&schema).expect("vendored schema compiles")
 }
 
@@ -2882,7 +2885,7 @@ fn a_name_declared_at_the_top_level_and_under_extras_reads_once() {
 fn an_orphan_transformer_overlay_warns() {
     let text = doc_with(r#", "extras": {"transformer": {"single_phase": {"t": {"tap": 1.05}}}}"#);
     let net = parse_bmopf_str(&text).unwrap();
-    assert!(net.transformers().is_empty());
+    assert_eq!(net.transformers().as_slice(), []);
     assert!(
         net.warnings
             .iter()
@@ -3611,7 +3614,7 @@ fn bmopf_regulator_subtypes_round_trip_verbatim() {
     let net = parse_bmopf_str(text).unwrap();
     // Typed reads: the autotransformer is one row, the open delta bank its
     // two legs, none of them untyped.
-    assert!(net.untyped_objects().is_empty());
+    assert_eq!(net.untyped_objects().as_slice(), []);
     let by_name = |name: &str| {
         net.transformers()
             .iter()
@@ -3916,7 +3919,7 @@ fn n_winding_ratings_taps_neutrals_and_limits_survive_serialization() {
 
 #[test]
 fn proposal_provenance_is_pinned_and_preserves_existing_keys() {
-    use powerio_dist::bmopf::{BMOPF_PROPOSAL_COMMIT, BMOPF_PROPOSAL_SHA256, BMOPF_PROPOSAL_URL};
+    use powerio_dist::bmopf::{BMOPF_PROPOSAL_COMMIT, BMOPF_PROPOSAL_SHA256};
     let mut net = parse_bmopf_file(fixture("bmopf/example_ieee13.json")).unwrap();
     net.extras_mut().insert(
         "bmopf_meta".into(),
@@ -3924,7 +3927,10 @@ fn proposal_provenance_is_pinned_and_preserves_existing_keys() {
     );
     let out = emit_bmopf_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    assert_eq!(doc["meta"]["$schema"], BMOPF_PROPOSAL_URL);
+    assert_eq!(
+        doc["meta"]["$schema"],
+        BmopfSchemaVersion::Bmopf020.retrieval_url()
+    );
     let provenance = &doc["meta"]["provenance"];
     assert_eq!(provenance["powerio_bmopf"]["note"], "keep");
     assert_eq!(provenance["powerio_bmopf_1"]["schema_status"], "proposal");

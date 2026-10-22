@@ -209,7 +209,7 @@ mod tests {
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].source(), &source);
         assert_eq!((spans[0].byte_start(), spans[0].byte_end()), (4, 9));
-        assert!(error.diagnostics()[1].spans().is_empty());
+        assert_eq!(error.diagnostics()[1].spans(), []);
 
         // Past the span limit the range is not attached and a note records
         // the refusal, so nothing is dropped silently.

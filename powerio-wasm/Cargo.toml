@@ -18,5 +18,8 @@ wasm-bindgen = "=0.2.128"
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false
 
+[dev-dependencies]
+rusqlite.workspace = true
+
 [lints]
 workspace = true

@@ -43,5 +43,5 @@ fn a_redirect_to_a_named_pipe_is_refused_promptly() {
         "{:?}",
         parsed.warnings
     );
-    assert!(parsed.line_codes().is_empty());
+    assert_eq!(parsed.line_codes().as_slice(), []);
 }

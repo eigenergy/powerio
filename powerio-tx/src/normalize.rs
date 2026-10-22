@@ -14,6 +14,10 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::islands::{
+    IslandPartition, IslandReferencePolicy, bus_list, kept_reference, largest_generator_bus,
+};
+use crate::merge::{BusMerge, BusMergeRule};
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost,
     Generator, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat, StaticVarCompensator, Storage,
@@ -73,6 +77,28 @@ pub(crate) const GEN_PU_KEYS: [&str; 4] = ["ramp_agc", "ramp_10", "ramp_30", "ra
 #[allow(clippy::approx_constant)]
 pub const POWER_MODELS_ANGLE_BOUND_PAD: f64 = 1.0472;
 
+/// What normalization does with a closed switch that joins two buses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ClosedSwitchPolicy {
+    /// Merge the buses closed switches join before the pass, with
+    /// [`BusMergeRule::closed_switches`], and report the merge under
+    /// `CANONICALIZE.MERGE`. The matrix builders and solver preparations
+    /// stamp branches only, so a normalized network carries no closed switch
+    /// for them to leave apart. A closed switch on an isolated or undeclared
+    /// bus is left to the filters that drop that bus. Returns
+    /// [`Error::ClosedSwitch`] if a requested merge is refused, for example
+    /// when it would join two windings of one three winding transformer.
+    #[default]
+    Merge,
+    /// Refuse a network with such a switch with [`Error::ClosedSwitch`]
+    /// (`BUILD.SWITCH.CLOSED`).
+    Refuse,
+    /// Keep closed switches as data, as normalization did before it merged
+    /// them, for a consumer that models switches itself.
+    Keep,
+}
+
 /// Options for [`BalancedNetwork::to_normalized_with_options`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NormalizeOptions {
@@ -92,6 +118,61 @@ impl Default for NormalizeOptions {
     }
 }
 
+/// Options for [`BalancedNetwork::to_normalized_with`]: the
+/// [`NormalizeOptions`] repairs and the normalization choices added after
+/// them. Build one from its default or from [`NormalizeOptions`] and set the
+/// rest with the `with_*` methods.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct NormalizeSettings {
+    /// The repairs [`BalancedNetwork::to_normalized_with_options`] applies.
+    pub options: NormalizeOptions,
+    /// What happens to closed switches; by default they merge.
+    pub closed_switches: ClosedSwitchPolicy,
+    /// How the reference buses of a network with several islands are chosen.
+    /// [`IslandReferencePolicy::Stated`], the default, keeps the behavior of
+    /// [`BalancedNetwork::to_normalized`];
+    /// [`IslandReferencePolicy::PerIsland`] gives every island one reference
+    /// and leaves out the islands no in-service generator supplies.
+    pub island_references: IslandReferencePolicy,
+}
+
+impl NormalizeSettings {
+    /// `options` with the default choice for everything else.
+    #[must_use]
+    pub const fn new(options: NormalizeOptions) -> Self {
+        Self {
+            options,
+            closed_switches: ClosedSwitchPolicy::Merge,
+            island_references: IslandReferencePolicy::Stated,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_options(mut self, options: NormalizeOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_closed_switches(mut self, policy: ClosedSwitchPolicy) -> Self {
+        self.closed_switches = policy;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_island_references(mut self, policy: IslandReferencePolicy) -> Self {
+        self.island_references = policy;
+        self
+    }
+}
+
+impl From<NormalizeOptions> for NormalizeSettings {
+    fn from(options: NormalizeOptions) -> Self {
+        Self::new(options)
+    }
+}
+
 /// Output of [`BalancedNetwork::to_normalized_with_options`].
 #[derive(Clone, Debug)]
 pub struct NormalizedNetwork {
@@ -100,6 +181,18 @@ pub struct NormalizedNetwork {
     pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
     /// The same findings as `CODE: message` lines.
     pub warnings: Vec<String>,
+}
+
+/// What [`BalancedNetwork::to_normalized_with`] changed in the network before
+/// the pass itself, beside the [`NormalizedNetwork`].
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct NormalizeReport {
+    /// The closed switch merge under [`ClosedSwitchPolicy::Merge`]: its bus
+    /// map, removed switches, and row maps from the source. `None` when no
+    /// closed switch joined two buses the pass keeps, or under another
+    /// policy.
+    pub bus_merge: Option<BusMerge>,
 }
 
 /// Row provenance for one normalize pass: for each dense position in the
@@ -139,6 +232,48 @@ pub struct NormalizeSourceRows {
 }
 
 impl NormalizeSourceRows {
+    /// Rows over a merged network, carried back to the network `merge`
+    /// read. Buses resolve by id; a removed branch or switch has no merged
+    /// row, and a shunt the merge added for a removed branch's charging has
+    /// no source row. The other families keep their rows.
+    fn through_merge(mut self, merge: &BusMerge) -> Self {
+        let source_bus: HashMap<BusId, usize> = merge
+            .source
+            .buses()
+            .iter()
+            .enumerate()
+            .map(|(row, bus)| (bus.id, row))
+            .collect();
+        let merged_buses = merge.network.buses();
+        for row in self.buses.iter_mut().flatten() {
+            *row = source_bus[&merged_buses[*row].id];
+        }
+        let inverse = |rows: &[Option<usize>]| {
+            let mut inverse = vec![0; rows.iter().flatten().count()];
+            for (source, merged) in rows.iter().enumerate() {
+                if let Some(merged) = merged {
+                    inverse[*merged] = source;
+                }
+            }
+            inverse
+        };
+        let branches = inverse(&merge.branch_rows);
+        for row in self.branches.iter_mut().flatten() {
+            *row = branches[*row];
+        }
+        let switches = inverse(&merge.switch_rows);
+        for row in self.switches.iter_mut().flatten() {
+            *row = switches[*row];
+        }
+        let source_shunts = merge.source.shunts().len();
+        for row in &mut self.shunts {
+            if row.is_some_and(|row| row >= source_shunts) {
+                *row = None;
+            }
+        }
+        self
+    }
+
     /// Grow the families the star lowering appends to so each length matches the
     /// lowered form of `net`. The appended entries have no source row. The
     /// lengths come from [`BalancedNetwork::lowered_lengths`], which counts them off the
@@ -596,19 +731,39 @@ fn norm_transformers_3w(
     xfmrs: &[Transformer3W],
     base: f64,
     map: &HashMap<BusId, BusId>,
+    warnings: &mut crate::diagnostics::Diagnostics,
 ) -> (Vec<Transformer3W>, Vec<Option<usize>>) {
-    xfmrs
+    let mut taken_out = Vec::new();
+    let normalized = xfmrs
         .iter()
         .enumerate()
         .filter(|(_, t)| t.in_service)
         .filter_map(|(row, t)| {
-            // Remap each winding terminal and drop the whole unit if any was filtered
-            // out (a 3-winding transformer can't keep a dangling winding). Phase
-            // shifts and the star angle go to radians; winding ratings go per unit;
-            // the pairwise impedances are already per unit on the system base.
+            // A winding whose bus this pass drops goes out of service, as PSS/E
+            // takes out a winding on a disconnected bus; the other two stay
+            // coupled through the star point. Its bus field then names a
+            // kept winding's bus, so the record stays reference consistent,
+            // and the source row gives the original. A transformer left with
+            // fewer than two windings couples nothing and is dropped. Phase
+            // shifts and the star angle go to radians; winding ratings go per
+            // unit; the pairwise impedances are already per unit on the system
+            // base.
+            let mut live = t.winding_in_service();
+            for (state, winding) in live.iter_mut().zip(&t.windings) {
+                *state &= remap(map, winding.bus).is_some();
+            }
+            let kept_bus = t
+                .windings
+                .iter()
+                .zip(live)
+                .find(|(_, on)| *on)
+                .map(|(winding, _)| winding.bus)?;
+            if live.iter().filter(|&&on| on).count() < 2 {
+                return None;
+            }
             let mut windings = t.windings.clone();
             for w in &mut windings {
-                w.bus = remap(map, w.bus)?;
+                w.bus = remap(map, w.bus).unwrap_or(kept_bus);
                 if let Some(control) = &mut w.control {
                     norm_transformer_control(control, base, map);
                 }
@@ -617,16 +772,47 @@ fn norm_transformers_3w(
                 w.rate_b /= base;
                 w.rate_c /= base;
             }
-            Some((
-                Transformer3W {
-                    windings,
-                    star_va: t.star_va * DEG_TO_RAD,
-                    ..t.clone()
-                },
-                Some(row),
-            ))
+            let mut transformer = Transformer3W {
+                windings,
+                star_va: t.star_va * DEG_TO_RAD,
+                ..t.clone()
+            };
+            for winding in 0..3 {
+                let mut sets = t.winding_rating_sets(winding);
+                for set in &mut sets {
+                    set.rate_mva /= base;
+                }
+                transformer.set_winding_rating_sets(winding, sets);
+            }
+            if live != t.winding_in_service() {
+                transformer.set_winding_in_service(live);
+                taken_out.push(row);
+            }
+            Some((transformer, Some(row)))
         })
-        .unzip()
+        .unzip();
+    if !taken_out.is_empty() {
+        let names = taken_out
+            .iter()
+            .take(5)
+            .map(|&row| {
+                xfmrs[row]
+                    .uid
+                    .clone()
+                    .unwrap_or_else(|| format!("transformers_3w:{row}"))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        warnings.push(
+            &crate::diagnostics::codes::CANONICALIZE_NORMALIZE_WINDING_TAKEN_OUT,
+            format!(
+                "{} three winding transformer(s) have a winding on a bus normalization drops; \
+                 that winding was taken out of service and the other two kept ({names})",
+                taken_out.len()
+            ),
+        );
+    }
+    normalized
 }
 
 /// No reference survived the bus type pass: anchor the slack at the largest
@@ -661,6 +847,152 @@ fn designate_reference(
     Ok(())
 }
 
+/// The buses of the islands no in-service generator supplies, each island
+/// reported as left out.
+fn unsupplied_island_buses(
+    network: &BalancedNetwork,
+    partition: &IslandPartition,
+    warnings: &mut crate::diagnostics::Diagnostics,
+) -> HashSet<BusId> {
+    let mut unsupplied = HashSet::new();
+    for island in partition
+        .islands
+        .iter()
+        .filter(|island| !island.is_supplied())
+    {
+        warnings.record(
+            network.unsupplied_island_finding(island, "was left out of the normalized network"),
+        );
+        unsupplied.extend(island.buses.iter().copied());
+    }
+    unsupplied
+}
+
+/// Canonical bus types: a bus hosting an in-service generator keeps `Ref` if
+/// the file marked it `Ref`, else becomes `Pv`; a gen-less bus is `Pq`. A
+/// `Pq` bus that becomes `Pv` is reported, since its generator now holds the
+/// bus voltage.
+fn canonicalize_bus_types(
+    buses: &mut [Bus],
+    generators: &[Generator],
+    warnings: &mut crate::diagnostics::Diagnostics,
+) {
+    let gen_buses: HashSet<BusId> = generators.iter().map(|g| g.bus).collect();
+    let mut retyped_pq = Vec::new();
+    for b in buses.iter_mut() {
+        if b.kind == BusType::Pq && gen_buses.contains(&b.id) {
+            retyped_pq.push(b.id);
+        }
+        b.kind = match (gen_buses.contains(&b.id), b.kind) {
+            (true, BusType::Ref) => BusType::Ref,
+            (true, _) => BusType::Pv,
+            (false, _) => BusType::Pq,
+        };
+    }
+    if !retyped_pq.is_empty() {
+        warnings.push(
+            &crate::diagnostics::codes::CANONICALIZE_NORMALIZE_GENERATOR_BUS_RETYPED,
+            format!(
+                "{} PQ bus(es) host an in-service generator and were retyped PV, so the \
+                 generator holds the bus voltage ({})",
+                retyped_pq.len(),
+                bus_list(&retyped_pq)
+            ),
+        );
+    }
+}
+
+/// The reference buses of the normalized tables: one per island of
+/// `partition` under [`IslandReferencePolicy::PerIsland`], and the largest
+/// generator's bus when no reference survives at all.
+fn assign_normalized_references(
+    buses: &mut [Bus],
+    generators: &[Generator],
+    partition: Option<&IslandPartition>,
+    warnings: &mut crate::diagnostics::Diagnostics,
+) -> Result<()> {
+    if let Some(partition) = partition {
+        assign_normalized_island_references(buses, generators, partition, warnings);
+    }
+    if !buses.iter().any(|b| b.kind == BusType::Ref) {
+        designate_reference(buses, generators, warnings)?;
+    }
+    Ok(())
+}
+
+/// [`IslandReferencePolicy::PerIsland`] over the normalized tables: each
+/// supplied island of `partition` keeps exactly one reference bus. The bus
+/// types are already canonical, so a reference hosts a generator and a demoted
+/// one becomes PV.
+fn assign_normalized_island_references(
+    buses: &mut [Bus],
+    generators: &[Generator],
+    partition: &IslandPartition,
+    warnings: &mut crate::diagnostics::Diagnostics,
+) {
+    let mut island_generators: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (row, generator) in generators.iter().enumerate() {
+        if let Some(island) = partition.island_of(generator.bus) {
+            island_generators.entry(island).or_default().push(row);
+        }
+    }
+    let mut island_references: HashMap<usize, Vec<BusId>> = HashMap::new();
+    for bus in buses.iter().filter(|bus| bus.kind == BusType::Ref) {
+        if let Some(island) = partition.island_of(bus.id) {
+            island_references.entry(island).or_default().push(bus.id);
+        }
+    }
+    let mut designated = HashSet::new();
+    let mut demoted = HashSet::new();
+    for (position, island) in partition.islands.iter().enumerate() {
+        let Some(rows) = island_generators.get(&position) else {
+            continue;
+        };
+        let mut references = island_references.remove(&position).unwrap_or_default();
+        references.sort_unstable();
+        match references.as_slice() {
+            [_] => {}
+            [] => {
+                if let Some(bus) = largest_generator_bus(generators, rows) {
+                    warnings.push(
+                        &crate::diagnostics::codes::CANONICALIZE_ISLAND_REFERENCE_DESIGNATED,
+                        format!(
+                            "the island of {} bus(es) ({}) has no reference bus that survives \
+                             normalization; bus {bus} hosts its largest pmax in-service \
+                             generator and was designated the reference",
+                            island.buses.len(),
+                            bus_list(&island.buses)
+                        ),
+                    );
+                    designated.insert(bus);
+                }
+            }
+            many => {
+                let kept = kept_reference(many, generators, rows).unwrap_or(many[0]);
+                let others: Vec<BusId> = many.iter().copied().filter(|&b| b != kept).collect();
+                warnings.push(
+                    &crate::diagnostics::codes::CANONICALIZE_ISLAND_REFERENCE_DEMOTED,
+                    format!(
+                        "the island of {} bus(es) keeps {} reference buses; bus {kept} hosts the \
+                         most generation and stays the reference, and bus(es) {} became PV",
+                        island.buses.len(),
+                        many.len(),
+                        bus_list(&others)
+                    ),
+                );
+                demoted.extend(others);
+            }
+        }
+    }
+    for bus in buses.iter_mut() {
+        if designated.contains(&bus.id) {
+            bus.kind = BusType::Ref;
+        } else if demoted.contains(&bus.id) {
+            bus.kind = BusType::Pv;
+        }
+    }
+}
+
 impl BalancedNetwork {
     /// A normalized, computation-ready copy of this network. The raw `BalancedNetwork` is
     /// kept lossless (MATPOWER units, 1-based sparse ids, out-of-service elements
@@ -680,16 +1012,25 @@ impl BalancedNetwork {
     ///   bus. A bus orphaned by the out-of-service filter (no in-service branch,
     ///   but not typed isolated) is kept — its load is real — and surfaces as its
     ///   own island, which the grounding check reports if it has no reference.
+    /// - **Closed switches**: the buses a closed switch joins merge into one
+    ///   ([`ClosedSwitchPolicy::Merge`], reported under `CANONICALIZE.MERGE`),
+    ///   whose survivor is the reference bus, else a generator bus, else a
+    ///   regulated bus, smallest id first. The matrix builders model no
+    ///   switches, so this keeps their buses together;
+    ///   [`BalancedNetwork::to_normalized_with`] keeps or refuses them instead.
     /// - **IDs**: kept buses retain their source bus ids, and every surviving
     ///   endpoint stays in the same id space. Consumers that need dense rows should
     ///   use [`IndexedNetwork`](crate::IndexedNetwork), which derives `[0, n)`
     ///   indices without destroying source ids.
     /// - **Bus types**: a bus hosting a surviving generator keeps `REF` if the file
     ///   marked it `REF`, otherwise becomes `PV`; a generator-less bus is `PQ` (so a
-    ///   generator-less `REF` is demoted). The file's `REF` buses are kept, several
-    ///   included, and the consumer picks the slack. Only when no reference bus
-    ///   survives is the largest-`pmax` in-service generator's bus promoted to
-    ///   `REF`.
+    ///   generator-less `REF` is demoted). A `PQ` bus retyped `PV` is reported as
+    ///   `CANONICALIZE.NORMALIZE.GENERATOR_BUS_RETYPED`. The file's `REF` buses are
+    ///   kept, several included, and the consumer picks the slack. Only when no
+    ///   reference bus survives is the largest-`pmax` in-service generator's bus
+    ///   promoted to `REF`;
+    ///   [`NormalizeSettings::island_references`] applies that rule per island
+    ///   instead.
     ///
     /// This is a derived product, not a source for write-back: `source` is dropped
     /// and `source_format` is [`SourceFormat::Normalized`], so writing it serializes
@@ -709,6 +1050,8 @@ impl BalancedNetwork {
     /// whole network with `NaN`/`Inf` or sign-flipped values.
     /// [`Error::NoReferenceBus`] if no reference bus can be established — no `REF`
     /// survives and there is no in-service generator to anchor one.
+    /// [`Error::ClosedSwitch`] if a requested switch merge cannot complete,
+    /// such as a connection between windings of one three winding transformer.
     pub fn to_normalized(&self) -> Result<BalancedNetwork> {
         Ok(self
             .to_normalized_with_options(&NormalizeOptions::default())?
@@ -721,7 +1064,24 @@ impl BalancedNetwork {
         &self,
         options: &NormalizeOptions,
     ) -> Result<NormalizedNetwork> {
-        Ok(self.normalize_inner(options)?.0)
+        Ok(self.normalize_inner(&NormalizeSettings::new(*options))?.0)
+    }
+
+    /// Like [`BalancedNetwork::to_normalized_with_options`], under every
+    /// choice [`NormalizeSettings`] states, also returning what the pass
+    /// changed before normalizing ([`NormalizeReport`]), such as the closed
+    /// switch merge.
+    ///
+    /// # Errors
+    /// As [`BalancedNetwork::to_normalized`], and [`Error::ClosedSwitch`]
+    /// under [`ClosedSwitchPolicy::Refuse`] or an incomplete
+    /// [`ClosedSwitchPolicy::Merge`].
+    pub fn to_normalized_with(
+        &self,
+        settings: &NormalizeSettings,
+    ) -> Result<(NormalizedNetwork, NormalizeReport)> {
+        let (normalized, _, report) = self.normalize_inner(settings)?;
+        Ok((normalized, report))
     }
 
     /// Like [`BalancedNetwork::to_normalized_with_options`], also returning the
@@ -753,21 +1113,153 @@ impl BalancedNetwork {
         &self,
         options: &NormalizeOptions,
     ) -> Result<(NormalizedNetwork, NormalizeSourceRows)> {
-        let (normalized, mut rows) = self.normalize_inner(options)?;
+        let (normalized, mut rows, _) = self.normalize_inner(&NormalizeSettings::new(*options))?;
         rows.pad_to_lowered(&normalized.network);
         Ok((normalized, rows))
     }
 
-    /// The pass itself. The rows it gives cover the normalized network before
-    /// the star lowering, so only [`Self::to_normalized_with_source_rows`] pays
-    /// for the lowered lengths.
+    /// The pass itself, after what `settings` asks of closed switches. The
+    /// rows it gives cover the normalized network before the star lowering,
+    /// so only [`Self::to_normalized_with_source_rows`] pays for the lowered
+    /// lengths.
     fn normalize_inner(
         &self,
-        options: &NormalizeOptions,
+        settings: &NormalizeSettings,
+    ) -> Result<(NormalizedNetwork, NormalizeSourceRows, NormalizeReport)> {
+        let options = &settings.options;
+        validate_normalize_options(options)?;
+        let (kept, left) = self.closed_switch_rows();
+        if kept.is_empty() || settings.closed_switches == ClosedSwitchPolicy::Keep {
+            let (normalized, rows) = self.normalize_pass(settings)?;
+            return Ok((normalized, rows, NormalizeReport::default()));
+        }
+        if settings.closed_switches == ClosedSwitchPolicy::Refuse {
+            let switch = &self.switches()[kept[0]];
+            return Err(Error::ClosedSwitch {
+                row: kept[0],
+                from: switch.from,
+                to: switch.to,
+                closed: kept.len(),
+            });
+        }
+        let merge = self.merge_normalization_switches(&left)?;
+        // A winding-pair refusal leaves the selected switch in the result.
+        // Report the source row, even when earlier switches were removed or
+        // their endpoints were remapped by a successful partial merge.
+        let mut remaining = kept
+            .into_iter()
+            .filter(|&row| merge.switch_rows[row].is_some());
+        if let Some(row) = remaining.next() {
+            let switch = &self.switches()[row];
+            return Err(Error::ClosedSwitch {
+                row,
+                from: switch.from,
+                to: switch.to,
+                closed: 1 + remaining.count(),
+            });
+        }
+        let (mut normalized, rows) = merge.network.normalize_pass(settings)?;
+        let rows = rows.through_merge(&merge);
+        let mut diagnostics = merge.diagnostics.clone();
+        diagnostics.append(&mut normalized.diagnostics);
+        normalized.warnings = crate::diagnostics::render_diagnostics(&diagnostics);
+        normalized.diagnostics = diagnostics;
+        Ok((
+            normalized,
+            rows,
+            NormalizeReport {
+                bus_merge: Some(merge),
+            },
+        ))
+    }
+
+    /// Merge only switches whose endpoints survive bus filtering, then
+    /// compose the merge's switch provenance back to the original table.
+    fn merge_normalization_switches(&self, left: &[usize]) -> Result<BusMerge> {
+        if left.is_empty() {
+            return self.merge_buses(&BusMergeRule::closed_switches());
+        }
+        let mut eligible = self.clone();
+        let excluded: HashSet<_> = left.iter().copied().collect();
+        let mut source_rows = Vec::new();
+        let mut row = 0;
+        eligible.switches_mut().retain_mut(|switch| {
+            let keep = !excluded.contains(&row);
+            if keep {
+                source_rows.push(row);
+                // Keep anonymous source identities in merge diagnostics even
+                // though filtering changes this temporary table's row numbers.
+                if switch.uid.is_none() {
+                    switch.uid = Some(format!("switches:{row}"));
+                }
+            }
+            row += 1;
+            keep
+        });
+        // Opening an ineligible switch is insufficient: an undeclared bus
+        // still leaves a dangling reference for merge_buses to validate.
+        let mut merge = eligible.merge_buses(&BusMergeRule::closed_switches())?;
+        let mut switch_rows = vec![None; self.switches().len()];
+        for (&source, &merged) in source_rows.iter().zip(&merge.switch_rows) {
+            switch_rows[source] = merged;
+            if let Some(row) = merged {
+                merge.network.switches_mut()[row]
+                    .uid
+                    .clone_from(&self.switches()[source].uid);
+            }
+        }
+        for removed in &mut merge.removed_switches {
+            removed.row = source_rows[removed.row];
+        }
+        merge.switch_rows = switch_rows;
+        merge.source = self.clone();
+        Ok(merge)
+    }
+
+    /// Closed switches joining distinct buses the pass keeps, and all
+    /// switches on isolated or undeclared buses, which the pass drops.
+    fn closed_switch_rows(&self) -> (Vec<usize>, Vec<usize>) {
+        let kept_bus: HashMap<BusId, bool> = self
+            .buses()
+            .iter()
+            .map(|bus| (bus.id, bus.kind != BusType::Isolated))
+            .collect();
+        let kept = |bus: BusId| kept_bus.get(&bus).copied().unwrap_or(false);
+        self.switches().iter().enumerate().fold(
+            (Vec::new(), Vec::new()),
+            |(mut eligible, mut left), (row, switch)| {
+                if !kept(switch.from) || !kept(switch.to) {
+                    left.push(row);
+                } else if switch.closed && switch.from != switch.to {
+                    eligible.push(row);
+                }
+                (eligible, left)
+            },
+        )
+    }
+
+    /// One normalization pass over this network as it stands.
+    fn normalize_pass(
+        &self,
+        settings: &NormalizeSettings,
     ) -> Result<(NormalizedNetwork, NormalizeSourceRows)> {
+        let options = &settings.options;
         validate_normalize_options(options)?;
         self.check_base_mva()?;
         let base = self.base_mva();
+        let mut warnings = crate::diagnostics::Diagnostics::new();
+
+        // Per island references: an island no in-service generator supplies
+        // cannot be solved, so its buses stay out like isolated ones and the
+        // element filters below drop what sits on them. The partition follows
+        // what this pass keeps: a three winding transformer keeps its live
+        // windings when another winding sits on an isolated bus.
+        let partition = (settings.island_references == IslandReferencePolicy::PerIsland)
+            .then(|| self.calc_islands());
+        let unsupplied = partition
+            .as_ref()
+            .map(|partition| unsupplied_island_buses(self, partition, &mut warnings))
+            .unwrap_or_default();
 
         // Kept buses keep their original `kind` for now (the reference scan below
         // reads it) and their source ids. Isolated buses are dropped.
@@ -778,7 +1270,7 @@ impl BalancedNetwork {
         // `pad_to_lowered` extends the map over what the star lowering appends.
         let mut bus_rows: Vec<Option<usize>> = Vec::with_capacity(self.buses().len());
         for (row, b) in self.buses().iter().enumerate() {
-            if b.kind == BusType::Isolated {
+            if b.kind == BusType::Isolated || unsupplied.contains(&b.id) {
                 continue;
             }
             id_map.insert(b.id, b.id);
@@ -793,7 +1285,6 @@ impl BalancedNetwork {
         let (static_var_compensators, static_var_compensator_rows) =
             norm_static_var_compensators(self.static_var_compensators(), base, &id_map);
         let (mut branches, branch_rows) = norm_branches(self.branches(), base, &id_map);
-        let mut warnings = crate::diagnostics::Diagnostics::new();
         if options.clamp_angle_bounds {
             clamp_angle_bounds(&mut branches, options.angle_bound_pad, &mut warnings);
         }
@@ -802,7 +1293,7 @@ impl BalancedNetwork {
         let (storage, storage_rows) = norm_storage(self.storage(), base, &id_map);
         let (hvdc, hvdc_rows) = norm_hvdc(self.hvdc(), base, &id_map);
         let (transformers_3w, transformer_3w_rows) =
-            norm_transformers_3w(self.transformers_3w(), base, &id_map);
+            norm_transformers_3w(self.transformers_3w(), base, &id_map, &mut warnings);
         let source_rows = NormalizeSourceRows {
             buses: bus_rows,
             loads: load_rows,
@@ -816,21 +1307,11 @@ impl BalancedNetwork {
             transformers_3w: transformer_3w_rows,
         };
 
-        // Bus types: a bus hosting an in-service generator keeps `Ref` if the
-        // file marked it `Ref`, else becomes `Pv`; a gen-less bus is `Pq`.
-        // Multiple file `Ref` buses are kept as-is, and only when no `Ref`
-        // survives is the largest-pmax generator's bus promoted.
-        let gen_buses: HashSet<BusId> = generators.iter().map(|g| g.bus).collect();
-        for b in &mut buses {
-            b.kind = match (gen_buses.contains(&b.id), b.kind) {
-                (true, BusType::Ref) => BusType::Ref,
-                (true, _) => BusType::Pv,
-                (false, _) => BusType::Pq,
-            };
-        }
-        if !buses.iter().any(|b| b.kind == BusType::Ref) {
-            designate_reference(&mut buses, &generators, &mut warnings)?;
-        }
+        // Bus types. Multiple file `Ref` buses are kept as-is unless the per
+        // island policy keeps one per island, and only when no `Ref` survives
+        // is the largest-pmax generator's bus promoted.
+        canonicalize_bus_types(&mut buses, &generators, &mut warnings);
+        assign_normalized_references(&mut buses, &generators, partition.as_ref(), &mut warnings)?;
         // The other silent semantic decision this gateway announces: a
         // solver-ready copy whose cost objective is identically zero.
         if !generators.is_empty() && generators.iter().all(|g| g.cost.is_none()) {
@@ -844,7 +1325,7 @@ impl BalancedNetwork {
             );
         }
 
-        let net = BalancedNetwork::from_tables(BalancedNetworkTables {
+        let mut net = BalancedNetwork::from_tables(BalancedNetworkTables {
             name: self.name().clone(),
             base_mva: base,
             base_frequency: self.base_frequency(),
@@ -868,6 +1349,9 @@ impl BalancedNetwork {
             solver: None,
             source_format: SourceFormat::Normalized,
         });
+        // Project source topology after all electrical filters have run, including
+        // unsupplied islands, isolated buses, and out-of-service equipment.
+        crate::operations::filter_connectivity(self, &mut net);
         // The filter drops every reference to a dropped bus by
         // construction, so the result is reference-consistent. Assert it in
         // debug builds to catch a future regression in the filtering logic.
@@ -889,6 +1373,106 @@ impl BalancedNetwork {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalization_merges_closed_switches_unless_told_otherwise() {
+        use crate::network::Switch;
+        let mut buses: Vec<Bus> = (1..=4)
+            .map(|id| Bus::new(BusId(id), BusType::Pq, 230.0))
+            .collect();
+        buses[0].kind = BusType::Ref;
+        buses[3].kind = BusType::Isolated;
+        let mut net = BalancedNetwork::in_memory(
+            "switched",
+            100.0,
+            buses,
+            vec![Branch::new(BusId(1), BusId(2), 0.0, 0.1)],
+        );
+        // A closed switch 2-3, an open one 1-3, and a closed one onto the
+        // isolated bus 4, which the pass drops with that bus.
+        net.switches_mut().extend([
+            Switch::new(BusId(2), BusId(3), true),
+            Switch::new(BusId(1), BusId(3), false),
+            Switch::new(BusId(2), BusId(4), true),
+        ]);
+        net.generators_mut().push(Generator::new(BusId(1)));
+        net.loads_mut().push(Load::new(BusId(3), 10.0, 0.0));
+
+        // The default merges, reports the merge, and maps rows to the source.
+        let (merged, rows) = net
+            .to_normalized_with_source_rows(&NormalizeOptions::default())
+            .unwrap();
+        assert_eq!(merged.network.buses().len(), 2);
+        assert_eq!(merged.network.loads()[0].bus, BusId(2));
+        crate::IndexedNetwork::new(&merged.network)
+            .check_closed_switches()
+            .unwrap();
+        assert!(
+            merged
+                .diagnostics
+                .iter()
+                .any(|d| d.code() == "CANONICALIZE.MERGE.CLOSED_SWITCH")
+        );
+        // The open switch survives at merged row 0 and maps back to source row 1.
+        assert_eq!(rows.switches, [Some(1)]);
+        assert_eq!(rows.buses, [Some(0), Some(1)]);
+        assert_eq!(rows.branches, [Some(0)]);
+        let plain = net.to_normalized().unwrap();
+        assert_eq!(plain.buses(), merged.network.buses());
+        assert_eq!(plain.switches(), merged.network.switches());
+
+        let (_, report) = net
+            .to_normalized_with(&NormalizeSettings::default())
+            .unwrap();
+        let merge = report.bus_merge.unwrap();
+        assert_eq!(merge.survivor(BusId(3)), BusId(2));
+        assert_eq!(merge.survivor(BusId(4)), BusId(4));
+
+        // Keep leaves the switches as data, as normalization used to.
+        let (kept, report) = net
+            .to_normalized_with(
+                &NormalizeSettings::default().with_closed_switches(ClosedSwitchPolicy::Keep),
+            )
+            .unwrap();
+        assert!(report.bus_merge.is_none());
+        assert_eq!(kept.network.buses().len(), 3);
+        let error = crate::IndexedNetwork::new(&kept.network)
+            .check_closed_switches()
+            .unwrap_err();
+        assert!(error.to_string().starts_with("1 closed switch(es)"));
+
+        // Refuse states the switch the pass would keep.
+        let error = net
+            .to_normalized_with(
+                &NormalizeSettings::default().with_closed_switches(ClosedSwitchPolicy::Refuse),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::ClosedSwitch {
+                row: 0,
+                closed: 1,
+                ..
+            }
+        ));
+        let message = error.to_string();
+        for call in [
+            "BusMergeRule::closed_switches()",
+            "closed_switches=\"merge\"",
+            "--merge-buses switches",
+        ] {
+            assert!(message.contains(call), "{message}");
+        }
+
+        // A network with no closed switch normalizes as it always has.
+        net.switches_mut()[0].closed = false;
+        net.switches_mut()[2].closed = false;
+        let (plain, report) = net
+            .to_normalized_with(&NormalizeSettings::default())
+            .unwrap();
+        assert!(report.bus_merge.is_none());
+        assert_eq!(plain.network.buses().len(), 3);
+    }
     use crate::network::GeneratorEnergySource;
 
     fn approx(a: f64, b: f64) -> bool {

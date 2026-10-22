@@ -8,8 +8,27 @@ Svelte renders the controls, and the telemetry policy uses plain JavaScript.
 
 ## Development
 
-Requirements: Rust with `wasm32-unknown-unknown`, wasm-pack 0.15.0, and
-Node.js 22.12 or newer.
+Requirements: Rust with `wasm32-unknown-unknown`, wasm-pack 0.15.0,
+Node.js 22.12 or newer, and a Clang/LLVM distribution with the WebAssembly
+backend. SQLite is compiled from C for the SINCAL readers; installing only the
+Rust target is not sufficient. Apple's system Clang may lack that backend.
+Check the compiler before building:
+
+```sh
+clang --print-targets | grep wasm32
+```
+
+If using a separate LLVM installation, select its compiler and archiver for
+this target (substitute your installation path):
+
+```sh
+export CC_wasm32_unknown_unknown=/path/to/llvm/bin/clang
+export AR_wasm32_unknown_unknown=/path/to/llvm/bin/llvm-ar
+"$CC_wasm32_unknown_unknown" --print-targets | grep wasm32
+```
+
+The Linux Converter CI performs the release WASM build and tests that exact
+artifact in Chromium, Firefox and WebKit.
 
 ```sh
 rustup target add wasm32-unknown-unknown
@@ -125,3 +144,19 @@ regenerates the committed 1200x630 social card with Playwright Chromium.
 Atkinson Hyperlegible Next is bundled under its OFL license. The MATPOWER
 example retains its upstream license and source; the distribution example
 is synthetic. Notices ship in `public/`.
+
+## SINCAL browser scope
+
+Choose `sincal-balanced` or `sincal-multiconductor` explicitly in the input
+format control; generic SINCAL input does not infer an electrical family.
+The browser uses the native default variant and snapshot selection. Selecting
+other variants, snapshots or acquired-table sources requires the native API or
+terminal workflow. Ambiguous or unsupported inputs remain errors, with their
+native diagnostics. Fresh SINCAL writing remains experimental and is not an
+ordinary browser output target; this does not change native source-byte echo.
+Native SINCAL application acceptance remains unverified.
+
+The analytics policy is generated from `[workspace.package].version` before
+development, tests and UI builds. Both the application and isolated frame load
+the same generated policy. Only that build's exact version is permitted; values
+supplied by callers cannot extend the telemetry vocabulary.

@@ -1418,7 +1418,7 @@ mod tests {
             (parsed.network.loads()[0].p, parsed.network.loads()[0].q),
             (29.5, 0.0)
         );
-        assert!(parsed.network.shunts().is_empty());
+        assert_eq!(parsed.network.shunts().as_slice(), []);
     }
 
     #[test]
@@ -1635,7 +1635,7 @@ mod tests {
             &format!("-9\n{INTERCHANGE}\n"),
         );
         let parsed = parse_str(&quirk, "ieee-cdf").unwrap();
-        assert!(parsed.network.areas().is_empty());
+        assert_eq!(parsed.network.areas().as_slice(), []);
         let malformed = messages(&parsed, "READ.IEEE_CDF.SOURCE_MALFORMED");
         assert_eq!(malformed.len(), 2, "{malformed:?}");
         assert!(
@@ -1781,7 +1781,10 @@ mod tests {
         let undated = two_bus().replacen("08/19/93", "0 /0 /0 ", 1);
         let parsed = parse_str(&undated, "ieee-cdf").unwrap();
         assert_eq!(parsed.network.case_metadata().case_date, None);
-        assert!(messages(&parsed, "READ.IEEE_CDF.SOURCE_MALFORMED").is_empty());
+        assert_eq!(
+            messages(&parsed, "READ.IEEE_CDF.SOURCE_MALFORMED").as_slice(),
+            [] as [String; 0]
+        );
     }
 
     #[test]

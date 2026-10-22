@@ -3814,7 +3814,10 @@ mod tests {
         br.rate_a = 100.0;
         net.branches_mut().push(br);
         let conv = write_pandapower_json(&net);
-        assert!(written_frame(&conv.text, "line").data.is_empty());
+        assert_eq!(
+            written_frame(&conv.text, "line").data.as_slice(),
+            [] as [Vec<serde_json::Value>; 0]
+        );
         assert_eq!(written_frame(&conv.text, "trafo").data.len(), 1);
         let rt = parse_pandapower_json(&conv.text).unwrap();
         let b = &rt.network.branches()[0];
@@ -3854,7 +3857,7 @@ mod tests {
         net.generators_mut().push(test_gen(1, None));
         let conv = write_pandapower_json(&net);
         let eg = written_frame(&conv.text, "ext_grid");
-        assert!(eg.data.is_empty());
+        assert_eq!(eg.data.as_slice(), [] as [Vec<serde_json::Value>; 0]);
         // The slack generator stays in the gen table.
         let gen_tbl = written_frame(&conv.text, "gen");
         assert_eq!(col(&gen_tbl, "slack"), vec![json!(true)]);
@@ -3936,7 +3939,7 @@ mod tests {
         assert_eq!(cost.model, 1);
         assert_eq!(cost.ncost, 3);
         assert_eq!(cost.coeffs, vec![0.0, 0.0, 10.0, 50.0, 20.0, 130.0]);
-        assert!(parsed.diagnostics.is_empty());
+        assert_eq!(parsed.diagnostics.as_slice(), []);
     }
 
     #[test]

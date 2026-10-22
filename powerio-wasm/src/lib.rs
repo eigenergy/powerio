@@ -220,6 +220,89 @@ mod tests {
     use super::*;
 
     #[test]
+    fn explicit_reader_profiles_report_their_family_without_enabling_sincal_writing() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(include_str!(
+                "../../tests/data/sincal/synthetic-multiconductor.sql"
+            ))
+            .unwrap();
+        let multiconductor = connection.serialize("main").unwrap().to_vec();
+        for (filename, bytes, token, family) in [
+            (
+                "feeder.xml",
+                include_bytes!("../../tests/data/dist/cim/micro_feeder.xml").as_slice(),
+                "cim-dist",
+                "distribution",
+            ),
+            (
+                "case.sinx",
+                include_bytes!("../../tests/data/sincal/1-LV-rural1--0-sw.sinx").as_slice(),
+                "sincal-balanced",
+                "transmission",
+            ),
+            (
+                "case.db",
+                multiconductor.as_slice(),
+                "sincal-multiconductor",
+                "distribution",
+            ),
+        ] {
+            let mut converter = Conversion::new(filename.into());
+            converter.add_file(filename.into(), bytes);
+            let result: Value =
+                serde_json::from_str(&converter.inspect(Some(filename.into()), Some(token.into())))
+                    .unwrap();
+            assert_eq!(result["ok"], true, "{result}");
+            assert_eq!(result["family"], family);
+            assert_eq!(result["format"], token);
+        }
+        let catalog: Value = serde_json::from_str(&capabilities()).unwrap();
+        for token in ["sincal-balanced", "sincal-multiconductor"] {
+            let format = catalog["formats"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|format| format["token"] == token)
+                .unwrap();
+            assert_eq!(format["canRead"], true);
+            assert_eq!(format["canEmit"], false);
+        }
+    }
+
+    #[test]
+    fn dss_companion_suffixes_do_not_change_native_parse_or_source_echo() {
+        let mut converter = Conversion::new("feeder".into());
+        let files: [(&str, &[u8]); 3] = [
+            (
+                "Master.dss",
+                b"New Circuit.example basekv=12.47 bus1=source\nRedirect loads.inc\n",
+            ),
+            (
+                "loads.inc",
+                b"New Load.ld bus1=source phases=3 conn=wye kv=12.47 kw=10 kvar=2\n",
+            ),
+            ("notes.asset", b"opaque companion bytes\x00\xff"),
+        ];
+        for (name, bytes) in files {
+            converter.add_file(name.into(), bytes);
+        }
+        let result: Value =
+            serde_json::from_str(&converter.inspect(Some("Master.dss".into()), None)).unwrap();
+        assert_eq!(result["ok"], true, "{result}");
+        let result: Value = serde_json::from_str(&converter.emit("dss", "feeder".into())).unwrap();
+        assert_eq!(result["ok"], true, "{result}");
+        for (name, bytes) in files {
+            let index = converter
+                .artifacts
+                .iter()
+                .position(|artifact| artifact.name().as_str().ends_with(name))
+                .unwrap();
+            assert_eq!(converter.take_artifact(index), bytes);
+        }
+    }
+
+    #[test]
     fn missing_primary_is_reported_instead_of_reading_another_file() {
         let mut converter = Conversion::new("case".into());
         converter.add_file("case9.m".into(), include_bytes!("../../tests/data/case9.m"));

@@ -1980,6 +1980,15 @@ fn raw_to_rawx(net: &BalancedNetwork, raw: &str, diagnostics: &mut Diagnostics) 
         &sections,
     );
     add_system_switch_output_table(&mut network, net, diagnostics);
+    if sections
+        .get("IMPEDANCE CORRECTION")
+        .is_some_and(|lines| !lines.is_empty())
+    {
+        diagnostics.push(
+            &codes::EMIT_PSSE.record_dropped,
+            "transformer impedance correction tables dropped: the RAWX writer writes no impcor table, so a transformer that names one keeps the number without the table",
+        );
+    }
     apply_detailed_equipment_ids(&mut network, net)?;
     add_detailed_connectivity_output_tables(&mut network, net, diagnostics)?;
 
@@ -3421,9 +3430,61 @@ mod tests {
         let net = parse_rawx_source(MINIMAL, None, &mut diagnostics).unwrap();
         assert_eq!(net.buses().len(), 2);
         close(net.loads()[0].p, 24.0);
-        close(net.loads()[0].q, 11.0);
+        // YQ 4 is capacitive: Q = QL + IQ - YQ.
+        close(net.loads()[0].q, 3.0);
         assert_eq!(net.generators()[0].regulated_bus, Some(BusId(2)));
         close(net.branches()[0].rate_a, 100.0);
+    }
+
+    /// RAWX `modsw` carries the PSS/E switched shunt codes: 1 discrete and 2
+    /// continuous voltage control, 3 to 6 discrete control of another
+    /// quantity. Each reads as PSS/E defines it and writes back unchanged.
+    #[test]
+    fn switched_shunt_modsw_codes_survive_rawx_output() {
+        use crate::network::SwitchedShuntMode;
+
+        for (modsw, mode, retained) in [
+            (0, SwitchedShuntMode::Locked, None),
+            (1, SwitchedShuntMode::Discrete, None),
+            (2, SwitchedShuntMode::Continuous, None),
+            (3, SwitchedShuntMode::Discrete, Some(3)),
+            (6, SwitchedShuntMode::Discrete, Some(6)),
+        ] {
+            let mut root: Value = serde_json::from_str(MINIMAL).unwrap();
+            root["network"]["swshunt"] = serde_json::json!({
+                "fields": ["ibus", "shntid", "modsw", "adjm", "stat", "vswhi", "vswlo", "swreg", "nreg", "rmpct", "rmidnt", "binit", "s1", "n1", "b1"],
+                "data": [[2, "S1", modsw, 0, 1, 1.05, 0.95, 0, 0, 100, "", 7.5, 1, 2, 10.0]]
+            });
+            let source = serde_json::to_string(&root).unwrap();
+            let net = parse_rawx_source(&source, None, &mut Diagnostics::new()).unwrap();
+            let shunt = &net.shunts()[0];
+            assert_eq!(shunt.control.as_ref().unwrap().mode, mode, "MODSW {modsw}");
+            assert_eq!(
+                shunt.extras.get("psse_modsw").and_then(Value::as_i64),
+                retained,
+                "MODSW {modsw} retained code"
+            );
+
+            let emitted = write_rawx(&net).unwrap();
+            let output: Value = serde_json::from_str(&emitted.text).unwrap();
+            assert_eq!(
+                table_value(&output, "swshunt", 0, "modsw"),
+                modsw,
+                "MODSW {modsw} written"
+            );
+            let back = parse_rawx_source(&emitted.text, None, &mut Diagnostics::new()).unwrap();
+            let shunt = &back.shunts()[0];
+            assert_eq!(
+                shunt.control.as_ref().unwrap().mode,
+                mode,
+                "MODSW {modsw} reread"
+            );
+            assert_eq!(
+                shunt.extras.get("psse_modsw").and_then(Value::as_i64),
+                retained,
+                "MODSW {modsw} reread code"
+            );
+        }
     }
 
     #[test]

@@ -1429,6 +1429,9 @@ pub enum SourceFormat {
     /// writer, so writing goes through another format's writer.
     #[serde(rename = "ieee-cdf")]
     IeeeCdf,
+    /// A SINCAL project read using the explicitly selected balanced profile.
+    #[serde(rename = "sincal")]
+    Sincal,
 }
 
 impl SourceFormat {
@@ -1439,6 +1442,7 @@ impl SourceFormat {
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
+            SourceFormat::Sincal => "sincal",
             SourceFormat::Matpower => "matpower",
             SourceFormat::PowerModelsJson => "powermodels-json",
             SourceFormat::EgretJson => "egret-json",
@@ -2292,6 +2296,12 @@ impl Shunt {
 }
 
 /// How a switched shunt adjusts its susceptance. Maps to the PSS/E `MODSW` code.
+//
+// The IR 2 schema catalogs are published byte for byte, and
+// `powerio/tests/frozen_schemas.rs` holds every record to its published text.
+// The schema descriptions of the two adjusting variants therefore keep their
+// 0.11 wording, which swaps `MODSW` 1 and 2, until a new catalog snapshot
+// takes the code mapping the rustdoc states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -2299,9 +2309,23 @@ impl Shunt {
 pub enum SwitchedShuntMode {
     /// Fixed at its initial susceptance, no automatic switching (`MODSW` 0).
     Locked,
-    /// Continuous adjustment within the block range (`MODSW` 1).
+    /// Continuous adjustment within the block range to hold the voltage band
+    /// (`MODSW` 2).
+    #[cfg_attr(
+        feature = "schema",
+        schemars(description = "Continuous adjustment within the block range (`MODSW` 1).")
+    )]
     Continuous,
-    /// Discrete adjustment in fixed steps (`MODSW` 2 and up).
+    /// Discrete adjustment in fixed steps (`MODSW` 1, and 3 to 6).
+    ///
+    /// `MODSW` 1 holds the voltage band. `MODSW` 3 to 6 control a plant's
+    /// reactive output, a VSC dc converter's reactive output, another switched
+    /// shunt's admittance setting, or a FACTS device's reactive output; the
+    /// PSS/E reader keeps that code in the shunt's `psse_modsw` extra.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(description = "Discrete adjustment in fixed steps (`MODSW` 2 and up).")
+    )]
     Discrete,
 }
 
@@ -2478,6 +2502,105 @@ pub struct Branch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<Vec<Location>>,
     pub extras: Extras,
+}
+
+/// The [`Branch::extras`] and [`Transformer3W::extras`] key behind
+/// [`Branch::impedance_correction`] and
+/// [`Transformer3W::winding_impedance_correction`].
+pub(crate) const IMPEDANCE_CORRECTION_EXTRA: &str = "impedance_correction";
+/// The extras key where [`BalancedNetwork::apply_impedance_correction`]
+/// records the nominal series impedance it scales.
+pub(crate) const IMPEDANCE_CORRECTION_NOMINAL_EXTRA: &str = "impedance_correction_nominal";
+
+/// A transformer impedance correction table: the factors by which a winding's
+/// nominal series impedance is multiplied, tabulated against the winding's
+/// off-nominal turns ratio or its phase shift. PSS/E states these as
+/// impedance correction tables that a transformer winding names through
+/// `TAB`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ImpedanceCorrection {
+    /// The source's table number (PSS/E `TAB`).
+    pub table: u32,
+    /// What the points are tabulated against.
+    pub variable: ImpedanceCorrectionVariable,
+    /// The points, in ascending order of [`value`](ImpedanceCorrectionPoint::value).
+    pub points: Vec<ImpedanceCorrectionPoint>,
+}
+
+/// The winding quantity an [`ImpedanceCorrection`] is tabulated against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ImpedanceCorrectionVariable {
+    /// The off-nominal turns ratio as the transformer's `tap` states it.
+    Ratio,
+    /// The phase shift, degrees.
+    Angle,
+}
+
+/// One point of an [`ImpedanceCorrection`]: the complex factor
+/// `factor_re + j·factor_im` that multiplies the nominal series impedance at
+/// `value`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ImpedanceCorrectionPoint {
+    /// Turns ratio (p.u.) or phase shift (degrees).
+    pub value: f64,
+    pub factor_re: f64,
+    pub factor_im: f64,
+}
+
+impl ImpedanceCorrectionPoint {
+    #[must_use]
+    pub fn new(value: f64, factor_re: f64, factor_im: f64) -> Self {
+        Self {
+            value,
+            factor_re,
+            factor_im,
+        }
+    }
+}
+
+impl ImpedanceCorrection {
+    #[must_use]
+    pub fn new(
+        table: u32,
+        variable: ImpedanceCorrectionVariable,
+        points: Vec<ImpedanceCorrectionPoint>,
+    ) -> Self {
+        Self {
+            table,
+            variable,
+            points,
+        }
+    }
+
+    /// The complex factor `(re, im)` at `value`, interpolated linearly
+    /// between the two points around it. Outside the tabulated range the
+    /// nearest end point applies, and one point applies everywhere. `None`
+    /// for a table with no points.
+    #[must_use]
+    pub fn calc_factor(&self, value: f64) -> Option<(f64, f64)> {
+        let mut points = self.points.clone();
+        points.sort_by(|a, b| a.value.total_cmp(&b.value));
+        let first = points.first()?;
+        let last = points.last()?;
+        if value <= first.value {
+            return Some((first.factor_re, first.factor_im));
+        }
+        if value >= last.value {
+            return Some((last.factor_re, last.factor_im));
+        }
+        let upper = points.iter().position(|point| point.value >= value)?;
+        let (a, b) = (points[upper - 1], points[upper]);
+        let weight = (value - a.value) / (b.value - a.value);
+        let lerp = |x: f64, y: f64| x + weight * (y - x);
+        Some((
+            lerp(a.factor_re, b.factor_re),
+            lerp(a.factor_im, b.factor_im),
+        ))
+    }
 }
 
 /// Extra branch MVA rating set beyond the canonical A/B/C columns.
@@ -2745,6 +2868,34 @@ impl Branch {
     #[must_use]
     pub fn has_angle_limits(&self) -> bool {
         self.angmin > -360.0 || self.angmax < 360.0
+    }
+
+    /// The impedance correction table this transformer's series impedance
+    /// follows. It is kept under `extras["impedance_correction"]`; an absent
+    /// or malformed entry reads as none.
+    /// [`BalancedNetwork::apply_impedance_correction`] applies it.
+    #[must_use]
+    pub fn impedance_correction(&self) -> Option<ImpedanceCorrection> {
+        self.extras
+            .get(IMPEDANCE_CORRECTION_EXTRA)
+            .and_then(|value| ImpedanceCorrection::deserialize(value).ok())
+    }
+
+    /// Set or clear [`impedance_correction`](Self::impedance_correction).
+    pub fn set_impedance_correction(&mut self, correction: Option<ImpedanceCorrection>) {
+        set_impedance_correction_extra(&mut self.extras, correction);
+    }
+}
+
+fn set_impedance_correction_extra(extras: &mut Extras, correction: Option<ImpedanceCorrection>) {
+    match correction {
+        Some(correction) => {
+            let value = serde_json::to_value(correction).expect("a correction serializes to JSON");
+            extras.insert(IMPEDANCE_CORRECTION_EXTRA.to_owned(), value);
+        }
+        None => {
+            extras.remove(IMPEDANCE_CORRECTION_EXTRA);
+        }
     }
 }
 
@@ -3422,6 +3573,13 @@ impl Impedance {
     }
 }
 
+/// The [`Transformer3W::extras`] key behind
+/// [`Transformer3W::winding_in_service`].
+pub(crate) const WINDING_IN_SERVICE_EXTRA: &str = "winding_in_service";
+/// The [`Transformer3W::extras`] key behind
+/// [`Transformer3W::winding_rating_sets`].
+pub(crate) const WINDING_RATING_SETS_EXTRA: &str = "winding_rating_sets";
+
 /// One winding of a [`Transformer3W`]: its terminal bus, off-nominal ratio, phase
 /// shift, nominal voltage, and thermal ratings.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -3526,12 +3684,142 @@ impl Transformer3W {
         ]
     }
 
+    /// Whether each winding is connected while the transformer is in service,
+    /// in winding order. [`in_service`](Self::in_service) takes the whole
+    /// transformer out; a winding that is out leaves the other two coupled
+    /// through the star point.
+    ///
+    /// The status is kept as three booleans under
+    /// `extras["winding_in_service"]`, absent while every winding is in
+    /// service. An absent or malformed entry reads as every winding in service.
+    #[must_use]
+    pub fn winding_in_service(&self) -> [bool; 3] {
+        self.extras
+            .get(WINDING_IN_SERVICE_EXTRA)
+            .and_then(|value| <[bool; 3]>::deserialize(value).ok())
+            .unwrap_or([true; 3])
+    }
+
+    /// Set [`winding_in_service`](Self::winding_in_service).
+    pub fn set_winding_in_service(&mut self, in_service: [bool; 3]) {
+        if in_service == [true; 3] {
+            self.extras.remove(WINDING_IN_SERVICE_EXTRA);
+        } else {
+            self.extras.insert(
+                WINDING_IN_SERVICE_EXTRA.to_owned(),
+                Value::from(in_service.to_vec()),
+            );
+        }
+    }
+
+    /// The MVA rating sets of winding `winding` (0, 1, or 2) beyond `rate_a`,
+    /// `rate_b`, and `rate_c`, named as on [`Branch::rating_sets`]: PSS/E
+    /// states `RATE4` to `RATE12`.
+    ///
+    /// The sets are kept under `extras["winding_rating_sets"]` as three arrays
+    /// of `{name, rate_mva}` objects in winding order, absent while no winding
+    /// has one. An absent or malformed entry reads as no sets.
+    ///
+    /// # Panics
+    /// If `winding` is 3 or more.
+    #[must_use]
+    pub fn winding_rating_sets(&self, winding: usize) -> Vec<BranchRatingSet> {
+        let mut sets = self.stored_winding_rating_sets();
+        std::mem::take(&mut sets[winding])
+    }
+
+    /// Set [`winding_rating_sets`](Self::winding_rating_sets) for one winding.
+    ///
+    /// # Panics
+    /// If `winding` is 3 or more.
+    pub fn set_winding_rating_sets(&mut self, winding: usize, rating_sets: Vec<BranchRatingSet>) {
+        let mut sets = self.stored_winding_rating_sets();
+        sets[winding] = rating_sets;
+        if sets.iter().all(Vec::is_empty) {
+            self.extras.remove(WINDING_RATING_SETS_EXTRA);
+        } else {
+            let value = serde_json::to_value(sets).expect("rating sets serialize to JSON");
+            self.extras
+                .insert(WINDING_RATING_SETS_EXTRA.to_owned(), value);
+        }
+    }
+
+    fn stored_winding_rating_sets(&self) -> [Vec<BranchRatingSet>; 3] {
+        self.extras
+            .get(WINDING_RATING_SETS_EXTRA)
+            .and_then(|value| <[Vec<BranchRatingSet>; 3]>::deserialize(value).ok())
+            .unwrap_or_default()
+    }
+
+    /// The sole adjustable winding for PSS/E bus-to-bus correction. The
+    /// sign of COD enables regulation but does not change which winding the
+    /// tables describe: a disabled nonzero control remains adjustable.
+    pub(crate) fn impedance_correction_control_winding(&self) -> Option<usize> {
+        let mut adjustable = self
+            .windings
+            .iter()
+            .enumerate()
+            .filter(|(_, winding)| {
+                winding
+                    .control
+                    .as_ref()
+                    .is_some_and(|control| control.mode != TransformerControlMode::Fixed)
+            })
+            .map(|(index, _)| index);
+        let winding = adjustable.next()?;
+        adjustable.next().is_none().then_some(winding)
+    }
+
+    /// The impedance correction table winding `winding` (0, 1, or 2) follows:
+    /// it scales that winding's star impedance, except with PSS/E `ZCOD=1`,
+    /// where entries 0/1/2 scale Z12/Z23/Z31 at the sole adjustable winding.
+    /// The tables are kept under
+    /// `extras["impedance_correction"]` as three entries in winding order, each
+    /// a table or `null`; an absent or malformed entry reads as none.
+    ///
+    /// # Panics
+    /// If `winding` is 3 or more.
+    #[must_use]
+    pub fn winding_impedance_correction(&self, winding: usize) -> Option<ImpedanceCorrection> {
+        let mut corrections = self.stored_winding_impedance_corrections();
+        corrections[winding].take()
+    }
+
+    /// Set or clear [`winding_impedance_correction`](Self::winding_impedance_correction)
+    /// for one winding.
+    ///
+    /// # Panics
+    /// If `winding` is 3 or more.
+    pub fn set_winding_impedance_correction(
+        &mut self,
+        winding: usize,
+        correction: Option<ImpedanceCorrection>,
+    ) {
+        let mut corrections = self.stored_winding_impedance_corrections();
+        corrections[winding] = correction;
+        if corrections.iter().all(Option::is_none) {
+            self.extras.remove(IMPEDANCE_CORRECTION_EXTRA);
+        } else {
+            let value = serde_json::to_value(corrections).expect("corrections serialize to JSON");
+            self.extras
+                .insert(IMPEDANCE_CORRECTION_EXTRA.to_owned(), value);
+        }
+    }
+
+    fn stored_winding_impedance_corrections(&self) -> [Option<ImpedanceCorrection>; 3] {
+        self.extras
+            .get(IMPEDANCE_CORRECTION_EXTRA)
+            .and_then(|value| <[Option<ImpedanceCorrection>; 3]>::deserialize(value).ok())
+            .unwrap_or_default()
+    }
+
     /// Expand into a synthetic star [`Bus`] (id `star_id`) plus three [`Branch`]es,
     /// one per winding, for a consumer that works in the bus-branch model.
     /// [`IndexedNetwork`](crate::IndexedNetwork) calls this via
     /// `BalancedNetwork::expand_transformers_3w` when assembling matrix inputs. The star
     /// bus carries the stored star voltage and the magnetizing shunt is left to the
-    /// caller; each branch takes its winding's tap, phase shift, and ratings.
+    /// caller; each branch takes its winding's tap, phase shift, ratings, and
+    /// status, so a winding out of service gives an out of service branch.
     #[must_use]
     pub fn to_star_expansion(&self, star_id: BusId) -> (Bus, [Branch; 3]) {
         let star = Bus {
@@ -3576,18 +3864,23 @@ impl Transformer3W {
             route: None,
             extras: Extras::new(),
         };
-        let branches = [
+        let mut branches = [
             branch(&self.windings[0], zs[0]),
             branch(&self.windings[1], zs[1]),
             branch(&self.windings[2], zs[2]),
         ];
+        let windings_in_service = self.winding_in_service();
+        for (k, branch) in branches.iter_mut().enumerate() {
+            branch.in_service &= windings_in_service[k];
+            branch.rating_sets = self.winding_rating_sets(k);
+        }
         (star, branches)
     }
 }
 
 /// The MATPOWER gen capability / ramp columns past `PMIN`, in order. The index
 /// into this array is the slot index into a [`GenCaps`].
-pub(crate) const GEN_EXTRA_KEYS: [&str; 11] = [
+pub const GEN_EXTRA_KEYS: [&str; 11] = [
     "pc1", "pc2", "qc1min", "qc1max", "qc2min", "qc2max", "ramp_agc", "ramp_10", "ramp_30",
     "ramp_q", "apf",
 ];
@@ -5668,6 +5961,7 @@ mod tests {
         // The exhaustive match keeps a new enum case from shipping with a serde
         // spelling that differs from name().
         let all = [
+            SourceFormat::Sincal,
             SourceFormat::Matpower,
             SourceFormat::PowerModelsJson,
             SourceFormat::EgretJson,
@@ -5712,7 +6006,8 @@ mod tests {
                 | SourceFormat::Jiidm
                 | SourceFormat::Cgmes
                 | SourceFormat::Ucte
-                | SourceFormat::IeeeCdf => {}
+                | SourceFormat::IeeeCdf
+                | SourceFormat::Sincal => {}
             }
             let token = serde_json::to_value(f).unwrap();
             assert_eq!(token, serde_json::Value::String(f.name().to_owned()));
@@ -5957,6 +6252,85 @@ mod tests {
         }
         close(branches[2].r, 0.02);
         close(branches[2].x, 0.20);
+    }
+
+    #[test]
+    fn star_expansion_carries_winding_status_and_rating_sets() {
+        let mut t = transformer_3w();
+        t.set_winding_in_service([true, false, true]);
+        t.set_winding_rating_sets(2, vec![BranchRatingSet::new("RATE4", 75.0)]);
+        let (_, branches) = t.to_star_expansion(BusId(99));
+        assert_eq!(
+            branches.each_ref().map(|br| br.in_service),
+            [true, false, true]
+        );
+        assert_eq!(
+            branches[2].rating_sets,
+            [BranchRatingSet::new("RATE4", 75.0)]
+        );
+        assert_eq!(branches[0].rating_sets, []);
+
+        // The transformer status still takes every winding out.
+        t.in_service = false;
+        let (_, branches) = t.to_star_expansion(BusId(99));
+        assert!(branches.iter().all(|br| !br.in_service));
+
+        // The lowering keeps all three branches of a partly in service
+        // transformer, so analysis rows still map to windings one for one.
+        t.in_service = true;
+        let mut net =
+            BalancedNetwork::in_memory("t", 100.0, vec![bus(1), bus(2), bus(3)], Vec::new());
+        net.transformers_3w_mut().push(t);
+        let lowered = net.expand_transformers_3w();
+        assert_eq!(
+            lowered
+                .branches()
+                .iter()
+                .map(|br| (br.from, br.in_service))
+                .collect::<Vec<_>>(),
+            [(BusId(1), true), (BusId(2), false), (BusId(3), true)]
+        );
+        assert_eq!(net.lowered_lengths().branches, lowered.branches().len());
+    }
+
+    #[test]
+    fn winding_status_and_rating_sets_live_in_extras_only_when_stated() {
+        let mut t = transformer_3w();
+        assert_eq!(t.winding_in_service(), [true; 3]);
+        assert_eq!(t.winding_rating_sets(1), []);
+
+        t.set_winding_in_service([false, true, true]);
+        t.set_winding_rating_sets(1, vec![BranchRatingSet::new("RATE4", 75.0)]);
+        assert_eq!(
+            t.extras["winding_in_service"],
+            serde_json::json!([false, true, true])
+        );
+        assert_eq!(
+            t.extras["winding_rating_sets"],
+            serde_json::json!([[], [{"name": "RATE4", "rate_mva": 75.0}], []])
+        );
+        let mut net =
+            BalancedNetwork::in_memory("t", 100.0, vec![bus(1), bus(2), bus(3)], Vec::new());
+        net.transformers_3w_mut().push(t.clone());
+        let back = serde_round_trip(&net);
+        assert_eq!(
+            back.transformers_3w()[0].winding_in_service(),
+            [false, true, true]
+        );
+        assert_eq!(
+            back.transformers_3w()[0].winding_rating_sets(1),
+            [BranchRatingSet::new("RATE4", 75.0)]
+        );
+
+        // Restating the defaults removes both entries.
+        t.set_winding_in_service([true; 3]);
+        t.set_winding_rating_sets(1, Vec::new());
+        assert!(t.extras.is_empty(), "{:?}", t.extras);
+
+        // A malformed entry reads as the default rather than failing.
+        t.extras
+            .insert("winding_in_service".to_owned(), Value::from("open"));
+        assert_eq!(t.winding_in_service(), [true; 3]);
     }
 
     #[test]
@@ -6445,7 +6819,7 @@ mod tests {
         close(net.generators()[0].vg, 1.0);
         // Idempotent: nothing left to repair, and a second pass appends
         // nothing.
-        assert!(net.validate_values().is_empty());
+        assert_eq!(net.validate_values().as_slice(), []);
         let entries = module.history();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].kind(), powerio_core::HistoryKind::Repair);
@@ -6461,7 +6835,7 @@ mod tests {
     #[test]
     fn validate_values_is_empty_for_a_clean_network() {
         let net = BalancedNetwork::in_memory("t", 100.0, vec![bus(1), bus(2)], Vec::new());
-        assert!(net.validate_values().is_empty());
+        assert_eq!(net.validate_values().as_slice(), []);
     }
 
     #[test]
@@ -6488,5 +6862,31 @@ mod tests {
         let error = calc_reactive_limits_at_active_power("generator 1", &limits, f64::NAN)
             .expect_err("NaN must not be used to index a capability curve");
         assert!(error.contains("nonfinite active power"), "{error}");
+    }
+    #[test]
+    fn impedance_correction_factor_interpolates_and_holds_the_end_points() {
+        let point = ImpedanceCorrectionPoint::new;
+        let table = ImpedanceCorrection::new(
+            1,
+            ImpedanceCorrectionVariable::Angle,
+            vec![
+                point(30.0, 1.2, -0.2),
+                point(-30.0, 1.2, 0.2),
+                point(0.0, 1.0, 0.0),
+            ],
+        );
+        assert_eq!(table.calc_factor(-45.0), Some((1.2, 0.2)));
+        assert_eq!(table.calc_factor(45.0), Some((1.2, -0.2)));
+        let (re, im) = table.calc_factor(15.0).unwrap();
+        close(re, 1.1);
+        close(im, -0.1);
+        let single = ImpedanceCorrection::new(
+            2,
+            ImpedanceCorrectionVariable::Ratio,
+            vec![point(1.0, 0.9, 0.0)],
+        );
+        assert_eq!(single.calc_factor(1.1), Some((0.9, 0.0)));
+        let empty = ImpedanceCorrection::new(3, ImpedanceCorrectionVariable::Ratio, Vec::new());
+        assert_eq!(empty.calc_factor(1.0), None);
     }
 }

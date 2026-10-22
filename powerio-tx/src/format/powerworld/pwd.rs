@@ -739,7 +739,7 @@ mod drawing_tests {
     fn bus_and_route_positions_keep_diagram_units() {
         let bytes = drawing();
         let parsed = parse_pwd_layer(&bytes).unwrap();
-        assert!(parsed.diagnostics.is_empty());
+        assert_eq!(parsed.diagnostics.as_slice(), []);
         assert_eq!(parsed.layer.features.len(), 3);
         assert!(matches!(
             parsed.layer.space,
@@ -758,7 +758,7 @@ mod drawing_tests {
             parsed.layer
         );
         let truncated = parse_pwd_layer(&bytes[..bytes.len() - 8]).unwrap();
-        assert!(!truncated.diagnostics.is_empty());
+        assert_ne!(truncated.diagnostics.as_slice(), []);
         assert_eq!(truncated.layer.features.len(), 2);
     }
 

@@ -12,6 +12,7 @@ from powerio import dist
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data" / "dist"
 FOURWIRE = DATA / "micro" / "fourwire_linecode.dss"
+CIM_FEEDER = DATA / "cim" / "micro_feeder.xml"
 LOWERABLE_DSS = """Clear
 Set DefaultBaseFrequency=60
 New Circuit.tiny basekv=12.47 pu=1.0 phases=3 bus1=src MVAsc3=2000 MVAsc1=2100
@@ -104,6 +105,18 @@ def test_same_format_write_echoes_source():
     conv = _emit_value(case, "dss")
     assert conv.text == FOURWIRE.read_text()
     assert conv.diagnostics == ()
+
+
+def test_distribution_cim_reads_converts_and_saves():
+    module = powerio.parse(CIM_FEEDER)
+    case = module.value
+    assert isinstance(case, dist.MulticonductorNetwork)
+    assert case.source_format == "cim-dist"
+    assert case.n_buses == 4
+    assert powerio.emit(module, "cim-dist").text == CIM_FEEDER.read_text()
+    assert "bus" in json.loads(_emit_value(case, "bmopf-json").text)
+    stored = _parse_module(_emit_module(module))
+    assert stored.value.source_format == "cim-dist"
 
 
 def test_cross_format_writes():
@@ -412,10 +425,12 @@ def test_source_energy_prices_and_draft_schema_digest_survive_ir():
     assert restored.value.voltage_sources[0]["energy_cost_rate"] == [0.1]
     output = json.loads(powerio.emit(restored, "bmopf-json@0.2.0").text)
     provenance = output["meta"]["provenance"]["powerio_bmopf"]
-    schema = (DATA / "bmopf" / "bmopf-0.2.0.schema.json").read_bytes()
+    schema = (DATA.parents[2] / "powerio-dist" / "schemas" / "bmopf" / "0.2.0" / "bmopf.schema.json").read_bytes()
     assert provenance["schema_sha256"] == hashlib.sha256(schema).hexdigest()
     assert provenance["schema_status"] == "proposal"
-    assert provenance["schema_commit"] in output["meta"]["$schema"]
+    assert provenance["schema_commit"] in provenance["schema_upstream_url"]
+    assert output["meta"]["$schema"] == provenance["schema_retrieval_url"]
+    assert "raw.githubusercontent.com/eigenergy/powerio/" in output["meta"]["$schema"]
     legacy = json.loads(powerio.emit(restored, "bmopf-json@0.1.0").text)
     assert "energy_cost_rate" not in legacy["voltage_source"]["s"]
     assert legacy["extras"]["voltage_source"]["s"]["energy_cost_rate"] == [0.1]

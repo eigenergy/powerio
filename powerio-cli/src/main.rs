@@ -43,6 +43,82 @@ struct Cli {
     diagnostics_format: DiagnosticsFormat,
 }
 
+/// Native SINCAL selection follows the same explicit profile as the facade.
+#[derive(clap::Args, Debug, Default)]
+struct SincalCliOptions {
+    /// Native variant ID; requires an explicit SINCAL --from profile.
+    #[arg(long)]
+    sincal_variant: Option<i64>,
+    /// Daily snapshot in hours; requires an explicit SINCAL --from profile.
+    #[arg(long, allow_hyphen_values = true)]
+    sincal_snapshot_hours: Option<f64>,
+    /// Relative acquired-table companion of the original MDB; never runs MDB Tools.
+    #[arg(long)]
+    sincal_acquired_tables: Option<String>,
+    /// Explicit root beneath which input companion files may be acquired.
+    #[arg(long)]
+    acquisition_root: Option<PathBuf>,
+    /// Experimental: assume schema-11.5 NULL source controls inactive; emits warnings.
+    #[arg(long)]
+    sincal_assume_inactive_source_controls: bool,
+}
+
+impl SincalCliOptions {
+    fn is_empty(&self) -> bool {
+        self.sincal_variant.is_none()
+            && self.sincal_snapshot_hours.is_none()
+            && self.sincal_acquired_tables.is_none()
+            && self.acquisition_root.is_none()
+            && !self.sincal_assume_inactive_source_controls
+    }
+
+    fn options(&self, from: Option<FormatArg>) -> anyhow::Result<powerio::ParseOptions> {
+        let mut options = parse_options(from.map(FormatArg::name))?;
+        options.acquisition_root.clone_from(&self.acquisition_root);
+        if self.sincal_variant.is_some()
+            || self.sincal_snapshot_hours.is_some()
+            || self.sincal_acquired_tables.is_some()
+            || self.sincal_assume_inactive_source_controls
+        {
+            match from {
+                Some(FormatArg::SincalBalanced) => {
+                    if self.sincal_assume_inactive_source_controls {
+                        return Err(cli_failure(
+                            &codes::REQUEST_CLI_OPTION_INVALID,
+                            "--sincal-assume-inactive-source-controls requires --from sincal-multiconductor",
+                        ));
+                    }
+                    let mut selection = powerio_tx::format::SincalBalancedReadOptions::default();
+                    selection.variant = self.sincal_variant;
+                    selection.snapshot_hours = self.sincal_snapshot_hours;
+                    selection
+                        .acquired_tables
+                        .clone_from(&self.sincal_acquired_tables);
+                    options.sincal_balanced = Some(selection);
+                }
+                Some(FormatArg::SincalMulticonductor) => {
+                    let mut selection = powerio_dist::SincalReadOptions::default();
+                    selection.assume_inactive_source_controls =
+                        self.sincal_assume_inactive_source_controls;
+                    selection.variant = self.sincal_variant;
+                    selection.snapshot_hours = self.sincal_snapshot_hours;
+                    selection
+                        .acquired_tables
+                        .clone_from(&self.sincal_acquired_tables);
+                    options.sincal_multiconductor = Some(selection);
+                }
+                _ => {
+                    return Err(cli_failure(
+                        &codes::REQUEST_CLI_OPTION_INVALID,
+                        "SINCAL selection options require --from sincal-balanced or sincal-multiconductor",
+                    ));
+                }
+            }
+        }
+        Ok(options)
+    }
+}
+
 /// The stderr rendering of diagnostics, selected once per run.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 enum DiagnosticsFormat {
@@ -115,6 +191,13 @@ enum Command {
         kind: MatrixKindArg,
         #[arg(long, value_enum, default_value = "bx")]
         scheme: SchemeArg,
+        /// Merge buses first. SPEC is `switches` (closed switches), `exact`
+        /// (and branches with r = 0 and x = 0), `psse` (and PSS/E zero
+        /// impedance lines: non-transformer, r = 0, |x| at most the case's
+        /// THRSHZ), `psse=<x>` (the same at threshold x), or `impedance=<z>`
+        /// (and non-transformer branches with |r + jx| at most z).
+        #[arg(long, value_name = "SPEC")]
+        merge_buses: Option<String>,
     },
     /// Emit the static DC OPF matrix/vector bundle for one case.
     #[command(name = "dcopf", visible_alias = "dc-opf")]
@@ -173,9 +256,18 @@ enum Command {
         /// Override the inferred input format.
         #[arg(long, value_enum)]
         from: Option<FormatArg>,
+        #[command(flatten)]
+        selection: SincalCliOptions,
         /// With `--from gridfm`, which scenario to summarize.
         #[arg(long, default_value_t = 0)]
         scenario: i64,
+        /// Merge buses first. SPEC is `switches` (closed switches), `exact`
+        /// (and branches with r = 0 and x = 0), `psse` (and PSS/E zero
+        /// impedance lines: non-transformer, r = 0, |x| at most the case's
+        /// THRSHZ), `psse=<x>` (the same at threshold x), or `impedance=<z>`
+        /// (and non-transformer branches with |r + jx| at most z).
+        #[arg(long, value_name = "SPEC")]
+        merge_buses: Option<String>,
     },
     /// Serialize one input as PowerIO IR (`.pio.json`).
     Serialize {
@@ -188,6 +280,8 @@ enum Command {
         /// Override the inferred input format.
         #[arg(long, value_enum)]
         from: Option<FormatArg>,
+        #[command(flatten)]
+        selection: SincalCliOptions,
     },
     /// Run the conversion invariants over a corpus of case files.
     ///
@@ -235,13 +329,14 @@ enum Command {
     },
     /// Convert a case file to another format. Transmission formats convert
     /// through the neutral hub; distribution formats (dss, pmd-json,
-    /// bmopf-json) through the wire coordinate distribution model. The two
-    /// families do not mix.
+    /// bmopf-json, cim-dist) through the wire coordinate distribution model.
+    /// The two families do not mix.
     Convert {
         /// Input case file, or a gridfm dataset directory with `--from gridfm`.
         /// The format is inferred from the extension (`.m`, `.json`, `.raw`,
-        /// `.aux`, `.dss`) unless `--from` is given. `-` reads the case from
-        /// standard input, which requires `--from`.
+        /// `.aux`, `.dss`, and `.xml` by its content) unless `--from` is
+        /// given. `-` reads the case from standard input, which requires
+        /// `--from`.
         input: PathBuf,
         /// Target format.
         #[arg(long, value_enum)]
@@ -253,6 +348,8 @@ enum Command {
         /// directory (see `--scenario`).
         #[arg(long, value_enum)]
         from: Option<FormatArg>,
+        #[command(flatten)]
+        selection: SincalCliOptions,
         /// With `--from gridfm`, which scenario to read from the dataset.
         #[arg(long, default_value_t = 0)]
         scenario: i64,
@@ -265,11 +362,23 @@ enum Command {
         /// CSV with columns gen_index,bus,c2,c1,c0 and optional startup,shutdown.
         #[arg(long)]
         gen_cost_csv: Option<PathBuf>,
+        /// Merge buses first. SPEC is `switches` (closed switches), `exact`
+        /// (and branches with r = 0 and x = 0), `psse` (and PSS/E zero
+        /// impedance lines: non-transformer, r = 0, |x| at most the case's
+        /// THRSHZ), `psse=<x>` (the same at threshold x), or `impedance=<z>`
+        /// (and non-transformer branches with |r + jx| at most z).
+        #[arg(long, value_name = "SPEC")]
+        merge_buses: Option<String>,
     },
     /// Extract, apply, or normalize standalone geographic layers (.geo.json).
     Geo {
         #[command(subcommand)]
         command: GeoCommand,
+    },
+    /// Bind PSS/E contingency analysis files (.con, .sub, .mon) to a case.
+    Contingency {
+        #[command(subcommand)]
+        command: ContingencyCommand,
     },
 }
 
@@ -377,6 +486,50 @@ enum GeoCommand {
     },
 }
 
+#[derive(Subcommand, Debug)]
+enum ContingencyCommand {
+    /// Bind a contingency description file to a case and report what each
+    /// case named.
+    Resolve {
+        /// Input case file (transmission).
+        case: PathBuf,
+        /// Contingency description file (.con).
+        contingency: PathBuf,
+        /// Subsystem description file (.sub), read with --mon: it names the
+        /// buses a monitored statement's subsystem holds. Without one, such a
+        /// statement names no bus.
+        #[arg(long, requires = "mon")]
+        sub: Option<PathBuf>,
+        /// Monitored element file (.mon), bound to the same case and
+        /// subsystems.
+        #[arg(long)]
+        mon: Option<PathBuf>,
+        /// Write the counts as one JSON object on stdout.
+        #[arg(long)]
+        json: bool,
+        /// Override the inferred case format.
+        #[arg(long, value_enum)]
+        from: Option<FormatArg>,
+    },
+    /// Expand the automatic specifications of a contingency description file
+    /// into explicit cases over a subsystem set.
+    Expand {
+        /// Input case file (transmission).
+        case: PathBuf,
+        /// Contingency description file (.con).
+        contingency: PathBuf,
+        /// Subsystem description file (.sub) the specifications draw from.
+        #[arg(long)]
+        sub: PathBuf,
+        /// Output .con file; `-` or omitted writes to stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Override the inferred case format.
+        #[arg(long, value_enum)]
+        from: Option<FormatArg>,
+    },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum MissingGenCostArg {
     Preserve,
@@ -430,6 +583,12 @@ impl<'a> GenCostCliOptions<'a> {
 /// PowerWorld `.pwb` and the IEEE CDF have no emitter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum FormatArg {
+    /// Explicit conductor-resolved SINCAL input; unchanged native echo on output.
+    #[value(name = "sincal-multiconductor")]
+    SincalMulticonductor,
+    /// Explicit balanced SINCAL input; unchanged binary echo only on output.
+    #[value(name = "sincal-balanced")]
+    SincalBalanced,
     #[value(name = "matpower", alias = "m")]
     Matpower,
     #[value(name = "powermodels-json", alias = "powermodels", alias = "pm")]
@@ -508,6 +667,10 @@ enum FormatArg {
     /// IEEE BMOPF JSON distribution case (parse and emit).
     #[value(name = "bmopf-json", alias = "bmopf")]
     BmopfJson,
+    /// Distribution CIM, CIM100 RDF/XML (parse and emit; parse also reads a
+    /// directory of documents).
+    #[value(name = "cim-dist", alias = "cimdist")]
+    CimDist,
     /// Re-encode against the BMOPF 0.1.0 schema.
     #[value(name = "bmopf-json@0.1.0")]
     Bmopf010,
@@ -549,12 +712,20 @@ impl FormatArg {
             | FormatArg::Gridfm
             | FormatArg::Pwb
             | FormatArg::IeeeCdf
+            | FormatArg::SincalMulticonductor
+            | FormatArg::SincalBalanced
             | FormatArg::Dss
             | FormatArg::PmdJson
             | FormatArg::BmopfJson
             | FormatArg::Bmopf010
-            | FormatArg::Bmopf020 => return None,
+            | FormatArg::Bmopf020
+            | FormatArg::CimDist => return None,
         })
+    }
+
+    /// Reader-family selection includes formats without a fresh writer.
+    fn is_distribution_input(self) -> bool {
+        self.distribution().is_some() || self == Self::SincalMulticonductor
     }
 
     /// The distribution target, or `None` outside that family. For every
@@ -569,6 +740,7 @@ impl FormatArg {
             FormatArg::BmopfJson | FormatArg::Bmopf010 | FormatArg::Bmopf020 => {
                 Some(DistTargetFormat::BmopfJson)
             }
+            FormatArg::CimDist => Some(DistTargetFormat::CimDist),
             FormatArg::Matpower
             | FormatArg::PowerModelsJson
             | FormatArg::EgretJson
@@ -591,13 +763,17 @@ impl FormatArg {
             | FormatArg::DeepMindOpfDataJson
             | FormatArg::Gridfm
             | FormatArg::Pwb
-            | FormatArg::IeeeCdf => None,
+            | FormatArg::IeeeCdf
+            | FormatArg::SincalMulticonductor
+            | FormatArg::SincalBalanced => None,
         }
     }
 
     /// The canonical name the format dispatcher accepts for forcing a parser.
     fn name(self) -> &'static str {
         match self {
+            FormatArg::SincalMulticonductor => "sincal-multiconductor",
+            FormatArg::SincalBalanced => "sincal-balanced",
             FormatArg::Matpower => "matpower",
             FormatArg::PowerModelsJson => "powermodels-json",
             FormatArg::EgretJson => "egret-json",
@@ -626,6 +802,7 @@ impl FormatArg {
             FormatArg::BmopfJson => "bmopf-json",
             FormatArg::Bmopf010 => "bmopf-json@0.1.0",
             FormatArg::Bmopf020 => "bmopf-json@0.2.0",
+            FormatArg::CimDist => "cim-dist",
         }
     }
 
@@ -800,7 +977,14 @@ fn main() -> std::process::ExitCode {
             from,
             kind,
             scheme,
-        } => run_verify(&input, from, kind.into(), scheme.into()),
+            merge_buses,
+        } => run_verify(
+            &input,
+            from,
+            kind.into(),
+            scheme.into(),
+            merge_buses.as_deref(),
+        ),
         Command::DcOpf {
             input,
             from,
@@ -832,13 +1016,16 @@ fn main() -> std::process::ExitCode {
             input,
             from,
             scenario,
-        } => run_summary(&input, from, scenario),
+            selection,
+            merge_buses,
+        } => run_summary(&input, from, scenario, &selection, merge_buses.as_deref()),
         Command::Corpus { action } => run_corpus(action),
         Command::Serialize {
             input,
             output,
             from,
-        } => run_serialize(&input, output.as_deref(), from),
+            selection,
+        } => run_serialize(&input, output.as_deref(), from, &selection),
         Command::Gridfm {
             inputs,
             output,
@@ -858,6 +1045,7 @@ fn main() -> std::process::ExitCode {
         ),
         Command::Convert {
             input,
+            selection,
             to,
             output,
             from,
@@ -865,7 +1053,8 @@ fn main() -> std::process::ExitCode {
             missing_gen_cost,
             default_gen_cost,
             gen_cost_csv,
-        } => run_convert(
+            merge_buses,
+        } => run_convert_with_selection(
             &input,
             to,
             output.as_deref(),
@@ -876,8 +1065,11 @@ fn main() -> std::process::ExitCode {
                 default_gen_cost.as_deref(),
                 gen_cost_csv.as_deref(),
             ),
+            &selection,
+            merge_buses.as_deref(),
         ),
         Command::Geo { command } => run_geo(command),
+        Command::Contingency { command } => run_contingency(command),
     };
     let status = match &result {
         Ok(()) => 0,
@@ -1557,8 +1749,14 @@ fn run_verify(
     from: Option<FormatArg>,
     kind: MatrixKind,
     scheme: Scheme,
+    merge_buses: Option<&str>,
 ) -> anyhow::Result<()> {
-    let mpc = balanced_case(input, from)?;
+    let mut mpc = balanced_case(input, from)?;
+    if let Some(spec) = merge_buses {
+        let merge = mpc.merge_buses(&bus_merge_rule(spec, &mpc)?)?;
+        report_diagnostics(&merge.diagnostics);
+        mpc = merge.network;
+    }
     let opts = BuildOptions {
         scheme,
         ..Default::default()
@@ -1670,38 +1868,210 @@ fn parse_gridfm_scenario(
     Ok((network.clone(), module.diagnostics().to_vec()))
 }
 
-fn run_summary(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow::Result<()> {
+fn run_summary(
+    input: &Path,
+    from: Option<FormatArg>,
+    scenario: i64,
+    selection: &SincalCliOptions,
+    merge_buses: Option<&str>,
+) -> anyhow::Result<()> {
+    selection.options(from)?;
+    if !selection.is_empty()
+        && (from == Some(FormatArg::Gridfm) || (from.is_none() && looks_like_gridfm_dir(input)))
+    {
+        fail_with!(
+            REQUEST_CLI_OPTION_INVALID,
+            "input selection options do not apply to GridFM scenarios"
+        );
+    }
     if is_stdin(input) {
         // Refuses a gridfm dataset, which is a directory, before the gridfm
         // branch opens a path named `-`.
         stdin_format(from)?;
     }
+    let transmission = |module: powerio_core::PioModule<powerio::BalancedNetwork>| {
+        let Some(spec) = merge_buses else {
+            let diagnostics = powerio_core::render_diagnostics(module.diagnostics());
+            return Ok(transmission_summary_json(module.value(), &diagnostics));
+        };
+        let (module, merge) = merge_balanced_module(module, spec)?;
+        let diagnostics = powerio_core::render_diagnostics(module.diagnostics());
+        let mut value = transmission_summary_json(module.value(), &diagnostics);
+        value["bus_merge"] = bus_merge_json(&merge);
+        anyhow::Ok(value)
+    };
     let value =
         if from == Some(FormatArg::Gridfm) || (from.is_none() && looks_like_gridfm_dir(input)) {
             let (network, diagnostics) = parse_gridfm_scenario(input, scenario)?;
-            transmission_summary_json(&network, &powerio_core::render_diagnostics(&diagnostics))
+            let mut module = powerio_core::PioModule::new(network);
+            for diagnostic in diagnostics {
+                module.add_diagnostic(diagnostic)?;
+            }
+            transmission(module)?
         } else {
-            match parse_family_case(input, from)? {
+            let family = if selection.is_empty() {
+                parse_family_case(input, from)?
+            } else {
+                module_family_case(input, load_module_with_selection(input, from, selection)?)?
+            };
+            match family {
                 FamilyCase::Distribution(module) => {
+                    if merge_buses.is_some() {
+                        fail_with!(
+                            REQUEST_CLI_OPTION_INVALID,
+                            "`--merge-buses` merges the buses of a transmission network; {} is \
+                             a distribution case",
+                            input.display()
+                        );
+                    }
                     let diagnostics = powerio_core::render_diagnostics(module.diagnostics());
                     distribution_summary_json(module.value(), &diagnostics)
                 }
-                FamilyCase::Transmission(module) => {
-                    let diagnostics = powerio_core::render_diagnostics(module.diagnostics());
-                    transmission_summary_json(module.value(), &diagnostics)
-                }
+                FamilyCase::Transmission(module) => transmission(*module)?,
             }
         };
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
 }
 
+/// The rule a `--merge-buses` spec names for `network`. Every rule merges
+/// closed switches.
+fn bus_merge_rule(
+    spec: &str,
+    network: &powerio_tx::BalancedNetwork,
+) -> anyhow::Result<powerio_tx::BusMergeRule> {
+    use powerio_tx::{BusMergeRule, ZeroImpedanceRule};
+    let threshold = |value: &str| {
+        value.trim().parse::<f64>().map_err(|_| {
+            failure!(
+                REQUEST_CLI_OPTION_INVALID,
+                "`--merge-buses {spec}`: `{value}` is not a number"
+            )
+        })
+    };
+    let rule = match spec.trim().split_once('=') {
+        None => match spec.trim() {
+            "switches" => BusMergeRule::closed_switches(),
+            "exact" => BusMergeRule::exact(),
+            "psse" => BusMergeRule::psse(network).context(
+                "`--merge-buses psse` reads the case's THRSHZ; name a threshold with `psse=<x>`",
+            )?,
+            _ => fail_with!(
+                REQUEST_CLI_OPTION_INVALID,
+                "`--merge-buses {spec}` is not a rule; use switches, exact, psse, psse=<x>, or \
+                 impedance=<z>"
+            ),
+        },
+        Some(("psse", value)) => BusMergeRule::new(
+            true,
+            Some(ZeroImpedanceRule::PsseThreshold(threshold(value)?)),
+        ),
+        Some(("impedance", value)) => BusMergeRule::new(
+            true,
+            Some(ZeroImpedanceRule::ImpedanceMagnitude(threshold(value)?)),
+        ),
+        Some(_) => fail_with!(
+            REQUEST_CLI_OPTION_INVALID,
+            "`--merge-buses {spec}` is not a rule; use switches, exact, psse, psse=<x>, or \
+             impedance=<z>"
+        ),
+    };
+    Ok(rule)
+}
+
+/// Merge a balanced module's buses under a `--merge-buses` spec. The merged
+/// module keeps the source's records, adds the merge's findings, and records
+/// one `merge_buses` history entry; its retained source is cleared.
+fn merge_balanced_module(
+    module: powerio_core::PioModule<powerio::BalancedNetwork>,
+    spec: &str,
+) -> anyhow::Result<(
+    powerio_core::PioModule<powerio::BalancedNetwork>,
+    powerio_tx::BusMerge,
+)> {
+    use powerio_core::{HistoryEntry, HistoryId, HistoryKind, Producer};
+    let rule = bus_merge_rule(spec, module.value())?;
+    let merge = module.value().merge_buses(&rule)?;
+    let taken: std::collections::BTreeSet<&str> = module
+        .history()
+        .iter()
+        .map(|entry| entry.id().as_str())
+        .collect();
+    // One more candidate than the module has entries, so one is free.
+    let id = std::iter::once("merge-buses".to_owned())
+        .chain((2..=taken.len() + 1).map(|n| format!("merge-buses-{n}")))
+        .find(|id| !taken.contains(id.as_str()))
+        .expect("more candidates than history entries leaves one unused");
+    let history = HistoryEntry::new(HistoryId::new(id)?, HistoryKind::Transform, "merge_buses")?
+        .with_input_type("powerio.BalancedNetwork")?
+        .with_output_type("powerio.BalancedNetwork")?
+        .with_parameters(std::collections::BTreeMap::from([(
+            "rule".to_owned(),
+            serde_json::Value::String(rule.to_string()),
+        )]))?;
+    let producer = Producer::new("powerio", powerio::VERSION)?;
+    let network = merge.network.clone();
+    let mut merged = module.derive_value(producer, history, |_| network)?;
+    for diagnostic in &merge.diagnostics {
+        merged.add_diagnostic(diagnostic.clone())?;
+    }
+    Ok((merged, merge))
+}
+
+/// Apply `--merge-buses` to a parsed module, which must hold a balanced
+/// network.
+fn merge_value_module(
+    module: powerio_core::PioModule<powerio::PioValue>,
+    spec: Option<&str>,
+) -> anyhow::Result<powerio_core::PioModule<powerio::PioValue>> {
+    let Some(spec) = spec else {
+        return Ok(module);
+    };
+    if !matches!(module.value(), powerio::PioValue::BalancedNetwork(_)) {
+        fail_with!(
+            REQUEST_CLI_OPTION_INVALID,
+            "`--merge-buses` merges the buses of a balanced network; the input holds {}",
+            module.value().type_name()
+        );
+    }
+    let balanced = module.map_value(|value| match value {
+        powerio::PioValue::BalancedNetwork(network) => network,
+        _ => unreachable!("the value variant was checked"),
+    });
+    let (merged, _) = merge_balanced_module(balanced, spec)?;
+    Ok(merged.map_value(powerio::PioValue::BalancedNetwork))
+}
+
+/// The `bus_merge` block of the summary: what the merge joined and removed.
+fn bus_merge_json(merge: &powerio_tx::BusMerge) -> serde_json::Value {
+    use powerio_tx::RemovalReason;
+    let count = |reason: RemovalReason| {
+        merge
+            .removed_branches
+            .iter()
+            .filter(|removed| removed.reason == reason)
+            .count()
+    };
+    json!({
+        "rule": merge.rule.to_string(),
+        "groups": merge.groups.len(),
+        "largest_group": merge.groups.iter().map(|group| group.members.len()).max().unwrap_or(0),
+        "merged_buses": merge.merged_buses.len(),
+        "removed_branches": {
+            "zero_impedance": count(RemovalReason::ZeroImpedance),
+            "shorted": count(RemovalReason::Shorted),
+        },
+        "removed_switches": merge.removed_switches.len(),
+    })
+}
+
 fn run_serialize(
     input: &Path,
     output: Option<&Path>,
     from: Option<FormatArg>,
+    selection: &SincalCliOptions,
 ) -> anyhow::Result<()> {
-    let module = load_module(input, from)?;
+    let module = load_module_with_selection(input, from, selection)?;
     report_diagnostics(module.diagnostics());
     let parse_errors = parse_error_count(module.diagnostics());
     let text = serialize_module_text(&module)?;
@@ -1730,16 +2100,26 @@ fn parse_options(format: Option<&str>) -> anyhow::Result<powerio::ParseOptions> 
     Ok(options)
 }
 
+#[cfg(test)]
 fn load_module(
     input: &Path,
     from: Option<FormatArg>,
-) -> anyhow::Result<powerio_core::PioModule<powerio::PioValue>> {
+) -> anyhow::Result<powerio::PioModule<powerio::PioValue>> {
+    load_module_with_selection(input, from, &SincalCliOptions::default())
+}
+
+fn load_module_with_selection(
+    input: &Path,
+    from: Option<FormatArg>,
+    selection: &SincalCliOptions,
+) -> anyhow::Result<powerio::PioModule<powerio::PioValue>> {
+    let options = selection.options(from)?;
     if is_stdin(input) {
-        let format = stdin_format(from)?;
-        return powerio::parse_with_options(stdin_source()?, &parse_options(Some(format.name()))?)
+        stdin_format(from)?;
+        return powerio::parse_with_options(stdin_source()?, &options)
             .context("parsing standard input");
     }
-    powerio::parse_with_options(input, &parse_options(from.map(FormatArg::name))?)
+    powerio::parse_with_options(input, &options)
         .with_context(|| format!("parsing {}", input.display()))
 }
 
@@ -1822,8 +2202,43 @@ fn transmission_summary_json(
             "is_radial": view.is_radial(),
             "reference_buses": view.reference_bus_indices(),
             "connectivity_report": view.calc_connectivity_report(),
+            "islands": islands_json(net),
         },
         "warnings": warnings,
+    })
+}
+
+/// The AC islands of the energized buses, largest first: each island's bus
+/// count, its reference bus ids, and its in-service generators.
+fn islands_json(net: &powerio_matrix::BalancedNetwork) -> serde_json::Value {
+    let partition = net.calc_islands();
+    let islands: Vec<serde_json::Value> = partition
+        .islands
+        .iter()
+        .map(|island| {
+            json!({
+                "buses": island.buses.len(),
+                "reference_buses": island.references.iter().map(|bus| bus.0).collect::<Vec<_>>(),
+                "generators": island.generators.len(),
+                "hvdc_ties": island.hvdc.len(),
+            })
+        })
+        .collect();
+    json!({
+        "count": islands.len(),
+        "unsupplied": partition.islands.iter().filter(|island| !island.is_supplied()).count(),
+        "unsupplied_hvdc_fed": partition
+            .islands
+            .iter()
+            .filter(|island| !island.is_supplied() && !island.hvdc.is_empty())
+            .count(),
+        "without_reference": partition
+            .islands
+            .iter()
+            .filter(|island| island.references.is_empty())
+            .count(),
+        "isolated_buses": partition.isolated.len(),
+        "islands": islands,
     })
 }
 
@@ -1855,6 +2270,7 @@ fn distribution_summary_json(
             "is_radial": serde_json::Value::Null,
             "reference_buses": serde_json::Value::Null,
             "connectivity_report": serde_json::Value::Null,
+            "islands": serde_json::Value::Null,
         },
         "warnings": warnings,
     })
@@ -1873,17 +2289,51 @@ fn looks_like_gridfm_dir(input: &Path) -> bool {
         })
 }
 
+#[cfg(test)]
+fn run_convert(
+    input: &Path,
+    to: FormatArg,
+    output: Option<&Path>,
+    from: Option<FormatArg>,
+    scenario: i64,
+    gen_cost_options: GenCostCliOptions<'_>,
+    merge_buses: Option<&str>,
+) -> anyhow::Result<()> {
+    run_convert_with_selection(
+        input,
+        to,
+        output,
+        from,
+        scenario,
+        gen_cost_options,
+        &SincalCliOptions::default(),
+        merge_buses,
+    )
+}
+
 // One conversion pipeline stage per block; splitting it would scatter the
 // stage order this function exists to show.
-#[allow(clippy::too_many_lines)]
-fn run_convert(
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+fn run_convert_with_selection(
     input: &std::path::Path,
     to: FormatArg,
     output: Option<&std::path::Path>,
     from: Option<FormatArg>,
     scenario: i64,
     gen_cost_options: GenCostCliOptions<'_>,
+    selection: &SincalCliOptions,
+    merge_buses: Option<&str>,
 ) -> anyhow::Result<()> {
+    selection.options(from)?;
+    if !selection.is_empty()
+        && (from == Some(FormatArg::Gridfm)
+            || (from.is_none() && cases::powerio_ir_text(input)?.is_some()))
+    {
+        fail_with!(
+            REQUEST_CLI_OPTION_INVALID,
+            "input selection options apply to grid exchange parsing, not GridFM or PowerIO IR"
+        );
+    }
     if to.is_input_spelling() {
         return Err(cli_failure(
             &codes::REQUEST_CLI_OUTPUT_REQUIRED,
@@ -1924,6 +2374,12 @@ fn run_convert(
         stdin_format(from)?;
     }
     if from == Some(FormatArg::Gridfm) {
+        if merge_buses.is_some() {
+            fail_with!(
+                REQUEST_CLI_OPTION_INVALID,
+                "`--merge-buses` does not apply to a gridfm dataset; convert the scenario first"
+            );
+        }
         // GridFM selects one scenario before it has a scalar module to emit.
         // The directory targets retain their existing writers; text targets
         // use the same balanced module writer as every other scalar network.
@@ -1960,14 +2416,17 @@ fn run_convert(
     // PowerIO IR is decoded rather than parsed, then follows the same typed
     // conversion path as a freshly parsed module.
     if from.is_none() && cases::powerio_ir_text(input)?.is_some() {
-        let module = deserialize_module(input)?;
+        let module = merge_value_module(deserialize_module(input)?, merge_buses)?;
         return convert_parsed_module(module, to, output, &gen_cost_options);
     }
 
     // Parse once through the facade. Static networks retain their established
     // emit options below; calculation instances and solutions stay typed and
     // go through the facade emitter for every target.
-    let module = load_module(input, from)?;
+    let module = merge_value_module(
+        load_module_with_selection(input, from, selection)?,
+        merge_buses,
+    )?;
     convert_parsed_module(module, to, output, &gen_cost_options)
 }
 
@@ -2003,6 +2462,26 @@ fn convert_balanced_module(
     gen_cost_options: &GenCostCliOptions<'_>,
 ) -> anyhow::Result<()> {
     let options = gen_cost_options.emit_options()?;
+    if to == FormatArg::SincalBalanced {
+        if !options.is_default() {
+            fail_with!(
+                REQUEST_CLI_TARGET_UNSUPPORTED,
+                "SINCAL source echo cannot apply generator-cost edits; fresh writing is experimental"
+            );
+        }
+        let Some(output) = output.filter(|p| p.as_os_str() != "-") else {
+            fail_with!(
+                REQUEST_CLI_OUTPUT_REQUIRED,
+                "binary SINCAL output requires -o <file>"
+            );
+        };
+        let result = powerio::emit(
+            module,
+            "sincal-balanced",
+            powerio_core::Destination::path(output),
+        )?;
+        return finish_path_emission(module.diagnostics(), &result, output);
+    }
     if to == FormatArg::PypsaCsv {
         let Some(output) = output else {
             fail_with!(
@@ -2064,6 +2543,16 @@ fn convert_multiconductor_module(
     to: FormatArg,
     output: Option<&Path>,
 ) -> anyhow::Result<()> {
+    if to == FormatArg::SincalMulticonductor {
+        let Some(output) = output.filter(|p| p.as_os_str() != "-") else {
+            fail_with!(
+                REQUEST_CLI_OUTPUT_REQUIRED,
+                "binary SINCAL output requires -o <file>"
+            );
+        };
+        let result = powerio::emit(module, to.name(), powerio::Destination::path(output))?;
+        return finish_path_emission(module.diagnostics(), &result, output);
+    }
     let target = to.distribution().ok_or_else(|| {
         failure!(
             REQUEST_CLI_FAMILY_MISMATCH,
@@ -2366,7 +2855,7 @@ fn run_geo_apply(
                     failure!(
                         REQUEST_CLI_TARGET_UNSUPPORTED,
                         "`{}` is not a distribution text target; a distribution case writes \
-                         back to dss, pmd-json, or bmopf-json",
+                         back to dss, pmd-json, bmopf-json, or cim-dist",
                         f.name()
                     )
                 })?,
@@ -2450,6 +2939,216 @@ fn report_geo_apply(report: &powerio::GeoApplyReport) {
     for note in &report.notes {
         report_progress(format!("note: {note}"));
     }
+}
+
+fn run_contingency(command: ContingencyCommand) -> anyhow::Result<()> {
+    match command {
+        ContingencyCommand::Resolve {
+            case,
+            contingency,
+            sub,
+            mon,
+            json,
+            from,
+        } => run_contingency_resolve(
+            &case,
+            &contingency,
+            sub.as_deref(),
+            mon.as_deref(),
+            json,
+            from,
+        ),
+        ContingencyCommand::Expand {
+            case,
+            contingency,
+            sub,
+            output,
+            from,
+        } => run_contingency_expand(&case, &contingency, &sub, output.as_deref(), from),
+    }
+}
+
+/// Parse one PSS/E contingency analysis file through the facade under its own
+/// token, report the reader's notes, and hand back the typed value.
+fn read_contingency_value(
+    input: &std::path::Path,
+    token: &str,
+) -> anyhow::Result<powerio::PioValue> {
+    let module = powerio::parse_with_options(input, &parse_options(Some(token))?)
+        .with_context(|| format!("reading {}", input.display()))?;
+    report_diagnostics(module.diagnostics());
+    Ok(module.into_value())
+}
+
+fn read_contingency_set(input: &std::path::Path) -> anyhow::Result<powerio::ContingencySet> {
+    match read_contingency_value(input, "psse-con")? {
+        powerio::PioValue::ContingencySet(set) => Ok(set),
+        other => fail_with!(
+            REQUEST_CLI_FAMILY_MISMATCH,
+            "{} reads as {}; this command needs a PSS/E contingency description file",
+            input.display(),
+            other.type_name()
+        ),
+    }
+}
+
+fn read_subsystem_set(input: &std::path::Path) -> anyhow::Result<powerio::SubsystemSet> {
+    match read_contingency_value(input, "psse-sub")? {
+        powerio::PioValue::SubsystemSet(set) => Ok(set),
+        other => fail_with!(
+            REQUEST_CLI_FAMILY_MISMATCH,
+            "{} reads as {}; this command needs a PSS/E subsystem description file",
+            input.display(),
+            other.type_name()
+        ),
+    }
+}
+
+fn read_monitored_set(input: &std::path::Path) -> anyhow::Result<powerio::MonitoredSet> {
+    match read_contingency_value(input, "psse-mon")? {
+        powerio::PioValue::MonitoredSet(set) => Ok(set),
+        other => fail_with!(
+            REQUEST_CLI_FAMILY_MISMATCH,
+            "{} reads as {}; this command needs a PSS/E monitored element file",
+            input.display(),
+            other.type_name()
+        ),
+    }
+}
+
+/// A one line account of why a case's action named no element.
+fn unresolved_reason_text(reason: powerio::UnresolvedReason) -> String {
+    use powerio::UnresolvedReason as Reason;
+    match reason {
+        Reason::NoSuchBus => "names no bus".to_owned(),
+        Reason::NoSuchBranch => "names no branch".to_owned(),
+        Reason::AmbiguousBranch { matches } => format!("names {matches} branches"),
+        Reason::NoSuchMachine => "names no machine".to_owned(),
+        Reason::NoSuchShunt => "names no shunt".to_owned(),
+        Reason::NoSuchLoad => "names no load".to_owned(),
+        Reason::NoSuchTransformer3w => "names no three winding transformer".to_owned(),
+        Reason::Unrecognized => "was kept as text and names no element".to_owned(),
+        _ => "names no element".to_owned(),
+    }
+}
+
+fn run_contingency_resolve(
+    case: &std::path::Path,
+    contingency: &std::path::Path,
+    sub: Option<&std::path::Path>,
+    mon: Option<&std::path::Path>,
+    json: bool,
+    from: Option<FormatArg>,
+) -> anyhow::Result<()> {
+    let network = read_network(case, from)?;
+    let set = read_contingency_set(contingency)?;
+    let subsystems = match sub {
+        Some(path) => read_subsystem_set(path)?,
+        None => powerio::SubsystemSet::default(),
+    };
+    // One index serves both bindings: it walks the network's tables once and
+    // states the PSS/E id of every element for the contingency set and the
+    // monitored set alike.
+    let index = powerio::PsseEquipmentIndex::new(&network);
+    let resolution = set.resolve_with(&index);
+    report_diagnostics(&resolution.diagnostics());
+
+    let unresolved: Vec<serde_json::Value> = resolution
+        .cases
+        .iter()
+        .filter(|case| !case.is_resolved())
+        .map(|case| {
+            let first = &case.unresolved[0];
+            serde_json::json!({
+                "case": case.name,
+                "reason": unresolved_reason_text(first.reason),
+            })
+        })
+        .collect();
+
+    let mut report = serde_json::json!({
+        "schema": "powerio.contingency_resolution",
+        powerio::version::VERSION_KEY: powerio::VERSION,
+        "cases": resolution.cases.len(),
+        "resolved": resolution.resolved,
+        "unresolved": resolution.unresolved,
+        "unrecognized_statements": resolution.unrecognized_statements,
+        "unresolved_cases": unresolved,
+    });
+
+    let monitored = match mon {
+        Some(path) => {
+            let set = read_monitored_set(path)?;
+            let resolved = set.resolve_with(&index, &subsystems);
+            report_diagnostics(&resolved.diagnostics());
+            let counts = serde_json::json!({
+                "branches": resolved.branch_rows.len(),
+                "ties": resolved.tie_rows.len(),
+                "transformers_3w": resolved.transformer_3w_rows.len(),
+                "interfaces": resolved.interfaces.len(),
+                "voltage_ranges": resolved.voltage_ranges.len(),
+                "voltage_deviations": resolved.voltage_deviations.len(),
+                "unresolved": resolved.unresolved.len(),
+            });
+            report["monitored"] = counts.clone();
+            Some(counts)
+        }
+        None => None,
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    println!(
+        "cases {}: {} resolved, {} unresolved, {} statements kept as text",
+        resolution.cases.len(),
+        resolution.resolved,
+        resolution.unresolved,
+        resolution.unrecognized_statements
+    );
+    for entry in &unresolved {
+        println!(
+            "unresolved {}: {}",
+            entry["case"].as_str().unwrap_or_default(),
+            entry["reason"].as_str().unwrap_or_default()
+        );
+    }
+    if let Some(counts) = monitored {
+        println!(
+            "monitored: {} branches, {} ties, {} three winding transformers, \
+             {} interfaces, {} voltage ranges, {} voltage deviations, {} unresolved",
+            counts["branches"],
+            counts["ties"],
+            counts["transformers_3w"],
+            counts["interfaces"],
+            counts["voltage_ranges"],
+            counts["voltage_deviations"],
+            counts["unresolved"]
+        );
+    }
+    Ok(())
+}
+
+fn run_contingency_expand(
+    case: &std::path::Path,
+    contingency: &std::path::Path,
+    sub: &std::path::Path,
+    output: Option<&std::path::Path>,
+    from: Option<FormatArg>,
+) -> anyhow::Result<()> {
+    let network = read_network(case, from)?;
+    let set = read_contingency_set(contingency)?;
+    let subsystems = read_subsystem_set(sub)?;
+    let expanded = set.expand_with(&powerio::PsseEquipmentIndex::new(&network), &subsystems);
+    report_diagnostics(&expanded.diagnostics);
+    report_progress(format!(
+        "expanded to {} case(s), {} specification(s) left unexpanded",
+        expanded.set.cases.len(),
+        expanded.set.automatic.len()
+    ));
+    write_conversion_output(&expanded.set.to_con(), &[], output)
 }
 
 fn run_geo_convert(
@@ -2601,7 +3300,13 @@ fn balanced_case(
 /// Deserialize PowerIO IR and adapt a static network to the CLI's family case.
 /// Other values are rejected instead of guessing a projection.
 fn ir_family_case(input: &Path) -> anyhow::Result<FamilyCase> {
-    let module = deserialize_module(input)?;
+    module_family_case(input, deserialize_module(input)?)
+}
+
+fn module_family_case(
+    input: &Path,
+    module: powerio::PioModule<powerio::PioValue>,
+) -> anyhow::Result<FamilyCase> {
     match &module.value() {
         powerio::PioValue::BalancedNetwork(_) => {
             let module = module.map_value(|value| match value {
@@ -2632,7 +3337,7 @@ fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<Fa
         let f = stdin_format(from)?;
         let source = module_io::declare_format(stdin_source()?, Some(f.name()))
             .context("declaring the standard input format")?;
-        return if f.distribution().is_some() {
+        return if f.is_distribution_input() {
             let net = powerio_dist::parse(source).context("reading standard input")?;
             Ok(FamilyCase::Distribution(Box::new(net)))
         } else {
@@ -2648,7 +3353,7 @@ fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<Fa
                  subcommand, not this command",
             ));
         }
-        return if f.distribution().is_some() {
+        return if f.is_distribution_input() {
             let net = module_io::load_multiconductor_module(input, Some(f.name()))
                 .with_context(|| format!("reading {}", input.display()))?;
             Ok(FamilyCase::Distribution(Box::new(net)))
@@ -2663,6 +3368,12 @@ fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<Fa
     }
     if let Some(case) = cases::classified_json(input)? {
         return parse_classified_case(&case, input);
+    }
+    if let Some(source) = cases::cim_dist_source(input) {
+        // The check already read the documents; the parse reuses them.
+        let net = module_io::load_multiconductor_source(source, None)
+            .with_context(|| format!("reading {}", input.display()))?;
+        return Ok(FamilyCase::Distribution(Box::new(net)));
     }
     if cases::looks_like_distribution_input(input)? {
         let net = module_io::load_multiconductor_module(input, None)
@@ -2715,11 +3426,11 @@ fn reject_nontransmission_from(from: Option<FormatArg>) -> anyhow::Result<()> {
                  subcommand, not this command"
             );
         }
-        if f.distribution().is_some() {
+        if f.is_distribution_input() {
             fail_with!(
                 REQUEST_CLI_FAMILY_MISMATCH,
                 "`{}` is a distribution format; this command reads transmission cases \
-                 (use `convert` to bridge dss, pmd-json, and bmopf-json)",
+                 (use `convert` to bridge dss, pmd-json, bmopf-json, and cim-dist)",
                 f.name()
             );
         }
@@ -2743,8 +3454,8 @@ mod tests {
     use super::cases::{infer_input_family, looks_like_distribution_input};
     use super::{
         BranchSusceptanceFormulaArg, Cli, Command, FamilyCase, FormatArg, GenCostCliOptions,
-        distribution_summary_json, parse_family_case, run_convert, run_serialize, serialize_input,
-        transmission_summary_json,
+        SincalCliOptions, distribution_summary_json, parse_family_case, run_convert, run_serialize,
+        serialize_input, transmission_summary_json,
     };
     use clap::Parser;
     use std::path::Path;
@@ -2762,6 +3473,26 @@ mod tests {
         let source =
             powerio::Source::from_memory("module.pio.json", text.as_bytes().to_vec()).unwrap();
         powerio::deserialize(source).unwrap()
+    }
+
+    #[test]
+    fn sincal_source_assumptions_require_the_multiconductor_profile() {
+        let selection = SincalCliOptions {
+            sincal_assume_inactive_source_controls: true,
+            ..Default::default()
+        };
+        assert!(!selection.is_empty());
+        assert!(selection.options(None).is_err());
+        assert!(selection.options(Some(FormatArg::SincalBalanced)).is_err());
+        let options = selection
+            .options(Some(FormatArg::SincalMulticonductor))
+            .unwrap();
+        assert!(
+            options
+                .sincal_multiconductor
+                .unwrap()
+                .assume_inactive_source_controls
+        );
     }
 
     #[test]
@@ -2842,6 +3573,25 @@ mod tests {
         .unwrap();
         assert!(!looks_like_distribution_input(&tmp).unwrap());
         let _ = std::fs::remove_file(tmp);
+    }
+
+    #[test]
+    fn cim_directories_route_by_their_top_level_documents() {
+        let cim = std::fs::read_to_string(data("dist/cim/micro_feeder.xml")).unwrap();
+        let top = tempfile::tempdir().unwrap();
+        std::fs::write(top.path().join("feeder.xml"), &cim).unwrap();
+        assert!(super::cases::cim_dist_source(top.path()).is_some());
+        assert!(looks_like_distribution_input(top.path()).unwrap());
+
+        // The CLI and the library agree that documents in a subdirectory
+        // do not make a case.
+        let nested = tempfile::tempdir().unwrap();
+        std::fs::create_dir(nested.path().join("archive")).unwrap();
+        std::fs::write(nested.path().join("archive/feeder.xml"), &cim).unwrap();
+        assert!(super::cases::cim_dist_source(nested.path()).is_none());
+        assert!(!looks_like_distribution_input(nested.path()).unwrap());
+        let source = powerio_core::Source::open(nested.path()).unwrap();
+        assert!(!powerio_dist::source_looks_like_cim_dist(&source));
     }
 
     #[test]
@@ -2967,7 +3717,13 @@ mod tests {
             .as_nanos();
         let output = std::env::temp_dir().join(format!("powerio-package-{stamp}.pio.json"));
 
-        run_serialize(&data("case9.m"), Some(&output), None).unwrap();
+        run_serialize(
+            &data("case9.m"),
+            Some(&output),
+            None,
+            &SincalCliOptions::default(),
+        )
+        .unwrap();
         let text = std::fs::read_to_string(&output).unwrap();
         let module = deserialize_module(&text);
         assert!(matches!(
@@ -3040,7 +3796,7 @@ mpc.branch = [
         )
         .unwrap();
 
-        run_serialize(&input, Some(&output), None).unwrap();
+        run_serialize(&input, Some(&output), None, &SincalCliOptions::default()).unwrap();
         let text = std::fs::read_to_string(&output).unwrap();
         assert!(text.contains("\"angmin\": \"NaN\""), "{text}");
         assert!(text.contains("\"angmax\": \"Infinity\""), "{text}");
@@ -3083,6 +3839,7 @@ mpc.branch = [
             None,
             0,
             GenCostCliOptions::preserve(),
+            None,
         )
         .unwrap_err();
         assert!(err.to_string().contains("no conversion path"), "{err}");
@@ -3110,6 +3867,7 @@ mpc.branch = [
             Some(FormatArg::PypsaCsv),
             0,
             GenCostCliOptions::preserve(),
+            None,
         )
         .unwrap();
         let text = std::fs::read_to_string(&output).unwrap();
@@ -3168,6 +3926,7 @@ mpc.branch = [
             Some(FormatArg::BmopfJson),
             0,
             GenCostCliOptions::preserve(),
+            None,
         )
         .unwrap();
 
@@ -3188,6 +3947,7 @@ mpc.branch = [
             None,
             0,
             GenCostCliOptions::preserve(),
+            None,
         )
         .unwrap_err();
         assert!(
@@ -3205,6 +3965,7 @@ mpc.branch = [
             None,
             0,
             GenCostCliOptions::preserve(),
+            None,
         )
         .unwrap_err();
         assert!(err.to_string().contains("cannot write IEEE CDF"), "{err}");

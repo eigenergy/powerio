@@ -1,8 +1,9 @@
 //! Multiconductor distribution network models and converters for OpenDSS
 //! `.dss`, PowerModelsDistribution ENGINEERING
-//! JSON ("PMD JSON"), and the draft JSON schema of the IEEE PES Task Force on
+//! JSON ("PMD JSON"), the draft JSON schema of the IEEE PES Task Force on
 //! Benchmarking Multiconductor OPF ("BMOPF JSON",
-//! <https://github.com/distribution-system-opt/dsopt-schema>).
+//! <https://github.com/distribution-system-opt/dsopt-schema>), and
+//! distribution CIM (CIM100 RDF/XML, see [`cim`]).
 //!
 //! The model uses wire coordinates: string bus IDs, ordered terminal names,
 //! explicit grounding, terminal maps on every element, SI units, and radians.
@@ -48,6 +49,7 @@
 //! reformats.
 
 pub mod bmopf;
+pub mod cim;
 mod collect;
 pub mod convert;
 pub mod diagnostics;
@@ -56,13 +58,21 @@ pub mod error;
 pub mod geo;
 pub mod graph;
 pub mod kron;
+pub mod lindist3flow;
 pub mod model;
 pub mod pmd;
 pub mod readiness;
+// Family-local native adapters; only explicitly selected verified profiles map.
+#[allow(dead_code)]
+mod sincal;
 #[cfg(test)]
 pub(crate) mod testkit;
 
 pub use bmopf::{BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfEmitOptions, BmopfSchemaVersion};
+pub use cim::{
+    CIM_DIST_HEAD_BYTES, looks_like_cim_dist, looks_like_cim_dist_header,
+    source_looks_like_cim_dist,
+};
 pub use convert::{
     DistTargetFormat, EmitOptions, classify_distribution_json, emit, emit_with_options, parse,
     parse_dist_target_format,
@@ -79,6 +89,11 @@ pub use kron::{
     NeutralKronAction, NeutralKronBus, NeutralKronGrounding, NeutralKronOptions,
     NeutralKronRecovery, NeutralKronReduction, NeutralKronReport, neutral_kron_reduce,
 };
+pub use lindist3flow::{
+    LinDist3FlowPreparationAction, LinDist3FlowPreparationActionKind,
+    LinDist3FlowPreparationPolicy, LinDist3FlowPreparationReport, LinDist3FlowPreparedNetwork,
+    prepare_lindist3flow_network,
+};
 pub use model::{
     ActivePowerReference, ActivePowerUnit, ConductorMatrix, Configuration, ControlVoltageReference,
     DistBus, DistCapacitor, DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode,
@@ -90,4 +105,58 @@ pub use model::{
 pub use readiness::{
     ElectricalReadiness, ReadinessFinding, ReadinessSeverity, audit_electrical_readiness,
     require_electrical_readiness,
+};
+pub use sincal::public::{SincalReadOptions, parse_sincal};
+
+/// Internal SINCAL validation entry point; callers must explicitly choose the
+/// conductor-resolved profile. Unsupported inputs reject the whole network.
+///
+/// # Errors
+/// Unverified schema, unsupported electrical modes or inconsistent inputs.
+#[doc(hidden)]
+pub fn __read_sincal_multiconductor_snapshot(
+    snapshot: powerio_sincal::DatabaseSnapshot,
+) -> Result<MulticonductorNetwork> {
+    sincal::read_snapshot(snapshot)
+}
+
+/// Internal component audit. A successful report is not a parsed network.
+///
+/// # Errors
+/// Unsupported schema or inability to establish the common mapping context.
+#[doc(hidden)]
+pub fn __audit_sincal_multiconductor_snapshot(
+    snapshot: powerio_sincal::DatabaseSnapshot,
+) -> Result<String> {
+    sincal::audit_snapshot(snapshot)
+}
+
+/// Internal SINCAL snapshot selection in hours for verified daily load profiles.
+///
+/// # Errors
+/// Unsupported profiles or components, invalid time, or inconsistent inputs.
+#[doc(hidden)]
+pub fn __read_sincal_multiconductor_at(
+    snapshot: powerio_sincal::DatabaseSnapshot,
+    hours: f64,
+) -> Result<MulticonductorNetwork> {
+    sincal::read_snapshot_at(snapshot, hours)
+}
+
+/// Internal component audit at an explicit daily-profile time; not a partial network.
+///
+/// # Errors
+/// Unsupported common context or invalid snapshot time.
+#[doc(hidden)]
+pub fn __audit_sincal_multiconductor_at(
+    snapshot: powerio_sincal::DatabaseSnapshot,
+    hours: f64,
+) -> Result<String> {
+    sincal::audit_snapshot_at(snapshot, hours)
+}
+
+#[doc(hidden)]
+pub use sincal::{
+    ExperimentalMulticonductorOptions, ExperimentalMulticonductorOutput,
+    write_experimental_multiconductor as __write_sincal_multiconductor_experimental,
 };

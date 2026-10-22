@@ -35,7 +35,7 @@ let module = powerio::parse(powerio::Source::from_memory("case9.m", bytes)?)?;
 | `network.to_json()` | `serialize(&PioModule::new(network), destination)` |
 | `BalancedNetwork::from_json(text)` | `deserialize(Source::from_memory("module.pio.json", text)?)?.into_value()` |
 | `parse_display(source, from)` | `parse(input)`, which returns `PioValue::GeoLayer`; `PwdDisplay` remains for the raw display record |
-| `DisplayData`, `DisplayFormat` | removed from Rust; Python keeps `parse_display` and `DisplayData` for the raw PowerWorld display record |
+| `DisplayData`, `DisplayFormat` | removed from Rust; Python keeps `parse_display` and `DisplayData` for the raw PowerWorld display record through 0.11.x, and 0.12 removes them |
 | a layer written by hand | `emit(&module, "geo-json", path)` |
 
 Python accepts a path, a file object, or a bytes-like object. A `str` is
@@ -113,8 +113,8 @@ PowerIO IR goes through `serialize` and `deserialize` instead. `.pio.json` is
 not a grid exchange format, so format discovery does not list it. Both calls
 use the PowerIO IR document shape, `"schema": "pio-ir"` with integer
 `"version": 2` in PowerIO 0.11.1; the producer record names the PowerIO release
-separately. The reader accepts generation 2. Documents older than
-generation 2 have to be regenerated from their original power system data.
+separately. The reader accepts IR version 2. Documents older than
+version 2 have to be regenerated from their original power system data.
 
 These 0.10 names are removed:
 
