@@ -343,6 +343,22 @@ impedance and tap control range are referred across \\(t_2\\): the impedance
 scales by \\(t_2^2\\) and the range divides by \\(t_2\\), so the branch states
 the same two port admittance as the PSS/E circuit.
 
+### PSS/E DYR dynamics
+
+PSS/E `.dyr` is parsed separately from `.raw`/RAWX because it describes
+transient-stability models, not the steady-state electrical network. Use
+`parse_dyr` (or `parse_dyr_bytes`) to obtain a `DynamicCase`; the parser
+keeps original source text for exact write-back and retains unknown/custom
+model names and ordered parameter tokens. `DynamicStudy::new(network,
+dynamics)` explicitly pairs that data with a parsed `BalancedNetwork`.
+
+The current study link check only reports DYR bus IDs absent from the static
+case. It intentionally does not infer that a record's second key is a
+generator ID, and does not claim model-specific device references are
+resolved. Typed model schemas, dynamic-device linking, DYR-to-AUX/DYD/SWI
+conversion, and transient simulation are not provided yet. See
+[Dynamics and DYR](dynamics.md) for the API definition.
+
 ### UCTE-DEF
 
 PowerIO reads UCTE-DEF revisions 2003.09.01 and 2007.05.01 and writes

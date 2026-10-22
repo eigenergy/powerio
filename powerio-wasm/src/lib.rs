@@ -372,4 +372,45 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn indexed_mutation_warning_reaches_inspection_without_changing_values_or_echo() {
+        let original = include_str!("../../tests/data/case9.m");
+        let mutation = "mpc.bus(:, [3 4]) ... ignored ) ' ; ,\n = mpc.bus(:, [3 4]) / 1000;";
+        let source = format!("{original}\nx = [1 2].';\n{mutation}\n");
+        let mut converter = Conversion::new("mutated.m".into());
+        converter.add_file("mutated.m".into(), source.as_bytes());
+        let result: Value =
+            serde_json::from_str(&converter.inspect(Some("mutated.m".into()), None)).unwrap();
+        assert_eq!(result["ok"], true, "{result}");
+        let warnings: Vec<_> = result["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["code"] == "READ.MATPOWER.INDEXED_ASSIGNMENT")
+            .collect();
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0]["severity"], "warning");
+        let start = source.find(mutation).unwrap();
+        assert_eq!(warnings[0]["spans"][0]["start"], start);
+        assert_eq!(warnings[0]["spans"][0]["end"], start + mutation.len());
+        let native =
+            powerio::parse(Source::from_memory("case9.m", original.as_bytes().to_vec()).unwrap())
+                .unwrap();
+        let (
+            powerio::PioValue::BalancedNetwork(expected),
+            powerio::PioValue::BalancedNetwork(actual),
+        ) = (native.value(), converter.module.as_ref().unwrap().value())
+        else {
+            panic!("balanced values expected");
+        };
+        let expected_load: f64 = expected.loads().iter().map(|load| load.p).sum();
+        let actual_load: f64 = actual.loads().iter().map(|load| load.p).sum();
+        assert!((actual_load - expected_load).abs() < 1e-12);
+        let emitted: Value =
+            serde_json::from_str(&converter.emit("matpower", "mutated.m".into())).unwrap();
+        assert_eq!(emitted["ok"], true, "{emitted}");
+        assert_eq!(converter.artifact_count(), 1);
+        assert_eq!(converter.take_artifact(0), source.as_bytes());
+    }
 }

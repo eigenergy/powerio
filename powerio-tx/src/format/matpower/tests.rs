@@ -602,3 +602,200 @@ fn area_metadata_matpower_cannot_hold_is_a_declared_drop() {
         conversion.render_diagnostics()
     );
 }
+
+#[test]
+fn indexed_matlab_mutations_emit_span_qualified_diagnostics() {
+    let src = "mpc.baseMVA = 10;\n\
+mpc.bus = [\n\
+  1 3 0 0 0 0 1 1 0 12.66 1 1.1 0.9;\n\
+];\n\
+mpc.branch = [\n\
+  1 1 0.01 0.05 0.02 0 0 0 0 0 1 -360 360;\n\
+];\n\
+mpc.branch(:, [BR_R BR_X]) = mpc.branch(:, [BR_R BR_X]) / 2; % scale impedance\n\
+mpc.bus(:, [PD, QD]) = mpc.bus(:, [PD, QD]) / 1e3;\n";
+    let mut warnings = crate::collect::Diagnostics::new();
+    warnings.locate_in(powerio_core::SourceId::new("/input").unwrap(), 0);
+    super::parse_matpower_source(src, None, &mut warnings).expect("literal case parses");
+
+    let records = warnings.records();
+    assert_eq!(records.len(), 2);
+    assert!(records.iter().all(|record| {
+        record.code() == "READ.MATPOWER.INDEXED_ASSIGNMENT"
+            && record.severity() == powerio_core::DiagnosticSeverity::Warning
+    }));
+
+    let branch_line = "mpc.branch(:, [BR_R BR_X]) = mpc.branch(:, [BR_R BR_X]) / 2;";
+    let bus_line = "mpc.bus(:, [PD, QD]) = mpc.bus(:, [PD, QD]) / 1e3;";
+    let spans: Vec<_> = records
+        .iter()
+        .map(|record| {
+            let span = &record.spans()[0];
+            (span.byte_start(), span.byte_end())
+        })
+        .collect();
+    assert_eq!(spans[0], byte_range(src, branch_line));
+    assert_eq!(spans[1], byte_range(src, bus_line));
+}
+
+#[test]
+fn indexed_assignment_diagnostic_ignores_comments_and_literal_assignments() {
+    let src = "mpc.baseMVA = 100;\n\
+% mpc.bus(:, [PD, QD]) = mpc.bus(:, [PD, QD]) / 1e3;\n\
+mpc.bus = [1 3 0 0 0 0 1 1 0 345 1 1.1 0.9];\n\
+mpc.branch = [1 1 0.01 0.05 0.02 0 0 0 0 0 1 -360 360];\n";
+    let mut warnings = crate::collect::Diagnostics::new();
+    super::parse_matpower_source(src, None, &mut warnings).expect("literal case parses");
+    assert!(
+        warnings.is_empty(),
+        "unexpected diagnostics: {:?}",
+        warnings.lines()
+    );
+}
+
+#[test]
+fn indexed_assignment_scanner_handles_nested_index_expressions_and_comparisons() {
+    let mutation = "mpc.bus(find(mpc.bus(:, 3) > 0), 3) = 0;";
+    let src = format!("{CASE_TINY}\n{mutation}\nmpc.bus(:, 3) == 0;\n");
+    let mut warnings = crate::collect::Diagnostics::new();
+    warnings.locate_in(powerio_core::SourceId::new("/input").unwrap(), 0);
+    super::parse_matpower_source(&src, None, &mut warnings).expect("literal case parses");
+    let records = warnings.records();
+    assert_eq!(records.len(), 1, "{:?}", warnings.lines());
+    assert_eq!(records[0].code(), "READ.MATPOWER.INDEXED_ASSIGNMENT");
+    assert_eq!(
+        records[0].severity(),
+        powerio_core::DiagnosticSeverity::Warning
+    );
+    let span = &records[0].spans()[0];
+    assert_eq!(
+        (span.byte_start(), span.byte_end()),
+        byte_range(&src, mutation)
+    );
+}
+
+#[test]
+fn indexed_assignment_scanner_handles_ellipsis_continuation_and_statement_boundaries() {
+    let continued = "mpc.bus(:, ...\n [3 4]) = mpc.bus(:, [3 4]) / 1000;";
+    let same_line = "scale = 1000; mpc.bus(:, [3 4]) = mpc.bus(:, [3 4]) / scale;";
+    let comma_separated = "scale = 1000, mpc.bus(:, [3 4]) = mpc.bus(:, [3 4]) / scale;";
+    for mutation in [continued, same_line, comma_separated] {
+        let src = format!("{CASE_TINY}\n{mutation}\n");
+        let mut warnings = crate::collect::Diagnostics::new();
+        warnings.locate_in(powerio_core::SourceId::new("/input").unwrap(), 0);
+        super::parse_matpower_source(&src, None, &mut warnings).expect("literal case parses");
+        let records = warnings.records();
+        assert_eq!(records.len(), 1, "{mutation:?}: {:?}", warnings.lines());
+        assert_eq!(records[0].code(), "READ.MATPOWER.INDEXED_ASSIGNMENT");
+        assert_eq!(
+            records[0].severity(),
+            powerio_core::DiagnosticSeverity::Warning
+        );
+        let span = &records[0].spans()[0];
+        let offending_statement = if mutation.starts_with("scale =") {
+            "mpc.bus(:, [3 4]) = mpc.bus(:, [3 4]) / scale;"
+        } else {
+            mutation
+        };
+        assert_eq!(
+            (span.byte_start(), span.byte_end()),
+            byte_range(&src, offending_statement),
+            "span should cover the original offending statement: {mutation:?}"
+        );
+    }
+}
+
+#[test]
+fn indexed_assignment_scanner_ignores_block_comments_and_quoted_literals() {
+    let src = format!(
+        "{CASE_TINY}\n%{{\nmpc.bus(:, [3 4]) = 0;\n%}}\nmpc.bus_name = {{'mpc.bus(:, [3 4]) = 0;'}};\n"
+    );
+    let mut warnings = crate::collect::Diagnostics::new();
+    super::parse_matpower_source(&src, None, &mut warnings).expect("literal case parses");
+    assert!(
+        warnings.is_empty(),
+        "inactive/commented or quoted text must not warn: {:?}",
+        warnings.lines()
+    );
+}
+
+#[test]
+fn indexed_assignment_scanner_finds_only_assignments_at_statement_start() {
+    let mutation = "mpc.bus(:, [3 4]) = mpc.bus(:, [3 4]) / 1000;";
+    let src = format!("{CASE_TINY}\nif true, mpc.bus(:, [3 4]) == 0; end\n{mutation}\n");
+    let mut warnings = crate::collect::Diagnostics::new();
+    warnings.locate_in(powerio_core::SourceId::new("/input").unwrap(), 0);
+    super::parse_matpower_source(&src, None, &mut warnings).expect("literal case parses");
+    let records = warnings.records();
+    assert_eq!(records.len(), 1, "{:?}", warnings.lines());
+    let span = &records[0].spans()[0];
+    assert_eq!(
+        (span.byte_start(), span.byte_end()),
+        byte_range(&src, mutation)
+    );
+}
+
+#[test]
+fn indexed_assignment_scanner_preserves_transpose_context_and_spans() {
+    for (prefix, mutation) in [
+        ("x = [1 2].';\n", "mpc.bus(:, [3 4]) = 0;"),
+        ("x = [1 2]';\n", "mpc.bus(:, [3 4]) = 0;"),
+        ("", "mpc.bus([1 2].', 3) = [0 0].';"),
+    ] {
+        let src = format!("{CASE_TINY}\n{prefix}{mutation}\n");
+        assert_indexed_warning_span(&src, mutation);
+    }
+}
+
+#[test]
+fn indexed_assignment_scanner_skips_continuation_trivia_without_parsing_its_tail() {
+    for mutation in [
+        "mpc.bus(:, [3 4]) ... % conversion\n = mpc.bus(:, [3 4]) / 1000;",
+        "mpc.bus(:, [3 4]) ... ignored ) ' ; ,\r\n = 0;",
+        "mpc.bus ... ignored ) ' ; ,\n (:, [3 4]) = 0;",
+        "mpc.bus(find(mpc.bus(:, 3) ... ignored ) ' ; ,\n > 0), 3) = 0;",
+        "mpc.bus(:, [3 4]) = ... ignored ) ' ; ,\n 0;",
+    ] {
+        let src = format!("{CASE_TINY}\n{mutation}\n");
+        assert_indexed_warning_span(&src, mutation);
+    }
+}
+
+#[test]
+fn indexed_assignment_scanner_keeps_comparisons_and_quoted_continuations_inactive() {
+    let src = format!(
+        "{CASE_TINY}\nmpc.bus(:, 3) ... % comparison\n == 0;\n\
+         label = '... mpc.bus(:, 3) = 0;';\n\
+         other = \"... mpc.bus(:, 3) = 0;\";\n"
+    );
+    let mut warnings = crate::collect::Diagnostics::new();
+    super::parse_matpower_source(&src, None, &mut warnings).unwrap();
+    assert!(warnings.is_empty(), "{:?}", warnings.lines());
+}
+
+#[test]
+fn indexed_assignment_scanner_stops_spans_at_top_level_commas() {
+    for mutation in ["mpc.bus(:, 3) = 0,", "mpc.bus(:, [3, 4]) = [0, 0],"] {
+        let src = format!("{CASE_TINY}\n{mutation} unrelated = 1;\n");
+        assert_indexed_warning_span(&src, mutation);
+    }
+}
+
+fn assert_indexed_warning_span(source: &str, mutation: &str) {
+    let mut warnings = crate::collect::Diagnostics::new();
+    warnings.locate_in(powerio_core::SourceId::new("/input").unwrap(), 0);
+    super::parse_matpower_source(source, None, &mut warnings).unwrap();
+    let records = warnings.records();
+    assert_eq!(records.len(), 1, "{mutation:?}: {:?}", warnings.lines());
+    assert_eq!(records[0].code(), "READ.MATPOWER.INDEXED_ASSIGNMENT");
+    assert_eq!(
+        records[0].severity(),
+        powerio_core::DiagnosticSeverity::Warning
+    );
+    let span = &records[0].spans()[0];
+    assert_eq!(
+        (span.byte_start(), span.byte_end()),
+        byte_range(source, mutation),
+        "span must cover only the original mutation: {mutation:?}",
+    );
+}

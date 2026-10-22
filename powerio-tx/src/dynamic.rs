@@ -61,6 +61,66 @@ impl DynamicCase {
             })
             .collect()
     }
+
+    /// Check generic DYR bus references against a parsed balanced network.
+    ///
+    /// This deliberately does not validate `device_id`: there is no
+    /// model-independent rule that the second DYR key names a generator.
+    #[must_use]
+    pub fn unresolved_buses_in(
+        &self,
+        network: &crate::BalancedNetwork,
+    ) -> Vec<UnresolvedBusReference> {
+        let bus_ids: BTreeSet<u32> = network
+            .buses()
+            .iter()
+            .filter_map(|bus| u32::try_from(bus.id.0).ok())
+            .collect();
+        self.unresolved_buses(&bus_ids)
+    }
+}
+
+/// A steady-state case explicitly paired with its transient-stability data.
+///
+/// This is a study-level association, not a mutation of [`crate::BalancedNetwork`].
+/// The current linking guarantee validates generic bus references only; it does
+/// not resolve model-specific device keys or claim that the named device exists.
+#[derive(Clone, Debug)]
+pub struct DynamicStudy {
+    network: crate::BalancedNetwork,
+    dynamics: DynamicCase,
+}
+
+impl DynamicStudy {
+    /// Pair a parsed static network with a parsed DYR case.
+    #[must_use]
+    pub fn new(network: crate::BalancedNetwork, dynamics: DynamicCase) -> Self {
+        Self { network, dynamics }
+    }
+
+    /// The steady-state network, unchanged by the pairing.
+    #[must_use]
+    pub fn network(&self) -> &crate::BalancedNetwork {
+        &self.network
+    }
+
+    /// The loss-preserving dynamic-model records.
+    #[must_use]
+    pub fn dynamics(&self) -> &DynamicCase {
+        &self.dynamics
+    }
+
+    /// DYR records whose bus reference is absent from the static case.
+    #[must_use]
+    pub fn unresolved_buses(&self) -> Vec<UnresolvedBusReference> {
+        self.dynamics.unresolved_buses_in(&self.network)
+    }
+
+    /// Consume the study and recover the separately represented components.
+    #[must_use]
+    pub fn into_parts(self) -> (crate::BalancedNetwork, DynamicCase) {
+        (self.network, self.dynamics)
+    }
 }
 
 /// One DYR model record. Parameters remain ordered and lexically decoded;
@@ -553,5 +613,24 @@ mod tests {
         let case = parse_dyr(&source).expect("long blank/comment prefix");
         assert_eq!(case.records().len(), 1);
         assert_eq!(case.records()[0].line(), 200_001);
+    }
+
+    #[test]
+    fn paired_dynamic_study_checks_bus_ids_but_keeps_device_keys_opaque() {
+        let network = crate::BalancedNetwork::in_memory(
+            "static",
+            100.0,
+            vec![crate::Bus::new(crate::BusId(1), crate::BusType::Ref, 230.0)],
+            Vec::new(),
+        );
+        let dynamics =
+            parse_dyr("1, 'GENCLS', '1', 13.0, 0.0 /\n2, 'USERMODEL', 'CUSTOM-A', 1.0 /\n")
+                .expect("DYR parses");
+        let study = DynamicStudy::new(network, dynamics);
+        let unresolved = study.unresolved_buses();
+        assert_eq!(unresolved.len(), 1);
+        assert_eq!(unresolved[0].bus_id, 2);
+        assert_eq!(unresolved[0].model_name, "USERMODEL");
+        assert_eq!(study.dynamics().records()[1].device_id(), Some("CUSTOM-A"));
     }
 }

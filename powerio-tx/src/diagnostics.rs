@@ -212,6 +212,8 @@ pub mod codes {
         // PARSE: the source text could not be decoded as given.
         PARSE_MATPOWER_MALFORMED = "PARSE.MATPOWER.MALFORMED", Error,
             "a MATPOWER matrix is missing, short, unparseable, or unbalanced", category = Parse;
+        READ_MATPOWER_INDEXED_ASSIGNMENT = "READ.MATPOWER.INDEXED_ASSIGNMENT", Warning,
+            "a MATPOWER indexed assignment is not evaluated by the literal reader";
         PARSE_SOURCE_MALFORMED = "PARSE.SOURCE.MALFORMED", Error,
             "a format reader refused the source it was given", category = Parse;
         PARSE_GOC3_MALFORMED = "PARSE.GOC3.MALFORMED", Error,
