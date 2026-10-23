@@ -268,15 +268,17 @@ jobs:
     # A browser consumer that sets `default-features = false` builds with no C
     # compiler: SQLite enters only through the default-on `sincal` feature.
     # The tree check is the proof; this runner's clang can target wasm32 and
-    # would compile SQLite without complaint.
+    # would compile SQLite without complaint. Package names are matched at the
+    # start of each `--prefix none` line, so a checkout path cannot match.
     - name: Check wasm32 without the sincal feature
       run: |
         cargo check --target wasm32-unknown-unknown -p powerio-tx -p powerio-dist --no-default-features
         cargo check --target wasm32-unknown-unknown -p powerio --no-default-features
         cargo check --target wasm32-unknown-unknown -p powerio --no-default-features --features matrix
         cargo check --target wasm32-unknown-unknown -p powerio --no-default-features --features schema
-        if cargo tree --target wasm32-unknown-unknown -p powerio --no-default-features --features matrix \
-            --edges normal,build | grep -q -E 'rusqlite|libsqlite3-sys|powerio-sincal'; then
+        tree=$(cargo tree --target wasm32-unknown-unknown -p powerio --no-default-features --features matrix \
+          --edges normal,build --prefix none)
+        if grep -E '^(rusqlite|libsqlite3-sys|sqlite-wasm-rs|powerio-sincal) ' <<<"$tree"; then
           echo "powerio without the sincal feature still reaches SQLite" >&2; exit 1
         fi
 

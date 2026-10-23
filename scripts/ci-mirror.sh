@@ -57,13 +57,17 @@ if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown;
       -p powerio-core -p powerio-prob -p powerio-matrix
   run cargo check --target wasm32-unknown-unknown -p powerio --features matrix
   # Without the default-on sincal feature the facade must build with no C
-  # compiler, so SQLite may not appear in that dependency graph.
+  # compiler, so SQLite may not appear in that dependency graph. Package names
+  # are matched at the start of each `--prefix none` line, so a checkout path
+  # cannot match; capturing the tree first keeps a cargo failure fatal and
+  # leaves no pipe for grep to close early under pipefail.
   run cargo check --target wasm32-unknown-unknown -p powerio-tx -p powerio-dist --no-default-features
   run cargo check --target wasm32-unknown-unknown -p powerio --no-default-features
   run cargo check --target wasm32-unknown-unknown -p powerio --no-default-features --features matrix
   run cargo check --target wasm32-unknown-unknown -p powerio --no-default-features --features schema
-  if cargo tree --target wasm32-unknown-unknown -p powerio --no-default-features --features matrix \
-      --edges normal,build | grep -q -E 'rusqlite|libsqlite3-sys|powerio-sincal'; then
+  tree=$(cargo tree --target wasm32-unknown-unknown -p powerio --no-default-features --features matrix \
+      --edges normal,build --prefix none)
+  if grep -E '^(rusqlite|libsqlite3-sys|sqlite-wasm-rs|powerio-sincal) ' <<<"$tree"; then
     echo "error: powerio without the sincal feature still reaches SQLite" >&2; exit 1
   fi
 else
