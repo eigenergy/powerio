@@ -24,19 +24,6 @@ fn failure(error: impl std::fmt::Display, source: &Source) -> Error {
     Error::new(&codes::PARSE_SINCAL_MALFORMED, error.to_string()).with_source(source.clone())
 }
 
-pub(in crate::format) fn handles(source: &Source) -> bool {
-    match source.format() {
-        Some(format) => {
-            format.as_str().eq_ignore_ascii_case("sincal")
-                || parse_transmission_format(format.as_str())
-                    == Some(TransmissionFormat::SincalBalanced)
-        }
-        None => std::path::Path::new(source.name())
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("sinx")),
-    }
-}
-
 pub(in crate::format) fn parse(source: Source) -> Result<PioModule<BalancedNetwork>, Error> {
     parse_with_options(source, &SincalBalancedReadOptions::default())
 }
