@@ -5,6 +5,7 @@ use powerio_core::{Diagnostic, HistoryEntry, HistoryId, HistoryKind};
 use powerio_dist::{MulticonductorNetwork, NeutralKronOptions, NeutralKronReport};
 #[cfg(test)]
 use powerio_tnd::transform::capped_history_notes;
+#[doc(inline)]
 pub use powerio_tnd::transform::{
     MulticonductorToBalancedError, MulticonductorToBalancedOptions, MulticonductorToBalancedReport,
     MulticonductorToBalancedTransformation, SequenceTransformConvention, to_balanced_network,

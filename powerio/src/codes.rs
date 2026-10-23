@@ -41,6 +41,7 @@ pub fn registry() -> Vec<&'static powerio_core::DiagnosticInfo> {
         .collect()
 }
 
+#[doc(inline)]
 pub use powerio_tnd::diagnostics::*;
 
 #[cfg(test)]

@@ -166,11 +166,10 @@ pub use powerio_core::{
 pub use powerio_core::Error;
 pub type Result<T> = std::result::Result<T, powerio_core::Error>;
 
-/// Distribution types remain grouped under `powerio::dist` where their names
-/// overlap with balanced network types. Common unambiguous records are also
-/// available at the facade root.
+/// Integrated transmission/distribution models, transformations, and adapters.
 pub use powerio_tnd as tnd;
 /// Distribution types and facade format dispatch.
+/// Types whose names overlap with balanced network types stay grouped here.
 pub mod dist {
     pub use powerio_dist::*;
     #[cfg(feature = "sincal")]

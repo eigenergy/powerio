@@ -56,6 +56,11 @@ git archive HEAD | tar -x -C "$current_root"
 # apply the same preparation to the isolated source archives.
 python3 scripts/semver_zip_compat.py --self-test
 python3 scripts/semver_zip_compat.py "$baseline_root" "$current_root"
+# Rustdoc JSON cannot follow foreign re-exports. In the isolated archives,
+# expose the moved implementation locally while retaining the actual export
+# lists, so the full API checks still cover every moved item.
+python3 scripts/semver_tnd_compat.py --self-test
+python3 scripts/semver_tnd_compat.py "$baseline_root" "$current_root"
 # Run SemVer against the isolated current checkout. cargo-semver-checks creates
 # synthetic consumer packages from this workspace, so running it against the
 # original checkout would still attempt to resolve the yanked ^8.6 dependency.
