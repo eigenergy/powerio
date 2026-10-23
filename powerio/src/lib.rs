@@ -76,6 +76,14 @@
 //! )?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+//!
+//! Native SINCAL projects are behind the `sincal` feature, on by default,
+//! which brings in SQLite through `powerio-sincal`. A build with
+//! `default-features = false` needs no C compiler: [`grid_formats`] then
+//! lists no SINCAL format, [`ParseOptions`] and [`EmitOptions`] carry no
+//! SINCAL field, and a SINCAL source or target fails with
+//! `REQUEST.SINCAL.FEATURE_DISABLED`. [`resolve_format`] still describes the
+//! SINCAL tokens, because format metadata is not a build probe.
 
 /// The facade version recorded on producers and stored modules.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -193,14 +201,6 @@ pub use powerio_prob::{
 /// `matrix` feature. Matrix construction is never a parse result, so the
 /// facade's automatic parsing and [`PioValue`] do not change with this
 /// feature.
-///
-/// Native SINCAL projects are behind the `sincal` feature, on by default,
-/// which brings in SQLite through `powerio-sincal`. A build with
-/// `default-features = false` needs no C compiler: [`grid_formats`] then
-/// lists no SINCAL format, [`ParseOptions`] and [`EmitOptions`] carry no
-/// SINCAL field, and a SINCAL source or target fails with
-/// `REQUEST.SINCAL.FEATURE_DISABLED`. [`resolve_format`] still describes the
-/// SINCAL tokens, because format metadata is not a build probe.
 #[cfg(feature = "matrix")]
 pub use powerio_matrix as matrix;
 
