@@ -16,6 +16,9 @@
   its breaking removal is tracked in #673. ABI 7 and real Arrow/Parquet support
   behind `gridfm` are unchanged.
 
+- Add PowerIO Convert at `powerio.dev/convert/`: local WebAssembly batch
+  conversion with mixed-format detection, project folders and ZIPs, multiple
+  outputs, native diagnostics, private downloads, and optional error statistics.
 - Apply bounded MATPOWER post-literal demand and impedance conversions, fixing
   case33bw's kW-to-MW and ohm-to-per-unit interpretation. Unsupported or ambiguous
   blocks keep literal values with source-span warnings; unchanged source echo
