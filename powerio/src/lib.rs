@@ -193,6 +193,14 @@ pub use powerio_prob::{
 /// `matrix` feature. Matrix construction is never a parse result, so the
 /// facade's automatic parsing and [`PioValue`] do not change with this
 /// feature.
+///
+/// Native SINCAL projects are behind the `sincal` feature, on by default,
+/// which brings in SQLite through `powerio-sincal`. A build with
+/// `default-features = false` needs no C compiler: [`grid_formats`] then
+/// lists no SINCAL format, [`ParseOptions`] and [`EmitOptions`] carry no
+/// SINCAL field, and a SINCAL source or target fails with
+/// `REQUEST.SINCAL.FEATURE_DISABLED`. [`resolve_format`] still describes the
+/// SINCAL tokens, because format metadata is not a build probe.
 #[cfg(feature = "matrix")]
 pub use powerio_matrix as matrix;
 
@@ -211,7 +219,9 @@ pub use __gridfm::codes as gridfm_codes;
 mod stored;
 mod write;
 pub use write::{EmitOptions, emit, emit_with_options};
+#[cfg(feature = "sincal")]
 mod sincal_write;
+#[cfg(feature = "sincal")]
 pub use sincal_write::{SincalContainer, SincalExperimentalOptions};
 mod ir;
 #[cfg(feature = "schema")]
@@ -394,9 +404,11 @@ pub use value::{PioScenarioSet, PioTimeSeries, PioValue};
 #[non_exhaustive]
 pub struct ParseOptions {
     /// Explicit native selections for the sincal-balanced format only.
+    #[cfg(feature = "sincal")]
     pub sincal_balanced: Option<powerio_tx::format::SincalBalancedReadOptions>,
     /// Explicit native-variant, daily-snapshot and Access-acquisition options.
     /// Valid only with the sincal-multiconductor format selection.
+    #[cfg(feature = "sincal")]
     pub sincal_multiconductor: Option<powerio_dist::SincalReadOptions>,
     /// The parser selected by its stable format token rather than inferred
     /// from the input's name and content.
@@ -495,6 +507,11 @@ pub fn parse_with_options(
     if let Some(format) = &options.format {
         source = source.with_format(format.clone());
     }
+    #[cfg(not(feature = "sincal"))]
+    if names_sincal_source(&source) {
+        return Err(sincal_feature_disabled().with_source(source));
+    }
+    #[cfg(feature = "sincal")]
     if options.sincal_balanced.is_some() && options.sincal_multiconductor.is_some() {
         return Err(powerio_core::Error::new(
             &codes::REQUEST_SINCAL_OPTIONS_PROFILE,
@@ -502,10 +519,12 @@ pub fn parse_with_options(
         )
         .with_source(source));
     }
+    #[cfg(feature = "sincal")]
     if let Some(sincal) = &options.sincal_balanced {
         return powerio_tx::format::parse_sincal_balanced_with_options(source, sincal)
             .map(|m| m.map_value(PioValue::from));
     }
+    #[cfg(feature = "sincal")]
     if let Some(sincal) = &options.sincal_multiconductor {
         if source
             .format()
@@ -828,6 +847,30 @@ enum RoutedFamily {
     Contingency(ContingencyFile),
     #[cfg(feature = "gridfm")]
     Gridfm,
+}
+
+/// Whether `source` names a SINCAL project: a declared format that resolves
+/// to one of the SINCAL tokens, or an undeclared `.sinx` archive. Content
+/// never selects the family, so SQLite bytes under another name route as
+/// before.
+#[cfg(not(feature = "sincal"))]
+fn names_sincal_source(source: &powerio_core::Source) -> bool {
+    match source.format() {
+        Some(format) => write::is_sincal_format(format.as_str()),
+        None => std::path::Path::new(source.name())
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("sinx")),
+    }
+}
+
+/// The refusal a SINCAL source or target meets in a build without the
+/// `sincal` feature. One code for parse and emit, shared with `powerio-tx`.
+#[cfg(not(feature = "sincal"))]
+pub(crate) fn sincal_feature_disabled() -> powerio_core::Error {
+    powerio_core::Error::new(
+        &powerio_tx::diagnostics::codes::REQUEST_SINCAL_FEATURE_DISABLED,
+        "this build of powerio compiled without the `sincal` feature, so it cannot read or write SINCAL projects; enable the `sincal` feature (on by default) to include the SQLite backed readers",
+    )
 }
 
 fn routed_family(

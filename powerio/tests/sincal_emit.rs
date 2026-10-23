@@ -1,3 +1,4 @@
+#![cfg(feature = "sincal")]
 mod helpers;
 
 use powerio::{

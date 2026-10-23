@@ -9,10 +9,14 @@
 //! ├── powerio-tx
 //! └── powerio-dist
 //!
+//! powerio-sincal -> powerio-core
+//! powerio-tx     -> powerio-sincal when the sincal feature is enabled
+//! powerio-dist   -> powerio-sincal when the sincal feature is enabled
 //! powerio-prob   -> powerio-core + powerio-tx + powerio-dist
 //! powerio-matrix -> powerio-core + powerio-tx + powerio-dist + powerio-prob
 //! powerio        -> powerio-core + powerio-tx + powerio-dist + powerio-prob
 //! powerio        -> powerio-matrix when the matrix feature is enabled
+//! powerio        -> powerio-sincal when the sincal feature is enabled
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -110,8 +114,9 @@ fn the_dependency_graph_matches_the_settled_layout() {
     );
 }
 
-#[test]
-fn the_facade_matrix_dependency_is_optional() {
+/// The normal dependency `dependency` of workspace `package`, from `cargo
+/// metadata`, so a test can read its `optional` flag.
+fn normal_dependency(package: &str, dependency: &str) -> serde_json::Value {
     let cargo = std::env::var_os("CARGO").expect("cargo sets CARGO for test runs");
     let output = std::process::Command::new(cargo)
         .args(["metadata", "--no-deps", "--format-version", "1"])
@@ -120,17 +125,51 @@ fn the_facade_matrix_dependency_is_optional() {
         .expect("cargo metadata runs");
     let metadata: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("cargo metadata emits JSON");
-    let facade = metadata["packages"]
+    metadata["packages"]
         .as_array()
         .expect("packages")
         .iter()
-        .find(|package| package["name"] == "powerio")
-        .expect("facade package");
-    let matrix_dep = facade["dependencies"]
+        .find(|entry| entry["name"] == package)
+        .unwrap_or_else(|| panic!("{package} is a workspace package"))["dependencies"]
         .as_array()
         .expect("dependencies")
         .iter()
-        .find(|dep| dep["name"] == "powerio-matrix" && dep["kind"].is_null())
-        .expect("facade names powerio-matrix");
+        .find(|dep| dep["name"] == dependency && dep["kind"].is_null())
+        .unwrap_or_else(|| panic!("{package} names {dependency}"))
+        .clone()
+}
+
+#[test]
+fn the_facade_matrix_dependency_is_optional() {
+    let matrix_dep = normal_dependency("powerio", "powerio-matrix");
     assert_eq!(matrix_dep["optional"], true, "matrix must be feature gated");
+}
+
+/// SQLite enters the graph only through `powerio-sincal`. Every edge to it is
+/// optional and off without the `sincal` feature, so a facade built with
+/// `default-features = false` needs no C compiler; the network crates' own
+/// defaults are not re-enabled by the crates above them.
+#[test]
+fn every_powerio_sincal_dependency_is_optional() {
+    for package in ["powerio", "powerio-tx", "powerio-dist"] {
+        let dep = normal_dependency(package, "powerio-sincal");
+        assert_eq!(
+            dep["optional"], true,
+            "{package}: sincal must be feature gated"
+        );
+    }
+    for (package, network) in [
+        ("powerio", "powerio-tx"),
+        ("powerio", "powerio-dist"),
+        ("powerio-prob", "powerio-tx"),
+        ("powerio-prob", "powerio-dist"),
+        ("powerio-matrix", "powerio-tx"),
+        ("powerio-matrix", "powerio-dist"),
+    ] {
+        let dep = normal_dependency(package, network);
+        assert_eq!(
+            dep["uses_default_features"], false,
+            "{package} -> {network} must not re-enable the default sincal feature"
+        );
+    }
 }
