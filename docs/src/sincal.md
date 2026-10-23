@@ -336,7 +336,7 @@ desktop acceptance. The 12-bus case does not close the larger-case review gate.
 ### Explicit balanced Access snapshots
 
 The balanced reader also accepts schema-11.5 Access acquisition records through
-`powerio_tx::format::SincalBalancedReadOptions`, carried by
+`powerio_tnd::formats::sincal::SincalBalancedReadOptions`, carried by
 `powerio::ParseOptions::sincal_balanced`. Select `sincal-balanced` explicitly,
 set `variant` and `snapshot_hours` when required, and set `acquired_tables` to
 the relative companion containing `import_access.py` output. Memory sources attach
