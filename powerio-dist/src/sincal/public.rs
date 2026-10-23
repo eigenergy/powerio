@@ -237,9 +237,4 @@ fn add_provenance(
     Ok(())
 }
 
-pub(crate) fn is_multiconductor_token(name: &str) -> bool {
-    name.chars()
-        .filter(|c| !matches!(c, '-' | '_' | ' '))
-        .collect::<String>()
-        .eq_ignore_ascii_case("sincalmulticonductor")
-}
+pub(crate) use crate::convert::is_sincal_multiconductor_token as is_multiconductor_token;

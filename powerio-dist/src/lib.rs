@@ -27,6 +27,12 @@
 //! # Ok::<(), powerio_core::Error>(())
 //! ```
 //!
+//! The conductor-resolved SINCAL reader and the experimental SINCAL writer
+//! are behind the `sincal` cargo feature, on by default. It brings in SQLite
+//! through `powerio-sincal`; with `default-features = false` every other
+//! format still parses and emits, no C compiler is needed, and a declared
+//! SINCAL source fails with `REQUEST.DIST_FORMAT.SINCAL_FEATURE_DISABLED`.
+//!
 //! # Fidelity rules
 //!
 //! Emitting to the retained source format returns the original bytes. Cross
@@ -63,6 +69,7 @@ pub mod model;
 pub mod pmd;
 pub mod readiness;
 // Family-local native adapters; only explicitly selected verified profiles map.
+#[cfg(feature = "sincal")]
 #[allow(dead_code)]
 mod sincal;
 #[cfg(test)]
@@ -106,6 +113,7 @@ pub use readiness::{
     ElectricalReadiness, ReadinessFinding, ReadinessSeverity, audit_electrical_readiness,
     require_electrical_readiness,
 };
+#[cfg(feature = "sincal")]
 pub use sincal::public::{SincalReadOptions, parse_sincal};
 
 /// Internal SINCAL validation entry point; callers must explicitly choose the
@@ -113,6 +121,7 @@ pub use sincal::public::{SincalReadOptions, parse_sincal};
 ///
 /// # Errors
 /// Unverified schema, unsupported electrical modes or inconsistent inputs.
+#[cfg(feature = "sincal")]
 #[doc(hidden)]
 pub fn __read_sincal_multiconductor_snapshot(
     snapshot: powerio_sincal::DatabaseSnapshot,
@@ -124,6 +133,7 @@ pub fn __read_sincal_multiconductor_snapshot(
 ///
 /// # Errors
 /// Unsupported schema or inability to establish the common mapping context.
+#[cfg(feature = "sincal")]
 #[doc(hidden)]
 pub fn __audit_sincal_multiconductor_snapshot(
     snapshot: powerio_sincal::DatabaseSnapshot,
@@ -135,6 +145,7 @@ pub fn __audit_sincal_multiconductor_snapshot(
 ///
 /// # Errors
 /// Unsupported profiles or components, invalid time, or inconsistent inputs.
+#[cfg(feature = "sincal")]
 #[doc(hidden)]
 pub fn __read_sincal_multiconductor_at(
     snapshot: powerio_sincal::DatabaseSnapshot,
@@ -147,6 +158,7 @@ pub fn __read_sincal_multiconductor_at(
 ///
 /// # Errors
 /// Unsupported common context or invalid snapshot time.
+#[cfg(feature = "sincal")]
 #[doc(hidden)]
 pub fn __audit_sincal_multiconductor_at(
     snapshot: powerio_sincal::DatabaseSnapshot,
@@ -155,6 +167,7 @@ pub fn __audit_sincal_multiconductor_at(
     sincal::audit_snapshot_at(snapshot, hours)
 }
 
+#[cfg(feature = "sincal")]
 #[doc(hidden)]
 pub use sincal::{
     ExperimentalMulticonductorOptions, ExperimentalMulticonductorOutput,

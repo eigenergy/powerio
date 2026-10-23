@@ -16,12 +16,18 @@ categories = ["science", "parsing"]
 all-features = true
 
 [features]
+default = ["sincal"]
 schema = ["dep:schemars"]
+# The conductor-resolved SINCAL reader and the experimental SINCAL writer:
+# SQLite projects and `.sinx` archives through powerio-sincal, which bundles
+# SQLite. Off, no C compiler is needed; a SINCAL source then fails with
+# REQUEST.DIST_FORMAT.SINCAL_FEATURE_DISABLED.
+sincal = ["dep:powerio-sincal", "dep:rusqlite"]
 
 [dependencies]
 powerio-core = { workspace = true }
-powerio-sincal = { workspace = true }
-rusqlite.workspace = true
+powerio-sincal = { workspace = true, optional = true }
+rusqlite = { workspace = true, optional = true }
 thiserror = "2"
 serde.workspace = true
 # float_roundtrip: the default float parser can be one ULP off the shortest
@@ -33,6 +39,10 @@ num-complex.workspace = true
 quick-xml.workspace = true
 uuid.workspace = true
 memchr = "2.4"
+
+[[example]]
+name = "sincal_multiconductor"
+required-features = ["sincal"]
 
 [dev-dependencies]
 sha2 = "0.10"

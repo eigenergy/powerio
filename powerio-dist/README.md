@@ -17,6 +17,10 @@ daily snapshot and explicitly acquired Access tables. Unsupported modes reject
 atomically. The `powerio` facade handles byte-exact native echo; a fresh SINCAL
 writer has a separate experimental scope. See the workspace SINCAL guide and
 `evals/sincal/` for exact supported profiles and independent validation.
+The reader and writer are behind the `sincal` cargo feature, on by default;
+it brings in SQLite. With `default-features = false` the crate needs no C
+compiler and a declared SINCAL source fails with
+`REQUEST.DIST_FORMAT.SINCAL_FEATURE_DISABLED`.
 
 Emitting back to the source format reproduces the retained bytes; emitting to
 a different format reports the fields the target cannot represent. The DSS
