@@ -1,0 +1,183 @@
+{
+  "notes": {
+    "about": "Expected leg D findings per case, written by schema_check.py --update-expected. A VOCAB finding on PowerIO output enters this file only with a note below saying why it is accepted; PROFILE findings are warnings and are recorded as observed. Corpus cases are kept when the corpus is absent.",
+    "VOCAB.PROPERTY_UNKNOWN ShuntCompensatorPhase.bPerSection / gPerSection (micro_feeder.xml source)": "The hand-written fixture uses the non-standard ShuntCompensatorPhase.* spelling, which the reader accepts as a fallback; cim17v40 declares bPerSection and gPerSection on LinearShuntCompensatorPhase, which the writer emits. Candidate fixture fix in a later PR.",
+    "VOCAB.CLASS_UNKNOWN PhotovoltaicUnit, VOCAB.REFERENCE_TYPE ... -> PhotovoltaicUnit (Powergrid-Models sources)": "Upstream spelling: cim17v40 names the class PhotoVoltaicUnit.",
+    "VOCAB.ENUM_VALUE BatteryUnit.batteryState = BatteryState.* (Powergrid-Models sources)": "Upstream: cim17v40 declares the enumeration BatteryStateKind with lower case members (charging, discharging, ...).",
+    "VOCAB.PROPERTY_UNKNOWN SynchronousMachine.p / q / ratedS / ratedU (9500 node source)": "Upstream: cim17v40 declares p and q on RotatingMachine and ratedS and ratedU on RotatingMachine, so the qualified names are RotatingMachine.*.",
+    "VOCAB.PROPERTY_UNKNOWN RegulatingControl.discrete, ConnectivityNode.OperationalLimitSet (Powergrid-Models sources)": "Upstream: neither property is declared in cim17v40 (both appear in older CIM16 or GridAPPS-D usage).",
+    "PROFILE.PROPERTY_OUTSIDE Terminal.phases, PowerTransformerEnd.x (PowerIO output)": "The rc4_2021 profile leaves out Terminal.phases and the PowerTransformerEnd series impedance (GridAPPS-D uses per-phase classes and TransformerMeshImpedance); both are valid cim17v40.",
+    "CONVERT.REFUSED BUILD.DIST.ELECTRICAL_INCOMPLETE (IEEE13_Assets, 9500 node)": "Segments described by wire spacing and wire data have no impedance the reader can use yet (wire geometry follow-up).",
+    "CONVERT.REFUSED PARSE.CLI.ERRORS_REPORTED (bmopf/example_enwl_n1_f2.json)": "The CLI refuses to convert a case whose reader reported errors; the Rust stable-CIM test writes it through the library instead."
+  },
+  "cases": {
+    "corpus/IEEE123.xml output": {
+      "PROFILE.PROPERTY_OUTSIDE PowerTransformerEnd.x": 4,
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 352
+    },
+    "corpus/IEEE123.xml source": {
+      "PROFILE.PROPERTY_OUTSIDE Asset.PowerSystemResources": 13,
+      "PROFILE.PROPERTY_OUTSIDE LoadResponseCharacteristic.pFrequencyExponent": 7,
+      "PROFILE.PROPERTY_OUTSIDE LoadResponseCharacteristic.qFrequencyExponent": 7,
+      "PROFILE.PROPERTY_OUTSIDE RatioTapChanger.tculControlMode": 7,
+      "VOCAB.PROPERTY_UNKNOWN ConnectivityNode.OperationalLimitSet": 130,
+      "VOCAB.PROPERTY_UNKNOWN RegulatingControl.discrete": 7
+    },
+    "corpus/IEEE13.xml output": {
+      "PROFILE.PROPERTY_OUTSIDE PowerTransformerEnd.x": 5,
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 56
+    },
+    "corpus/IEEE13.xml source": {
+      "PROFILE.PROPERTY_OUTSIDE Asset.PowerSystemResources": 7,
+      "PROFILE.PROPERTY_OUTSIDE BatteryUnit.batteryState": 2,
+      "PROFILE.PROPERTY_OUTSIDE LoadResponseCharacteristic.pFrequencyExponent": 7,
+      "PROFILE.PROPERTY_OUTSIDE LoadResponseCharacteristic.qFrequencyExponent": 7,
+      "PROFILE.PROPERTY_OUTSIDE RatioTapChanger.tculControlMode": 3,
+      "VOCAB.CLASS_UNKNOWN PhotovoltaicUnit": 2,
+      "VOCAB.ENUM_VALUE BatteryUnit.batteryState = BatteryState.Charging": 2,
+      "VOCAB.PROPERTY_UNKNOWN ConnectivityNode.OperationalLimitSet": 22,
+      "VOCAB.PROPERTY_UNKNOWN RegulatingControl.discrete": 3,
+      "VOCAB.REFERENCE_TYPE PowerElectronicsConnection.PowerElectronicsUnit -> PhotovoltaicUnit": 2
+    },
+    "corpus/IEEE13_Assets.xml output": {
+      "CONVERT.REFUSED BUILD.DIST.ELECTRICAL_INCOMPLETE": 1
+    },
+    "corpus/IEEE13_Assets.xml source": {
+      "PROFILE.PROPERTY_OUTSIDE Asset.PowerSystemResources": 8,
+      "PROFILE.PROPERTY_OUTSIDE LoadResponseCharacteristic.pFrequencyExponent": 7,
+      "PROFILE.PROPERTY_OUTSIDE LoadResponseCharacteristic.qFrequencyExponent": 7,
+      "PROFILE.PROPERTY_OUTSIDE RatioTapChanger.tculControlMode": 3,
+      "PROFILE.PROPERTY_OUTSIDE WireInfo.insulationMaterial": 2,
+      "PROFILE.PROPERTY_OUTSIDE WireSpacingInfo.usage": 10,
+      "VOCAB.PROPERTY_UNKNOWN ConnectivityNode.OperationalLimitSet": 16,
+      "VOCAB.PROPERTY_UNKNOWN RegulatingControl.discrete": 5
+    },
+    "corpus/IEEE37.xml output": {
+      "PROFILE.PROPERTY_OUTSIDE PowerTransformerEnd.x": 4,
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 107
+    },
+    "corpus/IEEE37.xml source": {
+      "PROFILE.PROPERTY_OUTSIDE Asset.PowerSystemResources": 4,
+      "PROFILE.PROPERTY_OUTSIDE LoadResponseCharacteristic.pFrequencyExponent": 7,
+      "PROFILE.PROPERTY_OUTSIDE LoadResponseCharacteristic.qFrequencyExponent": 7,
+      "PROFILE.PROPERTY_OUTSIDE RatioTapChanger.tculControlMode": 2,
+      "VOCAB.PROPERTY_UNKNOWN ConnectivityNode.OperationalLimitSet": 39,
+      "VOCAB.PROPERTY_UNKNOWN RegulatingControl.discrete": 2
+    },
+    "corpus/IEEE8500.xml output": {
+      "PROFILE.PROPERTY_OUTSIDE PowerTransformerEnd.x": 2,
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 8588
+    },
+    "corpus/IEEE8500.xml source": {
+      "PROFILE.PROPERTY_OUTSIDE Asset.PowerSystemResources": 1201,
+      "PROFILE.PROPERTY_OUTSIDE LoadResponseCharacteristic.pFrequencyExponent": 7,
+      "PROFILE.PROPERTY_OUTSIDE LoadResponseCharacteristic.qFrequencyExponent": 7,
+      "PROFILE.PROPERTY_OUTSIDE RatioTapChanger.tculControlMode": 12,
+      "VOCAB.PROPERTY_UNKNOWN ConnectivityNode.OperationalLimitSet": 4876,
+      "VOCAB.PROPERTY_UNKNOWN RegulatingControl.discrete": 21
+    },
+    "corpus/final9500nodebalanced.xml output": {
+      "CONVERT.REFUSED BUILD.DIST.ELECTRICAL_INCOMPLETE": 1
+    },
+    "corpus/final9500nodebalanced.xml source": {
+      "PROFILE.PROPERTY_OUTSIDE Asset.PowerSystemResources": 1311,
+      "PROFILE.PROPERTY_OUTSIDE BatteryUnit.batteryState": 2,
+      "PROFILE.PROPERTY_OUTSIDE LoadResponseCharacteristic.pFrequencyExponent": 7,
+      "PROFILE.PROPERTY_OUTSIDE LoadResponseCharacteristic.qFrequencyExponent": 7,
+      "PROFILE.PROPERTY_OUTSIDE RatioTapChanger.tculControlMode": 18,
+      "PROFILE.PROPERTY_OUTSIDE SynchronousMachine.p": 9,
+      "PROFILE.PROPERTY_OUTSIDE SynchronousMachine.q": 9,
+      "PROFILE.PROPERTY_OUTSIDE SynchronousMachine.ratedS": 9,
+      "PROFILE.PROPERTY_OUTSIDE SynchronousMachine.ratedU": 9,
+      "PROFILE.PROPERTY_OUTSIDE WireInfo.insulationMaterial": 1,
+      "PROFILE.PROPERTY_OUTSIDE WireSpacingInfo.usage": 70,
+      "VOCAB.CLASS_UNKNOWN PhotovoltaicUnit": 178,
+      "VOCAB.ENUM_VALUE BatteryUnit.batteryState = BatteryState.Discharging": 2,
+      "VOCAB.PROPERTY_UNKNOWN ConnectivityNode.OperationalLimitSet": 5294,
+      "VOCAB.PROPERTY_UNKNOWN RegulatingControl.discrete": 27,
+      "VOCAB.PROPERTY_UNKNOWN SynchronousMachine.p": 9,
+      "VOCAB.PROPERTY_UNKNOWN SynchronousMachine.q": 9,
+      "VOCAB.PROPERTY_UNKNOWN SynchronousMachine.ratedS": 9,
+      "VOCAB.PROPERTY_UNKNOWN SynchronousMachine.ratedU": 9,
+      "VOCAB.REFERENCE_TYPE PowerElectronicsConnection.PowerElectronicsUnit -> PhotovoltaicUnit": 178
+    },
+    "tests/data/dist/bmopf/example_enwl_n1_f2.json output": {
+      "CONVERT.REFUSED PARSE.CLI.ERRORS_REPORTED": 1
+    },
+    "tests/data/dist/bmopf/example_ieee13.json output": {
+      "PROFILE.PROPERTY_OUTSIDE PowerTransformerEnd.x": 4,
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 18
+    },
+    "tests/data/dist/cim/micro_feeder.xml output": {
+      "PROFILE.PROPERTY_OUTSIDE PowerTransformerEnd.x": 2,
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 9
+    },
+    "tests/data/dist/cim/micro_feeder.xml source": {
+      "PROFILE.PROPERTY_OUTSIDE PowerTransformerEnd.x": 2,
+      "PROFILE.PROPERTY_OUTSIDE ShuntCompensatorPhase.bPerSection": 3,
+      "PROFILE.PROPERTY_OUTSIDE ShuntCompensatorPhase.gPerSection": 3,
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 5,
+      "VOCAB.PROPERTY_UNKNOWN ShuntCompensatorPhase.bPerSection": 3,
+      "VOCAB.PROPERTY_UNKNOWN ShuntCompensatorPhase.gPerSection": 3
+    },
+    "tests/data/dist/micro/defaults_degenerate.dss output": {
+      "PROFILE.PROPERTY_OUTSIDE PowerTransformerEnd.x": 2,
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 7
+    },
+    "tests/data/dist/micro/fourwire_linecode.dss output": {
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 6
+    },
+    "tests/data/dist/micro/ibr_pv_control.dss output": {
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 6
+    },
+    "tests/data/dist/micro/lindist3flow_oracle.dss output": {
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 4
+    },
+    "tests/data/dist/micro/linecode_10x10.dss output": {
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 4
+    },
+    "tests/data/dist/micro/neutral_grounding_reactor.dss output": {
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 7
+    },
+    "tests/data/dist/micro/onephase_cvr_load.dss output": {
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 4
+    },
+    "tests/data/dist/micro/onephase_zip_load.dss output": {
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 4
+    },
+    "tests/data/dist/micro/switch.dss output": {
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 8
+    },
+    "tests/data/dist/micro/xfmr_1ph_delta_wye.dss output": {
+      "PROFILE.PROPERTY_OUTSIDE PowerTransformerEnd.x": 2,
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 4
+    },
+    "tests/data/dist/micro/xfmr_center_tap.dss output": {
+      "PROFILE.PROPERTY_OUTSIDE PowerTransformerEnd.x": 3,
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 7
+    },
+    "tests/data/dist/micro/xfmr_delta_wye.dss output": {
+      "PROFILE.PROPERTY_OUTSIDE PowerTransformerEnd.x": 2,
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 4
+    },
+    "tests/data/dist/micro/xfmr_open_wye_open_delta.dss output": {
+      "PROFILE.PROPERTY_OUTSIDE PowerTransformerEnd.x": 4,
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 6
+    },
+    "tests/data/dist/micro/xfmr_single_phase.dss output": {
+      "PROFILE.PROPERTY_OUTSIDE PowerTransformerEnd.x": 2,
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 4
+    },
+    "tests/data/dist/micro/xfmr_wye_delta.dss output": {
+      "PROFILE.PROPERTY_OUTSIDE PowerTransformerEnd.x": 2,
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 4
+    },
+    "tests/data/dist/pmd/fourwire_linecode.json output": {
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 6
+    },
+    "tests/data/dist/pmd/ieee13.json output": {
+      "PROFILE.PROPERTY_OUTSIDE PowerTransformerEnd.x": 6,
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 48
+    }
+  }
+}
