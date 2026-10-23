@@ -24,7 +24,9 @@ mod tests;
 
 pub use acquisition::{MAX_BYTES, SQLITE_MAGIC, database_bytes};
 pub use project::AcquiredProject;
-pub use retention::attach_retention_details;
+// The inventory helper is model neutral and needs no SQLite, so it lives in
+// powerio-core; the re-export keeps this crate's API unchanged.
+pub use powerio_core::attach_retention_details;
 pub use schema::{DatabaseSnapshot, TerminalIdentity, require_table};
 pub use tables::TableRecords;
 

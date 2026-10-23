@@ -96,33 +96,3 @@ impl DatabaseSnapshot {
         Ok(diagnostics)
     }
 }
-
-/// Add the parse-time inventory to an existing cross-format loss diagnostic.
-/// The inventory survives IR in diagnostics; it never reconstructs source bytes.
-///
-/// # Errors
-/// A diagnostic record exceeds the shared record limits.
-pub fn attach_retention_details(
-    read: &[Diagnostic],
-    emitted: &mut [Diagnostic],
-    loss_code: &str,
-) -> std::result::Result<(), powerio_core::Error> {
-    let inventory: Vec<_> = read
-        .iter()
-        .filter(|d| {
-            matches!(
-                d.details().get("retention").and_then(|v| v.as_str()),
-                Some("original_source_only" | "original_mdb_only")
-            )
-        })
-        .map(|d| json!(d.details()))
-        .collect();
-    for diagnostic in emitted.iter_mut().filter(|d| d.code() == loss_code) {
-        diagnostic.insert_detail("source_inventory", json!(inventory))?;
-        diagnostic.insert_detail(
-            "inventory_scope",
-            json!("parse_time_tables_and_enumerated_fields"),
-        )?;
-    }
-    Ok(())
-}
