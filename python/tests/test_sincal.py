@@ -36,7 +36,7 @@ def acquisition():
                 {"name": column[0], "native_type": "synthetic"} for column in cursor.description
             ], "rows": cursor.fetchall()})
     return original, json.dumps({
-        "format": "powerio-tnd-tables", "version": 1, "transport": "access-mdbtools",
+        "format": "powerio-sincal-tables", "version": 1, "transport": "access-mdbtools",
         "source": {"name": "synthetic.mdb", "bytes": len(original),
                    "sha256": hashlib.sha256(original).hexdigest()},
         "tools": {tool: "synthetic" for tool in ["mdb-json", "mdb-schema", "mdb-tables"]},
