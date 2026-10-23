@@ -42,10 +42,10 @@ echo "comparing the publishable crates at $version against $baseline"
 # API is changed by this workaround.
 # Compare the new crate once the selected release baseline contains it.
 excluded=(--exclude powerio-py --exclude powerio-capi)
-if [ -f powerio-sincal/Cargo.toml ] \
-    && ! git cat-file -e "$baseline:powerio-sincal/Cargo.toml" 2>/dev/null; then
-    echo "powerio-sincal is new since $baseline; no previous API to compare"
-    excluded+=(--exclude powerio-sincal)
+if [ -f powerio-tnd/Cargo.toml ] \
+    && ! git cat-file -e "$baseline:powerio-tnd/Cargo.toml" 2>/dev/null; then
+    echo "powerio-tnd is new since $baseline; no previous API to compare"
+    excluded+=(--exclude powerio-tnd)
 fi
 baseline_root=$(mktemp -d)
 current_root=$(mktemp -d)

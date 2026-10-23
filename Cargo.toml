@@ -3,7 +3,7 @@ members = [
     "powerio",
     "powerio-tx",
     "powerio-core",
-    "powerio-sincal",
+    "powerio-tnd",
     "powerio-matrix",
     "powerio-prob",
     "powerio-cli",
@@ -23,7 +23,7 @@ default-members = [
     "powerio",
     "powerio-tx",
     "powerio-core",
-    "powerio-sincal",
+    "powerio-tnd",
     "powerio-matrix",
     "powerio-prob",
     "powerio-cli",
@@ -50,18 +50,13 @@ homepage = "https://eigenergy.github.io/powerio/"
 # The intra-workspace deps carry the version pin `cargo publish` needs; keeping
 # them here means the pin moves with the [workspace.package] version.
 powerio = { path = "powerio", version = "0.11.6" }
-# The network crates' default `sincal` feature (SQLite through powerio-sincal)
-# is off at this level, because cargo lets a member turn an inherited
-# dependency's defaults off only when the workspace entry does. The facade's
-# own default-on `sincal` feature turns it back on; powerio-prob and
-# powerio-matrix use no SINCAL code, so a facade built with
-# `default-features = false` stays free of SQLite.
+# Model crates remain independent; the facade enables optional format adapters.
 powerio-tx = { path = "powerio-tx", version = "0.11.6", default-features = false }
 powerio-core = { path = "powerio-core", version = "0.11.6" }
 powerio-matrix = { path = "powerio-matrix", version = "0.11.6" }
 powerio-prob = { path = "powerio-prob", version = "0.11.6" }
 powerio-dist = { path = "powerio-dist", version = "0.11.6", default-features = false }
-powerio-sincal = { path = "powerio-sincal", version = "0.11.6" }
+powerio-tnd = { path = "powerio-tnd", version = "0.11.6", default-features = false }
 # Cross-crate type identity: `CsMat<f64>` (sprs) and the Arrow types cross crate
 # boundaries, so every crate must build against the same major.
 sprs = { version = "0.11", default-features = false }

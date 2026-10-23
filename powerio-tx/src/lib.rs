@@ -17,11 +17,8 @@
 //! A reader that retains source text can return those bytes when writing the
 //! same format. Matrix and problem instance builders live in separate crates.
 //!
-//! The SINCAL reader and the experimental SINCAL writer are behind the
-//! `sincal` cargo feature, on by default. It brings in SQLite through
-//! `powerio-sincal`; with `default-features = false` every other format
-//! still parses and emits, no C compiler is needed, and a SINCAL source
-//! fails with `REQUEST.SINCAL.FEATURE_DISABLED`.
+//! SINCAL adapters are provided by `powerio_tnd::formats::sincal` and the
+//! `powerio` facade. This model crate is independent of SQLite and integration.
 //!
 //! ```
 //! use powerio_core::Source;

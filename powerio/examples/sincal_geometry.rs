@@ -19,13 +19,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let mut options = ParseOptions::default().format(&args[0])?;
     if args[0] == "sincal-balanced" {
-        let mut selection = powerio_tx::format::SincalBalancedReadOptions::default();
+        let mut selection = powerio_tnd::formats::sincal::SincalBalancedReadOptions::default();
         selection.variant = Some(1);
         selection.snapshot_hours = records.map(|_| 0.0);
         selection.acquired_tables = records.map(|_| "acquired.json".into());
         options.sincal_balanced = Some(selection);
     } else if args[0] == "sincal-multiconductor" {
-        let mut selection = powerio_dist::SincalReadOptions::default();
+        let mut selection = powerio_tnd::formats::sincal::SincalReadOptions::default();
         selection.variant = Some(1);
         selection.snapshot_hours = records.map(|_| 0.0);
         selection.acquired_tables = records.map(|_| "acquired.json".into());

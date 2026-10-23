@@ -2421,7 +2421,7 @@ dependencies = [
  "powerio-dist",
  "powerio-matrix",
  "powerio-prob",
- "powerio-sincal",
+ "powerio-tnd",
  "powerio-tx",
  "rusqlite",
  "schemars",
@@ -2440,6 +2440,7 @@ dependencies = [
  "powerio-dist",
  "powerio-matrix",
  "powerio-prob",
+ "powerio-tnd",
  "powerio-tx",
  "rusqlite",
  "serde_json",
@@ -2492,9 +2493,7 @@ dependencies = [
  "memchr",
  "num-complex",
  "powerio-core",
- "powerio-sincal",
  "quick-xml",
- "rusqlite",
  "schemars",
  "serde",
  "serde_json",
@@ -2553,6 +2552,7 @@ dependencies = [
  "powerio-dist",
  "powerio-matrix",
  "powerio-prob",
+ "powerio-tnd",
  "powerio-tx",
  "pyo3",
  "rusqlite",
@@ -2561,14 +2561,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "powerio-sincal"
+name = "powerio-tnd"
 version = "0.11.6"
 dependencies = [
+ "num-complex",
  "powerio-core",
+ "powerio-dist",
+ "powerio-tx",
  "rusqlite",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "zip",
 ]
 
@@ -2581,9 +2586,7 @@ dependencies = [
  "memchr",
  "petgraph",
  "powerio-core",
- "powerio-sincal",
  "quick-xml",
- "rusqlite",
  "schemars",
  "serde",
  "serde_json",

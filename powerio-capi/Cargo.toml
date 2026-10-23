@@ -27,6 +27,7 @@ prob = []
 gridfm = ["powerio/gridfm", "powerio-matrix/gridfm"]
 
 [dependencies]
+powerio-tnd.workspace = true
 powerio-core = { workspace = true }
 powerio-dist.workspace = true
 powerio.workspace = true

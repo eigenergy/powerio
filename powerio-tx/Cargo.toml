@@ -18,19 +18,11 @@ categories = ["science", "parsing"]
 all-features = true
 
 [features]
-default = ["sincal"]
+default = []
 schema = ["dep:schemars", "powerio-core/schema"]
-# The native SINCAL reader and the experimental SINCAL writer: SQLite projects
-# and `.sinx` archives through powerio-sincal, which bundles SQLite. Off, no C
-# compiler is needed, which is what a wasm32 consumer without a WebAssembly
-# capable clang relies on; a SINCAL source then fails with
-# REQUEST.SINCAL.FEATURE_DISABLED.
-sincal = ["dep:powerio-sincal", "dep:rusqlite"]
 
 [dependencies]
 powerio-core = { workspace = true }
-powerio-sincal = { workspace = true, optional = true }
-rusqlite = { workspace = true, optional = true }
 thiserror = "2"
 # Byte-slice float parsing for numeric matrix rows, avoiding UTF-8 allocation.
 lexical-core = "1"
@@ -50,9 +42,6 @@ schemars = { workspace = true, optional = true }
 tempfile = "3"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 
-[[example]]
-name = "sincal_balanced"
-required-features = ["sincal"]
 
 [[bench]]
 name = "parse"

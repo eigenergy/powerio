@@ -360,9 +360,6 @@ pub fn parse(
         .format()
         .is_some_and(|f| is_sincal_multiconductor_token(f.as_str()))
     {
-        #[cfg(feature = "sincal")]
-        return crate::parse_sincal(source, &crate::SincalReadOptions::default());
-        #[cfg(not(feature = "sincal"))]
         return Err(sincal_feature_disabled(&source));
     }
     let mut warnings = crate::collect::Diagnostics::new();
@@ -494,11 +491,10 @@ pub(crate) fn is_sincal_multiconductor_token(name: &str) -> bool {
 }
 
 /// The refusal a SINCAL source meets in a build without the `sincal` feature.
-#[cfg(not(feature = "sincal"))]
 fn sincal_feature_disabled(source: &powerio_core::Source) -> powerio_core::Error {
     powerio_core::Error::new(
         &crate::diagnostics::codes::REQUEST_SINCAL_MULTICONDUCTOR_FEATURE_DISABLED,
-        "this build of powerio-dist compiled without the `sincal` feature, so it cannot read a SINCAL project; enable the `sincal` feature of powerio or powerio-dist (on by default) to include the SQLite backed reader",
+        "SINCAL adapters live in powerio-tnd; use powerio with its `sincal` feature or powerio_tnd::formats::sincal",
     )
     .with_source(source.clone())
 }

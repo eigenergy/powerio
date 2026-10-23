@@ -29,7 +29,7 @@ Run acquisition regressions without external model downloads:
 
 ```sh
 python3 -m unittest discover -s evals/sincal -v
-cargo test -p powerio-sincal
+cargo test -p powerio-tnd --features sincal
 ```
 
 Component checks remain available in the adjacent scripts; their original
@@ -46,7 +46,7 @@ on macOS. Other tool releases/platforms require their own verification.
 ```sh
 python3 evals/sincal/import_access.py /external/database.mdb /tmp/records.json \
   --tool-directory /path/to/mdbtools/bin
-cargo run -p powerio-sincal --example inspect_records -- /tmp/records.json 1
+cargo run -p powerio-tnd --features sincal --example inspect_records -- /tmp/records.json 1
 ```
 
 The helper copies the original into private temporary storage, hashes that
@@ -70,7 +70,7 @@ failure. Keep the original MDB for native source echo and provenance.
 Reproduce all 19 required corpus cases, with a fresh external record directory:
 
 ```sh
-cargo build -p powerio-sincal --example inspect_records
+cargo build -p powerio-tnd --features sincal --example inspect_records
 python3 evals/sincal/check_access_corpus.py /external/csiro \
   /tmp/sincal-acquired /tmp/sincal-acquisition-report.json \
   --inspector target/debug/examples/inspect_records \
@@ -98,8 +98,8 @@ family detection. The facade accepts the same case with the explicit
 Unknown active modes fail with native table, record and field context.
 
 ```sh
-cargo test -p powerio-tx --lib format::sincal
-cargo build -p powerio-tx --example sincal_balanced
+cargo test -p powerio-tnd --features sincal --lib formats::sincal::balanced
+cargo build -p powerio-tnd --features sincal --example sincal_balanced
 python evals/sincal/check_balanced_simbench.py target/debug/examples/sincal_balanced /tmp/simbench-check.json
 ```
 
@@ -138,7 +138,7 @@ terminal switches participate in those equations. No historical result is used
 as input. Missing or mismatched files fail this check.
 
 ```sh
-cargo build -p powerio-tx --example sincal_balanced
+cargo build -p powerio-tnd --features sincal --example sincal_balanced
 python3 evals/sincal/check_balanced_external.py \
   target/debug/examples/sincal_balanced /external/sqlite-cases /tmp/balanced-external.json
 ```
@@ -262,7 +262,7 @@ then compares a fresh solve of the typed model with the fundamental-frequency
 loss bars in Figure 8. Both source files are hash-pinned and remain external.
 
 ```sh
-cargo build -p powerio-tx --example sincal_balanced
+cargo build -p powerio-tnd --features sincal --example sincal_balanced
 # Research environment: numpy, pandapower, pdfplumber==0.11.9
 python3 evals/sincal/check_ieee18_paper.py /external/IEEE18.db \
   /external/milovanovic2018.pdf target/debug/examples/sincal_balanced \
@@ -402,7 +402,7 @@ are reader/binding checks; fresh SINCAL desktop acceptance remains external.
 ## Experimental writer branch
 
 The local `codex/sincal-experimental-writer` branch starts with shared source-free
-SQLite construction and deterministic candidate packaging in `powerio-sincal`.
+SQLite construction and deterministic candidate packaging in `powerio-tnd`.
 The tests create original small schemas at runtime. They check byte determinism,
 parameterized text (including quotes and newlines), strict integer/real/text
 cells, NULL preservation, bad identity/reference rejection, unsafe archive
@@ -426,8 +426,8 @@ SimBench fixture also passes fresh write/read without a template. No additional
 native model fixtures were added.
 
 ```sh
-cargo test -p powerio-tx --lib sincal::write_tests
-cargo build -p powerio-tx --example sincal_balanced
+cargo test -p powerio-tnd --features sincal --lib formats::sincal::balanced::write_tests
+cargo build -p powerio-tnd --features sincal --example sincal_balanced
 python3 evals/sincal/check_balanced_simbench.py target/debug/examples/sincal_balanced \
   /tmp/writer-balanced-simbench.json --fresh
 ```
@@ -474,7 +474,7 @@ writes `2/1/0`. These documented fields are present in the authentic 14.8
 catalog; their construction is tested, but native execution is still unverified.
 
 ```sh
-cargo test -p powerio-dist --lib sincal::write_tests
+cargo test -p powerio-tnd --features sincal --lib formats::sincal::multiconductor::write_tests
 POWERIO_SINCAL_WRITER_ORACLE_DIR=/tmp/dist-writer-oracle cargo test -p powerio-dist \
   --lib sincal::write_tests::export_writer_oracle -- --ignored
 python3 evals/sincal/check_multiconductor_writer.py /tmp/dist-writer-oracle \
@@ -530,9 +530,9 @@ PowerIO matrix builder's ideal-Wye transformer support is not used to validate
 these finite transformer circuits.
 
 ```sh
-cargo test -p powerio-dist --lib sincal::write_transformer_tests
+cargo test -p powerio-tnd --features sincal --lib formats::sincal::multiconductor::write_transformer_tests
 POWERIO_SINCAL_WRITER_ORACLE_DIR=/tmp/transformer-writer-oracle cargo test \
-  -p powerio-dist --lib sincal::write_transformer_tests::export_transformer_writer_oracle -- --ignored
+  -p powerio-tnd --features sincal --lib formats::sincal::multiconductor::write_transformer_tests::export_transformer_writer_oracle -- --ignored
 python3 evals/sincal/check_transformer_writer.py /tmp/transformer-writer-oracle \
   --report /tmp/writer-transformer.json
 ```
@@ -695,7 +695,7 @@ electrical-parser success. Acquired records must include the normal minimum
 identity tables plus the five graphics tables.
 
 ```sh
-cargo build -p powerio-sincal --example sincal_drawing
+cargo build -p powerio-tnd --features sincal --example sincal_drawing
 POWERIO_MAX_PRIMARY_BYTES=268435456 python evals/sincal/verify_geometry.py \
   --binary target/debug/examples/sincal_drawing \
   --native original.mdb --records acquired.json --family multiconductor \

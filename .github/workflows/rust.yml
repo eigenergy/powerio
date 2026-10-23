@@ -180,7 +180,7 @@ jobs:
     # Bare `cargo test` only covers the default-members; name the C ABI crate
     # explicitly so its end-to-end ABI tests run in CI too.
     - name: Run tests
-      run: cargo test -p powerio -p powerio-tx -p powerio-core -p powerio-matrix -p powerio-prob -p powerio-cli -p powerio-capi -p powerio-dist -p powerio-sincal --verbose
+      run: cargo test -p powerio -p powerio-tx -p powerio-core -p powerio-matrix -p powerio-prob -p powerio-cli -p powerio-capi -p powerio-dist -p powerio-tnd --verbose
     - name: Test problem matrix feature
       run: cargo test -p powerio --features matrix --verbose
     - name: Test gridfm reader feature
@@ -190,7 +190,7 @@ jobs:
     - name: Clippy + tests (without the sincal feature)
       run: |
         bash scripts/ci-clippy.sh no-sincal
-        cargo test -p powerio -p powerio-tx -p powerio-dist --no-default-features --verbose
+        cargo test -p powerio -p powerio-tx -p powerio-dist -p powerio-tnd --no-default-features --verbose
     - name: Check problem dependency boundaries
       run: |
         cargo check -p powerio-prob --no-default-features
@@ -278,7 +278,7 @@ jobs:
         cargo check --target wasm32-unknown-unknown -p powerio --no-default-features --features schema
         tree=$(cargo tree --target wasm32-unknown-unknown -p powerio --no-default-features --features matrix \
           --edges normal,build --prefix none)
-        if grep -E '^(rusqlite|libsqlite3-sys|sqlite-wasm-rs|powerio-sincal) ' <<<"$tree"; then
+        if grep -E '^(rusqlite|libsqlite3-sys|sqlite-wasm-rs) ' <<<"$tree"; then
           echo "powerio without the sincal feature still reaches SQLite" >&2; exit 1
         fi
 

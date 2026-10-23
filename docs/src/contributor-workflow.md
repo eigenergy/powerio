@@ -36,7 +36,7 @@ Pick the smallest set of gates that covers what you changed, then run the
 | rich model fields | `bash evals/validation/run_rich_validation.sh` |
 | matrix calculations | `cargo test -p powerio-matrix`; `cargo bench -p powerio-matrix --bench matrix` |
 | problem instances or DC OPF bundles | `cargo test -p powerio-prob --no-default-features`; `cargo test -p powerio --features matrix` |
-| SINCAL readers, writers, or the `sincal` feature | `cargo test -p powerio -p powerio-tx -p powerio-dist --no-default-features`; `bash scripts/ci-clippy.sh no-sincal`; `cargo check -p powerio --no-default-features --features matrix --target wasm32-unknown-unknown` |
+| SINCAL readers, writers, or the `sincal` feature | `cargo test -p powerio -p powerio-tx -p powerio-dist -p powerio-tnd --no-default-features`; `bash scripts/ci-clippy.sh no-sincal`; `cargo check -p powerio --no-default-features --features matrix --target wasm32-unknown-unknown` |
 | PowerWorld binary reader | PowerWorld parser tests plus `cargo bench -p powerio-tx --bench parse -- "parse_aux_|parse_pwb_"` |
 | C ABI | `scripts/capi-header-parity.sh`; `scripts/capi-smoke.sh`; `cargo test -p powerio-capi --no-default-features`; `cargo test -p powerio-capi --features matrix,gridfm,dist,prob`; `bash scripts/ci-clippy.sh capi-no-default`; `bash scripts/ci-clippy.sh capi-release` |
 | Python package metadata or extras | `maturin build --release --out /tmp/powerio-wheel-check`; inspect wheel `METADATA` |

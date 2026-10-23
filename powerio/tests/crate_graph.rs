@@ -2,23 +2,6 @@
 //! edit that reverses an edge or couples the sibling model crates fails here
 //! rather than in review.
 //!
-//! The graph under test:
-//!
-//! ```text
-//! powerio-core
-//! ├── powerio-tx
-//! └── powerio-dist
-//!
-//! powerio-sincal -> powerio-core
-//! powerio-tx     -> powerio-sincal when the sincal feature is enabled
-//! powerio-dist   -> powerio-sincal when the sincal feature is enabled
-//! powerio-prob   -> powerio-core + powerio-tx + powerio-dist
-//! powerio-matrix -> powerio-core + powerio-tx + powerio-dist + powerio-prob
-//! powerio        -> powerio-core + powerio-tx + powerio-dist + powerio-prob
-//! powerio        -> powerio-matrix when the matrix feature is enabled
-//! powerio        -> powerio-sincal when the sincal feature is enabled
-//! ```
-
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Normal-dependency names per workspace crate, from `cargo metadata`.
@@ -71,21 +54,20 @@ fn the_dependency_graph_matches_the_settled_layout() {
     // The foundation depends on no workspace crate.
     assert_eq!(workspace_deps_of(&graph, "powerio-core"), BTreeSet::new());
 
-    // Native transport/schema support is model neutral. Family adapters can
-    // depend on it without depending on one another.
+    // Integration composes both model crates above the foundation.
     assert_eq!(
-        workspace_deps_of(&graph, "powerio-sincal"),
-        BTreeSet::from(["powerio-core"])
+        workspace_deps_of(&graph, "powerio-tnd"),
+        BTreeSet::from(["powerio-core", "powerio-tx", "powerio-dist"])
     );
 
     // The two model crates are independent siblings over the foundation.
     assert_eq!(
         workspace_deps_of(&graph, "powerio-tx"),
-        BTreeSet::from(["powerio-core", "powerio-sincal"])
+        BTreeSet::from(["powerio-core"])
     );
     assert_eq!(
         workspace_deps_of(&graph, "powerio-dist"),
-        BTreeSet::from(["powerio-core", "powerio-sincal"])
+        BTreeSet::from(["powerio-core"])
     );
 
     // Problem data reads both models and stays matrix free.
@@ -145,31 +127,21 @@ fn the_facade_matrix_dependency_is_optional() {
     assert_eq!(matrix_dep["optional"], true, "matrix must be feature gated");
 }
 
-/// SQLite enters the graph only through `powerio-sincal`. Every edge to it is
-/// optional and off without the `sincal` feature, so a facade built with
-/// `default-features = false` needs no C compiler; the network crates' own
-/// defaults are not re-enabled by the crates above them.
+/// Integration is available without enabling SQLite adapters.
 #[test]
-fn every_powerio_sincal_dependency_is_optional() {
-    for package in ["powerio", "powerio-tx", "powerio-dist"] {
-        let dep = normal_dependency(package, "powerio-sincal");
+fn sincal_storage_dependencies_are_optional() {
+    for dependency in ["rusqlite", "zip", "sha2"] {
         assert_eq!(
-            dep["optional"], true,
-            "{package}: sincal must be feature gated"
+            normal_dependency("powerio-tnd", dependency)["optional"],
+            true
         );
     }
-    for (package, network) in [
-        ("powerio", "powerio-tx"),
-        ("powerio", "powerio-dist"),
-        ("powerio-prob", "powerio-tx"),
-        ("powerio-prob", "powerio-dist"),
-        ("powerio-matrix", "powerio-tx"),
-        ("powerio-matrix", "powerio-dist"),
-    ] {
-        let dep = normal_dependency(package, network);
-        assert_eq!(
-            dep["uses_default_features"], false,
-            "{package} -> {network} must not re-enable the default sincal feature"
-        );
-    }
+    assert_eq!(
+        normal_dependency("powerio", "powerio-tnd")["optional"],
+        false
+    );
+    assert_eq!(
+        normal_dependency("powerio", "powerio-tnd")["uses_default_features"],
+        false
+    );
 }

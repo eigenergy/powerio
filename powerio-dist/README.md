@@ -10,24 +10,8 @@ CIM. It reads BMOPF schema 0.1.0 and 0.2.0 and writes 0.2.0. Distribution CIM
 release that GridAPPS-D and CIMHub exchange, read from one document or a
 directory and written as one document.
 
-The explicit `sincal-multiconductor` reader maps verified native SINCAL profiles
-to the same model. Native SQLite/archive input uses `parse` with a declared
-format; `parse_sincal` and `SincalReadOptions` additionally select a native `Variant_ID`,
-daily snapshot and explicitly acquired Access tables. Unsupported modes reject
-atomically. The `powerio` facade handles byte-exact native echo; a fresh SINCAL
-writer has a separate experimental scope. See the workspace SINCAL guide and
-`evals/sincal/` for exact supported profiles and independent validation.
-The reader and writer are behind the `sincal` cargo feature, on by default;
-it brings in SQLite. With `default-features = false` the crate needs no C
-compiler and a declared SINCAL source fails with
-`REQUEST.DIST_FORMAT.SINCAL_FEATURE_DISABLED`.
-
-Emitting back to the source format reproduces the retained bytes; emitting to
-a different format reports the fields the target cannot represent. The DSS
-reader expands OpenDSS class defaults into explicit model values and remembers
-which ones came from defaults, which is why BMOPF output has explicit values
-for those fields. The generated [conversion matrix](docs/conversion-matrix.md)
-shows the behavior for each fixture.
+SINCAL profiles are provided by `powerio-tnd` and the `powerio` facade.
+This crate owns the multiconductor model and its distribution formats.
 
 ```rust
 let source = powerio_core::Source::open("feeder.dss")?;

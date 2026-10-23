@@ -67,7 +67,7 @@ pub(crate) fn emit(
                     "balanced SINCAL output uses typed bus nominal kV; nominal_ll_volts is only a multiconductor option",
                 ));
             }
-            let output = powerio_tx::format::__write_sincal_balanced_experimental(net)?;
+            let output = powerio_tnd::formats::sincal::__write_sincal_balanced_experimental(net)?;
             (output.database, output.diagnostics)
         }
         PioValue::MulticonductorNetwork(net) => {
@@ -76,9 +76,9 @@ pub(crate) fn emit(
                     "sincal-balanced cannot write a MulticonductorNetwork; use sincal-multiconductor with experimental options to retain its conductor model",
                 ));
             }
-            let output = powerio_dist::__write_sincal_multiconductor_experimental(
+            let output = powerio_tnd::formats::sincal::__write_sincal_multiconductor_experimental(
                 net,
-                &powerio_dist::ExperimentalMulticonductorOptions {
+                &powerio_tnd::formats::sincal::ExperimentalMulticonductorOptions {
                     nominal_ll_volts: options.nominal_ll_volts.clone(),
                 },
             )?;
@@ -111,7 +111,11 @@ pub(crate) fn emit(
         SincalContainer::Sqlite => ("case.db", database),
         SincalContainer::Archive { project_name } => (
             "case.sinx",
-            powerio_sincal::authoring::candidate_archive(&database, project_name).map_err(|e| {
+            powerio_tnd::formats::sincal::storage::authoring::candidate_archive(
+                &database,
+                project_name,
+            )
+            .map_err(|e| {
                 Error::new(&crate::codes::EMIT_SINCAL_PACKAGING_FAILED, e.to_string()).with_cause(e)
             })?,
         ),

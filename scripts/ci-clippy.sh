@@ -50,14 +50,14 @@ case "$target" in
       -p powerio-cli \
       -p powerio-capi \
       -p powerio-dist \
-      -p powerio-sincal \
+      -p powerio-tnd \
       -- -D warnings
     ;;
   matrix-gridfm)
     run cargo clippy -p powerio-matrix --all-targets --features gridfm -- -D warnings
     ;;
   no-sincal)
-    run cargo clippy -p powerio -p powerio-tx -p powerio-dist --all-targets --no-default-features -- -D warnings
+    run cargo clippy -p powerio -p powerio-tx -p powerio-dist -p powerio-tnd --all-targets --no-default-features -- -D warnings
     ;;
   capi-no-default)
     run cargo clippy -p powerio-capi --all-targets --no-default-features -- -D warnings

@@ -88,7 +88,8 @@ impl SincalCliOptions {
                             "--sincal-assume-inactive-source-controls requires --from sincal-multiconductor",
                         ));
                     }
-                    let mut selection = powerio_tx::format::SincalBalancedReadOptions::default();
+                    let mut selection =
+                        powerio::tnd::formats::sincal::SincalBalancedReadOptions::default();
                     selection.variant = self.sincal_variant;
                     selection.snapshot_hours = self.sincal_snapshot_hours;
                     selection
@@ -97,7 +98,7 @@ impl SincalCliOptions {
                     options.sincal_balanced = Some(selection);
                 }
                 Some(FormatArg::SincalMulticonductor) => {
-                    let mut selection = powerio_dist::SincalReadOptions::default();
+                    let mut selection = powerio::tnd::formats::sincal::SincalReadOptions::default();
                     selection.assume_inactive_source_controls =
                         self.sincal_assume_inactive_source_controls;
                     selection.variant = self.sincal_variant;
@@ -3368,10 +3369,11 @@ fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<Fa
         let source = module_io::declare_format(stdin_source()?, Some(f.name()))
             .context("declaring the standard input format")?;
         return if f.is_distribution_input() {
-            let net = powerio_dist::parse(source).context("reading standard input")?;
+            let net = powerio::dist::parse(source).context("reading standard input")?;
             Ok(FamilyCase::Distribution(Box::new(net)))
         } else {
-            let parsed = powerio_tx::parse(source).context("reading standard input")?;
+            let parsed = crate::module_io::parse_balanced_source(source)
+                .context("reading standard input")?;
             Ok(FamilyCase::Transmission(Box::new(parsed)))
         };
     }

@@ -67,7 +67,7 @@ if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown;
   run cargo check --target wasm32-unknown-unknown -p powerio --no-default-features --features schema
   tree=$(cargo tree --target wasm32-unknown-unknown -p powerio --no-default-features --features matrix \
       --edges normal,build --prefix none)
-  if grep -E '^(rusqlite|libsqlite3-sys|sqlite-wasm-rs|powerio-sincal) ' <<<"$tree"; then
+  if grep -E '^(rusqlite|libsqlite3-sys|sqlite-wasm-rs) ' <<<"$tree"; then
     echo "error: powerio without the sincal feature still reaches SQLite" >&2; exit 1
   fi
 else
@@ -84,11 +84,11 @@ else
 fi
 
 run cargo test -p powerio -p powerio-tx -p powerio-core -p powerio-matrix -p powerio-prob -p powerio-cli \
-    -p powerio-capi -p powerio-dist -p powerio-sincal
+    -p powerio-capi -p powerio-dist -p powerio-tnd
 run cargo test -p powerio --features matrix
 run cargo test -p powerio --features gridfm
 run cargo test -p powerio-matrix --features gridfm
-run cargo test -p powerio -p powerio-tx -p powerio-dist --no-default-features
+run cargo test -p powerio -p powerio-tx -p powerio-dist -p powerio-tnd --no-default-features
 
 # The three powerio-capi combinations rust.yml builds.
 run cargo test -p powerio-capi --no-default-features

@@ -78,7 +78,7 @@
 //! ```
 //!
 //! Native SINCAL projects are behind the `sincal` feature, on by default,
-//! which brings in SQLite through `powerio-sincal`. A build with
+//! which brings in SQLite through `powerio-tnd`. A build with
 //! `default-features = false` needs no C compiler: [`grid_formats`] then
 //! lists no SINCAL format, [`ParseOptions`] and [`EmitOptions`] carry no
 //! SINCAL field, and a SINCAL source or target fails with
@@ -169,7 +169,26 @@ pub type Result<T> = std::result::Result<T, powerio_core::Error>;
 /// Distribution types remain grouped under `powerio::dist` where their names
 /// overlap with balanced network types. Common unambiguous records are also
 /// available at the facade root.
-pub use powerio_dist as dist;
+pub use powerio_tnd as tnd;
+/// Distribution types and facade format dispatch.
+pub mod dist {
+    pub use powerio_dist::*;
+    #[cfg(feature = "sincal")]
+    pub use powerio_tnd::formats::sincal::{SincalReadOptions, parse_sincal};
+    pub fn parse(
+        source: powerio_core::Source,
+    ) -> std::result::Result<powerio_core::PioModule<MulticonductorNetwork>, powerio_core::Error>
+    {
+        #[cfg(feature = "sincal")]
+        if source.format().is_some_and(|f| {
+            crate::format::routing::parse_distribution_format(f.as_str())
+                == Some(crate::format::routing::DistributionFormat::SincalMulticonductor)
+        }) {
+            return parse_sincal(source, &SincalReadOptions::default());
+        }
+        powerio_dist::parse(source)
+    }
+}
 pub use powerio_dist::{
     BmopfEmitOptions, BmopfSchemaVersion, ConductorMatrix, DistGeoMeta, DistGraphEdgeKind,
     MulticonductorNetwork, NeutralKronOptions, NeutralKronReport,
@@ -405,11 +424,11 @@ pub use value::{PioScenarioSet, PioTimeSeries, PioValue};
 pub struct ParseOptions {
     /// Explicit native selections for the sincal-balanced format only.
     #[cfg(feature = "sincal")]
-    pub sincal_balanced: Option<powerio_tx::format::SincalBalancedReadOptions>,
+    pub sincal_balanced: Option<powerio_tnd::formats::sincal::SincalBalancedReadOptions>,
     /// Explicit native-variant, daily-snapshot and Access-acquisition options.
     /// Valid only with the sincal-multiconductor format selection.
     #[cfg(feature = "sincal")]
-    pub sincal_multiconductor: Option<powerio_dist::SincalReadOptions>,
+    pub sincal_multiconductor: Option<powerio_tnd::formats::sincal::SincalReadOptions>,
     /// The parser selected by its stable format token rather than inferred
     /// from the input's name and content.
     pub format: Option<powerio_core::FormatId>,
@@ -521,7 +540,7 @@ pub fn parse_with_options(
     }
     #[cfg(feature = "sincal")]
     if let Some(sincal) = &options.sincal_balanced {
-        return powerio_tx::format::parse_sincal_balanced_with_options(source, sincal)
+        return powerio_tnd::formats::sincal::parse_sincal_balanced_with_options(source, sincal)
             .map(|m| m.map_value(PioValue::from));
     }
     #[cfg(feature = "sincal")]
@@ -537,7 +556,19 @@ pub fn parse_with_options(
             )
             .with_source(source));
         }
-        return powerio_dist::parse_sincal(source, sincal).map(|m| m.map_value(PioValue::from));
+        return powerio_tnd::formats::sincal::parse_sincal(source, sincal)
+            .map(|m| m.map_value(PioValue::from));
+    }
+    #[cfg(feature = "sincal")]
+    if names_sincal_source(&source) {
+        if source.format().is_some_and(|f| {
+            format::routing::parse_distribution_format(f.as_str())
+                == Some(format::routing::DistributionFormat::SincalMulticonductor)
+        }) {
+            return dist::parse(source).map(|m| m.map_value(PioValue::from));
+        }
+        return powerio_tnd::formats::sincal::parse_balanced(source)
+            .map(|m| m.map_value(PioValue::from));
     }
     match routed_family(&source)? {
         RoutedFamily::Goc3 => parse_goc3(source),
@@ -550,7 +581,7 @@ pub fn parse_with_options(
                 }
                 _ => source,
             };
-            powerio_dist::parse(source).map(|module| module.map_value(PioValue::from))
+            dist::parse(source).map(|module| module.map_value(PioValue::from))
         }
         RoutedFamily::PypsaDirectory => parse_pypsa(source),
         #[cfg(feature = "gridfm")]
@@ -853,7 +884,6 @@ enum RoutedFamily {
 /// to one of the SINCAL tokens, or an undeclared `.sinx` archive. Content
 /// never selects the family, so SQLite bytes under another name route as
 /// before.
-#[cfg(not(feature = "sincal"))]
 fn names_sincal_source(source: &powerio_core::Source) -> bool {
     match source.format() {
         Some(format) => write::is_sincal_format(format.as_str()),

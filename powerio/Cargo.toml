@@ -19,11 +19,11 @@ all-features = true
 default = ["sincal"]
 # Native SINCAL projects: the balanced and conductor-resolved readers, the
 # byte-exact native echo, and the experimental writer. It brings in SQLite
-# through powerio-sincal, so a wasm32 build with it needs a C compiler with
+# through powerio-tnd, so a wasm32 build with it needs a C compiler with
 # a WebAssembly backend. `default-features = false` leaves it out; the facade
 # then lists no SINCAL format and refuses a SINCAL source or target with
 # REQUEST.SINCAL.FEATURE_DISABLED.
-sincal = ["dep:powerio-sincal", "powerio-tx/sincal", "powerio-dist/sincal"]
+sincal = ["powerio-tnd/sincal"]
 matrix = ["dep:powerio-matrix"]
 # The gridfm-datakit Parquet reader. Off by default so the facade pulls no
 # Arrow or Parquet into consumers that never read datasets.
@@ -34,12 +34,12 @@ gridfm = [
     "dep:powerio-matrix",
     "powerio-matrix/gridfm",
 ]
-schema = ["dep:schemars", "powerio-tx/schema", "powerio-core/schema", "powerio-dist/schema", "powerio-prob/schema"]
+schema = ["dep:schemars", "powerio-tx/schema", "powerio-core/schema", "powerio-dist/schema", "powerio-prob/schema", "powerio-tnd/schema"]
 
 [dependencies]
 num-complex = { workspace = true }
 powerio-core = { workspace = true }
-powerio-sincal = { workspace = true, optional = true }
+powerio-tnd.workspace = true
 powerio-dist = { workspace = true, default-features = false }
 powerio-matrix = { workspace = true, optional = true }
 powerio-prob = { workspace = true }

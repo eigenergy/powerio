@@ -406,7 +406,7 @@ fn parse_options(
     if let Some((variant, snapshot_hours, acquired_tables, assume_inactive_source_controls)) =
         sincal
     {
-        let mut selection = powerio_dist::SincalReadOptions::default();
+        let mut selection = powerio_tnd::formats::sincal::SincalReadOptions::default();
         selection.variant = variant;
         selection.snapshot_hours = snapshot_hours;
         selection.acquired_tables = acquired_tables;
@@ -414,7 +414,7 @@ fn parse_options(
         options.sincal_multiconductor = Some(selection);
     }
     if let Some((variant, snapshot_hours, acquired_tables)) = balanced {
-        let mut selection = powerio_tx::format::SincalBalancedReadOptions::default();
+        let mut selection = powerio_tnd::formats::sincal::SincalBalancedReadOptions::default();
         selection.variant = variant;
         selection.snapshot_hours = snapshot_hours;
         selection.acquired_tables = acquired_tables;

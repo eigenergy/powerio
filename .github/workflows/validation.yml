@@ -17,7 +17,7 @@ on:
       - "powerio/**"
       - "powerio-tx/**"
       - "powerio-core/**"
-      - "powerio-sincal/**"
+      - "powerio-tnd/**"
       - "powerio-dist/**"
       - "powerio-matrix/**"
       - "powerio-capi/**"

@@ -5,14 +5,13 @@ conductor-resolved networks. Select the electrical profile explicitly. The
 current balanced reader produces the existing `BalancedNetwork`; it does not
 infer balance from equal phase values or automatically reduce unbalanced data.
 The explicit multiconductor profile produces `MulticonductorNetwork` through
-`powerio-dist`; neither profile silently retries the other family.
+`powerio-tnd`; neither profile silently retries the other family.
 
 ## Build feature
 
 Both readers, the byte-exact native echo and the experimental writer are the
-`sincal` cargo feature of `powerio`, `powerio-tx` and `powerio-dist`, on by
-default, so the CLI, the Python wheel, the C ABI and the browser converter
-include them. The feature brings in SQLite through `powerio-sincal`, which a
+`sincal` cargo feature of `powerio-tnd`, enabled by default by `powerio`, so the CLI, the Python wheel, the C ABI and the browser converter
+include them. The feature brings in SQLite through `powerio-tnd`, which a
 `wasm32-unknown-unknown` build compiles only with a C compiler that has a
 WebAssembly backend. A facade built with `default-features = false` needs no C
 compiler: `grid_formats` lists no SINCAL format, `ParseOptions` and

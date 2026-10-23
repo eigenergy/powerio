@@ -4696,7 +4696,7 @@ pub unsafe extern "C" fn pio_parse_with_options(
                 )?
                 .map(PathBuf::from);
                 if let Some(sincal) = selections.sincal_multiconductor.as_ref() {
-                    let mut selection = powerio_dist::SincalReadOptions::default();
+                    let mut selection = powerio_tnd::formats::sincal::SincalReadOptions::default();
                     selection.variant = sincal.has_variant.then_some(sincal.variant);
                     selection.snapshot_hours =
                         sincal.has_snapshot_hours.then_some(sincal.snapshot_hours);
@@ -4711,7 +4711,8 @@ pub unsafe extern "C" fn pio_parse_with_options(
                     options.sincal_multiconductor = Some(selection);
                 }
                 if let Some(sincal) = selections.sincal_balanced.as_ref() {
-                    let mut selection = powerio_tx::format::SincalBalancedReadOptions::default();
+                    let mut selection =
+                        powerio_tnd::formats::sincal::SincalBalancedReadOptions::default();
                     selection.variant = sincal.has_variant.then_some(sincal.variant);
                     selection.snapshot_hours =
                         sincal.has_snapshot_hours.then_some(sincal.snapshot_hours);
