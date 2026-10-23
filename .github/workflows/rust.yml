@@ -185,6 +185,12 @@ jobs:
       run: cargo test -p powerio --features matrix --verbose
     - name: Test gridfm reader feature
       run: cargo test -p powerio --features gridfm --verbose
+    # SINCAL support is the default-on `sincal` feature of the facade and the
+    # network crates; the build without it must stay complete and warning free.
+    - name: Clippy + tests (without the sincal feature)
+      run: |
+        bash scripts/ci-clippy.sh no-sincal
+        cargo test -p powerio -p powerio-tx -p powerio-dist --no-default-features --verbose
     - name: Check problem dependency boundaries
       run: |
         cargo check -p powerio-prob --no-default-features
@@ -259,6 +265,20 @@ jobs:
         cargo check --target wasm32-unknown-unknown -p powerio -p powerio-tx -p powerio-dist \
           -p powerio-core -p powerio-prob -p powerio-matrix
         cargo check --target wasm32-unknown-unknown -p powerio --features matrix
+    # A browser consumer that sets `default-features = false` builds with no C
+    # compiler: SQLite enters only through the default-on `sincal` feature.
+    # The tree check is the proof; this runner's clang can target wasm32 and
+    # would compile SQLite without complaint.
+    - name: Check wasm32 without the sincal feature
+      run: |
+        cargo check --target wasm32-unknown-unknown -p powerio-tx -p powerio-dist --no-default-features
+        cargo check --target wasm32-unknown-unknown -p powerio --no-default-features
+        cargo check --target wasm32-unknown-unknown -p powerio --no-default-features --features matrix
+        cargo check --target wasm32-unknown-unknown -p powerio --no-default-features --features schema
+        if cargo tree --target wasm32-unknown-unknown -p powerio --no-default-features --features matrix \
+            --edges normal,build | grep -q -E 'rusqlite|libsqlite3-sys|powerio-sincal'; then
+          echo "powerio without the sincal feature still reaches SQLite" >&2; exit 1
+        fi
 
   c-abi:
     name: C ABI (core no-default + C smoke test)

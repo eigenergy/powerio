@@ -56,6 +56,16 @@ if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown;
   run cargo check --target wasm32-unknown-unknown -p powerio -p powerio-tx -p powerio-dist \
       -p powerio-core -p powerio-prob -p powerio-matrix
   run cargo check --target wasm32-unknown-unknown -p powerio --features matrix
+  # Without the default-on sincal feature the facade must build with no C
+  # compiler, so SQLite may not appear in that dependency graph.
+  run cargo check --target wasm32-unknown-unknown -p powerio-tx -p powerio-dist --no-default-features
+  run cargo check --target wasm32-unknown-unknown -p powerio --no-default-features
+  run cargo check --target wasm32-unknown-unknown -p powerio --no-default-features --features matrix
+  run cargo check --target wasm32-unknown-unknown -p powerio --no-default-features --features schema
+  if cargo tree --target wasm32-unknown-unknown -p powerio --no-default-features --features matrix \
+      --edges normal,build | grep -q -E 'rusqlite|libsqlite3-sys|powerio-sincal'; then
+    echo "error: powerio without the sincal feature still reaches SQLite" >&2; exit 1
+  fi
 else
   echo "=== skipped: wasm32-unknown-unknown target not installed ==="
 fi
@@ -74,6 +84,7 @@ run cargo test -p powerio -p powerio-tx -p powerio-core -p powerio-matrix -p pow
 run cargo test -p powerio --features matrix
 run cargo test -p powerio --features gridfm
 run cargo test -p powerio-matrix --features gridfm
+run cargo test -p powerio -p powerio-tx -p powerio-dist --no-default-features
 
 # The three powerio-capi combinations rust.yml builds.
 run cargo test -p powerio-capi --no-default-features

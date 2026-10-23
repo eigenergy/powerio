@@ -9,6 +9,7 @@ Targets:
   all             Run every clippy target below.
   workspace       Root Rust CI clippy for non extension crates.
   matrix-gridfm   powerio-matrix with the gridfm feature.
+  no-sincal       powerio, powerio-tx, and powerio-dist without the sincal feature.
   capi-no-default powerio-capi with no default features.
   capi-release    powerio-capi with matrix,gridfm,dist,prob.
   capi-dist       powerio-capi with dist.
@@ -33,6 +34,7 @@ case "$target" in
   all)
     bash "$0" workspace
     bash "$0" matrix-gridfm
+    bash "$0" no-sincal
     bash "$0" capi-no-default
     bash "$0" capi-release
     bash "$0" capi-dist
@@ -53,6 +55,9 @@ case "$target" in
     ;;
   matrix-gridfm)
     run cargo clippy -p powerio-matrix --all-targets --features gridfm -- -D warnings
+    ;;
+  no-sincal)
+    run cargo clippy -p powerio -p powerio-tx -p powerio-dist --all-targets --no-default-features -- -D warnings
     ;;
   capi-no-default)
     run cargo clippy -p powerio-capi --all-targets --no-default-features -- -D warnings
