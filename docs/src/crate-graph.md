@@ -12,6 +12,7 @@ powerio-core          Source, FormatId, Diagnostic, Error, PioModule<T>,
 
 powerio-sincal        internal model-neutral SINCAL transport and schema validation;
                       depends on core; tx and dist use it for explicit SINCAL adapters
+                      behind their default-on `sincal` feature
 
 powerio-prob          operating points, updates, the nine instances, the ten
                       solutions, and GO Challenge 3, OPFData, and BMOPF assembly;
@@ -19,8 +20,9 @@ powerio-prob          operating points, updates, the nine instances, the ten
 powerio-matrix        sparse matrices and graph data for both network families;
                       depends on core, tx, dist, and prob
 powerio               PioValue, parse, emit, serialize, deserialize, and the
-                      re-exports; depends on core, tx, dist, prob, sincal, and on
-                      matrix behind the `matrix` feature
+                      re-exports; depends on core, tx, dist, prob, on sincal
+                      behind the default-on `sincal` feature, and on matrix
+                      behind the `matrix` feature
 powerio-cli, powerio-capi, powerio-py, powerio-wasm    over the facade
 ```
 
@@ -40,6 +42,12 @@ mapper or solver. The balanced SINCAL profile is exposed by `powerio-tx`; the co
 adapter is being completed in `powerio-dist`. Both depend on this shared crate,
 never on each other. The facade uses the shared crate to package experimental
 fresh SQLite output; electrical validation still belongs to each backend.
+Every edge to `powerio-sincal` is the `sincal` cargo feature, on by default in
+the facade and both network crates. It is the only path by which SQLite enters
+a build, so a facade with `default-features = false` compiles with no C
+compiler; `powerio-prob` and `powerio-matrix` leave the network crates' default
+off so that they cannot turn it back on. CI builds that configuration for
+`wasm32-unknown-unknown` and checks the dependency graph.
 Shared structural admission does not imply that a family
 adapter supports all of the admitted schemas or electrical modes.
 The architecture gate also rejects cross-dependencies between the two network

@@ -234,6 +234,14 @@ docs/                         the mdBook guide, the schema archive, release note
 - **Clippy must match CI.** Root `cargo clippy --all-targets` skips feature
   combinations and the PyO3 extension. Run `bash scripts/ci-clippy.sh` before
   pushing Rust, C ABI, matrix, feature, or Python extension changes.
+- **SINCAL is the `sincal` feature.** It is on by default in `powerio`,
+  `powerio-tx`, and `powerio-dist` and is the only path to `powerio-sincal`
+  and SQLite; `powerio-prob` and `powerio-matrix` depend on the network
+  crates with `default-features = false` so a facade built without it stays
+  free of SQLite (a wasm32 build then needs no C compiler). Keep SINCAL code
+  behind `#[cfg(feature = "sincal")]`, and keep
+  `cargo test -p powerio -p powerio-tx -p powerio-dist --no-default-features`
+  and the wasm32 CI job green.
 - **One Python wheel (maturin mixed layout).** `powerio-py/` compiles to the
   native module `powerio._powerio`; `python/powerio/` is the pure Python
   wrapper that turns COO triplets into `scipy.sparse` and NetworkX. The

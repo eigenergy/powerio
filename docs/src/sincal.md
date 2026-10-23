@@ -7,6 +7,20 @@ infer balance from equal phase values or automatically reduce unbalanced data.
 The explicit multiconductor profile produces `MulticonductorNetwork` through
 `powerio-dist`; neither profile silently retries the other family.
 
+## Build feature
+
+Both readers, the byte-exact native echo and the experimental writer are the
+`sincal` cargo feature of `powerio`, `powerio-tx` and `powerio-dist`, on by
+default, so the CLI, the Python wheel, the C ABI and the browser converter
+include them. The feature brings in SQLite through `powerio-sincal`, which a
+`wasm32-unknown-unknown` build compiles only with a C compiler that has a
+WebAssembly backend. A facade built with `default-features = false` needs no C
+compiler: `grid_formats` lists no SINCAL format, `ParseOptions` and
+`EmitOptions` have no SINCAL field, and a SINCAL source or target fails with
+`REQUEST.SINCAL.FEATURE_DISABLED` (`REQUEST.DIST_FORMAT.SINCAL_FEATURE_DISABLED`
+from `powerio-dist` used directly). `resolve_format` still describes the
+tokens, because format metadata is not a build probe.
+
 ## Balanced reader
 
 The `sincal-balanced` input token selects positive-sequence load flow. The
