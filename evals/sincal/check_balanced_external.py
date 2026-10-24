@@ -49,8 +49,10 @@ def reference(db):
     for key, row in table(db, 'Line', 'Element_ID').items():
         assert row['Flag_Lf'] == 1 and row['Flag_ESB'] == 1 and not row['va']
         assert not row['CoupData_ID']
+        # The balanced reader admits only fr == 1 until its meaning is verified.
+        assert row['fr'] == 1
         pp.create_line_from_parameters(net, node(key), node(key, 2),
-            length_km=row['l'], r_ohm_per_km=row['r'] * row['fr'],
+            length_km=row['l'], r_ohm_per_km=row['r'],
             x_ohm_per_km=row['x'], c_nf_per_km=row['c'],
             max_i_ka=row['Ith'], parallel=int(row['ParSys']),
             in_service=bool(elements[key]['Flag_State']))

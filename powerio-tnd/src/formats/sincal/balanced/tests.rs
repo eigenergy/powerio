@@ -76,6 +76,14 @@ fn modern_schemas_apply_the_voltage_level_line_temperature() {
 }
 
 #[test]
+fn a_line_factor_other_than_one_is_refused_until_its_meaning_is_verified() {
+    let error = read_balanced_snapshot(&native("UPDATE Line SET fr=0.8"), "fr")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains(".fr:"), "{error}");
+}
+
+#[test]
 fn line_sections_are_refused_rather_than_read_from_the_line_row() {
     let error = read_balanced_snapshot(
         &native(

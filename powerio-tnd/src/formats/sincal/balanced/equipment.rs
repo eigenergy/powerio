@@ -95,8 +95,17 @@ pub(super) fn line(
     {
         return Err(row.bad("Un", "line voltage level/rating mismatch"));
     }
+    // The multiconductor reader treats `fr` as a factor on the thermal rating
+    // `Ith`; this reader used to scale resistance by it. Until the meaning is
+    // checked against native SINCAL results, only the neutral 1 is admitted.
+    if row.positive("fr")?.to_bits() != 1.0_f64.to_bits() {
+        return Err(row.bad(
+            "fr",
+            "a line factor other than 1 has no verified balanced mapping",
+        ));
+    }
     let r = finite(
-        row.nonnegative("r")? * row.positive("fr")? * temperature_factor * scale,
+        row.nonnegative("r")? * temperature_factor * scale,
         "line resistance",
     )?;
     let x = finite(row.number("x")? * scale, "line reactance")?;

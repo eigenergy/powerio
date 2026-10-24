@@ -196,6 +196,11 @@ limits. These are distinct limits; the library does not silently raise them.
 
 In the balanced profile, native physical quantities use a declared 100 MVA
 internal conversion base. The multiconductor model uses its usual SI units.
+Both readers correct cable resistance for the voltage-level temperature in
+every schema. The balanced reader refuses a line built from `LineSeg`
+sections, as the multiconductor reader does, and admits only `Line.fr = 1`:
+the multiconductor reader treats `fr` as a factor on the thermal rating, and
+that meaning is not yet verified for the balanced profile.
 Disabled native generator capability limits become unbounded typed limits,
 not zero capability. Diagnostics identify this and data outside the chosen
 snapshot. Disabled modern profile references do not replace static powers.
