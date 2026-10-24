@@ -374,10 +374,23 @@ fn load_projection_agrees_with_dss_and_survives_pmd_emission() {
         let dss = &other.loads()[0];
         assert_eq!(mapped.configuration, dss.configuration);
         assert_eq!(mapped.terminal_map, dss.terminal_map);
-        assert_eq!(
-            std::mem::discriminant(&mapped.voltage_model),
-            std::mem::discriminant(&dss.voltage_model)
-        );
+        // DSS also retains its voltage-band transitions. The SINCAL profile
+        // agrees inside that band without asserting equality outside it.
+        for phase in 0..3 {
+            for pu in [0.97, 1.0, 1.03] {
+                let expected = mapped
+                    .voltage_model
+                    .power_scale(phase, mapped.voltage_model.v_nom()[phase] * pu)
+                    .unwrap();
+                let actual = dss
+                    .voltage_model
+                    .power_scale(phase, dss.voltage_model.v_nom()[phase] * pu)
+                    .unwrap();
+                for (actual, expected) in actual.into_iter().zip(expected) {
+                    near(actual, expected);
+                }
+            }
+        }
         for (actual, expected) in mapped
             .p_nom
             .iter()
