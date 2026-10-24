@@ -29,6 +29,7 @@ API is documented in the
 | DC bus injection \\(p_{bus}\\) | \\(n\\) | `DcOperators::calc_bus_injection_dc` | \\(p_{bus} = -Bv_a + p_{shift}\\) |
 | weighted bus factor \\(L\\) | \\(n \times n\\) | `calc_weighted_laplacian` | \\(L = C \operatorname{diag}(w) C^\mathsf{T}\\); internal solver data |
 | solver branch flow matrix | \\(m \times n\\) | `calc_solver_branch_flow_matrix` | positive solver susceptance magnitudes times \\(C^\mathsf{T}\\); internal solver data |
+| Per-island PTDF | one matrix per component | `calc_ptdf_by_island` | partitions one global PTDF solve and returns source bus/branch index mappings |
 | PTDF | \\(m \times n\\) | `calc_ptdf` | routes through `Auto` solver selection; `calc_ptdf_lodf_with_options` exposes the choice |
 | LODF | \\(m \times m\\) | `calc_lodf` | routes through `Auto` solver selection; option based builds can prune small output entries |
 | AC power flow Jacobian | \\(2n \times 2n\\) | `calc_power_flow_jacobian` | polar or rectangular voltage coordinates |
@@ -211,3 +212,5 @@ estimate when the solver input is SPD.
 [petgraph](https://docs.rs/petgraph) graph, one node per bus and one edge per
 in service branch. The connectivity report and the radial check are built on
 it, and you can hand the returned graph straight to other petgraph algorithms.
+
+`calc_ptdf_by_island` returns one sparse PTDF per connected component. It uses the same single factorization and global solve as the ordinary PTDF builder, then scatters stored entries into component-local matrices in one pass. Each result carries dense source bus indices and source branch indices so callers can relate local matrix rows and columns back to the network. Closed switches must be merged before this call; the DC incidence matrix models branches, not unmerged switch connections.

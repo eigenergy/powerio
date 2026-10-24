@@ -929,3 +929,65 @@ fn coo_builder_rejects_out_of_bounds_column() {
     let mut coo = CooBuilder::new_rect(2, 2);
     coo.add(0, 2, 1.0);
 }
+
+#[test]
+fn per_island_ptdf_returns_local_matrices_and_source_index_mappings() {
+    let net = BalancedNetwork::in_memory(
+        "two-grounded-islands",
+        100.0,
+        vec![
+            bus(10, BusType::Ref),
+            bus(20, BusType::Pq),
+            bus(30, BusType::Ref),
+            bus(40, BusType::Pq),
+        ],
+        vec![br(10, 20, 0.0, 0.1, 0.0), br(30, 40, 0.0, 0.2, 0.0)],
+    );
+    let view = IndexedNetwork::new(&net);
+    let formula = BranchSusceptanceFormula::ReactanceOnly;
+    let global = crate::matrix::calc_ptdf(&view, formula).unwrap();
+
+    for solver in [
+        crate::matrix::SensitivitySolver::Dense,
+        crate::matrix::SensitivitySolver::Sparse,
+    ] {
+        let islands = crate::matrix::calc_ptdf_by_island(
+            &view,
+            &crate::matrix::SensitivityOptions {
+                formula,
+                solver,
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|err| panic!("{solver:?}: {err}"));
+
+        assert_eq!(islands.len(), 2);
+        assert_eq!(islands[0].island_label, 0);
+        assert_eq!(islands[0].bus_indices, vec![0, 1]);
+        assert_eq!(islands[0].branch_indices, vec![0]);
+        assert_eq!(islands[0].ptdf.shape(), (1, 2));
+        assert_eq!(islands[1].island_label, 2);
+        assert_eq!(islands[1].bus_indices, vec![2, 3]);
+        assert_eq!(islands[1].branch_indices, vec![1]);
+        assert_eq!(islands[1].ptdf.shape(), (1, 2));
+
+        // Local rows/columns are the corresponding global entries, while the
+        // disconnected island's buses never appear as columns in this matrix.
+        for island in &islands {
+            for (local_row, &source_branch) in island.branch_indices.iter().enumerate() {
+                for (local_col, &source_bus) in island.bus_indices.iter().enumerate() {
+                    let local = island
+                        .ptdf
+                        .get(local_row, local_col)
+                        .copied()
+                        .unwrap_or(0.0);
+                    let global_value = global
+                        .get(source_branch, source_bus)
+                        .copied()
+                        .unwrap_or(0.0);
+                    assert_relative_eq!(local, global_value, epsilon = 1e-12);
+                }
+            }
+        }
+    }
+}
