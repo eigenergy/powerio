@@ -25,6 +25,9 @@ extension-module = ["pyo3/extension-module"]
 gridfm = ["powerio-matrix/gridfm", "powerio/gridfm"]
 
 [dependencies]
+# Both bindings call the SINCAL adapters directly, so they ask for them
+# rather than rely on the facade's default features.
+powerio-tnd = { workspace = true, features = ["sincal"] }
 powerio.workspace = true
 powerio-core = { workspace = true }
 powerio-matrix.workspace = true
@@ -45,3 +48,6 @@ serde_json.workspace = true
 
 # No workspace pedantic lints here: pyo3 macro-generated code trips them, and
 # the i32 index narrowing is deliberate (and guarded) for scipy compatibility.
+
+[dev-dependencies]
+rusqlite.workspace = true

@@ -2,7 +2,7 @@
 # rows use the public PowerIO.jl API; the raw C ABI rows stay as lower bound
 # diagnostics for separating parser core time from Julia wrapper time.
 #
-#   cargo build --release -p powerio-capi --features arrow,matrix  # once
+#   cargo build --release -p powerio-capi  # once
 #   julia --project=evals/validation -e 'using Pkg; Pkg.instantiate()'   # once
 #   julia --project=evals/validation evals/performance/bench_julia.jl
 #

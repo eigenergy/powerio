@@ -1,0 +1,94 @@
+{
+  "date": "2026-10-08",
+  "scope": "Final two-family reader integration; experimental writer scope unchanged",
+  "remote_base": "d5f937631a4f7c60460c610a02eb949e35812252",
+  "ci_mirror": {
+    "status": "passed in resumed stages",
+    "details": "Full mirror through package verification; resumed package/audit/fuzz/guide/Python stages after adding license notices. Rebuilt installed wheel and reran ruff, mypy, stubtest and full pytest after correcting private extension stubs.",
+    "checks": [
+      "workspace and feature regression suites",
+      "full clippy matrix",
+      "Rust documentation",
+      "C and C++ release smoke checks in both configurations",
+      "header regeneration and symbol/Julia parity",
+      "IR schema and example checks",
+      "package verification and license audit",
+      "fuzz workspace build",
+      "WebAssembly default and matrix builds",
+      "mdBook build and tests",
+      "ruff",
+      "mypy",
+      "installed-wheel stubtest",
+      "installed-wheel pytest"
+    ],
+    "python_passed": 265,
+    "python_skipped": 1,
+    "browser_check": "Compilation only. rusqlite browser backend enabled; local C compilation used Zig targeting wasm32-freestanding. No browser execution claimed.",
+    "rust_reader_code_commit": "de96f88c",
+    "installed_wheel_sha256": "26cee694d3f23a56d7be0c39fec00be44b69d041a4810e35d7b97ffca02770e4"
+  },
+  "julia": {
+    "companion_commit": "89fbf15",
+    "passed": 1895,
+    "existing_broken": 2,
+    "native_case_assertions": 18,
+    "native_cases": "CSIRO19 at 0/12/24 h; CSIRO12 strict rejection and compatibility opt-in, source echo, typed IR, PF preparation"
+  },
+  "acquisition_unit_tests": 26,
+  "writer_checks": {
+    "facade_passed": 6,
+    "distribution_passed": 15,
+    "distribution_ignored": 3,
+    "balanced_passed": 6,
+    "storage_passed": 3,
+    "clippy": "affected crates and all targets passed",
+    "native_sincal_acceptance": false
+  },
+  "numerical_reruns": {
+    "csiro09": {
+      "checks": 10,
+      "negative_controls": 4,
+      "maximum_voltage_error_v": 0.0003711916667199571,
+      "reader_sha256": "b74875c54978a401ff8ad8c1c4213957e0f1b1007d09bfff0d0a1d720a292342"
+    },
+    "csiro12": {
+      "checks": 10,
+      "negative_controls": 4,
+      "maximum_voltage_error_v": 0.00036909913551596055,
+      "reader_sha256": "b74875c54978a401ff8ad8c1c4213957e0f1b1007d09bfff0d0a1d720a292342"
+    },
+    "csiro19": {
+      "checks": 7,
+      "negative_controls": 4,
+      "maximum_complex_voltage_error_pu": 1.9740655551225575e-11,
+      "reader_sha256": "a81e79931ba8473aaf96a200218ad1e9d0feae54d1f487479eadca44ecb31bde"
+    },
+    "truong12": {
+      "phase_voltages": 36,
+      "line_terminal_currents": 66,
+      "maximum_voltage_error_v": 5.329433940073175e-06,
+      "maximum_current_error_a": 2.414902089346971e-07,
+      "negative_controls": 3
+    }
+  },
+  "trial_workflows": "trial-workflows.json",
+  "fixtures_added": false,
+  "native_null_control_semantics_verified": false,
+  "native_sincal_executed": false,
+  "not_claimed": [
+    "numerical equivalence of ordinary exported DSS/PMD/BMOPF models",
+    "CSIRO09 PF readiness with unsourced islands",
+    "ordinary CSI09/CSI12 referenced-source export",
+    "complete unbalanced CSIRO corpus coverage",
+    "native acceptance of the experimental writer"
+  ],
+  "integration_fixes": [
+    "source table/field inventory and structured default/assumption provenance",
+    "two-family selections in Python/C/Julia",
+    "private extension stub parity",
+    "browser SQLite backend",
+    "shared crate license notices",
+    "guide and public terminology checks"
+  ],
+  "legacy_all_format_oracles_rerun": false
+}
