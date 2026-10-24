@@ -86,7 +86,7 @@ fn nested_dss_primary_resolves_sibling_and_parent_paths() {
     let PioValue::MulticonductorNetwork(network) = module.value() else {
         panic!("distribution network expected")
     };
-    assert_eq!(network.lines().len(), 1);
+    assert_eq!(network.lines().len(), 2); // feeder plus explicit finite source impedance
     assert_eq!(network.loads().len(), 1);
     assert!(
         !module
@@ -125,14 +125,14 @@ fn memory_tree_dss_includes_cannot_escape_the_supplied_root() {
         )],
         Some("model/Master.dss"),
     );
-    let module = powerio::parse(source).unwrap();
+    let error = powerio::parse(source).unwrap_err();
     assert!(
-        module
+        error
             .diagnostics()
             .iter()
             .any(|entry| entry.code() == "READ.DSS.INCLUDE_REFUSED")
     );
-    assert_eq!(module.sources().len(), 1);
+    assert_eq!(error.retained_source().unwrap().acquired_buffers().len(), 1);
 }
 
 #[test]
