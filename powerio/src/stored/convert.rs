@@ -202,6 +202,9 @@ fn encode_value(value: &PioValue) -> Result<dto::StoredValue> {
         PioValue::AcOpfInstance(instance) => {
             dto::StoredValue::AcOpfInstance(encode_ac_opf_instance(instance)?)
         }
+        PioValue::AcOtsInstance(instance) => {
+            dto::StoredValue::AcOtsInstance(Box::new(encode_ac_ots_instance(instance)?))
+        }
         PioValue::McAcPfInstance(instance) => {
             dto::StoredValue::McAcPfInstance(encode_mc_ac_pf_instance(instance)?)
         }
@@ -231,6 +234,9 @@ fn encode_value(value: &PioValue) -> Result<dto::StoredValue> {
         }
         PioValue::AcOpfSolution(solution) => {
             dto::StoredValue::AcOpfSolution(Box::new(encode_ac_opf_solution(solution)?))
+        }
+        PioValue::AcOtsSolution(solution) => {
+            dto::StoredValue::AcOtsSolution(Box::new(encode_ac_ots_solution(solution)?))
         }
         PioValue::SocwrOpfSolution(solution) => {
             dto::StoredValue::SocwrOpfSolution(Box::new(encode_socwr_opf_solution(solution)?))
@@ -1228,6 +1234,7 @@ fn encode_objective_term(term: &powerio_prob::ObjectiveTerm) -> Result<dto::Obje
         powerio_prob::ObjectiveTerm::ActivePowerDispatchCost => {
             dto::ObjectiveTerm::ActivePowerDispatchCost
         }
+        powerio_prob::ObjectiveTerm::BranchSwitchingCost => dto::ObjectiveTerm::BranchSwitchingCost,
         // The runtime enum is non_exhaustive for additive growth; a new term
         // must gain a stored spelling before it can be written.
         _ => return Err(invalid("unmapped objective term")),
@@ -1250,7 +1257,138 @@ fn decode_objective_term(term: dto::ObjectiveTerm) -> powerio_prob::ObjectiveTer
         dto::ObjectiveTerm::ActivePowerDispatchCost => {
             powerio_prob::ObjectiveTerm::ActivePowerDispatchCost
         }
+        dto::ObjectiveTerm::BranchSwitchingCost => powerio_prob::ObjectiveTerm::BranchSwitchingCost,
     }
+}
+
+fn encode_ac_ots_instance(instance: &powerio_prob::AcOtsInstance) -> Result<dto::AcOtsInstance> {
+    let options = instance.options();
+    check_operating_point_len(options.switching_costs.len())?;
+    check_operating_point_len(options.stated_current_limits.len())?;
+    Ok(dto::AcOtsInstance {
+        base: encode_ac_opf_instance(instance.base())?,
+        options: dto::AcOtsOptions {
+            switchable: match &options.switchable {
+                powerio_prob::BranchSelection::All => dto::BranchSelection::All,
+                powerio_prob::BranchSelection::None => dto::BranchSelection::None,
+                powerio_prob::BranchSelection::Only(identities) => {
+                    check_operating_point_len(identities.len())?;
+                    dto::BranchSelection::Only(
+                        identities
+                            .iter()
+                            .cloned()
+                            .map(dto::StoredIdentity)
+                            .collect(),
+                    )
+                }
+                _ => return Err(invalid("unmapped branch selection")),
+            },
+            switching_costs: options
+                .switching_costs
+                .iter()
+                .map(|cost| dto::BranchSwitchingCost {
+                    id: dto::StoredIdentity(cost.id.clone()),
+                    open_cost: StoredF64(cost.open_cost),
+                    close_cost: StoredF64(cost.close_cost),
+                })
+                .collect(),
+            islanding: match options.islanding {
+                powerio_prob::IslandingPolicy::Forbidden => dto::IslandingPolicy::Forbidden,
+                powerio_prob::IslandingPolicy::Allowed => dto::IslandingPolicy::Allowed,
+                _ => return Err(invalid("unmapped islanding policy")),
+            },
+            max_open: options.max_open.map(|budget| budget as u64),
+            max_switched: options.max_switched.map(|budget| budget as u64),
+            current_limits: match options.current_limits {
+                powerio_prob::CurrentLimitPolicy::Skip => dto::CurrentLimitPolicy::Skip,
+                powerio_prob::CurrentLimitPolicy::Stated => dto::CurrentLimitPolicy::Stated,
+                powerio_prob::CurrentLimitPolicy::DeriveFromRateA => {
+                    dto::CurrentLimitPolicy::DeriveFromRateA
+                }
+                _ => return Err(invalid("unmapped current limit policy")),
+            },
+            stated_current_limits: options
+                .stated_current_limits
+                .iter()
+                .map(|limit| dto::BranchCurrentLimit {
+                    id: dto::StoredIdentity(limit.id.clone()),
+                    from_pu: limit.from_pu.map(StoredF64),
+                    to_pu: limit.to_pu.map(StoredF64),
+                })
+                .collect(),
+        },
+    })
+}
+
+fn encode_ac_ots_solution(solution: &powerio_prob::AcOtsSolution) -> Result<dto::AcOtsSolution> {
+    check_operating_point_len(solution.branch_closed().len())?;
+    Ok(dto::AcOtsSolution {
+        instance: encode_ac_ots_instance(solution.instance())?,
+        branch_closed: solution.branch_closed().to_vec(),
+        ac_solution: encode_ac_opf_solution(solution.ac_solution())?,
+    })
+}
+
+fn decode_ac_ots_options(options: dto::AcOtsOptions) -> Result<powerio_prob::AcOtsOptions> {
+    let budget = |budget: Option<u64>| {
+        budget
+            .map(usize::try_from)
+            .transpose()
+            .map_err(|_| invalid("a switching budget exceeds this platform's index range"))
+    };
+    let mut decoded = powerio_prob::AcOtsOptions::default();
+    decoded.switchable = match options.switchable {
+        dto::BranchSelection::All => powerio_prob::BranchSelection::All,
+        dto::BranchSelection::None => powerio_prob::BranchSelection::None,
+        dto::BranchSelection::Only(identities) => powerio_prob::BranchSelection::Only(
+            identities.into_iter().map(|identity| identity.0).collect(),
+        ),
+    };
+    decoded.switching_costs = options
+        .switching_costs
+        .into_iter()
+        .map(|cost| {
+            powerio_prob::BranchSwitchingCost::new(cost.id.0, cost.open_cost.0, cost.close_cost.0)
+        })
+        .collect();
+    decoded.islanding = match options.islanding {
+        dto::IslandingPolicy::Forbidden => powerio_prob::IslandingPolicy::Forbidden,
+        dto::IslandingPolicy::Allowed => powerio_prob::IslandingPolicy::Allowed,
+    };
+    decoded.max_open = budget(options.max_open)?;
+    decoded.max_switched = budget(options.max_switched)?;
+    decoded.current_limits = match options.current_limits {
+        dto::CurrentLimitPolicy::Skip => powerio_prob::CurrentLimitPolicy::Skip,
+        dto::CurrentLimitPolicy::Stated => powerio_prob::CurrentLimitPolicy::Stated,
+        dto::CurrentLimitPolicy::DeriveFromRateA => {
+            powerio_prob::CurrentLimitPolicy::DeriveFromRateA
+        }
+    };
+    decoded.stated_current_limits = options
+        .stated_current_limits
+        .into_iter()
+        .map(|limit| {
+            powerio_prob::BranchCurrentLimit::new(
+                limit.id.0,
+                limit.from_pu.map(|value| value.0),
+                limit.to_pu.map(|value| value.0),
+            )
+        })
+        .collect();
+    Ok(decoded)
+}
+
+fn decode_ac_ots_instance(instance: dto::AcOtsInstance) -> Result<powerio_prob::AcOtsInstance> {
+    let base = decode_ac_opf_instance(instance.base)?;
+    powerio_prob::AcOtsInstance::new(base, decode_ac_ots_options(instance.options)?)
+        .map_err(|error| invalid(error.to_string()))
+}
+
+fn decode_ac_ots_solution(solution: dto::AcOtsSolution) -> Result<powerio_prob::AcOtsSolution> {
+    let instance = std::sync::Arc::new(decode_ac_ots_instance(solution.instance)?);
+    let ac_solution = decode_ac_opf_solution(solution.ac_solution)?;
+    powerio_prob::AcOtsSolution::new(instance, solution.branch_closed, ac_solution)
+        .map_err(|error| invalid(error.to_string()))
 }
 
 fn encode_time_point(point: &TimePoint) -> dto::TimePoint {
@@ -1783,6 +1921,7 @@ fn validate_decoded_networks(value: &PioValue) -> Result<()> {
         PioValue::AcPfInstance(instance) => balanced(instance.network()),
         PioValue::DcOpfInstance(instance) => balanced(instance.network()),
         PioValue::AcOpfInstance(instance) => balanced(instance.network()),
+        PioValue::AcOtsInstance(instance) => balanced(instance.network()),
         PioValue::AcScucInstance(instance) => balanced(instance.network()),
         PioValue::McAcPfInstance(instance) => multiconductor(instance.network()),
         PioValue::McAcOpfInstance(instance) => multiconductor(instance.network()),
@@ -1792,6 +1931,10 @@ fn validate_decoded_networks(value: &PioValue) -> Result<()> {
         PioValue::AcPfSolution(solution) => balanced(solution.network()),
         PioValue::DcOpfSolution(solution) => balanced(solution.network()),
         PioValue::AcOpfSolution(solution) => balanced(solution.network()),
+        PioValue::AcOtsSolution(solution) => {
+            balanced(solution.network())?;
+            balanced(solution.ac_solution().network())
+        }
         PioValue::SocwrOpfSolution(solution) => balanced(solution.network()),
         PioValue::McAcPfSolution(solution) => multiconductor(solution.network()),
         PioValue::McAcOpfSolution(solution) => multiconductor(solution.network()),
@@ -2126,6 +2269,9 @@ fn decode_value(value: dto::StoredValue) -> Result<PioValue> {
         dto::StoredValue::AcOpfInstance(instance) => {
             PioValue::AcOpfInstance(decode_ac_opf_instance(instance)?)
         }
+        dto::StoredValue::AcOtsInstance(instance) => {
+            PioValue::AcOtsInstance(decode_ac_ots_instance(*instance)?)
+        }
         dto::StoredValue::McAcPfInstance(instance) => {
             PioValue::McAcPfInstance(decode_mc_ac_pf_instance(instance)?)
         }
@@ -2152,6 +2298,9 @@ fn decode_value(value: dto::StoredValue) -> Result<PioValue> {
         }
         dto::StoredValue::AcOpfSolution(solution) => {
             PioValue::AcOpfSolution(decode_ac_opf_solution(*solution)?)
+        }
+        dto::StoredValue::AcOtsSolution(solution) => {
+            PioValue::AcOtsSolution(decode_ac_ots_solution(*solution)?)
         }
         dto::StoredValue::SocwrOpfSolution(solution) => {
             PioValue::SocwrOpfSolution(decode_socwr_opf_solution(*solution)?)

@@ -2,9 +2,9 @@
 
 An instance is the complete input for one named calculation, and a solution
 is the result of one; the solution shares the instance it solves. PowerIO has
-nine instance types, from DC power flow through LinDist3Flow and
-multiconductor AC OPF to AC security constrained unit commitment, and ten
-solution types, because
+ten instance types, from DC power flow through AC optimal transmission
+switching, LinDist3Flow, and multiconductor AC OPF to AC security constrained
+unit commitment, and eleven solution types, because
 `SocwrOpfSolution` is an SOCWR relaxation of an `AcOpfInstance` and is not
 labeled an AC OPF solution.
 
@@ -13,6 +13,7 @@ DcPfInstance       DcPfSolution
 AcPfInstance       AcPfSolution      SocwrOpfSolution
 DcOpfInstance      DcOpfSolution
 AcOpfInstance      AcOpfSolution
+AcOtsInstance      AcOtsSolution
 McAcPfInstance     McAcPfSolution
 McAcOpfInstance    McAcOpfSolution
 LinDist3FlowPfInstance   LinDist3FlowPfSolution
@@ -73,6 +74,20 @@ and polar or SOC for AC OPF, belongs to the solver and does not create
 another instance type. LinDist3Flow is an explicit exception to that general
 AC choice because its fixed-reference linear approximation, declared mesh
 limitations, and applicability decisions define the mathematical problem.
+
+`AcOtsInstance` is an AC OPF whose branch statuses are decisions. It keeps
+every physical branch, takes the network's `in_service` bits as the initial
+topology, and states which branches may switch, what opening or closing each
+one costs, budgets on open branches and on status changes, whether islands may
+form, and which branch current limits apply. `to_ac_ots_instance` builds the
+default from a network or an AC OPF: every initially in-service branch may
+switch, at zero cost. A solver chooses the final statuses;
+`fix_ac_ots_topology` derives the AC OPF to solve over them and reports what
+that problem leaves out, and `ac_ots_solution` attaches its solution after
+checking that it solves exactly that problem and that open branches carry no
+flow. The AC OTS solution keeps the instance's network with the initial
+statuses; `materialize_ac_ots_solution` returns the network with the final
+statuses and solved values for `emit`.
 
 `LinDist3FlowPfInstance` is the fixed-dispatch form: generator and IBR P/Q
 must be prescribed, its objective is zero, and retained line thermal limits

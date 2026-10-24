@@ -88,6 +88,24 @@
 
   The new objective term `branch_switching_cost` adds the switching cost to
   the objective. No solver or formulation is included.
+- PowerIO IR reads and writes `powerio.AcOtsInstance` and
+  `powerio.AcOtsSolution`, and the objective terms gain
+  `branch_switching_cost`. The IR version stays 2. The schema snapshot is
+  `pio-ir/2/0.11.7/schema.json`. The schema compatibility test now lets a
+  union of constant-tagged alternatives gain alternatives, as it already let
+  lists of allowed names gain names.
+- New facade functions:
+  - `to_ac_ots_instance` and `to_ac_ots_instance_with_options` build or
+    reconfigure the instance from a network, AC OPF, or AC OTS module.
+  - `ac_ots_instance_from_base` combines an AC OPF base with explicit options.
+  - `fix_ac_ots_topology` derives the AC OPF over a final topology.
+  - `ac_ots_solution` attaches that AC OPF's solution.
+  - `materialize_ac_ots_solution` returns the network with the final statuses
+    and solved values, which is what `emit` should write. Emitting an AC OTS
+    solution directly is refused.
+- Python reads the two types as `powerio.AcOtsInstance` and
+  `powerio.AcOtsSolution`, and `PioModule.to_ac_ots_instance()` builds the
+  default instance.
 
 ## 0.11.6
 
