@@ -977,6 +977,12 @@ fn bounded_load_laws_are_not_silently_projected_by_ivr_preparation() {
             v_min_pu: 0.95,
             v_max_pu: 1.05,
         },
+        Law::BoundedConstantPower {
+            v_nom: vec![230.0],
+            v_min_pu: 0.95,
+            v_max_pu: 1.05,
+            current_limit_pu: Some(1.1),
+        },
     ] {
         let mut net = network();
         net.loads_mut()[0].voltage_model = law;
