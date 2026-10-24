@@ -57,9 +57,9 @@ fn modern_schemas_apply_the_voltage_level_line_temperature() {
     )
     .unwrap();
     let mut lines = 0;
-    for (a, b) in cool.branches().iter().zip(warm.branches()) {
+    for (row, (a, b)) in cool.branches().iter().zip(warm.branches()).enumerate() {
         if a.uid.as_deref() != Some("sincal:element:19") {
-            assert!((b.r / a.r - 1.2).abs() < 1e-12, "{:?}", a.uid);
+            assert!((b.r / a.r - 1.2).abs() < 1e-12, "branch row {row}");
             lines += 1;
         }
     }
