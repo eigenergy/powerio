@@ -16,7 +16,7 @@ implemented by a release and keep their published bytes and identifiers.
 | 2 | v0.11.3 | `pio-ir`, version `2` | `pio-ir/2/0.11.3/schema.json` | yes |
 | 2 | v0.11.4 | `pio-ir`, version `2` | `pio-ir/2/0.11.4/schema.json` | yes |
 | 2 | v0.11.5 | `pio-ir`, version `2` | `pio-ir/2/0.11.5/schema.json` | yes |
-| 2 | v0.11.6 | `pio-ir`, version `2` | `pio-ir/2/0.11.7/schema.json` | yes |
+| 2 | v0.11.6 | `pio-ir`, version `2` | `pio-ir/2/0.11.6/schema.json` | yes |
 
 The current document begins:
 
