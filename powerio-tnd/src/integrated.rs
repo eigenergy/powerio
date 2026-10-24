@@ -24,6 +24,8 @@ pub enum TransmissionDemand {
 /// The consumer replaces the selected source's three phase voltage prescriptions
 /// with the coupled voltage equations. Extra source terminals remain fixed at zero.
 /// Source names and terminal names are exact identifiers within the named feeder.
+/// The source's stated phase voltages must agree with the interface: each within
+/// 0.5 to 2 times the bus voltage times `voltage_ratio`, in A, B, C rotation.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Interface {
@@ -40,12 +42,15 @@ pub struct Interface {
     pub demand: TransmissionDemand,
 }
 impl Interface {
+    /// `voltage_ratio` is feeder phase-to-earth voltage divided by transmission
+    /// phase-to-earth voltage; there is no default, since equal bases are rare.
     pub fn new(
         name: impl Into<String>,
         transmission_bus: BusId,
         feeder: impl Into<String>,
         voltage_source: impl Into<String>,
         phase_terminals: [String; 3],
+        voltage_ratio: f64,
         demand: TransmissionDemand,
     ) -> Self {
         Self {
@@ -54,7 +59,7 @@ impl Interface {
             feeder: feeder.into(),
             voltage_source: voltage_source.into(),
             phase_terminals,
-            voltage_ratio: 1.0,
+            voltage_ratio,
             angle_shift_radians: 0.0,
             demand,
         }
@@ -184,6 +189,7 @@ impl IntegratedNetwork {
                     "interface requires an active bus with positive voltage base",
                 ));
             }
+            let nominal = bus.base_kv * 1000.0 / 3.0_f64.sqrt() * link.voltage_ratio;
             let net = self
                 .feeders
                 .get(&link.feeder)
@@ -270,6 +276,30 @@ impl IntegratedNetwork {
             if fixed.any(|c| phases.contains(&c)) {
                 return Err(invalid(
                     "another source terminal or a ground fixes an interface phase, directly or through closed switches",
+                ));
+            }
+            // The stated phase voltages must describe the voltage the coupled
+            // equations will impose: a wrong ratio or phase map fails here.
+            let phasor = |terminal: &String| {
+                let index = source
+                    .terminal_map
+                    .iter()
+                    .position(|t| t == terminal)
+                    .expect("phase terminals were checked to be sourced");
+                (source.v_magnitude[index], source.v_angle[index])
+            };
+            let [a, b, c] = link.phase_terminals.each_ref().map(phasor);
+            if [a, b, c]
+                .iter()
+                .any(|(magnitude, _)| !(0.5 * nominal..=2.0 * nominal).contains(magnitude))
+            {
+                return Err(invalid(
+                    "stated source voltages disagree with the interface voltage ratio",
+                ));
+            }
+            if !near_angle(b.1 - a.1, -TAU / 3.0) || !near_angle(c.1 - a.1, TAU / 3.0) {
+                return Err(invalid(
+                    "stated source rotation disagrees with the A, B, C phase map",
                 ));
             }
             for (index, terminal) in source.terminal_map.iter().enumerate() {
@@ -383,6 +413,14 @@ fn terminal_classes(
         .into_iter()
         .map(|(node, row)| (node, union.root(row)))
         .collect())
+}
+/// Within 30 degrees of `expected`, modulo a full turn. Opposite rotation is
+/// 120 degrees away, so a swapped phase map cannot pass.
+fn near_angle(actual: f64, expected: f64) -> bool {
+    (actual - expected)
+        .rem_euclid(TAU)
+        .min((expected - actual).rem_euclid(TAU))
+        <= TAU / 12.0
 }
 fn positive(value: f64) -> bool {
     value.is_finite() && value > 0.0

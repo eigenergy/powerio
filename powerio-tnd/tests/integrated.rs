@@ -28,7 +28,7 @@ fn parts() -> (
         "grid",
         "head",
         vec!["1".into(), "2".into(), "3".into()],
-        vec![230.0; 3],
+        vec![11000.0 / 3.0_f64.sqrt(); 3],
         vec![0.0, -2.0 * PI / 3.0, 2.0 * PI / 3.0],
     ));
     let link = Interface::new(
@@ -37,6 +37,7 @@ fn parts() -> (
         "feeder",
         "grid",
         ["1".into(), "2".into(), "3".into()],
+        11.0 / 110.0,
         TransmissionDemand::ReplaceLoads(vec!["feeder-demand".into()]),
     );
     (
@@ -173,6 +174,30 @@ fn rejects_inconsistent_interfaces() {
         .is_err()
     );
 }
+#[test]
+fn stated_source_voltages_must_match_the_ratio_and_rotation() {
+    let (tx, feeders, link) = parts();
+    let build =
+        |link: &Interface| IntegratedNetwork::new(tx.clone(), feeders.clone(), vec![link.clone()]);
+    // An unset ratio would impose 63.5 kV on a 6.35 kV feeder.
+    let mut unit = link.clone();
+    unit.voltage_ratio = 1.0;
+    let error = build(&unit).unwrap_err().to_string();
+    assert!(error.contains("voltage ratio"), "{error}");
+    // Swapping B and C supplies negative-sequence voltage.
+    let mut swapped = link.clone();
+    swapped.phase_terminals = ["1".into(), "3".into(), "2".into()];
+    let error = build(&swapped).unwrap_err().to_string();
+    assert!(error.contains("rotation"), "{error}");
+    // An off-nominal setpoint and a small angle offset are ordinary.
+    let mut net = feeders["feeder"].value().clone();
+    let source = &mut net.sources_mut()[0];
+    source.v_magnitude = source.v_magnitude.iter().map(|v| v * 1.05).collect();
+    source.v_angle[1] += 0.05;
+    let stated = BTreeMap::from([("feeder".into(), PioModule::new(net))]);
+    assert!(IntegratedNetwork::new(tx.clone(), stated, vec![link]).is_ok());
+}
+
 #[test]
 fn preserves_earth_clamps_and_refuses_conflicting_sources() {
     let (tx, mut feeders, link) = parts();
@@ -349,6 +374,8 @@ fn independently_parsed_formats_preserve_modules() {
         "feeder",
         source_name,
         ["1".into(), "2".into(), "3".into()],
+        // An 11 kV feeder below case9's 345 kV bus 1.
+        11.0 / 345.0,
         TransmissionDemand::Additional,
     );
     let model = IntegratedNetwork::new(tx, BTreeMap::from([("feeder".into(), feeder)]), vec![link])
@@ -366,7 +393,7 @@ fn sincal_is_an_adapter_into_the_same_composition() {
     };
     let (tx, feeders, _) = parts();
     let options = ExperimentalMulticonductorOptions {
-        nominal_ll_volts: BTreeMap::from([("head".into(), 230.0 * 3.0_f64.sqrt())]),
+        nominal_ll_volts: BTreeMap::from([("head".into(), 11000.0)]),
     };
     let output =
         __write_sincal_multiconductor_experimental(feeders["feeder"].value(), &options).unwrap();
@@ -382,6 +409,7 @@ fn sincal_is_an_adapter_into_the_same_composition() {
         "sincal-feeder",
         &source.name,
         ["1".into(), "2".into(), "3".into()],
+        11.0 / 110.0,
         TransmissionDemand::Additional,
     );
     let model = IntegratedNetwork::new(

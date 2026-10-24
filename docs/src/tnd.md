@@ -15,7 +15,12 @@ by their terminal maps, so a source, ground, or other interface reached through
 them counts as competing at the terminal it reaches. Its validated contents are
 immutable.
 
-An interface states a positive voltage ratio and an angle displacement in radians.
+An interface states a positive voltage ratio, which `Interface::new` requires,
+and an angle displacement in radians. Construction checks the selected
+source's stated phase voltages against it: each magnitude must lie within 0.5
+to 2 times the bus phase voltage times the ratio, and the stated angles must
+rotate A, B, C in the phase map's order. A wrong ratio or a swapped phase map
+therefore fails before any coupled equation uses it.
 `boundary_voltages` converts transmission positive-sequence per-unit voltage using
 the bus line-to-line kV base into feeder phase-to-earth volts, in A/B/C order.
 `boundary_power` sums V times conjugate(I) and returns MW + j MVAr, positive into
