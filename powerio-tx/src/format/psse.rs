@@ -279,11 +279,28 @@ fn assign_impedance_tables(
         .max()
         .unwrap_or(0)
         .saturating_add(1);
+    // A line starting with table number 0 ends the section in PSS/E.
+    let mut zero_table = None;
     for (target, mut correction) in corrections {
         let Some(ratio2) = prepare_impedance_points(&mut correction, target, rev, net, warnings)
         else {
             continue;
         };
+        if correction.table == 0 {
+            let table = *zero_table.get_or_insert_with(|| {
+                let table = next_free;
+                next_free = next_free.saturating_add(1);
+                table
+            });
+            warnings.push(
+                &F.value_substituted,
+                format!(
+                    "impedance correction table 0 for {} would end the section; written as table {table}",
+                    impedance_target_label(net, target)
+                ),
+            );
+            correction.table = table;
+        }
         if let ImpedanceTarget::Branch(row) = target {
             written.branch_ratio2.insert(row, ratio2);
         }
@@ -10853,6 +10870,42 @@ Q
         );
         let back = parse_psse(&written.text).unwrap();
         assert_eq!(back.branches()[1].impedance_correction(), Some(correction));
+    }
+
+    #[test]
+    fn impedance_correction_table_zero_is_renumbered_not_written_as_a_terminator() {
+        let mut net = parse_psse(&impedance_correction_case()).unwrap();
+        let correction = ImpedanceCorrection::new(
+            0,
+            ImpedanceCorrectionVariable::Ratio,
+            vec![
+                ImpedanceCorrectionPoint::new(0.9, 1.1, 0.0),
+                ImpedanceCorrectionPoint::new(1.1, 0.9, 0.0),
+            ],
+        );
+        net.branches_mut()[1].set_impedance_correction(Some(correction.clone()));
+        let written = write_psse_rev(&net, 35);
+        assert!(
+            written
+                .render_diagnostics()
+                .iter()
+                .any(|message| message.contains("table 0"))
+        );
+        let back = parse_psse(&written.text).unwrap();
+        let read = back.branches()[1].impedance_correction().unwrap();
+        assert_ne!(read.table, 0);
+        assert_eq!(read.points, correction.points);
+        // Every other transformer's table survives the renumbering.
+        assert_eq!(
+            back.branches()
+                .iter()
+                .filter(|b| b.impedance_correction().is_some())
+                .count(),
+            net.branches()
+                .iter()
+                .filter(|b| b.impedance_correction().is_some())
+                .count()
+        );
     }
 
     #[test]
