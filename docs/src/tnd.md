@@ -10,7 +10,10 @@ modules, and explicit interfaces. Each interface identifies a transmission bus,
 a feeder voltage source, and its A/B/C terminals. Names stay scoped to each
 component, and the original modules retain their source bytes and records.
 Construction checks references, shared frequency, competing source constraints,
-phase maps, and the load replacement policy. Its validated contents are immutable.
+phase maps, and the load replacement policy. Closed ideal switches join terminals
+by their terminal maps, so a source, ground, or other interface reached through
+them counts as competing at the terminal it reaches. Its validated contents are
+immutable.
 
 An interface states a positive voltage ratio and an angle displacement in radians.
 `boundary_voltages` converts transmission positive-sequence per-unit voltage using

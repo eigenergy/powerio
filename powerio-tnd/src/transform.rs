@@ -1296,18 +1296,18 @@ fn z_base_ohm_of(line_to_line_volts: f64, base_mva: f64) -> f64 {
     line_to_line_volts * line_to_line_volts / (base_mva * 1_000_000.0)
 }
 
-struct UnionFind {
+pub(crate) struct UnionFind {
     parent: Vec<usize>,
 }
 
 impl UnionFind {
-    fn new(len: usize) -> Self {
+    pub(crate) fn new(len: usize) -> Self {
         Self {
             parent: (0..len).collect(),
         }
     }
 
-    fn root(&mut self, mut node: usize) -> usize {
+    pub(crate) fn root(&mut self, mut node: usize) -> usize {
         while self.parent[node] != node {
             self.parent[node] = self.parent[self.parent[node]];
             node = self.parent[node];
@@ -1315,7 +1315,7 @@ impl UnionFind {
         node
     }
 
-    fn join(&mut self, a: usize, b: usize) {
+    pub(crate) fn join(&mut self, a: usize, b: usize) {
         let (a, b) = (self.root(a), self.root(b));
         // The smaller row stays the root, so the canonical member is stable.
         let (keep, fold) = if a <= b { (a, b) } else { (b, a) };

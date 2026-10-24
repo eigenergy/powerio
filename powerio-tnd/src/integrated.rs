@@ -6,6 +6,8 @@ use powerio_tx::{BalancedNetwork, BusId, BusType};
 use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::TAU;
 
+use crate::transform::UnionFind;
+
 /// How the feeder's computed demand enters the transmission balance.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -139,6 +141,7 @@ impl IntegratedNetwork {
                 "composition needs a positive frequency, feeders, and interfaces",
             ));
         }
+        let mut classes = BTreeMap::new();
         for (id, module) in &self.feeders {
             identifier(id)?;
             let net = module.value();
@@ -154,6 +157,7 @@ impl IntegratedNetwork {
                     "feeder {id} frequency differs from transmission"
                 )));
             }
+            classes.insert(id, terminal_classes(net)?);
         }
         let mut names = BTreeSet::new();
         let mut sources = BTreeSet::new();
@@ -226,18 +230,47 @@ impl IntegratedNetwork {
                         "phase terminal must be declared, sourced, and ungrounded",
                     ));
                 }
-                if !terminals.insert((&link.feeder, &bus.id, terminal)) {
-                    return Err(invalid("interfaces overlap at a feeder terminal"));
-                }
-                if net.sources().iter().any(|s| {
-                    s.name != source.name
-                        && s.bus.eq_ignore_ascii_case(&source.bus)
-                        && s.terminal_map.contains(terminal)
-                }) {
+            }
+            // Terminal identity follows closed ideal switches by terminal map,
+            // so a voltage fixed elsewhere can still reach an interface phase.
+            let classes = &classes[&link.feeder];
+            let class = |bus: &str, terminal: &str| {
+                classes
+                    .get(&(bus.to_ascii_lowercase(), terminal.to_owned()))
+                    .copied()
+            };
+            let phases: BTreeSet<_> = link
+                .phase_terminals
+                .iter()
+                .filter_map(|terminal| class(&bus.id, terminal))
+                .collect();
+            if phases.len() != 3 {
+                return Err(invalid(
+                    "closed switches join interface phase terminals together",
+                ));
+            }
+            for phase in &phases {
+                if !terminals.insert((&link.feeder, *phase)) {
                     return Err(invalid(
-                        "another voltage source prescribes an interface terminal",
+                        "interfaces overlap at a feeder terminal, directly or through closed switches",
                     ));
                 }
+            }
+            let mut fixed = net
+                .sources()
+                .iter()
+                .flat_map(|s| s.terminal_map.iter().map(move |t| (s, t)))
+                .filter(|(s, t)| s.name != source.name || !link.phase_terminals.contains(t))
+                .filter_map(|(s, t)| class(&s.bus, t))
+                .chain(
+                    net.buses()
+                        .iter()
+                        .flat_map(|b| b.grounded.iter().filter_map(|t| class(&b.id, t))),
+                );
+            if fixed.any(|c| phases.contains(&c)) {
+                return Err(invalid(
+                    "another source terminal or a ground fixes an interface phase, directly or through closed switches",
+                ));
             }
             for (index, terminal) in source.terminal_map.iter().enumerate() {
                 if !bus.terminals.contains(terminal)
@@ -302,6 +335,54 @@ pub fn boundary_power(
         return Err(invalid("boundary power overflows"));
     }
     Ok(power)
+}
+/// Class of every `(bus, terminal)` node joined by closed ideal switches,
+/// pairing conductors by terminal map. Bus names compare case-insensitively,
+/// as `MulticonductorNetwork::bus` does; terminal names are exact.
+fn terminal_classes(
+    net: &MulticonductorNetwork,
+) -> Result<BTreeMap<(String, String), usize>, Error> {
+    let key = |bus: &str, terminal: &str| (bus.to_ascii_lowercase(), terminal.to_owned());
+    let closed: Vec<_> = net.switches().iter().filter(|s| !s.open).collect();
+    let mut index = BTreeMap::new();
+    let nodes = net
+        .buses()
+        .iter()
+        .flat_map(|b| b.terminals.iter().chain(&b.grounded).map(|t| key(&b.id, t)))
+        .chain(
+            net.sources()
+                .iter()
+                .flat_map(|s| s.terminal_map.iter().map(|t| key(&s.bus, t))),
+        )
+        .chain(closed.iter().flat_map(|s| {
+            let from = s.terminal_map_from.iter().map(|t| key(&s.bus_from, t));
+            from.chain(s.terminal_map_to.iter().map(|t| key(&s.bus_to, t)))
+        }));
+    for node in nodes {
+        let next = index.len();
+        index.entry(node).or_insert(next);
+    }
+    let mut union = UnionFind::new(index.len());
+    for switch in closed {
+        if switch.terminal_map_from.is_empty()
+            || switch.terminal_map_from.len() != switch.terminal_map_to.len()
+        {
+            return Err(invalid(format!(
+                "closed switch {} must pair its terminals one to one",
+                switch.name
+            )));
+        }
+        for (a, b) in switch.terminal_map_from.iter().zip(&switch.terminal_map_to) {
+            union.join(
+                index[&key(&switch.bus_from, a)],
+                index[&key(&switch.bus_to, b)],
+            );
+        }
+    }
+    Ok(index
+        .into_iter()
+        .map(|(node, row)| (node, union.root(row)))
+        .collect())
 }
 fn positive(value: f64) -> bool {
     value.is_finite() && value > 0.0

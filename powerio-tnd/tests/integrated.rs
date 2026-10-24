@@ -1,6 +1,6 @@
 use num_complex::Complex64;
 use powerio_core::{PioModule, Source};
-use powerio_dist::{DistBus, MulticonductorNetwork, VoltageSource};
+use powerio_dist::{DistBus, DistSwitch, MulticonductorNetwork, VoltageSource};
 use powerio_tnd::{IntegratedNetwork, Interface, TransmissionDemand, boundary_power};
 use powerio_tx::{BalancedNetwork, Bus, BusId, BusType, Load};
 use std::{collections::BTreeMap, f64::consts::PI};
@@ -202,6 +202,131 @@ fn preserves_earth_clamps_and_refuses_conflicting_sources() {
     net.sources_mut().push(second);
     feeders.insert("feeder".into(), PioModule::new(net));
     assert!(IntegratedNetwork::new(tx, feeders, vec![link]).is_err());
+}
+fn terminals(names: &[&str]) -> Vec<String> {
+    names.iter().map(|&name| name.to_owned()).collect()
+}
+fn with_feeder(
+    tx: &PioModule<BalancedNetwork>,
+    link: &Interface,
+    net: &MulticonductorNetwork,
+) -> Result<IntegratedNetwork, powerio_core::Error> {
+    IntegratedNetwork::new(
+        tx.clone(),
+        BTreeMap::from([("feeder".into(), PioModule::new(net.clone()))]),
+        vec![link.clone()],
+    )
+}
+#[test]
+fn refuses_sources_reached_through_closed_switches() {
+    let (tx, feeders, link) = parts();
+    let mut net = feeders["feeder"].value().clone();
+    let abc = terminals(&["1", "2", "3"]);
+    net.buses_mut().push(DistBus::new("other", abc.clone()));
+    let mut second = net.sources()[0].clone();
+    second.name = "backfeed".into();
+    second.bus = "other".into();
+    net.sources_mut().push(second);
+    net.switches_mut().push(DistSwitch::new(
+        "tie",
+        "head",
+        "other",
+        abc.clone(),
+        abc,
+        true,
+    ));
+    assert!(with_feeder(&tx, &link, &net).is_ok());
+    net.switches_mut()[0].open = false;
+    assert!(with_feeder(&tx, &link, &net).is_err());
+}
+#[test]
+fn closed_switches_join_terminals_by_their_maps() {
+    let (tx, feeders, link) = parts();
+    let mut net = feeders["feeder"].value().clone();
+    net.buses_mut()
+        .push(DistBus::new("other", terminals(&["1", "2"])));
+    net.sources_mut().push(VoltageSource::new(
+        "aux",
+        "other",
+        terminals(&["2"]),
+        vec![230.0],
+        vec![0.0],
+    ));
+    // Bus connectivity alone is not terminal equivalence: head 1 meets the
+    // unsourced other 1, while aux prescribes only other 2.
+    net.switches_mut().push(DistSwitch::new(
+        "tie",
+        "head",
+        "other",
+        terminals(&["1"]),
+        terminals(&["1"]),
+        false,
+    ));
+    assert!(with_feeder(&tx, &link, &net).is_ok());
+    net.switches_mut()[0].terminal_map_to = terminals(&["2"]);
+    assert!(with_feeder(&tx, &link, &net).is_err());
+}
+#[test]
+fn closed_switch_chains_and_grounds_reach_the_interface() {
+    let (tx, feeders, link) = parts();
+    let base = feeders["feeder"].value().clone();
+    let abc = terminals(&["1", "2", "3"]);
+    let mut net = base.clone();
+    for bus in ["mid", "other"] {
+        net.buses_mut().push(DistBus::new(bus, abc.clone()));
+    }
+    let mut second = net.sources()[0].clone();
+    second.name = "backfeed".into();
+    second.bus = "OTHER".into();
+    net.sources_mut().push(second);
+    for (name, from, to) in [("a", "head", "mid"), ("b", "Mid", "other")] {
+        net.switches_mut().push(DistSwitch::new(
+            name,
+            from,
+            to,
+            abc.clone(),
+            abc.clone(),
+            false,
+        ));
+    }
+    assert!(with_feeder(&tx, &link, &net).is_err());
+    net.switches_mut()[1].open = true;
+    assert!(with_feeder(&tx, &link, &net).is_ok());
+
+    let mut net = base;
+    let mut grounded = DistBus::new("other", abc.clone());
+    grounded.grounded = terminals(&["1"]);
+    net.buses_mut().push(grounded);
+    net.switches_mut().push(DistSwitch::new(
+        "tie",
+        "head",
+        "other",
+        abc.clone(),
+        abc,
+        true,
+    ));
+    assert!(with_feeder(&tx, &link, &net).is_ok());
+    net.switches_mut()[0].open = false;
+    assert!(with_feeder(&tx, &link, &net).is_err());
+}
+#[test]
+fn refuses_closed_switches_without_one_to_one_terminal_maps() {
+    let (tx, feeders, link) = parts();
+    let mut net = feeders["feeder"].value().clone();
+    net.buses_mut()
+        .push(DistBus::new("other", terminals(&["1", "2", "3"])));
+    net.switches_mut().push(DistSwitch::new(
+        "tie",
+        "head",
+        "other",
+        terminals(&["1", "2"]),
+        terminals(&["1"]),
+        true,
+    ));
+    assert!(with_feeder(&tx, &link, &net).is_ok());
+    net.switches_mut()[0].open = false;
+    let error = with_feeder(&tx, &link, &net).unwrap_err().to_string();
+    assert!(error.contains("one to one"), "{error}");
 }
 #[test]
 fn independently_parsed_formats_preserve_modules() {
