@@ -106,6 +106,22 @@
 - Python reads the two types as `powerio.AcOtsInstance` and
   `powerio.AcOtsSolution`, and `PioModule.to_ac_ots_instance()` builds the
   default instance.
+- C ABI 7 gains these entry points:
+  - instance: `pio_value_ac_ots_instance`, `pio_module_to_ac_ots_instance`,
+    `pio_module_to_ac_ots_instance_with_options`, `pio_ac_ots_instance_create`,
+    `pio_ac_ots_instance_options`, `pio_ac_ots_instance_branch_at`,
+    `pio_ac_ots_instance_validate_topology`, `pio_ac_ots_instance_fix_topology`;
+  - solution: `pio_value_ac_ots_solution`, `pio_ac_ots_solution_create`,
+    `pio_ac_ots_solution_summary`, `pio_ac_ots_solution_branch_closed_at`,
+    `pio_ac_ots_solution_materialize`.
+
+  It also gains the structs `PioAcOtsOptions`, `PioBranchSwitchingCost`,
+  `PioBranchCurrentLimit`, `PioAcOtsOptionsView`, `PioAcOtsBranchView`, and
+  `PioAcOtsSolutionView`, and the error code `BIND.CAPI.INVALID_ARGUMENT`.
+  The generic calculation accessors (network, instance, objective terms,
+  constraints, termination, objective, and named quantities) accept the AC
+  OTS kinds. PowerIO.jl binds them in
+  [PowerIO.jl#178](https://github.com/eigenergy/PowerIO.jl/pull/178).
 
 ## 0.11.6
 
