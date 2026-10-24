@@ -118,7 +118,7 @@ pub(crate) fn load_balanced_module(
     format: Option<&str>,
 ) -> Result<powerio_core::PioModule<BalancedNetwork>, powerio_core::Error> {
     let source = declare_format(powerio_core::Source::open(path.as_ref())?, format)?;
-    powerio_tx::parse(source)
+    parse_balanced_source(source)
 }
 
 #[allow(dead_code)] // The corpus library uses it; the binary does not.
@@ -136,7 +136,7 @@ pub(crate) fn load_balanced_memory_named(
 ) -> Result<powerio_core::PioModule<BalancedNetwork>, powerio_core::Error> {
     let name = name_hint.map_or_else(|| "<memory>".to_owned(), str::to_owned);
     let source = powerio_core::Source::from_memory(name, text.as_bytes().to_vec())?;
-    powerio_tx::parse(declare_format(source, Some(format))?)
+    parse_balanced_source(declare_format(source, Some(format))?)
 }
 
 pub(crate) fn load_multiconductor_module(
@@ -151,7 +151,7 @@ pub(crate) fn load_multiconductor_source(
     source: powerio_core::Source,
     format: Option<&str>,
 ) -> Result<powerio_core::PioModule<powerio_dist::MulticonductorNetwork>, powerio_core::Error> {
-    powerio_dist::parse(declare_format(source, format)?)
+    powerio::dist::parse(declare_format(source, format)?)
 }
 
 pub(crate) fn load_multiconductor_memory(
@@ -159,5 +159,24 @@ pub(crate) fn load_multiconductor_memory(
     format: &str,
 ) -> Result<powerio_core::PioModule<powerio_dist::MulticonductorNetwork>, powerio_core::Error> {
     let source = powerio_core::Source::from_memory("<memory>", text.as_bytes().to_vec())?;
-    powerio_dist::parse(declare_format(source, Some(format))?)
+    powerio::dist::parse(declare_format(source, Some(format))?)
+}
+
+/// Dispatch formats shared by both model families through their owning adapter.
+pub(crate) fn parse_balanced_source(
+    source: powerio_core::Source,
+) -> Result<powerio_core::PioModule<BalancedNetwork>, powerio_core::Error> {
+    let sincal = match source.format() {
+        Some(f) => {
+            matches!(
+                powerio_tx::format::routing::parse_transmission_format(f.as_str()),
+                Some(powerio_tx::format::routing::TransmissionFormat::SincalBalanced)
+            ) || f.as_str().eq_ignore_ascii_case("sincal")
+        }
+        None => source.name().to_ascii_lowercase().ends_with(".sinx"),
+    };
+    if sincal {
+        return powerio::tnd::formats::sincal::parse_balanced(source);
+    }
+    powerio_tx::parse(source)
 }
