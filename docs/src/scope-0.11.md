@@ -16,15 +16,19 @@
   IEEE Common Data Format are parse only, though a complete `AcScucSolution`
   does emit the official GO Challenge 3 solution file.
 - PowerIO does not solve anything; instances feed external solvers.
+- Transient-stability `.dyr` files parse into a loss-preserving `DynamicCase`
+  and pair with a steady-state `BalancedNetwork` through `DynamicStudy`. The
+  current link check validates bus references only; model-specific device
+  schemas, typed machine/control views, cross-format dynamics conversion, and
+  PowerWorld AUX dynamics views remain future work. See [Dynamics and DYR](dynamics.md).
 - Balanced to multiconductor construction, load linearized multiconductor
   admittance from an operating point, and a general multi period planning
-  instance are waiting on a later release, and dynamic simulation data has no
-  representation.
+  instance are waiting on a later release.
 - The multiconductor to balanced transformation is Rust and Python only.
   Multiconductor admittance assembly,
   `powerio_matrix::calc_multiconductor_admittance_matrix`, is Rust only.
-- Only the MATPOWER and PSS/E readers attach source spans, marking the record
-  each finding is about. Findings from the other readers, from
+- Only the MATPOWER, PSS/E RAW, UCTE-DEF, and IEEE CDF readers attach source
+  spans, marking the record each finding is about. Findings from the other readers, from
   transformations, and from writers have no byte range, and the text rendering
   of a diagnostic is still `CODE: message`.
 - There is no one call `convert` in the library; you compose `parse` with
@@ -54,9 +58,9 @@
 One PowerIO release version covers the Rust crates, the Python distribution,
 and PowerIO.jl. The boundaries checked independently are:
 
-| Boundary | Value at 0.11.1 | Checked where | Moves when |
+| Boundary | Value in 0.11 | Checked where | Moves when |
 |---|---|---|---|
-| PowerIO release | 0.11.1 | the manifests, `powerio::VERSION`, `powerio.versions()`, `pio_version` | every release |
+| PowerIO release | 0.11.x | the manifests, `powerio::VERSION`, `powerio.versions()`, `pio_version` | every release |
 | C ABI | 7 | the `pio_abi_version` handshake at load | an existing C signature or documented behavior changes |
 | PowerIO IR version | 2, unchanged | the document header, `powerio::IR_VERSION`, `powerio::IR_MIN_VERSION` | an existing representation changes incompatibly |
 | Rust toolchain | 1.88 | `rust-version` in the workspace manifest, checked by CI | a dependency in the locked graph requires a newer compiler |

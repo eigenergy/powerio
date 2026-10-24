@@ -27,6 +27,9 @@
 //! # Ok::<(), powerio_core::Error>(())
 //! ```
 //!
+//! SINCAL adapters are provided by `powerio_tnd::formats::sincal` and the
+//! `powerio` facade. This model crate is independent of SQLite and integration.
+//!
 //! # Fidelity rules
 //!
 //! Emitting to the retained source format returns the original bytes. Cross

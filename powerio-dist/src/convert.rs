@@ -366,18 +366,22 @@ pub fn classify_distribution_json(text: &str) -> crate::Result<DistTargetFormat>
 pub fn parse(
     source: powerio_core::Source,
 ) -> std::result::Result<powerio_core::PioModule<MulticonductorNetwork>, powerio_core::Error> {
+    if source
+        .format()
+        .is_some_and(|f| is_sincal_multiconductor_token(f.as_str()))
+    {
+        return Err(sincal_feature_disabled(&source));
+    }
     let selected = source
         .format()
         .and_then(|id| parse_dist_target_format(id.as_str()));
-    let inferred_glm = source.format().is_none()
+    if matches!(
+        selected,
+        Some(DistTargetFormat::Gridlabd | DistTargetFormat::GridlabdArras)
+    ) || (source.format().is_none()
         && std::path::Path::new(source.name())
             .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("glm"));
-    if inferred_glm
-        || matches!(
-            selected,
-            Some(DistTargetFormat::Gridlabd | DistTargetFormat::GridlabdArras)
-        )
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("glm")))
     {
         let dialect = if selected == Some(DistTargetFormat::GridlabdArras) {
             crate::glm::GlmDialect::Arras4_3
@@ -404,11 +408,12 @@ pub fn parse(
             };
             let mut module =
                 powerio_core::PioModule::parsed(network, source, warnings.into_records())?;
-            if let Some(absolute_dependency) = dss_replay {
+            if let Some(replay) = dss_replay {
                 module.insert_extension(
                     "org.powerio.opendss",
                     serde_json::json!({
-                        "version": 1, "absolute_dependency": absolute_dependency,
+                        "version": 1, "absolute_dependency": replay.absolute_dependency,
+                        "dependencies": replay.dependencies.iter().map(powerio_core::SourceId::as_str).collect::<Vec<_>>(),
                     }),
                 )?;
             }
@@ -429,7 +434,7 @@ pub fn parse(
 fn parse_to_network(
     source: &powerio_core::Source,
     warnings: &mut crate::collect::Diagnostics,
-    dss_replay: &mut Option<bool>,
+    dss_replay: &mut Option<crate::dss::read::ReplayContext>,
 ) -> crate::Result<(MulticonductorNetwork, DistTargetFormat)> {
     let declared = source
         .format()
@@ -529,6 +534,23 @@ impl DistTargetFormat {
     }
 }
 
+/// Whether `name` spells the explicit conductor-resolved SINCAL profile.
+pub(crate) fn is_sincal_multiconductor_token(name: &str) -> bool {
+    name.chars()
+        .filter(|c| !matches!(c, '-' | '_' | ' '))
+        .collect::<String>()
+        .eq_ignore_ascii_case("sincalmulticonductor")
+}
+
+/// The refusal a SINCAL source meets in a build without the `sincal` feature.
+fn sincal_feature_disabled(source: &powerio_core::Source) -> powerio_core::Error {
+    powerio_core::Error::new(
+        &crate::diagnostics::codes::REQUEST_SINCAL_MULTICONDUCTOR_FEATURE_DISABLED,
+        "SINCAL adapters live in powerio-tnd; use powerio with its `sincal` feature or powerio_tnd::formats::sincal",
+    )
+    .with_source(source.clone())
+}
+
 /// Prepare exact retained-source text or validated canonical output.
 pub(crate) fn emit_text_with_options(
     module: &powerio_core::PioModule<MulticonductorNetwork>,
@@ -541,7 +563,7 @@ pub(crate) fn emit_text_with_options(
     ) {
         return crate::glm::emit_glm_text(module.value());
     }
-    let output = if options.is_default_for(format)
+    let mut output = if options.is_default_for(format)
         && let Some(text) = echo_text(module, format)
     {
         TextEmission::faithful(text)
@@ -552,6 +574,11 @@ pub(crate) fn emit_text_with_options(
         }
         emit_value_text_with_options(module.value(), format, options)?
     };
+    powerio_core::attach_retention_details(
+        module.diagnostics(),
+        &mut output.diagnostics,
+        "EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED",
+    )?;
     Ok(output)
 }
 
@@ -603,6 +630,12 @@ pub(crate) fn emit_value_text_with_options(
             format!("{} component point(s) dropped: {} cannot carry their attachment, partial-axis and datum semantics",
                 net.component_locations().len(), format.name()));
     }
+    if *net.source_format() == Some(DistSourceFormat::Sincal) {
+        conv.push(
+            &crate::diagnostics::codes::EMIT_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_OMITTED,
+            "Native SINCAL source-only data are omitted from the typed electrical conversion.",
+        );
+    }
     // No distribution format carries line routes; report the loss the
     // way bus locations already do (`.pio.json` keeps them).
     let routed = net
@@ -645,6 +678,9 @@ pub(crate) fn emit_value_text(
 /// byte exactly and are refused. Fresh, edited, IR-restored and cross-profile
 /// modules write canonical `case.glm`; [`crate::glm::emit_canonical`] directly
 /// writes a single file from a network value.
+/// commits as `case.dss`, and generated companion files commit beside it.
+/// An unchanged multi-file DSS project retains its paths and bytes beneath
+/// `source/`; `case.dss` redirects to its entry file.
 ///
 /// # Errors
 /// Unsupported electrical features, nonportable retained projects, or the

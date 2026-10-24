@@ -22,6 +22,7 @@ digraph powerio_architecture {
     "powerio-cli" [label = "powerio-cli\nCLI + TUI"];
     "powerio-capi" [label = "powerio-capi\nC ABI 7 (Julia, C, C++)"];
     "powerio-py" [label = "powerio-py\nPython package + MCP"];
+    "powerio-wasm" [label = "powerio-wasm\nbrowser conversion"];
 
     powerio [label = "powerio (facade)\nparse, emit, serialize, deserialize,\nPioValue"];
 
@@ -32,9 +33,13 @@ digraph powerio_architecture {
     "powerio-dist" [label = "powerio-dist\nMulticonductorNetwork\n+ OpenDSS, PMD, BMOPF"];
 
     "powerio-core" [label = "powerio-core\nSource, Diagnostic, Error,\nPioModule<T>, series, output"];
+    "powerio-tnd" [label = "powerio-tnd\nIntegratedNetwork + transforms\nSINCAL adapters"];
 
     "powerio-tx" -> "powerio-core";
+    "powerio-tnd" -> "powerio-tx";
+    "powerio-tnd" -> "powerio-dist";
     "powerio-dist" -> "powerio-core";
+    "powerio-tnd" -> "powerio-core";
     "powerio-prob" -> "powerio-core";
     "powerio-prob" -> "powerio-tx";
     "powerio-prob" -> "powerio-dist";
@@ -43,6 +48,7 @@ digraph powerio_architecture {
     "powerio-matrix" -> "powerio-dist";
     "powerio-matrix" -> "powerio-prob";
     powerio -> "powerio-core";
+    powerio -> "powerio-tnd";
     powerio -> "powerio-tx";
     powerio -> "powerio-dist";
     powerio -> "powerio-prob";
@@ -50,6 +56,7 @@ digraph powerio_architecture {
     "powerio-cli" -> powerio;
     "powerio-capi" -> powerio;
     "powerio-py" -> powerio;
+    "powerio-wasm" -> powerio;
 
     solvers -> "powerio-prob" [label = "consume instances", style = dashed];
     gridfm_ml -> "powerio-matrix" [label = "Parquet datasets", style = dashed];

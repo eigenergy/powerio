@@ -16,6 +16,7 @@ categories = ["science", "parsing"]
 all-features = true
 
 [features]
+default = []
 schema = ["dep:schemars"]
 
 [dependencies]
@@ -33,7 +34,10 @@ uuid.workspace = true
 memchr = "2.4"
 regex = "1"
 
+
 [dev-dependencies]
+sha2 = "0.10"
+zip.workspace = true
 # Draft 2020-12 validation against the vendored BMOPF schema in tests.
 jsonschema = { version = "0.56", default-features = false }
 tempfile = "3"

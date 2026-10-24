@@ -86,13 +86,21 @@ const TYPED_DSS_CLASSES: &[&str] = &[
 /// the source's acquisition policy; see
 /// [`parse_raw_from_source`](super::raw::parse_raw_from_source) for the
 /// confinement rules.
+pub(crate) struct ReplayContext {
+    pub absolute_dependency: bool,
+    pub dependencies: Vec<powerio_core::SourceId>,
+}
+
 pub(crate) fn parse_dss_collecting(
     source: &powerio_core::Source,
     diags: &mut crate::collect::Diagnostics,
-    replay: &mut Option<bool>,
+    replay: &mut Option<ReplayContext>,
 ) -> Result<MulticonductorNetwork> {
     let raw = super::raw::parse_raw_from_source(source)?;
-    *replay = Some(raw.absolute_dependency);
+    *replay = Some(ReplayContext {
+        absolute_dependency: raw.absolute_dependency,
+        dependencies: raw.dependencies.clone(),
+    });
     let (net, found) = snapshot_network(&raw);
     let invalid = found.iter().any(|d| {
         d.severity() == powerio_core::DiagnosticSeverity::Error

@@ -10,12 +10,8 @@ CIM. It reads BMOPF schema 0.1.0 and 0.2.0 and writes 0.2.0. Distribution CIM
 release that GridAPPS-D and CIMHub exchange, read from one document or a
 directory and written as one document.
 
-Emitting back to the source format reproduces the retained bytes; emitting to
-a different format reports the fields the target cannot represent. The DSS
-reader expands OpenDSS class defaults into explicit model values and remembers
-which ones came from defaults, which is why BMOPF output has explicit values
-for those fields. The generated [conversion matrix](docs/conversion-matrix.md)
-shows the behavior for each fixture.
+SINCAL profiles are provided by `powerio-tnd` and the `powerio` facade.
+This crate owns the multiconductor model and its distribution formats.
 
 ```rust
 let source = powerio_core::Source::open("feeder.dss")?;
