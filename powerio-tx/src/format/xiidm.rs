@@ -7989,6 +7989,8 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
     for message in converter_model_losses {
         diagnostics.push(&codes::EMIT_XIIDM.field_dropped, message);
     }
+    super::warn_winding_rating_sets(&codes::EMIT_XIIDM, "XIIDM", network, &mut diagnostics);
+    super::warn_winding_status_collapsed(&codes::EMIT_XIIDM, "XIIDM", network, &mut diagnostics);
     validate_xiidm_hvdc_emission(network)?;
     let metadata = network.case_metadata();
     let case_date = metadata.case_date.as_deref().unwrap_or_else(|| {

@@ -77,12 +77,6 @@ test = false
 bench = false
 
 [[bin]]
-name = "glm_source"
-path = "fuzz_targets/glm_source.rs"
-test = false
-bench = false
-
-[[bin]]
 name = "pmd_json"
 path = "fuzz_targets/pmd_json.rs"
 test = false
@@ -119,6 +113,30 @@ bench = false
 [[bin]]
 name = "ucte"
 path = "fuzz_targets/ucte.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "ieee_cdf"
+path = "fuzz_targets/ieee_cdf.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "rawx"
+path = "fuzz_targets/rawx.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "psse_dyr"
+path = "fuzz_targets/psse_dyr.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "glm_source"
+path = "fuzz_targets/glm_source.rs"
 test = false
 bench = false
 
