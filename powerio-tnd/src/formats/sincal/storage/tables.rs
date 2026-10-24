@@ -124,8 +124,9 @@ impl TableRecords {
             || self.transport != "access-mdbtools"
             || self.source.name.is_empty()
             || self.source.name.len() > 1024
+            // The MDB itself is bounded by the core primary-file limit, and
+            // verify_source binds this declared size to its exact length.
             || self.source.bytes == 0
-            || self.source.bytes > 256 * 1024 * 1024
             || self.source.sha256.len() != 64
             || !self.source.sha256.bytes().all(|c| c.is_ascii_hexdigit())
             || self.tools.len() > 8
@@ -262,6 +263,20 @@ mod tests {
                 "rows":[[1,0.0,"0"],[2,null,""]]}],
             "excluded_tables":["ULFNodeResult"],"absent_requested_tables":["LineSeg"]
         })
+    }
+
+    #[test]
+    fn a_large_declared_mdb_is_bounded_by_the_primary_limit_not_a_record_cap() {
+        // A 300 MiB MDB passes the default 1 GiB primary limit; the record
+        // only has to state its exact length, which verify_source checks.
+        let mut doc = document();
+        doc["source"]["bytes"] = serde_json::json!(300_u64 << 20);
+        let records = TableRecords::decode(&serde_json::to_vec(&doc).unwrap()).unwrap();
+        assert!(
+            records
+                .verify_source(b"\0\x01\0\0Standard Jet DB\0")
+                .is_err()
+        );
     }
 
     #[test]
