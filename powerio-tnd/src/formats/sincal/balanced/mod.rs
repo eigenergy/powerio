@@ -24,6 +24,54 @@ use rows::{NativeRow, get, table};
 use settings::StaticProfiles;
 use std::collections::BTreeMap;
 
+/// Refuse a line with `LineSeg` sections in the selected variant. A section
+/// carries its own impedance, so the `Line` row alone does not describe the
+/// line, as the multiconductor reader also refuses. A project without the
+/// table has no sections; a view in its place is not native storage.
+fn refuse_segmented_lines(db: &DatabaseSnapshot) -> Result<()> {
+    let kind: Option<String> = db
+        .connection
+        .query_row(
+            "SELECT type FROM pragma_table_list WHERE schema='main' AND name='LineSeg'",
+            [],
+            |row| row.get(0),
+        )
+        .map(Some)
+        .or_else(|cause| match cause {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            cause => Err(cause),
+        })
+        .map_err(error)?;
+    if kind.is_none() {
+        return Ok(());
+    }
+    crate::formats::sincal::storage::require_table(
+        &db.connection,
+        "LineSeg",
+        &["Line_ID", "Variant_ID"],
+    )
+    .map_err(error)?;
+    let mut statement = db
+        .connection
+        .prepare("SELECT DISTINCT Line_ID FROM LineSeg WHERE Variant_ID=?1")
+        .map_err(error)?;
+    let segmented: std::collections::BTreeSet<i64> = statement
+        .query_map([db.variant], |row| row.get(0))
+        .map_err(error)?
+        .collect::<rusqlite::Result<_>>()
+        .map_err(error)?;
+    match db
+        .elements
+        .iter()
+        .find(|(id, kind)| kind.as_str() == "Line" && segmented.contains(id))
+    {
+        Some((id, _)) => Err(error(format!(
+            "Line[{id}]: line segments require explicit assembly"
+        ))),
+        None => Ok(()),
+    }
+}
+
 fn error(message: impl std::fmt::Display) -> powerio_tx::Error {
     powerio_tx::Error::FormatRead {
         format: "sincal",
@@ -174,6 +222,7 @@ fn read_elements(
             data.insert(kind, records);
         }
     }
+    refuse_segmented_lines(db)?;
     for (&id, kind) in &db.elements {
         let element = get(&elements, id, "Element")?;
         if element.integer("Flag_Input")? & 2 == 0 {

@@ -76,6 +76,27 @@ fn modern_schemas_apply_the_voltage_level_line_temperature() {
 }
 
 #[test]
+fn line_sections_are_refused_rather_than_read_from_the_line_row() {
+    let error = read_balanced_snapshot(
+        &native(
+            "INSERT INTO LineSeg (LineSeg_ID, Line_ID, Variant_ID) \
+             SELECT 1, Element_ID, Variant_ID FROM Line ORDER BY Element_ID LIMIT 1",
+        ),
+        "segmented",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("line segments require explicit assembly"),
+        "{error}"
+    );
+    // Legacy rename leaves the project's own views untouched.
+    let view = "PRAGMA legacy_alter_table=ON; ALTER TABLE LineSeg RENAME TO Stored; \
+                CREATE VIEW LineSeg AS SELECT * FROM Stored";
+    assert!(read_balanced_snapshot(&native(view), "view").is_err());
+}
+
+#[test]
 fn errors_identify_required_input_instead_of_returning_partial_networks() {
     for (sql, field) in [
         (
