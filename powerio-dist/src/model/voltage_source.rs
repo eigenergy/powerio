@@ -1,12 +1,14 @@
-use serde::{Deserialize, Serialize, Serializer};
+use std::fmt;
+
+use serde::de::{Error as _, IgnoredAny, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::Extras;
 
 /// An ideal source prescribing terminal voltages relative to earth or one
 /// explicit terminal on the same bus. A reference terminal is a conductor,
 /// not an implicit grounding instruction.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(try_from = "SourceWire")]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct VoltageSource {
     pub name: String,
@@ -58,8 +60,9 @@ impl VoltageSource {
 // A new source has a tagged wrapper, so a historical reader cannot accept it
 // while ignoring essential physics: its required name/bus/phasor fields are
 // absent at the wrapper level. This works recursively in every IR document.
-#[derive(Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg(feature = "schema")]
+#[derive(schemars::JsonSchema)]
+#[allow(dead_code)] // The body is only used to generate the schema.
 struct SourceFields {
     name: String,
     bus: String,
@@ -73,16 +76,12 @@ struct SourceFields {
     energy_cost_rate: Option<Vec<f64>>,
     extras: Extras,
     #[serde(flatten)]
-    #[cfg_attr(feature = "schema", schemars(skip))]
+    #[schemars(skip)]
     unknown: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
-#[derive(Deserialize)]
-struct ReferencedSourceFields {
-    #[serde(flatten)]
-    source: SourceFields,
-    reference_terminal: String,
-}
+#[cfg(feature = "schema")]
+struct ReferencedSourceFields;
 
 #[cfg(feature = "schema")]
 impl schemars::JsonSchema for ReferencedSourceFields {
@@ -109,8 +108,9 @@ impl schemars::JsonSchema for ReferencedSourceFields {
     }
 }
 
-#[derive(Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg(feature = "schema")]
+#[derive(schemars::JsonSchema)]
+#[allow(dead_code)] // The payload is only used to generate the schema.
 #[serde(tag = "type", content = "value")]
 enum ReferencedSourceWire {
     #[serde(rename = "powerio.ReferencedVoltageSource")]
@@ -118,41 +118,141 @@ enum ReferencedSourceWire {
 }
 
 #[derive(Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(untagged)]
-enum SourceWire {
-    Referenced(ReferencedSourceWire),
-    Earth(SourceFields),
+enum ReferencedType {
+    #[serde(rename = "powerio.ReferencedVoltageSource")]
+    Referenced,
 }
 
-impl TryFrom<SourceWire> for VoltageSource {
-    type Error = String;
+/// The referenced record's body: every historical field plus the reference.
+#[derive(Deserialize)]
+struct ReferencedBody {
+    name: String,
+    bus: String,
+    terminal_map: Vec<String>,
+    v_magnitude: Vec<f64>,
+    v_angle: Vec<f64>,
+    #[serde(default)]
+    energy_cost_rate: Option<Vec<f64>>,
+    extras: Extras,
+    reference_terminal: String,
+}
 
-    fn try_from(wire: SourceWire) -> Result<Self, Self::Error> {
-        let (fields, reference_terminal) = match wire {
-            SourceWire::Earth(fields) => {
-                if ["reference_terminal", "type", "value"]
-                    .iter()
-                    .any(|key| fields.unknown.contains_key(*key))
-                {
-                    return Err("source reference semantics require a powerio.ReferencedVoltageSource record".into());
+#[derive(Deserialize)]
+#[serde(field_identifier, rename_all = "snake_case")]
+enum Field {
+    Name,
+    Bus,
+    TerminalMap,
+    VMagnitude,
+    VAngle,
+    EnergyCostRate,
+    Extras,
+    ReferenceTerminal,
+    Type,
+    Value,
+    #[serde(other)]
+    Other,
+}
+
+impl<'de> Deserialize<'de> for VoltageSource {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct SourceVisitor;
+        impl<'de> Visitor<'de> for SourceVisitor {
+            type Value = VoltageSource;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str(
+                    "an earth-referenced source or powerio.ReferencedVoltageSource record",
+                )
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut name = None;
+                let mut bus = None;
+                let mut terminal_map = None;
+                let mut v_magnitude = None;
+                let mut v_angle = None;
+                let mut energy_cost_rate = None;
+                let mut extras = None;
+                let mut kind = None;
+                let mut value: Option<ReferencedBody> = None;
+                let mut has_body = false;
+                // Decode directly: an untagged enum or a flattened body buffers
+                // the record, which loses the nonfinite float spellings.
+                macro_rules! read_field {
+                    ($field:ident) => {{
+                        if $field.is_some() {
+                            return Err(A::Error::duplicate_field(stringify!($field)));
+                        }
+                        $field = Some(map.next_value()?);
+                        has_body = true;
+                    }};
                 }
-                (fields, None)
+                while let Some(field) = map.next_key()? {
+                    match field {
+                        Field::Name => read_field!(name),
+                        Field::Bus => read_field!(bus),
+                        Field::TerminalMap => read_field!(terminal_map),
+                        Field::VMagnitude => read_field!(v_magnitude),
+                        Field::VAngle => read_field!(v_angle),
+                        Field::EnergyCostRate => read_field!(energy_cost_rate),
+                        Field::Extras => read_field!(extras),
+                        Field::ReferenceTerminal => {
+                            return Err(A::Error::custom(
+                                "source reference semantics require a powerio.ReferencedVoltageSource record",
+                            ));
+                        }
+                        Field::Type => {
+                            if kind.is_some() {
+                                return Err(A::Error::duplicate_field("type"));
+                            }
+                            kind = Some(map.next_value::<ReferencedType>()?);
+                        }
+                        Field::Value => {
+                            if value.is_some() {
+                                return Err(A::Error::duplicate_field("value"));
+                            }
+                            value = Some(map.next_value()?);
+                        }
+                        Field::Other => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                if kind.is_some() || value.is_some() {
+                    if has_body {
+                        return Err(A::Error::custom(
+                            "powerio.ReferencedVoltageSource requires all source fields inside value",
+                        ));
+                    }
+                    kind.ok_or_else(|| A::Error::missing_field("type"))?;
+                    let body = value.ok_or_else(|| A::Error::missing_field("value"))?;
+                    return Ok(VoltageSource {
+                        name: body.name,
+                        bus: body.bus,
+                        terminal_map: body.terminal_map,
+                        v_magnitude: body.v_magnitude,
+                        v_angle: body.v_angle,
+                        reference_terminal: Some(body.reference_terminal),
+                        energy_cost_rate: body.energy_cost_rate,
+                        extras: body.extras,
+                    });
+                }
+                Ok(VoltageSource {
+                    name: name.ok_or_else(|| A::Error::missing_field("name"))?,
+                    bus: bus.ok_or_else(|| A::Error::missing_field("bus"))?,
+                    terminal_map: terminal_map
+                        .ok_or_else(|| A::Error::missing_field("terminal_map"))?,
+                    v_magnitude: v_magnitude
+                        .ok_or_else(|| A::Error::missing_field("v_magnitude"))?,
+                    v_angle: v_angle.ok_or_else(|| A::Error::missing_field("v_angle"))?,
+                    reference_terminal: None,
+                    energy_cost_rate: energy_cost_rate.unwrap_or(None),
+                    extras: extras.ok_or_else(|| A::Error::missing_field("extras"))?,
+                })
             }
-            SourceWire::Referenced(ReferencedSourceWire::Referenced(fields)) => {
-                (fields.source, Some(fields.reference_terminal))
-            }
-        };
-        Ok(Self {
-            name: fields.name,
-            bus: fields.bus,
-            terminal_map: fields.terminal_map,
-            v_magnitude: fields.v_magnitude,
-            v_angle: fields.v_angle,
-            energy_cost_rate: fields.energy_cost_rate,
-            extras: fields.extras,
-            reference_terminal,
-        })
+        }
+        deserializer.deserialize_map(SourceVisitor)
     }
 }
 

@@ -8,7 +8,7 @@ use powerio_matrix::{AnalysisBranchSource, DcOperators};
 use powerio_prob::{DcPfInstance, merge_zero_impedance_buses};
 use powerio_tx::{
     BalancedNetwork, Branch, BranchSusceptanceFormula, Bus, BusId, BusType, Impedance,
-    Transformer3W, Winding,
+    SourceFormat, Transformer3W, Winding,
 };
 
 fn case9() -> BalancedNetwork {
@@ -600,6 +600,20 @@ fn two_reference_buses_in_one_island_carry_a_nonzero_flow() {
 }
 
 #[test]
+fn update_rejects_changed_branch_parameters() {
+    let net = case9();
+    let original = DcPfInstance::from_network(net.clone()).unwrap();
+    let mut operators = DcOperators::build(&original).unwrap();
+
+    let mut changed_network = net;
+    changed_network.branches_mut()[0].x *= 1.1;
+    let changed = DcPfInstance::from_network(changed_network).unwrap();
+
+    let error = operators.update(&changed).unwrap_err();
+    assert!(error.to_string().contains("branch parameters"), "{error}");
+}
+
+#[test]
 fn a_subnormal_reactance_is_refused_like_zero() {
     // x = 1e-160 divides to a finite 1e160 weight that would annihilate every
     // real branch at its buses; the divisibility floor refuses it the same
@@ -613,4 +627,185 @@ fn a_subnormal_reactance_is_refused_like_zero() {
         error.to_string().contains("merge_zero_impedance_buses"),
         "{error}"
     );
+}
+
+#[test]
+fn update_rejects_same_size_network_with_reordered_bus_axis() {
+    let net = case9();
+    let original = DcPfInstance::from_network(net.clone()).unwrap();
+    let mut operators = DcOperators::build(&original).unwrap();
+
+    // Equal dimensions do not imply equal bus axes: rows must retain their BusId identity.
+    let mut reordered = net;
+    reordered.buses_mut().swap(0, 1);
+    let changed = DcPfInstance::from_network(reordered).unwrap();
+
+    let error = operators.update(&changed).unwrap_err();
+    assert!(
+        error.to_string().contains("bus IDs or bus order"),
+        "{error}"
+    );
+}
+
+#[test]
+fn update_rejects_changed_network_base() {
+    let net = case9();
+    let original = DcPfInstance::from_network(net.clone()).unwrap();
+    let mut operators = DcOperators::build(&original).unwrap();
+
+    let mut changed_network = net;
+    *changed_network.base_mva_mut() *= 1.1;
+    let changed = DcPfInstance::from_network(changed_network).unwrap();
+
+    let error = operators.update(&changed).unwrap_err();
+    assert!(error.to_string().contains("network base"), "{error}");
+}
+
+#[test]
+fn update_rejects_changed_normalization_state() {
+    let net = case9();
+    let original = DcPfInstance::from_network(net.clone()).unwrap();
+    let mut operators = DcOperators::build(&original).unwrap();
+
+    // Isolate the representation-state guard: preserve all electrical values
+    // and flip only the metadata that changes the interpretation of phase shifts.
+    let mut changed_network = net;
+    *changed_network.source_format_mut() = SourceFormat::Normalized;
+    let changed = DcPfInstance::from_network(changed_network).unwrap();
+
+    let error = operators.update(&changed).unwrap_err();
+    assert!(error.to_string().contains("normalization"), "{error}");
+}
+
+#[test]
+fn update_rejects_changed_branch_susceptance_formula() {
+    let net = case9();
+    let original = DcPfInstance::from_network(net.clone()).unwrap();
+    let mut operators = DcOperators::build(&original).unwrap();
+
+    let changed = DcPfInstance::from_network(net)
+        .unwrap()
+        .with_branch_susceptance_formula(BranchSusceptanceFormula::ReactanceOnly);
+
+    let error = operators.update(&changed).unwrap_err();
+    assert!(error.to_string().contains("DC formula"), "{error}");
+}
+
+#[test]
+fn update_rejects_changed_branch_topology() {
+    let net = case9();
+    let original = DcPfInstance::from_network(net.clone()).unwrap();
+    let mut operators = DcOperators::build(&original).unwrap();
+
+    let mut changed_network = net;
+    // Keep matrix dimensions fixed but change which buses this branch joins.
+    changed_network.branches_mut()[0].to = BusId(5);
+    let changed = DcPfInstance::from_network(changed_network).unwrap();
+
+    let error = operators.update(&changed).unwrap_err();
+    assert!(error.to_string().contains("topology"), "{error}");
+}
+
+#[test]
+fn update_rejects_changed_three_winding_impedance() {
+    // Three-winding transformers are lowered into three analysis branches.
+    // Updating one winding's impedance must invalidate operators built from
+    // the prior lowered network, even though the source branch table is empty.
+    let mut net = BalancedNetwork::in_memory(
+        "three-winding-update",
+        100.0,
+        vec![
+            Bus::new(BusId(1), BusType::Ref, 230.0),
+            Bus::new(BusId(2), BusType::Pq, 230.0),
+            Bus::new(BusId(3), BusType::Pq, 230.0),
+        ],
+        Vec::new(),
+    );
+    let mut transformer = Transformer3W::new(
+        [
+            Winding::new(BusId(1)),
+            Winding::new(BusId(2)),
+            Winding::new(BusId(3)),
+        ],
+        [
+            Impedance::new(0.0, 0.2, 100.0),
+            Impedance::new(0.0, 0.3, 100.0),
+            Impedance::new(0.0, 0.4, 100.0),
+        ],
+    );
+    transformer.uid = Some("tx-main".into());
+    net.transformers_3w_mut().push(transformer);
+
+    let original = DcPfInstance::from_network(net.clone()).unwrap();
+    let mut operators = DcOperators::build(&original).unwrap();
+
+    let mut changed = net;
+    let mut transformer = Transformer3W::new(
+        [
+            Winding::new(BusId(1)),
+            Winding::new(BusId(2)),
+            Winding::new(BusId(3)),
+        ],
+        [
+            Impedance::new(0.0, 0.25, 100.0),
+            Impedance::new(0.0, 0.3, 100.0),
+            Impedance::new(0.0, 0.4, 100.0),
+        ],
+    );
+    transformer.uid = Some("tx-main".into());
+    changed.transformers_3w_mut()[0] = transformer;
+
+    let changed_instance = DcPfInstance::from_network(changed).unwrap();
+    let error = operators.update(&changed_instance).unwrap_err();
+    assert!(error.to_string().contains("branch parameters"), "{error}");
+}
+
+#[test]
+fn update_rejects_changed_three_winding_source_row_mapping_without_mutation() {
+    let buses = vec![
+        Bus::new(BusId(1), BusType::Ref, 230.0),
+        Bus::new(BusId(2), BusType::Pq, 230.0),
+        Bus::new(BusId(3), BusType::Pq, 230.0),
+    ];
+    let make_transformer = |uid: &str| {
+        let mut transformer = Transformer3W::new(
+            [
+                Winding::new(BusId(1)),
+                Winding::new(BusId(2)),
+                Winding::new(BusId(3)),
+            ],
+            [
+                Impedance::new(0.0, 0.2, 100.0),
+                Impedance::new(0.0, 0.3, 100.0),
+                Impedance::new(0.0, 0.4, 100.0),
+            ],
+        );
+        transformer.uid = Some(uid.into());
+        transformer
+    };
+
+    let mut original_net =
+        BalancedNetwork::in_memory("source-row-mapping", 100.0, buses.clone(), Vec::new());
+    original_net
+        .transformers_3w_mut()
+        .push(make_transformer("active"));
+    let original = DcPfInstance::from_network(original_net).unwrap();
+    let mut operators = DcOperators::build(&original).unwrap();
+    let sources_before = operators.analysis_sources().to_vec();
+    let susceptances_before = operators.calc_branch_susceptances().to_vec();
+
+    let mut changed_net =
+        BalancedNetwork::in_memory("source-row-mapping", 100.0, buses, Vec::new());
+    let mut offline = make_transformer("offline");
+    offline.in_service = false;
+    changed_net.transformers_3w_mut().push(offline);
+    changed_net
+        .transformers_3w_mut()
+        .push(make_transformer("active"));
+    let changed = DcPfInstance::from_network(changed_net).unwrap();
+
+    let error = operators.update(&changed).unwrap_err();
+    assert!(error.to_string().contains("source mappings"), "{error}");
+    assert_eq!(operators.analysis_sources(), sources_before);
+    assert_eq!(operators.calc_branch_susceptances(), susceptances_before);
 }

@@ -1,0 +1,74 @@
+{
+  "source_repository": "https://github.com/Truong812001/Unbalance-Power-Flow",
+  "revision": "1459d2be39b3c00aac195b1d6c01bcde16ee357f",
+  "source_path": "Update_finalV1_database/12bus/12busbc_files/database.db",
+  "source_sha256": "fda71fb98e45f118dcea90b61c78db855c822f9b2b8d594bf05bf101ca9dff9a",
+  "source_bytes": 2363392,
+  "license": "No license found; external research only, no redistribution",
+  "schema": 15.0,
+  "variant": 1,
+  "native_nodes": 12,
+  "native_elements": 45,
+  "single_phase_loads": 33,
+  "lines": 11,
+  "sources": 1,
+  "compared_phase_voltages": 36,
+  "maximum_opendss_voltage_error_v": 5.329433940073175e-06,
+  "opendss_voltage_tolerance_v": 0.001,
+  "maximum_historical_voltage_error_v": 0.08638924289046924,
+  "historical_tolerance_v": 0.692820323027551,
+  "historical_angle_alignment": "Fixed +30 degrees: stored phase-1 is -30 degrees while the typed source uses zero; all relative phase angles are retained.",
+  "historical_results_attest_current_inputs": false,
+  "typed_kcl_residual_a": 1.0007168963886996e-11,
+  "typed_iterations": 19,
+  "opendss_source_sequence_r_x_ohm": 1e-08,
+  "opendss_version": "DSS C-API Library version 0.14.5 revision 87d85c2622c8281b92255335bc7c09b11191b21d based on OpenDSS SVN 3723 [FPC 3.2.2] (64-bit build) MVMULT INCREMENTAL_Y CONTEXT_API PM 20240329033829; License Status: Open \nDSS-Python version: 0.15.7\nOpenDSSDirect.py version: 0.9.4",
+  "case_size_disposition": "New authentic asymmetric success; smaller than requested larger feeders, not counted as completion of that gate.",
+  "native_sincal_executed": false,
+  "compared_line_terminal_currents": 66,
+  "maximum_opendss_current_error_a": 2.414902089346971e-07,
+  "opendss_current_tolerance_a": 0.001,
+  "maximum_opendss_power_error_va": 0.0005635190366624837,
+  "opendss_power_tolerance_va": 0.1,
+  "native_phase_load_totals_w_var": [
+    [
+      1430000.0,
+      1085000.0
+    ],
+    [
+      1245000.0,
+      825000.0
+    ],
+    [
+      770000.0,
+      570000.0
+    ]
+  ],
+  "passed": true,
+  "reader_api": "public facade, native SQLite",
+  "reader_sha256": "387797011ea65b7cc75ecf8305735c332440f098aa35642712f6ef803628fd50",
+  "checker_sha256": "42263e272866278ad6d3819fd3c1327522a9204f8184bd3368c65064697eba33",
+  "generic_consumers": {
+    "generic_matrix_diagnostics": 0,
+    "power_flow_instance": true,
+    "source_echo": true,
+    "typed_ir": true
+  },
+  "negative_controls": [
+    {
+      "mutation": "missing-load",
+      "rejected": true,
+      "reason": "incomplete Load accounting"
+    },
+    {
+      "mutation": "wrong-line-impedance",
+      "rejected": true,
+      "reason": "independent voltage disagreement"
+    },
+    {
+      "mutation": "wrong-load-phase",
+      "rejected": true,
+      "reason": "independent voltage disagreement"
+    }
+  ]
+}

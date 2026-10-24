@@ -263,14 +263,18 @@ fn angle_difference_correction_matches_powermodels_and_can_be_disabled() {
     let exact = preparation_from_view(
         &raw,
         DcOpfOptions {
-            correct_angle_difference_bounds: false,
+            angle_difference_bounds: powerio_tx::AngleDifferenceBounds::Stated,
             ..DcOpfOptions::default()
         },
     )
     .unwrap();
     assert!(!exact.correct_angle_difference_bounds);
-    assert_close(exact.branches.angle_min[0], -2.0 * std::f64::consts::PI);
-    assert_close(exact.branches.angle_max[0], 2.0 * std::f64::consts::PI);
+    assert!(
+        exact.branches.angle_min[0].is_infinite() && exact.branches.angle_min[0].is_sign_negative()
+    );
+    assert!(
+        exact.branches.angle_max[0].is_infinite() && exact.branches.angle_max[0].is_sign_positive()
+    );
 
     let normalized = network.to_normalized().unwrap();
     let normalized = IndexedNetwork::new(&normalized);
@@ -295,6 +299,120 @@ fn angle_difference_correction_matches_powermodels_and_can_be_disabled() {
     assert_eq!(
         correct_angle_difference_bounds(80.0_f64.to_radians(), 100.0_f64.to_radians()),
         (-POWER_MODELS_ANGLE_BOUND_PAD, POWER_MODELS_ANGLE_BOUND_PAD)
+    );
+}
+
+#[test]
+fn angle_difference_bounds_select_a_pad_the_stated_bounds_or_none() {
+    use powerio_tx::{
+        AngleDifferenceBounds, POWER_MODELS_ANGLE_BOUND_PAD, correct_angle_difference_bounds,
+        stated_angle_difference_bounds,
+    };
+    let full = std::f64::consts::TAU;
+    let pad = POWER_MODELS_ANGLE_BOUND_PAD;
+
+    // The legacy flag selects the zero centered pad or the stated bounds.
+    let network = small_network();
+    let raw = IndexedNetwork::new(&network);
+    let default = preparation_from_view(&raw, DcOpfOptions::default()).unwrap();
+    assert_eq!(
+        default.angle_difference_bounds,
+        Some(AngleDifferenceBounds::PowerModelsPad)
+    );
+    assert_eq!(
+        AngleDifferenceBounds::from_correct_flag(true),
+        AngleDifferenceBounds::PowerModelsPad
+    );
+    assert_eq!(
+        AngleDifferenceBounds::from_correct_flag(false),
+        AngleDifferenceBounds::Stated
+    );
+    let stated = preparation_from_view(
+        &raw,
+        DcOpfOptions {
+            angle_difference_bounds: AngleDifferenceBounds::Stated,
+            ..DcOpfOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(!stated.correct_angle_difference_bounds);
+    assert!(
+        stated.branches.angle_min[0].is_infinite()
+            && stated.branches.angle_min[0].is_sign_negative()
+    );
+    assert!(
+        stated.branches.angle_max[0].is_infinite()
+            && stated.branches.angle_max[0].is_sign_positive()
+    );
+
+    let mut bounded = network.clone();
+    bounded.branches_mut()[0].angmin = -30.0;
+    bounded.branches_mut()[0].angmax = 30.0;
+    let unbounded = preparation_from_view(
+        &IndexedNetwork::new(&bounded),
+        DcOpfOptions {
+            angle_difference_bounds: AngleDifferenceBounds::None,
+            ..DcOpfOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(!unbounded.correct_angle_difference_bounds);
+    assert!(
+        unbounded.branches.angle_min[0].is_infinite()
+            && unbounded.branches.angle_min[0].is_sign_negative()
+    );
+    assert!(
+        unbounded.branches.angle_max[0].is_infinite()
+            && unbounded.branches.angle_max[0].is_sign_positive()
+    );
+
+    // The MATPOWER 0/0 spelling states no constraint, which the stated form
+    // reads as the widest window and PowerModels pads.
+    assert_eq!(
+        stated_angle_difference_bounds(0.0, 0.0),
+        (f64::NEG_INFINITY, f64::INFINITY)
+    );
+    assert_eq!(
+        stated_angle_difference_bounds(-45.0_f64.to_radians(), 30.0_f64.to_radians()),
+        (-45.0_f64.to_radians(), 30.0_f64.to_radians())
+    );
+    assert_eq!(
+        stated_angle_difference_bounds(-3.0 * full, 2.0 * full),
+        (f64::NEG_INFINITY, f64::INFINITY)
+    );
+
+    // PowerModelsPad ignores the phase shift, as PowerModels does; the
+    // shift centered pad follows it, and agrees on an unshifted branch.
+    let shift = 150.0_f64.to_radians();
+    assert_eq!(
+        AngleDifferenceBounds::PowerModelsPad.calc_bounds(0.0, 0.0, shift),
+        correct_angle_difference_bounds(0.0, 0.0)
+    );
+    let centered = AngleDifferenceBounds::ShiftCenteredPad;
+    assert_eq!(
+        centered.calc_bounds(0.0, 0.0, 0.0),
+        correct_angle_difference_bounds(0.0, 0.0)
+    );
+    assert_eq!(
+        centered.calc_bounds(0.0, 0.0, shift),
+        (shift - pad, shift + pad)
+    );
+    assert_eq!(
+        centered.calc_bounds(-full, full, shift),
+        (shift - pad, shift + pad)
+    );
+    // A usable stated side is kept.
+    assert_eq!(
+        centered.calc_bounds(-full, 30.0_f64.to_radians(), 0.0),
+        (-pad, 30.0_f64.to_radians())
+    );
+    assert_eq!(
+        AngleDifferenceBounds::None.calc_bounds(-0.1, 0.1, shift),
+        (f64::NEG_INFINITY, f64::INFINITY)
+    );
+    assert_eq!(
+        AngleDifferenceBounds::Stated.calc_bounds(0.0, 0.0, shift),
+        (f64::NEG_INFINITY, f64::INFINITY)
     );
 }
 
@@ -999,6 +1117,10 @@ mod matrix_tests {
         assert_eq!(manifest["cost_policy"]["mode"], "require");
         assert_eq!(manifest["build_options"]["skip_zero_impedance"], true);
         assert_eq!(manifest["build_options"]["synthesize_unrated_limits"], true);
+        assert_eq!(
+            manifest["build_options"]["angle_difference_bounds"],
+            "power_models_pad"
+        );
 
         let emitted_files: Vec<_> = manifest["files"]
             .as_array()

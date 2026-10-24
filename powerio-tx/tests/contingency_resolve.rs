@@ -573,3 +573,64 @@ fn every_reason_states_its_snake_case_name() {
         ]
     );
 }
+
+#[test]
+fn a_branch_statement_opens_a_system_switching_device() {
+    let mut net = resolve_network();
+    // A closed breaker '@Z' between buses 1 and 3, and an open disconnect '1'
+    // between buses 1 and 2, where a line already carries circuit '1'.
+    let mut breaker = powerio_tx::Switch::new(BusId(1), BusId(3), true);
+    breaker.uid = Some("1-3-@Z".to_owned());
+    breaker
+        .extras
+        .insert("psse_ckt".into(), serde_json::Value::from("@Z"));
+    let mut disconnect = powerio_tx::Switch::new(BusId(1), BusId(2), false);
+    disconnect.uid = Some("1-2-1".to_owned());
+    net.switches_mut().extend([breaker, disconnect]);
+
+    let index = PsseEquipmentIndex::new(&net);
+    assert_eq!(index.switch_ids(), ["@Z", "1"]);
+    assert_eq!(index.switch_rows(BusId(3), BusId(1), "@Z"), vec![0]);
+
+    let text = "\
+CONTINGENCY 'BREAKER'
+OPEN BRANCH FROM BUS 3 TO BUS 1 CIRCUIT '@Z'
+END
+CONTINGENCY 'LINE_FIRST'
+OPEN BRANCH FROM BUS 1 TO BUS 2 CIRCUIT '1'
+END
+CONTINGENCY 'NO_SWITCH'
+OPEN BRANCH FROM BUS 1 TO BUS 3 CIRCUIT '@Y'
+END
+END
+";
+    let set = ContingencySet::parse(text).expect("parse").set;
+    let resolution = set.resolve(&net);
+    assert_eq!(bound(&resolution, "BREAKER"), [("switch", 0, true)]);
+    let component = &case(&resolution, "BREAKER").components[0];
+    assert_eq!(identity(component).to_string(), "switch/1-3-@Z");
+    // A line carrying the circuit id answers before a switch does.
+    assert_eq!(bound(&resolution, "LINE_FIRST"), [("branch", 0, true)]);
+    assert_eq!(
+        case(&resolution, "NO_SWITCH").unresolved[0].reason,
+        UnresolvedReason::NoSuchBranch
+    );
+}
+
+#[test]
+fn a_switching_device_read_from_raw_resolves_by_its_circuit_id() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/psse/merge_v35.raw");
+    let text = std::fs::read_to_string(path)
+        .unwrap()
+        .replace("5, 1, '1', 0.0,", "5, 1, '@Z', 0.0,");
+    let net = helpers::parse_str(&text, "psse").unwrap().network;
+    assert_eq!(net.switches().len(), 1);
+
+    let set = ContingencySet::parse(
+        "CONTINGENCY 'BREAKER'\nOPEN BRANCH FROM BUS 1 TO BUS 5 CIRCUIT '@Z'\nEND\nEND\n",
+    )
+    .unwrap()
+    .set;
+    let resolution = set.resolve(&net);
+    assert_eq!(bound(&resolution, "BREAKER"), [("switch", 0, true)]);
+}

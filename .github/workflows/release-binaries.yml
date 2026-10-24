@@ -1,7 +1,8 @@
 name: Release binaries
 
-# Build the powerio-capi cdylib (with arrow, matrix, gridfm, dist, and prob
-# features) for the five platforms PowerIO.jl's Artifacts.toml covers, package
+# Build the powerio-capi cdylib with the release feature tuple. Only gridfm
+# enables code; ABI 7 exposes one fixed typed symbol set.
+# For the five platforms PowerIO.jl's Artifacts.toml covers, package
 # each as the artifact tarball that file references (lib/ or bin/ layout, Julia
 # platform triplet in the name), and attach them to the GitHub release on a
 # version tag. A workflow_dispatch run builds the same tarballs as workflow
@@ -78,7 +79,7 @@ jobs:
     - name: Build powerio-capi
       run: |
         cargo build -p powerio-capi --release \
-          --features arrow,matrix,gridfm,dist,prob
+          --features matrix,gridfm,dist,prob
     - name: Check out PowerIO.jl default branch
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
@@ -166,7 +167,7 @@ jobs:
           sudo apt-get install -y ${{ matrix.cross_gcc }} qemu-user
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
       - name: Build powerio-capi
-        run: cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob --target ${{ matrix.rust_target }}
+        run: cargo build -p powerio-capi --release --features matrix,gridfm,dist,prob --target ${{ matrix.rust_target }}
       # Artifact layout PowerIO.jl's _artifact_lib() resolves: the cdylib under
       # lib/ (bin/ on Windows, renamed to the lib-prefixed name BinaryBuilder
       # would produce), the C header under include/, licenses at the root.
@@ -204,7 +205,7 @@ jobs:
           version="$(cargo metadata --no-deps --format-version 1 \
             | jq -er '.packages[] | select(.name == "powerio-capi") | .version')"
           stage="stage/libpowerio_capi"
-          defs=(-DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PROB)
+          defs=(-DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PROB)
           case "${{ matrix.triplet }}" in
             x86_64-linux-gnu)
               # shellcheck disable=SC2016
@@ -255,7 +256,7 @@ jobs:
             -DevCmdArguments '-arch=x64 -host_arch=x64'
           $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
           $version = ($metadata.packages | Where-Object { $_.name -eq 'powerio-capi' }).version
-          $defines = @('/DPIO_ARROW', '/DPIO_MATRIX', '/DPIO_GRIDFM', '/DPIO_DIST', '/DPIO_PROB')
+          $defines = @('/DPIO_MATRIX', '/DPIO_GRIDFM', '/DPIO_DIST', '/DPIO_PROB')
           $importLib = Get-ChildItem target/${{ matrix.rust_target }}/release -Filter '*powerio_capi*.dll.lib' |
             Select-Object -First 1 -ExpandProperty FullName
           if (-not $importLib) { throw 'powerio-capi import library is missing' }

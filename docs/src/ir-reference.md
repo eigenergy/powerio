@@ -3,7 +3,7 @@
 This page lists every structural value type in the PowerIO IR, field by
 field: each field's type, unit, and sign convention, the invariant the
 deserializer or the constructors enforce, and what a reader uses when the
-field is absent. The generated schema at `docs/schema/pio-ir/2/0.11.6/schema.json`
+field is absent. The generated schema at `docs/schema/pio-ir/2/0.11.7/schema.json`
 is the machine form of the same definitions. To keep the two from drifting
 apart, `powerio/tests/ir_reference.rs` reads this page and checks in both
 directions that each table lists the same fields the schema defines for its
@@ -100,7 +100,7 @@ Schema definition: `BalancedNetwork`.
 | `name` | string | | | | required |
 | `base_mva` | float | MVA | | finite and positive | required |
 | `base_frequency` | float | Hz | | positive | 60 |
-| `source_format` | token | | | one of the format tokens (`matpower`, `psse`, `psse-rawx`, `powermodels-json`, `egret-json`, `powerworld`, `powerworld-pwb`, `pslf`, `pandapower-json`, `pypsa-csv`, `gridfm`, `goc3-json`, `surge-json`, `opfdata-json`, `xiidm`, `cgmes`, `in-memory`, `normalized`) | required |
+| `source_format` | token | | | one of the format tokens (`matpower`, `psse`, `psse-rawx`, `powermodels-json`, `egret-json`, `powerworld`, `powerworld-pwb`, `pslf`, `pandapower-json`, `pypsa-csv`, `gridfm`, `goc3-json`, `surge-json`, `opfdata-json`, `xiidm`, `jiidm`, `cgmes`, `ucte`, `ieee-cdf`, `sincal`, `in-memory`, `normalized`) | required |
 | `buses` | array of `Bus` | | | `id` unique | required |
 | `loads` | array of `Load` | | | `bus` names a bus | required |
 | `shunts` | array of `Shunt` | | | `bus` names a bus | required |
@@ -225,6 +225,19 @@ Schema definition: `Branch`.
 | `uid` | string or null | | | unique within `branches` | assigned at serialization |
 | `route` | array of `Location` or null | network coordinate space | | | null |
 | `extras` | object | | | | required |
+
+A transformer's impedance correction table rides in `extras`.
+`impedance_correction` holds `{table, variable, points}`. `variable` is
+`ratio` or `angle` (degrees), and each point is `{value, factor_re,
+factor_im}`, the complex factor that multiplies the nominal series impedance
+at that ratio or angle. A three winding transformer keeps three such entries,
+one per winding or `null`, and its factor scales that winding's star
+impedance. With `psse_zcod = 1`, entries 0/1/2 instead scale Z12/Z23/Z31,
+using the sole winding whose control mode is not fixed (regulation may be
+disabled). Ratio coordinates on a branch are in its effective t1/t2 tap
+units; three-winding ratio coordinates are bus-base per-unit winding taps. `impedance_correction_nominal` holds the nominal impedance once
+`apply_impedance_correction` has scaled it: `[r, x]` on a branch and the three
+pairwise `[r, x]` on a three winding transformer.
 
 Schema definition: `BranchCharging`.
 
@@ -423,9 +436,11 @@ Schema definition: `Switch`.
 ### Transformer3W
 
 Three windings joined at a star point; the indexed view star-lowers the
-record for matrix calculations.
+record for matrix calculations. Default per-winding service states use this
+body directly. Nondefault states use the tagged record described below, whose
+nested body has the same physical fields.
 
-Schema definition: `Transformer3W`.
+Schema definitions: `Transformer3W/anyOf/0`, `PartialTransformer3WFields`.
 
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
@@ -439,6 +454,32 @@ Schema definition: `Transformer3W`.
 | `in_service` | boolean | | | | required |
 | `uid` | string or null | | | unique within `transformers_3w` | assigned at serialization |
 | `extras` | object | | | | required |
+
+Two `extras` entries carry per winding data, in winding order. Each is present
+only when it differs from its default. `winding_in_service` holds three
+booleans; a winding that is out leaves the other two coupled through the star
+point, and an absent entry means every winding is in service.
+`winding_rating_sets` holds three arrays of `{name, rate_mva}` objects with the
+MVA ratings beyond `rate_a`, `rate_b`, and `rate_c`, named as in
+`Branch.rating_sets`.
+
+### PartialTransformer3W
+
+A nondefault winding state uses structural identity
+`"powerio.PartialTransformer3W"`, including when the whole transformer is off.
+The nested body requires `extras.winding_in_service` to contain exactly three
+booleans, not all true. An explicit all-false state is therefore also tagged.
+Older IR 2 readers reject this record because its required physical transformer
+fields are absent at the root. The body preserves all winding rows, identifiers,
+units, and extension data; no winding is dropped or assigned a fake impedance.
+Bare nondefault states and malformed tagged records are rejected.
+
+Schema definition: `PartialTransformer3WWire/oneOf/0`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `type` | string | | | exactly `"powerio.PartialTransformer3W"` | required |
+| `value` | object | | | complete transformer body above with nondefault winding flags | required |
 
 Schema definition: `Winding`.
 
@@ -616,7 +657,7 @@ Schema definitions: `MulticonductorNetwork/anyOf/0`, `MulticonductorNetworkBody`
 |---|---|---|---|---|---|
 | `name` | string or null | | | | null |
 | `base_frequency` | float | Hz | | positive | required |
-| `source_format` | token `dss`, `bmopf-json`, `pmd-json`, `cim-dist`, or null | | | | null |
+| `source_format` | token `dss`, `bmopf-json`, `pmd-json`, `cim-dist`, `sincal`, or null | | | | null |
 | `buses` | array of `DistBus` | | | `id` unique | required |
 | `linecodes` | array of `DistLineCode` | | | `name` unique | required |
 | `lines` | array of `DistLine` | | | `bus_from`, `bus_to` name buses; `linecode` names a line code | required |
