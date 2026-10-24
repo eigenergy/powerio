@@ -6,8 +6,6 @@
   transmission/distribution composition, cross-model transformations, and optional
   SINCAL adapters. The facade retains its existing format and binding APIs.
 
-- Restore Python `BalancedNetwork` panic conversion for methods and delegated
-  properties, preserving `PowerIOError` and its `BIND.PY.PANIC` diagnostic.
 - Store nondefault three-winding service states in a distinct nested IR record.
   Older readers reject that representation instead of silently energizing an
   inactive winding. Ordinary legacy all-on/all-off records keep their legacy layout;
@@ -27,8 +25,12 @@
 
 - Parse caller-supplied file trees entirely in memory, including PyPSA folders
   and OpenDSS projects with nested references.
-- Keep included files and their original paths when copying unchanged OpenDSS
-  projects.
+- An unchanged OpenDSS project that spans several files now writes back
+  exactly: `case.dss` is a one-line `Redirect` to `source/<entry>`, and the
+  project's files are copied under `source/` with their original paths.
+  0.11.5 wrote one canonical `case.dss` instead. Keep the `source/` tree with
+  `case.dss`; Python's `EmitResult.text` is `None` for such a result because it
+  holds several artifacts.
 - Discover grid format names, electrical families, and reader/writer capabilities
   through the Rust facade.
 - Add explicit angle-difference policies to DC OPF, AC OPF and AC power-flow
@@ -52,7 +54,9 @@
   Declared schematic views use Diagram space; other views remain Unknown.
   Ordered bends follow the native manual, and module extensions preserve view
   origin, dimensions, scale and optional CRS fields without transforming them.
-  Access acquisition can opt into graphics with `--include-graphics`.
+  The repository's Access acquisition helper,
+  `evals/sincal/import_access.py`, can opt into graphics with
+  `--include-graphics`; it is not a `powerio` CLI flag.
   IR and existing geo-layer extraction retain the mapped geometry.
 
 - Add the explicit `sincal-balanced` parser profile for schema-14.8/15.5/16.0 SQLite
