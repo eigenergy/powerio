@@ -240,6 +240,8 @@ pub fn write_experimental_balanced(net: &BalancedNetwork) -> Result<Experimental
     real(&mut settings, "f", net.base_frequency());
     real(&mut settings, "ull", net.buses()[0].vmin * 100.0);
     real(&mut settings, "uul", net.buses()[0].vmax * 100.0);
+    // The native 20 C defaults, stated so readback applies no correction.
+    real(&mut settings, "Temp_Cond", 20.0);
     tables.push("CalcParameter", settings);
     let buses = net
         .buses()
@@ -608,6 +610,8 @@ fn write_buses(
         integer(&mut level, "Flag_Volt", 1);
         real(&mut level, "Un", bus.base_kv);
         real(&mut level, "f", net.base_frequency());
+        real(&mut level, "Temp_Line", 20.0);
+        real(&mut level, "Temp_Cable", 20.0);
         tables.push("VoltageLevel", level);
         let mut node = row("Flag_Volt RefNode_ID Stp_ID Uul Ull");
         integer(&mut node, "Node_ID", id);

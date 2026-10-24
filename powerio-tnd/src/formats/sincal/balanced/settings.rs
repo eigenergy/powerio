@@ -44,7 +44,7 @@ pub(super) fn validate(
         "Scenario_ID",
         "Flag_UseScenario",
     ])?;
-    if settings.legacy() && settings.number("Temp_Cond")?.to_bits() != 20.0_f64.to_bits() {
+    if settings.number("Temp_Cond")?.to_bits() != 20.0_f64.to_bits() {
         return Err(settings.bad(
             "Temp_Cond",
             "calculation temperature override requires mapping",

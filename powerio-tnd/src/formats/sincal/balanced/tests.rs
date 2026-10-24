@@ -47,6 +47,35 @@ fn complete_authentic_simbench_case_preserves_every_element() {
 }
 
 #[test]
+fn modern_schemas_apply_the_voltage_level_line_temperature() {
+    // The 2014 line equations state no schema limit, and the multiconductor
+    // reader applies them in every schema; a 14.8 cable at 70 C is warmer.
+    let cool = read_balanced_snapshot(&native(""), "20C").unwrap();
+    let warm = read_balanced_snapshot(
+        &native("UPDATE VoltageLevel SET Temp_Cable=70; UPDATE Line SET alpha=0.004"),
+        "70C",
+    )
+    .unwrap();
+    let mut lines = 0;
+    for (a, b) in cool.branches().iter().zip(warm.branches()) {
+        if a.uid.as_deref() != Some("sincal:element:19") {
+            assert!((b.r / a.r - 1.2).abs() < 1e-12, "{:?}", a.uid);
+            lines += 1;
+        }
+    }
+    assert!(lines > 0);
+    for edit in [
+        "UPDATE CalcParameter SET Temp_Cond=80",
+        "UPDATE VoltageLevel SET Temp_Cable=NULL",
+    ] {
+        assert!(
+            read_balanced_snapshot(&native(edit), "x").is_err(),
+            "{edit}"
+        );
+    }
+}
+
+#[test]
 fn errors_identify_required_input_instead_of_returning_partial_networks() {
     for (sql, field) in [
         (

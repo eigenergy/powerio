@@ -70,30 +70,30 @@ pub(super) fn line(
     let parallel = row.positive("ParSys")?;
     let scale = finite(length / parallel / base_z, "line impedance base")?;
     let mut temperature_factor = 1.0;
-    let mut default_temperature = false;
-    if row.legacy() {
-        // The admitted native cable profile uses the voltage-level temperature.
-        // April2014 Input Data line equations; optional NULL defaults to20C.
-        default_temperature = level.is_null("Temp_Cable");
-        let temperature = if default_temperature {
-            20.0
-        } else {
-            level.number("Temp_Cable")?
-        };
-        if temperature.to_bits() != 20.0_f64.to_bits() {
-            temperature_factor = finite(
-                1.0 + row.number("alpha")? * (temperature - 20.0),
-                "line temperature",
-            )?;
-            if temperature_factor <= 0.0 {
-                return Err(row.bad("alpha", "nonpositive temperature factor"));
-            }
+    // The admitted native cable profile uses the voltage-level temperature
+    // (April 2014 Input Data line equations) in every schema, as the
+    // multiconductor reader does. Only schema 11.5's optional NULL defaults
+    // to 20 C; a newer schema must state it.
+    let default_temperature = row.legacy() && level.is_null("Temp_Cable");
+    let temperature = if default_temperature {
+        20.0
+    } else {
+        level.number("Temp_Cable")?
+    };
+    if temperature.to_bits() != 20.0_f64.to_bits() {
+        temperature_factor = finite(
+            1.0 + row.number("alpha")? * (temperature - 20.0),
+            "line temperature",
+        )?;
+        if temperature_factor <= 0.0 {
+            return Err(row.bad("alpha", "nonpositive temperature factor"));
         }
-        if row.positive("Un")? < kv(network, ports[0])
-            || level.positive("Un")?.to_bits() != kv(network, ports[0]).to_bits()
-        {
-            return Err(row.bad("Un", "line voltage level/rating mismatch"));
-        }
+    }
+    if row.legacy()
+        && (row.positive("Un")? < kv(network, ports[0])
+            || level.positive("Un")?.to_bits() != kv(network, ports[0]).to_bits())
+    {
+        return Err(row.bad("Un", "line voltage level/rating mismatch"));
     }
     let r = finite(
         row.nonnegative("r")? * row.positive("fr")? * temperature_factor * scale,
