@@ -51,6 +51,39 @@ pub fn write_surge_json(net: &BalancedNetwork) -> TextEmission {
         Value::Array(net.branches().iter().enumerate().map(branch_obj).collect()),
     );
 
+    // Surge's network profile has no three-winding transformer record. Report
+    // the specific equipment that cannot cross this format boundary rather
+    // than silently losing it (or emitting only an aggregate count).
+    if !net.transformers_3w().is_empty() {
+        let dropped = net
+            .transformers_3w()
+            .iter()
+            .enumerate()
+            .map(|(index, transformer)| {
+                let identity = transformer
+                    .name
+                    .as_deref()
+                    .filter(|name| !name.is_empty())
+                    .or(transformer.uid.as_deref())
+                    .map_or_else(|| format!("transformer {}", index + 1), str::to_owned);
+                format!(
+                    "{identity} (buses {}, {}, {})",
+                    transformer.windings[0].bus,
+                    transformer.windings[1].bus,
+                    transformer.windings[2].bus
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        warnings.push(
+            &F.record_dropped,
+            format!(
+                "{} 3-winding transformer(s) dropped: Surge JSON has no 3-winding transformer record; {dropped}",
+                net.transformers_3w().len()
+            ),
+        );
+    }
+
     let mut gen_counts: BTreeMap<BusId, usize> = BTreeMap::new();
     let mut generators = Vec::new();
     for generator in net.generators() {
@@ -1641,6 +1674,28 @@ mod tests {
         assert!((charging.b_fr - 0.2).abs() < EPS);
         assert!((charging.g_to - 0.3).abs() < EPS);
         assert!((charging.b_to - 0.4).abs() < EPS);
+    }
+
+    #[test]
+    fn reports_each_dropped_three_winding_transformer() {
+        let source = powerio_core::Source::from_memory(
+            "case3_3w_v33.raw",
+            include_bytes!("../../../tests/data/psse/case3_3w_v33.raw").to_vec(),
+        )
+        .unwrap();
+        let module = super::super::parse(source).unwrap();
+        assert_eq!(module.value().transformers_3w().len(), 1);
+
+        let emitted = write_surge_json(module.value());
+        let diagnostics = emitted.render_diagnostics();
+        assert!(
+            diagnostics.iter().any(|line| {
+                line.contains("EMIT.SURGE.RECORD_DROPPED")
+                    && line.contains("T3W")
+                    && line.contains("buses 1, 2, 3")
+            }),
+            "expected a record-loss diagnostic naming the dropped transformer, got {diagnostics:?}"
+        );
     }
 
     #[test]
