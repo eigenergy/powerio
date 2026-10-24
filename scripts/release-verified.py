@@ -103,17 +103,37 @@ def api(path, method="GET", data=None, missing_ok=False):
     return json.loads(result.stdout) if result.stdout.strip() else None
 
 
-def collection(path, key):
+def collection(path, key=None):
     result = []
     for page in range(1, 101):
         sep = "&" if "?" in path else "?"
-        batch = api(f"{path}{sep}per_page=100&page={page}")[key]
+        batch = api(f"{path}{sep}per_page=100&page={page}")
+        if key is not None:
+            batch = batch[key]
         result.extend(batch)
         if len(batch) < 100:
             return result
     raise ReleaseError(
         "Refusing an unexpectedly large API result; nothing was inferred."
     )
+
+
+def release_for_tag(tag):
+    """The draft or published release for tag, or None.
+
+    GET releases/tags/{tag} never returns a draft, so the draft this helper
+    publishes is found by listing releases.
+    """
+    matches = [
+        release
+        for release in collection(f"repos/{REPO}/releases")
+        if release["tag_name"] == tag
+    ]
+    require(
+        len(matches) <= 1,
+        f"Several releases claim {tag}; reconcile them manually.",
+    )
+    return matches[0] if matches else None
 
 
 def contents(repo, path, ref):
@@ -626,7 +646,7 @@ def main(argv=None):
         current is None or current == args.candidate,
         "Existing tag points elsewhere; refusing to move or replace it.",
     )
-    release = api(f"repos/{REPO}/releases/tags/{tag}", missing_ok=True)
+    release = release_for_tag(tag)
     if release is None or release["draft"]:
         require(
             api(f"repos/{JULIA_REPO}/branches/main")["commit"]["sha"]
@@ -664,7 +684,8 @@ def main(argv=None):
     deadline = time.monotonic() + args.timeout
     run = wait_for_tag_run(args.candidate, tag, deadline)
     print(f"All tagged source/build/packaged gates passed: {run['html_url']}")
-    release = api(f"repos/{REPO}/releases/tags/{tag}")
+    release = release_for_tag(tag)
+    require(release is not None, f"The tag build passed but no {tag} release exists.")
     validate_release(release, tag)
     require(
         tag_commit(tag) == args.candidate,
@@ -693,7 +714,7 @@ def main(argv=None):
             "PATCH",
             {"draft": False, "make_latest": "true"},
         )
-    release = api(f"repos/{REPO}/releases/tags/{tag}")
+    release = api(f"repos/{REPO}/releases/{release['id']}")
     validate_release(release, tag)
     require(
         not release["draft"] and release.get("published_at"),
