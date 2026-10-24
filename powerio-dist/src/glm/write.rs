@@ -126,6 +126,12 @@ pub(crate) fn emit_text(network: &MulticonductorNetwork) -> Result<TextEmission,
     writer.static_injections()?;
     writer.capacitor_shunts()?;
     writer.remaining_locations();
+    if *network.source_format() == Some(crate::DistSourceFormat::Sincal) {
+        writer.diagnostics.push(
+            &codes::EMIT_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_OMITTED,
+            "Native SINCAL source-only data are omitted from the typed electrical conversion.",
+        );
+    }
     Ok(TextEmission::new(
         writer.out,
         Vec::new(),

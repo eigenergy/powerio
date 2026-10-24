@@ -557,13 +557,12 @@ pub(crate) fn emit_text_with_options(
     format: DistTargetFormat,
     options: &EmitOptions,
 ) -> Result<TextEmission, powerio_core::Error> {
-    if matches!(
+    let mut output = if matches!(
         format,
         DistTargetFormat::Gridlabd | DistTargetFormat::GridlabdArras
     ) {
-        return crate::glm::emit_glm_text(module.value());
-    }
-    let mut output = if options.is_default_for(format)
+        crate::glm::emit_glm_text(module.value())?
+    } else if options.is_default_for(format)
         && let Some(text) = echo_text(module, format)
     {
         TextEmission::faithful(text)

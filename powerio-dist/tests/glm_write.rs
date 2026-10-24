@@ -381,3 +381,41 @@ fn zero_admittance_shunt_emits_no_fake_capacitor_rating() {
                 && p.point.longitude == Some(151.0))
     );
 }
+
+#[test]
+fn canonical_glm_reports_sincal_source_only_losses_on_both_entrypoints() {
+    let mut net = network();
+    *net.source_format_mut() = Some(powerio_dist::DistSourceFormat::Sincal);
+    let output = emit_canonical(&net, Destination::memory("out").unwrap()).unwrap();
+    let code = "EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED";
+    assert_eq!(
+        output
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code() == code)
+            .count(),
+        1
+    );
+    let text = "module powerflow; object node { name source; phases AN; bustype SWING; nominal_voltage 240; }\n";
+    let mut module = parse(
+        Source::from_memory("case.glm", text.as_bytes()).unwrap(),
+        PreprocessOptions::default(),
+    )
+    .unwrap();
+    *module.value_mut().source_format_mut() = Some(powerio_dist::DistSourceFormat::Sincal);
+    for format in [
+        powerio_dist::DistTargetFormat::Gridlabd,
+        powerio_dist::DistTargetFormat::GridlabdArras,
+    ] {
+        let output =
+            powerio_dist::emit(&module, format, Destination::memory("out").unwrap()).unwrap();
+        assert_eq!(
+            output
+                .diagnostics()
+                .iter()
+                .filter(|d| d.code() == code)
+                .count(),
+            1
+        );
+    }
+}
