@@ -10,6 +10,7 @@ use powerio_tx::format::routing::TransmissionFormat;
 /// Electrical model family accepted by a grid format.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum NetworkFamily {
     Transmission,
     Distribution,
@@ -17,6 +18,7 @@ pub enum NetworkFamily {
 
 /// A discoverable grid format with its reader and writer capabilities.
 #[derive(Clone, Copy, Debug, serde::Serialize)]
+#[non_exhaustive]
 pub struct GridFormatInfo {
     pub format: FormatInfo,
     pub label: &'static str,
