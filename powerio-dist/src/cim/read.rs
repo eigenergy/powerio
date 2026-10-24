@@ -15,9 +15,13 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::f64::consts::PI;
+use std::rc::Rc;
 
 use super::xml::{CimDocument, CimObject, PropValue, parse_cimxml};
-use super::{sequence_to_phase, wrap_angle, z_base};
+use super::{
+    LEAKAGE_READING, no_load_test_pct, sequence_to_phase, short_circuit_test_pct, wrap_angle,
+    z_base,
+};
 use crate::diagnostics::{Diagnostic, DiagnosticInfo, codes as C};
 use crate::model::{
     ConductorMatrix, Configuration, DistBus, DistLine, DistLineCode, DistLoad, DistShunt,
@@ -47,7 +51,7 @@ pub(super) const SWITCH_CLASSES: [&str; 8] = [
 
 /// Classes the mapping reads. An object of any other class is reported as
 /// unmapped, per class.
-const MAPPED_CLASSES: [&str; 20] = [
+const MAPPED_CLASSES: [&str; 23] = [
     "ConnectivityNode",
     "Terminal",
     "BaseFrequency",
@@ -67,7 +71,18 @@ const MAPPED_CLASSES: [&str; 20] = [
     "PowerTransformer",
     "PowerTransformerEnd",
     "TransformerMeshImpedance",
+    "TransformerCoreAdmittance",
+    "TransformerTank",
+    "TransformerTankEnd",
     "RatioTapChanger",
+];
+
+/// Association roles that may hold several values: a repeated statement
+/// adds a value, within one document or across documents, rather than
+/// conflicting with the first.
+const MULTI_VALUED: [&str; 2] = [
+    "Asset.PowerSystemResources",
+    "ShortCircuitTest.GroundedEnds",
 ];
 
 /// Containment, naming, version, and base voltage classes: context the
@@ -203,7 +218,8 @@ impl Store {
 
     /// Merge one document. An `rdf:about` extension adds properties to the
     /// object its id names. A property a second statement assigns a
-    /// different value keeps its first value, with a finding.
+    /// different value keeps its first value, with a finding, except a
+    /// [`MULTI_VALUED`] role, which collects every distinct value.
     fn merge(
         &mut self,
         document: &str,
@@ -249,6 +265,12 @@ impl Store {
             existing.defined |= definition;
             existing.nested.extend(nested);
             for (key, value) in props {
+                if MULTI_VALUED.contains(&key.as_str()) {
+                    if !existing.props.iter().any(|(k, v)| *k == key && *v == value) {
+                        existing.props.push((key, value));
+                    }
+                    continue;
+                }
                 match existing.props.iter().find(|(k, _)| *k == key) {
                     Some((_, first)) if *first == value => {}
                     Some((_, first)) => {
@@ -320,6 +342,35 @@ impl Store {
             }
         }
         found
+    }
+
+    /// Every value of `key` on object `id`, in statement order, recording
+    /// the reads.
+    fn props_all(&self, id: &str, key: &str) -> Vec<&PropValue> {
+        let Some(&at) = self.by_id.get(id) else {
+            return Vec::new();
+        };
+        let object = &self.objects[at];
+        let mut read = self.read.borrow_mut();
+        let mut found = Vec::new();
+        for (i, (k, v)) in object.props.iter().enumerate() {
+            if k == key {
+                read[at][i] = true;
+                found.push(v);
+            }
+        }
+        found
+    }
+
+    /// The target ids of every value of reference `key` on `id`.
+    fn refs_all(&self, id: &str, key: &str) -> Vec<&str> {
+        self.props_all(id, key)
+            .into_iter()
+            .filter_map(|v| match v {
+                PropValue::Ref(target) => Some(target.as_str()),
+                PropValue::Text(_) => None,
+            })
+            .collect()
     }
 
     /// Record `key` on `id` as consumed without using its value.
@@ -558,6 +609,79 @@ struct Wiring {
     node_of: HashMap<String, String>,
 }
 
+/// The lookups the tank form reads through, built once per read.
+struct TankIndex {
+    /// Tank mRID to its `TransformerTankEnd`s.
+    ends_of: HashMap<String, Vec<String>>,
+    /// Power system resource mRID to the `(Asset, TransformerTankInfo)`
+    /// pairs whose `Asset.PowerSystemResources` lists it.
+    info_of: HashMap<String, Vec<(String, String)>>,
+    end_infos_of: HashMap<String, Vec<String>>,
+    /// End info mRID to the tests that energise it.
+    short_circuit_of: HashMap<String, Vec<String>>,
+    no_load_of: HashMap<String, Vec<String>>,
+    tap_changers: HashMap<String, Vec<String>>,
+}
+
+/// One `TransformerTankInfo` with its end infos and tests resolved.
+struct Catalog {
+    /// In end number order.
+    ends: Vec<CatalogEnd>,
+    /// Pair reactances, percent on the first end's rating, keyed by end
+    /// numbers.
+    pairs: HashMap<(i64, i64), f64>,
+    /// `(%noloadloss, %imag)` on the first end's rating.
+    no_load: Option<(f64, f64)>,
+}
+
+struct CatalogEnd {
+    id: String,
+    number: f64,
+    delta: bool,
+    clock: Option<f64>,
+    v_ref: f64,
+    s_rating: f64,
+    /// `TransformerEndInfo.r` as percent of the end's base, when stated and
+    /// nonzero.
+    stated_r: Option<f64>,
+    /// The winding resistance read, percent of the end's base.
+    r_pct: f64,
+}
+
+/// An end number as an integer key.
+#[allow(clippy::cast_possible_truncation)] // end numbers are small integers
+fn end_key(number: f64) -> i64 {
+    number as i64
+}
+
+/// A winding pair key from two end numbers, lower first.
+fn pair_key(a: f64, b: f64) -> (i64, i64) {
+    let (a, b) = (end_key(a), end_key(b));
+    (a.min(b), a.max(b))
+}
+
+/// A tank end's terminal map and connection from its
+/// `TransformerTankEnd.phases`, in the conventions the dss reader produces:
+/// a line to neutral end `A` is `1, 4` (`bus.1.0`), a line to line end `AB`
+/// is a delta `1, 2`, a three phase end is `1, 2, 3` in delta or `1, 2, 3, 4`
+/// in wye, and the center tap halves `s1` and `s2` are `1, 4` and `4, 2`
+/// (`bus.1.0` and `bus.0.2`), so they stack to the full secondary voltage.
+fn tank_terminal_map(code: &str, delta: bool) -> Option<(Vec<String>, DistWindingConn)> {
+    let names = |terminals: &[&str]| terminals.iter().map(|t| (*t).to_owned()).collect();
+    Some(match code {
+        "s1" | "s1N" => (names(&["1", "4"]), DistWindingConn::Wye),
+        "s2" | "s2N" => (names(&["4", "2"]), DistWindingConn::Wye),
+        "A" | "AN" | "B" | "BN" | "C" | "CN" => (
+            names(&[phase_terminal(&code[..1])?, "4"]),
+            DistWindingConn::Wye,
+        ),
+        "AB" | "BC" | "AC" => (expand_phase_code(code)?, DistWindingConn::Delta),
+        "ABC" | "ABCN" if delta => (names(&["1", "2", "3"]), DistWindingConn::Delta),
+        "ABC" | "ABCN" => (names(&["1", "2", "3", "4"]), DistWindingConn::Wye),
+        _ => return None,
+    })
+}
+
 struct Mapper<'a> {
     store: &'a Store,
     diags: &'a mut crate::collect::Diagnostics,
@@ -571,8 +695,13 @@ struct Mapper<'a> {
     /// again as unmapped.
     dropped: HashSet<String>,
     /// Objects of an otherwise unmapped class the mapping read (the feeder
-    /// that names the network).
+    /// that names the network, the catalog entries tanks link).
     consumed: HashSet<String>,
+    /// Transformer catalog entries read so far, by `TransformerTankInfo`
+    /// mRID; `None` for one without end infos.
+    catalogs: HashMap<String, Option<Rc<Catalog>>>,
+    /// Core admittances a transformer read.
+    core_read: HashSet<String>,
 }
 
 impl<'a> Mapper<'a> {
@@ -589,6 +718,8 @@ impl<'a> Mapper<'a> {
             taken: HashMap::new(),
             dropped: HashSet::new(),
             consumed: HashSet::new(),
+            catalogs: HashMap::new(),
+            core_read: HashSet::new(),
         };
         mapper.build_wiring();
         mapper.name_nodes();
@@ -1926,32 +2057,60 @@ impl<'a> Mapper<'a> {
 
     // -- transformers ------------------------------------------------------
 
+    // One pass per transformer form, then the records that hang off neither.
+    #[allow(clippy::too_many_lines)]
     fn transformers(&mut self) -> Vec<DistTransformer> {
         let ends_of = self.children_of(
             "PowerTransformerEnd",
             "PowerTransformerEnd.PowerTransformer",
         );
-        // Read only to name the form a tank based transformer uses; the
-        // tanks themselves stay reported as an unmapped class.
-        let tanks_of = self
-            .store
-            .index_by("TransformerTank", "TransformerTank.PowerTransformer");
+        let tanks_of = self.children_of("TransformerTank", "TransformerTank.PowerTransformer");
         let meshes_of = self.children_of(
             "TransformerMeshImpedance",
             "TransformerMeshImpedance.FromTransformerEnd",
         );
+        let cores_of = self.children_of(
+            "TransformerCoreAdmittance",
+            "TransformerCoreAdmittance.TransformerEnd",
+        );
         let taps_of = self.children_of("RatioTapChanger", "RatioTapChanger.TransformerEnd");
+        let index = self.tank_index(taps_of);
+        let mut handled: HashSet<String> = HashSet::new();
         let mut transformers = Vec::new();
         for id in self.store.ids_of("PowerTransformer") {
+            let tanks = tanks_of.get(&id).cloned().unwrap_or_default();
+            handled.extend(tanks.iter().cloned());
             let Some(ends) = ends_of.get(&id).cloned().filter(|e| !e.is_empty()) else {
-                let why = if tanks_of.contains_key(&id) {
-                    "it uses the TransformerTank form, which the reader does not map yet"
-                } else {
-                    "it has no PowerTransformerEnd records"
-                };
-                self.drop_record("PowerTransformer", &id, why);
+                if tanks.is_empty() {
+                    self.drop_record(
+                        "PowerTransformer",
+                        &id,
+                        "it has no PowerTransformerEnd or TransformerTank records",
+                    );
+                    continue;
+                }
+                self.check_in_service("PowerTransformer", &id);
+                for tank in &tanks {
+                    if let Some(transformer) = self.tank(&id, tank, &index) {
+                        transformers.push(transformer);
+                    }
+                }
                 continue;
             };
+            for tank in &tanks {
+                let label = self.label(tank);
+                let parent = self.label(&id);
+                self.note(
+                    &C::READ_CIM_DIST_VALUE_CONFLICT,
+                    "TransformerTank",
+                    tank,
+                    format!(
+                        "TransformerTank {label}: its PowerTransformer {parent} also has \
+                         PowerTransformerEnd records; the end form is read and the tank is not"
+                    ),
+                );
+                self.drop_tank_ends(tank, &index);
+            }
             let mut ends: Vec<(f64, String)> = ends
                 .into_iter()
                 .map(|e| {
@@ -1979,11 +2138,12 @@ impl<'a> Mapper<'a> {
                 continue;
             };
             for (winding, end) in windings.iter_mut().zip(&ends) {
-                if let Some(tap) = self.end_tap(end, &taps_of) {
+                if let Some(tap) = self.end_tap(end, &index.tap_changers) {
                     winding.tap = tap;
                 }
             }
             let xsc = self.short_circuit_pct(&id, &ends, &windings, &meshes_of);
+            let no_load = self.core_admittance(&ends, &windings, &cores_of);
             self.check_in_service("PowerTransformer", &id);
             let name = self.unique_name("transformer", "PowerTransformer", &id);
             let mut transformer = DistTransformer::new(name, windings, xsc, phases);
@@ -1994,9 +2154,654 @@ impl<'a> Mapper<'a> {
                 "cim_end_mrids".into(),
                 serde_json::Value::from(ends.clone()),
             );
+            if let Some((loss, imag)) = no_load {
+                transformer.extras.insert("%noloadloss".into(), loss.into());
+                transformer.extras.insert("%imag".into(), imag.into());
+            }
             transformers.push(transformer);
         }
+        // Records that hang off no transformer the loop reads.
+        for tank in self.store.ids_of("TransformerTank") {
+            if !handled.contains(&tank) && !self.dropped.contains(&tank) {
+                self.drop_tank(&tank, &index, "it names no PowerTransformer");
+            }
+        }
+        let attached: HashSet<&String> = index.ends_of.values().flatten().collect();
+        for end in self.store.ids_of("TransformerTankEnd") {
+            if !attached.contains(&end) && !self.dropped.contains(&end) {
+                self.drop_record("TransformerTankEnd", &end, "it names no TransformerTank");
+            }
+        }
+        for core in self.store.ids_of("TransformerCoreAdmittance") {
+            if !self.core_read.contains(&core) && !self.dropped.contains(&core) {
+                self.drop_record(
+                    "TransformerCoreAdmittance",
+                    &core,
+                    "its TransformerEnd is not an end of a transformer the reader maps",
+                );
+            }
+        }
         transformers
+    }
+
+    /// The no-load percentages `(%noloadloss, %imag)` on winding 1's rating
+    /// from the `TransformerCoreAdmittance` on the lowest numbered end that
+    /// has one: `g` and `b` (siemens) times that end's impedance base.
+    fn core_admittance(
+        &mut self,
+        ends: &[String],
+        windings: &[DistWinding],
+        cores_of: &HashMap<String, Vec<String>>,
+    ) -> Option<(f64, f64)> {
+        let s_1 = windings.first().map_or(0.0, |w| w.s_rating);
+        let mut found = None;
+        for (end, winding) in ends.iter().zip(windings) {
+            for core in cores_of.get(end).map_or(&[][..], Vec::as_slice) {
+                if found.is_some() {
+                    self.drop_record(
+                        "TransformerCoreAdmittance",
+                        core,
+                        "another end of the transformer already states the core admittance",
+                    );
+                    continue;
+                }
+                self.core_read.insert(core.clone());
+                let g = self
+                    .store
+                    .f(core, "TransformerCoreAdmittance.g")
+                    .unwrap_or(0.0);
+                let b = self
+                    .store
+                    .f(core, "TransformerCoreAdmittance.b")
+                    .unwrap_or(0.0);
+                let Some(base) = z_base(winding.v_ref, s_1) else {
+                    let label = self.label(core);
+                    self.note(
+                        &C::READ_CIM_DIST_VALUE_DEFAULTED,
+                        "TransformerCoreAdmittance",
+                        core,
+                        format!(
+                            "TransformerCoreAdmittance {label}: its end or winding 1 states no \
+                             rating; the no-load data is not carried"
+                        ),
+                    );
+                    found = Some(None);
+                    continue;
+                };
+                found = Some(Some((100.0 * g * base, 100.0 * b * base)));
+            }
+        }
+        found.flatten()
+    }
+
+    // -- transformer tanks -------------------------------------------------
+
+    /// The lookups the tank form reads through: each tank's ends, the
+    /// catalog entry each tank's `Asset` links, and the catalog's end infos
+    /// and tests.
+    fn tank_index(&mut self, taps_of: HashMap<String, Vec<String>>) -> TankIndex {
+        let ends_of = self.children_of("TransformerTankEnd", "TransformerTankEnd.TransformerTank");
+        let store = self.store;
+        let mut info_of: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        for asset in store.ids_of("Asset") {
+            let Some(info) = store.refv(&asset, "Asset.AssetInfo") else {
+                continue;
+            };
+            if store.class_of(info) != Some("TransformerTankInfo") {
+                continue;
+            }
+            for psr in store.refs_all(&asset, "Asset.PowerSystemResources") {
+                info_of
+                    .entry(psr.to_owned())
+                    .or_default()
+                    .push((asset.clone(), info.to_owned()));
+            }
+        }
+        TankIndex {
+            ends_of,
+            info_of,
+            end_infos_of: store.index_by(
+                "TransformerEndInfo",
+                "TransformerEndInfo.TransformerTankInfo",
+            ),
+            short_circuit_of: store.index_by("ShortCircuitTest", "ShortCircuitTest.EnergisedEnd"),
+            no_load_of: store.index_by("NoLoadTest", "NoLoadTest.EnergisedEnd"),
+            tap_changers: taps_of,
+        }
+    }
+
+    /// Mark a tank and its ends dropped, so they are not reported again
+    /// property by property.
+    fn drop_tank_ends(&mut self, tank: &str, index: &TankIndex) {
+        self.dropped.insert(tank.to_owned());
+        for end in index.ends_of.get(tank).map_or(&[][..], Vec::as_slice) {
+            self.dropped.insert(end.clone());
+        }
+    }
+
+    fn drop_tank(&mut self, tank: &str, index: &TankIndex, why: &str) {
+        self.drop_record("TransformerTank", tank, why);
+        self.drop_tank_ends(tank, index);
+    }
+
+    /// One `TransformerTank` as a [`DistTransformer`]: windings from its
+    /// `TransformerTankEnd`s, ratings, resistances and reactances from its
+    /// catalog entry, and taps from the tap changers on its ends.
+    #[allow(clippy::too_many_lines)]
+    fn tank(&mut self, pt: &str, tank: &str, index: &TankIndex) -> Option<DistTransformer> {
+        let Some(links) = index.info_of.get(tank) else {
+            self.drop_tank(tank, index, "it has no TransformerTankInfo");
+            return None;
+        };
+        let (asset, info) = links[0].clone();
+        self.consumed.insert(asset);
+        if let Some((_, other)) = links.iter().find(|(_, i)| *i != info) {
+            let label = self.label(tank);
+            self.note(
+                &C::READ_CIM_DIST_VALUE_CONFLICT,
+                "TransformerTank",
+                tank,
+                format!(
+                    "TransformerTank {label}: Assets link it to TransformerTankInfo `{info}` and \
+                     `{other}`; the first is read"
+                ),
+            );
+        }
+        let Some(catalog) = self.catalog(&info, index) else {
+            self.drop_tank(
+                tank,
+                index,
+                &format!("its TransformerTankInfo `{info}` has no TransformerEndInfo"),
+            );
+            return None;
+        };
+        let mut ends: Vec<(f64, String)> = index
+            .ends_of
+            .get(tank)
+            .map_or(&[][..], Vec::as_slice)
+            .iter()
+            .map(|e| {
+                (
+                    self.store
+                        .f(e, "TransformerEnd.endNumber")
+                        .unwrap_or(f64::MAX),
+                    e.clone(),
+                )
+            })
+            .collect();
+        ends.sort_by(|a, b| a.0.total_cmp(&b.0));
+        if ends.len() < 2 {
+            self.drop_tank(tank, index, "it has fewer than two ends");
+            return None;
+        }
+        let mut windings = Vec::with_capacity(ends.len());
+        let mut numbers = Vec::with_capacity(ends.len());
+        let mut clocks = Vec::with_capacity(ends.len());
+        for (number, end) in &ends {
+            let Some(info_end) = catalog
+                .ends
+                .iter()
+                .find(|e| end_key(e.number) == end_key(*number))
+            else {
+                let why = if *number >= f64::MAX {
+                    "an end states no endNumber".to_owned()
+                } else {
+                    format!("end {number} has no TransformerEndInfo of the same endNumber")
+                };
+                self.drop_tank(tank, index, &why);
+                return None;
+            };
+            let terminal = self.target("TransformerTankEnd", end, "TransformerEnd.Terminal");
+            let Some(bus) = terminal.as_deref().and_then(|t| self.bus_of_terminal(t)) else {
+                self.drop_tank(tank, index, "an end has no terminal on a connectivity node");
+                return None;
+            };
+            if let Some(terminal) = &terminal {
+                self.store.consume(terminal, "Terminal.phases");
+            }
+            let Some(code) = self
+                .store
+                .enum_value(end, "TransformerTankEnd.phases")
+                .map(str::to_owned)
+            else {
+                self.drop_tank(
+                    tank,
+                    index,
+                    &format!("end {number} states no TransformerTankEnd.phases"),
+                );
+                return None;
+            };
+            let Some((map, conn)) = tank_terminal_map(&code, info_end.delta) else {
+                self.drop_tank(
+                    tank,
+                    index,
+                    &format!("end {number} states phases `{code}`, which the reader does not map"),
+                );
+                return None;
+            };
+            let mut winding = DistWinding::new(bus, map, conn, info_end.v_ref, info_end.s_rating);
+            winding.r_pct = info_end.r_pct;
+            self.grounding(end, &mut winding);
+            if let Some(tap) = self.end_tap(end, &index.tap_changers) {
+                winding.tap = tap;
+            }
+            windings.push(winding);
+            numbers.push(*number);
+            clocks.push(
+                info_end
+                    .clock
+                    .map_or(serde_json::Value::Null, serde_json::Value::from),
+            );
+        }
+        let mut xsc = Vec::new();
+        let mut missing = Vec::new();
+        for i in 0..numbers.len() {
+            for j in i + 1..numbers.len() {
+                let x = catalog.pairs.get(&pair_key(numbers[i], numbers[j]));
+                if x.is_none() {
+                    missing.push(format!("{}-{}", i + 1, j + 1));
+                }
+                xsc.push(x.copied().unwrap_or(0.0));
+            }
+        }
+        if !missing.is_empty() {
+            let label = self.label(tank);
+            self.note(
+                &C::READ_CIM_DIST_VALUE_DEFAULTED,
+                "TransformerTank",
+                tank,
+                format!(
+                    "TransformerTank {label}: no ShortCircuitTest states winding pair(s) {}; \
+                     their reactance is 0",
+                    missing.join(", ")
+                ),
+            );
+        }
+        let phases = match windings[0]
+            .terminal_map
+            .iter()
+            .filter(|t| *t != "4")
+            .count()
+        {
+            3 => 3,
+            _ => 1,
+        };
+        self.check_in_service("TransformerTank", tank);
+        let name = self.unique_name("transformer", "TransformerTank", tank);
+        let pt_name = self.store.name_of(pt);
+        let mut transformer = DistTransformer::new(name, windings, xsc, phases);
+        let extras = &mut transformer.extras;
+        extras.insert("cim_mrid".into(), tank.to_owned().into());
+        extras.insert(
+            "cim_end_mrids".into(),
+            serde_json::Value::from(ends.into_iter().map(|(_, e)| e).collect::<Vec<_>>()),
+        );
+        extras.insert("cim_form".into(), "tank".into());
+        extras.insert("cim_power_transformer".into(), pt.to_owned().into());
+        if let Some(pt_name) = pt_name {
+            extras.insert("cim_power_transformer_name".into(), pt_name.into());
+        }
+        extras.insert("cim_tank_info".into(), info.into());
+        extras.insert("cim_phase_angle_clock".into(), clocks.into());
+        if let Some((loss, imag)) = catalog.no_load {
+            extras.insert("%noloadloss".into(), loss.into());
+            extras.insert("%imag".into(), imag.into());
+        }
+        Some(transformer)
+    }
+
+    /// A `TransformerTankInfo` and everything under it, read once however
+    /// many tanks share it.
+    fn catalog(&mut self, info: &str, index: &TankIndex) -> Option<Rc<Catalog>> {
+        if let Some(catalog) = self.catalogs.get(info) {
+            return catalog.clone();
+        }
+        let catalog = self.read_catalog(info, index).map(Rc::new);
+        self.catalogs.insert(info.to_owned(), catalog.clone());
+        catalog
+    }
+
+    /// The end infos of a catalog entry, in end number order, with their
+    /// ratings and connections.
+    fn catalog_ends(&mut self, info: &str, index: &TankIndex) -> Vec<CatalogEnd> {
+        let mut ends: Vec<CatalogEnd> = Vec::new();
+        for id in index.end_infos_of.get(info).map_or(&[][..], Vec::as_slice) {
+            let Some(number) = self.store.f(id, "TransformerEndInfo.endNumber") else {
+                self.drop_record("TransformerEndInfo", id, "it states no endNumber");
+                continue;
+            };
+            if ends.iter().any(|e| end_key(e.number) == end_key(number)) {
+                self.drop_record(
+                    "TransformerEndInfo",
+                    id,
+                    &format!("another end info of its catalog entry is end {number}"),
+                );
+                continue;
+            }
+            self.consumed.insert(id.clone());
+            let label = self.label(id);
+            let delta = match self
+                .store
+                .enum_value(id, "TransformerEndInfo.connectionKind")
+            {
+                Some("D") => true,
+                Some("Y" | "Yn" | "I") => false,
+                Some(other) => {
+                    let other = other.to_owned();
+                    self.note(
+                        &C::READ_CIM_DIST_VALUE_UNSUPPORTED,
+                        "TransformerEndInfo",
+                        id,
+                        format!(
+                            "TransformerEndInfo {label}: winding connection `{other}` is read as \
+                             wye"
+                        ),
+                    );
+                    false
+                }
+                None => {
+                    self.note(
+                        &C::READ_CIM_DIST_VALUE_DEFAULTED,
+                        "TransformerEndInfo",
+                        id,
+                        format!("TransformerEndInfo {label}: no connectionKind; wye is assumed"),
+                    );
+                    false
+                }
+            };
+            let v_ref = self.store.f(id, "TransformerEndInfo.ratedU");
+            let s_rating = self.store.f(id, "TransformerEndInfo.ratedS");
+            if v_ref.is_none() || s_rating.is_none() {
+                self.note(
+                    &C::READ_CIM_DIST_VALUE_DEFAULTED,
+                    "TransformerEndInfo",
+                    id,
+                    format!(
+                        "TransformerEndInfo {label}: ratedU or ratedS is not stated; 0 is used \
+                         and the end's impedance cannot be carried"
+                    ),
+                );
+            }
+            let (v_ref, s_rating) = (v_ref.unwrap_or(0.0), s_rating.unwrap_or(0.0));
+            let stated_r = self
+                .store
+                .f(id, "TransformerEndInfo.r")
+                .filter(|r| *r != 0.0)
+                .and_then(|r| z_base(v_ref, s_rating).map(|base| r / base * 100.0));
+            ends.push(CatalogEnd {
+                id: id.clone(),
+                number,
+                delta,
+                clock: self.store.f(id, "TransformerEndInfo.phaseAngleClock"),
+                v_ref,
+                s_rating,
+                stated_r,
+                r_pct: 0.0,
+            });
+        }
+        ends.sort_by(|a, b| a.number.total_cmp(&b.number));
+        ends
+    }
+
+    fn read_catalog(&mut self, info: &str, index: &TankIndex) -> Option<Catalog> {
+        self.consumed.insert(info.to_owned());
+        if let Some(container) = self.target(
+            "TransformerTankInfo",
+            info,
+            "TransformerTankInfo.PowerTransformerInfo",
+        ) {
+            self.consumed.insert(container);
+        }
+        let mut ends = self.catalog_ends(info, index);
+        if ends.is_empty() {
+            return None;
+        }
+        let (pairs, losses) = self.short_circuit_tests(&ends, index);
+        self.winding_resistances(info, &mut ends, &losses);
+        let no_load = self.no_load_test(&ends, index);
+        Some(Catalog {
+            ends,
+            pairs,
+            no_load,
+        })
+    }
+
+    /// The pair reactances of a catalog entry's short circuit tests, and the
+    /// pair resistances the tests with a nonzero load loss give, with the
+    /// test stating each. Both are percent on the first end's rating.
+    #[allow(clippy::type_complexity)]
+    fn short_circuit_tests(
+        &mut self,
+        ends: &[CatalogEnd],
+        index: &TankIndex,
+    ) -> (HashMap<(i64, i64), f64>, Vec<((i64, i64), f64, String)>) {
+        let s_1 = ends[0].s_rating;
+        let mut pairs: HashMap<(i64, i64), f64> = HashMap::new();
+        let mut losses = Vec::new();
+        for (i, energised) in ends.iter().enumerate() {
+            for test in index
+                .short_circuit_of
+                .get(&energised.id)
+                .map_or(&[][..], Vec::as_slice)
+            {
+                let grounded: Vec<String> = self
+                    .store
+                    .refs_all(test, "ShortCircuitTest.GroundedEnds")
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect();
+                if grounded.len() != 1 {
+                    self.drop_record(
+                        "ShortCircuitTest",
+                        test,
+                        &format!(
+                            "it grounds {} ends; the reader reads tests between two ends",
+                            grounded.len()
+                        ),
+                    );
+                    continue;
+                }
+                let Some(j) = ends.iter().position(|e| e.id == grounded[0]) else {
+                    self.drop_record(
+                        "ShortCircuitTest",
+                        test,
+                        "its ends belong to different catalog entries",
+                    );
+                    continue;
+                };
+                if j == i {
+                    self.drop_record("ShortCircuitTest", test, "it grounds its energised end");
+                    continue;
+                }
+                let key = pair_key(energised.number, ends[j].number);
+                if pairs.contains_key(&key) {
+                    self.drop_record(
+                        "ShortCircuitTest",
+                        test,
+                        "another test already states the same winding pair",
+                    );
+                    continue;
+                }
+                self.consumed.insert(test.clone());
+                let label = self.label(test);
+                let leakage = self.store.f(test, "ShortCircuitTest.leakageImpedance");
+                let loss = self.store.f(test, "ShortCircuitTest.loss").unwrap_or(0.0);
+                let base = self.store.f(test, "TransformerTest.basePower");
+                let base = base.unwrap_or_else(|| {
+                    self.note(
+                        &C::READ_CIM_DIST_VALUE_DEFAULTED,
+                        "ShortCircuitTest",
+                        test,
+                        format!(
+                            "ShortCircuitTest {label}: no basePower; the energised end's ratedS \
+                             is used"
+                        ),
+                    );
+                    energised.s_rating
+                });
+                let pct = leakage.and_then(|z| {
+                    short_circuit_test_pct(z, loss, energised.v_ref, base, s_1, LEAKAGE_READING)
+                });
+                let Some(pct) = pct else {
+                    self.note(
+                        &C::READ_CIM_DIST_VALUE_DEFAULTED,
+                        "ShortCircuitTest",
+                        test,
+                        format!(
+                            "ShortCircuitTest {label}: needs leakageImpedance and positive \
+                             ratings; the pair reactance is 0"
+                        ),
+                    );
+                    pairs.insert(key, 0.0);
+                    continue;
+                };
+                if pct.short {
+                    self.note(
+                        &C::READ_CIM_DIST_VALUE_UNSUPPORTED,
+                        "ShortCircuitTest",
+                        test,
+                        format!(
+                            "ShortCircuitTest {label}: leakageImpedance is smaller than the \
+                             resistance its loss gives; the pair reactance is 0"
+                        ),
+                    );
+                }
+                pairs.insert(key, pct.x);
+                // A loss of 0 states nothing: some producers leave it 0 on
+                // every pair but one.
+                if loss != 0.0 {
+                    losses.push((key, pct.r, test.clone()));
+                }
+            }
+        }
+        (pairs, losses)
+    }
+
+    /// Winding resistances: the end infos' own when any states one (a load
+    /// loss that disagrees is reported), else the split of the pair
+    /// resistances the load losses give, as CIMHub's
+    /// `SetWindingResistances` does.
+    fn winding_resistances(
+        &mut self,
+        info: &str,
+        ends: &mut [CatalogEnd],
+        losses: &[((i64, i64), f64, String)],
+    ) {
+        let s_1 = ends[0].s_rating;
+        // A percentage on the end's own rating to one on the first end's,
+        // and back.
+        let to_base = |pct: f64, s: f64| if s > 0.0 { pct * s_1 / s } else { 0.0 };
+        let from_base = |pct: f64, s: f64| if s_1 > 0.0 { pct * s / s_1 } else { 0.0 };
+        if ends.iter().any(|e| e.stated_r.is_some()) {
+            for end in ends.iter_mut() {
+                end.r_pct = end.stated_r.unwrap_or(0.0);
+            }
+            for (key, pair_r, test) in losses {
+                let on_base = |number: i64| {
+                    ends.iter()
+                        .find(|e| end_key(e.number) == number)
+                        .map_or(0.0, |e| to_base(e.r_pct, e.s_rating))
+                };
+                let sum = on_base(key.0) + on_base(key.1);
+                if (pair_r - sum).abs() > 1e-6 * pair_r.abs().max(sum.abs()) {
+                    let label = self.label(test);
+                    self.note(
+                        &C::READ_CIM_DIST_VALUE_CONFLICT,
+                        "ShortCircuitTest",
+                        test,
+                        format!(
+                            "ShortCircuitTest {label}: its loss gives a pair resistance of \
+                             {pair_r}%, but the end resistances sum to {sum}%; the end \
+                             resistances are kept"
+                        ),
+                    );
+                }
+            }
+            return;
+        }
+        if losses.is_empty() {
+            return;
+        }
+        let pair_r = |a: f64, b: f64| {
+            losses
+                .iter()
+                .find(|(k, _, _)| *k == pair_key(a, b))
+                .map_or(0.0, |(_, r, _)| *r)
+        };
+        let split = match ends {
+            [a, b] => vec![pair_r(a.number, b.number) / 2.0; 2],
+            [a, b, c] => {
+                let (rab, rac, rbc) = (
+                    pair_r(a.number, b.number),
+                    pair_r(a.number, c.number),
+                    pair_r(b.number, c.number),
+                );
+                vec![
+                    (rab + rac - rbc) / 2.0,
+                    (rab + rbc - rac) / 2.0,
+                    (rac + rbc - rab) / 2.0,
+                ]
+            }
+            _ => {
+                let label = self.label(info);
+                self.note(
+                    &C::READ_CIM_DIST_VALUE_UNSUPPORTED,
+                    "TransformerTankInfo",
+                    info,
+                    format!(
+                        "TransformerTankInfo {label}: {} windings and no end resistance; load \
+                         losses split between two or three windings only, so the resistances \
+                         are 0",
+                        ends.len()
+                    ),
+                );
+                return;
+            }
+        };
+        for (end, r) in ends.iter_mut().zip(split) {
+            end.r_pct = from_base(r, end.s_rating);
+        }
+    }
+
+    /// The no-load percentages from the `NoLoadTest` that energises the
+    /// first end.
+    fn no_load_test(&mut self, ends: &[CatalogEnd], index: &TankIndex) -> Option<(f64, f64)> {
+        let s_1 = ends[0].s_rating;
+        let mut no_load = None;
+        for (i, end) in ends.iter().enumerate() {
+            for test in index.no_load_of.get(&end.id).map_or(&[][..], Vec::as_slice) {
+                if i > 0 {
+                    self.drop_record(
+                        "NoLoadTest",
+                        test,
+                        "it energises an end other than end 1, whose test the reader reads",
+                    );
+                    continue;
+                }
+                if no_load.is_some() {
+                    self.drop_record(
+                        "NoLoadTest",
+                        test,
+                        "another NoLoadTest already states end 1's no-load data",
+                    );
+                    continue;
+                }
+                self.consumed.insert(test.clone());
+                // The energised end's ratedU states the same voltage.
+                self.store.consume(test, "NoLoadTest.energisedEndVoltage");
+                let loss = self.store.f(test, "NoLoadTest.loss").unwrap_or(0.0);
+                let exciting = self
+                    .store
+                    .f(test, "NoLoadTest.excitingCurrent")
+                    .unwrap_or(0.0);
+                let base = self
+                    .store
+                    .f(test, "TransformerTest.basePower")
+                    .unwrap_or(s_1);
+                no_load = Some(no_load_test_pct(loss, exciting, base, s_1));
+            }
+        }
+        no_load.flatten()
     }
 
     fn transformer_phase_count(&mut self, ends: &[String]) -> usize {
@@ -2092,18 +2897,21 @@ impl<'a> Mapper<'a> {
             {
                 winding.r_pct = r / base * 100.0;
             }
-            if self.store.boolean(end, "TransformerEnd.grounded") == Some(true) {
-                winding.r_neutral =
-                    Some(self.store.f(end, "TransformerEnd.rground").unwrap_or(0.0));
-                winding.x_neutral =
-                    Some(self.store.f(end, "TransformerEnd.xground").unwrap_or(0.0));
-            } else {
-                self.store.consume(end, "TransformerEnd.rground");
-                self.store.consume(end, "TransformerEnd.xground");
-            }
+            self.grounding(end, &mut winding);
             windings.push(winding);
         }
         Some(windings)
+    }
+
+    /// A grounded end's neutral impedance.
+    fn grounding(&mut self, end: &str, winding: &mut DistWinding) {
+        if self.store.boolean(end, "TransformerEnd.grounded") == Some(true) {
+            winding.r_neutral = Some(self.store.f(end, "TransformerEnd.rground").unwrap_or(0.0));
+            winding.x_neutral = Some(self.store.f(end, "TransformerEnd.xground").unwrap_or(0.0));
+        } else {
+            self.store.consume(end, "TransformerEnd.rground");
+            self.store.consume(end, "TransformerEnd.xground");
+        }
     }
 
     /// The tap of an end from its `RatioTapChanger`: the position (`step`,

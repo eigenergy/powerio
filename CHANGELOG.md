@@ -175,12 +175,25 @@
   sequence impedance, loads, linear shunt compensators with their sections,
   switches, transformers of any winding count with mesh impedances and ratio
   tap changer positions, and energy sources with their series impedance.
-  What it does not map yet (the transformer tank form, controls, distributed
-  energy resources, wire geometry, limits) is reported through
+  What it does not map yet (controls, distributed energy resources, wire
+  geometry, limits) is reported through
   `READ.CIM_DIST.*` codes, and the writer reports what CIM cannot state
   through `EMIT.CIM_DIST.*` codes. Same format emission returns the retained
   bytes of a single document; canonical output carries UUIDv5 mRIDs and is
   byte stable from write to read to write.
+
+- The CIM reader maps the transformer tank form that GridAPPS-D and CIMHub
+  feeders use for single phase, center tap, and regulator banks: each
+  `TransformerTank` becomes one transformer, with ratings, resistances, and
+  short circuit reactances from its `TransformerTankInfo` catalog entry
+  (`TransformerEndInfo`, `ShortCircuitTest`, whose `leakageImpedance` is read
+  as the pair reactance the GridAPPS-D feeders state), taps from tap
+  changers on its ends, and `NoLoadTest` data in the `%noloadloss` and `%imag` extras the
+  dss, PMD, and BMOPF writers read. A `TransformerCoreAdmittance` on the
+  `PowerTransformerEnd` form gives the same extras. The writer writes tanks
+  read from CIM back as tanks, grouped under their `PowerTransformer` with
+  shared catalog entries; other transformers keep the `PowerTransformerEnd`
+  form.
 
 - A CIM line segment whose impedance the reader cannot read, for example one
   described only by wire spacing and wire data, parses with an error finding,

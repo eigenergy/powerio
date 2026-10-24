@@ -23,6 +23,17 @@
 //! `C`→`3`, `N`→`4`, and the split phase `s1`/`s2`→`1`/`2`. A conductor
 //! beyond those four has no `SinglePhaseKind` and is reported on output.
 //!
+//! # Transformer forms
+//!
+//! A `PowerTransformer` states its windings either as `PowerTransformerEnd`
+//! records with their own ratings and impedances, or as `TransformerTank`s,
+//! each with `TransformerTankEnd`s and catalog data (`TransformerTankInfo`,
+//! `TransformerEndInfo`, `ShortCircuitTest`, `NoLoadTest`) that an `Asset`
+//! links. Each tank reads as one transformer, with its parent and catalog
+//! entry in extras, and is written back as a tank; every other transformer is
+//! written in the `PowerTransformerEnd` form. No-load data from either form
+//! lands in the `%noloadloss` and `%imag` extras.
+//!
 //! [`MulticonductorNetwork`]: crate::MulticonductorNetwork
 
 mod read;
@@ -146,11 +157,190 @@ fn wrap_angle(angle: f64) -> f64 {
     a
 }
 
+/// How `ShortCircuitTest.leakageImpedance` is read. CIM defines it as the
+/// magnitude of the leakage impedance, and CIMHub's exporter (`GetDSS`)
+/// reads it that way, taking the reactance as `sqrt(|Z|² − R²)` with `R`
+/// from the test's load loss. The GridAPPS-D feeders state the reactance
+/// itself: IEEE 13's `ct5` tests are exactly the deck's 2.04%, 2.04% and
+/// 1.36%, and its regulators' 0.01% is the deck's `XHL` with an equal
+/// `%LoadLoss`, which a magnitude reading would leave with almost no
+/// reactance. The reading is one switch the reader and the writer share.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LeakageReading {
+    #[cfg_attr(not(test), allow(dead_code))]
+    Magnitude,
+    Reactance,
+}
+
+/// The [`LeakageReading`] the reader and the writer use.
+const LEAKAGE_READING: LeakageReading = LeakageReading::Reactance;
+
+/// One `ShortCircuitTest` as percentages on winding 1's power base.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ShortCircuitPct {
+    /// The pair reactance.
+    x: f64,
+    /// The pair resistance from the load loss.
+    r: f64,
+    /// The stated magnitude was smaller than its resistive part, so the
+    /// reactance is 0.
+    short: bool,
+}
+
+/// A short circuit test's leakage impedance (ohm, referred to the energised
+/// end of rated voltage `rated_u`) and load loss (kW), on a test base of
+/// `base_power` VA, as percentages on winding 1's rating `s_1`. `None` when
+/// a voltage or power is not positive.
+fn short_circuit_test_pct(
+    leakage: f64,
+    loss_kw: f64,
+    rated_u: f64,
+    base_power: f64,
+    s_1: f64,
+    reading: LeakageReading,
+) -> Option<ShortCircuitPct> {
+    let base = z_base(rated_u, base_power)?;
+    if s_1 <= 0.0 {
+        return None;
+    }
+    let z = 100.0 * leakage / base;
+    let r = 100.0 * 1000.0 * loss_kw / base_power;
+    let (x, short) = match reading {
+        LeakageReading::Magnitude => {
+            let square = z * z - r * r;
+            if square < 0.0 {
+                (0.0, true)
+            } else {
+                (square.sqrt(), false)
+            }
+        }
+        LeakageReading::Reactance => (z, false),
+    };
+    let scale = s_1 / base_power;
+    Some(ShortCircuitPct {
+        x: x * scale,
+        r: r * scale,
+        short,
+    })
+}
+
+/// A no-load test's loss (kW) and exciting current (percent of rated
+/// current at `base_power`) as the OpenDSS `(%noloadloss, %imag)` on winding
+/// 1's rating `s_1`. `None` when a power is not positive.
+fn no_load_test_pct(loss_kw: f64, exciting: f64, base_power: f64, s_1: f64) -> Option<(f64, f64)> {
+    if base_power <= 0.0 || s_1 <= 0.0 {
+        return None;
+    }
+    let loss = 100.0 * 1000.0 * loss_kw / s_1;
+    let iexc = exciting * base_power / s_1;
+    let imag = if loss > 0.0 && loss <= iexc {
+        (iexc * iexc - loss * loss).sqrt()
+    } else {
+        iexc
+    };
+    Some((loss, imag))
+}
+
 #[cfg(test)]
 mod tests {
     use std::f64::consts::PI;
 
-    use super::{is_case_document, looks_like_cim_dist, sequence_to_phase, wrap_angle};
+    use super::{
+        LeakageReading, is_case_document, looks_like_cim_dist, no_load_test_pct, sequence_to_phase,
+        short_circuit_test_pct, wrap_angle,
+    };
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
+    }
+
+    /// The IEEE 13 center tap tank `ct5` (2400/120/120 V, 5 kVA): its tests
+    /// state 23.5008, 23.5008 and 0.039168 ohm, exactly 2.04%, 2.04% and
+    /// 1.36% of the energised end's base, and only the 1 to 2 test states a
+    /// loss (0.09 kW, 1.8%). Read as a magnitude the 1 to 2 pair loses its
+    /// resistive part; read as a reactance every pair keeps the source value.
+    #[test]
+    fn leakage_impedance_interpretations() {
+        let tests = [
+            (23.5008, 0.09, 2400.0),
+            (23.5008, 0.0, 2400.0),
+            (0.039_168, 0.0, 120.0),
+        ];
+        let read = |reading| -> Vec<f64> {
+            tests
+                .iter()
+                .map(|&(z, loss, u)| {
+                    short_circuit_test_pct(z, loss, u, 5000.0, 5000.0, reading)
+                        .unwrap()
+                        .x
+                })
+                .collect()
+        };
+        let magnitude = read(LeakageReading::Magnitude);
+        assert!(close(
+            magnitude[0],
+            (2.04_f64.powi(2) - 1.8_f64.powi(2)).sqrt()
+        ));
+        assert!(close(magnitude[0], 0.96));
+        assert!(close(magnitude[1], 2.04));
+        assert!(close(magnitude[2], 1.36));
+        let reactance = read(LeakageReading::Reactance);
+        assert!(close(reactance[0], 2.04));
+        assert!(close(reactance[1], 2.04));
+        assert!(close(reactance[2], 1.36));
+        // The resistance comes from the loss either way.
+        let pair = short_circuit_test_pct(
+            23.5008,
+            0.09,
+            2400.0,
+            5000.0,
+            5000.0,
+            LeakageReading::Reactance,
+        )
+        .unwrap();
+        assert!(close(pair.r, 1.8));
+    }
+
+    /// The test base rescales to winding 1's rating, and a magnitude smaller
+    /// than its resistive part reads as no reactance.
+    #[test]
+    fn short_circuit_tests_rescale_and_flag_short_magnitudes() {
+        // 2.04% on a 5 kVA test base is 4.08% on a 10 kVA winding 1.
+        let pct = short_circuit_test_pct(
+            23.5008,
+            0.0,
+            2400.0,
+            5000.0,
+            10_000.0,
+            LeakageReading::Magnitude,
+        )
+        .unwrap();
+        assert!(close(pct.x, 4.08));
+        let short =
+            short_circuit_test_pct(1.0, 0.09, 2400.0, 5000.0, 5000.0, LeakageReading::Magnitude)
+                .unwrap();
+        assert!(short.short);
+        assert!(close(short.x, 0.0));
+        assert!(
+            short_circuit_test_pct(1.0, 0.0, 0.0, 5000.0, 5000.0, LeakageReading::Magnitude)
+                .is_none()
+        );
+    }
+
+    /// 25 kVA with 0.05 kW of no-load loss and 0.538516% exciting current is
+    /// 0.2% loss and 0.5% magnetizing current.
+    #[test]
+    fn no_load_tests_become_percentages() {
+        let (loss, imag) = no_load_test_pct(0.05, 0.538_516, 25_000.0, 25_000.0).unwrap();
+        assert!(close(loss, 0.2));
+        assert!((imag - 0.5).abs() < 1e-6);
+        // A loss above the exciting current keeps the exciting current.
+        let (_, imag) = no_load_test_pct(0.05, 0.1, 25_000.0, 25_000.0).unwrap();
+        assert!(close(imag, 0.1));
+        // A test base other than winding 1's rating rescales the current.
+        let (_, imag) = no_load_test_pct(0.0, 0.5, 5000.0, 10_000.0).unwrap();
+        assert!(close(imag, 0.25));
+    }
 
     #[test]
     #[allow(clippy::float_cmp)]

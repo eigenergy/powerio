@@ -124,13 +124,39 @@ directory routes here when it carries per phase classes and no CGMES
 | `LinearShuntCompensator` with its phases | shunts; sections multiply the per section admittance |
 | the `Switch` classes with `SwitchPhase` | switches with their state and rating |
 | `PowerTransformer` with `PowerTransformerEnd`, `TransformerMeshImpedance`, `RatioTapChanger` | transformers of any winding count, with taps |
+| `TransformerTank` with `TransformerTankEnd` | one transformer per tank, grouped by its `PowerTransformer` in the `cim_power_transformer` extra |
+| `Asset` linking a tank to `TransformerTankInfo`, with `TransformerEndInfo` | winding ratings, connections, and resistances |
+| `ShortCircuitTest` | short circuit reactances between winding pairs, and winding resistances when no end info states one |
+| `NoLoadTest`, `TransformerCoreAdmittance` | the `%noloadloss` and `%imag` extras |
 | `EnergySource` | voltage sources, with the series impedance in `rs`/`xs` extras |
 
 `SinglePhaseKind` A, B, C, and N map to terminals 1, 2, 3, and 4, and the
 split phase s1 and s2 to 1 and 2. A conductor beyond those four has no CIM
-phase, so the writer reports it. The tank form (`TransformerTank` with
-`TransformerTankInfo` catalog data), regulator controls, distributed energy
-resources, machines, wire and cable geometry, operational limits,
+phase, so the writer reports it.
+
+A tank end's terminals follow from its `TransformerTankEnd.phases`, in the
+form the dss reader gives the equivalent OpenDSS transformer: a line to
+neutral end `A` is terminals `1, 4` (`bus.1.0`), a line to line end `AB` is
+a delta winding on `1, 2`, a three phase end is `1, 2, 3` in delta or
+`1, 2, 3, 4` in wye, and the center tap halves `s1` and `s2` are `1, 4` and
+`4, 2` (`bus.1.0` and `bus.0.2`), so they stack to the full secondary
+voltage. Catalog values follow CIMHub's conventions: `ratedU`, `ratedS`, and
+`r` in V, VA, and ohm; `ShortCircuitTest.leakageImpedance` in ohm referred to
+the energised end and read as the pair reactance, which is what the GridAPPS-D
+feeders state (CIM defines it as the impedance magnitude, but read that way
+IEEE 13's center tap and regulator tests lose their reactance); test losses in
+kW; `NoLoadTest.excitingCurrent` in percent of rated current at the test's
+`basePower`; and every percentage rescaled to winding 1's rating. End
+resistances (`TransformerEndInfo.r`) take precedence over resistances split
+from test losses, a loss of 0 states nothing, and a nonzero loss that
+disagrees with the end resistances is reported
+(`READ.CIM_DIST.VALUE_CONFLICT`). A transformer whose extras carry
+`cim_form = "tank"` is written as tanks, grouped under the `PowerTransformer`
+its `cim_power_transformer` extra names, with tanks of identical catalog data
+sharing one `TransformerTankInfo`; every other transformer, including those
+from other formats, takes the `PowerTransformerEnd` form.
+
+Regulator controls, distributed energy resources, machines, wire and cable geometry, operational limits,
 `LoadResponseCharacteristic`, and `TopologicalNode` only documents are not
 mapped yet, and the reader reports each of them: a class with no mapping is
 counted per class (`READ.CIM_DIST.CLASS_UNMAPPED`), a property no mapping reads
