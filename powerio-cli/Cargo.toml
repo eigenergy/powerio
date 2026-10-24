@@ -52,6 +52,7 @@ serde_json.workspace = true
 
 [dev-dependencies]
 num-complex.workspace = true
+rusqlite.workspace = true
 tempfile = "3"
 
 [lints]

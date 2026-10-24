@@ -1,0 +1,182 @@
+{
+  "powerio_version": "0.11.4",
+  "binding": "installed Python wheel",
+  "cases": {
+    "CSIRO19": {
+      "source_sha256": "5540e956effe9a8e6e691f834e79f62c86d96924fdd38092e5fd5c6fa84789c4",
+      "source_bytes": 4476928,
+      "family": "balanced",
+      "snapshot_hours": 12,
+      "experimental_compatibility": false,
+      "buses_including_port_buses": 26,
+      "loads": 7,
+      "source_echo": true,
+      "typed_ir": true,
+      "ir_cannot_echo_native": true,
+      "pf_preparation": {
+        "constructed": true,
+        "type": "AcPfInstance"
+      },
+      "ordinary_emission": {
+        "matpower": {
+          "emitted_and_reparsed": true,
+          "diagnostic_codes": [
+            "EMIT.MATPOWER.FIELD_DROPPED",
+            "EMIT.MATPOWER.EXTRAS_DROPPED",
+            "EMIT.SINCAL.RETAINED_SOURCE_OMITTED",
+            "EMIT.MATPOWER.FIELD_DROPPED",
+            "EMIT.MATPOWER.FIELD_DROPPED"
+          ]
+        }
+      },
+      "source_inventory_entries": 4,
+      "numerical_validation_in_this_check": false
+    },
+    "CSIRO09": {
+      "source_sha256": "d2c41fae2f6fc3b9cdea75c1bcbc50f083b104440148a25274ee6ed7da57a14b",
+      "source_bytes": 69181440,
+      "family": "multiconductor",
+      "snapshot_hours": 12,
+      "experimental_compatibility": false,
+      "buses_including_port_buses": 689,
+      "loads": 67,
+      "source_echo": true,
+      "typed_ir": true,
+      "ir_cannot_echo_native": true,
+      "pf_preparation": {
+        "constructed": false,
+        "code": "BUILD.INSTANCE.SHAPE_MISMATCH",
+        "message": "BUILD.INSTANCE.SHAPE_MISMATCH: multiconductor island containing bus `2178` has no voltage source; explicitly resolve de-energized islands before constructing a calculation instance"
+      },
+      "ordinary_emission": {
+        "dss": {
+          "emitted_and_reparsed": false,
+          "code": "BUILD.DIST.ELECTRICAL_INCOMPLETE",
+          "message": "BUILD.DIST.ELECTRICAL_INCOMPLETE: source `4`: this projection does not support reference-terminal voltage constraints"
+        },
+        "pmd-json": {
+          "emitted_and_reparsed": false,
+          "code": "BUILD.DIST.ELECTRICAL_INCOMPLETE",
+          "message": "BUILD.DIST.ELECTRICAL_INCOMPLETE: source `4`: this projection does not support reference-terminal voltage constraints"
+        },
+        "bmopf-json": {
+          "emitted_and_reparsed": false,
+          "code": "BUILD.DIST.ELECTRICAL_INCOMPLETE",
+          "message": "BUILD.DIST.ELECTRICAL_INCOMPLETE: source `4`: this projection does not support reference-terminal voltage constraints"
+        }
+      },
+      "source_inventory_entries": 3,
+      "numerical_validation_in_this_check": false
+    },
+    "CSIRO12": {
+      "source_sha256": "7339548baf8bfcf5b891b9d3dbb6b616d9234b8f3df298d959904e150b8cfe91",
+      "source_bytes": 29548544,
+      "family": "multiconductor",
+      "snapshot_hours": 12,
+      "experimental_compatibility": true,
+      "buses_including_port_buses": 216,
+      "loads": 26,
+      "source_echo": true,
+      "typed_ir": true,
+      "ir_cannot_echo_native": true,
+      "pf_preparation": {
+        "constructed": true,
+        "type": "McAcPfInstance"
+      },
+      "ordinary_emission": {
+        "dss": {
+          "emitted_and_reparsed": false,
+          "code": "BUILD.DIST.ELECTRICAL_INCOMPLETE",
+          "message": "BUILD.DIST.ELECTRICAL_INCOMPLETE: source `181`: this projection does not support reference-terminal voltage constraints"
+        },
+        "pmd-json": {
+          "emitted_and_reparsed": false,
+          "code": "BUILD.DIST.ELECTRICAL_INCOMPLETE",
+          "message": "BUILD.DIST.ELECTRICAL_INCOMPLETE: source `181`: this projection does not support reference-terminal voltage constraints"
+        },
+        "bmopf-json": {
+          "emitted_and_reparsed": false,
+          "code": "BUILD.DIST.ELECTRICAL_INCOMPLETE",
+          "message": "BUILD.DIST.ELECTRICAL_INCOMPLETE: source `181`: this projection does not support reference-terminal voltage constraints"
+        }
+      },
+      "source_inventory_entries": 3,
+      "numerical_validation_in_this_check": false
+    },
+    "Truong12": {
+      "source_sha256": "fda71fb98e45f118dcea90b61c78db855c822f9b2b8d594bf05bf101ca9dff9a",
+      "source_bytes": 2363392,
+      "family": "multiconductor",
+      "snapshot_hours": null,
+      "experimental_compatibility": false,
+      "buses_including_port_buses": 46,
+      "loads": 33,
+      "source_echo": true,
+      "typed_ir": true,
+      "ir_cannot_echo_native": true,
+      "pf_preparation": {
+        "constructed": true,
+        "type": "McAcPfInstance"
+      },
+      "ordinary_emission": {
+        "dss": {
+          "emitted_and_reparsed": true,
+          "diagnostic_codes": [
+            "EMIT.DSS.VALUE_COLLAPSED",
+            "EMIT.DSS.VALUE_SUBSTITUTED",
+            "EMIT.DSS.VALUE_SUBSTITUTED",
+            "EMIT.DSS.VALUE_SUBSTITUTED",
+            "EMIT.DSS.VALUE_SUBSTITUTED",
+            "EMIT.DSS.VALUE_SUBSTITUTED",
+            "EMIT.DSS.VALUE_SUBSTITUTED",
+            "EMIT.DSS.VALUE_SUBSTITUTED",
+            "EMIT.DSS.VALUE_SUBSTITUTED",
+            "EMIT.DSS.VALUE_SUBSTITUTED",
+            "EMIT.DSS.VALUE_SUBSTITUTED",
+            "EMIT.DSS.VALUE_SUBSTITUTED",
+            "EMIT.DSS.EXTRAS_DROPPED",
+            "EMIT.DSS.EXTRAS_DROPPED",
+            "EMIT.DSS.EXTRAS_DROPPED",
+            "EMIT.DSS.EXTRAS_DROPPED",
+            "EMIT.DSS.EXTRAS_DROPPED",
+            "EMIT.DSS.EXTRAS_DROPPED",
+            "EMIT.DSS.EXTRAS_DROPPED",
+            "EMIT.DSS.EXTRAS_DROPPED",
+            "EMIT.DSS.EXTRAS_DROPPED",
+            "EMIT.DSS.EXTRAS_DROPPED",
+            "EMIT.DSS.EXTRAS_DROPPED",
+            "EMIT.DSS.EXTRAS_DROPPED",
+            "EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED"
+          ]
+        },
+        "pmd-json": {
+          "emitted_and_reparsed": true,
+          "diagnostic_codes": [
+            "EMIT.PMD.FIELD_DROPPED",
+            "EMIT.PMD.FIELD_DROPPED",
+            "EMIT.PMD.FIELD_DROPPED",
+            "EMIT.PMD.FIELD_DROPPED",
+            "EMIT.PMD.FIELD_DROPPED",
+            "EMIT.PMD.FIELD_DROPPED",
+            "EMIT.PMD.FIELD_DROPPED",
+            "EMIT.PMD.FIELD_DROPPED",
+            "EMIT.PMD.FIELD_DROPPED",
+            "EMIT.PMD.FIELD_DROPPED",
+            "EMIT.PMD.FIELD_DROPPED",
+            "EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED"
+          ]
+        },
+        "bmopf-json": {
+          "emitted_and_reparsed": true,
+          "diagnostic_codes": [
+            "EMIT.BMOPF.FIELD_DROPPED",
+            "EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED"
+          ]
+        }
+      },
+      "source_inventory_entries": 21,
+      "numerical_validation_in_this_check": false
+    }
+  },
+  "passed": true
+}

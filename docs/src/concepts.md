@@ -47,10 +47,13 @@ OperatingPoint<MulticonductorNetwork>
 TimeSeries<T>
 ScenarioSet<T>
 DcPfInstance, AcPfInstance, DcOpfInstance, AcOpfInstance,
-McAcPfInstance, McAcOpfInstance, LinDist3FlowOpfInstance, AcScucInstance
+McAcPfInstance, McAcOpfInstance, LinDist3FlowPfInstance,
+LinDist3FlowOpfInstance, AcScucInstance
 DcPfSolution, AcPfSolution, DcOpfSolution, AcOpfSolution, SocwrOpfSolution,
-McAcPfSolution, McAcOpfSolution, LinDist3FlowOpfSolution, AcScucSolution
+McAcPfSolution, McAcOpfSolution, LinDist3FlowPfSolution,
+LinDist3FlowOpfSolution, AcScucSolution
 GeoLayer
+ContingencySet, SubsystemSet, MonitoredSet
 ```
 
 | Type | Meaning |
@@ -63,6 +66,7 @@ GeoLayer
 | `*Instance` | The complete input of one named calculation: fixed inputs, unknowns, bounds, objectives, horizon, contingencies, and formulation choices. |
 | `*Solution` | The result of one calculation: computed quantities, termination, residuals, multipliers, and the objective or bound. |
 | `GeoLayer` | Coordinates and routes for the elements of a case, as a document of its own. |
+| `ContingencySet`, `SubsystemSet`, `MonitoredSet` | The PSS/E contingency, subsystem, and monitored element files (`.con`, `.sub`, `.mon`) as documents of their own; the contingency and monitored element sets resolve against a network on request. |
 
 The two network types are peers, and neither is a subtype of the other.
 `BalancedNetwork` is where MATPOWER, PSS/E, XIIDM, CGMES, and the other

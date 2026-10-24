@@ -877,10 +877,8 @@ impl<'a> Mapper<'a> {
     fn lines(&mut self) -> (Vec<DistLineCode>, Vec<DistLine>) {
         let phase_children =
             self.children_of("ACLineSegmentPhase", "ACLineSegmentPhase.ACLineSegment");
-        let impedance_data = self.children_of(
-            "PhaseImpedanceData",
-            "PhaseImpedanceData.PerLengthPhaseImpedance",
-        );
+        let impedance_data =
+            self.children_of("PhaseImpedanceData", "PhaseImpedanceData.PhaseImpedance");
         let mut line_codes: Vec<DistLineCode> = Vec::new();
         // (impedance object, its matrix rows in segment phase order) to line
         // code name.
@@ -919,6 +917,7 @@ impl<'a> Mapper<'a> {
                 continue;
             }
             let stated = self.store.f(&id, "Conductor.length").filter(|l| *l > 0.0);
+            let length_stated = stated.is_some();
             let length = if let Some(length) = stated {
                 length
             } else {
@@ -938,6 +937,7 @@ impl<'a> Mapper<'a> {
                 &name,
                 &rows,
                 length,
+                length_stated,
                 &impedance_data,
                 &mut line_codes,
                 &mut seen,
@@ -955,6 +955,26 @@ impl<'a> Mapper<'a> {
             lines.push(line);
         }
         (line_codes, lines)
+    }
+
+    /// A per-length impedance needs the segment's own length: the 1 m
+    /// placeholder would turn it into a near short circuit, so the segment
+    /// stays unresolved and conversion refuses it.
+    fn per_length_is_scaled(&mut self, line: &str, pli: &str, length_stated: bool) -> bool {
+        if !length_stated {
+            let label = self.label(line);
+            let pli = self.label(pli);
+            self.note(
+                &C::READ_CIM_DIST_IMPEDANCE_UNRESOLVED,
+                "ACLineSegment",
+                line,
+                format!(
+                    "ACLineSegment {label}: its PerLengthImpedance {pli} needs a positive \
+                     Conductor.length; the segment has no series impedance"
+                ),
+            );
+        }
+        length_stated
     }
 
     /// Every phase impedance object is a line code at its own conductor
@@ -1018,12 +1038,14 @@ impl<'a> Mapper<'a> {
     /// other rows writes as an object of its own. The flag is false when the
     /// segment states no impedance and the code is a zero placeholder.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn line_code_for(
         &mut self,
         line: &str,
         line_name: &str,
         rows: &[usize],
         length: f64,
+        length_stated: bool,
         impedance_data: &HashMap<String, Vec<String>>,
         line_codes: &mut Vec<DistLineCode>,
         seen: &mut HashMap<(String, Vec<usize>), String>,
@@ -1040,7 +1062,8 @@ impl<'a> Mapper<'a> {
             };
             let key = (pli.clone(), key_rows);
             if let Some(name) = seen.get(&key) {
-                return (name.clone(), true);
+                let name = name.clone();
+                return (name, self.per_length_is_scaled(line, &pli, length_stated));
             }
             let matrices = if self.dropped.contains(&pli) {
                 None
@@ -1059,7 +1082,7 @@ impl<'a> Mapper<'a> {
                 }
                 line_codes.push(code);
                 seen.insert(key, name.clone());
-                return (name, true);
+                return (name, self.per_length_is_scaled(line, &pli, length_stated));
             }
             unusable = Some(pli);
         }
@@ -1566,7 +1589,7 @@ impl<'a> Mapper<'a> {
         }
         let sum: f64 = values.iter().sum();
         if let Some(total) = total
-            && (sum - total).abs() > 1e-9 * sum.abs().max(total.abs()).max(1.0)
+            && (sum - total).abs() > 1e-6 * sum.abs().max(total.abs()).max(1.0)
         {
             self.note(
                 &C::READ_CIM_DIST_VALUE_CONFLICT,
