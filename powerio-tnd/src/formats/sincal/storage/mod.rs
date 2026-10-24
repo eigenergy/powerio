@@ -44,6 +44,23 @@ impl std::error::Error for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-fn format_error(message: impl std::fmt::Display) -> Error {
-    Error(message.to_string())
+fn format_error<T: std::fmt::Display + 'static>(message: T) -> Error {
+    Error(failure_message(&message))
+}
+
+/// Render a storage failure. SQLite interrupts a query once the parse's
+/// shared step budget is spent, which means the project is larger than this
+/// reader handles; a bare "interrupted" would not say so.
+pub(crate) fn failure_message<T: std::fmt::Display + 'static>(message: &T) -> String {
+    let interrupted = (message as &dyn std::any::Any)
+        .downcast_ref::<rusqlite::Error>()
+        .and_then(rusqlite::Error::sqlite_error_code)
+        == Some(rusqlite::ErrorCode::OperationInterrupted);
+    if interrupted {
+        "the project exceeds this reader's bounded query work; SINCAL projects of a \
+         few hundred elements or more may be too large for this release"
+            .to_owned()
+    } else {
+        message.to_string()
+    }
 }

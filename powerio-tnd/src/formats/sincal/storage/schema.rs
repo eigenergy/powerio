@@ -240,9 +240,11 @@ fn read_rows<T>(
 
 pub fn require_table(connection: &Connection, table: &str, required: &[&str]) -> Result<()> {
     // A view or virtual table is not a native schema table. Do not evaluate it.
+    // Naming the table looks up one entry instead of scanning the catalog on
+    // every call; the name must still match the native spelling exactly.
     let kind: String = connection
         .query_row(
-            "SELECT type FROM pragma_table_list WHERE schema='main' AND name=?1",
+            "SELECT type FROM pragma_table_list(?1) WHERE schema='main' AND name=?1",
             [table],
             |row| row.get(0),
         )

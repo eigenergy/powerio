@@ -71,10 +71,10 @@ fn read(source: &Source, variant: Option<i64>) -> Result<NativeDatabase> {
     NativeDatabase::decode(&bytes, variant)
 }
 
-fn format_error(message: impl std::fmt::Display) -> Error {
+fn format_error<T: std::fmt::Display + 'static>(message: T) -> Error {
     Error::FormatRead {
         format: "PSS SINCAL",
-        message: message.to_string(),
+        message: crate::formats::sincal::storage::failure_message(&message),
     }
 }
 

@@ -32,7 +32,7 @@ fn refuse_segmented_lines(db: &DatabaseSnapshot) -> Result<()> {
     let kind: Option<String> = db
         .connection
         .query_row(
-            "SELECT type FROM pragma_table_list WHERE schema='main' AND name='LineSeg'",
+            "SELECT type FROM pragma_table_list('LineSeg') WHERE schema='main' AND name='LineSeg'",
             [],
             |row| row.get(0),
         )
@@ -72,10 +72,10 @@ fn refuse_segmented_lines(db: &DatabaseSnapshot) -> Result<()> {
     }
 }
 
-fn error(message: impl std::fmt::Display) -> powerio_tx::Error {
+fn error<T: std::fmt::Display + 'static>(message: T) -> powerio_tx::Error {
     powerio_tx::Error::FormatRead {
         format: "sincal",
-        message: message.to_string(),
+        message: crate::formats::sincal::storage::failure_message(&message),
     }
 }
 

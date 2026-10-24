@@ -255,7 +255,7 @@ impl DatabaseSnapshot {
         let kind: String = self
             .connection
             .query_row(
-                "SELECT type FROM pragma_table_list WHERE schema='main' AND name=?1",
+                "SELECT type FROM pragma_table_list(?1) WHERE schema='main' AND name=?1",
                 [table],
                 |row| row.get(0),
             )
