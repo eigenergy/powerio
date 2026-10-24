@@ -122,6 +122,14 @@ fn plan(
     let mut first = true;
     let mut ended = false;
     let mut literals_end = 0;
+    // The locator returns assignments in source order, so one cursor pairs
+    // each statement with its assignment instead of searching them all.
+    let starts: Vec<usize> = assignments
+        .iter()
+        .map(|a| a.start + a.text.len() - a.text.trim_start().len())
+        .collect();
+    debug_assert!(starts.is_sorted());
+    let mut next = 0;
     while at < source.len() {
         at = skip_trivia(source, at)?;
         if at == source.len() {
@@ -133,9 +141,10 @@ fn plan(
         // assignment start, one assignment per field, and no literals after
         // executable definitions. In particular a later baseMVA/bus overwrite
         // cannot be mistaken for the values used by an earlier conversion.
-        if let Some(assignment) = assignments.iter().find(|assignment| {
-            assignment.start + assignment.text.len() - assignment.text.trim_start().len() == at
-        }) {
+        while starts.get(next).is_some_and(|&start| start < at) {
+            next += 1;
+        }
+        if let Some(assignment) = (starts.get(next) == Some(&at)).then(|| &assignments[next]) {
             if ended || !vars.is_empty() || !scales.is_empty() || seen.contains(&assignment.field) {
                 return None;
             }
