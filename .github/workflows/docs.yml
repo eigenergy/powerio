@@ -52,7 +52,7 @@ jobs:
     - name: Build docs
       env:
         RUSTDOCFLAGS: "-D warnings"
-      run: cargo doc --no-deps --all-features -p powerio -p powerio-core -p powerio-tx -p powerio-matrix -p powerio-prob -p powerio-dist -p powerio-capi -p powerio-py
+      run: cargo doc --no-deps --all-features -p powerio-tnd -p powerio -p powerio-core -p powerio-tx -p powerio-matrix -p powerio-prob -p powerio-dist -p powerio-capi -p powerio-py
     - name: Build Python API docs
       run: |
         python -m pip install --upgrade pip
@@ -142,6 +142,7 @@ jobs:
                 <a href="powerio_core/index.html">powerio-core</a>
                 <a href="powerio_tx/index.html">powerio-tx</a>
                 <a href="powerio_dist/index.html">powerio-dist</a>
+                <a href="powerio_tnd/index.html">powerio-tnd</a>
                 <a href="powerio_prob/index.html">powerio-prob</a>
                 <a href="powerio_matrix/index.html">powerio-matrix</a>
                 <a href="powerio_capi/index.html">powerio-capi</a>

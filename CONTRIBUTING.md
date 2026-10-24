@@ -78,12 +78,25 @@ updates `Cargo.lock`. Then:
 3. Inspect the draft and its five binary assets, then publish the release.
    The release event fires the PyPI publish
    (python.yml) and the crates.io publish (crates.yml: powerio-core,
-   powerio-tx, powerio-dist, powerio-prob, powerio-matrix, powerio, and
-   powerio-cli, in dependency order). Both deploy through reviewer protected
-   environments (`pypi` and `crates-io`; the protection lives in the repo
-   settings). PyPI skips files it already has and crates.io skips versions
-   already in the index, so if one of them fails partway you recover by
-   running it again.
+   powerio-tx, powerio-dist, powerio-tnd, powerio-prob, powerio-matrix,
+   powerio, and powerio-cli, in dependency order). Both deploy through
+   reviewer protected environments (`pypi` and `crates-io`; the protection
+   lives in the repo settings). PyPI skips files it already has and crates.io
+   skips versions already in the index, so if one of them fails partway you
+   recover by running it again.
+
+   A crate's first version cannot use trusted publishing
+   ([crates.io](https://blog.rust-lang.org/2025/07/11/crates-io-development-update-2025-07/)).
+   For a release that adds a crate, run `scripts/release-verified.py` from a
+   clean checkout of the tested main commit with `--bootstrap-crate <name>`,
+   using your existing GitHub CLI login and local Cargo credentials. It waits
+   for the native packages and Julia checks, then for the protected crates.io
+   job; when that job fails at the new crate, it publishes only the named
+   crate, checks the registry, and reruns the job to publish the rest. When a
+   protected environment awaits approval, approve it in GitHub and rerun the
+   same command; the helper never approves it. Afterwards configure the new
+   crate's trusted publisher: owner `eigenergy`, repository `powerio`,
+   workflow `crates.yml`, environment `crates-io`.
 4. Publishing also starts PowerIO.jl's "Release" workflow, which releases
    PowerIO.jl X.Y.Z with no PowerIO.jl change: it sets the version, pins the
    release tarballs in `Artifacts.toml`, runs the Julia tests against them,
