@@ -1017,7 +1017,7 @@ fn write_phase_impedance(
         for (j, &col) in rows.iter().enumerate().take(i + 1) {
             let did = det_mrid("pid", &format!("{id}:{i}:{j}"));
             doc.open("PhaseImpedanceData", &did);
-            doc.reference("PhaseImpedanceData.PerLengthPhaseImpedance", id);
+            doc.reference("PhaseImpedanceData.PhaseImpedance", id);
             doc.integer("PhaseImpedanceData.row", i + 1);
             doc.integer("PhaseImpedanceData.column", j + 1);
             doc.number(&what, "PhaseImpedanceData.r", at(&code.r_series, row, col));

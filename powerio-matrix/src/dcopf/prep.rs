@@ -75,16 +75,15 @@ pub struct DcOpfOptions {
     /// existed deserialize to the default (off), the pre-field behavior.
     #[serde(default)]
     pub synthesize_unrated_limits: bool,
-    /// Apply PowerModels' ±60 degree correction to unconstrained or unusable
-    /// branch angle difference intervals in the prepared arrays.
-    #[serde(default = "default_true")]
-    pub correct_angle_difference_bounds: bool,
+    /// Which angle difference bounds the prepared arrays carry.
+    #[serde(default = "default_angle_difference_bounds")]
+    pub angle_difference_bounds: powerio_tx::AngleDifferenceBounds,
     /// The already validated instance objective to compile into the arrays.
     pub objective: PreparedObjective,
 }
 
-const fn default_true() -> bool {
-    true
+const fn default_angle_difference_bounds() -> powerio_tx::AngleDifferenceBounds {
+    powerio_tx::AngleDifferenceBounds::PowerModelsPad
 }
 
 impl Default for DcOpfOptions {
@@ -94,7 +93,7 @@ impl Default for DcOpfOptions {
             units: Units::default(),
             skip_zero_impedance: false,
             synthesize_unrated_limits: false,
-            correct_angle_difference_bounds: true,
+            angle_difference_bounds: default_angle_difference_bounds(),
             objective: PreparedObjective::default(),
         }
     }
@@ -149,8 +148,10 @@ pub struct DcBranchParameters {
     pub shift: Vec<f64>,
     /// Thermal limit in the selected power unit. Zero means unlimited.
     pub f_max: Vec<f64>,
-    /// Branch angle bounds in radians.
+    /// Selected branch angle bounds in radians; absent sides are infinities.
+    #[serde(with = "crate::opf::angle_bounds_serde")]
     pub angle_min: Vec<f64>,
+    #[serde(with = "crate::opf::angle_bounds_serde")]
     pub angle_max: Vec<f64>,
     /// Branch column to row in the star-lowered analysis network.
     pub analysis_rows: Vec<usize>,
@@ -208,6 +209,11 @@ pub struct DcOpfPreparation {
     pub synthesize_unrated_limits: bool,
     /// Whether PowerModels' angle difference correction was applied.
     pub correct_angle_difference_bounds: bool,
+    /// Which angle difference bounds `angle_min` and `angle_max` carry.
+    /// `None` only in a document written before the field existed, whose
+    /// `correct_angle_difference_bounds` says whether the pad was applied.
+    #[serde(default)]
+    pub angle_difference_bounds: Option<powerio_tx::AngleDifferenceBounds>,
     /// Dense bus index to external bus ID.
     pub bus_ids: Vec<BusId>,
     /// Dense bus index to row in the star-lowered analysis network.
@@ -453,11 +459,10 @@ pub(crate) fn preparation_from_view(
         }
         let source_amin = case.to_radians(branch.angmin);
         let source_amax = case.to_radians(branch.angmax);
-        let (amin, amax) = if options.correct_angle_difference_bounds {
-            powerio_tx::correct_angle_difference_bounds(source_amin, source_amax)
-        } else {
-            (source_amin, source_amax)
-        };
+        let (amin, amax) =
+            options
+                .angle_difference_bounds
+                .calc_bounds(source_amin, source_amax, shift_rad);
         from_bus.push(from);
         branch_identities.push(crate::opf::row_identity(
             branch.uid.as_deref(),
@@ -502,7 +507,8 @@ pub(crate) fn preparation_from_view(
         objective: options.objective,
         skip_zero_impedance: options.skip_zero_impedance,
         synthesize_unrated_limits: options.synthesize_unrated_limits,
-        correct_angle_difference_bounds: options.correct_angle_difference_bounds,
+        correct_angle_difference_bounds: options.angle_difference_bounds.is_padded(),
+        angle_difference_bounds: Some(options.angle_difference_bounds),
         bus_ids: active_buses.bus_ids,
         bus_analysis_rows,
         bus_source_rows,

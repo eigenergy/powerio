@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use powerio::{BalancedNetwork, PioValue};
-use powerio_core::{PioModule, TimePoint};
+use powerio_core::{PioModule, Scenario, ScenarioId, ScenarioSet, TimePoint, TimeSeries};
 use powerio_dist::{DistBus, DistLine, DistLineCode, MulticonductorNetwork, VoltageSource};
 use powerio_prob::{
     BalancedOperatingPointBuilder, BalancedOperatingPointFlag, BalancedOperatingPointQuantity,
@@ -684,4 +684,86 @@ fn a_solution_over_106038_terminals_round_trips() {
         decoded.source_active_injections(),
         solution.source_active_injections()
     );
+}
+
+fn repeated_time_points(count: usize) -> Vec<TimePoint> {
+    (0..count)
+        .map(|index| TimePoint::new(format!("h{index}"), None).unwrap())
+        .collect()
+}
+
+fn nested_balanced_network_series_module(count: usize) -> PioModule<PioValue> {
+    let series = TimeSeries::new(repeated_time_points(count), vec![small_network(); count])
+        .expect("time points and values have equal lengths");
+    let scenarios = ScenarioSet::new(vec![Scenario::new(
+        ScenarioId::new("base").unwrap(),
+        Some(1.0),
+        series,
+    )])
+    .unwrap();
+    PioModule::new(PioValue::from(scenarios))
+}
+
+fn small_multiconductor_network() -> MulticonductorNetwork {
+    let terminals: Vec<String> = ["1", "2", "3", "n"].map(String::from).to_vec();
+    let mut network = MulticonductorNetwork::named("stored-nested-series");
+    network
+        .line_codes_mut()
+        .push(DistLineCode::new("lc", diagonal(4, 0.2), diagonal(4, 0.4)));
+    network
+        .buses_mut()
+        .push(DistBus::new("b0", terminals.clone()));
+    network.sources_mut().push(VoltageSource::new(
+        "vs",
+        "b0",
+        terminals[..3].to_vec(),
+        vec![2_400.0; 3],
+        vec![0.0, -2.094, 2.094],
+    ));
+    network
+}
+
+fn nested_multiconductor_network_series_module(count: usize) -> PioModule<PioValue> {
+    let network = small_multiconductor_network();
+    let series = TimeSeries::new(repeated_time_points(count), vec![network; count])
+        .expect("time points and values have equal lengths");
+    let scenarios = ScenarioSet::new(vec![Scenario::new(
+        ScenarioId::new("base").unwrap(),
+        Some(1.0),
+        series,
+    )])
+    .unwrap();
+    PioModule::new(PioValue::from(scenarios))
+}
+
+fn assert_emit_record_cap(module: &PioModule<PioValue>) {
+    let error = serialize_module_text(module)
+        .expect_err("the writer must reject a nested series over the reader's bound");
+    assert_eq!(
+        error.info().map(|info| info.code),
+        Some("EMIT.MODULE.RECORD_CAP"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn nested_balanced_network_series_observes_the_storage_bound() {
+    const LIMIT: usize = 65_536;
+    let module = nested_balanced_network_series_module(LIMIT);
+    let text = serialize_module_text(&module).expect("the exact limit is accepted");
+    deserialize_module_text(&text).expect("the reader accepts the exact limit");
+
+    let oversized = nested_balanced_network_series_module(LIMIT + 1);
+    assert_emit_record_cap(&oversized);
+}
+
+#[test]
+fn nested_multiconductor_network_series_observes_the_storage_bound() {
+    const LIMIT: usize = 65_536;
+    let module = nested_multiconductor_network_series_module(LIMIT);
+    let text = serialize_module_text(&module).expect("the exact limit is accepted");
+    deserialize_module_text(&text).expect("the reader accepts the exact limit");
+
+    let oversized = nested_multiconductor_network_series_module(LIMIT + 1);
+    assert_emit_record_cap(&oversized);
 }

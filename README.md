@@ -6,8 +6,8 @@
 [![crates.io](https://img.shields.io/crates/v/powerio)](https://crates.io/crates/powerio)
 [![docs.rs](https://docs.rs/powerio/badge.svg)](https://docs.rs/powerio)
 [![PyPI](https://img.shields.io/pypi/v/powerio)](https://pypi.org/project/powerio/)
-[![MSRV 1.88](https://img.shields.io/badge/MSRV-1.88-blue.svg)](Cargo.toml)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
+[![MSRV 1.88](https://img.shields.io/badge/MSRV-1.88-blue.svg)](https://github.com/eigenergy/powerio/blob/main/Cargo.toml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/eigenergy/powerio/blob/main/LICENSE-MIT)
 
 <p align="center">
   <img
@@ -25,8 +25,9 @@ C ABI expose the same operations under the same names.
 
 A parse returns a `PioModule`, which is one typed value together with its
 sources, diagnostics, source map, and history. Depending on what the source
-declares, the value is a network, a calculation instance, a solution, a time
-series, a scenario set, or a geographic layer.
+declares, the value is a network, an operating point, a calculation instance,
+a solution, a time series, a scenario set, a geographic layer, or a PSS/E
+contingency analysis file.
 
 ## Install
 
@@ -40,7 +41,7 @@ cargo install powerio-cli         # the powerio command
 
 ## Parse and emit
 
-The examples use [case9.m](tests/data/case9.m), the nine-bus MATPOWER case
+The examples use [case9.m](https://github.com/eigenergy/powerio/blob/main/tests/data/case9.m), the nine-bus MATPOWER case
 included in this repository. Save it in your working directory first, or
 replace `"case9.m"` with the path to your own case.
 
@@ -119,6 +120,7 @@ describe separate interfaces.
 | MATPOWER `.m` | `matpower` | yes | yes |
 | PSS/E RAW | `psse`, `psse34`, `psse35` | revisions 32 to 35 | 33, 34, 35 |
 | PSS/E RAWX | `psse-rawx` | revision 35 | 35 |
+| PSS/E contingency, subsystem, and monitored element files `.con`, `.sub`, `.mon` | `psse-con`, `psse-sub`, `psse-mon` | yes | yes |
 | PowSybl XIIDM | `xiidm` | 1.0 to 1.17 | 1.17 |
 | PowSybl JIIDM | `jiidm` | 1.0 to 1.17 | 1.17 |
 | CIM CGMES profile set | `cgmes` | 2.4.15, 3.0 | 3.0 |
@@ -146,8 +148,9 @@ The balanced transmission formats parse to `BalancedNetwork`, and OpenDSS,
 PMD, BMOPF, and distribution CIM parse to `MulticonductorNetwork`. A GO Challenge 3 problem
 parses to `AcScucInstance`, a problem with its solution to `AcScucSolution`,
 an OPFData file to `AcOpfSolution`, a GridFM dataset to
-`ScenarioSet<BalancedNetwork>`, and a PyPSA directory with several snapshots
-to a `TimeSeries`. The
+`ScenarioSet<BalancedNetwork>`, a PyPSA directory with several snapshots to a
+`TimeSeries`, and the PSS/E `.con`, `.sub`, and `.mon` files to
+`ContingencySet`, `SubsystemSet`, and `MonitoredSet`. The
 [format guide](https://eigenergy.github.io/powerio/guide/format-fidelity.html)
 says what each reader keeps, what each writer reports, and how each is
 checked against its reference implementation.
@@ -172,7 +175,10 @@ depend on just the layer they use.
 `powerio-tx` and `powerio-dist` share `powerio-core` and nothing else, so a
 distribution consumer pulls in no transmission code. `powerio-prob` is matrix
 free. The `powerio` facade re-exports the component crates, with
-`powerio-matrix` behind its `matrix` feature.
+`powerio-matrix` behind its `matrix` feature. Native SINCAL support is the
+`sincal` feature, on by default; it brings in SQLite, so a
+`wasm32-unknown-unknown` build with it needs a C compiler with a WebAssembly
+backend, and `default-features = false` leaves it out.
 
 ## Documentation
 

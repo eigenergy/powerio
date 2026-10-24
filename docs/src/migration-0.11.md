@@ -194,16 +194,19 @@ tap adjusted reactance, and reactance only equations.
 
 ## Calculation instances and solutions
 
-PowerIO 0.11 registers these calculation pairs:
+PowerIO 0.11 registers these calculation pairs. The LinDist3Flow OPF pair
+arrived in 0.11.1 and the LinDist3Flow power flow pair in 0.11.4.
 
 ```text
-DcPfInstance       DcPfSolution
-AcPfInstance       AcPfSolution
-DcOpfInstance      DcOpfSolution
-AcOpfInstance      AcOpfSolution
-McAcPfInstance     McAcPfSolution
-McAcOpfInstance    McAcOpfSolution
-AcScucInstance     AcScucSolution
+DcPfInstance              DcPfSolution
+AcPfInstance              AcPfSolution
+DcOpfInstance             DcOpfSolution
+AcOpfInstance             AcOpfSolution
+McAcPfInstance            McAcPfSolution
+McAcOpfInstance           McAcOpfSolution
+LinDist3FlowPfInstance    LinDist3FlowPfSolution
+LinDist3FlowOpfInstance   LinDist3FlowOpfSolution
+AcScucInstance            AcScucSolution
 ```
 
 `SocwrOpfSolution` holds a PowerModels SOCWR relaxation, including its

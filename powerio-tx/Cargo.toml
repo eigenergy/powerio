@@ -18,6 +18,7 @@ categories = ["science", "parsing"]
 all-features = true
 
 [features]
+default = []
 schema = ["dep:schemars", "powerio-core/schema"]
 
 [dependencies]
@@ -41,8 +42,13 @@ schemars = { workspace = true, optional = true }
 tempfile = "3"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 
+
 [[bench]]
 name = "parse"
+harness = false
+
+[[bench]]
+name = "large_case"
 harness = false
 
 [lints]

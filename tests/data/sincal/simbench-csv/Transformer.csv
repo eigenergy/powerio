@@ -1,0 +1,2 @@
+id;nodeHV;nodeLV;type;tappos;autoTap;autoTapSide;loadingMax;substation;subnet;voltLvl
+MV1.101-LV1.101-Trafo 1;MV1.101 Bus 4_1;LV1.101 Bus 4_5;0.16 MVA 20/0.4 kV DOTE 160/20  SGB;0;0;NULL;100;NULL;LV1.101;6

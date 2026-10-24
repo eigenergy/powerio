@@ -408,6 +408,31 @@ def test_parse_confines_includes_to_the_case_directory(tmp_path):
     assert "include_root" not in inspect.signature(powerio.parse).parameters
 
 
+def test_referenced_source_rows_read_like_earth_source_rows():
+    # The IR keeps a referenced source in a tagged record so older readers
+    # reject it; Python rows stay flat and add `reference_terminal`.
+    document = {
+        "meta": {"schema_version": "0.2.0"},
+        "bus": {"b": {"terminal_names": ["a", "n"]}},
+        "voltage_source": {"s": {
+            "bus": "b", "terminal_map": ["a"],
+            "v_magnitude": [230], "v_angle": [0],
+        }},
+    }
+    module = powerio.parse(io.StringIO(json.dumps(document)), format="bmopf-json")
+    ir = json.loads(_emit_module(module))
+    source = ir["value"]["data"]["sources"][0]
+    ir["value"]["data"]["sources"][0] = {
+        "type": "powerio.ReferencedVoltageSource",
+        "value": {**source, "reference_terminal": "n"},
+    }
+    rows = _parse_module(json.dumps(ir)).value.voltage_sources
+    assert rows[0]["name"] == "s"
+    assert rows[0]["terminal_map"] == ["a"]
+    assert rows[0]["reference_terminal"] == "n"
+    assert "type" not in rows[0]
+
+
 def test_source_energy_prices_and_draft_schema_digest_survive_ir():
     import hashlib
 
