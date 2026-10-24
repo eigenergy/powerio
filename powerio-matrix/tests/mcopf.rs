@@ -949,3 +949,33 @@ fn inverter_control_laws_intersect_selected_reactive_capability() {
         }
     }
 }
+
+#[test]
+fn bounded_load_laws_are_not_silently_projected_by_ivr_preparation() {
+    use powerio_dist::DistLoadVoltageModel as Law;
+    let instance = McAcOpfInstance::from_network(network()).unwrap();
+    assert!(build_mc_ac_opf_preparation(&instance, &McAcOpfAssemblyOptions::default()).is_ok());
+    for law in [Law::BoundedZip {
+        v_nom: vec![230.0],
+        alpha_z: vec![0.0],
+        alpha_i: vec![0.0],
+        alpha_p: vec![1.0],
+        beta_z: vec![0.0],
+        beta_i: vec![0.0],
+        beta_p: vec![1.0],
+        v_low_pu: 0.5,
+        v_min_pu: 0.95,
+        v_max_pu: 1.05,
+        cutoff_pu: 0.0,
+    }] {
+        let mut net = network();
+        net.loads_mut()[0].voltage_model = law;
+        let instance = McAcOpfInstance::from_network(net).unwrap();
+        let error =
+            build_mc_ac_opf_preparation(&instance, &McAcOpfAssemblyOptions::default()).unwrap_err();
+        assert!(
+            error.to_string().contains("piecewise IVR equations"),
+            "{error}"
+        );
+    }
+}

@@ -52,6 +52,12 @@ conductors, shunts, capacitor matrices, and ideal switches/sources. Currents
 remain explicit at exact-zero or singular impedance. There is no neutral
 reduction, impedance inversion, epsilon impedance, or ideal-switch contraction.
 
+Voltage-bounded ZIP, exponential and constant-power laws, including those read
+from ordinary OpenDSS loads, remain intact in the network and PF/OPF instance.
+The current IVR preparation profile refuses them explicitly because its power-law
+terms cannot represent their piecewise transitions, dropout or current limits.
+It does not silently approximate them by their nominal laws.
+
 Supported devices include WYE/DELTA/two-terminal P/I/Z/ZIP/exponential loads,
 generator capability and linear dispatch cost, single-phase/center-tapped/Yd/Dy
 and fixed n-winding transformers, type-A/B regulators, and supported open-delta
