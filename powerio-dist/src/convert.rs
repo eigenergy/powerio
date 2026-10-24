@@ -356,6 +356,12 @@ pub fn classify_distribution_json(text: &str) -> crate::Result<DistTargetFormat>
 pub fn parse(
     source: powerio_core::Source,
 ) -> std::result::Result<powerio_core::PioModule<MulticonductorNetwork>, powerio_core::Error> {
+    if source
+        .format()
+        .is_some_and(|f| is_sincal_multiconductor_token(f.as_str()))
+    {
+        return Err(sincal_feature_disabled(&source));
+    }
     let mut warnings = crate::collect::Diagnostics::new();
     match parse_to_network(&source, &mut warnings) {
         Ok((network, format)) => {
@@ -476,13 +482,30 @@ impl DistTargetFormat {
     }
 }
 
+/// Whether `name` spells the explicit conductor-resolved SINCAL profile.
+pub(crate) fn is_sincal_multiconductor_token(name: &str) -> bool {
+    name.chars()
+        .filter(|c| !matches!(c, '-' | '_' | ' '))
+        .collect::<String>()
+        .eq_ignore_ascii_case("sincalmulticonductor")
+}
+
+/// The refusal a SINCAL source meets in a build without the `sincal` feature.
+fn sincal_feature_disabled(source: &powerio_core::Source) -> powerio_core::Error {
+    powerio_core::Error::new(
+        &crate::diagnostics::codes::REQUEST_SINCAL_MULTICONDUCTOR_FEATURE_DISABLED,
+        "SINCAL adapters live in powerio-tnd; use powerio with its `sincal` feature or powerio_tnd::formats::sincal",
+    )
+    .with_source(source.clone())
+}
+
 /// Prepare exact retained-source text or validated canonical output.
 pub(crate) fn emit_text_with_options(
     module: &powerio_core::PioModule<MulticonductorNetwork>,
     format: DistTargetFormat,
     options: &EmitOptions,
 ) -> Result<TextEmission, powerio_core::Error> {
-    let output = if options.is_default_for(format)
+    let mut output = if options.is_default_for(format)
         && let Some(text) = echo_text(module, format)
     {
         TextEmission::faithful(text)
@@ -493,6 +516,11 @@ pub(crate) fn emit_text_with_options(
         }
         emit_value_text_with_options(module.value(), format, options)?
     };
+    powerio_core::attach_retention_details(
+        module.diagnostics(),
+        &mut output.diagnostics,
+        "EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED",
+    )?;
     Ok(output)
 }
 
@@ -535,6 +563,12 @@ pub(crate) fn emit_value_text_with_options(
         DistTargetFormat::PmdJson => crate::pmd::emit_pmd_json_text(net),
         DistTargetFormat::CimDist => crate::cim::emit_cim_dist_text(net),
     };
+    if *net.source_format() == Some(DistSourceFormat::Sincal) {
+        conv.push(
+            &crate::diagnostics::codes::EMIT_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_OMITTED,
+            "Native SINCAL source-only data are omitted from the typed electrical conversion.",
+        );
+    }
     // No distribution format carries line routes; report the loss the
     // way bus locations already do (`.pio.json` keeps them).
     let routed = net
@@ -568,9 +602,9 @@ pub(crate) fn emit_value_text(
 /// The JSON and CIM targets commit a single artifact — a path destination names the
 /// exact file, a memory destination names the artifact. The dss target is a
 /// directory inventory: the destination names the output root, the case text
-/// commits as `case.dss`, and every companion file the emitter produced
-/// (OpenDSS `Buscoords` CSV) commits beside it, so nothing the case text
-/// refers to is missing from the output.
+/// commits as `case.dss`, and generated companion files commit beside it.
+/// An unchanged multi-file DSS project retains its paths and bytes beneath
+/// `source/`; `case.dss` redirects to its entry file.
 ///
 /// # Errors
 /// The destination's own collision and staging failures.
@@ -601,6 +635,59 @@ pub fn emit_with_options(
     destination: powerio_core::Destination,
 ) -> std::result::Result<powerio_core::EmitResult, powerio_core::Error> {
     let conv = emit_text_with_options(module, format, options)?;
+    if format == DistTargetFormat::Dss
+        && conv.fidelity == powerio_core::Fidelity::ExactSameFormat
+        && let Some(source) = module.source()
+    {
+        let primary = source.primary_buffer()?;
+        let buffers = source.acquired_buffers();
+        if buffers.len() > 1 || primary.directory_segments().next().is_some() {
+            let mut artifacts = Vec::with_capacity(buffers.len() + 1);
+            for buffer in buffers {
+                let name = if buffer.id() == primary.id() {
+                    let mut segments: Vec<_> = primary.directory_segments().collect();
+                    let filename = std::path::Path::new(primary.name())
+                        .file_name()
+                        .and_then(std::ffi::OsStr::to_str)
+                        .filter(|name| powerio_core::ArtifactPath::new(*name).is_ok())
+                        .unwrap_or("case.dss");
+                    segments.push(filename);
+                    segments.join("/")
+                } else {
+                    buffer.name().to_owned()
+                };
+                let path = powerio_core::ArtifactPath::new(format!("source/{name}"))?;
+                if buffer.id() == primary.id() {
+                    let target = if path.as_str().contains('"') {
+                        let (token, representable) = crate::dss::dss_value_out(path.as_str());
+                        if !representable {
+                            return Err(powerio_core::Error::new(
+                                &powerio_core::codes::REQUEST_OUTPUT_INVALID_ARTIFACT_PATH,
+                                "the project entry filename cannot be represented in an OpenDSS redirect",
+                            ));
+                        }
+                        token
+                    } else {
+                        format!("\"{}\"", path.as_str())
+                    };
+                    artifacts.push(powerio_core::MemoryArtifact::new(
+                        powerio_core::ArtifactPath::new("case.dss")?,
+                        format!("Redirect {target}\n").into_bytes(),
+                    ));
+                }
+                artifacts.push(powerio_core::MemoryArtifact::new(
+                    path,
+                    buffer.bytes().to_vec(),
+                ));
+            }
+            return destination.__commit_artifacts(
+                true,
+                conv.fidelity,
+                artifacts,
+                conv.diagnostics,
+            );
+        }
+    }
     match format {
         DistTargetFormat::Dss => {
             let mut artifacts = vec![powerio_core::MemoryArtifact::new(

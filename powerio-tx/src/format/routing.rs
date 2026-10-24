@@ -60,11 +60,14 @@ pub enum TransmissionFormat {
     Ucte,
     /// The IEEE Common Data Format, a read only fixed column text case.
     IeeeCdf,
+    /// Explicit positive-sequence profile of the two-family SINCAL container.
+    SincalBalanced,
 }
 
 impl TransmissionFormat {
     pub fn name(self) -> &'static str {
         match self {
+            Self::SincalBalanced => "sincal-balanced",
             Self::Matpower => "matpower",
             Self::PowerModelsJson => "powermodels-json",
             Self::EgretJson => "egret-json",
@@ -98,11 +101,13 @@ pub enum DistributionFormat {
     BmopfJson,
     /// Distribution CIM (CIM100 RDF/XML).
     CimDist,
+    SincalMulticonductor,
 }
 
 impl DistributionFormat {
     pub fn name(self) -> &'static str {
         match self {
+            Self::SincalMulticonductor => "sincal-multiconductor",
             Self::Dss => "dss",
             Self::PmdJson => "pmd-json",
             Self::BmopfJson => "bmopf-json",
@@ -138,6 +143,9 @@ pub type JsonFormat = SourceFormat;
 
 /// Resolve a source format name or common alias.
 pub fn classify_format_name(name: &str) -> Detection<SourceFormat> {
+    if canonical_key(name) == "sincal" {
+        return Detection::Ambiguous;
+    }
     if let Some(format) = parse_transmission_format(name) {
         return Detection::Known(SourceFormat::Transmission(format));
     }
@@ -150,6 +158,7 @@ pub fn classify_format_name(name: &str) -> Detection<SourceFormat> {
 pub fn parse_transmission_format(name: &str) -> Option<TransmissionFormat> {
     let key = canonical_key(name);
     match key.as_str() {
+        "sincalbalanced" => Some(TransmissionFormat::SincalBalanced),
         "matpower" | "m" => Some(TransmissionFormat::Matpower),
         "powermodelsjson" | "powermodels" | "pm" => Some(TransmissionFormat::PowerModelsJson),
         "egretjson" | "egret" => Some(TransmissionFormat::EgretJson),
@@ -183,6 +192,7 @@ pub fn parse_transmission_format(name: &str) -> Option<TransmissionFormat> {
 pub fn parse_distribution_format(name: &str) -> Option<DistributionFormat> {
     let key = canonical_key(name);
     match key.as_str() {
+        "sincalmulticonductor" => Some(DistributionFormat::SincalMulticonductor),
         "dss" | "opendss" => Some(DistributionFormat::Dss),
         "pmd" | "pmdjson" | "engineering" => Some(DistributionFormat::PmdJson),
         "bmopf" | "bmopfjson" => Some(DistributionFormat::BmopfJson),

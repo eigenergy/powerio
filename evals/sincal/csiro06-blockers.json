@@ -1,0 +1,208 @@
+{
+  "scope": "Explain every remaining CSIRO06 rejection against hash-pinned native inputs.\n\nThis is a development blocker audit, not an electrical acceptance test. Decimal\nnameplate arithmetic follows Siemens Input Data (April 2014), printed p.180.\nIt does not repair inputs, infer missing grounding, or execute SINCAL.\n",
+  "case": 6,
+  "variant": 1,
+  "snapshot_hours": 0,
+  "component_count": 218,
+  "mapped": 163,
+  "rejected": 55,
+  "transformer_nameplates_checked": 51,
+  "core_nameplate_conflicts": [
+    {
+      "element": 250,
+      "core_loss_w": 32.0,
+      "no_load_va": 30.72,
+      "excess_w": 1.28,
+      "excess_fraction": 0.041666666666666664
+    },
+    {
+      "element": 252,
+      "core_loss_w": 32.0,
+      "no_load_va": 30.72,
+      "excess_w": 1.28,
+      "excess_fraction": 0.041666666666666664
+    },
+    {
+      "element": 256,
+      "core_loss_w": 726.0,
+      "no_load_va": 725.76,
+      "excess_w": 0.24,
+      "excess_fraction": 0.00033068783068783067
+    },
+    {
+      "element": 260,
+      "core_loss_w": 726.0,
+      "no_load_va": 725.76,
+      "excess_w": 0.24,
+      "excess_fraction": 0.00033068783068783067
+    },
+    {
+      "element": 262,
+      "core_loss_w": 32.0,
+      "no_load_va": 30.72,
+      "excess_w": 1.28,
+      "excess_fraction": 0.041666666666666664
+    },
+    {
+      "element": 278,
+      "core_loss_w": 726.0,
+      "no_load_va": 725.76,
+      "excess_w": 0.24,
+      "excess_fraction": 0.00033068783068783067
+    },
+    {
+      "element": 279,
+      "core_loss_w": 32.0,
+      "no_load_va": 30.72,
+      "excess_w": 1.28,
+      "excess_fraction": 0.041666666666666664
+    },
+    {
+      "element": 282,
+      "core_loss_w": 30.0,
+      "no_load_va": 27.0,
+      "excess_w": 3.0,
+      "excess_fraction": 0.1111111111111111
+    },
+    {
+      "element": 292,
+      "core_loss_w": 32.0,
+      "no_load_va": 30.72,
+      "excess_w": 1.28,
+      "excess_fraction": 0.041666666666666664
+    },
+    {
+      "element": 294,
+      "core_loss_w": 726.0,
+      "no_load_va": 725.76,
+      "excess_w": 0.24,
+      "excess_fraction": 0.00033068783068783067
+    },
+    {
+      "element": 298,
+      "core_loss_w": 726.0,
+      "no_load_va": 725.76,
+      "excess_w": 0.24,
+      "excess_fraction": 0.00033068783068783067
+    }
+  ],
+  "partial_mixed_windings": [
+    {
+      "element": 258,
+      "vector_group": "YNd1",
+      "winding_selection": 1,
+      "positive_primary_magnitude_ohm": 1607.364,
+      "zero_primary_magnitude_ohm": 3.587798325226768
+    },
+    {
+      "element": 261,
+      "vector_group": "YNd1",
+      "winding_selection": 2,
+      "positive_primary_magnitude_ohm": 1607.364,
+      "zero_primary_magnitude_ohm": 3.587798325226768
+    },
+    {
+      "element": 273,
+      "vector_group": "YNd1",
+      "winding_selection": 1,
+      "positive_primary_magnitude_ohm": 1607.364,
+      "zero_primary_magnitude_ohm": 3.587798325226768
+    },
+    {
+      "element": 274,
+      "vector_group": "YNd1",
+      "winding_selection": 2,
+      "positive_primary_magnitude_ohm": 2280.09375,
+      "zero_primary_magnitude_ohm": 2.197294945564887
+    },
+    {
+      "element": 283,
+      "vector_group": "YNd1",
+      "winding_selection": 3,
+      "positive_primary_magnitude_ohm": 1607.364,
+      "zero_primary_magnitude_ohm": 3.587798325226768
+    },
+    {
+      "element": 284,
+      "vector_group": "YNd1",
+      "winding_selection": 3,
+      "positive_primary_magnitude_ohm": 1607.364,
+      "zero_primary_magnitude_ohm": 3.587798325226768
+    },
+    {
+      "element": 287,
+      "vector_group": "YNd1",
+      "winding_selection": 2,
+      "positive_primary_magnitude_ohm": 2280.09375,
+      "zero_primary_magnitude_ohm": 2.197294945564887
+    },
+    {
+      "element": 288,
+      "vector_group": "YNd1",
+      "winding_selection": 1,
+      "positive_primary_magnitude_ohm": 2280.09375,
+      "zero_primary_magnitude_ohm": 2.197294945564887
+    },
+    {
+      "element": 296,
+      "vector_group": "YNd1",
+      "winding_selection": 3,
+      "positive_primary_magnitude_ohm": 1607.364,
+      "zero_primary_magnitude_ohm": 3.587798325226768
+    }
+  ],
+  "undeclared_wye_sequence_loads": [
+    4,
+    5,
+    9,
+    10,
+    12,
+    13,
+    15,
+    16,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    41,
+    42,
+    46,
+    47,
+    48,
+    50,
+    51,
+    52,
+    54,
+    55
+  ],
+  "zero_sequence_completion": "disabled by native Flag_LFZ0=1",
+  "classification": "Core conflicts violate the published excitation formula. Partial mixed windings and Wye loads require native-semantic mapping; neither is classified as malformed solely because it is unsupported.",
+  "source_sha256": "6c6eb3caaaa517fcb424965d5e15819edaa7bd20da15a32d85a02b4ddef4eff8",
+  "record_sha256": "082bb93d85781682d7f34c01d5ce3c0ff9ee68682383a015320d82bbb393cf17",
+  "reader_sha256": "99687691433200f716510676f9471be12dff46bb1c4a0de29820e55d37d6fbcb",
+  "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
+  "collection": "https://doi.org/10.4225/08/5631B1DF6F1A0",
+  "license": "CC-BY-4.0",
+  "negative_controls": [
+    "missing_component",
+    "accepted_bad_core",
+    "wrong_core_reason",
+    "ignored_load_failure"
+  ],
+  "native_execution": false,
+  "complete_parse": false,
+  "blocker_audit_passed": true
+}

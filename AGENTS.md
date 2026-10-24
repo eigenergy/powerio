@@ -7,7 +7,7 @@ Guidance for agents working in this repo.
 A Cargo workspace of Rust crates plus a Python package. PowerIO parses power
 system data into typed values, converts between formats, and emits sparse
 matrices and graph data for downstream solvers. It feeds the GridFM ML
-pipeline. The files under `arch-v1/` and `docs/design/` record the design
+pipeline. The files under `docs/design/` record the design
 work that led to the 0.10 beta and the 0.11 API. They are dated evidence, not
 current API authority: read them for the reasoning behind a public name, then
 check the current source, tests, and release notes.
@@ -18,6 +18,10 @@ check the current source, tests, and release notes.
   electrical network, matrix, or solver dependencies.
 - **`powerio-tx`**: the format neutral `BalancedNetwork`, the balanced format
   readers and writers, normalization, and derived indexed views.
+- **`powerio-tnd`**: integrated transmission/distribution composition, explicit
+  cross-model transforms, and format adapters that span both electrical models.
+  It depends on core, tx, and dist. SINCAL lives under `formats::sincal` behind
+  an opt-in feature; the facade enables it by default.
 - **`powerio-dist`**: the multiconductor distribution model
   (`MulticonductorNetwork`) with the OpenDSS `.dss`, PMD JSON, BMOPF JSON, and
   distribution CIM (`cim-dist`) converters. It does **not** depend on the transmission crate; both share
@@ -59,7 +63,9 @@ a complete `AcScucSolution` writes the official GO Challenge 3 solution
 file. A PowerWorld `.pwd` display parses to `PioValue::GeoLayer`. GridFM
 Parquet directories parse and write behind the `gridfm` feature. OpenDSS
 `.dss`, PMD engineering JSON, BMOPF JSON, and distribution CIM (`cim-dist`,
-CIM100 RDF/XML) meet at `MulticonductorNetwork`.
+CIM100 RDF/XML) meet at `MulticonductorNetwork`. The PSS/E contingency,
+subsystem, and monitored element files (`.con`, `.sub`, `.mon`) parse and
+write as `ContingencySet`, `SubsystemSet`, and `MonitoredSet`.
 PowerIO IR moves through `serialize` and `deserialize` and is not a grid
 exchange format; `parse` refuses it. Every balanced format maps to
 `BalancedNetwork`, so a new format needs one reader and one writer rather
@@ -128,9 +134,11 @@ PowerIO releases are tag driven, and PowerIO.jl follows each published
 release on its own.
 
 1. Merge the version bump with a `CHANGELOG.md` section headed exactly
-   `## X.Y.Z`, and wait for `main` CI to pass on that merge commit. The tag
-   workflow copies the section into the draft release body and fails
-   without it.
+   `## X.Y.Z` and release notes at `docs/release-notes/X.Y.Z.md` titled
+   `# PowerIO X.Y.Z release notes`, and wait for `main` CI to pass on that
+   merge commit. The tag workflow copies the section into the draft release
+   body and fails without it. `bash scripts/release-preflight.sh` fails on
+   anything that still states the old version.
 2. Create a release tag only when the maintainer asks for the release.
    Check that the tag does not exist, then create an annotated tag on
    `origin/main` and push it:
@@ -147,17 +155,23 @@ release on its own.
    the `powerio-capi` tarballs for `aarch64-apple-darwin`,
    `aarch64-linux-gnu`, `x86_64-apple-darwin`, `x86_64-linux-gnu`, and
    `x86_64-w64-mingw32` with the release features
-   `arrow,matrix,gridfm,dist,prob`. It runs PowerIO.jl's
+   `matrix,gridfm,dist,prob`. It runs PowerIO.jl's
    `gen/update_artifacts.jl` on the tarballs, installs each one as the
    artifact PowerIO.jl will pin, and runs the PowerIO.jl tests against it on
    its platform. Only then does it stage a **draft** GitHub release with the
    five assets.
 4. A human inspects and publishes the draft. Publishing starts `python.yml`
-   (PyPI) and `crates.yml` (crates.io: `powerio-core`, `powerio-tx`,
-   `powerio-dist`, `powerio-prob`, `powerio-matrix`, `powerio`, and
+   (PyPI) and `crates.yml` (crates.io: `powerio-core`, `powerio-tx`, `powerio-dist`,
+   `powerio-tnd`, `powerio-prob`, `powerio-matrix`, `powerio`, and
    `powerio-cli`, in dependency order). Both deploy through the `pypi` and
    `crates-io` environments, which wait for the maintainer's approval. A
-   rerun skips files and versions already published.
+   rerun skips files and versions already published. A crate's first
+   version cannot use trusted publishing, so a release that adds a crate
+   runs `scripts/release-verified.py` with `--bootstrap-crate <name>`: after
+   `crates.yml` fails at the new crate, it publishes that crate with the
+   maintainer's local Cargo credentials and reruns the job. Then configure
+   the crate's trusted publisher (repository `eigenergy/powerio`, workflow
+   `crates.yml`, environment `crates-io`).
 5. Publishing also runs `.github/workflows/notify-powerio-jl.yml`, which
    starts PowerIO.jl's Release workflow; its hourly schedule is the backstop.
    That workflow sets the Julia version, pins the release tarballs in
@@ -176,32 +190,41 @@ powerio-core/src              module.rs (PioModule<T>), source.rs, output.rs,
 powerio-tx/src                network.rs (BalancedNetwork and its tables),
                               indexed.rs, normalize.rs, operations.rs, dc.rs,
                               gen_cost.rs, geo/ (layer.rs, pwd.rs),
-                              contingency/ (mod.rs, lexer.rs), collect.rs,
-                              diagnostics.rs, version.rs
+                              contingency/ (.con, .sub, .mon: mod.rs, lexer.rs,
+                              resolve.rs, expand.rs, sub.rs, mon.rs),
+                              collect.rs, diagnostics.rs, error.rs, version.rs
 powerio-tx/src/format         mod.rs (parse, emit, TargetFormat, EmitOptions),
                               routing.rs (tokens, JSON classification), xml.rs,
+                              decode.rs, union_find.rs,
                               matpower/, psse.rs, rawx.rs, xiidm.rs, cgmes/,
-                              ucte/, ieee_cdf.rs, powerworld/ (aux, pwb, pwd),
+                              ucte/, ieee_cdf.rs, powerworld/ (auxiliary, pwb,
+                              pwd, map, objects),
                               pslf.rs, powermodels.rs, egret.rs, pandapower.rs,
                               pypsa.rs, surge.rs, goc3.rs, opfdata.rs
+powerio-tnd/src               integrated.rs, transform.rs, formats/sincal/
 powerio-dist/src              model.rs, convert.rs, dss/, pmd/, bmopf/, cim/, graph.rs,
-                              geo.rs, diagnostics.rs, error.rs
+                              geo.rs, kron.rs, lindist3flow.rs, readiness.rs,
+                              collect.rs, diagnostics.rs, error.rs
 powerio-prob/src              operating/, instance/, solution/, update.rs,
-                              reference.rs, goc3/, formats/ (goc3, opfdata, pypsa)
+                              reference.rs, goc3/, formats/ (goc3, opfdata, pypsa),
+                              diagnostics.rs, error.rs
 powerio-matrix/src            matrix/ (bprime, bdoubleprime, ybus, lacpf,
                               incidence, adjacency, laplacian, sensitivity,
                               multiconductor, triplet), dc_operators.rs,
                               ac_jacobian.rs, dcopf/ (prep, nodal, limits, bundle),
                               acopf.rs, opf.rs, io/ (mtx, meta, sensitivity, gridfm),
-                              pipeline.rs, synth/
+                              lindist3flow*.rs (LinDist3Flow OPF and PF),
+                              pipeline.rs, synth/, diagnostics.rs, error.rs
 powerio/src                   lib.rs (parse, emit), value.rs (PioValue), ir.rs,
                               stored/ (dto.rs, convert.rs), formats.rs, transform.rs,
-                              write.rs, gridfm.rs, dist_geo.rs, codes.rs
-powerio-cli/src               main.rs (clap), cases.rs, module_io.rs, codes.rs,
+                              write.rs, gridfm.rs, dist_geo.rs, collect.rs, codes.rs
+powerio-cli/src               main.rs (clap), lib.rs, cases.rs, module_io.rs, codes.rs,
                               invariants.rs, corpus/, tui/
 powerio-py/src/lib.rs         the PyO3 extension, module `powerio._powerio`
 python/powerio                the package (__init__.py, dist.py, mcp/, stubs)
 powerio-capi/src              lib.rs (pio_*), diagnostics.rs; include/powerio.h
+scripts/                      CI gates (ci-mirror.sh, ci-clippy.sh, check-*),
+                              header checks, release checks
 tests/data                    shared fixtures
 evals/                        validation, PowSybl, performance, and allocation harnesses
 fuzz/                         libFuzzer targets (detached workspace)
@@ -217,6 +240,10 @@ docs/                         the mdBook guide, the schema archive, release note
 - **Clippy must match CI.** Root `cargo clippy --all-targets` skips feature
   combinations and the PyO3 extension. Run `bash scripts/ci-clippy.sh` before
   pushing Rust, C ABI, matrix, feature, or Python extension changes.
+- **SINCAL is the `sincal` feature.** The facade enables `powerio-tnd/sincal`
+  by default. The tx and dist crates depend only on core within the workspace;
+  they own neither SINCAL adapters nor SQLite. The tnd crate is format neutral
+  by default. Keep the no-default-features and wasm32 checks green.
 - **One Python wheel (maturin mixed layout).** `powerio-py/` compiles to the
   native module `powerio._powerio`; `python/powerio/` is the pure Python
   wrapper that turns COO triplets into `scipy.sparse` and NetworkX. The
@@ -236,8 +263,9 @@ docs/                         the mdBook guide, the schema archive, release note
   declares. Balanced formats meet at `BalancedNetwork`; conductor resolved
   formats meet at `MulticonductorNetwork`. Register the token in
   `powerio-tx/src/format/routing.rs`, the diagnostics family in
-  `powerio-tx/src/diagnostics.rs`, and the facade metadata in
-  `powerio/src/formats.rs`. Format enums are nonexhaustive and bindings use
+  `powerio-tx/src/diagnostics.rs` (or `powerio-dist/src/diagnostics.rs` for
+  a distribution format), the facade metadata in `powerio/src/formats.rs`,
+  and the CLI token in `FormatArg` in `powerio-cli/src/main.rs`. Format enums are nonexhaustive and bindings use
   stable names rather than integer positions.
 - **PowerIO IR.** `serialize` and `deserialize` move `PioModule<PioValue>`.
   Retained source bytes are not serialized. The document identity is
@@ -304,8 +332,8 @@ docs/                         the mdBook guide, the schema archive, release note
   `Sparse`. Factor once and reuse scratch buffers.
 - **MTX output is lower triangle, 1 based.** `sprs` writes the upper
   triangle, so `io::mtx::emit_mtx` ships its own emitter.
-- **`CooBuilder`** in `matrix/triplet.rs` is HashMap COO with O(nnz)
-  inserts.
+- **`CooBuilder`** in `matrix/triplet.rs` is HashMap COO: each insert
+  deduplicates its `(i, j)` entry in O(1) amortized time.
 - **The TUI lives in the CLI crate** under `powerio-cli/src/tui/` and is
   testable through `ratatui::backend::TestBackend`.
 - **petgraph data.** `IndexedNetwork::to_petgraph()` returns
@@ -321,10 +349,13 @@ docs/                         the mdBook guide, the schema archive, release note
 
 `tests/data/case{9,14,30,57,118}.m` and `case2869pegase.m` are vendored
 verbatim from `https://github.com/MATPOWER/matpower/tree/master/data`
-(BSD-3). Also `t_case9_dcline.m`, `pglib/` (PGLib OPF), `psse/*.raw`, the
-PowSybl XIIDM and CGMES fixtures under `tests/data/xiidm` and
-`tests/data/cgmes` (MPL-2.0), and the distribution fixtures under
-`tests/data/dist`. `tests/data/pandapower/example.json` was written by
+(BSD-3). Also `t_case9_dcline.m` and `t_case9_oos.m` (MATPOWER), `pglib/`
+(PGLib OPF, MIT), the PowSybl Core files under `tests/data/xiidm/powsybl`,
+`tests/data/ucte`, `tests/data/ieee-cdf`, and two revision 32 cases in
+`tests/data/psse` (MPL-2.0), and the distribution fixtures under
+`tests/data/dist`. The other `psse/*.raw` files and `tests/data/cgmes` are
+hand written for this repository. `tests/data/README.md` and the README in
+each directory record the source and license of every file. `tests/data/pandapower/example.json` was written by
 pandapower 3.2.2 and `tests/data/pypsa/example/` by PyPSA 1.2.2; both are
 committed byte exact as the tool wrote them.
 

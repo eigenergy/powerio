@@ -28,13 +28,24 @@ equations or infer conductor count from a phase count. Explicit linecode data
 without geometry-dependent properties remains eligible when the remaining
 checks pass.
 
+## Distribution CIM segments without impedance
+
+A CIM `ACLineSegment` whose impedance the reader cannot read, for example one
+described only by wire spacing and wire data, parses with a zero placeholder
+line code and an error finding, `READ.CIM_DIST.IMPEDANCE_UNRESOLVED`. The
+audit blocks it as `READINESS.CIM_DIST.IMPEDANCE_UNRESOLVED`, because the
+placeholder would be a short circuit between its buses. Numerical
+calculations and conversion to another format reject it, as they reject an
+OpenDSS geometry line, and a same format write of a single source document
+still returns its bytes.
+
 ## Other structural checks
 
 The audit checks source-specific identifier equality, unresolved line endpoints
 and linecodes, terminal references, line lengths, conductor counts, matrix
 shapes and finite matrix entries. It reports source defaults as warnings.
 
-```rust
+```rust,ignore
 let readiness = powerio_dist::audit_electrical_readiness(network);
 for finding in readiness.findings {
     eprintln!("{} {}: {}", finding.code, finding.element, finding.message);
