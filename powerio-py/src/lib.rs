@@ -1780,7 +1780,23 @@ fn dist_field_to_py<'py>(
     model: &powerio_dist::MulticonductorNetwork,
     field: &str,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let value = serde_json::to_value(model).map_err(serialize_pyerr)?;
+    let mut value = serde_json::to_value(model).map_err(serialize_pyerr)?;
+    // Python exposes physical source rows, not the tagged IR record: a
+    // referenced source keeps every earth-referenced field and adds
+    // `reference_terminal`, so `row["name"]` reads the same for both.
+    if field == "sources"
+        && let Some(rows) = value
+            .get_mut(field)
+            .and_then(serde_json::Value::as_array_mut)
+    {
+        for row in rows {
+            if row.get("type").and_then(serde_json::Value::as_str)
+                == Some("powerio.ReferencedVoltageSource")
+            {
+                *row = row.get_mut("value").expect("referenced source body").take();
+            }
+        }
+    }
     // These tables omit their JSON key when empty. The Python table surface
     // still returns an empty list so every declared table is always readable.
     if value.get(field).is_none() && matches!(field, "ibrs" | "control_profiles" | "capacitors") {
@@ -5169,6 +5185,7 @@ mod tests {
             Some("sincal-multiconductor"),
             None,
             None,
+            None,
         )
         .unwrap();
         let module = parsed.module().unwrap();
@@ -5189,6 +5206,7 @@ mod tests {
             NATIVE,
             "case.sinx",
             Some("sincal-balanced"),
+            None,
             None,
             None,
         )

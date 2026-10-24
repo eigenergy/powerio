@@ -69,7 +69,7 @@ case "$target" in
     run cargo clippy -p powerio-capi --all-targets --features dist -- -D warnings
     ;;
   powerio-py)
-    run cargo clippy -p powerio-py --no-deps --features extension-module,gridfm -- -D warnings
+    run cargo clippy -p powerio-py --no-deps --all-targets --features extension-module,gridfm -- -D warnings
     ;;
   -h|--help|help)
     usage
