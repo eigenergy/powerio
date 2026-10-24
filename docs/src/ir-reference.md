@@ -100,7 +100,7 @@ Schema definition: `BalancedNetwork`.
 | `name` | string | | | | required |
 | `base_mva` | float | MVA | | finite and positive | required |
 | `base_frequency` | float | Hz | | positive | 60 |
-| `source_format` | token | | | one of the format tokens (`matpower`, `psse`, `psse-rawx`, `powermodels-json`, `egret-json`, `powerworld`, `powerworld-pwb`, `pslf`, `pandapower-json`, `pypsa-csv`, `gridfm`, `goc3-json`, `surge-json`, `opfdata-json`, `xiidm`, `cgmes`, `in-memory`, `normalized`) | required |
+| `source_format` | token | | | one of the format tokens (`matpower`, `psse`, `psse-rawx`, `powermodels-json`, `egret-json`, `powerworld`, `powerworld-pwb`, `pslf`, `pandapower-json`, `pypsa-csv`, `gridfm`, `goc3-json`, `surge-json`, `opfdata-json`, `xiidm`, `jiidm`, `cgmes`, `ucte`, `ieee-cdf`, `sincal`, `in-memory`, `normalized`) | required |
 | `buses` | array of `Bus` | | | `id` unique | required |
 | `loads` | array of `Load` | | | `bus` names a bus | required |
 | `shunts` | array of `Shunt` | | | `bus` names a bus | required |
@@ -653,7 +653,7 @@ Schema definition: `MulticonductorNetwork`.
 |---|---|---|---|---|---|
 | `name` | string or null | | | | null |
 | `base_frequency` | float | Hz | | positive | required |
-| `source_format` | token `dss`, `bmopf-json`, `pmd-json`, `cim-dist`, or null | | | | null |
+| `source_format` | token `dss`, `bmopf-json`, `pmd-json`, `cim-dist`, `sincal`, or null | | | | null |
 | `buses` | array of `DistBus` | | | `id` unique | required |
 | `linecodes` | array of `DistLineCode` | | | `name` unique | required |
 | `lines` | array of `DistLine` | | | `bus_from`, `bus_to` name buses; `linecode` names a line code | required |

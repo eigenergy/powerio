@@ -436,12 +436,12 @@ END
 
 | Statement | Synonyms | Reads as |
 | --- | --- | --- |
-| `MONITOR BRANCHES IN SUBSYSTEM name [3WLOWVOLTAGE] [KVRANGE lo hi]` | `BRANCHES`, `LINES`; `IN`, `FROM` | `BranchesInSubsystem { subsystem, low_voltage_3w, kv_range }` |
-| `MONITOR TIES FROM SUBSYSTEM name [KVRANGE lo hi]` | `IN`, `FROM` | `TiesFromSubsystem { subsystem, kv_range }` |
+| `MONITOR BRANCHES IN SUBSYSTEM name [3WLOWVOLTAGE] [KVRANGE lo hi]` | `BRANCHES`, `LINES`; `IN`, `FROM` | `BranchesInSubsystem { subsystem, low_voltage_3w }`, or with `KVRANGE` `BranchesInSubsystemKvRange { subsystem, low_voltage_3w, kv_range }` |
+| `MONITOR TIES FROM SUBSYSTEM name [KVRANGE lo hi]` | `IN`, `FROM` | `TiesFromSubsystem { subsystem }`, or with `KVRANGE` `TiesFromSubsystemKvRange { subsystem, kv_range }` |
 | `MONITOR BRANCHES` ... `END`, holding `i j [ckt]` or `[BRANCH] FROM BUS i TO BUS j [CIRCUIT c]` | `BRANCHES`, `LINES`; `LINE` | `Branches(Vec<BranchRef>)` |
 | `MONITOR BRANCH FROM BUS i TO BUS j [CIRCUIT c]` | `LINE`; `BUS` optional; `CKT` | `Branches` holding that one branch |
 | `MONITOR INTERFACE name [RATING x [MW]]` ... `END` | | `Interface { name, rating_mw, branches }` |
-| `MONITOR VOLTAGE RANGE scope lo hi [pre_min pre_max]` | | `VoltageRange { scope, vmin, vmax, pre }` |
+| `MONITOR VOLTAGE RANGE scope lo hi [pre_min pre_max]` | | `VoltageRange { scope, vmin, vmax }`, or with the pre-contingency pair `VoltageRangeWithPre { scope, vmin, vmax, pre_min, pre_max }` |
 | `MONITOR VOLTAGE DEVIATION scope down [up]` | | `VoltageDeviation { scope, down, up }` |
 
 A `MONITOR VOLTAGE RANGE` states its band low end first; one whose ends run
