@@ -64,10 +64,12 @@ jobs:
           wheels=true
           # A pull request checks out its merge commit, whose first parent is
           # the base branch.
-          if [ "$GITHUB_EVENT_NAME" = pull_request ] \
-            && ! git diff --name-only HEAD^1 HEAD \
-              | grep -qE '^(\.github/workflows/python\.yml|Cargo\.(toml|lock)|pyproject\.toml|rust-toolchain(\.toml)?|powerio-py/)'; then
-            wheels=false
+          # Run sdist, all wheel builds and wheel smoke tests on every PR.
+          # Publishing remains protected by the separate release-only gate.
+          # These build checks are validation and should not disappear because
+          # the PR happens not to touch packaging inputs.
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            wheels=true
           fi
           echo "wheels=$wheels" >> "$GITHUB_OUTPUT"
       - name: Release identity agreement

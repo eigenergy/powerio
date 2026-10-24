@@ -71,7 +71,29 @@ shifts, or when the case has no phase shifter), and `fixed_withdrawal`, equal to
 The branch indexed vectors, of length \\(m\\), are `b` (susceptances), `shift`
 (radians), `flow_offset` (equal to `-b * shift` elementwise), `fmax` (thermal
 limits; \\(0\\) means unlimited per MATPOWER), and the radian limits
-`angle_min` and `angle_max`.
+`angle_min` and `angle_max` on \\(\theta_{\mathrm{from}} - \theta_{\mathrm{to}}\\), the
+MATPOWER and PowerModels convention, which is not net of the branch's phase
+shift. By default they carry PowerModels' ±60 degree pad
+(`AngleDifferenceBounds::PowerModelsPad`, exactly its
+`correct_voltage_angle_differences!`): a side the case leaves unconstrained, as
+PSS/E and other formats with no angle limits always do, or unusable (at or
+beyond ±90 degrees, or the MATPOWER `0`/`0` spelling) becomes ±60 degrees. A
+branch that shifts phase by more than 60 degrees cannot meet that window, so
+`with_angle_difference_bounds` on the assembly options, and
+`powerio dcopf --angle-difference-bounds`, select another rule:
+`ShiftCenteredPad` (`shift-centered-pad`) centers the same pad on each
+branch's phase shift, `Stated` (`stated`) keeps the bounds the case states and
+reads an absent side as negative or positive infinity, and `None` (`none`)
+removes both bounds for every branch. The MATPOWER `0`/`0` pair denotes no
+bounds; a lower side at or below −360 degrees and an upper side at or above
+360 degrees denote absent sides. Other stated sides remain unchanged, so a
+single zero side, as in `0`/`30`, stays a bound at zero; MATPOWER's `makeAang`
+reads each zero side as absent instead.
+Unwrapped DC angle differences can exceed a full turn, so ±360 degrees is
+not a substitute for no constraint. Bundle vectors spell infinities `-inf`
+and `inf`; consumers must omit the corresponding inequality side. Preparation
+JSON uses the strings `"-Infinity"` and `"Infinity"`, retaining numeric values
+for finite limits. The default padded policy and ABI 7 remain unchanged.
 
 The generator space vectors, of length \\(n_{\mathrm{gen}}\\), are `q_gen`,
 `c_gen`, `c0_gen`, `pmax_gen`, and `pmin_gen`.
@@ -104,9 +126,11 @@ structured metadata:
 - `index_base`: `dense = 0` for manifest bus, branch, generator, and reference
   indices; `matrix_market = 1` for `.mtx` coordinates.
 - `branch_susceptance_formula`, `units`, `build_options`, and `zero_impedance`.
-  `build_options` records both `skip_zero_impedance` and
-  `synthesize_unrated_limits`. The zero impedance block records the skip flag,
-  denominator rule, skipped count, and skipped source branch rows.
+  `build_options` records `skip_zero_impedance`,
+  `synthesize_unrated_limits`, and `angle_difference_bounds`
+  (`power_models_pad`, `shift_centered_pad`, `stated`, or `none`). The zero
+  impedance block records the skip flag, denominator rule, skipped count, and
+  skipped source branch rows.
 - `grounding`: reference buses, removed rows and columns, the grounded operator
   (`L_grounded`), and the reference selector (`e_r`).
 - `operators[]`: one entry per emitted operator with `name`, `file`, `kind`,

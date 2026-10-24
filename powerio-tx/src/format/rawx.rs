@@ -1980,6 +1980,15 @@ fn raw_to_rawx(net: &BalancedNetwork, raw: &str, diagnostics: &mut Diagnostics) 
         &sections,
     );
     add_system_switch_output_table(&mut network, net, diagnostics);
+    if sections
+        .get("IMPEDANCE CORRECTION")
+        .is_some_and(|lines| !lines.is_empty())
+    {
+        diagnostics.push(
+            &codes::EMIT_PSSE.record_dropped,
+            "transformer impedance correction tables dropped: the RAWX writer writes no impcor table, so a transformer that names one keeps the number without the table",
+        );
+    }
     apply_detailed_equipment_ids(&mut network, net)?;
     add_detailed_connectivity_output_tables(&mut network, net, diagnostics)?;
 
@@ -3421,7 +3430,8 @@ mod tests {
         let net = parse_rawx_source(MINIMAL, None, &mut diagnostics).unwrap();
         assert_eq!(net.buses().len(), 2);
         close(net.loads()[0].p, 24.0);
-        close(net.loads()[0].q, 11.0);
+        // YQ 4 is capacitive: Q = QL + IQ - YQ.
+        close(net.loads()[0].q, 3.0);
         assert_eq!(net.generators()[0].regulated_bus, Some(BusId(2)));
         close(net.branches()[0].rate_a, 100.0);
     }

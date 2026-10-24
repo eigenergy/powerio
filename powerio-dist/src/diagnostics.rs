@@ -20,6 +20,26 @@ pub use powerio_core::{
 
 pub mod codes {
     powerio_core::diagnostic_codes! {
+        PARSE_SINCAL_MULTICONDUCTOR = "PARSE.DIST.SINCAL", Error,
+            "the selected conductor-resolved SINCAL profile cannot be parsed", category = Parse;
+        REQUEST_SINCAL_MULTICONDUCTOR_FEATURE_DISABLED = "REQUEST.DIST_FORMAT.SINCAL_FEATURE_DISABLED", Error,
+            "conductor-resolved SINCAL is not available through this build or entry point", category = Request;
+        READ_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_ONLY = "READ.DIST.SINCAL_RETAINED_SOURCE_ONLY", Remark,
+            "native data outside the selected conductor-resolved profile remain only in source";
+        READ_SINCAL_GEOMETRY = "READ.DIST.SINCAL_GEOMETRY", Warning,
+            "optional SINCAL drawing geometry retains native view metadata and reports mapping limits";
+        READ_SINCAL_UNCONNECTED_NODES = "READ.DIST.SINCAL_UNCONNECTED_NODES", Remark,
+            "native nodes with no declared conductors remain in network extras";
+        READ_SINCAL_ASSUMED_INACTIVE_SOURCE_CONTROLS = "READ.DIST.SINCAL_ASSUMED_INACTIVE_SOURCE_CONTROLS", Warning,
+            "legacy NULL source controls were explicitly assumed inactive";
+        EMIT_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_OMITTED = "EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED", Warning,
+            "native SINCAL source-only data are omitted from cross-format emission";
+        EMIT_SINCAL_MULTICONDUCTOR_UNSUPPORTED = "EMIT.DIST.SINCAL_UNSUPPORTED", Error,
+            "invalid or unsupported candidate multiconductor SINCAL output", category = Output;
+        EMIT_SINCAL_MULTICONDUCTOR_EXPERIMENTAL = "EMIT.DIST.SINCAL_EXPERIMENTAL", Remark,
+            "candidate multiconductor output has no native SINCAL acceptance evidence";
+        EMIT_SINCAL_MULTICONDUCTOR_LOSS = "EMIT.DIST.SINCAL_LOSS", Warning,
+            "candidate multiconductor output canonicalizes topology or omits ancillary data";
         // PARSE: the source text could not be decoded as given.
         PARSE_DSS_SOURCE_MALFORMED = "PARSE.DSS.SOURCE_MALFORMED", Warning,
             "a dss command, object spec, or property assignment does not parse";
@@ -178,6 +198,8 @@ pub mod codes {
             "a BMOPF field with no canonical home was dropped";
         READ_BMOPF_RECORD_DROPPED = "READ.BMOPF.RECORD_DROPPED", Warning,
             "a BMOPF object or winding beyond the modeled set was dropped";
+        READ_BMOPF_CAPACITOR_LOWERED = "READ.BMOPF.CAPACITOR_LOWERED", Remark,
+            "a per-coil capacitor was represented exactly by a terminal shunt";
         READ_BMOPF_VALUE_COLLAPSED = "READ.BMOPF.VALUE_COLLAPSED", Warning,
             "a per phase or per terminal BMOPF value was collapsed to one entry";
         READ_BMOPF_TRANSFORMER_OPEN_DELTA_SPLIT = "READ.BMOPF.TRANSFORMER_OPEN_DELTA_SPLIT", Warning,
