@@ -6,6 +6,7 @@ use super::{
 use powerio_dist::DistWindingConn;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 /// Complex affine expression with no constant term. Coefficients are `[real, imaginary]`.
 /// Voltage indices address preparation.terminals; current indices address the
 /// owning transformer's coils. Rows of equations are constrained to zero.
