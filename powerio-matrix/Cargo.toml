@@ -27,9 +27,8 @@ path = "src/lib.rs"
 
 [dependencies]
 powerio-core = { workspace = true }
-# default-features = false: this crate uses no SINCAL code, and leaving the
-# network crates' default `sincal` feature off here lets a facade built with
-# `default-features = false` stay free of SQLite.
+# default-features = false: this crate needs no optional network-crate
+# feature. SINCAL lives in powerio-tnd, which this crate does not use.
 powerio-dist = { workspace = true, default-features = false }
 powerio-prob.workspace = true
 powerio-tx = { workspace = true, default-features = false }

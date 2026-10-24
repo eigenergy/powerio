@@ -165,7 +165,13 @@ release on its own.
    `powerio-tnd`, `powerio-prob`, `powerio-matrix`, `powerio`, and
    `powerio-cli`, in dependency order). Both deploy through the `pypi` and
    `crates-io` environments, which wait for the maintainer's approval. A
-   rerun skips files and versions already published.
+   rerun skips files and versions already published. A crate's first
+   version cannot use trusted publishing, so a release that adds a crate
+   runs `scripts/release-verified.py` with `--bootstrap-crate <name>`: after
+   `crates.yml` fails at the new crate, it publishes that crate with the
+   maintainer's local Cargo credentials and reruns the job. Then configure
+   the crate's trusted publisher (repository `eigenergy/powerio`, workflow
+   `crates.yml`, environment `crates-io`).
 5. Publishing also runs `.github/workflows/notify-powerio-jl.yml`, which
    starts PowerIO.jl's Release workflow; its hourly schedule is the backstop.
    That workflow sets the Julia version, pins the release tarballs in

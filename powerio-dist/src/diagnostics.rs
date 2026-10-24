@@ -23,7 +23,7 @@ pub mod codes {
         PARSE_SINCAL_MULTICONDUCTOR = "PARSE.DIST.SINCAL", Error,
             "the selected conductor-resolved SINCAL profile cannot be parsed", category = Parse;
         REQUEST_SINCAL_MULTICONDUCTOR_FEATURE_DISABLED = "REQUEST.DIST_FORMAT.SINCAL_FEATURE_DISABLED", Error,
-            "conductor-resolved SINCAL support is not compiled into this build", category = Request;
+            "conductor-resolved SINCAL is not available through this build or entry point", category = Request;
         READ_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_ONLY = "READ.DIST.SINCAL_RETAINED_SOURCE_ONLY", Remark,
             "native data outside the selected conductor-resolved profile remain only in source";
         READ_SINCAL_GEOMETRY = "READ.DIST.SINCAL_GEOMETRY", Warning,

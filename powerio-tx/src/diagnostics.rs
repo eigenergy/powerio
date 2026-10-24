@@ -188,7 +188,7 @@ pub mod codes {
         REQUEST_SINCAL_PROFILE_REQUIRED = "REQUEST.SINCAL.PROFILE_REQUIRED", Error,
             "SINCAL requires an explicit electrical profile", category = Request;
         REQUEST_SINCAL_FEATURE_DISABLED = "REQUEST.SINCAL.FEATURE_DISABLED", Error,
-            "SINCAL support is not compiled into this build", category = Request;
+            "SINCAL is not available through this build or entry point", category = Request;
         PARSE_SINCAL_MALFORMED = "PARSE.SINCAL.MALFORMED", Error,
             "a required SINCAL record or electrical mode is invalid or unsupported", category = Parse;
         READ_SINCAL_CONVERSION_BASE = "READ.SINCAL.CONVERSION_BASE", Remark,
