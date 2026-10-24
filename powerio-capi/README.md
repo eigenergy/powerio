@@ -79,7 +79,7 @@ int main(void) {
 
 For text or binary content already in memory, build the `PioSource` with
 `pio_source_from_memory` instead. `pio_parse` is the grid exchange parser;
-`pio_geo_layer_parse` reads a geographic layer from text in memory. For DOE
+`pio_geo_layer_parse` reads a geographic layer from a `PioSource`. For DOE
 GO Challenge 3, a directory containing the problem file parses to an
 `AcScucInstance`, and if you add the matching solution file to that directory
 the same call parses an `AcScucSolution`.

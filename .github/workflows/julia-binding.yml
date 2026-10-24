@@ -22,15 +22,15 @@ name: Julia binding
 # keeps both green, and a stacked PR inherits the parent's companion rather
 # than testing the new surface against the old expectations on main.
 # The paths cover every crate the full-feature capi build below pulls in
-# (--features arrow,matrix,gridfm,dist,prob), so a change in any of them
+# (--features matrix,gridfm,dist,prob), so a change in any of them
 # reruns the compatibility suite.
 on:
   push:
     branches: [ "main" ]
-    paths: [ "powerio/**", "powerio-core/**", "powerio-tx/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml", ".github/powerio-jl-companion.json", "scripts/*julia-companion.py" ]
+    paths: [ "Cargo.toml", "Cargo.lock", "powerio/**", "powerio-core/**", "powerio-tnd/**", "powerio-tx/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml", ".github/powerio-jl-companion.json", "scripts/*julia-companion.py" ]
   # No branch filter: stacked PRs must run this too (see rust.yml).
   pull_request:
-    paths: [ "powerio/**", "powerio-core/**", "powerio-tx/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml", ".github/powerio-jl-companion.json", "scripts/*julia-companion.py" ]
+    paths: [ "Cargo.toml", "Cargo.lock", "powerio/**", "powerio-core/**", "powerio-tnd/**", "powerio-tx/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml", ".github/powerio-jl-companion.json", "scripts/*julia-companion.py" ]
 
 # One run per workflow per branch. A force push to a stacked pull request
 # otherwise leaves the superseded run going: it finishes, it fails or it
@@ -86,11 +86,9 @@ jobs:
       if: steps.powerio-jl.outputs.available == 'true'
     - name: Build powerio-capi
       if: steps.powerio-jl.outputs.available == 'true'
-      # --features arrow,matrix,gridfm,dist,prob so PowerIO.jl's Arrow export,
-      # matrix Arrow export, gridfm reader, distribution surface, and package
-      # surface bind against real symbols rather than skipping behind feature
-      # probes.
-      run: cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
+      # Match the release feature tuple. Only gridfm enables code; ABI 7
+      # exposes the same typed symbol set with or without these feature names.
+      run: cargo build -p powerio-capi --release --features matrix,gridfm,dist,prob
     - name: Read pinned PowerIO.jl companion
       id: powerio-jl-pin
       if: steps.powerio-jl.outputs.available == 'true'

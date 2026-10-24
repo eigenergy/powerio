@@ -170,8 +170,8 @@ impl<'a> GridfmSnapshot<'a> {
 
 /// The gridfm-datakit tables as Arrow record batches. The Parquet writer builds
 /// from these; a deferred gridfm-schema Arrow C Data Interface export (issue #38)
-/// would reuse them. (The raw network Arrow export that ships in powerio-capi is
-/// a different, lighter schema.)
+/// would reuse them. The raw network Arrow export removed from powerio-capi in
+/// 0.11.0 used a different, lighter schema.
 ///
 /// For a scenario batch the tables are row stacked: each table holds the rows of
 /// every snapshot back-to-back, keyed by the `scenario` column (0-based dense bus

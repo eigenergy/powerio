@@ -96,6 +96,23 @@ typedef struct {
 } PioDiagnosticSpanView;
 
 /**
+ * Borrowed binary bytes.
+ */
+typedef struct {
+    const uint8_t *data;
+    size_t len;
+} PioByteView;
+
+/**
+ * One caller-owned companion for an in-memory source. Both views are copied
+ * during source construction; no filesystem acquisition is permitted.
+ */
+typedef struct {
+    PioStringView name;
+    PioByteView bytes;
+} PioNamedBufferView;
+
+/**
  * Borrowed stable component identity.
  */
 typedef struct {
@@ -116,6 +133,57 @@ typedef struct {
     size_t row;
     bool in_service;
 } PioContingencyComponentView;
+
+/**
+ * Explicit conductor-resolved SINCAL reader selection. Zero initialization
+ * means no selected variant, no snapshot, and no acquired-table companion.
+ * The presence flags distinguish omission from an explicit zero.
+ */
+typedef struct {
+    bool has_variant;
+    int64_t variant;
+    bool has_snapshot_hours;
+    double snapshot_hours;
+    /**
+     * Relative companion name. NULL/0 omits it; non-NULL empty text is invalid.
+     */
+    PioStringView acquired_tables;
+    /**
+     * Experimental schema-11.5 NULL source controls as inactive; default false.
+     */
+    bool assume_inactive_source_controls;
+} PioSincalReadOptions;
+
+/**
+ * Explicit balanced SINCAL reader selection; presence flags preserve zero.
+ */
+typedef struct {
+    bool has_variant;
+    int64_t variant;
+    bool has_snapshot_hours;
+    double snapshot_hours;
+    PioStringView acquired_tables;
+} PioSincalBalancedReadOptions;
+
+/**
+ * Borrowed parsing options. Zero initialization preserves pio_parse behavior.
+ * All nested pointers need remain valid only during the call. These layouts
+ * are fixed; a future incompatible layout requires a new ABI or input type.
+ */
+typedef struct {
+    /**
+     * Optional explicit file acquisition root (NULL/0 means default).
+     */
+    PioStringView acquisition_root;
+    /**
+     * NULL omits SINCAL selection. Otherwise requires sincal-multiconductor.
+     */
+    const PioSincalReadOptions *sincal_multiconductor;
+    /**
+     * NULL omits balanced selection. Otherwise requires sincal-balanced.
+     */
+    const PioSincalBalancedReadOptions *sincal_balanced;
+} PioParseOptions;
 
 /**
  * Program identity recorded with one module.
@@ -2181,14 +2249,6 @@ typedef struct {
 } PioMulticonductorCommandView;
 
 /**
- * Borrowed binary bytes.
- */
-typedef struct {
-    const uint8_t *data;
-    size_t len;
-} PioByteView;
-
-/**
  * Complete source boundary without changing the legacy source-view layout.
  * Source phasors specify V(terminal) - V(reference). A named reference is
  * on source.bus and does not imply grounding; an absent reference means
@@ -2413,6 +2473,23 @@ PioSource *pio_source_from_memory(const char *name,
                                   const uint8_t *data,
                                   size_t data_len,
                                   PioError **error);
+
+/**
+ * Construct a memory source with explicitly supplied relative companions.
+ * Copies the primary and companion bytes before returning an owned handle.
+ * This source never reads referenced files from the filesystem.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * buffers addresses buffers_len readable views; NULL is valid only at zero length.
+ */
+PioSource *pio_source_from_memory_with_buffers(const char *name,
+                                               size_t name_len,
+                                               const uint8_t *data,
+                                               size_t data_len,
+                                               const PioNamedBufferView *buffers,
+                                               size_t buffers_len,
+                                               PioError **error);
 
 /**
  *
@@ -2834,6 +2911,22 @@ PioModule *pio_parse(const PioSource *source,
                      const char *format,
                      size_t format_len,
                      PioError **error);
+
+/**
+ * Parse with optional typed reader and acquisition selections. NULL options
+ * is identical to pio_parse. Explicit SINCAL options require the matching
+ * format token and never select or balance a network family implicitly.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * Non-NULL options and nested selections must be readable for their declared
+ * types, with all borrowed strings valid through the call.
+ */
+PioModule *pio_parse_with_options(const PioSource *source,
+                                  const char *format,
+                                  size_t format_len,
+                                  const PioParseOptions *selections,
+                                  PioError **error);
 
 /**
  * Deserialize one PowerIO IR source.

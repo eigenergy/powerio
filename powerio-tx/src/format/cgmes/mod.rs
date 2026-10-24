@@ -305,9 +305,7 @@ fn push_zip(
         let raw_name = file
             .name()
             .map_err(|error| {
-                format_error(format!(
-                    "cannot read entry {index} name from {archive_name}: {error}"
-                ))
+                format_error(format!("cannot read entry name in {archive_name}: {error}"))
             })?
             .into_owned();
         let path = strict_archive_path(&raw_name)?;
@@ -372,7 +370,7 @@ fn push_zip(
 /// declare, then refuse entries that disagree with the first count, leave
 /// the entry data, or share bytes.
 ///
-/// The ZIP reader examines end records from the last. It reserves its entry table
+/// zip 8.6 examines end records from the last. It reserves its entry table
 /// from the count of the first record it accepts and indexes every central
 /// record before `ZipArchive::new` returns; when that fails, it falls back to
 /// an earlier record and reserves again. So before opening, the number of
@@ -427,11 +425,11 @@ fn open_archive<'a>(
         {
             Some(end) if end <= directory_start => regions.push((start, end, index)),
             _ => {
+                let entry_name = entry.name().map_err(|error| {
+                    format_error(format!("cannot read entry name in {archive_name}: {error}"))
+                })?;
                 return Err(format_error(format!(
-                    "archive {archive_name} is refused as malformed: entry {} lies outside the archive's entry data",
-                    entry.name().map_err(|error| format_error(format!(
-                        "cannot read entry {index} name from {archive_name}: {error}"
-                    )))?
+                    "archive {archive_name} is refused as malformed: entry {entry_name} lies outside the archive's entry data"
                 )));
             }
         }
@@ -443,17 +441,14 @@ fn open_archive<'a>(
         let name = |index| {
             archive
                 .name_for_index(index)
-                .ok_or_else(|| format_error(format!("missing entry {index} in {archive_name}")))?
-                .map_err(|error| {
-                    format_error(format!(
-                        "cannot read entry {index} name from {archive_name}: {error}"
-                    ))
-                })
+                .and_then(std::result::Result::ok)
+                .map(std::borrow::Cow::into_owned)
+                .unwrap_or_default()
         };
         return Err(format_error(format!(
             "archive {archive_name} is refused as unsafe: entries {} and {} overlap",
-            name(pair[0].2)?,
-            name(pair[1].2)?
+            name(pair[0].2),
+            name(pair[1].2)
         )));
     }
     Ok(archive)
@@ -464,7 +459,7 @@ const ZIP64_END_LOCATOR: &[u8] = b"PK\x06\x07";
 const ZIP64_END_RECORD: &[u8] = b"PK\x06\x06";
 
 /// Most end records an archive may hold: its end of central directory
-/// signatures, plus the Zip64 end records the ZIP reader reads for their locators.
+/// signatures, plus the Zip64 end records zip 8.6 reads for their locators.
 /// An honest archive holds one or two, and a four byte signature occurs by
 /// chance in compressed data about once per 4 GiB. Each record can cost the
 /// reader, and the scan in [`declared_entries`], one search of the archive,
@@ -474,7 +469,7 @@ const MAX_END_RECORDS: usize = 8;
 /// The entry counts an archive's end records declare.
 #[derive(Debug, PartialEq, Eq)]
 struct DeclaredEntries {
-    /// The count of the end record the ZIP reader examines first: the last end
+    /// The count of the end record zip 8.6 examines first: the last end
     /// record signature whose comment fits in the archive, or the Zip64
     /// record its locator names when a 16 bit field is saturated.
     first: u64,
@@ -628,6 +623,21 @@ enum DeclaredSizeFailure {
 }
 
 impl DeclaredSizeFailure {
+    fn from_read_error(error: std::io::Error) -> Self {
+        // zip 9.x rejects an inflater that produces more bytes than the
+        // central directory declared before our one-byte overrun probe runs.
+        // Preserve the reader's stable malformed-archive diagnostic instead
+        // of leaking the ZIP implementation's internal error text.
+        if error
+            .to_string()
+            .contains("larger than its declared uncompressed size")
+        {
+            Self::Long
+        } else {
+            Self::Read(error)
+        }
+    }
+
     fn into_error(self, archive_name: &str, raw_name: &str, size: u64) -> Error {
         format_error(match self {
             Self::Read(error) => format!("cannot decompress {raw_name}: {error}"),
@@ -663,14 +673,14 @@ fn read_declared_size(
         .by_ref()
         .take(size - prefix.len() as u64)
         .read_to_end(&mut content)
-        .map_err(DeclaredSizeFailure::Read)?;
+        .map_err(DeclaredSizeFailure::from_read_error)?;
     let produced = content.len() as u64;
     if produced != size {
         return Err(DeclaredSizeFailure::Short(produced));
     }
     if entry
         .read(&mut [0_u8; 1])
-        .map_err(DeclaredSizeFailure::Read)?
+        .map_err(DeclaredSizeFailure::from_read_error)?
         != 0
     {
         return Err(DeclaredSizeFailure::Long);
@@ -6228,6 +6238,34 @@ mod tests {
         writer.finish().unwrap().into_inner()
     }
 
+    #[test]
+    fn zip_entry_names_preserve_utf8_and_cp437_identity() {
+        let utf8 = zip_archive(
+            &[("café.xml", b"<rdf:RDF/>")],
+            zip::CompressionMethod::Stored,
+        );
+        let mut cp437 = zip_archive(
+            &[("cafe.xml", b"<rdf:RDF/>")],
+            zip::CompressionMethod::Stored,
+        );
+        let names: Vec<_> = cp437
+            .windows(8)
+            .enumerate()
+            .filter_map(|(index, name)| (name == b"cafe.xml").then_some(index))
+            .collect();
+        assert_eq!(names.len(), 2);
+        for index in names {
+            cp437[index + 3] = 0x82; // CP437 é in both local and central names.
+        }
+        for archive in [utf8, cp437] {
+            let documents = acquire_archive(archive).unwrap();
+            assert_eq!(
+                documents,
+                [("case.zip/café.xml".to_string(), "<rdf:RDF/>".to_string())]
+            );
+        }
+    }
+
     fn acquire_archive(bytes: Vec<u8>) -> Result<Vec<(String, String)>> {
         let source = Source::from_memory("case.zip", bytes).unwrap();
         acquire_documents_with_limit(&source, 1 << 20)
@@ -6321,8 +6359,7 @@ mod tests {
         put_u32(&mut forged, central + 24, declared);
         let error = archive_error(forged);
         assert!(
-            error.contains(&format!("inflates past the {declared} bytes"))
-                || error.contains("File is larger than its declared uncompressed size"),
+            error.contains(&format!("inflates past the {declared} bytes")),
             "{error}"
         );
 
