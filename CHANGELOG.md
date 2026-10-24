@@ -65,6 +65,25 @@
   PTDF columns, and LODF columns from one factorization and one solve per
   row or column, without forming the full matrices.
 
+- Add typed AC optimal transmission switching to `powerio-prob`
+  ([#671](https://github.com/eigenergy/powerio/issues/671)).
+  `AcOtsInstance` is an AC OPF base plus switching options:
+  - which branches may switch;
+  - per-branch opening and closing costs;
+  - an islanding policy;
+  - budgets on open branches and on status changes;
+  - branch current limits, either stated per terminal or derived as
+    PowerModels' `calc_current_limits!` derives them.
+
+  The instance keeps every physical branch and its initial status.
+  - `validate_topology` checks a final status vector and returns its
+    switching cost.
+  - `fix_topology` derives the AC OPF to solve and reports what it discards.
+  - `AcOtsSolution` attaches that AC OPF solution, after checking that it
+    solves exactly the fixed problem and that open branches carry no flow.
+
+  The new objective term `branch_switching_cost` adds the switching cost to
+  the objective. No solver or formulation is included.
 
 ## 0.11.6
 
