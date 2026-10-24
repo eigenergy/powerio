@@ -1378,7 +1378,7 @@ fn prepare_load_laws(
                         ],
                     ]
                 }
-                Law::BoundedZip { .. } => {
+                Law::BoundedZip { .. } | Law::BoundedExponential { .. } => {
                     return Err(unsupported(&load.name, "voltage-bounded load laws require piecewise IVR equations; a nominal-law approximation is not implicit"));
                 }
                 _ => return Err(unsupported(&load.name, "unknown load voltage law")),
