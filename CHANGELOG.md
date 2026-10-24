@@ -454,8 +454,9 @@
 - PSS/E `.dyr` files parse to a standalone `DynamicCase` through
   `powerio::parse_dyr` and `parse_dyr_bytes`. Each record keeps its exact
   source text, model name, and ordered parameters, including models PowerIO
-  does not type. `DynamicStudy` pairs a case with its `BalancedNetwork` and
-  reports bus references the network lacks. The study is Rust only: typed
+  does not type. A record's unquoted first field is its bus; a quoted one
+  names a device, as dc line models do. `DynamicStudy` pairs a case with its
+  `BalancedNetwork` and reports bus references the network lacks. The study is Rust only: typed
   model schemas, PowerIO IR, the C ABI, Python, and Julia do not carry it yet
   (#642, #660).
 

@@ -25,15 +25,20 @@ a directory containing `case.raw` and `case.dyr` with
 ```
 
 `DynamicCase::records()` returns records in source order. Each record exposes
-its bus ID, raw model name, optional device key, ordered parameter tokens,
-source line, and record spelling. `DynamicCase::to_dyr_string()` returns the
+its first-field `key`, raw model name, optional device key, ordered parameter
+tokens, source line, and record spelling. An unquoted key is a bus number,
+returned by `bus_id()`; a quoted key names a device, as dc line models do
+(`'DC1' 'CDC4T' ... /`), and `bus_id()` returns `None` for it. `DynamicCase::to_dyr_string()` returns the
 original text exactly, including comments and formatting. `parse_dyr_bytes`
 rejects invalid UTF-8 rather than replacing bytes.
 
 ## Linking guarantees and limitations
 
 `DynamicStudy::unresolved_buses()` verifies only whether each generic DYR
-bus ID occurs in the paired network. It does **not** assert that the optional
+bus ID occurs in the paired network, and skips records keyed by a device
+name. Load models keyed by area, zone, or owner (for example `CLODAR`) state
+that number where a bus would be, so the check can report them as unresolved
+buses. It does **not** assert that the optional
 `device_id` refers to a generator, load, or other particular equipment: the
 meaning of that field and the association rule depend on the model family.
 Unknown and user-defined models are preserved rather than rejected or
