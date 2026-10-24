@@ -53,6 +53,28 @@ jobs:
             echo "publishable workspace members ($actual) do not match the publish list in crates.yml" >&2
             exit 1
           fi
+      - name: Refuse crate names someone else owns
+        # A name another account claimed (a new crate's name is visible in a
+        # public PR before its first release) must stop the release before
+        # any crate publishes. scripts/release-verified.py checks the same.
+        env:
+          UA: powerio release workflow (https://github.com/eigenergy/powerio)
+          OWNER: samtalki
+        run: |
+          for crate in powerio-core powerio-tx powerio-dist powerio-tnd powerio-prob powerio-matrix powerio powerio-cli; do
+            resp="$RUNNER_TEMP/$crate-owners.json"
+            code="$(curl -sS -A "$UA" --max-time 30 -o "$resp" -w '%{http_code}' \
+              "https://crates.io/api/v1/crates/$crate/owners")" || code=unreachable
+            case "$code" in
+              200)
+                jq -e --arg owner "$OWNER" 'any(.users[]; .login == $owner)' "$resp" >/dev/null \
+                  || { echo "$crate on crates.io is not owned by $OWNER; refusing to publish under a claimed name" >&2; exit 1; } ;;
+              404) ;;  # not yet published; its first version is bootstrapped
+              *)
+                echo "crates.io returned $code for the $crate owners; re-run once it is reachable" >&2
+                exit 1 ;;
+            esac
+          done
       - name: Verify the immutable published release
         env:
           RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}

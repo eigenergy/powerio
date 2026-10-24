@@ -297,7 +297,7 @@ class FirstPublication(unittest.TestCase):
                 helper.bootstrap_first_missing(SHA, "0.11.6", ["powerio-tnd"])
             )
             run.assert_called_once_with(
-                ["cargo", "publish", "--locked", "-p", "powerio-tnd"],
+                ["cargo", "publish", "--locked", "--all-features", "-p", "powerio-tnd"],
                 cwd=Path("/repo"),
                 check=True,
             )
@@ -386,6 +386,75 @@ class FirstPublication(unittest.TestCase):
                 helper.bootstrap_first_missing(SHA, "0.11.6", ["powerio-tnd"])
             )
             run.assert_not_called()
+
+    def test_a_name_owned_by_someone_else_stops_the_release(self):
+        def owners(login):
+            return lambda url: (
+                {"users": [{"login": login}]} if url.endswith("/powerio-tnd/owners") else None
+            )
+
+        with patch.object(helper, "public_json", side_effect=owners("squatter")):
+            with self.assertRaises(helper.ReleaseError):
+                helper.require_crate_ownership()
+        with patch.object(helper, "public_json", side_effect=owners(helper.CRATE_OWNER)):
+            helper.require_crate_ownership()
+        # An absent name is the first-publication case, not a claim.
+        with patch.object(helper, "public_json", return_value=None):
+            helper.require_crate_ownership()
+
+    def test_failed_publish_step_bootstraps_then_reruns_the_job_once(self):
+        run = source_run(
+            "crates.yml", event="release", display_title="PowerIO crates.io v0.11.6"
+        )
+        run.update(conclusion="failure", id=7, run_attempt=1)
+        calls = []
+
+        def api(path, method="GET", data=None, missing_ok=False):
+            calls.append((path, method))
+            return [] if path.endswith("/pending_deployments") else None
+
+        class Done(Exception):
+            pass
+
+        with (
+            patch.object(helper, "collection", side_effect=lambda *a: [run] if "crates.yml" in a[0] else []),
+            patch.object(helper, "report_jobs", return_value=[]),
+            patch.object(helper, "api", side_effect=api),
+            patch.object(helper, "bootstrap_after_approved_failure", return_value=True) as boot,
+            patch.object(helper, "wait_pause", side_effect=Done),
+        ):
+            with self.assertRaises(Done):
+                helper.follow_publication(SHA, "b" * 40, "0.11.6", "v0.11.6", 0, ["powerio-tnd"])
+        boot.assert_called_once()
+        self.assertIn(
+            (f"repos/{helper.REPO}/actions/runs/7/rerun-failed-jobs", "POST"), calls
+        )
+
+    def test_a_failure_without_bootstrap_is_not_retried_twice(self):
+        run = source_run(
+            "crates.yml", event="release", display_title="PowerIO crates.io v0.11.6"
+        )
+        run.update(conclusion="failure", id=7, run_attempt=1)
+        attempts = iter([1, 2])
+
+        def collection(endpoint, key):
+            if "crates.yml" not in endpoint:
+                return []
+            return [dict(run, run_attempt=next(attempts, 2))]
+
+        with (
+            patch.object(helper, "collection", side_effect=collection),
+            patch.object(helper, "report_jobs", return_value=[]),
+            patch.object(
+                helper,
+                "api",
+                side_effect=lambda path, *a, **k: [] if path.endswith("/pending_deployments") else None,
+            ),
+            patch.object(helper, "bootstrap_after_approved_failure", return_value=False),
+            patch.object(helper, "wait_pause"),
+        ):
+            with self.assertRaises(helper.ReleaseError):
+                helper.follow_publication(SHA, "b" * 40, "0.11.6", "v0.11.6", 0, ["powerio-tnd"])
 
     def test_pending_protection_prevents_local_publication(self):
         run = source_run(

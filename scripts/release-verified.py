@@ -33,6 +33,9 @@ MAIN_WORKFLOWS = {
     "converter.yml",
     "powsybl.yml",
 }
+# The account that owns every published PowerIO crate. A crate name that
+# exists under another owner was claimed by someone else.
+CRATE_OWNER = "samtalki"
 CRATES = (
     "powerio-core",
     "powerio-tx",
@@ -341,6 +344,23 @@ def require_clean_candidate(candidate):
     return root
 
 
+def require_crate_ownership():
+    """Refuse a release whose crate names someone else has claimed.
+
+    Run before the tag and again before the draft is published, so a
+    squatted new name stops the release before any crate is published.
+    """
+    for crate in CRATES:
+        owners = public_json(f"https://crates.io/api/v1/crates/{crate}/owners")
+        if owners is None:
+            continue
+        logins = {user.get("login") for user in owners.get("users", [])}
+        require(
+            CRATE_OWNER in logins,
+            f"{crate} on crates.io is not owned by {CRATE_OWNER}; refusing to publish under a claimed name.",
+        )
+
+
 def bootstrap_first_missing(candidate, version, allowed):
     """Publish only an explicitly named, unclaimed crate after its dependencies."""
     already_bootstrapped = False
@@ -362,7 +382,11 @@ def bootstrap_first_missing(candidate, version, allowed):
         )
         root = require_clean_candidate(candidate)
         subprocess.run(
-            ["cargo", "publish", "--locked", "-p", crate], cwd=root, check=True
+            # Every feature compiles from the packaged tarball before the
+            # new name is permanent on crates.io.
+            ["cargo", "publish", "--locked", "--all-features", "-p", crate],
+            cwd=root,
+            check=True,
         )
         require(
             published_crate_version(
@@ -591,6 +615,7 @@ def main(argv=None):
         set(missing) <= set(args.bootstrap_crate),
         f"New crates require explicit --bootstrap-crate flags: {missing}",
     )
+    require_crate_ownership()
     tag = f"v{args.version}"
     print(
         f"Phase 2: reconcile annotated tag {tag}; never move an existing tag.",
@@ -647,6 +672,7 @@ def main(argv=None):
     )
     print("Phase 4: reconcile draft and publish only after verified gates.", flush=True)
     if release["draft"]:
+        require_crate_ownership()
         current_run = api(f"repos/{REPO}/actions/runs/{run['id']}")
         require(
             current_run["run_attempt"] == run["run_attempt"]
