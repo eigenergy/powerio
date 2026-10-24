@@ -250,6 +250,19 @@ impl DatabaseSnapshot {
             }
             return Ok(None);
         }
+        // As for the electrical tables, a view or virtual table is not native
+        // storage and is never evaluated.
+        let kind: String = self
+            .connection
+            .query_row(
+                "SELECT type FROM pragma_table_list WHERE schema='main' AND name=?1",
+                [table],
+                |row| row.get(0),
+            )
+            .map_err(format_error)?;
+        if kind != "table" {
+            return Err(format_error(format!("expected native table {table}")));
+        }
         // GraphicAreaTile has no Flag_Variant in legacy schemas. Its optional
         // fields also evolve independently of the electrical schema.
         let view = table == "GraphicAreaTile";

@@ -38,6 +38,17 @@ fn drawing_points_keep_zero_and_derive_extended_busbar_midpoints() {
     );
 }
 #[test]
+fn a_view_in_place_of_a_graphic_table_is_never_evaluated() {
+    let g = database(
+        "ALTER TABLE GraphicNode RENAME TO Stored; CREATE VIEW GraphicNode AS SELECT * FROM Stored;",
+    );
+    let error = g.drawing_geometry().unwrap_err().to_string();
+    assert!(
+        error.contains("expected native table GraphicNode"),
+        "{error}"
+    );
+}
+#[test]
 fn variant_and_inactive_graphic_records_do_not_contaminate_selected_geometry() {
     let g = database(
         "INSERT INTO GraphicNode VALUES(3,2,1,100,2,999,999,999,999),(4,1,0,100,3,999,999,999,999)",

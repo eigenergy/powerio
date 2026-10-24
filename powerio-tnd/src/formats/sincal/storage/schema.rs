@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use rusqlite::{Connection, limits::Limit};
+use rusqlite::{Connection, OptionalExtension, limits::Limit};
 
 use crate::formats::sincal::storage::{MAX_BYTES, Result, SQLITE_MAGIC, format_error};
 
@@ -307,5 +307,23 @@ fn configure_query_snapshot(connection: &Connection) -> Result<()> {
     connection
         .execute_batch("PRAGMA query_only=ON; PRAGMA trusted_schema=OFF; PRAGMA temp_store=MEMORY;")
         .map_err(format_error)?;
+    // A virtual generated column is computed on every read, so a small file
+    // could return far more data than its input bound. Native snapshots store
+    // plain values; stored generated columns are read like any other column.
+    // Only ordinary tables are inspected: describing a view would compile it.
+    let generated: Option<String> = connection
+        .query_row(
+            "SELECT t.name FROM pragma_table_list AS t, pragma_table_xinfo(t.name) AS c \
+             WHERE t.schema = 'main' AND t.type = 'table' AND c.hidden = 2 LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(format_error)?;
+    if let Some(table) = generated {
+        return Err(format_error(format!(
+            "{table}: a column computed on read is not native storage"
+        )));
+    }
     Ok(())
 }
