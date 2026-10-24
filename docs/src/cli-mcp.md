@@ -18,11 +18,32 @@ powerio geo extract case.aux -o layer.geo.json     # standalone geographic layer
 
 The other subcommands are `batch`, which writes matrix families for every
 case in a directory, `gen`, which writes synthetic cases, `geo apply` and
-`geo convert`, `corpus`, the private corpus harness described in
+`geo convert`, `contingency resolve` and `contingency expand`, which bind
+PSS/E `.con`, `.sub`, and `.mon` files to a case and expand a `.con` file's
+automatic specifications, as described in
+[PSS/E contingency analysis files](contingency-files.md#command-line),
+`corpus`, the private corpus harness described in
 [Corpus harness](corpus-harness.md), and `tui`. `dcopf` accepts the alias
-`dc-opf`. `--from` and `--to` take the format tokens and aliases of the
-[format table](format-fidelity.md); `iidm` and `rawx` are accepted as
-input spellings only.
+`dc-opf`. `--from` accepts the network and calculation format tokens and
+aliases in the [format table](https://github.com/eigenergy/powerio#formats).
+`--to` accepts their supported output formats except GridFM; use the
+`gridfm` subcommand to write those datasets. `iidm` and `rawx` are input
+spellings only. The geographic layer, PowerWorld display, and PSS/E
+contingency file tokens are not `--from` values: the `geo` and `contingency`
+subcommands read those files.
+
+`convert`, `summary`, and `verify` take `--merge-buses SPEC`, which merges
+buses before the command runs (see
+[Merging buses](transmission.md#merging-buses)). `SPEC` is `switches` for
+closed switches, `exact` for those and branches with `r = 0` and `x = 0`,
+`psse` for those and PSS/E zero impedance lines at the case's `THRSHZ`,
+`psse=<x>` for the same at threshold `x`, or `impedance=<z>` for closed
+switches and non-transformer branches whose impedance magnitude is at most
+`z`. `summary` adds a `bus_merge` block with the counts. Its
+`topology.islands` block lists the AC islands with their bus counts, reference
+buses, generators, and HVDC ties to other islands, and counts the unsupplied
+islands an HVDC line still feeds (see
+[Islands and reference buses](transmission.md#islands-and-reference-buses)).
 
 Format names, structural value types, and diagnostic codes are the same
 strings the language APIs use. Diagnostics print one per line on stderr as

@@ -31,12 +31,12 @@ fn binary_profiles_are_not_text_and_same_format_keeps_every_byte() {
     assert!(
         artifacts
             .iter()
-            .any(|a| a.name().as_str() == "out/p.bin" && a.bytes() == bytes)
+            .any(|a| a.name().as_str() == "out/source/p.bin" && a.bytes() == bytes)
     );
     assert!(
         artifacts
             .iter()
-            .any(|a| a.name().as_str() == "out/case.dss" && a.bytes() == text.as_bytes())
+            .any(|a| a.name().as_str() == "out/source/case.dss" && a.bytes() == text.as_bytes())
     );
 }
 
@@ -132,15 +132,13 @@ fn retained_project_keeps_entrypoint_location_and_never_reacquires_profiles() {
     let EmittedOutput::Memory { artifacts } = emitted.into_output() else {
         panic!("memory output");
     };
+    assert!(artifacts.iter().any(
+        |a| a.name().as_str() == "out/source/cases/master.dss" && a.bytes() == text.as_bytes()
+    ));
     assert!(
         artifacts
             .iter()
-            .any(|a| a.name().as_str() == "out/cases/master.dss" && a.bytes() == text.as_bytes())
-    );
-    assert!(
-        artifacts
-            .iter()
-            .any(|a| a.name().as_str() == "out/p.bin" && a.bytes() == bytes)
+            .any(|a| a.name().as_str() == "out/source/p.bin" && a.bytes() == bytes)
     );
 }
 

@@ -240,6 +240,7 @@ pub struct RawDss {
     pub buscoords: Vec<BusCoord>,
     pub vars: VarMap,
     pub(super) absolute_dependency: bool,
+    pub(super) dependencies: Vec<powerio_core::SourceId>,
     load_powers: BTreeMap<usize, super::load_power::LoadPower>,
     load_shapes: BTreeMap<usize, super::loadshape::Shape>,
     /// AutoTrans MakeLike copies derived winding state not reconstructed yet.
@@ -2281,12 +2282,14 @@ fn include_acquisition_error(error: &powerio_core::Error) -> std::io::Error {
 struct SourceLoader<'a> {
     source: &'a powerio_core::Source,
     lexical_root: PathBuf,
+    dependencies: std::collections::BTreeSet<powerio_core::SourceId>,
 }
 
 fn source_include_loader(source: &powerio_core::Source, lexical_root: PathBuf) -> SourceLoader<'_> {
     SourceLoader {
         source,
         lexical_root,
+        dependencies: std::collections::BTreeSet::new(),
     }
 }
 
@@ -2318,6 +2321,7 @@ impl Loader for SourceLoader<'_> {
             .source
             .root_buffer(&name)
             .map_err(|error| include_acquisition_error(&error))?;
+        self.dependencies.insert(buffer.id().clone());
         Ok(buffer.bytes().to_vec())
     }
 }
@@ -2343,7 +2347,7 @@ pub(crate) fn parse_raw_from_source(source: &powerio_core::Source) -> Result<Raw
         format: "case text",
         message: format!("not valid UTF-8: {e}"),
     })?;
-    if let Some(root) = source.selected_acquisition_root() {
+    let (mut raw, loader) = if let Some(root) = source.selected_acquisition_root() {
         // A selected root is canonical, so resolution runs in the canonical
         // root's space, the same space the acquisition walk confines to. The
         // primary's own directory seeds relative includes.
@@ -2354,12 +2358,14 @@ pub(crate) fn parse_raw_from_source(source: &powerio_core::Source) -> Result<Raw
             None => file.push(source.name()),
         }
         let mut loader = source_include_loader(source, root.to_path_buf());
-        Ok(parse_raw_confined_under(
-            text,
-            &file.display().to_string(),
-            root,
-            &mut loader,
-        ))
+        let raw = parse_raw_confined_under(text, &file.display().to_string(), root, &mut loader);
+        (raw, loader)
+    } else if primary.directory_segments().next().is_some() {
+        // A memory-tree primary is relative to the supplied tree root.
+        let root = Path::new("");
+        let mut loader = source_include_loader(source, root.to_path_buf());
+        let raw = parse_raw_confined_under(text, source.name(), root, &mut loader);
+        (raw, loader)
     } else {
         // The default root of a file source is its containing directory, and
         // an in-memory source resolves the same way against its (possibly
@@ -2372,8 +2378,11 @@ pub(crate) fn parse_raw_from_source(source: &powerio_core::Source) -> Result<Raw
                 .unwrap_or_else(|| Path::new("")),
         );
         let mut loader = source_include_loader(source, lexical_root);
-        Ok(parse_raw_with_confined(text, source.name(), &mut loader))
-    }
+        let raw = parse_raw_with_confined(text, source.name(), &mut loader);
+        (raw, loader)
+    };
+    raw.dependencies = loader.dependencies.into_iter().collect();
+    Ok(raw)
 }
 
 /// The loader's own containment refusal, carried inside the `io::Error` so it

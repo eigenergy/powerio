@@ -28,10 +28,9 @@ mod xfmrcode;
 pub use lex::{BusSpec, Param, Scanner, Value, VarMap};
 pub use raw::{BusCoord, RawCommand, RawDss, RawObject, RawProp};
 
+pub(crate) use emit_project::retained_project;
 #[doc(hidden)]
 pub use raw::{__parse_raw_file, __parse_raw_with};
 pub use read::to_network_from_raw;
 pub use write::{DssEmitOptions, DssLoadVoltageBounds};
 pub(crate) use write::{emit_dss_text_with_options, validate_emission};
-
-pub(crate) use emit_project::retained_project;

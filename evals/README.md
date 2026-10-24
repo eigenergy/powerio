@@ -9,12 +9,13 @@ minimal fixtures for ordinary tests stay beside those tests under
 - `validation/` is the cross tool correctness matrix: powerio's parse and
   write against PowerModels.jl, ExaPowerIO.jl, Egret, pandapower, PyPSA,
   OpenDSS, the BMOPF schema, and the matrix oracles. `run_validation.sh` is
-  the same gate CI runs; `run_rich_validation.sh` walks external corpora.
+  the same gate CI runs; `run_rich_validation.sh` checks the committed rich
+  fixtures strictly and walks external corpora only when `--root` names them.
 - `performance/` is the timing record: `bench_parse.py` and `bench_julia.jl`
   measure parse and matrix construction, `asv/` tracks the airspeed velocity
   history, and `RESULTS.md` is the rendered table.
-- `allocation/` is the allocation gate with its pinned fixture digests and
-  baseline table.
+- `allocation/` is the recorded 0.10.0 allocation baseline with its pinned
+  fixture digests; no CI job runs it.
 
 ## What every case records
 

@@ -1,10 +1,17 @@
 # Distribution networks
 
 A multiconductor network is the conductor level distribution model, and
-OpenDSS, GridLAB-D, PowerModelsDistribution engineering JSON, BMOPF JSON,
-and distribution CIM all parse to it. When you need a calculation, construct an `McAcPfInstance`,
-`McAcOpfInstance`, or `LinDist3FlowOpfInstance` from it explicitly (see
+OpenDSS, GridLAB-D, PowerModelsDistribution engineering JSON, BMOPF JSON, and
+distribution CIM all parse to it. When you need a calculation, construct an
+`McAcPfInstance`, `McAcOpfInstance`, `LinDist3FlowPfInstance`, or
+`LinDist3FlowOpfInstance` from it explicitly (see
 [Calculation instances and solutions](instances.md)).
+
+The explicit [SINCAL multiconductor profile](sincal.md) also produces this
+existing type, including when its selected powers happen to be symmetric.
+Required unsupported SINCAL components reject the entire parse rather than
+returning a partial network. Its balanced profile belongs to the separate
+transmission backend; neither path silently falls back to the other.
 
 ```julia
 using PowerIO
@@ -168,7 +175,8 @@ segment with no impedance is an error severity finding
 (`READ.CIM_DIST.IMPEDANCE_UNRESOLVED`). Conversion to another format refuses
 such a segment (`READINESS.CIM_DIST.IMPEDANCE_UNRESOLVED`): its placeholder
 line code has zero impedance, which would be a short circuit between its
-buses. OpenDSS geometry lines are refused for the same reason.
+buses. OpenDSS geometry lines are refused for the same reason;
+[Electrical readiness](electrical-readiness.md) describes both checks.
 
 A network read from distribution CIM records `cim-dist` as its source format.
 A same format write of a single document returns its bytes. Canonical output is
@@ -809,7 +817,6 @@ The C and Julia bus views expose unequal limits as
 `phase_to_ground_voltage_min_v` and `phase_to_ground_voltage_max_v`, while
 `voltage_min_v` and `voltage_max_v` represent uniform bounds. C spans borrow
 from the network's owner and remain valid for the lifetime of that handle.
-The unreleased ABI 7 layout and Julia definitions are updated together.
 
 Parsing, structural schema validity, semantic consistency and computational
 support are separate checks. Contradictory versions, invalid dimensions,
@@ -833,6 +840,14 @@ records the canonical identity, proposal status, digest and revision under
 `meta.provenance.powerio_bmopf`. Existing provenance is preserved; a name
 collision uses a numbered producer entry. Reading the former canonical or
 version-directory identifiers remains supported without fetching remote data.
+
+The supported schemas ship in the Rust crate at `schemas/bmopf/`, in the
+Python package at `powerio/schemas/bmopf/`, and in each C/Julia library archive
+at `schemas/bmopf/`. Their manifests record the exact bytes and upstream
+review references. Python can read them with `importlib.resources.files("powerio")`.
+Upstream review changes do not alter an installed release's schema. A new
+schema interpretation requires a reviewed PowerIO release; a PowerIO release
+does not establish Task Force acceptance.
 
 ### Energy prices
 
@@ -916,7 +931,6 @@ fixed-dispatch pair under the same version. Readers without those structural typ
 reject them, while existing network and calculation records keep their
 representation.
 
-
 ## Solver adapters, including Tellegen
 
 A solver adapter can retain PowerIO's typed module throughout parsing,
@@ -950,13 +964,6 @@ Tellegen can reuse this Rust boundary for native and WebAssembly adapters.
 The remaining consumer work is solver dispatch, capability checks, and
 presentation of the supported distribution results. Parsing, neutral
 projection, electrical coefficients, physical axes, and primal scaling stay
-in PowerIO. New LinDist3Flow types require PowerIO 0.11.1; existing saved
-IR 2 networks require no format migration.
-
-The supported schemas ship in the Rust crate at `schemas/bmopf/`, in the
-Python package at `powerio/schemas/bmopf/`, and in each C/Julia library archive
-at `schemas/bmopf/`. Their manifests record the exact bytes and upstream
-review references. Python can read them with `importlib.resources.files("powerio")`.
-Upstream review changes do not alter an installed release's schema. A new
-schema interpretation requires a reviewed PowerIO release; a PowerIO release
-does not establish Task Force acceptance.
+in PowerIO. The LinDist3Flow OPF types require PowerIO 0.11.1 and the
+fixed-dispatch types 0.11.4; existing saved IR 2 networks require no format
+migration.
