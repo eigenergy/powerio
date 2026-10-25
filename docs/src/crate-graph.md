@@ -16,8 +16,10 @@ powerio-tnd          IntegratedNetwork, cross-model transformations, and
 powerio-prob          operating points, updates, the nine instances, the ten
                       solutions, and GO Challenge 3, OPFData, and BMOPF assembly;
                       depends on core, tx, and dist; matrix free
+powerio-synth        deterministic topology-only network generators;
+                      depends on tx
 powerio-matrix        sparse matrices and graph data for both network families;
-                      depends on core, tx, dist, and prob
+                      depends on core, tx, dist, prob, and synth
 powerio               PioValue, parse, emit, serialize, deserialize, and the
                       re-exports; depends on core, tx, dist, prob, tnd, and on matrix
                       behind the `matrix` feature

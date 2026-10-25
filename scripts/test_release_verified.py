@@ -92,6 +92,23 @@ class ReleaseSafety(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(helper.ReleaseError):
                 helper.validate_release(dict(release, **change), "v0.11.6")
 
+    def test_draft_release_is_found_by_listing_not_by_tag(self):
+        # GET releases/tags/{tag} never returns a draft.
+        draft = {"id": 7, "tag_name": "v0.11.6", "draft": True}
+        older = {"id": 6, "tag_name": "v0.11.5", "draft": False}
+        with patch.object(helper, "api", return_value=[draft, older]) as api:
+            self.assertEqual(helper.release_for_tag("v0.11.6"), draft)
+            self.assertIsNone(helper.release_for_tag("v0.11.7"))
+            self.assertTrue(
+                all("releases/tags" not in call.args[0] for call in api.call_args_list)
+            )
+        page = [dict(older, id=index) for index in range(100)]
+        with patch.object(helper, "api", side_effect=[page, [draft]]):
+            self.assertEqual(helper.release_for_tag("v0.11.6"), draft)
+        with patch.object(helper, "api", return_value=[draft, dict(draft, id=8)]):
+            with self.assertRaises(helper.ReleaseError):
+                helper.release_for_tag("v0.11.6")
+
     def test_only_get_404_is_absence_not_auth_or_write_failure(self):
         with patch.object(
             helper.subprocess,
@@ -298,6 +315,38 @@ class FirstPublication(unittest.TestCase):
             )
             run.assert_called_once_with(
                 ["cargo", "publish", "--locked", "--all-features", "-p", "powerio-tnd"],
+                cwd=Path("/repo"),
+                check=True,
+            )
+
+    def test_new_synth_bootstraps_after_current_published_predecessors(self):
+        published = False
+
+        def lookup(url):
+            nonlocal published
+            crate = url.split("/crates/")[1].split("/")[0]
+            if url.endswith("/0.11.6"):
+                if crate == "powerio-synth" and not published:
+                    return None
+                return {"version": {"num": "0.11.6", "yanked": False}}
+            if crate == "powerio-synth":
+                return None
+            return {"crate": {"name": crate}}
+
+        def publish(*args, **kwargs):
+            nonlocal published
+            published = True
+
+        with (
+            patch.object(helper, "public_json", side_effect=lookup),
+            patch.object(helper, "require_clean_candidate", return_value=Path("/repo")),
+            patch.object(helper.subprocess, "run", side_effect=publish) as run,
+        ):
+            self.assertTrue(
+                helper.bootstrap_first_missing(SHA, "0.11.6", ["powerio-synth"])
+            )
+            run.assert_called_once_with(
+                ["cargo", "publish", "--locked", "--all-features", "-p", "powerio-synth"],
                 cwd=Path("/repo"),
                 check=True,
             )

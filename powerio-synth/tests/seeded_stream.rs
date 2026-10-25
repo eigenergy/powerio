@@ -7,7 +7,7 @@
 //! below while still producing a structurally valid network. Without these
 //! assertions such a shift passes unnoticed.
 
-use powerio_matrix::synth::{SynthSpec, Topology, generate};
+use powerio_synth::{SynthSpec, Topology, generate};
 
 const SEED: u64 = 0x00C0_FFEE;
 
