@@ -41,12 +41,14 @@ check the current source, tests, and release notes.
   over the facade and its component crates.
 - **`powerio-py`**: the PyO3 extension behind the `powerio` Python package
   (`python/powerio/`); it hands back COO triplets that SciPy assembles.
-- **`powerio-capi`**: C ABI 7 over `powerio` (`pio_*`, header `powerio.h`)
+- **`powerio-capi`**: the C ABI over `powerio` (`pio_*`, header `powerio.h`)
   for C, C++, Julia, and other FFI users. `pio_parse` returns a module
   handle, `pio_module_value` an owner rooted value handle, and the typed
-  accessors return borrowed views. ABI 7 exports one fixed symbol set; only
-  the `gridfm` cargo feature changes the build, and the other feature names
-  the release build passes gate nothing.
+  accessors return borrowed views. The header states the release it was
+  generated from (`PIO_VERSION_MAJOR`, `_MINOR`, `_PATCH`), and
+  `pio_version_numbers` returns the library's. The C ABI exports one fixed
+  symbol set; only the `gridfm` cargo feature changes the build, and the
+  other feature names the release build passes gate nothing.
 
 `BalancedNetwork` and `MulticonductorNetwork` are the two electrical network
 types. The normalized solver tables and dense row arrays are internal
@@ -139,7 +141,9 @@ release on its own.
    merge commit. The tag workflow copies the section into the draft release
    body and fails without it. The bump also sets `IR_VERSION` to the release
    and commits its schema file unless it already names it
-   (`docs/schema/README.md`). `bash scripts/release-preflight.sh` fails on
+   (`docs/schema/README.md`), sets `PIO_VERSION_MAJOR`, `_MINOR`, and
+   `_PATCH` in `powerio-capi/src/lib.rs`, and regenerates `powerio.h`.
+   `bash scripts/release-preflight.sh` fails on
    anything that still states the old version.
 2. Create a release tag only when the maintainer asks for the release.
    Check that the tag does not exist, then create an annotated tag on
@@ -283,6 +287,14 @@ docs/                         the mdBook guide, the schema archive, release note
   `pio-ir/<release>/schema.json`; `IR_VERSION` is at or after the workspace
   version and equals it in a release. Published schema files, including all
   of `pio-ir/2/`, remain byte-exact.
+- **C ABI compatibility.** A program compiled against the header of release
+  X.Y.Z works with any library from the same release series (the same major
+  and minor numbers before 1.0, the same major number from 1.0 on) at X.Y.Z
+  or newer. Within a release series the C ABI only gains symbols: never
+  remove a `pio_*` function, struct, or `#define`, and never change a
+  signature or struct layout. `scripts/check-capi-header.py` (in
+  `semver.yml`) compares `powerio.h` with the latest release header; a break
+  needs the `semver-major` label and lands in the next release series.
 - **Bindings stay typed and lazy.** C calls `pio_module_value`, checks the
   structural type, and requests an owner rooted typed handle. Python reads
   `module.value`; Julia dispatches on `PioModule{T}`. Typed access does not

@@ -93,7 +93,7 @@ Unwrapped DC angle differences can exceed a full turn, so ±360 degrees is
 not a substitute for no constraint. Bundle vectors spell infinities `-inf`
 and `inf`; consumers must omit the corresponding inequality side. Preparation
 JSON uses the strings `"-Infinity"` and `"Infinity"`, retaining numeric values
-for finite limits. The default padded policy and ABI 7 remain unchanged.
+for finite limits. The default padded policy and the C ABI remain unchanged.
 
 The generator space vectors, of length \\(n_{\mathrm{gen}}\\), are `q_gen`,
 `c_gen`, `c0_gen`, `pmax_gen`, and `pmin_gen`.

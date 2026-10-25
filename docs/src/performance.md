@@ -43,7 +43,7 @@ python3 evals/performance/render_tables.py --check
 ```
 
 The Julia benchmark writes `rows` for parse only and `matrix_rows` for parse
-plus Y bus construction. Each tool is timed on its own path: PowerIO on ABI 7
+plus Y bus construction. Each tool is timed on its own path: PowerIO on C ABI
 parsing and typed network access, PowerModels on `parse_file`,
 `make_per_unit!`, and `calc_admittance_matrix`, and ExaPowerIO on
 `parse_matpower` plus a sparse Y bus assembled from its parsed branch
@@ -82,7 +82,7 @@ goes into a release note or benchmark page needs the commit, tree
 cleanliness, machine, toolchain, command, fixtures, and whether the optional
 large cases were present.
 
-Before you publish a C ABI change, measure the release binary size. ABI 7
+Before you publish a C ABI change, measure the release binary size. The C ABI
 exports one symbol set and only the `gridfm` feature changes the binary, so
 two builds cover the range (the library is `libpowerio_capi.so` on Linux,
 `libpowerio_capi.dylib` on macOS, and `powerio_capi.dll` on Windows):

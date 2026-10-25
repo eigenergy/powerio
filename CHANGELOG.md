@@ -13,6 +13,23 @@
   `pio-ir/2/` keep their bytes. `powerio.versions()["powerio_ir"]["version"]`
   and the `powerio_ir.version` that the C function `pio_schema_report`
   returns are now the release string. See the 0.12 migration guide (#701).
+- Replace the C ABI number with the PowerIO release (#701). `PIO_ABI_VERSION`,
+  `pio_abi_version()`, and the `abi` key of `pio_schema_report` are removed
+  with no alias. The header states the release it was generated from as
+  `PIO_VERSION_MAJOR`, `PIO_VERSION_MINOR`, and `PIO_VERSION_PATCH`, and the
+  new `pio_version_numbers()` returns the release of the loaded library as a
+  `PioVersionView`. A program compiled against the header of release X.Y.Z
+  works with any library from the same release series (the same major and
+  minor numbers before 1.0, the same major number from 1.0 on) at X.Y.Z or
+  newer; within a release series the C ABI only gains symbols. PowerIO.jl
+  checks the release series instead of the ABI number. See the
+  [0.12 migration guide](docs/src/migration-0.12.md).
+- CI compares `powerio.h` with the header of the latest release
+  (`scripts/check-capi-header.py`, in `semver.yml`) and fails when a function,
+  struct, opaque type, or `#define` of that header is missing or changed,
+  unless the pull request carries the `semver-major` label.
+  `scripts/check-capi-v7.sh` is now `scripts/check-capi.sh`, and also rejects
+  `pio_abi_version`.
 
 ## 0.11.6
 

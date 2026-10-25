@@ -37,7 +37,7 @@ reference currents. IR 2 uses a distinct tagged source record, so older readers
 reject this new physics; ordinary earth-referenced records are unchanged.
 `McAcPfInstance::source_boundary` borrows both voltage endpoints and their
 phasor differences. The additive C `PioVoltageSourceBoundaryView` serves
-network and PF instance callers without changing the existing ABI 7 layouts.
+network and PF instance callers without changing the existing C ABI layouts.
 Legacy C source views reject references they cannot describe. Exchange-format
 writers, balanced/LinDist3Flow projections and neutral Kron reduction also
 reject referenced sources until their integration is complete.
@@ -276,7 +276,7 @@ Transformer/regulator lowering and their thermal checks remain unsupported;
 the preparation report records any selected omission rather than presenting
 an incomplete report as comprehensive.
 
-C ABI 7 adds `pio_value_lindist3flow_opf_instance`,
+The C ABI adds `pio_value_lindist3flow_opf_instance`,
 `pio_value_lindist3flow_opf_solution`, and
 `pio_module_to_lindist3flow_opf_instance`. The generic calculation accessors
 read the instance, network, objective, constraints, termination, and solution
@@ -284,7 +284,7 @@ columns. `pio_lindist3flow_opf_instance_node_at` and
 `pio_lindist3flow_opf_instance_conductor_at` return borrowed typed axis views.
 Their strings stay valid while the instance handle remains alive.
 Sparse conic preparation and solver adapters remain Rust APIs.
-The fixed-dispatch types add no ABI 7 symbols; they remain available through
+The fixed-dispatch types add no C ABI symbols; they remain available through
 Rust, Python, and PowerIO IR until a future C ABI revision can add a
 fixed symbol set deliberately.
 

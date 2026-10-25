@@ -2,7 +2,8 @@
 # Release identity agreement: the versions a consumer can observe must state
 # one story before anything publishes.
 #
-# - PIO_ABI_VERSION in the Rust source and the checked-in C header agree.
+# - PIO_VERSION_MAJOR, _MINOR, and _PATCH in the Rust source and the
+#   checked-in C header state the workspace version.
 # - IR_VERSION, the release whose PowerIO IR schema this build writes, has its
 #   own schema file, and that file and the facade constants agree on it. It is
 #   at or after the workspace version during development, and `--release`
@@ -20,14 +21,21 @@ case "${1:-}" in
     *) echo "usage: $0 [--release]" >&2; exit 2 ;;
 esac
 
-rust_abi=$(grep -oE 'pub const PIO_ABI_VERSION: u32 = [0-9]+' powerio-capi/src/lib.rs | grep -oE '[0-9]+$')
-header_abi=$(grep -oE '#define PIO_ABI_VERSION [0-9]+' powerio-capi/include/powerio.h | grep -oE '[0-9]+$')
-if [ "$rust_abi" != "$header_abi" ]; then
-    echo "ABI version disagreement: Rust says $rust_abi, powerio.h says $header_abi" >&2
+workspace_version=$(grep -oE '^version = "[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+# The header states the release it was generated from, so a version bump
+# updates the constants and regenerates powerio.h.
+c_version() {
+    local part
+    for part in MAJOR MINOR PATCH; do
+        grep -oE "$1$part$2[0-9]+" "$3" | grep -oE '[0-9]+$' || echo '?'
+    done | paste -sd. -
+}
+rust_version=$(c_version 'pub const PIO_VERSION_' ': u32 = ' powerio-capi/src/lib.rs)
+header_version=$(c_version '#define PIO_VERSION_' ' ' powerio-capi/include/powerio.h)
+if [ "$rust_version" != "$workspace_version" ] || [ "$header_version" != "$workspace_version" ]; then
+    echo "C header release disagreement: PIO_VERSION_* says $rust_version in powerio-capi/src/lib.rs and $header_version in powerio.h, the workspace says $workspace_version" >&2
     exit 1
 fi
-
-workspace_version=$(grep -oE '^version = "[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
 # The generated schema is what a consumer validates a document against, so it
 # is the artifact that states the PowerIO IR identity: CI regenerates it from
 # the Rust constants, and this gate reads the identity back out of it.
@@ -135,7 +143,7 @@ fi
 grep -q "PowerIO $workspace_version release notes" "$release_notes" \
     || { echo "the release notes title does not state $workspace_version" >&2; exit 1; }
 
-echo "release identity OK: ABI $rust_abi, PowerIO IR pio-ir/$ir_version, workspace $workspace_version, tag v$workspace_version"
+echo "release identity OK: C header $header_version, PowerIO IR pio-ir/$ir_version, workspace $workspace_version, tag v$workspace_version"
 
 # The Arrow payload goldens embed the producing build's powerio_version; a
 # renumber that misses one fails the golden comparisons later. Stored

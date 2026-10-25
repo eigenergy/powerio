@@ -3,7 +3,8 @@
 
 #include <type_traits>
 
-static_assert(PIO_ABI_VERSION == 7);
+static_assert(PIO_VERSION_MAJOR >= 0 && PIO_VERSION_MINOR >= 0 && PIO_VERSION_PATCH >= 0);
+static_assert(std::is_standard_layout_v<PioVersionView>);
 static_assert(std::is_standard_layout_v<PioStringView>);
 static_assert(std::is_standard_layout_v<PioByteView>);
 static_assert(std::is_standard_layout_v<PioF64View>);
@@ -50,5 +51,8 @@ static_assert(std::is_standard_layout_v<PioMulticonductorUntypedPropertyView>);
 static_assert(std::is_standard_layout_v<PioMulticonductorCommandView>);
 
 int main() {
-    return pio_abi_version() == PIO_ABI_VERSION ? 0 : 1;
+    const PioVersionView release = pio_version_numbers();
+    const bool same = release.major == PIO_VERSION_MAJOR &&
+                      release.minor == PIO_VERSION_MINOR && release.patch == PIO_VERSION_PATCH;
+    return same ? 0 : 1;
 }

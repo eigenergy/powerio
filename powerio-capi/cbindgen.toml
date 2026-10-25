@@ -7,7 +7,16 @@ style = "type"
 usize_is_size_t = true
 
 header = """
-/* PowerIO C ABI 7.
+/* PowerIO C ABI.
+ *
+ * PIO_VERSION_MAJOR, PIO_VERSION_MINOR, and PIO_VERSION_PATCH name the
+ * PowerIO release this header was generated from, and pio_version_numbers
+ * returns the release of the loaded library. A program compiled against this
+ * header works with a library from the same release series, as Cargo defines
+ * it (the same major and minor numbers before 1.0, the same major number from
+ * 1.0 on), at this release or a newer one. Within a release series the C ABI
+ * only gains symbols: no symbol is removed, and no signature or struct layout
+ * changes.
  *
  * Grid exchange data enters through PioSource and pio_parse. pio_emit writes
  * a selected grid exchange format. PowerIO IR uses pio_module_serialize and

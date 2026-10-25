@@ -38,7 +38,7 @@ Pick the smallest set of gates that covers what you changed, then run the
 | problem instances or DC OPF bundles | `cargo test -p powerio-prob --no-default-features`; `cargo test -p powerio --features matrix` |
 | SINCAL readers, writers, or the `sincal` feature | `cargo test -p powerio -p powerio-tx -p powerio-dist -p powerio-tnd --no-default-features`; `bash scripts/ci-clippy.sh no-sincal`; `cargo check -p powerio --no-default-features --features matrix --target wasm32-unknown-unknown` |
 | PowerWorld binary reader | PowerWorld parser tests plus `cargo bench -p powerio-tx --bench parse -- "parse_aux_|parse_pwb_"` |
-| C ABI | `scripts/capi-header-parity.sh`; `scripts/capi-smoke.sh`; `cargo test -p powerio-capi --no-default-features`; `cargo test -p powerio-capi --features matrix,gridfm,dist,prob`; `bash scripts/ci-clippy.sh capi-no-default`; `bash scripts/ci-clippy.sh capi-release` |
+| C ABI | `scripts/capi-header-parity.sh`; `python3 scripts/check-capi-header.py`; `scripts/capi-smoke.sh`; `cargo test -p powerio-capi --no-default-features`; `cargo test -p powerio-capi --features matrix,gridfm,dist,prob`; `bash scripts/ci-clippy.sh capi-no-default`; `bash scripts/ci-clippy.sh capi-release` |
 | Python package metadata or extras | `maturin build --release --out /tmp/powerio-wheel-check`; inspect wheel `METADATA` |
 | Julia binding compatibility | build `powerio-capi --features matrix,gridfm,dist,prob`, then run `PowerIO.jl` tests with `POWERIO_CAPI` |
 | shared surface with PowerIO.jl | push a same-named PowerIO.jl companion branch; the tandem CI job tests against it |
@@ -64,6 +64,7 @@ bash scripts/ci-clippy.sh capi-no-default
 bash scripts/ci-clippy.sh capi-release
 cargo build -p powerio-capi --release --features matrix,gridfm,dist,prob
 scripts/capi-header-parity.sh
+python3 scripts/check-capi-header.py
 scripts/capi-smoke.sh
 POWERIO_CAPI=$PWD/target/release/libpowerio_capi.so \
   julia --project=../PowerIO.jl -e 'using Pkg; Pkg.test()'   # .dylib on macOS

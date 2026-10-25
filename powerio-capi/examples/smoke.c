@@ -1,4 +1,4 @@
-/* End to end C probe for ABI 7.
+/* End to end C probe for the C ABI.
  *
  *   cc -I powerio-capi/include powerio-capi/examples/smoke.c \
  *      -L target/release -lpowerio_capi -o smoke
@@ -9,8 +9,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#if PIO_ABI_VERSION != 7
-#error "update the C probe for the current ABI"
+#if !defined(PIO_VERSION_MAJOR) || !defined(PIO_VERSION_MINOR) || !defined(PIO_VERSION_PATCH)
+#error "powerio.h does not state the release it was generated from"
 #endif
 
 static int failures;
@@ -26,6 +26,19 @@ static int failures;
 static int view_equals(PioStringView view, const char *text) {
     size_t len = strlen(text);
     return view.len == len && view.data != NULL && memcmp(view.data, text, len) == 0;
+}
+
+/* The library works with this header when it is in the header's release
+ * series (the same major and minor numbers before 1.0, the same major number
+ * from 1.0 on) and at the header's release or a newer one. */
+static int library_matches_header(PioVersionView library) {
+    if (library.major != PIO_VERSION_MAJOR) {
+        return 0;
+    }
+    if (library.minor != PIO_VERSION_MINOR) {
+        return PIO_VERSION_MAJOR > 0 && library.minor > PIO_VERSION_MINOR;
+    }
+    return library.patch >= PIO_VERSION_PATCH;
 }
 
 static void report_error(const char *operation, PioError *error) {
@@ -52,8 +65,12 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    CHECK(pio_abi_version() == PIO_ABI_VERSION, "ABI handshake");
-    CHECK(pio_version().len != 0, "version string");
+    PioVersionView release = pio_version_numbers();
+    CHECK(library_matches_header(release), "release series handshake");
+    char release_text[32];
+    snprintf(release_text, sizeof release_text, "%u.%u.%u", (unsigned)release.major,
+             (unsigned)release.minor, (unsigned)release.patch);
+    CHECK(view_equals(pio_version(), release_text), "version string matches the numbers");
 
     PioError *error = NULL;
     PioSource *missing = pio_source_open("missing-case.m", 14, &error);
@@ -300,7 +317,7 @@ int main(int argc, char **argv) {
     pio_vector_release(NULL);
 
     if (failures == 0) {
-        puts("PowerIO C ABI 7 probe passed");
+        puts("PowerIO C ABI probe passed");
     }
     return failures == 0 ? 0 : 1;
 }

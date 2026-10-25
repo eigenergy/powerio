@@ -1,4 +1,13 @@
-/* PowerIO C ABI 7.
+/* PowerIO C ABI.
+ *
+ * PIO_VERSION_MAJOR, PIO_VERSION_MINOR, and PIO_VERSION_PATCH name the
+ * PowerIO release this header was generated from, and pio_version_numbers
+ * returns the release of the loaded library. A program compiled against this
+ * header works with a library from the same release series, as Cargo defines
+ * it (the same major and minor numbers before 1.0, the same major number from
+ * 1.0 on), at this release or a newer one. Within a release series the C ABI
+ * only gains symbols: no symbol is removed, and no signature or struct layout
+ * changes.
  *
  * Grid exchange data enters through PioSource and pio_parse. pio_emit writes
  * a selected grid exchange format. PowerIO IR uses pio_module_serialize and
@@ -74,9 +83,25 @@ typedef struct PioValueHandle PioValueHandle;
 typedef struct PioVector PioVector;
 
 /**
- * C ABI version.
+ * Major number of the PowerIO release this header was generated from.
+ *
+ * A program compiled against this header works with a library from the same
+ * release series, as Cargo defines it (the same major and minor numbers
+ * before 1.0, the same major number from 1.0 on), at this release or a newer
+ * one. Compare the three numbers with `pio_version_numbers` before you use
+ * the library.
  */
-#define PIO_ABI_VERSION 7
+#define PIO_VERSION_MAJOR 0
+
+/**
+ * Minor number of the PowerIO release this header was generated from.
+ */
+#define PIO_VERSION_MINOR 11
+
+/**
+ * Patch number of the PowerIO release this header was generated from.
+ */
+#define PIO_VERSION_PATCH 6
 
 /**
  * Borrowed UTF-8 bytes. The bytes need not end in NUL.
@@ -85,6 +110,15 @@ typedef struct {
     const char *data;
     size_t len;
 } PioStringView;
+
+/**
+ * The three numbers of a PowerIO release, such as 0.12.0.
+ */
+typedef struct {
+    uint32_t major;
+    uint32_t minor;
+    uint32_t patch;
+} PioVersionView;
 
 /**
  * One borrowed source byte range from a diagnostic.
@@ -1925,7 +1959,7 @@ typedef struct {
 /**
  * Exact table lengths in a multiconductor network.
  *
- * Source extension `extras` maps are not exposed through ABI 7. They are
+ * Source extension `extras` maps are not exposed through the C ABI. They are
  * retained by PowerIO for same format emission but are not PowerIO domain data.
  */
 typedef struct {
@@ -2265,14 +2299,18 @@ extern "C" {
 #endif // __cplusplus
 
 /**
- * Return the ABI number compiled into this library.
- */
-uint32_t pio_abi_version(void);
-
-/**
  * Return the PowerIO crate version.
  */
 PioStringView pio_version(void);
+
+/**
+ * Return the release of this library as numbers.
+ *
+ * The library works with a program compiled against a header from the same
+ * release series at the library's release or an older one; see
+ * `PIO_VERSION_MAJOR`.
+ */
+PioVersionView pio_version_numbers(void);
 
 /**
  * The failure's stable diagnostic code.
@@ -2931,9 +2969,9 @@ PioModule *pio_parse_with_options(const PioSource *source,
 /**
  * Deserialize one PowerIO IR source.
  *
- * A document carries the independent PowerIO IR version reported by
- * `pio_schema_report`. This library refuses any unsupported identity or
- * version through `error`, naming what it found.
+ * A document carries the PowerIO IR schema name and version that
+ * `pio_schema_report` reports. This library refuses any unsupported identity
+ * or version through `error`, naming what it found.
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.
@@ -6927,7 +6965,7 @@ PioVector *pio_vector_retain(const PioVector *vector);
 void pio_vector_release(PioVector *vector);
 
 /**
- * Return version information for this ABI and the PowerIO IR serializer/deserializer.
+ * Return version information for this library and the PowerIO IR serializer/deserializer.
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.

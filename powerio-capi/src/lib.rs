@@ -1,4 +1,4 @@
-//! PowerIO C ABI, version 7.
+//! PowerIO C ABI.
 //!
 //! The ABI exposes the same four representation operations as Rust:
 //! [`pio_parse`], [`pio_emit`], [`pio_module_serialize`], and
@@ -55,8 +55,20 @@ pub mod diagnostics;
 #[cfg(test)]
 mod parse_options_tests;
 
-/// C ABI version.
-pub const PIO_ABI_VERSION: u32 = 7;
+/// Major number of the PowerIO release this header was generated from.
+///
+/// A program compiled against this header works with a library from the same
+/// release series, as Cargo defines it (the same major and minor numbers
+/// before 1.0, the same major number from 1.0 on), at this release or a newer
+/// one. Compare the three numbers with `pio_version_numbers` before you use
+/// the library.
+pub const PIO_VERSION_MAJOR: u32 = 0;
+
+/// Minor number of the PowerIO release this header was generated from.
+pub const PIO_VERSION_MINOR: u32 = 11;
+
+/// Patch number of the PowerIO release this header was generated from.
+pub const PIO_VERSION_PATCH: u32 = 6;
 
 // ---- views -----------------------------------------------------------------
 
@@ -80,6 +92,15 @@ impl PioStringView {
             len: text.len(),
         }
     }
+}
+
+/// The three numbers of a PowerIO release, such as 0.12.0.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioVersionView {
+    pub major: u32,
+    pub minor: u32,
+    pub patch: u32,
 }
 
 /// One borrowed source byte range from a diagnostic.
@@ -1372,7 +1393,7 @@ pub struct PioMulticonductorGeoView {
 
 /// Exact table lengths in a multiconductor network.
 ///
-/// Source extension `extras` maps are not exposed through ABI 7. They are
+/// Source extension `extras` maps are not exposed through the C ABI. They are
 /// retained by PowerIO for same format emission but are not PowerIO domain data.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -2538,16 +2559,24 @@ unsafe fn optional_str<'a>(
     unsafe { input_str(data, len, argument) }.map(Some)
 }
 
-/// Return the ABI number compiled into this library.
-#[unsafe(no_mangle)]
-pub extern "C" fn pio_abi_version() -> u32 {
-    PIO_ABI_VERSION
-}
-
 /// Return the PowerIO crate version.
 #[unsafe(no_mangle)]
 pub extern "C" fn pio_version() -> PioStringView {
     PioStringView::new(powerio::VERSION)
+}
+
+/// Return the release of this library as numbers.
+///
+/// The library works with a program compiled against a header from the same
+/// release series at the library's release or an older one; see
+/// `PIO_VERSION_MAJOR`.
+#[unsafe(no_mangle)]
+pub extern "C" fn pio_version_numbers() -> PioVersionView {
+    PioVersionView {
+        major: PIO_VERSION_MAJOR,
+        minor: PIO_VERSION_MINOR,
+        patch: PIO_VERSION_PATCH,
+    }
 }
 
 /// The failure's stable diagnostic code.
@@ -4734,9 +4763,9 @@ pub unsafe extern "C" fn pio_parse_with_options(
 
 /// Deserialize one PowerIO IR source.
 ///
-/// A document carries the independent PowerIO IR version reported by
-/// `pio_schema_report`. This library refuses any unsupported identity or
-/// version through `error`, naming what it found.
+/// A document carries the PowerIO IR schema name and version that
+/// `pio_schema_report` reports. This library refuses any unsupported identity
+/// or version through `error`, naming what it found.
 ///
 /// # Safety
 /// Pointers and handles must satisfy the crate-level safety requirements.
@@ -6785,7 +6814,7 @@ fn opf_analysis_branch_source(
         _ => Err(boundary_error(
             &codes::REQUEST_CAPI_TYPE_MISMATCH,
             format!(
-                "the {preparation} OPF preparation has an analysis branch source unsupported by ABI 7"
+                "the {preparation} OPF preparation has an analysis branch source unsupported by the C ABI"
             ),
         )),
     }
@@ -6849,13 +6878,13 @@ pub unsafe extern "C" fn pio_dc_opf_preparation_summary(
             let units = opf_preparation_units_name(preparation.units).ok_or_else(|| {
                 boundary_error(
                     &codes::REQUEST_CAPI_TYPE_MISMATCH,
-                    "the DC OPF preparation uses units unsupported by ABI 7",
+                    "the DC OPF preparation uses units unsupported by the C ABI",
                 )
             })?;
             let objective = prepared_objective_name(preparation.objective).ok_or_else(|| {
                 boundary_error(
                     &codes::REQUEST_CAPI_TYPE_MISMATCH,
-                    "the DC OPF preparation uses an objective unsupported by ABI 7",
+                    "the DC OPF preparation uses an objective unsupported by the C ABI",
                 )
             })?;
             *require_output(output, "output")? = PioDcOpfPreparationView {
@@ -7105,13 +7134,13 @@ pub unsafe extern "C" fn pio_ac_opf_preparation_summary(
             let units = opf_preparation_units_name(preparation.units).ok_or_else(|| {
                 boundary_error(
                     &codes::REQUEST_CAPI_TYPE_MISMATCH,
-                    "the AC OPF preparation uses units unsupported by ABI 7",
+                    "the AC OPF preparation uses units unsupported by the C ABI",
                 )
             })?;
             let objective = prepared_objective_name(preparation.objective).ok_or_else(|| {
                 boundary_error(
                     &codes::REQUEST_CAPI_TYPE_MISMATCH,
-                    "the AC OPF preparation uses an objective unsupported by ABI 7",
+                    "the AC OPF preparation uses an objective unsupported by the C ABI",
                 )
             })?;
             *require_output(output, "output")? = PioAcOpfPreparationView {
@@ -19240,7 +19269,7 @@ opaque_handle!(
     StringInner
 );
 
-/// Return version information for this ABI and the PowerIO IR serializer/deserializer.
+/// Return version information for this library and the PowerIO IR serializer/deserializer.
 ///
 /// # Safety
 /// Pointers and handles must satisfy the crate-level safety requirements.
@@ -19250,13 +19279,12 @@ pub unsafe extern "C" fn pio_schema_report(error: *mut *mut PioError) -> *mut Pi
         entry(error, std::ptr::null_mut(), || {
             serde_json::to_string(&serde_json::json!({
                 "powerio_version": powerio::VERSION,
-                "abi": PIO_ABI_VERSION,
                 "powerio_ir": {
                     "schema": powerio::IR_SCHEMA_NAME,
                     "version": powerio::IR_VERSION
                 },
                 "bmopf_schema": powerio_dist::BMOPF_SCHEMA_VERSION,
-                // ABI 7 exports one fixed symbol set. Matrices, the
+                // The C ABI exports one fixed symbol set. Matrices, the
                 // multiconductor model, and calculation types are always
                 // present; only GridFM Parquet support is a build option.
                 "features": {
@@ -19741,16 +19769,36 @@ mod tests {
     }
 
     #[test]
-    fn reports_abi_seven() {
-        assert_eq!(pio_abi_version(), 7);
-        assert_eq!(PIO_ABI_VERSION, 7);
+    fn header_version_is_the_crate_version() {
+        let numbers = [
+            env!("CARGO_PKG_VERSION_MAJOR"),
+            env!("CARGO_PKG_VERSION_MINOR"),
+            env!("CARGO_PKG_VERSION_PATCH"),
+        ]
+        .map(|number| number.parse::<u32>().unwrap());
+        assert_eq!(
+            [PIO_VERSION_MAJOR, PIO_VERSION_MINOR, PIO_VERSION_PATCH],
+            numbers,
+            "update PIO_VERSION_* with the workspace version and regenerate powerio.h"
+        );
+        let version = pio_version_numbers();
+        assert_eq!([version.major, version.minor, version.patch], numbers);
+        assert_eq!(
+            unsafe { view_text(pio_version()) },
+            format!("{}.{}.{}", version.major, version.minor, version.patch)
+        );
+    }
+
+    #[test]
+    fn reports_schema_versions() {
         unsafe {
             let mut error = std::ptr::null_mut();
             let report = pio_schema_report(&mut error);
             assert!(!report.is_null(), "{}", error_text(error));
             let parsed: serde_json::Value =
                 serde_json::from_str(&view_text(pio_string_view(report))).unwrap();
-            assert_eq!(parsed["abi"], 7);
+            assert!(parsed.get("abi").is_none());
+            assert_eq!(parsed["powerio_version"], powerio::VERSION);
             assert_eq!(parsed["powerio_ir"]["schema"], powerio::IR_SCHEMA_NAME);
             assert_eq!(parsed["powerio_ir"]["version"], powerio::IR_VERSION);
             assert_eq!(

@@ -61,7 +61,7 @@ explicit JSON shaped view materialization that the narrowed parse avoids.
 | case193k | 192768 / 228574 | 287.38 +/- 4.26 ms | 366.67 +/- 61.09 ms | n/a | 274.64 +/- 4.59 ms | n/a |
 <!-- BENCH:speed-julia END -->
 
-The Ybus table times the public PowerIO.jl sparse matrix API. C ABI 7 has no
+The Ybus table times the public PowerIO.jl sparse matrix API. The C ABI has no
 raw admittance export, so there is no lower bound column.
 
 <!-- BENCH:speed-julia-ybus START -->

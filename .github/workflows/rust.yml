@@ -298,8 +298,8 @@ jobs:
     # of sync with include/powerio.h.
     - name: Header symbol parity
       run: bash scripts/capi-header-parity.sh
-    - name: ABI 7 surface
-      run: POWERIO_JL_OPTIONAL=1 bash scripts/check-capi-v7.sh
+    - name: C entry point names
+      run: POWERIO_JL_OPTIONAL=1 bash scripts/check-capi.sh
     - name: Structural value type parity
       run: bash scripts/check-value-types.sh
     - name: Diagnostic parity
@@ -324,8 +324,8 @@ jobs:
         cc -I powerio-capi/include powerio-capi/examples/smoke.c \
            -L target/release -lpowerio_capi -o pio_smoke
         LD_LIBRARY_PATH=target/release ./pio_smoke tests/data/case9.m
-    # The same smoke under address and undefined behavior sanitizers: the ABI
-    # v6 ownership paths (retain/release orders, spans after parent release)
+    # The same smoke under address and undefined behavior sanitizers: the C
+    # ABI ownership paths (retain/release orders, spans after parent release)
     # must be clean, not merely not crash.
     - name: C smoke test under ASan and UBSan
       run: |
@@ -365,7 +365,7 @@ jobs:
       with:
         components: miri
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-    # The unsafe ownership helpers behind every ABI v6 handle, under Miri.
+    # The unsafe ownership helpers behind every C ABI handle, under Miri.
     # FFI entry points cannot run under Miri; the pure handle core can.
     - name: Miri over the handle lifecycle
       run: cargo +nightly miri test -p powerio-capi handle_lifecycle_is_sound
@@ -381,11 +381,11 @@ jobs:
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
     - name: Build powerio-capi --features matrix,gridfm,dist,prob
       run: cargo build -p powerio-capi --release --features matrix,gridfm,dist,prob
-    # ABI 7 has one fixed symbol set, including in the release build.
+    # The C ABI has one fixed symbol set, including in the release build.
     - name: Header symbol parity
       run: bash scripts/capi-header-parity.sh
     # Match the release tooling's define list. Only PIO_GRIDFM selects
-    # additional smoke-test behavior; ABI 7's symbol set is fixed.
+    # additional smoke-test behavior; the C ABI's symbol set is fixed.
     - name: Compile and run the C smoke test (release features)
       run: |
         rm -rf /tmp/pio-gridfm-smoke

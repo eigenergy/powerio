@@ -70,7 +70,7 @@
 <title>powerio&#45;capi</title>
 <path fill="#f4f6f8" stroke="#4a5568" d="M458,-36C458,-36 342,-36 342,-36 336,-36 330,-30 330,-24 330,-24 330,-12 330,-12 330,-6 336,0 342,0 342,0 458,0 458,0 464,0 470,-6 470,-12 470,-12 470,-24 470,-24 470,-30 464,-36 458,-36"/>
 <text text-anchor="middle" x="400" y="-21.2" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">powerio&#45;capi</text>
-<text text-anchor="middle" x="400" y="-9.2" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">C ABI 7 (Julia, C, C++)</text>
+<text text-anchor="middle" x="400" y="-9.2" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">C ABI (Julia, C, C++)</text>
 </g>
 <g id="edge20" class="edge">
 <title>powerio&#45;capi&#45;&gt;powerio</title>
