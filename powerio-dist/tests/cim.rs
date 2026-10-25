@@ -427,6 +427,40 @@ fn a_directory_reads_as_one_case() {
     assert!(net.source.is_none());
 }
 
+/// An out-of-service CIM switch must not connect the buses in the imported model.
+#[test]
+fn an_out_of_service_switch_is_preserved_as_open() {
+    let text = feeder(
+        r##"<cim:Breaker rdf:ID="_sw1">
+    <cim:IdentifiedObject.name>sw1</cim:IdentifiedObject.name>
+    <cim:Switch.open>false</cim:Switch.open>
+    <cim:Equipment.inService>false</cim:Equipment.inService>
+  </cim:Breaker>
+  <cim:Terminal rdf:ID="_sw_t1">
+    <cim:Terminal.ConductingEquipment rdf:resource="#_sw1"/>
+    <cim:Terminal.ConnectivityNode rdf:resource="#_n1"/>
+    <cim:Terminal.phases rdf:resource="http://iec.ch/TC57/CIM100#PhaseCode.ABC"/>
+    <cim:ACDCTerminal.sequenceNumber>1</cim:ACDCTerminal.sequenceNumber>
+  </cim:Terminal>
+  <cim:Terminal rdf:ID="_sw_t2">
+    <cim:Terminal.ConductingEquipment rdf:resource="#_sw1"/>
+    <cim:Terminal.ConnectivityNode rdf:resource="#_n2"/>
+    <cim:Terminal.phases rdf:resource="http://iec.ch/TC57/CIM100#PhaseCode.ABC"/>
+    <cim:ACDCTerminal.sequenceNumber>2</cim:ACDCTerminal.sequenceNumber>
+  </cim:Terminal>"##,
+    );
+    let net = parse_str(&text, "cim-dist").unwrap();
+    assert_eq!(net.switches().len(), 1);
+    assert!(net.switches()[0].open, "{:#?}", net.switches()[0]);
+    assert!(
+        findings(&net.warnings, "READ.CIM_DIST.VALUE_UNSUPPORTED")
+            .iter()
+            .any(|finding| finding.contains("sw1") && finding.contains("open switch")),
+        "{:#?}",
+        net.warnings
+    );
+}
+
 /// A directory case is its top level `.xml` documents: a copy under a
 /// subdirectory is not merged in, and a directory whose documents sit only
 /// in a subdirectory is not a case.

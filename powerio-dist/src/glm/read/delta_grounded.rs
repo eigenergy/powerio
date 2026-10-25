@@ -14,6 +14,14 @@ impl Reader<'_> {
         if phases != [0, 1, 2] {
             return Err(self.error(key, "DELTA_GWYE requires all three phases"));
         }
+        if self.newton_raphson
+            && let Some(bus) =
+                crate::glm::connections::source_with_zero_sequence(self.net.sources())
+        {
+            return Err(self.error(key, format!(
+                "NR DELTA_GWYE with source zero-sequence voltage at {bus} requires an additional native primary-stamp mapping"
+            )));
+        }
         let primary = self.positive_geometry(cfg, "primary_voltage")?;
         let secondary_ll = self.positive_geometry(cfg, "secondary_voltage")?;
         let secondary = secondary_ll / 3.0_f64.sqrt();
