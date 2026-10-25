@@ -187,6 +187,58 @@ fn include_cycles_duplicates_and_escape_paths_fail_without_external_reads() {
 }
 
 #[test]
+fn oversized_filesystem_include_is_refused_before_its_bytes_are_acquired() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = "#include \"large.glm\"\n";
+    std::fs::write(directory.path().join("main.glm"), main).unwrap();
+    let large = std::fs::File::create(directory.path().join("large.glm")).unwrap();
+    large.set_len((64 << 20) + 1).unwrap();
+    drop(large);
+    let source = Source::open(directory.path().join("main.glm")).unwrap();
+    let primary = source.primary_buffer().unwrap();
+    let error = preprocess_source(source.clone(), PreprocessOptions::default()).unwrap_err();
+    assert_eq!(error.diagnostics()[0].code(), "PARSE.GLM.LIMIT_EXCEEDED");
+    let spans = error.diagnostics()[0].spans();
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].source(), primary.id());
+    assert_eq!(spans[0].byte_start(), 0);
+    assert_eq!(spans[0].byte_end(), main.len() as u64);
+    assert!(error.retained_source().is_some());
+    assert_eq!(source.acquired_buffers().len(), 1);
+    assert_eq!(source.acquired_buffers()[0].bytes(), main.as_bytes());
+}
+
+#[test]
+fn filesystem_includes_use_the_remaining_cumulative_input_budget() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = "#include \"small.glm\"\n#include \"large.glm\"\n";
+    let small = "object node { name first; }\n";
+    std::fs::write(directory.path().join("main.glm"), main).unwrap();
+    std::fs::write(directory.path().join("small.glm"), small).unwrap();
+    // The second include fits the full limit but exceeds the remaining budget
+    // after the primary source and first include have been processed.
+    let large = std::fs::File::create(directory.path().join("large.glm")).unwrap();
+    large
+        .set_len(((64 << 20) - main.len() - small.len() + 1) as u64)
+        .unwrap();
+    drop(large);
+    let source = Source::open(directory.path().join("main.glm")).unwrap();
+    let error = preprocess_source(source.clone(), PreprocessOptions::default()).unwrap_err();
+    assert_eq!(error.diagnostics()[0].code(), "PARSE.GLM.LIMIT_EXCEEDED");
+    let span = &error.diagnostics()[0].spans()[0];
+    assert_eq!(
+        &main[span.byte_start() as usize..span.byte_end() as usize],
+        "#include \"large.glm\"\n"
+    );
+    let acquired = source.acquired_buffers();
+    assert_eq!(acquired.len(), 2);
+    assert_eq!(
+        acquired.iter().map(|b| b.bytes().len()).sum::<usize>(),
+        main.len() + small.len()
+    );
+}
+
+#[test]
 fn missing_include_error_points_to_the_referrer_and_retains_source() {
     let failure = preprocess_source(
         memory("#include \"missing.glm\"\n"),

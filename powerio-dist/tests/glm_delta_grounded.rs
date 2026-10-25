@@ -170,3 +170,30 @@ fn conflicting_coil_coordinates_are_not_merged_silently() {
     net.component_locations_mut()[1].point.latitude = Some(-28.0);
     assert!(emit_canonical(&net, Destination::memory("out.glm").unwrap()).is_err());
 }
+
+#[test]
+fn canonical_nr_banks_refuse_source_zero_sequence_but_accept_balanced_edits() {
+    for dialect in [GlmDialect::Pnnl5_3, GlmDialect::Arras4_3] {
+        let mut net = read(deck(), dialect).into_value();
+        for magnitude in &mut net.sources_mut()[0].v_magnitude {
+            *magnitude *= 1.01;
+        }
+        emit_canonical(&net, Destination::memory("balanced.glm").unwrap()).unwrap();
+        net.sources_mut()[0].v_magnitude[0] *= 1.01;
+        let error =
+            emit_canonical(&net, Destination::memory("unqualified.glm").unwrap()).unwrap_err();
+        assert!(error.to_string().contains("zero-sequence"), "{error}");
+        let source = net.sources_mut().pop().unwrap();
+        for phase in (0..3).rev() {
+            net.sources_mut().push(powerio_dist::VoltageSource::new(
+                format!("phase_{phase}"),
+                &source.bus,
+                vec![source.terminal_map[phase].clone()],
+                vec![source.v_magnitude[phase]],
+                vec![source.v_angle[phase]],
+            ));
+        }
+        let error = emit_canonical(&net, Destination::memory("split.glm").unwrap()).unwrap_err();
+        assert!(error.to_string().contains("zero-sequence"), "{error}");
+    }
+}

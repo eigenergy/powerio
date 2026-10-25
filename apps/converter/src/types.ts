@@ -34,11 +34,12 @@ export interface Job {
   format?: string;
   family?: Family;
   valueType?: string;
-  status: 'queued' | 'inspecting' | 'ready' | 'converting' | 'done' | 'error' | 'cancelled' | 'needs-primary';
+  status: 'queued' | 'inspecting' | 'ready' | 'converting' | 'done' | 'error' | 'cancelled' | 'needs-primary' | 'needs-files';
   diagnostics: Diagnostic[];
   outputs: Output[];
   primary?: string;
   overrideFormat?: string;
+  acquisitionFailed?: boolean;
   targets?: string[];
 }
 export interface ConverterState {

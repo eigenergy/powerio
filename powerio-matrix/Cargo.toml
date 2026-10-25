@@ -31,6 +31,7 @@ powerio-core = { workspace = true }
 # feature. SINCAL lives in powerio-tnd, which this crate does not use.
 powerio-dist = { workspace = true, default-features = false }
 powerio-prob.workspace = true
+powerio-synth.workspace = true
 powerio-tx = { workspace = true, default-features = false }
 thiserror = "2"
 sprs.workspace = true

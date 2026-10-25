@@ -39,6 +39,7 @@ mod lexer;
 pub mod mon;
 mod resolve;
 pub mod sub;
+mod tara;
 
 use std::cmp::Ordering;
 
@@ -55,6 +56,10 @@ pub use resolve::{
 };
 pub use sub::{
     JoinName, SelectorGroup, Subsystem, SubsystemParsed, SubsystemSelector, SubsystemSet,
+};
+pub use tara::{
+    DefaultDispatch, DispatchBlock, DispatchEntry, DispatchLevel, DispatchedAction, ScaledQuantity,
+    SubsystemDispatchRule,
 };
 
 use crate::diagnostics::{Diagnostic, DiagnosticInfo, codes};
@@ -731,10 +736,23 @@ fn parse_bus(token: &str) -> Option<BusId> {
 
 /// Read `BUS i` or a bare `i` at `at`, advancing past it.
 fn take_bus(upper: &[String], at: &mut usize) -> Option<BusId> {
-    if upper.get(*at).is_some_and(|word| word == "BUS") {
-        *at += 1;
-    }
-    let bus = parse_bus(upper.get(*at)?)?;
+    take_bus_with(upper, at, &mut |index| parse_bus(upper.get(index)?))
+}
+
+/// Read a bus operand through the action grammar, including its optional
+/// `BUS` keyword. A named operand may itself be quoted `BUS`, so try the
+/// operand reader before consuming that keyword.
+fn take_bus_with(
+    upper: &[String],
+    at: &mut usize,
+    bus_at: &mut impl FnMut(usize) -> Option<BusId>,
+) -> Option<BusId> {
+    let bus = if let Some(bus) = bus_at(*at) {
+        bus
+    } else {
+        take_keyword(upper, at, "BUS")?;
+        bus_at(*at)?
+    };
     *at += 1;
     Some(bus)
 }
@@ -779,57 +797,76 @@ fn take_id(words: &[&str], at: &mut usize) -> Option<String> {
 }
 
 fn parse_action(upper: &[String], words: &[&str]) -> Option<ContingencyAction> {
+    parse_action_with_buses(upper, words, &mut |at| parse_bus(upper.get(at)?))
+}
+
+/// The shared action grammar, with a reader for its bus operand positions.
+/// TARA name lookup uses this so identifiers, circuit ids and quantities
+/// never become bus-name operands.
+fn parse_action_with_buses(
+    upper: &[String],
+    words: &[&str],
+    bus_at: &mut impl FnMut(usize) -> Option<BusId>,
+) -> Option<ContingencyAction> {
     let verb = upper.first()?.as_str();
     let noun = upper.get(1).map_or("", String::as_str);
     match (verb, noun) {
-        ("OPEN" | "TRIP" | "DISCONNECT", "LINE" | "BRANCH") => parse_open_branch(upper, words),
-        ("OPEN" | "TRIP" | "DISCONNECT", "THREEWINDING") => parse_three_winding(upper, words),
+        ("OPEN" | "TRIP" | "DISCONNECT", "LINE" | "BRANCH") => {
+            parse_open_branch(upper, words, bus_at)
+        }
+        ("OPEN" | "TRIP" | "DISCONNECT", "THREEWINDING") => {
+            parse_three_winding(upper, words, bus_at)
+        }
         ("DISCONNECT", "BUS") => {
             let mut at = 1;
-            let bus = take_bus(upper, &mut at)?;
+            let bus = take_bus_with(upper, &mut at, bus_at)?;
             (at == upper.len()).then_some(ContingencyAction::DisconnectBus { bus })
         }
         ("REMOVE" | "TRIP", "MACHINE" | "UNIT") => {
-            let (bus, id) = parse_id_from_bus(upper, words)?;
+            let (bus, id) = parse_id_from_bus(upper, words, bus_at)?;
             Some(ContingencyAction::RemoveMachine { bus, id })
         }
         ("ADD", "MACHINE" | "UNIT") => {
             let mut at = 2;
             let id = take_id(words, &mut at)?;
             take_keyword(upper, &mut at, "TO")?;
-            let bus = take_bus(upper, &mut at)?;
+            let bus = take_bus_with(upper, &mut at, bus_at)?;
             (at == upper.len()).then_some(ContingencyAction::AddMachine { bus, id })
         }
         ("REMOVE" | "TRIP", "SHUNT") => {
-            let (bus, id) = parse_optional_id_from_bus(upper, words)?;
+            let (bus, id) = parse_optional_id_from_bus(upper, words, bus_at)?;
             Some(ContingencyAction::RemoveShunt { bus, id })
         }
         ("REMOVE" | "TRIP", "LOAD") => {
-            let (bus, id) = parse_optional_id_from_bus(upper, words)?;
+            let (bus, id) = parse_optional_id_from_bus(upper, words, bus_at)?;
             Some(ContingencyAction::RemoveLoad { bus, id })
         }
         ("REMOVE" | "TRIP", "SWSHUNT") => {
             let mut at = 2;
             take_keyword(upper, &mut at, "FROM")?;
-            let bus = take_bus(upper, &mut at)?;
+            let bus = take_bus_with(upper, &mut at, bus_at)?;
             (at == upper.len()).then_some(ContingencyAction::RemoveSwitchedShunt { bus })
         }
-        ("INCREASE" | "RAISE" | "DECREASE" | "SET", _) => parse_change(upper),
+        ("INCREASE" | "RAISE" | "DECREASE" | "SET", _) => parse_change(upper, bus_at),
         _ => None,
     }
 }
 
 /// `OPEN LINE FROM BUS i TO BUS j [CIRCUIT c]`, or the three winding spelling
 /// that states a third bus in place of the circuit tail.
-fn parse_open_branch(upper: &[String], words: &[&str]) -> Option<ContingencyAction> {
+fn parse_open_branch(
+    upper: &[String],
+    words: &[&str],
+    bus_at: &mut impl FnMut(usize) -> Option<BusId>,
+) -> Option<ContingencyAction> {
     let mut at = 2;
     take_keyword(upper, &mut at, "FROM")?;
-    let from = take_bus(upper, &mut at)?;
+    let from = take_bus_with(upper, &mut at, bus_at)?;
     take_keyword(upper, &mut at, "TO")?;
-    let to = take_bus(upper, &mut at)?;
+    let to = take_bus_with(upper, &mut at, bus_at)?;
     if upper.get(at).is_some_and(|word| word == "TO") {
         at += 1;
-        let third = take_bus(upper, &mut at)?;
+        let third = take_bus_with(upper, &mut at, bus_at)?;
         let circuit = take_circuit(upper, words, &mut at)?;
         return Some(ContingencyAction::OpenThreeWinding {
             buses: [from, to, third],
@@ -841,14 +878,18 @@ fn parse_open_branch(upper: &[String], words: &[&str]) -> Option<ContingencyActi
 }
 
 /// `OPEN THREEWINDING AT BUS a TO BUS b TO BUS c [CIRCUIT c]`.
-fn parse_three_winding(upper: &[String], words: &[&str]) -> Option<ContingencyAction> {
+fn parse_three_winding(
+    upper: &[String],
+    words: &[&str],
+    bus_at: &mut impl FnMut(usize) -> Option<BusId>,
+) -> Option<ContingencyAction> {
     let mut at = 2;
     take_keyword(upper, &mut at, "AT")?;
-    let first = take_bus(upper, &mut at)?;
+    let first = take_bus_with(upper, &mut at, bus_at)?;
     take_keyword(upper, &mut at, "TO")?;
-    let second = take_bus(upper, &mut at)?;
+    let second = take_bus_with(upper, &mut at, bus_at)?;
     take_keyword(upper, &mut at, "TO")?;
-    let third = take_bus(upper, &mut at)?;
+    let third = take_bus_with(upper, &mut at, bus_at)?;
     let circuit = take_circuit(upper, words, &mut at)?;
     Some(ContingencyAction::OpenThreeWinding {
         buses: [first, second, third],
@@ -857,16 +898,24 @@ fn parse_three_winding(upper: &[String], words: &[&str]) -> Option<ContingencyAc
 }
 
 /// `REMOVE MACHINE id FROM BUS i`.
-fn parse_id_from_bus(upper: &[String], words: &[&str]) -> Option<(BusId, String)> {
+fn parse_id_from_bus(
+    upper: &[String],
+    words: &[&str],
+    bus_at: &mut impl FnMut(usize) -> Option<BusId>,
+) -> Option<(BusId, String)> {
     let mut at = 2;
     let id = take_id(words, &mut at)?;
     take_keyword(upper, &mut at, "FROM")?;
-    let bus = take_bus(upper, &mut at)?;
+    let bus = take_bus_with(upper, &mut at, bus_at)?;
     (at == upper.len()).then_some((bus, id))
 }
 
 /// `REMOVE SHUNT [id] FROM BUS i`.
-fn parse_optional_id_from_bus(upper: &[String], words: &[&str]) -> Option<(BusId, Option<String>)> {
+fn parse_optional_id_from_bus(
+    upper: &[String],
+    words: &[&str],
+    bus_at: &mut impl FnMut(usize) -> Option<BusId>,
+) -> Option<(BusId, Option<String>)> {
     let mut at = 2;
     let id = if upper.get(at).is_some_and(|word| word == "FROM") {
         None
@@ -874,13 +923,16 @@ fn parse_optional_id_from_bus(upper: &[String], words: &[&str]) -> Option<(BusId
         Some(take_id(words, &mut at)?)
     };
     take_keyword(upper, &mut at, "FROM")?;
-    let bus = take_bus(upper, &mut at)?;
+    let bus = take_bus_with(upper, &mut at, bus_at)?;
     (at == upper.len()).then_some((bus, id))
 }
 
 /// `INCREASE BUS i LOAD BY x PERCENT` and its synonyms, and the `SET ... TO`
 /// spelling.
-fn parse_change(upper: &[String]) -> Option<ContingencyAction> {
+fn parse_change(
+    upper: &[String],
+    bus_at: &mut impl FnMut(usize) -> Option<BusId>,
+) -> Option<ContingencyAction> {
     let op = match upper[0].as_str() {
         "INCREASE" | "RAISE" => ChangeOp::Increase,
         "DECREASE" => ChangeOp::Decrease,
@@ -888,7 +940,7 @@ fn parse_change(upper: &[String]) -> Option<ContingencyAction> {
         _ => return None,
     };
     let mut at = 1;
-    let bus = take_bus(upper, &mut at)?;
+    let bus = take_bus_with(upper, &mut at, bus_at)?;
     let load = match upper.get(at)?.as_str() {
         "LOAD" => true,
         "GENERATION" => false,

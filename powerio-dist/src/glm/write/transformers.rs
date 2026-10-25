@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 impl Writer<'_> {
     #[allow(clippy::float_cmp)] // Exact base/tap restrictions; no approximate projection.
     pub(super) fn validate_transformers(&self) -> Result<(), Error> {
-        self.validate_coil_bank_points()?;
+        self.validate_coil_banks()?;
         for t in self.net.transformers() {
             if self.regulators.leaders.contains_key(t.name.as_str()) {
                 continue;

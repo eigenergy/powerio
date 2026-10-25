@@ -169,7 +169,7 @@ def glm(source: np.ndarray, z: np.ndarray, loads: np.ndarray) -> str:
         "#set complex_format=%.15g%+.15gj",
         "#set complex_output_format=RECT",
         "clock { timezone UTC0; starttime '2000-01-01 00:00:00'; "
-        "stoptime '2000-01-01 00:00:02'; }",
+        + "stoptime '2000-01-01 00:00:02'; }",
         "module powerflow { solver_method NR; }",
         "module tape;",
         f"object node {{ name source; phases {phases}N; bustype SWING; nominal_voltage 240;",
@@ -221,7 +221,7 @@ def dss_deck(source: np.ndarray, z: np.ndarray, loads: np.ndarray) -> str:
         "! Synthetic PowerIO oracle circuit; no active controls.",
         "clear",
         "new circuit.oracle phases=1 bus1=source.1 basekv=.24 pu=1 "
-        "r1=0.000001 x1=0.000001 r0=0.000001 x0=0.000001",
+        + "r1=0.000001 x1=0.000001 r0=0.000001 x0=0.000001",
     ]
     for i in range(1, n):
         text.append(
