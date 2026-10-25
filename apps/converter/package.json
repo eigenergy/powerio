@@ -4,13 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
+    "dev": "node scripts/build-metadata.mjs && vite --host 127.0.0.1",
     "wasm": "node scripts/build-wasm.mjs",
-    "build": "npm run wasm && vite build && node scripts/pages.mjs",
-    "build:ui": "vite build && node scripts/pages.mjs",
+    "build": "npm run wasm && npm run build:ui",
+    "build:ui": "node scripts/build-metadata.mjs && vite build && node scripts/pages.mjs",
     "preview": "vite preview --host 127.0.0.1",
-    "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "vitest run",
+    "check": "node scripts/build-metadata.mjs && svelte-check --tsconfig ./tsconfig.json",
+    "test": "node scripts/build-metadata.mjs && vitest run",
     "test:browser": "playwright test"
   },
   "dependencies": {

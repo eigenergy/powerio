@@ -61,6 +61,11 @@ const TRANSFORMER_IMPEDANCE_FIELDS: &[&str] = &[
     "anstar",
 ];
 const AREA_FIELDS: &[&str] = &["iarea", "isw", "pdes", "ptol", "arname"];
+/// The revision 35 FACTS device record, field for field.
+const FACTS_FIELDS: &[&str] = &[
+    "name", "ibus", "jbus", "mode", "pdes", "qdes", "vset", "shmx", "trmx", "vtmn", "vtmx", "vsmx",
+    "imx", "linx", "rmpct", "owner", "set1", "set2", "vsref", "fcreg", "nreg", "mname",
+];
 const TWO_TERMINAL_DC_FIELDS: &[&str] = &[
     "name", "mdc", "rdc", "setvl", "vschd", "vcmod", "rcomp", "delti", "met", "dcvmin", "cccitmx",
     "cccacc", "ipr", "nbr", "anmxr", "anmnr", "rcr", "xcr", "ebasr", "trr", "tapr", "tmxr", "tmnr",
@@ -106,7 +111,6 @@ const UNSUPPORTED_TABLES: &[(&str, &str)] = &[
     ("zone", "zones"),
     ("iatransfer", "interarea transfers"),
     ("owner", "owners"),
-    ("facts", "FACTS devices"),
     ("gne", "GNE devices"),
     ("indmach", "induction machines"),
 ];
@@ -433,6 +437,15 @@ pub(super) fn parse_rawx_source(
     raw.push_str("0 / END OF ZONE DATA, BEGIN INTER-AREA TRANSFER DATA\n");
     raw.push_str("0 / END OF INTER-AREA TRANSFER DATA, BEGIN OWNER DATA\n");
     raw.push_str("0 / END OF OWNER DATA, BEGIN FACTS DEVICE DATA\n");
+    append_simple_table(
+        network,
+        "facts",
+        FACTS_FIELDS,
+        &["name", "mname"],
+        &mut raw,
+        warnings,
+        &mut substituted_strings,
+    )?;
     raw.push_str("0 / END OF FACTS DEVICE DATA, BEGIN SWITCHED SHUNT DATA\n");
     append_simple_table(
         network,
@@ -1081,6 +1094,26 @@ fn rawx_equipment_mappings(
         }
     }
 
+    if let Some(table) = Table::parse(source, "facts")? {
+        let mut compensators = parsed.static_var_compensators().iter().enumerate();
+        for row in table.rows {
+            if table_bus(&table, row, "jbus")? != 0 {
+                continue;
+            }
+            let (index, svc) = compensators
+                .next()
+                .ok_or_else(|| malformed("RAWX shunt FACTS table did not map one for one"))?;
+            insert_equipment_mapping(
+                &mut mappings,
+                table_equipment_key(&table, row, "A", "name", &["ibus"])?,
+                stable_id("static_var_compensator", svc.uid.as_deref(), "facts", index)?,
+            )?;
+        }
+        if compensators.next().is_some() {
+            return Err(malformed("RAWX shunt FACTS table did not map one for one"));
+        }
+    }
+
     if let Some(table) = Table::parse(source, "twotermdc")? {
         if table.rows.len() != parsed.hvdc().len() {
             return Err(malformed(
@@ -1193,6 +1226,29 @@ fn apply_regulating_terminals(
                 bus,
                 node,
                 format!("PSS/E switched shunt at bus {}", shunt.bus),
+            );
+        }
+    }
+
+    if let Some(table) = Table::parse(source, "facts")? {
+        let mut compensators = parsed.static_var_compensators_mut().iter_mut();
+        for row in table.rows {
+            if table_bus(&table, row, "jbus")? != 0 {
+                continue;
+            }
+            let svc = compensators
+                .next()
+                .ok_or_else(|| malformed("RAWX shunt FACTS controls did not map one for one"))?;
+            let fcreg = BusId(table_bus(&table, row, "fcreg")?);
+            let node = integer_value(table.value(row, "nreg"), "facts.nreg", Some(0))?;
+            let node = i32::try_from(node)
+                .map_err(|_| malformed("RAWX facts.nreg is outside the i32 range"))?;
+            let bus = if fcreg.0 == 0 { svc.bus } else { fcreg };
+            assign(
+                &mut svc.regulating_terminal,
+                bus,
+                node,
+                format!("PSS/E FACTS device at bus {}", svc.bus),
             );
         }
     }
@@ -1836,6 +1892,15 @@ pub(super) fn read_raw_detailed_connectivity(
         &["shntid", "rmidnt"],
         &sections,
     );
+    // Only the common identity prefix is needed here; revision 34 and 35
+    // place the later MNAME/NREG fields in different orders.
+    add_simple_output_table(
+        &mut network,
+        "facts",
+        &["name", "ibus", "jbus"],
+        &["name"],
+        &sections,
+    );
     add_two_terminal_output_table(&mut network, &sections)?;
     network.insert(
         "sub".to_owned(),
@@ -1977,6 +2042,13 @@ fn raw_to_rawx(net: &BalancedNetwork, raw: &str, diagnostics: &mut Diagnostics) 
         "swshunt",
         SWITCHED_SHUNT_FIELDS,
         &["shntid", "rmidnt"],
+        &sections,
+    );
+    add_simple_output_table(
+        &mut network,
+        "facts",
+        FACTS_FIELDS,
+        &["name", "mname"],
         &sections,
     );
     add_system_switch_output_table(&mut network, net, diagnostics);
@@ -2134,6 +2206,7 @@ fn add_simple_output_table(
         "acline" => "BRANCH",
         "area" => "AREA",
         "swshunt" => "SWITCHED SHUNT",
+        "facts" => "FACTS DEVICE",
         _ => return,
     };
     let rows: Vec<Value> = sections
@@ -2472,6 +2545,7 @@ fn psse_equipment_type(
                     ("load", 1) => "L",
                     ("shunt", 1) => "F",
                     ("generator", 1) => "M",
+                    ("static_var_compensator", 1) => "A",
                     ("branch", 2) => "B",
                     ("transformer", 2) => "2",
                     ("transformer", 3) => "3",
@@ -2593,6 +2667,16 @@ fn output_equipment_keys(
                 &["shunt"],
                 shunt.uid.as_deref(),
                 &table_equipment_key(&table, row, "S", "shntid", &["ibus"])?,
+            )?;
+        }
+    }
+    if let Some(table) = Table::parse(network, "facts")? {
+        for (row, svc) in table.rows.iter().zip(net.static_var_compensators()) {
+            insert_output_equipment_key(
+                &mut keys,
+                &["static_var_compensator"],
+                svc.uid.as_deref(),
+                &table_equipment_key(&table, row, "A", "name", &["ibus"])?,
             )?;
         }
     }
@@ -3220,13 +3304,35 @@ fn add_detailed_connectivity_output_tables(
     Ok(())
 }
 
+/// Use the electrical writer's allocated FACTS names in subterm EQID,
+/// including generated names and sanitized collisions.
+fn shunt_facts_identity_table(net: &BalancedNetwork, names: &[String]) -> Value {
+    let rows = net
+        .static_var_compensators()
+        .iter()
+        .zip(names)
+        .map(|(svc, name)| {
+            Value::Array(vec![
+                Value::String(name.clone()),
+                Value::from(svc.bus.0),
+                Value::from(0),
+            ])
+        })
+        .collect();
+    table_object(&["name", "ibus", "jbus"], Value::Array(rows))
+}
+
 /// Encode detailed connectivity as the nested revision 35 RAW substation
 /// records. RAWX stores the same records in four flat tables.
 pub(super) fn write_raw_substation_data(
     net: &BalancedNetwork,
+    facts_names: &[String],
 ) -> Result<(Option<String>, Diagnostics)> {
     let mut network = Map::new();
     let mut warnings = Diagnostics::new();
+    if !facts_names.is_empty() {
+        network.insert("facts".into(), shunt_facts_identity_table(net, facts_names));
+    }
     add_detailed_connectivity_output_tables(&mut network, net, &mut warnings)?;
     let Some(substations) = Table::parse(&network, "sub")? else {
         return Ok((None, warnings));
@@ -3687,7 +3793,7 @@ mod tests {
             .properties
             .insert("psse_eqid".into(), "EQ'ID".into());
 
-        let (records, warnings) = write_raw_substation_data(&net).unwrap();
+        let (records, warnings) = write_raw_substation_data(&net, &[]).unwrap();
         let records = records.unwrap();
         for sanitized in [
             "'SUB NAME'",

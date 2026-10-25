@@ -1,0 +1,22 @@
+[package]
+name = "powerio-synth"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Deterministic synthetic power-system network generators for testing and benchmarking."
+readme = "README.md"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/powerio-synth"
+keywords = ["power-system", "synthetic", "benchmarking"]
+categories = ["science", "simulation"]
+
+[dependencies]
+powerio-tx.workspace = true
+serde.workspace = true
+rand = { version = "0.10", default-features = false, features = ["std"] }
+rand_chacha = { version = "0.10", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true

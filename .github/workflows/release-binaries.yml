@@ -86,10 +86,10 @@ jobs:
         repository: eigenergy/PowerIO.jl
         path: PowerIO.jl
         token: ${{ secrets.POWERIO_JL_REPO_TOKEN || github.token }}
-    - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+    - uses: julia-actions/setup-julia@da908477b5db94c10ffce8cfea9f2b3b9d5db687 # v3.0.3
       with:
         version: '1'
-    - uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8 # v3.3.0
+    - uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
     # Every entry point this tag declares is bound by PowerIO.jl main or
     # listed in its gen/unbound_entry_points.txt with a reason.
     - name: Entry point coverage of PowerIO.jl main
@@ -266,7 +266,7 @@ jobs:
             /Fe:release-smoke.exe
           Copy-Item stage/libpowerio_capi/bin/libpowerio_capi.dll powerio_capi.dll
           ./release-smoke.exe $version
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: libpowerio_capi.${{ matrix.triplet }}
           path: libpowerio_capi.${{ matrix.triplet }}.tar.gz
@@ -296,12 +296,12 @@ jobs:
           repository: eigenergy/PowerIO.jl
           path: PowerIO.jl
           token: ${{ secrets.POWERIO_JL_REPO_TOKEN || github.token }}
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: libpowerio_capi.*
           path: release-assets
           merge-multiple: true
-      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+      - uses: julia-actions/setup-julia@da908477b5db94c10ffce8cfea9f2b3b9d5db687 # v3.0.3
         with:
           version: '1'
       - name: Pin the tarballs with gen/update_artifacts.jl
@@ -311,7 +311,7 @@ jobs:
         run: |
           tag="${TAG:-v$(grep -oE '^version = "[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')}"
           julia --project=PowerIO.jl scripts/check-julia-artifacts.jl pin PowerIO.jl release-assets "$tag"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: powerio-jl-artifacts
           path: PowerIO.jl/Artifacts.toml
@@ -352,18 +352,18 @@ jobs:
           path: PowerIO.jl
           token: ${{ secrets.POWERIO_JL_REPO_TOKEN || github.token }}
       - name: Use the Artifacts.toml julia-pin wrote
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: powerio-jl-artifacts
           path: PowerIO.jl
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: libpowerio_capi.${{ matrix.platform }}
           path: release-assets
       - name: Install Rosetta
         if: matrix.julia_arch == 'x64'
         run: /usr/sbin/softwareupdate --install-rosetta --agree-to-license
-      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+      - uses: julia-actions/setup-julia@da908477b5db94c10ffce8cfea9f2b3b9d5db687 # v3.0.3
         with:
           version: '1'
           arch: ${{ matrix.julia_arch || 'default' }}
@@ -409,7 +409,7 @@ jobs:
             echo "::error::Release tag moved or disappeared while this build ran."
             exit 1
           fi
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: libpowerio_capi.*
           path: release-assets

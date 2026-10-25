@@ -47,6 +47,11 @@ if [ -f powerio-tnd/Cargo.toml ] \
     echo "powerio-tnd is new since $baseline; no previous API to compare"
     excluded+=(--exclude powerio-tnd)
 fi
+if [ -f powerio-synth/Cargo.toml ] \
+    && ! git cat-file -e "$baseline:powerio-synth/Cargo.toml" 2>/dev/null; then
+    echo "powerio-synth is new since $baseline; no previous API to compare"
+    excluded+=(--exclude powerio-synth)
+fi
 baseline_root=$(mktemp -d)
 current_root=$(mktemp -d)
 trap 'rm -rf "$baseline_root" "$current_root"' EXIT

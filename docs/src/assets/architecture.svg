@@ -218,5 +218,21 @@
 <path fill="none" stroke="#4a5568" d="M625.56,-297.39C623.99,-320.06 618.17,-355.63 598,-378 584.86,-392.57 567.62,-403.52 549.54,-411.73"/>
 <polygon fill="#4a5568" stroke="#4a5568" points="547.86,-408.64 540.03,-415.78 550.6,-415.08 547.86,-408.64"/>
 </g>
+<g id="node14" class="node">
+<title>powerio&#45;synth</title>
+<rect x="402" y="-209" width="190" height="40" rx="6" fill="#f4f6f8" stroke="#4a5568"/>
+<text text-anchor="middle" x="497" y="-198" font-family="Helvetica,sans-Serif" font-size="11.00" fill="#1a202c">powerio&#45;synth</text>
+<text text-anchor="middle" x="497" y="-185" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#1a202c">deterministic topology fixtures</text>
+<g id="edge26" class="edge">
+<title>powerio&#45;matrix&#45;&gt;powerio&#45;synth</title>
+<path fill="none" stroke="#4a5568" d="M391 -198 C395 -198 398 -197 402 -196"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="402 -196 394 -192 394 -200 402 -196"/>
+</g>
+</g>
+<g id="edge25" class="edge">
+<title>powerio&#45;synth&#45;&gt;powerio&#45;tx</title>
+<path fill="none" stroke="#4a5568" d="M430 -209 C420 -250 390 -300 365 -333"/>
+<polygon fill="#4a5568" stroke="#4a5568" points="362 -331 359 -341 368 -335 362 -331"/>
+</g>
 </g>
 </svg>

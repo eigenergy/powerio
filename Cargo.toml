@@ -5,6 +5,7 @@ members = [
     "powerio-core",
     "powerio-tnd",
     "powerio-matrix",
+    "powerio-synth",
     "powerio-prob",
     "powerio-cli",
     "powerio-py",
@@ -25,6 +26,7 @@ default-members = [
     "powerio-core",
     "powerio-tnd",
     "powerio-matrix",
+    "powerio-synth",
     "powerio-prob",
     "powerio-cli",
     "powerio-dist",
@@ -54,6 +56,7 @@ powerio = { path = "powerio", version = "0.11.6" }
 powerio-tx = { path = "powerio-tx", version = "0.11.6", default-features = false }
 powerio-core = { path = "powerio-core", version = "0.11.6" }
 powerio-matrix = { path = "powerio-matrix", version = "0.11.6" }
+powerio-synth = { path = "powerio-synth", version = "0.11.6" }
 powerio-prob = { path = "powerio-prob", version = "0.11.6" }
 powerio-dist = { path = "powerio-dist", version = "0.11.6", default-features = false }
 powerio-tnd = { path = "powerio-tnd", version = "0.11.6", default-features = false }

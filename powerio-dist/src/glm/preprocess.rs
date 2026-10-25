@@ -507,8 +507,20 @@ impl Context<'_> {
                 })?;
                 let included = self
                     .source
-                    .referenced_buffer(&self.include_base, path)
-                    .map_err(|e| e.with_span(span(buffer, range.clone())))?;
+                    .referenced_buffer_with_limit(
+                        &self.include_base,
+                        path,
+                        (MAX_BYTES - self.input_bytes) as u64,
+                    )
+                    .map_err(|e| {
+                        if e.diagnostics().first().is_some_and(|d| {
+                            d.code() == powerio_core::codes::READ_IO_BUFFER_BUDGET.code
+                        }) {
+                            limit(buffer, range.clone()).with_cause(e)
+                        } else {
+                            e.with_span(span(buffer, range.clone()))
+                        }
+                    })?;
                 self.file(&included, depth + 1)?;
                 if !self.boundary.ready() {
                     return Err(error(
