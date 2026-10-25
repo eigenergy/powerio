@@ -8,6 +8,7 @@ checks the stored document writes deterministically.
 
 import json
 import io
+import re
 
 import powerio
 
@@ -20,13 +21,21 @@ mpc.branch = [1 2 0.01 0.1 0 250 250 250 0 0 1 -30 30; 2 3 0.02 0.2 0 250 250 25
 """
 
 
+def release(version: str) -> tuple:
+    """The MAJOR.MINOR.PATCH numbers a version starts with."""
+    match = re.match(r"(\d+)\.(\d+)\.(\d+)", version)
+    assert match is not None, version
+    return tuple(int(part) for part in match.groups())
+
+
 def main() -> None:
     versions = powerio.versions()
     assert powerio.__version__ == versions["powerio_version"], versions
-    assert versions["powerio_ir"] == {
-        "schema": "pio-ir",
-        "version": 2,
-    }, versions
+    # The PowerIO IR `version` names the release whose schema the build writes,
+    # at or after the package release.
+    ir = versions["powerio_ir"]
+    assert ir["schema"] == "pio-ir", versions
+    assert release(ir["version"]) >= release(powerio.__version__), versions
 
     module = powerio.parse(
         io.StringIO(CASE),
@@ -41,7 +50,7 @@ def main() -> None:
     assert document is not None
     decoded = json.loads(document)
     assert decoded["schema"] == "pio-ir"
-    assert decoded["version"] == 2
+    assert decoded["version"] == ir["version"]
     # Deterministic release: the stored document is byte stable.
     assert (
         powerio.serialize(powerio.deserialize(document.encode())).text == document

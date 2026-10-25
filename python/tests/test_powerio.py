@@ -1165,14 +1165,29 @@ def test_pio_module_emit_uses_dynamic_writer(tmp_path):
     assert json.loads(solved_text)["value"]["type"] == "powerio.AcOpfSolution"
 
 
-def test_deserialize_rejects_a_newer_powerio_ir_generation():
+def test_deserialize_reads_its_release_series_and_0_11_documents():
     document = json.loads(powerio.serialize(powerio.parse(DATA / "case9.m")).text)
-    document["version"] += 1
+    current = powerio.versions()["powerio_ir"]["version"]
+    assert document["version"] == current
+    major, minor, patch = (int(part) for part in current.split("."))
+    assert major == 0
+    for version in (f"0.{minor}.{patch + 1}", 2):
+        document["version"] = version
+        module = powerio.deserialize(io.StringIO(json.dumps(document)))
+        assert isinstance(module.value, powerio.BalancedNetwork)
 
-    with pytest.raises(powerio.PowerIOError) as failure:
-        powerio.deserialize(io.StringIO(json.dumps(document)))
-
-    assert failure.value.code == "READ.MODULE.UNSUPPORTED"
+    for version, remedy in (
+        (f"0.{minor + 1}.0", "upgrade PowerIO"),
+        ("1.0.0", "upgrade PowerIO"),
+        (f"0.{minor - 1}.0", "regenerate this document"),
+        (1, "regenerate this document"),
+        (f"0.{minor}", "regenerate this document"),
+    ):
+        document["version"] = version
+        with pytest.raises(powerio.PowerIOError) as failure:
+            powerio.deserialize(io.StringIO(json.dumps(document)))
+        assert failure.value.code == "READ.MODULE.UNSUPPORTED"
+        assert remedy in str(failure.value)
 
 
 def test_pio_module_emit_covers_memory_and_file_destinations(tmp_path):

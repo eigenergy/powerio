@@ -4,7 +4,54 @@
 use std::path::Path;
 
 const SCHEMA_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/schema");
-const CURRENT_SCHEMA: &str = "pio-ir/2/0.11.6/schema.json";
+const CURRENT_SCHEMA: &str = "pio-ir/0.12.0/schema.json";
+
+/// The schema files 0.11 releases published, all for documents stating the
+/// integer version 2. This build reads those documents.
+const SCHEMAS_0_11: [&str; 6] = [
+    "pio-ir/2/schema.json",
+    "pio-ir/2/0.11.1/schema.json",
+    "pio-ir/2/0.11.3/schema.json",
+    "pio-ir/2/0.11.4/schema.json",
+    "pio-ir/2/0.11.5/schema.json",
+    "pio-ir/2/0.11.6/schema.json",
+];
+
+/// The release a `pio-ir/<release>/schema.json` path names, as
+/// `(major, minor, patch)`. From 0.12.0 on, every release has such a file.
+fn release_of(path: &str) -> Option<(u64, u64, u64)> {
+    let release = path.strip_prefix("pio-ir/")?.strip_suffix("/schema.json")?;
+    let mut parts = release.split('.').map(|part| part.parse::<u64>().ok());
+    let parsed = (parts.next()??, parts.next()??, parts.next()??);
+    parts.next().is_none().then_some(parsed)
+}
+
+/// The release series as Cargo defines it: the minor release within 0.x and
+/// the major release from 1.0 on.
+fn series((major, minor, _): (u64, u64, u64)) -> (u64, u64) {
+    if major == 0 { (0, minor) } else { (major, 0) }
+}
+
+/// The schema files of earlier releases in this build's release series. A
+/// later release in the series has to read every document they describe.
+fn earlier_schemas_in_series() -> Vec<String> {
+    let current = release_of(CURRENT_SCHEMA).unwrap();
+    let mut earlier: Vec<String> = std::fs::read_dir(Path::new(SCHEMA_ROOT).join("pio-ir"))
+        .unwrap()
+        .map(|entry| {
+            format!(
+                "pio-ir/{}/schema.json",
+                entry.unwrap().file_name().to_string_lossy()
+            )
+        })
+        .filter(|path| {
+            release_of(path)
+                .is_some_and(|release| series(release) == series(current) && release < current)
+        })
+        .collect();
+    earlier.sort();
+    earlier
+}
 
 fn monitor_discriminator(value: &serde_json::Value) -> Option<(&str, &str)> {
     if value["type"] != "object" {
@@ -182,8 +229,11 @@ fn the_schema_directory_contains_the_documented_powerio_ir_history() {
     let mut files = Vec::new();
     collect_files(root, root, &mut files);
     files.sort();
+    let (releases, history): (Vec<_>, Vec<_>) = files
+        .into_iter()
+        .partition(|file| release_of(file).is_some());
     assert_eq!(
-        files,
+        history,
         [
             "README.md",
             "pio-ir/0.1/schema.json",
@@ -194,9 +244,32 @@ fn the_schema_directory_contains_the_documented_powerio_ir_history() {
             "pio-ir/2/0.11.3/schema.json",
             "pio-ir/2/0.11.4/schema.json",
             "pio-ir/2/0.11.5/schema.json",
-            CURRENT_SCHEMA,
+            "pio-ir/2/0.11.6/schema.json",
             "pio-ir/2/schema.json",
         ]
+    );
+    // From 0.12.0 on, each release adds `pio-ir/<release>/schema.json`, and
+    // none is ahead of this build.
+    assert!(releases.iter().any(|file| file == CURRENT_SCHEMA));
+    for file in &releases {
+        let release = release_of(file).unwrap();
+        assert!(
+            (0, 12, 0) <= release && release <= release_of(CURRENT_SCHEMA).unwrap(),
+            "{file} is not a release from 0.12.0 through this build"
+        );
+    }
+}
+
+/// The current schema file is the one `IR_VERSION` and `IR_SCHEMA_ID` name.
+#[test]
+fn the_current_schema_file_names_ir_version() {
+    assert_eq!(
+        CURRENT_SCHEMA,
+        format!("pio-ir/{}/schema.json", powerio::IR_VERSION)
+    );
+    assert_eq!(
+        powerio::IR_SCHEMA_ID,
+        format!("https://powerio.dev/schema/{CURRENT_SCHEMA}")
     );
 }
 
@@ -240,9 +313,40 @@ fn historical_schemas_preserve_their_original_identifiers() {
             "pio-ir/2/0.11.5/schema.json",
             "https://powerio.dev/schema/pio-ir/2/0.11.5/schema.json",
         ),
+        (
+            "pio-ir/2/0.11.6/schema.json",
+            "https://powerio.dev/schema/pio-ir/2/0.11.6/schema.json",
+        ),
     ] {
         let schema: serde_json::Value = serde_json::from_str(&read_schema_file(path)).unwrap();
         assert_eq!(schema["$id"], expected_id, "historical schema {path}");
+    }
+}
+
+/// From 0.12.0 on, a release's schema file is served at its own path and
+/// describes documents whose `version` names that release.
+#[test]
+fn release_schemas_name_their_release() {
+    for path in earlier_schemas_in_series()
+        .iter()
+        .map(String::as_str)
+        .chain([CURRENT_SCHEMA])
+    {
+        let schema: serde_json::Value = serde_json::from_str(&read_schema_file(path)).unwrap();
+        let release = path
+            .strip_prefix("pio-ir/")
+            .and_then(|path| path.strip_suffix("/schema.json"))
+            .unwrap();
+        assert_eq!(
+            schema["$id"],
+            format!("https://powerio.dev/schema/{path}"),
+            "{path}"
+        );
+        assert_eq!(
+            schema["properties"]["version"],
+            serde_json::json!({"const": release, "type": "string"}),
+            "{path}"
+        );
     }
 }
 
@@ -304,117 +408,138 @@ fn assert_partial_transformer_schema_preserved(
     assert_eq!(&partial_body, definition);
 }
 
-/// Each earlier IR version 2 schema file is checked against the current one.
-/// A release can add structural types and definitions, and a list of allowed
-/// string values (such as the distribution source formats) can gain values.
-/// Every other existing definition, and the document rules, stay byte for
-/// byte the same, so a document an earlier 0.11 release wrote still reads
-/// with the same meaning. Renaming or reshaping an existing type fails here.
+/// Every 0.11 schema file is checked against the current one, because this
+/// build reads the documents 0.11 wrote. See [`assert_reads_documents_of`].
 #[test]
-fn ir_version_2_schemas_only_add() {
-    for earlier in [
-        "pio-ir/2/0.11.5/schema.json",
-        "pio-ir/2/0.11.4/schema.json",
-        "pio-ir/2/schema.json",
-        "pio-ir/2/0.11.1/schema.json",
-        "pio-ir/2/0.11.3/schema.json",
-    ] {
-        let mut published: serde_json::Value =
-            serde_json::from_str(&read_schema_file(earlier)).unwrap();
-        let mut current: serde_json::Value =
-            serde_json::from_str(&read_schema_file(CURRENT_SCHEMA)).unwrap();
-        let published_defs = published.as_object_mut().unwrap().remove("$defs").unwrap();
-        let current_defs = current.as_object_mut().unwrap().remove("$defs").unwrap();
-        published.as_object_mut().unwrap().remove("$id");
-        current.as_object_mut().unwrap().remove("$id");
-        assert_eq!(published, current, "{earlier}: document rules changed");
+fn the_current_schema_reads_every_0_11_document() {
+    for earlier in SCHEMAS_0_11 {
+        assert_reads_documents_of(earlier);
+    }
+}
 
-        for (name, definition) in published_defs.as_object().unwrap() {
-            if name == "StoredValue" {
-                for variant in definition["oneOf"].as_array().unwrap() {
-                    let type_name = &variant["properties"]["type"]["const"];
-                    let matching = current_defs[name]["oneOf"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .find(|candidate| candidate["properties"]["type"]["const"] == *type_name);
-                    assert_eq!(
-                        matching,
-                        Some(variant),
-                        "{earlier}: type {type_name} changed"
-                    );
-                }
-            } else if name == "SourceFormat" {
-                // The public format enum is nonexhaustive. Adding one new
-                // format must leave every existing spelling and schema rule
-                // intact; this is not permission to change arbitrary records.
-                let mut without_sincal = current_defs[name].clone();
-                let alternatives = without_sincal["oneOf"].as_array_mut().unwrap();
-                let before = alternatives.len();
-                alternatives.retain(|v| v["const"] != "sincal");
-                assert_eq!(before, alternatives.len() + 1);
-                assert_eq!(
-                    &without_sincal, definition,
-                    "{earlier}: existing format changed"
-                );
-                let sincal = current_defs[name]["oneOf"]
+/// The schema file of every earlier release in this build's release series
+/// is checked against the current one, so a release reads every document
+/// its series has written. See [`assert_reads_documents_of`].
+#[test]
+fn the_current_schema_reads_every_earlier_document_in_its_series() {
+    for earlier in earlier_schemas_in_series() {
+        assert_reads_documents_of(&earlier);
+    }
+}
+
+/// The current schema may add structural types and definitions, and a list
+/// of allowed string values (such as the distribution source formats) can
+/// gain values. Every other existing definition, and the document rules
+/// apart from the header's `version`, stay byte for byte the same, so a
+/// document the earlier release wrote still reads with the same meaning.
+/// Renaming or reshaping an existing type fails here.
+fn assert_reads_documents_of(earlier: &str) {
+    let mut published: serde_json::Value =
+        serde_json::from_str(&read_schema_file(earlier)).unwrap();
+    let mut current: serde_json::Value =
+        serde_json::from_str(&read_schema_file(CURRENT_SCHEMA)).unwrap();
+    let published_defs = published.as_object_mut().unwrap().remove("$defs").unwrap();
+    let current_defs = current.as_object_mut().unwrap().remove("$defs").unwrap();
+    // Each file has its own identifier, and the header's `version` names
+    // the release (or, before 0.12, the integer 2) its documents state.
+    for schema in [&mut published, &mut current] {
+        schema.as_object_mut().unwrap().remove("$id");
+        schema["properties"]
+            .as_object_mut()
+            .unwrap()
+            .remove("version")
+            .unwrap();
+    }
+    assert_eq!(published, current, "{earlier}: document rules changed");
+
+    for (name, definition) in published_defs.as_object().unwrap() {
+        if current_defs[name] == *definition {
+            continue;
+        }
+        if name == "StoredValue" {
+            for variant in definition["oneOf"].as_array().unwrap() {
+                let type_name = &variant["properties"]["type"]["const"];
+                let matching = current_defs[name]["oneOf"]
                     .as_array()
                     .unwrap()
                     .iter()
-                    .find(|v| v["const"] == "sincal")
-                    .unwrap();
-                assert_eq!(sincal["type"], "string");
-            } else if name == "VoltageSource" {
-                // IR 2 also admits a distinctly tagged nested source type.
-                // Keep the legacy branch byte-for-byte equivalent as JSON;
-                // do not generally permit arbitrary changes to record unions.
-                let branches = current_defs[name]["anyOf"].as_array().unwrap();
-                assert_eq!(branches.len(), 2);
-                assert_eq!(&branches[0], definition, "{earlier}: legacy source changed");
-                assert_eq!(branches[1]["$ref"], "#/$defs/ReferencedSourceWire");
-                let new_source = &current_defs["ReferencedSourceWire"]["oneOf"][0];
+                    .find(|candidate| candidate["properties"]["type"]["const"] == *type_name);
                 assert_eq!(
-                    new_source["properties"]["type"]["const"],
-                    "powerio.ReferencedVoltageSource"
-                );
-                assert_eq!(new_source["required"], serde_json::json!(["type", "value"]));
-            } else if name == "Transformer3W" {
-                assert_partial_transformer_schema_preserved(definition, &current_defs, earlier);
-            } else if name == "MonitorScope" || name == "MonitorStatement" {
-                assert_monitor_schema_preserved(
-                    definition,
-                    &current_defs[name],
-                    &format!("{earlier}: record {name}"),
-                );
-            } else if let Some(values) = definition["enum"].as_array() {
-                // A list of allowed values keeps every value it had; it may
-                // gain values, and nothing else about it changes.
-                let current = &current_defs[name];
-                let current_values = current["enum"].as_array().unwrap_or_else(|| {
-                    panic!("{earlier}: {name} is no longer a list of allowed values")
-                });
-                for value in values {
-                    assert!(
-                        current_values.contains(value),
-                        "{earlier}: {name} no longer allows {value}"
-                    );
-                }
-                let without_values = |definition: &serde_json::Value| {
-                    let mut definition = definition.clone();
-                    definition.as_object_mut().unwrap().remove("enum");
-                    definition
-                };
-                assert_eq!(
-                    without_values(current),
-                    without_values(definition),
-                    "{earlier}: {name} changed beyond gaining values"
-                );
-            } else {
-                assert_eq!(
-                    &current_defs[name], definition,
-                    "{earlier}: definition {name} changed"
+                    matching,
+                    Some(variant),
+                    "{earlier}: type {type_name} changed"
                 );
             }
+        } else if name == "SourceFormat" {
+            // The public format enum is nonexhaustive. Adding one new
+            // format must leave every existing spelling and schema rule
+            // intact; this is not permission to change arbitrary records.
+            let mut without_sincal = current_defs[name].clone();
+            let alternatives = without_sincal["oneOf"].as_array_mut().unwrap();
+            let before = alternatives.len();
+            alternatives.retain(|v| v["const"] != "sincal");
+            assert_eq!(before, alternatives.len() + 1);
+            assert_eq!(
+                &without_sincal, definition,
+                "{earlier}: existing format changed"
+            );
+            let sincal = current_defs[name]["oneOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v["const"] == "sincal")
+                .unwrap();
+            assert_eq!(sincal["type"], "string");
+        } else if name == "VoltageSource" {
+            // IR 2 also admits a distinctly tagged nested source type.
+            // Keep the legacy branch byte-for-byte equivalent as JSON;
+            // do not generally permit arbitrary changes to record unions.
+            let branches = current_defs[name]["anyOf"].as_array().unwrap();
+            assert_eq!(branches.len(), 2);
+            assert_eq!(&branches[0], definition, "{earlier}: legacy source changed");
+            assert_eq!(branches[1]["$ref"], "#/$defs/ReferencedSourceWire");
+            let new_source = &current_defs["ReferencedSourceWire"]["oneOf"][0];
+            assert_eq!(
+                new_source["properties"]["type"]["const"],
+                "powerio.ReferencedVoltageSource"
+            );
+            assert_eq!(new_source["required"], serde_json::json!(["type", "value"]));
+        } else if name == "Transformer3W" {
+            assert_partial_transformer_schema_preserved(definition, &current_defs, earlier);
+        } else if name == "MonitorScope" || name == "MonitorStatement" {
+            assert_monitor_schema_preserved(
+                definition,
+                &current_defs[name],
+                &format!("{earlier}: record {name}"),
+            );
+        } else if let Some(values) = definition["enum"].as_array() {
+            // A list of allowed values keeps every value it had; it may
+            // gain values, and nothing else about it changes.
+            let current = &current_defs[name];
+            let current_values = current["enum"].as_array().unwrap_or_else(|| {
+                panic!("{earlier}: {name} is no longer a list of allowed values")
+            });
+            for value in values {
+                assert!(
+                    current_values.contains(value),
+                    "{earlier}: {name} no longer allows {value}"
+                );
+            }
+            let without_values = |definition: &serde_json::Value| {
+                let mut definition = definition.clone();
+                definition.as_object_mut().unwrap().remove("enum");
+                definition
+            };
+            assert_eq!(
+                without_values(current),
+                without_values(definition),
+                "{earlier}: {name} changed beyond gaining values"
+            );
+        } else {
+            assert_eq!(
+                &current_defs[name], definition,
+                "{earlier}: definition {name} changed"
+            );
         }
     }
 }

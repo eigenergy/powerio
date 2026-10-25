@@ -49,7 +49,7 @@ fn with_component_ids(mut network: crate::BalancedNetwork) -> crate::BalancedNet
 pub fn emit_module(module: &PioModule<PioValue>) -> Result<String> {
     let stored = StoredModule {
         schema: crate::IR_SCHEMA_NAME.to_string(),
-        version: crate::IR_VERSION,
+        version: dto::StoredVersion::Text(crate::IR_VERSION.to_owned()),
         producer: dto::Producer {
             name: module.producer().name().to_string(),
             version: module.producer().version().to_string(),
@@ -73,8 +73,8 @@ pub fn emit_module(module: &PioModule<PioValue>) -> Result<String> {
     serde_json::to_string_pretty(&stored).map_err(|error| invalid(error.to_string()))
 }
 
-/// Decode one current PowerIO IR document. Any other identity or version
-/// is refused with what was found named.
+/// Decode one PowerIO IR document this build reads. Any other identity or
+/// version is refused with what was found named.
 ///
 /// # Errors
 /// An unsupported schema or version, or an invalid document.
@@ -82,17 +82,20 @@ pub fn read_module(text: &str) -> Result<PioModule<PioValue>> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     // One scan decodes the current shape. Only a document that is not one is
     // scanned again, for its header alone, so the refusal can say whether it
-    // is another PowerIO IR version, a current document that is invalid,
-    // or not PowerIO IR at all.
+    // is a version this build does not read, a readable document that is
+    // invalid, or not PowerIO IR at all.
     let decode_error = match serde_json::from_str::<StoredModule>(text) {
-        Ok(stored) if is_readable(&stored.schema, stored.version) => {
+        Ok(stored) if is_readable(&stored.schema, &stored.version) => {
             dto::validate(&stored).map_err(invalid)?;
             return decode_stored(stored);
         }
         Ok(stored) => {
-            let version = dto::StoredVersion::Integer(stored.version);
             let producer = format!("{} {}", stored.producer.name, stored.producer.version);
-            return Err(unsupported(&stored.schema, Some(&version), Some(&producer)));
+            return Err(unsupported(
+                &stored.schema,
+                Some(&stored.version),
+                Some(&producer),
+            ));
         }
         Err(error) => error,
     };
@@ -100,9 +103,7 @@ pub fn read_module(text: &str) -> Result<PioModule<PioValue>> {
         serde_json::from_str(text).map_err(|error| invalid(error.to_string()))?;
     let producer = header.producer.as_ref().and_then(describe_producer);
     match (header.schema.as_deref(), header.version) {
-        (Some(schema), Some(dto::StoredVersion::Integer(version)))
-            if is_readable(schema, version) =>
-        {
+        (Some(schema), Some(version)) if is_readable(schema, &version) => {
             Err(invalid(decode_error.to_string()))
         }
         (Some(schema), version) => Err(unsupported(schema, version.as_ref(), producer.as_deref())),
@@ -113,9 +114,75 @@ pub fn read_module(text: &str) -> Result<PioModule<PioValue>> {
     }
 }
 
-fn is_readable(schema: &str, version: u64) -> bool {
+/// The integer `version` every 0.11 release wrote. Those documents use
+/// record layouts this build still reads, so they decode as they always did.
+const VERSION_0_11: u64 = 2;
+
+/// A release a document names, `MAJOR.MINOR.PATCH`, kept to the parts that
+/// decide its series.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Release {
+    major: u64,
+    minor: u64,
+}
+
+impl Release {
+    /// Three decimal numbers without signs or leading zeros. A prerelease or
+    /// build suffix is not a release a document states.
+    fn parse(text: &str) -> Option<Self> {
+        fn number(part: &str) -> Option<u64> {
+            let digits = !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+            let canonical = part == "0" || !part.starts_with('0');
+            if digits && canonical {
+                part.parse().ok()
+            } else {
+                None
+            }
+        }
+        let mut parts = text.split('.');
+        let release = Self {
+            major: number(parts.next()?)?,
+            minor: number(parts.next()?)?,
+        };
+        number(parts.next()?)?;
+        parts.next().is_none().then_some(release)
+    }
+
+    /// The release whose schema this build writes, [`crate::IR_VERSION`].
+    fn current() -> Self {
+        Self::parse(crate::IR_VERSION).expect("IR_VERSION names a release")
+    }
+
+    /// The release series as Cargo defines it: one minor release within 0.x
+    /// and one major release from 1.0 on. Later series compare greater.
+    fn series(self) -> (u64, u64) {
+        if self.major == 0 {
+            (0, self.minor)
+        } else {
+            (self.major, 0)
+        }
+    }
+
+    /// The series as the documentation writes it: `0.12.x` or `1.x`.
+    fn series_name(self) -> String {
+        if self.major == 0 {
+            format!("0.{}.x", self.minor)
+        } else {
+            format!("{}.x", self.major)
+        }
+    }
+}
+
+/// A `pio-ir` document from a release in this build's series, or one with
+/// the integer version 0.11 wrote.
+fn is_readable(schema: &str, version: &dto::StoredVersion) -> bool {
     schema == crate::IR_SCHEMA_NAME
-        && (crate::IR_MIN_VERSION..=crate::IR_VERSION).contains(&version)
+        && match version {
+            dto::StoredVersion::Integer(version) => *version == VERSION_0_11,
+            dto::StoredVersion::Text(text) => Release::parse(text)
+                .is_some_and(|release| release.series() == Release::current().series()),
+            dto::StoredVersion::Other(_) => false,
+        }
 }
 
 /// The producer a document states, as a refusal names it: `name version`
@@ -138,26 +205,34 @@ fn unsupported(
     version: Option<&dto::StoredVersion>,
     producer: Option<&str>,
 ) -> powerio_core::Error {
-    let guidance = if schema == crate::IR_SCHEMA_NAME
-        && version
-            .and_then(dto::StoredVersion::as_integer)
-            .is_some_and(|version| version > crate::IR_VERSION)
-    {
-        "upgrade PowerIO to a release that supports this later IR version".to_owned()
-    } else {
-        let reads = if crate::IR_MIN_VERSION == crate::IR_VERSION {
-            format!("version {}", crate::IR_VERSION)
-        } else {
-            format!(
-                "versions {} through {}",
-                crate::IR_MIN_VERSION,
-                crate::IR_VERSION
-            )
-        };
-        format!(
-            "this build reads `{}` {reads}; regenerate this document from its source data",
-            crate::IR_SCHEMA_NAME
-        )
+    let current = Release::current();
+    let regenerate = format!(
+        "this build reads `{}` documents from the {} release series and version {VERSION_0_11} \
+         documents from 0.11.x; regenerate this document from its source data",
+        crate::IR_SCHEMA_NAME,
+        current.series_name()
+    );
+    let guidance = match version {
+        Some(dto::StoredVersion::Text(text)) if schema == crate::IR_SCHEMA_NAME => {
+            match Release::parse(text) {
+                Some(release) if release.series() > current.series() => {
+                    format!("upgrade PowerIO to a {} release", release.series_name())
+                }
+                Some(_) => regenerate,
+                None => format!(
+                    "the version is not a release such as \"{}\"; {regenerate}",
+                    crate::IR_VERSION
+                ),
+            }
+        }
+        // 0.11 readers sent a later integer version to a newer release, and
+        // bindings match that remedy, so it stays.
+        Some(dto::StoredVersion::Integer(version))
+            if schema == crate::IR_SCHEMA_NAME && *version > VERSION_0_11 =>
+        {
+            "upgrade PowerIO to a release that reads this later version".to_owned()
+        }
+        _ => regenerate,
     };
     let version = version.map_or_else(|| "<none>".to_owned(), ToString::to_string);
     let written_by =
@@ -3224,6 +3299,58 @@ mod collection_ir_tests {
             decoded.history()[0].output_type(),
             Some(BALANCED_NETWORK_TYPE)
         );
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+
+    #[test]
+    fn ir_version_names_a_release() {
+        assert!(Release::parse(crate::IR_VERSION).is_some());
+        assert_eq!(
+            crate::IR_SCHEMA_ID,
+            format!(
+                "https://powerio.dev/schema/pio-ir/{}/schema.json",
+                crate::IR_VERSION
+            )
+        );
+    }
+
+    #[test]
+    fn a_release_is_three_canonical_numbers() {
+        for text in ["0.12.0", "0.12.10", "1.0.0", "10.20.30"] {
+            assert!(Release::parse(text).is_some(), "{text}");
+        }
+        for text in [
+            "",
+            "0.12",
+            "0.12.0.1",
+            "v0.12.0",
+            "0.12.0-rc.1",
+            "0.12.0+build",
+            "0.012.0",
+            "+0.12.0",
+            "0.-1.0",
+            " 0.12.0",
+            "0..0",
+        ] {
+            assert!(Release::parse(text).is_none(), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_series_is_the_minor_release_before_1_0_and_the_major_after() {
+        let series = |text| Release::parse(text).unwrap().series();
+        assert_eq!(series("0.12.0"), series("0.12.9"));
+        assert_ne!(series("0.12.0"), series("0.13.0"));
+        assert_eq!(series("1.0.0"), series("1.4.2"));
+        assert_ne!(series("1.0.0"), series("2.0.0"));
+        assert!(series("0.13.0") > series("0.12.5"));
+        assert!(series("1.0.0") > series("0.99.0"));
+        assert_eq!(Release::parse("0.12.3").unwrap().series_name(), "0.12.x");
+        assert_eq!(Release::parse("1.4.2").unwrap().series_name(), "1.x");
     }
 }
 

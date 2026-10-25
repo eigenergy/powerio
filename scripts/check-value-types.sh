@@ -50,7 +50,9 @@ print("\n".join(sorted(names)))
 PY
 )
 
-schema=$(python3 - "docs/schema/pio-ir/2/0.11.6/schema.json" <<'PY'
+# The schema file of the release this build writes, named by IR_VERSION.
+ir_version=$(grep -oE 'pub const IR_VERSION: &str = "[^"]+"' powerio/src/lib.rs | cut -d'"' -f2)
+schema=$(python3 - "docs/schema/pio-ir/$ir_version/schema.json" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding='utf-8') as handle:

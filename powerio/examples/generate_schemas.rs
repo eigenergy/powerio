@@ -23,8 +23,9 @@ mod generate {
             .nth(1)
             .map_or_else(|| PathBuf::from("docs/schema"), PathBuf::from);
 
-        // The public identifier names the catalog snapshot without replacing
-        // an earlier release's schema at the same IR version.
+        // The public identifier names this release's own schema file,
+        // `pio-ir/<IR_VERSION>/schema.json`, so earlier releases' files stay
+        // untouched.
         let relative = powerio::IR_SCHEMA_ID
             .strip_prefix("https://powerio.dev/schema/")
             .ok_or("the schema identifier must use the PowerIO schema root")?;
