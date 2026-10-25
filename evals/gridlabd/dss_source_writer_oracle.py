@@ -121,8 +121,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.action == "evaluate" and args.canonical is None and args.powerio is None:
         parser.error("evaluate requires --canonical or --powerio")
-    raise SystemExit(
+    if args.action == "prepare":
         prepare(args.output)
-        if args.action == "prepare"
-        else evaluate(args.output, args.canonical, args.powerio)
-    )
+    else:
+        raise SystemExit(evaluate(args.output, args.canonical, args.powerio))
