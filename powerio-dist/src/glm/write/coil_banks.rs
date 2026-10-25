@@ -137,7 +137,16 @@ impl<'a> CoilBanks<'a> {
     }
 }
 impl Writer<'_> {
-    pub(super) fn validate_coil_bank_points(&self) -> Result<(), Error> {
+    pub(super) fn validate_coil_banks(&self) -> Result<(), Error> {
+        if self.ideal_plan.is_none()
+            && !self.coil_banks.banks.is_empty()
+            && let Some(bus) =
+                crate::glm::connections::source_with_zero_sequence(self.net.sources())
+        {
+            return Err(unsupported(format!(
+                "NR DELTA_GWYE output with source zero-sequence voltage at {bus} requires an additional native primary-stamp mapping"
+            )));
+        }
         for bank in self.coil_banks.banks.values() {
             let mut point = None;
             for member in bank.members {
