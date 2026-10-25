@@ -3,7 +3,10 @@
 
 #include <type_traits>
 
-static_assert(PIO_VERSION_MAJOR >= 0 && PIO_VERSION_MINOR >= 0 && PIO_VERSION_PATCH >= 0);
+// The release macros are integer constants that fit the PioVersionView
+// fields; a missing, negative, or out of range value does not compile.
+constexpr PioVersionView header_release{PIO_VERSION_MAJOR, PIO_VERSION_MINOR,
+                                        PIO_VERSION_PATCH};
 static_assert(std::is_standard_layout_v<PioVersionView>);
 static_assert(std::is_standard_layout_v<PioStringView>);
 static_assert(std::is_standard_layout_v<PioByteView>);
@@ -52,7 +55,8 @@ static_assert(std::is_standard_layout_v<PioMulticonductorCommandView>);
 
 int main() {
     const PioVersionView release = pio_version_numbers();
-    const bool same = release.major == PIO_VERSION_MAJOR &&
-                      release.minor == PIO_VERSION_MINOR && release.patch == PIO_VERSION_PATCH;
+    const bool same = release.major == header_release.major &&
+                      release.minor == header_release.minor &&
+                      release.patch == header_release.patch;
     return same ? 0 : 1;
 }

@@ -143,8 +143,11 @@ release on its own.
    and commits its schema file unless it already names it
    (`docs/schema/README.md`), sets `PIO_VERSION_MAJOR`, `_MINOR`, and
    `_PATCH` in `powerio-capi/src/lib.rs`, and regenerates `powerio.h`.
-   `bash scripts/release-preflight.sh` fails on
-   anything that still states the old version.
+   `bash scripts/release-preflight.sh` fails on anything that still states
+   the old version. PowerIO.jl refuses a library from another release
+   series, so a bump that starts a new series also needs a PowerIO.jl
+   companion branch of the same name that regenerates `src/LibPowerIO.jl`
+   from the new header, merged before the tag.
 2. Create a release tag only when the maintainer asks for the release.
    Check that the tag does not exist, then create an annotated tag on
    `origin/main` and push it:
@@ -183,8 +186,8 @@ release on its own.
    That workflow sets the Julia version, pins the release tarballs in
    `Artifacts.toml`, runs the Julia tests against them, pushes the release
    commit to PowerIO.jl `main`, and asks JuliaRegistrator to register it.
-   Releasing needs no PowerIO.jl change. The PowerIO.jl repository variable
-   `RELEASE_HOLD=true` pauses it.
+   Within a release series, releasing needs no PowerIO.jl change. The
+   PowerIO.jl repository variable `RELEASE_HOLD=true` pauses it.
 
 ## Layout
 

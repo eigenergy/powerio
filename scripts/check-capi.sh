@@ -3,7 +3,7 @@
 # when a PowerIO.jl checkout is available, checks the entry point names both
 # ways: every name the binding calls is declared by the header, and every name
 # the header declares is either called by the binding or exempted in its
-# gen/unbound_entry_points.txt. scripts/check-capi-header.sh compares the
+# gen/unbound_entry_points.txt. scripts/check-capi-header.py compares the
 # declarations themselves with the latest release.
 set -euo pipefail
 cd "$(dirname "$0")/.."

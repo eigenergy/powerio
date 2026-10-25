@@ -68,8 +68,9 @@ and PowerIO.jl. The boundaries checked independently are:
 
 The release version is what you install. ABI 7 is what a compiled consumer
 has to match in 0.11; from 0.12 a compiled C consumer needs a library from
-its header's release series, at that release or a newer one. The integer 2 identified every 0.11 PowerIO IR document;
-from 0.12 the header names the release whose schema the document follows, as
+its header's release series, at that release or a newer one. The integer 2
+identified every 0.11 PowerIO IR document; from 0.12 the header names the
+release whose schema the document follows, as
 [PowerIO IR](pio-json-schema.md) describes. The MCP server passes PowerIO IR
 documents through and defines no electrical data shape of its own.
 

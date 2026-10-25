@@ -70,7 +70,11 @@ The release version lives in `[workspace.package]` and the workspace dependency
 pins in `[workspace.dependencies]`. Update them together; the next Cargo command
 updates `Cargo.lock`. Set `PIO_VERSION_MAJOR`, `PIO_VERSION_MINOR`, and
 `PIO_VERSION_PATCH` in `powerio-capi/src/lib.rs` to the same release and
-regenerate `powerio.h`; `scripts/check-release-versions.sh` checks both. Then:
+regenerate `powerio.h`; `scripts/check-release-versions.sh` checks both.
+PowerIO.jl refuses a library from another release series, so a bump that
+starts a new series also needs a PowerIO.jl companion branch of the same name
+that regenerates `src/LibPowerIO.jl` from the new header; merge it before the
+tag. Then:
 
 1. Merge the bump with a `CHANGELOG.md` section headed exactly `## X.Y.Z`
    and wait for main CI.
