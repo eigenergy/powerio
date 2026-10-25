@@ -59,6 +59,8 @@ crate::diagnostic_codes! {
         "a primary source exceeds its byte limit", category = Io;
     READ_IO_REFERENCE_BUDGET = "READ.IO.REFERENCE_BUDGET", Error,
         "acquiring another referenced file would pass the source acquisition budget", category = Io;
+    READ_IO_BUFFER_BUDGET = "READ.IO.BUFFER_BUDGET", Error,
+        "a referenced buffer exceeds the caller's byte limit", category = Io;
 
     VALIDATE_TIME_POINT_INVALID_LABEL = "VALIDATE.TIME_POINT.INVALID_LABEL", Error,
         "a time point label is empty, contains NUL, or exceeds its bound", category = Data;
