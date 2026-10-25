@@ -203,7 +203,9 @@ powerio convert feeder.pio.json --to gridlabd-arras -o canonical
 Both GLM targets emit directories. An unchanged same-profile module retains
 the entrypoint's original relative path and all acquired include files, byte
 for byte. Parsing or writing never executes the simulator. Replay reads only
-the retained buffers, even if the original files have since disappeared.
+the retained dependency buffers, even if the original files have since disappeared.
+Unreferenced supplied buffers remain on the source module but are not copied to
+the emitted project.
 Absolute include paths cannot be relocated byte exactly and are refused.
 When a caller supplies external definitions through `glm::PreprocessOptions`,
 replay reports that those inputs must accompany the files; the module's
@@ -733,8 +735,11 @@ checked. Physical terminal powers use endpoint voltages and boundary currents,
 not internal equivalent-source powers. Fresh canonical GLM now solves both
 complete cases on both pinned forks with the same feeder accuracy and physical
 current-balance checks. An edit that introduces source zero-sequence voltage
-still exposes a native NR delta-grounded-wye primary-stamp discrepancy; that
-profile remains unqualified. Broader format compatibility remains unfinished.
+exposes a native NR delta-grounded-wye primary-stamp discrepancy. NR input
+containing these banks and canonical NR output therefore refuse nonzero
+zero-sequence voltages at complete three-phase fixed sources. Balanced edits
+remain supported, and the FBS reader keeps its separate mapping. This is an
+explicit profile restriction, not a numerical correction or tolerance change. Broader format compatibility remains unfinished.
 
 GridLAB-D object latitude and longitude map to the network's typed
 `component_locations` table. Each point identifies its component table and exact

@@ -1334,7 +1334,10 @@ The IEEE9500 baseline, IR-restored, rebased and grounded-reference canonical
 profiles qualify on both forks. The source-phase edit remains unqualified:
 native NR DELTA_GWYE stamps extra primary zero-sequence current that its
 reported transformer currents omit. The upstream voltage discrepancy and KCL
-residual are electrical mapping failures. A balanced stiff-source microcase
+residual are electrical mapping failures. The NR reader and canonical NR
+writer refuse this source-voltage profile until that stamp has a mapping;
+these refusals must remain failed qualification cases, not numerical passes.
+A balanced stiff-source microcase
 does not expose this gap, and numerical tolerance must not hide it.
 
 Canonical NR stopping scales with nominal voltage at 1e-9 per unit. FBS retains
