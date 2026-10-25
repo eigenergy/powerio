@@ -83,7 +83,7 @@ else
   echo "=== skipped: cargo-semver-checks not installed ==="
 fi
 
-run cargo test -p powerio -p powerio-tx -p powerio-core -p powerio-matrix -p powerio-prob -p powerio-cli \
+run cargo test -p powerio -p powerio-tx -p powerio-core -p powerio-synth -p powerio-matrix -p powerio-prob -p powerio-cli \
     -p powerio-capi -p powerio-dist -p powerio-tnd
 run cargo test -p powerio --features matrix
 run cargo test -p powerio --features gridfm

@@ -366,8 +366,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.action == "evaluate" and args.powerio is None:
         parser.error("evaluate requires --powerio for facade IR validation")
-    raise SystemExit(
+    if args.action == "prepare":
         prepare(args.output)
-        if args.action == "prepare"
-        else evaluate(args.output, args.powerio, args.canonical, args.public)
-    )
+    else:
+        raise SystemExit(evaluate(args.output, args.powerio, args.canonical, args.public))

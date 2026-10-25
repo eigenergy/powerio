@@ -51,6 +51,18 @@ pub(crate) fn retained_project(
             ));
         }
     }
+    let dependencies = context
+        .get("dependencies")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| invalid("GLM replay context lacks its dependency inventory"))?;
+    let dependencies: BTreeSet<_> = dependencies
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| invalid("GLM replay dependency inventory is malformed"))
+        })
+        .collect::<Result<_, _>>()?;
     let primary = source.primary_buffer()?;
     let file_name = Path::new(primary.name())
         .file_name()
@@ -62,6 +74,9 @@ pub(crate) fn retained_project(
     let mut artifacts = Vec::new();
     let mut identities = BTreeSet::new();
     for buffer in source.acquired_buffers() {
+        if buffer.id() != primary.id() && !dependencies.contains(buffer.id().as_str()) {
+            continue;
+        }
         let name = if buffer.id() == primary.id() {
             &primary_name
         } else {

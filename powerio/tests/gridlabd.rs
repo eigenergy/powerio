@@ -86,7 +86,7 @@ fn unchanged_project_replays_all_retained_bytes_without_reopening_files() {
 }
 
 #[test]
-fn memory_projects_preserve_supplied_buffers_and_exact_primary_bytes() {
+fn memory_projects_replay_only_referenced_files_and_keep_all_supplied_bytes() {
     let main = format!("{HEAD}#include \"parts/load.glm\"\n");
     let source = Source::from_memory("main.glm", main.as_bytes())
         .unwrap()
@@ -95,13 +95,18 @@ fn memory_projects_preserve_supplied_buffers_and_exact_primary_bytes() {
         .with_named_buffer("unused.txt", b"uninterpreted retained bytes\xff".as_slice())
         .unwrap();
     let module = powerio::parse(source).unwrap();
+    let retained = module.source().unwrap().acquired_buffers();
+    assert_eq!(retained.len(), 3);
+    assert!(
+        retained
+            .iter()
+            .any(|b| b.bytes() == b"uninterpreted retained bytes\xff")
+    );
     let files =
         memory(powerio::emit(&module, "gridlabd", Destination::memory("replay").unwrap()).unwrap());
-    assert_eq!(
-        files["replay/unused.txt"],
-        b"uninterpreted retained bytes\xff"
-    );
+    assert_eq!(files.len(), 2);
     assert_eq!(files["replay/main.glm"], main.as_bytes());
+    assert_eq!(files["replay/parts/load.glm"], LOAD.as_bytes());
 }
 
 #[test]
@@ -267,4 +272,20 @@ fn explicit_preprocessing_inputs_survive_ir_and_require_replay_context() {
     assert!(
         (network(&reparsed).loads()[0].p_nom[0] - typed.value().loads()[0].p_nom[0]).abs() < 1e-9
     );
+}
+
+#[test]
+fn unrelated_memory_buffers_do_not_create_portable_replay_collisions() {
+    let main = format!("{HEAD}#include \"parts/load.glm\"\n");
+    let source = Source::from_memory("main.glm", main.as_bytes())
+        .unwrap()
+        .with_named_buffer("parts/load.glm", LOAD.as_bytes())
+        .unwrap()
+        .with_named_buffer("MAIN.GLM", b"unrelated deck".as_slice())
+        .unwrap();
+    let module = powerio::parse(source).unwrap();
+    let files =
+        memory(powerio::emit(&module, "gridlabd", Destination::memory("replay").unwrap()).unwrap());
+    assert_eq!(files.len(), 2);
+    assert_eq!(files["replay/main.glm"], main.as_bytes());
 }

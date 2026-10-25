@@ -180,6 +180,58 @@ fn a_wye_capacitor_stamps_its_nameplate_susceptance() {
 }
 
 #[test]
+fn delta_capacitor_rating_is_divided_by_physical_coils_not_terminals() {
+    // An open-delta bank with two terminals is one phase-to-phase coil:
+    // 100 var / (1000 V)^2 = 1e-4 S, not half that value.
+    let mut open_delta = MulticonductorNetwork::default();
+    open_delta
+        .buses_mut()
+        .push(DistBus::new("a", strings(&["1", "2"])));
+    open_delta.capacitors_mut().push(DistCapacitor::new(
+        "open-delta",
+        "a",
+        strings(&["1", "2"]),
+        Configuration::Delta,
+        100.0,
+        1000.0,
+    ));
+
+    let system = calc_multiconductor_admittance_matrix(&open_delta).unwrap();
+    let b = dense(system.susceptance());
+    let coil_b = 100.0 / 1000.0_f64.powi(2);
+    assert!((b[0][0] - coil_b).abs() < 1e-15);
+    assert!((b[1][1] - coil_b).abs() < 1e-15);
+    assert!((b[0][1] + coil_b).abs() < 1e-15);
+    assert!((b[1][0] + coil_b).abs() < 1e-15);
+
+    // A three-terminal delta still shares the total bank rating across
+    // three physical coils, preserving the balanced-bank convention.
+    let mut full_delta = MulticonductorNetwork::default();
+    full_delta
+        .buses_mut()
+        .push(DistBus::new("b", strings(&["1", "2", "3"])));
+    full_delta.capacitors_mut().push(DistCapacitor::new(
+        "full-delta",
+        "b",
+        strings(&["1", "2", "3"]),
+        Configuration::Delta,
+        300.0,
+        1000.0,
+    ));
+    let system = calc_multiconductor_admittance_matrix(&full_delta).unwrap();
+    let b = dense(system.susceptance());
+    let coil_b = 100.0 / 1000.0_f64.powi(2);
+    for phase in 0..3 {
+        assert!((b[phase][phase] - 2.0 * coil_b).abs() < 1e-15);
+        for other in 0..3 {
+            if phase != other {
+                assert!((b[phase][other] + coil_b).abs() < 1e-15);
+            }
+        }
+    }
+}
+
+#[test]
 fn shunt_matrices_stamp_verbatim() {
     let mut net = MulticonductorNetwork::default();
     net.buses_mut()
