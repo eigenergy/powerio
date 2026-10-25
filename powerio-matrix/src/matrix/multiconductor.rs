@@ -505,9 +505,11 @@ pub fn calc_multiconductor_admittance_matrix(
                         capacitor.name, phases
                     )));
                 }
-                let b = capacitor.q_rated / (phases as f64) / (capacitor.v_nom * capacitor.v_nom);
-                // Two terminals close one delta loop; more close `phases`.
+                // A two-terminal open-delta bank has one physical coil;
+                // a full N-terminal delta bank has N coils. Divide the
+                // bank's total rated vars by the number of stamped coils.
                 let loops = if phases == 2 { 1 } else { phases };
+                let b = capacitor.q_rated / (loops as f64) / (capacitor.v_nom * capacitor.v_nom);
                 for pair in 0..loops {
                     let a = terminals[pair];
                     let c = terminals[(pair + 1) % phases];

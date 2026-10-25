@@ -1,8 +1,10 @@
 import { BlobReader, BlobWriter, ZipReader, type FileEntry } from '@zip.js/zip.js';
 import type { BrowserFile } from './types';
+import { available, type InputEntry } from './acquisition';
 import { dssProjects } from './dss-projects';
+import { discoveryProblem, inputLimit, MAX_INPUT_BYTES, MAX_INPUT_FILES, type InputProblem } from './input-limits';
 
-export interface InputCase { name: string; entries: BrowserFile[]; primary?: string; needsPrimary?: boolean }
+export interface InputCase { name: string; entries: BrowserFile[]; paths?: string[]; primary?: string; needsPrimary?: boolean; error?: InputProblem; acquisitionFailed?: boolean }
 const directory = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf('/')));
 export const basename = (path: string) => path.split('/').at(-1) ?? path;
 export function safeName(name: string) {
@@ -27,7 +29,7 @@ export async function unpack(entry: BrowserFile): Promise<BrowserFile[]> {
       safePath(member.filename);
       if (member.encrypted) throw new Error('This ZIP is encrypted. Extract it locally and choose the folder.');
       total += member.uncompressedSize;
-      if (files.length >= 4096 || total > 64 * 1024 * 1024 || member.uncompressedSize > Math.max(1, member.compressedSize) * 200) {
+      if (files.length >= MAX_INPUT_FILES || total > MAX_INPUT_BYTES || member.uncompressedSize > Math.max(1, member.compressedSize) * 200) {
         throw new Error('This archive exceeds the project limit: 4096 files, 64 MiB expanded, or a compression ratio of 200. Choose smaller projects or use PowerIO in the terminal.');
       }
       if (files.some(file => file.filename === member.filename)) throw new Error('The ZIP contains duplicate paths. Choose a folder with unique paths.');
@@ -46,31 +48,46 @@ export async function unpack(entry: BrowserFile): Promise<BrowserFile[]> {
   } finally { await reader.close(); }
 }
 
-export async function groupInputs(entries: BrowserFile[]): Promise<InputCase[]> {
+export async function groupInputs(entries: InputEntry[], cancelled: () => boolean = () => false): Promise<InputCase[]> {
   const result: InputCase[] = [];
   const remaining = new Set(entries);
-  const take = (name: string, files: BrowserFile[], root: string, primary?: string, needsPrimary = false) => {
+  const unavailable = entries.filter(entry => !available(entry));
+  const take = (name: string, files: InputEntry[], root: string, primary?: string, needsPrimary = false, error?: InputProblem) => {
     files.forEach(file => remaining.delete(file));
-    const trim = (path: string) => root ? path.slice(root.length + 1) : path;
-    result.push({ name, entries: files.map(file => ({ ...file, path: trim(file.path) })), primary: primary ? trim(primary) : undefined, needsPrimary });
+    const trim = (path: string) => root && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path;
+    const acquired = files.filter(available);
+    const missing = files.find(file => !available(file));
+    result.push({ name, entries: acquired.map(file => ({ ...file, path: trim(file.path) })), paths: files.map(file => trim(file.path) || './'), primary: primary ? trim(primary) : undefined, needsPrimary, error: missing && !available(missing) ? missing.error : error ?? inputLimit(acquired), acquisitionFailed: !!missing });
   };
   for (const marker of entries.filter(file => basename(file.path).toLowerCase() === 'network.csv')) {
     const root = directory(marker.path);
-    take(basename(root) || 'PyPSA project', [...remaining].filter(file => root ? file.path.startsWith(`${root}/`) : !file.path.includes('/')), root);
+    const files = [...remaining].filter(file => root ? file.path.startsWith(`${root}/`) : !file.path.includes('/'));
+    // A failed ancestor listing can affect several projects; consuming the
+    // error for one case must not make the others appear complete.
+    take(basename(root) || 'PyPSA project', [...new Set([...files, ...unavailable.filter(file => !available(file) && file.directory && `${root}/`.startsWith(file.path))])], root);
   }
-  for (const project of await dssProjects([...remaining])) {
+  for (const project of await dssProjects([...new Set([...remaining, ...unavailable.filter(file => !available(file) && file.directory)])], cancelled)) {
     take(basename(project.root) || project.primary || 'OpenDSS project', project.files,
-      project.root, project.primary, !project.primary);
+      project.root, project.primary, !project.primary, project.error);
   }
   const xmlGroups = new Map<string, BrowserFile[]>();
   for (const file of remaining) {
+    if (cancelled()) return result;
+    if (!available(file)) continue;
     if (!/\.xml$/i.test(file.path)) continue;
-    const prefix = await file.file.slice(0, 4096).text();
+    const limit = inputLimit([file]);
+    if (limit) { take(file.file.name, [file], directory(file.path), file.path, false, limit); continue; }
+    let prefix: string;
+    try { prefix = await file.file.slice(0, 4096).text(); }
+    catch (error) { take(file.file.name, [file], directory(file.path), file.path, false, discoveryProblem(error)); continue; }
     if (!/<(?:\w+:)?RDF\b/.test(prefix)) continue;
     const root = directory(file.path);
     xmlGroups.set(root, [...(xmlGroups.get(root) ?? []), file]);
   }
-  for (const [root, files] of xmlGroups) if (files.length > 1) take(basename(root) || 'CGMES project', files, root);
-  for (const file of remaining) result.push({ name: file.file.name, entries: [{ ...file, path: basename(file.path) }], primary: basename(file.path) });
+  for (const [root, files] of xmlGroups) {
+    const missing = unavailable.filter(file => !available(file) && (directory(file.path) === root || (file.directory && `${root}/`.startsWith(file.path))));
+    if (files.length > 1 || missing.length) take(basename(root) || 'CGMES project', [...files, ...missing], root);
+  }
+  for (const file of remaining) take(available(file) ? file.file.name : basename(file.path.replace(/\/$/, '')), [file], directory(file.path), file.path);
   return result;
 }

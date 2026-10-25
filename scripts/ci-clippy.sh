@@ -47,6 +47,7 @@ case "$target" in
       -p powerio-core \
       -p powerio-matrix \
       -p powerio-prob \
+      -p powerio-synth \
       -p powerio-cli \
       -p powerio-capi \
       -p powerio-dist \

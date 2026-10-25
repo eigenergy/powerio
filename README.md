@@ -29,6 +29,9 @@ declares, the value is a network, an operating point, a calculation instance,
 a solution, a time series, a scenario set, a geographic layer, or a PSS/E
 contingency analysis file.
 
+[Convert files in the browser](https://powerio.dev/convert/), including mixed
+transmission and distribution batches. Files stay on the computer.
+
 ## Install
 
 ```sh

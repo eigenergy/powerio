@@ -292,6 +292,10 @@ and remote includes remain unsupported and require further profile work.
 The original project bytes and expansion source map remain separate from the
 expanded text. The boolean preprocessing switches `reinclude`, `literal_if` and
 `relax_undefined_if` are handled explicitly where the dialect supports them.
+Each include acquisition is capped by the remaining 64 MiB processed-input
+budget before allocation or reading, including cumulative includes. Cached and
+in-memory buffers are checked against that remaining budget too; the shared
+source's acquisition limit and path confinement still apply.
 Line-comment stripping follows native preprocessing, including
 its handling of comment markers before quoted-string syntax is parsed.
 
