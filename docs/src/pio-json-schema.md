@@ -7,8 +7,8 @@ history, and extensions. A current document begins like this:
 ```json
 {
   "schema": "pio-ir",
-  "version": 2,
-  "producer": { "name": "powerio", "version": "0.11.5" },
+  "version": "0.12.0",
+  "producer": { "name": "powerio", "version": "0.12.0" },
   "value": {
     "type": "powerio.BalancedNetwork",
     "data": {}
@@ -26,8 +26,8 @@ both sides consume PowerIO values, including calculation instances, solutions,
 time series, and scenario sets.
 
 The generated JSON Schema is checked in at
-`docs/schema/pio-ir/2/0.11.6/schema.json` and served from
-`https://powerio.dev/schema/pio-ir/2/0.11.6/schema.json`. That schema, the
+`docs/schema/pio-ir/0.12.0/schema.json` and served from
+`https://powerio.dev/schema/pio-ir/0.12.0/schema.json`. That schema, the
 serializer, and the deserializer are all tested from the same Rust types.
 `docs/schema/README.md` lists the earlier `pio-package` and
 `powerio.module` documents as one history under `pio-ir`.
@@ -180,54 +180,58 @@ serialized byte length against their reload limit before saving, and choose a
 smaller limit for memory-constrained applications. The byte limits do not
 bound process memory.
 
-## IR versions
+## Versions and release series
 
-The integer `version` is the IR version of the serialized representation. It
-is a property of the document alone, separate from the Rust memory layout,
-the PowerIO release, any grid exchange format, and the C ABI, and it changes
-only when an existing representation changes incompatibly. `producer.version` records the release
-that wrote the document; the reader reports it and ignores it when deciding
-compatibility.
+The header's `version` names the release whose schema the document follows:
+`"0.12.0"` for a document this build writes, described by
+`pio-ir/0.12.0/schema.json`. `powerio::IR_VERSION` is that release and
+`powerio::IR_SCHEMA_ID` the `$id` of its schema file. `producer` names the
+software that wrote the document, which need not be PowerIO; the reader reports
+it and ignores it when deciding whether to read the document.
 
-PowerIO 0.11.6 keeps IR version 2. `powerio::IR_VERSION` and
-`powerio::IR_MIN_VERSION` are both `2`. Additive structural types do not change
-the IR version: older readers continue to accept existing types and reject
-types they do not implement. A list of allowed names can gain a name the same
-way; an older reader rejects a document that uses the new name. An incompatible change to an existing record's
-representation or meaning requires a version bump and a release decision.
+Compatibility follows the release series as Cargo defines it: one minor
+release before 1.0 (0.12.x), then one major release (1.x, 2.x). Within a
+release series, any release reads PowerIO IR documents written by any other
+release in it, including a later one. A later release in the series can add
+structural types, add names to a list of allowed values, and add a distinctly
+tagged alternative to a record; every existing definition keeps its exact
+text. A reader refuses a document that uses a type or name it does not
+implement and keeps reading documents that use only the ones it knows. A
+change that existing readers could not read, such as a new field on an
+existing record or a different meaning for an existing one, starts a new
+release series.
 
-Schema snapshots describe the structural types available in a release.
-`pio-ir/2/schema.json` is the frozen 0.11.0 catalog,
-`pio-ir/2/0.11.1/schema.json` adds the LinDist3Flow OPF instance and solution
-types, `pio-ir/2/0.11.3/schema.json` adds the three PSS/E contingency
-analysis files, `pio-ir/2/0.11.4/schema.json` adds the fixed-dispatch
-LinDist3Flow instance and solution types, `pio-ir/2/0.11.5/schema.json`
-republishes the 0.11.4 catalog under its own identifier, and
-`pio-ir/2/0.11.6/schema.json` adds `cim-dist` and `sincal` to distribution
-source formats, `sincal` to balanced source formats, the distinctly tagged
-`ReferencedVoltageSource` and `PartialTransformer3W` nested IR records,
-and additive monitor scopes
-and statements for kV qualifiers and pre/post voltage bands. Existing source
-and monitor representations remain accepted; published snapshots stay frozen.
-The release in that path identifies the snapshot, not another
-document version. A release without catalog changes can reuse the previous
-snapshot, as 0.11.2 did.
-A refused document is reported with the schema name,
-IR version, and producer it claims and the remedy: a later IR version needs a
-newer PowerIO, and an earlier schema name or IR version has to be regenerated
-from its source data.
+PowerIO 0.12 also reads the documents every 0.11 release wrote. Those state
+the integer `"version": 2`, and 0.12.0 keeps every record layout they use, so
+they decode as they did in 0.11. A 0.11 reader refuses a 0.12 document by its
+string version, whatever its value holds. Its message names the version and
+says to regenerate the document; upgrading the reader to 0.12 also works.
+
+The reader refuses every other version and reports the schema name, version,
+and producer the document states, with the remedy: a string from a later
+release series (`"0.13.0"`, `"1.0.0"`) needs a newer PowerIO, and an earlier
+release, the integer 1 of a 0.10 document, or a string that is not a
+`MAJOR.MINOR.PATCH` release has to be regenerated from its source data.
+
+Every release from 0.12.0 on publishes its own schema file at
+`pio-ir/<release>/schema.json`, and no release reuses an earlier one. The 0.11
+files under `pio-ir/2/`, and every earlier file, keep their exact bytes and
+identifiers. A test compares the current schema with every 0.11 file and with
+the file of every earlier release in its series, so a definition that a
+reader of the series understands cannot change.
 [`docs/schema/README.md`](https://github.com/eigenergy/powerio/blob/main/docs/schema/README.md)
-is the ledger of every IR version and the archive of every published schema.
+lists every schema file, what each release added, and the document header
+each describes.
 
-Two other intermediate representations answer the versioning question
-differently. LLVM bitcode carries no explicit version number, and a newer
-reader upgrades any older bitcode on load; there is no forward compatibility.
+Other intermediate representations answer the versioning question
+differently. LLVM bitcode records a format version in its
+`MODULE_CODE_VERSION` record (0, 1, or 2), which tells the reader how some
+records are encoded, such as whether instruction operands are absolute or
+relative value IDs. That number describes the encoding rather than a
+compatibility window: a newer LLVM reads any bitcode since LLVM 3.0 and
+upgrades it on load, and an older LLVM is not promised to read newer bitcode.
 MLIR bytecode carries an explicit version number with per-dialect upgrade
-hooks. PowerIO IR carries an explicit version integer and reads the window
-from `IR_MIN_VERSION` through `IR_VERSION`, both 2 throughout 0.11, so a version 1
-document from 0.10.x is refused rather than upgraded, and an upgrade path for
-those documents would be a later addition. Structural types are added without
-a version bump, and a type this build does not implement is rejected. The
-catalog snapshots under `pio-ir/2/<release>/` are the type catalogs of one IR
-version, published when a release adds types or allowed names; they are not
-versions.
+hooks. StableHLO ties its compatibility guarantees to its own release
+version, as PowerIO IR does with the release series. A 0.10 document
+is refused rather than upgraded; an upgrade path for those documents would be
+a later addition.
