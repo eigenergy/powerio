@@ -955,7 +955,7 @@ fn bounded_load_laws_are_not_silently_projected_by_ivr_preparation() {
     use powerio_dist::DistLoadVoltageModel as Law;
     let instance = McAcOpfInstance::from_network(network()).unwrap();
     assert!(build_mc_ac_opf_preparation(&instance, &McAcOpfAssemblyOptions::default()).is_ok());
-    for law in [Law::BoundedZip {
+    let law = Law::BoundedZip {
         v_nom: vec![230.0],
         alpha_z: vec![0.0],
         alpha_i: vec![0.0],
@@ -967,15 +967,14 @@ fn bounded_load_laws_are_not_silently_projected_by_ivr_preparation() {
         v_min_pu: 0.95,
         v_max_pu: 1.05,
         cutoff_pu: 0.0,
-    }] {
-        let mut net = network();
-        net.loads_mut()[0].voltage_model = law;
-        let instance = McAcOpfInstance::from_network(net).unwrap();
-        let error =
-            build_mc_ac_opf_preparation(&instance, &McAcOpfAssemblyOptions::default()).unwrap_err();
-        assert!(
-            error.to_string().contains("piecewise IVR equations"),
-            "{error}"
-        );
-    }
+    };
+    let mut net = network();
+    net.loads_mut()[0].voltage_model = law;
+    let instance = McAcOpfInstance::from_network(net).unwrap();
+    let error =
+        build_mc_ac_opf_preparation(&instance, &McAcOpfAssemblyOptions::default()).unwrap_err();
+    assert!(
+        error.to_string().contains("piecewise IVR equations"),
+        "{error}"
+    );
 }
