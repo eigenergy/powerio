@@ -1170,18 +1170,20 @@ def test_deserialize_reads_its_release_series_and_0_11_documents():
     current = powerio.versions()["powerio_ir"]["version"]
     assert document["version"] == current
     major, minor, patch = (int(part) for part in current.split("."))
-    assert major == 0
-    for version in (f"0.{minor}.{patch + 1}", 2):
+    for version in (f"{major}.{minor}.{patch + 1}", 2):
         document["version"] = version
         module = powerio.deserialize(io.StringIO(json.dumps(document)))
         assert isinstance(module.value, powerio.BalancedNetwork)
 
+    # The first release of the next series: a minor release before 1.0, a
+    # major release after.
+    next_series = f"0.{minor + 1}.0" if major == 0 else f"{major + 1}.0.0"
     for version, remedy in (
-        (f"0.{minor + 1}.0", "upgrade PowerIO"),
-        ("1.0.0", "upgrade PowerIO"),
-        (f"0.{minor - 1}.0", "regenerate this document"),
+        (next_series, "upgrade PowerIO"),
+        (f"{major + 1}.0.0", "upgrade PowerIO"),
+        ("0.11.0", "regenerate this document"),
         (1, "regenerate this document"),
-        (f"0.{minor}", "regenerate this document"),
+        (f"{major}.{minor}", "regenerate this document"),
     ):
         document["version"] = version
         with pytest.raises(powerio.PowerIOError) as failure:

@@ -11,7 +11,8 @@
   unchanged; 0.11 readers refuse 0.12 documents. Every release now publishes
   its own `docs/schema/pio-ir/<release>/schema.json`, and the files under
   `pio-ir/2/` keep their bytes. `powerio.versions()["powerio_ir"]["version"]`
-  is now a string. See the 0.12 migration guide (#701).
+  and the `powerio_ir.version` that the C function `pio_schema_report`
+  returns are now the release string. See the 0.12 migration guide (#701).
 
 ## 0.11.6
 

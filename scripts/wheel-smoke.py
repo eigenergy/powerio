@@ -22,20 +22,33 @@ mpc.branch = [1 2 0.01 0.1 0 250 250 250 0 0 1 -30 30; 2 3 0.02 0.2 0 250 250 25
 
 
 def release(version: str) -> tuple:
-    """The MAJOR.MINOR.PATCH numbers a version starts with."""
-    match = re.match(r"(\d+)\.(\d+)\.(\d+)", version)
+    """MAJOR.MINOR.PATCH: three numbers without leading zeros or a suffix."""
+    match = re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version)
     assert match is not None, version
     return tuple(int(part) for part in match.groups())
+
+
+def series(version: tuple) -> tuple:
+    """The release series: the minor release before 1.0, the major after."""
+    major, minor, _ = version
+    return (0, minor) if major == 0 else (major, 0)
 
 
 def main() -> None:
     versions = powerio.versions()
     assert powerio.__version__ == versions["powerio_version"], versions
-    # The PowerIO IR `version` names the release whose schema the build writes,
-    # at or after the package release.
+    # The PowerIO IR `version` names the release whose schema the build writes:
+    # the package release, a later release in its series, or, while the next
+    # series is developed, that series' first release (0.13.0 or 1.0.0).
     ir = versions["powerio_ir"]
     assert ir["schema"] == "pio-ir", versions
-    assert release(ir["version"]) >= release(powerio.__version__), versions
+    ir_release, package = release(ir["version"]), release(powerio.__version__)
+    major, minor, _ = package
+    assert ir_release >= package, versions
+    assert series(ir_release) == series(package) or ir_release in {
+        (0, minor + 1, 0),
+        (major + 1, 0, 0),
+    }, versions
 
     module = powerio.parse(
         io.StringIO(CASE),

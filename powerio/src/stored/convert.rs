@@ -1,6 +1,7 @@
 //! The one bridge between a runtime module and PowerIO IR.
 
 use std::collections::{BTreeMap, HashSet};
+use std::sync::LazyLock;
 
 use powerio_core::{
     Diagnostic, DiagnosticCode, DiagnosticId, DiagnosticSeverity, Digest, HistoryEntry, HistoryId,
@@ -148,9 +149,13 @@ impl Release {
         parts.next().is_none().then_some(release)
     }
 
-    /// The release whose schema this build writes, [`crate::IR_VERSION`].
+    /// The release whose schema this build writes, [`crate::IR_VERSION`],
+    /// parsed once. `version_tests` checks that the constant parses.
     fn current() -> Self {
-        Self::parse(crate::IR_VERSION).expect("IR_VERSION names a release")
+        static CURRENT: LazyLock<Release> = LazyLock::new(|| {
+            Release::parse(crate::IR_VERSION).expect("IR_VERSION names a release")
+        });
+        *CURRENT
     }
 
     /// The release series as Cargo defines it: one minor release within 0.x
@@ -225,8 +230,8 @@ fn unsupported(
                 ),
             }
         }
-        // 0.11 readers sent a later integer version to a newer release, and
-        // bindings match that remedy, so it stays.
+        // 0.11 readers sent a later integer version to a newer release. The
+        // remedy still begins `upgrade PowerIO`, the text bindings match.
         Some(dto::StoredVersion::Integer(version))
             if schema == crate::IR_SCHEMA_NAME && *version > VERSION_0_11 =>
         {
@@ -3315,6 +3320,24 @@ mod version_tests {
                 "https://powerio.dev/schema/pio-ir/{}/schema.json",
                 crate::IR_VERSION
             )
+        );
+    }
+
+    /// Reading the integer version 0.11 wrote is a choice the 0.12 series
+    /// made. The next series has to make its own choice rather than inherit
+    /// this one unnoticed.
+    #[test]
+    fn only_the_0_12_series_reads_0_11_documents() {
+        let reads_0_11 = is_readable(
+            crate::IR_SCHEMA_NAME,
+            &dto::StoredVersion::Integer(VERSION_0_11),
+        );
+        assert!(
+            !reads_0_11 || Release::current().series() == (0, 12),
+            "IR_VERSION {} starts a new release series. Decide which earlier series it reads, \
+             then update `VERSION_0_11` and `is_readable` here, `SCHEMAS_0_11` in \
+             powerio/tests/frozen_schemas.rs, and the docs that state the rule.",
+            crate::IR_VERSION
         );
     }
 

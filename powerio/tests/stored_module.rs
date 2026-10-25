@@ -409,16 +409,47 @@ fn with_version(text: &str, version: serde_json::Value) -> String {
     raw.to_string()
 }
 
+/// `IR_VERSION` as `(major, minor, patch)`.
+fn ir_release() -> (u64, u64, u64) {
+    let mut parts = powerio::IR_VERSION
+        .split('.')
+        .map(|part| part.parse().unwrap());
+    (
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+    )
+}
+
+/// A release series as a refusal names it: `0.12.x` before 1.0, `1.x` after.
+fn series_name(major: u64, minor: u64) -> String {
+    if major == 0 {
+        format!("0.{minor}.x")
+    } else {
+        format!("{major}.x")
+    }
+}
+
+/// The series after `IR_VERSION`'s, as the `(major, minor)` of its first
+/// release.
+fn next_series() -> (u64, u64) {
+    match ir_release() {
+        (0, minor, _) => (0, minor + 1),
+        (major, _, _) => (major + 1, 0),
+    }
+}
+
 /// A document from any release in this build's release series reads, as
 /// does one stating the integer version every 0.11 release wrote.
 #[test]
 fn documents_from_the_release_series_and_from_0_11_are_read() {
     let module = module_with_records();
     let text = serialize_module_text(&module).unwrap();
+    let (major, minor, patch) = ir_release();
     for version in [
-        serde_json::json!("0.12.0"),
-        serde_json::json!("0.12.1"),
-        serde_json::json!("0.12.42"),
+        serde_json::json!(powerio::IR_VERSION),
+        serde_json::json!(format!("{major}.{minor}.{}", patch + 1)),
+        serde_json::json!(format!("{major}.{minor}.{}", patch + 42)),
         serde_json::json!(2),
     ] {
         let back = deserialize_module_text(&with_version(&text, version.clone()))
@@ -455,8 +486,17 @@ fn an_unreadable_powerio_ir_version_is_refused_with_the_remedy() {
     };
 
     // A later release series needs a newer PowerIO.
-    for (version, series) in [("0.13.0", "0.13.x"), ("1.0.0", "1.x"), ("2.3.4", "2.x")] {
-        let error = refusal(version.into());
+    let (major, minor, _) = ir_release();
+    let (next_major, next_minor) = next_series();
+    for (version, series) in [
+        (
+            format!("{next_major}.{next_minor}.0"),
+            series_name(next_major, next_minor),
+        ),
+        (format!("{}.0.0", major + 1), series_name(major + 1, 0)),
+        (format!("{}.3.4", major + 2), series_name(major + 2, 3)),
+    ] {
+        let error = refusal(version.clone().into());
         assert!(error.contains(&format!("version \"{version}\"")), "{error}");
         assert!(
             error.contains(&format!("upgrade PowerIO to a {series} release")),
@@ -483,7 +523,10 @@ fn an_unreadable_powerio_ir_version_is_refused_with_the_remedy() {
         let error = refusal(version.clone());
         assert!(error.contains(&format!("version {version}")), "{error}");
         assert!(error.contains("regenerate this document"), "{error}");
-        assert!(error.contains("0.12.x release series"), "{error}");
+        assert!(
+            error.contains(&format!("{} release series", series_name(major, minor))),
+            "{error}"
+        );
     }
     for version in ["0.12", "v0.12.0", "0.12.0-rc.1", "0.12.0.0", ""] {
         let error = refusal(version.into());
@@ -508,11 +551,14 @@ fn an_unreadable_powerio_ir_version_is_refused_with_the_remedy() {
     // decoded.
     let later = with_version(
         &serialize_module_text(&module_with_records()).unwrap(),
-        "0.13.0".into(),
+        format!("{next_major}.{next_minor}.0").into(),
     );
     let error = deserialize_module_text(&later).unwrap_err().to_string();
     assert!(
-        error.contains("upgrade PowerIO to a 0.13.x release"),
+        error.contains(&format!(
+            "upgrade PowerIO to a {} release",
+            series_name(next_major, next_minor)
+        )),
         "{error}"
     );
 

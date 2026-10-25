@@ -51,6 +51,9 @@ compare the release series instead, or leave the decision to `deserialize`.
 **Python.** `powerio.versions()["powerio_ir"]` is now
 `{"schema": "pio-ir", "version": "0.12.0"}`, with the version a string.
 
+**C.** The JSON that `pio_schema_report` returns states `powerio_ir.version`
+as the release string, `"0.12.0"`, instead of the integer `2`.
+
 **Code that inspects documents.** To recognize PowerIO IR, check
 `"schema": "pio-ir"` and let `deserialize` decide whether it reads the
 version. A check for `"version": 2` no longer matches the documents 0.12

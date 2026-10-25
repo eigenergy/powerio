@@ -18,10 +18,21 @@ const SCHEMAS_0_11: [&str; 6] = [
 ];
 
 /// The release a `pio-ir/<release>/schema.json` path names, as
-/// `(major, minor, patch)`. From 0.12.0 on, every release has such a file.
+/// `(major, minor, patch)`: three decimal numbers without signs or leading
+/// zeros, as the reader accepts. From 0.12.0 on, every release has such a
+/// file.
 fn release_of(path: &str) -> Option<(u64, u64, u64)> {
+    fn number(part: &str) -> Option<u64> {
+        let digits = !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+        let canonical = part == "0" || !part.starts_with('0');
+        if digits && canonical {
+            part.parse().ok()
+        } else {
+            None
+        }
+    }
     let release = path.strip_prefix("pio-ir/")?.strip_suffix("/schema.json")?;
-    let mut parts = release.split('.').map(|part| part.parse::<u64>().ok());
+    let mut parts = release.split('.').map(number);
     let parsed = (parts.next()??, parts.next()??, parts.next()??);
     parts.next().is_none().then_some(parsed)
 }
@@ -412,6 +423,15 @@ fn assert_partial_transformer_schema_preserved(
 /// build reads the documents 0.11 wrote. See [`assert_reads_documents_of`].
 #[test]
 fn the_current_schema_reads_every_0_11_document() {
+    // Reading 0.11 documents is a choice the 0.12 series made; the next
+    // series makes its own.
+    assert_eq!(
+        series(release_of(CURRENT_SCHEMA).unwrap()),
+        (0, 12),
+        "{CURRENT_SCHEMA} starts a new release series. Decide which earlier series it reads, \
+         then update `SCHEMAS_0_11` here, the reader in powerio/src/stored/convert.rs, and \
+         the docs that state the rule."
+    );
     for earlier in SCHEMAS_0_11 {
         assert_reads_documents_of(earlier);
     }

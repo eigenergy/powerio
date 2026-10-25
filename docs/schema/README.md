@@ -107,7 +107,7 @@ nondefault winding flags is rejected with a diagnostic requiring the new type.
   the workspace version, that `IR_SCHEMA_ID` names
   `pio-ir/<IR_VERSION>/schema.json`, and that the file is checked in. With
   `--release`, which the tag and publish workflows pass, `IR_VERSION` must
-  equal the release.
+  equal the release, and in a tag run the tag must be `v<release>`.
 - CI regenerates the current schema and fails if it differs from the
   committed file.
 - `scripts/check-ir-compatibility.py` writes documents with the published

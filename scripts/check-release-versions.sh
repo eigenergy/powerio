@@ -6,7 +6,9 @@
 # - IR_VERSION, the release whose PowerIO IR schema this build writes, has its
 #   own schema file, and that file and the facade constants agree on it. It is
 #   at or after the workspace version during development, and `--release`
-#   (passed when a tag is built or published) requires it to equal it.
+#   (passed when a tag is built or published) requires it to equal it. In a
+#   GitHub Actions run for a `v*` tag, `--release` also requires the tag to be
+#   v<workspace version>.
 # - Every publishable crate carries the one workspace version.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -86,6 +88,17 @@ if problems:
 print(version)
 PY
 ) || { echo "IR_VERSION and its schema file disagree with the release" >&2; exit 1; }
+
+if $release && [ "${GITHUB_REF_TYPE:-}" = tag ]; then
+    case "${GITHUB_REF_NAME:-}" in
+        v*)
+            if [ "$GITHUB_REF_NAME" != "v$workspace_version" ]; then
+                echo "the tag $GITHUB_REF_NAME is not v$workspace_version, the workspace version" >&2
+                exit 1
+            fi
+            ;;
+    esac
+fi
 
 for manifest in powerio/Cargo.toml powerio-core/Cargo.toml powerio-tx/Cargo.toml \
                 powerio-dist/Cargo.toml powerio-tnd/Cargo.toml powerio-matrix/Cargo.toml powerio-prob/Cargo.toml \

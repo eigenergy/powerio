@@ -2,16 +2,19 @@
 releases wrote, and the documents of its own release series.
 
 Each --legacy-package is a directory holding one published 0.11 wheel's
-`powerio` package. The script runs it in a subprocess (--write) to write one
-document per structural type that release writes, then reads every document
-with the installed build: it accepts the integer version 2, and the value
-it writes back is the one the 0.11 release wrote.
+`powerio` package. The script runs it in a subprocess (--write), where it
+refuses a document this build wrote with READ.MODULE.UNSUPPORTED rather than
+misreading it, and writes one document per structural type that release
+writes. The installed build then reads every document: it accepts the
+integer version 2, and the value it writes back is the one the 0.11 release
+wrote.
 """
 
 import argparse
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -22,16 +25,31 @@ import powerio
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/data/dist/micro/lindist3flow-solution.pio.json"
 CONTINGENCY = ROOT / "tests/data/psse/contingency"
+# This build's document, beside the ones the 0.11 package writes; the
+# extension keeps it out of their `*.json` glob.
+CURRENT = "current.pio.txt"
 
 
 def release(text: str) -> tuple:
-    return tuple(int(part) for part in text.split("."))
+    """MAJOR.MINOR.PATCH: three numbers without leading zeros or a suffix."""
+    match = re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", text)
+    assert match is not None, text
+    return tuple(int(part) for part in match.groups())
 
 
 def write_with_legacy(directory: Path) -> None:
-    """Write one document per structural type, under a 0.11 package."""
+    """Under a 0.11 package, refuse this build's document, then write one
+    document per structural type."""
     legacy = release(powerio.__version__)
     assert legacy[:2] == (0, 11), powerio.__version__
+    current = (directory / CURRENT).read_text()
+    try:
+        powerio.deserialize(io.StringIO(current))
+    except powerio.PowerIOError as error:
+        assert error.code == "READ.MODULE.UNSUPPORTED", error
+    else:
+        version = json.loads(current)["version"]
+        raise AssertionError(f"{powerio.__version__} read a version {version!r} document")
     balanced = powerio.parse(ROOT / "tests/data/case9.m")
     document = json.loads(FIXTURE.read_text())
     network = document["value"]["data"]["instance"]["base"]["network"]
@@ -64,6 +82,8 @@ def read_legacy_documents(legacy_package: Path) -> None:
     """Read with this build what one 0.11 package writes."""
     with tempfile.TemporaryDirectory(prefix="powerio-ir-0.11-") as temporary:
         directory = Path(temporary)
+        current = powerio.serialize(powerio.parse(ROOT / "tests/data/case9.m")).text
+        (directory / CURRENT).write_text(current)
         environment = dict(os.environ, PYTHONPATH=str(legacy_package.resolve()))
         subprocess.run(
             [sys.executable, str(Path(__file__).resolve()), "--write", str(directory)],
@@ -85,7 +105,8 @@ def read_legacy_documents(legacy_package: Path) -> None:
         producer = json.loads((directory / "00.json").read_text())["producer"]
     print(
         f"PowerIO IR compatibility: read {len(types)} structural types "
-        f"from {legacy_package.name} ({producer['name']} {producer['version']})"
+        f"from {legacy_package.name} ({producer['name']} {producer['version']}), "
+        "which refuses this build's documents"
     )
 
 
