@@ -4,10 +4,9 @@
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-use crate::network::BalancedNetwork;
+use powerio_tx::BalancedNetwork;
 
-use super::SynthSpec;
-use super::tree::{make_branch, make_buses, net};
+use super::{SynthSpec, make_branch, make_buses, net};
 
 pub fn generate_lattice(spec: &SynthSpec) -> BalancedNetwork {
     let side = ((spec.n as f64).sqrt().ceil() as usize).max(2);

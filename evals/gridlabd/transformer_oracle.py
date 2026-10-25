@@ -147,7 +147,7 @@ def dss_deck(split: bool) -> str:
     lines = [
         "clear",
         "new circuit.oracle phases=1 bus1=source.1.0 basekv=.24 pu=1 "
-        "r1=0.000001 x1=0.000001 r0=0.000001 x0=0.000001",
+        + "r1=0.000001 x1=0.000001 r0=0.000001 x0=0.000001",
     ]
     if split:
         lines += [
