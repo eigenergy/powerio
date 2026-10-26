@@ -3,12 +3,15 @@ members = [
     "powerio",
     "powerio-tx",
     "powerio-core",
+    "powerio-tnd",
     "powerio-matrix",
+    "powerio-synth",
     "powerio-prob",
     "powerio-cli",
     "powerio-py",
     "powerio-capi",
     "powerio-dist",
+    "powerio-wasm",
     "tests/facade-only",
 ]
 # Bare `cargo build`/`test`/`clippy` touch only the library + CLI crates, so the
@@ -21,7 +24,9 @@ default-members = [
     "powerio",
     "powerio-tx",
     "powerio-core",
+    "powerio-tnd",
     "powerio-matrix",
+    "powerio-synth",
     "powerio-prob",
     "powerio-cli",
     "powerio-dist",
@@ -36,7 +41,7 @@ resolver = "2"
 # via `key.workspace = true`, so a release bump touches this version and the
 # workspace dependency pins below.
 [workspace.package]
-version = "0.11.5"
+version = "0.11.6"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -46,12 +51,15 @@ homepage = "https://eigenergy.github.io/powerio/"
 [workspace.dependencies]
 # The intra-workspace deps carry the version pin `cargo publish` needs; keeping
 # them here means the pin moves with the [workspace.package] version.
-powerio = { path = "powerio", version = "0.11.5" }
-powerio-tx = { path = "powerio-tx", version = "0.11.5" }
-powerio-core = { path = "powerio-core", version = "0.11.5" }
-powerio-matrix = { path = "powerio-matrix", version = "0.11.5" }
-powerio-prob = { path = "powerio-prob", version = "0.11.5" }
-powerio-dist = { path = "powerio-dist", version = "0.11.5" }
+powerio = { path = "powerio", version = "0.11.6" }
+# Model crates remain independent; the facade enables optional format adapters.
+powerio-tx = { path = "powerio-tx", version = "0.11.6", default-features = false }
+powerio-core = { path = "powerio-core", version = "0.11.6" }
+powerio-matrix = { path = "powerio-matrix", version = "0.11.6" }
+powerio-synth = { path = "powerio-synth", version = "0.11.6" }
+powerio-prob = { path = "powerio-prob", version = "0.11.6" }
+powerio-dist = { path = "powerio-dist", version = "0.11.6", default-features = false }
+powerio-tnd = { path = "powerio-tnd", version = "0.11.6", default-features = false }
 # Cross-crate type identity: `CsMat<f64>` (sprs) and the Arrow types cross crate
 # boundaries, so every crate must build against the same major.
 sprs = { version = "0.11", default-features = false }
@@ -62,7 +70,12 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 quick-xml = { version = "0.41", features = ["encoding"] }
 zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
-uuid = { version = "1", default-features = false, features = ["v5"] }
+# The browser backend preserves the existing wasm32 component build.
+# Shared SINCAL snapshot queries expose rusqlite row/connection types to the
+# family adapters; keep both their version and safety features consistent.
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled", "serialize", "hooks", "limits", "ffi-sqlite-wasm-rs"] }
+# uuid 1.27 and later require Rust 1.89; preserve the workspace's Rust 1.88 MSRV.
+uuid = { version = ">=1, <1.27", default-features = false, features = ["v5"] }
 schemars = { version = "1", features = ["derive"] }
 
 [workspace.lints.clippy]

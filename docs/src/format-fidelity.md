@@ -343,6 +343,22 @@ impedance and tap control range are referred across \\(t_2\\): the impedance
 scales by \\(t_2^2\\) and the range divides by \\(t_2\\), so the branch states
 the same two port admittance as the PSS/E circuit.
 
+### PSS/E DYR dynamics
+
+PSS/E `.dyr` is parsed separately from `.raw`/RAWX because it describes
+transient-stability models, not the steady-state electrical network. Use
+`parse_dyr` (or `parse_dyr_bytes`) to obtain a `DynamicCase`; the parser
+keeps original source text for exact write-back and retains unknown/custom
+model names and ordered parameter tokens. `DynamicStudy::new(network,
+dynamics)` explicitly pairs that data with a parsed `BalancedNetwork`.
+
+The current study link check only reports DYR bus IDs absent from the static
+case. It intentionally does not infer that a record's second key is a
+generator ID, and does not claim model-specific device references are
+resolved. Typed model schemas, dynamic-device linking, DYR-to-AUX/DYD/SWI
+conversion, and transient simulation are not provided yet. See
+[Dynamics and DYR](dynamics.md) for the API definition.
+
 ### UCTE-DEF
 
 PowerIO reads UCTE-DEF revisions 2003.09.01 and 2007.05.01 and writes
@@ -429,6 +445,41 @@ lowers each one as a star into \\(Y_{\mathrm{bus}}\\)/connectivity. Unsupported
 sections stay in the retained source text and produce diagnostics.
 
 ### MATPOWER
+
+The reader applies a bounded, straight-line unit-conversion profile after the
+numeric literals. This covers MATPOWER's `case33bw.m`: demand columns `PD`/`QD`
+are divided by 1000, and branch `BR_R`/`BR_X` by `Vbase^2 / Sbase`. Its interpreted
+network contains 3.715 MW / 2.300 MVAr of demand and first-branch impedance
+0.005752591161723931 + j0.002932448856844086 per unit, rather than the raw
+kW/kVAr and ohm values.
+
+Supported statements are all-row, same-selection self-scaling of bus columns
+3/4 or branch columns 3/4 by a finite, positive scalar. Columns may be stated
+numerically or through earlier scalar definitions or positional output bindings
+from `idx_bus` / `idx_brch`. Scalar expressions may use finite numeric literals,
+earlier scalar locals, `mpc.baseMVA`, `mpc.bus(1, BASE_KV)` (or column 10),
+parentheses, multiplication/division, and squaring. `.*`, `./`, and `.^2` are
+accepted for scalar arithmetic; the scale operand itself must be one atom or a
+parenthesized expression. Scalars and repeated conversions follow source order.
+The voltage lookup is the first matrix row, not the bus whose ID equals one.
+Only constant scalar definitions and these two known index functions are
+interpreted; no MATLAB code or arbitrary function is executed.
+
+This is not general MATLAB support. Control flow, arbitrary calls, partial-row
+indexing, mismatched or duplicate selected columns, other mutations, nonliteral
+matrix expressions, unresolved symbols, nonpositive scales, and nonfinite
+results are unsupported. The entire conversion plan is discarded if any
+executable statement is outside the profile, even if earlier conversions were
+recognized. Original literal values remain available with span-bearing
+`READ.MATPOWER.INDEXED_ASSIGNMENT` warnings; these cases must not be treated as
+fully interpreted networks. The profile is bounded to 128 tokens per executable
+statement, 128 scalar bindings, 128 scaling statements, and 16 nested scalar
+parentheses.
+
+Unchanged same-format emission still returns the exact source bytes, including
+the original literals and conversion statements. Edited/canonical MATPOWER
+output and cross-format writers use the interpreted network values and do not
+append the original conversions, so the conversions are not applied twice.
 
 Canonical MATPOWER output, for a case that did not start as MATPOWER, omits
 dcline; the byte exact echo path keeps it when the case was read from MATPOWER.

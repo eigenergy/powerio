@@ -185,9 +185,37 @@ pub mod codes {
     emit_family!(EMIT_UNSUPPORTED, "UNSUPPORTED", "a read only format");
 
     powerio_core::diagnostic_codes! {
+        REQUEST_SINCAL_PROFILE_REQUIRED = "REQUEST.SINCAL.PROFILE_REQUIRED", Error,
+            "SINCAL requires an explicit electrical profile", category = Request;
+        REQUEST_SINCAL_FEATURE_DISABLED = "REQUEST.SINCAL.FEATURE_DISABLED", Error,
+            "SINCAL is not available through this build or entry point", category = Request;
+        PARSE_SINCAL_MALFORMED = "PARSE.SINCAL.MALFORMED", Error,
+            "a required SINCAL record or electrical mode is invalid or unsupported", category = Parse;
+        READ_SINCAL_CONVERSION_BASE = "READ.SINCAL.CONVERSION_BASE", Remark,
+            "physical SINCAL quantities use a declared internal MVA conversion base";
+        READ_SINCAL_GEOMETRY = "READ.SINCAL.GEOMETRY", Warning,
+            "optional SINCAL drawing geometry retains native view metadata and reports mapping limits";
+        READ_SINCAL_VALUE_DEFAULTED = "READ.SINCAL.VALUE_DEFAULTED", Warning,
+            "a versioned SINCAL field default was applied";
+        READ_SINCAL_LIMITS_UNSPECIFIED = "READ.SINCAL.LIMITS_UNSPECIFIED", Remark,
+            "inactive native generator capability limits are represented as unbounded";
+        READ_SINCAL_RETAINED_SOURCE_ONLY = "READ.SINCAL.RETAINED_SOURCE_ONLY", Remark,
+            "native data outside the selected steady-state profile remains in retained source";
+        EMIT_SINCAL_RETAINED_SOURCE_OMITTED = "EMIT.SINCAL.RETAINED_SOURCE_OMITTED", Warning,
+            "native data retained only in SINCAL source is not included in cross-format output";
+        EMIT_SINCAL_EXPERIMENTAL_UNSUPPORTED = "EMIT.SINCAL.EXPERIMENTAL_UNSUPPORTED", Error,
+            "invalid or unsupported candidate SINCAL output", category = Output;
+        EMIT_SINCAL_EXPERIMENTAL_LOSS = "EMIT.SINCAL.EXPERIMENTAL_LOSS", Warning,
+            "candidate SINCAL output omits data outside its declared profile";
+        EMIT_SINCAL_EXPERIMENTAL = "EMIT.SINCAL.EXPERIMENTAL", Remark,
+            "candidate SINCAL output has not been validated in native SINCAL";
+        EMIT_SINCAL_FRESH_UNSUPPORTED = "EMIT.SINCAL.FRESH_UNSUPPORTED", Error,
+            "fresh SINCAL emission is not available through the universal emitter", category = Output;
         // PARSE: the source text could not be decoded as given.
         PARSE_MATPOWER_MALFORMED = "PARSE.MATPOWER.MALFORMED", Error,
             "a MATPOWER matrix is missing, short, unparseable, or unbalanced", category = Parse;
+        READ_MATPOWER_INDEXED_ASSIGNMENT = "READ.MATPOWER.INDEXED_ASSIGNMENT", Warning,
+            "a MATPOWER indexed assignment is not evaluated by the literal reader";
         PARSE_SOURCE_MALFORMED = "PARSE.SOURCE.MALFORMED", Error,
             "a format reader refused the source it was given", category = Parse;
         PARSE_GOC3_MALFORMED = "PARSE.GOC3.MALFORMED", Error,

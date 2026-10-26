@@ -52,7 +52,8 @@ impl DynamicCase {
         self.records
             .iter()
             .filter_map(|record| {
-                let bus_id = record.bus_id;
+                // A record keyed by a device name references no bus here.
+                let bus_id = record.bus_id?;
                 (!bus_ids.contains(&bus_id)).then(|| UnresolvedBusReference {
                     line: record.line,
                     model_name: record.model_name.clone(),
@@ -61,6 +62,66 @@ impl DynamicCase {
             })
             .collect()
     }
+
+    /// Check generic DYR bus references against a parsed balanced network.
+    ///
+    /// This deliberately does not validate `device_id`: there is no
+    /// model-independent rule that the second DYR key names a generator.
+    #[must_use]
+    pub fn unresolved_buses_in(
+        &self,
+        network: &crate::BalancedNetwork,
+    ) -> Vec<UnresolvedBusReference> {
+        let bus_ids: BTreeSet<u32> = network
+            .buses()
+            .iter()
+            .filter_map(|bus| u32::try_from(bus.id.0).ok())
+            .collect();
+        self.unresolved_buses(&bus_ids)
+    }
+}
+
+/// A steady-state case explicitly paired with its transient-stability data.
+///
+/// This is a study-level association, not a mutation of [`crate::BalancedNetwork`].
+/// The current linking guarantee validates generic bus references only; it does
+/// not resolve model-specific device keys or claim that the named device exists.
+#[derive(Clone, Debug)]
+pub struct DynamicStudy {
+    network: crate::BalancedNetwork,
+    dynamics: DynamicCase,
+}
+
+impl DynamicStudy {
+    /// Pair a parsed static network with a parsed DYR case.
+    #[must_use]
+    pub fn new(network: crate::BalancedNetwork, dynamics: DynamicCase) -> Self {
+        Self { network, dynamics }
+    }
+
+    /// The steady-state network, unchanged by the pairing.
+    #[must_use]
+    pub fn network(&self) -> &crate::BalancedNetwork {
+        &self.network
+    }
+
+    /// The loss-preserving dynamic-model records.
+    #[must_use]
+    pub fn dynamics(&self) -> &DynamicCase {
+        &self.dynamics
+    }
+
+    /// DYR records whose bus reference is absent from the static case.
+    #[must_use]
+    pub fn unresolved_buses(&self) -> Vec<UnresolvedBusReference> {
+        self.dynamics.unresolved_buses_in(&self.network)
+    }
+
+    /// Consume the study and recover the separately represented components.
+    #[must_use]
+    pub fn into_parts(self) -> (crate::BalancedNetwork, DynamicCase) {
+        (self.network, self.dynamics)
+    }
 }
 
 /// One DYR model record. Parameters remain ordered and lexically decoded;
@@ -68,7 +129,8 @@ impl DynamicCase {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DynamicRecord {
     model_name: String,
-    bus_id: u32,
+    key: String,
+    bus_id: Option<u32>,
     device_id: Option<String>,
     parameters: Vec<String>,
     line: usize,
@@ -82,9 +144,19 @@ impl DynamicRecord {
         &self.model_name
     }
 
-    /// Bus identifier in the first DYR field.
+    /// The first DYR field, without surrounding quotes. Most models key a
+    /// record by an unquoted bus number; dc line and similar models name
+    /// their device here in quotes instead.
     #[must_use]
-    pub fn bus_id(&self) -> u32 {
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    /// Bus number in an unquoted first field, or `None` for a record keyed
+    /// by a quoted device name such as a dc line. Load models keyed by area,
+    /// zone or owner state that number here too; it is not a bus.
+    #[must_use]
+    pub fn bus_id(&self) -> Option<u32> {
         self.bus_id
     }
 
@@ -115,6 +187,7 @@ impl DynamicRecord {
 
 /// A DYR record whose bus reference is not present in a static case.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct UnresolvedBusReference {
     pub line: usize,
     pub model_name: String,
@@ -123,6 +196,7 @@ pub struct UnresolvedBusReference {
 
 /// Errors detected while reading a DYR source.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DyrError {
     InputTooLarge { actual: usize, maximum: usize },
     InvalidUtf8,
@@ -316,18 +390,28 @@ fn parse_record(raw: &str, line: usize) -> Result<DynamicRecord, DyrError> {
     if fields.len() < 2 || fields[1].is_empty() {
         return Err(DyrError::MissingModelName { line });
     }
-    let bus_id = fields[0]
-        .parse::<u32>()
-        .map_err(|_| DyrError::InvalidBusId {
-            line,
-            token: fields[0].clone(),
-        })?;
+    // An unquoted key is a bus number; a quoted key names a device, as dc
+    // line models do (`'DC1' 'CDC4T' ... /`).
+    let bus_id = if raw.trim_start().starts_with('\'') {
+        None
+    } else {
+        Some(
+            fields[0]
+                .parse::<u32>()
+                .map_err(|_| DyrError::InvalidBusId {
+                    line,
+                    token: fields[0].clone(),
+                })?,
+        )
+    };
+    let key = fields[0].clone();
     let model_name = fields[1].clone();
     let device_id = fields.get(2).cloned().filter(|value| !value.is_empty());
     let parameters = fields.into_iter().skip(3).collect();
 
     Ok(DynamicRecord {
         model_name,
+        key,
         bus_id,
         device_id,
         parameters,
@@ -435,7 +519,7 @@ mod tests {
         let case = parse_dyr(source).expect("valid DYR");
         assert_eq!(case.records().len(), 3);
         assert_eq!(case.records()[0].model_name(), "GENCLS");
-        assert_eq!(case.records()[0].bus_id(), 1);
+        assert_eq!(case.records()[0].bus_id(), Some(1));
         assert_eq!(case.records()[0].device_id(), Some("1"));
         assert_eq!(case.records()[0].parameters(), ["3.5", "0.2"]);
         assert_eq!(case.records()[1].model_name(), "USERMODEL");
@@ -489,6 +573,26 @@ mod tests {
     }
 
     #[test]
+    fn quoted_device_keys_are_names_not_buses() {
+        // PSS/E dc line models key a record by its quoted line name, as in
+        // the Model Library's `'DC Line Name', 'USRDCL', 'CHVDC2U1' ...` record.
+        let source = "'DC1' 'CDC4T' 0.1 0.2 /\n\
+            '1', 'USRDCL', 'CHVDC2U1', 18, 0.5 /\n\
+            3, 'GENCLS', '1', 3.5 /\n";
+        let case = parse_dyr(source).expect("named dc line records parse");
+        let records = case.records();
+        assert_eq!((records[0].key(), records[0].bus_id()), ("DC1", None));
+        assert_eq!(records[0].model_name(), "CDC4T");
+        assert_eq!((records[1].key(), records[1].bus_id()), ("1", None));
+        assert_eq!((records[2].key(), records[2].bus_id()), ("3", Some(3)));
+        // A dc line named '1' is not bus 1, and named records reference no bus.
+        let unresolved = case.unresolved_buses(&BTreeSet::from([1]));
+        assert_eq!(unresolved.len(), 1);
+        assert_eq!(unresolved[0].bus_id, 3);
+        assert_eq!(case.to_dyr_string(), source);
+    }
+
+    #[test]
     fn rejects_unterminated_quotes_and_invalid_utf8() {
         assert!(matches!(
             parse_dyr("1, 'GENCLS, '1', 3.5 /"),
@@ -518,7 +622,7 @@ mod tests {
             let case = parse_dyr(source).unwrap_or_else(|error| panic!("{source:?}: {error}"));
             assert_eq!(case.records().len(), 1, "{source:?}");
             let record = &case.records()[0];
-            assert_eq!(record.bus_id(), 1, "{source:?}");
+            assert_eq!(record.bus_id(), Some(1), "{source:?}");
             assert_eq!(record.model_name(), "GENCLS", "{source:?}");
             assert_eq!(record.device_id(), Some("1"), "{source:?}");
             assert_eq!(record.parameters(), ["13.0000", "0.000000"], "{source:?}");
@@ -553,5 +657,24 @@ mod tests {
         let case = parse_dyr(&source).expect("long blank/comment prefix");
         assert_eq!(case.records().len(), 1);
         assert_eq!(case.records()[0].line(), 200_001);
+    }
+
+    #[test]
+    fn paired_dynamic_study_checks_bus_ids_but_keeps_device_keys_opaque() {
+        let network = crate::BalancedNetwork::in_memory(
+            "static",
+            100.0,
+            vec![crate::Bus::new(crate::BusId(1), crate::BusType::Ref, 230.0)],
+            Vec::new(),
+        );
+        let dynamics =
+            parse_dyr("1, 'GENCLS', '1', 13.0, 0.0 /\n2, 'USERMODEL', 'CUSTOM-A', 1.0 /\n")
+                .expect("DYR parses");
+        let study = DynamicStudy::new(network, dynamics);
+        let unresolved = study.unresolved_buses();
+        assert_eq!(unresolved.len(), 1);
+        assert_eq!(unresolved[0].bus_id, 2);
+        assert_eq!(unresolved[0].model_name, "USERMODEL");
+        assert_eq!(study.dynamics().records()[1].device_id(), Some("CUSTOM-A"));
     }
 }

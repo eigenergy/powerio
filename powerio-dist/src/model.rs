@@ -34,13 +34,15 @@ pub enum DistSourceFormat {
     BmopfJson,
     PmdJson,
     CimDist,
+    Sincal,
 }
 
 impl DistSourceFormat {
-    /// The canonical format name (`dss`, `pmd-json`, `bmopf-json`,
-    /// `cim-dist`), accepted back by [`crate::parse_dist_target_format`].
+    /// The canonical source format name. A read-only format need not have a
+    /// corresponding [`crate::DistTargetFormat`].
     pub fn name(self) -> &'static str {
         match self {
+            DistSourceFormat::Sincal => "sincal",
             DistSourceFormat::Dss => "dss",
             DistSourceFormat::PmdJson => "pmd-json",
             DistSourceFormat::BmopfJson => "bmopf-json",

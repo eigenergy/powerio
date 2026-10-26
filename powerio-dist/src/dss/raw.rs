@@ -1434,6 +1434,16 @@ pub(crate) fn parse_raw_from_source(source: &powerio_core::Source) -> Result<Raw
             root,
             &mut loader,
         ))
+    } else if primary.directory_segments().next().is_some() {
+        // A memory-tree primary is relative to the supplied tree root.
+        let root = Path::new("");
+        let mut loader = source_include_loader(source, root.to_path_buf());
+        Ok(parse_raw_confined_under(
+            text,
+            source.name(),
+            root,
+            &mut loader,
+        ))
     } else {
         // The default root of a file source is its containing directory, and
         // an in-memory source resolves the same way against its (possibly
