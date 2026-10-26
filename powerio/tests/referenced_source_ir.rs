@@ -44,6 +44,57 @@ fn referenced_source_ir_roundtrips_in_network_collection_and_calculation_envelop
 }
 
 #[test]
+fn nonfinite_source_values_roundtrip_in_both_source_records() {
+    // 0.11.5 read nonfinite source floats back from their JSON spellings;
+    // both the historical body and the referenced record must keep doing so.
+    let mut earth = network();
+    earth.sources_mut()[0].reference_terminal = None;
+    for mut net in [earth, network()] {
+        let source = &mut net.sources_mut()[0];
+        source.v_angle = vec![f64::NAN];
+        source.energy_cost_rate = Some(vec![f64::INFINITY]);
+        let text = serialize_module_text(&PioModule::new(PioValue::from(net))).unwrap();
+        assert!(text.contains("\"NaN\"") && text.contains("\"Infinity\""));
+        let restored = deserialize_module_text(&text).unwrap();
+        let PioValue::MulticonductorNetwork(restored) = restored.value() else {
+            panic!("the network type is preserved");
+        };
+        let source = &restored.sources()[0];
+        assert!(source.v_angle[0].is_nan());
+        assert_eq!(source.energy_cost_rate, Some(vec![f64::INFINITY]));
+    }
+}
+
+#[test]
+fn source_records_refuse_mixed_or_unknown_reference_forms() {
+    let text = serialize_module_text(&PioModule::new(PioValue::from(network()))).unwrap();
+    let mut document: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let source = &mut document["value"]["data"]["sources"][0];
+    let body = source["value"].clone();
+    for broken in [
+        // A reference outside the tagged record would be silently dropped by
+        // a historical reader, so it is refused.
+        {
+            let mut flat = body.clone();
+            flat["reference_terminal"] = "n".into();
+            flat
+        },
+        // The tag admits only the referenced record.
+        serde_json::json!({"type": "powerio.Other", "value": body}),
+        // A tagged record carries its fields only inside value.
+        {
+            let mut mixed = source.clone();
+            mixed["name"] = "s".into();
+            mixed
+        },
+    ] {
+        let mut document = document.clone();
+        document["value"]["data"]["sources"][0] = broken;
+        assert!(deserialize_module_text(&document.to_string()).is_err());
+    }
+}
+
+#[test]
 fn prescribed_source_boundary_cannot_omit_the_reference() {
     let instance = powerio_prob::McAcPfInstance::from_network(network()).unwrap();
     let source = instance.source_boundary(0).unwrap();

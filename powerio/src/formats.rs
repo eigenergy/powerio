@@ -10,6 +10,7 @@ use powerio_tx::format::routing::TransmissionFormat;
 /// Electrical model family accepted by a grid format.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum NetworkFamily {
     Transmission,
     Distribution,
@@ -17,6 +18,7 @@ pub enum NetworkFamily {
 
 /// A discoverable grid format with its reader and writer capabilities.
 #[derive(Clone, Copy, Debug, serde::Serialize)]
+#[non_exhaustive]
 pub struct GridFormatInfo {
     pub format: FormatInfo,
     pub label: &'static str,
@@ -26,8 +28,9 @@ pub struct GridFormatInfo {
 
 /// Enumerate supported grid exchange formats, including explicit output profiles.
 ///
-/// PowerIO IR and geographic documents are separate operations. The optional
-/// GridFM format is included only when its implementation is compiled in.
+/// PowerIO IR and geographic documents are separate operations. A format
+/// behind a cargo feature, GridFM and the two SINCAL profiles, is listed only
+/// when its implementation is compiled in.
 ///
 /// # Panics
 ///
@@ -60,7 +63,9 @@ pub fn grid_formats() -> impl Iterator<Item = GridFormatInfo> {
             true,
         ),
         ("goc3-json", "GO Challenge 3", Transmission, true),
+        #[cfg(feature = "sincal")]
         ("sincal-balanced", "SINCAL balanced", Transmission, true),
+        #[cfg(feature = "sincal")]
         (
             "sincal-multiconductor",
             "SINCAL multiconductor",

@@ -467,7 +467,7 @@ impl Source {
             if named.len() >= MAX_REFERENCED_FILES || total_bytes > MAX_REFERENCED_BYTES {
                 return Err(Error::new(
                     &crate::codes::READ_IO_REFERENCE_BUDGET,
-                    "an in-memory tree exceeds 4096 files or 64 MiB",
+                    "an in-memory tree exceeds 4096 files or 1 GiB",
                 ));
             }
             let id = if primary.as_ref() == Some(&path) {

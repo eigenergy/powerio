@@ -27,7 +27,7 @@ inputs first, then render:
 
 ```sh
 bash evals/validation/fetch_cases.sh
-cargo build --release -p powerio-capi --features arrow,matrix
+cargo build --release -p powerio-capi
 python3.11 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip maturin -r evals/validation/requirements.txt
 env VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop --release

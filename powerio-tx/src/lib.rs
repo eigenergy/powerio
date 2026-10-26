@@ -17,6 +17,9 @@
 //! A reader that retains source text can return those bytes when writing the
 //! same format. Matrix and problem instance builders live in separate crates.
 //!
+//! SINCAL adapters are provided by `powerio_tnd::formats::sincal` and the
+//! `powerio` facade. This model crate is independent of SQLite and integration.
+//!
 //! ```
 //! use powerio_core::Source;
 //! use powerio_tx::{parse, parse_format_id};

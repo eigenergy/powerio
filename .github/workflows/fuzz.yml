@@ -12,7 +12,7 @@ on:
       - "powerio-tx/src/dynamic.rs"
       - "powerio-tx/src/geo/**"
       - "powerio-dist/src/**"
-      - "powerio-sincal/src/**"
+      - "powerio-tnd/src/**"
       - "fuzz/**"
       - ".github/workflows/fuzz.yml"
   schedule:

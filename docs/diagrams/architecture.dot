@@ -27,19 +27,21 @@ digraph powerio_architecture {
     powerio [label = "powerio (facade)\nparse, emit, serialize, deserialize,\nPioValue"];
 
     "powerio-matrix" [label = "powerio-matrix\nsparse matrices, graph data"];
+    "powerio-synth" [label = "powerio-synth\ndeterministic topology fixtures"];
     "powerio-prob" [label = "powerio-prob\noperating points, 7 instances,\n8 solutions"];
 
     "powerio-tx" [label = "powerio-tx\nBalancedNetwork\n+ balanced formats"];
     "powerio-dist" [label = "powerio-dist\nMulticonductorNetwork\n+ OpenDSS, PMD, BMOPF"];
 
     "powerio-core" [label = "powerio-core\nSource, Diagnostic, Error,\nPioModule<T>, series, output"];
-    "powerio-sincal" [label = "powerio-sincal\ninternal transport + schema\n(no electrical model)"];
+    "powerio-tnd" [label = "powerio-tnd\nIntegratedNetwork + transforms\nSINCAL adapters"];
 
+    "powerio-synth" -> "powerio-tx";
     "powerio-tx" -> "powerio-core";
-    "powerio-tx" -> "powerio-sincal";
-    "powerio-dist" -> "powerio-sincal";
+    "powerio-tnd" -> "powerio-tx";
+    "powerio-tnd" -> "powerio-dist";
     "powerio-dist" -> "powerio-core";
-    "powerio-sincal" -> "powerio-core";
+    "powerio-tnd" -> "powerio-core";
     "powerio-prob" -> "powerio-core";
     "powerio-prob" -> "powerio-tx";
     "powerio-prob" -> "powerio-dist";
@@ -47,8 +49,9 @@ digraph powerio_architecture {
     "powerio-matrix" -> "powerio-tx";
     "powerio-matrix" -> "powerio-dist";
     "powerio-matrix" -> "powerio-prob";
+    "powerio-matrix" -> "powerio-synth";
     powerio -> "powerio-core";
-    powerio -> "powerio-sincal";
+    powerio -> "powerio-tnd";
     powerio -> "powerio-tx";
     powerio -> "powerio-dist";
     powerio -> "powerio-prob";

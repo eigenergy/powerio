@@ -129,11 +129,11 @@ pub use matrix::multiconductor::{
     calc_multiconductor_admittance_matrix,
 };
 pub use matrix::{
-    BranchSusceptanceFormula, BuildOptions, GroundedIndexMap, MatrixStats, Scheme,
+    BranchSusceptanceFormula, BuildOptions, GroundedIndexMap, IslandPtdf, MatrixStats, Scheme,
     SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata, SensitivityOptions,
     SensitivitySolver, SensitivitySolverPath, ZeroImpedanceRule, ZeroImpedanceSkips,
     calc_adjacency_matrix, calc_admittance_matrix, calc_bdoubleprime_matrix, calc_bprime_matrix,
-    calc_diagonal, calc_lacpf_matrix, calc_lodf, calc_ptdf, calc_ptdf_lodf,
+    calc_diagonal, calc_lacpf_matrix, calc_lodf, calc_ptdf, calc_ptdf_by_island, calc_ptdf_lodf,
     calc_ptdf_lodf_with_options, calc_reference_indicator, calc_susceptance_diagonal,
     calc_unit_vector, calc_weighted_laplacian, calc_zero_impedance_skips, check_sddm, ground_at,
     ground_at_each,

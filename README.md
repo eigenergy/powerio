@@ -178,7 +178,10 @@ depend on just the layer they use.
 `powerio-tx` and `powerio-dist` share `powerio-core` and nothing else, so a
 distribution consumer pulls in no transmission code. `powerio-prob` is matrix
 free. The `powerio` facade re-exports the component crates, with
-`powerio-matrix` behind its `matrix` feature.
+`powerio-matrix` behind its `matrix` feature. Native SINCAL support is the
+`sincal` feature, on by default; it brings in SQLite, so a
+`wasm32-unknown-unknown` build with it needs a C compiler with a WebAssembly
+backend, and `default-features = false` leaves it out.
 
 ## Documentation
 

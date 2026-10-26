@@ -16,6 +16,8 @@
 // sparse traversal read clearer than the iterator rewrites clippy suggests.
 #![allow(clippy::needless_range_loop, clippy::explicit_iter_loop)]
 
+use std::collections::BTreeMap;
+
 use sprs::CsMat;
 
 use crate::indexed::IndexedNetwork;
@@ -177,6 +179,26 @@ pub struct SensitivityMatrices {
     pub metadata: SensitivityMetadata,
 }
 
+/// PTDF rows and columns for one connected component of a network.
+///
+/// `ptdf` has shape `(branch_indices.len(), bus_indices.len())`. The index
+/// vectors map its local rows and columns back to the source `IndexedNetwork`:
+/// branch indices refer to `case.branches()`, and bus indices are dense bus
+/// indices. Only in-service branches accepted by the DC incidence builder are
+/// included. `island_label` is the representative dense bus index returned by
+/// [`IndexedNetwork::calc_island_labels`].
+#[derive(Debug, Clone)]
+pub struct IslandPtdf {
+    /// Representative dense bus index identifying this connected component.
+    pub island_label: usize,
+    /// Dense source-network bus indices in local PTDF column order.
+    pub bus_indices: Vec<usize>,
+    /// Source-network branch indices in local PTDF row order.
+    pub branch_indices: Vec<usize>,
+    /// Component-local PTDF matrix, with local branches by local buses.
+    pub ptdf: CsMat<f64>,
+}
+
 /// Metadata describing a sensitivity build.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SensitivityMetadata {
@@ -264,6 +286,99 @@ pub fn calc_ptdf_lodf_with_options(
     })
 }
 
+/// Calculate one PTDF matrix per connected component using one shared solve.
+///
+/// Component detection is linear in the network size. The existing global PTDF
+/// builder performs the factorization and solves once; this function then
+/// partitions its sparse output, avoiding a separate factorization for every
+/// island. Each result carries explicit mappings back to the source network.
+///
+/// Closed switches must be merged during normalization first, because the DC
+/// incidence matrix models branches, not switch connections. Every component
+/// must contain a reference bus, as required by the global sensitivity builder.
+pub fn calc_ptdf_by_island(
+    case: &IndexedNetwork,
+    options: &SensitivityOptions,
+) -> Result<Vec<IslandPtdf>> {
+    case.check_closed_switches()?;
+    let labels = case.calc_island_labels();
+    let parts = build_parts(case, options, Want::Ptdf)?;
+    let branch_indices = parts.branch_indices.clone();
+    let (global_ptdf, _) = parts.into_ptdf();
+
+    let mut buses_by_island = BTreeMap::<usize, Vec<usize>>::new();
+    for (bus, &label) in labels.iter().enumerate() {
+        buses_by_island.entry(label).or_default().push(bus);
+    }
+
+    let mut rows_by_island = BTreeMap::<usize, Vec<usize>>::new();
+    let mut row_labels = vec![usize::MAX; branch_indices.len()];
+    for (row, &branch_index) in branch_indices.iter().enumerate() {
+        let branch = &case.branches()[branch_index];
+        let from = case
+            .bus_index(branch.from)
+            .ok_or(powerio_tx::Error::UnknownBus {
+                bus_id: branch.from,
+                element_index: branch_index,
+            })?;
+        let to = case
+            .bus_index(branch.to)
+            .ok_or(powerio_tx::Error::UnknownBus {
+                bus_id: branch.to,
+                element_index: branch_index,
+            })?;
+        let label = labels[from];
+        debug_assert_eq!(
+            label, labels[to],
+            "an in-service branch cannot cross islands"
+        );
+        row_labels[row] = label;
+        rows_by_island.entry(label).or_default().push(row);
+    }
+
+    // Global-to-local maps let us scatter every stored PTDF entry exactly once,
+    // instead of scanning the full sparse matrix separately for each island.
+    let mut slot_by_label = vec![usize::MAX; labels.len()];
+    let mut local_bus = vec![usize::MAX; labels.len()];
+    let mut local_row = vec![usize::MAX; branch_indices.len()];
+    let mut builders = Vec::with_capacity(buses_by_island.len());
+    let mut island_data = Vec::with_capacity(buses_by_island.len());
+
+    for (slot, (label, buses)) in buses_by_island.into_iter().enumerate() {
+        slot_by_label[label] = slot;
+        for (local, &bus) in buses.iter().enumerate() {
+            local_bus[bus] = local;
+        }
+        let rows = rows_by_island.remove(&label).unwrap_or_default();
+        let local_branches = rows.iter().map(|&row| branch_indices[row]).collect();
+        for (local, &row) in rows.iter().enumerate() {
+            local_row[row] = local;
+        }
+        builders.push(CooBuilder::new_rect(rows.len(), buses.len()));
+        island_data.push((label, buses, local_branches));
+    }
+
+    for (&value, (row, col)) in &global_ptdf {
+        let label = row_labels[row];
+        if labels[col] == label {
+            builders[slot_by_label[label]].add(local_row[row], local_bus[col], value);
+        }
+    }
+
+    Ok(island_data
+        .into_iter()
+        .zip(builders)
+        .map(
+            |((island_label, bus_indices, branch_indices), builder)| IslandPtdf {
+                island_label,
+                bus_indices,
+                branch_indices,
+                ptdf: builder.finish_csr(),
+            },
+        )
+        .collect())
+}
+
 /// Which matrices a [`build_parts`] call materializes. The dense path always
 /// forms the dense PTDF (the LODF is built from it); the sparse path runs only
 /// the requested halves.
@@ -280,6 +395,8 @@ struct BuiltParts {
     lodf: Option<(CsMat<f64>, usize)>,
     solver_path: SensitivitySolverPath,
     reduced_dimension: usize,
+    /// Source branch indices in the same row order as the PTDF.
+    branch_indices: Vec<usize>,
 }
 
 impl BuiltParts {
@@ -307,9 +424,11 @@ fn build_parts(
     want: Want,
 ) -> Result<BuiltParts> {
     options.validate()?;
+    case.check_closed_switches()?;
     case.check_reference_coverage()?;
     let refs = case.reference_bus_indices();
     let inc = build_incidence(case, options.formula, &BuildOptions::default())?;
+    let branch_indices = inc.branch_indices.clone();
     let g = Grounding::new(&refs);
     let reduced_dimension = inc.n().saturating_sub(g.len());
 
@@ -325,6 +444,7 @@ fn build_parts(
                 lodf,
                 solver_path,
                 reduced_dimension,
+                branch_indices,
             })
         }
         SensitivitySolver::Sparse => {
@@ -356,6 +476,7 @@ fn build_parts(
                 lodf,
                 solver_path: SensitivitySolverPath::SparseCholesky,
                 reduced_dimension,
+                branch_indices,
             })
         }
         SensitivitySolver::Auto => unreachable!("select_solver_for_shape resolves Auto"),
@@ -369,6 +490,7 @@ pub(crate) fn for_each_ptdf_lodf_entry(
     mut lodf_entry: impl FnMut(usize, usize, f64) -> Result<()>,
 ) -> Result<SensitivityMetadata> {
     options.validate()?;
+    case.check_closed_switches()?;
     case.check_reference_coverage()?;
     let refs = case.reference_bus_indices();
     let inc = build_incidence(case, options.formula, &BuildOptions::default())?;
@@ -1253,5 +1375,81 @@ mod auto_policy_tests {
             ),
             SensitivitySolver::Sparse
         );
+    }
+}
+
+#[cfg(test)]
+mod closed_switch_tests {
+    use super::{
+        SensitivityOptions, calc_lodf, calc_ptdf, calc_ptdf_lodf, calc_ptdf_lodf_with_options,
+        for_each_ptdf_lodf_entry,
+    };
+    use crate::indexed::IndexedNetwork;
+    use crate::matrix::BranchSusceptanceFormula;
+    use crate::network::{BalancedNetwork, Branch, Bus, BusId, BusType, Switch};
+
+    fn network_with_unmerged_closed_switch() -> BalancedNetwork {
+        let mut network = BalancedNetwork::in_memory(
+            "closed-switch-sensitivity",
+            100.0,
+            vec![
+                Bus::new(BusId(1), BusType::Ref, 230.0),
+                Bus::new(BusId(2), BusType::Pq, 230.0),
+                Bus::new(BusId(3), BusType::Pq, 230.0),
+            ],
+            vec![
+                Branch::new(BusId(1), BusId(2), 0.0, 0.1),
+                Branch::new(BusId(2), BusId(3), 0.0, 0.2),
+            ],
+        );
+        network
+            .switches_mut()
+            .push(Switch::new(BusId(1), BusId(2), true));
+        network
+    }
+
+    #[test]
+    fn every_in_memory_sensitivity_builder_refuses_unmerged_closed_switches() {
+        let network = network_with_unmerged_closed_switch();
+        let view = IndexedNetwork::new(&network);
+        let formula = BranchSusceptanceFormula::default();
+
+        let results = [
+            calc_ptdf(&view, formula).map(|_| ()),
+            calc_lodf(&view, formula).map(|_| ()),
+            calc_ptdf_lodf(&view, formula).map(|_| ()),
+            calc_ptdf_lodf_with_options(&view, &SensitivityOptions::default()).map(|_| ()),
+        ];
+
+        for result in results {
+            let error = result.expect_err("closed switches must not be silently omitted");
+            assert_eq!(error.code().code, "BUILD.SWITCH.CLOSED");
+        }
+    }
+
+    #[test]
+    fn streaming_sensitivity_builder_refuses_before_emitting_entries() {
+        let network = network_with_unmerged_closed_switch();
+        let view = IndexedNetwork::new(&network);
+        let mut ptdf_entries = 0;
+        let mut lodf_entries = 0;
+
+        let error = for_each_ptdf_lodf_entry(
+            &view,
+            &SensitivityOptions::default(),
+            |_, _, _| {
+                ptdf_entries += 1;
+                Ok(())
+            },
+            |_, _, _| {
+                lodf_entries += 1;
+                Ok(())
+            },
+        )
+        .expect_err("closed switches must be rejected before streaming matrix entries");
+
+        assert_eq!(error.code().code, "BUILD.SWITCH.CLOSED");
+        assert_eq!(ptdf_entries, 0);
+        assert_eq!(lodf_entries, 0);
     }
 }

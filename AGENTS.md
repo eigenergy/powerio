@@ -18,11 +18,10 @@ check the current source, tests, and release notes.
   electrical network, matrix, or solver dependencies.
 - **`powerio-tx`**: the format neutral `BalancedNetwork`, the balanced format
   readers and writers, normalization, and derived indexed views.
-- **`powerio-sincal`**: internal model-neutral native archive transport, source
-  retention and bounded schema/identity validation for SINCAL adapters.
-  It depends on `powerio-core`, never
-  either network crate or the facade. Electrical interpretation and
-  profile selection remain adapter work; public SINCAL support is unfinished.
+- **`powerio-tnd`**: integrated transmission/distribution composition, explicit
+  cross-model transforms, and format adapters that span both electrical models.
+  It depends on core, tx, and dist. SINCAL lives under `formats::sincal` behind
+  an opt-in feature; the facade enables it by default.
 - **`powerio-dist`**: the multiconductor distribution model
   (`MulticonductorNetwork`) with the OpenDSS `.dss`, PMD JSON, BMOPF JSON, and
   distribution CIM (`cim-dist`) converters. It does **not** depend on the transmission crate; both share
@@ -156,17 +155,23 @@ release on its own.
    the `powerio-capi` tarballs for `aarch64-apple-darwin`,
    `aarch64-linux-gnu`, `x86_64-apple-darwin`, `x86_64-linux-gnu`, and
    `x86_64-w64-mingw32` with the release features
-   `arrow,matrix,gridfm,dist,prob`. It runs PowerIO.jl's
+   `matrix,gridfm,dist,prob`. It runs PowerIO.jl's
    `gen/update_artifacts.jl` on the tarballs, installs each one as the
    artifact PowerIO.jl will pin, and runs the PowerIO.jl tests against it on
    its platform. Only then does it stage a **draft** GitHub release with the
    five assets.
 4. A human inspects and publishes the draft. Publishing starts `python.yml`
-   (PyPI) and `crates.yml` (crates.io: `powerio-core`, `powerio-sincal`, `powerio-tx`,
-   `powerio-dist`, `powerio-prob`, `powerio-matrix`, `powerio`, and
+   (PyPI) and `crates.yml` (crates.io: `powerio-core`, `powerio-tx`, `powerio-dist`,
+   `powerio-tnd`, `powerio-prob`, `powerio-matrix`, `powerio`, and
    `powerio-cli`, in dependency order). Both deploy through the `pypi` and
    `crates-io` environments, which wait for the maintainer's approval. A
-   rerun skips files and versions already published.
+   rerun skips files and versions already published. A crate's first
+   version cannot use trusted publishing, so a release that adds a crate
+   runs `scripts/release-verified.py` with `--bootstrap-crate <name>`: after
+   `crates.yml` fails at the new crate, it publishes that crate with the
+   maintainer's local Cargo credentials and reruns the job. Then configure
+   the crate's trusted publisher (repository `eigenergy/powerio`, workflow
+   `crates.yml`, environment `crates-io`).
 5. Publishing also runs `.github/workflows/notify-powerio-jl.yml`, which
    starts PowerIO.jl's Release workflow; its hourly schedule is the backstop.
    That workflow sets the Julia version, pins the release tarballs in
@@ -196,6 +201,7 @@ powerio-tx/src/format         mod.rs (parse, emit, TargetFormat, EmitOptions),
                               pwd, map, objects),
                               pslf.rs, powermodels.rs, egret.rs, pandapower.rs,
                               pypsa.rs, surge.rs, goc3.rs, opfdata.rs
+powerio-tnd/src               integrated.rs, transform.rs, formats/sincal/
 powerio-dist/src              model.rs, convert.rs, dss/, pmd/, bmopf/, cim/, graph.rs,
                               geo.rs, kron.rs, lindist3flow.rs, readiness.rs,
                               collect.rs, diagnostics.rs, error.rs
@@ -234,6 +240,10 @@ docs/                         the mdBook guide, the schema archive, release note
 - **Clippy must match CI.** Root `cargo clippy --all-targets` skips feature
   combinations and the PyO3 extension. Run `bash scripts/ci-clippy.sh` before
   pushing Rust, C ABI, matrix, feature, or Python extension changes.
+- **SINCAL is the `sincal` feature.** The facade enables `powerio-tnd/sincal`
+  by default. The tx and dist crates depend only on core within the workspace;
+  they own neither SINCAL adapters nor SQLite. The tnd crate is format neutral
+  by default. Keep the no-default-features and wasm32 checks green.
 - **One Python wheel (maturin mixed layout).** `powerio-py/` compiles to the
   native module `powerio._powerio`; `python/powerio/` is the pure Python
   wrapper that turns COO triplets into `scipy.sparse` and NetworkX. The

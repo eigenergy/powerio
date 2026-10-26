@@ -55,7 +55,7 @@ pub(crate) fn emit(
             "experimental SINCAL options require a SINCAL target",
         ));
     }
-    let (database, mut diagnostics) = match module.value() {
+    let (database, mut diagnostics, retained_omitted) = match module.value() {
         PioValue::BalancedNetwork(net) => {
             if selected == Some("sincal-multiconductor") {
                 return Err(invalid(
@@ -67,8 +67,12 @@ pub(crate) fn emit(
                     "balanced SINCAL output uses typed bus nominal kV; nominal_ll_volts is only a multiconductor option",
                 ));
             }
-            let output = powerio_tx::format::__write_sincal_balanced_experimental(net)?;
-            (output.database, output.diagnostics)
+            let output = powerio_tnd::formats::sincal::__write_sincal_balanced_experimental(net)?;
+            (
+                output.database,
+                output.diagnostics,
+                &powerio_tx::diagnostics::codes::EMIT_SINCAL_RETAINED_SOURCE_OMITTED,
+            )
         }
         PioValue::MulticonductorNetwork(net) => {
             if selected == Some("sincal-balanced") {
@@ -76,13 +80,22 @@ pub(crate) fn emit(
                     "sincal-balanced cannot write a MulticonductorNetwork; use sincal-multiconductor with experimental options to retain its conductor model",
                 ));
             }
-            let output = powerio_dist::__write_sincal_multiconductor_experimental(
+            // Built from Default so a field added in a later tnd patch does
+            // not break this crate's build.
+            let mut tnd_options =
+                powerio_tnd::formats::sincal::ExperimentalMulticonductorOptions::default();
+            tnd_options
+                .nominal_ll_volts
+                .clone_from(&options.nominal_ll_volts);
+            let output = powerio_tnd::formats::sincal::__write_sincal_multiconductor_experimental(
                 net,
-                &powerio_dist::ExperimentalMulticonductorOptions {
-                    nominal_ll_volts: options.nominal_ll_volts.clone(),
-                },
+                &tnd_options,
             )?;
-            (output.database, output.diagnostics)
+            (
+                output.database,
+                output.diagnostics,
+                &powerio_dist::diagnostics::codes::EMIT_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_OMITTED,
+            )
         }
         value => {
             return Err(Error::new(
@@ -103,7 +116,7 @@ pub(crate) fn emit(
         })
     }) {
         diagnostics.push(Diagnostic::of(
-            &powerio_tx::diagnostics::codes::EMIT_SINCAL_RETAINED_SOURCE_OMITTED,
+            retained_omitted,
             "Experimental fresh output uses the typed electrical value only. Retained native fault, dynamic, protection, diagram, result and other source-only records are omitted.",
         ));
     }
@@ -111,7 +124,11 @@ pub(crate) fn emit(
         SincalContainer::Sqlite => ("case.db", database),
         SincalContainer::Archive { project_name } => (
             "case.sinx",
-            powerio_sincal::authoring::candidate_archive(&database, project_name).map_err(|e| {
+            powerio_tnd::formats::sincal::storage::authoring::candidate_archive(
+                &database,
+                project_name,
+            )
+            .map_err(|e| {
                 Error::new(&crate::codes::EMIT_SINCAL_PACKAGING_FAILED, e.to_string()).with_cause(e)
             })?,
         ),

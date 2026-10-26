@@ -69,10 +69,20 @@ The release name in the snapshot path does not create a new IR version.
 A later release without catalog changes can reuse that snapshot (0.11.2
 reused 0.11.1). CI preserves existing definitions and document rules, with
 narrow checks for added format names, the distinctly tagged voltage-source
-alternative, and additive monitor fields and variants. The monitor checks
-preserve existing property schemas and required fields and require distinct
+and partial-transformer alternatives, and additive monitor fields and variants.
+The monitor checks preserve existing property schemas and required fields and require distinct
 constant tags for added alternatives; they reject new restrictions and
 ambiguous variants. Every earlier published snapshot keeps its exact bytes.
+
+Three-winding transformers with any nondefault per-winding status use the
+nested `powerio.PartialTransformer3W` record. Its `value` holds the complete
+physical transformer, including all three windings, impedances, units, identity,
+and original extras. Readers that predate this type reject it instead of
+silently energizing an off winding. Ordinary all-on and whole-transformer-off
+records with default winding flags retain their exact historical body. This
+also preserves nondefault flags while the whole transformer is off, so a later
+status change cannot lose the individual winding state. A bare legacy body with
+nondefault winding flags is rejected with a diagnostic requiring the new type.
 
 ## Served identifiers
 

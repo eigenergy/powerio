@@ -18,12 +18,11 @@ categories = ["science", "parsing"]
 all-features = true
 
 [features]
+default = []
 schema = ["dep:schemars", "powerio-core/schema"]
 
 [dependencies]
 powerio-core = { workspace = true }
-powerio-sincal.workspace = true
-rusqlite.workspace = true
 thiserror = "2"
 # Byte-slice float parsing for numeric matrix rows, avoiding UTF-8 allocation.
 lexical-core = "1"
@@ -42,6 +41,7 @@ schemars = { workspace = true, optional = true }
 [dev-dependencies]
 tempfile = "3"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
 
 [[bench]]
 name = "parse"

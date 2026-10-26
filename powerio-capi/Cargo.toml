@@ -16,15 +16,20 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 
 [features]
 default = []
+# Deprecated compatibility alias for 0.11.x source builds; enables no code.
+# Remove only in the planned breaking release: https://github.com/eigenergy/powerio/issues/673
+arrow = []
 # Retained build-feature names for release tooling. ABI 7 exposes one fixed
 # symbol set; none of these names gates a C function.
-arrow = []
 matrix = []
 dist = []
 prob = []
 gridfm = ["powerio/gridfm", "powerio-matrix/gridfm"]
 
 [dependencies]
+# Both bindings call the SINCAL adapters directly, so they ask for them
+# rather than rely on the facade's default features.
+powerio-tnd = { workspace = true, features = ["sincal"] }
 powerio-core = { workspace = true }
 powerio-dist.workspace = true
 powerio.workspace = true

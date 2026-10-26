@@ -1,3 +1,4 @@
+#![cfg(feature = "sincal")]
 mod helpers;
 
 use powerio::{Destination, EmittedOutput, Fidelity, ParseOptions, PioValue, Source};
@@ -219,7 +220,8 @@ fn direct_sqlite_input_has_the_same_value_and_echoes_its_database_bytes() {
 #[test]
 fn balanced_selections_are_explicit_and_do_not_override_other_families() {
     let mut options = ParseOptions::default();
-    options.sincal_balanced = Some(powerio_tx::format::SincalBalancedReadOptions::default());
+    options.sincal_balanced =
+        Some(powerio_tnd::formats::sincal::SincalBalancedReadOptions::default());
     for format in [
         None,
         Some("sincal"),
@@ -265,7 +267,8 @@ fn balanced_selections_are_explicit_and_do_not_override_other_families() {
 fn two_sincal_selection_families_cannot_silently_shadow_each_other() {
     for format in ["sincal-balanced", "sincal-multiconductor"] {
         let mut options = ParseOptions::default().format(format).unwrap();
-        options.sincal_balanced = Some(powerio_tx::format::SincalBalancedReadOptions::default());
+        options.sincal_balanced =
+            Some(powerio_tnd::formats::sincal::SincalBalancedReadOptions::default());
         options.sincal_multiconductor = Some(powerio::dist::SincalReadOptions::default());
         let error = powerio::parse_with_options(source(), &options).unwrap_err();
         assert!(
@@ -290,7 +293,8 @@ fn experimental_balanced_backend_writes_edited_ir_without_native_source() {
     let expected_power = network.loads()[0].p;
     // The candidate backend takes only the typed value. The module's native
     // source bytes are absent after IR transport and cannot enter this API.
-    let candidate = powerio_tx::format::__write_sincal_balanced_experimental(network).unwrap();
+    let candidate =
+        powerio_tnd::formats::sincal::__write_sincal_balanced_experimental(network).unwrap();
     assert!(
         candidate
             .diagnostics
@@ -327,8 +331,8 @@ fn experimental_balanced_backend_writes_edited_ir_without_native_source() {
 #[test]
 fn experimental_multiconductor_backend_writes_edited_ir_with_floating_reference() {
     use powerio_dist::{
-        Configuration, DistBus, DistLoad, DistLoadVoltageModel, ExperimentalMulticonductorOptions,
-        MulticonductorNetwork, VoltageSource,
+        Configuration, DistBus, DistLoad, DistLoadVoltageModel, MulticonductorNetwork,
+        VoltageSource,
     };
     let phases = vec!["1".into(), "2".into(), "3".into()];
     let mut net = MulticonductorNetwork::new();
@@ -378,12 +382,17 @@ fn experimental_multiconductor_backend_writes_edited_ir_with_floating_reference(
         panic!("IR changed electrical family")
     };
     net.loads_mut()[0].p_nom[1] = 2500.0;
-    let options = ExperimentalMulticonductorOptions {
+    let options = powerio_tnd::formats::sincal::ExperimentalMulticonductorOptions {
         nominal_ll_volts: [("b".into(), 400.0)].into(),
     };
-    let output = powerio_dist::__write_sincal_multiconductor_experimental(net, &options).unwrap();
-    let snapshot = powerio_sincal::DatabaseSnapshot::decode(&output.database, None).unwrap();
-    let readback = powerio_dist::__read_sincal_multiconductor_snapshot(snapshot).unwrap();
+    let output =
+        powerio_tnd::formats::sincal::__write_sincal_multiconductor_experimental(net, &options)
+            .unwrap();
+    let snapshot =
+        powerio_tnd::formats::sincal::storage::DatabaseSnapshot::decode(&output.database, None)
+            .unwrap();
+    let readback =
+        powerio_tnd::formats::sincal::__read_sincal_multiconductor_snapshot(snapshot).unwrap();
     assert_eq!(readback.loads().len(), 3);
     assert!((readback.loads()[1].p_nom[0] - 2500.0).abs() < 1e-10);
     let source = &readback.sources()[0];
@@ -409,8 +418,7 @@ fn experimental_multiconductor_backend_writes_edited_ir_with_floating_reference(
 #[test]
 fn experimental_transformer_primitives_rewrite_after_real_ir_and_edit() {
     use powerio_dist::{
-        DistBus, DistTransformer, DistWinding, DistWindingConn, ExperimentalMulticonductorOptions,
-        MulticonductorNetwork,
+        DistBus, DistTransformer, DistWinding, DistWindingConn, MulticonductorNetwork,
     };
     let mut net = MulticonductorNetwork::new();
     let phases = ["1", "2", "3"].map(str::to_owned).to_vec();
@@ -428,18 +436,20 @@ fn experimental_transformer_primitives_rewrite_after_real_ir_and_edit() {
     windings[1].r_pct = 0.5;
     net.transformers_mut()
         .push(DistTransformer::new("tx", windings, vec![4.0], 3));
-    let options = ExperimentalMulticonductorOptions {
+    let options = powerio_tnd::formats::sincal::ExperimentalMulticonductorOptions {
         nominal_ll_volts: [("hv".into(), 11000.0), ("lv".into(), 400.0)].into(),
     };
-    let first = powerio_dist::__write_sincal_multiconductor_experimental(&net, &options).unwrap();
+    let first =
+        powerio_tnd::formats::sincal::__write_sincal_multiconductor_experimental(&net, &options)
+            .unwrap();
     let read = |bytes: &[u8]| {
-        powerio_dist::__read_sincal_multiconductor_snapshot(
-            powerio_sincal::DatabaseSnapshot::decode(bytes, None).unwrap(),
+        powerio_tnd::formats::sincal::__read_sincal_multiconductor_snapshot(
+            powerio_tnd::formats::sincal::storage::DatabaseSnapshot::decode(bytes, None).unwrap(),
         )
         .unwrap()
     };
     let recovered = read(&first.database);
-    let levels = ExperimentalMulticonductorOptions {
+    let levels = powerio_tnd::formats::sincal::ExperimentalMulticonductorOptions {
         nominal_ll_volts: recovered
             .buses()
             .iter()
@@ -467,7 +477,9 @@ fn experimental_transformer_primitives_rewrite_after_real_ir_and_edit() {
     for v in shunt.g.iter_mut().chain(&mut shunt.b).flatten() {
         *v *= 1.2;
     }
-    let changed = powerio_dist::__write_sincal_multiconductor_experimental(net, &levels).unwrap();
+    let changed =
+        powerio_tnd::formats::sincal::__write_sincal_multiconductor_experimental(net, &levels)
+            .unwrap();
     let second = read(&changed.database);
     assert_eq!(second.shunts().len(), 1);
     for (a, b) in [&net.shunts()[0].g, &net.shunts()[0].b]

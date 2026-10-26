@@ -95,7 +95,11 @@ Transformer rows are `equations[k] + t * tap_equations[k] = 0`, with nominal
 multiplier `t = 1`. The physical tap is `tap_nominal * t`, or `tap_nominal / t`
 for the inverse regulator convention. Fixed taps have no multiplier rows.
 Initial voltage seeds are suggestions; a free common mode in a seed is not a
-physical reference imposed on the optimization problem.
+physical reference imposed on the optimization problem. With transformers
+present, the seeds come from a dense solve of the no-load voltage equations,
+whose memory grows with the square of the terminal count and whose time grows
+with its cube. Feeders beyond about ten thousand terminals can need
+gigabytes; a sparse seed solve is planned.
 
 The downstream solver owns expression construction, objective/constraint
 scaling, sparse Jacobians/Hessians, optimization, status acceptance, and independent

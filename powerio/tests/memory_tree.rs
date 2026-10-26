@@ -203,11 +203,19 @@ fn format_catalog_tokens_resolve_and_read_only_targets_stay_read_only() {
 fn catalog_includes_explicit_cim_and_sincal_reader_families() {
     use powerio::NetworkFamily::{Distribution, Transmission};
     let catalog: Vec<_> = powerio::grid_formats().collect();
-    for (token, family, can_emit) in [
-        ("cim-dist", Distribution, true),
-        ("sincal-balanced", Transmission, false),
-        ("sincal-multiconductor", Distribution, false),
-    ] {
+    // The SINCAL profiles are listed only in a build that can read them.
+    let mut expected = vec![("cim-dist", Distribution, true)];
+    if cfg!(feature = "sincal") {
+        expected.push(("sincal-balanced", Transmission, false));
+        expected.push(("sincal-multiconductor", Distribution, false));
+    }
+    assert_eq!(
+        catalog
+            .iter()
+            .any(|entry| entry.format.token.starts_with("sincal")),
+        cfg!(feature = "sincal")
+    );
+    for (token, family, can_emit) in expected {
         let entry = catalog
             .iter()
             .find(|entry| entry.format.token == token)

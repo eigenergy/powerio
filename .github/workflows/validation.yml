@@ -17,7 +17,7 @@ on:
       - "powerio/**"
       - "powerio-tx/**"
       - "powerio-core/**"
-      - "powerio-sincal/**"
+      - "powerio-tnd/**"
       - "powerio-dist/**"
       - "powerio-matrix/**"
       - "powerio-capi/**"
@@ -60,10 +60,10 @@ jobs:
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
     - name: Build powerio-capi
       run: cargo build --release -p powerio-capi
-    - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+    - uses: julia-actions/setup-julia@da908477b5db94c10ffce8cfea9f2b3b9d5db687 # v3.0.3
       with:
         version: '1'
-    - uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8 # v3.3.0
+    - uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
     - name: Instantiate the Julia oracle env
       run: julia --project=evals/validation -e 'using Pkg; Pkg.instantiate()'
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0

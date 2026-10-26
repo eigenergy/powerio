@@ -117,6 +117,36 @@ fn unsupported_or_ambiguous_blocks_keep_all_literal_values_and_diagnostics() {
 }
 
 #[test]
+fn mutations_after_a_continuation_or_as_octave_operators_are_not_missed() {
+    // MATLAB joins the line after `...`, so the assignment still starts a
+    // statement; Octave's `/=` mutates the same element. Each must be either
+    // converted or reported, never read as literal values in silence.
+    for mutation in [
+        "x = 1; ...\nmpc.bus(:, [3 4]) = mpc.bus(:, [3 4]) / 1e3;",
+        "mpc.bus(:, [3 4]) /= 1e3;",
+    ] {
+        let (net, warnings) = parse(&format!("{LITERAL}{mutation}\n"));
+        let converted = (net.loads().iter().map(|load| load.p).sum::<f64>() - 0.3).abs() < 1e-13;
+        let reported = warnings
+            .records()
+            .iter()
+            .any(|record| record.code() == "READ.MATPOWER.INDEXED_ASSIGNMENT");
+        assert!(converted || reported, "{mutation}");
+    }
+}
+
+#[test]
+fn indexed_assignment_warnings_stay_within_the_diagnostic_cap() {
+    let (_, warnings) = parse(&format!("{LITERAL}{}", "mpc.bus(:,3)=0;\n".repeat(1_005)));
+    let reported = warnings
+        .records()
+        .iter()
+        .filter(|record| record.code() == "READ.MATPOWER.INDEXED_ASSIGNMENT")
+        .count();
+    assert_eq!(reported, 1_001);
+}
+
+#[test]
 fn invalid_scalars_and_overflow_do_not_partially_convert() {
     for divisor in [
         "0",

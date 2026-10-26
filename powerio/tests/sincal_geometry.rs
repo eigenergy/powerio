@@ -1,4 +1,5 @@
 #![allow(clippy::float_cmp)] // Exact native coordinates and synthetic integer midpoints.
+#![cfg(feature = "sincal")]
 mod helpers;
 
 use powerio::geo::{CoordinateSpace, GeoLayer};

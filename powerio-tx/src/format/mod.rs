@@ -64,20 +64,8 @@ pub(crate) mod psse;
 mod pypsa;
 mod rawx;
 pub mod routing;
-mod sincal;
 mod surge;
 
-#[doc(hidden)]
-pub use sincal::read_balanced_snapshot as __read_sincal_balanced_snapshot;
-#[doc(hidden)]
-pub use sincal::read_balanced_snapshot_at as __read_sincal_balanced_snapshot_at;
-pub use sincal::source::{
-    SincalBalancedReadOptions, parse_with_options as parse_sincal_balanced_with_options,
-};
-#[doc(hidden)]
-pub use sincal::{
-    ExperimentalBalancedOutput, write_experimental_balanced as __write_sincal_balanced_experimental,
-};
 mod ucte;
 mod union_find;
 mod xiidm;
@@ -402,8 +390,8 @@ pub fn parse_with_json_class(
     source: powerio_core::Source,
     json_class: Option<routing::JsonClass>,
 ) -> std::result::Result<PioModule<BalancedNetwork>, powerio_core::Error> {
-    if sincal::source::handles(&source) {
-        return sincal::source::parse(source);
+    if sincal_source_declared(&source) {
+        return Err(sincal_feature_disabled(&source));
     }
     // Classify JSON once so the facade can pass the answer through without a
     // second scan over the same bytes.
@@ -1105,6 +1093,31 @@ fn echo_text(module: &PioModule<BalancedNetwork>, target: TargetFormat) -> Optio
     Some(text.to_owned())
 }
 
+/// Whether `source` names the SINCAL family: a declared `sincal` or
+/// `sincal-balanced` format, or an undeclared `.sinx` archive. Content never
+/// selects the family; three-phase data is validated after the caller does.
+fn sincal_source_declared(source: &powerio_core::Source) -> bool {
+    match source.format() {
+        Some(format) => {
+            format.as_str().eq_ignore_ascii_case("sincal")
+                || routing::parse_transmission_format(format.as_str())
+                    == Some(TransmissionFormat::SincalBalanced)
+        }
+        None => std::path::Path::new(source.name())
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("sinx")),
+    }
+}
+
+/// The refusal a SINCAL source meets in a build without the `sincal` feature.
+fn sincal_feature_disabled(source: &powerio_core::Source) -> powerio_core::Error {
+    powerio_core::Error::new(
+        &codes::REQUEST_SINCAL_FEATURE_DISABLED,
+        "SINCAL adapters live in powerio-tnd; use powerio with its `sincal` feature or powerio_tnd::formats::sincal",
+    )
+    .with_source(source.clone())
+}
+
 fn sincal_source_omitted(net: &BalancedNetwork) -> Option<Diagnostic> {
     (net.source_format() == SourceFormat::Sincal).then(|| Diagnostic::of(
         &codes::EMIT_SINCAL_RETAINED_SOURCE_OMITTED,
@@ -1274,7 +1287,7 @@ pub fn emit_with_options(
         let (artifacts, format_diagnostics) = cgmes::artifacts(&working).map_err(core_error)?;
         diagnostics.extend(format_diagnostics.into_records());
         diagnostics.extend(sincal_source_omitted(&working));
-        powerio_sincal::attach_retention_details(
+        powerio_core::attach_retention_details(
             module.diagnostics(),
             &mut diagnostics,
             "EMIT.SINCAL.RETAINED_SOURCE_OMITTED",
@@ -1287,7 +1300,7 @@ pub fn emit_with_options(
         );
     }
     let mut conv = emit_text_with_options(module, format, options)?;
-    powerio_sincal::attach_retention_details(
+    powerio_core::attach_retention_details(
         module.diagnostics(),
         &mut conv.diagnostics,
         "EMIT.SINCAL.RETAINED_SOURCE_OMITTED",
@@ -1336,7 +1349,7 @@ pub fn __emit_pypsa_csv_with_options(
         pypsa::pypsa_csv_artifacts(working.as_ref().unwrap_or(module.value()));
     diagnostics.extend(format_diagnostics);
     diagnostics.extend(sincal_source_omitted(module.value()));
-    powerio_sincal::attach_retention_details(
+    powerio_core::attach_retention_details(
         module.diagnostics(),
         &mut diagnostics,
         "EMIT.SINCAL.RETAINED_SOURCE_OMITTED",

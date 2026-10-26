@@ -11,7 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let records = Source::open(&args[1])?.primary_buffer()?;
     let source = Source::from_memory("original.mdb", native.shared_bytes())?
         .with_named_buffer("acquired.json", records.shared_bytes())?;
-    let mut selection = powerio_dist::SincalReadOptions::default();
+    let mut selection = powerio_tnd::formats::sincal::SincalReadOptions::default();
     selection.assume_inactive_source_controls = args.len() == 4;
     selection.variant = Some(1);
     selection.snapshot_hours = Some(args[2].parse()?);

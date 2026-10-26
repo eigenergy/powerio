@@ -358,9 +358,9 @@ pub fn parse(
 ) -> std::result::Result<powerio_core::PioModule<MulticonductorNetwork>, powerio_core::Error> {
     if source
         .format()
-        .is_some_and(|f| crate::sincal::public::is_multiconductor_token(f.as_str()))
+        .is_some_and(|f| is_sincal_multiconductor_token(f.as_str()))
     {
-        return crate::parse_sincal(source, &crate::SincalReadOptions::default());
+        return Err(sincal_feature_disabled(&source));
     }
     let mut warnings = crate::collect::Diagnostics::new();
     match parse_to_network(&source, &mut warnings) {
@@ -482,6 +482,23 @@ impl DistTargetFormat {
     }
 }
 
+/// Whether `name` spells the explicit conductor-resolved SINCAL profile.
+pub(crate) fn is_sincal_multiconductor_token(name: &str) -> bool {
+    name.chars()
+        .filter(|c| !matches!(c, '-' | '_' | ' '))
+        .collect::<String>()
+        .eq_ignore_ascii_case("sincalmulticonductor")
+}
+
+/// The refusal a SINCAL source meets in a build without the `sincal` feature.
+fn sincal_feature_disabled(source: &powerio_core::Source) -> powerio_core::Error {
+    powerio_core::Error::new(
+        &crate::diagnostics::codes::REQUEST_SINCAL_MULTICONDUCTOR_FEATURE_DISABLED,
+        "SINCAL adapters live in powerio-tnd; use powerio with its `sincal` feature or powerio_tnd::formats::sincal",
+    )
+    .with_source(source.clone())
+}
+
 /// Prepare exact retained-source text or validated canonical output.
 pub(crate) fn emit_text_with_options(
     module: &powerio_core::PioModule<MulticonductorNetwork>,
@@ -497,7 +514,7 @@ pub(crate) fn emit_text_with_options(
         crate::readiness::require_earth_referenced_sources(module.value())?;
         emit_value_text_with_options(module.value(), format, options)
     };
-    powerio_sincal::attach_retention_details(
+    powerio_core::attach_retention_details(
         module.diagnostics(),
         &mut output.diagnostics,
         "EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED",

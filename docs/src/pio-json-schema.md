@@ -84,6 +84,16 @@ the value a reader takes when a field is absent.
 Typed floating point fields spell nonfinite values as `"Infinity"`,
 `"-Infinity"`, and `"NaN"`. JSON `null` is not a floating point value.
 
+A transformer with nondefault per-winding service flags is stored as a nested
+record in its physical table, with `type` equal to `"powerio.PartialTransformer3W"`
+and the complete transformer body under `value`.
+The nested body preserves every original field and all three winding rows; it
+is not a star expansion or an altered electrical network. Earlier readers reject
+this new record because its required transformer fields are not at the outer
+level. Default winding states retain the historical unwrapped representation,
+including when the whole transformer is off. Malformed wrappers and unwrapped
+nondefault winding states are rejected, never silently treated as all-on.
+
 ## Collections and operating points
 
 `TimeSeries<T>` stores ordered time points and values of `T`, and
@@ -195,7 +205,8 @@ LinDist3Flow instance and solution types, `pio-ir/2/0.11.5/schema.json`
 republishes the 0.11.4 catalog under its own identifier, and
 `pio-ir/2/0.11.6/schema.json` adds `cim-dist` and `sincal` to distribution
 source formats, `sincal` to balanced source formats, the distinctly tagged
-`ReferencedVoltageSource` nested IR record, and additive monitor scopes
+`ReferencedVoltageSource` and `PartialTransformer3W` nested IR records,
+and additive monitor scopes
 and statements for kV qualifiers and pre/post voltage bands. Existing source
 and monitor representations remain accepted; published snapshots stay frozen.
 The release in that path identifies the snapshot, not another

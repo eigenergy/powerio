@@ -1,3 +1,4 @@
+#![cfg(feature = "sincal")]
 mod helpers;
 
 use powerio::{
@@ -197,6 +198,34 @@ fn edited_multiconductor_ir_uses_its_own_backend_and_requires_nominal_levels() {
             .collect::<Vec<_>>();
         assert_eq!(powers, [1000.0, 2500.0, 3000.0]);
         assert!(recovered.sources()[0].reference_terminal.is_some());
+        // A SINCAL-sourced multiconductor module reports its omitted
+        // source-only records under the distribution family's code.
+        // Native readback names its own buses; the case has one 400 V level.
+        let levels = recovered
+            .buses()
+            .iter()
+            .map(|bus| (bus.id.clone(), 400.0))
+            .collect();
+        let again = powerio::emit_with_options(
+            &parsed,
+            "sincal-multiconductor",
+            &options(SincalContainer::Sqlite, levels),
+            Destination::memory("again").unwrap(),
+        )
+        .unwrap();
+        let codes: Vec<_> = again
+            .diagnostics()
+            .iter()
+            .map(powerio::Diagnostic::code)
+            .collect();
+        assert!(
+            codes.contains(&"EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED"),
+            "{codes:?}"
+        );
+        assert!(
+            !codes.contains(&"EMIT.SINCAL.RETAINED_SOURCE_OMITTED"),
+            "{codes:?}"
+        );
         let error = powerio::emit_with_options(
             &module,
             "sincal-balanced",
