@@ -62,7 +62,7 @@ A [PowerModelsITD.jl adapter](https://lanl-ansi.github.io/PowerModelsITD.jl/stab
 can map its component files and boundary definitions into this composition.
 Both adapters should reuse the component parsers and checked interface constructor.
 
-The initial integration API is Rust-only. PowerIO IR version 2 and the facade's
+The initial integration API is Rust-only. PowerIO IR and the facade's
 `PioValue` variants are unchanged. A future integrated IR variant and binding
 accessors need a separate compatibility design. Coupled calculation instances
 belong in `powerio-prob`, while sparse coupled operators belong in

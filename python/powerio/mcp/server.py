@@ -989,7 +989,10 @@ def _to_balanced_tool(
 
 @_tool(
     name="about",
-    description="Return the PowerIO version, IR version, feature set, and MCP tools.",
+    description=(
+        "Return the PowerIO version, the PowerIO IR schema name and the release "
+        "whose schema its documents follow, the feature set, and the MCP tools."
+    ),
 )
 def _about_tool() -> dict:
     return {

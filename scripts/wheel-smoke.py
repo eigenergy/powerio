@@ -8,6 +8,7 @@ checks the stored document writes deterministically.
 
 import json
 import io
+import re
 
 import powerio
 
@@ -20,12 +21,33 @@ mpc.branch = [1 2 0.01 0.1 0 250 250 250 0 0 1 -30 30; 2 3 0.02 0.2 0 250 250 25
 """
 
 
+def release(version: str) -> tuple:
+    """MAJOR.MINOR.PATCH: three numbers without leading zeros or a suffix."""
+    match = re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version)
+    assert match is not None, version
+    return tuple(int(part) for part in match.groups())
+
+
+def series(version: tuple) -> tuple:
+    """The release series: the minor release before 1.0, the major after."""
+    major, minor, _ = version
+    return (0, minor) if major == 0 else (major, 0)
+
+
 def main() -> None:
     versions = powerio.versions()
     assert powerio.__version__ == versions["powerio_version"], versions
-    assert versions["powerio_ir"] == {
-        "schema": "pio-ir",
-        "version": 2,
+    # The PowerIO IR `version` names the release whose schema the build writes:
+    # the package release, a later release in its series, or, while the next
+    # series is developed, that series' first release (0.13.0 or 1.0.0).
+    ir = versions["powerio_ir"]
+    assert ir["schema"] == "pio-ir", versions
+    ir_release, package = release(ir["version"]), release(powerio.__version__)
+    major, minor, _ = package
+    assert ir_release >= package, versions
+    assert series(ir_release) == series(package) or ir_release in {
+        (0, minor + 1, 0),
+        (major + 1, 0, 0),
     }, versions
 
     module = powerio.parse(
@@ -41,7 +63,7 @@ def main() -> None:
     assert document is not None
     decoded = json.loads(document)
     assert decoded["schema"] == "pio-ir"
-    assert decoded["version"] == 2
+    assert decoded["version"] == ir["version"]
     # Deterministic release: the stored document is byte stable.
     assert (
         powerio.serialize(powerio.deserialize(document.encode())).text == document

@@ -134,10 +134,31 @@ retired='\b(parse_file|parse_text|parse_str|parse_bytes|write_to|write_string|wr
 scan "retired PowerIO beta API on the public surface" \
   -e "$retired" -- "${surface_paths[@]}"
 
-# Retired diagnostic namespaces must not return. PowerIO IR has one reader for
-# its current IR version.
+# Retired diagnostic namespaces must not return. PowerIO IR has one reader.
 scan "retired diagnostic namespace" \
   "${vendored_excludes[@]}" -e '\bLOWER\.[A-Z_]+' -- "${public_paths[@]}"
+
+# A PowerIO IR document names the release whose schema it follows. The
+# separate integer IR version and its reading window stay out of current
+# text; the migration guides, release notes, and design records still name
+# them.
+ir_current=(
+  AGENTS.md
+  README.md
+  docs/schema/README.md
+  docs/src/pio-json-schema.md
+  docs/src/ir-reference.md
+  docs/src/python.md
+  docs/src/concepts.md
+  docs/src/compiler-ir.md
+  docs/src/distribution.md
+  powerio/src
+  python/powerio
+  powerio-py/src
+  powerio-cli/src
+)
+scan "retired PowerIO IR version numbering" \
+  "${vendored_excludes[@]}" -e '\bIR_MIN_VERSION\b|\bIR versions?\b' -- "${ir_current[@]}"
 
 # Keep the ordinary language quickstarts on the same four operations, each
 # naming the case file and nothing else.

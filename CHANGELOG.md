@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- PowerIO IR documents state the release whose schema they follow: the
+  header's `"version"` is now `"0.12.0"` instead of the integer `2`.
+  `powerio::IR_VERSION` becomes that release as a string, `IR_MIN_VERSION` is
+  removed, and `IR_SCHEMA_ID` names `pio-ir/0.12.0/schema.json`. A reader
+  accepts documents from its own release series (any 0.12.z) and the
+  `"version": 2` documents every 0.11 release wrote, whose record layouts are
+  unchanged; 0.11 readers refuse 0.12 documents. Every release now publishes
+  its own `docs/schema/pio-ir/<release>/schema.json`, and the files under
+  `pio-ir/2/` keep their bytes. `powerio.versions()["powerio_ir"]["version"]`
+  and the `powerio_ir.version` that the C function `pio_schema_report`
+  returns are now the release string. See the 0.12 migration guide (#701).
+
 ## 0.11.6
 
 - Replace the unreleased SINCAL support crate with `powerio-tnd`: checked integrated

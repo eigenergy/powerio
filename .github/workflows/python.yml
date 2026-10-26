@@ -74,7 +74,7 @@ jobs:
           echo "wheels=$wheels" >> "$GITHUB_OUTPUT"
       - name: Release identity agreement
         if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
-        run: bash scripts/check-release-versions.sh
+        run: bash scripts/check-release-versions.sh --release
       - name: Verify the immutable published release
         id: release
         if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
@@ -155,10 +155,12 @@ jobs:
       # fails on an import it cannot resolve.
       - name: Install powerio
         run: pip install '.[mcp]'
-      - name: Published 0.11.0 IR reader compatibility
+      - name: Reads PowerIO IR documents from published 0.11 releases
         run: |
-          python -m pip install --no-deps --target /tmp/powerio-ir-reader-0110 powerio==0.11.0
-          python scripts/check-ir-compatibility.py --legacy-package /tmp/powerio-ir-reader-0110
+          python -m pip install --no-deps --target /tmp/powerio-0.11.0 powerio==0.11.0
+          python -m pip install --no-deps --target /tmp/powerio-0.11.6 powerio==0.11.6
+          python scripts/check-ir-compatibility.py \
+            --legacy-package /tmp/powerio-0.11.0 --legacy-package /tmp/powerio-0.11.6
       - name: mypy
         run: python -m mypy python/powerio
       # stubtest runs from an empty directory: with the repo (or a venv) as

@@ -169,11 +169,12 @@ fresh writer exists. It describes formats only; values are named by
 
 `serialize` writes a module as PowerIO IR and `deserialize` reads it back
 with its types, diagnostics, sources, history, and extensions intact. The
-document has an integer version that changes only when an existing serialized
-representation changes incompatibly. Additive structural types keep the same
-IR version and require a reader implementing those types. PowerIO IR is absent from grid exchange format
-discovery, so `parse` does not accept it. [PowerIO IR](pio-json-schema.md)
-defines the document and its version rule.
+document's `version` names the release whose schema it follows, and a release
+reads the documents of its own release series. Later releases in a series add
+structural types, which a reader that does not implement them refuses.
+PowerIO IR is absent from grid exchange format discovery, so `parse` does not
+accept it. [PowerIO IR](pio-json-schema.md) defines the document and its
+version rule.
 
 ## Derived data
 

@@ -22,6 +22,7 @@
 - [Known limits and versions](scope-0.11.md)
 - [Developer guides](developer.md)
   - [From 0.10 to 0.11](migration-0.11.md)
+  - [From 0.11 to 0.12](migration-0.12.md)
   - [PowerIO IR](pio-json-schema.md)
   - [PowerIO IR reference](ir-reference.md)
   - [BMOPF field mapping](bmopf-field-mapping.md)

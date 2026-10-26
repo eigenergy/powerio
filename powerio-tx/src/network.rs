@@ -2299,11 +2299,11 @@ impl Shunt {
 
 /// How a switched shunt adjusts its susceptance. Maps to the PSS/E `MODSW` code.
 //
-// The IR 2 schema catalogs are published byte for byte, and
+// The 0.11 schema files are published byte for byte, and
 // `powerio/tests/frozen_schemas.rs` holds every record to its published text.
 // The schema descriptions of the two adjusting variants therefore keep their
-// 0.11 wording, which swaps `MODSW` 1 and 2, until a new catalog snapshot
-// takes the code mapping the rustdoc states.
+// 0.11 wording, which swaps `MODSW` 1 and 2, until a release series that no
+// longer reads 0.11 documents takes the code mapping the rustdoc states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]

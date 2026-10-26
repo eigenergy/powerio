@@ -137,7 +137,9 @@ release on its own.
    `## X.Y.Z` and release notes at `docs/release-notes/X.Y.Z.md` titled
    `# PowerIO X.Y.Z release notes`, and wait for `main` CI to pass on that
    merge commit. The tag workflow copies the section into the draft release
-   body and fails without it. `bash scripts/release-preflight.sh` fails on
+   body and fails without it. The bump also sets `IR_VERSION` to the release
+   and commits its schema file unless it already names it
+   (`docs/schema/README.md`). `bash scripts/release-preflight.sh` fails on
    anything that still states the old version.
 2. Create a release tag only when the maintainer asks for the release.
    Check that the tag does not exist, then create an annotated tag on
@@ -268,15 +270,19 @@ docs/                         the mdBook guide, the schema archive, release note
   and the CLI token in `FormatArg` in `powerio-cli/src/main.rs`. Format enums are nonexhaustive and bindings use
   stable names rather than integer positions.
 - **PowerIO IR.** `serialize` and `deserialize` move `PioModule<PioValue>`.
-  Retained source bytes are not serialized. The document identity is
-  `pio-ir` with integer version `2`; `IR_VERSION` and `IR_MIN_VERSION` in
-  `powerio/src/lib.rs` state the window. Additive structural types retain the
-  IR version; older readers reject types they do not implement. Existing
-  type layouts and meanings stay compatible throughout 0.11.x. The DTOs in
-  `powerio/src/stored/dto.rs` define the document layout. Regenerate the schema
-  named by `IR_SCHEMA_ID`, currently `docs/schema/pio-ir/2/0.11.6/schema.json`.
-  Published snapshots, including `pio-ir/2/schema.json` from 0.11.0, remain
-  byte-exact. The release in a catalog path is not a new IR version.
+  Retained source bytes are not serialized. The header is `"schema": "pio-ir"`
+  with `"version"` naming the release whose schema the document follows;
+  `IR_VERSION` in `powerio/src/lib.rs` is that release for this build. The
+  reader accepts its own release series (0.12.x before 1.0, one major release
+  after) and the integer version `2` every 0.11 release wrote. Within a
+  series, releases add structural types and existing type layouts and
+  meanings stay unchanged; older readers reject types they do not implement.
+  The DTOs in `powerio/src/stored/dto.rs` define the document layout.
+  Regenerate the schema named by `IR_SCHEMA_ID`, currently
+  `docs/schema/pio-ir/0.12.0/schema.json`. Every release adds its own
+  `pio-ir/<release>/schema.json`; `IR_VERSION` is at or after the workspace
+  version and equals it in a release. Published schema files, including all
+  of `pio-ir/2/`, remain byte-exact.
 - **Bindings stay typed and lazy.** C calls `pio_module_value`, checks the
   structural type, and requests an owner rooted typed handle. Python reads
   `module.value`; Julia dispatches on `PioModule{T}`. Typed access does not

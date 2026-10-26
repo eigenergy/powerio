@@ -1,9 +1,20 @@
-"""Check current IR 2 output with the published PowerIO 0.11.0 reader."""
+"""Check that this build reads the PowerIO IR documents published 0.11
+releases wrote, and the documents of its own release series.
+
+Each --legacy-package is a directory holding one published 0.11 wheel's
+`powerio` package. The script runs it in a subprocess (--write), where it
+refuses a document this build wrote with READ.MODULE.UNSUPPORTED rather than
+misreading it, and writes one document per structural type that release
+writes. The installed build then reads every document: it accepts the
+integer version 2, and the value it writes back is the one the 0.11 release
+wrote.
+"""
 
 import argparse
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -12,94 +23,131 @@ from pathlib import Path
 import powerio
 
 ROOT = Path(__file__).resolve().parents[1]
-# Structural types added after 0.11.0 under the same IR version. A 0.11.0
-# reader rejects each by name and keeps reading the types it implements.
-ADDITIVE_TYPES = {
-    "powerio.ContingencySet",
-    "powerio.LinDist3FlowOpfInstance",
-    "powerio.LinDist3FlowOpfSolution",
-    "powerio.MonitoredSet",
-    "powerio.SubsystemSet",
-}
+FIXTURE = ROOT / "tests/data/dist/micro/lindist3flow-solution.pio.json"
+CONTINGENCY = ROOT / "tests/data/psse/contingency"
+# This build's document, beside the ones the 0.11 package writes; the
+# extension keeps it out of their `*.json` glob.
+CURRENT = "current.pio.txt"
 
 
-def read_with_legacy(directory: Path) -> None:
-    assert powerio.__version__ == "0.11.0", powerio.__version__
-    accepted = 0
-    rejected = set()
-    for path in sorted(directory.glob("*.json")):
-        document = json.loads(path.read_text())
-        kind = document["value"]["type"]
-        assert document["version"] == 2, path
-        if kind in ADDITIVE_TYPES:
-            try:
-                powerio.deserialize(path)
-            except powerio.PowerIOError as error:
-                assert "unknown variant" in str(error) and kind in str(error), error
-                rejected.add(kind)
-            else:
-                raise AssertionError(f"0.11.0 unexpectedly implemented {kind}")
-        else:
-            module = powerio.deserialize(path)
-            decoded = json.loads(powerio.serialize(module).text)
-            assert decoded["value"] == document["value"], path
-            accepted += 1
-    assert accepted == 8 and rejected == ADDITIVE_TYPES, (accepted, sorted(rejected))
-    print(
-        f"IR 2 compatibility: 0.11.0 read {accepted} existing types "
-        f"and rejected only the {len(rejected)} new types"
-    )
+def release(text: str) -> tuple:
+    """MAJOR.MINOR.PATCH: three numbers without leading zeros or a suffix."""
+    match = re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", text)
+    assert match is not None, text
+    return tuple(int(part) for part in match.groups())
 
 
-def check_output(legacy_package: Path) -> None:
-    assert powerio.versions()["powerio_ir"] == {"schema": "pio-ir", "version": 2}
+def write_with_legacy(directory: Path) -> None:
+    """Under a 0.11 package, refuse this build's document, then write one
+    document per structural type."""
+    legacy = release(powerio.__version__)
+    assert legacy[:2] == (0, 11), powerio.__version__
+    current = (directory / CURRENT).read_text()
+    try:
+        powerio.deserialize(io.StringIO(current))
+    except powerio.PowerIOError as error:
+        assert error.code == "READ.MODULE.UNSUPPORTED", error
+    else:
+        version = json.loads(current)["version"]
+        raise AssertionError(f"{powerio.__version__} read a version {version!r} document")
     balanced = powerio.parse(ROOT / "tests/data/case9.m")
-    solution = powerio.deserialize(ROOT / "tests/data/dist/micro/lindist3flow-solution.pio.json")
-    document = json.loads(powerio.serialize(solution).text)
+    document = json.loads(FIXTURE.read_text())
     network = document["value"]["data"]["instance"]["base"]["network"]
     document["value"] = {"type": "powerio.MulticonductorNetwork", "data": network}
     multiconductor = powerio.deserialize(io.StringIO(json.dumps(document)))
-    contingency = ROOT / "tests/data/psse/contingency"
-    modules = [
-        balanced,
-        balanced.to_dc_pf_instance(),
-        balanced.to_ac_pf_instance(),
-        balanced.to_dc_opf_instance(),
-        balanced.to_ac_opf_instance(),
-        multiconductor,
-        multiconductor.to_mc_ac_pf_instance(),
-        multiconductor.to_mc_ac_opf_instance(),
-        multiconductor.to_lindist3flow_opf_instance(),
-        solution,
-        powerio.parse(contingency / "psse35_generated.con"),
-        powerio.parse(contingency / "psse35_area.sub"),
-        powerio.parse(contingency / "generated.mon"),
+    # Each module with the first 0.11 release that writes its type.
+    builders = [
+        ("0.11.0", lambda: balanced),
+        ("0.11.0", lambda: balanced.to_dc_pf_instance()),
+        ("0.11.0", lambda: balanced.to_ac_pf_instance()),
+        ("0.11.0", lambda: balanced.to_dc_opf_instance()),
+        ("0.11.0", lambda: balanced.to_ac_opf_instance()),
+        ("0.11.0", lambda: multiconductor),
+        ("0.11.0", lambda: multiconductor.to_mc_ac_pf_instance()),
+        ("0.11.0", lambda: multiconductor.to_mc_ac_opf_instance()),
+        ("0.11.1", lambda: multiconductor.to_lindist3flow_opf_instance()),
+        ("0.11.1", lambda: powerio.deserialize(FIXTURE)),
+        ("0.11.3", lambda: powerio.parse(CONTINGENCY / "psse35_generated.con")),
+        ("0.11.3", lambda: powerio.parse(CONTINGENCY / "psse35_area.sub")),
+        ("0.11.3", lambda: powerio.parse(CONTINGENCY / "generated.mon")),
+        ("0.11.4", lambda: multiconductor.to_lindist3flow_pf_instance()),
     ]
-    with tempfile.TemporaryDirectory(prefix="powerio-ir2-compat-") as temporary:
+    for index, (first, build) in enumerate(builders):
+        if legacy >= release(first):
+            text = powerio.serialize(build()).text
+            (directory / f"{index:02}.json").write_text(text)
+
+
+def read_legacy_documents(legacy_package: Path) -> None:
+    """Read with this build what one 0.11 package writes."""
+    with tempfile.TemporaryDirectory(prefix="powerio-ir-0.11-") as temporary:
         directory = Path(temporary)
-        for index, module in enumerate(modules):
-            text = powerio.serialize(module).text
-            assert json.loads(text)["version"] == 2
-            (directory / f"{index}.json").write_text(text)
+        current = powerio.serialize(powerio.parse(ROOT / "tests/data/case9.m")).text
+        (directory / CURRENT).write_text(current)
         environment = dict(os.environ, PYTHONPATH=str(legacy_package.resolve()))
         subprocess.run(
-            [sys.executable, str(Path(__file__).resolve()), "--read", str(directory)],
+            [sys.executable, str(Path(__file__).resolve()), "--write", str(directory)],
             env=environment,
             cwd=directory,
             check=True,
         )
+        types = set()
+        for path in sorted(directory.glob("*.json")):
+            document = json.loads(path.read_text())
+            assert document["version"] == 2, path
+            module = powerio.deserialize(path)
+            rewritten = json.loads(powerio.serialize(module).text)
+            assert rewritten["version"] == powerio.versions()["powerio_ir"]["version"]
+            assert rewritten["value"] == document["value"], document["value"]["type"]
+            types.add(document["value"]["type"])
+        assert len(types) >= 8, sorted(types)
+        # The parsed case comes first; its producer is the 0.11 release.
+        producer = json.loads((directory / "00.json").read_text())["producer"]
+    print(
+        f"PowerIO IR compatibility: read {len(types)} structural types "
+        f"from {legacy_package.name} ({producer['name']} {producer['version']}), "
+        "which refuses this build's documents"
+    )
+
+
+def check_release_series() -> None:
+    """This build writes its release and reads its own release series."""
+    stated = powerio.versions()["powerio_ir"]
+    current = stated["version"]
+    assert stated["schema"] == "pio-ir" and isinstance(current, str), stated
+    major, minor, patch = release(current)
+    document = json.loads(powerio.serialize(powerio.parse(ROOT / "tests/data/case9.m")).text)
+    assert document["version"] == current, document["version"]
+    if major == 0:
+        later, next_series = f"0.{minor}.{patch + 7}", f"0.{minor + 1}.0"
+    else:
+        later, next_series = f"{major}.{minor + 1}.0", f"{major + 1}.0.0"
+    document["version"] = later
+    module = powerio.deserialize(io.StringIO(json.dumps(document)))
+    assert json.loads(powerio.serialize(module).text)["value"] == document["value"]
+    document["version"] = next_series
+    try:
+        powerio.deserialize(io.StringIO(json.dumps(document)))
+    except powerio.PowerIOError as error:
+        assert error.code == "READ.MODULE.UNSUPPORTED", error
+        assert "upgrade PowerIO" in str(error), error
+    else:
+        raise AssertionError(f"{current} read a {next_series} document")
+    print(f"PowerIO IR {current}: reads {later} and refuses {next_series}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_mutually_exclusive_group(required=True)
-    modes.add_argument("--legacy-package", type=Path)
-    modes.add_argument("--read", type=Path)
+    modes.add_argument("--legacy-package", type=Path, action="append")
+    modes.add_argument("--write", type=Path, help=argparse.SUPPRESS)
     arguments = parser.parse_args()
-    if arguments.read is not None:
-        read_with_legacy(arguments.read)
-    else:
-        check_output(arguments.legacy_package)
+    if arguments.write is not None:
+        write_with_legacy(arguments.write)
+        return
+    check_release_series()
+    for legacy_package in arguments.legacy_package:
+        read_legacy_documents(legacy_package)
 
 
 if __name__ == "__main__":

@@ -91,32 +91,25 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The `schema` discriminator of every PowerIO IR document.
 pub const IR_SCHEMA_NAME: &str = "pio-ir";
 
-/// The PowerIO IR version this build writes.
+/// The release whose PowerIO IR schema this build writes, stated as the
+/// `version` of every document it serializes.
 ///
-/// The IR version is an integer that advances only when the serialized
-/// representation changes incompatibly for an existing value type. It is
-/// independent of the PowerIO release, which the `producer` record of a
-/// document names, and of the C ABI version.
+/// Compatibility follows the release series as Cargo defines it: within 0.x
+/// a series is one minor release (0.12.x), and from 1.0 on one major release
+/// (1.x). A reader accepts a document from any release in its own series,
+/// including a later one, and refuses a structural type it does not
+/// implement, one type at a time. A change that existing readers cannot read
+/// starts a new series. This build also reads the integer version `2` that
+/// every 0.11 release wrote.
 ///
-/// | IR version | First release | Change |
-/// |---|---|---|
-/// | 1 | v0.10.0 | the `PioModule` serialization, under the identity `powerio.module` |
-/// | 2 | v0.11.0 | the identity `pio-ir`; the producer release recorded apart from the IR version; retained source bytes left out |
-///
-/// Additive structural types keep the IR version unchanged. A reader accepts
-/// the types it implements; an unknown type requires a newer reader.
-/// [`IR_MIN_VERSION`] is the oldest IR version this build reads.
-pub const IR_VERSION: u64 = 2;
+/// The constant names a release at or after the workspace version, and
+/// equals it in a published release. `producer.version` names the software
+/// that wrote a document, which need not be PowerIO.
+pub const IR_VERSION: &str = "0.12.0";
 
-/// The oldest PowerIO IR version this build reads.
-///
-/// The floor rises only at a minor release boundary. PowerIO 0.11 writes and
-/// reads IR version 2.
-pub const IR_MIN_VERSION: u64 = 2;
-
-/// The `$id` of the schema snapshot describing this build's structural types.
-/// The release in the path identifies the catalog, not a new IR version.
-pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/2/0.11.6/schema.json";
+/// The `$id` of the schema describing this build's document:
+/// `pio-ir/<IR_VERSION>/schema.json` beneath `https://powerio.dev/schema/`.
+pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/0.12.0/schema.json";
 
 /// Loss-preserving PSS/E transient-stability parsing and explicit study pairing.
 pub use powerio_tx::dynamic::{

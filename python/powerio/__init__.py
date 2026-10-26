@@ -1157,7 +1157,11 @@ MulticonductorNetwork = dist.MulticonductorNetwork
 
 @_guard
 def versions() -> Any:
-    """Return the PowerIO release, sole IR identity, and BMOPF schema."""
+    """Return the PowerIO release, the PowerIO IR identity, and BMOPF schema.
+
+    ``powerio_ir`` is ``{"schema": "pio-ir", "version": <release>}``: the
+    release whose schema the documents this build writes follow.
+    """
     return _json.loads(_powerio.versions_json())
 
 

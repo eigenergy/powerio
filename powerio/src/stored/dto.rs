@@ -1426,9 +1426,9 @@ pub struct StoredModule {
     pub schema: String,
     #[cfg_attr(
         feature = "schema",
-        schemars(extend("const" = crate::IR_VERSION))
+        schemars(with = "String", extend("const" = crate::IR_VERSION))
     )]
-    pub version: u64,
+    pub version: StoredVersion,
     pub producer: Producer,
     pub value: StoredValue,
     #[serde(
@@ -1480,27 +1480,22 @@ impl<'de> Deserialize<'de> for StoredModule {
     }
 }
 
-/// The `version` a document states, kept as written so a refusal can name it.
-#[derive(Debug, Deserialize)]
+/// The `version` a document states, kept as written so the reader can check
+/// it and a refusal can name it. A document from 0.12 on states a release
+/// such as `"0.12.0"`; every 0.11 release wrote the integer `2`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub(super) enum StoredVersion {
+pub enum StoredVersion {
     Integer(u64),
+    Text(String),
     Other(serde_json::Value),
-}
-
-impl StoredVersion {
-    pub(super) fn as_integer(&self) -> Option<u64> {
-        match self {
-            Self::Integer(version) => Some(*version),
-            Self::Other(_) => None,
-        }
-    }
 }
 
 impl fmt::Display for StoredVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Integer(version) => version.fmt(f),
+            Self::Text(text) => serde_json::Value::from(text.as_str()).fmt(f),
             Self::Other(value) => value.fmt(f),
         }
     }

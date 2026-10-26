@@ -50,8 +50,8 @@
   `serialize` returns an `EmitResult`.
 - `SocwrOpfSolution` calls its branch flows `branch_from_active_power` where
   the other solutions say `branch_from_active_flow`, and its `bus_order` and
-  `branch_order` are iterators rather than vectors. PowerIO IR version 2
-  has the same split in its keys.
+  `branch_order` are iterators rather than vectors. PowerIO IR has the
+  same split in its keys.
 
 ## Versions
 
@@ -62,13 +62,14 @@ and PowerIO.jl. The boundaries checked independently are:
 |---|---|---|---|
 | PowerIO release | 0.11.x | the manifests, `powerio::VERSION`, `powerio.versions()`, `pio_version` | every release |
 | C ABI | 7 | the `pio_abi_version` handshake at load | an existing C signature or documented behavior changes |
-| PowerIO IR version | 2, unchanged | the document header, `powerio::IR_VERSION`, `powerio::IR_MIN_VERSION` | an existing representation changes incompatibly |
+| PowerIO IR version | 2, unchanged | the document header | an existing representation changes incompatibly |
 | Rust toolchain | 1.88 | `rust-version` in the workspace manifest, checked by CI | a dependency in the locked graph requires a newer compiler |
 | Python | 3.9 or later; the `mcp` extra needs 3.10, the `bench` extra 3.11 | `pyproject.toml` | a dependency drops a version |
 
 The release version is what you install. ABI 7 is what a compiled consumer
-has to match. The IR version identifies the serialized document; its rule
-is in [PowerIO IR](pio-json-schema.md). The MCP server passes PowerIO IR
+has to match. The integer 2 identified every 0.11 PowerIO IR document;
+from 0.12 the header names the release whose schema the document follows, as
+[PowerIO IR](pio-json-schema.md) describes. The MCP server passes PowerIO IR
 documents through and defines no electrical data shape of its own.
 
 The 0.11.x line is for compatible fixes, performance work, and additive

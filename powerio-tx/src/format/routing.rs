@@ -556,8 +556,8 @@ mod tests {
             classify_json_text(r#"{"schema":"pio-ir","version":2}"#),
             JsonClass::Module
         );
-        // Routing is the schema name's job alone. Every PowerIO IR generation
-        // reaches the deserializer, which owns the version rule and can then
+        // Routing is the schema name's job alone. A document stating any
+        // version reaches the deserializer, which owns the version rule and can then
         // name the version it refuses.
         for version in ["1", "3", r#""0.11.0""#, "null"] {
             assert_eq!(
