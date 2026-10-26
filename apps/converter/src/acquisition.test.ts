@@ -91,3 +91,12 @@ test('an unavailable shared include blocks each dependent project without affect
   expect(groups.filter(group => group.acquisitionFailed)).toHaveLength(2);
   expect(groups.find(group => group.name === 'working')?.error).toBeUndefined();
 });
+
+for (const family of ['pypsa', 'cgmes']) test(`a shared listing failure blocks every ${family} project`, async () => {
+  const groups = await groupInputs(await acquire([folder('batch', ['one', 'two'].map(name => folder(name,
+    family === 'pypsa' ? [source('network.csv'), source('buses.csv')]
+      : [source('EQ.xml', '<rdf:RDF>'), source('TP.xml', '<rdf:RDF>')],
+  )), true)]));
+  expect(groups).toHaveLength(2);
+  expect(groups.every(group => group.acquisitionFailed)).toBe(true);
+});

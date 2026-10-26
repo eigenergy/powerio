@@ -51,6 +51,7 @@ export async function unpack(entry: BrowserFile): Promise<BrowserFile[]> {
 export async function groupInputs(entries: InputEntry[], cancelled: () => boolean = () => false): Promise<InputCase[]> {
   const result: InputCase[] = [];
   const remaining = new Set(entries);
+  const unavailable = entries.filter(entry => !available(entry));
   const take = (name: string, files: InputEntry[], root: string, primary?: string, needsPrimary = false, error?: InputProblem) => {
     files.forEach(file => remaining.delete(file));
     const trim = (path: string) => root && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path;
@@ -60,9 +61,12 @@ export async function groupInputs(entries: InputEntry[], cancelled: () => boolea
   };
   for (const marker of entries.filter(file => basename(file.path).toLowerCase() === 'network.csv')) {
     const root = directory(marker.path);
-    take(basename(root) || 'PyPSA project', [...remaining].filter(file => (root ? file.path.startsWith(`${root}/`) : !file.path.includes('/')) || (!available(file) && file.directory && `${root}/`.startsWith(file.path))), root);
+    const files = [...remaining].filter(file => root ? file.path.startsWith(`${root}/`) : !file.path.includes('/'));
+    // A failed ancestor listing can affect several projects; consuming the
+    // error for one case must not make the others appear complete.
+    take(basename(root) || 'PyPSA project', [...new Set([...files, ...unavailable.filter(file => !available(file) && file.directory && `${root}/`.startsWith(file.path))])], root);
   }
-  for (const project of await dssProjects([...remaining], cancelled)) {
+  for (const project of await dssProjects([...new Set([...remaining, ...unavailable.filter(file => !available(file) && file.directory)])], cancelled)) {
     take(basename(project.root) || project.primary || 'OpenDSS project', project.files,
       project.root, project.primary, !project.primary, project.error);
   }
@@ -81,7 +85,7 @@ export async function groupInputs(entries: InputEntry[], cancelled: () => boolea
     xmlGroups.set(root, [...(xmlGroups.get(root) ?? []), file]);
   }
   for (const [root, files] of xmlGroups) {
-    const missing = [...remaining].filter(file => !available(file) && (directory(file.path) === root || (file.directory && `${root}/`.startsWith(file.path))));
+    const missing = unavailable.filter(file => !available(file) && (directory(file.path) === root || (file.directory && `${root}/`.startsWith(file.path))));
     if (files.length > 1 || missing.length) take(basename(root) || 'CGMES project', [...files, ...missing], root);
   }
   for (const file of remaining) take(available(file) ? file.file.name : basename(file.path.replace(/\/$/, '')), [file], directory(file.path), file.path);
