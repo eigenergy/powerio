@@ -1,9 +1,10 @@
 import { BlobReader, BlobWriter, ZipReader, type FileEntry } from '@zip.js/zip.js';
 import type { BrowserFile } from './types';
+import { available, type InputEntry } from './acquisition';
 import { dssProjects } from './dss-projects';
 import { discoveryProblem, inputLimit, MAX_INPUT_BYTES, MAX_INPUT_FILES, type InputProblem } from './input-limits';
 
-export interface InputCase { name: string; entries: BrowserFile[]; primary?: string; needsPrimary?: boolean; error?: InputProblem }
+export interface InputCase { name: string; entries: BrowserFile[]; paths?: string[]; primary?: string; needsPrimary?: boolean; error?: InputProblem; acquisitionFailed?: boolean }
 const directory = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf('/')));
 export const basename = (path: string) => path.split('/').at(-1) ?? path;
 export function safeName(name: string) {
@@ -47,17 +48,19 @@ export async function unpack(entry: BrowserFile): Promise<BrowserFile[]> {
   } finally { await reader.close(); }
 }
 
-export async function groupInputs(entries: BrowserFile[], cancelled: () => boolean = () => false): Promise<InputCase[]> {
+export async function groupInputs(entries: InputEntry[], cancelled: () => boolean = () => false): Promise<InputCase[]> {
   const result: InputCase[] = [];
   const remaining = new Set(entries);
-  const take = (name: string, files: BrowserFile[], root: string, primary?: string, needsPrimary = false, error?: InputProblem) => {
+  const take = (name: string, files: InputEntry[], root: string, primary?: string, needsPrimary = false, error?: InputProblem) => {
     files.forEach(file => remaining.delete(file));
-    const trim = (path: string) => root ? path.slice(root.length + 1) : path;
-    result.push({ name, entries: files.map(file => ({ ...file, path: trim(file.path) })), primary: primary ? trim(primary) : undefined, needsPrimary, error: error ?? inputLimit(files) });
+    const trim = (path: string) => root && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path;
+    const acquired = files.filter(available);
+    const missing = files.find(file => !available(file));
+    result.push({ name, entries: acquired.map(file => ({ ...file, path: trim(file.path) })), paths: files.map(file => trim(file.path) || './'), primary: primary ? trim(primary) : undefined, needsPrimary, error: missing && !available(missing) ? missing.error : error ?? inputLimit(acquired), acquisitionFailed: !!missing });
   };
   for (const marker of entries.filter(file => basename(file.path).toLowerCase() === 'network.csv')) {
     const root = directory(marker.path);
-    take(basename(root) || 'PyPSA project', [...remaining].filter(file => root ? file.path.startsWith(`${root}/`) : !file.path.includes('/')), root);
+    take(basename(root) || 'PyPSA project', [...remaining].filter(file => (root ? file.path.startsWith(`${root}/`) : !file.path.includes('/')) || (!available(file) && file.directory && `${root}/`.startsWith(file.path))), root);
   }
   for (const project of await dssProjects([...remaining], cancelled)) {
     take(basename(project.root) || project.primary || 'OpenDSS project', project.files,
@@ -66,6 +69,7 @@ export async function groupInputs(entries: BrowserFile[], cancelled: () => boole
   const xmlGroups = new Map<string, BrowserFile[]>();
   for (const file of remaining) {
     if (cancelled()) return result;
+    if (!available(file)) continue;
     if (!/\.xml$/i.test(file.path)) continue;
     const limit = inputLimit([file]);
     if (limit) { take(file.file.name, [file], directory(file.path), file.path, false, limit); continue; }
@@ -76,7 +80,10 @@ export async function groupInputs(entries: BrowserFile[], cancelled: () => boole
     const root = directory(file.path);
     xmlGroups.set(root, [...(xmlGroups.get(root) ?? []), file]);
   }
-  for (const [root, files] of xmlGroups) if (files.length > 1) take(basename(root) || 'CGMES project', files, root);
-  for (const file of remaining) take(file.file.name, [file], directory(file.path), file.path);
+  for (const [root, files] of xmlGroups) {
+    const missing = [...remaining].filter(file => !available(file) && (directory(file.path) === root || (file.directory && `${root}/`.startsWith(file.path))));
+    if (files.length > 1 || missing.length) take(basename(root) || 'CGMES project', [...files, ...missing], root);
+  }
+  for (const file of remaining) take(available(file) ? file.file.name : basename(file.path.replace(/\/$/, '')), [file], directory(file.path), file.path);
   return result;
 }

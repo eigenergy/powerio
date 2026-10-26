@@ -39,6 +39,7 @@ export interface Job {
   outputs: Output[];
   primary?: string;
   overrideFormat?: string;
+  acquisitionFailed?: boolean;
   targets?: string[];
 }
 export interface ConverterState {

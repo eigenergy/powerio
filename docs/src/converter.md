@@ -31,6 +31,10 @@ The [command line](cli-mcp.md) is useful for larger projects.
 A failed case does not prevent other cases from converting. Cancel stops
 the active worker and keeps completed results. Changing an input format,
 entry file, or dependency removes its old outputs before conversion.
+If a dropped file or folder cannot be acquired, its affected project stays
+blocked while independent cases continue. Remove that failed case and select
+its complete files or folder again; retry and format overrides cannot restore
+files that the browser did not acquire. Cancel also stops further acquisition.
 
 ## Understand the result
 
@@ -72,8 +76,9 @@ its requests and derives browser/device, approximate location, and visit
 statistics from that metadata. See [Umami metric definitions](https://docs.umami.is/docs/metric-definitions).
 Switch statistics off at any time; Do Not Track and Global
 Privacy Control also disable them. Conversion works with analytics blocked.
-The [public analytics policy](https://github.com/eigenergy/powerio/blob/main/apps/converter/public/analytics-policy.js)
-lists every permitted event and value.
+The committed [analytics policy template](https://github.com/eigenergy/powerio/blob/main/apps/converter/scripts/analytics-policy.template.js)
+lists every permitted event and value. The build supplies the one permitted
+PowerIO version in the generated policy shared by the application and frame.
 
 Share settings copies a link containing output preferences only. It never
 includes files or filenames. Report a conversion problem prepares an

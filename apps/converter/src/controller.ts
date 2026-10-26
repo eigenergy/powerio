@@ -2,6 +2,7 @@ import { ArtifactStore, download } from './artifacts';
 import { analyticsEnabled, bucket, configureAnalytics, track, trackOperation } from './analytics';
 import { basename, groupInputs, safeName, stem, unpack, type InputCase } from './inputs';
 import { inputLimit } from './input-limits';
+import { acquire, available, type DropEntry, type InputEntry } from './acquisition';
 import { WorkerClient } from './worker-client';
 import type { BrowserFile, ConverterState, Diagnostic, Family, Job, Output } from './types';
 
@@ -78,16 +79,23 @@ export class ConverterController {
   addFiles(files: File[]) {
     return this.addEntries(files.map(file => ({ file, path: file.webkitRelativePath || file.name })));
   }
-  addEntries(entries: BrowserFile[]) {
+  addEntries(entries: InputEntry[]) {
     return this.run(epoch => this.addInputs(entries, epoch));
   }
-  private async addInputs(entries: BrowserFile[], epoch: number) {
+  addDroppedEntries(entries: DropEntry[]) {
+    return this.run(async epoch => {
+      this.state.phase = 'inspecting'; this.publish();
+      await this.addInputs(await acquire(entries, () => epoch !== this.epoch), epoch);
+    });
+  }
+  private async addInputs(entries: InputEntry[], epoch: number) {
     if (epoch !== this.epoch) return;
     this.state.phase = 'inspecting'; this.publish();
-    const expanded: BrowserFile[] = [];
+    const expanded: InputEntry[] = [];
     const rejected: InputCase[] = [];
     for (const entry of entries) {
       if (epoch !== this.epoch) return;
+      if (!available(entry)) { expanded.push(entry); continue; }
       const archive = /\.zip$/i.test(entry.path);
       const limit = archive ? inputLimit([entry]) : undefined;
       if (limit) {
@@ -103,7 +111,7 @@ export class ConverterController {
       if (epoch !== this.epoch) return;
       const problem = input.error ?? inputLimit(input.entries);
       const job: Job = {
-        id: crypto.randomUUID(), name: input.name, files: input.entries.map(entry => entry.path),
+        id: crypto.randomUUID(), name: input.name, files: input.paths ?? input.entries.map(entry => entry.path), acquisitionFailed: input.acquisitionFailed,
         size: input.entries.reduce((sum, entry) => sum + entry.file.size, 0), primary: input.primary,
         status: problem ? 'error' : input.needsPrimary ? 'needs-primary' : 'queued', diagnostics: problem ? [issue(problem.message, problem.code)] : [], outputs: [],
       };
@@ -166,7 +174,7 @@ export class ConverterController {
     this.publish();
   }
   setFormat(id: string, token: string) {
-    const job = this.job(id); if (!job) return Promise.resolve();
+    const job = this.job(id); if (!job || job.acquisitionFailed) return Promise.resolve();
     return this.run(async epoch => {
       await this.invalidate(id);
       this.job(id)!.overrideFormat = token;
@@ -174,7 +182,7 @@ export class ConverterController {
     });
   }
   setPrimary(id: string, path: string) {
-    const job = this.job(id); if (!job || !job.files.includes(path)) return Promise.resolve();
+    const job = this.job(id); if (!job || job.acquisitionFailed || !job.files.includes(path)) return Promise.resolve();
     return this.run(async epoch => {
       await this.invalidate(id);
       this.job(id)!.primary = path;
@@ -183,7 +191,7 @@ export class ConverterController {
   }
   addMissingFiles(id: string, files: File[]) {
     return this.run(async epoch => {
-      const job = this.job(id); if (!job) return;
+      const job = this.job(id); if (!job || job.acquisitionFailed) return;
       await this.invalidate(id);
       const entries = this.inputs.get(id) ?? [];
       for (const file of files) {
@@ -199,7 +207,7 @@ export class ConverterController {
   retry(id?: string) {
     return this.run(async epoch => {
       this.state.phase = 'inspecting';
-      const ids = this.state.jobs.filter(job => id ? job.id === id : job.status === 'error' || job.status === 'cancelled' || job.status === 'needs-files' || job.outputs.some(output => output.status === 'error')).map(job => job.id);
+      const ids = this.state.jobs.filter(job => !job.acquisitionFailed && (id ? job.id === id : job.status === 'error' || job.status === 'cancelled' || job.status === 'needs-files' || job.outputs.some(output => output.status === 'error'))).map(job => job.id);
       for (const key of ids) {
         if (epoch !== this.epoch) return;
         const job = this.job(key); if (!job) continue;

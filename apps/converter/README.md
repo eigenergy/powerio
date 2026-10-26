@@ -82,6 +82,13 @@ Retry reruns discovery, so temporary read failures can recover without losing
 completed neighboring results; retry cannot bypass the input limits. Cancelling
 discovery stops subsequent reads and prevents stale jobs from being added.
 
+Dropped-file acquisition failures are kept with their affected project; successful
+independent cases still convert. Failed directory listings also block any partial
+project inventories beneath that directory. These cases require removing the
+failed case and selecting the complete files or folder again. Retry and format
+overrides cannot turn an incomplete acquisition into a successful conversion.
+Acquisition runs in the same cancellable queue as discovery and parsing.
+
 The portal excludes PowerIO IR, geographic-only values, GridFM/Parquet,
 and calculation operations. GO Challenge 3 writing requires a complete
 `powerio.AcScucSolution`; network inputs cannot produce one. BMOPF outputs
@@ -105,7 +112,9 @@ On powerio.dev only, an iframe with `sandbox="allow-scripts"` loads Umami.
 It loads the third-party script only after a consent message from the
 converter; opening the frame URL directly sends nothing. Its opaque origin prevents access to the converter DOM, selected files,
 browser storage, and reports. Both sides apply the same closed vocabulary
-in [`public/analytics-policy.js`](public/analytics-policy.js). Unknown
+in the generated `public/analytics-policy.js`, built from the committed
+[`scripts/analytics-policy.template.js`](scripts/analytics-policy.template.js)
+with the one permitted workspace version. Unknown
 format values become `unknown`; unreviewed diagnostic codes become `other`.
 There is no general text, numeric, or regular-expression escape hatch.
 The reviewed codes describe parsing, format compatibility, project-file

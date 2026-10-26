@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { ConverterController } from "./controller";
+  import type { DropEntry } from "./acquisition";
   import type {
-    BrowserFile,
     ConverterState,
     Diagnostic,
     Family,
@@ -232,42 +232,6 @@
     missingJobId = id;
     missingInput.click();
   }
-  interface DropEntry {
-    isFile: boolean;
-    name: string;
-    file: (
-      success: (file: File) => void,
-      failure: (error: DOMException) => void,
-    ) => void;
-    createReader: () => {
-      readEntries: (
-        success: (entries: DropEntry[]) => void,
-        failure: (error: DOMException) => void,
-      ) => void;
-    };
-  }
-  async function readEntry(
-    entry: DropEntry,
-    prefix = "",
-  ): Promise<BrowserFile[]> {
-    const path = `${prefix}${entry.name}`;
-    if (entry.isFile) {
-      const file = await new Promise<File>((resolve, reject) =>
-        entry.file(resolve, reject),
-      );
-      return [{ path, file }];
-    }
-    const reader = entry.createReader();
-    const result: BrowserFile[] = [];
-    while (true) {
-      const children = await new Promise<DropEntry[]>((resolve, reject) =>
-        reader.readEntries(resolve, reject),
-      );
-      if (!children.length) return result;
-      for (const child of children)
-        result.push(...(await readEntry(child, `${path}/`)));
-    }
-  }
   function dragEnter(event: DragEvent) {
     if (!event.dataTransfer?.types.includes("Files")) return;
     event.preventDefault();
@@ -296,10 +260,7 @@
     const files = Array.from(transfer.files);
     await action(async () => {
       if (entries.length) {
-        const collected: BrowserFile[] = [];
-        for (const entry of entries)
-          collected.push(...(await readEntry(entry)));
-        await controller?.addEntries(collected);
+        await controller?.addDroppedEntries(entries);
       } else await controller?.addFiles(files);
     });
   }
@@ -579,6 +540,7 @@
               : ""}</span
           >
         </p>
+        {#if !hasFiles}<button class="button secondary" onclick={() => controller?.cancel()}>Cancel</button>{/if}
       {:else if notice || view.message}<p class="status-message">
           {@render icon("check")}{notice || view.message}
         </p>{/if}
@@ -669,7 +631,11 @@
                 {#if job.status === "error" || job.status === "needs-files"}<p
                     class="job-help"
                   >
-                    {#if job.status === "needs-files"}
+                    {#if job.acquisitionFailed}
+                      Some files could not be acquired. Remove this case and choose
+                      its complete files or folder again. Incomplete projects cannot
+                      be converted. Other cases can still convert.
+                    {:else if job.status === "needs-files"}
                       Some referenced files could not be read, so this project
                       is incomplete. Review the details, add missing files, or
                       use the complete project folder. Other cases can still
@@ -679,12 +645,12 @@
                       missing files, or try a format override below.
                     {/if}
                   </p>
-                  <button
+                  {#if !job.acquisitionFailed}<button
                     class="text-button"
                     disabled={busy}
                     onclick={() => chooseMissingFiles(job.id)}
                     >Add missing files</button
-                  >{/if}
+                  >{/if}{/if}
                 {@render diagnostics(job.diagnostics)}
                 {#if job.outputs.length}
                   <ul class="output-list">
@@ -731,6 +697,7 @@
                   <details class="case-settings">
                     <summary>Case settings</summary>
                     <div class="case-setting-fields">
+                      {#if !job.acquisitionFailed}
                       <label
                         >Input format<select
                           aria-label="Input format"
@@ -807,6 +774,7 @@
                                 >{/each}
                             </div>{/if}
                         </fieldset>{/if}
+                      {/if}
                       <details class="source-files">
                         <summary>Included files ({job.files.length})</summary>
                         <ul>
@@ -816,7 +784,7 @@
                     </div>
                   </details>
                   <div class="job-tools">
-                    {#if job.status === "error" || job.status === "cancelled" || job.status === "needs-files"}<button
+                    {#if !job.acquisitionFailed && (job.status === "error" || job.status === "cancelled" || job.status === "needs-files")}<button
                         class="text-button"
                         disabled={busy}
                         onclick={() => action(() => controller?.retry(job.id))}
@@ -922,7 +890,7 @@
           {#if busy}<button
               class="button secondary"
               onclick={() => controller?.cancel()}>Cancel</button
-            >{:else}{#if failures.length}<button
+            >{:else}{#if failures.some(job => !job.acquisitionFailed)}<button
                 class="text-button"
                 onclick={() => action(() => controller?.retry())}
                 >Retry failed</button
@@ -1057,10 +1025,11 @@
           </details>
           <p>
             <a
-              href="https://github.com/eigenergy/powerio/tree/main/apps/converter/public/analytics-policy.js"
+              href="https://github.com/eigenergy/powerio/blob/main/apps/converter/scripts/analytics-policy.template.js"
               >Review the analytics policy</a
             >
-            for the exact allowed fields. Source review and suggestions are welcome
+            for the exact allowed fields. The build supplies the one permitted PowerIO
+            version. Source review and suggestions are welcome
             on GitHub.
           </p>
           <label class="checkbox-label analytics-control"

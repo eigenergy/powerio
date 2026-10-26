@@ -42,6 +42,36 @@ beforeEach(() => {
 });
 const file = (name: string) => new File(['mpc.version = 2;'], name);
 
+test('unavailable acquisitions cannot bypass rejection through retry or interpretation controls', async () => {
+  const controller = new ConverterController();
+  await controller.addEntries([
+    { path: 'broken/Master.dss', file: file('Master.dss') },
+    { path: 'broken/loads.inc', directory: false, error: { code: 'WEB.INPUT.ACQUISITION', message: 'Choose the folder again.' } },
+    { path: 'working.m', file: file('working.m') },
+  ]);
+  const broken = controller.state.jobs.find(job => job.acquisitionFailed)!;
+  await controller.retry(broken.id);
+  await controller.setFormat(broken.id, 'matpower');
+  await controller.setPrimary(broken.id, 'Master.dss');
+  await controller.addMissingFiles(broken.id, [file('loads.inc')]);
+  await controller.convert();
+  expect(broken.status).toBe('error');
+  expect(fake.inspected.every(name => name === 'working.m')).toBe(true);
+  expect(controller.state.jobs.find(job => job.name === 'working.m')?.outputs).toHaveLength(1);
+  controller.dispose();
+});
+
+test('cancelled acquisition cannot append cases after its pending callback finishes', async () => {
+  const controller = new ConverterController();
+  let finish!: (file: File) => void;
+  const adding = controller.addDroppedEntries([{ isFile: true, name: 'pending.m', file: success => { finish = success; }, createReader: () => { throw new Error(); } }]);
+  await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+  controller.cancel(); finish(file('pending.m')); await adding;
+  expect(controller.state.jobs).toEqual([]);
+  expect(fake.inspected).toEqual([]);
+  controller.dispose();
+});
+
 test('an unreadable discovery input has a retryable error while its independent neighbor converts', async () => {
   const broken = file('broken.dss');
   const read = vi.spyOn(broken, 'text').mockRejectedValueOnce(new DOMException('Cannot read this file.', 'NotReadableError'));

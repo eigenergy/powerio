@@ -140,6 +140,80 @@ test('an oversized loose DSS file is rejected before discovery while a valid nei
   await expect(working.getByRole('button', { name: /^Download working.m as MATPOWER/ })).toBeEnabled();
 });
 
+for (const mode of ['file', 'nested-file', 'nested-directory'] as const) {
+  test(`dropped ${mode} acquisition failure preserves independent conversion and blocks partial projects`, async ({ page }) => {
+    await ready(page);
+    await page.evaluate(({ mode, network, feeder }) => {
+      type Entry = import('../src/acquisition').DropEntry;
+      const file = (name: string, content: string, failed = false): Entry => ({
+        name, isFile: true,
+        file: (success, failure) => failed ? failure(new DOMException('Unavailable', 'NotReadableError')) : success(new File([content], name)),
+        createReader: () => { throw new Error('Not a directory'); },
+      });
+      const folder = (name: string, children: Entry[], failed = false): Entry => ({
+        name, isFile: false, file: () => { throw new Error('Not a file'); },
+        createReader() {
+          let batch = 0;
+          return { readEntries(success, failure) {
+            if (!batch++) success(children);
+            else if (failed) failure(new DOMException('Unavailable', 'NotReadableError'));
+            else success([]);
+          } };
+        },
+      });
+      const broken = mode === 'file' ? file('unavailable.dss', '', true)
+        : folder('batch', [folder('broken', [file('Master.dss', feeder), ...(mode === 'nested-file' ? [file('notes.asset', '', true)] : [])], mode === 'nested-directory')]);
+      const event = new Event('drop', { bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'dataTransfer', { value: { types: ['Files'], files: [], items: [file('working.m', network), broken].map(entry => ({ webkitGetAsEntry: () => entry })) } });
+      document.querySelector('.drop-zone')!.dispatchEvent(event);
+    }, { mode, network: case9.toString(), feeder: feeder.toString() });
+    await expect(page.getByRole('article')).toHaveCount(2);
+    const working = page.getByRole('article', { name: 'working.m', exact: true });
+    const broken = page.getByRole('article').filter({ hasText: /Couldn't convert/ });
+    await expect(working.getByText('Ready to convert', { exact: true })).toBeVisible();
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(broken.getByText(/choose its complete files or folder again/)).toBeVisible();
+    await broken.locator('details.diagnostics > summary').click();
+    await expect(broken.getByText('WEB.INPUT.ACQUISITION', { exact: true })).toBeVisible();
+    await expect(broken.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0);
+    await expect(broken.getByRole('button', { name: 'Add missing files', exact: true })).toBeHidden();
+    await broken.getByText('Case settings', { exact: true }).click();
+    await expect(broken.getByRole('combobox', { name: 'Input format' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Convert', exact: true }).click();
+    const downloaded = page.waitForEvent('download');
+    await working.getByRole('button', { name: /^Download working.m as MATPOWER/ }).click();
+    expect(await downloadBytes(await downloaded)).toEqual(case9);
+    await expect(broken.getByRole('button', { name: /^Download / })).toHaveCount(0);
+    await broken.getByRole('button', { name: /^Remove / }).click();
+    await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'reselected.dss', mimeType: 'text/plain', buffer: feeder });
+    await expect(page.getByRole('article', { name: 'reselected.dss', exact: true }).getByText('Ready to convert', { exact: true })).toBeVisible();
+    await expect(working.getByRole('button', { name: /^Download working.m as MATPOWER/ })).toBeEnabled();
+  });
+}
+
+test('cancel during initial drop acquisition stops stale cases before a new selection', async ({ page }) => {
+  await ready(page);
+  await page.evaluate(() => {
+    const entry = { isFile: true, name: 'cancelled.m', file: (success: (file: File) => void) => { (window as any).finishAcquisition = () => success(new File([''], 'cancelled.m')); } };
+    const event = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'dataTransfer', { value: { types: ['Files'], files: [], items: [{ webkitGetAsEntry: () => entry }] } });
+    document.querySelector('.drop-zone')!.dispatchEvent(event);
+  });
+  await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.evaluate(() => (window as any).finishAcquisition());
+  await page.getByRole('button', { name: 'Transmission', exact: true }).click();
+  await expect(page.getByRole('article', { name: 'case9.m', exact: true }).getByText('Ready to convert', { exact: true })).toBeVisible();
+  await expect(page.getByRole('article')).toHaveCount(1);
+});
+
+test('privacy disclosure links to the committed analytics template', async ({ page }) => {
+  await ready(page);
+  await page.getByText('Your files stay here.', { exact: true }).click();
+  await expect(page.getByRole('link', { name: 'Review the analytics policy', exact: true })).toHaveAttribute('href', 'https://github.com/eigenergy/powerio/blob/main/apps/converter/scripts/analytics-policy.template.js');
+  await expect(page.getByText(/The build supplies the one permitted PowerIO version/)).toBeVisible();
+});
+
 test('every applicable transmission writer runs in browser WASM', async ({ page }) => {
   await ready(page);
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'case9.m', mimeType: 'text/plain', buffer: case9 });
