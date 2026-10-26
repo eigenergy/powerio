@@ -74,6 +74,14 @@ allow abandoned temporary directories to be deleted on the next visit.
 The queue does not persist across reloads. Clear all removes its local
 artifacts. A local report can include private filenames and diagnostics.
 
+Discovery checks project inventories before reading full DSS command files and
+charges newly reached includes before reading them. The same limits are used
+for archive handling, discovery and worker input. A failed discovery read or
+over-limit project gets its own error job while independent cases continue.
+Retry reruns discovery, so temporary read failures can recover without losing
+completed neighboring results; retry cannot bypass the input limits. Cancelling
+discovery stops subsequent reads and prevents stale jobs from being added.
+
 The portal excludes PowerIO IR, geographic-only values, GridFM/Parquet,
 and calculation operations. GO Challenge 3 writing requires a complete
 `powerio.AcScucSolution`; network inputs cannot produce one. BMOPF outputs

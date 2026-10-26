@@ -3,6 +3,7 @@ import { beforeEach, expect, test, vi } from 'vitest';
 const fake = vi.hoisted(() => ({
   paths: [] as string[],
   crash: false, quota: false, closed: 0, removed: [] as string[], current: '',
+  inspected: [] as string[],
   pending: undefined as undefined | { resolve: (value: unknown) => void; reject: (error: Error) => void },
   pause: false,
 }));
@@ -13,7 +14,7 @@ vi.mock('./worker-client', () => ({ WorkerClient: class {
     { token: 'powermodels-json', family: 'transmission', canRead: true, canEmit: true, extension: 'json' },
   ] }; }
   async request(type: string, data: any) {
-    if (type === 'inspect') { fake.current = data.name; return { ok: true, format: 'matpower', family: 'transmission', valueType: 'powerio.BalancedNetwork', diagnostics: [] }; }
+    if (type === 'inspect') { fake.current = data.name; fake.inspected.push(data.name); return { ok: true, format: 'matpower', family: 'transmission', valueType: 'powerio.BalancedNetwork', diagnostics: [] }; }
     if (type === 'emit') {
       if (fake.crash && fake.current === 'broken.m') throw new Error('WASM stopped');
       if (fake.pause) return new Promise((resolve, reject) => { fake.pending = { resolve, reject }; });
@@ -35,10 +36,65 @@ import { ConverterController } from './controller';
 
 beforeEach(() => {
   fake.paths = []; fake.crash = false; fake.quota = false; fake.pause = false; fake.closed = 0; fake.removed = []; fake.pending = undefined;
+  fake.inspected = [];
   vi.stubGlobal('document', { documentElement: { dataset: {} } });
   vi.stubGlobal('location', { hash: '' });
 });
 const file = (name: string) => new File(['mpc.version = 2;'], name);
+
+test('an unreadable discovery input has a retryable error while its independent neighbor converts', async () => {
+  const broken = file('broken.dss');
+  const read = vi.spyOn(broken, 'text').mockRejectedValueOnce(new DOMException('Cannot read this file.', 'NotReadableError'));
+  const controller = new ConverterController();
+  await controller.addFiles([broken, file('working.m')]);
+  expect(controller.state.error).toBe('');
+  expect(controller.state.jobs).toHaveLength(2);
+  const bad = controller.state.jobs.find(job => job.files.includes('broken.dss'))!;
+  expect(bad.status).toBe('error');
+  expect(bad.diagnostics[0].code).toBe('WEB.INPUT.DISCOVERY');
+  expect(controller.state.jobs.find(job => job.name === 'working.m')?.status).toBe('ready');
+  expect(fake.inspected).toEqual(['working.m']);
+  await controller.convert();
+  expect(controller.state.jobs.find(job => job.name === 'working.m')?.outputs[0].status).toBe('converted');
+  await controller.retry(bad.id);
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(controller.state.jobs).toHaveLength(2);
+  expect(controller.state.jobs.every(job => job.status !== 'error')).toBe(true);
+  controller.dispose();
+});
+
+test('loose oversized DSS files are refused before discovery and cannot bypass the guard by retrying', async () => {
+  const large = file('oversized.dss');
+  Object.defineProperty(large, 'size', { value: 64 * 1024 * 1024 + 1 });
+  const read = vi.spyOn(large, 'text');
+  const controller = new ConverterController();
+  await controller.addFiles([large, file('working.m')]);
+  expect(read).not.toHaveBeenCalled();
+  expect(controller.state.error).toBe('');
+  const bad = controller.state.jobs.find(job => job.files.includes('oversized.dss'))!;
+  expect(bad.status).toBe('error');
+  expect(bad.diagnostics[0].code).toBe('WEB.INPUT.LIMIT');
+  expect(controller.state.jobs.find(job => job.name === 'working.m')?.status).toBe('ready');
+  await controller.retry(bad.id);
+  expect(read).not.toHaveBeenCalled();
+  expect(controller.state.jobs).toHaveLength(2);
+  expect(controller.state.jobs.filter(job => job.status === 'error')).toHaveLength(1);
+  controller.dispose();
+});
+
+test('cancel during discovery stops later reads and cannot append stale jobs', async () => {
+  const slow = file('Master.dss'), later = file('other.dss');
+  let finish!: (text: string) => void;
+  const reading = vi.spyOn(slow, 'text').mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const unread = vi.spyOn(later, 'text');
+  const controller = new ConverterController();
+  const adding = controller.addFiles([slow, later]);
+  await vi.waitFor(() => expect(reading).toHaveBeenCalled());
+  controller.cancel(); finish(''); await adding;
+  expect(unread).not.toHaveBeenCalled();
+  expect(controller.state.jobs).toEqual([]);
+  controller.dispose();
+});
 
 test('a trapped writer leaves an error result and the next case still completes', async () => {
   const controller = new ConverterController();

@@ -70,6 +70,76 @@ test('valid cases survive a malformed neighbor and issue reports omit filenames 
   expect(report).toContain('Diagnostic codes');
 });
 
+test('a discovery read failure is retryable and does not prevent an independent case from converting', async ({ page }) => {
+  await page.addInitScript(() => {
+    const read = File.prototype.text;
+    let failed = false;
+    File.prototype.text = function () {
+      if (this.name === 'unreadable.dss' && !failed) {
+        failed = true;
+        return Promise.reject(new DOMException('The selected file is temporarily unreadable.', 'NotReadableError'));
+      }
+      return read.call(this);
+    };
+  });
+  await ready(page);
+  await page.getByLabel('Choose power system files', { exact: true }).setInputFiles([
+    { name: 'unreadable.dss', mimeType: 'text/plain', buffer: feeder },
+    { name: 'working.m', mimeType: 'text/plain', buffer: case9 },
+  ]);
+  const broken = page.getByRole('article').filter({ hasText: 'unreadable.dss' });
+  const working = page.getByRole('article').filter({ hasText: 'working.m' });
+  await expect(page.getByRole('article')).toHaveCount(2);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(broken.getByText("Couldn't convert", { exact: true })).toBeVisible();
+  await expect(working.getByText('Ready to convert', { exact: true })).toBeVisible();
+  await broken.locator('details.diagnostics > summary').click();
+  await expect(broken.getByText('WEB.INPUT.DISCOVERY', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Convert', exact: true }).click();
+  const downloaded = page.waitForEvent('download');
+  await working.getByRole('button', { name: /^Download working.m as MATPOWER/ }).click();
+  expect(await downloadBytes(await downloaded)).toEqual(case9);
+  await broken.getByRole('button', { name: 'Retry', exact: true }).click();
+  await expect(broken.getByText('Ready to convert', { exact: true })).toBeVisible();
+  await expect(page.getByRole('article')).toHaveCount(2);
+  await expect(working.getByRole('button', { name: /^Download working.m as MATPOWER/ })).toBeEnabled();
+  await page.getByRole('button', { name: 'Convert again', exact: true }).click();
+  await expect(broken.getByRole('button', { name: /^Download unreadable.dss as PMD/ })).toBeEnabled();
+});
+
+test('an oversized loose DSS file is rejected before discovery while a valid neighbor remains usable', async ({ page }) => {
+  await page.addInitScript(() => {
+    const size = Object.getOwnPropertyDescriptor(Blob.prototype, 'size')!.get!;
+    Object.defineProperty(File.prototype, 'size', { configurable: true, get() {
+      return this.name === 'oversized.dss' ? 64 * 1024 * 1024 + 1 : size.call(this);
+    } });
+    const read = File.prototype.text;
+    (window as any).oversizedDiscoveryReads = 0;
+    File.prototype.text = function () {
+      if (this.name === 'oversized.dss') (window as any).oversizedDiscoveryReads++;
+      return read.call(this);
+    };
+  });
+  await ready(page);
+  await page.getByLabel('Choose power system files', { exact: true }).setInputFiles([
+    { name: 'oversized.dss', mimeType: 'text/plain', buffer: feeder },
+    { name: 'working.m', mimeType: 'text/plain', buffer: case9 },
+  ]);
+  const large = page.getByRole('article').filter({ hasText: 'oversized.dss' });
+  const working = page.getByRole('article').filter({ hasText: 'working.m' });
+  await expect(large.getByText("Couldn't convert", { exact: true })).toBeVisible();
+  await expect(working.getByText('Ready to convert', { exact: true })).toBeVisible();
+  await large.locator('details.diagnostics > summary').click();
+  await expect(large.getByText('WEB.INPUT.LIMIT', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).oversizedDiscoveryReads)).toBe(0);
+  await large.getByRole('button', { name: 'Retry', exact: true }).click();
+  await expect(large.getByText("Couldn't convert", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).oversizedDiscoveryReads)).toBe(0);
+  await expect(page.getByRole('article')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Convert', exact: true }).click();
+  await expect(working.getByRole('button', { name: /^Download working.m as MATPOWER/ })).toBeEnabled();
+});
+
 test('every applicable transmission writer runs in browser WASM', async ({ page }) => {
   await ready(page);
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'case9.m', mimeType: 'text/plain', buffer: case9 });

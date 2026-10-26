@@ -1,6 +1,7 @@
 import { ArtifactStore, download } from './artifacts';
 import { analyticsEnabled, bucket, configureAnalytics, track, trackOperation } from './analytics';
-import { basename, groupInputs, safeName, stem, unpack } from './inputs';
+import { basename, groupInputs, safeName, stem, unpack, type InputCase } from './inputs';
+import { inputLimit } from './input-limits';
 import { WorkerClient } from './worker-client';
 import type { BrowserFile, ConverterState, Diagnostic, Family, Job, Output } from './types';
 
@@ -19,6 +20,7 @@ export class ConverterController {
   };
   private listeners = new Set<(state: ConverterState) => void>();
   private inputs = new Map<string, BrowserFile[]>();
+  private discoveryFailures = new Set<string>();
   private artifacts = new Map<string, SavedArtifact[]>();
   private store = new ArtifactStore();
   private client?: WorkerClient;
@@ -77,31 +79,45 @@ export class ConverterController {
     return this.addEntries(files.map(file => ({ file, path: file.webkitRelativePath || file.name })));
   }
   addEntries(entries: BrowserFile[]) {
-    return this.run(async epoch => {
-      this.state.phase = 'inspecting'; this.publish();
-      const expanded: BrowserFile[] = [];
-      for (const entry of entries) {
-        if (epoch !== this.epoch) return;
-        try { expanded.push(...(/\.zip$/i.test(entry.path) ? await unpack(entry) : [entry])); }
-        catch (error) {
-          this.state.jobs.push({ id: crypto.randomUUID(), name: entry.file.name, files: [entry.path], size: entry.file.size, status: 'error', diagnostics: [issue(message(error), 'WEB.INPUT.ARCHIVE')], outputs: [] });
-          trackOperation('input', 'error', undefined, undefined, [issue('', 'WEB.INPUT.ARCHIVE')]);
-        }
+    return this.run(epoch => this.addInputs(entries, epoch));
+  }
+  private async addInputs(entries: BrowserFile[], epoch: number) {
+    if (epoch !== this.epoch) return;
+    this.state.phase = 'inspecting'; this.publish();
+    const expanded: BrowserFile[] = [];
+    const rejected: InputCase[] = [];
+    for (const entry of entries) {
+      if (epoch !== this.epoch) return;
+      const archive = /\.zip$/i.test(entry.path);
+      const limit = archive ? inputLimit([entry]) : undefined;
+      if (limit) {
+        rejected.push({ name: entry.file.name, entries: [entry], error: limit });
+        continue;
       }
-      for (const input of await groupInputs(expanded)) {
-        if (epoch !== this.epoch) return;
-        const job: Job = {
-          id: crypto.randomUUID(), name: input.name, files: input.entries.map(entry => entry.path),
-          size: input.entries.reduce((sum, entry) => sum + entry.file.size, 0), primary: input.primary,
-          status: input.needsPrimary ? 'needs-primary' : 'queued', diagnostics: [], outputs: [],
-        };
-        this.inputs.set(job.id, input.entries);
-        this.state.jobs.push(job);
-        this.publish();
-        if (!input.needsPrimary) await this.inspect(job, epoch);
-        else trackOperation('input', 'needs-primary');
+      try { expanded.push(...(archive ? await unpack(entry) : [entry])); }
+      catch (error) {
+        rejected.push({ name: entry.file.name, entries: [entry], error: { code: 'WEB.INPUT.ARCHIVE', message: message(error) } });
       }
-    });
+    }
+    for (const input of [...rejected, ...await groupInputs(expanded, () => epoch !== this.epoch)]) {
+      if (epoch !== this.epoch) return;
+      const problem = input.error ?? inputLimit(input.entries);
+      const job: Job = {
+        id: crypto.randomUUID(), name: input.name, files: input.entries.map(entry => entry.path),
+        size: input.entries.reduce((sum, entry) => sum + entry.file.size, 0), primary: input.primary,
+        status: problem ? 'error' : input.needsPrimary ? 'needs-primary' : 'queued', diagnostics: problem ? [issue(problem.message, problem.code)] : [], outputs: [],
+      };
+      this.inputs.set(job.id, input.entries);
+      this.state.jobs.push(job);
+      this.publish();
+      if (problem) {
+        this.discoveryFailures.add(job.id);
+        trackOperation('input', 'error', undefined, undefined, job.diagnostics);
+        continue;
+      }
+      if (!input.needsPrimary) await this.inspect(job, epoch);
+      else trackOperation('input', 'needs-primary');
+    }
   }
   private job(id: string) { return this.state.jobs.find(job => job.id === id); }
   private async inspect(input: Job, epoch: number, release = true) {
@@ -123,6 +139,7 @@ export class ConverterController {
         current.status = 'error';
         current.diagnostics.push(issue('This document is not a supported grid exchange case. Use PowerIO in the terminal for geographic layers, IR, and other operations.', 'WEB.INPUT.VALUE_TYPE'));
       }
+      if (current.status === 'ready') this.discoveryFailures.delete(id);
       if (release) {
         trackOperation('parse', current.status === 'ready' && warned(current.diagnostics) ? 'warnings' : current.status, current.format, undefined, current.diagnostics);
         await this.client!.request('release');
@@ -185,8 +202,12 @@ export class ConverterController {
       const ids = this.state.jobs.filter(job => id ? job.id === id : job.status === 'error' || job.status === 'cancelled' || job.status === 'needs-files' || job.outputs.some(output => output.status === 'error')).map(job => job.id);
       for (const key of ids) {
         if (epoch !== this.epoch) return;
-        const job = this.job(key)!;
-        if (this.inputs.has(key)) await this.inspect(job, epoch);
+        const job = this.job(key); if (!job) continue;
+        const entries = this.inputs.get(key);
+        if (entries && this.discoveryFailures.has(key)) {
+          await this.remove(key);
+          await this.addInputs(entries, epoch);
+        } else if (entries) await this.inspect(job, epoch);
       }
     });
   }
@@ -283,7 +304,7 @@ export class ConverterController {
       for (const artifact of this.artifacts.get(output.id) ?? []) await this.store.remove(artifact.key);
       this.artifacts.delete(output.id);
     }
-    this.inputs.delete(id); this.state.jobs = this.state.jobs.filter(job => job.id !== id); this.publish();
+    this.inputs.delete(id); this.discoveryFailures.delete(id); this.state.jobs = this.state.jobs.filter(job => job.id !== id); this.publish();
   }
   private async invalidate(id: string) {
     const job = this.job(id); if (!job) return;
@@ -295,7 +316,7 @@ export class ConverterController {
   }
   async clear() {
     this.cancel(); await this.chain;
-    await this.store.clear(); this.inputs.clear(); this.artifacts.clear();
+    await this.store.clear(); this.inputs.clear(); this.discoveryFailures.clear(); this.artifacts.clear();
     this.state.jobs = []; this.state.error = ''; this.state.message = ''; this.publish();
   }
   private report() {
