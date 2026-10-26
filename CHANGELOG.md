@@ -1,6 +1,77 @@
 # Changelog
 
+## Unreleased
+
+- TARA contingency statements are read at analysis time. The readers keep
+  them as text, as before, because the contingency, subsystem, and monitored
+  set layouts are fixed within PowerIO IR 2; the new views read that text.
+  `ContingencySet::resolve` binds a statement naming buses by quoted name and
+  base kV (`BUSNAMES`, `'NAME 345'`) and one naming a branch by quoted name
+  (`BRANCHNAMES`), matching exactly first and then without regard to letter
+  case and runs of whitespace, and reports a name matching nothing or several
+  elements with the new reasons `no_such_bus_name`, `ambiguous_bus_name`,
+  `no_such_branch_name`, and `ambiguous_branch_name`. A case action that
+  closes with `DISPATCH` binds as the action ahead of the keyword.
+  `ContingencySet::calc_default_dispatch` reads `DEFAULT DISPATCH [UP | DOWN |
+  FIRSTLEVEL]` blocks and `ContingencyAction::calc_dispatched_action` a case's
+  dispatch block into `SUBSYSTEM`, `BUS`, and `PARTICIPATING MACHINES`
+  entries, and `Subsystem::calc_dispatch_rules` reads `PARTICIPATE`, `SCALE
+  ALL ...`, `BASELOAD`, `TURBINETYPE`, and `EXCEPT` lines into
+  `SubsystemDispatchRule`s.
+  Quoted numeric bus operands keep their identities through dispatch blocks,
+  and named operands use the same optional `BUS` keywords as numeric ones.
+  Post-file-`END` defaults and non-finite scale thresholds remain inert text.
+
+- PSS/E shunt FACTS devices read as static var compensators. A FACTS device
+  record with `J = 0` has only a shunt element, which PSS/E operates as a
+  voltage regulating STATCOM, and the RAW and RAWX readers skipped the whole
+  section. Each one now becomes a `StaticVarCompensator` at bus `I`: `SHMX`,
+  the shunt limit in MVA at unity voltage, bounds the susceptance at
+  `±SHMX / kV²` siemens on the bus base, `VSET`, in per unit of the regulated bus base,
+  gives the voltage setpoint, `MODE 0` is out of service, and the device
+  regulates its own bus or the bus `FCREG` (`REMOT` before revision 35) names.
+  `SHMX` limits the shunt current, so the PSS/E reactive limit moves with the
+  voltage `V` while a susceptance bound moves with `V²`: the bound equals it
+  at 1 p.u. and is 5% tighter at 0.95 p.u. and 5% looser at 1.05 p.u. A
+  remote `FCREG` without a node has no typed home and is reported, as are
+  series devices (`J` nonzero), which stay unmodeled. PSS/E and RAWX output
+  write each static var compensator back as a shunt FACTS record, restating
+  the retained fields, so a case written back states its own records; a
+  compensator from another format reports what the record cannot state, such
+  as unequal limits, terminal power, or a control other than voltage. RAWX
+  reads and writes the `facts` table. RAW and RAWX bind detailed FACTS
+  terminals and regulating nodes, including revision 34's trailing `NREG`.
+  Both reading and fresh writing diagnose the current-limit approximation.
+  Writers reserve retained names before generated names and resolve sanitation
+  collisions consistently in the electrical and detailed terminal tables.
+
+- PTDF and LODF accept negative branch reactances on the sparse path. A
+  series capacitor's negative susceptance can make the reference grounded DC
+  bus susceptance matrix indefinite, and the sparse path refused any branch
+  with a nonpositive susceptance, leaving only the dense path, which cannot
+  hold a 100k bus case. The sparse path now factors with Cholesky while the
+  matrix is positive definite, then with `LDLᵀ`, then with LU and partial
+  pivoting. It accepts a factorization only when it solves a probe right hand
+  side with a normwise backward error below 1e-10 and a relative forward error
+  below 1e-4, and refuses the matrix as singular only when every
+  factorization fails. `SensitivitySolverPath` gains `SparseLdlt` and
+  `SparseLu` (`sparse_ldlt`, `sparse_lu` in metadata), and a nonfinite branch
+  susceptance is still refused. The new `calc_ptdf_rows`,
+  `calc_ptdf_columns`, and `calc_lodf_columns` return selected PTDF rows,
+  PTDF columns, and LODF columns from one factorization and one solve per
+  row or column, without forming the full matrices.
+
+
 ## 0.11.6
+
+- Preserve CIM distribution topology by mapping an out-of-service switch to an
+  open switch, with an explicit diagnostic instead of importing it closed.
+
+- Fix multiconductor admittance for two-terminal DELTA capacitor banks: the
+  rated reactive power is assigned to the single stamped phase-to-phase coil
+  instead of being incorrectly halved by the terminal count. Full multi-coil
+  DELTA banks continue to divide the total rating across their physical coils.
+  Regression coverage checks both open-delta and three-phase delta stamps.
 
 - Replace the unreleased SINCAL support crate with `powerio-tnd`: checked integrated
   transmission/distribution composition, cross-model transformations, and optional
@@ -18,6 +89,9 @@
   its breaking removal is tracked in #673. ABI 7 and real Arrow/Parquet support
   behind `gridfm` are unchanged.
 
+- Add PowerIO Convert at `powerio.dev/convert/`: local WebAssembly batch
+  conversion with mixed-format detection, project folders and ZIPs, multiple
+  outputs, native diagnostics, private downloads, and optional error statistics.
 - Apply bounded MATPOWER post-literal demand and impedance conversions, fixing
   case33bw's kW-to-MW and ohm-to-per-unit interpretation. Unsupported or ambiguous
   blocks keep literal values with source-span warnings; unchanged source echo
