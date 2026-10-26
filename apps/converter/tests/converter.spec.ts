@@ -172,7 +172,7 @@ for (const mode of ['file', 'nested-file', 'nested-directory'] as const) {
     const broken = page.getByRole('article').filter({ hasText: /Couldn't convert/ });
     await expect(working.getByText('Ready to convert', { exact: true })).toBeVisible();
     await expect(page.getByRole('alert')).toHaveCount(0);
-    await expect(broken.getByText(/choose its complete files or folder again/)).toBeVisible();
+    await expect(broken.locator('.job-help')).toContainText('choose its complete files or folder again');
     await broken.locator('details.diagnostics > summary').click();
     await expect(broken.getByText('WEB.INPUT.ACQUISITION', { exact: true })).toBeVisible();
     await expect(broken.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0);
@@ -211,7 +211,7 @@ test('privacy disclosure links to the committed analytics template', async ({ pa
   await ready(page);
   await page.getByText('Your files stay here.', { exact: true }).click();
   await expect(page.getByRole('link', { name: 'Review the analytics policy', exact: true })).toHaveAttribute('href', 'https://github.com/eigenergy/powerio/blob/main/apps/converter/scripts/analytics-policy.template.js');
-  await expect(page.getByText(/The build supplies the one permitted PowerIO version/)).toBeVisible();
+  await expect(page.locator('#privacy')).toContainText('The build supplies the one permitted PowerIO version.');
 });
 
 test('every applicable transmission writer runs in browser WASM', async ({ page }) => {
