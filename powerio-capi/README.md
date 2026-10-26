@@ -1,6 +1,6 @@
 # PowerIO C ABI
 
-ABI 7 exposes PowerIO modules, typed electrical values, diagnostics, grid
+The C ABI exposes PowerIO modules, typed electrical values, diagnostics, grid
 exchange formats, PowerIO IR, updates, and DC calculations to C, C++, Julia,
 and other FFI consumers. [PowerIO.jl](https://github.com/eigenergy/PowerIO.jl)
 is the supported Julia binding.
@@ -22,10 +22,22 @@ scripts/capi-header-parity.sh
 scripts/capi-smoke.sh
 ```
 
-ABI 7 exports one fixed symbol set. The `gridfm` cargo feature adds GridFM
-Parquet support behind the same entry points, and the other feature names the
-release build passes do not gate anything. `pio_schema_report` tells you what
-a library was built with.
+The C ABI exports one fixed symbol set. The `gridfm` cargo feature adds
+GridFM Parquet support behind the same entry points, and the other feature
+names the release build passes do not gate anything. `pio_schema_report` tells
+you what a library was built with.
+
+## Versions
+
+`powerio.h` states the release it was generated from as `PIO_VERSION_MAJOR`,
+`PIO_VERSION_MINOR`, and `PIO_VERSION_PATCH`, and `pio_version_numbers()`
+returns the release of the loaded library. A program compiled against the
+header of release X.Y.Z works with any library from the same release series
+(the same major and minor numbers before 1.0, the same major number from 1.0
+on) at release X.Y.Z or newer. Within a release series the C ABI only gains
+symbols; no symbol is removed, and no signature or struct layout changes.
+The [C ABI guide](../docs/src/capi.md#versions-and-compatibility) has the check
+in C.
 
 ## Parse, inspect, and emit
 
@@ -34,8 +46,15 @@ a library was built with.
 #include <stdio.h>
 #include <string.h>
 
+static int library_matches_header(PioVersionView library) {
+    if (library.major != PIO_VERSION_MAJOR) return 0;
+    if (library.minor != PIO_VERSION_MINOR)
+        return PIO_VERSION_MAJOR > 0 && library.minor > PIO_VERSION_MINOR;
+    return library.patch >= PIO_VERSION_PATCH;
+}
+
 int main(void) {
-    if (pio_abi_version() != PIO_ABI_VERSION) return 1;
+    if (!library_matches_header(pio_version_numbers())) return 1;
 
     PioError *error = NULL;
     const char *path = "case9.m";

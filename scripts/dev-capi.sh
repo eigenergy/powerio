@@ -7,7 +7,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# ABI 7 exposes the typed C surface without optional features. The retired
+# The C ABI exposes its typed surface without optional features. The retired
 # Arrow export is not part of this API; only gridfm adds optional format support.
 cargo build -p powerio-capi --release >&2
 

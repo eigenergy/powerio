@@ -38,7 +38,7 @@
   the Egret, GO Challenge 3, OPFData, and pandapower readers decode through a
   generic JSON value tree first.
 - Two sets of field names coexist. Rust records and Python dict rows use the
-  MATPOWER derived names (`vm`, `pg`, `rate_a`, `tap`); C ABI 7 and Julia
+  MATPOWER derived names (`vm`, `pg`, `rate_a`, `tap`); the C ABI and Julia
   spell out the quantity and unit (`vm_pu`, `active_power_mw`, `rate_a_mva`,
   `tap_ratio`). Settling on one set of names for all four languages is a 1.0
   decision, and it is separate from the PowerIO IR keys, which change only
@@ -61,21 +61,24 @@ and PowerIO.jl. The boundaries checked independently are:
 | Boundary | Value in 0.11 | Checked where | Moves when |
 |---|---|---|---|
 | PowerIO release | 0.11.x | the manifests, `powerio::VERSION`, `powerio.versions()`, `pio_version` | every release |
-| C ABI | 7 | the `pio_abi_version` handshake at load | an existing C signature or documented behavior changes |
+| C ABI | 7 | the ABI number the binding compares at load; 0.12 compares the release series instead | an existing C signature or documented behavior changes |
 | PowerIO IR version | 2, unchanged | the document header | an existing representation changes incompatibly |
 | Rust toolchain | 1.88 | `rust-version` in the workspace manifest, checked by CI | a dependency in the locked graph requires a newer compiler |
 | Python | 3.9 or later; the `mcp` extra needs 3.10, the `bench` extra 3.11 | `pyproject.toml` | a dependency drops a version |
 
 The release version is what you install. ABI 7 is what a compiled consumer
-has to match. The integer 2 identified every 0.11 PowerIO IR document;
-from 0.12 the header names the release whose schema the document follows, as
+has to match in 0.11; from 0.12 a compiled C consumer needs a library from
+its header's release series, at that release or a newer one. The integer 2
+identified every 0.11 PowerIO IR document; from 0.12 the header names the
+release whose schema the document follows, as
 [PowerIO IR](pio-json-schema.md) describes. The MCP server passes PowerIO IR
 documents through and defines no electrical data shape of its own.
 
 The 0.11.x line is for compatible fixes, performance work, and additive
 change; a break in the public Rust API that cannot be avoided goes into 0.12.
 CI checks the publishable crates against the latest 0.11 release tag with
-cargo-semver-checks (`scripts/check-semver.sh`); a pull request that carries a
-0.12 break is labeled `semver-major`.
+cargo-semver-checks (`scripts/check-semver.sh`) and the C header against
+that tag's header (`scripts/check-capi-header.py`); a pull request that
+carries a 0.12 break is labeled `semver-major`.
 The Rust API stays pre-1.0 as long as public signatures expose types from the
 pre-1.0 `sprs` and `petgraph` crates.

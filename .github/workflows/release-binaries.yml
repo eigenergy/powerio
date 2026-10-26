@@ -1,7 +1,7 @@
 name: Release binaries
 
 # Build the powerio-capi cdylib with the release feature tuple. Only gridfm
-# enables code; ABI 7 exposes one fixed typed symbol set.
+# enables code; the C ABI exposes one fixed typed symbol set.
 # For the five platforms PowerIO.jl's Artifacts.toml covers, package
 # each as the artifact tarball that file references (lib/ or bin/ layout, Julia
 # platform triplet in the name), and attach them to the GitHub release on a
@@ -32,9 +32,10 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Release gate. PIO_ABI_VERSION does not cover document formats, so a
-  # release can break the Julia binding while both ABI integers stay the
-  # same. This job tests the tag against the default branch of PowerIO.jl.
+  # Release gate. The C ABI compatibility rule covers declarations, not
+  # document formats, so a release can break the Julia binding without
+  # changing a C declaration. This job tests the tag against the default
+  # branch of PowerIO.jl.
   # It gates `build`: a failure makes no tarballs and no draft release.
   # It also checks that PowerIO.jl binds or exempts every entry point the
   # tagged ABI declares, so a release never ships an entry point the binding
@@ -98,7 +99,7 @@ jobs:
     # Every entry point this tag declares is bound by PowerIO.jl main or
     # listed in its gen/unbound_entry_points.txt with a reason.
     - name: Entry point coverage of PowerIO.jl main
-      run: POWERIO_JL=PowerIO.jl bash scripts/check-capi-v7.sh
+      run: POWERIO_JL=PowerIO.jl bash scripts/check-capi.sh
     - name: Test PowerIO.jl against this tag
       env:
         POWERIO_CAPI: ${{ github.workspace }}/target/release/libpowerio_capi.so

@@ -111,8 +111,8 @@ After deserialization, `emit` writes fresh output from the stored value.
 Upgrading from 0.10? Start with the
 [migration guide](https://eigenergy.github.io/powerio/guide/migration-0.11.html).
 A PowerIO IR document names the release whose schema it follows, and a
-release reads the documents of its own release series.
-The C ABI is version 7.
+release reads the documents of its own release series. The C ABI follows the
+release series too: within one, it only gains symbols.
 
 ## Formats
 
@@ -171,7 +171,7 @@ depend on just the layer they use.
 | `powerio-matrix` | Sparse matrices, sensitivities, DC OPF bundles and graph data |
 | `powerio-cli` | The `powerio` command and its terminal interface |
 | `powerio-py` | The native extension used by the Python package |
-| `powerio-capi` | C ABI 7, used by Julia and other FFI bindings |
+| `powerio-capi` | The C ABI, used by Julia and other FFI bindings |
 
 `powerio-tx` and `powerio-dist` share `powerio-core` and nothing else, so a
 distribution consumer pulls in no transmission code. `powerio-prob` is matrix

@@ -7,9 +7,13 @@ name: Semver
 # minor release (docs/src/scope-0.11.md), so a pull request that breaks the API
 # without moving the workspace version to that minor fails here.
 #
+# The C header gets the same comparison against the header of that tag
+# (scripts/check-capi-header.py): within a release series the C ABI only
+# gains symbols.
+#
 # A break that is meant for the next minor before the version moves carries
-# the `semver-major` label: the check still runs and lists every break, as a
-# warning. Adding or removing the label runs the check again.
+# the `semver-major` label: each check still runs and lists every break, as a
+# warning. Adding or removing the label runs the checks again.
 on:
   # No branch filter: stacked PRs must run this too (see rust.yml).
   pull_request:
@@ -58,4 +62,32 @@ jobs:
           exit 0
         fi
         echo "::error title=Public Rust API break::make the change additive, or label the pull request semver-major if it belongs in the next minor release"
+        exit "$status"
+
+  capi-header:
+    name: C header (latest release)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        # The baseline header is read from a release tag.
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Check powerio.h against the latest release header
+      env:
+        BREAK_ALLOWED: ${{ contains(github.event.pull_request.labels.*.name, 'semver-major') }}
+      run: |
+        python3 scripts/check-capi-header.py --self-test
+        status=0
+        python3 scripts/check-capi-header.py || status=$?
+        if [ "$status" -eq 0 ]; then
+          exit 0
+        fi
+        # Status 2 means the baseline could not be read; the label does not
+        # cover that.
+        if [ "$status" -eq 1 ] && [ "$BREAK_ALLOWED" = true ]; then
+          echo "::warning title=C ABI break::the semver-major label accepts the breaks above; they ship in the next release series"
+          exit 0
+        fi
+        echo "::error title=C ABI break::keep every declaration of the release header and only add new ones, or label the pull request semver-major if the break belongs in the next release series"
         exit "$status"

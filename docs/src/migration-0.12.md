@@ -2,8 +2,8 @@
 
 PowerIO 0.12 starts a new release series. From 0.12 on, the release series
 says what is compatible with what: within 0.12.x, any release reads the
-PowerIO IR documents any other 0.12 release writes. This page lists what
-changes for code and data written against 0.11.
+PowerIO IR documents any other 0.12 release writes, and the C ABI only gains
+symbols. This page lists what changes for code and data written against 0.11.
 
 ## PowerIO IR documents
 
@@ -67,3 +67,47 @@ the file its `version` names. The 0.11 files under `pio-ir/2/` keep their
 bytes and identifiers, and still describe 0.11 documents. See
 [PowerIO IR](pio-json-schema.md) for the rule and `docs/schema/README.md`
 for every file.
+
+## C ABI
+
+PowerIO 0.11 gave the C ABI its own number, 7, which a program compared with
+the library at load. The number only ever changed when a new release series
+began, so PowerIO 0.12 removes it and states the release instead.
+
+Removed, with no alias:
+
+- the `PIO_ABI_VERSION` macro;
+- `pio_abi_version()`;
+- the `abi` key of the `pio_schema_report` document.
+
+Added:
+
+- `PIO_VERSION_MAJOR`, `PIO_VERSION_MINOR`, and `PIO_VERSION_PATCH`, the
+  release the header was generated from;
+- `pio_version_numbers()`, which returns the release of the loaded library as
+  a `PioVersionView` with `major`, `minor`, and `patch` fields.
+
+`pio_version()` still returns the release as text.
+
+A program compiled against the header of release X.Y.Z works with any library
+that is in the same release series, as Cargo defines it (the same major and
+minor numbers before 1.0, the same major number from 1.0 on), and is release
+X.Y.Z or newer. Within a release series the C ABI only gains symbols: no
+symbol is removed, and no signature or struct layout changes.
+
+| 0.11 | 0.12 |
+|---|---|
+| `pio_abi_version() == PIO_ABI_VERSION` | `pio_version_numbers()` is in the header's release series, at the header's release or newer ([the check in C](capi.md#versions-and-compatibility)) |
+| `#if PIO_ABI_VERSION != 7` | `#if PIO_VERSION_MAJOR != 0 \|\| PIO_VERSION_MINOR != 12` |
+| `"abi"` in the `pio_schema_report` document | `"powerio_version"` |
+
+A 0.11 library has no `pio_version_numbers`. A program that loads the library
+with `dlopen` or `LoadLibrary` can look the symbol up first and treat its
+absence as a library older than 0.12.
+
+PowerIO.jl applies the same rule. It removes `abi_version()` and keeps
+`library_version()`. Before its first call into a library, PowerIO.jl checks
+that the library is in the release series of the header it was generated
+from, at that release or a newer one. It refuses a library from another
+series, an older library, or one without `pio_version_numbers`, and names
+both releases in the error.

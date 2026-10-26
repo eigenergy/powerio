@@ -49,11 +49,17 @@ CI runs two header checks plus a C smoke test against the built library.
 `scripts/capi-header-parity.sh` compares symbol names and runs in every feature
 job. `scripts/capi-header-regen.sh` regenerates the header with cbindgen and
 diffs it, which is what catches a reordered argument, a changed type, or a
-changed struct field; it runs once. A breaking change to an existing `pio_*`
-signature bumps `PIO_ABI_VERSION` (in `powerio-capi/src/lib.rs`; the header
-`#define` follows from regeneration) and needs a lockstep PowerIO.jl release
-that targets the new version. Adding symbols does not bump it. Each ABI
-generation gets a changelog entry.
+changed struct field; it runs once.
+
+Within a release series the C ABI only gains symbols: a program compiled
+against the header of release X.Y.Z works with any library from the same
+series at X.Y.Z or newer. `scripts/check-capi-header.py` compares the header
+with the header of the newest release tag at or below the workspace version
+and fails when a function, struct, opaque type, or `#define` of that header
+is missing or declared differently. Add a new entry point or struct beside the
+old one instead. A break that belongs in the next release series carries the
+`semver-major` label, which turns the failure into a warning that still lists
+every break, and needs a PowerIO.jl companion branch of the same name.
 
 ## Releasing
 
@@ -62,7 +68,13 @@ releases itself after each published release.
 
 The release version lives in `[workspace.package]` and the workspace dependency
 pins in `[workspace.dependencies]`. Update them together; the next Cargo command
-updates `Cargo.lock`. Then:
+updates `Cargo.lock`. Set `PIO_VERSION_MAJOR`, `PIO_VERSION_MINOR`, and
+`PIO_VERSION_PATCH` in `powerio-capi/src/lib.rs` to the same release and
+regenerate `powerio.h`; `scripts/check-release-versions.sh` checks both.
+PowerIO.jl refuses a library from another release series, so a bump that
+starts a new series also needs a PowerIO.jl companion branch of the same name
+that regenerates `src/LibPowerIO.jl` from the new header; merge it before the
+tag. Then:
 
 1. Merge the bump with a `CHANGELOG.md` section headed exactly `## X.Y.Z`
    and wait for main CI.
@@ -105,7 +117,7 @@ updates `Cargo.lock`. Then:
    [PowerIO.jl's release section](https://github.com/eigenergy/PowerIO.jl/blob/main/CONTRIBUTING.md#releasing)
    covers a failed run and how to hold a release.
 
-A breaking C ABI change bumps `PIO_ABI_VERSION` first; see "C ABI changes"
+A breaking C ABI change starts a new release series; see "C ABI changes"
 above.
 
 ## Naming
