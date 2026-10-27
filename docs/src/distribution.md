@@ -124,13 +124,52 @@ directory routes here when it carries per phase classes and no CGMES
 | `LinearShuntCompensator` with its phases | shunts; sections multiply the per section admittance |
 | the `Switch` classes with `SwitchPhase` | switches with their state and rating |
 | `PowerTransformer` with `PowerTransformerEnd`, `TransformerMeshImpedance`, `RatioTapChanger` | transformers of any winding count, with taps |
+| `TransformerTank` with `TransformerTankEnd` | one transformer per tank, grouped by its `PowerTransformer` in the `cim_power_transformer` extra |
+| `Asset` linking a tank to `TransformerTankInfo`, with `TransformerEndInfo` | winding ratings, connections, and resistances |
+| `ShortCircuitTest` | short circuit reactances between winding pairs, and winding resistances when no end info states one |
+| `NoLoadTest`, `TransformerCoreAdmittance` | the `%noloadloss` and `%imag` extras |
 | `EnergySource` | voltage sources, with the series impedance in `rs`/`xs` extras |
 
 `SinglePhaseKind` A, B, C, and N map to terminals 1, 2, 3, and 4, and the
 split phase s1 and s2 to 1 and 2. A conductor beyond those four has no CIM
-phase, so the writer reports it. The tank form (`TransformerTank` with
-`TransformerTankInfo` catalog data), regulator controls, distributed energy
-resources, machines, wire and cable geometry, operational limits,
+phase, so the writer reports it.
+
+A tank end's terminals follow from its `TransformerTankEnd.phases`, in the
+form the dss reader gives the equivalent OpenDSS transformer: a line to
+neutral end `A` is terminals `1, 4` (`bus.1.0`), a line to line end `AB` is
+a delta winding on `1, 2`, a three phase end is `1, 2, 3` in delta or
+`1, 2, 3, 4` in wye, and the center tap halves `s1` and `s2` are `1, 4` and
+`4, 2` (`bus.1.0` and `bus.0.2`), so they stack to the full secondary
+voltage. Catalog values use `ratedU`, `ratedS`, and `r` in V, VA, and
+ohm. `ShortCircuitTest.leakageImpedance` is the standard impedance magnitude
+in ohm referred to the energised end; the pair reactance is derived with
+`X = sqrt(|Z|² - R²)` after resolving the winding resistances, including when
+a test loss is zero/unstated. Test losses are in kW;
+`NoLoadTest.excitingCurrent` is percent of rated current at the test's
+`basePower`, and percentages are rescaled to winding 1's rating. The
+producer-specific GridAPPS-D convention that places X in this magnitude field
+is not supported or automatically inferred; those inputs need normalization
+to the standard convention before import. End
+resistances (`TransformerEndInfo.r`) take precedence over resistances split
+from test losses, a loss of 0 states nothing, and a nonzero loss that
+disagrees with the end resistances is reported
+(`READ.CIM_DIST.VALUE_CONFLICT`).
+
+Tank phase clocks are validated against the represented winding layout:
+aligned connections use clock 0, the supported three-phase D/Y lagging
+connection uses clock 1, and reversed single-phase center-tap halves use
+clock 6. Other vector groups (including clock 11), invalid clocks, inactive
+tanks or parents, and disconnected end terminals are refused. An absent clock
+is assumed to match the layout with a diagnostic. Fresh writing derives the
+clock from the current windings and reports conflicting retained metadata.
+
+A transformer whose extras carry
+`cim_form = "tank"` is written as tanks, grouped under the `PowerTransformer`
+its `cim_power_transformer` extra names, with tanks of identical catalog data
+sharing one `TransformerTankInfo`; every other transformer, including those
+from other formats, takes the `PowerTransformerEnd` form.
+
+Regulator controls, distributed energy resources, machines, wire and cable geometry, operational limits,
 `LoadResponseCharacteristic`, and `TopologicalNode` only documents are not
 mapped yet, and the reader reports each of them: a class with no mapping is
 counted per class (`READ.CIM_DIST.CLASS_UNMAPPED`), a property no mapping reads
@@ -142,13 +181,23 @@ line code has zero impedance, which would be a short circuit between its
 buses. OpenDSS geometry lines are refused for the same reason;
 [Electrical readiness](electrical-readiness.md) describes both checks.
 
+Disconnected or out-of-service switches read as open, preserving connectivity.
+For other mapped equipment, the reader refuses an out-of-service state or a
+disconnected terminal because the 0.11 model cannot represent that electrical
+status. `inService` takes precedence over `normallyInService`. Per-phase delta
+compensators and incomplete-phase delta banks are refused rather than converted
+to phase-to-ground admittances; balanced three-phase delta banks remain supported.
+
 A network read from distribution CIM records `cim-dist` as its source format.
 A same format write of a single document returns its bytes. Canonical output is
 one CIM100 document with no `md:FullModel` header. Imported mRIDs pass through
 and the rest are UUIDv5 values, and the written numbers are the ones the reader
 maps back exactly, so write, read, write is byte stable. The output is not
-yet validated against the CIM17 profile schemas or an independent
-implementation such as CIM-Graph or CIMHub.
+fully qualified against external producer corpora. The committed synthetic
+tank cases are checked against native OpenDSS grounded admittance stamps and
+loaded coil phasors by `evals/validation/validate_cim_tanks.py`, including fresh
+CIM writing and a clock-1/clock-11 control. This does not establish support for
+producer dialects outside the documented electrical profile.
 
 ## BMOPF schema versions
 
