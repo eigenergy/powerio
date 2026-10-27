@@ -1075,6 +1075,6 @@ fn projecting_bounded_load_laws_is_an_explicit_opt_in_with_one_diagnostic_per_lo
     // Loads that carry no bounded law are not touched.
     let instance = McAcOpfInstance::from_network(network()).unwrap();
     let prepared = build_mc_ac_opf_preparation(&instance, &opt_in).unwrap();
-    assert!(prepared.load_law_projections.is_empty());
-    assert!(prepared.diagnostics().is_empty());
+    assert_eq!(prepared.load_law_projections, []);
+    assert_eq!(prepared.diagnostics(), []);
 }
