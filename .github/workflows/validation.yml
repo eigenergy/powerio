@@ -97,3 +97,5 @@ jobs:
       run: |
         cargo build --release -p powerio-cli
         .venv/bin/python evals/validation/validate_bmopf_core_shunts.py --powerio "$PWD/target/release/powerio"
+    - name: Compare CIM tanks with native OpenDSS
+      run: .venv/bin/python evals/validation/validate_cim_tanks.py --powerio "$PWD/target/release/powerio"
