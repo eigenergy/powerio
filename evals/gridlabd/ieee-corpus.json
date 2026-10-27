@@ -1,0 +1,1896 @@
+{
+  "description": "Discovery catalog of public distribution feeder inputs and reference results. Pins identify source versions, not compatibility claims. Dataset contents remain outside the repository.",
+  "repositories_licenses": {
+    "gridlab-d/gridlab-d": "LICENSE",
+    "GRIDAPPSD/CIMHub": "license.md",
+    "dss-extensions/electricdss-tst": "License.txt",
+    "GRIDAPPSD/Powergrid-Models": "No repository-wide license located in this inventory; do not vendor inputs.",
+    "ieee-pes-amps/dtf-dev": "LICENSE.md is a three-byte placeholder; do not treat it as redistribution permission."
+  },
+  "families": [
+    {
+      "id": "ieee13",
+      "sources": [
+        {
+          "repository": "https://github.com/gridlab-d/gridlab-d",
+          "commit": "1b2e463d3c149e999a2c5f04213477f545e01dc6",
+          "files": [
+            {
+              "path": "powerflow/autotest/test_IEEE_13_NR.glm",
+              "git_blob_sha1": "c594da8c3fb50157715693b21f3c7f310885e0ec",
+              "bytes": 14063
+            },
+            {
+              "path": "powerflow/autotest/test_IEEE_13_FBS.glm",
+              "git_blob_sha1": "24f7d685f090efecd50009852e8b2fe34838b31e",
+              "bytes": 14065
+            }
+          ]
+        },
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/13Bus/IEEE13Node_BusXY.csv",
+              "git_blob_sha1": "26cd6f484e910e03ec196318f8692266421c9f2a",
+              "bytes": 243
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/13Bus/IEEE13Nodeckt.dss",
+              "git_blob_sha1": "f02bc852ff50fc03632a7efe9cead633a237a66a",
+              "bytes": 8354
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/13Bus/IEEELineCodes.DSS",
+              "git_blob_sha1": "519a228cf1907f551a6b38c1522da651d1322c26",
+              "bytes": 30
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/IEEELineCodes.DSS",
+              "git_blob_sha1": "eba8d904eb8f0aa1b8fa69faa0fdbc6afa10c3dd",
+              "bytes": 12032
+            }
+          ]
+        }
+      ],
+      "note": "Keep solver variants distinct; do not substitute NR for FBS implicitly."
+    },
+    {
+      "id": "ieee34",
+      "sources": [
+        {
+          "repository": "https://github.com/gridlab-d/gridlab-d",
+          "commit": "1b2e463d3c149e999a2c5f04213477f545e01dc6",
+          "files": [
+            {
+              "path": "powerflow/autotest/test_IEEE_34_NR.glm",
+              "git_blob_sha1": "d7d052cd19507f14a926ba36c1acb767bb359ed6",
+              "bytes": 17527
+            },
+            {
+              "path": "powerflow/autotest/test_IEEE_34_FBS.glm",
+              "git_blob_sha1": "13f09df28f303933e7fd2c9207b07fc425d29e3b",
+              "bytes": 17528
+            },
+            {
+              "path": "powerflow/autotest/data_configurations_34_node.glm",
+              "git_blob_sha1": "0be619019344f11a0b877cc73dc5ba1a13a4c67e",
+              "bytes": 2873
+            }
+          ]
+        },
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/34Bus/IEEE34_BusXY.csv",
+              "git_blob_sha1": "da24689018a460a25c7d973fa56d92f2b33d951d",
+              "bytes": 506
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/34Bus/IEEELineCodes.DSS",
+              "git_blob_sha1": "519a228cf1907f551a6b38c1522da651d1322c26",
+              "bytes": 30
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/34Bus/Run_IEEE34Mod1.dss",
+              "git_blob_sha1": "b01299250d68acde03317822fac0e86e020f8bc6",
+              "bytes": 1565
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/34Bus/Run_IEEE34Mod2.dss",
+              "git_blob_sha1": "7bca2e2f0c389e023901f63db71bc2d0458685a4",
+              "bytes": 1691
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/34Bus/ieee34Mod1.dss",
+              "git_blob_sha1": "2e4c35226bcf35008f73620e5926854b96437e34",
+              "bytes": 14341
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/34Bus/ieee34Mod2.dss",
+              "git_blob_sha1": "1a6297718368277ff8d8dd689cb00bf55e5525ae",
+              "bytes": 14329
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/34Bus/nmsu_linecode2_ABC.txt",
+              "git_blob_sha1": "cbafbe5d0616493d3ea5c3cb3842001bbfd5fdd5",
+              "bytes": 1281
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/IEEELineCodes.DSS",
+              "git_blob_sha1": "eba8d904eb8f0aa1b8fa69faa0fdbc6afa10c3dd",
+              "bytes": 12032
+            }
+          ]
+        }
+      ],
+      "note": "Keep solver variants distinct; do not substitute NR for FBS implicitly."
+    },
+    {
+      "id": "ieee37",
+      "sources": [
+        {
+          "repository": "https://github.com/gridlab-d/gridlab-d",
+          "commit": "1b2e463d3c149e999a2c5f04213477f545e01dc6",
+          "files": [
+            {
+              "path": "powerflow/autotest/test_IEEE_37_NR.glm",
+              "git_blob_sha1": "864284119211fdc155f749f87cff1fcab1e3460d",
+              "bytes": 10550
+            },
+            {
+              "path": "powerflow/autotest/test_IEEE_37_FBS.glm",
+              "git_blob_sha1": "5f74a47d186e4bc3b3a9d6cb65f77cd8f96c0b64",
+              "bytes": 10551
+            },
+            {
+              "path": "powerflow/autotest/data_configurations_37_node.glm",
+              "git_blob_sha1": "21e6a6981f683673aadc8cccb6786d132e60ba06",
+              "bytes": 2637
+            }
+          ]
+        },
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/37Bus/IEEE37_BusXY.csv",
+              "git_blob_sha1": "48c6bc6bdb3ea8d3f4209c9a596bc6a4cf565fa1",
+              "bytes": 755
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/37Bus/IEEELineCodes.DSS",
+              "git_blob_sha1": "519a228cf1907f551a6b38c1522da651d1322c26",
+              "bytes": 30
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/37Bus/ieee37.dss",
+              "git_blob_sha1": "938b6843f3e025f223194d32072503a017191bf8",
+              "bytes": 7427
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/IEEELineCodes.DSS",
+              "git_blob_sha1": "eba8d904eb8f0aa1b8fa69faa0fdbc6afa10c3dd",
+              "bytes": 12032
+            }
+          ]
+        }
+      ],
+      "note": "Keep solver variants distinct; do not substitute NR for FBS implicitly."
+    },
+    {
+      "id": "ieee123",
+      "sources": [
+        {
+          "repository": "https://github.com/gridlab-d/gridlab-d",
+          "commit": "1b2e463d3c149e999a2c5f04213477f545e01dc6",
+          "files": [
+            {
+              "path": "powerflow/autotest/test_IEEE-123_FBS.glm",
+              "git_blob_sha1": "6a243657ea937313a75f64df247532bdfa9473f3",
+              "bytes": 64330
+            },
+            {
+              "path": "powerflow/autotest/test_IEEE123_zero_voltages_NR.glm",
+              "git_blob_sha1": "bda144fad5a1dce4aa7942f7ac56dfd0aec0d8d9",
+              "bytes": 35848
+            },
+            {
+              "path": "powerflow/autotest/test_IEEE123_zero_voltages_FBS.glm",
+              "git_blob_sha1": "50e325fd43d1961fb5cda10bc57f265cf288cca0",
+              "bytes": 35849
+            },
+            {
+              "path": "powerflow/autotest/data_configurations_delta_123node.glm",
+              "git_blob_sha1": "3769e4f733f2679cb927aba20b61889eddc00715",
+              "bytes": 7577
+            },
+            {
+              "path": "powerflow/autotest/test_IEEE123_run.glm",
+              "git_blob_sha1": "a3c5524b4abd513b334b57b255aad86ee4050240",
+              "bytes": 1845
+            },
+            {
+              "path": "powerflow/autotest/IEEE123_base.inc",
+              "git_blob_sha1": "cfa0ecf6fd4d6fac7c4633222bc4a9664b0f1f64",
+              "bytes": 57032
+            }
+          ]
+        },
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/BusCoords.dat",
+              "git_blob_sha1": "1bced02d1de85454674d6b0a4a263ffd7bbbee5a",
+              "bytes": 2858
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/CircuitPlottingScripts.dss",
+              "git_blob_sha1": "e65fd37cdc1a1aa7480970647bb14c22de5e6412",
+              "bytes": 1165
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/IEEE123Loads.DSS",
+              "git_blob_sha1": "452974187c8dcc05e387e1d83cf798db373ed1d7",
+              "bytes": 8289
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/IEEE123Master.dss",
+              "git_blob_sha1": "1f234a8615253c8891ac2530f3f2803fca34915f",
+              "bytes": 17096
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/IEEE123Regulators.DSS",
+              "git_blob_sha1": "f695011c017946feadcd0f5280f833d8d9680ac4",
+              "bytes": 1861
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/IEEE123Switches.dss",
+              "git_blob_sha1": "f42cde72efe27a43fc39eba21925066979b8d666",
+              "bytes": 16925
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/IEEELineCodes.DSS",
+              "git_blob_sha1": "519a228cf1907f551a6b38c1522da651d1322c26",
+              "bytes": 30
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/P174_Run_SolarRamp.DSS",
+              "git_blob_sha1": "b9003175125afc623d07938afc899dc4d833f375",
+              "bytes": 1439
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/P174_Run_VoltageProfile.DSS",
+              "git_blob_sha1": "43a71343404dec1e2edb4f094f8f464b0bf64709",
+              "bytes": 1034
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/PV5sdata1.csv",
+              "git_blob_sha1": "cc5609a244f6c829fb967b2a438e285bfd6c69b6",
+              "bytes": 28794
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/PVShape.dss",
+              "git_blob_sha1": "4c0469a76186fbba90201ccfe9c292a056c2c71f",
+              "bytes": 14521
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/PaperLoadShape.txt",
+              "git_blob_sha1": "5f42b2bb14e55c8b3954ff6df2f0772f9aba1a87",
+              "bytes": 61318
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/RevRegTest.dss",
+              "git_blob_sha1": "c22706e56ba0f29d988528b4bed5c8a846edf0c8",
+              "bytes": 1753
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/Run_IEEE123Bus.DSS",
+              "git_blob_sha1": "84d74a943d99195b7c8f0f4fcaa45d1674eadeaf",
+              "bytes": 4766
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/Run_YearlySim.dss",
+              "git_blob_sha1": "25d503322862a8e08f9b3ade012e8bf006cf0ec3",
+              "bytes": 1717
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/SetDailyLoadShape.DSS",
+              "git_blob_sha1": "6ca22a83376142f320d5bf2dbe98c1291fa21a93",
+              "bytes": 2277
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/SolarRamp-Mack.DSS",
+              "git_blob_sha1": "c16caecade45949ca7c29c42a194824fdbcc1ead",
+              "bytes": 2230
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/SolarRamp.DSS",
+              "git_blob_sha1": "180127226edae02d46c6b38e21f7df4e75dcec50",
+              "bytes": 1940
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/SolarRamp.csv",
+              "git_blob_sha1": "2e55be78f8f81a3235aaac72eb54779864c008da",
+              "bytes": 1202
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/StorageRamp.CSV",
+              "git_blob_sha1": "9e3ece25ef79dd28888e9583bfa67d0df21185fb",
+              "bytes": 1202
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/WindRamp.DSS",
+              "git_blob_sha1": "50c76a79256fdc7bdaaf9765b1c0aa39aa7a3369",
+              "bytes": 1432
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/123Bus/WindRampRevRegTest.DSS",
+              "git_blob_sha1": "caf901d9c517daf5f3dced2f239d564154859e36",
+              "bytes": 1992
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/IEEELineCodes.DSS",
+              "git_blob_sha1": "eba8d904eb8f0aa1b8fa69faa0fdbc6afa10c3dd",
+              "bytes": 12032
+            }
+          ]
+        }
+      ],
+      "note": "Zero-voltage regression assertions cover absent phases, not a complete positive load-flow reference. Switching schedules require an explicitly selected static state."
+    },
+    {
+      "id": "ieee4",
+      "sources": [
+        {
+          "repository": "https://github.com/gridlab-d/gridlab-d",
+          "commit": "1b2e463d3c149e999a2c5f04213477f545e01dc6",
+          "files": [
+            {
+              "path": "models/powerflow_IEEE_4node.glm",
+              "git_blob_sha1": "38c6332934c661ba697c33706e8a5faa56fc5942",
+              "bytes": 2283
+            }
+          ]
+        },
+        {
+          "repository": "https://github.com/GRIDAPPSD/CIMHub",
+          "commit": "5ba4c63fa525108928942d564fddc022c3fb031f",
+          "files": [
+            {
+              "path": "ieee4/base/Auto1bus.dss",
+              "git_blob_sha1": "5237bf27cf60990bfa2b9a9610d3ab369d306d85",
+              "bytes": 1411
+            },
+            {
+              "path": "ieee4/base/Auto3bus.dss",
+              "git_blob_sha1": "c3beb25dfbd9251b037d540728bfda6346542ba1",
+              "bytes": 1219
+            },
+            {
+              "path": "ieee4/base/AutoAuto.dss",
+              "git_blob_sha1": "907c598b632a2ded0f791c0aaf7837c3e7d594c2",
+              "bytes": 777
+            },
+            {
+              "path": "ieee4/base/AutoHLT.dss",
+              "git_blob_sha1": "e0ecf3551c6c18c974ae27eeba5bd50d21133838",
+              "bytes": 740
+            },
+            {
+              "path": "ieee4/base/AutoHLTCode.dss",
+              "git_blob_sha1": "7cb4daf527eaf4a8dfbf20ac0532abdfe18d42ad",
+              "bytes": 875
+            },
+            {
+              "path": "ieee4/base/DDBal.dss",
+              "git_blob_sha1": "7b77ca4ffc40456d56cd2609f28c34356be416f8",
+              "bytes": 1350
+            },
+            {
+              "path": "ieee4/base/DDUnBal.dss",
+              "git_blob_sha1": "6a6c38760294ca6f9e45109186a4534b93616e2b",
+              "bytes": 1560
+            },
+            {
+              "path": "ieee4/base/DYBal.dss",
+              "git_blob_sha1": "2a6dbff06a483ebb07b5f8040342894b5374b6ac",
+              "bytes": 1305
+            },
+            {
+              "path": "ieee4/base/DYUnBal.dss",
+              "git_blob_sha1": "b6d0dbe61a608e638f8db1eacefbe77af48ae287",
+              "bytes": 1466
+            },
+            {
+              "path": "ieee4/base/GYDBal.dss",
+              "git_blob_sha1": "ab90286668a3a5dc1c9e38d52ae33eab98787f20",
+              "bytes": 1375
+            },
+            {
+              "path": "ieee4/base/GYDUnBal.dss",
+              "git_blob_sha1": "2cb0b757957786320b7fb7a7af8e59b8f60539fc",
+              "bytes": 1509
+            },
+            {
+              "path": "ieee4/base/IMODOD.dss",
+              "git_blob_sha1": "05dea966abdc81b9cc418073b48842489725b0e3",
+              "bytes": 1999
+            },
+            {
+              "path": "ieee4/base/IMOYODlag.dss",
+              "git_blob_sha1": "48d7653c57230bd9a8d597f9c1aebca9bf1502e6",
+              "bytes": 2031
+            },
+            {
+              "path": "ieee4/base/IMOYODlead.dss",
+              "git_blob_sha1": "a87f3a32d62effa7a5eee360eeb685c4baf0dd07",
+              "bytes": 2030
+            },
+            {
+              "path": "ieee4/base/IMYD.dss",
+              "git_blob_sha1": "bc17b690e93db4df6629e042e24b9e6cbf8cd7f8",
+              "bytes": 2137
+            },
+            {
+              "path": "ieee4/base/OYODBal.dss",
+              "git_blob_sha1": "df229226a236b567dd223fe6db995da7a6450002",
+              "bytes": 1648
+            },
+            {
+              "path": "ieee4/base/OYODUnBal.dss",
+              "git_blob_sha1": "53727f61d9f00492d6bb008d88ca16dd632ead0c",
+              "bytes": 1492
+            },
+            {
+              "path": "ieee4/base/OnePh.dss",
+              "git_blob_sha1": "415afee60e2e55077e3fff84508a43da2f953b67",
+              "bytes": 1121
+            },
+            {
+              "path": "ieee4/base/SCTBal.dss",
+              "git_blob_sha1": "86396018e793e2550286bf6af8337f116a4815f0",
+              "bytes": 1248
+            },
+            {
+              "path": "ieee4/base/SCTUnBal.dss",
+              "git_blob_sha1": "094c185422a39db79e09de5e1336864caf0c7c80",
+              "bytes": 1250
+            },
+            {
+              "path": "ieee4/base/YDBal.dss",
+              "git_blob_sha1": "02584002787b3a5a91f2832f7635275475885cfb",
+              "bytes": 1401
+            },
+            {
+              "path": "ieee4/base/YDUnBal.dss",
+              "git_blob_sha1": "3d5913411462d7b6591d13b2787732f62f63894d",
+              "bytes": 1611
+            },
+            {
+              "path": "ieee4/base/YYBal.dss",
+              "git_blob_sha1": "c77b8bbb5ca5c6164f399934dcc682397cb019eb",
+              "bytes": 1097
+            },
+            {
+              "path": "ieee4/base/YYD.dss",
+              "git_blob_sha1": "f5ccf044a9641a5f73dac50141d112f2abe03267",
+              "bytes": 2495
+            },
+            {
+              "path": "ieee4/base/YYD1Tank.dss",
+              "git_blob_sha1": "74637a7d9eb5c654837c66030a87bd65ba79d891",
+              "bytes": 2162
+            },
+            {
+              "path": "ieee4/base/YYDXn.dss",
+              "git_blob_sha1": "1b2c9caf1d48dc29430b50fad022e61dc49a3325",
+              "bytes": 2140
+            },
+            {
+              "path": "ieee4/base/YYUnBal.dss",
+              "git_blob_sha1": "79a824e44a9293ea26c106451f92b33e5423a257",
+              "bytes": 1258
+            },
+            {
+              "path": "ieee4/base/ieee4xy.dat",
+              "git_blob_sha1": "f71a07ed2dd0e36d34e2821ae1c9f79310055680",
+              "bytes": 208
+            }
+          ]
+        }
+      ],
+      "note": "Balanced/unbalanced winding-connection cases; some CIMHub examples extend the IEEE4 family."
+    },
+    {
+      "id": "ieee8500",
+      "sources": [
+        {
+          "repository": "https://github.com/GRIDAPPSD/Powergrid-Models",
+          "commit": "f5cc029ff31cd8e4a8338109b781c95fd01a00f4",
+          "files": [
+            {
+              "path": "archive/GLM/IEEE_8500node.glm",
+              "git_blob_sha1": "08fa86d37b8a46dc9667d3d95f521a3634cbef87",
+              "bytes": 1366160
+            }
+          ]
+        },
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/AddBusXY.py",
+              "git_blob_sha1": "3457138fec5621a2ae58df503be558a2c9eb54aa",
+              "bytes": 1582
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Buscoords.dss",
+              "git_blob_sha1": "20934f5bf66717bbc5cd6da9153d877c542d0adf",
+              "bytes": 215233
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/CapControls.DSS",
+              "git_blob_sha1": "5651e6213ebb085d4045a26f9d5ee723b238169d",
+              "bytes": 2084
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Capacitors.dss",
+              "git_blob_sha1": "465ae7e5442afc9e6a70cd579e69e7ea98ba9157",
+              "bytes": 927
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/CloudTransient.dss",
+              "git_blob_sha1": "35dbb095da58e50bb1a983c41648309b94b6ae46",
+              "bytes": 358
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Feeder_Loads.dss",
+              "git_blob_sha1": "0ffcc589e1cd83854fb17d509c8e19c622f5e556",
+              "bytes": 188
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Fuses.DSS",
+              "git_blob_sha1": "31c270eb814090fefd9d73520b289d68976e47ac",
+              "bytes": 2423
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Generators.dss",
+              "git_blob_sha1": "5ceae62407cf74435dce046bfe2773a6bfa03e6f",
+              "bytes": 794
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/LineCodes.dss",
+              "git_blob_sha1": "26d73b6f48a1f4bb73a8fd4e899255f33407cb81",
+              "bytes": 358423
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/LineCodes2.DSS",
+              "git_blob_sha1": "64d6130e821fadf8aaff04a413fef23540b728c4",
+              "bytes": 12249
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/LineGeometry.dss",
+              "git_blob_sha1": "71ec92b37394ead4ae1a79fb639c1b94c69905dd",
+              "bytes": 13891
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Lines-Geometry.dss",
+              "git_blob_sha1": "4d9d46dbd1689f5176fb15d9aedcc013c7dd1389",
+              "bytes": 390575
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Lines.dss",
+              "git_blob_sha1": "1055b0f1fe72f666671bdadf2eafc43f98af4a6e",
+              "bytes": 389011
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/LoadXfmrCodes.dss",
+              "git_blob_sha1": "5037b3e3af5a51bf23ac76b3abecb59c9e4e9844",
+              "bytes": 118289
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/LoadXfmrs.dss",
+              "git_blob_sha1": "e163c9419908d69784a63a45e923720dfe6b52d1",
+              "bytes": 292247
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Loads.dss",
+              "git_blob_sha1": "168baf1e1a2f26052e58da1a63fec6178dbc8ab7",
+              "bytes": 149061
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Master-unbal.dss",
+              "git_blob_sha1": "1b2257008dd157213be42d1f22d0de5921855340",
+              "bytes": 823
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Master.dss",
+              "git_blob_sha1": "656acebe0b95b4ef51086930cc778ce39e0b1193",
+              "bytes": 829
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Normalized-1s-2900-pts.CSV",
+              "git_blob_sha1": "b00459583774da91dfcb1f446fe0d466bb07d7c7",
+              "bytes": 36988
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/P174_Run_360kW_PV.DSS",
+              "git_blob_sha1": "f14f1e4608a48fe1199510342795662183e6bd63",
+              "bytes": 1483
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/P174_Run_Voltage_Profile.DSS",
+              "git_blob_sha1": "93a8fde5f1c9723d1ef688776c6e1ec77a7f8286",
+              "bytes": 415
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Regulators.dss",
+              "git_blob_sha1": "fc99f78522f8d307a055f87c4231a7402c1c5965",
+              "bytes": 3033
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Run_8500Node.dss",
+              "git_blob_sha1": "7341fabe8778376a23631062377ace550f330f8c",
+              "bytes": 1531
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Run_8500Node_Unbal.dss",
+              "git_blob_sha1": "b2b26a486d1a50796224e062e67dc8332bed0a78",
+              "bytes": 1652
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Run_RecloserSiting.DSS",
+              "git_blob_sha1": "12bedd306ab3c51b7455a4783b27da879f48c025",
+              "bytes": 612
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/TplxFaultrate.dss",
+              "git_blob_sha1": "4df602e2b7b40698e3cecfab3b58569cebc80994",
+              "bytes": 36332
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Transformers.dss",
+              "git_blob_sha1": "800b47278f005b5596488371569ce9aaaf35018a",
+              "bytes": 1607
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Triplex_Linecodes.dss",
+              "git_blob_sha1": "e2c72223e5243220a3bf778f53ed142bf0463163",
+              "bytes": 786
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/Triplex_Lines.DSS",
+              "git_blob_sha1": "78ac3463a8f212e6e2f82138edf58f5e5e7120c2",
+              "bytes": 128587
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/UnbalancedLoads.DSS",
+              "git_blob_sha1": "63eed942694dad3e87915a64b9dd1492080fd456",
+              "bytes": 334482
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/8500-Node/WireData.dss",
+              "git_blob_sha1": "cfc8d15c8e88744edcdb1bb5cecfb9ee8fcd9198",
+              "bytes": 15848
+            }
+          ]
+        },
+        {
+          "repository": "https://github.com/ieee-pes-amps/dtf-dev",
+          "commit": "030a22772c3e8ef5d55bebcec1960fd4325ce44f",
+          "files": [
+            {
+              "path": "8500-bus/Additional Information/Solutions/Solution-Balanced.xls",
+              "git_blob_sha1": "53059589724fac47696c2b063fcfce3a6a6d17b0",
+              "bytes": 4036608
+            },
+            {
+              "path": "8500-bus/Additional Information/Solutions/Solution-unBalanced.xls",
+              "git_blob_sha1": "c8dcea622c706e31e99234d8346924df383ceb58",
+              "bytes": 4445184
+            }
+          ]
+        }
+      ],
+      "note": "Balanced/unbalanced service loads and controller state must be aligned before comparison. Published result files belong to their original baseline."
+    },
+    {
+      "id": "ieee9500",
+      "sources": [
+        {
+          "repository": "https://github.com/GRIDAPPSD/CIMHub",
+          "commit": "5ba4c63fa525108928942d564fddc022c3fb031f",
+          "files": [
+            {
+              "path": "ieee9500/ieee9500bal_glm.zip",
+              "git_blob_sha1": "1ac8bab6e2c7f2d135b3bd23ef6ee68c69658a33",
+              "bytes": 168520
+            },
+            {
+              "path": "ieee9500/ieee9500bal_dss.zip",
+              "git_blob_sha1": "d9819852ace7417d89f9b2864dd0f10fd412cb66",
+              "bytes": 325095
+            },
+            {
+              "path": "ieee9500/ieee9500bal_compare.zip",
+              "git_blob_sha1": "a2a9eb471f2457ed87899b24e8ade659169d4901",
+              "bytes": 1361187
+            },
+            {
+              "path": "ieee9500/ieee9500unbal_glm.zip",
+              "git_blob_sha1": "27ed32f02e7b032f54cf5976845c5db771e8ac92",
+              "bytes": 179473
+            },
+            {
+              "path": "ieee9500/ieee9500unbal_dss.zip",
+              "git_blob_sha1": "4f1080fe30a79653cdc8376c32320c8c4dd7c724",
+              "bytes": 385460
+            },
+            {
+              "path": "ieee9500/ieee9500unbal_compare.zip",
+              "git_blob_sha1": "bf5c95e3471a4feb1ad3337322503600d608217f",
+              "bytes": 1445129
+            }
+          ]
+        },
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/ieee9500dss/ieee9500_base.dss",
+              "git_blob_sha1": "bb5d8745d98a808e2d2c5478bc9b24611401100e",
+              "bytes": 1064633
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/ieee9500dss/ieee9500_busxy.dss",
+              "git_blob_sha1": "892fcdfecf58c188a801e55587ea64e7642b752a",
+              "bytes": 165083
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/ieee9500dss/ieee9500_uuid.dss",
+              "git_blob_sha1": "12ad8f0fdcd6b72aad3ecc1170019f0aa4f8c49b",
+              "bytes": 381690
+            }
+          ]
+        }
+      ],
+      "note": "Archives include paired engine results. GLM wrappers include climate/generator/reliability modules; do not silently discard their effects."
+    },
+    {
+      "id": "european_lv",
+      "sources": [
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Buscoords.txt",
+              "git_blob_sha1": "8cc819e53e8fab2fbb20dda97e2e330c2fbcd727",
+              "bytes": 23723
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_1.txt",
+              "git_blob_sha1": "f08762073aced1f6eebd6c110eaa2c7c300f5a19",
+              "bytes": 12803
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_10.txt",
+              "git_blob_sha1": "6a36b211d6bcd38a1e64c7d01fe7ef29b12463af",
+              "bytes": 12933
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_100.txt",
+              "git_blob_sha1": "ebdebc7bef085ef10d45239173d4c2df00fb11ed",
+              "bytes": 12891
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_11.txt",
+              "git_blob_sha1": "6242023c7c272cdc389dc5ed0592d2e83f007897",
+              "bytes": 12931
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_12.txt",
+              "git_blob_sha1": "4c47d41a9c7808fcbae28bed103addc16adcc841",
+              "bytes": 12937
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_13.txt",
+              "git_blob_sha1": "10b91ea876fc2ae1e0a37e98068a7e7174457a9c",
+              "bytes": 12903
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_14.txt",
+              "git_blob_sha1": "a26c66055796b045635ca0b5fe62b3f5466c3533",
+              "bytes": 12687
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_15.txt",
+              "git_blob_sha1": "679490c5b522c63c5e3a7ff42967205fcd421918",
+              "bytes": 12960
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_16.txt",
+              "git_blob_sha1": "745d3d3118800e7a179a73e51bb959f8fe456f97",
+              "bytes": 12744
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_17.txt",
+              "git_blob_sha1": "fc29e229d2ba0ecea83f654710209e61340d67c5",
+              "bytes": 12851
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_18.txt",
+              "git_blob_sha1": "2af17bc3056c214736406e4b7349a674c6a66970",
+              "bytes": 12556
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_19.txt",
+              "git_blob_sha1": "419d6700d10d92fd468289940e6a6e2bb5bf3eca",
+              "bytes": 12773
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_2.txt",
+              "git_blob_sha1": "386be3ce43aaf37858875e7c493e79a10e8b85ac",
+              "bytes": 12881
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_20.txt",
+              "git_blob_sha1": "30e2c2f19a6eabbda67fc6bcc38905cd606f7e9e",
+              "bytes": 12854
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_21.txt",
+              "git_blob_sha1": "771f437c01402460ea97231bff3023f9a62e443a",
+              "bytes": 12632
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_22.txt",
+              "git_blob_sha1": "09fbd29fed9bf87803c065fd71d38033edbb4cc3",
+              "bytes": 12807
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_23.txt",
+              "git_blob_sha1": "feed4f1eb1ce278aa4651897a071f681785649e4",
+              "bytes": 12941
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_24.txt",
+              "git_blob_sha1": "8eda61b9db1e013eff3d105427ca4d6a237ada59",
+              "bytes": 12906
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_25.txt",
+              "git_blob_sha1": "8f26a996dbd3ce8eccf590adf63a81129f445464",
+              "bytes": 12179
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_26.txt",
+              "git_blob_sha1": "4583c293c03fdcacc771f81adf5cdf1388fefffa",
+              "bytes": 12941
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_27.txt",
+              "git_blob_sha1": "47a1cc33ceef328332ab3c45410f16101d507e92",
+              "bytes": 12893
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_28.txt",
+              "git_blob_sha1": "3c948e9b8b087fb85bbfa37f93c277e2c1b12cf2",
+              "bytes": 12948
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_29.txt",
+              "git_blob_sha1": "d36fcb6d68d6d3f7f2924ca1f49a64fa60485c23",
+              "bytes": 12818
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_3.txt",
+              "git_blob_sha1": "c105c37e1387f5bf448bb9cc89e23b10051170a1",
+              "bytes": 12943
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_30.txt",
+              "git_blob_sha1": "da112b221aa20150f3927485f133fd297faf6aa7",
+              "bytes": 12899
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_31.txt",
+              "git_blob_sha1": "8f8468a7dcaaf17602a6883781f48b6d1b61c223",
+              "bytes": 12819
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_32.txt",
+              "git_blob_sha1": "1972f910670a06b8323e7940b014171004fda18c",
+              "bytes": 12867
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_33.txt",
+              "git_blob_sha1": "370935c3320330b501f81bef83b93546f1859820",
+              "bytes": 12794
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_34.txt",
+              "git_blob_sha1": "48d8dec7647020b5123202960646134ec5382750",
+              "bytes": 12920
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_35.txt",
+              "git_blob_sha1": "dc71cbd1e298512866a941754cd2fe1f4f26735b",
+              "bytes": 12918
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_36.txt",
+              "git_blob_sha1": "58429739b6bd10d31e8a9ac51c71a46ec0c8e0d2",
+              "bytes": 12954
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_37.txt",
+              "git_blob_sha1": "644d45775f7e5dc9820274829e3c77bfda198218",
+              "bytes": 12838
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_38.txt",
+              "git_blob_sha1": "43d575ade058ce0e6825d572f8cfe5f8fd9a1321",
+              "bytes": 12863
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_39.txt",
+              "git_blob_sha1": "96a917a8a4e24a7d26fd86076da51ef2f4b72ad3",
+              "bytes": 12857
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_4.txt",
+              "git_blob_sha1": "7bf9c1011191e308c03c3905224cad488c4f654d",
+              "bytes": 12884
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_40.txt",
+              "git_blob_sha1": "5cef11afc2f30f407de1784d5e1117e8efd072d4",
+              "bytes": 12924
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_41.txt",
+              "git_blob_sha1": "2cbb2eb779b9324e43d7c1c53e427f93d2487c6a",
+              "bytes": 12911
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_42.txt",
+              "git_blob_sha1": "98f5b5a61f9aeaf6e852fef8e2f14a8a02bdb4ef",
+              "bytes": 12750
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_43.txt",
+              "git_blob_sha1": "42d1a743587d38360db20247d947ee641b7b26c9",
+              "bytes": 11876
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_44.txt",
+              "git_blob_sha1": "bf738e0bb0f2e9bf9d667950c474dce38a9a5ecd",
+              "bytes": 12872
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_45.txt",
+              "git_blob_sha1": "39337b3c043b7480c004f002f08eb399e7c3dce1",
+              "bytes": 12887
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_46.txt",
+              "git_blob_sha1": "17857c14b2a863b268b23d04fd39d334f19b5aff",
+              "bytes": 12905
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_47.txt",
+              "git_blob_sha1": "c8a46e2218cea50e8c729e66e5c6812a0359fc0a",
+              "bytes": 12928
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_48.txt",
+              "git_blob_sha1": "9fce7100f7009bde3582bf737e4b778116f78219",
+              "bytes": 12854
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_49.txt",
+              "git_blob_sha1": "50de96e669c9a24d62986f5df9f933410ec66251",
+              "bytes": 12879
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_5.txt",
+              "git_blob_sha1": "6b8f4c92e153b840a279f78b5974fc1ef3fd73bb",
+              "bytes": 12865
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_50.txt",
+              "git_blob_sha1": "80b093d196a80f40cb7dac82d88269e16df673b1",
+              "bytes": 12734
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_51.txt",
+              "git_blob_sha1": "454f0bcbe8c34d397ea8d30b73a16ae0f4d0d476",
+              "bytes": 12915
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_52.txt",
+              "git_blob_sha1": "404eb8b17c5a35de7a81dcf84b02aa7e71db6c1e",
+              "bytes": 12923
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_53.txt",
+              "git_blob_sha1": "62c029148f28bfdb041cb73f3a24d67b49e8595f",
+              "bytes": 12829
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_54.txt",
+              "git_blob_sha1": "8cf96b44a183326646125bd191780372db943679",
+              "bytes": 12908
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_55.txt",
+              "git_blob_sha1": "30e9905cad35fc2aedfc4bbf48f01ccdaa697ae6",
+              "bytes": 12778
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_56.txt",
+              "git_blob_sha1": "db4ee2e2ce5c450d1613011ddfa59c3b2a168e2f",
+              "bytes": 12286
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_57.txt",
+              "git_blob_sha1": "6c5d42d24c5c065329154485c644c986f0ad82e8",
+              "bytes": 12956
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_58.txt",
+              "git_blob_sha1": "4b0fcd7b2383fef4dc7e8bf2e40fa71de3645f0d",
+              "bytes": 11970
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_59.txt",
+              "git_blob_sha1": "d32c95d68d024006348da0d14475dab07d195fe6",
+              "bytes": 12888
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_6.txt",
+              "git_blob_sha1": "73988fd802083e57ed81bd747d17e2493fb68e14",
+              "bytes": 12939
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_60.txt",
+              "git_blob_sha1": "98dad3c86495dd1379799ed0587eb6747b5c2d88",
+              "bytes": 12932
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_61.txt",
+              "git_blob_sha1": "cce954342c91a5681a44c387c253191f066edcca",
+              "bytes": 12893
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_62.txt",
+              "git_blob_sha1": "93d55688dd8fa2156de23af4467dec81b94b41a3",
+              "bytes": 12903
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_63.txt",
+              "git_blob_sha1": "30bc3de2a9845a09ab14e759f1f879d5b8ef13be",
+              "bytes": 12553
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_64.txt",
+              "git_blob_sha1": "c0f54e35147a67fe636f0b434f466706bf523752",
+              "bytes": 12890
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_65.txt",
+              "git_blob_sha1": "5039eb6dca57d2c82c02bd5fec76edc8b9c5c803",
+              "bytes": 12925
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_66.txt",
+              "git_blob_sha1": "91081a7e9d88ff6fdc7ca408f76ed1dc9a9c5f74",
+              "bytes": 12917
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_67.txt",
+              "git_blob_sha1": "7252405b880e263819556015a15abae13af1a75f",
+              "bytes": 12469
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_68.txt",
+              "git_blob_sha1": "5a8beb7a210cb8ad265a601e00e23f8be51522eb",
+              "bytes": 12776
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_69.txt",
+              "git_blob_sha1": "b0e085ffb35325c33424368bb0660bac73ac2e12",
+              "bytes": 12799
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_7.txt",
+              "git_blob_sha1": "26e88e6dfe7b64600c49b06e6149bf0a9ab0bf3b",
+              "bytes": 12928
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_70.txt",
+              "git_blob_sha1": "97fd982ce690aca2037a4e258b4b938eae251157",
+              "bytes": 12881
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_71.txt",
+              "git_blob_sha1": "a33adfb72e15e222de6cecbcd12931ffcd5d50c4",
+              "bytes": 12911
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_72.txt",
+              "git_blob_sha1": "f81a09543599208543caf7c6c419f264fd0f8911",
+              "bytes": 12762
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_73.txt",
+              "git_blob_sha1": "83f8b98c14c93d0674815c5a9252e25f03a48e4a",
+              "bytes": 12848
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_74.txt",
+              "git_blob_sha1": "177c04e643508dcb31b129df1e8f501a463fd342",
+              "bytes": 12904
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_75.txt",
+              "git_blob_sha1": "839e9ee9a7c56acd3182a01fb87dfcf9e821532b",
+              "bytes": 12858
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_76.txt",
+              "git_blob_sha1": "0adc49eee74abb9524bbadf82e83a2efb5dd3976",
+              "bytes": 12896
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_77.txt",
+              "git_blob_sha1": "df89893825e2c6d81869683b65ca614b8cb316fc",
+              "bytes": 12864
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_78.txt",
+              "git_blob_sha1": "f61e64632962cecea0ba1a179439af02bcbb8969",
+              "bytes": 12837
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_79.txt",
+              "git_blob_sha1": "df0871fd5ed2db4db9c38e88cf8b9c24f9fef74a",
+              "bytes": 12945
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_8.txt",
+              "git_blob_sha1": "121128ea2e8dc5b539ecbb2f421d9ee412e94588",
+              "bytes": 12850
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_80.txt",
+              "git_blob_sha1": "b396823fc6a5873e96a37e3cb7ac935eb2c59332",
+              "bytes": 12890
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_81.txt",
+              "git_blob_sha1": "b9f38d6fefa857bac465fe72cec9b35262492969",
+              "bytes": 12205
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_82.txt",
+              "git_blob_sha1": "0846073ff3e4356b896c2a2dae9de66243fb3434",
+              "bytes": 12903
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_83.txt",
+              "git_blob_sha1": "79a235d3f8460ec629104b0d0b44f2f9957e7e47",
+              "bytes": 12914
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_84.txt",
+              "git_blob_sha1": "24d36a09cfd50b2e7cccf0e2bee096f12106b2e1",
+              "bytes": 12921
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_85.txt",
+              "git_blob_sha1": "644aef20ab04680f6b6bd19dcb80b1067848161b",
+              "bytes": 12915
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_86.txt",
+              "git_blob_sha1": "b4389d0247e16f49128c1900a887e14b069b5ab9",
+              "bytes": 12912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_87.txt",
+              "git_blob_sha1": "c96ea601b36f7bbd7d3e9542ad649554affcec87",
+              "bytes": 12928
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_88.txt",
+              "git_blob_sha1": "dcb048b995d9d0445736be0c92d854182df18f22",
+              "bytes": 12854
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_89.txt",
+              "git_blob_sha1": "1ddcafce91c0077d1b474851c23c0d8bfd3e3be9",
+              "bytes": 12765
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_9.txt",
+              "git_blob_sha1": "c4045068b940106a09bb67ff60835f23f796431c",
+              "bytes": 12862
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_90.txt",
+              "git_blob_sha1": "70811de84fdde77c23c58bcb7c893344a267f1eb",
+              "bytes": 12772
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_91.txt",
+              "git_blob_sha1": "1c8f6e15935790f515ee8c393e05470c9bb1c374",
+              "bytes": 12945
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_92.txt",
+              "git_blob_sha1": "6d0f34196455e92f3115f2a9b4f386ea0634b01b",
+              "bytes": 12266
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_93.txt",
+              "git_blob_sha1": "00822106724c84bc5f908cd028b2b095bbadaf07",
+              "bytes": 12900
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_94.txt",
+              "git_blob_sha1": "32f327c5672633ff504dc975016f7cb6e2eb1430",
+              "bytes": 12947
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_95.txt",
+              "git_blob_sha1": "618d9c6747acc44205d1673285ab68e506498bd0",
+              "bytes": 12879
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_96.txt",
+              "git_blob_sha1": "29f1e106cc9178270a9c4a9d0b51cba2470ec0b4",
+              "bytes": 12878
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_97.txt",
+              "git_blob_sha1": "a388bc3f2f7fda143407d4cce60c0ac1d191a591",
+              "bytes": 12903
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_98.txt",
+              "git_blob_sha1": "79c6d94850015f04ed708a6398575666a5baa65b",
+              "bytes": 12852
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Daily_1min_100profiles/load_profile_99.txt",
+              "git_blob_sha1": "ce760afa068eda60abbcf424da86f8502c1b36d0",
+              "bytes": 12896
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Generators.txt",
+              "git_blob_sha1": "d9bd27384ae2c4b19848f288b93b47572c183c5a",
+              "bytes": 56
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/LineCode.txt",
+              "git_blob_sha1": "264bd68fede735712030e76af1d0f2a461c748df",
+              "bytes": 864
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Lines.txt",
+              "git_blob_sha1": "dc52c03ca9e262e0534a2f22136da47f065b32a9",
+              "bytes": 74784
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/LoadShapes.txt",
+              "git_blob_sha1": "b085affedf28f4e0cd0b272e7e177c29197cddb2",
+              "bytes": 6362
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Loads.txt",
+              "git_blob_sha1": "2cf6a1aba083ef8945f36c11fe1e1cf22fa7afb8",
+              "bytes": 4046
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Master.dss",
+              "git_blob_sha1": "21e4d7f3610558718da7b4f94d3352878ed6cbfd",
+              "bytes": 1600
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Monitors.txt",
+              "git_blob_sha1": "922798c64cd36ced81e43f913b959e76a920161a",
+              "bytes": 109069
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCase/Transformers.txt",
+              "git_blob_sha1": "4f46319b644cd103282cdf6876a9b4fd9901f857",
+              "bytes": 101
+            }
+          ]
+        }
+      ],
+      "note": "Original snapshot entrypoint and all companion files pinned; european_lv_import_oracle.py checks native DSS against import, IR and fresh canonical DSS. Time-series simulation and GLM emission remain separate qualifications."
+    },
+    {
+      "id": "north_american_lv_network",
+      "sources": [
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCaseNorthAmerican/Master.dss",
+              "git_blob_sha1": "359f282e2593aba15abae0b9fd7f738e69315143",
+              "bytes": 164108
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCaseNorthAmerican/SecPar.dss",
+              "git_blob_sha1": "19d1b9f52e0a4b54d0f86902d689f6dd05efcb47",
+              "bytes": 87789
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCaseNorthAmerican/energy_meters.dss",
+              "git_blob_sha1": "701ecf6e231a16c19d3a42175e730b6e7b20a04b",
+              "bytes": 6555
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCaseNorthAmerican/network_protectors.dss",
+              "git_blob_sha1": "8c6b9412fc96b2cd811aacb85f7c2ff75df5a48a",
+              "bytes": 12448
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/LVTestCaseNorthAmerican/buscoords.dat",
+              "git_blob_sha1": "0f7ef3cd175d46fc6beb1810efc9ffe44b28da4c",
+              "bytes": 6023
+            }
+          ]
+        }
+      ],
+      "note": "OpenDSS corpus source; this catalog does not imply an available GLM equivalent or validated PowerIO support."
+    },
+    {
+      "id": "neutral_earth_voltage",
+      "sources": [
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/Capacitors.DSS",
+              "git_blob_sha1": "6c3a44d3e7cb81e0590c7450d6144bdb053405a9",
+              "bytes": 523
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/Grounds.DSS",
+              "git_blob_sha1": "74aa1c07f5f9b855b37be48ba34fc6c3a950479e",
+              "bytes": 7423
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/LineCodes.DSS",
+              "git_blob_sha1": "9b691a25e640f061d82525dd604d35d698ce7b0e",
+              "bytes": 749
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/LineConstantsCode.DSS",
+              "git_blob_sha1": "d24dd5199d6fd046a632982ab296dfabb1d22993",
+              "bytes": 7384
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/LineGeometry.DSS",
+              "git_blob_sha1": "dee12aebe4dfa26e29e51b36305fc9e14326347f",
+              "bytes": 3057
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/Lines.DSS",
+              "git_blob_sha1": "5a88063b8e909b157fcbfeaa8583b5318f309cc2",
+              "bytes": 11037
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/Loads.DSS",
+              "git_blob_sha1": "73c06969d9fcfbd58160cc0bb0445d4bde25df66",
+              "bytes": 8106
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/NEVMASTER.DSS",
+              "git_blob_sha1": "f4746c5050e9f6a7fc3563a063d6c95854bb0bd8",
+              "bytes": 324
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/Run_NEV.dss",
+              "git_blob_sha1": "95c1e83ced5bc8e64679cdd6af8bc8059e1eddba",
+              "bytes": 211
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/Spectra.DSS",
+              "git_blob_sha1": "b6d594991c21f46b9d9ed946ff3797c0b2aa5efa",
+              "bytes": 740
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/NEVTestCase/Substation.DSS",
+              "git_blob_sha1": "e54c759b713145b326c9e7705d9eaac46875256d",
+              "bytes": 1198
+            }
+          ]
+        }
+      ],
+      "note": "OpenDSS corpus source; this catalog does not imply an available GLM equivalent or validated PowerIO support."
+    },
+    {
+      "id": "four_wire_delta",
+      "sources": [
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/4wire-Delta/Kersting4wireIndMotor.dss",
+              "git_blob_sha1": "8b0a02acf2ef6aebb45c2a710755ec73f4907d81",
+              "bytes": 2148
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/4wire-Delta/Kersting4wire_Lagging.dss",
+              "git_blob_sha1": "0be5c9addb007941b3de20fb0b5e39941ea096b5",
+              "bytes": 2876
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/4wire-Delta/Kersting4wire_Leading.dss",
+              "git_blob_sha1": "ef7fb5430cad60ba15c8299d520451cf7d39fd9a",
+              "bytes": 2867
+            }
+          ]
+        }
+      ],
+      "note": "OpenDSS corpus source; this catalog does not imply an available GLM equivalent or validated PowerIO support."
+    },
+    {
+      "id": "secondary_circuit",
+      "sources": [
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/BusCoords.DSS",
+              "git_blob_sha1": "a17f460a0e0854a5a127a570cc7c6654cf113da1",
+              "bytes": 1836
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/LineCodes.DSS",
+              "git_blob_sha1": "8d2c934700944a1f898d9dada6c8033c477936b1",
+              "bytes": 1051
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/LinesTrafosLoads.dss",
+              "git_blob_sha1": "ce5fca35f4bdbb0322816abc506d7ce0a3e0abbf",
+              "bytes": 17918
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Loadshapes.dss",
+              "git_blob_sha1": "495b251ec0a73a4b00372cf955eab6b59c5e5197",
+              "bytes": 4968
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Loadshapes_VarySubV.dss",
+              "git_blob_sha1": "91dd1c34b8b979707208de5bccf4f345f4f2bbc6",
+              "bytes": 118
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Master.DSS",
+              "git_blob_sha1": "416bf35e13c0690ca8e4aef137579e9b2ebd4909",
+              "bytes": 597
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/Source_V.dbl",
+              "git_blob_sha1": "62986547cea41fbf9a9a92e94c7c512c2daaf3b8",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/SubV_PhaseA_60minInst.sng",
+              "git_blob_sha1": "b9677a8ef66f685cec929c184aca87cb2852172d",
+              "bytes": 34956
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load10_1_P.dbl",
+              "git_blob_sha1": "401183e6f9945246e2e56e22279f55ef7a957439",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load10_1_Q.dbl",
+              "git_blob_sha1": "fb1dfcd4709c535b6db65ca4e07b7c9aa933b4e8",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load10_2_P.dbl",
+              "git_blob_sha1": "d139c516e7fbc895ddd8a218d1fd7e7ab0e98573",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load10_2_Q.dbl",
+              "git_blob_sha1": "61baea73384057844353883a1587c38e4eec7f78",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load1_1_P.dbl",
+              "git_blob_sha1": "758c369382862486da2bb5a1782ef046834bc81f",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load1_1_Q.dbl",
+              "git_blob_sha1": "efa0336481ff255fa6f164579cfdf88194758590",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load1_2_P.dbl",
+              "git_blob_sha1": "9dacccb0c536770bcac213f0aca5dcc8f1c9a67d",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load1_2_Q.dbl",
+              "git_blob_sha1": "5b10b8d5891f1f79ce6bd42b9f108e19927e46e5",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load1_3_P.dbl",
+              "git_blob_sha1": "2a87c8984cbf28e0acfdbcfa5893f404a4701a3d",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load1_3_Q.dbl",
+              "git_blob_sha1": "60089cdc161fd58fa01e7428cce30e50648aac3a",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load1_4_P.dbl",
+              "git_blob_sha1": "85cb24e9d420a8b00679f3b702d05b2adcd661ec",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load1_4_Q.dbl",
+              "git_blob_sha1": "7e4d56929e6c2a5340c0c362e103740a0ea66ad1",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load1_5_P.dbl",
+              "git_blob_sha1": "ec7738b98276e94eb0faef8c76b7e30df7f2456d",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load1_5_Q.dbl",
+              "git_blob_sha1": "fa6fe18ab76ecbe69f6cb6ac874907ac9bbd5bc5",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load2_P.dbl",
+              "git_blob_sha1": "3bc736c685b71db027ebeac082bbc26b08b05dff",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load2_Q.dbl",
+              "git_blob_sha1": "b0f6409737819f0f7d8b4d751691e29c524b5ebd",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load3_1_P.dbl",
+              "git_blob_sha1": "afe536af90329eab9d122450096defb25df4c5df",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load3_1_Q.dbl",
+              "git_blob_sha1": "4465696c29d62e3ca5db1f52c276a5208e2801ae",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load3_2_P.dbl",
+              "git_blob_sha1": "05ff895356019131282fece9311ce9dc7322bf1e",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load3_2_Q.dbl",
+              "git_blob_sha1": "05c69f099e8aeab77ee6139eae673d240ce6c564",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load3_3_P.dbl",
+              "git_blob_sha1": "a10b2af0540e49e7b856ce6fb9945b729228612e",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load3_3_Q.dbl",
+              "git_blob_sha1": "ad7524667c0b1df13cbe61c8fbcaf1fcfa1af187",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load3_4_P.dbl",
+              "git_blob_sha1": "b871f2112602532141f5eef33e0a20ee3bdb58fa",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load3_4_Q.dbl",
+              "git_blob_sha1": "69f105ee74e63cf5c71dc59042b03e2143a8d089",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load3_5_P.dbl",
+              "git_blob_sha1": "d755d77ab8bf874a26287daea85e3663102f410a",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load3_5_Q.dbl",
+              "git_blob_sha1": "9ff9e46f4b13149b2c7081cee505f35eeeed0018",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load4_1_P.dbl",
+              "git_blob_sha1": "6428a649dfdc8572e757aa1af095223cb285341a",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load4_1_Q.dbl",
+              "git_blob_sha1": "51ca5aaea220c247e1c5c2637141024bea0fb486",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load4_2_P.dbl",
+              "git_blob_sha1": "7117e5b808c6ec14db545639ba928c8a60d42a39",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load4_2_Q.dbl",
+              "git_blob_sha1": "a73ae352891f678d6a7a8a54ddbb34009afa0afa",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load4_3_P.dbl",
+              "git_blob_sha1": "cd564373d8799b2f9a4d01ff11aa4f0dc722fba2",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load4_3_Q.dbl",
+              "git_blob_sha1": "59c75edd946e1285525e0c74b13d9b98f6ecb406",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load4_4_P.dbl",
+              "git_blob_sha1": "abe21cb296c6902cbc5aceb8694cc6becafaeeb7",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load4_4_Q.dbl",
+              "git_blob_sha1": "e4a49daba5cf78f047b0fe3ac8176e854bd452ff",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load4_5_P.dbl",
+              "git_blob_sha1": "01e0b85410ec9c73e2ec4b883b1984adb12db89f",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load4_5_Q.dbl",
+              "git_blob_sha1": "2784f26651dec05421e88637b0ede4c54576fa13",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load5_1_P.dbl",
+              "git_blob_sha1": "94e222721dd742d39220e5befddeab71f872c781",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load5_1_Q.dbl",
+              "git_blob_sha1": "affcc7a5c957f10ffc1915a7918d2bd326af7807",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load5_2_P.dbl",
+              "git_blob_sha1": "ebbd63eb8c3453347bdd69fc616893656e307ace",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load5_2_Q.dbl",
+              "git_blob_sha1": "de41b47bbfb5f71b1fbcfd53fce0cee3db6aad03",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load5_3_P.dbl",
+              "git_blob_sha1": "a645720fe9f36bf3312f54f6a7d4a11b928bfac9",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load5_3_Q.dbl",
+              "git_blob_sha1": "54dc651492a928f46d0bdd25ac8a3896a9c68b1e",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load5_4_P.dbl",
+              "git_blob_sha1": "34798cbcb3c09a9c7cb65e9d0a35de7bfe3bab68",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load5_4_Q.dbl",
+              "git_blob_sha1": "7be306ac46351f5c8988f563f7a28447a75d00a9",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load6_1_P.dbl",
+              "git_blob_sha1": "6994de50d3e1678175ef86e4fc70f8dc5f826169",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load6_1_Q.dbl",
+              "git_blob_sha1": "89742b17457a8a48ec0d9600bbdfcb4b1db99330",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load6_2_P.dbl",
+              "git_blob_sha1": "869e13eec6b5a545724308d086cb5733dcf4e7de",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load6_2_Q.dbl",
+              "git_blob_sha1": "a8d9c47b2006298874bb9fae03b6c46911a862f8",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load6_3_P.dbl",
+              "git_blob_sha1": "1ecbb684e85336c4a8606434c2f726f15be1b8ef",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load6_3_Q.dbl",
+              "git_blob_sha1": "88d60f7be011b805c72253653e0cba524311d0b7",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load6_4_P.dbl",
+              "git_blob_sha1": "1e08b2c1d286dd5543a0399233eb3dfd5d446019",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load6_4_Q.dbl",
+              "git_blob_sha1": "1e0c46f27fa33540978a1ffd8b2ce3c618a7e8e3",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load7_1_P.dbl",
+              "git_blob_sha1": "2053d51174ffc8d726e6c686215aeaeff10fbadc",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load7_1_Q.dbl",
+              "git_blob_sha1": "f7e7cda757757507c84024a23f00c9f8cf2c8aff",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load7_2_P.dbl",
+              "git_blob_sha1": "8cb88e3992f705d8033626585d6a3d7d2855ab5d",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load7_2_Q.dbl",
+              "git_blob_sha1": "a328fe242d56da8353fc05f2b111305d68be9e04",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load7_3_P.dbl",
+              "git_blob_sha1": "3e5d964564850caa3a40f27d481d6678a90eb828",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load7_3_Q.dbl",
+              "git_blob_sha1": "0a15ff83186ab0d3fe9ed650d40b94f71a6d64f2",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load7_4_P.dbl",
+              "git_blob_sha1": "dc597cf5d778c62e65231df94f3ed28d7b4fa6b0",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load7_4_Q.dbl",
+              "git_blob_sha1": "8a6e68801a32d36f8caac93b2609c8299b877a93",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load8_1_P.dbl",
+              "git_blob_sha1": "0b1ea12a59c0c57655da73c19d10186bc3606c07",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load8_1_Q.dbl",
+              "git_blob_sha1": "9ff48a03cc7a00b2c9c5b987e75cef4e4a515912",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load8_2_P.dbl",
+              "git_blob_sha1": "7167bd249fac87b9631ac4557078d9c899821be8",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load8_2_Q.dbl",
+              "git_blob_sha1": "41ec7567210493858e2103f2b13e65b3f3544c6b",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load8_3_P.dbl",
+              "git_blob_sha1": "8688a4cf0ea9279498f11c8987965d1463d4b09f",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load8_3_Q.dbl",
+              "git_blob_sha1": "de7592de3441d4719bdf47ba22d3bbc9eebc15ee",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load8_4_P.dbl",
+              "git_blob_sha1": "04930e6cf9fe688aa2e99150fde568b3046a2f07",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load8_4_Q.dbl",
+              "git_blob_sha1": "def562515a449a31cf612dc3dc423397d167493a",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load9_1_P.dbl",
+              "git_blob_sha1": "2763b0c9fef66753d1a40a28a066009c11fac187",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load9_1_Q.dbl",
+              "git_blob_sha1": "17a45386013dbd0d63185de730a389077925614e",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load9_2_P.dbl",
+              "git_blob_sha1": "6855fe205879572354ce539fa1afd8e70958cb48",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Profiles/load9_2_Q.dbl",
+              "git_blob_sha1": "3a5cf5f17f283a9e6d5e133c4bd282a4aa172ad3",
+              "bytes": 69912
+            },
+            {
+              "path": "Version8/Distrib/IEEETestCases/SecondaryTestCircuit_modified/Substation.DSS",
+              "git_blob_sha1": "4e84489b379659cb3b98d2fca0cd2a49284aa407",
+              "bytes": 577
+            }
+          ]
+        }
+      ],
+      "note": "OpenDSS corpus source; this catalog does not imply an available GLM equivalent or validated PowerIO support."
+    },
+    {
+      "id": "dg_protection_static",
+      "sources": [
+        {
+          "repository": "https://github.com/dss-extensions/electricdss-tst",
+          "commit": "3b208397160213cae4a9e2d0a7d1aa3528ce26e1",
+          "files": [
+            {
+              "path": "Version8/Distrib/IEEETestCases/DG_Protection/DG_Prot_Fdr.dss",
+              "git_blob_sha1": "e3c1a832d64d35479c9eb836c1d9b67df938eb17",
+              "bytes": 5870
+            }
+          ]
+        }
+      ],
+      "note": "OpenDSS corpus source; this catalog does not imply an available GLM equivalent or validated PowerIO support."
+    },
+    {
+      "id": "comprehensive",
+      "source_page": "https://www.ewh.ieee.org/soc/pes/dsacom/testfeeders/Comprehensive.htm",
+      "note": "IEEE publishes model data and reference solutions; downloadable native input has not yet been acquired or pinned."
+    }
+  ]
+}

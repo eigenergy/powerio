@@ -29,6 +29,8 @@ pub mod codes {
             "invalid multiconductor OPF coefficients, mappings or topology", category = Data;
         BUILD_MULTI_PHYSICS_UNSUPPORTED = "BUILD.MULTI.PHYSICS_UNSUPPORTED", Error,
             "the requested multiconductor calculation requires unsupported equipment equations", category = Data;
+        BUILD_MC_OPF_LOAD_LAW_PROJECTED = "BUILD.MULTI.LOAD_LAW_PROJECTED", Warning,
+            "a voltage-bounded load law was projected to its nominal law at the caller's request";
         BUILD_MULTI_UNSUPPORTED_STAMP = "BUILD.MULTI.UNSUPPORTED_STAMP", Warning,
             "an element has no exact multiconductor admittance or ideal stamp and was omitted loudly";
         BUILD_LINDIST3FLOW_COEFFICIENT_INVALID = "BUILD.MULTI.LINDIST3FLOW_COEFFICIENT_INVALID", Error,

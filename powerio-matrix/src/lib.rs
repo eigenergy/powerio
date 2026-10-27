@@ -60,10 +60,10 @@ mod ac_jacobian;
 mod acopf;
 mod mcopf;
 pub use mcopf::{
-    McAcOpfAssemblyOptions, McAcOpfPreparation, McOpfAngleLimit, McOpfBranch, McOpfCoil,
-    McOpfComplexRow, McOpfDevice, McOpfDeviceKind, McOpfDroop, McOpfLoadLaw, McOpfShunt,
-    McOpfTerminal, McOpfTransformer, McOpfTransformerCoil, McOpfTransformerPort, McOpfVoltageLimit,
-    build_mc_ac_opf_preparation,
+    BoundedLoadLawPolicy, McAcOpfAssemblyOptions, McAcOpfPreparation, McOpfAngleLimit, McOpfBranch,
+    McOpfCoil, McOpfComplexRow, McOpfDevice, McOpfDeviceKind, McOpfDroop, McOpfLoadLaw,
+    McOpfLoadLawProjection, McOpfShunt, McOpfTerminal, McOpfTransformer, McOpfTransformerCoil,
+    McOpfTransformerPort, McOpfVoltageLimit, build_mc_ac_opf_preparation,
 };
 mod dc_operators;
 mod dcopf;

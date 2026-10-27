@@ -51,8 +51,8 @@ pub use mon::{
     UnresolvedMonitorReason,
 };
 pub use resolve::{
-    ContingencyResolution, PsseEquipmentIndex, ResolvedCase, ResolvedComponent, UnresolvedAction,
-    UnresolvedReason,
+    ContingencyResolution, PsseEquipmentIndex, ResolvedCase, ResolvedComponent,
+    SharedPsseEquipmentIndex, UnresolvedAction, UnresolvedReason,
 };
 pub use sub::{
     JoinName, SelectorGroup, Subsystem, SubsystemParsed, SubsystemSelector, SubsystemSet,

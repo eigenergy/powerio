@@ -144,6 +144,9 @@ use powerio_cli::invariants::{
 };
 use powerio_dist::{DistTargetFormat, MulticonductorNetwork};
 
+#[path = "../../powerio-dist/tests/helpers/source_equivalents.rs"]
+mod source_equivalents;
+
 const REPORT_ENV: &str = "POWERIO_CONVERSION_MATRIX_REPORT";
 const DETAILS_ENV: &str = "POWERIO_CONVERSION_MATRIX_DETAILS";
 const REPORT_MARKER: &str = "<!-- powerio-conversion-matrix-report -->";
@@ -1066,6 +1069,11 @@ fn transmission_targets() -> impl Iterator<Item = (usize, TransmissionFormat)> {
 //   1, so it now reads as discrete, the section control IIDM states, and the
 //   XIIDM and JIIDM writers no longer report a continuous control relabeled
 //   as section control: -1 on both cells of the `PSS/E .raw 32` row.
+// - PSS/E and RAWX output write a line whose converters are both VSC into the
+//   VSC DC line section, with the constant converter loss that reproduces its
+//   stated received power. The dcline case's IIDM VSC lines no longer report
+//   the two-terminal converter detail they were written as: -1 on the PSS/E
+//   .raw 33 and RAWX 35 cells of the `XIIDM 1.17` and `JIIDM 1.17` rows.
 // - MATPOWER carries only aggregate bus GS/BS values. Two IIDM payload cases
 //   contain switched shunt controls, so the XIIDM, JIIDM, and CGMES source
 //   rows each add two warnings in the MATPOWER column rather than silently
@@ -1110,8 +1118,8 @@ const TRANSMISSION_WARNING_BASELINE: [[usize; TRANSMISSION_TARGETS]; 19] = [
     [0, 0, 7, 7, 8, 0, 0, 0, 7, 55, 55, 35, 52, 8, 18],        // pandapower JSON
     [0, 0, 9, 9, 12, 0, 6, 0, 7, 67, 67, 36, 36, 9, 25],       // Surge JSON
     [0, 0, 1, 1, 1, 0, 4, 3, 0, 38, 38, 11, 28, 8, 27],        // PSLF .epc
-    [9, 7, 33, 33, 8, 7, 9, 7, 8, 0, 0, 179, 60, 15, 53],      // XIIDM 1.17
-    [9, 7, 33, 33, 8, 7, 9, 7, 8, 0, 0, 179, 60, 15, 53],      // JIIDM 1.17
+    [9, 7, 32, 32, 8, 7, 9, 7, 8, 0, 0, 179, 60, 15, 53],      // XIIDM 1.17
+    [9, 7, 32, 32, 8, 7, 9, 7, 8, 0, 0, 179, 60, 15, 53],      // JIIDM 1.17
     [8, 6, 67, 42, 6, 6, 7, 6, 6, 44, 44, 0, 51, 13, 51],      // CGMES 3.0
     [18, 12, 6, 6, 18, 12, 6, 12, 18, 36, 36, 12, 0, 12, 36],  // UCTE-DEF .uct
     [0, 6, 14, 14, 14, 6, 9, 6, 12, 70, 70, 38, 38, 0, 15],    // PyPSA CSV
@@ -1568,11 +1576,38 @@ const DISTRIBUTION_FORMATS: [DistributionFormat; 3] = [
 ];
 
 // Counts include conductor remapping, explicit neutral materialization, and
-// fields the target cannot represent. Phase voltage limits survive the PMD
-// projection; OpenDSS reports their omission. Retained PMD neutral limits
-// require an additional diagnostic only when they carry nondefault data.
-// PMD emergency transformer ratings remain available for targets to report.
-const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 66, 88], [21, 0, 16], [27, 44, 0]];
+// fields the target cannot represent. The public source/line activation was
+// audited against the prior baseline with complete warning details:
+// Dss->Dss +28: 14 retained LineCode definitions on each parse leg.
+// Dss->BMOPF +55: +14 parse, +28 line history, +6 normal ratings, +14 nominal
+// bases, +14 definition drops, +10 separate-source notices, -26 old source
+// hints and -5 old unit hints (now replaced by explicit snapshot metadata).
+// Dss->PMD +235: +14 parse, +160 line metadata, +49 matrix provenance,
+// +14 definition drops, -2 old sequence hints now represented in typed lines.
+// BMOPF->Dss +30: +14 definitions, +10 matrix provenance, +7 exact-source
+// remarks, -1 source-phase collapse. BMOPF->PMD +10: matrix provenance.
+// PMD->Dss +30: +14 definitions, +21 source metadata, +7 exact-source remarks,
+// -4 sequence notices, -1 source-phase collapse, -7 old configuration notices.
+// PMD->BMOPF +2: +4 capacitance-half stashes on explicit source branches,
+// -2 former switch-matrix stashes. Unchanged source replay remains byte exact;
+// the nonzero Dss diagonal counts parse disclosures, not replay losses.
+// Typed load bounds: DSS->BMOPF adds 21 nominal-law projection notices and
+// removes 14 aggregated vmin/vmax extra notices (+7). DSS->PMD adds the same
+// 21 notices and removes 42 per-load vmin/vmax extra notices (-21).
+// Generator voltage bounds: DSS->BMOPF/PMD each adds two disclosures for
+// retained native vminpu/vmaxpu defaults. BMOPF/PMD->DSS each adds one
+// disclosure for the explicit 0..2 pu band on the format-neutral generator.
+// Native Thevenin source compaction (full warning-text audit against d8d94896):
+// DSS->DSS -6: three fewer retained source LineCode definitions on each parse leg.
+// DSS->BMOPF -12: -3 parse definitions, -3 dropped definitions, -6 source-count
+// disclosures; one native source replaces three cancellation constraints.
+// DSS->PMD -84: -3 parse definitions, -3 dropped records, -78 derived helper-line
+// metadata notices. Current typed source voltages and impedances are unchanged.
+// BMOPF->DSS -6: -3 derived matrix-provenance notices, -3 readback definitions.
+// Every delta is accounted for by complete stage/message counts. Existing
+// electrical/source-equivalent invariants continue to run; no warnings were
+// removed to force a zero cell.
+const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[22, 118, 220], [46, 0, 26], [58, 46, 0]];
 
 const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 7] = [
     (
@@ -1762,7 +1797,8 @@ fn distribution_payloads(format: DistributionFormat) -> Result<Vec<DistributionP
             let rendered = emit_distribution_value(&base.network, format.target)?;
             let parsed = parse_distribution_text(&rendered.text, format)
                 .map_err(|err| format!("read generated {rel} as {}: {err}", format.name))?;
-            let core = distribution_core(&parsed.network);
+            let core =
+                distribution_core(&source_equivalents::contract_source_pairs(&parsed.network));
             Ok(DistributionPayload {
                 label,
                 network: parsed.network,
@@ -1794,7 +1830,14 @@ fn validate_distribution_pair(
     match parse_distribution_text(&conversion.text, target) {
         Ok(parsed) => {
             cell.record_warnings(TARGET_READBACK, &parsed.warnings);
-            let actual = distribution_core(&parsed.network);
+            let before = source_equivalents::contract_source_pairs(&payload.network);
+            let after = source_equivalents::contract_source_pairs(&parsed.network);
+            source_equivalents::assert_source_constraints(
+                &before,
+                &after,
+                &format!("{} to {}", payload.label, target.name),
+            );
+            let actual = distribution_core(&after);
             if !core_survives(&payload.core, &actual, target.target) {
                 cell.failures.push(format!(
                     "{} core changed for {}: before {:?}, after {:?}",
@@ -1865,7 +1908,9 @@ fn parse_distribution_text(
 
 /// Whether the core survived the round trip.
 ///
-/// Everything must match, with one allowance: a dss target splits a load whose
+/// Source-equivalent series pairs are already contracted after checking their
+/// exact cancellation and exclusive internal nodes. Everything else must match,
+/// with one allowance: a dss target splits a load whose
 /// phases carry different power into one single phase `Load` per phase (#266),
 /// because a dss `Load` divides its `kw` evenly and cannot state the profile
 /// otherwise. That grows the object count and nothing else — the power the

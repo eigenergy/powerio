@@ -485,7 +485,33 @@ fn verify_lines(
             &out.g_to,
             &out.b_to,
         ]) {
-            for (a, b) in a.iter().flatten().zip(b.iter().flatten()) {
+            near_matrix(a, b)?;
+        }
+    }
+    Ok(())
+}
+
+/// Compare one read-back line matrix with its input. Diagonal entries keep
+/// the entrywise relative check. An off-diagonal entry is the difference of
+/// the zero- and positive-sequence values over three, so when the two are
+/// nearly equal it sits far below the diagonal and carries rounding of the
+/// diagonal's size; it also passes within 1e-10 of the larger diagonal.
+fn near_matrix(input: &[Vec<f64>], output: &[Vec<f64>]) -> Result<()> {
+    let largest_diagonal = |m: &[Vec<f64>]| {
+        m.iter()
+            .enumerate()
+            .filter_map(|(i, row)| row.get(i))
+            .fold(0.0_f64, |largest, v| largest.max(v.abs()))
+    };
+    let diagonal = largest_diagonal(input).max(largest_diagonal(output));
+    for (i, (a, b)) in input.iter().zip(output).enumerate() {
+        for (j, (a, b)) in a.iter().zip(b).enumerate() {
+            let off_diagonal_close = i != j
+                && a.is_finite()
+                && b.is_finite()
+                && diagonal.is_finite()
+                && (a - b).abs() <= 1e-10 * diagonal;
+            if !off_diagonal_close {
                 near(*a, *b, "line matrix")?;
             }
         }

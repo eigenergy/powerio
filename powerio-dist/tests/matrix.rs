@@ -1,5 +1,5 @@
 //! The 3x3 conversion harness: diagonal byte identity via the retained
-//! source, canonical writer idempotence, and off diagonal round trips with
+//! source, canonical JSON stability, and electrical round trips with
 //! the lossy transforms named per cell. `cargo test --test matrix --
 //! --ignored write_conversion_matrix` regenerates docs/conversion-matrix.md.
 
@@ -11,6 +11,8 @@ use std::sync::Arc;
 use powerio_dist::{DistLoadVoltageModel, DistTargetFormat, MulticonductorNetwork, Result};
 
 mod helpers;
+#[path = "helpers/source_equivalents.rs"]
+mod source_equivalents;
 use helpers::{Conv as Emission, Sidecar, parse_bmopf_str, parse_dss_file, parse_pmd_str};
 
 fn fixture(rel: &str) -> PathBuf {
@@ -243,11 +245,62 @@ fn same_v_nom(a: &[f64], b: &[f64], allow_derived: bool) -> bool {
         || (allow_derived && a.is_empty() && !b.is_empty())
 }
 
+#[allow(clippy::float_cmp)] // Exact ZIP coefficients are checked before acknowledging a diagnosed projection.
 fn same_load_voltage_model(
     a: &DistLoadVoltageModel,
     b: &DistLoadVoltageModel,
     allow_derived_v_nom: bool,
+    allow_exponential_projection: bool,
 ) -> bool {
+    if let DistLoadVoltageModel::BoundedExponential {
+        v_nom,
+        gamma_p,
+        gamma_q,
+        ..
+    } = a
+    {
+        // JSON destinations diagnose the missing voltage band; only BMOPF
+        // can also retain the nominal exponents. PMD diagnoses their loss.
+        return same_v_nom(v_nom, b.v_nom(), allow_derived_v_nom)
+            && match b {
+                DistLoadVoltageModel::Exponential {
+                    gamma_p: p,
+                    gamma_q: q,
+                    ..
+                } => gamma_p == p && gamma_q == q,
+                DistLoadVoltageModel::ConstantPower { .. } => allow_exponential_projection,
+                _ => false,
+            };
+    }
+    if let DistLoadVoltageModel::BoundedZip {
+        v_nom,
+        alpha_z,
+        alpha_i,
+        alpha_p,
+        beta_z,
+        beta_i,
+        beta_p,
+        ..
+    } = a
+    {
+        // Off-diagonal JSON projection reports the lost voltage band below.
+        // These corpus loads are pure P/I; verify every nominal coefficient.
+        let (want_z, want_i, want_p) = match b {
+            DistLoadVoltageModel::ConstantPower { .. } => (0.0, 0.0, 1.0),
+            DistLoadVoltageModel::ConstantCurrent { .. } => (0.0, 1.0, 0.0),
+            _ => return false,
+        };
+        return same_v_nom(v_nom, b.v_nom(), allow_derived_v_nom)
+            && [alpha_z, beta_z]
+                .iter()
+                .all(|v| v.iter().all(|x| *x == want_z))
+            && [alpha_i, beta_i]
+                .iter()
+                .all(|v| v.iter().all(|x| *x == want_i))
+            && [alpha_p, beta_p]
+                .iter()
+                .all(|v| v.iter().all(|x| *x == want_p));
+    }
     match (a, b) {
         (
             DistLoadVoltageModel::ConstantPower { v_nom: a },
@@ -337,7 +390,12 @@ fn assert_loads_eq(
             &format!("load {} map", x.name),
         );
         assert!(
-            same_load_voltage_model(&x.voltage_model, &y.voltage_model, allow_derived_v_nom),
+            same_load_voltage_model(
+                &x.voltage_model,
+                &y.voltage_model,
+                allow_derived_v_nom,
+                what.contains("→ PMD → back")
+            ),
             "{what}: load {} voltage model {:?} vs {:?}",
             x.name,
             x.voltage_model,
@@ -475,12 +533,17 @@ fn assert_projection_eq(
     let buses_b = by_name(b.buses(), |b| &b.id);
     for ((_, x), (_, y)) in buses_a.iter().zip(&buses_b) {
         assert!(x.id.eq_ignore_ascii_case(&y.id), "{what}: bus set");
-        assert_maps_eq(
-            &x.terminals,
-            &y.terminals,
-            what,
-            &format!("bus {} terminals", x.id),
-        );
+        // DSS node zero is global earth. A grounded placeholder can be
+        // created or omitted when no equipment references it; compare the
+        // non-ground conductors here and the actual device ports below.
+        let live = |bus: &powerio_dist::DistBus| {
+            bus.terminals
+                .iter()
+                .filter(|t| !target_is_dss_leg(what) || !bus.grounded.contains(t))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_maps_eq(&live(x), &live(y), what, &format!("bus {} terminals", x.id));
         // dss has no standalone grounding statement (grounding is a node 0
         // reference) and its reader materializes source bus grounding, so
         // grounding equality only holds off the dss legs.
@@ -522,12 +585,14 @@ fn assert_projection_eq(
             "{what}: line {} endpoints",
             x.name
         );
-        assert_eq!(
-            x.length.to_bits(),
-            y.length.to_bits(),
-            "{what}: line {} length",
-            x.name
-        );
+        if !target_is_dss_leg(what) {
+            assert_eq!(
+                x.length.to_bits(),
+                y.length.to_bits(),
+                "{what}: line {} length",
+                x.name
+            );
+        }
         assert_maps_eq(
             &x.terminal_map_from,
             &y.terminal_map_from,
@@ -575,32 +640,29 @@ fn assert_projection_eq(
 /// basis change (the PMD capacitance form, the dss per length form) costs
 /// at most one rounding per direction.
 fn assert_linecodes_close(a: &MulticonductorNetwork, b: &MulticonductorNetwork, what: &str) {
-    assert_eq!(
-        a.line_codes().len(),
-        b.line_codes().len(),
-        "{what}: linecodes"
-    );
     let close = |x: f64, y: f64| (x - y).abs() <= 1e-12 * x.abs().max(y.abs()).max(1e-300);
-    let mut xs: Vec<_> = a.line_codes().iter().collect();
-    let mut ys: Vec<_> = b.line_codes().iter().collect();
-    xs.sort_by_key(|c| c.name.to_ascii_lowercase());
-    ys.sort_by_key(|c| c.name.to_ascii_lowercase());
-    for (x, y) in xs.iter().zip(&ys) {
-        assert!(
-            x.name.eq_ignore_ascii_case(&y.name),
-            "{what}: linecode set ({} vs {})",
-            x.name,
-            y.name
-        );
+    // Canonical DSS allocates a private effective code per line. Compare
+    // physical matrices at each named branch, including both shunt halves.
+    for line in a.lines() {
+        let other = b
+            .lines()
+            .iter()
+            .find(|l| l.name.eq_ignore_ascii_case(&line.name))
+            .unwrap();
+        let x = a.linecode(&line.linecode).unwrap();
+        let y = b.linecode(&other.linecode).unwrap();
         assert_eq!(
             x.n_conductors, y.n_conductors,
-            "{what}: linecode {} size",
-            x.name
+            "{what}: line {} conductors",
+            line.name
         );
         let mats = [
             ("r", &x.r_series, &y.r_series),
             ("x", &x.x_series, &y.x_series),
-            ("b", &x.b_from, &y.b_from),
+            ("b_from", &x.b_from, &y.b_from),
+            ("b_to", &x.b_to, &y.b_to),
+            ("g_from", &x.g_from, &y.g_from),
+            ("g_to", &x.g_to, &y.g_to),
         ];
         for (label, mx, my) in mats {
             assert_eq!(mx.len(), my.len(), "{what}: linecode {} {label}", x.name);
@@ -608,7 +670,7 @@ fn assert_linecodes_close(a: &MulticonductorNetwork, b: &MulticonductorNetwork, 
                 assert_eq!(rx.len(), ry.len(), "{what}: linecode {} {label}", x.name);
                 for (vx, vy) in rx.iter().zip(ry) {
                     assert!(
-                        close(*vx, *vy),
+                        close(*vx * line.length, *vy * other.length),
                         "{what}: linecode {} {label} {vx} vs {vy}",
                         x.name
                     );
@@ -743,22 +805,63 @@ fn diagonal_byte_identity() {
     }
 }
 
-/// The (case, target) pairs whose first canonical write is not yet a fixed
-/// point. Each entry needs a source construct that explains it, because the
-/// general rule is that one write reaches the canonical form. The second
-/// write must then be a fixed point, which the test still checks.
-const LATE_CONVERGENCE: &[(&str, &str)] = &[
-    // The BMOPF ieee13 example declares a single_phase transformer with
-    // three phase terminal maps; dss narrows it to its real phase count.
-    ("BMOPF IEEE 13 example", "dss"),
-];
+// The legacy PMD reader retains finite switch matrices in extras. Check
+// those explicit values against the emitted line instead of treating that
+// record as an ideal contact. Moving these matrices into typed physics is
+// still a separate reader gap; no default epsilon is allowed here.
+fn with_pmd_switch_impedances(net: &MulticonductorNetwork) -> MulticonductorNetwork {
+    let mut result = net.clone();
+    for switch in net.switches().iter().filter(|s| !s.open) {
+        let (Some(r), Some(x)) = (switch.extras.get("pmd_rs"), switch.extras.get("pmd_xs")) else {
+            continue;
+        };
+        let code_name = format!("test_switch_{}", switch.name);
+        assert!(result.linecode(&code_name).is_none());
+        result
+            .line_codes_mut()
+            .push(powerio_dist::DistLineCode::new(
+                &code_name,
+                serde_json::from_value(r.clone()).unwrap(),
+                serde_json::from_value(x.clone()).unwrap(),
+            ));
+        result.lines_mut().push(powerio_dist::DistLine::new(
+            &switch.name,
+            &switch.bus_from,
+            &switch.bus_to,
+            switch.terminal_map_from.clone(),
+            switch.terminal_map_to.clone(),
+            code_name,
+            1.0,
+        ));
+        result.switches_mut().retain(|s| s.name != switch.name);
+    }
+    result
+}
 
-fn converges_on_the_second_write(label: &str, target: &str) -> bool {
-    LATE_CONVERGENCE.contains(&(label, target))
+fn assert_dss_equivalent(
+    a: &MulticonductorNetwork,
+    b: &MulticonductorNetwork,
+    case: &Case,
+    stage: &str,
+) {
+    let what = format!("{} → dss → back ({stage})", case.label);
+    let a = source_equivalents::contract_source_pairs(&with_pmd_switch_impedances(a));
+    let b = source_equivalents::contract_source_pairs(b);
+    let a = source_equivalents::contract_transformer_pairs(&a);
+    let b = source_equivalents::contract_transformer_pairs(&b);
+    source_equivalents::assert_source_constraints(&a, &b, &what);
+    let a = normalize_bmopf_bus_metadata(&a, &a);
+    let (a, b) = if case.dss_renames_grounded {
+        (normalize_grounded(&a), normalize_grounded(&b))
+    } else {
+        (a, b)
+    };
+    assert_projection_eq(&a, &b, &what, true);
+    assert_linecodes_close(&a, &b, &what);
 }
 
 #[test]
-fn canonical_writers_are_idempotent() {
+fn canonical_writers_preserve_electrical_equivalents() {
     for case in CASES {
         let net = parse_case(case);
         for target in [Fmt::Dss, Fmt::Bmopf, Fmt::Pmd] {
@@ -776,36 +879,19 @@ fn canonical_writers_are_idempotent() {
                 Fmt::Bmopf => helpers::emit_bmopf_json(&reparsed),
                 Fmt::Pmd => helpers::emit_pmd_json(&reparsed),
             };
-            if first.text != second.text {
-                assert!(
-                    converges_on_the_second_write(case.label, target.name()),
-                    "{} → {}: the first canonical write is not a fixed point, and this \
-                     pair is not a known one-step canonicalization; add it to \
-                     LATE_CONVERGENCE only with the construct that explains it",
-                    case.label,
-                    target.name()
-                );
-                // A degenerate source construct can canonicalize once through
-                // the target (the BMOPF ieee13 example carries a single_phase
-                // transformer with three phase terminal maps, which dss
-                // narrows to its actual phase count); the canonical form must
-                // then be a fixed point.
-                let reparsed2 = target.parse_emission(&second).unwrap_or_else(|e| {
-                    panic!("{} → {}: reparse failed: {e}", case.label, target.name())
-                });
-                let third = match target {
-                    Fmt::Dss => helpers::emit_dss(&reparsed2),
-                    Fmt::Bmopf => helpers::emit_bmopf_json(&reparsed2),
-                    Fmt::Pmd => helpers::emit_pmd_json(&reparsed2),
-                };
-                assert_eq!(
-                    second.text,
-                    third.text,
-                    "{} → {}: canonical output does not converge",
-                    case.label,
-                    target.name()
-                );
+            if target == Fmt::Dss {
+                let third = target.parse_emission(&second).unwrap();
+                assert_dss_equivalent(&net, &reparsed, case, "first canonical write");
+                assert_dss_equivalent(&reparsed, &third, case, "second canonical write");
+                continue;
             }
+            assert_eq!(
+                first.text,
+                second.text,
+                "{} → {}: canonical JSON is not stable",
+                case.label,
+                target.name()
+            );
         }
     }
 }
@@ -823,28 +909,51 @@ fn off_diagonal_round_trips() {
             let back = target
                 .parse_emission(&out)
                 .unwrap_or_else(|e| panic!("{what}: {e}"));
+            if target == Fmt::Dss {
+                assert_dss_equivalent(&net, &back, case, "cross-format write");
+                continue;
+            }
+            for load in net.loads().iter().filter(|l| {
+                matches!(
+                    l.voltage_model,
+                    DistLoadVoltageModel::BoundedZip { .. }
+                        | DistLoadVoltageModel::BoundedExponential { .. }
+                )
+            }) {
+                assert!(
+                    out.warnings
+                        .iter()
+                        .any(|w| w.contains(&format!("load {}:", load.name))
+                            && w.contains("voltage-band transitions")),
+                    "{what}: lost voltage band without disclosure"
+                );
+                if target == Fmt::Pmd
+                    && matches!(
+                        load.voltage_model,
+                        DistLoadVoltageModel::BoundedExponential { .. }
+                    )
+                {
+                    assert!(
+                        out.warnings
+                            .iter()
+                            .any(|w| w.contains(&format!("load {}:", load.name))
+                                && w.contains("exponential load model")),
+                        "{what}: lost exponents without disclosure"
+                    );
+                }
+            }
             let transformers = !(target == Fmt::Bmopf && case.bmopf_restates_transformers);
-            let (expected, actual) = match target {
-                Fmt::Bmopf => (
+            let (expected, actual) = if target == Fmt::Bmopf {
+                (
                     normalize_bmopf_bus_metadata(&net, &back),
                     normalize_bmopf_bus_metadata(&back, &back),
-                ),
-                // A dss leg only materializes referenced or grounded
-                // terminals, so project the source the same way.
-                Fmt::Dss => (normalize_bmopf_bus_metadata(&net, &net), (*back).clone()),
-                Fmt::Pmd => ((*net).clone(), (*back).clone()),
-            };
-            if target == Fmt::Dss && case.dss_renames_grounded {
-                // Grounded phase terminals fold into node 0 on the way
-                // through dss; compare the networks with each bus's grounded
-                // terminals normalized to one token.
-                let (a, b) = (normalize_grounded(&expected), normalize_grounded(&actual));
-                assert_projection_eq(&a, &b, &what, transformers);
-                assert_linecodes_close(&a, &b, &what);
+                )
             } else {
-                assert_projection_eq(&expected, &actual, &what, transformers);
-                assert_linecodes_close(&expected, &actual, &what);
-            }
+                ((*net).clone(), (*back).clone())
+            };
+            source_equivalents::assert_source_constraints(&expected, &actual, &what);
+            assert_projection_eq(&expected, &actual, &what, transformers);
+            assert_linecodes_close(&expected, &actual, &what);
         }
     }
 }
@@ -1064,5 +1173,94 @@ fn renumbering_legs_are_position_stable_bijections() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn source_equivalence_checks_reject_corrupted_circuits() {
+    let original = helpers::parse_dss_str(
+        "New Circuit.c phases=1 basekv=0.24 bus1=feed.1 r1=3 x1=4 r0=3 x0=4\n",
+    );
+    let emitted = helpers::emit_dss(&original);
+    let round_trip = Fmt::Dss.parse_emission(&emitted).unwrap();
+    let restored = source_equivalents::contract_source_pairs(&round_trip);
+    source_equivalents::assert_source_constraints(&original, &restored, "uncorrupted");
+    for fault in ["impedance", "shunt", "ground", "angle", "connection"] {
+        let mut changed = (*round_trip).clone();
+        let source_bus = changed.sources()[0].bus.clone();
+        let line = changed
+            .lines()
+            .iter()
+            .find(|l| l.bus_from == source_bus)
+            .unwrap()
+            .clone();
+        match fault {
+            "impedance" | "shunt" => {
+                let code = changed
+                    .line_codes_mut()
+                    .iter_mut()
+                    .find(|c| c.name == line.linecode)
+                    .unwrap();
+                if fault == "impedance" {
+                    code.r_series[0][0] += 0.01;
+                } else {
+                    code.b_from[0][0] += 0.01;
+                }
+            }
+            "ground" => changed
+                .buses_mut()
+                .iter_mut()
+                .find(|b| b.id == line.bus_to)
+                .unwrap()
+                .grounded
+                .push(line.terminal_map_to[0].clone()),
+            "angle" => changed.sources_mut()[0].v_angle[0] += 0.1,
+            "connection" => changed.loads_mut().push(powerio_dist::DistLoad::new(
+                "extra",
+                &line.bus_to,
+                line.terminal_map_to.clone(),
+                powerio_dist::Configuration::SinglePhase,
+                vec![1.0],
+                vec![0.0],
+            )),
+            _ => unreachable!(),
+        }
+        let changed = source_equivalents::contract_source_pairs(&changed);
+        assert!(
+            std::panic::catch_unwind(|| {
+                source_equivalents::assert_source_constraints(&original, &changed, fault);
+            })
+            .is_err(),
+            "accepted {fault} corruption"
+        );
+    }
+}
+
+#[test]
+fn ideal_transformer_contraction_requires_electrical_cancellation() {
+    let source = "New Circuit.c phases=1 bus1=source.1.0 basekv=2.4\n\
+        New Transformer.x phases=1 windings=2 buses=(source.1.0 internal.1.2) \
+        conns=(wye wye) kvs=(2.4 .24) kvas=(10 10) \
+        %rs=(0 17.36111111111111) xscarray=(0) ppm_antifloat=0\n\
+        New Line.cancel phases=2 bus1=internal.1.2 bus2=load.1.2 length=1 units=m \
+        rmatrix=(-.5 | 0 -.5) xmatrix=(0 | 0 0) cmatrix=(0 | 0 0)\n";
+    let parse = |text: &str| Fmt::Dss.parse_text_and_sidecars(text, &[]).unwrap();
+    let original = parse(source);
+    let contracted = source_equivalents::contract_transformer_pairs(&original);
+    assert_eq!(contracted.lines().len() + 1, original.lines().len());
+    let winding = &contracted.transformers()[0].windings[1];
+    assert_eq!(winding.bus, "load");
+    assert_eq!(winding.terminal_map, ["1", "2"]);
+    assert_eq!(winding.r_pct.to_bits(), 0.0_f64.to_bits());
+    assert!(contracted.bus("internal").is_none());
+    for invalid in [
+        source.replace("(-.5 | 0 -.5)", "(-.4 | 0 -.5)"),
+        source.replace("cmatrix=(0 | 0 0)", "cmatrix=(1 | 0 1)"),
+        format!("{source}New Load.extra phases=1 bus1=internal.1.2 kv=.24 kw=1\n"),
+    ] {
+        let original = parse(&invalid);
+        let contracted = source_equivalents::contract_transformer_pairs(&original);
+        assert_eq!(contracted.lines().len(), original.lines().len());
+        assert!(contracted.bus("internal").is_some());
     }
 }

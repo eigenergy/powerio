@@ -4710,6 +4710,37 @@
       ],
       "type": "object"
     },
+    "DistComponentLocation": {
+      "additionalProperties": false,
+      "description": "A geographic point attached to one exact component identity.\nIt is independent of bus drawing positions, line routes and electrical length.",
+      "properties": {
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DistCoordsKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "point": {
+          "$ref": "#/$defs/DistGeographicPoint"
+        },
+        "target": {
+          "$ref": "#/$defs/DistLocationTarget"
+        }
+      },
+      "required": [
+        "target",
+        "name",
+        "point"
+      ],
+      "type": "object"
+    },
     "DistControlProfile": {
       "properties": {
         "extras": {
@@ -5088,6 +5119,57 @@
             }
           ],
           "description": "Default origin for points without their own `kind`."
+        }
+      },
+      "type": "object"
+    },
+    "DistGeographicPoint": {
+      "additionalProperties": false,
+      "description": "Source or user supplied geographic coordinates, in decimal degrees.\nNeither axis is implied by the other; zero is a valid stated value.\nAn absent datum is unknown, never an implicit WGS84 declaration.",
+      "properties": {
+        "datum": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "latitude": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "longitude": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       "type": "object"
@@ -6034,6 +6116,437 @@
             "gamma_q"
           ],
           "type": "object"
+        },
+        {
+          "description": "ZIP law with low-voltage current interpolation and high-voltage\nimpedance continuation. See [`Self::power_scale`] for the equations.\nBelow `v_low_pu` the entire nominal load is constant impedance;\nthe dropout curve applies only above that threshold.",
+          "properties": {
+            "alpha_i": {
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "alpha_p": {
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "alpha_z": {
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "beta_i": {
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "beta_p": {
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "beta_z": {
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "cutoff_pu": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "model": {
+              "const": "bounded_zip",
+              "type": "string"
+            },
+            "v_low_pu": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "v_max_pu": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "v_min_pu": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "v_nom": {
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "model",
+            "v_nom",
+            "alpha_z",
+            "alpha_i",
+            "alpha_p",
+            "beta_z",
+            "beta_i",
+            "beta_p",
+            "v_low_pu",
+            "v_min_pu",
+            "v_max_pu",
+            "cutoff_pu"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Exponential law inside a voltage band, with nominal-impedance\ncontinuation below `v_low_pu`, current interpolation up to `v_min_pu`,\nand impedance continuation above `v_max_pu`. The continuations apply\nequally to P and Q, independently of their middle-band exponents.\nSee [`Self::power_scale`] for the equations. Arrays follow active branches.",
+          "properties": {
+            "gamma_p": {
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "gamma_q": {
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "model": {
+              "const": "bounded_exponential",
+              "type": "string"
+            },
+            "v_low_pu": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "v_max_pu": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "v_min_pu": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "v_nom": {
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "model",
+            "v_nom",
+            "gamma_p",
+            "gamma_q",
+            "v_low_pu",
+            "v_min_pu",
+            "v_max_pu"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Constant power between positive voltage bounds, with impedance\ncontinuation outside them and an optional current-magnitude limit.\n`v_nom` is volts per active branch. `current_limit_pu` is a multiple\nof that branch's nominal apparent power divided by nominal voltage.\nP and Q share one scale, preserving power factor. See [`Self::power_scale`].",
+          "properties": {
+            "current_limit_pu": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "model": {
+              "const": "bounded_constant_power",
+              "type": "string"
+            },
+            "v_max_pu": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "v_min_pu": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "v_nom": {
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "model",
+            "v_nom",
+            "v_min_pu",
+            "v_max_pu"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -6091,6 +6604,23 @@
         "y"
       ],
       "type": "object"
+    },
+    "DistLocationTarget": {
+      "description": "The typed table containing a located component. Names retain exact case.",
+      "enum": [
+        "bus",
+        "line",
+        "line_code",
+        "switch",
+        "transformer",
+        "load",
+        "generator",
+        "ibr",
+        "shunt",
+        "capacitor",
+        "source"
+      ],
+      "type": "string"
     },
     "DistShunt": {
       "properties": {
@@ -9197,6 +9727,47 @@
       },
       "type": "object"
     },
+    "LocatedNetworkFields": {
+      "additionalProperties": false,
+      "properties": {
+        "locations": {
+          "items": {
+            "$ref": "#/$defs/DistComponentLocation"
+          },
+          "type": "array"
+        },
+        "network": {
+          "$ref": "#/$defs/MulticonductorNetworkBody"
+        }
+      },
+      "required": [
+        "network",
+        "locations"
+      ],
+      "type": "object"
+    },
+    "LocatedNetworkTag": {
+      "enum": [
+        "powerio.LocatedMulticonductorNetwork"
+      ],
+      "type": "string"
+    },
+    "LocatedNetworkWire": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/LocatedNetworkTag"
+        },
+        "value": {
+          "$ref": "#/$defs/LocatedNetworkFields"
+        }
+      },
+      "required": [
+        "type",
+        "value"
+      ],
+      "type": "object"
+    },
     "Location": {
       "description": "A point attached to one model element.",
       "properties": {
@@ -10139,6 +10710,194 @@
       "type": "object"
     },
     "MulticonductorNetwork": {
+      "anyOf": [
+        {
+          "description": "A multiconductor distribution network.\n\n`source` retains the original text for the byte exact echo tier;\n`defaulted` records, per element (`\"class.name\"` key), the fields the\nreader materialized from format defaults rather than the source text.",
+          "properties": {
+            "base_frequency": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ],
+              "description": "Hz."
+            },
+            "buses": {
+              "items": {
+                "$ref": "#/$defs/DistBus"
+              },
+              "type": "array"
+            },
+            "capacitors": {
+              "items": {
+                "$ref": "#/$defs/DistCapacitor"
+              },
+              "type": "array"
+            },
+            "commands": {
+              "description": "Source commands and options the typed model does not interpret\n(`solve`, `set mode=...`), in order, as (verb, args).",
+              "items": {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "control_profiles": {
+              "items": {
+                "$ref": "#/$defs/DistControlProfile"
+              },
+              "type": "array"
+            },
+            "extras": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "generators": {
+              "items": {
+                "$ref": "#/$defs/DistGenerator"
+              },
+              "type": "array"
+            },
+            "geo": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DistGeoMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "ibrs": {
+              "items": {
+                "$ref": "#/$defs/DistIbr"
+              },
+              "type": "array"
+            },
+            "linecodes": {
+              "items": {
+                "$ref": "#/$defs/DistLineCode"
+              },
+              "type": "array"
+            },
+            "lines": {
+              "items": {
+                "$ref": "#/$defs/DistLine"
+              },
+              "type": "array"
+            },
+            "loads": {
+              "items": {
+                "$ref": "#/$defs/DistLoad"
+              },
+              "type": "array"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "options": {
+              "items": {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "shunts": {
+              "items": {
+                "$ref": "#/$defs/DistShunt"
+              },
+              "type": "array"
+            },
+            "source_format": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DistSourceFormat"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sources": {
+              "description": "BMOPF allows exactly one; the model allows any number and the BMOPF\nwriter warns beyond the first.",
+              "items": {
+                "$ref": "#/$defs/VoltageSource"
+              },
+              "type": "array"
+            },
+            "switches": {
+              "items": {
+                "$ref": "#/$defs/DistSwitch"
+              },
+              "type": "array"
+            },
+            "transformers": {
+              "items": {
+                "$ref": "#/$defs/DistTransformer"
+              },
+              "type": "array"
+            },
+            "untyped": {
+              "items": {
+                "$ref": "#/$defs/UntypedObject"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "base_frequency",
+            "buses",
+            "linecodes",
+            "lines",
+            "switches",
+            "transformers",
+            "loads",
+            "generators",
+            "shunts",
+            "sources",
+            "untyped",
+            "commands",
+            "options",
+            "extras"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/LocatedNetworkWire"
+        }
+      ]
+    },
+    "MulticonductorNetworkBody": {
       "description": "A multiconductor distribution network.\n\n`source` retains the original text for the byte exact echo tier;\n`defaulted` records, per element (`\"class.name\"` key), the fields the\nreader materialized from format defaults rather than the source text.",
       "properties": {
         "base_frequency": {

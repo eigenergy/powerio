@@ -681,7 +681,8 @@ fn summary_routes_json_inputs_through_the_classifier() {
     assert_success(&out);
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(value["domain"], "distribution");
-    assert_eq!(value["elements"]["buses"], 2);
+    // Canonical output keeps the finite source impedance behind an EMF bus.
+    assert_eq!(value["elements"]["buses"], 3);
 
     let _ = std::fs::remove_file(dist_json);
 }
@@ -1024,8 +1025,8 @@ fn batch_scan_where_nothing_loads_fails() {
 
 #[test]
 fn convert_exits_nonzero_on_a_refused_include() {
-    // #275: the parse continues past a refused include and the output is
-    // still written, but the run must not exit 0.
+    // A refused include invalidates the static snapshot. Surface its
+    // diagnostic and do not publish a partial electrical output.
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     let case_dir = dir.join("case");
@@ -1058,12 +1059,12 @@ fn convert_exits_nonzero_on_a_refused_include() {
         "stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("the output is incomplete"),
+        stderr.contains("READ.DSS.LINE_UNRESOLVED"),
         "stderr:\n{stderr}"
     );
     assert!(
-        out_path.is_file(),
-        "the output must still be written for inspection"
+        !out_path.exists(),
+        "an invalid snapshot must not be emitted"
     );
 }
 
@@ -1109,16 +1110,19 @@ fn convert_exits_nonzero_on_an_include_refused_through_a_symbolic_link() {
         "the refusal must name the route:\n{stderr}"
     );
     assert!(
-        stderr.contains("references unknown linecode"),
-        "the linked file must stay unread:\n{stderr}"
+        stderr.contains("READ.DSS.LINE_UNRESOLVED"),
+        "the linked definition must stay unavailable:\n{stderr}"
+    );
+    assert!(
+        !out_path.exists(),
+        "an invalid snapshot must not be emitted"
     );
 }
 
 #[test]
 fn serialize_exits_nonzero_on_a_refused_include() {
-    // PowerIO IR carries the same `Error` finding convert fails on,
-    // so the module subcommand has to fail with it too — otherwise a script
-    // gating on the exit code accepts IR built from a truncated network.
+    // Serialization must retain the read failure on stderr and produce
+    // no IR value from an invalid electrical snapshot.
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     let case_dir = dir.join("case");
@@ -1149,8 +1153,8 @@ fn serialize_exits_nonzero_on_a_refused_include() {
         "stderr:\n{stderr}"
     );
     assert!(
-        out_path.is_file(),
-        "the PowerIO IR must still be serialized for inspection"
+        !out_path.exists(),
+        "an invalid snapshot must not be serialized"
     );
 }
 

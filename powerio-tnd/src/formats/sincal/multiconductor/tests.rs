@@ -372,7 +372,7 @@ fn sequence_line_agrees_with_existing_dss_conversion() {
     let native = NativeDatabase::decode(&sequence_database(""), None).unwrap();
     let code = native.sequence_line(30).unwrap().code;
     let dss = crate::formats::sincal::testkit::parse_str(
-        "Set DefaultBaseFrequency=50\nNew Linecode.lc nphases=3 units=km r1=0.3 x1=0.1 c1=10 r0=0.9 x0=0.4 c0=4 basefreq=50 normamps=200",
+        "Set DefaultBaseFrequency=50\nNew Linecode.lc nphases=3 units=km r1=0.3 x1=0.1 c1=10 r0=0.9 x0=0.4 c0=4 basefreq=50 normamps=200\nNew Line.witness phases=3 bus1=a bus2=b linecode=lc length=1 units=km",
         "dss").unwrap();
     let other = &dss.line_codes()[0];
     for (a, b) in [
@@ -860,4 +860,58 @@ fn missing_line_sequence_uses_selected_calculation_policy_and_keeps_explicit_inp
             .sequence_line(30)
             .is_err()
     );
+}
+
+#[test]
+fn indexed_terminal_lookup_matches_a_per_element_query() {
+    // The per-element query the index replaced; it must give the same ports.
+    fn queried(native: &NativeDatabase, element: i64) -> Vec<(i64, i64, i64, i64, i64)> {
+        let mut statement = native
+            .connection
+            .prepare(
+                "SELECT Terminal_ID, Node_ID, TerminalNo, Flag_Terminal, Flag_State
+                 FROM Terminal WHERE Element_ID=?1 AND Variant_ID=?2 ORDER BY TerminalNo",
+            )
+            .unwrap();
+        statement
+            .query_map([element, native.variant], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+    let native = NativeDatabase::decode(&database_bytes(AUTHENTIC).unwrap(), None).unwrap();
+    assert!(native.terminal_index.get().is_none());
+    let mut seen = 0;
+    for &element in native.elements.keys() {
+        let ports = native
+            .electrical_terminals(element)
+            .unwrap()
+            .into_iter()
+            .map(|p| {
+                let code = (1..=8)
+                    .find(|&c| super::semantics::Connection::decode(c).unwrap() == p.connection)
+                    .unwrap();
+                let state = i64::from(p.state == super::semantics::State::On);
+                (p.id, p.node, p.position, code, state)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ports, queried(&native, element), "Element {element}");
+        seen += ports.len();
+    }
+    assert_eq!(seen, native.terminals.len());
+    assert!(native.terminal_index.get().is_some());
+
+    // A malformed terminal still fails only the element that uses it.
+    let bytes = database(
+        "ALTER TABLE Terminal ADD COLUMN Flag_Terminal INTEGER DEFAULT 7;
+         ALTER TABLE Terminal ADD COLUMN Flag_State INTEGER DEFAULT 1;
+         INSERT INTO Element VALUES (31, 1, 'Load');
+         INSERT INTO Terminal VALUES (60, 1, 31, 10, 1, NULL, 1);",
+    );
+    let native = NativeDatabase::decode(&bytes, None).unwrap();
+    assert!(native.electrical_terminals(31).is_err());
+    assert_eq!(native.electrical_terminals(30).unwrap().len(), 2);
+    assert!(native.electrical_terminals(99).is_err());
 }

@@ -1453,11 +1453,68 @@ class AcOpfInstance(_BalancedCalculation):
     """An AC optimal power flow calculation instance."""
 
 
+def _branch_statuses(closed: Sequence[bool]) -> list[bool]:
+    """A final branch status vector as a list of booleans, in branch order."""
+    if isinstance(closed, (str, bytes)):
+        raise TypeError("branch statuses are a sequence of booleans")
+    return list(closed)
+
+
+@_guard_class
 class AcOtsInstance(_BalancedCalculation):
     """An AC optimal transmission switching calculation instance.
 
     Its network holds every candidate branch at its initial status.
     """
+
+    @property
+    def options(self) -> dict[str, Any]:
+        """The switching options as stated, spelled as the keyword arguments of
+        :meth:`PioModule.to_ac_ots_instance`: ``switchable`` (``"all"``,
+        ``"none"``, or a list of branch identities), ``switching_costs``
+        (``{id: (open_cost, close_cost)}``), ``islanding``, ``max_open``,
+        ``max_switched``, ``current_limits``, and ``stated_current_limits``
+        (``{id: (from_pu, to_pu)}``, ``None`` for an unbounded side).
+        """
+        return self.module._inner._ac_ots_options()
+
+    @property
+    def branches(self) -> list[dict[str, Any]]:
+        """One row per physical branch, in branch table order: ``id``,
+        ``initial_closed``, ``switchable``, ``switching_cost`` (``(open_cost,
+        close_cost)``, or ``None`` when no cost is stated and the branch
+        switches at zero cost), ``stated_current`` (the stated ``(from_pu,
+        to_pu)`` limits), and ``current`` (the limits that apply under the
+        current limit policy). ``None`` in a limit pair is unbounded.
+        """
+        return self.module._inner._ac_ots_branches()
+
+    def validate_topology(self, closed: Sequence[bool]) -> float:
+        """Check a final topology and return its switching cost.
+
+        ``closed`` holds one boolean per branch, in branch table order. The
+        check covers the length, the branches that cannot switch, the
+        ``max_open`` and ``max_switched`` budgets, and the islanding policy;
+        it does not certify AC feasibility. A refused topology raises
+        :class:`PowerIOError` with code ``BUILD.INSTANCE.TOPOLOGY_INVALID``.
+        """
+        return self.module._inner._ac_ots_validate_topology(_branch_statuses(closed))
+
+    def fix_topology(
+        self, closed: Sequence[bool]
+    ) -> tuple["AcOpfInstance", list[Diagnostic]]:
+        """The AC optimal power flow over a final topology.
+
+        Every branch row stays in the network with its final status. The
+        switching options, current limits, and switching cost term are not
+        part of the AC optimal power flow; the returned diagnostics report
+        each one dropped, and the instance's module carries them too. The
+        topology is checked as :meth:`validate_topology` checks it.
+        """
+        inner, diagnostics = self.module._inner._ac_ots_fix_topology(
+            _branch_statuses(closed)
+        )
+        return PioModule(inner).value, list(diagnostics)
 
 
 class McAcPfInstance(_MulticonductorCalculation):
@@ -1514,11 +1571,73 @@ class AcOpfSolution(_BalancedCalculation, _CalculationSolution):
     """An AC optimal power flow solution."""
 
 
+@_guard_class
 class AcOtsSolution(_BalancedCalculation, _CalculationSolution):
     """An AC optimal transmission switching result.
 
-    Its network is the instance's network, with the initial branch statuses.
+    Its network is the instance's network, with the initial branch statuses;
+    :meth:`solved_network` gives the network with the final statuses and
+    solved values.
     """
+
+    @classmethod
+    def from_ac_opf_solution(
+        cls,
+        instance: AcOtsInstance,
+        closed: Sequence[bool],
+        solution: "AcOpfSolution",
+    ) -> "AcOtsSolution":
+        """Attach the AC optimal power flow solution computed on
+        ``instance.fix_topology(closed)``.
+
+        The topology is checked as :meth:`AcOtsInstance.validate_topology`
+        checks it, the solution must answer exactly the fixed-topology problem
+        (its network, objective, and constraint selections), and open branches
+        must carry no flow. Residuals and optimality are not checked. The
+        result's module carries the instance module's records.
+        """
+        if not isinstance(instance, AcOtsInstance):
+            raise TypeError("instance must be a powerio.AcOtsInstance")
+        if not isinstance(solution, AcOpfSolution):
+            raise TypeError("solution must be a powerio.AcOpfSolution")
+        inner = instance.module._inner._ac_ots_solution(
+            _branch_statuses(closed), solution.module._inner
+        )
+        return PioModule(inner).value
+
+    @property
+    def branch_closed(self) -> list[bool]:
+        """The final branch statuses, in branch table order."""
+        return self.module._inner._ac_ots_solution_branch_closed()
+
+    @property
+    def switching_cost(self) -> float:
+        """The cost of the status changes against the initial topology."""
+        return self.module._inner._ac_ots_solution_summary()[0]
+
+    @property
+    def branches_open(self) -> int:
+        """The number of branches open in the final topology."""
+        return self.module._inner._ac_ots_solution_summary()[1]
+
+    @property
+    def branches_switched(self) -> int:
+        """The number of branches whose final status differs from the initial one."""
+        return self.module._inner._ac_ots_solution_summary()[2]
+
+    @property
+    def objective(self) -> float:
+        """The AC solution's objective, plus the switching cost when the
+        instance's objective states the switching cost term."""
+        return self.module._inner._ac_ots_solution_summary()[3]
+
+    def solved_network(self) -> "PioModule":
+        """The balanced network this result states: the final branch statuses
+        with the solved bus voltages, generator dispatch, and branch flows
+        applied, ready for :func:`emit`. The C ABI's
+        ``pio_ac_ots_solution_materialize`` and PowerIO.jl's
+        ``materialize_ac_ots_solution`` return the same network."""
+        return PioModule(self.module._inner._ac_ots_solved_network())
 
 
 class SocwrOpfSolution(_BalancedCalculation, _CalculationSolution):
@@ -1810,12 +1929,97 @@ class PioModule:
         """Build an AC optimal power flow instance from a balanced network module."""
         return PioModule(self._inner._to_ac_opf_instance())
 
-    def to_ac_ots_instance(self) -> "PioModule":
-        """Build an AC optimal transmission switching instance with the default
-        options from a balanced network or AC optimal power flow module: every
-        initially in-service branch may switch, at zero cost.
+    def to_ac_ots_instance(
+        self,
+        *,
+        switchable: Union[str, Sequence[str], None] = None,
+        switching_costs: Optional[Mapping[str, tuple[float, float]]] = None,
+        islanding: Optional[str] = None,
+        max_open: Optional[int] = None,
+        max_switched: Optional[int] = None,
+        current_limits: Optional[str] = None,
+        stated_current_limits: Optional[
+            Mapping[str, tuple[Optional[float], Optional[float]]]
+        ] = None,
+    ) -> "PioModule":
+        """Build an AC optimal transmission switching instance from a balanced
+        network, AC optimal power flow, or AC optimal transmission switching
+        module.
+
+        With no option, this gives the default instance: every initially
+        in-service branch may switch, at zero cost, islanding is forbidden,
+        there is no budget and no current limit, and the objective gains the
+        switching cost term. An AC optimal transmission switching module comes
+        back unchanged.
+
+        Any option makes the options explicit, as the C ABI's options struct
+        and PowerIO.jl's ``AcOtsOptions`` do, and an option not given takes
+        its explicit default:
+
+        - ``switchable``: ``"all"`` (the default, which includes initially
+          open branches), ``"none"``, or a list of branch identities.
+        - ``switching_costs``: ``{branch_id: (open_cost, close_cost)}``; a
+          branch with no entry switches at zero cost.
+        - ``islanding``: ``"forbidden"`` (the default) or ``"allowed"``.
+        - ``max_open``: the most branches open in the final topology,
+          counting fixed open rows; ``None`` is no budget.
+        - ``max_switched``: the most status changes; ``None`` is no budget.
+        - ``current_limits``: ``"skip"`` (the default), ``"stated"``, or
+          ``"derive_from_rate_a"``.
+        - ``stated_current_limits``: ``{branch_id: (from_pu, to_pu)}``, per
+          unit; ``None`` on a side is unbounded.
+
+        The base problem and objective are kept, and the objective gains the
+        switching cost term once. Refused options raise
+        :class:`PowerIOError` with code
+        ``BUILD.INSTANCE.SWITCHING_OPTIONS_INVALID``; an unknown policy name
+        raises :class:`ValueError`.
         """
-        return PioModule(self._inner._to_ac_ots_instance())
+        if (
+            switchable is None
+            and switching_costs is None
+            and islanding is None
+            and max_open is None
+            and max_switched is None
+            and current_limits is None
+            and stated_current_limits is None
+        ):
+            return PioModule(self._inner._to_ac_ots_instance())
+        if switchable is None:
+            selection, identities = "all", []
+        elif isinstance(switchable, str):
+            selection, identities = switchable, []
+        else:
+            selection, identities = "only", [str(identity) for identity in switchable]
+        for name, budget in (("max_open", max_open), ("max_switched", max_switched)):
+            if budget is not None and (
+                isinstance(budget, bool) or not isinstance(budget, int) or budget < 0
+            ):
+                raise ValueError(f"{name} must be a nonnegative integer or None")
+        costs = [
+            (str(identity), float(open_cost), float(close_cost))
+            for identity, (open_cost, close_cost) in (switching_costs or {}).items()
+        ]
+        limits = [
+            (
+                str(identity),
+                None if from_pu is None else float(from_pu),
+                None if to_pu is None else float(to_pu),
+            )
+            for identity, (from_pu, to_pu) in (stated_current_limits or {}).items()
+        ]
+        return PioModule(
+            self._inner._to_ac_ots_instance_with_options(
+                selection,
+                identities,
+                costs,
+                "forbidden" if islanding is None else islanding,
+                max_open,
+                max_switched,
+                "skip" if current_limits is None else current_limits,
+                limits,
+            )
+        )
 
     def to_mc_ac_pf_instance(self) -> "PioModule":
         """Build a multiconductor AC power flow instance from a network module."""
