@@ -410,6 +410,7 @@ struct RawArea {
 #[derive(Clone, Debug)]
 struct RawBus {
     id: Option<String>,
+    name: Option<String>,
     voltage_level: String,
     nodes: Vec<i32>,
     v: Option<f64>,
@@ -2442,6 +2443,7 @@ impl ParsedXiidm {
         };
         self.buses.push(RawBus {
             id,
+            name: attrs.get("name").cloned(),
             voltage_level,
             nodes,
             v: optional_f64(attrs, "v")?,
@@ -4523,6 +4525,19 @@ fn map_areas(
     Ok(areas)
 }
 
+/// The PSS/E bus number a configured bus id states: `B<n>`, as PowSybl writes
+/// it (psse-converter `AbstractConverter.extractBusNumber` accepts
+/// `B[1-9][0-9]*`), or `powerio-bus-<n>`, as PowerIO wrote it before.
+fn stated_bus_number(id: &str) -> Option<usize> {
+    let digits = id
+        .strip_prefix('B')
+        .or_else(|| id.strip_prefix("powerio-bus-"))?;
+    if digits.starts_with('0') || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok().filter(|number| *number > 0)
+}
+
 fn set_bus_kind(buses: &mut [Bus], id: BusId, kind: BusType) {
     if let Some(bus) = buses.iter_mut().find(|bus| bus.id == id) {
         bus.kind = kind;
@@ -4533,6 +4548,9 @@ fn set_bus_kind(buses: &mut [Bus], id: BusId, kind: BusType) {
 struct BusBuilder<'a> {
     parsed: &'a ParsedXiidm,
     buses: Vec<Bus>,
+    /// The PSS/E bus number each bus breaker bus states in its IIDM id, in
+    /// `buses` order.
+    stated_numbers: Vec<Option<usize>>,
     bus_map: HashMap<(String, String), BusId>,
     node_map: HashMap<(String, i32), BusId>,
     empty_node_breaker_levels: Vec<String>,
@@ -4650,6 +4668,7 @@ impl<'a> BusBuilder<'a> {
         Self {
             parsed,
             buses: Vec::new(),
+            stated_numbers: Vec::new(),
             bus_map: HashMap::new(),
             node_map: HashMap::new(),
             empty_node_breaker_levels: Vec::new(),
@@ -4668,8 +4687,57 @@ impl<'a> BusBuilder<'a> {
                 RawTopologyKind::NodeBreaker => self.build_node_breaker(level, records)?,
             }
         }
+        self.number_buses_from_ids(diagnostics);
         self.report_topology_summaries(diagnostics);
         Ok(())
+    }
+
+    /// Give each bus the PSS/E number its IIDM id states. PowSybl's PSS/E
+    /// importer names bus `n` `B<n>` (psse-converter
+    /// `AbstractConverter.getBusId`) and its exporter reads the number back
+    /// (`AbstractConverter.extractBusNumber`); PowerIO's own writer also
+    /// stated `powerio-bus-<n>` before it followed that convention. A case
+    /// whose ids state no number keeps its buses numbered in document order.
+    /// When only some ids state one, or two state the same, the rest are
+    /// numbered after the recovered numbers and a diagnostic says so.
+    fn number_buses_from_ids(&mut self, diagnostics: &mut Diagnostics) {
+        if self.stated_numbers.iter().all(Option::is_none) {
+            return;
+        }
+        let mut used = HashSet::new();
+        let mut numbers = self
+            .stated_numbers
+            .iter()
+            .map(|stated| stated.filter(|number| used.insert(*number)))
+            .collect::<Vec<_>>();
+        let recovered = numbers.iter().flatten().count();
+        let mut next = 1;
+        let mut unnumbered = 0usize;
+        for number in &mut numbers {
+            if number.is_none() {
+                while used.contains(&next) {
+                    next += 1;
+                }
+                used.insert(next);
+                *number = Some(next);
+                unnumbered += 1;
+            }
+        }
+        let renumbered = |id: BusId| BusId::new(numbers[id.0 - 1].expect("every bus is numbered"));
+        for bus in &mut self.buses {
+            bus.id = renumbered(bus.id);
+        }
+        for id in self.bus_map.values_mut().chain(self.node_map.values_mut()) {
+            *id = renumbered(*id);
+        }
+        if unnumbered > 0 {
+            diagnostics.push(
+                &codes::READ_XIIDM_VALUE_DEFAULTED,
+                format!(
+                    "{unnumbered} bus(es) state no PSS/E bus number in their IIDM id (`B<n>`), or repeat one; they were numbered after the {recovered} recovered number(s)"
+                ),
+            );
+        }
     }
 
     fn report_topology_summaries(&self, diagnostics: &mut Diagnostics) {
@@ -4876,6 +4944,7 @@ impl<'a> BusBuilder<'a> {
                         .find_map(|value| value.legacy_voltage);
                     RawBus {
                         id: None,
+                        name: None,
                         voltage_level: level.id.clone(),
                         nodes: group.clone(),
                         v: legacy_voltage.map(|(v, _)| v),
@@ -4910,7 +4979,11 @@ impl<'a> BusBuilder<'a> {
         let id = BusId::new(self.buses.len() + 1);
         let mut bus = Bus::new(id, BusType::Pq, level.nominal_v);
         bus.uid.clone_from(&local_id);
-        bus.name = local_id;
+        // PowSybl's PSS/E importer states the PSS/E bus name as the IIDM name
+        // (psse-converter `BusConverter.create`).
+        bus.name = raw.name.clone().or(local_id);
+        self.stated_numbers
+            .push(raw.id.as_deref().and_then(stated_bus_number));
         bus.vm = raw.v.map_or(1.0, |value| value / level.nominal_v);
         bus.va = raw.angle.unwrap_or(0.0);
         bus.vmin = level
@@ -7242,8 +7315,23 @@ fn derive_detailed_connectivity(
             buses: buses.iter().map(|bus| bus.id).collect(),
         });
         for bus in buses {
-            let configured_bus = component_id("bus", &format!("powerio-bus-{}", bus.id))
-                .expect("derived bus identity");
+            // PowSybl's PSS/E importer names bus `n` `B<n>` and states the
+            // PSS/E name as the IIDM name (psse-converter
+            // `AbstractConverter.getBusId`, `BusConverter.create`), which the
+            // reader turns back into the bus number and name.
+            let configured_bus =
+                component_id("bus", &format!("B{}", bus.id)).expect("derived bus identity");
+            if let Some(name) = &bus.name {
+                detailed.component_metadata.push(ComponentMetadata {
+                    component: configured_bus.clone(),
+                    name: Some(name.clone()),
+                    equipment_container: None,
+                    aliases: Vec::new(),
+                    external_identifiers: Vec::new(),
+                    properties: BTreeMap::new(),
+                    fictitious: false,
+                });
+            }
             detailed.bus_breaker_buses.push(BusBreakerBus {
                 component: configured_bus.clone(),
                 voltage_level: voltage_level.clone(),
@@ -8168,9 +8256,20 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
     let mut detailed = derive_detailed_connectivity(network, &mut diagnostics)?;
     if let Some(supplied) = network.detailed_connectivity() {
         detailed.omitted_fields.clone_from(&supplied.omitted_fields);
+        // Supplied metadata wins; the derived bus names fill in the rest.
+        let derived = std::mem::take(&mut detailed.component_metadata);
         detailed
             .component_metadata
             .clone_from(&supplied.component_metadata);
+        for metadata in derived {
+            if !supplied
+                .component_metadata
+                .iter()
+                .any(|value| value.component == metadata.component)
+            {
+                detailed.component_metadata.push(metadata);
+            }
+        }
     }
     validate_xiidm_tap_changers(&detailed)?;
     validate_xiidm_reactive_limits(&detailed)?;

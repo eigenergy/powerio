@@ -1074,6 +1074,11 @@ fn transmission_targets() -> impl Iterator<Item = (usize, TransmissionFormat)> {
 //   stated received power. The dcline case's IIDM VSC lines no longer report
 //   the two-terminal converter detail they were written as: -1 on the PSS/E
 //   .raw 33 and RAWX 35 cells of the `XIIDM 1.17` and `JIIDM 1.17` rows.
+// - XIIDM and JIIDM name a bus `B<n>`, PowSybl's PSS/E convention, and read
+//   the number back. The shorter id fits UCTE's 12 character name field, so
+//   the name truncation warning leaves each UCTE cell of both rows: -6. The
+//   dcline case keeps its bus 30 instead of reading back as bus 3, so
+//   GridFM reports the dense index it substitutes: +1 on both rows.
 // - MATPOWER carries only aggregate bus GS/BS values. Two IIDM payload cases
 //   contain switched shunt controls, so the XIIDM, JIIDM, and CGMES source
 //   rows each add two warnings in the MATPOWER column rather than silently
@@ -1118,8 +1123,8 @@ const TRANSMISSION_WARNING_BASELINE: [[usize; TRANSMISSION_TARGETS]; 19] = [
     [0, 0, 7, 7, 8, 0, 0, 0, 7, 55, 55, 35, 52, 8, 18],        // pandapower JSON
     [0, 0, 9, 9, 12, 0, 6, 0, 7, 67, 67, 36, 36, 9, 25],       // Surge JSON
     [0, 0, 1, 1, 1, 0, 4, 3, 0, 38, 38, 11, 28, 8, 27],        // PSLF .epc
-    [9, 7, 32, 32, 8, 7, 9, 7, 8, 0, 0, 179, 60, 15, 53],      // XIIDM 1.17
-    [9, 7, 32, 32, 8, 7, 9, 7, 8, 0, 0, 179, 60, 15, 53],      // JIIDM 1.17
+    [9, 7, 32, 32, 8, 7, 9, 7, 8, 0, 0, 179, 54, 15, 54],      // XIIDM 1.17
+    [9, 7, 32, 32, 8, 7, 9, 7, 8, 0, 0, 179, 54, 15, 54],      // JIIDM 1.17
     [8, 6, 67, 42, 6, 6, 7, 6, 6, 44, 44, 0, 51, 13, 51],      // CGMES 3.0
     [18, 12, 6, 6, 18, 12, 6, 12, 18, 36, 36, 12, 0, 12, 36],  // UCTE-DEF .uct
     [0, 6, 14, 14, 14, 6, 9, 6, 12, 70, 70, 38, 38, 0, 15],    // PyPSA CSV

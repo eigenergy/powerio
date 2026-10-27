@@ -259,3 +259,72 @@ fn three_winding_leg_current_limits_rate_each_winding() {
     assert!(xml.contains("permanentLimit=\"1000\""), "{xml}");
     assert!(!xml.contains("apparentPowerLimits"), "{xml}");
 }
+
+/// Buses 1 and 10, the PSS/E numbering a dense renumbering would lose.
+fn two_numbered_buses() -> BalancedNetwork {
+    use powerio_tx::network::{Branch, Bus, BusId, BusType, Generator, Load};
+    let mut first = Bus::new(BusId::new(1), BusType::Ref, 138.0);
+    first.name = Some("Alpha".to_owned());
+    let mut tenth = Bus::new(BusId::new(10), BusType::Pq, 138.0);
+    tenth.name = Some("Bus 10".to_owned());
+    let mut network = BalancedNetwork::in_memory(
+        "numbered",
+        100.0,
+        vec![first, tenth],
+        vec![Branch::new(BusId::new(1), BusId::new(10), 0.01, 0.1)],
+    );
+    network.generators_mut().push(Generator::new(BusId::new(1)));
+    network
+        .loads_mut()
+        .push(Load::new(BusId::new(10), 10.0, 2.0));
+    network
+}
+
+fn numbers_and_names(network: &BalancedNetwork) -> Vec<(usize, Option<String>)> {
+    network
+        .buses()
+        .iter()
+        .map(|bus| (bus.id.0, bus.name.clone()))
+        .collect()
+}
+
+#[test]
+fn psse_bus_numbers_and_names_survive_iidm() {
+    let network = parse_psse(&emit_psse(&two_numbered_buses()).text).unwrap();
+    let xml = emit_value(&network, TargetFormat::Xiidm).unwrap().text;
+    assert!(xml.contains(r#"<iidm:bus id="B10" name="Bus 10""#), "{xml}");
+    let back = parse_psse(&emit_psse(&xiidm(&xml)).text).unwrap();
+    assert_eq!(numbers_and_names(&back), numbers_and_names(&network));
+    // JIIDM states the same ids.
+    let json = emit_value(&network, TargetFormat::Jiidm).unwrap().text;
+    let back = parse_str(&json, "jiidm").unwrap().network;
+    assert_eq!(numbers_and_names(&back), numbers_and_names(&network));
+
+    let source = parse_file(data("psse/ExampleVersion32_exported.raw"), None)
+        .unwrap()
+        .network;
+    let xml = emit_value(&source, TargetFormat::Xiidm).unwrap().text;
+    let back = parse_psse(&emit_psse(&xiidm(&xml)).text).unwrap();
+    assert_eq!(numbers_and_names(&back), numbers_and_names(&source));
+}
+
+#[test]
+fn an_iidm_bus_id_with_no_number_is_numbered_after_the_recovered_ones() {
+    let xml = LINE_CURRENT_LIMITS
+        .replace("\"B1\"", "\"B7\"")
+        .replace("\"B2\"", "\"X\"");
+    let parsed = parse_str(&xml, "xiidm").unwrap();
+    let ids = parsed
+        .network
+        .buses()
+        .iter()
+        .map(|bus| bus.id.0)
+        .collect::<Vec<_>>();
+    assert_eq!(ids, [7, 1]);
+    let messages = powerio_tx::diagnostics::render_diagnostics(&parsed.diagnostics);
+    assert!(
+        messages.iter().any(|message| message
+            == "READ.XIIDM.VALUE_DEFAULTED: 1 bus(es) state no PSS/E bus number in their IIDM id (`B<n>`), or repeat one; they were numbered after the 1 recovered number(s)"),
+        "{messages:#?}"
+    );
+}

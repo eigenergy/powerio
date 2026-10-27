@@ -17,6 +17,14 @@
   states only current limits now reads as winding MVA ratings the same way,
   where it was reported as unmapped; XIIDM output keeps the amperes.
 
+- PSS/E bus numbers and names now survive a trip through XIIDM or JIIDM. The
+  writers name a bus `B<n>` with its name as the IIDM name, as PowSybl's
+  PSS/E importer does, and the readers take the number back from `B<n>` (or
+  from `powerio-bus-<n>`, the id older PowerIO output used) and the name from
+  the IIDM name. Bus 10 no longer comes back as bus 5, nor "Bus 1" as
+  `powerio-bus-1`. A bus whose id states no number, when others do, is
+  numbered after them with a diagnostic.
+
 - Pull requests now build and smoke-test one Linux wheel (x86_64) and the
   sdist. The five-platform wheel matrix runs on pushes to main and on
   releases, and the browser converter suite on pushes to main, the commits
