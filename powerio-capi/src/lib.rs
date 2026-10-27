@@ -19575,7 +19575,9 @@ fn invalid_ots_option(message: String) -> *mut PioError {
     boundary_error(&codes::BIND_CAPI_INVALID_OPTIONS, message)
 }
 
-/// The Rust options a `PioAcOtsOptions` states; NULL is the defaults.
+/// The Rust options a `PioAcOtsOptions` states; NULL is the Rust defaults,
+/// where every branch may switch. `pio_module_to_ac_ots_instance_with_options`
+/// handles NULL itself before it gets here.
 unsafe fn ac_ots_options(
     options: *const PioAcOtsOptions,
 ) -> Result<powerio_prob::AcOtsOptions, *mut PioError> {
@@ -19840,7 +19842,9 @@ pub unsafe extern "C" fn pio_module_to_ac_ots_instance(
 /// explicit options from a balanced network, AC OPF, or AC OTS module. An
 /// AC OTS module keeps its base problem and objective and takes the new
 /// options; the objective gains the switching cost term once. NULL options
-/// are the defaults.
+/// give exactly what `pio_module_to_ac_ots_instance` gives: only the
+/// initially in-service branches may switch, and an AC OTS module comes back
+/// unchanged.
 ///
 /// # Safety
 /// Pointers and handles must satisfy the crate-level safety requirements.
@@ -19850,6 +19854,11 @@ pub unsafe extern "C" fn pio_module_to_ac_ots_instance_with_options(
     options: *const PioAcOtsOptions,
     error: *mut *mut PioError,
 ) -> *mut PioModule {
+    if options.is_null() {
+        // The Rust option defaults let every branch switch, including the
+        // initially open ones. NULL here means the no-options entry point.
+        return unsafe { pio_module_to_ac_ots_instance(module, error) };
+    }
     unsafe {
         entry(error, std::ptr::null_mut(), || {
             let module = PioModule::get(module).ok_or_else(|| {
@@ -25369,6 +25378,71 @@ mpc.gencost = [
         let code = unsafe { view_text(pio_error_code(error)) };
         unsafe { pio_error_release(error) };
         code
+    }
+
+    /// The switchable flag of every branch of an AC OTS module, in branch
+    /// order, and the number of objective terms.
+    unsafe fn ac_ots_switchable_set(module: *const PioModule) -> (Vec<bool>, usize) {
+        unsafe {
+            let mut error = std::ptr::null_mut();
+            let value = pio_module_value(module);
+            let instance = pio_value_ac_ots_instance(value, &mut error);
+            assert!(!instance.is_null(), "{}", error_text(error));
+            let mut options_view: PioAcOtsOptionsView = std::mem::zeroed();
+            assert!(pio_ac_ots_instance_options(
+                instance,
+                &raw mut options_view,
+                &mut error
+            ));
+            let mut switchable = Vec::new();
+            for index in 0..options_view.branch_count {
+                let mut branch: PioAcOtsBranchView = std::mem::zeroed();
+                assert!(pio_ac_ots_instance_branch_at(
+                    instance,
+                    index,
+                    &raw mut branch,
+                    &mut error
+                ));
+                switchable.push(branch.switchable);
+            }
+            let terms = pio_calculation_instance_objective_term_count(instance);
+            pio_calculation_instance_release(instance);
+            pio_value_release(value);
+            (switchable, terms)
+        }
+    }
+
+    #[test]
+    fn null_options_give_the_same_instance_as_the_no_options_entry_point() {
+        unsafe {
+            // case9 with its second branch (4-5) initially open: the default
+            // Rust options would let that branch switch.
+            let mut network = case9_network();
+            network.branches_mut()[1].in_service = false;
+            let network_module = module_handle(powerio::PioModule::new(PioValue::from(network)));
+            let mut error = std::ptr::null_mut();
+
+            let plain = pio_module_to_ac_ots_instance(network_module, &mut error);
+            assert!(!plain.is_null(), "{}", error_text(error));
+            let with_null = pio_module_to_ac_ots_instance_with_options(
+                network_module,
+                std::ptr::null(),
+                &mut error,
+            );
+            assert!(!with_null.is_null(), "{}", error_text(error));
+            let (plain_set, plain_terms) = ac_ots_switchable_set(plain);
+            let (null_set, null_terms) = ac_ots_switchable_set(with_null);
+            let initially_closed: Vec<bool> = (0..9).map(|row| row != 1).collect();
+            assert_eq!(plain_set, initially_closed);
+            assert_eq!(null_set, plain_set);
+            assert_eq!(null_terms, plain_terms);
+
+            // An AC OTS module comes back unchanged under NULL options too.
+            let again =
+                pio_module_to_ac_ots_instance_with_options(with_null, std::ptr::null(), &mut error);
+            assert!(!again.is_null(), "{}", error_text(error));
+            assert_eq!(ac_ots_switchable_set(again), (plain_set, plain_terms));
+        }
     }
 
     #[test]

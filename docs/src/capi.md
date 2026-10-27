@@ -261,7 +261,8 @@ AC optimal transmission switching has its own entry points.
   - `pio_module_to_ac_ots_instance` builds one with the default options from a
     balanced network or AC OPF module.
   - `pio_module_to_ac_ots_instance_with_options` takes a `PioAcOtsOptions`, and
-    also reconfigures an AC OTS module.
+    also reconfigures an AC OTS module. NULL options are the same as
+    `pio_module_to_ac_ots_instance`.
   - `pio_ac_ots_instance_create` combines an AC OPF instance handle with
     options and keeps its objective exactly.
 - **Read an instance.** `pio_value_ac_ots_instance` returns the instance view.

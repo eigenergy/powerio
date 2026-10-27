@@ -7115,7 +7115,9 @@ PioModule *pio_module_to_ac_ots_instance(const PioModule *module, PioError **err
  * explicit options from a balanced network, AC OPF, or AC OTS module. An
  * AC OTS module keeps its base problem and objective and takes the new
  * options; the objective gains the switching cost term once. NULL options
- * are the defaults.
+ * give exactly what `pio_module_to_ac_ots_instance` gives: only the
+ * initially in-service branches may switch, and an AC OTS module comes back
+ * unchanged.
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.
