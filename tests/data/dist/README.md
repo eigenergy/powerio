@@ -27,9 +27,14 @@ Benchmarking Multiconductor OPF.
 ## cim/
 
 `micro_feeder.xml` is a synthetic, hand written distribution CIM feeder
-original to this repository (CIM100 namespace, 243 lines, 13,883 bytes). It
+original to this repository (CIM100 namespace, 243 lines, 13,829 bytes). It
 exercises the mapped element set with hand computed expected values, pinned in
-`powerio-dist/tests/cim.rs`. See `cim/README.md`.
+`powerio-dist/tests/cim.rs`. `tank_feeder.xml` is a synthetic distribution
+CIM feeder, also original to this repository (CIM100 namespace, 533 lines,
+30,526 bytes), of transformers in the `TransformerTank` form, pinned in the
+same test file and compared with native OpenDSS by
+`evals/validation/validate_cim_tanks.py`. Both are MIT OR Apache-2.0
+(`cim/License.md`). See `cim/README.md`.
 
 ## opendss/
 

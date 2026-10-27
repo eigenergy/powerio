@@ -57,8 +57,8 @@ pub(crate) fn failure_message<T: std::fmt::Display + 'static>(message: &T) -> St
         .and_then(rusqlite::Error::sqlite_error_code)
         == Some(rusqlite::ErrorCode::OperationInterrupted);
     if interrupted {
-        "the project exceeds this reader's bounded query work; SINCAL projects of a \
-         few hundred elements or more may be too large for this release"
+        "the project exceeds this reader's bounded query work; it is too large for \
+         this release"
             .to_owned()
     } else {
         message.to_string()

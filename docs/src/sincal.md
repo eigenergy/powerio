@@ -186,11 +186,12 @@ dielectric losses, parallel counts, rating factors, rated frequency and active
 temperature coefficients. Required impedances and sequence declarations remain
 strict. Ideal connections record their applied defaults as well.
 
-Every SINCAL parse shares a fixed budget of SQLite work. The multiconductor
-reader still scans the terminal table for each element, so in this release it
-reads feeders of up to roughly 450 lines on a native-width schema; a larger
-project fails with a message saying it exceeds the reader's bounded query work,
-never with partial output. Indexing terminals once per parse is planned.
+Every SINCAL parse shares a fixed budget of SQLite work. Both readers read
+terminals once per parse and group them by element, so the work per element
+does not grow with the size of the terminal table: a native-width feeder with
+1,000 lines reads within the budget. A project that does exceed it fails with
+a message saying it exceeds the reader's bounded query work, never with
+partial output.
 
 Access MDB inputs use the core primary-file limit, which defaults to 1 GiB;
 `POWERIO_MAX_PRIMARY_BYTES` can set an explicit bound. CSIRO09 is 69,181,440
@@ -204,9 +205,9 @@ In the balanced profile, native physical quantities use a declared 100 MVA
 internal conversion base. The multiconductor model uses its usual SI units.
 Both readers correct cable resistance for the voltage-level temperature in
 every schema. The balanced reader refuses a line built from `LineSeg`
-sections, as the multiconductor reader does, and admits only `Line.fr = 1`:
-the multiconductor reader treats `fr` as a factor on the thermal rating, and
-that meaning is not yet verified for the balanced profile.
+sections, as the multiconductor reader does. Both readers apply `Line.fr` as
+a factor on the thermal current `Ith`: the line's current limit is
+`Ith * ParSys * fr`, and `fr` does not change its impedance.
 Disabled native generator capability limits become unbounded typed limits,
 not zero capability. Diagnostics identify this and data outside the chosen
 snapshot. Disabled modern profile references do not replace static powers.
@@ -250,9 +251,8 @@ let module = powerio::parse_with_options(
     "case.sinx", &powerio::ParseOptions::default().format("sincal-balanced")?,
 )?;
 let mut request = powerio::SincalExperimentalOptions::default();
-request.container = powerio::SincalContainer::Archive {
-    project_name: "converted".into(),
-};
+request.container =
+    powerio::SincalContainer::archive_with("converted", powerio::ArchiveOptions::default());
 let mut options = powerio::EmitOptions::default();
 options.sincal_experimental = Some(request);
 let result = powerio::emit_with_options(&module, "sincal", &options, "fresh.sinx")?;
@@ -264,8 +264,11 @@ for diagnostic in result.diagnostics() {
 ```
 
 `SincalContainer::Sqlite` (the default) produces a single SQLite database.
-`Archive` produces deterministic candidate `.sinx` packaging containing that
-database and manifests. The project name accepts 1–128 ASCII letters, digits,
+`SincalContainer::archive_with` produces deterministic candidate `.sinx`
+packaging containing that database and manifests. `ArchiveOptions` has no
+fields yet; it starts from `Default` so packaging options can be added later
+without breaking callers. The struct variant `SincalContainer::Archive {
+project_name }` is kept for compatibility and packages the same bytes. The project name accepts 1–128 ASCII letters, digits,
 underscores or hyphens. The destination filename does not select the container.
 Neither path writes an Access database, desktop `.sin` file, diagrams or results.
 Native SINCAL open/save/calculation remains an external acceptance gate.

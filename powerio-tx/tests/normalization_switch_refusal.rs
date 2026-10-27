@@ -182,6 +182,33 @@ fn filtered_merges_keep_source_identities_in_diagnostics_and_results() {
     assert_eq!(merge.source.switches(), net.switches());
 }
 
+/// Split secondaries of one live three winding transformer tied by a closed
+/// switch are a valid parallel connection, but the merge does not admit them
+/// yet: normalization refuses the tie as it refuses any winding pair, under
+/// either island policy.
+#[test]
+fn a_closed_tie_between_two_live_secondaries_is_refused() {
+    let mut net = network();
+    net.switches_mut()
+        .push(Switch::new(BusId(2), BusId(3), true));
+    let expected = (0, BusId(2), BusId(3), 1);
+    assert_closed(net.to_normalized().unwrap_err(), expected);
+    let per_island = NormalizeSettings::default()
+        .with_island_references(powerio_tx::IslandReferencePolicy::PerIsland);
+    assert_closed(net.to_normalized_with(&per_island).unwrap_err(), expected);
+    // The merge itself keeps the switch and says why.
+    let merge = net
+        .merge_buses(&powerio_tx::BusMergeRule::new(true, None))
+        .unwrap();
+    assert_eq!(merge.network.switches().len(), 1);
+    assert!(
+        merge
+            .diagnostics
+            .iter()
+            .any(|d| d.code() == "CANONICALIZE.MERGE.WINDING_PAIR_KEPT")
+    );
+}
+
 #[test]
 fn per_island_normalization_also_rejects_an_incomplete_switch_merge() {
     let mut net = network();

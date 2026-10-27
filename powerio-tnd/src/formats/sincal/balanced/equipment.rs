@@ -90,15 +90,10 @@ pub(super) fn line(
     {
         return Err(row.bad("Un", "line voltage level/rating mismatch"));
     }
-    // The multiconductor reader treats `fr` as a factor on the thermal rating
-    // `Ith`; this reader used to scale resistance by it. Until the meaning is
-    // checked against native SINCAL results, only the neutral 1 is admitted.
-    if row.positive("fr")?.to_bits() != 1.0_f64.to_bits() {
-        return Err(row.bad(
-            "fr",
-            "a line factor other than 1 has no verified balanced mapping",
-        ));
-    }
+    // `fr` is the rating factor on the thermal current `Ith`, as the
+    // multiconductor reader applies it: it scales the current limit and
+    // leaves the series impedance alone.
+    let rating_factor = row.positive("fr")?;
     let r = finite(
         row.nonnegative("r")? * temperature_factor * scale,
         "line resistance",
@@ -121,8 +116,9 @@ pub(super) fn line(
             * base_z,
         "line charging",
     )?;
+    let ampacity = row.nonnegative("Ith")?;
     let amps = finite(
-        row.nonnegative("Ith")? * 1000.0 * parallel,
+        ampacity * 1000.0 * parallel * rating_factor,
         "line current limit",
     )?;
     branch.current_ratings = Some(BranchCurrentRatings::new(amps, 0.0, 0.0));
@@ -130,6 +126,10 @@ pub(super) fn line(
         3.0_f64.sqrt() * kv(network, ports[0]) * amps / 1000.0,
         "line thermal rating",
     )?;
+    // A stated limit must not round to zero, which would read as unlimited.
+    if ampacity > 0.0 && (amps == 0.0 || branch.rate_a == 0.0) {
+        return Err(row.bad("fr", "line current limit underflows"));
+    }
     branch.uid = Some(uid.to_owned());
     if default_temperature {
         branch.extras.insert(

@@ -243,7 +243,7 @@ pub use write::{EmitOptions, emit, emit_with_options};
 #[cfg(feature = "sincal")]
 mod sincal_write;
 #[cfg(feature = "sincal")]
-pub use sincal_write::{SincalContainer, SincalExperimentalOptions};
+pub use sincal_write::{ArchiveOptions, SincalContainer, SincalExperimentalOptions};
 mod ir;
 #[cfg(feature = "schema")]
 pub use ir::generate_ir_schema;

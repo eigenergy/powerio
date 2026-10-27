@@ -1036,7 +1036,8 @@ fn assign_normalized_references(
 /// [`IslandReferencePolicy::PerIsland`] over the normalized tables: each
 /// supplied island of `partition` keeps exactly one reference bus. The bus
 /// types are already canonical, so a reference hosts a generator and a demoted
-/// one becomes PV.
+/// one becomes PV. This picks the same buses as
+/// [`BalancedNetwork::assign_island_references`] on the raw network.
 fn assign_normalized_island_references(
     buses: &mut [Bus],
     generators: &[Generator],
