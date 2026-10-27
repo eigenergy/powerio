@@ -150,7 +150,7 @@ branch is beyond repair, close the old pull request in the same step, with a
 link to the new one, so two versions of one change are never open together.
 
 Do not update a branch only to keep up with `main`: each push reruns about
-forty CI jobs. If a conflict is limited to `CHANGELOG.md`, note it and wait
+fifty CI jobs. If a conflict is limited to `CHANGELOG.md`, note it and wait
 until the pull request is otherwise ready to merge. The author resolves it
 when asked, or the maintainer may resolve it while merging. Keep every
 unreleased entry when you resolve it.
@@ -504,12 +504,13 @@ updates `Cargo.lock`. Then:
 3. Inspect the draft and its five binary assets, then publish the release.
    The release event fires the PyPI publish
    (python.yml) and the crates.io publish (crates.yml: powerio-core,
-   powerio-tx, powerio-dist, powerio-tnd, powerio-prob, powerio-matrix,
-   powerio, and powerio-cli, in dependency order). Both deploy through
-   reviewer protected environments (`pypi` and `crates-io`; the protection
-   lives in the repo settings). PyPI skips files it already has and crates.io
-   skips versions already in the index, so if one of them fails partway you
-   recover by running it again.
+   powerio-tx, powerio-dist, powerio-tnd, powerio-prob, powerio-synth,
+   powerio-matrix, powerio, and powerio-cli, in dependency order). Both
+   deploy through reviewer protected environments (`pypi` and `crates-io`;
+   the protection lives in the repo settings). A rerun skips the PyPI files
+   and crates.io versions that are already published, so it publishes only
+   what is missing; it does not fix a publish that fails for a reason a rerun
+   does not change.
 
    A crate's first version cannot use trusted publishing
    ([crates.io](https://blog.rust-lang.org/2025/07/11/crates-io-development-update-2025-07/)).
