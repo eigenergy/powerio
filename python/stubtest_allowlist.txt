@@ -9,6 +9,10 @@ powerio.BranchRatingSet
 powerio.BranchSusceptanceFormula
 powerio.Bus
 powerio.AcDcConverterControlMode
+powerio.AcOtsBranch
+powerio.AcOtsCurrentLimits
+powerio.AcOtsIslanding
+powerio.AcOtsOptions
 powerio.ActivePowerControl
 powerio.BoundaryLine
 powerio.BoundaryLineGeneration

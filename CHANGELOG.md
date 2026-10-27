@@ -106,6 +106,26 @@
 - Python reads the two types as `powerio.AcOtsInstance` and
   `powerio.AcOtsSolution`, and `PioModule.to_ac_ots_instance()` builds the
   default instance.
+- Python covers the whole AC optimal transmission switching workflow
+  ([#699](https://github.com/eigenergy/powerio/issues/699)):
+  - `PioModule.to_ac_ots_instance()` takes the switching options as keyword
+    arguments: `switchable`, `switching_costs`, `islanding`, `max_open`,
+    `max_switched`, `current_limits`, and `stated_current_limits`. With none
+    it returns the same instance as before.
+  - `AcOtsInstance.options` returns the stated options and
+    `AcOtsInstance.branches` one row per branch: its identity, initial
+    status, whether it may switch, its switching costs, and its stated and
+    applied current limits.
+  - `AcOtsInstance.validate_topology(closed)` checks a final topology and
+    returns its switching cost, and `AcOtsInstance.fix_topology(closed)`
+    returns the AC OPF instance over it with the diagnostics for what it
+    drops.
+  - `AcOtsSolution.from_ac_opf_solution(instance, closed, solution)`
+    attaches an AC OPF solution, with the same checks as Rust and C.
+  - `AcOtsSolution` gains `branch_closed`, `switching_cost`,
+    `branches_open`, `branches_switched`, `objective`, and
+    `solved_network()`, which returns the network with the final statuses and
+    solved values, as C's `pio_ac_ots_solution_materialize` does.
 - C ABI 7 gains these entry points:
   - instance: `pio_value_ac_ots_instance`, `pio_module_to_ac_ots_instance`,
     `pio_module_to_ac_ots_instance_with_options`, `pio_ac_ots_instance_create`,
