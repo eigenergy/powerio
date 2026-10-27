@@ -9,7 +9,8 @@
 //!
 //! The rule is always the caller's: [`ZeroImpedanceRule::Exact`] merges only
 //! branches with `r == 0` and `x == 0`, and a threshold rule names its
-//! threshold. Nothing here applies a tolerance the caller did not state.
+//! threshold. Nothing here selects elements by a tolerance the caller did not
+//! state; only the attribute conflict report compares within a fixed `1e-9`.
 //!
 //! The merged network no longer has the removed elements' flows as
 //! variables. [`BusMerge::calc_removed_flows`] recovers their active power
@@ -18,7 +19,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::diagnostics::{Diagnostic, codes};
-use crate::network::{BalancedNetwork, BusId, BusType};
+use crate::network::{BalancedNetwork, Bus, BusId, BusType};
 use crate::{Error, Result};
 
 /// The zero impedance threshold PSS/E applies when a case states none
@@ -651,6 +652,140 @@ fn fold_admittance(
     Ok(rows)
 }
 
+/// Two bus attributes differ by more than this (per unit for voltage
+/// magnitude limits, degrees for angles) before a merge reports them.
+const ATTRIBUTE_TOLERANCE: f64 = 1e-9;
+
+/// Whether two attribute values disagree beyond [`ATTRIBUTE_TOLERANCE`]. Equal
+/// infinities agree; a NaN disagrees with every other value.
+fn attribute_differs(a: f64, b: f64) -> bool {
+    let gap = (a - b).abs();
+    a.to_bits() != b.to_bits() && (gap.is_nan() || gap > ATTRIBUTE_TOLERANCE)
+}
+
+/// The attributes a merge group's survivor takes from the whole group.
+struct SurvivorAttributes {
+    kind: BusType,
+    vmin: f64,
+    vmax: f64,
+    va: f64,
+}
+
+/// The voltage magnitude band of a merge group: the intersection of its
+/// members' bands (the largest `vmin` and the smallest `vmax`), since the
+/// merged bus carries every member's voltage. Nonfinite limits are ignored.
+/// When the members disagree the merge reports it, naming each bus whose band
+/// differs from the result; when the bands do not overlap the survivor keeps
+/// its own band and the report says so.
+fn merge_voltage_limits(
+    buses: &[Bus],
+    ids: &[BusId],
+    index_of: &HashMap<BusId, usize>,
+    survivor_index: usize,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> (f64, f64) {
+    let survivor = &buses[survivor_index];
+    let members: Vec<&Bus> = ids.iter().map(|id| &buses[index_of[id]]).collect();
+    let tightest = |values: Vec<f64>, pick: fn(f64, f64) -> f64, own: f64| {
+        values
+            .into_iter()
+            .filter(|value| value.is_finite())
+            .reduce(pick)
+            .unwrap_or(own)
+    };
+    let vmin = tightest(
+        members.iter().map(|bus| bus.vmin).collect(),
+        f64::max,
+        survivor.vmin,
+    );
+    let vmax = tightest(
+        members.iter().map(|bus| bus.vmax).collect(),
+        f64::min,
+        survivor.vmax,
+    );
+    let differing: Vec<String> = members
+        .iter()
+        .filter(|bus| attribute_differs(bus.vmin, vmin) || attribute_differs(bus.vmax, vmax))
+        .map(|bus| bus.id.to_string())
+        .collect();
+    if differing.is_empty() {
+        return (vmin, vmax);
+    }
+    let bands = members
+        .iter()
+        .map(|bus| format!("bus {} [{}, {}]", bus.id, bus.vmin, bus.vmax))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let id = survivor.id;
+    if vmin > vmax {
+        diagnostics.push(Diagnostic::of(
+            &codes::CANONICALIZE_MERGE_ATTRIBUTE_CONFLICT,
+            format!(
+                "buses merged into bus {id} have voltage limits that do not overlap ({bands} \
+                 p.u.); bus {id} kept its own limits [{}, {}] p.u.",
+                survivor.vmin, survivor.vmax
+            ),
+        ));
+        return (survivor.vmin, survivor.vmax);
+    }
+    diagnostics.push(Diagnostic::of(
+        &codes::CANONICALIZE_MERGE_ATTRIBUTE_CONFLICT,
+        format!(
+            "buses merged into bus {id} have differing voltage limits ({bands} p.u.); bus {id} \
+             takes their intersection [{vmin}, {vmax}] p.u., which narrows the limits of \
+             bus(es) {}",
+            differing.join(", ")
+        ),
+    ));
+    (vmin, vmax)
+}
+
+/// The voltage angle of a merge group's survivor. A group with a reference
+/// bus keeps the reference's angle: the survivor's own when it is a
+/// reference, else the angle of the smallest id reference it takes over. The
+/// merge reports a survivor angle or another reference angle that differs.
+fn merge_reference_angle(
+    buses: &[Bus],
+    references: &[BusId],
+    index_of: &HashMap<BusId, usize>,
+    survivor_index: usize,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> f64 {
+    let survivor = &buses[survivor_index];
+    let Some(&first) = references.first() else {
+        return survivor.va;
+    };
+    let reference = if survivor.kind == BusType::Ref {
+        survivor
+    } else {
+        &buses[index_of[&first]]
+    };
+    let va = reference.va;
+    let mut angles: Vec<&Bus> = references.iter().map(|id| &buses[index_of[id]]).collect();
+    if survivor.kind != BusType::Ref {
+        angles.push(survivor);
+        angles.sort_by_key(|bus| bus.id);
+    }
+    if angles.iter().all(|bus| !attribute_differs(bus.va, va)) {
+        return va;
+    }
+    let listed = angles
+        .iter()
+        .map(|bus| format!("bus {} {} deg", bus.id, bus.va))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let id = survivor.id;
+    diagnostics.push(Diagnostic::of(
+        &codes::CANONICALIZE_MERGE_ATTRIBUTE_CONFLICT,
+        format!(
+            "buses merged into bus {id} disagree on the reference angle ({listed}); bus {id} \
+             takes the angle {va} deg of reference bus {}",
+            reference.id
+        ),
+    ));
+    va
+}
+
 /// Bus kind importance: the survivor of a group takes the strongest kind of
 /// its members, so a merge never demotes a slack.
 pub(crate) fn kind_priority(kind: BusType) -> u8 {
@@ -689,8 +824,13 @@ impl BalancedNetwork {
     /// generator regulates, with the smallest id breaking each tie
     /// ([`MergeSurvivor::Strongest`]; [`BusMergeRule::with_survivor`] selects
     /// another rule). It takes the strongest bus kind of the set (reference,
-    /// then PV, then PQ) and keeps its own other attributes. Every element reference to a merged
-    /// bus moves to the survivor: loads, shunts, static var compensators,
+    /// then PV, then PQ) and the intersection of the set's voltage limits
+    /// (the largest `vmin` and the smallest `vmax`; when the limits do not
+    /// overlap it keeps its own). When the set holds a reference bus, the
+    /// survivor takes the reference's voltage angle. It keeps its own other
+    /// attributes. Limits or reference angles that differ by more than `1e-9`
+    /// are reported as `CANONICALIZE.MERGE.ATTRIBUTE_CONFLICT`, naming the
+    /// buses. Every element reference to a merged bus moves to the survivor: loads, shunts, static var compensators,
     /// generators and their regulated buses, storage, branch, switch, and
     /// HVDC endpoints, three winding transformer windings, control buses,
     /// and area swing buses.
@@ -842,7 +982,7 @@ impl BalancedNetwork {
 
         let mut merged_buses: HashMap<BusId, BusId> = HashMap::new();
         let mut groups = Vec::with_capacity(members_of.len());
-        let mut survivor_kind: HashMap<BusId, BusType> = HashMap::new();
+        let mut survivor_attributes: HashMap<BusId, SurvivorAttributes> = HashMap::new();
         for (&root, members) in &members_of {
             let survivor_index = match rule.survivor {
                 MergeSurvivor::Strongest => {
@@ -860,7 +1000,6 @@ impl BalancedNetwork {
                 .map(|&index| buses[index].kind)
                 .max_by_key(|&kind| kind_priority(kind))
                 .unwrap_or(buses[survivor_index].kind);
-            survivor_kind.insert(survivor, kind);
             let mut ids: Vec<BusId> = members.iter().map(|&index| buses[index].id).collect();
             ids.sort_unstable();
             for &id in &ids {
@@ -910,6 +1049,24 @@ impl BalancedNetwork {
                     ),
                 ));
             }
+            let (vmin, vmax) =
+                merge_voltage_limits(buses, &ids, &index_of, survivor_index, &mut diagnostics);
+            let va = merge_reference_angle(
+                buses,
+                &references,
+                &index_of,
+                survivor_index,
+                &mut diagnostics,
+            );
+            survivor_attributes.insert(
+                survivor,
+                SurvivorAttributes {
+                    kind,
+                    vmin,
+                    vmax,
+                    va,
+                },
+            );
             groups.push(BusGroup {
                 survivor,
                 members: ids,
@@ -1094,8 +1251,11 @@ impl BalancedNetwork {
             if merged_buses.contains_key(&bus.id) {
                 return false;
             }
-            if let Some(&kind) = survivor_kind.get(&bus.id) {
-                bus.kind = kind;
+            if let Some(attributes) = survivor_attributes.get(&bus.id) {
+                bus.kind = attributes.kind;
+                bus.vmin = attributes.vmin;
+                bus.vmax = attributes.vmax;
+                bus.va = attributes.va;
             }
             true
         });
@@ -2099,6 +2259,93 @@ mod tests {
         assert!(conflicts[0].contains("34.5 kV"));
         assert!(conflicts[1].contains("reference buses 1, 3"));
         assert_eq!(merge.network.buses()[0].kind, BusType::Ref);
+    }
+
+    fn conflicts(merge: &BusMerge) -> Vec<&str> {
+        merge
+            .diagnostics
+            .iter()
+            .filter(|d| d.code() == "CANONICALIZE.MERGE.ATTRIBUTE_CONFLICT")
+            .map(Diagnostic::message)
+            .collect()
+    }
+
+    #[test]
+    fn a_merge_intersects_differing_voltage_limits_and_reports_them() {
+        let mut network = net(
+            &[1, 2, 3, 4],
+            vec![jumper(1, 2), jumper(2, 3), line(3, 4, 0.0, 0.1)],
+        );
+        network.buses_mut()[1].vmin = 0.95;
+        network.buses_mut()[2].vmax = 1.05;
+        network.buses_mut()[2].vmin = 0.93;
+        let merge = network.merge_buses(&PSSE).unwrap();
+        let survivor = &merge.network.buses()[0];
+        assert_eq!(survivor.id, BusId(1));
+        assert_eq!((survivor.vmin, survivor.vmax), (0.95, 1.05));
+        let conflicts = conflicts(&merge);
+        assert_eq!(conflicts.len(), 1, "{conflicts:?}");
+        assert!(
+            conflicts[0].contains("intersection [0.95, 1.05]"),
+            "{}",
+            conflicts[0]
+        );
+        assert!(conflicts[0].contains("bus(es) 1, 2, 3"), "{}", conflicts[0]);
+        // The bus outside the group keeps its own limits.
+        assert_eq!(merge.network.buses()[1].vmin, 0.9);
+    }
+
+    #[test]
+    fn equal_voltage_limits_and_angles_merge_without_a_conflict() {
+        let mut network = net(&[1, 2, 3], vec![jumper(1, 2), jumper(2, 3)]);
+        for bus in network.buses_mut() {
+            (bus.vmin, bus.vmax, bus.va) = (0.94, 1.06, -3.0);
+        }
+        // Within the tolerance counts as equal.
+        network.buses_mut()[2].vmax = 1.06 + 1e-12;
+        network.buses_mut()[1].kind = BusType::Ref;
+        let merge = network
+            .merge_buses(&PSSE.with_survivor(MergeSurvivor::SmallestId))
+            .unwrap();
+        assert_eq!(conflicts(&merge), Vec::<&str>::new());
+        let survivor = &merge.network.buses()[0];
+        assert_eq!((survivor.vmin, survivor.vmax), (0.94, 1.06));
+        assert_eq!(survivor.kind, BusType::Ref);
+    }
+
+    #[test]
+    fn disjoint_voltage_limits_keep_the_survivor_s_own() {
+        let mut network = net(&[1, 2], vec![jumper(1, 2)]);
+        (network.buses_mut()[1].vmin, network.buses_mut()[1].vmax) = (1.15, 1.2);
+        let merge = network.merge_buses(&PSSE).unwrap();
+        let survivor = &merge.network.buses()[0];
+        assert_eq!((survivor.vmin, survivor.vmax), (0.9, 1.1));
+        let conflicts = conflicts(&merge);
+        assert_eq!(conflicts.len(), 1, "{conflicts:?}");
+        assert!(conflicts[0].contains("do not overlap"), "{}", conflicts[0]);
+    }
+
+    #[test]
+    fn a_survivor_taking_over_a_reference_takes_its_angle() {
+        let mut network = net(&[1, 2, 3], vec![jumper(1, 2), jumper(2, 3)]);
+        network.buses_mut()[0].va = 4.0;
+        network.buses_mut()[1].va = -7.5;
+        network.buses_mut()[1].kind = BusType::Ref;
+        let merge = network
+            .merge_buses(&PSSE.with_survivor(MergeSurvivor::SmallestId))
+            .unwrap();
+        let survivor = &merge.network.buses()[0];
+        assert_eq!(survivor.id, BusId(1));
+        assert_eq!(survivor.kind, BusType::Ref);
+        assert_eq!(survivor.va, -7.5);
+        let conflicts = conflicts(&merge);
+        assert_eq!(conflicts.len(), 1, "{conflicts:?}");
+        assert!(
+            conflicts[0].contains("bus 1 4 deg, bus 2 -7.5 deg"),
+            "{}",
+            conflicts[0]
+        );
+        assert!(conflicts[0].contains("reference bus 2"), "{}", conflicts[0]);
     }
 
     #[test]

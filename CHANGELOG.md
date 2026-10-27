@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- A bus merge (`merge_buses`, and normalization when it merges closed
+  switches) now gives the merged bus the overlap of the merged buses' voltage
+  limits: the highest `vmin` and the lowest `vmax`. Before, the merged bus
+  kept only its own limits. When the limits do not overlap, the merged bus
+  keeps its own and the merge says so. A merged bus that takes over a
+  reference bus now also takes that reference's voltage angle. Limits or
+  reference angles that differ by more than `1e-9` are reported as
+  `CANONICALIZE.MERGE.ATTRIBUTE_CONFLICT`, naming the buses.
+  `reduce_zero_impedance` still returns zero when its merge fails, for
+  example when a jumper would short an ideal transformer with an off-nominal
+  tap; the new `reduce_zero_impedance_with_report` returns the same count
+  with the merge's diagnostics, including the error that stopped it (#684).
+
 - Distribution CIM opens switches with disconnected terminals and refuses
   inactive/disconnected non-switch equipment and unsupported delta compensators,
   instead of constructing an energized or phase-to-ground equivalent (#687).
