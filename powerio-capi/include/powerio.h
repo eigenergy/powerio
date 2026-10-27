@@ -2260,6 +2260,104 @@ typedef struct {
     bool has_reference_terminal;
 } PioVoltageSourceBoundaryView;
 
+/**
+ * One branch's opening and closing cost in objective units, by branch
+ * identity. Only a change against the initial topology costs anything.
+ */
+typedef struct {
+    PioStringView id;
+    double open_cost;
+    double close_cost;
+} PioBranchSwitchingCost;
+
+/**
+ * Explicit current magnitude limits at a branch's two terminals, per unit
+ * on the system MVA base and each terminal bus's nominal voltage. A side
+ * whose `has_` flag is false is unbounded.
+ */
+typedef struct {
+    PioStringView id;
+    double from_pu;
+    double to_pu;
+    bool has_from_pu;
+    bool has_to_pu;
+} PioBranchCurrentLimit;
+
+/**
+ * AC optimal transmission switching options. `switchable` is `all`,
+ * `none`, or `only` (then `identities` names the switchable branches);
+ * `islanding` is `forbidden` or `allowed`; `current_limits` is `skip`,
+ * `stated`, or `derive_from_rate_a`. Arrays carry their element counts and
+ * are read during the call only.
+ */
+typedef struct {
+    PioStringView switchable;
+    const PioStringView *identities;
+    size_t identities_len;
+    const PioBranchSwitchingCost *switching_costs;
+    size_t switching_costs_len;
+    PioStringView islanding;
+    size_t max_open;
+    bool has_max_open;
+    size_t max_switched;
+    bool has_max_switched;
+    PioStringView current_limits;
+    const PioBranchCurrentLimit *stated_current_limits;
+    size_t stated_current_limits_len;
+} PioAcOtsOptions;
+
+/**
+ * The stated switching options of one AC optimal transmission switching
+ * instance, and its branch count. Per-branch settings are read with
+ * `pio_ac_ots_instance_branch_at`. The strings are static.
+ */
+typedef struct {
+    PioStringView switchable;
+    PioStringView islanding;
+    PioStringView current_limits;
+    size_t branch_count;
+    size_t max_open;
+    bool has_max_open;
+    size_t max_switched;
+    bool has_max_switched;
+} PioAcOtsOptionsView;
+
+/**
+ * One physical branch as an AC optimal transmission switching instance
+ * sees it: its identity, initial status, whether it may switch, its
+ * switching costs, its stated current limits, and the current limits that
+ * apply under the instance's policy. Borrowed data lives with the owner.
+ */
+typedef struct {
+    PioStringView id;
+    bool initial_closed;
+    bool switchable;
+    bool has_switching_cost;
+    double open_cost;
+    double close_cost;
+    double stated_from_pu;
+    double stated_to_pu;
+    bool has_stated_from_pu;
+    bool has_stated_to_pu;
+    double current_from_pu;
+    double current_to_pu;
+    bool has_current_from_pu;
+    bool has_current_to_pu;
+} PioAcOtsBranchView;
+
+/**
+ * The totals of one AC optimal transmission switching solution. The
+ * objective includes the switching cost when the instance's objective
+ * states the switching cost term.
+ */
+typedef struct {
+    size_t branch_count;
+    size_t branches_open;
+    size_t branches_switched;
+    double switching_cost;
+    double objective;
+} PioAcOtsSolutionView;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -6984,6 +7082,160 @@ bool pio_mc_ac_pf_instance_source_boundary_at(const PioCalculationInstance *inst
                                               size_t index,
                                               PioVoltageSourceBoundaryView *output,
                                               PioError **error);
+
+/**
+ * Return an owner-rooted AC optimal transmission switching instance view.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioCalculationInstance *pio_value_ac_ots_instance(const PioValueHandle *value, PioError **error);
+
+/**
+ * Return an owner-rooted AC optimal transmission switching solution view.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioCalculationSolution *pio_value_ac_ots_solution(const PioValueHandle *value, PioError **error);
+
+/**
+ * Construct an AC optimal transmission switching calculation module with
+ * the default options from a balanced network or AC OPF module: every
+ * initially in-service branch may switch, at zero cost, and the objective
+ * gains the switching cost term. An AC OTS module comes back unchanged.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioModule *pio_module_to_ac_ots_instance(const PioModule *module, PioError **error);
+
+/**
+ * Construct an AC optimal transmission switching calculation module with
+ * explicit options from a balanced network, AC OPF, or AC OTS module. An
+ * AC OTS module keeps its base problem and objective and takes the new
+ * options; the objective gains the switching cost term once. NULL options
+ * give exactly what `pio_module_to_ac_ots_instance` gives: only the
+ * initially in-service branches may switch, and an AC OTS module comes back
+ * unchanged.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioModule *pio_module_to_ac_ots_instance_with_options(const PioModule *module,
+                                                      const PioAcOtsOptions *options,
+                                                      PioError **error);
+
+/**
+ * Combine an AC OPF instance with explicit switching options, keeping its
+ * objective exactly, as a new module that carries the base module's
+ * records. NULL options are the defaults: every branch may switch.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioModule *pio_ac_ots_instance_create(const PioCalculationInstance *base,
+                                      const PioAcOtsOptions *options,
+                                      PioError **error);
+
+/**
+ * Read an AC optimal transmission switching instance's stated options and
+ * branch count.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_ac_ots_instance_options(const PioCalculationInstance *instance,
+                                 PioAcOtsOptionsView *output,
+                                 PioError **error);
+
+/**
+ * Read one physical branch of an AC optimal transmission switching
+ * instance by zero based branch table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_ac_ots_instance_branch_at(const PioCalculationInstance *instance_handle,
+                                   size_t index,
+                                   PioAcOtsBranchView *output,
+                                   PioError **error);
+
+/**
+ * Check a complete final branch status vector (one byte per branch in
+ * table order, 0 open and 1 closed) against the fixed branches, the
+ * budgets, and the islanding policy, and write its switching cost. This
+ * does not certify AC feasibility.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_ac_ots_instance_validate_topology(const PioCalculationInstance *instance,
+                                           const uint8_t *branch_closed,
+                                           size_t branch_count,
+                                           double *switching_cost,
+                                           PioError **error);
+
+/**
+ * The AC OPF calculation module over a validated final topology: every
+ * branch row with its final status, and the switching data the AC OPF
+ * cannot carry reported as module diagnostics.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioModule *pio_ac_ots_instance_fix_topology(const PioCalculationInstance *instance,
+                                            const uint8_t *branch_closed,
+                                            size_t branch_count,
+                                            PioError **error);
+
+/**
+ * Attach the AC OPF solution computed on the instance's fixed topology for
+ * `branch_closed`, as a new AC OTS solution module that carries the
+ * instance module's records. Construction checks the topology, the exact
+ * fixed-problem correspondence, finite values, and zero flow on open
+ * branches; it does not check residuals or optimality.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioModule *pio_ac_ots_solution_create(const PioCalculationInstance *instance,
+                                      const uint8_t *branch_closed,
+                                      size_t branch_count,
+                                      const PioCalculationSolution *ac_solution,
+                                      PioError **error);
+
+/**
+ * Read an AC optimal transmission switching solution's totals.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_ac_ots_solution_summary(const PioCalculationSolution *solution,
+                                 PioAcOtsSolutionView *output,
+                                 PioError **error);
+
+/**
+ * Read one final branch status by zero based branch table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_ac_ots_solution_branch_closed_at(const PioCalculationSolution *solution,
+                                          size_t index,
+                                          bool *output,
+                                          PioError **error);
+
+/**
+ * The balanced network module an AC optimal transmission switching
+ * solution states: final branch statuses with the solved bus voltages,
+ * generator dispatch, and branch flows applied, ready for `pio_emit`.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioModule *pio_ac_ots_solution_materialize(const PioCalculationSolution *solution,
+                                           PioError **error);
 
 #ifdef __cplusplus
 }  // extern "C"

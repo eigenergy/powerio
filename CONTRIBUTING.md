@@ -165,6 +165,28 @@ change.
 Use conventional commit subjects (`feat:`, `fix:`, `refactor:`). PRs are
 squash merged.
 
+## Contributor credit
+
+Record issue reports, reproductions, and proposals that lead to merged work in
+[CONTRIBUTORS.md](CONTRIBUTORS.md). Name the concrete contribution and link both
+the source issue and the implementing merged pull request or commit. An open
+issue can qualify when part of its proposal has landed; state the implemented
+part rather than implying that the whole issue is resolved.
+
+Acknowledgment and commit coauthorship are different. Use a `Co-authored-by`
+trailer when the commit incorporates the person's actual contribution,
+including design or reproduction material, not merely because it adds their
+name to the list. Use a verified account-associated name and email, preferring
+the person's GitHub noreply address when appropriate. Do not rewrite published
+history solely to add recognition.
+
+When squash merging, preserve justified trailers in the final commit message,
+after an empty line, and check the landed commit's attribution. A list entry or
+a trailer alone does not guarantee every GitHub contributor display will show
+the person; default-branch and account-association requirements also apply.
+See GitHub's [coauthor instructions](https://docs.github.com/en/pull-requests/how-tos/commit-changes/creating-a-commit-with-multiple-authors)
+and [repository contributors guidance](https://docs.github.com/en/repositories/viewing-activity-and-data-for-your-repository/viewing-a-projects-contributors).
+
 ## Tandem changes with PowerIO.jl
 
 The `Julia binding` CI job builds this repository's C ABI and runs PowerIO.jl's test
