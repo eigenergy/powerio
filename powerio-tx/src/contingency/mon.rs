@@ -265,6 +265,8 @@ struct Reader {
     seen_statement: bool,
     ended: bool,
     noted_text_after_end: bool,
+    /// The line of the first four-value voltage range, once its remark is recorded.
+    band_order_noted_at: Option<usize>,
 }
 
 impl Reader {
@@ -278,6 +280,7 @@ impl Reader {
             seen_statement: false,
             ended: false,
             noted_text_after_end: false,
+            band_order_noted_at: None,
         }
     }
 
@@ -416,13 +419,38 @@ impl Reader {
             && let Some(read) = self.read_monitor(line, upper, words)
         {
             match read {
-                Read::Statement(statement) => self.parsed.set.statements.push(statement),
+                Read::Statement(statement) => {
+                    if matches!(statement, MonitorStatement::VoltageRangeWithPre { .. }) {
+                        self.note_band_order(line.number);
+                    }
+                    self.parsed.set.statements.push(statement);
+                }
                 Read::OpenedBlock => {}
             }
             return;
         }
         self.parsed.unrecognized(line.number, line.trimmed());
         self.keep_statement(line, false);
+    }
+
+    /// Record, once per file, the band order a four-value
+    /// `MONITOR VOLTAGE RANGE` is read in. The PSS/E manual states two values
+    /// (low, then an optional high), and no public source labels the two
+    /// pairs of the four-value form, so the order is an assumption the
+    /// caller should see. See `FORMAT.md`.
+    fn note_band_order(&mut self, number: usize) {
+        if self.band_order_noted_at.is_some() {
+            return;
+        }
+        self.band_order_noted_at = Some(number);
+        self.parsed.note(
+            &codes::READ_MON_VOLTAGE_BAND_ORDER_ASSUMED,
+            format!(
+                "line {number}: MONITOR VOLTAGE RANGE states four values; every four-value range \
+                 in this file is read as the post-contingency low and high, then the \
+                 pre-contingency low and high, an order no public PSS/E or TARA source states"
+            ),
+        );
     }
 
     /// One `MONITOR` statement, or `None` when the tail is outside the

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- A `.mon` file with a four-value `MONITOR VOLTAGE RANGE` now reports one
+  `READ.MON.VOLTAGE_BAND_ORDER_ASSUMED` remark. The reader takes the first
+  pair as the post-contingency band and the second as the pre-contingency
+  band, as before, but no public source confirms that order: the PSS/E
+  manual documents only a low and an optional high value, and PowerGEM's
+  TARA grammar accepts the extra pair without naming it. The remark names
+  the line and the order, so a caller can check it against the tool that
+  wrote the file. The values read and written are unchanged.
+
 - The conversion matrix grades each cell by its worst finding: exact,
   lossless, restated (the target required a value and the writer supplied
   it), approximate, dropped, or failed. The PR comment shows that level, the
