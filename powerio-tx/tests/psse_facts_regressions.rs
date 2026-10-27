@@ -49,7 +49,6 @@ Q
 ";
     let p = helpers::parse_str(raw, "psse").unwrap();
     let svc = &p.network.static_var_compensators()[0];
-    println!("RAW svc={svc:?}, warnings={:?}", p.render_diagnostics());
     assert!(svc.regulating_terminal.is_some());
     assert!(
         (svc.voltage_setpoint_kv - 117.3).abs() < 1e-10,
@@ -86,12 +85,6 @@ fn facts_terminal_is_attached_to_the_typed_compensator() {
     let p = parse(&source());
     let svc = &p.network.static_var_compensators()[0];
     let detailed = p.network.detailed_connectivity().as_ref().unwrap();
-    println!(
-        "svc uid {:?}; terminals {:?}; warnings {:?}",
-        svc.uid,
-        detailed.terminals,
-        p.render_diagnostics()
-    );
     assert!(
         detailed
             .terminals
@@ -128,10 +121,7 @@ fn current_limit_projection_has_a_runtime_fidelity_diagnostic() {
     let p = parse(&s);
     let svc = &p.network.static_var_compensators()[0];
     let bound = svc.b_max_siemens * (230.0_f64 * 0.95).powi(2);
-    println!(
-        "typed Q max at .95 pu={bound} Mvar, STATCOM expected95; warnings {:?}",
-        p.render_diagnostics()
-    );
+    assert!((bound - 90.25).abs() < 1e-10);
     assert!(
         p.render_diagnostics()
             .iter()
@@ -171,18 +161,8 @@ fn rawx_facts_nreg_is_resolved_and_roundtrips() {
         .truncate(1);
     let p = parse(&s);
     let svc = &p.network.static_var_compensators()[0];
-    println!(
-        "RAWX regulating terminal {:?}; read diagnostics {:?}",
-        svc.regulating_terminal,
-        p.render_diagnostics()
-    );
     let out = helpers::emit_value(&p.network, TargetFormat::PsseRawx).unwrap();
     let root: Value = serde_json::from_str(&out.text).unwrap();
-    println!(
-        "written nreg={}, diagnostics={:?}",
-        field(&root, "facts", 0, "nreg"),
-        out.render_diagnostics()
-    );
     assert!(
         svc.regulating_terminal.is_some(),
         "valid FACTS NREG ignored without a diagnostic"
