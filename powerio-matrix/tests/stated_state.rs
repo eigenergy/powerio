@@ -497,7 +497,7 @@ fn an_lcc_converter_record_draws_its_bridge_reactive_power() {
     let model = calc_stated_state_mismatch(&net, &StatedStateOptions::default()).unwrap();
     let stated = calc_stated_state_mismatch(&net, &stated_lcc_q()).unwrap();
     assert_eq!(model, stated);
-    assert!(model.diagnostics.is_empty());
+    assert_eq!(model.diagnostics, []);
 
     // With a PSS/E two-terminal record, the bridge reactive demand replaces
     // each end's terminal reactive power, positive from the bus into the
@@ -521,7 +521,7 @@ fn an_lcc_converter_record_draws_its_bridge_reactive_power() {
 
     let model = calc_stated_state_mismatch(&net, &StatedStateOptions::default()).unwrap();
     let stated = calc_stated_state_mismatch(&net, &stated_lcc_q()).unwrap();
-    assert!(model.diagnostics.is_empty());
+    assert_eq!(model.diagnostics, []);
     // A mismatch is drawn minus injected, so a larger injection lowers it.
     let (from, to) = (row_of(&model, 3), row_of(&model, 7));
     let shift = |row: usize| model.buses[row].q_mvar - stated.buses[row].q_mvar;
@@ -565,7 +565,7 @@ fn an_lcc_record_at_a_negative_power_factor_keeps_the_stated_reactive_power() {
     assert_eq!(warning.code(), "BUILD.STATED_STATE.LCC_MODEL_UNAVAILABLE");
     assert!(warning.message().contains("row 0"), "{}", warning.message());
     // Asking for the stated powers is not a fallback.
-    assert!(stated.diagnostics.is_empty());
+    assert_eq!(stated.diagnostics, []);
 }
 
 /// Without the line the stored voltages still need its injection, so under
