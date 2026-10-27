@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- C ABI 7 adds island and DC sensitivity entry points, so bindings call the
+  Rust routines instead of reimplementing them. `pio_balanced_network_islands`
+  returns a `PioIslands` handle over `BalancedNetwork::calc_islands`: per
+  island (`pio_islands_at`, `PioIslandView`) its bus positions and ids, its
+  reference buses, its in-service generators and HVDC ties, and whether it is
+  supplied, plus the buses typed isolated. `pio_calc_sensitivities` returns a
+  `PioSensitivities` handle over `calc_ptdf_lodf_with_options`, the routine
+  the Python binding calls, with the formula and solver (`auto`, `dense`,
+  `sparse`) as options: the dense row-major PTDF (branches by buses, every
+  reference bus grounded and its column zero) and LODF, the bus and branch
+  axes, the reference bus positions, and the solver path. Only additions; the
+  ABI stays 7.
+
 - Distribution CIM opens switches with disconnected terminals and refuses
   inactive/disconnected non-switch equipment and unsupported delta compensators,
   instead of constructing an energized or phase-to-ground equivalent (#687).
