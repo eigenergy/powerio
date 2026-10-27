@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Format discovery names the distribution CIM release and profile: the
+  `cim-dist` entry of `powerio::grid_formats()` is labeled
+  "CIM distribution (CIM100 cim17v40, GridAPPS-D profile)" instead of
+  "CIM distribution". The distribution guide gains a status note listing
+  the CIM release, the profile, the validation that runs, and what is not
+  mapped yet.
+
 - The conversion matrix grades each cell by its worst finding: exact,
   lossless, restated (the target required a value and the writer supplied
   it), approximate, dropped, or failed. The PR comment shows that level, the
