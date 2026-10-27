@@ -500,7 +500,7 @@ fn parse_to_network(
 }
 
 /// The retained primary buffer of a file or in-memory source.
-fn primary(source: &powerio_core::Source) -> crate::Result<powerio_core::SourceBuffer> {
+pub(crate) fn primary(source: &powerio_core::Source) -> crate::Result<powerio_core::SourceBuffer> {
     source
         .primary_buffer()
         .map_err(|error| crate::Error::FormatRead {
@@ -512,7 +512,7 @@ fn primary(source: &powerio_core::Source) -> crate::Result<powerio_core::SourceB
 /// The buffer's decode slice as UTF-8 text: the retained bytes with a leading
 /// byte order mark skipped, so the mark survives for the echo and never
 /// reaches a reader.
-fn source_text(buffer: &powerio_core::SourceBuffer) -> crate::Result<&str> {
+pub(crate) fn source_text(buffer: &powerio_core::SourceBuffer) -> crate::Result<&str> {
     std::str::from_utf8(buffer.content_bytes()).map_err(|e| crate::Error::FormatRead {
         format: "case text",
         message: format!("not valid UTF-8: {e}"),

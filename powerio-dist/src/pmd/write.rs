@@ -30,9 +30,15 @@ use crate::model::{
 /// Never in practice: the document is maps, strings, finite numbers, and
 /// nulls, which always serialize.
 pub(crate) fn emit_pmd_json_text(net: &MulticonductorNetwork) -> TextEmission {
+    let retained = retained_sections(net);
     let mut w = Writer {
         warnings: crate::diagnostics::Diagnostics::new(),
         renamed_terminals: renamed_terminals(net),
+        time_series: retained
+            .get("time_series")
+            .map(|items| items.keys().cloned().collect())
+            .unwrap_or_default(),
+        retained,
     };
     for source in net
         .sources()
@@ -68,6 +74,35 @@ struct Writer {
     warnings: crate::diagnostics::Diagnostics,
     /// One id per terminal name that is not numeric, for the whole network.
     renamed_terminals: BTreeMap<String, i64>,
+    /// ENGINEERING sections the PMD reader kept untyped (`time_series`, say),
+    /// by section and then by name, as the source stated them.
+    retained: BTreeMap<String, Map<String, Value>>,
+    /// The names of the time series the output carries, so a component's
+    /// `time_series` references are emitted only when they resolve.
+    time_series: BTreeSet<String>,
+}
+
+/// The sections the PMD reader kept untyped, decoded back to JSON. Only a
+/// network read from PMD JSON carries them: there an untyped object is one
+/// ENGINEERING component whose single unnamed property is the component's
+/// JSON text. Untyped objects from other formats (an OpenDSS `loadshape`)
+/// have no ENGINEERING form and stay out.
+fn retained_sections(net: &MulticonductorNetwork) -> BTreeMap<String, Map<String, Value>> {
+    let mut sections: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
+    if *net.source_format() != Some(crate::model::DistSourceFormat::PmdJson) {
+        return sections;
+    }
+    for u in net.untyped_objects() {
+        if let [(None, text)] = u.props.as_slice()
+            && let Ok(value) = serde_json::from_str::<Value>(text)
+        {
+            sections
+                .entry(u.class.clone())
+                .or_default()
+                .insert(u.name.clone(), value);
+        }
+    }
+    sections
 }
 
 /// One id for each terminal name in the network that PMD cannot spell.
@@ -297,13 +332,43 @@ impl Writer {
     /// BMOPF subtype marker pass silently.
     fn extras_dropped(&mut self, extras: &crate::model::Extras, consumed: &[&str], what: &str) {
         for key in extras.keys() {
-            if consumed.contains(&key.as_str()) || key.starts_with("pmd_") || key == "bmopf_subtype"
+            // `time_series` is reported by `time_series_refs`.
+            if consumed.contains(&key.as_str())
+                || key.starts_with("pmd_")
+                || key == "bmopf_subtype"
+                || key == "time_series"
             {
                 continue;
             }
             self.warn(
                 &C::EMIT_PMD_FIELD_DROPPED,
                 format!("{what}: `{key}` has no ENGINEERING field; dropped from the output"),
+            );
+        }
+    }
+
+    /// A component's ENGINEERING `time_series` field, which maps a component
+    /// field to the name of a document level time series. It is emitted when
+    /// every name it references is a time series the output carries, and
+    /// reported as dropped otherwise, since PMD rejects a dangling reference.
+    fn time_series_refs(&mut self, extras: &Extras, o: &mut Map<String, Value>, what: &str) {
+        let Some(refs) = extras.get("time_series") else {
+            return;
+        };
+        let resolves = refs.as_object().is_some_and(|fields| {
+            fields
+                .values()
+                .all(|name| name.as_str().is_some_and(|n| self.time_series.contains(n)))
+        });
+        if resolves {
+            o.insert("time_series".into(), refs.clone());
+        } else {
+            self.warn(
+                &C::EMIT_PMD_FIELD_DROPPED,
+                format!(
+                    "{what}: `time_series` references a time series the output does not \
+                     carry; dropped from the output"
+                ),
             );
         }
     }
@@ -502,13 +567,60 @@ impl Writer {
         self.transformers(net, &mut doc);
 
         for u in net.untyped_objects() {
-            self.warn(
-                &C::EMIT_PMD_RECORD_DROPPED,
-                format!(
-                    "{} {}: class is not converted to ENGINEERING; dropped from the output",
-                    u.class, u.name
-                ),
-            );
+            let retained = self
+                .retained
+                .get(&u.class)
+                .is_some_and(|items| items.contains_key(&u.name));
+            if !retained {
+                self.warn(
+                    &C::EMIT_PMD_RECORD_DROPPED,
+                    format!(
+                        "{} {}: class is not converted to ENGINEERING; dropped from the output",
+                        u.class, u.name
+                    ),
+                );
+            }
+        }
+        for (class, items) in std::mem::take(&mut self.retained) {
+            match doc.get_mut(&class) {
+                None => {
+                    doc.insert(class, Value::Object(items));
+                }
+                Some(Value::Object(section)) => {
+                    for (name, value) in items {
+                        if section.contains_key(&name) {
+                            self.warn(
+                                &C::EMIT_PMD_RECORD_DROPPED,
+                                format!(
+                                    "{class} {name}: the typed component of the same name \
+                                     takes its place; the retained one is dropped"
+                                ),
+                            );
+                        } else {
+                            section.insert(name, value);
+                        }
+                    }
+                }
+                Some(_) => {
+                    for name in items.keys() {
+                        self.warn(
+                            &C::EMIT_PMD_RECORD_DROPPED,
+                            format!(
+                                "{class} {name}: `{class}` is not a component section in the \
+                                 output; dropped"
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+        // Top level values the reader kept (PMD's `time_elapsed`, say).
+        if let Some(Value::Object(top_level)) = net.extras().get("pmd_top_level") {
+            for (key, value) in top_level {
+                if !doc.contains_key(key) {
+                    doc.insert(key.clone(), value.clone());
+                }
+            }
         }
         Value::Object(doc)
     }
@@ -610,6 +722,7 @@ impl Writer {
                     "source_id".into(),
                     json!(format!("line.{}", l.name.to_lowercase())),
                 );
+                self.time_series_refs(&l.extras, &mut o, &what);
                 self.extras_dropped(&l.extras, &["units"], &what);
                 lines.insert(l.name.to_lowercase(), Value::Object(o));
             }
@@ -667,6 +780,7 @@ impl Writer {
                     "source_id".into(),
                     json!(format!("line.{}", s.name.to_lowercase())),
                 );
+                self.time_series_refs(&s.extras, &mut o, &what);
                 self.extras_dropped(&s.extras, &[], &what);
                 switches.insert(s.name.to_lowercase(), Value::Object(o));
             }
@@ -771,6 +885,7 @@ impl Writer {
                     "source_id".into(),
                     json!(format!("load.{}", l.name.to_lowercase())),
                 );
+                self.time_series_refs(&l.extras, &mut o, &what);
                 self.extras_dropped(&l.extras, &["kv", "model", "pf"], &what);
                 loads.insert(l.name.to_lowercase(), Value::Object(o));
             }
@@ -835,6 +950,7 @@ impl Writer {
                     "source_id".into(),
                     json!(format!("generator.{}", g.name.to_lowercase())),
                 );
+                self.time_series_refs(&g.extras, &mut o, &what);
                 self.extras_dropped(&g.extras, &["kv"], &what);
                 gens.insert(g.name.to_lowercase(), Value::Object(o));
             }
@@ -877,6 +993,7 @@ impl Writer {
                         "source_id".into(),
                         json!(format!("capacitor.{}", c.name.to_lowercase())),
                     );
+                    self.time_series_refs(&c.extras, &mut o, &what);
                     self.extras_dropped(&c.extras, &[], &what);
                     capacitor_shunts.insert(c.name.to_lowercase(), Value::Object(o));
                 }
@@ -916,6 +1033,7 @@ impl Writer {
                     "source_id".into(),
                     json!(format!("capacitor.{}", s.name.to_lowercase())),
                 );
+                self.time_series_refs(&s.extras, &mut o, &what);
                 self.extras_dropped(&s.extras, &["kv", "kvar", "conn"], &what);
                 shunts.insert(s.name.to_lowercase(), Value::Object(o));
             }
@@ -967,6 +1085,7 @@ impl Writer {
         );
         // Nominal voltage and power bases are used by synthesized_settings.
         // Short-circuit hints cannot override the typed ideal constraint.
+        self.time_series_refs(&vs.extras, &mut o, &what);
         self.extras_dropped(
             &vs.extras,
             &[
@@ -1116,6 +1235,7 @@ impl Writer {
         if explicit_shunt.is_some() {
             allowed.push("no_load_shunt");
         }
+        self.time_series_refs(&t.extras, o, what);
         self.extras_dropped(&t.extras, &allowed, what);
     }
 }

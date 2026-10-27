@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- PowerModelsDistribution engineering JSON written by PMD's `print_file`
+  after `make_multinetwork` (one network per time step under `nw`) no longer
+  parses to an empty network with no buses, lines, or loads (#646).
+  `parse` now returns a `TimeSeries<MulticonductorNetwork>` with every
+  component of every step, ordered by `mn_lookup` time, labeled by the `nw`
+  key, and with each step's `time_elapsed` as its duration; the single
+  network reader refuses such a document with a message saying so. The PMD
+  writer now writes back the `time_series` section and each component's
+  `time_series` references instead of dropping them with a warning, and a
+  top level value the reader does not type (such as `time_elapsed`) is kept
+  and reported instead of ignored. PMD's stock `case3_balanced`, as PMD
+  writes it, is now a test fixture in both forms.
 - The conversion matrix grades each cell by its worst finding: exact,
   lossless, restated (the target required a value and the writer supplied
   it), approximate, dropped, or failed. The PR comment shows that level, the

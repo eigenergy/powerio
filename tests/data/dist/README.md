@@ -94,6 +94,27 @@ commit 87dc18b0) via the committed oracle:
 way. PMD's `parse_file` ran with `kron_reduce=false`; `print_file` wrote the
 dict. Regenerate with the same command when bumping the PMD version.
 
+`case3_balanced.json` and `case3_balanced_multinetwork.json` reproduce issue
+#646. Both come from `test/data/opendss/case3_balanced.dss` as shipped in the
+PowerModelsDistribution v0.16.0 package (JSON.jl 0.21.4, Julia 1.13.1), read
+with PMD's defaults:
+
+```julia
+using PowerModelsDistribution
+eng = parse_file(joinpath(pkgdir(PowerModelsDistribution),
+    "test/data/opendss/case3_balanced.dss"); data_model=ENGINEERING)
+print_file("case3_balanced.json", eng)
+# The multinetwork file keeps the first two points of the load shape.
+ts = eng["time_series"]["ls1"]
+ts["values"] = ts["values"][1:2]; ts["time"] = ts["time"][1:2]
+print_file("case3_balanced_multinetwork.json", make_multinetwork(eng))
+```
+
+One edit follows `print_file` in each: the `files` entry, an absolute path
+into the local Julia depot, is replaced with the package relative
+`test/data/opendss/case3_balanced.dss`. `case3_balanced.json` is 509 lines,
+8,283 bytes; `case3_balanced_multinetwork.json` is 994 lines, 20,121 bytes.
+
 ## Licensing
 
 Each directory carries its own license file next to the data it covers:

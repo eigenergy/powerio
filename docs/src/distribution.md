@@ -78,6 +78,16 @@ distinct tagged models; readers without a configuration reject it. Canonical DSS
 writes the typed exponents and voltage limits ahead of stale extras or writer
 defaults. Unequal per-branch parameters emit separate single-phase loads.
 
+PowerModelsDistribution engineering JSON imports every component section the
+typed model has a slot for. Its `time_series` section has none: the series
+stay in the `untyped` table with a diagnostic, and a fresh PMD write restores
+them together with each component's `time_series` references. A multinetwork
+document, the output of PMD's `make_multinetwork` with one network per time
+step under `nw`, parses to `PioModule{TimeSeries{MulticonductorNetwork}}`,
+one network per step in `mn_lookup` time order. Each time point is labeled by
+its `nw` key and carries the step's `time_elapsed` as its duration. Reading
+such a document as a single network is refused with a message saying so.
+
 BMOPF and PMD project voltage-bounded loads to their nominal laws with a
 diagnostic; PMD also diagnoses its lack of exponential load fields. The
 multiconductor IVR OPF and LinDist3Flow preparations refuse these loads by
