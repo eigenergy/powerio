@@ -28,6 +28,14 @@
   the existing `--merge-buses SPEC`, such as `switches` or `exact`), and
   Python as `BalancedNetwork.calc_stated_state_mismatch` and
   `BalancedNetwork.calc_stated_branch_flows`.
+- Distribution CIM tank imports refuse unsupported phase clocks and inactive
+  or disconnected tank/parent/end states. Fresh tank output writes standard
+  impedance magnitudes and clocks derived from the current winding layout;
+  producer-specific X-in-magnitude inputs require prior normalization (#680).
+  The `PowerTransformerEnd` form now reads `phaseAngleClock` and refuses the
+  same clocks as the tank form. A three-winding tank whose load losses leave
+  a pair unstated, or split to a negative winding resistance, reads zero
+  winding resistance with a diagnostic instead of a negative one.
 
 - Distribution CIM opens switches with disconnected terminals and refuses
   inactive/disconnected non-switch equipment and unsupported delta compensators,
@@ -392,12 +400,25 @@
   sequence impedance, loads, linear shunt compensators with their sections,
   switches, transformers of any winding count with mesh impedances and ratio
   tap changer positions, and energy sources with their series impedance.
-  What it does not map yet (the transformer tank form, controls, distributed
-  energy resources, wire geometry, limits) is reported through
+  What it does not map yet (controls, distributed energy resources, wire
+  geometry, limits) is reported through
   `READ.CIM_DIST.*` codes, and the writer reports what CIM cannot state
   through `EMIT.CIM_DIST.*` codes. Same format emission returns the retained
   bytes of a single document; canonical output carries UUIDv5 mRIDs and is
   byte stable from write to read to write.
+
+- The CIM reader maps the transformer tank form that GridAPPS-D and CIMHub
+  feeders use for single phase, center tap, and regulator banks: each
+  `TransformerTank` becomes one transformer, with ratings, resistances, and
+  short circuit reactances from its `TransformerTankInfo` catalog entry
+  (`TransformerEndInfo`, `ShortCircuitTest`, whose `leakageImpedance` is read
+  as the standard magnitude after resolving winding resistance), taps from tap
+  changers on its ends, and `NoLoadTest` data in the `%noloadloss` and `%imag` extras the
+  dss, PMD, and BMOPF writers read. A `TransformerCoreAdmittance` on the
+  `PowerTransformerEnd` form gives the same extras. The writer writes tanks
+  read from CIM back as tanks, grouped under their `PowerTransformer` with
+  shared catalog entries; other transformers keep the `PowerTransformerEnd`
+  form.
 
 - A CIM line segment whose impedance the reader cannot read, for example one
   described only by wire spacing and wire data, parses with an error finding,

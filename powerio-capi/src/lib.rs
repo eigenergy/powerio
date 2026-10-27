@@ -20874,6 +20874,36 @@ mod tests {
     }
 
     #[test]
+    fn distribution_cim_reads_the_transformer_tank_form() {
+        unsafe {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/data/dist/cim/tank_feeder.xml");
+            let path = path.to_string_lossy();
+            let format = b"cim-dist";
+            let mut error = std::ptr::null_mut();
+            let source = pio_source_open(path.as_ptr().cast(), path.len(), &mut error);
+            assert!(!source.is_null(), "{}", error_text(error));
+            let module = pio_parse(source, format.as_ptr().cast(), format.len(), &mut error);
+            pio_source_release(source);
+            assert!(!module.is_null(), "{}", error_text(error));
+            let value = pio_module_value(module);
+            let network = pio_value_multiconductor_network(value, &mut error);
+            assert!(!network.is_null(), "{}", error_text(error));
+            let mut counts = std::mem::MaybeUninit::<PioMulticonductorNetworkCountsView>::uninit();
+            assert!(pio_multiconductor_network_counts(
+                network,
+                counts.as_mut_ptr(),
+                &mut error,
+            ));
+            // Eight tanks and one PowerTransformerEnd transformer.
+            assert_eq!(counts.assume_init().transformers, 9);
+            pio_multiconductor_network_release(network);
+            pio_value_release(value);
+            pio_module_release(module);
+        }
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn multiconductor_typed_views_preserve_ownership_and_optional_values() {
         unsafe {
