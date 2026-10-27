@@ -127,6 +127,13 @@ calculated-bus records so fresh XIIDM emission preserves the selected buses.
 The older selector-based `subset` shares this filtering but still returns a
 network directly.
 
+To keep row indices fixed instead, `keep_island(&buses)` works in place: it
+de-energizes every other bus not already typed isolated and returns those
+buses, so the equipment outside the island stays in its table, out of
+service. `de_energize_buses(&buses)` is the step it builds on, the same one
+`assign_island_references` applies to an island with no source; it also takes
+the generators at those buses out of service.
+
 A power flow needs one reference bus per island, and an island with no source
 cannot be solved. `assign_island_references` with the per island policy gives
 each island exactly one:

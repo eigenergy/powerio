@@ -11,4 +11,4 @@
 pub(crate) mod read;
 mod write;
 
-pub(crate) use write::{emit_pmd_json_text, thevenin};
+pub(crate) use write::emit_pmd_json_text;

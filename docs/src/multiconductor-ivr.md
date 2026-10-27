@@ -52,6 +52,25 @@ conductors, shunts, capacitor matrices, and ideal switches/sources. Currents
 remain explicit at exact-zero or singular impedance. There is no neutral
 reduction, impedance inversion, epsilon impedance, or ideal-switch contraction.
 
+Voltage-bounded ZIP, exponential and constant-power laws, including those read
+from ordinary OpenDSS loads, remain intact in the network and PF/OPF instance.
+The current IVR preparation profile refuses them explicitly because its power-law
+terms cannot represent their piecewise transitions, dropout or current limits.
+It does not silently approximate them by their nominal laws.
+
+A caller that accepts that approximation opts in explicitly:
+`McAcOpfAssemblyOptions::with_bounded_load_laws(BoundedLoadLawPolicy::ProjectToNominal)`
+replaces each bounded law by its nominal (middle-band) law. The low-voltage
+transitions, high-voltage continuation and dropout are then not modeled. The
+preparation lists one `McOpfLoadLawProjection` per load in
+`load_law_projections`, and `McAcOpfPreparation::diagnostics()` returns one
+`BUILD.MULTI.LOAD_LAW_PROJECTED` warning for each. The default,
+`BoundedLoadLawPolicy::Refuse`, is unchanged. Ordinary OpenDSS feeders, whose
+default `model=1` loads read as bounded laws, need this opt-in to reach OPF
+preparation. LinDist3Flow has the same choice through its `unsupported` policy:
+`reject` and `lower` refuse these loads, while `approximate` and `permissive`
+project them and record a `load_approximated` preparation action.
+
 Supported devices include WYE/DELTA/two-terminal P/I/Z/ZIP/exponential loads,
 generator capability and linear dispatch cost, single-phase/center-tapped/Yd/Dy
 and fixed n-winding transformers, type-A/B regulators, and supported open-delta

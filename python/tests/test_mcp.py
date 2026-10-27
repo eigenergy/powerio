@@ -616,3 +616,21 @@ def test_display_requires_a_regular_file_within_the_primary_limit(
         os.mkfifo(fifo)
         with pytest.raises(ValueError, match="regular file"):
             server.display(str(fifo))
+
+
+def test_coded_error_encodes_typed_and_legacy_diagnostics():
+    with pytest.raises(powerio.PowerIOError) as caught:
+        powerio.parse(io.StringIO(""), format="no-such-format")
+    native = caught.value
+    message = str(server._coded_error("PowerIO input", native))
+    assert "REQUEST.FORMAT.UNKNOWN" in message
+    records = json.loads(message.split(" | ", 1)[1])
+    assert records[0]["code"] == "REQUEST.FORMAT.UNKNOWN"
+    assert records[0]["severity"] == "error"
+
+    legacy = ValueError("projection refused")
+    legacy.diagnostics = records
+    assert (
+        json.loads(str(server._coded_error("projection", legacy)).split(" | ", 1)[1])
+        == records
+    )

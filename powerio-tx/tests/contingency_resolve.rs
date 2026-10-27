@@ -8,13 +8,13 @@ mod helpers;
 use common::*;
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use powerio_core::ComponentId;
 use powerio_tx::network::BalancedNetwork;
 use powerio_tx::{
     BusId, ContingencyResolution, ContingencySet, PsseEquipmentIndex, ResolvedCase,
-    ResolvedComponent, UnresolvedReason,
+    ResolvedComponent, SharedPsseEquipmentIndex, UnresolvedReason,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -384,6 +384,96 @@ fn the_index_is_reusable_across_sets() {
     let set = resolve_cases();
     assert_eq!(set.resolve_with(&index), set.resolve(&net));
     assert_eq!(index.network().buses().len(), net.buses().len());
+}
+
+/// A network kept with an index built on first use, the way a caller holding
+/// one network across many resolutions keeps it.
+struct PreparedNetwork {
+    net: Arc<BalancedNetwork>,
+    index: OnceLock<SharedPsseEquipmentIndex>,
+}
+
+impl PreparedNetwork {
+    fn new(net: BalancedNetwork) -> Self {
+        Self {
+            net: Arc::new(net),
+            index: OnceLock::new(),
+        }
+    }
+
+    fn index(&self) -> &SharedPsseEquipmentIndex {
+        self.index
+            .get_or_init(|| SharedPsseEquipmentIndex::new(Arc::clone(&self.net)))
+    }
+}
+
+#[test]
+fn a_shared_index_kept_in_a_once_lock_resolves_like_the_borrowed_one() {
+    fn assert_send_sync<T: Send + Sync + 'static>() {}
+    assert_send_sync::<PreparedNetwork>();
+
+    let raws = [
+        "resolve_v33.raw",
+        "select_v33.raw",
+        "../case14.raw",
+        "../case3_3w_v33.raw",
+    ];
+    let lists = [
+        "automatic_skip.con",
+        "expand.con",
+        "explicit_mixed.con",
+        "no_file_end.con",
+        "psse35_generated.con",
+        "resolve_cases.con",
+        "tara_extensions.con",
+    ];
+    for raw in raws {
+        let prepared = PreparedNetwork::new(
+            helpers::parse_file(fixture(raw), Some("psse"))
+                .unwrap_or_else(|e| panic!("parse {raw}: {e}"))
+                .network,
+        );
+        // Built once: every later read returns the same index.
+        assert!(std::ptr::eq(prepared.index(), prepared.index()));
+        let shared = prepared.index();
+        assert!(Arc::ptr_eq(shared.network(), &prepared.net));
+        assert!(std::ptr::eq(
+            shared.index().network(),
+            Arc::as_ptr(&prepared.net)
+        ));
+
+        let borrowed = PsseEquipmentIndex::new(&prepared.net);
+        assert_eq!(shared.index().machine_ids(), borrowed.machine_ids());
+        assert_eq!(shared.index().circuit_ids(), borrowed.circuit_ids());
+        assert_eq!(shared.index().switch_ids(), borrowed.switch_ids());
+        assert_eq!(
+            shared.index().transformer_3w_ids(),
+            borrowed.transformer_3w_ids()
+        );
+        for list in lists {
+            let text = std::fs::read_to_string(fixture(list)).expect("read fixture");
+            let set = ContingencySet::parse(&text).expect("parse fixture").set;
+            let expected = set.resolve(&prepared.net);
+            assert_eq!(
+                set.resolve_with(&shared.index()),
+                expected,
+                "{list} on {raw}"
+            );
+            assert_eq!(set.resolve_with(&borrowed), expected, "{list} on {raw}");
+        }
+    }
+}
+
+#[test]
+fn a_shared_index_can_own_its_network() {
+    let net = resolve_network();
+    let set = resolve_cases();
+    let expected = set.resolve(&net);
+    let shared = SharedPsseEquipmentIndex::new(net);
+    assert_eq!(set.resolve_with(&shared.index()), expected);
+    let kept = shared.clone();
+    drop(shared);
+    assert_eq!(set.resolve_with(&kept.index()), expected);
 }
 
 #[test]

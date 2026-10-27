@@ -696,15 +696,18 @@ fn emit_multiconductor_network(
         return Err(unknown_format(format));
     };
     let typed = typed_sibling(module, network)?;
-    let retained_dss_project = target == powerio_dist::DistTargetFormat::Dss
-        && module
-            .source()
-            .and_then(powerio_core::Source::format)
-            .is_some_and(|source_format| {
-                powerio_dist::parse_dist_target_format(source_format.as_str()) == Some(target)
-            });
+    let retained_project = matches!(
+        target,
+        powerio_dist::DistTargetFormat::Dss
+            | powerio_dist::DistTargetFormat::Gridlabd
+            | powerio_dist::DistTargetFormat::GridlabdArras
+    ) && module
+        .source()
+        .and_then(powerio_core::Source::format)
+        .and_then(|id| powerio_dist::parse_dist_target_format(id.as_str()))
+        == Some(target);
     let typed = if preserve_retained_source
-        && (retained_dss_project || retained_source_matches_case_format(module, format))
+        && (retained_project || retained_source_matches_case_format(module, format))
     {
         typed
     } else {

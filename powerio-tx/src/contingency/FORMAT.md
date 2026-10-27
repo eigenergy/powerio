@@ -532,7 +532,9 @@ one per line as `{i:>6} {j:>6} {ckt}`, then the block's kept lines, before its
 `MonitoredResolution`, whose rows are positions in the network's tables. A
 caller binding several files to one network builds one `PsseEquipmentIndex` and
 calls `MonitoredSet::resolve_with` and `ContingencySet::expand_with`, which read
-the network the index borrows.
+the network the index borrows. A caller that keeps the index beside the network
+builds a `SharedPsseEquipmentIndex` from an `Arc<BalancedNetwork>` once and
+passes `shared.index()` to the same entry points.
 
 | Statement | Binds to |
 | --- | --- |

@@ -317,6 +317,20 @@ over the handle as `pio_dc_operators_incidence_matrix`,
 `pio_dc_operators_branch_flow_dc`, and `pio_dc_operators_bus_injection_dc`;
 release the handle with `pio_dc_operators_release`.
 
+
+Distribution loads with voltage bands, dropout or current limits use
+`pio_multiconductor_network_load_details_at`. Its borrowed voltage-law view
+keeps nominal voltages, ZIP fractions or exponents, and every transition bound.
+Presence flags distinguish absent bounds from zero. The existing load view
+keeps its ABI 7 layout and rejects laws it cannot describe.
+
+`pio_mc_ac_pf_instance_load_details_at` returns prescribed power arrays and the
+same complete law. `pio_mc_ac_pf_instance_load_terminal_name_at` reads the full
+terminal map; power channels can have fewer entries than that map when it
+includes a reference conductor. Keep the network or instance handle alive while
+using any borrowed string or numeric array. These accessors do not serialize or
+clone the network.
+
 `pio_balanced_network_islands` partitions a balanced network into AC islands
 with the Rust `calc_islands` rule and returns a `PioIslands` handle.
 `pio_islands_count` and `pio_islands_at` read one `PioIslandView` per island,
