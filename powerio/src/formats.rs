@@ -74,7 +74,12 @@ pub fn grid_formats() -> impl Iterator<Item = GridFormatInfo> {
         ),
         ("dss", "OpenDSS", Distribution, true),
         ("gridlabd", "GridLAB-D (PNNL GLM)", Distribution, true),
-        ("gridlabd-arras", "GridLAB-D (Arras GLM)", Distribution, true),
+        (
+            "gridlabd-arras",
+            "GridLAB-D (Arras GLM)",
+            Distribution,
+            true,
+        ),
         ("cim-dist", "CIM distribution", Distribution, true),
         ("pmd-json", "PMD JSON", Distribution, true),
         (
