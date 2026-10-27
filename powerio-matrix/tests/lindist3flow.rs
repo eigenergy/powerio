@@ -472,6 +472,24 @@ fn opendss_lindist_oracle_fixture() -> (MulticonductorNetwork, serde_json::Value
 }
 
 #[test]
+fn bounded_load_laws_are_refused_until_the_approximate_policy() {
+    use powerio_prob::LinDist3FlowUnsupported as Policy;
+    let (network, _) = opendss_lindist_oracle_fixture();
+    let build = |policy| {
+        LinDist3FlowOpfInstance::from_network(
+            network.clone(),
+            LinDist3FlowBuildOptions::default()
+                .with_required_neutral_provenance(true)
+                .with_unsupported(policy),
+        )
+    };
+    // Reject and lower keep refusing the bounded law; approximate and
+    // permissive project it to the nominal law and record the action.
+    assert!(build(Policy::Reject).is_err() && build(Policy::Lower).is_err());
+    assert!(build(Policy::Approximate).is_ok() && build(Policy::Permissive).is_ok());
+}
+
+#[test]
 fn opendss_oracle_bounds_the_lossless_linear_voltage_approximation() {
     let (network, oracle) = opendss_lindist_oracle_fixture();
     // The native load retains its voltage band. Nominal linearization is an
@@ -483,19 +501,6 @@ fn opendss_oracle_bounds_the_lossless_linear_voltage_approximation() {
         )
         .is_err()
     );
-    // Reject and lower keep refusing the bounded law; approximate and
-    // permissive project it to the nominal law and record the action.
-    use powerio_prob::LinDist3FlowUnsupported as Policy;
-    let build = |policy| {
-        LinDist3FlowOpfInstance::from_network(
-            network.clone(),
-            LinDist3FlowBuildOptions::default()
-                .with_required_neutral_provenance(true)
-                .with_unsupported(policy),
-        )
-    };
-    assert!(build(Policy::Reject).is_err() && build(Policy::Lower).is_err());
-    assert!(build(Policy::Permissive).is_ok());
     let instance = LinDist3FlowOpfInstance::from_network(
         network.clone(),
         LinDist3FlowBuildOptions::default()
