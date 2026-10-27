@@ -32,6 +32,9 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Always builds the converter site that `build` deploys. Its Playwright
+  # browser suite runs on main and on pull requests that change the converter
+  # (see converter.yml).
   converter:
     uses: ./.github/workflows/converter.yml
 

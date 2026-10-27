@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 
 use super::lex::{Scanner, Value, VarMap};
 use super::prop::{self, DssClass};
+
+mod static_loads;
 use crate::diagnostics::codes as C;
 use crate::error::{Error, Result};
 
@@ -237,6 +239,20 @@ pub struct RawDss {
     pub commands: Vec<RawCommand>,
     pub buscoords: Vec<BusCoord>,
     pub vars: VarMap,
+    pub(super) absolute_dependency: bool,
+    pub(super) dependencies: Vec<powerio_core::SourceId>,
+    load_powers: BTreeMap<usize, super::load_power::LoadPower>,
+    load_shapes: BTreeMap<usize, super::loadshape::Shape>,
+    /// AutoTrans MakeLike copies derived winding state not reconstructed yet.
+    pub(super) autotrans_copies: std::collections::BTreeSet<String>,
+    /// Capacitor MakeLike copies connection and step state not reconstructed yet.
+    pub(super) capacitor_copies: std::collections::BTreeSet<String>,
+    /// Storage MakeLike copies hidden inverter state not reconstructed yet.
+    pub(super) storage_copies: std::collections::BTreeSet<String>,
+    /// Reactor MakeLike copies hidden specification state.
+    pub(super) reactor_copies: std::collections::BTreeSet<String>,
+    /// Generator MakeLike may copy hidden user-library state.
+    pub(super) generator_copies: std::collections::BTreeSet<String>,
     /// Bumped by `clear`, so `run_command` can tell whether a `Clear` ran
     /// during the command it just dispatched and, if so, skip restoring the
     /// pre-command var snapshot over the empty table `clear` installed.
@@ -249,9 +265,19 @@ pub struct RawDss {
     pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
     index: BTreeMap<(String, String), usize>,
     active: Option<usize>,
-    /// Properties retained across every object, charged by each push and
-    /// each `like=` splice against `MAX_TOTAL_PROPS`.
+    /// Properties, source resets, line copy/edit/calculation history and wildcard work,
+    /// charged against `MAX_TOTAL_PROPS`.
     total_props: usize,
+    // Source MakeLike copies resolved state, including flags/defaults that
+    // an appended property history alone cannot restore. Reset markers refer
+    // to offsets in the existing flattened history; no extra history tree.
+    source_replay: BTreeMap<usize, SourceReplay>,
+    pub(super) line_history: BTreeMap<usize, super::line_history::LineHistory>,
+    pub(super) geometry_timeline: Vec<super::geometry::timeline::Action>,
+    earth_model: Option<String>,
+    pub(super) geometry_earth: Option<std::result::Result<super::geometry::EarthModel, String>>,
+    frequency: super::frequency::FrequencyState,
+    solution_mode: super::solution_mode::SolutionMode,
     /// Diagnostic records retained, against `MAX_TOTAL_DIAGNOSTICS`. Survives
     /// `clear` with the channel it counts.
     total_diagnostics: usize,
@@ -264,7 +290,64 @@ pub struct RawDss {
     halted: bool,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct SourceReplay {
+    pub constructor_frequency: f64,
+    pub resets: Vec<(usize, f64)>,
+    // MakeLike re-enables the target independently of the copied property
+    // history. Wildcard Enable/Disable changes this without an engine Edit.
+    pub enabled: bool,
+    // Native object references bind during assignment, not after all objects
+    // have been declared. A later overwrite cannot erase an earlier failure.
+    pub invalid_reference: Option<String>,
+}
+
+impl SourceReplay {
+    fn record_property(&mut self, p: &RawProp) {
+        if p.name.as_deref() == Some("enabled") && !p.value.text.is_empty() {
+            // Native InterpretYesNo recognizes leading y/t only; numeric 1
+            // is false, unlike the legacy general Boolean helper.
+            self.enabled = matches!(p.value.text.as_bytes()[0].to_ascii_lowercase(), b'y' | b't');
+        }
+    }
+}
+
 impl RawDss {
+    pub(super) fn line_snapshot(&self, object: usize) -> super::line_history::Snapshot {
+        super::line_history::Snapshot {
+            object,
+            properties: self.objects[object].props.len(),
+            edits: self.objects[object].edits.len(),
+            copies: self.line_history[&object].copies.len(),
+            events: self.line_history[&object].events.len(),
+        }
+    }
+
+    fn option_assignment(&mut self, position: &mut usize, name: &str, value: &Value) {
+        self.frequency.assignment(position, name, value, &self.vars);
+        if *position == 81 {
+            self.earth_model = Some(value.text.clone());
+        }
+        if *position == 8 {
+            self.solution_mode.assign(&value.text);
+        }
+    }
+
+    pub(super) fn solution_mode(&self) -> &'static str {
+        self.solution_mode.name()
+    }
+
+    pub(super) fn unresolved_mode_transition(&self) -> Option<&'static str> {
+        self.solution_mode.unresolved_transition()
+    }
+
+    pub(super) fn snapshot_frequency(&self) -> f64 {
+        self.frequency.snapshot()
+    }
+    pub(super) fn source_replay(&self, object: &RawObject) -> &SourceReplay {
+        let index = self.index[&(object.class.clone(), object.name.to_ascii_lowercase())];
+        &self.source_replay[&index]
+    }
     pub fn find(&self, class: &str, name: &str) -> Option<&RawObject> {
         self.index
             .get(&(class.to_ascii_lowercase(), name.to_ascii_lowercase()))
@@ -329,6 +412,7 @@ impl RawDss {
     }
 
     fn clear(&mut self) {
+        let geometry_earth = Some(super::geometry::timeline::earth_before_clear(self));
         // `Clear` resets the circuit, not the record of how the script was
         // read. A warning or an `Error` finding already emitted describes input
         // the caller wrote, and no later command un-writes it — dropping them
@@ -341,10 +425,17 @@ impl RawDss {
         );
         let (total_diagnostics, halted) = (self.total_diagnostics, self.halted);
         let vars_generation = self.vars_generation.wrapping_add(1);
+        let mut frequency = std::mem::take(&mut self.frequency);
+        frequency.clear();
+        let earth_model = self.earth_model.take();
         *self = RawDss {
+            absolute_dependency: self.absolute_dependency,
             vars_generation,
             warnings,
             diagnostics,
+            earth_model,
+            geometry_earth,
+            frequency,
             total_diagnostics,
             halted,
             ..RawDss::default()
@@ -355,6 +446,12 @@ impl RawDss {
 /// Supplies included file text, so tests can run without a filesystem.
 pub trait Loader {
     fn load(&mut self, path: &Path) -> std::io::Result<String>;
+
+    /// Binary profile data. Text-only test loaders retain their existing API;
+    /// filesystem/named-buffer acquisition overrides this without UTF-8 decoding.
+    fn load_bytes(&mut self, path: &Path) -> std::io::Result<Vec<u8>> {
+        self.load(path).map(String::into_bytes)
+    }
 }
 
 impl<F> Loader for F
@@ -556,8 +653,10 @@ impl<L: Loader> Executor<'_, L> {
         match command_index(&verb).map(|i| COMMANDS[i]) {
             Some("new") => self.do_new(scan, ctx),
             Some("edit") => self.do_edit(scan, ctx),
+            Some("batchedit") => self.do_batch_edit(scan, ctx),
             Some("more" | "m" | "~") => self.do_more(scan, ctx),
             Some("select") => self.do_select(scan, ctx),
+            Some(canonical @ ("open" | "close")) => self.do_terminal_state(canonical, scan, ctx),
             Some("set") => self.do_set(scan),
             Some("redirect") => self.do_redirect(scan, false, ctx),
             Some("compile") => self.do_redirect(scan, true, ctx),
@@ -565,12 +664,38 @@ impl<L: Loader> Executor<'_, L> {
             Some("setbusxy") => self.do_setbusxy(scan, ctx),
             Some("var") => self.do_var(scan, ctx),
             Some("clear" | "clearall") => self.raw.clear(),
+            Some("enable" | "disable") => self.do_enabled(&verb, scan, ctx),
             Some("//") => {}
             Some(canonical) => {
                 if self.raw.charge_preserved() {
+                    let args = scan.remainder().to_string();
+                    if canonical == "solve" {
+                        let mut position = 0;
+                        while let Some(p) = scan.next_param() {
+                            if p.value.text.is_empty() {
+                                break;
+                            }
+                            self.raw.option_assignment(
+                                &mut position,
+                                &p.name.unwrap_or_default().to_ascii_lowercase(),
+                                &p.value,
+                            );
+                        }
+                    }
+                    if matches!(
+                        canonical,
+                        "solve"
+                            | "_solvenocontrol"
+                            | "_solvedirect"
+                            | "_solvepflow"
+                            | "calcvoltagebases"
+                            | "buildy"
+                    ) {
+                        self.record_line_calculation(canonical == "buildy", ctx);
+                    }
                     self.raw.commands.push(RawCommand {
                         verb: canonical.to_string(),
-                        args: scan.remainder().to_string(),
+                        args,
                     });
                 }
             }
@@ -729,7 +854,7 @@ impl<L: Loader> Executor<'_, L> {
             &mut self.raw,
             ctx,
         ));
-        self.apply_props(idx, props, ctx);
+        self.apply_props(idx, props, scan.vars(), ctx);
     }
 
     fn do_new(&mut self, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
@@ -742,6 +867,8 @@ impl<L: Loader> Executor<'_, L> {
             // sourcebus etc.) stay implicit here so the reader can tell
             // written values from materialized defaults.
             self.raw.circuit_name = Some(name);
+            self.raw.frequency.new_circuit();
+            self.raw.solution_mode = super::solution_mode::SolutionMode::default();
             let idx = self.make_object("vsource", "source".into());
             self.consume_and_apply(idx, scan, ctx);
             return;
@@ -777,6 +904,126 @@ impl<L: Loader> Executor<'_, L> {
         self.consume_and_apply(idx, scan, ctx);
     }
 
+    fn batch_targets(&mut self, class: &str, ctx: &dyn Fn(String) -> String) -> Option<Vec<usize>> {
+        // Charge the selection scan, including objects in other classes, so
+        // repeated empty matches cannot evade the whole-script work bound.
+        let cost = self.raw.objects.len();
+        if self.raw.total_props.saturating_add(cost) > MAX_TOTAL_PROPS {
+            self.raw.halt(ctx(
+                "BatchEdit selection exceeds the whole-script work budget".into(),
+            ));
+            return None;
+        }
+        self.raw.total_props += cost;
+        Some(
+            self.raw
+                .objects
+                .iter()
+                .enumerate()
+                .filter(|(_, object)| object.class == class)
+                .map(|(i, _)| i)
+                .collect(),
+        )
+    }
+
+    fn do_batch_edit(&mut self, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
+        let Some((class, pattern)) = self.object_spec(scan, ctx) else {
+            self.raw.warn(
+                &C::READ_DSS_BATCH_UNRESOLVED,
+                ctx("BatchEdit requires Class.Pattern".into()),
+            );
+            return;
+        };
+        if class.eq_ignore_ascii_case("circuit") {
+            return; // Native BatchEdit deliberately ignores Circuit.
+        }
+        let class = class.to_ascii_lowercase();
+        let Some(table) = prop_table(&class) else {
+            self.raw.warn(
+                &C::READ_DSS_BATCH_UNRESOLVED,
+                ctx(format!("BatchEdit class {class} is not supported")),
+            );
+            return;
+        };
+        // The native regular expression searches names case-insensitively;
+        // it is not a shell glob and is not implicitly anchored. Unsupported
+        // backreferences/lookarounds fail explicitly rather than being skipped.
+        let Some(expression) = batch_expression(&pattern) else {
+            self.raw.warn(
+                &C::READ_DSS_BATCH_UNRESOLVED,
+                ctx("BatchEdit needs a supported ASCII regular expression".into()),
+            );
+            return;
+        };
+        let props = collect_props_for(Some(table), scan, None, &mut self.raw, ctx);
+        let Some(targets) = self.batch_targets(&class, ctx) else {
+            return;
+        };
+        let mut cursor = 0;
+        while let Some(&idx) = targets.get(cursor) {
+            if self.raw.halted {
+                return;
+            }
+            if self.raw.total_props >= MAX_TOTAL_PROPS {
+                self.raw.halt(ctx(
+                    "BatchEdit iterator exceeds the whole-script work budget".into(),
+                ));
+                return;
+            }
+            self.raw.total_props += 1;
+            cursor += 1;
+            if !self.raw.objects[idx].name.is_ascii() {
+                self.raw.warn(
+                    &C::READ_DSS_BATCH_UNRESOLVED,
+                    ctx("BatchEdit matching of non-ASCII object names is not qualified".into()),
+                );
+                return;
+            }
+            // Native First/Next selects every visited object, including the
+            // last unmatched name. A following continuation edits that object.
+            self.raw.active = Some(idx);
+            if expression.is_match(self.raw.objects[idx].name.as_bytes()) {
+                if self
+                    .raw
+                    .total_props
+                    .saturating_add(props.len())
+                    .saturating_add(1)
+                    > MAX_TOTAL_PROPS
+                    || self
+                        .retained_property_count(idx)
+                        .saturating_add(props.len())
+                        .saturating_add(1)
+                        > MAX_OBJECT_PROPS
+                {
+                    self.raw.halt(ctx(
+                        "BatchEdit assignments exceed the property/work budget".into()
+                    ));
+                    return;
+                }
+                self.apply_props(idx, props.clone(), scan.vars(), ctx);
+                // Native MakeLike locates the template through the same
+                // class iterator. Next resumes after that template, which
+                // can skip names or revisit earlier ones; visits stay bounded.
+                for property in props.iter().filter(|p| p.name.as_deref() == Some("like")) {
+                    if let Some(position) = self
+                        .raw
+                        .index
+                        .get(&(class.clone(), property.value.text.to_ascii_lowercase()))
+                        .and_then(|target| targets.binary_search(target).ok())
+                    {
+                        cursor = position + 1;
+                    } else {
+                        self.raw.warn(
+                            &C::READ_DSS_BATCH_UNRESOLVED,
+                            ctx("BatchEdit copy template does not exist".into()),
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     fn do_more(&mut self, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
         let Some(idx) = self.raw.active else {
             self.raw.warn(
@@ -786,6 +1033,110 @@ impl<L: Loader> Executor<'_, L> {
             return;
         };
         self.consume_and_apply(idx, scan, ctx);
+    }
+
+    fn do_terminal_state(
+        &mut self,
+        verb: &str,
+        scan: &mut Scanner,
+        ctx: &dyn Fn(String) -> String,
+    ) {
+        if !self.raw.charge_preserved() {
+            return;
+        }
+        self.raw.commands.push(RawCommand {
+            verb: verb.into(),
+            args: scan.remainder().into(),
+        });
+        let Some((class, name)) = self.object_spec(scan, ctx) else {
+            self.raw.warn(
+                &C::READ_DSS_LINE_UNRESOLVED,
+                ctx("terminal command requires an explicit element".into()),
+            );
+            return;
+        };
+        let key = (class.to_ascii_lowercase(), name.to_ascii_lowercase());
+        let diagnostic = if class.eq_ignore_ascii_case("transformer") {
+            &C::READ_DSS_TRANSFORMER_UNRESOLVED
+        } else {
+            &C::READ_DSS_LINE_UNRESOLVED
+        };
+        let Some(&idx) = self
+            .raw
+            .index
+            .get(&key)
+            .filter(|_| matches!(class.to_ascii_lowercase().as_str(), "line" | "transformer"))
+        else {
+            self.raw.warn(diagnostic, ctx(format!("{verb} {class}.{name}: terminal state requires an existing Line or Transformer; other classes remain unresolved")));
+            return;
+        };
+        // The native command consumes positional values even when they have
+        // parameter names. Bind the object now, not after later declarations.
+        let mut integer = || {
+            scan.next_param()
+                .map(|p| p.value.to_f64(Some(&self.raw.vars)))
+        };
+        let terminal = integer();
+        let conductor = integer();
+        let number = |v: Option<std::result::Result<f64, _>>, default: usize| -> Option<usize> {
+            match v {
+                None => Some(default),
+                Some(Ok(n)) if n.is_finite() && (0.0..=32.0).contains(&n) && n.fract() == 0.0 => {
+                    Some(n as usize)
+                }
+                _ => None,
+            }
+        };
+        let limit = if class.eq_ignore_ascii_case("line") {
+            2
+        } else {
+            32
+        };
+        let (Some(terminal), Some(conductor)) = (number(terminal, 0), number(conductor, 0)) else {
+            self.raw.warn(diagnostic, ctx(format!("{verb} {class}.{name}: explicit terminal and a nonnegative conductor index are required")));
+            return;
+        };
+        if terminal == 0 || terminal > limit {
+            self.raw.warn(
+                diagnostic,
+                ctx(format!(
+                    "{verb} {class}.{name}: terminal index is outside the supported range"
+                )),
+            );
+            return;
+        }
+        if self.raw.total_props >= MAX_TOTAL_PROPS
+            || self.retained_property_count(idx) >= MAX_OBJECT_PROPS
+        {
+            self.raw.halt(ctx(
+                "element terminal history exceeds the supported work budget".into(),
+            ));
+            return;
+        }
+        let event = super::line_history::Event {
+            position: self.raw.line_snapshot(idx),
+            frequency: self.raw.snapshot_frequency(),
+            rebuild_only: false,
+            terminal_state: Some((terminal, conductor, verb == "close")),
+        };
+        self.raw.total_props += 1;
+        self.raw
+            .line_history
+            .get_mut(&idx)
+            .unwrap()
+            .events
+            .push(event);
+        if class.eq_ignore_ascii_case("line") {
+            self.raw
+                .geometry_timeline
+                .push(super::geometry::timeline::Action::Terminal {
+                    object: idx,
+                    terminal,
+                    conductor,
+                    closed: verb == "close",
+                });
+        }
+        self.raw.active = Some(idx);
     }
 
     fn do_select(&mut self, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
@@ -803,14 +1154,149 @@ impl<L: Loader> Executor<'_, L> {
     }
 
     fn do_set(&mut self, scan: &mut Scanner) {
+        let mut position = 0;
         while let Some(p) = scan.next_param() {
             if p.value.text.is_empty() && p.name.is_none() {
                 break;
             }
             let name = p.name.unwrap_or_default().to_ascii_lowercase();
             if self.raw.charge_preserved() {
+                self.raw.option_assignment(&mut position, &name, &p.value);
                 self.raw.options.push((name, p.value));
             }
+        }
+    }
+
+    fn do_enabled(&mut self, verb: &str, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
+        let canonical = COMMANDS[command_index(verb).unwrap()];
+        if !self.raw.charge_preserved() {
+            return;
+        }
+        self.raw.commands.push(RawCommand {
+            verb: canonical.into(),
+            args: scan.remainder().into(),
+        });
+        let Some(parameter) = scan.next_param() else {
+            return;
+        };
+        if parameter
+            .name
+            .as_ref()
+            .is_some_and(|name| !"object".starts_with(&name.to_ascii_lowercase()))
+        {
+            self.raw.warn(
+                &C::PARSE_DSS_SOURCE_MALFORMED,
+                ctx("expected object=Class.Name".into()),
+            );
+            return;
+        }
+        let Some((class, name)) = parameter.value.text.split_once('.') else {
+            return; // Native Enable/Disable requires an explicit class.
+        };
+        if class.eq_ignore_ascii_case("fault") {
+            self.raw.warn(
+                &C::READ_DSS_FAULT_UNRESOLVED,
+                ctx(format!(
+                    "{canonical} Fault.{name}: switching state is not materialized"
+                )),
+            );
+            return;
+        }
+        if class.eq_ignore_ascii_case("line") {
+            self.do_line_enabled(name, canonical == "enable", ctx);
+            return;
+        }
+        if !class.eq_ignore_ascii_case("vsource") {
+            return; // Other equipment enable/disable histories remain unqualified.
+        }
+        let enabled = canonical == "enable";
+        if name == "*" {
+            // Native wildcard assignment does not select an object or invoke
+            // RecalcElementData. Charge each visited state to bound repeated
+            // wildcard work even though no property history is appended.
+            let count = self.raw.source_replay.len();
+            if self.raw.total_props.saturating_add(count) > MAX_TOTAL_PROPS {
+                self.raw
+                    .halt("source state assignments exceeded the whole parse budget".into());
+                return;
+            }
+            self.raw.total_props += count;
+            for replay in self.raw.source_replay.values_mut() {
+                replay.enabled = enabled;
+            }
+        } else if let Some(&idx) = self
+            .raw
+            .index
+            .get(&("vsource".into(), name.to_ascii_lowercase()))
+        {
+            self.apply_props(
+                idx,
+                vec![RawProp {
+                    name: Some("enabled".into()),
+                    value: Value::new(if enabled { "true" } else { "false" }),
+                }],
+                None,
+                ctx,
+            );
+        } else {
+            self.raw.warn(
+                &C::READ_DSS_REFERENCE_DROPPED,
+                ctx(format!("{canonical} names an unknown Vsource.{name}")),
+            );
+        }
+    }
+
+    fn do_line_enabled(&mut self, name: &str, enabled: bool, ctx: &dyn Fn(String) -> String) {
+        let targets: Vec<_> = if name == "*" {
+            self.raw
+                .line_history
+                .keys()
+                .copied()
+                .filter(|&idx| self.raw.objects[idx].class == "line")
+                .collect()
+        } else {
+            self.raw
+                .index
+                .get(&("line".into(), name.to_ascii_lowercase()))
+                .copied()
+                .into_iter()
+                .collect()
+        };
+        if targets.is_empty() && name != "*" {
+            self.raw.warn(
+                &C::READ_DSS_REFERENCE_DROPPED,
+                ctx(format!("enabled assignment names an unknown Line.{name}")),
+            );
+            return;
+        }
+        if self
+            .raw
+            .total_props
+            .saturating_add(targets.len().saturating_mul(2))
+            > MAX_TOTAL_PROPS
+            || targets
+                .iter()
+                .any(|&idx| self.retained_property_count(idx).saturating_add(2) > MAX_OBJECT_PROPS)
+        {
+            self.raw.halt(ctx(
+                "Line enabled assignments exceed the supported work budget".into(),
+            ));
+            return;
+        }
+        let active = self.raw.active;
+        for idx in targets {
+            self.apply_props(
+                idx,
+                vec![RawProp {
+                    name: Some("enabled".into()),
+                    value: Value::new(if enabled { "true" } else { "false" }),
+                }],
+                None,
+                ctx,
+            );
+        }
+        if name == "*" {
+            self.raw.active = active;
         }
     }
 
@@ -856,6 +1342,7 @@ impl<L: Loader> Executor<'_, L> {
         file_arg: &str,
         ctx: &dyn Fn(String) -> String,
     ) -> Option<PathBuf> {
+        self.raw.absolute_dependency |= Path::new(&file_arg.replace('\\', "/")).is_absolute();
         let resolved = self.resolve(file_arg);
         if resolved.is_none() {
             let message = ctx(format!(
@@ -1147,6 +1634,45 @@ impl<L: Loader> Executor<'_, L> {
             props: Vec::new(),
             edits: Vec::new(),
         });
+        if matches!(
+            self.raw.objects[idx].class.as_str(),
+            "line"
+                | "linecode"
+                | "wiredata"
+                | "cndata"
+                | "linegeometry"
+                | "linespacing"
+                | "xfmrcode"
+                | "transformer"
+        ) {
+            self.raw.line_history.insert(
+                idx,
+                super::line_history::LineHistory::new(self.raw.frequency.constructor()),
+            );
+            if matches!(
+                self.raw.objects[idx].class.as_str(),
+                "line" | "wiredata" | "cndata" | "linegeometry" | "linespacing"
+            ) {
+                self.raw
+                    .geometry_timeline
+                    .push(super::geometry::timeline::Action::New {
+                        point: self.raw.line_snapshot(idx),
+                        earth: self.raw.earth_model.clone(),
+                    });
+            }
+        }
+        if self.raw.objects[idx].class == "vsource" {
+            let frequency = self.raw.frequency.constructor();
+            self.raw.source_replay.insert(
+                idx,
+                SourceReplay {
+                    constructor_frequency: frequency,
+                    resets: Vec::new(),
+                    enabled: true,
+                    invalid_reference: None,
+                },
+            );
+        }
         idx
     }
 
@@ -1163,68 +1689,394 @@ impl<L: Loader> Executor<'_, L> {
             &mut self.raw,
             ctx,
         );
-        self.apply_props(idx, props, ctx);
+        self.apply_props(idx, props, scan.vars(), ctx);
     }
 
-    fn apply_props(&mut self, idx: usize, props: Vec<RawProp>, ctx: &dyn Fn(String) -> String) {
-        self.raw.active = Some(idx);
-        for p in props {
-            // `like=<name>` splices the source object's accumulated props,
-            // checkpoints included: MakeLike copies the source's recalced
-            // state (Load.cpp ~810-815 takes kWBase, kvarBase, LoadSpecType,
-            // AND PFNominal), which equals replaying the source's writes
-            // with its own edit boundaries.
-            if p.name.as_deref() == Some("like") {
-                let class = self.raw.objects[idx].class.clone();
-                let key = (class.clone(), p.value.text.to_ascii_lowercase());
-                match self.raw.index.get(&key).copied() {
-                    Some(src) => {
-                        let base = self.raw.objects[idx].props.len();
-                        let src_len = self.raw.objects[src].props.len();
-                        // Refuse a splice that would push the object past the
-                        // cap. A self reference (`Edit X like=X`) or a mutual
-                        // chain otherwise doubles the prop count per edit; the
-                        // guard turns that into a warning instead of unbounded
-                        // growth.
-                        if base.saturating_add(src_len) > MAX_OBJECT_PROPS {
-                            self.raw.warn(
-                                &C::READ_DSS_VALUE_CLAMPED,
-                                ctx(format!(
-                                    "like={}: {class} property count would exceed the supported \
-                                 maximum of {MAX_OBJECT_PROPS}; splice refused",
-                                    p.value.text
-                                )),
-                            );
-                            continue;
-                        }
-                        if self.raw.total_props.saturating_add(src_len) > MAX_TOTAL_PROPS {
-                            self.raw.warn(
-                                &C::READ_DSS_VALUE_CLAMPED,
-                                ctx(format!(
-                                    "like={}: the script's retained property count would exceed \
-                                 the supported maximum of {MAX_TOTAL_PROPS}; splice refused",
-                                    p.value.text
-                                )),
-                            );
-                            continue;
-                        }
-                        self.raw.total_props += src_len;
-                        let cloned = self.raw.objects[src].props.clone();
-                        let bounds: Vec<usize> = self.raw.objects[src]
-                            .edit_bounds()
-                            .map(|e| base + e)
-                            .collect();
-                        self.raw.objects[idx].props.extend(cloned);
-                        self.raw.objects[idx].edits.extend(bounds);
-                    }
-                    None => self.raw.warn(
-                        &C::READ_DSS_REFERENCE_DROPPED,
-                        ctx(format!("like={} names an unknown {class}", p.value.text)),
-                    ),
+    fn retained_property_count(&self, idx: usize) -> usize {
+        self.raw.objects[idx].props.len()
+            + self.raw.line_history.get(&idx).map_or(0, |h| {
+                // Include the current command's pending closing checkpoint.
+                h.copies.len()
+                    + h.events.len()
+                    + h.wires.values().map(Vec::len).sum::<usize>()
+                    + self.raw.objects[idx].edits.len()
+                    + 1
+            })
+            + self
+                .raw
+                .source_replay
+                .get(&idx)
+                .map_or(0, |r| r.resets.len())
+    }
+
+    fn record_line_calculation(&mut self, rebuild_only: bool, ctx: &dyn Fn(String) -> String) {
+        let indices: Vec<_> = self
+            .raw
+            .line_history
+            .keys()
+            .copied()
+            .filter(|&idx| self.raw.objects[idx].class == "line")
+            .collect();
+        if self.raw.total_props.saturating_add(indices.len()) > MAX_TOTAL_PROPS
+            || indices
+                .iter()
+                .any(|&idx| self.retained_property_count(idx) >= MAX_OBJECT_PROPS)
+        {
+            self.raw.halt(ctx(
+                "line calculation history exceeds the supported work budget".into(),
+            ));
+            return;
+        }
+        self.raw.total_props += indices.len();
+        if !rebuild_only {
+            self.raw
+                .geometry_timeline
+                .push(super::geometry::timeline::Action::Solve {
+                    frequency: self.raw.snapshot_frequency(),
+                });
+        }
+        for idx in indices {
+            let event = super::line_history::Event {
+                position: self.raw.line_snapshot(idx),
+                frequency: self.raw.snapshot_frequency(),
+                rebuild_only,
+                terminal_state: None,
+            };
+            self.raw
+                .line_history
+                .get_mut(&idx)
+                .unwrap()
+                .events
+                .push(event);
+        }
+    }
+
+    fn append_source_resets(&mut self, target: usize, source: usize, base: usize) {
+        if let Some(replay) = self.raw.source_replay.get(&source).cloned() {
+            let target = self
+                .raw
+                .source_replay
+                .get_mut(&target)
+                .expect("source replay initialized");
+            target.enabled = true;
+            if target.invalid_reference.is_none() {
+                target.invalid_reference = replay.invalid_reference;
+            }
+            target.resets.push((base, replay.constructor_frequency));
+            target.resets.extend(
+                replay
+                    .resets
+                    .into_iter()
+                    .map(|(offset, frequency)| (base + offset, frequency)),
+            );
+        }
+    }
+
+    fn source_reference(&mut self, idx: usize, property: &RawProp) {
+        if !self.raw.source_replay.contains_key(&idx) || property.value.text.is_empty() {
+            return;
+        }
+        let (class, defaults): (&str, &[&str]) = match property.name.as_deref() {
+            Some("daily" | "yearly" | "duty") => ("loadshape", &["default"]),
+            Some("spectrum") => (
+                "spectrum",
+                &[
+                    "default",
+                    "defaultload",
+                    "defaultgen",
+                    "defaultvsource",
+                    "linear",
+                    "pwm6",
+                    "dc6",
+                ],
+            ),
+            _ => return,
+        };
+        let name = property.value.text.to_ascii_lowercase();
+        if (class == "loadshape" && name == "none")
+            || (!defaults.contains(&name.as_str()) && self.raw.find(class, &name).is_none())
+        {
+            let replay = self.raw.source_replay.get_mut(&idx).unwrap();
+            if replay.invalid_reference.is_none() {
+                replay.invalid_reference = Some(format!(
+                    "{} references missing {class} object {:?} at assignment (native error 401)",
+                    property.name.as_deref().unwrap(),
+                    property.value.text,
+                ));
+            }
+        }
+    }
+
+    fn copy_transformer_bindings(&mut self, idx: usize, src: usize, base: usize) {
+        if self.raw.objects[idx].class == "transformer" {
+            let bindings = self.raw.line_history[&src].xfmrcodes.clone();
+            self.raw
+                .line_history
+                .get_mut(&idx)
+                .unwrap()
+                .xfmrcodes
+                .extend(
+                    bindings
+                        .into_iter()
+                        .map(|(offset, point)| (base + offset, point)),
+                );
+        }
+    }
+
+    fn copied_properties(&self, target: usize, source: usize) -> Vec<RawProp> {
+        let mut cloned = self.raw.objects[source].props.clone();
+        if self.raw.objects[target].class == "load" {
+            // TLoadObj.MakeLike keeps the destination's physical connection.
+            let bus = self.raw.objects[target]
+                .get("bus1")
+                .cloned()
+                .unwrap_or_default();
+            for property in &mut cloned {
+                if property.name.as_deref() == Some("bus1") {
+                    property.value.clone_from(&bus);
                 }
+            }
+        }
+        cloned
+    }
+
+    fn apply_like(&mut self, idx: usize, value: &Value, ctx: &dyn Fn(String) -> String) {
+        let class = self.raw.objects[idx].class.clone();
+        let key = (class.clone(), value.text.to_ascii_lowercase());
+        match self.raw.index.get(&key).copied() {
+            Some(src) => {
+                if class == "vsource" && src == idx {
+                    // Native source MakeLike(self) does not recalculate
+                    // the current edit or reset its in-flight setters.
+                    self.raw.source_replay.get_mut(&idx).unwrap().enabled = true;
+                    return;
+                }
+                let base = self.raw.objects[idx].props.len();
+                let src_len = self.raw.objects[src].props.len();
+                let replay_charge = self
+                    .raw
+                    .source_replay
+                    .get(&src)
+                    .map_or(0, |r| r.resets.len() + 1)
+                    + if self.raw.line_history.contains_key(&idx) {
+                        1 + self.raw.objects[src].edit_bounds().count()
+                    } else {
+                        0
+                    };
+                // Refuse a splice that would push the object past the
+                // cap. A self reference (`Edit X like=X`) or a mutual
+                // chain otherwise doubles the prop count per edit; the
+                // guard turns that into a warning instead of unbounded
+                // growth.
+                if self
+                    .retained_property_count(idx)
+                    .saturating_add(src_len)
+                    .saturating_add(replay_charge)
+                    > MAX_OBJECT_PROPS
+                {
+                    self.raw.warn(
+                        &C::READ_DSS_VALUE_CLAMPED,
+                        ctx(format!(
+                            "like={}: {class} property count would exceed the supported \
+                         maximum of {MAX_OBJECT_PROPS}; splice refused",
+                            value.text
+                        )),
+                    );
+                    return;
+                }
+                if self
+                    .raw
+                    .total_props
+                    .saturating_add(src_len)
+                    .saturating_add(replay_charge)
+                    > MAX_TOTAL_PROPS
+                {
+                    self.raw.warn(
+                        &C::READ_DSS_VALUE_CLAMPED,
+                        ctx(format!(
+                            "like={}: the script's retained property count would exceed \
+                         the supported maximum of {MAX_TOTAL_PROPS}; splice refused",
+                            value.text
+                        )),
+                    );
+                    return;
+                }
+                self.raw.total_props += src_len + replay_charge;
+                if self.raw.line_history.contains_key(&idx) {
+                    let source = self.raw.line_snapshot(src);
+                    let edit_start = self.raw.objects[idx].edits.len();
+                    let edit_end = edit_start + self.raw.objects[src].edit_bounds().count();
+                    self.raw.line_history.get_mut(&idx).unwrap().copies.push(
+                        super::line_history::CopyPoint {
+                            start: base,
+                            end: base + src_len,
+                            edit_start,
+                            edit_end,
+                            source,
+                        },
+                    );
+                }
+                self.copy_static_load(idx, src);
+                self.copy_transformer_bindings(idx, src, base);
+                self.append_source_resets(idx, src, base);
+                let cloned = self.copied_properties(idx, src);
+                let bounds: Vec<usize> = self.raw.objects[src]
+                    .edit_bounds()
+                    .map(|e| base + e)
+                    .collect();
+                self.raw.objects[idx].props.extend(cloned);
+                self.raw.objects[idx].edits.extend(bounds);
+                if matches!(
+                    class.as_str(),
+                    "line" | "wiredata" | "cndata" | "linegeometry" | "linespacing"
+                ) {
+                    self.raw
+                        .geometry_timeline
+                        .push(super::geometry::timeline::Action::Copy {
+                            point: self.raw.line_snapshot(idx),
+                            frequency: self.raw.snapshot_frequency(),
+                        });
+                }
+            }
+            None => self.raw.warn(
+                &C::READ_DSS_REFERENCE_DROPPED,
+                ctx(format!("like={} names an unknown {class}", value.text)),
+            ),
+        }
+    }
+
+    fn bind_geometry_references(
+        &mut self,
+        idx: usize,
+        p: &RawProp,
+        ctx: &dyn Fn(String) -> String,
+    ) -> bool {
+        if matches!(
+            self.raw.objects[idx].class.as_str(),
+            "linegeometry" | "line"
+        ) && matches!(
+            p.name.as_deref(),
+            Some("wire" | "wires" | "cncable" | "cncables")
+        ) {
+            let names = if matches!(p.name.as_deref(), Some("wire" | "cncable")) {
+                vec![p.value.text.clone()]
+            } else {
+                p.value.to_string_list(Some(&self.raw.vars))
+            };
+            if names.len() > 32
+                || self
+                    .retained_property_count(idx)
+                    .saturating_add(names.len())
+                    > MAX_OBJECT_PROPS
+                || self.raw.total_props.saturating_add(names.len()) > MAX_TOTAL_PROPS
+            {
+                self.raw.halt(ctx(
+                    "geometry conductor bindings exceed the supported count/work budget".into(),
+                ));
+                return false;
+            }
+            self.raw.total_props += names.len();
+            let class = if p.name.as_deref().unwrap().starts_with("cn") {
+                "cndata"
+            } else {
+                "wiredata"
+            };
+            let references = names
+                .iter()
+                .map(|name| {
+                    self.raw
+                        .index
+                        .get(&(class.into(), name.to_ascii_lowercase()))
+                        .map(|&object| self.raw.line_snapshot(object))
+                })
+                .collect();
+            let offset = self.raw.objects[idx].props.len();
+            self.raw
+                .line_history
+                .get_mut(&idx)
+                .unwrap()
+                .wires
+                .insert(offset, references);
+        }
+        if matches!(
+            self.raw.objects[idx].class.as_str(),
+            "linegeometry" | "line"
+        ) && p.name.as_deref() == Some("spacing")
+        {
+            let referenced = self
+                .raw
+                .index
+                .get(&("linespacing".into(), p.value.text.to_ascii_lowercase()))
+                .map(|&object| self.raw.line_snapshot(object));
+            let offset = self.raw.objects[idx].props.len();
+            self.raw
+                .line_history
+                .get_mut(&idx)
+                .unwrap()
+                .spacings
+                .insert(offset, referenced);
+        }
+        if self.raw.objects[idx].class == "line" && p.name.as_deref() == Some("geometry") {
+            let referenced = self
+                .raw
+                .index
+                .get(&("linegeometry".into(), p.value.text.to_ascii_lowercase()))
+                .map(|&object| self.raw.line_snapshot(object));
+            let offset = self.raw.objects[idx].props.len();
+            self.raw
+                .line_history
+                .get_mut(&idx)
+                .unwrap()
+                .geometries
+                .insert(offset, referenced);
+        }
+        true
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keep ordered assignment dispatch and the native edit boundary together"
+    )]
+    fn apply_props(
+        &mut self,
+        idx: usize,
+        props: Vec<RawProp>,
+        vars: Option<&VarMap>,
+        ctx: &dyn Fn(String) -> String,
+    ) {
+        self.raw.active = Some(idx);
+        if self.raw.line_history.contains_key(&idx) {
+            if self.retained_property_count(idx) > MAX_OBJECT_PROPS
+                || self.raw.total_props >= MAX_TOTAL_PROPS
+            {
+                self.raw.warn(&C::READ_DSS_VALUE_CLAMPED, ctx("line history edit count exceeds the supported property/work budget; edit refused".into()));
+                return;
+            }
+            // Reserve the closing checkpoint without exposing it as a
+            // completed edit to references captured inside this command.
+            self.raw.total_props += 1;
+        }
+        for p in props {
+            // Keep the legacy flattened assignments and edit boundaries.
+            // Stateful source/line readers also use reset/copy records to
+            // recover hidden defaults and the state visible during MakeLike.
+            if p.name.as_deref() == Some("like") {
+                let object = &self.raw.objects[idx];
+                let copies = match object.class.as_str() {
+                    "autotrans" => Some(&mut self.raw.autotrans_copies),
+                    "capacitor" => Some(&mut self.raw.capacitor_copies),
+                    "storage" => Some(&mut self.raw.storage_copies),
+                    "generator" => Some(&mut self.raw.generator_copies),
+                    "reactor" => Some(&mut self.raw.reactor_copies),
+                    _ => None,
+                };
+                if let Some(copies) = copies {
+                    copies.insert(object.name.to_ascii_lowercase());
+                }
+                self.apply_like(idx, &p.value, ctx);
                 continue;
             }
-            if self.raw.objects[idx].props.len() >= MAX_OBJECT_PROPS {
+            if self.retained_property_count(idx) >= MAX_OBJECT_PROPS {
                 self.raw.warn(
                     &C::READ_DSS_VALUE_CLAMPED,
                     ctx(format!(
@@ -1247,13 +2099,75 @@ impl<L: Loader> Executor<'_, L> {
                 continue;
             }
             self.raw.total_props += 1;
+            if self.raw.objects[idx].class == "line" && p.name.as_deref() == Some("linecode") {
+                let referenced = self
+                    .raw
+                    .index
+                    .get(&("linecode".into(), p.value.text.to_ascii_lowercase()))
+                    .map(|&index| self.raw.line_snapshot(index));
+                let offset = self.raw.objects[idx].props.len();
+                self.raw
+                    .line_history
+                    .get_mut(&idx)
+                    .unwrap()
+                    .linecodes
+                    .insert(offset, referenced);
+            }
+            if self.raw.objects[idx].class == "transformer" && p.name.as_deref() == Some("xfmrcode")
+            {
+                let referenced = self
+                    .raw
+                    .index
+                    .get(&("xfmrcode".into(), p.value.text.to_ascii_lowercase()))
+                    .map(|&index| self.raw.line_snapshot(index));
+                let offset = self.raw.objects[idx].props.len();
+                self.raw
+                    .line_history
+                    .get_mut(&idx)
+                    .unwrap()
+                    .xfmrcodes
+                    .insert(offset, referenced);
+            }
+            if !self.bind_geometry_references(idx, &p, ctx) {
+                return;
+            }
+            self.static_load_property(idx, &p, vars, ctx);
+            self.source_reference(idx, &p);
+            if let Some(replay) = self.raw.source_replay.get_mut(&idx) {
+                replay.record_property(&p);
+            }
             self.raw.objects[idx].props.push(p);
+            if matches!(
+                self.raw.objects[idx].class.as_str(),
+                "line" | "wiredata" | "cndata" | "linegeometry" | "linespacing"
+            ) {
+                self.raw
+                    .geometry_timeline
+                    .push(super::geometry::timeline::Action::Property {
+                        point: self.raw.line_snapshot(idx),
+                        offset: self.raw.objects[idx].props.len() - 1,
+                    });
+            }
         }
+        self.finish_static_load(idx);
         // This command line was one engine Edit; it ends in
         // RecalcElementData, so record the boundary.
         let end = self.raw.objects[idx].props.len();
         self.raw.objects[idx].edits.push(end);
     }
+}
+
+fn batch_expression(pattern: &str) -> Option<regex::bytes::Regex> {
+    if !pattern.is_ascii() {
+        return None;
+    }
+    regex::bytes::RegexBuilder::new(pattern)
+        .case_insensitive(true)
+        .unicode(false)
+        .size_limit(1 << 20)
+        .dfa_size_limit(1 << 20)
+        .build()
+        .ok()
 }
 
 fn prop_table(class: &str) -> Option<&'static DssClass> {
@@ -1365,34 +2279,50 @@ fn include_acquisition_error(error: &powerio_core::Error) -> std::io::Error {
 /// and acquired by that root relative name; an in-memory source consults its
 /// named buffers under the same names. A leading byte order mark on an
 /// included file is not decoded (the retained bytes keep it).
-fn source_include_loader(
-    source: &powerio_core::Source,
+struct SourceLoader<'a> {
+    source: &'a powerio_core::Source,
     lexical_root: PathBuf,
-) -> impl FnMut(&Path) -> std::io::Result<String> {
-    move |p: &Path| {
-        let relative = p.strip_prefix(&lexical_root).map_err(|_| {
-            Containment::refused(format!(
-                "{} does not sit under the confinement root",
-                p.display()
-            ))
-        })?;
-        let mut name = String::new();
-        for component in relative.components() {
-            if !name.is_empty() {
-                name.push('/');
-            }
-            name.push_str(&component.as_os_str().to_string_lossy());
-        }
-        let buffer = source
-            .root_buffer(&name)
-            .map_err(|error| include_acquisition_error(&error))?;
-        let text = std::str::from_utf8(buffer.content_bytes()).map_err(|e| {
+    dependencies: std::collections::BTreeSet<powerio_core::SourceId>,
+}
+
+fn source_include_loader(source: &powerio_core::Source, lexical_root: PathBuf) -> SourceLoader<'_> {
+    SourceLoader {
+        source,
+        lexical_root,
+        dependencies: std::collections::BTreeSet::new(),
+    }
+}
+
+impl Loader for SourceLoader<'_> {
+    fn load(&mut self, path: &Path) -> std::io::Result<String> {
+        let bytes = self.load_bytes(path)?;
+        let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
+        String::from_utf8(bytes.to_vec()).map_err(|error| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("stream did not contain valid UTF-8: {e}"),
+                format!("stream did not contain valid UTF-8: {}", error.utf8_error()),
             )
+        })
+    }
+
+    fn load_bytes(&mut self, path: &Path) -> std::io::Result<Vec<u8>> {
+        let relative = path.strip_prefix(&self.lexical_root).map_err(|_| {
+            Containment::refused(format!(
+                "{} does not sit under the confinement root",
+                path.display()
+            ))
         })?;
-        Ok(text.to_owned())
+        let name = relative
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        let buffer = self
+            .source
+            .root_buffer(&name)
+            .map_err(|error| include_acquisition_error(&error))?;
+        self.dependencies.insert(buffer.id().clone());
+        Ok(buffer.bytes().to_vec())
     }
 }
 
@@ -1417,7 +2347,7 @@ pub(crate) fn parse_raw_from_source(source: &powerio_core::Source) -> Result<Raw
         format: "case text",
         message: format!("not valid UTF-8: {e}"),
     })?;
-    if let Some(root) = source.selected_acquisition_root() {
+    let (mut raw, loader) = if let Some(root) = source.selected_acquisition_root() {
         // A selected root is canonical, so resolution runs in the canonical
         // root's space, the same space the acquisition walk confines to. The
         // primary's own directory seeds relative includes.
@@ -1428,22 +2358,14 @@ pub(crate) fn parse_raw_from_source(source: &powerio_core::Source) -> Result<Raw
             None => file.push(source.name()),
         }
         let mut loader = source_include_loader(source, root.to_path_buf());
-        Ok(parse_raw_confined_under(
-            text,
-            &file.display().to_string(),
-            root,
-            &mut loader,
-        ))
+        let raw = parse_raw_confined_under(text, &file.display().to_string(), root, &mut loader);
+        (raw, loader)
     } else if primary.directory_segments().next().is_some() {
         // A memory-tree primary is relative to the supplied tree root.
         let root = Path::new("");
         let mut loader = source_include_loader(source, root.to_path_buf());
-        Ok(parse_raw_confined_under(
-            text,
-            source.name(),
-            root,
-            &mut loader,
-        ))
+        let raw = parse_raw_confined_under(text, source.name(), root, &mut loader);
+        (raw, loader)
     } else {
         // The default root of a file source is its containing directory, and
         // an in-memory source resolves the same way against its (possibly
@@ -1456,8 +2378,11 @@ pub(crate) fn parse_raw_from_source(source: &powerio_core::Source) -> Result<Raw
                 .unwrap_or_else(|| Path::new("")),
         );
         let mut loader = source_include_loader(source, lexical_root);
-        Ok(parse_raw_with_confined(text, source.name(), &mut loader))
-    }
+        let raw = parse_raw_with_confined(text, source.name(), &mut loader);
+        (raw, loader)
+    };
+    raw.dependencies = loader.dependencies.into_iter().collect();
+    Ok(raw)
 }
 
 /// The loader's own containment refusal, carried inside the `io::Error` so it
@@ -1571,6 +2496,98 @@ pub fn __parse_raw_file(path: impl AsRef<Path>) -> Result<RawDss> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn calculation_events_record_frequency_and_copy_horizons() {
+        let raw = parse(
+            "New Circuit.c\nNew Line.a\nSolve frequency=50\nNew Line.b like=a\nBuildY\nSolve frequency=70",
+        );
+        let a = raw
+            .objects
+            .iter()
+            .position(|o| o.class == "line" && o.name == "a")
+            .unwrap();
+        let b = raw
+            .objects
+            .iter()
+            .position(|o| o.class == "line" && o.name == "b")
+            .unwrap();
+        assert_eq!(raw.line_history[&a].events.len(), 3);
+        assert_eq!(raw.line_history[&b].copies[0].source.events, 1);
+        assert_eq!(
+            raw.line_history[&a].events[0].frequency.to_bits(),
+            50.0_f64.to_bits()
+        );
+        assert!(raw.line_history[&b].events[0].rebuild_only);
+        assert_eq!(
+            raw.line_history[&b].events[1].frequency.to_bits(),
+            70.0_f64.to_bits()
+        );
+    }
+
+    #[test]
+    fn calculation_history_charges_the_whole_parse_budget_atomically() {
+        let mut raw = parse("New Circuit.c\nNew Line.a\nNew Line.b");
+        raw.total_props = MAX_TOTAL_PROPS - 1;
+        let mut loader = no_files;
+        let mut executor = Executor {
+            raw,
+            loader: &mut loader,
+            dirs: Vec::new(),
+            root: None,
+            boundary: IncludeBoundary::CaseDirectory,
+            includes: 0,
+            include_bytes: 0,
+            budget_spent: false,
+            var_count: 0,
+            var_bytes: 0,
+            var_budget_spent: false,
+        };
+        executor.record_line_calculation(false, &|s| s);
+        assert!(executor.raw.halted);
+        assert!(
+            executor
+                .raw
+                .line_history
+                .values()
+                .all(|h| h.events.is_empty())
+        );
+    }
+
+    #[test]
+    fn line_wildcards_preserve_selection_and_apply_only_to_existing_lines() {
+        let raw = parse(
+            "New Circuit.c\nNew Line.a\nNew Line.b\nDisable Line.*\n~ enabled=yes\nNew Line.c",
+        );
+        assert_eq!(
+            raw.find("line", "a").unwrap().get("enabled").unwrap().text,
+            "false"
+        );
+        assert_eq!(
+            raw.find("line", "b").unwrap().get("enabled").unwrap().text,
+            "yes"
+        );
+        assert!(raw.find("line", "c").unwrap().get("enabled").is_none());
+    }
+
+    #[test]
+    fn empty_linecode_self_copies_bound_edit_history_as_well_as_properties() {
+        let raw = parse(&format!(
+            "New Linecode.empty\n{}",
+            "Edit Linecode.empty like=empty\n".repeat(30)
+        ));
+        let object = raw.find("linecode", "empty").unwrap();
+        let history = &raw.line_history[&0];
+        assert_eq!(object.props, [] as [crate::dss::raw::RawProp; 0]);
+        assert!(history.copies.len() < 30);
+        assert!(object.edits.len() + history.copies.len() <= MAX_OBJECT_PROPS);
+        assert!(raw.total_props <= MAX_TOTAL_PROPS);
+        assert!(
+            raw.diagnostics
+                .iter()
+                .any(|d| d.code() == C::READ_DSS_VALUE_CLAMPED.code)
+        );
+    }
+
     use super::*;
 
     fn no_files(_: &Path) -> std::io::Result<String> {
@@ -1579,6 +2596,120 @@ mod tests {
 
     fn parse(text: &str) -> RawDss {
         __parse_raw_with(text, "test.dss", &mut no_files)
+    }
+
+    #[test]
+    fn batch_edit_matches_names_and_keeps_native_last_visited_object_active() {
+        let raw =
+            parse("new load.alpha kw=1\nnew load.beta kw=2\nbatchedit load.ALP kw=3\n~ kvar=4\n");
+        assert_eq!(
+            raw.find("load", "alpha").unwrap().get("kw").unwrap().text,
+            "3"
+        );
+        assert_eq!(
+            raw.find("load", "beta").unwrap().get("kw").unwrap().text,
+            "2"
+        );
+        assert_eq!(
+            raw.find("load", "beta").unwrap().get("kvar").unwrap().text,
+            "4"
+        );
+        assert!(raw.commands.iter().all(|c| c.verb != "batchedit"));
+    }
+
+    #[test]
+    fn unsupported_batch_selectors_are_errors() {
+        for selector in ["load.(?=alpha)", "load.(a)\\1", "missing..*", "load.é"] {
+            let raw = parse(&format!("new load.alpha kw=1\nbatchedit {selector} kw=3\n"));
+            assert!(
+                raw.diagnostics
+                    .iter()
+                    .any(|d| d.code() == C::READ_DSS_BATCH_UNRESOLVED.code),
+                "{selector}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_copy_reenables_independently_of_the_templates_property_history() {
+        let raw = parse(
+            "New Circuit.c enabled=no\nNew Vsource.copy enabled=no like=source\nEdit Vsource.source like=source",
+        );
+        for object in raw.of_class("vsource") {
+            assert!(raw.source_replay(object).enabled);
+        }
+        let raw = parse("New Circuit.c enabled=no\nNew Vsource.copy like=source enabled=1");
+        assert!(
+            raw.of_class("vsource")
+                .all(|o| !raw.source_replay(o).enabled)
+        );
+    }
+
+    #[test]
+    fn source_wildcard_updates_current_objects_without_changing_active_selection() {
+        let raw = parse(
+            "New Circuit.c\nNew Vsource.aux\nDisable Vsource.*\n~ enabled=yes\nNew Vsource.later",
+        );
+        assert!(
+            !raw.source_replay(raw.find("vsource", "source").unwrap())
+                .enabled
+        );
+        assert!(
+            raw.source_replay(raw.find("vsource", "aux").unwrap())
+                .enabled
+        );
+        assert!(
+            raw.source_replay(raw.find("vsource", "later").unwrap())
+                .enabled
+        );
+        assert!(
+            raw.commands
+                .iter()
+                .any(|c| c.verb == "disable" && c.args == "Vsource.*")
+        );
+    }
+
+    #[test]
+    fn repeated_source_wildcards_charge_the_existing_whole_parse_budget() {
+        let mut raw = parse("New Circuit.c");
+        raw.total_props = MAX_TOTAL_PROPS;
+        let mut loader = no_files;
+        let mut executor = Executor {
+            raw,
+            loader: &mut loader,
+            dirs: Vec::new(),
+            root: None,
+            boundary: IncludeBoundary::CaseDirectory,
+            includes: 0,
+            include_bytes: 0,
+            budget_spent: false,
+            var_count: 0,
+            var_bytes: 0,
+            var_budget_spent: false,
+        };
+        executor.do_enabled("disable", &mut Scanner::new("Vsource.*", None), &|s| s);
+        let raw = executor.raw;
+        assert!(raw.halted);
+        assert!(
+            raw.source_replay(raw.find("vsource", "source").unwrap())
+                .enabled
+        );
+    }
+
+    #[test]
+    fn empty_source_copy_histories_are_bounded_even_without_properties() {
+        let mut text = String::from("New Circuit.c\nNew Vsource.other\n");
+        for _ in 0..24 {
+            text.push_str("Edit Vsource.source like=other\nEdit Vsource.other like=source\n");
+        }
+        let raw = parse(&text);
+        assert!(raw.warnings.iter().any(|w| w.contains("maximum")));
+        assert!(raw.total_props <= MAX_TOTAL_PROPS);
+        for object in &raw.objects {
+            assert!(
+                object.props.len() + raw.source_replay(object).resets.len() <= MAX_OBJECT_PROPS
+            );
+        }
     }
 
     #[test]

@@ -12,7 +12,9 @@ use num_complex::Complex64;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::DistLocationTarget;
 use crate::diagnostics::codes;
+use crate::geo::ComponentLocationEdits;
 use crate::{ConductorMatrix, Diagnostic, Error, MulticonductorNetwork, Result};
 
 const SINGULAR_TOLERANCE: f64 = 1e-12;
@@ -668,6 +670,7 @@ fn reduce_buses(network: &mut MulticonductorNetwork, report: &mut NeutralKronRep
 fn reduce_terminal_maps(
     network: &mut MulticonductorNetwork,
     report: &mut NeutralKronReport,
+    locations: &mut ComponentLocationEdits,
 ) -> Result<()> {
     let buses = report.buses.clone();
     for line in network.lines_mut() {
@@ -812,10 +815,17 @@ fn reduce_terminal_maps(
             )?
         {
             if shunt.terminal_map.len() == 1 {
-                report.actions.push(action(
+                let mut record = action(
                     format!("shunt/{}", shunt.name),
                     "removed_neutral_only_shunt",
-                ));
+                );
+                locations.rewrite(
+                    DistLocationTarget::Shunt,
+                    &shunt.name,
+                    None,
+                    &mut record.details,
+                );
+                report.actions.push(record);
                 continue;
             }
             let old_n = shunt.terminal_map.len();
@@ -863,10 +873,17 @@ fn reduce_terminal_maps(
         match (from, to) {
             (Some(from), Some(to)) => {
                 if switch.terminal_map_from.len() == 1 && switch.terminal_map_to.len() == 1 {
-                    report.actions.push(action(
+                    let mut record = action(
                         format!("switch/{}", switch.name),
                         "removed_neutral_only_switch",
-                    ));
+                    );
+                    locations.rewrite(
+                        DistLocationTarget::Switch,
+                        &switch.name,
+                        None,
+                        &mut record.details,
+                    );
+                    report.actions.push(record);
                     continue;
                 }
                 let old_n = switch.terminal_map_from.len();
@@ -949,6 +966,9 @@ fn update_terminal_conventions(network: &mut MulticonductorNetwork, buses: &[Neu
 /// terminal conventions, or the model's conservative `n` / four-wire `4`
 /// convention. Only perfectly grounded neutrals are accepted unless the
 /// explicit forced-ground option is enabled.
+/// Component points remain attached to retained components and are copied to
+/// derived line configurations. Removed devices' points remain in the audit
+/// action's `details.source_location`.
 ///
 /// # Errors
 /// Ambiguous or floating neutral roles, inconsistent conductor maps,
@@ -958,6 +978,9 @@ pub fn neutral_kron_reduce(
     network: &MulticonductorNetwork,
     options: &NeutralKronOptions,
 ) -> Result<NeutralKronReduction> {
+    network
+        .validate_component_locations()
+        .map_err(|error| fail(error.to_string()))?;
     crate::readiness::require_earth_referenced_sources(network)
         .map_err(|error| fail(error.to_string()))?;
     let buses = identify_neutrals(network, options)?;
@@ -1000,21 +1023,59 @@ pub fn neutral_kron_reduce(
 
     let uses = collect_line_uses(network, &report.buses)?;
     let mut reduced = network.clone();
+    let mut locations = ComponentLocationEdits::new(network);
     reduce_linecodes(&mut reduced, &uses, &mut report)?;
-    reduce_terminal_maps(&mut reduced, &mut report)?;
+    copy_linecode_locations(&mut locations, &mut report)?;
+    reduce_terminal_maps(&mut reduced, &mut report, &mut locations)?;
     reduce_buses(&mut reduced, &mut report)?;
+    locations.apply(&mut reduced);
+    reduced
+        .validate_component_locations()
+        .map_err(|error| fail(error.to_string()))?;
     update_terminal_conventions(&mut reduced, &report.buses);
-    reduced.extras_mut().insert(
-        "powerio_neutral_kron".to_owned(),
+    crate::transform_audit::store(
+        &mut reduced,
+        "powerio_neutral_kron",
         json!({
             "method": "explicit_neutral_schur_complement",
             "buses": &report.buses,
             "recoveries": &report.recoveries,
             "actions": &report.actions,
         }),
-    );
+    )
+    .map_err(fail)?;
     Ok(NeutralKronReduction {
         network: reduced,
         report,
     })
+}
+
+fn copy_linecode_locations(
+    locations: &mut ComponentLocationEdits,
+    report: &mut NeutralKronReport,
+) -> Result<()> {
+    for recovery in &report.recoveries {
+        if recovery.linecode == recovery.source_linecode {
+            continue;
+        }
+        let mut record = action(
+            format!("linecode/{}", recovery.source_linecode),
+            "copied_linecode_location",
+        );
+        if locations
+            .copy_linecode(
+                &recovery.source_linecode,
+                &recovery.linecode,
+                &mut record.details,
+            )
+            .map_err(fail)?
+        {
+            record.details.insert(
+                "target".to_owned(),
+                json!(format!("linecode/{}", recovery.linecode)),
+            );
+            report.actions.push(record);
+        }
+    }
+    Ok(())
 }

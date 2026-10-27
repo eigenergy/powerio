@@ -70,11 +70,7 @@ fn reference_readiness_validates_endpoints_and_complete_phasors() {
 #[test]
 fn unsupported_format_writers_refuse_to_ground_a_referenced_source() {
     let module = PioModule::new(network());
-    for target in [
-        DistTargetFormat::Dss,
-        DistTargetFormat::PmdJson,
-        DistTargetFormat::BmopfJson,
-    ] {
+    for target in [DistTargetFormat::PmdJson, DistTargetFormat::BmopfJson] {
         let error =
             powerio_dist::emit(&module, target, Destination::memory("case").unwrap()).unwrap_err();
         assert!(error.to_string().contains("reference-terminal"), "{error}");
