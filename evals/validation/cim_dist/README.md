@@ -105,3 +105,18 @@ done
   which `cim17v40` does not declare.
 
 `RESULTS.md` holds the rendered per case table from the last run.
+
+## Native tank electrical qualification
+
+`../validate_cim_tanks.py --powerio <current-cli>` runs in the main Validation
+workflow with OpenDSSDirect.py. It compares nine transformer cases against
+committed native DSS decks and hand-stated regulator nameplates, through both
+CIM reading and fresh CIM writing. The comparison covers the grounded active
+terminal admittance stamp (ground node 0 is eliminated) and loaded complex
+coil voltages, with rtol/atol of 1e-10/1e-8 S and 1e-9/1e-6 V respectively.
+Nonzero resistance, center taps, open-delta legs, no-load losses, three-phase
+connections and regulator taps are included. An independent native lead/lag
+control distinguishes clocks 1 and 11; inactive/disconnected and unsupported
+clock inputs must refuse conversion. This synthetic qualification does not
+claim validation of the optional external feeder corpus or X-in-magnitude
+producer dialects.

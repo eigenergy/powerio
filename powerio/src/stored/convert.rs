@@ -1069,6 +1069,8 @@ fn multiconductor_identity_order(
 }
 
 fn encode_dc_pf_instance(instance: &powerio_prob::DcPfInstance) -> Result<dto::DcPfInstance> {
+    // The stored instance is its network; reading it back derives the
+    // specifications under the stated HVDC treatment.
     let network = with_component_ids(instance.network().clone());
     Ok(dto::DcPfInstance {
         initial_point: instance
@@ -1083,6 +1085,7 @@ fn encode_dc_pf_instance(instance: &powerio_prob::DcPfInstance) -> Result<dto::D
             .transpose()?,
         network: Box::new(network),
         approximation: dc_formula_name(instance.branch_susceptance_formula())?.to_string(),
+        hvdc_treatment: stated_hvdc_treatment(instance.hvdc_treatment()),
     })
 }
 
@@ -1101,6 +1104,7 @@ fn encode_ac_pf_instance(instance: &powerio_prob::AcPfInstance) -> Result<dto::A
             .transpose()?,
         network: Box::new(network),
         specifications: instance.specifications().to_vec(),
+        hvdc_treatment: stated_hvdc_treatment(instance.hvdc_treatment()),
     })
 }
 
@@ -2699,11 +2703,32 @@ fn with_solution_records<S>(
     Ok(value)
 }
 
+/// The HVDC treatment a stored power flow instance states. A document
+/// without one was written before the treatment existed, when the power flow
+/// instances left HVDC lines out, so it reads as `Ignore` and denotes the
+/// calculation it did then.
+fn stored_hvdc_treatment(stated: Option<powerio_tx::HvdcTreatment>) -> powerio_tx::HvdcTreatment {
+    stated.unwrap_or(powerio_tx::HvdcTreatment::Ignore)
+}
+
+/// The HVDC treatment a power flow instance document states. `Ignore` is what
+/// a document without the field denotes, so it is left out and the document
+/// stays readable by releases that predate the field; any other treatment is
+/// written, and those releases reject it rather than calculate without it.
+fn stated_hvdc_treatment(
+    treatment: powerio_tx::HvdcTreatment,
+) -> Option<powerio_tx::HvdcTreatment> {
+    (treatment != powerio_tx::HvdcTreatment::Ignore).then_some(treatment)
+}
+
 fn decode_dc_pf_instance(instance: dto::DcPfInstance) -> Result<powerio_prob::DcPfInstance> {
     let network = with_component_ids(*instance.network);
-    let mut decoded = powerio_prob::DcPfInstance::from_network(network)
-        .map_err(|error| invalid(error.to_string()))?
-        .with_branch_susceptance_formula(dc_formula_from_name(&instance.approximation)?);
+    let mut decoded = powerio_prob::DcPfInstance::from_network_with_hvdc(
+        network,
+        stored_hvdc_treatment(instance.hvdc_treatment),
+    )
+    .map_err(|error| invalid(error.to_string()))?
+    .with_branch_susceptance_formula(dc_formula_from_name(&instance.approximation)?);
     if let Some(stored) = instance.initial_point {
         let point = decode_balanced_point_assignment(decoded.network(), stored)?;
         decoded = decoded.with_initial_point(point);
@@ -2712,9 +2737,10 @@ fn decode_dc_pf_instance(instance: dto::DcPfInstance) -> Result<powerio_prob::Dc
 }
 
 fn decode_ac_pf_instance(instance: dto::AcPfInstance) -> Result<powerio_prob::AcPfInstance> {
-    let mut decoded = powerio_prob::AcPfInstance::new(
+    let mut decoded = powerio_prob::AcPfInstance::new_with_hvdc(
         with_component_ids(*instance.network),
         instance.specifications,
+        stored_hvdc_treatment(instance.hvdc_treatment),
     )
     .map_err(|error| invalid(error.to_string()))?;
     if let Some(stored) = instance.initial_point {

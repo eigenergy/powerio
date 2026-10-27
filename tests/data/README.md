@@ -26,6 +26,18 @@ It pins the original kW/kVAr and ohm literals, the post-literal conversion
 statements, and exact-byte source echo. The numerical regression checks
 3.715 MW, 2.300 MVAr, and `Zbase = 12.66^2 / 10` ohms.
 
+## `pio-ir/`
+
+PowerIO IR documents written by published PowerIO releases, original to this
+repository under its code license. `pio-ir/0.11.6/hvdc-dc-pf-instance.pio.json`
+and `pio-ir/0.11.6/hvdc-ac-pf-instance.pio.json` are the DC and AC power flow
+instances the `powerio` 0.11.6 wheel from PyPI wrote (`parse`,
+`to_dc_pf_instance` or `to_ac_pf_instance`, then `serialize`) from a hand
+written two bus MATPOWER case with 40 MW of load and one `dcline` sending
+10 MW and delivering 9.5 MW. They are kept byte exact as that release wrote
+them, without the `hvdc_treatment` field later releases write, and pin the
+calculation such a document denotes.
+
 ## `pglib/`
 
 From the [IEEE PES PGLib-OPF benchmark library](https://github.com/power-grid-lib/pglib-opf),
