@@ -3910,11 +3910,13 @@ impl PyPioModule {
             powerio::PioValue::AcPfInstance(instance) => Ok(instance.network()),
             powerio::PioValue::DcOpfInstance(instance) => Ok(instance.network()),
             powerio::PioValue::AcOpfInstance(instance) => Ok(instance.network()),
+            powerio::PioValue::AcOtsInstance(instance) => Ok(instance.network()),
             powerio::PioValue::AcScucInstance(instance) => Ok(instance.network()),
             powerio::PioValue::DcPfSolution(solution) => Ok(solution.network()),
             powerio::PioValue::AcPfSolution(solution) => Ok(solution.network()),
             powerio::PioValue::DcOpfSolution(solution) => Ok(solution.network()),
             powerio::PioValue::AcOpfSolution(solution) => Ok(solution.network()),
+            powerio::PioValue::AcOtsSolution(solution) => Ok(solution.network()),
             powerio::PioValue::SocwrOpfSolution(solution) => Ok(solution.network()),
             powerio::PioValue::AcScucSolution(solution) => Ok(solution.instance().network()),
             other => Err(PyTypeError::new_err(format!(
@@ -4505,6 +4507,15 @@ impl PyPioModule {
         })
     }
 
+    fn _to_ac_ots_instance(&self) -> PyResult<Self> {
+        let module = powerio::transform::to_ac_ots_instance(self.module()?)
+            .map_err(|error| core_error_pyerr(&error))?
+            .map_value(powerio::PioValue::AcOtsInstance);
+        Ok(Self {
+            module: Some(module),
+        })
+    }
+
     fn _to_mc_ac_pf_instance(&self) -> PyResult<Self> {
         let module = powerio::transform::to_mc_ac_pf_instance(self.module()?)
             .map_err(|error| core_error_pyerr(&error))?
@@ -4740,6 +4751,9 @@ impl PyPioModule {
             }
             powerio::PioValue::AcOpfSolution(solution) => {
                 powerio::PioValue::AcOpfInstance(solution.instance().clone())
+            }
+            powerio::PioValue::AcOtsSolution(solution) => {
+                powerio::PioValue::AcOtsInstance(solution.instance().clone())
             }
             powerio::PioValue::SocwrOpfSolution(solution) => {
                 powerio::PioValue::AcOpfInstance(solution.instance().clone())

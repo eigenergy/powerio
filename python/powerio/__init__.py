@@ -88,6 +88,8 @@ from ._sincal import SincalBalancedReadOptions
 __all__ = [
     "AcOpfInstance",
     "AcOpfSolution",
+    "AcOtsInstance",
+    "AcOtsSolution",
     "AcPfInstance",
     "AcPfSolution",
     "AcScucInstance",
@@ -1443,6 +1445,13 @@ class AcOpfInstance(_BalancedCalculation):
     """An AC optimal power flow calculation instance."""
 
 
+class AcOtsInstance(_BalancedCalculation):
+    """An AC optimal transmission switching calculation instance.
+
+    Its network holds every candidate branch at its initial status.
+    """
+
+
 class McAcPfInstance(_MulticonductorCalculation):
     """A multiconductor AC power flow calculation instance."""
 
@@ -1495,6 +1504,13 @@ class DcOpfSolution(_BalancedCalculation, _CalculationSolution):
 
 class AcOpfSolution(_BalancedCalculation, _CalculationSolution):
     """An AC optimal power flow solution."""
+
+
+class AcOtsSolution(_BalancedCalculation, _CalculationSolution):
+    """An AC optimal transmission switching result.
+
+    Its network is the instance's network, with the initial branch statuses.
+    """
 
 
 class SocwrOpfSolution(_BalancedCalculation, _CalculationSolution):
@@ -1675,6 +1691,7 @@ _VALUE_CLASSES: dict[str, type[_TypedValue]] = {
     "powerio.AcPfInstance": AcPfInstance,
     "powerio.DcOpfInstance": DcOpfInstance,
     "powerio.AcOpfInstance": AcOpfInstance,
+    "powerio.AcOtsInstance": AcOtsInstance,
     "powerio.McAcPfInstance": McAcPfInstance,
     "powerio.McAcOpfInstance": McAcOpfInstance,
     "powerio.LinDist3FlowPfInstance": LinDist3FlowPfInstance,
@@ -1684,6 +1701,7 @@ _VALUE_CLASSES: dict[str, type[_TypedValue]] = {
     "powerio.AcPfSolution": AcPfSolution,
     "powerio.DcOpfSolution": DcOpfSolution,
     "powerio.AcOpfSolution": AcOpfSolution,
+    "powerio.AcOtsSolution": AcOtsSolution,
     "powerio.SocwrOpfSolution": SocwrOpfSolution,
     "powerio.McAcPfSolution": McAcPfSolution,
     "powerio.McAcOpfSolution": McAcOpfSolution,
@@ -1783,6 +1801,13 @@ class PioModule:
     def to_ac_opf_instance(self) -> "PioModule":
         """Build an AC optimal power flow instance from a balanced network module."""
         return PioModule(self._inner._to_ac_opf_instance())
+
+    def to_ac_ots_instance(self) -> "PioModule":
+        """Build an AC optimal transmission switching instance with the default
+        options from a balanced network or AC optimal power flow module: every
+        initially in-service branch may switch, at zero cost.
+        """
+        return PioModule(self._inner._to_ac_ots_instance())
 
     def to_mc_ac_pf_instance(self) -> "PioModule":
         """Build a multiconductor AC power flow instance from a network module."""
