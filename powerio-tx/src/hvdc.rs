@@ -213,6 +213,17 @@ impl HvdcTerminalPowers {
     pub fn calc_active_loss(&self) -> f64 {
         self.p_from + self.p_to
     }
+
+    /// The injections these terminal powers make into the two AC buses,
+    /// `[(p, q) at the from bus, (p, q) at the to bus]`: each end's terminal
+    /// power negated. This is the one place a terminal power becomes a bus
+    /// injection; [`Hvdc::calc_terminal_injections`] goes through it, and a
+    /// calculation that replaces a terminal power (an LCC converter's bridge
+    /// reactive demand, say) negates the replaced value here too.
+    #[must_use]
+    pub fn calc_bus_injections(&self) -> [(f64, f64); 2] {
+        [(-self.p_from, -self.q_from), (-self.p_to, -self.q_to)]
+    }
 }
 
 impl Hvdc {
@@ -246,11 +257,9 @@ impl Hvdc {
     /// not consulted.
     #[must_use]
     pub fn calc_terminal_injections(&self) -> [(BusId, f64, f64); 2] {
-        let terminal = self.calc_bus_to_device_powers();
-        [
-            (self.from, -terminal.p_from, -terminal.q_from),
-            (self.to, -terminal.p_to, -terminal.q_to),
-        ]
+        let [(p_from, q_from), (p_to, q_to)] =
+            self.calc_bus_to_device_powers().calc_bus_injections();
+        [(self.from, p_from, q_from), (self.to, p_to, q_to)]
     }
 }
 

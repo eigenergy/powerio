@@ -1928,6 +1928,7 @@ fn run_verify_stated_state(
         .with_merged_buses(merged_buses)
         .with_lcc_reactive_power(lcc_q);
     let mismatch = powerio_matrix::calc_stated_state_mismatch(&network, &options)?;
+    report_diagnostics(&mismatch.diagnostics);
     let energized = mismatch.buses.iter().filter(|b| b.island.is_some()).count();
     println!(
         "stated state ({}): {energized} buses in {} islands; sum |dP| = {:.3} MW, sum |dQ| = {:.3} MVAr, max |dS| = {:.3} MVA",

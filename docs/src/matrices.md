@@ -104,7 +104,11 @@ that solved the case.
   bridge equations give at the stored AC voltages
   (`Hvdc::calc_lcc_operating_point`: firing and extinction angles, overlap,
   and the fundamental power factor), unless `LccReactivePower::Stated` keeps
-  the line's stated reactive powers.
+  the line's stated reactive powers. A record that reaches no operating point
+  at a positive power factor keeps the stated reactive powers too, with a
+  `BUILD.HVDC.LCC_MODEL_UNAVAILABLE` warning. The active powers stay the
+  reader's `pf` and `pt`, which price the DC current differently from the
+  bridge model (see `powerio_tx::lcc`).
 - **Sign.** A bus mismatch is the power the network draws at the stored
   voltages minus the stated injection, MW and MVAr, the mismatch MATPOWER's
   `newtonpf` drives to zero. An injection equal to it closes the bus, and

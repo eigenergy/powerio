@@ -2142,6 +2142,8 @@ def test_stated_state_mismatch_ranks_buses_and_counts_hvdc():
     assert magnitudes == sorted(magnitudes, reverse=True)
     row = fixed["bus_ids"].index(30)
     assert "hvdc" in fixed["flags"][row]
+    # A MATPOWER dcline has no LCC converter record to fall back from.
+    assert fixed["diagnostics"] == []
     # Bus 30 sends 10 MW into the dcline; ignoring the line drops that
     # withdrawal from the stated injection.
     ignored = case.calc_stated_state_mismatch(hvdc="ignore")

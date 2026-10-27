@@ -11,6 +11,7 @@ use powerio_tx::{
     LoadVoltageModel,
 };
 
+use crate::diagnostics::{Diagnostic, codes};
 use crate::matrix::{YbusFlags, branch_admittance, branch_flows};
 use crate::opf::{AnalysisBranchSource, analysis_branch_sources};
 use crate::{Error, Result};
@@ -130,9 +131,16 @@ pub enum LccReactivePower {
     /// The converter bridge equations at the stored AC voltages
     /// ([`Hvdc::calc_lcc_operating_point`](powerio_tx::Hvdc::calc_lcc_operating_point)):
     /// each converter of a line read from a PSS/E two-terminal record draws
-    /// the reactive power its firing or extinction angle and overlap imply.
-    /// A line without such a record keeps its stated `qf` and `qt`, and a
-    /// normalized network, whose powers are per unit, keeps them throughout.
+    /// the reactive power its firing or extinction angle and overlap imply,
+    /// substituted for the terminal reactive powers of
+    /// [`Hvdc::calc_bus_to_device_powers`](powerio_tx::Hvdc::calc_bus_to_device_powers)
+    /// (positive, absorbed from the bus) and negated once into the bus
+    /// injection. The active powers stay the stated `pf` and `pt`. A line
+    /// without such a record keeps its stated `qf` and `qt`, as does one
+    /// whose record reaches no operating point, with a
+    /// `BUILD.HVDC.LCC_MODEL_UNAVAILABLE` warning in
+    /// [`StatedStateMismatch::diagnostics`]; a normalized network, whose
+    /// powers are per unit, keeps them throughout.
     #[default]
     ConverterModel,
     /// The line's stated `qf` and `qt`, which a PSS/E record leaves at zero.
@@ -271,6 +279,11 @@ pub struct StatedStateMismatch {
     /// Indices into [`buses`](Self::buses) of the largest `|ΔS|`, largest
     /// first, at most [`StatedStateOptions::top_k`] of them.
     pub top: Vec<usize>,
+    /// What the evaluation could not do as asked: one
+    /// `BUILD.HVDC.LCC_MODEL_UNAVAILABLE` warning per line with an LCC
+    /// converter record whose stated reactive powers stood in for the
+    /// converter model.
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 impl StatedStateMismatch {
@@ -609,26 +622,46 @@ pub fn calc_stated_state_mismatch(
             flags[idx] |= StatedBusFlags::STORAGE;
         }
     }
+    let mut diagnostics = Vec::new();
     if opts.hvdc_treatment == HvdcTreatment::FixedInjection {
-        for ((injection, p), q) in stated.iter_mut().zip(view.p_hvdc()).zip(view.q_hvdc()) {
-            *injection += Complex64::new(*p, *q) / base;
-        }
-        if opts.lcc_reactive_power == LccReactivePower::ConverterModel && !net.is_normalized() {
-            // Each injecting line states its from end, then its to end.
-            for ends in view.hvdc_injections().terminals.chunks(2) {
-                let [from, to] = ends else { continue };
-                let line = &view.network().hvdc()[from.row];
-                let (Some(f), Some(t)) = (view.bus_index(from.bus), view.bus_index(to.bus)) else {
-                    continue;
-                };
-                let Some(point) =
-                    line.calc_lcc_operating_point(voltages[f].norm(), voltages[t].norm())
-                else {
-                    continue;
-                };
-                stated[f] += Complex64::new(0.0, -point.rectifier.q_mvar - line.qf) / base;
-                stated[t] += Complex64::new(0.0, -point.inverter.q_mvar - line.qt) / base;
+        // The converter model's power is MW and MVAr, so a normalized
+        // network keeps the stated reactive powers throughout.
+        let bridge_q =
+            opts.lcc_reactive_power == LccReactivePower::ConverterModel && !net.is_normalized();
+        // Each injecting line states its from end, then its to end.
+        for ends in view.hvdc_injections().terminals.chunks(2) {
+            let [from, to] = ends else { continue };
+            let line = &view.network().hvdc()[from.row];
+            let (Some(f), Some(t)) = (view.bus_index(from.bus), view.bus_index(to.bus)) else {
+                continue;
+            };
+            let mut terminal = line.calc_bus_to_device_powers();
+            if bridge_q && line.has_lcc_converter_record() {
+                // The bridge model's reactive demand replaces the stated
+                // terminal reactive powers; the active powers stay the
+                // reader's `pf` and `pt` (the bridge model prices the DC
+                // current differently, see `powerio_tx::lcc`).
+                match line.calc_lcc_operating_point(voltages[f].norm(), voltages[t].norm()) {
+                    Some(point) => {
+                        terminal.q_from = point.rectifier.q_mvar;
+                        terminal.q_to = point.inverter.q_mvar;
+                    }
+                    None => diagnostics.push(Diagnostic::of(
+                        &codes::BUILD_HVDC_LCC_MODEL_UNAVAILABLE,
+                        format!(
+                            "HVDC line row {} between buses {} and {} reaches no LCC bridge \
+                             operating point at the stored voltages (no converter AC base, \
+                             capacitor commutation, or a schedule no angle reaches at a \
+                             positive power factor); its stated reactive powers were kept",
+                            from.row, from.bus, to.bus
+                        ),
+                    )),
+                }
             }
+            // The one negation from terminal power to bus injection.
+            let [(p_from, q_from), (p_to, q_to)] = terminal.calc_bus_injections();
+            stated[f] += Complex64::new(p_from, q_from) / base;
+            stated[t] += Complex64::new(p_to, q_to) / base;
         }
     }
     for line in view.network().hvdc().iter().filter(|line| line.in_service) {
@@ -716,6 +749,7 @@ pub fn calc_stated_state_mismatch(
         buses: rows,
         islands,
         top,
+        diagnostics,
     })
 }
 

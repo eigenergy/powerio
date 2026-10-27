@@ -1055,6 +1055,12 @@ impl PyBalancedNetwork {
         d.set_item("total_abs_p_mw", mismatch.calc_total_abs_p_mw())?;
         d.set_item("total_abs_q_mvar", mismatch.calc_total_abs_q_mvar())?;
         d.set_item("max_magnitude_mva", mismatch.calc_max_magnitude_mva())?;
+        let diagnostics: Vec<PyDiagnostic> = mismatch
+            .diagnostics
+            .iter()
+            .map(PyDiagnostic::from)
+            .collect();
+        d.set_item("diagnostics", diagnostics)?;
         Ok(d)
     }
 

@@ -27,6 +27,26 @@
 //! `Vd_inverter + RCOMP·Id`, the rectifier sits `RDC·Id` above the inverter,
 //! and `SETVL` states the power (at the rectifier, or at the inverter when
 //! negative) or, under `MDC 2`, the current.
+//!
+//! A converter whose angle reaches 90 degrees or more, or whose DC voltage
+//! is not positive, has a power factor at or below zero: the schedule does
+//! not describe a rectifier or inverter at these voltages, so no operating
+//! point is returned and a caller keeps the line's stated reactive powers.
+//!
+//! # Known inconsistency with the PSS/E reader
+//!
+//! The two-terminal reader on main prices a power schedule at the rectifier
+//! as `Id = SETVL / VSCHD`, as if `VSCHD` were the rectifier voltage, and
+//! stores `pf = SETVL` and `pt = SETVL - RDC·Id²`. The bridge model here
+//! follows PSS/E: `VSCHD` is the inverter voltage plus the compounding drop
+//! `RCOMP·Id`, so the rectifier sits `RDC·Id` above it and `Id` solves
+//! `(VSCHD + (RDC - RCOMP)·Id)·Id = SETVL`. For `SETVL` 1000 MW, `VSCHD`
+//! 500 kV, `RDC` 10 Ω, and `RCOMP` 0, the reader has `Id` = 2.0 kA and
+//! `pt` = 960 MW, the bridge model `Id` = 1.9258 kA and 962.9 MW at the
+//! inverter. The stated-state balance uses this model's current only for
+//! the converters' reactive power and keeps the reader's `pf` and `pt` for
+//! the active power; aligning the reader changes conversion output and is
+//! separate work.
 
 use serde_json::Value;
 
@@ -127,7 +147,10 @@ impl Bridge {
         let k = 3.0 * std::f64::consts::SQRT_2 / std::f64::consts::PI;
         let drop = (3.0 * self.xc / std::f64::consts::PI + 2.0 * self.rc) * id;
         let cos_theta = (vd / self.bridges + drop) / (k * e);
-        if !(-1.0..=1.0).contains(&cos_theta) {
+        // A power factor at or below zero (an angle of 90 degrees or more,
+        // or a DC voltage that is not positive) is no converter operating
+        // point; the caller keeps the stated reactive power.
+        if vd <= 0.0 || !(f64::MIN_POSITIVE..=1.0).contains(&cos_theta) {
             return None;
         }
         let theta = cos_theta.acos();
@@ -152,6 +175,18 @@ impl Bridge {
 }
 
 impl Hvdc {
+    /// Whether the line carries a PSS/E two-terminal converter record that
+    /// states a converter: a rectifier or inverter tail the reader retained
+    /// because it differs from the default fields. A line from another
+    /// format, or a record left at the defaults, has none, and
+    /// [`calc_lcc_operating_point`](Self::calc_lcc_operating_point) has
+    /// nothing to model for it.
+    #[must_use]
+    pub fn has_lcc_converter_record(&self) -> bool {
+        self.extras.contains_key("psse_dc_rectifier_tail")
+            || self.extras.contains_key("psse_dc_inverter_tail")
+    }
+
     /// The LCC operating point of a line read from a PSS/E two-terminal DC
     /// record, at AC voltage magnitudes `vm_rectifier` (the `from` bus) and
     /// `vm_inverter` (the `to` bus), per unit: the DC current, and each
@@ -162,7 +197,13 @@ impl Hvdc {
     /// (a line from another format, or a record left at the default converter
     /// fields), states no scheduled voltage, uses capacitor commutation, or
     /// schedules a point no firing or extinction angle reaches at these
-    /// voltages. The in service flag is not consulted.
+    /// voltages, or one where a converter's power factor is at or below zero
+    /// (an angle of 90 degrees or more, or a DC voltage that is not
+    /// positive). The in service flag is not consulted.
+    ///
+    /// The DC current follows PSS/E's schedule semantics, which differ from
+    /// how the two-terminal reader prices `pf` and `pt`; the
+    /// [module](crate::lcc) states the difference.
     #[must_use]
     pub fn calc_lcc_operating_point(
         &self,
@@ -350,5 +391,112 @@ Q
         assert!(default_tail.calc_lcc_operating_point(1.0, 1.0).is_none());
         // An AC voltage too low for the schedule leaves no angle.
         assert!(line().calc_lcc_operating_point(0.3, 1.0).is_none());
+        assert!(!plain.has_lcc_converter_record());
+        assert!(line().has_lcc_converter_record());
+    }
+
+    /// One bridge with the given commutating reactance on a 100 kV valve
+    /// side (`EBAS·TR/TAP` at 1 per unit).
+    fn one_bridge(xc: f64) -> Bridge {
+        Bridge {
+            bridges: 1.0,
+            rc: 0.0,
+            xc,
+            ebas: 100.0,
+            tr: 1.0,
+            tap: 1.0,
+            xcap: 0.0,
+        }
+    }
+
+    #[test]
+    fn without_commutation_reactance_the_reactive_power_is_p_tan_alpha() {
+        // No overlap: the fundamental current lags the voltage by the firing
+        // angle itself, so Q = P·tan α exactly. Pick α = 15 degrees.
+        let k = 3.0 * std::f64::consts::SQRT_2 / std::f64::consts::PI;
+        let alpha = 15.0_f64.to_radians();
+        let vd = k * 100.0 * alpha.cos();
+        let state = one_bridge(0.0).calc_state(vd, 2.0, 1.0).unwrap();
+        assert!((state.angle_deg - 15.0).abs() < 1e-9);
+        assert!(state.overlap_deg.abs() < 1e-9);
+        assert!((state.q_mvar - state.p_mw * alpha.tan()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn with_overlap_the_power_factor_is_near_the_classical_estimate() {
+        // The exact fundamental power factor and the classical estimate
+        // cos φ ≈ (cos α + cos(α + μ)) / 2 (Kundur, Power System Stability
+        // and Control, section 10.2) agree to within half a percent at
+        // ordinary angles (here α = 15 and μ = 19.5 degrees: 0.8993 against
+        // 0.8952); the reactive power itself differs by a few percent.
+        let k = 3.0 * std::f64::consts::SQRT_2 / std::f64::consts::PI;
+        let (xc, id, e) = (5.0, 2.0, 100.0);
+        let alpha = 15.0_f64.to_radians();
+        let vd = k * e * alpha.cos() - 3.0 * xc / std::f64::consts::PI * id;
+        let state = one_bridge(xc).calc_state(vd, id, 1.0).unwrap();
+        assert!((state.angle_deg - 15.0).abs() < 1e-9);
+        let mu = state.overlap_deg.to_radians();
+        assert!(mu > 0.1, "a real overlap: {} degrees", state.overlap_deg);
+        let exact = state.p_mw / state.p_mw.hypot(state.q_mvar);
+        let estimate = f64::midpoint(alpha.cos(), (alpha + mu).cos());
+        assert!(((exact - estimate) / exact).abs() < 0.005);
+    }
+
+    #[test]
+    fn a_power_factor_at_or_below_zero_is_no_operating_point() {
+        // A current schedule with a compounding resistance large enough to
+        // drive the inverter's DC voltage negative: 2 kA through RCOMP = 300 Ω
+        // leaves 500 - 600 = -100 kV, an extinction angle past 90 degrees.
+        let mut line = line();
+        line.extras.insert("psse_dc_mdc".into(), Value::from(2));
+        line.extras.insert(
+            "psse_dc_control_tail".into(),
+            Value::Array(
+                ["0.0", "300.0", "0.1", "'I'", "0.0", "20", "1.0"]
+                    .iter()
+                    .map(|v| Value::String((*v).into()))
+                    .collect(),
+            ),
+        );
+        assert!(line.calc_lcc_operating_point(1.0, 1.0).is_none());
+        // The same bridge at a negative DC voltage directly.
+        let bridge = one_bridge(10.0);
+        assert!(bridge.calc_state(-50.0, 2.0, 1.0).is_none());
+        assert!(bridge.calc_state(0.0, 2.0, 1.0).is_none());
+    }
+
+    #[test]
+    fn the_bridge_current_differs_from_the_reader_pricing() {
+        // SETVL 1000 MW at the rectifier, VSCHD 500 kV, RDC 10 Ω, RCOMP 0.
+        // The reader prices Id = SETVL / VSCHD = 2 kA and pt = 1000 - 10·2² =
+        // 960 MW; the bridge model solves (500 + 10·Id)·Id = 1000.
+        let raw = "0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+4,'B4          ', 345.0,3,1,1,1,1.02,0.0,1.1,0.9,1.1,0.9
+5,'B5          ', 345.0,1,1,1,1,0.98,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+'POLE', 1, 10.0, 1000.0, 500.0, 0.0, 0.0, 0.1, 'I', 0.0, 20, 1.0
+4, 2, 17.5, 12.5, 0.3, 20.0, 345.0, 0.7, 1.0, 1.2, 0.9, 0.0125, 0, 0, 0, '1', 0.0
+5, 2, 17.5, 12.5, 0.3, 20.0, 345.0, 0.7, 1.0, 1.2, 0.9, 0.0125, 0, 0, 0, '1', 0.0
+0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
+Q
+";
+        let parsed = crate::parse_str(raw, "psse").unwrap();
+        let read = &parsed.network.hvdc()[0];
+        assert!((read.pf - 1000.0).abs() < 1e-9);
+        assert!((read.pt - 960.0).abs() < 1e-9, "reader pt {}", read.pt);
+        let point = read.calc_lcc_operating_point(1.02, 0.98).unwrap();
+        let id = (290_000.0_f64.sqrt() - 500.0) / 20.0;
+        assert!((point.dc_current_ka - id).abs() < 1e-12);
+        assert!((point.dc_current_ka - 1.9258).abs() < 1e-4);
+        assert!((point.inverter.p_mw - 962.91).abs() < 0.01);
+        assert!((point.rectifier.p_mw - 1000.0).abs() < 1e-9);
     }
 }

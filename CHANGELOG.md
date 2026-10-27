@@ -13,9 +13,31 @@
   `calc_stated_state_mismatch` uses it by default for every line with a
   converter record (`LccReactivePower::ConverterModel`, or `Stated` for the
   line's stated `qf` and `qt`), also as `powerio verify --stated-state --lcc-q`
-  and the Python `lcc_reactive_power` argument. A line without a converter
-  record, with capacitor commutation, or at a point no angle reaches keeps its
-  stated reactive powers.
+  and the Python `lcc_reactive_power` argument: the bridge reactive demand
+  replaces the terminal reactive powers of `Hvdc::calc_bus_to_device_powers`
+  and is negated once into the bus injection by the new
+  `HvdcTerminalPowers::calc_bus_injections`, the path
+  `Hvdc::calc_terminal_injections` now takes too. A line without a converter
+  record keeps its stated reactive powers. A line whose record uses
+  capacitor commutation, states no converter AC base, or schedules a point no
+  angle reaches at a positive power factor (an angle below 90 degrees and a
+  positive DC voltage) also keeps them, with a
+  `BUILD.HVDC.LCC_MODEL_UNAVAILABLE` warning in the new
+  `StatedStateMismatch::diagnostics` (reported by the CLI, and returned as
+  `diagnostics` in Python). `Hvdc::has_lcc_converter_record` tells the two
+  apart.
+
+  The model and the existing PSS/E two-terminal reader price the DC current
+  differently. The reader takes `Id = SETVL / VSCHD`, as if `VSCHD` were the
+  rectifier voltage, and stores `pf = SETVL` and `pt = SETVL - RDC·Id²`. The
+  model follows PSS/E: `VSCHD` is the inverter voltage plus the compounding
+  drop `RCOMP·Id`, so `Id` solves `(VSCHD + (RDC - RCOMP)·Id)·Id = SETVL`.
+  For `SETVL` 1000 MW, `VSCHD` 500 kV, `RDC` 10 Ω, and `RCOMP` 0, the reader
+  has `Id` = 2.0 kA and `pt` = 960 MW, the model `Id` = 1.9258 kA and 962.9
+  MW at the inverter. The stated-state check uses the model's current only
+  for the converters' reactive power and keeps the reader's `pf` and `pt` for
+  the active power. The reader is unchanged here, since aligning it changes
+  conversion output.
 
 - `calc_stated_state_mismatch` evaluates every bus's AC balance at the
   voltages a case stores, with each device at its stated output: generators

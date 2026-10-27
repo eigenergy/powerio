@@ -518,7 +518,9 @@ class BalancedNetwork:
         The result holds per bus columns in analysis bus order (``bus_ids``,
         ``island``, ``p_mw``, ``q_mvar``, and ``flags``, the attached
         equipment a residual is traced to), ``islands`` totals largest first,
-        ``top`` (row indices of the largest mismatches), and the totals.
+        ``top`` (row indices of the largest mismatches), the totals, and
+        ``diagnostics`` (a warning per LCC line that kept its stated reactive
+        powers because its converter record reaches no operating point).
         ``merge_zero_impedance`` first merges the buses joined by in-service
         zero-impedance branches, whose flows the stored voltages cannot
         determine; without it such a branch raises. A closed switch joining
