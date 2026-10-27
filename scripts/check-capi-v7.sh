@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PowerIO 0.11 ships exactly ABI 7. This gate checks the ABI number, rejects
-# removed beta entry points, and, when a paired PowerIO.jl checkout is
+# removed beta entry points, and, when a PowerIO.jl checkout is
 # available, checks the entry point names both ways: every name the binding
 # calls is declared by ABI 7, and every name ABI 7 declares is either called by
 # the binding or exempted in its gen/unbound_entry_points.txt.

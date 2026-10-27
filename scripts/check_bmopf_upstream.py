@@ -2,15 +2,33 @@
 """Record upstream schema review changes without adopting their modeling rules."""
 
 import base64
+import hashlib
 import json
+import subprocess
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from paired_release import POWERIO, api, sha256
-
+POWERIO = 'eigenergy/powerio'
 BRANCH = 'maintenance/bmopf-upstream-review'
 PATH = '.github/bmopf-upstream.json'
+
+
+def api(path, data=None, *, missing=False):
+    command = ['gh', 'api', path]
+    if data is not None:
+        command += ['--input', '-']
+    result = subprocess.run(command, input=json.dumps(data) if data is not None else None,
+                            capture_output=True, text=True, check=False)
+    if result.returncode:
+        if missing and 'HTTP 404' in result.stderr:
+            return None
+        raise RuntimeError(f'GitHub request failed: {path}: {result.stderr.strip()}')
+    return json.loads(result.stdout) if result.stdout.strip() else None
+
+
+def sha256(data):
+    return hashlib.sha256(data).hexdigest()
 
 
 def public_api(path):
@@ -61,12 +79,12 @@ def main():
         print('The current upstream observation was already reviewed and closed')
         return
     if not unchanged:
-        from paired_release import run
         payload = {'message': 'docs: record BMOPF upstream review state', 'branch': BRANCH,
                    'content': base64.b64encode(content).decode()}
         if current:
             payload['sha'] = current['sha']
-        run('gh', 'api', '--method', 'PUT', f'repos/{POWERIO}/contents/{PATH}', '--input', '-', input=json.dumps(payload))
+        subprocess.run(['gh', 'api', '--method', 'PUT', f'repos/{POWERIO}/contents/{PATH}', '--input', '-'],
+                       input=json.dumps(payload), check=True, capture_output=True, text=True)
     prs = api(f'repos/{POWERIO}/pulls?state=open&head=eigenergy:{BRANCH}&base=main')
     if not prs:
         pr = api(f'repos/{POWERIO}/pulls', {'head': BRANCH, 'base': 'main', 'draft': True,
