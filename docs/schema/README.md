@@ -33,14 +33,17 @@ The current document begins:
 
 PowerIO 0.11.7 keeps IR version 2 and every existing record layout. The
 LinDist3Flow OPF instance and solution types added in 0.11.1, the three PSS/E
-contingency analysis files added in 0.11.3, and the fixed-dispatch LinDist3Flow
-instance and solution types added in 0.11.4 use distinct structural type names.
+contingency analysis files added in 0.11.3, the fixed-dispatch LinDist3Flow
+instance and solution types added in 0.11.4, and the AC optimal transmission
+switching instance and solution types added in 0.11.7 use distinct structural
+type names.
 A reader accepts the types it implements; an older reader rejects an
 unknown type without losing the ability to read familiar types. A list of
 allowed names can gain a name the same way: 0.11.6 adds `cim-dist` to the
 source formats a distribution network records. SINCAL adds `sincal` to both
 network families' source-format lists. An older reader rejects a document that
-uses an unknown format while still reading documents using known formats. A version
+uses an unknown format while still reading documents using known formats. The
+objective terms gain `branch_switching_cost` the same way in 0.11.7. A version
 bump requires an incompatible change to an existing representation and an
 explicit release decision. Adding fields to a record is not automatically
 compatible: readers can reject unknown fields, so existing records retain
@@ -71,6 +74,8 @@ to `SourceFormat`, and the distinctly tagged `powerio.ReferencedVoltageSource`
 nested record. Ordinary voltage sources retain their original representation.
 It also extends monitor scopes and statements with kV-qualified selection and
 pre/post voltage bands while preserving previously accepted monitor records.
+The 0.11.7 snapshot adds `powerio.AcOtsInstance`, `powerio.AcOtsSolution`,
+their option definitions, and the `branch_switching_cost` objective term.
 The 0.11.7 snapshot adds the optional `hvdc_treatment` field to
 `DcPfInstance` and `AcPfInstance` and its `HvdcTreatment` definition
 (`fixed_injection` or `ignore`).
@@ -78,7 +83,9 @@ The 0.11.7 snapshot adds the optional `hvdc_treatment` field to
 The release name in the snapshot path does not create a new IR version.
 A later release without catalog changes can reuse that snapshot (0.11.2
 reused 0.11.1). CI preserves existing definitions and document rules, with
-narrow checks for added format names, the distinctly tagged voltage-source
+narrow checks for added format names and other constant-tagged alternatives
+(every alternative an earlier schema file states stays byte for byte the
+same, and every tag stays distinct), the distinctly tagged voltage-source
 and partial-transformer alternatives, additive monitor fields and variants,
 and the optional `hvdc_treatment` field of the power flow instance records.
 The monitor checks preserve existing property schemas and required fields and require distinct

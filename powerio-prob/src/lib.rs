@@ -34,11 +34,13 @@ pub mod __internal {
     };
 }
 pub use instance::{
-    AcBusSpecification, AcOpfInstance, AcPfInstance, AcScucInstance, ActiveConstraints,
-    ActiveControlMode, ConstraintSelection, DcBusSpecification, DcOpfInstance, DcPfInstance,
-    LinDist3FlowApplicability, LinDist3FlowApplicabilityStatus, LinDist3FlowBuildOptions,
-    LinDist3FlowNode, LinDist3FlowOpfInstance, LinDist3FlowOrientedConductor,
-    LinDist3FlowPfInstance, LinDist3FlowPreparationAction, LinDist3FlowPreparationActionKind,
+    AcBusSpecification, AcOpfInstance, AcOtsBranch, AcOtsInstance, AcOtsOptions, AcPfInstance,
+    AcScucInstance, ActiveConstraints, ActiveControlMode, BranchCurrentLimit, BranchSelection,
+    BranchSwitchingCost, ConstraintSelection, CurrentLimitPolicy, DcBusSpecification,
+    DcOpfInstance, DcPfInstance, IslandingPolicy, LinDist3FlowApplicability,
+    LinDist3FlowApplicabilityStatus, LinDist3FlowBuildOptions, LinDist3FlowNode,
+    LinDist3FlowOpfInstance, LinDist3FlowOrientedConductor, LinDist3FlowPfInstance,
+    LinDist3FlowPreparationAction, LinDist3FlowPreparationActionKind,
     LinDist3FlowPreparationReport, LinDist3FlowReferencePolicy, LinDist3FlowReferenceProvenance,
     LinDist3FlowReferenceState, LinDist3FlowReferenceVoltage, LinDist3FlowTopology,
     LinDist3FlowUnsupported, McAcOpfInstance, McAcPfInstance, MulticonductorActiveConstraints,
@@ -48,7 +50,8 @@ pub use instance::{
     ScucInitialCommitment, ScucInputs, ScucRampLimits, ScucReactiveCapability,
     ScucReactiveReserveZone, ScucReserveCosts, ScucReserveLimits, ScucShunt,
     ScucStartupCostAdjustment, ScucStartupLimit, ScucTransformerControl, ScucViolationCosts,
-    ZeroImpedanceMerge, check_lindist3flow_applicability, merge_zero_impedance_buses,
+    SwitchingCost, TerminalCurrentBounds, ZeroImpedanceMerge, check_lindist3flow_applicability,
+    merge_zero_impedance_buses,
 };
 pub use operating::{
     BalancedOperatingPointBuilder, BalancedOperatingPointFlag, BalancedOperatingPointQuantity,
@@ -58,12 +61,12 @@ pub use operating::{
 };
 pub use reference::ReferenceBuses;
 pub use solution::{
-    AcOpfSolution, AcPfSolution, AcScucSolution, DcOpfSolution, DcPfSolution, GeneratorDispatch,
-    LinDist3FlowLimitCheck, LinDist3FlowLimitKind, LinDist3FlowOpfSolution, LinDist3FlowOpfValues,
-    LinDist3FlowPfSolution, McAcOpfSolution, McAcPfSolution, Producer, Residuals,
-    SCUC_DEVICE_OUTPUT_SERIES, SCUC_NETWORK_OUTPUT_SERIES, ScucDeviceOutputs, ScucNetworkOutputs,
-    Termination, ThreeWindingTransformerTerminalActivePower, ThreeWindingTransformerTerminalPower,
-    evaluate_lindist3flow_pf_limits,
+    AcOpfSolution, AcOtsSolution, AcPfSolution, AcScucSolution, DcOpfSolution, DcPfSolution,
+    GeneratorDispatch, LinDist3FlowLimitCheck, LinDist3FlowLimitKind, LinDist3FlowOpfSolution,
+    LinDist3FlowOpfValues, LinDist3FlowPfSolution, McAcOpfSolution, McAcPfSolution, Producer,
+    Residuals, SCUC_DEVICE_OUTPUT_SERIES, SCUC_NETWORK_OUTPUT_SERIES, ScucDeviceOutputs,
+    ScucNetworkOutputs, Termination, ThreeWindingTransformerTerminalActivePower,
+    ThreeWindingTransformerTerminalPower, evaluate_lindist3flow_pf_limits,
 };
 pub use update::{
     ActivePower, ActivePowerUnit, ApparentPower, ApparentPowerUnit, BalancedCalculationInstance,

@@ -1668,6 +1668,104 @@ pub struct PioVoltageSourceBoundaryView {
     pub has_reference_terminal: bool,
 }
 
+/// One branch's opening and closing cost in objective units, by branch
+/// identity. Only a change against the initial topology costs anything.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioBranchSwitchingCost {
+    pub id: PioStringView,
+    pub open_cost: f64,
+    pub close_cost: f64,
+}
+
+/// Explicit current magnitude limits at a branch's two terminals, per unit
+/// on the system MVA base and each terminal bus's nominal voltage. A side
+/// whose `has_` flag is false is unbounded.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioBranchCurrentLimit {
+    pub id: PioStringView,
+    pub from_pu: f64,
+    pub to_pu: f64,
+    pub has_from_pu: bool,
+    pub has_to_pu: bool,
+}
+
+/// AC optimal transmission switching options. `switchable` is `all`,
+/// `none`, or `only` (then `identities` names the switchable branches);
+/// `islanding` is `forbidden` or `allowed`; `current_limits` is `skip`,
+/// `stated`, or `derive_from_rate_a`. Arrays carry their element counts and
+/// are read during the call only.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioAcOtsOptions {
+    pub switchable: PioStringView,
+    pub identities: *const PioStringView,
+    pub identities_len: usize,
+    pub switching_costs: *const PioBranchSwitchingCost,
+    pub switching_costs_len: usize,
+    pub islanding: PioStringView,
+    pub max_open: usize,
+    pub has_max_open: bool,
+    pub max_switched: usize,
+    pub has_max_switched: bool,
+    pub current_limits: PioStringView,
+    pub stated_current_limits: *const PioBranchCurrentLimit,
+    pub stated_current_limits_len: usize,
+}
+
+/// The stated switching options of one AC optimal transmission switching
+/// instance, and its branch count. Per-branch settings are read with
+/// `pio_ac_ots_instance_branch_at`. The strings are static.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioAcOtsOptionsView {
+    pub switchable: PioStringView,
+    pub islanding: PioStringView,
+    pub current_limits: PioStringView,
+    pub branch_count: usize,
+    pub max_open: usize,
+    pub has_max_open: bool,
+    pub max_switched: usize,
+    pub has_max_switched: bool,
+}
+
+/// One physical branch as an AC optimal transmission switching instance
+/// sees it: its identity, initial status, whether it may switch, its
+/// switching costs, its stated current limits, and the current limits that
+/// apply under the instance's policy. Borrowed data lives with the owner.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioAcOtsBranchView {
+    pub id: PioStringView,
+    pub initial_closed: bool,
+    pub switchable: bool,
+    pub has_switching_cost: bool,
+    pub open_cost: f64,
+    pub close_cost: f64,
+    pub stated_from_pu: f64,
+    pub stated_to_pu: f64,
+    pub has_stated_from_pu: bool,
+    pub has_stated_to_pu: bool,
+    pub current_from_pu: f64,
+    pub current_to_pu: f64,
+    pub has_current_from_pu: bool,
+    pub has_current_to_pu: bool,
+}
+
+/// The totals of one AC optimal transmission switching solution. The
+/// objective includes the switching cost when the instance's objective
+/// states the switching cost term.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioAcOtsSolutionView {
+    pub branch_count: usize,
+    pub branches_open: usize,
+    pub branches_switched: usize,
+    pub switching_cost: f64,
+    pub objective: f64,
+}
+
 fn voltage_source_view(source: &powerio_dist::VoltageSource) -> PioVoltageSourceView {
     PioVoltageSourceView {
         name: PioStringView::new(&source.name),
@@ -4116,11 +4214,13 @@ enum BalancedNetworkProjection {
     AcPfInstance,
     DcOpfInstance,
     AcOpfInstance,
+    AcOtsInstance,
     AcScucInstance,
     DcPfSolution,
     AcPfSolution,
     DcOpfSolution,
     AcOpfSolution,
+    AcOtsSolution,
     SocwrOpfSolution,
     AcScucSolution,
 }
@@ -4152,6 +4252,9 @@ impl BalancedNetworkInner {
             (BalancedNetworkProjection::AcOpfInstance, PioValue::AcOpfInstance(instance)) => {
                 Some(instance.network())
             }
+            (BalancedNetworkProjection::AcOtsInstance, PioValue::AcOtsInstance(instance)) => {
+                Some(instance.network())
+            }
             (BalancedNetworkProjection::AcScucInstance, PioValue::AcScucInstance(instance)) => {
                 Some(instance.network())
             }
@@ -4165,6 +4268,9 @@ impl BalancedNetworkInner {
                 Some(solution.network())
             }
             (BalancedNetworkProjection::AcOpfSolution, PioValue::AcOpfSolution(solution)) => {
+                Some(solution.network())
+            }
+            (BalancedNetworkProjection::AcOtsSolution, PioValue::AcOtsSolution(solution)) => {
                 Some(solution.network())
             }
             (BalancedNetworkProjection::SocwrOpfSolution, PioValue::SocwrOpfSolution(solution)) => {
@@ -4242,6 +4348,7 @@ enum OperatingPointProjection {
     AcPfInitial,
     DcOpfInitial,
     AcOpfInitial,
+    AcOtsInitial,
     McAcPfInitial,
     McAcOpfInitial,
     LinDist3FlowOpfInitial,
@@ -4249,6 +4356,7 @@ enum OperatingPointProjection {
     AcPfSolutionInitial,
     DcOpfSolutionInitial,
     AcOpfSolutionInitial,
+    AcOtsSolutionInitial,
     SocwrOpfSolutionInitial,
     McAcPfSolutionInitial,
     McAcOpfSolutionInitial,
@@ -4278,6 +4386,9 @@ impl OperatingPointInner {
             (OperatingPointProjection::AcOpfInitial, PioValue::AcOpfInstance(instance)) => {
                 instance.initial_point()
             }
+            (OperatingPointProjection::AcOtsInitial, PioValue::AcOtsInstance(instance)) => {
+                instance.initial_point()
+            }
             (OperatingPointProjection::DcPfSolutionInitial, PioValue::DcPfSolution(solution)) => {
                 solution.instance().initial_point()
             }
@@ -4288,6 +4399,9 @@ impl OperatingPointInner {
                 solution.instance().initial_point()
             }
             (OperatingPointProjection::AcOpfSolutionInitial, PioValue::AcOpfSolution(solution)) => {
+                solution.instance().initial_point()
+            }
+            (OperatingPointProjection::AcOtsSolutionInitial, PioValue::AcOtsSolution(solution)) => {
                 solution.instance().initial_point()
             }
             (
@@ -4350,6 +4464,7 @@ impl OperatingPointInner {
             OperatingPointProjection::AcPfInitial => BalancedNetworkProjection::AcPfInstance,
             OperatingPointProjection::DcOpfInitial => BalancedNetworkProjection::DcOpfInstance,
             OperatingPointProjection::AcOpfInitial => BalancedNetworkProjection::AcOpfInstance,
+            OperatingPointProjection::AcOtsInitial => BalancedNetworkProjection::AcOtsInstance,
             OperatingPointProjection::DcPfSolutionInitial => {
                 BalancedNetworkProjection::DcPfSolution
             }
@@ -4361,6 +4476,9 @@ impl OperatingPointInner {
             }
             OperatingPointProjection::AcOpfSolutionInitial => {
                 BalancedNetworkProjection::AcOpfSolution
+            }
+            OperatingPointProjection::AcOtsSolutionInitial => {
+                BalancedNetworkProjection::AcOtsSolution
             }
             OperatingPointProjection::SocwrOpfSolutionInitial => {
                 BalancedNetworkProjection::SocwrOpfSolution
@@ -4405,6 +4523,7 @@ enum CalculationInstanceProjection {
     AcPfSolution,
     DcOpfSolution,
     AcOpfSolution,
+    AcOtsSolution,
     SocwrOpfSolution,
     McAcPfSolution,
     McAcOpfSolution,
@@ -4418,6 +4537,7 @@ enum CalculationInstanceRef<'a> {
     AcPf(&'a powerio_prob::AcPfInstance),
     DcOpf(&'a powerio_prob::DcOpfInstance),
     AcOpf(&'a powerio_prob::AcOpfInstance),
+    AcOts(&'a powerio_prob::AcOtsInstance),
     McAcPf(&'a powerio_prob::McAcPfInstance),
     McAcOpf(&'a powerio_prob::McAcOpfInstance),
     LinDist3FlowOpf(&'a powerio_prob::LinDist3FlowOpfInstance),
@@ -4431,6 +4551,7 @@ impl CalculationInstanceRef<'_> {
             Self::AcPf(_) => "powerio.AcPfInstance",
             Self::DcOpf(_) => "powerio.DcOpfInstance",
             Self::AcOpf(_) => "powerio.AcOpfInstance",
+            Self::AcOts(_) => "powerio.AcOtsInstance",
             Self::McAcPf(_) => "powerio.McAcPfInstance",
             Self::McAcOpf(_) => "powerio.McAcOpfInstance",
             Self::LinDist3FlowOpf(_) => "powerio.LinDist3FlowOpfInstance",
@@ -4459,6 +4580,9 @@ impl CalculationInstanceInner {
             (CalculationInstanceProjection::Direct, PioValue::AcOpfInstance(instance)) => {
                 Some(CalculationInstanceRef::AcOpf(instance))
             }
+            (CalculationInstanceProjection::Direct, PioValue::AcOtsInstance(instance)) => {
+                Some(CalculationInstanceRef::AcOts(instance))
+            }
             (CalculationInstanceProjection::Direct, PioValue::McAcPfInstance(instance)) => {
                 Some(CalculationInstanceRef::McAcPf(instance))
             }
@@ -4483,6 +4607,9 @@ impl CalculationInstanceInner {
             }
             (CalculationInstanceProjection::AcOpfSolution, PioValue::AcOpfSolution(solution)) => {
                 Some(CalculationInstanceRef::AcOpf(solution.instance()))
+            }
+            (CalculationInstanceProjection::AcOtsSolution, PioValue::AcOtsSolution(solution)) => {
+                Some(CalculationInstanceRef::AcOts(solution.instance()))
             }
             (
                 CalculationInstanceProjection::SocwrOpfSolution,
@@ -4538,6 +4665,13 @@ impl CalculationInstanceInner {
         }
     }
 
+    fn ac_ots(&self) -> Option<&powerio_prob::AcOtsInstance> {
+        match self.instance()? {
+            CalculationInstanceRef::AcOts(instance) => Some(instance),
+            _ => None,
+        }
+    }
+
     fn mc_ac_pf(&self) -> Option<&powerio_prob::McAcPfInstance> {
         match self.instance()? {
             CalculationInstanceRef::McAcPf(instance) => Some(instance),
@@ -4558,6 +4692,7 @@ impl CalculationInstanceInner {
             Some(CalculationInstanceRef::AcPf(instance)) => instance.initial_point().is_some(),
             Some(CalculationInstanceRef::DcOpf(instance)) => instance.initial_point().is_some(),
             Some(CalculationInstanceRef::AcOpf(instance)) => instance.initial_point().is_some(),
+            Some(CalculationInstanceRef::AcOts(instance)) => instance.initial_point().is_some(),
             Some(CalculationInstanceRef::McAcPf(instance)) => instance.initial_point().is_some(),
             Some(CalculationInstanceRef::McAcOpf(instance)) => instance.initial_point().is_some(),
             Some(CalculationInstanceRef::LinDist3FlowOpf(instance)) => {
@@ -6063,6 +6198,7 @@ enum ExpectedValue {
     AcPfInstance,
     DcOpfInstance,
     AcOpfInstance,
+    AcOtsInstance,
     McAcPfInstance,
     McAcOpfInstance,
     LinDist3FlowOpfInstance,
@@ -6071,6 +6207,7 @@ enum ExpectedValue {
     AcPfSolution,
     DcOpfSolution,
     AcOpfSolution,
+    AcOtsSolution,
     SocwrOpfSolution,
     McAcPfSolution,
     McAcOpfSolution,
@@ -6092,6 +6229,7 @@ impl ExpectedValue {
                 | (Self::AcPfInstance, PioValue::AcPfInstance(_))
                 | (Self::DcOpfInstance, PioValue::DcOpfInstance(_))
                 | (Self::AcOpfInstance, PioValue::AcOpfInstance(_))
+                | (Self::AcOtsInstance, PioValue::AcOtsInstance(_))
                 | (Self::McAcPfInstance, PioValue::McAcPfInstance(_))
                 | (Self::McAcOpfInstance, PioValue::McAcOpfInstance(_))
                 | (
@@ -6103,6 +6241,7 @@ impl ExpectedValue {
                 | (Self::AcPfSolution, PioValue::AcPfSolution(_))
                 | (Self::DcOpfSolution, PioValue::DcOpfSolution(_))
                 | (Self::AcOpfSolution, PioValue::AcOpfSolution(_))
+                | (Self::AcOtsSolution, PioValue::AcOtsSolution(_))
                 | (Self::SocwrOpfSolution, PioValue::SocwrOpfSolution(_))
                 | (Self::McAcPfSolution, PioValue::McAcPfSolution(_))
                 | (Self::McAcOpfSolution, PioValue::McAcOpfSolution(_))
@@ -6124,6 +6263,7 @@ impl ExpectedValue {
             Self::AcPfInstance => "powerio.AcPfInstance",
             Self::DcOpfInstance => "powerio.DcOpfInstance",
             Self::AcOpfInstance => "powerio.AcOpfInstance",
+            Self::AcOtsInstance => "powerio.AcOtsInstance",
             Self::McAcPfInstance => "powerio.McAcPfInstance",
             Self::McAcOpfInstance => "powerio.McAcOpfInstance",
             Self::LinDist3FlowOpfInstance => "powerio.LinDist3FlowOpfInstance",
@@ -6132,6 +6272,7 @@ impl ExpectedValue {
             Self::AcPfSolution => "powerio.AcPfSolution",
             Self::DcOpfSolution => "powerio.DcOpfSolution",
             Self::AcOpfSolution => "powerio.AcOpfSolution",
+            Self::AcOtsSolution => "powerio.AcOtsSolution",
             Self::SocwrOpfSolution => "powerio.SocwrOpfSolution",
             Self::McAcPfSolution => "powerio.McAcPfSolution",
             Self::McAcOpfSolution => "powerio.McAcOpfSolution",
@@ -6485,6 +6626,7 @@ pub unsafe extern "C" fn pio_calculation_solution_instance(
                 Some(PioValue::AcPfSolution(_)) => CalculationInstanceProjection::AcPfSolution,
                 Some(PioValue::DcOpfSolution(_)) => CalculationInstanceProjection::DcOpfSolution,
                 Some(PioValue::AcOpfSolution(_)) => CalculationInstanceProjection::AcOpfSolution,
+                Some(PioValue::AcOtsSolution(_)) => CalculationInstanceProjection::AcOtsSolution,
                 Some(PioValue::SocwrOpfSolution(_)) => {
                     CalculationInstanceProjection::SocwrOpfSolution
                 }
@@ -6624,6 +6766,9 @@ pub unsafe extern "C" fn pio_calculation_instance_balanced_network(
                     Some(CalculationInstanceRef::AcOpf(_)) => {
                         BalancedNetworkProjection::AcOpfInstance
                     }
+                    Some(CalculationInstanceRef::AcOts(_)) => {
+                        BalancedNetworkProjection::AcOtsInstance
+                    }
                     Some(CalculationInstanceRef::AcScuc(_)) => {
                         BalancedNetworkProjection::AcScucInstance
                     }
@@ -6645,6 +6790,9 @@ pub unsafe extern "C" fn pio_calculation_instance_balanced_network(
                 }
                 CalculationInstanceProjection::AcOpfSolution => {
                     BalancedNetworkProjection::AcOpfSolution
+                }
+                CalculationInstanceProjection::AcOtsSolution => {
+                    BalancedNetworkProjection::AcOtsSolution
                 }
                 CalculationInstanceProjection::SocwrOpfSolution => {
                     BalancedNetworkProjection::SocwrOpfSolution
@@ -7698,6 +7846,7 @@ fn objective(instance: &CalculationInstanceInner) -> Option<&powerio_prob::Objec
     match instance.instance()? {
         CalculationInstanceRef::DcOpf(instance) => Some(instance.objective()),
         CalculationInstanceRef::AcOpf(instance) => Some(instance.objective()),
+        CalculationInstanceRef::AcOts(instance) => Some(instance.objective()),
         CalculationInstanceRef::McAcOpf(instance) => Some(instance.objective()),
         CalculationInstanceRef::LinDist3FlowOpf(instance) => {
             Some(instance.base_instance().objective())
@@ -7710,6 +7859,7 @@ fn objective_term_name(term: &powerio_prob::ObjectiveTerm) -> &'static str {
     match term {
         powerio_prob::ObjectiveTerm::NetworkGeneratorCost => "network_generator_cost",
         powerio_prob::ObjectiveTerm::ActivePowerDispatchCost => "active_power_dispatch_cost",
+        powerio_prob::ObjectiveTerm::BranchSwitchingCost => "branch_switching_cost",
         _ => "unknown",
     }
 }
@@ -7765,26 +7915,15 @@ fn active_constraint(
     index: usize,
 ) -> Option<(&'static str, &powerio_prob::ConstraintSelection)> {
     match instance.instance()? {
-        CalculationInstanceRef::DcOpf(instance) => match index {
-            0 => Some((
-                "generator_capability",
-                &instance.constraints().generator_capability,
-            )),
-            1 => Some(("voltage_bounds", &instance.constraints().voltage_bounds)),
-            2 => Some(("thermal_limits", &instance.constraints().thermal_limits)),
-            3 => Some(("angle_bounds", &instance.constraints().angle_bounds)),
-            _ => None,
-        },
-        CalculationInstanceRef::AcOpf(instance) => match index {
-            0 => Some((
-                "generator_capability",
-                &instance.constraints().generator_capability,
-            )),
-            1 => Some(("voltage_bounds", &instance.constraints().voltage_bounds)),
-            2 => Some(("thermal_limits", &instance.constraints().thermal_limits)),
-            3 => Some(("angle_bounds", &instance.constraints().angle_bounds)),
-            _ => None,
-        },
+        CalculationInstanceRef::DcOpf(instance) => {
+            balanced_active_constraint(instance.constraints(), index)
+        }
+        CalculationInstanceRef::AcOpf(instance) => {
+            balanced_active_constraint(instance.constraints(), index)
+        }
+        CalculationInstanceRef::AcOts(instance) => {
+            balanced_active_constraint(instance.constraints(), index)
+        }
         CalculationInstanceRef::McAcOpf(instance) => match index {
             0 => Some((
                 "terminal_voltage_bounds",
@@ -7819,6 +7958,20 @@ fn active_constraint(
     }
 }
 
+/// One of the four active constraint families of a balanced OPF instance.
+fn balanced_active_constraint(
+    constraints: &powerio_prob::ActiveConstraints,
+    index: usize,
+) -> Option<(&'static str, &powerio_prob::ConstraintSelection)> {
+    match index {
+        0 => Some(("generator_capability", &constraints.generator_capability)),
+        1 => Some(("voltage_bounds", &constraints.voltage_bounds)),
+        2 => Some(("thermal_limits", &constraints.thermal_limits)),
+        3 => Some(("angle_bounds", &constraints.angle_bounds)),
+        _ => None,
+    }
+}
+
 fn constraint_selection_parts(
     selection: &powerio_prob::ConstraintSelection,
 ) -> (&'static str, &[String]) {
@@ -7840,7 +7993,11 @@ pub unsafe extern "C" fn pio_calculation_instance_active_constraint_count(
     match unsafe { PioCalculationInstance::get(instance) }
         .and_then(CalculationInstanceInner::instance)
     {
-        Some(CalculationInstanceRef::DcOpf(_) | CalculationInstanceRef::AcOpf(_)) => 4,
+        Some(
+            CalculationInstanceRef::DcOpf(_)
+            | CalculationInstanceRef::AcOpf(_)
+            | CalculationInstanceRef::AcOts(_),
+        ) => 4,
         Some(CalculationInstanceRef::McAcOpf(_)) => 3,
         Some(CalculationInstanceRef::LinDist3FlowOpf(_)) => 3,
         _ => 0,
@@ -7961,6 +8118,10 @@ pub unsafe extern "C" fn pio_calculation_instance_initial_point(
                     ) => OperatingPointProjection::AcOpfInitial,
                     (
                         CalculationInstanceProjection::Direct,
+                        Some(CalculationInstanceRef::AcOts(_)),
+                    ) => OperatingPointProjection::AcOtsInitial,
+                    (
+                        CalculationInstanceProjection::Direct,
                         Some(CalculationInstanceRef::McAcPf(_)),
                     ) => OperatingPointProjection::McAcPfInitial,
                     (
@@ -7982,6 +8143,9 @@ pub unsafe extern "C" fn pio_calculation_instance_initial_point(
                     }
                     (CalculationInstanceProjection::AcOpfSolution, _) => {
                         OperatingPointProjection::AcOpfSolutionInitial
+                    }
+                    (CalculationInstanceProjection::AcOtsSolution, _) => {
+                        OperatingPointProjection::AcOtsSolutionInitial
                     }
                     (CalculationInstanceProjection::SocwrOpfSolution, _) => {
                         OperatingPointProjection::SocwrOpfSolutionInitial
@@ -9682,6 +9846,7 @@ pub unsafe extern "C" fn pio_calculation_solution_balanced_network(
                 Some(PioValue::AcPfSolution(_)) => BalancedNetworkProjection::AcPfSolution,
                 Some(PioValue::DcOpfSolution(_)) => BalancedNetworkProjection::DcOpfSolution,
                 Some(PioValue::AcOpfSolution(_)) => BalancedNetworkProjection::AcOpfSolution,
+                Some(PioValue::AcOtsSolution(_)) => BalancedNetworkProjection::AcOtsSolution,
                 Some(PioValue::SocwrOpfSolution(_)) => BalancedNetworkProjection::SocwrOpfSolution,
                 Some(PioValue::AcScucSolution(_)) => BalancedNetworkProjection::AcScucSolution,
                 _ => {
@@ -18022,6 +18187,7 @@ pub unsafe extern "C" fn pio_calculation_solution_termination(
         PioValue::AcPfSolution(solution) => solution.termination(),
         PioValue::DcOpfSolution(solution) => solution.termination(),
         PioValue::AcOpfSolution(solution) => solution.termination(),
+        PioValue::AcOtsSolution(solution) => solution.termination(),
         PioValue::SocwrOpfSolution(solution) => solution.termination(),
         PioValue::McAcPfSolution(solution) => solution.termination(),
         PioValue::McAcOpfSolution(solution) => solution.termination(),
@@ -18056,6 +18222,7 @@ pub unsafe extern "C" fn pio_calculation_solution_get_objective(
             let objective = match solution {
                 PioValue::DcOpfSolution(solution) => Some(solution.objective()),
                 PioValue::AcOpfSolution(solution) => Some(solution.objective()),
+                PioValue::AcOtsSolution(solution) => Some(solution.objective()),
                 PioValue::McAcOpfSolution(solution) => Some(solution.objective()),
                 PioValue::LinDist3FlowOpfSolution(solution) => Some(solution.objective()),
                 PioValue::AcScucSolution(solution) => solution.objective(),
@@ -18111,6 +18278,32 @@ fn balanced_generator_identities(network: &BalancedNetwork) -> impl Iterator<Ite
             .as_deref()
             .expect("facade assigns component IDs")
     })
+}
+
+/// One named AC OPF solution column; `None` when the quantity is unknown or
+/// an optional column is absent.
+fn ac_opf_solution_values(
+    solution: &powerio_prob::AcOpfSolution,
+    quantity: &str,
+) -> Option<Vec<f64>> {
+    let values = match quantity {
+        "bus_voltage_magnitude" => solution.bus_voltage_magnitudes(),
+        "bus_voltage_angle" => solution.bus_voltage_angles(),
+        "bus_active_injection" => solution.bus_active_injections(),
+        "bus_reactive_injection" => solution.bus_reactive_injections(),
+        "branch_from_active_flow" => solution.branch_from_active_flows(),
+        "branch_from_reactive_flow" => solution.branch_from_reactive_flows(),
+        "branch_to_active_flow" => solution.branch_to_active_flows(),
+        "branch_to_reactive_flow" => solution.branch_to_reactive_flows(),
+        "generator_active_power" => solution.generator_active_powers(),
+        "generator_reactive_power" => solution.generator_reactive_powers(),
+        "bus_active_power_marginal" => solution.bus_active_power_marginals()?,
+        "bus_reactive_power_marginal" => solution.bus_reactive_power_marginals()?,
+        "branch_from_limit_multiplier" => solution.branch_from_limit_multipliers()?,
+        "branch_to_limit_multiplier" => solution.branch_to_limit_multipliers()?,
+        _ => return None,
+    };
+    Some(values.to_vec())
 }
 
 fn collect_solution_values(solution: &PioValue, quantity: &str) -> Result<Vec<f64>, *mut PioError> {
@@ -18274,35 +18467,14 @@ fn collect_solution_values(solution: &PioValue, quantity: &str) -> Result<Vec<f6
                 .ok_or_else(unknown)?,
             _ => return Err(unknown()),
         },
-        PioValue::AcOpfSolution(solution) => match quantity {
-            "bus_voltage_magnitude" => solution.bus_voltage_magnitudes().to_vec(),
-            "bus_voltage_angle" => solution.bus_voltage_angles().to_vec(),
-            "bus_active_injection" => solution.bus_active_injections().to_vec(),
-            "bus_reactive_injection" => solution.bus_reactive_injections().to_vec(),
-            "branch_from_active_flow" => solution.branch_from_active_flows().to_vec(),
-            "branch_from_reactive_flow" => solution.branch_from_reactive_flows().to_vec(),
-            "branch_to_active_flow" => solution.branch_to_active_flows().to_vec(),
-            "branch_to_reactive_flow" => solution.branch_to_reactive_flows().to_vec(),
-            "generator_active_power" => solution.generator_active_powers().to_vec(),
-            "generator_reactive_power" => solution.generator_reactive_powers().to_vec(),
-            "bus_active_power_marginal" => solution
-                .bus_active_power_marginals()
-                .map(<[f64]>::to_vec)
-                .ok_or_else(unknown)?,
-            "bus_reactive_power_marginal" => solution
-                .bus_reactive_power_marginals()
-                .map(<[f64]>::to_vec)
-                .ok_or_else(unknown)?,
-            "branch_from_limit_multiplier" => solution
-                .branch_from_limit_multipliers()
-                .map(<[f64]>::to_vec)
-                .ok_or_else(unknown)?,
-            "branch_to_limit_multiplier" => solution
-                .branch_to_limit_multipliers()
-                .map(<[f64]>::to_vec)
-                .ok_or_else(unknown)?,
-            _ => return Err(unknown()),
-        },
+        PioValue::AcOpfSolution(solution) => {
+            ac_opf_solution_values(solution, quantity).ok_or_else(unknown)?
+        }
+        // An AC OTS solution's quantities are those of its fixed-topology AC
+        // solution, in the same table order.
+        PioValue::AcOtsSolution(solution) => {
+            ac_opf_solution_values(solution.ac_solution(), quantity).ok_or_else(unknown)?
+        }
         PioValue::SocwrOpfSolution(solution) => {
             let values = solution.values();
             match quantity {
@@ -19380,6 +19552,587 @@ pub unsafe extern "C" fn pio_mc_ac_pf_instance_source_boundary_at(
             })?;
             *require_output(output, "output")? = voltage_source_boundary_view(source);
             Ok(true)
+        })
+    }
+}
+
+// ---- AC optimal transmission switching ---------------------------------------
+
+/// The elements of one caller array. A zero length reads nothing, so its
+/// pointer may be NULL or dangling.
+unsafe fn input_slice<'a, T>(
+    data: *const T,
+    len: usize,
+    argument: &str,
+) -> Result<&'a [T], *mut PioError> {
+    if len == 0 {
+        return Ok(&[]);
+    }
+    if data.is_null() {
+        return Err(boundary_error(
+            &codes::BIND_CAPI_NULL_ARGUMENT,
+            format!("{argument} is NULL with a nonzero length"),
+        ));
+    }
+    Ok(unsafe { std::slice::from_raw_parts(data, len) })
+}
+
+fn invalid_ots_option(message: String) -> *mut PioError {
+    boundary_error(&codes::BIND_CAPI_INVALID_OPTIONS, message)
+}
+
+/// The Rust options a `PioAcOtsOptions` states; NULL is the Rust defaults,
+/// where every branch may switch. `pio_module_to_ac_ots_instance_with_options`
+/// handles NULL itself before it gets here.
+unsafe fn ac_ots_options(
+    options: *const PioAcOtsOptions,
+) -> Result<powerio_prob::AcOtsOptions, *mut PioError> {
+    let mut parsed = powerio_prob::AcOtsOptions::default();
+    let Some(raw) = (unsafe { options.as_ref() }) else {
+        return Ok(parsed);
+    };
+    let switchable = unsafe {
+        required_str(
+            raw.switchable.data,
+            raw.switchable.len,
+            "options.switchable",
+        )
+    }?;
+    let identities =
+        unsafe { input_slice(raw.identities, raw.identities_len, "options.identities") }?;
+    parsed.switchable = match switchable {
+        "only" => powerio_prob::BranchSelection::Only(
+            identities
+                .iter()
+                .enumerate()
+                .map(|(index, identity)| {
+                    unsafe {
+                        required_str(
+                            identity.data,
+                            identity.len,
+                            &format!("options.identities[{index}]"),
+                        )
+                    }
+                    .map(str::to_owned)
+                })
+                .collect::<Result<_, _>>()?,
+        ),
+        "all" | "none" if !identities.is_empty() => {
+            return Err(invalid_ots_option(format!(
+                "options.identities names branches, but the selection is '{switchable}'; \
+                 identities require 'only'"
+            )));
+        }
+        "all" => powerio_prob::BranchSelection::All,
+        "none" => powerio_prob::BranchSelection::None,
+        other => {
+            return Err(invalid_ots_option(format!(
+                "unknown branch selection '{other}'; expected 'all', 'none', or 'only'"
+            )));
+        }
+    };
+    let costs = unsafe {
+        input_slice(
+            raw.switching_costs,
+            raw.switching_costs_len,
+            "options.switching_costs",
+        )
+    }?;
+    parsed.switching_costs = costs
+        .iter()
+        .enumerate()
+        .map(|(index, cost)| {
+            let id = unsafe {
+                required_str(
+                    cost.id.data,
+                    cost.id.len,
+                    &format!("options.switching_costs[{index}].id"),
+                )
+            }?;
+            Ok(powerio_prob::BranchSwitchingCost::new(
+                id,
+                cost.open_cost,
+                cost.close_cost,
+            ))
+        })
+        .collect::<Result<_, *mut PioError>>()?;
+    parsed.islanding = match unsafe {
+        required_str(raw.islanding.data, raw.islanding.len, "options.islanding")
+    }? {
+        "forbidden" => powerio_prob::IslandingPolicy::Forbidden,
+        "allowed" => powerio_prob::IslandingPolicy::Allowed,
+        other => {
+            return Err(invalid_ots_option(format!(
+                "unknown islanding policy '{other}'; expected 'forbidden' or 'allowed'"
+            )));
+        }
+    };
+    parsed.max_open = raw.has_max_open.then_some(raw.max_open);
+    parsed.max_switched = raw.has_max_switched.then_some(raw.max_switched);
+    parsed.current_limits = match unsafe {
+        required_str(
+            raw.current_limits.data,
+            raw.current_limits.len,
+            "options.current_limits",
+        )
+    }? {
+        "skip" => powerio_prob::CurrentLimitPolicy::Skip,
+        "stated" => powerio_prob::CurrentLimitPolicy::Stated,
+        "derive_from_rate_a" => powerio_prob::CurrentLimitPolicy::DeriveFromRateA,
+        other => {
+            return Err(invalid_ots_option(format!(
+                "unknown current limit policy '{other}'; expected 'skip', 'stated', or \
+                 'derive_from_rate_a'"
+            )));
+        }
+    };
+    let limits = unsafe {
+        input_slice(
+            raw.stated_current_limits,
+            raw.stated_current_limits_len,
+            "options.stated_current_limits",
+        )
+    }?;
+    parsed.stated_current_limits = limits
+        .iter()
+        .enumerate()
+        .map(|(index, limit)| {
+            let id = unsafe {
+                required_str(
+                    limit.id.data,
+                    limit.id.len,
+                    &format!("options.stated_current_limits[{index}].id"),
+                )
+            }?;
+            Ok(powerio_prob::BranchCurrentLimit::new(
+                id,
+                limit.has_from_pu.then_some(limit.from_pu),
+                limit.has_to_pu.then_some(limit.to_pu),
+            ))
+        })
+        .collect::<Result<_, *mut PioError>>()?;
+    Ok(parsed)
+}
+
+/// A final branch status vector: one byte per branch, 0 open and 1 closed.
+unsafe fn branch_statuses(data: *const u8, len: usize) -> Result<Vec<bool>, *mut PioError> {
+    unsafe { input_slice(data, len, "branch_closed") }?
+        .iter()
+        .enumerate()
+        .map(|(index, &status)| match status {
+            0 => Ok(false),
+            1 => Ok(true),
+            other => Err(boundary_error(
+                &codes::BIND_CAPI_INVALID_ARGUMENT,
+                format!("branch_closed[{index}] is {other}; a status is 0 (open) or 1 (closed)"),
+            )),
+        })
+        .collect()
+}
+
+unsafe fn require_ac_ots_instance<'a>(
+    instance: *const PioCalculationInstance,
+) -> Result<
+    (
+        &'a CalculationInstanceInner,
+        &'a powerio_prob::AcOtsInstance,
+    ),
+    *mut PioError,
+> {
+    let handle = unsafe { require_calculation_instance(instance) }?;
+    let instance = handle.ac_ots().ok_or_else(|| {
+        boundary_error(
+            &codes::REQUEST_CAPI_TYPE_MISMATCH,
+            "the calculation instance is not powerio.AcOtsInstance",
+        )
+    })?;
+    Ok((handle, instance))
+}
+
+unsafe fn require_ac_ots_solution<'a>(
+    solution: *const PioCalculationSolution,
+) -> Result<(&'a ValueInner, &'a powerio_prob::AcOtsSolution), *mut PioError> {
+    let handle = unsafe { PioCalculationSolution::get(solution) }.ok_or_else(|| {
+        boundary_error(
+            &codes::BIND_CAPI_NULL_HANDLE,
+            "PioCalculationSolution must not be NULL",
+        )
+    })?;
+    match handle.value() {
+        Some(PioValue::AcOtsSolution(solution)) => Ok((handle, solution)),
+        _ => Err(boundary_error(
+            &codes::REQUEST_CAPI_TYPE_MISMATCH,
+            "the calculation solution is not powerio.AcOtsSolution",
+        )),
+    }
+}
+
+/// `(value, has_value)` for an optional float field of a view.
+fn optional_f64(value: Option<f64>) -> (f64, bool) {
+    (value.unwrap_or(0.0), value.is_some())
+}
+
+fn ac_ots_branch_view(branch: &powerio_prob::AcOtsBranch) -> PioAcOtsBranchView {
+    let (open_cost, close_cost) = branch
+        .switching_cost
+        .map_or((0.0, 0.0), |cost| (cost.open, cost.close));
+    let (stated_from_pu, has_stated_from_pu) = optional_f64(branch.stated_current.from_pu);
+    let (stated_to_pu, has_stated_to_pu) = optional_f64(branch.stated_current.to_pu);
+    let (current_from_pu, has_current_from_pu) = optional_f64(branch.current.from_pu);
+    let (current_to_pu, has_current_to_pu) = optional_f64(branch.current.to_pu);
+    PioAcOtsBranchView {
+        id: PioStringView::new(&branch.id),
+        initial_closed: branch.initial_closed,
+        switchable: branch.switchable,
+        has_switching_cost: branch.switching_cost.is_some(),
+        open_cost,
+        close_cost,
+        stated_from_pu,
+        stated_to_pu,
+        has_stated_from_pu,
+        has_stated_to_pu,
+        current_from_pu,
+        current_to_pu,
+        has_current_from_pu,
+        has_current_to_pu,
+    }
+}
+
+/// Return an owner-rooted AC optimal transmission switching instance view.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_value_ac_ots_instance(
+    value: *const PioValueHandle,
+    error: *mut *mut PioError,
+) -> *mut PioCalculationInstance {
+    unsafe { instance_accessor(value, ExpectedValue::AcOtsInstance, error) }
+}
+
+/// Return an owner-rooted AC optimal transmission switching solution view.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_value_ac_ots_solution(
+    value: *const PioValueHandle,
+    error: *mut *mut PioError,
+) -> *mut PioCalculationSolution {
+    unsafe { solution_accessor(value, ExpectedValue::AcOtsSolution, error) }
+}
+
+/// Construct an AC optimal transmission switching calculation module with
+/// the default options from a balanced network or AC OPF module: every
+/// initially in-service branch may switch, at zero cost, and the objective
+/// gains the switching cost term. An AC OTS module comes back unchanged.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_to_ac_ots_instance(
+    module: *const PioModule,
+    error: *mut *mut PioError,
+) -> *mut PioModule {
+    unsafe {
+        transform_module(
+            module,
+            error,
+            powerio::transform::to_ac_ots_instance,
+            PioValue::AcOtsInstance,
+        )
+    }
+}
+
+/// Construct an AC optimal transmission switching calculation module with
+/// explicit options from a balanced network, AC OPF, or AC OTS module. An
+/// AC OTS module keeps its base problem and objective and takes the new
+/// options; the objective gains the switching cost term once. NULL options
+/// give exactly what `pio_module_to_ac_ots_instance` gives: only the
+/// initially in-service branches may switch, and an AC OTS module comes back
+/// unchanged.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_to_ac_ots_instance_with_options(
+    module: *const PioModule,
+    options: *const PioAcOtsOptions,
+    error: *mut *mut PioError,
+) -> *mut PioModule {
+    if options.is_null() {
+        // The Rust option defaults let every branch switch, including the
+        // initially open ones. NULL here means the no-options entry point.
+        return unsafe { pio_module_to_ac_ots_instance(module, error) };
+    }
+    unsafe {
+        entry(error, std::ptr::null_mut(), || {
+            let module = PioModule::get(module).ok_or_else(|| {
+                boundary_error(&codes::BIND_CAPI_NULL_HANDLE, "PioModule must not be NULL")
+            })?;
+            let options = ac_ots_options(options)?;
+            powerio::transform::to_ac_ots_instance_with_options(&module.module, options)
+                .map(|derived| module_handle(derived.map_value(PioValue::AcOtsInstance)))
+                .map_err(|failure| error_from_core(&failure))
+        })
+    }
+}
+
+/// Combine an AC OPF instance with explicit switching options, keeping its
+/// objective exactly, as a new module that carries the base module's
+/// records. NULL options are the defaults: every branch may switch.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_ac_ots_instance_create(
+    base: *const PioCalculationInstance,
+    options: *const PioAcOtsOptions,
+    error: *mut *mut PioError,
+) -> *mut PioModule {
+    unsafe {
+        entry(error, std::ptr::null_mut(), || {
+            let handle = require_calculation_instance(base)?;
+            let base = handle.ac_opf().ok_or_else(|| {
+                boundary_error(
+                    &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                    "the base calculation instance is not powerio.AcOpfInstance",
+                )
+            })?;
+            let options = ac_ots_options(options)?;
+            powerio::transform::ac_ots_instance_from_base(&handle.value.owner.module, base, options)
+                .map(|derived| module_handle(derived.map_value(PioValue::AcOtsInstance)))
+                .map_err(|failure| error_from_core(&failure))
+        })
+    }
+}
+
+/// Read an AC optimal transmission switching instance's stated options and
+/// branch count.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_ac_ots_instance_options(
+    instance: *const PioCalculationInstance,
+    output: *mut PioAcOtsOptionsView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let (_, instance) = require_ac_ots_instance(instance)?;
+            let options = instance.options();
+            *require_output(output, "output")? = PioAcOtsOptionsView {
+                switchable: PioStringView::new(options.switchable.kind_name()),
+                islanding: PioStringView::new(options.islanding.name()),
+                current_limits: PioStringView::new(options.current_limits.name()),
+                branch_count: instance.branches().len(),
+                max_open: options.max_open.unwrap_or(0),
+                has_max_open: options.max_open.is_some(),
+                max_switched: options.max_switched.unwrap_or(0),
+                has_max_switched: options.max_switched.is_some(),
+            };
+            Ok(true)
+        })
+    }
+}
+
+/// Read one physical branch of an AC optimal transmission switching
+/// instance by zero based branch table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_ac_ots_instance_branch_at(
+    instance_handle: *const PioCalculationInstance,
+    index: usize,
+    output: *mut PioAcOtsBranchView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let (_, instance) = require_ac_ots_instance(instance_handle)?;
+            let branch = instance.branches().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("branch index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = ac_ots_branch_view(branch);
+            Ok(true)
+        })
+    }
+}
+
+/// Check a complete final branch status vector (one byte per branch in
+/// table order, 0 open and 1 closed) against the fixed branches, the
+/// budgets, and the islanding policy, and write its switching cost. This
+/// does not certify AC feasibility.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_ac_ots_instance_validate_topology(
+    instance: *const PioCalculationInstance,
+    branch_closed: *const u8,
+    branch_count: usize,
+    switching_cost: *mut f64,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let (_, instance) = require_ac_ots_instance(instance)?;
+            let closed = branch_statuses(branch_closed, branch_count)?;
+            let output = require_output(switching_cost, "switching_cost")?;
+            *output = instance
+                .validate_topology(&closed)
+                .map_err(|failure| error_from_core(&failure))?;
+            Ok(true)
+        })
+    }
+}
+
+/// The AC OPF calculation module over a validated final topology: every
+/// branch row with its final status, and the switching data the AC OPF
+/// cannot carry reported as module diagnostics.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_ac_ots_instance_fix_topology(
+    instance: *const PioCalculationInstance,
+    branch_closed: *const u8,
+    branch_count: usize,
+    error: *mut *mut PioError,
+) -> *mut PioModule {
+    unsafe {
+        entry(error, std::ptr::null_mut(), || {
+            let (handle, instance) = require_ac_ots_instance(instance)?;
+            let closed = branch_statuses(branch_closed, branch_count)?;
+            powerio::transform::fix_ac_ots_topology(&handle.value.owner.module, instance, &closed)
+                .map(|derived| module_handle(derived.map_value(PioValue::AcOpfInstance)))
+                .map_err(|failure| error_from_core(&failure))
+        })
+    }
+}
+
+/// Attach the AC OPF solution computed on the instance's fixed topology for
+/// `branch_closed`, as a new AC OTS solution module that carries the
+/// instance module's records. Construction checks the topology, the exact
+/// fixed-problem correspondence, finite values, and zero flow on open
+/// branches; it does not check residuals or optimality.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_ac_ots_solution_create(
+    instance: *const PioCalculationInstance,
+    branch_closed: *const u8,
+    branch_count: usize,
+    ac_solution: *const PioCalculationSolution,
+    error: *mut *mut PioError,
+) -> *mut PioModule {
+    unsafe {
+        entry(error, std::ptr::null_mut(), || {
+            let (handle, instance) = require_ac_ots_instance(instance)?;
+            let closed = branch_statuses(branch_closed, branch_count)?;
+            let ac_solution = match PioCalculationSolution::get(ac_solution)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_NULL_HANDLE,
+                        "PioCalculationSolution must not be NULL",
+                    )
+                })?
+                .value()
+            {
+                Some(PioValue::AcOpfSolution(solution)) => solution.clone(),
+                _ => {
+                    return Err(boundary_error(
+                        &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                        "the AC solution is not powerio.AcOpfSolution",
+                    ));
+                }
+            };
+            powerio::transform::ac_ots_solution(
+                &handle.value.owner.module,
+                instance,
+                closed,
+                ac_solution,
+            )
+            .map(|derived| module_handle(derived.map_value(PioValue::AcOtsSolution)))
+            .map_err(|failure| error_from_core(&failure))
+        })
+    }
+}
+
+/// Read an AC optimal transmission switching solution's totals.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_ac_ots_solution_summary(
+    solution: *const PioCalculationSolution,
+    output: *mut PioAcOtsSolutionView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let (_, solution) = require_ac_ots_solution(solution)?;
+            *require_output(output, "output")? = PioAcOtsSolutionView {
+                branch_count: solution.branch_closed().len(),
+                branches_open: solution.branches_open(),
+                branches_switched: solution.branches_switched(),
+                switching_cost: solution.switching_cost(),
+                objective: solution.objective(),
+            };
+            Ok(true)
+        })
+    }
+}
+
+/// Read one final branch status by zero based branch table position.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_ac_ots_solution_branch_closed_at(
+    solution: *const PioCalculationSolution,
+    index: usize,
+    output: *mut bool,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let (_, solution) = require_ac_ots_solution(solution)?;
+            let closed = *solution.branch_closed().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("branch index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = closed;
+            Ok(true)
+        })
+    }
+}
+
+/// The balanced network module an AC optimal transmission switching
+/// solution states: final branch statuses with the solved bus voltages,
+/// generator dispatch, and branch flows applied, ready for `pio_emit`.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_ac_ots_solution_materialize(
+    solution: *const PioCalculationSolution,
+    error: *mut *mut PioError,
+) -> *mut PioModule {
+    unsafe {
+        entry(error, std::ptr::null_mut(), || {
+            let (handle, solution) = require_ac_ots_solution(solution)?;
+            powerio::transform::materialize_ac_ots_solution(&handle.owner.module, solution)
+                .map(|derived| module_handle(derived.map_value(PioValue::from)))
+                .map_err(|failure| error_from_core(&failure))
         })
     }
 }
@@ -20982,12 +21735,23 @@ mod tests {
             )
             .unwrap();
 
+            let ac_ots_instance =
+                Arc::new(powerio_prob::AcOtsInstance::from_network(network.clone()).unwrap());
+            let initial = ac_ots_instance.initial_closed();
+            let (fixed, _) = ac_ots_instance.fix_topology(&initial).unwrap();
+            let ac_ots = powerio_prob::AcOtsSolution::new(
+                ac_ots_instance,
+                initial,
+                synthetic_ac_opf_solution(fixed, 0.0),
+            )
+            .unwrap();
+
             type SolutionAccessor = unsafe extern "C" fn(
                 *const PioValueHandle,
                 *mut *mut PioError,
             )
                 -> *mut PioCalculationSolution;
-            let solutions: [(PioValue, &str, bool, SolutionAccessor); 8] = [
+            let solutions: [(PioValue, &str, bool, SolutionAccessor); 9] = [
                 (
                     PioValue::DcPfSolution(dc_pf),
                     "powerio.DcPfInstance",
@@ -21017,6 +21781,12 @@ mod tests {
                     "powerio.AcOpfInstance",
                     false,
                     pio_value_socwr_opf_solution,
+                ),
+                (
+                    PioValue::AcOtsSolution(ac_ots),
+                    "powerio.AcOtsInstance",
+                    false,
+                    pio_value_ac_ots_solution,
                 ),
                 (
                     PioValue::McAcPfSolution(mc_pf),
@@ -24575,6 +25345,508 @@ mpc.gencost = [
             pio_artifact_release(artifact);
             pio_emit_result_release(result);
             pio_destination_release(destination);
+            pio_module_release(module);
+        }
+    }
+
+    /// A synthetic AC OPF solution of `instance`: values that satisfy the
+    /// AC OTS correspondence checks, not an AC feasibility certificate.
+    fn synthetic_ac_opf_solution(
+        instance: powerio_prob::AcOpfInstance,
+        objective: f64,
+    ) -> powerio_prob::AcOpfSolution {
+        let network = instance.network().clone();
+        let (buses, branches, generators) = (
+            network.buses().len(),
+            network.branches().len(),
+            network.generators().len(),
+        );
+        powerio_prob::AcOpfSolution::new(
+            Arc::new(instance),
+            powerio_prob::Termination::NotReported,
+            vec![1.01; buses],
+            vec![0.0; buses],
+            vec![0.0; buses],
+            vec![0.0; buses],
+            vec![0.0; branches],
+            vec![0.0; branches],
+            vec![0.0; branches],
+            vec![0.0; branches],
+            vec![12.0; generators],
+            vec![3.0; generators],
+            objective,
+            vec![Default::default(); network.transformers_3w().len()],
+        )
+        .unwrap()
+    }
+
+    unsafe fn error_code_text(error: *mut PioError) -> String {
+        let code = unsafe { view_text(pio_error_code(error)) };
+        unsafe { pio_error_release(error) };
+        code
+    }
+
+    /// The switchable flag of every branch of an AC OTS module, in branch
+    /// order, and the number of objective terms.
+    unsafe fn ac_ots_switchable_set(module: *const PioModule) -> (Vec<bool>, usize) {
+        unsafe {
+            let mut error = std::ptr::null_mut();
+            let value = pio_module_value(module);
+            let instance = pio_value_ac_ots_instance(value, &mut error);
+            assert!(!instance.is_null(), "{}", error_text(error));
+            let mut options_view: PioAcOtsOptionsView = std::mem::zeroed();
+            assert!(pio_ac_ots_instance_options(
+                instance,
+                &raw mut options_view,
+                &mut error
+            ));
+            let mut switchable = Vec::new();
+            for index in 0..options_view.branch_count {
+                let mut branch: PioAcOtsBranchView = std::mem::zeroed();
+                assert!(pio_ac_ots_instance_branch_at(
+                    instance,
+                    index,
+                    &raw mut branch,
+                    &mut error
+                ));
+                switchable.push(branch.switchable);
+            }
+            let terms = pio_calculation_instance_objective_term_count(instance);
+            pio_calculation_instance_release(instance);
+            pio_value_release(value);
+            (switchable, terms)
+        }
+    }
+
+    #[test]
+    fn null_options_give_the_same_instance_as_the_no_options_entry_point() {
+        unsafe {
+            // case9 with its second branch (4-5) initially open: the default
+            // Rust options would let that branch switch.
+            let mut network = case9_network();
+            network.branches_mut()[1].in_service = false;
+            let network_module = module_handle(powerio::PioModule::new(PioValue::from(network)));
+            let mut error = std::ptr::null_mut();
+
+            let plain = pio_module_to_ac_ots_instance(network_module, &mut error);
+            assert!(!plain.is_null(), "{}", error_text(error));
+            let with_null = pio_module_to_ac_ots_instance_with_options(
+                network_module,
+                std::ptr::null(),
+                &mut error,
+            );
+            assert!(!with_null.is_null(), "{}", error_text(error));
+            let (plain_set, plain_terms) = ac_ots_switchable_set(plain);
+            let (null_set, null_terms) = ac_ots_switchable_set(with_null);
+            let initially_closed: Vec<bool> = (0..9).map(|row| row != 1).collect();
+            assert_eq!(plain_set, initially_closed);
+            assert_eq!(null_set, plain_set);
+            assert_eq!(null_terms, plain_terms);
+
+            // An AC OTS module comes back unchanged under NULL options too.
+            let again =
+                pio_module_to_ac_ots_instance_with_options(with_null, std::ptr::null(), &mut error);
+            assert!(!again.is_null(), "{}", error_text(error));
+            assert_eq!(ac_ots_switchable_set(again), (plain_set, plain_terms));
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // one walk through the Julia binding's flow
+    fn ac_ots_entry_points_follow_the_julia_binding_flow() {
+        unsafe {
+            // case9 with its second branch (4-5) initially open.
+            let mut network = case9_network();
+            network.branches_mut()[1].in_service = false;
+            let network_module = module_handle(powerio::PioModule::new(PioValue::from(network)));
+            let mut error = std::ptr::null_mut();
+
+            let defaults = pio_module_to_ac_ots_instance(network_module, &mut error);
+            assert!(!defaults.is_null(), "{}", error_text(error));
+            let value = pio_module_value(defaults);
+            let instance = pio_value_ac_ots_instance(value, &mut error);
+            assert!(!instance.is_null(), "{}", error_text(error));
+            let mut options_view: PioAcOtsOptionsView = std::mem::zeroed();
+            assert!(pio_ac_ots_instance_options(
+                instance,
+                &raw mut options_view,
+                &mut error
+            ));
+            assert_eq!(view_text(options_view.switchable), "only");
+            assert_eq!(view_text(options_view.islanding), "forbidden");
+            assert_eq!(view_text(options_view.current_limits), "skip");
+            assert_eq!(options_view.branch_count, 9);
+            assert!(!options_view.has_max_open);
+            let mut branch: PioAcOtsBranchView = std::mem::zeroed();
+            assert!(!pio_ac_ots_instance_branch_at(
+                instance,
+                9,
+                &raw mut branch,
+                &mut error
+            ));
+            assert_eq!(error_code_text(error), "BIND.CAPI.INDEX_OUT_OF_RANGE");
+            let mut ids = Vec::new();
+            for index in 0..9 {
+                assert!(pio_ac_ots_instance_branch_at(
+                    instance,
+                    index,
+                    &raw mut branch,
+                    &mut error
+                ));
+                assert_eq!(branch.initial_closed, index != 1);
+                assert_eq!(branch.switchable, index != 1);
+                ids.push(view_text(branch.id));
+            }
+            pio_calculation_instance_release(instance);
+            pio_value_release(value);
+
+            // The Julia test's explicit options.
+            let costs = [
+                PioBranchSwitchingCost {
+                    id: PioStringView::new(&ids[1]),
+                    open_cost: 4.0,
+                    close_cost: 7.0,
+                },
+                PioBranchSwitchingCost {
+                    id: PioStringView::new(&ids[2]),
+                    open_cost: 2.0,
+                    close_cost: 5.0,
+                },
+            ];
+            let limits = [PioBranchCurrentLimit {
+                id: PioStringView::new(&ids[1]),
+                from_pu: 1.25,
+                to_pu: 0.0,
+                has_from_pu: true,
+                has_to_pu: false,
+            }];
+            let mut options = PioAcOtsOptions {
+                switchable: PioStringView::new("all"),
+                identities: std::ptr::null(),
+                identities_len: 0,
+                switching_costs: costs.as_ptr(),
+                switching_costs_len: costs.len(),
+                islanding: PioStringView::new("forbidden"),
+                max_open: 1,
+                has_max_open: true,
+                max_switched: 2,
+                has_max_switched: true,
+                current_limits: PioStringView::new("stated"),
+                stated_current_limits: limits.as_ptr(),
+                stated_current_limits_len: limits.len(),
+            };
+            let module = pio_module_to_ac_ots_instance_with_options(
+                defaults,
+                &raw const options,
+                &mut error,
+            );
+            assert!(!module.is_null(), "{}", error_text(error));
+            let value = pio_module_value(module);
+            let instance = pio_value_ac_ots_instance(value, &mut error);
+            assert!(!instance.is_null(), "{}", error_text(error));
+            assert_eq!(
+                view_text(pio_calculation_instance_type_name(instance)),
+                "powerio.AcOtsInstance"
+            );
+            assert!(pio_ac_ots_instance_branch_at(
+                instance,
+                1,
+                &raw mut branch,
+                &mut error
+            ));
+            assert!(branch.switchable && branch.has_switching_cost);
+            assert_eq!(branch.close_cost, 7.0);
+            assert!(branch.has_current_from_pu && !branch.has_current_to_pu);
+            assert_eq!(branch.current_from_pu, 1.25);
+            assert_eq!(pio_calculation_instance_objective_term_count(instance), 2);
+            let mut term: PioObjectiveTermView = std::mem::zeroed();
+            assert!(pio_calculation_instance_objective_term_at(
+                instance,
+                1,
+                &raw mut term,
+                &mut error
+            ));
+            assert_eq!(view_text(term.kind), "branch_switching_cost");
+            assert_eq!(
+                pio_calculation_instance_active_constraint_count(instance),
+                4
+            );
+            let network = pio_calculation_instance_balanced_network(instance, &mut error);
+            assert!(!network.is_null(), "{}", error_text(error));
+            pio_balanced_network_release(network);
+
+            // Refused options.
+            options.islanding = PioStringView::new("sometimes");
+            assert!(
+                pio_module_to_ac_ots_instance_with_options(
+                    defaults,
+                    &raw const options,
+                    &mut error
+                )
+                .is_null()
+            );
+            assert_eq!(error_code_text(error), "BIND.CAPI.INVALID_OPTIONS");
+            options.islanding = PioStringView::new("forbidden");
+            let identities = [PioStringView::new(&ids[0])];
+            options.identities = identities.as_ptr();
+            options.identities_len = identities.len();
+            assert!(
+                pio_module_to_ac_ots_instance_with_options(
+                    defaults,
+                    &raw const options,
+                    &mut error
+                )
+                .is_null()
+            );
+            assert_eq!(error_code_text(error), "BIND.CAPI.INVALID_OPTIONS");
+            let duplicate = [PioStringView::new(&ids[0]), PioStringView::new(&ids[0])];
+            options.switchable = PioStringView::new("only");
+            options.identities = duplicate.as_ptr();
+            options.identities_len = duplicate.len();
+            assert!(
+                pio_module_to_ac_ots_instance_with_options(
+                    defaults,
+                    &raw const options,
+                    &mut error
+                )
+                .is_null()
+            );
+            assert_eq!(
+                error_code_text(error),
+                "BUILD.INSTANCE.SWITCHING_OPTIONS_INVALID"
+            );
+
+            // Topology validation: close row 1, open row 2.
+            let mut closed = [1u8; 9];
+            closed[2] = 0;
+            let mut cost = 0.0;
+            assert!(
+                pio_ac_ots_instance_validate_topology(
+                    instance,
+                    closed.as_ptr(),
+                    closed.len(),
+                    &raw mut cost,
+                    &mut error
+                ),
+                "{}",
+                error_text(error)
+            );
+            assert_eq!(cost, 9.0);
+            assert!(!pio_ac_ots_instance_validate_topology(
+                instance,
+                closed.as_ptr(),
+                1,
+                &raw mut cost,
+                &mut error
+            ));
+            assert_eq!(error_code_text(error), "BUILD.INSTANCE.TOPOLOGY_INVALID");
+            let mut bad = closed;
+            bad[0] = 2;
+            assert!(!pio_ac_ots_instance_validate_topology(
+                instance,
+                bad.as_ptr(),
+                bad.len(),
+                &raw mut cost,
+                &mut error
+            ));
+            assert_eq!(error_code_text(error), "BIND.CAPI.INVALID_ARGUMENT");
+
+            // Fix the topology and attach a synthetic AC solution of it.
+            let fixed = pio_ac_ots_instance_fix_topology(
+                instance,
+                closed.as_ptr(),
+                closed.len(),
+                &mut error,
+            );
+            assert!(!fixed.is_null(), "{}", error_text(error));
+            let fixed_module = &PioModule::get(fixed).unwrap().module;
+            assert!(
+                !fixed_module.diagnostics().is_empty(),
+                "fixing the topology reports what the AC OPF leaves out"
+            );
+            let PioValue::AcOpfInstance(fixed_instance) = fixed_module.value() else {
+                panic!("fix_topology returns an AC OPF instance")
+            };
+            let statuses: Vec<u8> = fixed_instance
+                .network()
+                .branches()
+                .iter()
+                .map(|branch| u8::from(branch.in_service))
+                .collect();
+            assert_eq!(statuses, closed);
+            let ac_module = module_handle(powerio::PioModule::new(PioValue::AcOpfSolution(
+                synthetic_ac_opf_solution(fixed_instance.clone(), 40.0),
+            )));
+            let ac_value = pio_module_value(ac_module);
+            let ac_solution = pio_value_ac_opf_solution(ac_value, &mut error);
+            assert!(!ac_solution.is_null(), "{}", error_text(error));
+
+            let all_closed = [1u8; 9];
+            assert!(
+                pio_ac_ots_solution_create(
+                    instance,
+                    all_closed.as_ptr(),
+                    all_closed.len(),
+                    ac_solution,
+                    &mut error
+                )
+                .is_null()
+            );
+            assert_eq!(error_code_text(error), "BUILD.SOLUTION.TOPOLOGY_MISMATCH");
+            let solution_module = pio_ac_ots_solution_create(
+                instance,
+                closed.as_ptr(),
+                closed.len(),
+                ac_solution,
+                &mut error,
+            );
+            assert!(!solution_module.is_null(), "{}", error_text(error));
+            let solution_value = pio_module_value(solution_module);
+            let solution = pio_value_ac_ots_solution(solution_value, &mut error);
+            assert!(!solution.is_null(), "{}", error_text(error));
+            let mut summary: PioAcOtsSolutionView = std::mem::zeroed();
+            assert!(pio_ac_ots_solution_summary(
+                solution,
+                &raw mut summary,
+                &mut error
+            ));
+            assert_eq!(summary.branch_count, 9);
+            assert_eq!(summary.branches_open, 1);
+            assert_eq!(summary.branches_switched, 2);
+            assert_eq!(summary.switching_cost, 9.0);
+            assert_eq!(summary.objective, 49.0);
+            let mut objective = 0.0;
+            assert!(pio_calculation_solution_get_objective(
+                solution,
+                &raw mut objective
+            ));
+            assert_eq!(objective, 49.0);
+            assert_eq!(
+                view_text(pio_calculation_solution_termination(solution)),
+                "not_reported"
+            );
+            let mut status = true;
+            assert!(pio_ac_ots_solution_branch_closed_at(
+                solution,
+                2,
+                &raw mut status,
+                &mut error
+            ));
+            assert!(!status);
+            assert!(!pio_ac_ots_solution_branch_closed_at(
+                solution,
+                9,
+                &raw mut status,
+                &mut error
+            ));
+            assert_eq!(error_code_text(error), "BIND.CAPI.INDEX_OUT_OF_RANGE");
+            let quantity = "bus_voltage_magnitude";
+            let magnitudes = pio_calculation_solution_get_values(
+                solution,
+                quantity.as_ptr().cast(),
+                quantity.len(),
+                &mut error,
+            );
+            assert!(!magnitudes.is_null(), "{}", error_text(error));
+            let view = pio_vector_values(magnitudes);
+            assert_eq!(
+                std::slice::from_raw_parts(view.data, view.len),
+                &[1.01; 9][..]
+            );
+            pio_vector_release(magnitudes);
+
+            // The solution's network keeps the initial statuses; the
+            // materialized network carries the final ones.
+            let solution_network = pio_calculation_solution_balanced_network(solution, &mut error);
+            assert!(!solution_network.is_null(), "{}", error_text(error));
+            pio_balanced_network_release(solution_network);
+            let materialized = pio_ac_ots_solution_materialize(solution, &mut error);
+            assert!(!materialized.is_null(), "{}", error_text(error));
+            let PioValue::BalancedNetwork(materialized_network) =
+                PioModule::get(materialized).unwrap().module.value()
+            else {
+                panic!("materialize returns a balanced network")
+            };
+            let statuses: Vec<u8> = materialized_network
+                .branches()
+                .iter()
+                .map(|branch| u8::from(branch.in_service))
+                .collect();
+            assert_eq!(statuses, closed);
+            pio_module_release(materialized);
+
+            // A child view keeps its owner alive after every parent goes.
+            let child = pio_calculation_solution_instance(solution, &mut error);
+            assert!(!child.is_null(), "{}", error_text(error));
+            pio_calculation_solution_release(solution);
+            pio_value_release(solution_value);
+            pio_module_release(solution_module);
+            pio_calculation_solution_release(ac_solution);
+            pio_value_release(ac_value);
+            pio_module_release(ac_module);
+            pio_module_release(fixed);
+            pio_calculation_instance_release(instance);
+            pio_value_release(value);
+            pio_module_release(module);
+            pio_module_release(defaults);
+            pio_module_release(network_module);
+            assert_eq!(
+                view_text(pio_calculation_instance_type_name(child)),
+                "powerio.AcOtsInstance"
+            );
+            assert!(pio_ac_ots_instance_options(
+                child,
+                &raw mut options_view,
+                &mut error
+            ));
+            assert_eq!(options_view.max_switched, 2);
+            assert!(pio_ac_ots_instance_branch_at(
+                child,
+                1,
+                &raw mut branch,
+                &mut error
+            ));
+            assert_eq!(view_text(branch.id), ids[1]);
+            pio_calculation_instance_release(child);
+        }
+    }
+
+    #[test]
+    fn an_ac_ots_instance_is_created_from_an_ac_opf_base() {
+        unsafe {
+            let module = parse_case9();
+            let mut error = std::ptr::null_mut();
+            let opf = pio_module_to_ac_opf_instance(module, &mut error);
+            assert!(!opf.is_null(), "{}", error_text(error));
+            let value = pio_module_value(opf);
+            let base = pio_value_ac_opf_instance(value, &mut error);
+            assert!(!base.is_null(), "{}", error_text(error));
+            let created = pio_ac_ots_instance_create(base, std::ptr::null(), &mut error);
+            assert!(!created.is_null(), "{}", error_text(error));
+            let created_value = pio_module_value(created);
+            let instance = pio_value_ac_ots_instance(created_value, &mut error);
+            assert!(!instance.is_null(), "{}", error_text(error));
+            let mut options: PioAcOtsOptionsView = std::mem::zeroed();
+            assert!(pio_ac_ots_instance_options(
+                instance,
+                &raw mut options,
+                &mut error
+            ));
+            assert_eq!(view_text(options.switchable), "all");
+            // The base objective is kept exactly: no switching term.
+            assert_eq!(
+                pio_calculation_instance_objective_term_count(instance),
+                pio_calculation_instance_objective_term_count(base)
+            );
+            // An AC OTS handle is not an AC OPF base.
+            assert!(pio_ac_ots_instance_create(instance, std::ptr::null(), &mut error).is_null());
+            assert_eq!(error_code_text(error), "REQUEST.CAPI.TYPE_MISMATCH");
+            pio_calculation_instance_release(instance);
+            pio_value_release(created_value);
+            pio_module_release(created);
+            pio_calculation_instance_release(base);
+            pio_value_release(value);
+            pio_module_release(opf);
             pio_module_release(module);
         }
     }
