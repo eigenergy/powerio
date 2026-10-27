@@ -9406,14 +9406,25 @@ fn write_active_power_control_extensions(
 /// resolves that terminal's bus, so any connectable at the reference bus states
 /// the same fact; an in-service injection is preferred, and generators come
 /// first because a reference bus regulates through one.
-fn slack_terminal_equipment(network: &BalancedNetwork) -> Option<ComponentId> {
+/// The terminal that states the network's reference bus as a SlackTerminal.
+///
+/// An injection at the reference bus is preferred, then a branch or three
+/// winding transformer terminal there, in service before out of service. A
+/// reference bus that hosts only branches still names one of their terminals,
+/// as PowSybl's PSS/E importer attaches the slack terminal to any terminal
+/// connected at the swing bus (psse-converter `SlackConverter.create`), so the
+/// reference does not move to another bus on readback.
+fn slack_terminal_equipment(network: &BalancedNetwork) -> Option<TerminalReference> {
     let reference = network
         .buses()
         .iter()
         .find(|bus| bus.kind == BusType::Ref)?
         .id;
+    let one = |kind: &'static str, uid: Option<&str>, bus: BusId, in_service: bool| {
+        (kind, uid.map(str::to_owned), 1_u8, bus, in_service)
+    };
     let generators = network.generators().iter().map(|value| {
-        (
+        one(
             "generator",
             value.uid.as_deref(),
             value.bus,
@@ -9423,25 +9434,48 @@ fn slack_terminal_equipment(network: &BalancedNetwork) -> Option<ComponentId> {
     let storage = network
         .storage()
         .iter()
-        .map(|value| ("storage", value.uid.as_deref(), value.bus, value.in_service));
+        .map(|value| one("storage", value.uid.as_deref(), value.bus, value.in_service));
     let loads = network
         .loads()
         .iter()
-        .map(|value| ("load", value.uid.as_deref(), value.bus, value.in_service));
+        .map(|value| one("load", value.uid.as_deref(), value.bus, value.in_service));
     let shunts = network
         .shunts()
         .iter()
-        .map(|value| ("shunt", value.uid.as_deref(), value.bus, value.in_service));
+        .map(|value| one("shunt", value.uid.as_deref(), value.bus, value.in_service));
+    let branches = network.branches().iter().flat_map(|value| {
+        [(1, value.from), (2, value.to)]
+            .map(|(side, bus)| ("branch", value.uid.clone(), side, bus, value.in_service))
+    });
+    let transformers = network.transformers_3w().iter().flat_map(|value| {
+        let in_service = value.in_service;
+        value
+            .windings
+            .each_ref()
+            .map(|winding| winding.bus)
+            .into_iter()
+            .zip(1_u8..)
+            .map(move |(bus, side)| ("transformer_3w", value.uid.clone(), side, bus, in_service))
+    });
     let mut out_of_service = None;
-    for (kind, uid, bus, in_service) in generators.chain(storage).chain(loads).chain(shunts) {
+    for (kind, uid, terminal, bus, in_service) in generators
+        .chain(storage)
+        .chain(loads)
+        .chain(shunts)
+        .chain(branches)
+        .chain(transformers)
+    {
         let Some(uid) = uid.filter(|_| bus == reference) else {
             continue;
         };
-        let component = component_id(kind, uid).ok()?;
+        let reference = TerminalReference {
+            equipment: component_id(kind, &uid).ok()?,
+            terminal,
+        };
         if in_service {
-            return Some(component);
+            return Some(reference);
         }
-        out_of_service = out_of_service.or(Some(component));
+        out_of_service = out_of_service.or(Some(reference));
     }
     out_of_service
 }
@@ -9450,24 +9484,31 @@ fn slack_terminal_equipment(network: &BalancedNetwork) -> Option<ComponentId> {
 /// is written when the reference bus hosts no emitted connectable, because the
 /// extension states a terminal.
 fn write_slack_terminal_extension(
-    slack_terminal: Option<&ComponentId>,
+    slack_terminal: Option<&TerminalReference>,
     index: &XiidmWriteIndex<'_>,
     included: &dyn Fn(&ComponentId) -> bool,
     indent: usize,
     output: &mut String,
 ) {
-    let Some(component) = slack_terminal.filter(|component| included(component)) else {
+    let Some(reference) = slack_terminal.filter(|reference| included(&reference.equipment)) else {
         return;
     };
-    let Some(terminal) = index.terminal(component, 1) else {
+    let Some(terminal) = index.terminal(&reference.equipment, reference.terminal) else {
         return;
+    };
+    // A branch or transformer terminal names its side, as PowSybl writes it.
+    let side = match (reference.equipment.component_type(), reference.terminal) {
+        ("branch" | "transformer_3w", 1) => " side=\"ONE\"",
+        (_, 2) => " side=\"TWO\"",
+        (_, 3) => " side=\"THREE\"",
+        _ => "",
     };
     let parent_indent = " ".repeat(indent);
     let child_indent = " ".repeat(indent + 2);
     output.push_str(&format!(
-        "{parent_indent}<iidm:extension id=\"{}\">\n{child_indent}<slt:slackTerminal id=\"{}\"/>\n{parent_indent}</iidm:extension>\n",
+        "{parent_indent}<iidm:extension id=\"{}\">\n{child_indent}<slt:slackTerminal id=\"{}\"{side}/>\n{parent_indent}</iidm:extension>\n",
         xml(terminal.voltage_level.local_id()),
-        xml(component.local_id()),
+        xml(reference.equipment.local_id()),
     ));
 }
 

@@ -1079,6 +1079,11 @@ fn transmission_targets() -> impl Iterator<Item = (usize, TransmissionFormat)> {
 //   the name truncation warning leaves each UCTE cell of both rows: -6. The
 //   dcline case keeps its bus 30 instead of reading back as bus 3, so
 //   GridFM reports the dense index it substitutes: +1 on both rows.
+// - The XIIDM writer names a branch terminal as the SlackTerminal when the
+//   reference bus hosts no injection, as PowSybl's PSS/E importer does. The
+//   eight-bus export's swing bus 1 hosts only branches, so the readback no
+//   longer reports a missing slack terminal and moves the reference to bus 6:
+//   -1 on the XIIDM and JIIDM cells of the `PSS/E .raw 32` row.
 // - MATPOWER carries only aggregate bus GS/BS values. Two IIDM payload cases
 //   contain switched shunt controls, so the XIIDM, JIIDM, and CGMES source
 //   rows each add two warnings in the MATPOWER column rather than silently
@@ -1129,7 +1134,7 @@ const TRANSMISSION_WARNING_BASELINE: [[usize; TRANSMISSION_TARGETS]; 19] = [
     [18, 12, 6, 6, 18, 12, 6, 12, 18, 36, 36, 12, 0, 12, 36],  // UCTE-DEF .uct
     [0, 6, 14, 14, 14, 6, 9, 6, 12, 70, 70, 38, 38, 0, 15],    // PyPSA CSV
     [6, 0, 14, 14, 14, 6, 9, 0, 12, 64, 64, 32, 40, 12, 0],    // GridFM Parquet
-    [5, 4, 2, 2, 4, 4, 5, 4, 6, 14, 14, 9, 10, 6, 12],         // PSS/E .raw 32
+    [5, 4, 2, 2, 4, 4, 5, 4, 6, 13, 13, 9, 10, 6, 12],         // PSS/E .raw 32
     [8, 8, 6, 6, 8, 8, 9, 8, 8, 13, 13, 8, 14, 9, 11],         // IEEE CDF
     [6, 5, 7, 7, 9, 5, 7, 5, 7, 8, 8, 7, 14, 9, 11],           // GO Challenge 3 JSON
     [3, 2, 5, 5, 5, 3, 4, 2, 4, 32, 32, 8, 32, 5, 4],          // DeepMind OPFData JSON

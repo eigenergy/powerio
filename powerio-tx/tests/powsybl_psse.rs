@@ -328,3 +328,50 @@ fn an_iidm_bus_id_with_no_number_is_numbered_after_the_recovered_ones() {
         "{messages:#?}"
     );
 }
+
+fn reference_buses(network: &BalancedNetwork) -> Vec<usize> {
+    network
+        .buses()
+        .iter()
+        .filter(|bus| bus.kind == powerio_tx::BusType::Ref)
+        .map(|bus| bus.id.0)
+        .collect()
+}
+
+#[test]
+fn a_reference_bus_with_only_branches_stays_the_reference() {
+    use powerio_tx::network::{Branch, Bus, BusId, BusType, Generator};
+    // Bus 1 is the swing bus and hosts only the line; the generator is at 2.
+    let mut network = BalancedNetwork::in_memory(
+        "branch reference",
+        100.0,
+        vec![
+            Bus::new(BusId::new(1), BusType::Ref, 138.0),
+            Bus::new(BusId::new(2), BusType::Pv, 138.0),
+        ],
+        vec![Branch::new(BusId::new(1), BusId::new(2), 0.01, 0.1)],
+    );
+    network.generators_mut().push(Generator::new(BusId::new(2)));
+    let network = parse_psse(&emit_psse(&network).text).unwrap();
+    let parsed = parse_str(
+        &emit_value(&network, TargetFormat::Xiidm).unwrap().text,
+        "xiidm",
+    )
+    .unwrap();
+    assert_eq!(reference_buses(&parsed.network), [1]);
+    let messages = powerio_tx::diagnostics::render_diagnostics(&parsed.diagnostics);
+    assert!(
+        messages
+            .iter()
+            .all(|message| !message.contains("slack terminal")),
+        "{messages:#?}"
+    );
+
+    // PowSybl's eight bus export: the swing bus 1 hosts no injection.
+    let source = parse_file(data("psse/ExampleVersion32_exported.raw"), None)
+        .unwrap()
+        .network;
+    assert_eq!(reference_buses(&source), [1]);
+    let xml = emit_value(&source, TargetFormat::Xiidm).unwrap().text;
+    assert_eq!(reference_buses(&xiidm(&xml)), [1]);
+}
