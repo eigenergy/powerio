@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::geo::{DistGeoMeta, DistLocation};
 
+mod located_network;
+
 pub type Extras = BTreeMap<String, serde_json::Value>;
 
 /// A square matrix in conductor order, row major.
@@ -416,6 +418,47 @@ pub enum DistLoadVoltageModel {
         gamma_p: Vec<f64>,
         gamma_q: Vec<f64>,
     },
+    /// ZIP law with low-voltage current interpolation and high-voltage
+    /// impedance continuation. See [`Self::power_scale`] for the equations.
+    /// Below `v_low_pu` the entire nominal load is constant impedance;
+    /// the dropout curve applies only above that threshold.
+    BoundedZip {
+        v_nom: Vec<f64>,
+        alpha_z: Vec<f64>,
+        alpha_i: Vec<f64>,
+        alpha_p: Vec<f64>,
+        beta_z: Vec<f64>,
+        beta_i: Vec<f64>,
+        beta_p: Vec<f64>,
+        v_low_pu: f64,
+        v_min_pu: f64,
+        v_max_pu: f64,
+        cutoff_pu: f64,
+    },
+    /// Exponential law inside a voltage band, with nominal-impedance
+    /// continuation below `v_low_pu`, current interpolation up to `v_min_pu`,
+    /// and impedance continuation above `v_max_pu`. The continuations apply
+    /// equally to P and Q, independently of their middle-band exponents.
+    /// See [`Self::power_scale`] for the equations. Arrays follow active branches.
+    BoundedExponential {
+        v_nom: Vec<f64>,
+        gamma_p: Vec<f64>,
+        gamma_q: Vec<f64>,
+        v_low_pu: f64,
+        v_min_pu: f64,
+        v_max_pu: f64,
+    },
+    /// Constant power between positive voltage bounds, with impedance
+    /// continuation outside them and an optional current-magnitude limit.
+    /// `v_nom` is volts per active branch. `current_limit_pu` is a multiple
+    /// of that branch's nominal apparent power divided by nominal voltage.
+    /// P and Q share one scale, preserving power factor. See [`Self::power_scale`].
+    BoundedConstantPower {
+        v_nom: Vec<f64>,
+        v_min_pu: f64,
+        v_max_pu: f64,
+        current_limit_pu: Option<f64>,
+    },
 }
 
 impl Default for DistLoadVoltageModel {
@@ -432,7 +475,10 @@ impl DistLoadVoltageModel {
             | Self::ConstantCurrent { v_nom }
             | Self::ConstantImpedance { v_nom }
             | Self::Zip { v_nom, .. }
-            | Self::Exponential { v_nom, .. } => v_nom,
+            | Self::Exponential { v_nom, .. }
+            | Self::BoundedZip { v_nom, .. }
+            | Self::BoundedConstantPower { v_nom, .. }
+            | Self::BoundedExponential { v_nom, .. } => v_nom,
         }
     }
 }
@@ -888,6 +934,10 @@ pub(crate) struct MulticonductorNetworkTables {
     pub base_frequency: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geo: Option<DistGeoMeta>,
+    /// Component geography uses a distinct stored network wrapper. The legacy
+    /// network body and its schema remain unchanged when this table is empty.
+    #[serde(skip)]
+    pub component_locations: Vec<crate::DistComponentLocation>,
     pub buses: Vec<DistBus>,
     #[serde(rename = "linecodes")]
     pub line_codes: Vec<DistLineCode>,
@@ -930,19 +980,13 @@ pub(crate) struct MulticonductorNetworkTables {
 // as the balanced model.
 impl serde::Serialize for MulticonductorNetwork {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        MulticonductorNetworkTables::serialize(
-            &self.tables,
-            powerio_core::__implementation::nonfinite::NonFiniteSer(serializer),
-        )
+        located_network::serialize(self, serializer)
     }
 }
 
 impl<'de> serde::Deserialize<'de> for MulticonductorNetwork {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        MulticonductorNetworkTables::deserialize(
-            powerio_core::__implementation::nonfinite::NonFiniteDe(deserializer),
-        )
-        .map(MulticonductorNetwork::from_tables)
+        located_network::deserialize(deserializer)
     }
 }
 
@@ -957,7 +1001,7 @@ impl schemars::JsonSchema for MulticonductorNetwork {
     }
 
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        <MulticonductorNetworkTables as schemars::JsonSchema>::json_schema(generator)
+        located_network::json_schema(generator)
     }
 }
 
@@ -985,6 +1029,7 @@ macro_rules! dist_table_accessors {
 dist_table_accessors! {
     name, name_mut: Option<String>;
     geo, geo_mut: Option<DistGeoMeta>;
+    component_locations, component_locations_mut: Vec<crate::DistComponentLocation>;
     buses, buses_mut: Vec<DistBus>;
     line_codes, line_codes_mut: Vec<DistLineCode>;
     lines, lines_mut: Vec<DistLine>;
@@ -1033,6 +1078,7 @@ impl Default for MulticonductorNetworkTables {
             name: None,
             base_frequency: crate::dss::defaults::BASE_FREQUENCY,
             geo: None,
+            component_locations: Vec::new(),
             buses: Vec::new(),
             line_codes: Vec::new(),
             lines: Vec::new(),
@@ -1320,32 +1366,6 @@ pub(crate) fn pair_keys(n: usize) -> Vec<(usize, usize)> {
     pairs
 }
 
-/// Builds an `n`x`n` matrix from lower triangle rows (the OpenDSS matrix
-/// entry convention) or full rows; symmetric completion for the triangle.
-pub(crate) fn square_from_rows(rows: &[Vec<f64>], n: usize) -> Option<ConductorMatrix> {
-    let mut m = vec![vec![0.0; n]; n];
-    if rows.len() != n {
-        return None;
-    }
-    let lower = rows.iter().enumerate().all(|(i, r)| r.len() == i + 1);
-    let full = rows.iter().all(|r| r.len() == n);
-    if lower {
-        for (i, row) in rows.iter().enumerate() {
-            for (j, &v) in row.iter().enumerate() {
-                m[i][j] = v;
-                m[j][i] = v;
-            }
-        }
-    } else if full {
-        for (i, row) in rows.iter().enumerate() {
-            m[i].clone_from_slice(&row[..n]);
-        }
-    } else {
-        return None;
-    }
-    Some(m)
-}
-
 /// Actual coil voltage base, including the fixed winding tap.
 pub(crate) fn winding_coil_voltage(winding: &DistWinding, phases: usize) -> f64 {
     let divisor = if winding.conn == DistWindingConn::Wye && matches!(phases, 2 | 3) {
@@ -1383,32 +1403,6 @@ pub(crate) fn transformer_no_load_percentages(t: &DistTransformer) -> Option<(f6
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    #[allow(clippy::float_cmp)]
-    fn lower_triangle_completes_symmetrically() {
-        let rows = vec![vec![1.0], vec![0.5, 2.0], vec![0.3, 0.4, 3.0]];
-        let m = square_from_rows(&rows, 3).unwrap();
-        assert_eq!(m[0][1], 0.5);
-        assert_eq!(m[1][0], 0.5);
-        assert_eq!(m[2][2], 3.0);
-        assert_eq!(m[0][2], 0.3);
-    }
-
-    #[test]
-    #[allow(clippy::float_cmp)]
-    fn full_rows_pass_through() {
-        let rows = vec![vec![1.0, 9.0], vec![8.0, 2.0]];
-        let m = square_from_rows(&rows, 2).unwrap();
-        assert_eq!(m[0][1], 9.0);
-        assert_eq!(m[1][0], 8.0);
-    }
-
-    #[test]
-    fn wrong_shape_is_rejected() {
-        assert!(square_from_rows(&[vec![1.0], vec![2.0]], 2).is_none());
-        assert!(square_from_rows(&[vec![1.0, 2.0]], 2).is_none());
-    }
 
     #[test]
     fn multiconductor_json_uses_only_final_nonfinite_spellings() {

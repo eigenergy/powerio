@@ -41,6 +41,8 @@ typedef struct PioActivePower PioActivePower;
 typedef struct PioAcOpfPreparation PioAcOpfPreparation;
 typedef struct PioDcOpfPreparation PioDcOpfPreparation;
 typedef struct PioDcOperators PioDcOperators;
+typedef struct PioIslands PioIslands;
+typedef struct PioSensitivities PioSensitivities;
 typedef struct PioApparentPower PioApparentPower;
 typedef struct PioBalancedNetwork PioBalancedNetwork;
 typedef struct PioCalculationUpdate PioCalculationUpdate;
@@ -163,6 +165,7 @@ include = [
     "PioBranchRatingView",
     "PioByteView",
     "PioF64View",
+    "PioIslandView",
     "PioGeneratorCapabilityView",
     "PioGeneratorCostView",
     "PioDcBusSpecificationView",

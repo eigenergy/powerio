@@ -130,13 +130,15 @@ BranchSusceptanceFormula = Literal[
 SensitivitySolver = Literal["auto", "dense", "sparse"]
 
 class PowerIOError(ValueError):
-    """Base error from the powerio parser, emitter, or matrix calculations.
+    """Base error from parsing, emission, or matrix calculations.
 
-    Failures mapped from the Rust core carry the diagnostic code string as
-    ``code``; it is set at raise time, so it is instance-only.
+    Rust core failures carry a diagnostic code and typed Diagnostic records.
+    Refused conversion passes retain their existing dictionary findings.
+    These attributes are populated when the exception is raised.
     """
 
     code: str
+    diagnostics: list[Diagnostic] | list[dict[str, Any]]
 
 class PowerIOParseError(PowerIOError):
     """A case file is malformed or unparseable."""
@@ -144,13 +146,9 @@ class PowerIOParseError(PowerIOError):
 class PowerIODataError(PowerIOError):
     """A well-formed case cannot satisfy a requested operation.
 
-    A refused pass (e.g. :meth:`PioModule.to_balanced`) additionally sets
-    ``diagnostics``: the pass's structured findings, each a dict with
-    ``code``, ``severity``, ``message``, and ``target``. Absent on a
-    ``PowerIODataError`` raised elsewhere.
+    Core errors carry typed Diagnostic records. Refused conversion passes
+    retain dictionary findings with code, severity, message, and target.
     """
-
-    diagnostics: List[Dict[str, Any]]
 
 # The runtime re-exports the native record classes; the stub does the same so
 # a `_powerio.Diagnostic` and a `powerio.Diagnostic` are one type to a checker.
@@ -187,6 +185,26 @@ from ._powerio import ScucViolationCosts as ScucViolationCosts
 from ._powerio import SourceSpan as SourceSpan
 from ._powerio import UpdateChange as UpdateChange
 from ._powerio import UpdateReport as UpdateReport
+
+AcOtsIslanding = Literal["forbidden", "allowed"]
+AcOtsCurrentLimits = Literal["skip", "stated", "derive_from_rate_a"]
+
+class AcOtsOptions(TypedDict):
+    switchable: Union[Literal["all", "none"], List[str]]
+    switching_costs: Dict[str, Tuple[float, float]]
+    islanding: AcOtsIslanding
+    max_open: Optional[int]
+    max_switched: Optional[int]
+    current_limits: AcOtsCurrentLimits
+    stated_current_limits: Dict[str, Tuple[Optional[float], Optional[float]]]
+
+class AcOtsBranch(TypedDict):
+    id: str
+    initial_closed: bool
+    switchable: bool
+    switching_cost: Optional[Tuple[float, float]]
+    stated_current: Tuple[Optional[float], Optional[float]]
+    current: Tuple[Optional[float], Optional[float]]
 
 class GenCost(TypedDict):
     model: int
@@ -1174,7 +1192,16 @@ class DcPfInstance(_BalancedCalculation): ...
 class AcPfInstance(_BalancedCalculation): ...
 class DcOpfInstance(_BalancedCalculation): ...
 class AcOpfInstance(_BalancedCalculation): ...
-class AcOtsInstance(_BalancedCalculation): ...
+class AcOtsInstance(_BalancedCalculation):
+    @property
+    def options(self) -> AcOtsOptions: ...
+    @property
+    def branches(self) -> List[AcOtsBranch]: ...
+    def validate_topology(self, closed: Sequence[bool]) -> float: ...
+    def fix_topology(
+        self, closed: Sequence[bool]
+    ) -> Tuple[AcOpfInstance, List[Diagnostic]]: ...
+
 class McAcPfInstance(_MulticonductorCalculation): ...
 class McAcOpfInstance(_MulticonductorCalculation): ...
 class LinDist3FlowPfInstance(_MulticonductorCalculation):
@@ -1234,6 +1261,24 @@ class AcOpfSolution(_BalancedCalculation, _CalculationSolution):
 class AcOtsSolution(_BalancedCalculation, _CalculationSolution):
     @property
     def instance(self) -> AcOtsInstance: ...
+    @classmethod
+    def from_ac_opf_solution(
+        cls,
+        instance: AcOtsInstance,
+        closed: Sequence[bool],
+        solution: AcOpfSolution,
+    ) -> AcOtsSolution: ...
+    @property
+    def branch_closed(self) -> List[bool]: ...
+    @property
+    def switching_cost(self) -> float: ...
+    @property
+    def branches_open(self) -> int: ...
+    @property
+    def branches_switched(self) -> int: ...
+    @property
+    def objective(self) -> float: ...
+    def solved_network(self) -> PioModule[BalancedNetwork]: ...
 class SocwrOpfSolution(_BalancedCalculation, _CalculationSolution):
     @property
     def instance(self) -> AcOpfInstance: ...
@@ -1295,7 +1340,19 @@ class PioModule(Generic[_T]):
     def to_ac_pf_instance(self) -> PioModule[AcPfInstance]: ...
     def to_dc_opf_instance(self) -> PioModule[DcOpfInstance]: ...
     def to_ac_opf_instance(self) -> PioModule[AcOpfInstance]: ...
-    def to_ac_ots_instance(self) -> PioModule[AcOtsInstance]: ...
+    def to_ac_ots_instance(
+        self,
+        *,
+        switchable: Union[Literal["all", "none"], Sequence[str], None] = ...,
+        switching_costs: Optional[Mapping[str, Tuple[float, float]]] = ...,
+        islanding: Optional[AcOtsIslanding] = ...,
+        max_open: Optional[int] = ...,
+        max_switched: Optional[int] = ...,
+        current_limits: Optional[AcOtsCurrentLimits] = ...,
+        stated_current_limits: Optional[
+            Mapping[str, Tuple[Optional[float], Optional[float]]]
+        ] = ...,
+    ) -> PioModule[AcOtsInstance]: ...
     def to_mc_ac_pf_instance(self) -> PioModule[McAcPfInstance]: ...
     def to_mc_ac_opf_instance(self) -> PioModule[McAcOpfInstance]: ...
     def to_lindist3flow_opf_instance(self) -> PioModule[LinDist3FlowOpfInstance]: ...

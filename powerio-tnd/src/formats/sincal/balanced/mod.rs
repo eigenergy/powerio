@@ -17,7 +17,7 @@ mod tests;
 #[cfg(test)]
 mod write_tests;
 
-use crate::formats::sincal::storage::DatabaseSnapshot;
+use crate::formats::sincal::storage::{DatabaseSnapshot, TerminalIdentity};
 use powerio_tx::Result;
 use powerio_tx::network::{BalancedNetwork, Bus, BusId, BusType, SourceFormat, Switch};
 use rows::{NativeRow, get, table};
@@ -77,6 +77,26 @@ fn error<T: std::fmt::Display + 'static>(message: T) -> powerio_tx::Error {
         format: "sincal",
         message: crate::formats::sincal::storage::failure_message(&message),
     }
+}
+
+/// Position of a bus in `network.buses()`. The reader pushes native nodes in
+/// ascending `Node_ID` order and gives each auxiliary bus the next larger ID,
+/// so the table is sorted by ID and a binary search finds the bus without
+/// scanning every bus per lookup. The scan remains only as a fallback.
+fn bus_position(network: &BalancedNetwork, id: BusId) -> Option<usize> {
+    let buses = network.buses();
+    match buses.binary_search_by_key(&id, |b| b.id) {
+        Ok(position) => Some(position),
+        Err(_) => buses.iter().position(|b| b.id == id),
+    }
+}
+
+fn find_bus(network: &BalancedNetwork, id: BusId) -> Option<&Bus> {
+    bus_position(network, id).map(|position| &network.buses()[position])
+}
+
+fn find_bus_mut(network: &mut BalancedNetwork, id: BusId) -> Option<&mut Bus> {
+    bus_position(network, id).map(|position| &mut network.buses_mut()[position])
 }
 
 fn bus_id(id: i64) -> Result<BusId> {
@@ -223,6 +243,9 @@ fn read_elements(
         }
     }
     refuse_segmented_lines(db)?;
+    let by_element = terminals_by_element(db);
+    // Auxiliary buses take the next ID above every bus so far.
+    let mut largest_bus = network.buses().iter().map(|b| b.id.0).max().unwrap_or(0);
     for (&id, kind) in &db.elements {
         let element = get(&elements, id, "Element")?;
         if element.integer("Flag_Input")? & 2 == 0 {
@@ -238,7 +261,8 @@ fn read_elements(
         } else {
             1
         };
-        let ports = ports(db, &terminals, id, count, network)?;
+        let native = by_element.get(&id).map_or(&[][..], Vec::as_slice);
+        let ports = ports(native, &terminals, id, count, &mut largest_bus, network)?;
         let uid = format!("sincal:element:{id}");
         match kind.as_str() {
             "Line" => {
@@ -256,12 +280,7 @@ fn read_elements(
                 network.branches_mut().push(branch);
             }
             "Load" => {
-                let base_kv = network
-                    .buses()
-                    .iter()
-                    .find(|b| b.id == ports[0])
-                    .unwrap()
-                    .base_kv;
+                let base_kv = find_bus(network, ports[0]).unwrap().base_kv;
                 network.loads_mut().push(equipment::load(
                     db, input, ports[0], base_kv, &uid, profiles,
                 )?);
@@ -302,21 +321,33 @@ fn read_elements(
     Ok(())
 }
 
+/// Group terminals by element once, in `Terminal_ID` order, instead of
+/// scanning every terminal for each element.
+fn terminals_by_element(db: &DatabaseSnapshot) -> BTreeMap<i64, Vec<(&i64, &TerminalIdentity)>> {
+    let mut by_element = BTreeMap::<i64, Vec<_>>::new();
+    for (id, terminal) in &db.terminals {
+        by_element
+            .entry(terminal.element)
+            .or_default()
+            .push((id, terminal));
+    }
+    by_element
+}
+
 /// An open terminal leaves the device itself present, connected through an
 /// explicit open switch. In particular, opening one end must not remove the
 /// energized end's line charging. Native node IDs are never renumbered.
+/// `native` holds the element's terminals in `Terminal_ID` order;
+/// `largest_bus` is the largest bus ID in the network so far.
 fn ports(
-    db: &DatabaseSnapshot,
+    native: &[(&i64, &TerminalIdentity)],
     rows: &BTreeMap<i64, NativeRow>,
     element: i64,
     count: usize,
+    largest_bus: &mut usize,
     network: &mut BalancedNetwork,
 ) -> Result<Vec<BusId>> {
-    let mut native = db
-        .terminals
-        .iter()
-        .filter(|(_, t)| t.element == element)
-        .collect::<Vec<_>>();
+    let mut native = native.to_vec();
     native.sort_by_key(|(_, t)| t.position);
     if native.len() != count {
         return Err(error(format!(
@@ -337,20 +368,10 @@ fn ports(
             result.push(node);
             continue;
         }
-        let aux_id = network
-            .buses()
-            .iter()
-            .map(|b| b.id.0)
-            .max()
-            .unwrap_or(0)
+        let aux_id = largest_bus
             .checked_add(1)
             .ok_or_else(|| error("auxiliary node ID overflow"))?;
-        let mut bus = network
-            .buses()
-            .iter()
-            .find(|b| b.id == node)
-            .unwrap()
-            .clone();
+        let mut bus = find_bus(network, node).unwrap().clone();
         bus.id = BusId(aux_id);
         // The auxiliary terminal has no source merely because its original
         // bus does. A source adapter may explicitly prescribe it afterward.
@@ -360,6 +381,7 @@ fn ports(
         let mut switch = Switch::new(node, bus.id, closed);
         switch.uid = Some(format!("sincal:terminal:{id}:switch"));
         result.push(bus.id);
+        *largest_bus = aux_id;
         network.buses_mut().push(bus);
         network.switches_mut().push(switch);
     }

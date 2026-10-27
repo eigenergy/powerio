@@ -66,13 +66,15 @@ class PanicException(BaseException):
     """A Rust panic pyo3 caught at the boundary; the wrapper converts it."""
 
 class PowerIOError(ValueError):
-    """Base error from the powerio parser, emitter, or matrix calculations.
+    """Base error from parsing, emission, or matrix calculations.
 
-    Failures mapped from the Rust core carry the diagnostic code string as
-    ``code``; it is set at raise time, so it is instance-only.
+    Rust core failures carry a diagnostic code and typed Diagnostic records.
+    Refused conversion passes retain their existing dictionary findings.
+    These attributes are populated when the exception is raised.
     """
 
     code: str
+    diagnostics: list[Diagnostic] | list[dict[str, Any]]
 
 class PowerIOParseError(PowerIOError):
     """A case file is malformed or unparseable."""
@@ -80,13 +82,9 @@ class PowerIOParseError(PowerIOError):
 class PowerIODataError(PowerIOError):
     """A well-formed case cannot satisfy a requested operation.
 
-    A refused pass (e.g. ``_PioModule.lower_to_balanced``) additionally sets
-    ``diagnostics``: the pass's structured findings, each a dict with
-    ``code``, ``severity``, ``message``, and ``target``. Absent on a
-    ``PowerIODataError`` raised elsewhere.
+    Core errors carry typed Diagnostic records. Refused conversion passes
+    retain dictionary findings with code, severity, message, and target.
     """
-
-    diagnostics: List[Dict[str, Any]]
 
 class _BusMerge:
     @property
@@ -913,6 +911,29 @@ class _PioModule:
     def _to_dc_opf_instance(self) -> "_PioModule": ...
     def _to_ac_opf_instance(self) -> "_PioModule": ...
     def _to_ac_ots_instance(self) -> "_PioModule": ...
+    def _to_ac_ots_instance_with_options(
+        self,
+        switchable: str,
+        identities: List[str],
+        switching_costs: List[Tuple[str, float, float]],
+        islanding: str,
+        max_open: Optional[int],
+        max_switched: Optional[int],
+        current_limits: str,
+        stated_current_limits: List[Tuple[str, Optional[float], Optional[float]]],
+    ) -> "_PioModule": ...
+    def _ac_ots_options(self) -> Dict[str, Any]: ...
+    def _ac_ots_branches(self) -> List[Dict[str, Any]]: ...
+    def _ac_ots_validate_topology(self, branch_closed: List[bool]) -> float: ...
+    def _ac_ots_fix_topology(
+        self, branch_closed: List[bool]
+    ) -> Tuple["_PioModule", List[Diagnostic]]: ...
+    def _ac_ots_solution(
+        self, branch_closed: List[bool], ac_solution: "_PioModule"
+    ) -> "_PioModule": ...
+    def _ac_ots_solution_branch_closed(self) -> List[bool]: ...
+    def _ac_ots_solution_summary(self) -> Tuple[float, int, int, float]: ...
+    def _ac_ots_solved_network(self) -> "_PioModule": ...
     def _to_mc_ac_pf_instance(self) -> "_PioModule": ...
     def _to_mc_ac_opf_instance(self) -> "_PioModule": ...
     def _to_lindist3flow_opf_instance(self) -> "_PioModule": ...

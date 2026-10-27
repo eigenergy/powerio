@@ -112,7 +112,7 @@ fn an_acquisition_root_widens_where_includes_may_live() {
     let master = root.join("nested/master.dss");
     // Without the wider root the include above the master's own directory is
     // refused; with it the case reads whole.
-    let refused = powerio::parse(&master).unwrap();
+    let refused = powerio::parse(&master).unwrap_err();
     let allowed =
         powerio::parse_with_options(&master, &ParseOptions::default().acquisition_root(&root));
     assert!(allowed.is_ok(), "{:?}", allowed.err());

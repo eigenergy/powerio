@@ -431,11 +431,13 @@ fn core_error_pyerr(error: &powerio_core::Error) -> PyErr {
         powerio_core::ErrorCategory::Data => PowerIODataError::new_err(error.to_string()),
         _ => PowerIOError::new_err(error.to_string()),
     };
-    if let Some(code) = error.diagnostics().first().map(|d| d.code().to_owned()) {
-        Python::attach(|py| {
-            let _ = err.value(py).setattr("code", code);
-        });
-    }
+    Python::attach(|py| {
+        if let Some(diagnostic) = error.diagnostics().first() {
+            let _ = err.value(py).setattr("code", diagnostic.code());
+        }
+        let diagnostics: Vec<_> = error.diagnostics().iter().map(PyDiagnostic::from).collect();
+        let _ = err.value(py).setattr("diagnostics", diagnostics);
+    });
     err
 }
 
@@ -3903,6 +3905,26 @@ impl PyPioModule {
         }
     }
 
+    fn ac_ots_instance(&self) -> PyResult<&powerio_prob::AcOtsInstance> {
+        match &self.module()?.value() {
+            powerio::PioValue::AcOtsInstance(instance) => Ok(instance),
+            other => Err(PyTypeError::new_err(format!(
+                "{} is not an AC optimal transmission switching instance",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn ac_ots_solution(&self) -> PyResult<&powerio_prob::AcOtsSolution> {
+        match &self.module()?.value() {
+            powerio::PioValue::AcOtsSolution(solution) => Ok(solution),
+            other => Err(PyTypeError::new_err(format!(
+                "{} is not an AC optimal transmission switching solution",
+                other.type_name()
+            ))),
+        }
+    }
+
     fn balanced_calculation_network(&self) -> PyResult<&powerio::BalancedNetwork> {
         let value = &self.module()?.value();
         match value {
@@ -4511,6 +4533,218 @@ impl PyPioModule {
         let module = powerio::transform::to_ac_ots_instance(self.module()?)
             .map_err(|error| core_error_pyerr(&error))?
             .map_value(powerio::PioValue::AcOtsInstance);
+        Ok(Self {
+            module: Some(module),
+        })
+    }
+
+    /// Construct, or reconfigure, an AC optimal transmission switching
+    /// instance with explicit options. The wrapper calls `_to_ac_ots_instance`
+    /// when no option is given, as the C ABI does for NULL options.
+    #[allow(clippy::too_many_arguments)]
+    fn _to_ac_ots_instance_with_options(
+        &self,
+        switchable: &str,
+        identities: Vec<String>,
+        switching_costs: Vec<(String, f64, f64)>,
+        islanding: &str,
+        max_open: Option<usize>,
+        max_switched: Option<usize>,
+        current_limits: &str,
+        stated_current_limits: Vec<(String, Option<f64>, Option<f64>)>,
+    ) -> PyResult<Self> {
+        let mut options = powerio_prob::AcOtsOptions::default();
+        options.switchable = match switchable {
+            "only" => powerio_prob::BranchSelection::Only(identities),
+            "all" | "none" if !identities.is_empty() => {
+                return Err(PyValueError::new_err(format!(
+                    "identities name branches, but the selection is '{switchable}'; \
+                     identities require 'only'"
+                )));
+            }
+            "all" => powerio_prob::BranchSelection::All,
+            "none" => powerio_prob::BranchSelection::None,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown branch selection '{other}'; expected 'all', 'none', or a list of branch identities"
+                )));
+            }
+        };
+        options.switching_costs = switching_costs
+            .into_iter()
+            .map(|(id, open, close)| powerio_prob::BranchSwitchingCost::new(id, open, close))
+            .collect();
+        options.islanding = match islanding {
+            "forbidden" => powerio_prob::IslandingPolicy::Forbidden,
+            "allowed" => powerio_prob::IslandingPolicy::Allowed,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown islanding policy '{other}'; expected 'forbidden' or 'allowed'"
+                )));
+            }
+        };
+        options.max_open = max_open;
+        options.max_switched = max_switched;
+        options.current_limits = match current_limits {
+            "skip" => powerio_prob::CurrentLimitPolicy::Skip,
+            "stated" => powerio_prob::CurrentLimitPolicy::Stated,
+            "derive_from_rate_a" => powerio_prob::CurrentLimitPolicy::DeriveFromRateA,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown current limit policy '{other}'; expected 'skip', 'stated', or 'derive_from_rate_a'"
+                )));
+            }
+        };
+        options.stated_current_limits = stated_current_limits
+            .into_iter()
+            .map(|(id, from_pu, to_pu)| powerio_prob::BranchCurrentLimit::new(id, from_pu, to_pu))
+            .collect();
+        let module = powerio::transform::to_ac_ots_instance_with_options(self.module()?, options)
+            .map_err(|error| core_error_pyerr(&error))?
+            .map_value(powerio::PioValue::AcOtsInstance);
+        Ok(Self {
+            module: Some(module),
+        })
+    }
+
+    /// The switching options an AC OTS instance states, spelled as the
+    /// keyword arguments of `PioModule.to_ac_ots_instance`.
+    fn _ac_ots_options<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let options = self.ac_ots_instance()?.options();
+        let out = PyDict::new(py);
+        match &options.switchable {
+            powerio_prob::BranchSelection::Only(identities) => {
+                out.set_item("switchable", PyList::new(py, identities)?)?;
+            }
+            other => out.set_item("switchable", other.kind_name())?,
+        }
+        let costs = PyDict::new(py);
+        for cost in &options.switching_costs {
+            costs.set_item(&cost.id, (cost.open_cost, cost.close_cost))?;
+        }
+        out.set_item("switching_costs", costs)?;
+        out.set_item("islanding", options.islanding.name())?;
+        out.set_item("max_open", options.max_open)?;
+        out.set_item("max_switched", options.max_switched)?;
+        out.set_item("current_limits", options.current_limits.name())?;
+        let limits = PyDict::new(py);
+        for limit in &options.stated_current_limits {
+            limits.set_item(&limit.id, (limit.from_pu, limit.to_pu))?;
+        }
+        out.set_item("stated_current_limits", limits)?;
+        Ok(out)
+    }
+
+    /// Every physical branch of an AC OTS instance in table order, with its
+    /// resolved switching settings.
+    fn _ac_ots_branches<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let out = PyList::empty(py);
+        for branch in self.ac_ots_instance()?.branches() {
+            let row = PyDict::new(py);
+            row.set_item("id", &branch.id)?;
+            row.set_item("initial_closed", branch.initial_closed)?;
+            row.set_item("switchable", branch.switchable)?;
+            row.set_item(
+                "switching_cost",
+                branch.switching_cost.map(|cost| (cost.open, cost.close)),
+            )?;
+            row.set_item(
+                "stated_current",
+                (branch.stated_current.from_pu, branch.stated_current.to_pu),
+            )?;
+            row.set_item("current", (branch.current.from_pu, branch.current.to_pu))?;
+            out.append(row)?;
+        }
+        Ok(out)
+    }
+
+    /// Check a final branch status vector and return its switching cost.
+    fn _ac_ots_validate_topology(&self, branch_closed: Vec<bool>) -> PyResult<f64> {
+        self.ac_ots_instance()?
+            .validate_topology(&branch_closed)
+            .map_err(|error| core_error_pyerr(&error))
+    }
+
+    /// The AC OPF module over a final topology, and the diagnostics that
+    /// report the switching data it drops.
+    fn _ac_ots_fix_topology(
+        &self,
+        branch_closed: Vec<bool>,
+    ) -> PyResult<(Self, Vec<PyDiagnostic>)> {
+        let module = self.module()?;
+        let inherited = module.diagnostics().len();
+        let derived = powerio::transform::fix_ac_ots_topology(
+            module,
+            self.ac_ots_instance()?,
+            &branch_closed,
+        )
+        .map_err(|error| core_error_pyerr(&error))?
+        .map_value(powerio::PioValue::AcOpfInstance);
+        let diagnostics = derived.diagnostics()[inherited..]
+            .iter()
+            .map(PyDiagnostic::from)
+            .collect();
+        Ok((
+            Self {
+                module: Some(derived),
+            },
+            diagnostics,
+        ))
+    }
+
+    /// Attach the AC OPF solution computed on this instance's fixed topology.
+    fn _ac_ots_solution(
+        &self,
+        branch_closed: Vec<bool>,
+        ac_solution: PyRef<'_, Self>,
+    ) -> PyResult<Self> {
+        let ac_solution = match ac_solution.module()?.value() {
+            powerio::PioValue::AcOpfSolution(solution) => solution.clone(),
+            other => {
+                return Err(PyTypeError::new_err(format!(
+                    "the AC solution must be powerio.AcOpfSolution; this value is {}",
+                    other.type_name()
+                )));
+            }
+        };
+        let module = powerio::transform::ac_ots_solution(
+            self.module()?,
+            self.ac_ots_instance()?,
+            branch_closed,
+            ac_solution,
+        )
+        .map_err(|error| core_error_pyerr(&error))?
+        .map_value(powerio::PioValue::AcOtsSolution);
+        Ok(Self {
+            module: Some(module),
+        })
+    }
+
+    /// The final branch statuses of an AC OTS solution, in branch table order.
+    fn _ac_ots_solution_branch_closed(&self) -> PyResult<Vec<bool>> {
+        Ok(self.ac_ots_solution()?.branch_closed().to_vec())
+    }
+
+    /// The switching cost, open count, switched count, and objective of an
+    /// AC OTS solution.
+    fn _ac_ots_solution_summary(&self) -> PyResult<(f64, usize, usize, f64)> {
+        let solution = self.ac_ots_solution()?;
+        Ok((
+            solution.switching_cost(),
+            solution.branches_open(),
+            solution.branches_switched(),
+            solution.objective(),
+        ))
+    }
+
+    /// The balanced network an AC OTS solution states, ready for `emit`.
+    fn _ac_ots_solved_network(&self) -> PyResult<Self> {
+        let module = powerio::transform::materialize_ac_ots_solution(
+            self.module()?,
+            self.ac_ots_solution()?,
+        )
+        .map_err(|error| core_error_pyerr(&error))?
+        .map_value(powerio::PioValue::from);
         Ok(Self {
             module: Some(module),
         })
