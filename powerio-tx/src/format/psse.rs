@@ -2208,18 +2208,8 @@ fn write_psse_rev_inner(
     }
     let _ = writeln!(s, "Q");
 
-    if net
-        .hvdc()
-        .iter()
-        .any(|dc| !is_vsc_line(dc) && dc_states_beyond_record(dc))
-    {
-        warnings.push(
-            &F.value_defaulted,
-            "DC line converter detail (firing angles, converter transformer taps, reactive \
-             output) defaulted: PSS/E two-terminal DC is written from the power setpoint and \
-             line resistance only",
-        );
-    }
+    warn_dc_record_gaps(net, &mut warnings);
+    warn_case_metadata_and_area_types(net, &mut warnings);
     if net.generators().iter().any(|g| g.cost.is_some()) {
         warnings.push(
             &F.field_dropped,
@@ -2455,7 +2445,24 @@ pub(crate) fn quoted_circuit_id<K: Ord + Clone>(
 /// voltage setpoints, reactive limits, its own power band, or a loss model)
 /// earns the dropped-detail warning regardless of which format it came from.
 #[allow(clippy::float_cmp)] // the neutral shape is produced bit-exactly by the reader
-fn dc_states_beyond_record(d: &Hvdc) -> bool {
+/// What a source states about a two-terminal DC line that the PSS/E record,
+/// written from the power setpoint, `RDC`, and `VSCHD`, does not reproduce.
+#[derive(Default)]
+struct DcRecordGaps {
+    /// The end power the record cannot state: which end, the stated value,
+    /// and the value a reread derives from the other end and the drop model.
+    setpoint: Option<(&'static str, f64, f64)>,
+    /// Active power limits other than the `[0, max(|Pf|, |Pt|)]` a reread
+    /// derives.
+    limits: bool,
+    /// A MATPOWER style linear loss model.
+    loss_model: bool,
+    /// Terminal voltages, reactive output, and reactive limits.
+    detail: bool,
+}
+
+#[allow(clippy::float_cmp)]
+fn dc_record_gaps(d: &Hvdc) -> DcRecordGaps {
     let rdc = dc_f64(&d.extras, "psse_dc_rdc").unwrap_or(0.0);
     let vschd = dc_f64(&d.extras, "psse_dc_vschd").unwrap_or(0.0);
     // A blocked line writes MDC 0, under which the reader prices no drop and
@@ -2463,6 +2470,7 @@ fn dc_states_beyond_record(d: &Hvdc) -> bool {
     // service and scheduling a voltage has a current to price the loss with.
     let priced = d.in_service && vschd > 0.0;
     let at_inverter = d.in_service && d.extras.contains_key(SETVL_AT_INVERTER);
+    let mut gaps = DcRecordGaps::default();
     // The drop the rewrite reproduces from the replayed RDC/VSCHD. A whisker
     // of tolerance covers the units round trip of a current-mode record
     // (SETVL -> kA -> SETVL). An inverter-measured record writes back as
@@ -2478,27 +2486,127 @@ fn dc_states_beyond_record(d: &Hvdc) -> bool {
             d.pt
         };
         if (d.pf - expected_pf).abs() > 1e-9 * d.pt.abs().max(1.0) {
-            return true;
+            gaps.setpoint = Some(("sent power Pf", d.pf, expected_pf));
+        }
+    } else {
+        let expected_pt = if priced {
+            let i = d.pf / vschd;
+            d.pf - i * i * rdc
+        } else {
+            d.pf
+        };
+        if (d.pt - expected_pt).abs() > 1e-9 * d.pf.abs().max(1.0) {
+            gaps.setpoint = Some(("received power Pt", d.pt, expected_pt));
         }
     }
-    let expected_pt = if at_inverter {
-        d.pt
-    } else if priced {
-        let i = d.pf / vschd;
-        d.pf - i * i * rdc
-    } else {
-        d.pf
-    };
-    (d.pt - expected_pt).abs() > 1e-9 * d.pf.abs().max(1.0)
-        || d.vf != 1.0
+    gaps.limits = d.pmin != 0.0 || d.pmax != d.pf.abs().max(d.pt.abs());
+    gaps.loss_model = d.loss0 != 0.0 || d.loss1 != 0.0;
+    gaps.detail = d.vf != 1.0
         || d.vt != 1.0
-        || d.pmin != 0.0
-        || d.pmax != d.pf.abs().max(d.pt.abs())
         || [d.qf, d.qt, d.qminf, d.qmaxf, d.qmint, d.qmaxt]
             .iter()
-            .any(|q| *q != 0.0)
-        || d.loss0 != 0.0
-        || d.loss1 != 0.0
+            .any(|q| *q != 0.0);
+    gaps
+}
+
+/// Report what each two-terminal DC record cannot state, by field, so a
+/// reader of the diagnostics learns which values change on a reread.
+fn warn_dc_record_gaps(net: &BalancedNetwork, warnings: &mut Diagnostics) {
+    let mut setpoints = Vec::new();
+    let mut limits = 0usize;
+    let mut loss_models = 0usize;
+    let mut detail = false;
+    for d in net.hvdc().iter().filter(|d| !is_vsc_line(d)) {
+        let gaps = dc_record_gaps(d);
+        if let Some((end, stated, reproduced)) = gaps.setpoint {
+            setpoints.push(format!(
+                "line {}-{} {end} {stated} MW reads back as {reproduced} MW",
+                d.from, d.to
+            ));
+        }
+        limits += usize::from(gaps.limits);
+        loss_models += usize::from(gaps.loss_model);
+        detail |= gaps.detail;
+    }
+    if !setpoints.is_empty() {
+        let count = setpoints.len();
+        setpoints.truncate(3);
+        warnings.push(
+            &F.value_substituted,
+            format!(
+                "{count} two-terminal DC line(s) state an end power the record's SETVL, VSCHD, and RDC do not reproduce; the record is written from the other end, so the stated value is replaced by the one the drop model gives ({})",
+                setpoints.join("; ")
+            ),
+        );
+    }
+    if limits > 0 {
+        warnings.push(
+            &F.field_dropped,
+            format!(
+                "{limits} two-terminal DC line active power limit pair(s) (Pmin, Pmax) dropped: a PSS/E two-terminal DC record has no limit field, and a reread takes 0 to the larger end power"
+            ),
+        );
+    }
+    if loss_models > 0 {
+        warnings.push(
+            &F.field_dropped,
+            format!(
+                "{loss_models} two-terminal DC line loss model(s) (loss0, loss1) dropped: a PSS/E two-terminal DC record prices its loss from RDC and VSCHD only"
+            ),
+        );
+    }
+    if detail {
+        warnings.push(
+            &F.value_defaulted,
+            "DC line converter detail (firing angles, converter transformer taps, reactive \
+             output) defaulted: PSS/E two-terminal DC is written from the power setpoint and \
+             line resistance only",
+        );
+    }
+}
+
+/// PSS/E states no case date, forecast distance, source model format, or
+/// validation level, and every PSS/E area is a control area, which is how
+/// the reader types it back.
+fn warn_case_metadata_and_area_types(net: &BalancedNetwork, warnings: &mut Diagnostics) {
+    let metadata = net.case_metadata();
+    let fields = [
+        ("case_date", metadata.case_date.as_deref()),
+        ("forecast_distance", metadata.forecast_distance.map(|_| "")),
+        (
+            "source_model_format",
+            metadata.source_model_format.as_deref(),
+        ),
+        (
+            "minimum_validation_level",
+            metadata.minimum_validation_level.as_deref(),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(name, value)| value.map(|_| format!("`{name}`")))
+    .collect::<Vec<_>>();
+    if !fields.is_empty() {
+        warnings.push(
+            &F.field_dropped,
+            format!(
+                "case metadata field(s) {} dropped: a PSS/E case states none of them",
+                fields.join(", ")
+            ),
+        );
+    }
+    let retyped = net
+        .areas()
+        .iter()
+        .filter(|area| area.area_type.as_deref() != Some("ControlArea"))
+        .count();
+    if retyped > 0 {
+        warnings.push(
+            &F.value_substituted,
+            format!(
+                "{retyped} area(s) with no area type or another one written as PSS/E areas, which are control areas: they read back with area type `ControlArea`"
+            ),
+        );
+    }
 }
 
 /// The circuit id the three winding transformer record states: the element's

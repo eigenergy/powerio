@@ -741,3 +741,60 @@ fn an_area_swing_bus_property_naming_no_bus_is_reported() {
         "{messages:#?}"
     );
 }
+
+// What the PSS/E writer cannot state is named, so a model change on the way
+// through PSS/E is never silent.
+
+#[test]
+fn psse_names_the_dc_line_values_its_record_cannot_state() {
+    use powerio_tx::network::{BusId, Hvdc};
+    let mut network = two_numbered_buses();
+    let mut line = Hvdc::new(BusId::new(1), BusId::new(10));
+    line.pf = 10.0;
+    line.pt = 9.5;
+    line.pmin = -10.0;
+    line.pmax = 10.0;
+    network.hvdc_mut().push(line);
+    let emitted = emit_psse(&network);
+    let messages = codes_and_messages(&emitted);
+    assert!(
+        messages.iter().any(|message| message.starts_with(
+            "EMIT.PSSE.VALUE_SUBSTITUTED: 1 two-terminal DC line(s) state an end power"
+        ) && message
+            .contains("line 1-10 received power Pt 9.5 MW reads back as 10 MW")),
+        "{messages:#?}"
+    );
+    assert!(
+        messages.iter().any(|message| message.starts_with(
+            "EMIT.PSSE.FIELD_DROPPED: 1 two-terminal DC line active power limit pair(s) (Pmin, Pmax) dropped"
+        )),
+        "{messages:#?}"
+    );
+    // The values a reread derives are the ones the diagnostics name.
+    let back = parse_psse(&emitted.text).unwrap();
+    let line = &back.hvdc()[0];
+    assert_eq!((line.pt, line.pmin, line.pmax), (10.0, 0.0, 10.0));
+}
+
+#[test]
+fn psse_names_the_case_date_and_area_type_it_cannot_state() {
+    let source = parse_file(data("ieee-cdf/ieee14cdf.txt"), Some("ieee-cdf"))
+        .unwrap()
+        .network;
+    assert!(source.case_metadata().case_date.is_some());
+    assert_eq!(source.areas()[0].area_type, None);
+    for target in [TargetFormat::Psse { rev: 33 }, TargetFormat::PsseRawx] {
+        let messages = codes_and_messages(&emit_value(&source, target).unwrap());
+        assert!(
+            messages.iter().any(|message| message
+                == "EMIT.PSSE.FIELD_DROPPED: case metadata field(s) `case_date` dropped: a PSS/E case states none of them"),
+            "{messages:#?}"
+        );
+        assert!(
+            messages.iter().any(|message| message.starts_with(
+                "EMIT.PSSE.VALUE_SUBSTITUTED: 1 area(s) with no area type or another one written as PSS/E areas"
+            )),
+            "{messages:#?}"
+        );
+    }
+}

@@ -68,6 +68,14 @@
   `psse_ptol`, where both were reported as dropped. A swing bus property
   that names no bus of the case is reported on read.
 
+- PSS/E output now names the values it changes instead of changing them
+  silently. A two-terminal DC line whose received (or sent) power the
+  record's drop model does not reproduce is reported with the value a reread
+  gives, and its active power limits and MATPOWER loss model are reported
+  as dropped; a case date, forecast distance, source format, or validation
+  level is reported as dropped; and an area with no area type, or another
+  one, is reported as read back as a control area.
+
 - The conversion matrix grades each cell by its worst finding: exact,
   lossless, restated (the target required a value and the writer supplied
   it), approximate, dropped, or failed. The PR comment shows that level, the
