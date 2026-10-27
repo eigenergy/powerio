@@ -678,9 +678,9 @@ pub(crate) fn emit_value_text(
 /// byte exactly and are refused. Fresh, edited, IR-restored and cross-profile
 /// modules write canonical `case.glm`; [`crate::glm::emit_canonical`] directly
 /// writes a single file from a network value.
-/// commits as `case.dss`, and generated companion files commit beside it.
-/// An unchanged multi-file DSS project retains its paths and bytes beneath
-/// `source/`; `case.dss` redirects to its entry file.
+/// An unchanged multi-file DSS project retains the paths and bytes of every
+/// acquired file, dependencies and companions alike, beneath `source/`;
+/// `case.dss` redirects to its entry file.
 ///
 /// # Errors
 /// Unsupported electrical features, nonportable retained projects, or the
@@ -723,18 +723,13 @@ pub fn emit_with_options(
             project.diagnostics,
         );
     }
+    let conv = emit_text_with_options(module, format, options)?;
     if format == DistTargetFormat::Dss
         && options.is_default_for(format)
         && let Some(artifacts) = crate::dss::retained_project(module)?
     {
-        return destination.__commit_artifacts(
-            true,
-            powerio_core::Fidelity::ExactSameFormat,
-            artifacts,
-            Vec::new(),
-        );
+        return destination.__commit_artifacts(true, conv.fidelity, artifacts, conv.diagnostics);
     }
-    let conv = emit_text_with_options(module, format, options)?;
     match format {
         DistTargetFormat::Gridlabd | DistTargetFormat::GridlabdArras => {
             let artifact = powerio_core::MemoryArtifact::new(
