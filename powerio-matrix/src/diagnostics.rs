@@ -37,7 +37,7 @@ pub mod codes {
             "the reference grounded Laplacian is singular", category = Data;
         BUILD_SENSITIVITY_INVALID_OPTION = "BUILD.SENSITIVITY.INVALID_OPTION", Error,
             "a DC sensitivity option is outside the range it is defined on", category = Data;
-        BUILD_HVDC_LCC_MODEL_UNAVAILABLE = "BUILD.HVDC.LCC_MODEL_UNAVAILABLE", Warning,
+        BUILD_STATED_STATE_LCC_MODEL_UNAVAILABLE = "BUILD.STATED_STATE.LCC_MODEL_UNAVAILABLE", Warning,
             "an LCC converter record reaches no bridge operating point at the stored voltages; the line's stated reactive powers were kept";
         /// Retired in 0.11.0: the conjugate gradient solver this reported on
         /// was replaced by a sparse direct factorization, which either

@@ -138,7 +138,7 @@ pub enum LccReactivePower {
     /// injection. The active powers stay the stated `pf` and `pt`. A line
     /// without such a record keeps its stated `qf` and `qt`, as does one
     /// whose record reaches no operating point, with a
-    /// `BUILD.HVDC.LCC_MODEL_UNAVAILABLE` warning in
+    /// `BUILD.STATED_STATE.LCC_MODEL_UNAVAILABLE` warning in
     /// [`StatedStateMismatch::diagnostics`]; a normalized network, whose
     /// powers are per unit, keeps them throughout.
     #[default]
@@ -280,7 +280,7 @@ pub struct StatedStateMismatch {
     /// first, at most [`StatedStateOptions::top_k`] of them.
     pub top: Vec<usize>,
     /// What the evaluation could not do as asked: one
-    /// `BUILD.HVDC.LCC_MODEL_UNAVAILABLE` warning per line with an LCC
+    /// `BUILD.STATED_STATE.LCC_MODEL_UNAVAILABLE` warning per line with an LCC
     /// converter record whose stated reactive powers stood in for the
     /// converter model.
     pub diagnostics: Vec<Diagnostic>,
@@ -647,7 +647,7 @@ pub fn calc_stated_state_mismatch(
                         terminal.q_to = point.inverter.q_mvar;
                     }
                     None => diagnostics.push(Diagnostic::of(
-                        &codes::BUILD_HVDC_LCC_MODEL_UNAVAILABLE,
+                        &codes::BUILD_STATED_STATE_LCC_MODEL_UNAVAILABLE,
                         format!(
                             "HVDC line row {} between buses {} and {} reaches no LCC bridge \
                              operating point at the stored voltages (no converter AC base, \

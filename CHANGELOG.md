@@ -22,7 +22,7 @@
   capacitor commutation, states no converter AC base, or schedules a point no
   angle reaches at a positive power factor (an angle below 90 degrees and a
   positive DC voltage) also keeps them, with a
-  `BUILD.HVDC.LCC_MODEL_UNAVAILABLE` warning in the new
+  `BUILD.STATED_STATE.LCC_MODEL_UNAVAILABLE` warning in the new
   `StatedStateMismatch::diagnostics` (reported by the CLI, and returned as
   `diagnostics` in Python). `Hvdc::has_lcc_converter_record` tells the two
   apart.

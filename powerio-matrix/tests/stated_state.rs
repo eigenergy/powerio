@@ -562,7 +562,7 @@ fn an_lcc_record_at_a_negative_power_factor_keeps_the_stated_reactive_power() {
     let [warning] = &model.diagnostics[..] else {
         panic!("one fallback warning: {:?}", model.diagnostics);
     };
-    assert_eq!(warning.code(), "BUILD.HVDC.LCC_MODEL_UNAVAILABLE");
+    assert_eq!(warning.code(), "BUILD.STATED_STATE.LCC_MODEL_UNAVAILABLE");
     assert!(warning.message().contains("row 0"), "{}", warning.message());
     // Asking for the stated powers is not a fallback.
     assert!(stated.diagnostics.is_empty());
