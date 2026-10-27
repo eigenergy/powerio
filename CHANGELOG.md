@@ -13,6 +13,18 @@
   because the model changes with no finding: PSLF to PSS/E RAW and RAWX
   (DC line power limits and setpoints) and IEEE CDF to PSS/E RAW and RAWX
   (the case date and the area type).
+- PSS/E impedance correction writes no longer lose or misstate an edit. An
+  impedance edited after `apply_impedance_correction` is now written, and
+  used by the next apply, as the nominal value the table scales, with a
+  warning; before, the writer restated the value recorded before the edit.
+  A RAW 35 three winding ZCOD=1 transformer with no single adjustable winding
+  is written at its present impedance with TAB = 0 and a warning, instead of
+  a record PowerIO's own reader refuses. A TAB is written only for a table the
+  file states, so a cleared correction or a table the source never stated no
+  longer reads back as a dropped reference (a warning lists them). RAWX output
+  of a corrected network now states the corrected impedance with TAB = 0 and
+  a warning per transformer, as RAW 33/34 does for tables it cannot state,
+  instead of the uncorrected impedance and a TAB naming no table.
 
 - Pull requests now build and smoke-test one Linux wheel (x86_64) and the
   sdist. The five-platform wheel matrix runs on pushes to main and on

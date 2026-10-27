@@ -22,24 +22,30 @@ use crate::diagnostics::Diagnostic;
 use crate::merge::{BusMergeRule, MergeSurvivor, ZeroImpedanceRule, kind_priority};
 use crate::network::{
     BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras,
-    IMPEDANCE_CORRECTION_NOMINAL_EXTRA, ImpedanceCorrectionVariable, SourceFormat,
+    IMPEDANCE_CORRECTION_APPLIED_EXTRA, IMPEDANCE_CORRECTION_NOMINAL_EXTRA,
+    ImpedanceCorrectionVariable, SourceFormat, current_correction_nominal,
 };
 
-/// The nominal impedance an earlier impedance correction recorded in `extras`,
-/// or `current`, recorded there now.
+/// The nominal impedance an earlier impedance correction recorded in `extras`
+/// for the present impedance `current`, or `current`, recorded there now. An
+/// impedance edited since the correction wrote it is the new nominal.
 fn recorded_nominal<T>(extras: &mut Extras, current: T) -> T
 where
-    T: serde::Serialize + serde::de::DeserializeOwned,
+    T: PartialEq + serde::Serialize + serde::de::DeserializeOwned,
 {
-    if let Some(nominal) = extras
-        .get(IMPEDANCE_CORRECTION_NOMINAL_EXTRA)
-        .and_then(|value| T::deserialize(value).ok())
-    {
+    if let Some(nominal) = current_correction_nominal(extras, &current) {
         return nominal;
     }
     let value = serde_json::to_value(&current).expect("an impedance serializes to JSON");
     extras.insert(IMPEDANCE_CORRECTION_NOMINAL_EXTRA.to_owned(), value);
     current
+}
+
+/// Record the corrected impedance an impedance correction wrote, so a later
+/// edit of it is recognized.
+fn record_applied<T: serde::Serialize>(extras: &mut Extras, applied: &T) {
+    let value = serde_json::to_value(applied).expect("an impedance serializes to JSON");
+    extras.insert(IMPEDANCE_CORRECTION_APPLIED_EXTRA.to_owned(), value);
 }
 
 /// `(a.0 + j·a.1)·(b.0 + j·b.1)`.
@@ -697,9 +703,12 @@ impl BalancedNetwork {
     /// The first call records each scaled transformer's nominal
     /// impedance under `extras["impedance_correction_nominal"]`, and every
     /// call scales that nominal value: a repeated call changes nothing, and a
-    /// call after a tap or shift change evaluates the table there. The PSS/E
-    /// writer states the nominal impedance beside the table, as the format
-    /// does.
+    /// call after a tap or shift change evaluates the table there. The
+    /// corrected impedance is recorded under
+    /// `extras["impedance_correction_applied"]`; an impedance edited after
+    /// the call no longer matches it and becomes the new nominal value. The
+    /// PSS/E writer states the nominal impedance beside the table, as the
+    /// format does.
     pub fn apply_impedance_correction(&mut self) -> usize {
         // A normalized network states phase shifts in radians; the tables
         // state degrees.
@@ -722,6 +731,7 @@ impl BalancedNetwork {
             };
             let [r, x] = recorded_nominal(&mut branch.extras, [branch.r, branch.x]);
             (branch.r, branch.x) = complex_product((r, x), factor);
+            record_applied(&mut branch.extras, &[branch.r, branch.x]);
             scaled += 1;
         }
         for transformer in self.transformers_3w_mut().iter_mut() {
@@ -762,6 +772,8 @@ impl BalancedNetwork {
                         (r, x)
                     };
                 }
+                let applied = transformer.z.map(|z| [z.r, z.x]);
+                record_applied(&mut transformer.extras, &applied);
                 continue;
             }
             let [z12, z23, z31] = nominal;
@@ -783,6 +795,8 @@ impl BalancedNetwork {
                 transformer.z[pair].r = stars[a].0 + stars[b].0;
                 transformer.z[pair].x = stars[a].1 + stars[b].1;
             }
+            let applied = transformer.z.map(|z| [z.r, z.x]);
+            record_applied(&mut transformer.extras, &applied);
         }
         scaled
     }

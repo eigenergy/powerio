@@ -2513,6 +2513,39 @@ pub(crate) const IMPEDANCE_CORRECTION_EXTRA: &str = "impedance_correction";
 /// The extras key where [`BalancedNetwork::apply_impedance_correction`]
 /// records the nominal series impedance it scales.
 pub(crate) const IMPEDANCE_CORRECTION_NOMINAL_EXTRA: &str = "impedance_correction_nominal";
+/// The extras key where [`BalancedNetwork::apply_impedance_correction`]
+/// records the corrected series impedance it wrote, so a later edit of that
+/// impedance can be told apart from the correction's own result.
+pub(crate) const IMPEDANCE_CORRECTION_APPLIED_EXTRA: &str = "impedance_correction_applied";
+
+/// The nominal impedance an impedance correction recorded in `extras`, when
+/// it still describes the present impedance `current`. `None` when no nominal
+/// is recorded, or when `current` differs from the corrected impedance the
+/// correction wrote: the impedance was edited since, and the edited value is
+/// the nominal one. A nominal recorded without the corrected value (0.11.6
+/// and earlier) is taken as is.
+pub(crate) fn current_correction_nominal<T>(extras: &Extras, current: &T) -> Option<T>
+where
+    T: PartialEq + serde::de::DeserializeOwned,
+{
+    let nominal = T::deserialize(extras.get(IMPEDANCE_CORRECTION_NOMINAL_EXTRA)?).ok()?;
+    let applied = extras
+        .get(IMPEDANCE_CORRECTION_APPLIED_EXTRA)
+        .and_then(|value| T::deserialize(value).ok());
+    applied
+        .is_none_or(|applied| applied == *current)
+        .then_some(nominal)
+}
+
+/// Whether the impedance `current` was edited after an impedance correction
+/// scaled it: a nominal is recorded, and `current` is not the corrected value.
+pub(crate) fn correction_nominal_edited<T>(extras: &Extras, current: &T) -> bool
+where
+    T: PartialEq + serde::de::DeserializeOwned,
+{
+    extras.contains_key(IMPEDANCE_CORRECTION_NOMINAL_EXTRA)
+        && current_correction_nominal(extras, current).is_none()
+}
 
 /// A transformer impedance correction table: the factors by which a winding's
 /// nominal series impedance is multiplied, tabulated against the winding's
