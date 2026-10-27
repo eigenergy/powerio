@@ -8,18 +8,56 @@ use powerio_matrix::{
     calc_admittance_matrix, calc_stated_branch_flows, calc_stated_state_mismatch,
 };
 use powerio_tx::{
-    BalancedNetwork, Branch, Bus, BusId, BusType, Generator, Hvdc, HvdcTreatment, Impedance, Load,
-    LoadVoltageModel, Shunt, ShuntBlock, SwitchedShuntControl, SwitchedShuntMode, Transformer3W,
-    Winding,
+    BalancedNetwork, Branch, Bus, BusId, BusMergeRule, BusType, Generator, Hvdc, HvdcTreatment,
+    Impedance, Load, LoadVoltageModel, Shunt, ShuntBlock, Switch, SwitchedShuntControl,
+    SwitchedShuntMode, Transformer3W, Winding,
 };
 
 const BASE_MVA: f64 = 100.0;
+
+/// An HVDC line from bus 3 to bus 7 stated in the stored MATPOWER `dcline`
+/// signs, the only form the network holds it in.
+fn hvdc_line(pf: f64, pt: f64, qf: f64, qt: f64) -> Hvdc {
+    let mut line = Hvdc::new(BusId(3), BusId(7));
+    line.pf = pf;
+    line.pt = pt;
+    line.qf = qf;
+    line.qt = qt;
+    line
+}
+
+/// A forward transfer: 100 MW sent from bus 3, 97 MW delivered at bus 7, the
+/// converters absorbing 30 and 25 MVAr from their buses.
+fn forward_line() -> Hvdc {
+    hvdc_line(100.0, 97.0, -30.0, -25.0)
+}
+
+/// The reverse transfer over the same line: bus 7 sends 100 MW and bus 3
+/// receives 97 MW, the receiving converter absorbing 25 MVAr and the sending
+/// one 30.
+fn reverse_line() -> Hvdc {
+    hvdc_line(-97.0, -100.0, -25.0, -30.0)
+}
+
+/// The injection `line` makes into each terminal bus, MW and MVAr: the
+/// negative of its bus-to-device terminal powers.
+fn hvdc_injections(line: &Hvdc) -> (Complex64, Complex64) {
+    let terminal = line.calc_bus_to_device_powers();
+    (
+        -Complex64::new(terminal.p_from, terminal.q_from),
+        -Complex64::new(terminal.p_to, terminal.q_to),
+    )
+}
 
 /// Buses 1 to 6 and 7 to 8 form two islands joined only by an HVDC line from
 /// bus 3 to bus 7; a three winding transformer joins buses 4, 5, and 6; bus
 /// 9 is isolated. Bus 6 is a PQ bus with a generator. No device closes the
 /// balance yet.
 fn skeleton() -> BalancedNetwork {
+    skeleton_with(forward_line())
+}
+
+fn skeleton_with(hvdc: Hvdc) -> BalancedNetwork {
     let kinds = [
         (1, BusType::Ref),
         (2, BusType::Pv),
@@ -105,11 +143,6 @@ fn skeleton() -> BalancedNetwork {
     zip.q = 5.0;
     net.loads_mut().push(zip);
 
-    let mut hvdc = Hvdc::new(BusId(3), BusId(7));
-    hvdc.pf = 50.0;
-    hvdc.pt = 48.0;
-    hvdc.qf = -20.0;
-    hvdc.qt = -15.0;
     net.hvdc_mut().push(hvdc);
 
     let mut pq_generator = Generator::new(BusId(6));
@@ -150,7 +183,11 @@ fn network_injection(net: &BalancedNetwork) -> Vec<Complex64> {
 /// [`skeleton`] with the star point voltage solved and one closing device
 /// per bus, so the stored voltages solve the stated injections exactly.
 fn solved() -> BalancedNetwork {
-    let mut net = skeleton();
+    solved_with(forward_line())
+}
+
+fn solved_with(hvdc: Hvdc) -> BalancedNetwork {
+    let mut net = skeleton_with(hvdc);
     // The star point carries no device, so its voltage satisfies its own
     // current balance: Y_ss V_s = -Σ Y_sk V_k.
     let view = IndexedNetwork::new(&net);
@@ -175,17 +212,18 @@ fn solved() -> BalancedNetwork {
 
     // What the skeleton's devices inject at the stored voltages, MW, worked
     // out here rather than read back from the calculation under test: the
-    // HVDC line at buses 3 and 7, the ZIP load at bus 4, and the generator on
-    // PQ bus 6.
+    // HVDC line at buses 3 and 7 through its terminal powers, the ZIP load at
+    // bus 4, and the generator on PQ bus 6.
     let vm4 = net.buses()[3].vm;
+    let (hvdc_from, hvdc_to) = hvdc_injections(&net.hvdc()[0]);
     let existing = |bus: usize| match bus {
-        3 => Complex64::new(-50.0, -20.0),
+        3 => hvdc_from,
         4 => -Complex64::new(
             20.0 + 8.0 * vm4 + 5.0 * vm4 * vm4,
             6.0 + 3.0 * vm4 - 4.0 * vm4 * vm4,
         ),
         6 => Complex64::new(10.0, 5.0),
-        7 => Complex64::new(48.0, -15.0),
+        7 => hvdc_to,
         _ => Complex64::new(0.0, 0.0),
     };
     let drawn = network_injection(&net);
@@ -412,22 +450,88 @@ fn a_low_impedance_branch_flags_both_terminals() {
     );
 }
 
-#[test]
-fn ignoring_hvdc_leaves_its_injection_as_the_residual() {
-    let net = solved();
-    let ignored = calc_stated_state_mismatch(
-        &net,
+/// Without the line the stored voltages still need its injection, so under
+/// `HvdcTreatment::Ignore` each terminal's residual is the injection the line
+/// makes there: the negative of its bus-to-device terminal power.
+fn ignored(net: &BalancedNetwork) -> StatedStateMismatch {
+    calc_stated_state_mismatch(
+        net,
         &StatedStateOptions::default().with_hvdc_treatment(HvdcTreatment::Ignore),
     )
-    .unwrap();
-    let from = &ignored.buses[row_of(&ignored, 3)];
-    let to = &ignored.buses[row_of(&ignored, 7)];
-    // Without the line, the voltages still need its injection at both ends:
-    // -50 - j20 MVA at bus 3 and 48 - j15 MVA at bus 7.
-    assert!((from.p_mw + 50.0).abs() < 1e-9 && (from.q_mvar + 20.0).abs() < 1e-9);
-    assert!((to.p_mw - 48.0).abs() < 1e-9 && (to.q_mvar + 15.0).abs() < 1e-9);
+    .unwrap()
+}
+
+fn residual(mismatch: &StatedStateMismatch, bus: usize) -> Complex64 {
+    let row = &mismatch.buses[row_of(mismatch, bus)];
+    Complex64::new(row.p_mw, row.q_mvar)
+}
+
+#[test]
+fn the_forward_terminal_powers_are_the_documented_example() {
+    let terminal = forward_line().calc_bus_to_device_powers();
+    assert_eq!((terminal.p_from, terminal.q_from), (100.0, 30.0));
+    assert_eq!((terminal.p_to, terminal.q_to), (-97.0, 25.0));
+    assert!((terminal.calc_active_loss() - 3.0).abs() < 1e-12);
+    // The fixed injection closes the case that states it.
+    assert_closed_except(
+        &calc_stated_state_mismatch(&solved(), &StatedStateOptions::default()).unwrap(),
+        &[],
+    );
+}
+
+#[test]
+fn the_sending_end_withdraws_its_terminal_power() {
+    let net = solved();
+    let line = &net.hvdc()[0];
+    let terminal = line.calc_bus_to_device_powers();
+    let mismatch = ignored(&net);
+    let from = residual(&mismatch, 3);
+    // The residual is the injection, the negated terminal power: bus 3 gives
+    // up 100 MW and 30 MVAr to the line.
+    assert!((from + Complex64::new(terminal.p_from, terminal.q_from)).norm() < 1e-9);
+    assert!((from - Complex64::new(-100.0, -30.0)).norm() < 1e-9);
+    assert!((from - hvdc_injections(line).0).norm() < 1e-9);
+}
+
+#[test]
+fn the_receiving_end_injects_the_delivered_power() {
+    let net = solved();
+    let line = &net.hvdc()[0];
+    let terminal = line.calc_bus_to_device_powers();
+    let mismatch = ignored(&net);
+    let to = residual(&mismatch, 7);
+    // Bus 7 receives 97 MW and its converter absorbs 25 MVAr.
+    assert!((to + Complex64::new(terminal.p_to, terminal.q_to)).norm() < 1e-9);
+    assert!((to - Complex64::new(97.0, -25.0)).norm() < 1e-9);
     // Island 7-8 has nothing else wrong; its total is the delivered power.
-    assert!((ignored.islands[1].p_mw - 48.0).abs() < 1e-9);
+    assert!((mismatch.islands[1].p_mw - 97.0).abs() < 1e-9);
+    assert_closed_except(&mismatch, &[3, 7]);
+}
+
+#[test]
+fn a_reverse_transfer_keeps_the_ends_and_a_positive_loss() {
+    let net = solved_with(reverse_line());
+    let line = &net.hvdc()[0];
+    let terminal = line.calc_bus_to_device_powers();
+    // Bus 7 now sends: its terminal power is positive into the line and the
+    // from end's is negative, and the two still sum to a 3 MW loss.
+    assert_eq!((terminal.p_from, terminal.q_from), (-97.0, 25.0));
+    assert_eq!((terminal.p_to, terminal.q_to), (100.0, 30.0));
+    assert!((terminal.calc_active_loss() - 3.0).abs() < 1e-12);
+
+    // Fixed injection closes the reversed case.
+    let fixed = calc_stated_state_mismatch(&net, &StatedStateOptions::default()).unwrap();
+    assert_closed_except(&fixed, &[]);
+
+    // Ignored, the residuals are the negated terminal powers.
+    let mismatch = ignored(&net);
+    let (from, to) = (residual(&mismatch, 3), residual(&mismatch, 7));
+    assert!((from + Complex64::new(terminal.p_from, terminal.q_from)).norm() < 1e-9);
+    assert!((to + Complex64::new(terminal.p_to, terminal.q_to)).norm() < 1e-9);
+    assert!((from - Complex64::new(97.0, -25.0)).norm() < 1e-9);
+    assert!((to - Complex64::new(-100.0, -30.0)).norm() < 1e-9);
+    // The two ends together inject the negative of the loss.
+    assert!((from.re + to.re + terminal.calc_active_loss()).abs() < 1e-9);
 }
 
 #[test]
@@ -468,4 +572,54 @@ fn top_k_bounds_the_ranked_list() {
     let mismatch =
         calc_stated_state_mismatch(&net, &StatedStateOptions::default().with_top_k(1)).unwrap();
     assert_eq!(mismatch.top, [row_of(&mismatch, 3)]);
+}
+
+#[test]
+fn a_closed_switch_is_refused_until_merged() {
+    // Bus 12 hangs off bus 8 through a closed switch and holds a 5 + j2 MVA
+    // load that a generator at bus 8 serves. Stamping branches only would
+    // show +5 + j2 at bus 8 and -5 - j2 at bus 12 instead of the switch's
+    // flow.
+    let mut net = solved();
+    let mut tail = Bus::new(BusId(12), BusType::Pq, 230.0);
+    tail.vm = net.buses()[7].vm;
+    tail.va = net.buses()[7].va;
+    net.buses_mut().push(tail);
+    net.loads_mut().push(Load::new(BusId(12), 5.0, 2.0));
+    let mut serving = Generator::new(BusId(8));
+    serving.pg = 5.0;
+    serving.qg = 2.0;
+    net.generators_mut().push(serving);
+    net.switches_mut()
+        .push(Switch::new(BusId(8), BusId(12), true));
+
+    let refused = calc_stated_state_mismatch(&net, &StatedStateOptions::default()).unwrap_err();
+    assert_eq!(refused.code().code, "BUILD.SWITCH.CLOSED", "{refused}");
+    assert!(
+        refused.to_string().contains("--merge-buses switches"),
+        "{refused}"
+    );
+    // Each branch flow depends on its own terminals only.
+    assert!(calc_stated_branch_flows(&net).is_ok());
+
+    let merge = net.merge_buses(&BusMergeRule::closed_switches()).unwrap();
+    let mismatch = calc_stated_state_mismatch(
+        &merge.network,
+        &StatedStateOptions::default().with_merged_buses(merge.merged_buses),
+    )
+    .unwrap();
+    assert_closed_except(&mismatch, &[]);
+    let survivor = mismatch
+        .buses
+        .iter()
+        .find(|bus| bus.flags.contains(StatedBusFlags::MERGED_GROUP))
+        .unwrap();
+    assert!([BusId(8), BusId(12)].contains(&survivor.bus));
+
+    // An open switch joins nothing and is not refused.
+    net.switches_mut()[0].closed = false;
+    net.loads_mut().pop();
+    net.generators_mut().pop();
+    let open = calc_stated_state_mismatch(&net, &StatedStateOptions::default()).unwrap();
+    assert_closed_except(&open, &[]);
 }

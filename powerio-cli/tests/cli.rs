@@ -1240,7 +1240,7 @@ fn convert_writes_a_deserialized_distribution_module_through_the_writer() {
 }
 
 /// `verify --stated-state` refuses an unmerged zero-impedance branch with its
-/// code, and balances the case after `--merge-zero-impedance`.
+/// code, and balances the case after `--merge-buses exact`.
 #[test]
 fn verify_stated_state_refuses_then_merges_a_zero_impedance_branch() {
     let stamp = SystemTime::now()
@@ -1282,7 +1282,7 @@ fn verify_stated_state_refuses_then_merges_a_zero_impedance_branch() {
         "{records:?}"
     );
 
-    let merged = run(&["verify", path, "--stated-state", "--merge-zero-impedance"]);
+    let merged = run(&["verify", path, "--stated-state", "--merge-buses", "exact"]);
     assert!(
         merged.status.success(),
         "{}",

@@ -131,7 +131,8 @@ pub struct StatedStateOptions {
     /// How many buses [`StatedStateMismatch::top`] lists. Default 20.
     pub top_k: usize,
     /// Merged bus to surviving bus, as a bus merge reports it
-    /// (`ZeroImpedanceMerge::merged_buses` in `powerio-prob`). Every
+    /// ([`BusMerge::merged_buses`](powerio_tx::BusMerge::merged_buses), or
+    /// `ZeroImpedanceMerge::merged_buses` in `powerio-prob`). Every
     /// survivor is flagged [`StatedBusFlags::MERGED_GROUP`]; the map is not
     /// otherwise read.
     pub merged_buses: BTreeMap<BusId, BusId>,
@@ -471,11 +472,21 @@ fn is_voltage_dependent(load: &powerio_tx::Load) -> bool {
 /// stated terminal power, and every HVDC line under
 /// [`StatedStateOptions::hvdc_treatment`].
 ///
+/// Closed switches are refused rather than modeled. The balance stamps
+/// branches only, while the island labels join the buses a closed switch
+/// connects, so an unmerged switch carrying power would show as two equal
+/// and opposite residuals at its ends instead of a flow.
+///
 /// # Errors
 /// [`Error::UnmergedZeroImpedance`] for an in service branch or winding with
 /// zero series impedance: the stored voltages do not determine its flow, so
 /// merge the buses it joins first
-/// (`powerio_prob::merge_zero_impedance_buses`). An element naming an
+/// ([`BalancedNetwork::merge_buses`], or `--merge-buses` on the command
+/// line). `powerio_tx::Error::ClosedSwitch` (`BUILD.SWITCH.CLOSED`), as
+/// [`IndexedNetwork::check_closed_switches`] raises it, for a closed switch
+/// joining two buses; a rule that selects closed switches
+/// ([`BusMergeRule::closed_switches`](powerio_tx::BusMergeRule::closed_switches),
+/// `--merge-buses switches`) merges them first. An element naming an
 /// undeclared bus, a non-finite admittance, or an unusable tap or base fail
 /// as the admittance builders do.
 #[allow(clippy::too_many_lines)] // one pass per element table, stated in full
@@ -485,6 +496,7 @@ pub fn calc_stated_state_mismatch(
 ) -> Result<StatedStateMismatch> {
     net.check_base_mva()?;
     let view = IndexedNetwork::new(net);
+    view.check_closed_switches()?;
     let n = view.n();
     let base = view.per_unit_base();
     let base_mva = view.base_mva();
@@ -666,8 +678,11 @@ pub fn calc_stated_state_mismatch(
 /// Calculate the active and reactive power entering every analysis branch
 /// at both ends, at the voltages `net` stores.
 ///
+/// A closed switch is not refused here: each branch's flow depends on its
+/// own terminal voltages only.
+///
 /// # Errors
-/// As [`calc_stated_state_mismatch`].
+/// As [`calc_stated_state_mismatch`], except closed switches.
 pub fn calc_stated_branch_flows(net: &BalancedNetwork) -> Result<StatedBranchFlows> {
     net.check_base_mva()?;
     let view = IndexedNetwork::new(net);

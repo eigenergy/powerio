@@ -20,10 +20,13 @@
   at the flagged buses, and `calc_stated_branch_flows` returns the power
   entering both ends of every branch and winding at the stored voltages. A
   branch with zero series impedance is refused with
-  `Error::UnmergedZeroImpedance` until the buses it joins are merged. The
-  CLI runs it as `powerio verify --stated-state` (with `--top`, `--hvdc`,
-  and `--merge-zero-impedance`), and Python as
-  `BalancedNetwork.calc_stated_state_mismatch` and
+  `Error::UnmergedZeroImpedance`, and a closed switch joining two buses with
+  `BUILD.SWITCH.CLOSED`, as the PTDF and LODF builders refuse it, until the
+  buses they join are merged: the balance stamps branches only, so an
+  unmerged switch would show as two equal and opposite residuals. The CLI
+  runs it as `powerio verify --stated-state` (with `--top`, `--hvdc`, and
+  the existing `--merge-buses SPEC`, such as `switches` or `exact`), and
+  Python as `BalancedNetwork.calc_stated_state_mismatch` and
   `BalancedNetwork.calc_stated_branch_flows`.
 
 - Distribution CIM opens switches with disconnected terminals and refuses

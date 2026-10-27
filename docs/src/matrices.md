@@ -116,7 +116,12 @@ that solved the case.
   isolated has no balance and belongs to no island.
 - **Refusal.** The stored voltages do not determine the flow through a
   branch with zero series impedance, so such a branch is refused with
-  `Error::UnmergedZeroImpedance`; merge the buses it joins first.
+  `Error::UnmergedZeroImpedance`. The balance stamps branches only, so a
+  closed switch joining two buses is refused with `BUILD.SWITCH.CLOSED`, as
+  the PTDF and LODF builders refuse it. Merge the buses either joins first:
+  `BalancedNetwork::merge_buses` in Rust, or `--merge-buses switches` (closed
+  switches) or `--merge-buses exact` (and zero impedance branches) with
+  `powerio verify --stated-state`.
 
 `calc_stated_branch_flows` returns the active and reactive power entering
 both ends of every branch and winding at the stored voltages. From the

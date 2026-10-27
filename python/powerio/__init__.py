@@ -520,7 +520,9 @@ class BalancedNetwork:
         ``top`` (row indices of the largest mismatches), and the totals.
         ``merge_zero_impedance`` first merges the buses joined by in-service
         zero-impedance branches, whose flows the stored voltages cannot
-        determine; without it such a branch raises.
+        determine; without it such a branch raises. A closed switch joining
+        two buses also raises (``BUILD.SWITCH.CLOSED``); merge it first with
+        ``merge_buses(closed_switches=True)``.
         """
         return self._inner.calc_stated_state_mismatch(
             top_k=top_k,
