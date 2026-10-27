@@ -369,7 +369,16 @@ Schema definition: `Storage`.
 ### Hvdc
 
 A two terminal HVDC line in the MATPOWER `dcline` convention, whatever the
-source format.
+source format. The stored `pf`, `pt`, `qf`, and `qt` keep these signs
+throughout 0.11.x: `pf` is positive from the from bus into the line, and
+`pt`, `qf`, and `qt` are positive from the line into their bus. The
+calculations read them through the bus-to-device terminal view
+(`Hvdc::calc_bus_to_device_powers` in Rust), positive from each AC bus into
+the HVDC system: `p_from = pf`, `q_from = -qf`, `p_to = -pt`, `q_to = -qt`,
+with `p_from + p_to` the active power lost. A balanced calculation carries an
+in service line whose two terminal buses are energized as fixed bus
+injections, the negatives of its terminal powers: `-pf` and `+qf` at the from
+bus, `+pt` and `+qt` at the to bus.
 
 Schema definition: `Hvdc`.
 
@@ -1379,10 +1388,17 @@ Schema definition: `DcPfInstance`.
 | `network` | `BalancedNetwork` | | | at least one `REF` bus | required |
 | `approximation` | token `series_susceptance`, `tap_adjusted_reactance`, `reactance_only` | | | the DC branch susceptance formula | required |
 | `initial_point` | `StoredOperatingPointAssignment` or null | | | | null |
+| `hvdc_treatment` | token `fixed_injection`, `ignore` | | | how the specifications treat HVDC lines; written only when not `ignore` | `ignore` |
 
 The bus specifications are derived from the network: a `REF` bus contributes
 its stated angle, an `ISOLATED` bus no equation, and every other bus its net
-active injection over in service generators and loads.
+active injection over in service generators and loads. Under
+`fixed_injection` each in service HVDC line whose terminal buses are energized
+adds a fixed injection of `-pf` at its from bus and `+pt` at its to bus; under
+`ignore` HVDC lines add nothing. A document without `hvdc_treatment` reads as
+`ignore`: a document written before the field existed, when the instance left
+HVDC lines out, denotes the calculation it did when written, and an `ignore`
+instance is written without the field.
 
 ### powerio.AcPfInstance
 
@@ -1393,6 +1409,7 @@ Schema definition: `AcPfInstance`.
 | `network` | `BalancedNetwork` | | | at least one `REF` bus | required |
 | `specifications` | array of `AcBusSpecification` | | | one per bus, in bus table order | required |
 | `initial_point` | `StoredOperatingPointAssignment` or null | | | | null |
+| `hvdc_treatment` | token `fixed_injection`, `ignore` | | | how specifications derived for a replacement network treat HVDC lines; written only when not `ignore` | `ignore` |
 
 `AcBusSpecification` is tagged by `kind`. `pq` gives `p` (MW) and `q`
 (MVAr), the prescribed net injection; `pv` gives `p` and `vm` (p.u.);
