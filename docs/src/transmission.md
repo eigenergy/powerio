@@ -188,4 +188,6 @@ their interpolation and angle/ratio classification. When winding 2 cannot
 be set to one without changing a ratio table's meaning, the writer chooses
 an equivalent nonunit ratio. RAW33/34 cannot state `ZCOD=1`; output freezes
 its present corrected pairwise impedances and reports the lost dependence
-on tap position. RAWX correction tables remain unsupported and are reported.
+on tap position. RAWX reads and writes the same tables as its `impcor`
+table, one `itable, tap, refact, imfact` row per point, with the RAW 35
+rules.

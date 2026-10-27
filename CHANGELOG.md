@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- PSS/E RAWX now reads and writes transformer impedance correction tables
+  (the `impcor` table, one `itable, tap, refact, imfact` row per point),
+  closing the last reader gap from #592. Before, the reader reported the
+  table as unsupported and every transformer read uncorrected, and RAWX
+  output wrote the uncorrected impedance with a TAB naming no table. Rows of
+  one table may interleave with another's; a row with table number 0 or
+  below, or the all zero point that ends a RAW table, is dropped with a
+  warning. A corrected network now reaches RAWX with its tables and nominal
+  impedances, as RAW 35 output does.
+
 - The conversion matrix grades each cell by its worst finding: exact,
   lossless, restated (the target required a value and the writer supplied
   it), approximate, dropped, or failed. The PR comment shows that level, the
@@ -21,10 +31,7 @@
   is written at its present impedance with TAB = 0 and a warning, instead of
   a record PowerIO's own reader refuses. A TAB is written only for a table the
   file states, so a cleared correction or a table the source never stated no
-  longer reads back as a dropped reference (a warning lists them). RAWX output
-  of a corrected network now states the corrected impedance with TAB = 0 and
-  a warning per transformer, as RAW 33/34 does for tables it cannot state,
-  instead of the uncorrected impedance and a TAB naming no table.
+  longer reads back as a dropped reference (a warning lists them).
 
 - Pull requests now build and smoke-test one Linux wheel (x86_64) and the
   sdist. The five-platform wheel matrix runs on pushes to main and on
