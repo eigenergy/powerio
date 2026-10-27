@@ -8,7 +8,7 @@ history, and extensions. A current document begins like this:
 {
   "schema": "pio-ir",
   "version": 2,
-  "producer": { "name": "powerio", "version": "0.11.5" },
+  "producer": { "name": "powerio", "version": "0.11.7" },
   "value": {
     "type": "powerio.BalancedNetwork",
     "data": {}

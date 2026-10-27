@@ -113,7 +113,7 @@ After deserialization, `emit` writes fresh output from the stored value.
 
 Upgrading from 0.10? Start with the
 [migration guide](https://eigenergy.github.io/powerio/guide/migration-0.11.html).
-PowerIO 0.11.5 keeps PowerIO IR version 2 and C ABI 7; these version numbers
+PowerIO 0.11.7 keeps PowerIO IR version 2 and C ABI 7; these version numbers
 describe separate interfaces.
 
 ## Formats

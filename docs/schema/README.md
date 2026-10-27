@@ -25,7 +25,7 @@ The current document begins:
 {
   "schema": "pio-ir",
   "version": 2,
-  "producer": { "name": "powerio", "version": "0.11.5" }
+  "producer": { "name": "powerio", "version": "0.11.7" }
 }
 ```
 
