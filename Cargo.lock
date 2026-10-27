@@ -2565,6 +2565,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "powerio-synth"
+version = "0.11.6"
+dependencies = [
+ "powerio-tx",
+ "rand 0.10.3",
+ "rand_chacha",
+ "serde",
+]
+
+[[package]]
 name = "powerio-tnd"
 version = "0.11.6"
 dependencies = [
@@ -2579,16 +2589,6 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "zip",
-]
-
-[[package]]
-name = "powerio-synth"
-version = "0.11.6"
-dependencies = [
- "powerio-tx",
- "rand 0.10.3",
- "rand_chacha",
- "serde",
 ]
 
 [[package]]
