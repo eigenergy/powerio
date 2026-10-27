@@ -2650,6 +2650,9 @@ fn vsc_record_lines(
             .map(|b| b.base_kv)
             .filter(|kv| *kv > 0.0)
     };
+    // PSS/E states each converter's power as an injection into its AC bus,
+    // the convention of the line's terminal injections.
+    let injections = dc.calc_terminal_injections();
     let mut converters = Vec::with_capacity(2);
     for side in 1..=2 {
         let typed = if side == 1 {
@@ -2671,9 +2674,8 @@ fn vsc_record_lines(
                 .and_then(|record| record.get(key))
                 .and_then(Value::as_i64)
         };
-        let bus = if side == 1 { dc.from.0 } else { dc.to.0 };
-        let p_ac = if side == 1 { -dc.pf } else { dc.pt };
-        let q_ac = if side == 1 { dc.qf } else { dc.qt };
+        let (bus, p_ac, q_ac) = injections[side - 1];
+        let bus = bus.0;
         let kind = stored_int("type").unwrap_or(if side == 1 { 2 } else { 1 });
         let mode = match typed.and_then(|c| c.voltage_regulator_on) {
             Some(true) => 1,
@@ -2718,7 +2720,9 @@ fn vsc_record_lines(
         } else if p_ac == 0.0 || q_ac == 0.0 {
             1.0
         } else {
-            (p_ac.abs() / p_ac.hypot(q_ac)).copysign(q_ac * p_ac)
+            // The inverse of `calc_vsc_reactive_power`: the factor's sign is
+            // the sign of the reactive injection.
+            (p_ac.abs() / p_ac.hypot(q_ac)).copysign(q_ac)
         };
         converters.push(VscConverter {
             bus,
@@ -2748,7 +2752,7 @@ fn vsc_record_lines(
         && dc.in_service
         && let Some((_, p2, _)) = calc_vsc_powers([&converters[0], &converters[1]], rdc)
     {
-        let loss = p2 - dc.pt;
+        let loss = p2 - injections[1].1;
         if loss > 0.0 {
             converters[1].aloss = loss * 1000.0;
         }
@@ -2759,15 +2763,25 @@ fn vsc_record_lines(
         let (p1, p2) = calc_vsc_powers([&converters[0], &converters[1]], rdc)
             .map_or((0.0, 0.0), |(p1, p2, _)| (p1, p2));
         let reread = [
-            ("pf", -p1, dc.pf),
-            ("pt", p2, dc.pt),
-            ("qf", calc_vsc_reactive_power(&converters[0], p1), dc.qf),
-            ("qt", calc_vsc_reactive_power(&converters[1], p2), dc.qt),
+            ("from end active", p1, injections[0].1),
+            ("to end active", p2, injections[1].1),
+            (
+                "from end reactive",
+                calc_vsc_reactive_power(&converters[0], p1),
+                injections[0].2,
+            ),
+            (
+                "to end reactive",
+                calc_vsc_reactive_power(&converters[1], p2),
+                injections[1].2,
+            ),
         ];
         let changed: Vec<String> = reread
             .iter()
             .filter(|(_, back, stated)| (back - stated).abs() > 1e-6 * stated.abs().max(1.0))
-            .map(|(field, back, stated)| format!("{field} {stated} reads back as {back}"))
+            .map(|(power, back, stated)| {
+                format!("the {power} injection {stated} reads back as {back}")
+            })
             .collect();
         if !changed.is_empty() {
             warnings.push(
@@ -6451,8 +6465,18 @@ fn calc_vsc_powers(converters: [&VscConverter; 2], rdc: f64) -> Option<(f64, f64
 
 /// The reactive power a converter injects into its AC bus at active
 /// injection `p`: zero under AC voltage control (MODE 1), whose reactive
-/// output the solution sets, and `p·tan(acos|PF|)` signed by the power
-/// factor under fixed power factor control (MODE 2).
+/// output the solution sets, and `|p|·tan(acos|PF|)` signed by the power
+/// factor under fixed power factor control (MODE 2). A positive factor
+/// injects reactive power whether the converter is a rectifier or an
+/// inverter, and a negative one absorbs it.
+///
+/// The sign follows PowSybl's PSS/E importer (powsybl-core,
+/// `psse/psse-converter/.../VscDcTransmissionLineConverter.java`,
+/// `getReactiveSetpoint`, at commit 42cb7b03), which sets the IIDM
+/// `LocalTargetQ`, an injection into the bus, to
+/// `|DCSET|·sqrt(1 - PF²)/PF` at either converter. PowSybl scales by the
+/// line's scheduled power; this reader uses each converter's own active
+/// power, so the two differ in magnitude by the converter losses.
 fn calc_vsc_reactive_power(converter: &VscConverter, p: f64) -> f64 {
     if converter.mode != 2 {
         return 0.0;
@@ -6461,7 +6485,7 @@ fn calc_vsc_reactive_power(converter: &VscConverter, p: f64) -> f64 {
     if pf == 0.0 {
         return 0.0;
     }
-    p * (1.0 - pf * pf).sqrt() / pf * converter.acset.signum()
+    p.abs() * (1.0 - pf * pf).sqrt() / pf * converter.acset.signum()
 }
 
 /// Read one VSC DC line record into the neutral [`Hvdc`]: the control line
@@ -10140,7 +10164,11 @@ Q
             i = ((v * v + 4.0 * r * sent).sqrt() - v) / (2.0 * r);
         }
         let pt = v * i - loss(i);
-        let qf = -200.0 * (1.0 - 0.95_f64 * 0.95).sqrt() / 0.95;
+        // 200 MW at power factor +0.95 is 200·tan(acos 0.95) = 65.7368 MVAr.
+        // A positive factor injects reactive power at a rectifier too, as
+        // PowSybl's PSS/E importer reads it, and MATPOWER's `qf` is the from
+        // end's reactive injection.
+        let qf = 65.736_821_035_772_6;
         (200.0, pt, qf)
     }
 
@@ -10167,7 +10195,7 @@ Q
             close_to(dc.pf, pf, 1e-9);
             close_to(dc.pt, pt, 1e-9);
             assert!(dc.pt < dc.pf - 2.0, "losses and the DC drop: {}", dc.pt);
-            // Fixed power factor: the rectifier absorbs reactive power.
+            // Fixed power factor +0.95: the rectifier injects reactive power.
             close_to(dc.qf, qf, 1e-9);
             // AC voltage control states no reactive power; the solution does.
             close(dc.qt, 0.0);
@@ -10308,7 +10336,8 @@ Q
             written
                 .diagnostics
                 .iter()
-                .any(|d| d.message().contains("pt") && d.message().contains("reads back")),
+                .any(|d| d.message().contains("to end active injection")
+                    && d.message().contains("reads back")),
             "the stated pt no longer matches the record's loss model: {:?}",
             written.diagnostics
         );
@@ -10349,6 +10378,69 @@ Q
             "{:?}",
             written.diagnostics
         );
+    }
+
+    /// A hand-written revision 33 record whose DC voltage-controlling
+    /// converter comes first: converter 1 (bus 4, `TYPE 1`, `MODE 1`) holds
+    /// 500 kV and regulates its AC bus at 1.01 per unit, and converter 2
+    /// (bus 5, `TYPE 2`, `MODE 2`) feeds 300 MW into its AC bus at power
+    /// factor 0.98. `RDC` is 2 ohm.
+    ///
+    /// Worked by hand: converter 2 loses `600 kW + 1 kW/A · I`, under its
+    /// 2000 kW `MINLOSS` at any current here, so 2 MW, and the DC line
+    /// must deliver 302 MW to it. `500·I − 2·I² = 302` (I in kA) gives
+    /// I = 0.605466 kA, so converter 1 sends 302.733 MW into the line and
+    /// loses `800 kW + 1.5 kW/A · 605.466 A` = 1.708 MW: bus 4 gives
+    /// 304.441 MW. Converter 2 injects 300 · tan(acos 0.98) = 60.918 MVAr.
+    #[test]
+    fn reads_a_hand_written_vsc_record_with_its_loss_model() {
+        let c1 =
+            "1, 1, 500.0, 1.01, 800.0, 1.5, 1200.0, 400.0, 1000.0, 1.0, 150.0, -150.0, 0, 100.0";
+        let c2 =
+            "2, 2, 300.0, 0.98, 600.0, 1.0, 2000.0, 400.0, 1000.0, 1.0, 100.0, -100.0, 0, 100.0";
+        let mut warnings = Diagnostics::new();
+        let net = parse_psse_source(&vsc_case(33, "1", c1, c2), None, &mut warnings).unwrap();
+        assert!(
+            warnings.lines().iter().all(|w| !w.contains("VSC")),
+            "{warnings:?}"
+        );
+        let dc = &net.hvdc()[0];
+        assert_eq!((dc.from, dc.to), (BusId(4), BusId(5)));
+        assert!(dc.in_service);
+        // RDC in ohm and the DC voltage the TYPE 1 converter holds, in kV.
+        assert_eq!(dc.resistance_ohm, Some(2.0));
+        assert_eq!(dc.nominal_voltage_kv, Some(500.0));
+        assert_eq!(
+            dc.converters_mode,
+            Some(HvdcConvertersMode::Side1RectifierSide2Inverter)
+        );
+        let voltage_end = &dc.extras["psse_vsc_converter1"];
+        assert_eq!(voltage_end["type"], Value::from(1));
+        assert_eq!(voltage_end["dcset"], Value::from(500.0)); // kV
+        assert_eq!(voltage_end["aloss"], Value::from(800.0)); // kW
+        assert_eq!(voltage_end["bloss"], Value::from(1.5)); // kW/A
+        assert_eq!(voltage_end["minloss"], Value::from(1200.0)); // kW
+        let power_end = &dc.extras["psse_vsc_converter2"];
+        assert_eq!(power_end["type"], Value::from(2));
+        assert_eq!(power_end["dcset"], Value::from(300.0)); // MW
+        assert_eq!(power_end["aloss"], Value::from(600.0)); // kW
+        assert_eq!(power_end["bloss"], Value::from(1.0)); // kW/A
+        assert_eq!(power_end["minloss"], Value::from(2000.0)); // kW
+        let c1 = dc.converter1.as_ref().unwrap();
+        assert_eq!(c1.voltage_regulator_on, Some(true));
+        close_to(c1.voltage_setpoint_kv.unwrap(), 1.01 * 230.0, 1e-9);
+        let c2 = dc.converter2.as_ref().unwrap();
+        assert_eq!(c2.voltage_regulator_on, Some(false));
+        assert_eq!(c2.power_factor, Some(0.98));
+
+        // Positive from each AC bus into the HVDC system, MW and MVAr.
+        let terminal = dc.calc_bus_to_device_powers();
+        close_to(terminal.p_from, 304.441_378_558_509, 1e-9);
+        close(terminal.q_from, 0.0);
+        close_to(terminal.p_to, -300.0, 1e-9);
+        close_to(terminal.q_to, -60.917_598_190_201_3, 1e-9);
+        // Both converters' losses and the I²·RDC drop: 1.708 + 2 + 0.733 MW.
+        close_to(terminal.calc_active_loss(), 4.441_378_558_509, 1e-9);
     }
 
     #[test]

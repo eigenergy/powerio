@@ -73,17 +73,19 @@
   converter (`TYPE 1`) takes the remainder after both converters'
   `ALOSS + BLOSS·Idc` losses (at least `MINLOSS`) and the `I²·RDC` drop at
   its scheduled DC voltage. A fixed power factor converter (`MODE 2`)
-  injects the reactive power its factor implies, and an AC voltage-controlling
-  one (`MODE 1`) states no reactive power and records its setpoint. `MDC 0`,
-  or a converter with `TYPE` or `MODE` 0, reads the line out of service with
-  its schedule kept. A record without exactly one `TYPE 1` and one `TYPE 2`
+  injects the reactive power its factor implies: a positive factor injects
+  and a negative one absorbs, at a rectifier as at an inverter, as PowSybl's
+  PSS/E importer reads it. An AC voltage-controlling one (`MODE 1`) states
+  no reactive power and records its setpoint. `MDC 0`, or a converter with
+  `TYPE` or `MODE` 0, reads the line out of service with its schedule kept. A record without exactly one `TYPE 1` and one `TYPE 2`
   converter reads as zero power with a diagnostic, and an `RMPCT` outside
   (0, 100] reads as 100 with a diagnostic. The converter control fields
   ride in the `psse_vsc_converter1` and `psse_vsc_converter2` extras. PSS/E
   and RAWX output write every line whose converters are both VSC into the VSC
-  section, restating the MW-controlling converter's `DCSET` from `pf` and
-  `pt`, and report a line whose stated terminal powers the record's own loss
-  model does not reproduce.
+  section, restating the MW-controlling converter's `DCSET` from the line's
+  terminal injections (`Hvdc::calc_terminal_injections`), and report a line
+  whose stated terminal powers the record's own loss model does not
+  reproduce.
 
 - HVDC lines enter the balanced power flow instances and the DC OPF
   preparation as fixed bus injections (#572). The canonical interface is the
