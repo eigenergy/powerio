@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `BalancedNetwork::de_energize_buses` exposes the de-energizing that
+  `assign_island_references` applies to an unsupplied island: the buses are
+  typed isolated and everything at or touching them goes out of service,
+  with no row added or removed. `BalancedNetwork::keep_island` builds on it to
+  keep one island in place, returning the buses it de-energized, so data keyed
+  by source rows stays valid; `subset_buses` already returns the cut with its
+  `BusSubset` row maps (`branch_rows`, `switch_rows`, `generator_rows`, and the
+  rest) (#656).
+
 - Distribution CIM opens switches with disconnected terminals and refuses
   inactive/disconnected non-switch equipment and unsupported delta compensators,
   instead of constructing an energized or phase-to-ground equivalent (#687).
