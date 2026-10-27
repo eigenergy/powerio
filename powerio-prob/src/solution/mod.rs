@@ -10,13 +10,14 @@
 //! `solution.clone()` duplicates neither its instance nor its network.
 //!
 //! The registered solutions include [`DcPfSolution`], [`AcPfSolution`],
-//! [`DcOpfSolution`], [`AcOpfSolution`], [`SocwrOpfSolution`],
+//! [`DcOpfSolution`], [`AcOpfSolution`], [`AcOtsSolution`], [`SocwrOpfSolution`],
 //! [`McAcPfSolution`], [`McAcOpfSolution`], [`LinDist3FlowOpfSolution`],
 //! [`LinDist3FlowPfSolution`], and [`AcScucSolution`].
 
 mod balanced;
 mod lindist3flow;
 mod multiconductor;
+mod ots;
 mod scuc;
 mod socwr;
 
@@ -29,6 +30,7 @@ pub use lindist3flow::{
     LinDist3FlowPfSolution, evaluate_lindist3flow_pf_limits,
 };
 pub use multiconductor::{McAcOpfSolution, McAcPfSolution};
+pub use ots::AcOtsSolution;
 pub use scuc::{
     AcScucSolution, SCUC_DEVICE_OUTPUT_SERIES, SCUC_NETWORK_OUTPUT_SERIES, ScucDeviceOutputs,
     ScucNetworkOutputs,

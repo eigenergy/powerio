@@ -595,7 +595,9 @@ fn network_with_dc_opf_solution(solution: &powerio_prob::DcOpfSolution) -> Balan
     network
 }
 
-fn network_with_ac_opf_solution(solution: &powerio_prob::AcOpfSolution) -> BalancedNetwork {
+pub(crate) fn network_with_ac_opf_solution(
+    solution: &powerio_prob::AcOpfSolution,
+) -> BalancedNetwork {
     let mut network = solution.network().clone();
     for bus in network.buses_mut() {
         bus.vm = solution

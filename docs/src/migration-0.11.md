@@ -195,13 +195,15 @@ tap adjusted reactance, and reactance only equations.
 ## Calculation instances and solutions
 
 PowerIO 0.11 registers these calculation pairs. The LinDist3Flow OPF pair
-arrived in 0.11.1 and the LinDist3Flow power flow pair in 0.11.4.
+arrived in 0.11.1, the LinDist3Flow power flow pair in 0.11.4, and the AC
+optimal transmission switching pair in 0.11.7.
 
 ```text
 DcPfInstance              DcPfSolution
 AcPfInstance              AcPfSolution
 DcOpfInstance             DcOpfSolution
 AcOpfInstance             AcOpfSolution
+AcOtsInstance             AcOtsSolution
 McAcPfInstance            McAcPfSolution
 McAcOpfInstance           McAcOpfSolution
 LinDist3FlowPfInstance    LinDist3FlowPfSolution
