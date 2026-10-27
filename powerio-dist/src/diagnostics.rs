@@ -139,6 +139,8 @@ pub mod codes {
             "a disabled source is retained without electrical contributions";
         EMIT_DSS_PROJECT_UNREPRESENTABLE = "EMIT.DSS.PROJECT_UNREPRESENTABLE", Error,
             "retained DSS dependencies cannot be replayed as a portable project", category = Output;
+        EMIT_DSS_PROJECT_COMPANION_KEPT = "EMIT.DSS.PROJECT_COMPANION_KEPT", Remark,
+            "a supplied file the deck never read was copied into the retained project";
         READ_DSS_LOADSHAPE_UNRESOLVED = "READ.DSS.LOADSHAPE_UNRESOLVED", Error,
             "static UseActual loadshape power could not be resolved";
         READ_DSS_SOURCE_UNRESOLVED = "READ.DSS.SOURCE_UNRESOLVED", Error,

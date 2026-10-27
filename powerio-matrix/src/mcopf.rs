@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod inverter;
+mod starts;
 mod transformer;
 pub use transformer::{
     McOpfComplexRow, McOpfTransformer, McOpfTransformerCoil, McOpfTransformerPort,
@@ -528,7 +529,7 @@ pub fn build_mc_ac_opf_preparation(
     if transformers.is_empty() {
         check_topology(&branches, &mut terminals)?;
     } else {
-        transformer::initialize(&branches, &transformers, &mut terminals)?;
+        starts::initialize(&branches, &transformers, &mut terminals)?;
     }
     Ok(McAcOpfPreparation {
         bases: *bases,

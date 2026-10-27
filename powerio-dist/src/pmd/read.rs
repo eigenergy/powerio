@@ -10,6 +10,7 @@
 
 use std::collections::BTreeSet;
 
+use powerio_core::TimeSeries;
 use serde_json::{Map, Value};
 
 use crate::diagnostics::codes as C;
@@ -25,6 +26,172 @@ pub(crate) fn parse_pmd_collecting(
     text: &str,
     diags: &mut crate::collect::Diagnostics,
 ) -> Result<MulticonductorNetwork> {
+    let doc = engineering_document(text)?;
+    if is_multinetwork_document(&doc) {
+        let steps = doc.get("nw").and_then(Value::as_object).map_or(0, Map::len);
+        return Err(Error::Json {
+            format: "PMD",
+            message: format!(
+                "the document is a multinetwork ENGINEERING model with {steps} time steps \
+                 under `nw`, and one MulticonductorNetwork holds one network; read it with \
+                 powerio::parse, which returns a TimeSeries<MulticonductorNetwork>, or \
+                 export the model before `make_multinetwork`"
+            ),
+        });
+    }
+    Ok(network_from_document(&doc, diags))
+}
+
+/// PMD's own test (`ismultinetwork`): a true `multinetwork` flag. The
+/// components then live once per time step under `nw`, and the top level
+/// holds only the keys the steps share.
+fn is_multinetwork_document(doc: &Map<String, Value>) -> bool {
+    doc.get("multinetwork").and_then(Value::as_bool) == Some(true)
+}
+
+/// The multinetwork flag alone, read without building the document tree, so
+/// the facade can choose the value type before the full parse.
+pub(crate) fn text_is_multinetwork(text: &str) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Header {
+        #[serde(default)]
+        multinetwork: Option<Value>,
+    }
+    serde_json::from_str::<Header>(text)
+        .ok()
+        .and_then(|header| header.multinetwork)
+        .and_then(|flag| flag.as_bool())
+        == Some(true)
+}
+
+/// Keys of a multinetwork document that describe the time axis rather than
+/// a network. Every other top level key is shared by all time steps.
+const MULTINETWORK_KEYS: &[&str] = &["multinetwork", "nw", "mn_lookup"];
+
+/// A multinetwork ENGINEERING document (PMD's `make_multinetwork` output) as
+/// one network per time step, in time order. Each step reads like a single
+/// network document: the step's own sections, with the shared top level keys
+/// (`name`, `files`, `data_model`, and any others) filled in where the step
+/// does not state them. The step's `mn_lookup` time orders it, its key labels
+/// its time point, and its `time_elapsed` (hours, PMD's unit) becomes the
+/// time point's duration. A finding that every step repeats is reported once.
+pub(crate) fn parse_pmd_multinetwork_collecting(
+    text: &str,
+    diags: &mut crate::collect::Diagnostics,
+) -> Result<TimeSeries<MulticonductorNetwork>> {
+    let doc = engineering_document(text)?;
+    let Some(Value::Object(steps)) = doc.get("nw") else {
+        return Err(Error::Json {
+            format: "PMD",
+            message: "`multinetwork` is true but `nw` is not an object of time steps".into(),
+        });
+    };
+    let lookup = doc.get("mn_lookup").and_then(Value::as_object);
+    let time_of = |key: &str, step: &Value| -> f64 {
+        lookup
+            .and_then(|l| l.get(key))
+            .or_else(|| step.get("time"))
+            .and_then(Value::as_f64)
+            .unwrap_or(f64::NAN)
+    };
+    let mut order: Vec<(&String, &Value)> = steps.iter().collect();
+    order.sort_by(|(a, va), (b, vb)| {
+        time_of(a, va).total_cmp(&time_of(b, vb)).then_with(|| {
+            match (a.parse::<i64>(), b.parse::<i64>()) {
+                (Ok(x), Ok(y)) => x.cmp(&y),
+                _ => a.cmp(b),
+            }
+        })
+    });
+    let mut seen = BTreeSet::new();
+    let mut time_points = Vec::with_capacity(order.len());
+    let mut values = Vec::with_capacity(order.len());
+    for (key, step) in order {
+        let Value::Object(step) = step else {
+            diags.push(
+                &C::READ_PMD_RECORD_DROPPED,
+                format!("multinetwork time step {key} is not an object; dropped"),
+            );
+            continue;
+        };
+        let mut merged = step.clone();
+        for (k, v) in &doc {
+            if !MULTINETWORK_KEYS.contains(&k.as_str()) && !merged.contains_key(k) {
+                merged.insert(k.clone(), v.clone());
+            }
+        }
+        let elapsed = merged.remove("time_elapsed");
+        let time = merged.remove("time");
+        let mut found = crate::collect::Diagnostics::new();
+        let mut net = network_from_document(&merged, &mut found);
+        if let Some(time) = time {
+            net.extras_mut().insert("pmd_time".into(), time);
+        }
+        let duration = elapsed.as_ref().and_then(|v| {
+            let duration = v
+                .as_f64()
+                .filter(|hours| hours.is_finite() && *hours >= 0.0)
+                .and_then(|hours| std::time::Duration::try_from_secs_f64(hours * 3600.0).ok());
+            if duration.is_none() {
+                found.push(
+                    &C::READ_PMD_SOURCE_MALFORMED,
+                    format!(
+                        "multinetwork time step {key}: `time_elapsed` {v} is not a finite \
+                         nonnegative number of hours; the time point has no duration"
+                    ),
+                );
+            }
+            duration
+        });
+        for record in found.into_records() {
+            if seen.insert((record.code().to_string(), record.message().to_string())) {
+                diags.absorb([record]);
+            }
+        }
+        let point =
+            powerio_core::TimePoint::new(key.clone(), duration).map_err(|e| Error::Json {
+                format: "PMD",
+                message: format!("multinetwork time step {key}: {e}"),
+            })?;
+        time_points.push(point);
+        values.push(net);
+    }
+    if values.is_empty() {
+        return Err(Error::Json {
+            format: "PMD",
+            message: "`multinetwork` is true but `nw` holds no time step".into(),
+        });
+    }
+    TimeSeries::new(time_points, values).map_err(|e| Error::Json {
+        format: "PMD",
+        message: e.to_string(),
+    })
+}
+
+/// One network from a single network ENGINEERING document.
+fn network_from_document(
+    doc: &Map<String, Value>,
+    diags: &mut crate::collect::Diagnostics,
+) -> MulticonductorNetwork {
+    let mut net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
+        source_format: Some(DistSourceFormat::PmdJson),
+        base_frequency: 60.0,
+        ..MulticonductorNetworkTables::default()
+    });
+    let mut rd = Reader {
+        net: &mut net,
+        diagnostics: crate::diagnostics::Diagnostics::new(),
+    };
+    rd.document(doc);
+    let found = std::mem::take(&mut rd.diagnostics);
+    diags.absorb(found);
+    crate::model::warn_unresolved_references(&net, diags);
+    net
+}
+
+/// The top level object of a PMD document, refused unless it is the
+/// ENGINEERING model.
+fn engineering_document(text: &str) -> Result<Map<String, Value>> {
     let doc: Value = serde_json::from_str(text).map_err(|e| Error::Json {
         format: "PMD",
         message: e.to_string(),
@@ -52,20 +219,7 @@ pub(crate) fn parse_pmd_collecting(
             ),
         });
     }
-    let mut net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
-        source_format: Some(DistSourceFormat::PmdJson),
-        base_frequency: 60.0,
-        ..MulticonductorNetworkTables::default()
-    });
-    let mut rd = Reader {
-        net: &mut net,
-        diagnostics: crate::diagnostics::Diagnostics::new(),
-    };
-    rd.document(&doc);
-    let found = std::mem::take(&mut rd.diagnostics);
-    diags.absorb(found);
-    crate::model::warn_unresolved_references(&net, diags);
-    Ok(net)
+    Ok(doc)
 }
 
 struct Reader<'a> {
@@ -484,16 +638,32 @@ impl Reader<'_> {
                 _ => unreachable!(),
             }
         }
+        let mut top_level = Map::new();
         for (key, value) in doc {
-            if SECTIONS.contains(&key.as_str()) || key == "settings" || key == "name" {
+            if SECTIONS.contains(&key.as_str())
+                || ["settings", "name", "data_model", "files", "conductor_ids", "per_unit"]
+                    .contains(&key.as_str())
+                // A false flag states the single network default.
+                || (key == "multinetwork" && value == &Value::Bool(false))
+            {
                 continue;
             }
             let Value::Object(items) = value else {
+                // A top level value this reader does not type (PMD's
+                // `time_elapsed`, say) rides along for the PMD writer.
+                self.diagnostics.push(
+                    &C::READ_PMD_RETAINED_SOURCE_ONLY,
+                    format!("ENGINEERING top level `{key}` is not typed; kept in extras"),
+                );
+                top_level.insert(key.clone(), value.clone());
                 continue;
             };
             self.diagnostics.push(
                 &C::READ_PMD_RETAINED_SOURCE_ONLY,
-                format!("ENGINEERING `{key}` components are not typed; kept untyped"),
+                format!(
+                    "ENGINEERING `{key}` components are not typed; kept untyped (the PMD \
+                     writer reproduces them, other formats drop them)"
+                ),
             );
             for (name, v) in items {
                 self.net.untyped_objects_mut().push(UntypedObject {
@@ -502,6 +672,11 @@ impl Reader<'_> {
                     props: vec![(None, v.to_string())],
                 });
             }
+        }
+        if !top_level.is_empty() {
+            self.net
+                .extras_mut()
+                .insert("pmd_top_level".into(), Value::Object(top_level));
         }
         if stated.is_none() {
             crate::model::warn_defaulted_frequency(

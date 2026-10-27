@@ -80,7 +80,14 @@ pub fn grid_formats() -> impl Iterator<Item = GridFormatInfo> {
             Distribution,
             true,
         ),
-        ("cim-dist", "CIM distribution", Distribution, true),
+        // The CIM release and application profile the reader and writer
+        // implement: see `docs/src/distribution.md#distribution-cim`.
+        (
+            "cim-dist",
+            "CIM distribution (CIM100 cim17v40, GridAPPS-D profile)",
+            Distribution,
+            true,
+        ),
         ("pmd-json", "PMD JSON", Distribution, true),
         (
             "bmopf-json",
@@ -285,6 +292,17 @@ mod tests {
         // Aliases land on the canonical catalog entry.
         assert_eq!(resolve_format("glm").unwrap().token, "gridlabd");
         assert_eq!(resolve_format("gridlabd-pnnl").unwrap().token, "gridlabd");
+    }
+
+    #[test]
+    fn distribution_cim_names_its_cim_release_and_profile() {
+        let entry = grid_formats()
+            .find(|entry| entry.format.token == "cim-dist")
+            .unwrap();
+        assert_eq!(
+            entry.label,
+            "CIM distribution (CIM100 cim17v40, GridAPPS-D profile)"
+        );
     }
 
     #[test]

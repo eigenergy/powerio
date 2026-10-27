@@ -510,8 +510,6 @@ fn warn_unbacked_table_references(net: &BalancedNetwork, warnings: &mut Diagnost
 /// Why a write states a transformer's corrected impedance with no table.
 #[derive(Clone, Copy)]
 enum CorrectionFreeze {
-    /// RAWX states no impedance correction table.
-    Rawx,
     /// Revisions before 35 cannot state ZCOD=1 pairwise tables.
     PairwiseBeforeRevision35,
     /// ZCOD=1 names no single adjustable winding, which the reader refuses.
@@ -519,16 +517,9 @@ enum CorrectionFreeze {
 }
 
 /// The reason a write must freeze transformer `t`'s correction tables, if any.
-fn three_winding_correction_freeze(
-    t: &Transformer3W,
-    rev: u32,
-    rawx: bool,
-) -> Option<CorrectionFreeze> {
+fn three_winding_correction_freeze(t: &Transformer3W, rev: u32) -> Option<CorrectionFreeze> {
     if !(0..3).any(|w| t.winding_impedance_correction(w).is_some()) {
         return None;
-    }
-    if rawx {
-        return Some(CorrectionFreeze::Rawx);
     }
     if extra_i64(&t.extras, "psse_zcod") != Some(1) {
         return None;
@@ -549,36 +540,18 @@ fn three_winding_correction_freeze(
 fn freeze_unwritable_corrections(
     net: &BalancedNetwork,
     rev: u32,
-    rawx: bool,
     warnings: &mut Diagnostics,
 ) -> Option<BalancedNetwork> {
     let reasons: Vec<_> = net
         .transformers_3w()
         .iter()
-        .map(|t| three_winding_correction_freeze(t, rev, rawx))
+        .map(|t| three_winding_correction_freeze(t, rev))
         .collect();
-    let branch_frozen = rawx
-        && net
-            .branches()
-            .iter()
-            .any(|b| b.impedance_correction().is_some());
-    if !branch_frozen && reasons.iter().all(Option::is_none) {
+    if reasons.iter().all(Option::is_none) {
         return None;
     }
     let mut projected = net.clone();
     projected.apply_impedance_correction();
-    if rawx {
-        for b in projected.branches_mut() {
-            if let Some(correction) = b.impedance_correction() {
-                b.set_impedance_correction(None);
-                b.extras.remove("psse_tab");
-                warnings.push(&F.value_collapsed, format!(
-                    "transformer {}-{} impedance correction table {} frozen at its present setting: the RAWX writer writes no impcor table, so the corrected R, X are written with TAB = 0",
-                    b.from, b.to, correction.table,
-                ));
-            }
-        }
-    }
     for (t, reason) in projected.transformers_3w_mut().iter_mut().zip(reasons) {
         let Some(reason) = reason else {
             continue;
@@ -589,9 +562,6 @@ fn freeze_unwritable_corrections(
         }
         let [i, j, k] = t.windings.each_ref().map(|w| w.bus);
         let message = match reason {
-            CorrectionFreeze::Rawx => format!(
-                "three winding transformer {i}-{j}-{k} impedance correction frozen at its present setting: the RAWX writer writes no impcor table, so the corrected impedances are written with TAB = 0"
-            ),
             CorrectionFreeze::PairwiseBeforeRevision35 => {
                 t.extras.remove("psse_zcod");
                 format!(
@@ -977,16 +947,15 @@ fn write_psse(net: &BalancedNetwork) -> TextEmission {
 /// this serializer is the cross format path.
 #[must_use]
 pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> TextEmission {
-    write_psse_rev_inner(net, rev, true, false)
+    write_psse_rev_inner(net, rev, true)
 }
 
 /// The RAWX writer reuses the electrical records but writes detailed
 /// connectivity directly into JSON tables. Omitting the nested RAW substation
 /// records here prevents duplicate conversion work and duplicate diagnostics.
-/// RAWX states no impedance correction table, so every correction is frozen
-/// at its present setting.
+/// The impedance correction section becomes the RAWX `impcor` table.
 pub(super) fn write_psse_rev_for_rawx(net: &BalancedNetwork, rev: u32) -> TextEmission {
-    write_psse_rev_inner(net, rev, false, true)
+    write_psse_rev_inner(net, rev, false)
 }
 
 #[expect(clippy::too_many_lines)]
@@ -994,19 +963,64 @@ fn write_psse_rev_inner(
     net: &BalancedNetwork,
     rev: u32,
     include_detailed_connectivity: bool,
-    rawx: bool,
 ) -> TextEmission {
     // v34+ wraps the global parameters in a system-wide data section, names
     // branches and carries 12 ratings, and adds load DG / load-type columns.
     let modern = rev >= 34;
     let mut warnings = Diagnostics::new();
     warn_edited_correction_nominals(net, &mut warnings);
-    // Freeze the correction tables this write cannot state (RAWX, ZCOD=1
-    // before revision 35, ZCOD=1 with no single adjustable winding) at their
+    // Freeze the correction tables this write cannot state (ZCOD=1 before
+    // revision 35, ZCOD=1 with no single adjustable winding) at their
     // present operating point rather than reinterpret them or write a record
     // the reader refuses. Other transformers retain their tables.
-    let projected = freeze_unwritable_corrections(net, rev, rawx, &mut warnings);
+    let projected = freeze_unwritable_corrections(net, rev, &mut warnings);
     let net = projected.as_ref().unwrap_or(net);
+    // Number the connectivity nodes as PSS/E numbers them before any record
+    // resolves a regulating node. Revision 33 writes no node, so it reports no
+    // renumbering either.
+    let numbered;
+    let net = if include_detailed_connectivity {
+        let mut numbering = Diagnostics::new();
+        if let Some(prepared) = super::rawx::with_psse_node_numbers(net, &mut numbering) {
+            if modern {
+                warnings.absorb(numbering);
+            }
+            numbered = prepared;
+            &numbered
+        } else {
+            net
+        }
+    } else {
+        net
+    };
+    let rated;
+    let net = if let Some((projected, count)) =
+        super::powsybl_psse::rate_branches_from_current_limits(net)
+    {
+        warnings.push(
+            &F.value_substituted,
+            format!(
+                "{count} branch current limit set(s) written as MVA ratings, sqrt(3) * Vnom * I / 1000 at the terminal's nominal voltage and sorted into RATE1-RATE12 as PowSybl's exporter writes them: PSS/E branch ratings are MVA ratings"
+            ),
+        );
+        rated = projected;
+        &rated
+    } else {
+        net
+    };
+    let stored;
+    let net = if let Some((projected, count)) = super::powsybl_psse::storage_as_loads(net) {
+        warnings.push(
+            &F.value_collapsed,
+            format!(
+                "{count} storage unit(s) written as PSS/E loads consuming the negated storage injection, as PowSybl's exporter writes a battery: PSS/E has no storage record, so energy, charge and discharge ratings, efficiencies, and reactive limits are dropped"
+            ),
+        );
+        stored = projected;
+        &stored
+    } else {
+        net
+    };
     let mut nonfinite = false;
     let mut sanitized_quoted = 0usize;
     let mut s = String::new();
@@ -2119,12 +2133,22 @@ fn write_psse_rev_inner(
                 warnings.absorb(detailed_warnings);
                 records
             }
-            Err(error) => {
+            Err(error) if modern => {
                 warnings.push(
                     &F.field_dropped,
                     format!(
                         "detailed connectivity dropped from PSS/E revision {rev} output: {error}"
                     ),
+                );
+                None
+            }
+            // Revision 33 has no substation block, so the records are dropped
+            // whether or not they could be written; the reason they could not
+            // belongs to a revision that states them.
+            Err(_) => {
+                warnings.push(
+                    &F.record_dropped,
+                    "detailed substation connectivity dropped: PSS/E revision 33 has no substation data block",
                 );
                 None
             }
@@ -2152,27 +2176,8 @@ fn write_psse_rev_inner(
     }
     let _ = writeln!(s, "Q");
 
-    if net
-        .hvdc()
-        .iter()
-        .any(|dc| !is_vsc_line(dc) && dc_states_beyond_record(dc))
-    {
-        warnings.push(
-            &F.value_defaulted,
-            "DC line converter detail (firing angles, converter transformer taps, reactive \
-             output) defaulted: PSS/E two-terminal DC is written from the power setpoint and \
-             line resistance only",
-        );
-    }
-    if !net.storage().is_empty() {
-        warnings.push(
-            &F.record_dropped,
-            format!(
-                "{} storage unit(s) dropped: PSS/E has no storage record",
-                net.storage().len()
-            ),
-        );
-    }
+    warn_dc_record_gaps(net, &mut warnings);
+    warn_case_metadata_and_area_types(net, &mut warnings);
     if net.generators().iter().any(|g| g.cost.is_some()) {
         warnings.push(
             &F.field_dropped,
@@ -2408,7 +2413,24 @@ pub(crate) fn quoted_circuit_id<K: Ord + Clone>(
 /// voltage setpoints, reactive limits, its own power band, or a loss model)
 /// earns the dropped-detail warning regardless of which format it came from.
 #[allow(clippy::float_cmp)] // the neutral shape is produced bit-exactly by the reader
-fn dc_states_beyond_record(d: &Hvdc) -> bool {
+/// What a source states about a two-terminal DC line that the PSS/E record,
+/// written from the power setpoint, `RDC`, and `VSCHD`, does not reproduce.
+#[derive(Default)]
+struct DcRecordGaps {
+    /// The end power the record cannot state: which end, the stated value,
+    /// and the value a reread derives from the other end and the drop model.
+    setpoint: Option<(&'static str, f64, f64)>,
+    /// Active power limits other than the `[0, max(|Pf|, |Pt|)]` a reread
+    /// derives.
+    limits: bool,
+    /// A MATPOWER style linear loss model.
+    loss_model: bool,
+    /// Terminal voltages, reactive output, and reactive limits.
+    detail: bool,
+}
+
+#[allow(clippy::float_cmp)]
+fn dc_record_gaps(d: &Hvdc) -> DcRecordGaps {
     let rdc = dc_f64(&d.extras, "psse_dc_rdc").unwrap_or(0.0);
     let vschd = dc_f64(&d.extras, "psse_dc_vschd").unwrap_or(0.0);
     // A blocked line writes MDC 0, under which the reader prices no drop and
@@ -2416,6 +2438,7 @@ fn dc_states_beyond_record(d: &Hvdc) -> bool {
     // service and scheduling a voltage has a current to price the loss with.
     let priced = d.in_service && vschd > 0.0;
     let at_inverter = d.in_service && d.extras.contains_key(SETVL_AT_INVERTER);
+    let mut gaps = DcRecordGaps::default();
     // The drop the rewrite reproduces from the replayed RDC/VSCHD. A whisker
     // of tolerance covers the units round trip of a current-mode record
     // (SETVL -> kA -> SETVL). An inverter-measured record writes back as
@@ -2431,27 +2454,127 @@ fn dc_states_beyond_record(d: &Hvdc) -> bool {
             d.pt
         };
         if (d.pf - expected_pf).abs() > 1e-9 * d.pt.abs().max(1.0) {
-            return true;
+            gaps.setpoint = Some(("sent power Pf", d.pf, expected_pf));
+        }
+    } else {
+        let expected_pt = if priced {
+            let i = d.pf / vschd;
+            d.pf - i * i * rdc
+        } else {
+            d.pf
+        };
+        if (d.pt - expected_pt).abs() > 1e-9 * d.pf.abs().max(1.0) {
+            gaps.setpoint = Some(("received power Pt", d.pt, expected_pt));
         }
     }
-    let expected_pt = if at_inverter {
-        d.pt
-    } else if priced {
-        let i = d.pf / vschd;
-        d.pf - i * i * rdc
-    } else {
-        d.pf
-    };
-    (d.pt - expected_pt).abs() > 1e-9 * d.pf.abs().max(1.0)
-        || d.vf != 1.0
+    gaps.limits = d.pmin != 0.0 || d.pmax != d.pf.abs().max(d.pt.abs());
+    gaps.loss_model = d.loss0 != 0.0 || d.loss1 != 0.0;
+    gaps.detail = d.vf != 1.0
         || d.vt != 1.0
-        || d.pmin != 0.0
-        || d.pmax != d.pf.abs().max(d.pt.abs())
         || [d.qf, d.qt, d.qminf, d.qmaxf, d.qmint, d.qmaxt]
             .iter()
-            .any(|q| *q != 0.0)
-        || d.loss0 != 0.0
-        || d.loss1 != 0.0
+            .any(|q| *q != 0.0);
+    gaps
+}
+
+/// Report what each two-terminal DC record cannot state, by field, so a
+/// reader of the diagnostics learns which values change on a reread.
+fn warn_dc_record_gaps(net: &BalancedNetwork, warnings: &mut Diagnostics) {
+    let mut setpoints = Vec::new();
+    let mut limits = 0usize;
+    let mut loss_models = 0usize;
+    let mut detail = false;
+    for d in net.hvdc().iter().filter(|d| !is_vsc_line(d)) {
+        let gaps = dc_record_gaps(d);
+        if let Some((end, stated, reproduced)) = gaps.setpoint {
+            setpoints.push(format!(
+                "line {}-{} {end} {stated} MW reads back as {reproduced} MW",
+                d.from, d.to
+            ));
+        }
+        limits += usize::from(gaps.limits);
+        loss_models += usize::from(gaps.loss_model);
+        detail |= gaps.detail;
+    }
+    if !setpoints.is_empty() {
+        let count = setpoints.len();
+        setpoints.truncate(3);
+        warnings.push(
+            &F.value_substituted,
+            format!(
+                "{count} two-terminal DC line(s) state an end power the record's SETVL, VSCHD, and RDC do not reproduce; the record is written from the other end, so the stated value is replaced by the one the drop model gives ({})",
+                setpoints.join("; ")
+            ),
+        );
+    }
+    if limits > 0 {
+        warnings.push(
+            &F.field_dropped,
+            format!(
+                "{limits} two-terminal DC line active power limit pair(s) (Pmin, Pmax) dropped: a PSS/E two-terminal DC record has no limit field, and a reread takes 0 to the larger end power"
+            ),
+        );
+    }
+    if loss_models > 0 {
+        warnings.push(
+            &F.field_dropped,
+            format!(
+                "{loss_models} two-terminal DC line loss model(s) (loss0, loss1) dropped: a PSS/E two-terminal DC record prices its loss from RDC and VSCHD only"
+            ),
+        );
+    }
+    if detail {
+        warnings.push(
+            &F.value_defaulted,
+            "DC line converter detail (firing angles, converter transformer taps, reactive \
+             output) defaulted: PSS/E two-terminal DC is written from the power setpoint and \
+             line resistance only",
+        );
+    }
+}
+
+/// PSS/E states no case date, forecast distance, source model format, or
+/// validation level, and every PSS/E area is a control area, which is how
+/// the reader types it back.
+fn warn_case_metadata_and_area_types(net: &BalancedNetwork, warnings: &mut Diagnostics) {
+    let metadata = net.case_metadata();
+    let fields = [
+        ("case_date", metadata.case_date.as_deref()),
+        ("forecast_distance", metadata.forecast_distance.map(|_| "")),
+        (
+            "source_model_format",
+            metadata.source_model_format.as_deref(),
+        ),
+        (
+            "minimum_validation_level",
+            metadata.minimum_validation_level.as_deref(),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(name, value)| value.map(|_| format!("`{name}`")))
+    .collect::<Vec<_>>();
+    if !fields.is_empty() {
+        warnings.push(
+            &F.field_dropped,
+            format!(
+                "case metadata field(s) {} dropped: a PSS/E case states none of them",
+                fields.join(", ")
+            ),
+        );
+    }
+    let retyped = net
+        .areas()
+        .iter()
+        .filter(|area| area.area_type.as_deref() != Some("ControlArea"))
+        .count();
+    if retyped > 0 {
+        warnings.push(
+            &F.value_substituted,
+            format!(
+                "{retyped} area(s) with no area type or another one written as PSS/E areas, which are control areas: they read back with area type `ControlArea`"
+            ),
+        );
+    }
 }
 
 /// The circuit id the three winding transformer record states: the element's
@@ -8751,6 +8874,109 @@ Q
         );
     }
 
+    /// Issue #592 items 2 and 8: one two winding transformer stated as
+    /// PSS/E 34 writes it (NOD last), as revision 35 states it (NODE after
+    /// CONT), and as a RAWX row with named fields. All three read the same
+    /// control columns, and bus I sees `MAG1 + jMAG2` itself, outside the
+    /// winding 1 ratio (`1.02 / 1.05`), as PSS/E connects it.
+    #[test]
+    fn winding_node_columns_and_magnetizing_admittance_agree_across_revisions() {
+        let case = |rev: u32, winding1: &str| {
+            format!(
+                "0, 100.00, {rev}, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 115.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN SYSTEM SWITCHING DEVICE DATA
+0 / END OF SYSTEM SWITCHING DEVICE DATA, BEGIN TRANSFORMER DATA
+1,2,0,'1 ',1,1,1,0.002,-0.015,2,'T12A        ',1,1,1,0,1,0,1,0,1,'            '
+0.005,0.08,100
+{winding1}
+1.05,0.0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+"
+            )
+        };
+        let ratings = "100,0,0,0,0,0,0,0,0,0,0,0";
+        // COD 1, CONT 2, RMA/RMI 1.12/0.88, VMA/VMI 1.04/0.96, NTP 25, node 0.
+        let rev34 = case(
+            34,
+            &format!("1.02,0.0,0.0,{ratings},1,2,1.12,0.88,1.04,0.96,25,0,0,0,0,0"),
+        );
+        let rev35 = case(
+            35,
+            &format!("1.02,0.0,0.0,{ratings},1,2,0,1.12,0.88,1.04,0.96,25,0,0,0,0"),
+        );
+        let rawx = serde_json::json!({
+            "network": {
+                "caseid": {"fields": ["rev", "sbase", "basfrq"], "data": [35, 100, 60]},
+                "bus": {
+                    "fields": ["ibus", "name", "baskv", "ide"],
+                    "data": [[1, "B1", 230.0, 3], [2, "B2", 115.0, 1]]
+                },
+                "transformer": {
+                    "fields": [
+                        "ibus", "jbus", "kbus", "ckt", "cw", "cz", "cm", "mag1", "mag2", "name",
+                        "r1_2", "x1_2", "sbase1_2", "windv1", "nomv1", "ang1", "wdg1rate1",
+                        "cod1", "cont1", "node1", "rma1", "rmi1", "vma1", "vmi1", "ntp1",
+                        "windv2", "nomv2"
+                    ],
+                    "data": [[
+                        1, 2, 0, "1", 1, 1, 1, 0.002, -0.015, "T12A",
+                        0.005, 0.08, 100.0, 1.02, 0.0, 0.0, 100.0,
+                        1, 2, 0, 1.12, 0.88, 1.04, 0.96, 25,
+                        1.05, 0.0
+                    ]]
+                }
+            }
+        })
+        .to_string();
+        let mut nets = Vec::new();
+        for (label, net) in [
+            ("RAW 34", parse_psse(&rev34)),
+            ("RAW 35", parse_psse(&rev35)),
+            (
+                "RAWX",
+                super::super::rawx::parse_rawx_source(&rawx, None, &mut Diagnostics::new()),
+            ),
+        ] {
+            let net = net.unwrap_or_else(|error| panic!("{label}: {error}"));
+            let branch = &net.branches()[0];
+            let tap = branch.calc_effective_tap();
+            close(tap, 1.02 / 1.05);
+            let control = branch.control.as_ref().unwrap();
+            assert_eq!(control.mode, TransformerControlMode::Voltage, "{label}");
+            assert_eq!(control.controlled_bus, Some(BusId(2)), "{label}");
+            // RMA and RMI are winding 1 ratios; in branch tap terms they
+            // divide by the winding 2 ratio as the tap does.
+            close(control.tap_max, 1.12 / 1.05);
+            close(control.tap_min, 0.88 / 1.05);
+            close(control.band_max, 1.04);
+            close(control.band_min, 0.96);
+            assert_eq!(control.ntp, 25, "{label}");
+            // The pi model divides the from side charging by tap²; bus I
+            // sees exactly MAG1 + jMAG2.
+            let charging = branch.calc_terminal_charging();
+            close(charging.g_fr / (tap * tap), 0.002);
+            close(charging.b_fr / (tap * tap), -0.015);
+            close(charging.g_to, 0.0);
+            close(charging.b_to, 0.0);
+            nets.push(net);
+        }
+        assert_eq!(nets[0].branches(), nets[1].branches());
+        // RAWX also assigns the row a stable identity.
+        let mut rawx_branch = nets[2].branches()[0].clone();
+        rawx_branch.uid = None;
+        assert_eq!(*nets[1].branches(), [rawx_branch]);
+    }
+
     /// A revision 34 case in which a two winding transformer, the second
     /// winding of a three winding transformer, a generator, and a switched
     /// shunt each regulate node 2 of bus 1's substation. Revision 34 appends
@@ -11511,23 +11737,30 @@ COMMENT
     #[test]
     fn three_winding_detail_other_writers_cannot_state_is_diagnosed() {
         let net = parse_psse(&three_winding_status_case()).unwrap();
+        // XIIDM states each winding's status as its terminal's connection
+        // and its further rating sets as unselected limit groups.
         let xiidm = crate::format::emit_value_text(&net, crate::TargetFormat::Xiidm).unwrap();
         let diagnostics = xiidm.render_diagnostics();
         assert!(
-            diagnostics.iter().any(|line| {
-                line.contains("3 out of service three winding transformer winding(s)")
-            }),
+            diagnostics.iter().all(
+                |line| !line.contains("three winding transformer winding(s)")
+                    && !line.contains("RATING_SET_DROPPED")
+            ),
             "{diagnostics:?}"
         );
-        assert_eq!(
-            diagnostics
-                .iter()
-                .filter(|line| line.contains("RATING_SET_DROPPED")
-                    && line.contains("three winding transformer 1-2-3 winding"))
-                .count(),
-            5 * (3 + 9),
-            "{diagnostics:?}"
-        );
+        let back =
+            super::super::xiidm::parse_xiidm_source(&xiidm.text, &mut Diagnostics::new()).unwrap();
+        assert_eq!(three_winding_statuses(&back), three_winding_statuses(&net));
+        for (actual, expected) in back.transformers_3w().iter().zip(net.transformers_3w()) {
+            for winding in 0..3 {
+                let sorted = |transformer| {
+                    let mut sets = rating_sets(transformer, winding);
+                    sets.sort_by(|a, b| a.0.cmp(&b.0));
+                    sets
+                };
+                assert_eq!(sorted(actual), sorted(expected));
+            }
+        }
 
         // PSLF declares both entries through its dropped extras line.
         let pslf = crate::format::emit_value_text(&net, crate::TargetFormat::Pslf).unwrap();
@@ -12947,31 +13180,53 @@ Q
     }
 
     #[test]
-    fn rawx_writes_corrected_impedances_with_no_table() {
+    fn rawx_writes_impedance_correction_tables_as_impcor() {
         let net = parse_psse(&impedance_correction_case()).unwrap();
-        let mut corrected = net.clone();
-        corrected.apply_impedance_correction();
         let emission = super::super::rawx::write_rawx(&net).unwrap();
-        assert!(has_diagnostic(
-            &emission,
-            "transformer 1-2 impedance correction table 1 frozen at its present setting"
-        ));
-        assert!(has_diagnostic(
-            &emission,
-            "three winding transformer 1-3-5 impedance correction frozen"
-        ));
+        assert!(
+            !has_diagnostic(&emission, "frozen"),
+            "{:?}",
+            emission.render_diagnostics()
+        );
+        let root: serde_json::Value = serde_json::from_str(&emission.text).unwrap();
+        let impcor = &root["network"]["impcor"];
+        assert_eq!(
+            impcor["fields"],
+            serde_json::json!(["itable", "tap", "refact", "imfact"])
+        );
+        // One row per point: table 1's five angle points, then table 2's
+        // three ratio points, then table 4's.
+        let rows = impcor["data"].as_array().unwrap();
+        assert_eq!(rows.len(), 11, "{rows:?}");
+        assert_eq!(rows[0], serde_json::json!([1, -60.0, 1.5, 0.1]));
+        assert_eq!(rows[4], serde_json::json!([1, 60.0, 1.5, -0.1]));
+        assert_eq!(rows[5], serde_json::json!([2, 0.9, 1.1, 0.0]));
+        let mut warnings = Diagnostics::new();
         let back =
-            super::super::rawx::parse_rawx_source(&emission.text, None, &mut Diagnostics::new())
-                .unwrap();
-        for (read, written) in back.branches().iter().zip(corrected.branches()) {
-            assert_eq!(read.impedance_correction(), None);
-            assert_eq!(read.extras.get("psse_tab"), None);
+            super::super::rawx::parse_rawx_source(&emission.text, None, &mut warnings).unwrap();
+        assert_eq!(
+            transformer_corrections(&back),
+            transformer_corrections(&net)
+        );
+        let lines = warnings.lines();
+        assert!(
+            !lines.iter().any(|line| line.contains("impcor")),
+            "{lines:?}"
+        );
+        // Applying the tables read back gives the impedance the RAW case
+        // gives.
+        let (mut applied, mut back) = (net.clone(), back);
+        applied.apply_impedance_correction();
+        back.apply_impedance_correction();
+        for (read, written) in back.branches().iter().zip(applied.branches()) {
             close(read.r, written.r);
             close(read.x, written.x);
         }
-        let t = &back.transformers_3w()[0];
-        assert_eq!(t.extras.get("psse_tab3"), None);
-        for (read, written) in t.z.iter().zip(corrected.transformers_3w()[0].z) {
+        for (read, written) in back.transformers_3w()[0]
+            .z
+            .iter()
+            .zip(applied.transformers_3w()[0].z)
+        {
             close(read.r, written.r);
             close(read.x, written.x);
         }

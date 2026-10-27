@@ -243,7 +243,7 @@ pub use write::{EmitOptions, emit, emit_with_options};
 #[cfg(feature = "sincal")]
 mod sincal_write;
 #[cfg(feature = "sincal")]
-pub use sincal_write::{SincalContainer, SincalExperimentalOptions};
+pub use sincal_write::{ArchiveOptions, SincalContainer, SincalExperimentalOptions};
 mod ir;
 #[cfg(feature = "schema")]
 pub use ir::generate_ir_schema;
@@ -586,6 +586,15 @@ pub fn parse_with_options(
                 }
                 _ => source,
             };
+            // A PMD multinetwork document holds one network per time step.
+            let pmd = source.format().is_some_and(|f| {
+                format::routing::parse_distribution_format(f.as_str())
+                    == Some(format::routing::DistributionFormat::PmdJson)
+            });
+            if pmd && powerio_dist::pmd::is_multinetwork(&source) {
+                return powerio_dist::pmd::parse_multinetwork(source)
+                    .map(|module| module.map_value(PioValue::from));
+            }
             dist::parse(source).map(|module| module.map_value(PioValue::from))
         }
         RoutedFamily::PypsaDirectory => parse_pypsa(source),

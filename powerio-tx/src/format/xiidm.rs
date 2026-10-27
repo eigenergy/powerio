@@ -410,6 +410,7 @@ struct RawArea {
 #[derive(Clone, Debug)]
 struct RawBus {
     id: Option<String>,
+    name: Option<String>,
     voltage_level: String,
     nodes: Vec<i32>,
     v: Option<f64>,
@@ -2442,6 +2443,7 @@ impl ParsedXiidm {
         };
         self.buses.push(RawBus {
             id,
+            name: attrs.get("name").cloned(),
             voltage_level,
             nodes,
             v: optional_f64(attrs, "v")?,
@@ -3535,6 +3537,7 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
     let mut bus_builder = BusBuilder::new(parsed);
     bus_builder.build(diagnostics)?;
     let mut buses = bus_builder.buses.clone();
+    apply_psse_bus_properties(parsed, &mut buses, diagnostics)?;
     let areas = map_areas(parsed, &bus_builder, &mut buses, diagnostics)?;
     let missing_assignments = collect_missing_assignments(parsed);
     report_missing_assignment_summaries(&missing_assignments, diagnostics);
@@ -3983,16 +3986,50 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
                 };
                 branch.uid = Some(equipment.id.clone());
                 branch.in_service = connected1 && terminal_records[1].1.connected;
+                if equipment.kind == EquipmentKind::Transformer {
+                    let rated_u1 = required_f64(&equipment.attrs, "ratedU1")?;
+                    let rated_u2 = required_f64(&equipment.attrs, "ratedU2")?;
+                    let rho0 = (rated_u2 / level2.nominal_v) / (rated_u1 / level1.nominal_v);
+                    branch.control = winding_tap_control(
+                        parsed,
+                        equipment.ratio_tap.as_ref(),
+                        equipment.phase_tap.as_ref(),
+                        |rho| 1.0 / (rho0 * rho),
+                        &bus_builder,
+                        &voltage_levels,
+                    )?;
+                }
                 apply_branch_operational_limits(equipment, &mut branch, diagnostics)?;
                 branches.push(branch);
             }
             EquipmentKind::ThreeWindingTransformer => {
-                let transformer = read_three_winding_transformer(
+                let mut transformer = read_three_winding_transformer(
                     equipment,
                     &terminal_records,
                     &voltage_levels,
                     diagnostics,
                 )?;
+                if let Some((v, angle)) = parsed
+                    .metadata
+                    .get(&component_id("transformer_3w", &equipment.id)?)
+                    .and_then(star_voltage_properties)
+                {
+                    transformer.star_vm = v / required_f64(&equipment.attrs, "ratedU0")?;
+                    transformer.star_va = angle;
+                }
+                for side in 0..3 {
+                    let rated_u = required_f64(&equipment.attrs, &format!("ratedU{}", side + 1))?;
+                    let level = voltage_levels[terminal_records[side].1.voltage_level.local_id()];
+                    let base_ratio = rated_u / level.nominal_v;
+                    transformer.windings[side].control = winding_tap_control(
+                        parsed,
+                        equipment.winding_ratio_taps[side].as_ref(),
+                        equipment.winding_phase_taps[side].as_ref(),
+                        |rho| base_ratio * rho,
+                        &bus_builder,
+                        &voltage_levels,
+                    )?;
+                }
                 transformers_3w.push(transformer);
             }
             EquipmentKind::VscConverterStation | EquipmentKind::LccConverterStation => {
@@ -4510,7 +4547,7 @@ fn map_areas(
             members.clear();
         }
 
-        areas.push(Area {
+        let mut area = Area {
             number,
             slack_bus: None,
             net_interchange: raw.interchange_target.unwrap_or(0.0),
@@ -4518,9 +4555,142 @@ fn map_areas(
             name: raw.name.clone(),
             uid: Some(raw.id.clone()),
             area_type: Some(raw.area_type.clone()),
-        });
+        };
+        if let Some(metadata) = parsed.metadata.get(&component_id("area", &raw.id)?) {
+            apply_psse_area_properties(metadata, &mut area, buses, diagnostics);
+        }
+        areas.push(area);
     }
     Ok(areas)
+}
+
+/// The IIDM property that states a PSS/E bus zone, which IIDM has no field for.
+/// PowSybl's PSS/E importer drops the zone; PowerIO states it as a property,
+/// as it states other PSS/E fields IIDM does not name (`psse_rmpct` on a
+/// generator), and the reader takes it back.
+const PSSE_ZONE_PROPERTY: &str = "psse_zone";
+/// The IIDM area property that states a PSS/E area swing bus (`ISW`).
+const PSSE_ISW_PROPERTY: &str = "psse_isw";
+/// The IIDM area property that states a PSS/E interchange tolerance (`PTOL`).
+const PSSE_PTOL_PROPERTY: &str = "psse_ptol";
+
+/// The PSS/E area fields IIDM has no field for, as IIDM properties.
+fn psse_area_properties(area: &Area) -> Vec<(&'static str, String)> {
+    let mut properties = Vec::new();
+    if let Some(bus) = area.slack_bus {
+        properties.push((PSSE_ISW_PROPERTY, bus.0.to_string()));
+    }
+    if area.tolerance != 0.0 {
+        properties.push((PSSE_PTOL_PROPERTY, number(area.tolerance)));
+    }
+    properties
+}
+
+/// Read back what [`psse_area_properties`] states, with a diagnostic for a
+/// value that names no bus or no finite tolerance.
+fn apply_psse_area_properties(
+    metadata: &ComponentMetadata,
+    area: &mut Area,
+    buses: &[Bus],
+    diagnostics: &mut Diagnostics,
+) {
+    if let Some(value) = metadata.properties.get(PSSE_ISW_PROPERTY) {
+        match value.trim().parse::<usize>() {
+            Ok(number) if buses.iter().any(|bus| bus.id.0 == number) => {
+                area.slack_bus = Some(BusId::new(number));
+            }
+            _ => diagnostics.push(
+                &codes::READ_XIIDM_FIELD_UNMAPPED,
+                format!(
+                    "area `{}` property `{PSSE_ISW_PROPERTY}={value}` names no bus of the case; the area keeps no swing bus",
+                    metadata.component.local_id()
+                ),
+            ),
+        }
+    }
+    if let Some(value) = metadata.properties.get(PSSE_PTOL_PROPERTY) {
+        match value.trim().parse::<f64>() {
+            Ok(tolerance) if tolerance.is_finite() => area.tolerance = tolerance,
+            _ => diagnostics.push(
+                &codes::READ_XIIDM_FIELD_UNMAPPED,
+                format!(
+                    "area `{}` property `{PSSE_PTOL_PROPERTY}={value}` is not a finite number; the area keeps no interchange tolerance",
+                    metadata.component.local_id()
+                ),
+            ),
+        }
+    }
+}
+/// The IIDM property that states a PSS/E bus owner.
+const PSSE_OWNER_PROPERTY: &str = "psse_owner";
+
+/// The PSS/E bus fields IIDM has no field for, as IIDM properties: the zone
+/// when it is not PSS/E's default 1, and the owner a PSS/E source stated.
+fn psse_bus_properties(bus: &Bus) -> BTreeMap<String, String> {
+    let mut properties = BTreeMap::new();
+    if bus.zone != 1 {
+        properties.insert(PSSE_ZONE_PROPERTY.to_owned(), bus.zone.to_string());
+    }
+    if let Some(owner) = bus
+        .extras
+        .get(PSSE_OWNER_PROPERTY)
+        .and_then(serde_json::Value::as_i64)
+    {
+        properties.insert(PSSE_OWNER_PROPERTY.to_owned(), owner.to_string());
+    }
+    properties
+}
+
+/// Read back what [`psse_bus_properties`] states.
+fn apply_psse_bus_properties(
+    parsed: &ParsedXiidm,
+    buses: &mut [Bus],
+    diagnostics: &mut Diagnostics,
+) -> Result<()> {
+    for bus in buses {
+        let Some(uid) = bus.uid.as_deref() else {
+            continue;
+        };
+        let Some(metadata) = parsed.metadata.get(&component_id("bus", uid)?) else {
+            continue;
+        };
+        for (property, value) in &metadata.properties {
+            if property != PSSE_ZONE_PROPERTY && property != PSSE_OWNER_PROPERTY {
+                continue;
+            }
+            let Ok(number) = value.trim().parse::<usize>() else {
+                diagnostics.push(
+                    &codes::READ_XIIDM_FIELD_UNMAPPED,
+                    format!(
+                        "bus `{uid}` property `{property}={value}` is not a PSS/E number; the bus keeps its default"
+                    ),
+                );
+                continue;
+            };
+            if property == PSSE_ZONE_PROPERTY {
+                bus.zone = number;
+            } else {
+                bus.extras.insert(
+                    PSSE_OWNER_PROPERTY.to_owned(),
+                    serde_json::Value::from(number),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The PSS/E bus number a configured bus id states: `B<n>`, as PowSybl writes
+/// it (psse-converter `AbstractConverter.extractBusNumber` accepts
+/// `B[1-9][0-9]*`), or `powerio-bus-<n>`, as PowerIO wrote it before.
+fn stated_bus_number(id: &str) -> Option<usize> {
+    let digits = id
+        .strip_prefix('B')
+        .or_else(|| id.strip_prefix("powerio-bus-"))?;
+    if digits.starts_with('0') || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok().filter(|number| *number > 0)
 }
 
 fn set_bus_kind(buses: &mut [Bus], id: BusId, kind: BusType) {
@@ -4533,6 +4703,9 @@ fn set_bus_kind(buses: &mut [Bus], id: BusId, kind: BusType) {
 struct BusBuilder<'a> {
     parsed: &'a ParsedXiidm,
     buses: Vec<Bus>,
+    /// The PSS/E bus number each bus breaker bus states in its IIDM id, in
+    /// `buses` order.
+    stated_numbers: Vec<Option<usize>>,
     bus_map: HashMap<(String, String), BusId>,
     node_map: HashMap<(String, i32), BusId>,
     empty_node_breaker_levels: Vec<String>,
@@ -4650,6 +4823,7 @@ impl<'a> BusBuilder<'a> {
         Self {
             parsed,
             buses: Vec::new(),
+            stated_numbers: Vec::new(),
             bus_map: HashMap::new(),
             node_map: HashMap::new(),
             empty_node_breaker_levels: Vec::new(),
@@ -4668,8 +4842,57 @@ impl<'a> BusBuilder<'a> {
                 RawTopologyKind::NodeBreaker => self.build_node_breaker(level, records)?,
             }
         }
+        self.number_buses_from_ids(diagnostics);
         self.report_topology_summaries(diagnostics);
         Ok(())
+    }
+
+    /// Give each bus the PSS/E number its IIDM id states. PowSybl's PSS/E
+    /// importer names bus `n` `B<n>` (psse-converter
+    /// `AbstractConverter.getBusId`) and its exporter reads the number back
+    /// (`AbstractConverter.extractBusNumber`); PowerIO's own writer also
+    /// stated `powerio-bus-<n>` before it followed that convention. A case
+    /// whose ids state no number keeps its buses numbered in document order.
+    /// When only some ids state one, or two state the same, the rest are
+    /// numbered after the recovered numbers and a diagnostic says so.
+    fn number_buses_from_ids(&mut self, diagnostics: &mut Diagnostics) {
+        if self.stated_numbers.iter().all(Option::is_none) {
+            return;
+        }
+        let mut used = HashSet::new();
+        let mut numbers = self
+            .stated_numbers
+            .iter()
+            .map(|stated| stated.filter(|number| used.insert(*number)))
+            .collect::<Vec<_>>();
+        let recovered = numbers.iter().flatten().count();
+        let mut next = 1;
+        let mut unnumbered = 0usize;
+        for number in &mut numbers {
+            if number.is_none() {
+                while used.contains(&next) {
+                    next += 1;
+                }
+                used.insert(next);
+                *number = Some(next);
+                unnumbered += 1;
+            }
+        }
+        let renumbered = |id: BusId| BusId::new(numbers[id.0 - 1].expect("every bus is numbered"));
+        for bus in &mut self.buses {
+            bus.id = renumbered(bus.id);
+        }
+        for id in self.bus_map.values_mut().chain(self.node_map.values_mut()) {
+            *id = renumbered(*id);
+        }
+        if unnumbered > 0 {
+            diagnostics.push(
+                &codes::READ_XIIDM_VALUE_DEFAULTED,
+                format!(
+                    "{unnumbered} bus(es) state no PSS/E bus number in their IIDM id (`B<n>`), or repeat one; they were numbered after the {recovered} recovered number(s)"
+                ),
+            );
+        }
     }
 
     fn report_topology_summaries(&self, diagnostics: &mut Diagnostics) {
@@ -4876,6 +5099,7 @@ impl<'a> BusBuilder<'a> {
                         .find_map(|value| value.legacy_voltage);
                     RawBus {
                         id: None,
+                        name: None,
                         voltage_level: level.id.clone(),
                         nodes: group.clone(),
                         v: legacy_voltage.map(|(v, _)| v),
@@ -4910,7 +5134,11 @@ impl<'a> BusBuilder<'a> {
         let id = BusId::new(self.buses.len() + 1);
         let mut bus = Bus::new(id, BusType::Pq, level.nominal_v);
         bus.uid.clone_from(&local_id);
-        bus.name = local_id;
+        // PowSybl's PSS/E importer states the PSS/E bus name as the IIDM name
+        // (psse-converter `BusConverter.create`).
+        bus.name = raw.name.clone().or(local_id);
+        self.stated_numbers
+            .push(raw.id.as_deref().and_then(stated_bus_number));
         bus.vm = raw.v.map_or(1.0, |value| value / level.nominal_v);
         bus.va = raw.angle.unwrap_or(0.0);
         bus.vmin = level
@@ -5754,42 +5982,7 @@ fn apply_branch_operational_limits(
                 ),
             );
         }
-        let selected_ids = selected_operational_limit_group_ids(equipment, side)?;
-        let selected =
-            (!selected_ids.is_empty()).then(|| selected_ids.into_iter().collect::<HashSet<_>>());
-        for group in equipment.operational_limits.iter().filter(|group| {
-            group.side == side
-                && !selected
-                    .as_ref()
-                    .is_some_and(|selected| selected.contains(group.id.as_str()))
-        }) {
-            if let Some(limits) = &group.apparent_power {
-                if let Some(value) = limits.permanent_limit {
-                    let name = limits
-                        .permanent_name
-                        .clone()
-                        .unwrap_or_else(|| group.id.clone());
-                    named_apparent_ratings
-                        .entry(name)
-                        .and_modify(|existing| *existing = existing.min(value))
-                        .or_insert(value);
-                }
-                for limit in &limits.temporary_limits {
-                    if let Some(value) = limit.value {
-                        let name = format!(
-                            "{} {} ({} s)",
-                            group.id,
-                            limit.name,
-                            limit.acceptable_duration.unwrap_or(i32::MAX)
-                        );
-                        named_apparent_ratings
-                            .entry(name)
-                            .and_modify(|existing| *existing = existing.min(value))
-                            .or_insert(value);
-                    }
-                }
-            }
-        }
+        add_unselected_apparent_ratings(equipment, side, &mut named_apparent_ratings)?;
     }
     branch.rating_sets.extend(
         named_apparent_ratings
@@ -5823,6 +6016,70 @@ fn apply_branch_operational_limits(
     Ok(())
 }
 
+/// The apparent power limits of the operational limit groups a terminal does
+/// not select, as named MVA rating sets: a permanent limit under its name or
+/// its group id, a temporary limit under its group, name, and duration.
+fn add_unselected_apparent_ratings(
+    equipment: &RawEquipment,
+    side: u8,
+    named_apparent_ratings: &mut BTreeMap<String, f64>,
+) -> Result<()> {
+    let selected_ids = selected_operational_limit_group_ids(equipment, side)?;
+    let selected =
+        (!selected_ids.is_empty()).then(|| selected_ids.into_iter().collect::<HashSet<_>>());
+    for group in equipment.operational_limits.iter().filter(|group| {
+        group.side == side
+            && !selected
+                .as_ref()
+                .is_some_and(|selected| selected.contains(group.id.as_str()))
+    }) {
+        if let Some(limits) = &group.apparent_power {
+            if let Some(value) = limits.permanent_limit {
+                let name = limits
+                    .permanent_name
+                    .clone()
+                    .unwrap_or_else(|| group.id.clone());
+                named_apparent_ratings
+                    .entry(name)
+                    .and_modify(|existing| *existing = existing.min(value))
+                    .or_insert(value);
+            }
+            for limit in &limits.temporary_limits {
+                if let Some(value) = limit.value {
+                    let name = format!(
+                        "{} {} ({} s)",
+                        group.id,
+                        limit.name,
+                        limit.acceptable_duration.unwrap_or(i32::MAX)
+                    );
+                    named_apparent_ratings
+                        .entry(name)
+                        .and_modify(|existing| *existing = existing.min(value))
+                        .or_insert(value);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The star point voltage a three winding transformer states as the
+/// properties `v` (kV) and `angle` (degrees), as PowSybl's PSS/E importer
+/// states `VMSTAR` and `ANSTAR` (psse-converter `TransformerConverter.create`
+/// for three windings). Both must be finite numbers.
+fn star_voltage_properties(metadata: &ComponentMetadata) -> Option<(f64, f64)> {
+    let value = |name: &str| {
+        metadata
+            .properties
+            .get(name)?
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+    };
+    Some((value("v")?, value("angle")?))
+}
+
 fn read_three_winding_transformer(
     equipment: &RawEquipment,
     terminals: &[(BusId, Terminal)],
@@ -5843,6 +6100,7 @@ fn read_three_winding_transformer(
     let mut star_b = [0.0; 3];
     let mut rated_u = [0.0; 3];
     let mut windings = std::array::from_fn(|side| Winding::new(terminals[side].0));
+    let mut winding_rating_sets: [Vec<BranchRatingSet>; 3] = Default::default();
     for side in 0..3 {
         let suffix = side + 1;
         star_r[side] = required_f64(&equipment.attrs, &format!("r{suffix}"))?;
@@ -5885,19 +6143,42 @@ fn read_three_winding_transformer(
         let apparent = calc_loading_limit_projection(equipment, suffix as u8, |group| {
             group.apparent_power.as_ref()
         })?;
-        windings[side].rate_a = apparent.permanent;
-        windings[side].rate_b = apparent
+        let states_apparent = apparent.permanent > 0.0 || !apparent.temporary.is_empty();
+        // A leg that states current limits and no apparent power limits is
+        // rated in MVA at its terminal's nominal voltage, as PowSybl's PSS/E
+        // exporter rates it (psse-converter `TransformerConverter.createRates(Leg)`
+        // through `AbstractConverter.convertToMva`). The selected groups stay
+        // in the detailed connectivity, so XIIDM output restates the amperes.
+        let (ratings, factor) = if states_apparent {
+            (apparent, 1.0)
+        } else {
+            let current = calc_loading_limit_projection(equipment, suffix as u8, |group| {
+                group.current.as_ref()
+            })?;
+            let factor = super::powsybl_psse::current_limit_mva(1.0, level.nominal_v);
+            (current, factor)
+        };
+        windings[side].rate_a = ratings.permanent * factor;
+        windings[side].rate_b = ratings
             .temporary
             .first()
-            .map_or(0.0, |(_, _, value)| *value);
-        windings[side].rate_c = apparent
+            .map_or(0.0, |(_, _, value)| *value * factor);
+        windings[side].rate_c = ratings
             .temporary
             .get(1)
-            .map_or(0.0, |(_, _, value)| *value);
-        if selected_operational_limits_groups(equipment, suffix as u8)?
-            .iter()
-            .any(|group| group.current.is_some() || group.active_power.is_some())
-        {
+            .map_or(0.0, |(_, _, value)| *value * factor);
+        // Unselected groups are the winding's further rating sets, as they
+        // are a branch's.
+        let mut named = BTreeMap::new();
+        add_unselected_apparent_ratings(equipment, suffix as u8, &mut named)?;
+        winding_rating_sets[side] = named
+            .into_iter()
+            .map(|(name, value)| BranchRatingSet::new(name, value))
+            .collect();
+        let selected = selected_operational_limits_groups(equipment, suffix as u8)?;
+        let unmapped_current =
+            states_apparent && selected.iter().any(|group| group.current.is_some());
+        if unmapped_current || selected.iter().any(|group| group.active_power.is_some()) {
             diagnostics.push(
                 &codes::READ_XIIDM_FIELD_UNMAPPED,
                 format!(
@@ -5918,7 +6199,11 @@ fn read_three_winding_transformer(
         .iter()
         .filter(|(_, terminal)| terminal.connected)
         .count();
-    if connected != 0 && connected != 3 {
+    // Two connected legs keep the transformer in service with the third
+    // winding out, as PSS/E `STAT` 2, 3, and 4 state it (psse-converter
+    // `TransformerConverter.getStatus` for three windings); one connected
+    // leg is out of service, as `STAT` 0.
+    if connected == 1 {
         diagnostics.push(
             &codes::READ_XIIDM_FIELD_UNMAPPED,
             format!(
@@ -5947,18 +6232,27 @@ fn read_three_winding_transformer(
             ),
         );
     }
-    Ok(Transformer3W {
+    let mut transformer = Transformer3W {
         windings,
         z: [pair(0, 1), pair(1, 2), pair(2, 0)],
         star_vm: 1.0,
         star_va: 0.0,
         mag_g: star_g.iter().sum::<f64>() * zbase,
         mag_b: star_b.iter().sum::<f64>() * zbase,
-        in_service: connected == 3,
+        in_service: connected >= 2,
         name: equipment.attrs.get("name").cloned(),
         uid: Some(equipment.id.clone()),
         extras,
-    })
+    };
+    if connected == 2 {
+        transformer.set_winding_in_service(std::array::from_fn(|side| terminals[side].1.connected));
+    }
+    for (side, rating_sets) in winding_rating_sets.into_iter().enumerate() {
+        if !rating_sets.is_empty() {
+            transformer.set_winding_rating_sets(side, rating_sets);
+        }
+    }
+    Ok(transformer)
 }
 
 fn read_hvdc_line(
@@ -6492,7 +6786,27 @@ fn build_detailed_connectivity(
         .collect::<Result<Vec<_>>>()?;
     Ok(DetailedConnectivity {
         omitted_fields: collect_omitted_fields(parsed)?,
-        component_metadata: parsed.metadata.values().cloned().collect(),
+        // The star voltage properties are typed on the transformer.
+        component_metadata: parsed
+            .metadata
+            .values()
+            .map(|metadata| {
+                let mut metadata = metadata.clone();
+                if metadata.component.component_type() == "transformer_3w"
+                    && star_voltage_properties(&metadata).is_some()
+                {
+                    metadata.properties.remove("v");
+                    metadata.properties.remove("angle");
+                }
+                // The area swing bus and tolerance are typed on the area,
+                // and the writer states them again from there.
+                if metadata.component.component_type() == "area" {
+                    metadata.properties.remove(PSSE_ISW_PROPERTY);
+                    metadata.properties.remove(PSSE_PTOL_PROPERTY);
+                }
+                metadata
+            })
+            .collect(),
         subnetworks: parsed
             .subnetworks
             .iter()
@@ -6878,6 +7192,66 @@ fn resolve_terminal_reference(
     )))
 }
 
+/// The PSS/E style control a winding's IIDM tap changers state, as PowSybl's
+/// PSS/E exporter reads it ([`super::powsybl_psse::psse_control_from_tap`]).
+/// When both tap changers are present, the phase tap changer's control is
+/// stated only when it alone regulates (psse-converter
+/// `TransformerConverter.findRatioDataRtcAndPtc`). `tap_of_rho` turns a
+/// ratio step's combined `rho` into the winding's tap ratio.
+fn winding_tap_control(
+    parsed: &ParsedXiidm,
+    ratio: Option<&TapChanger>,
+    phase: Option<&TapChanger>,
+    tap_of_rho: impl Fn(f64) -> f64,
+    bus_builder: &BusBuilder<'_>,
+    voltage_levels: &HashMap<&str, &RawVoltageLevel>,
+) -> Result<Option<crate::network::TransformerControl>> {
+    let (kind, tap, other, other_kind) = match (ratio, phase) {
+        (Some(ratio), Some(phase)) if phase.regulating && !ratio.regulating => {
+            (TapChangerKind::Phase, phase, Some(ratio), TapKind::Ratio)
+        }
+        (Some(ratio), phase) => (TapChangerKind::Ratio, ratio, phase, TapKind::Phase),
+        (None, Some(phase)) => (TapChangerKind::Phase, phase, None, TapKind::Ratio),
+        (None, None) => return Ok(None),
+    };
+    let other_rho = other
+        .and_then(|other| other.calculation_step(other_kind))
+        .map_or(1.0, |step| step.rho);
+    let steps = tap
+        .steps
+        .iter()
+        .map(|step| match kind {
+            TapChangerKind::Ratio => tap_of_rho(step.rho * other_rho),
+            TapChangerKind::Phase => -step.alpha,
+        })
+        .collect::<Vec<_>>();
+    let position = tap
+        .tap_position
+        .and_then(|position| usize::try_from(position.checked_sub(tap.low_tap_position)?).ok())
+        .unwrap_or(0);
+    let regulated = match &tap.regulation_terminal {
+        Some(reference) => resolve_regulating_bus(parsed, reference, bus_builder, voltage_levels)?,
+        None => None,
+    };
+    let regulated_kv = regulated
+        .and_then(|bus| bus_builder.buses.iter().find(|value| value.id == bus))
+        .map_or(0.0, |bus| bus.base_kv);
+    Ok(super::powsybl_psse::psse_control_from_tap(
+        &super::powsybl_psse::TapControl {
+            kind,
+            steps,
+            position,
+            inserted_present: false,
+            regulation_mode: tap.regulation_mode,
+            regulating: tap.regulating,
+            regulation_value: tap.regulation_value,
+            target_deadband: tap.target_deadband,
+        },
+        regulated,
+        regulated_kv,
+    ))
+}
+
 fn resolve_regulating_bus(
     parsed: &ParsedXiidm,
     reference: &RawTerminalReference,
@@ -7227,8 +7601,24 @@ fn derive_detailed_connectivity(
             buses: buses.iter().map(|bus| bus.id).collect(),
         });
         for bus in buses {
-            let configured_bus = component_id("bus", &format!("powerio-bus-{}", bus.id))
-                .expect("derived bus identity");
+            // PowSybl's PSS/E importer names bus `n` `B<n>` and states the
+            // PSS/E name as the IIDM name (psse-converter
+            // `AbstractConverter.getBusId`, `BusConverter.create`), which the
+            // reader turns back into the bus number and name.
+            let configured_bus =
+                component_id("bus", &format!("B{}", bus.id)).expect("derived bus identity");
+            let properties = psse_bus_properties(bus);
+            if bus.name.is_some() || !properties.is_empty() {
+                detailed.component_metadata.push(ComponentMetadata {
+                    component: configured_bus.clone(),
+                    name: bus.name.clone(),
+                    equipment_container: None,
+                    aliases: Vec::new(),
+                    external_identifiers: Vec::new(),
+                    properties,
+                    fictitious: false,
+                });
+            }
             detailed.bus_breaker_buses.push(BusBreakerBus {
                 component: configured_bus.clone(),
                 voltage_level: voltage_level.clone(),
@@ -7356,6 +7746,7 @@ fn derive_detailed_connectivity(
             transformer.uid.as_deref().expect("prepared identity"),
         )
         .expect("valid stored identity");
+        let winding_in_service = transformer.winding_in_service();
         for (index, winding) in transformer.windings.iter().enumerate() {
             push_derived_terminal(
                 &mut detailed,
@@ -7363,7 +7754,7 @@ fn derive_detailed_connectivity(
                 component.clone(),
                 u8::try_from(index + 1).expect("three windings"),
                 winding.bus,
-                transformer.in_service,
+                transformer.in_service && winding_in_service[index],
             );
         }
     }
@@ -7389,6 +7780,7 @@ fn derive_detailed_connectivity(
 /// order in its vectors; each grouped vector below is filled in that same
 /// order so indexing does not change emitted XML ordering.
 struct XiidmWriteIndex<'a> {
+    network: &'a BalancedNetwork,
     /// `true` when the caller supplied detailed terminals. In that case an
     /// absent terminal power value stays absent instead of being filled from
     /// the balanced calculation view.
@@ -7522,6 +7914,7 @@ impl<'a> XiidmWriteIndex<'a> {
         }
 
         let mut index = Self {
+            network,
             supplied_detailed_connectivity: network.detailed_connectivity().is_some(),
             base_mva: network.base_mva(),
             omitted_fields: detailed
@@ -7989,8 +8382,23 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
     for message in converter_model_losses {
         diagnostics.push(&codes::EMIT_XIIDM.field_dropped, message);
     }
-    super::warn_winding_rating_sets(&codes::EMIT_XIIDM, "XIIDM", network, &mut diagnostics);
-    super::warn_winding_status_collapsed(&codes::EMIT_XIIDM, "XIIDM", network, &mut diagnostics);
+    // A winding status and the rating sets beyond rate_a, rate_b, and
+    // rate_c are written as each terminal's connection and further limit
+    // groups when the writer derives the hierarchy; a supplied hierarchy
+    // states its own terminals and limit groups.
+    if network
+        .detailed_connectivity()
+        .as_deref()
+        .is_some_and(|detailed| network.buses().is_empty() || !detailed.voltage_levels.is_empty())
+    {
+        super::warn_winding_rating_sets(&codes::EMIT_XIIDM, "XIIDM", network, &mut diagnostics);
+        super::warn_winding_status_collapsed(
+            &codes::EMIT_XIIDM,
+            "XIIDM",
+            network,
+            &mut diagnostics,
+        );
+    }
     validate_xiidm_hvdc_emission(network)?;
     let metadata = network.case_metadata();
     let case_date = metadata.case_date.as_deref().unwrap_or_else(|| {
@@ -8153,9 +8561,20 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
     let mut detailed = derive_detailed_connectivity(network, &mut diagnostics)?;
     if let Some(supplied) = network.detailed_connectivity() {
         detailed.omitted_fields.clone_from(&supplied.omitted_fields);
+        // Supplied metadata wins; the derived bus names fill in the rest.
+        let derived = std::mem::take(&mut detailed.component_metadata);
         detailed
             .component_metadata
             .clone_from(&supplied.component_metadata);
+        for metadata in derived {
+            if !supplied
+                .component_metadata
+                .iter()
+                .any(|value| value.component == metadata.component)
+            {
+                detailed.component_metadata.push(metadata);
+            }
+        }
     }
     validate_xiidm_tap_changers(&detailed)?;
     validate_xiidm_reactive_limits(&detailed)?;
@@ -9292,14 +9711,31 @@ fn write_active_power_control_extensions(
 /// resolves that terminal's bus, so any connectable at the reference bus states
 /// the same fact; an in-service injection is preferred, and generators come
 /// first because a reference bus regulates through one.
-fn slack_terminal_equipment(network: &BalancedNetwork) -> Option<ComponentId> {
+/// The terminal that states the network's reference bus as a SlackTerminal.
+///
+/// An injection at the reference bus is preferred, then a branch or three
+/// winding transformer terminal there, in service before out of service. A
+/// reference bus that hosts only branches still names one of their terminals,
+/// as PowSybl's PSS/E importer attaches the slack terminal to any terminal
+/// connected at the swing bus (psse-converter `SlackConverter.create`), so the
+/// reference does not move to another bus on readback.
+fn slack_terminal_equipment(network: &BalancedNetwork) -> Option<TerminalReference> {
     let reference = network
         .buses()
         .iter()
         .find(|bus| bus.kind == BusType::Ref)?
         .id;
+    terminal_at_bus(network, reference)
+}
+
+/// An equipment terminal at `reference`: an injection before a branch or
+/// three winding transformer terminal, in service before out of service.
+fn terminal_at_bus(network: &BalancedNetwork, reference: BusId) -> Option<TerminalReference> {
+    let one = |kind: &'static str, uid: Option<&str>, bus: BusId, in_service: bool| {
+        (kind, uid.map(str::to_owned), 1_u8, bus, in_service)
+    };
     let generators = network.generators().iter().map(|value| {
-        (
+        one(
             "generator",
             value.uid.as_deref(),
             value.bus,
@@ -9309,25 +9745,48 @@ fn slack_terminal_equipment(network: &BalancedNetwork) -> Option<ComponentId> {
     let storage = network
         .storage()
         .iter()
-        .map(|value| ("storage", value.uid.as_deref(), value.bus, value.in_service));
+        .map(|value| one("storage", value.uid.as_deref(), value.bus, value.in_service));
     let loads = network
         .loads()
         .iter()
-        .map(|value| ("load", value.uid.as_deref(), value.bus, value.in_service));
+        .map(|value| one("load", value.uid.as_deref(), value.bus, value.in_service));
     let shunts = network
         .shunts()
         .iter()
-        .map(|value| ("shunt", value.uid.as_deref(), value.bus, value.in_service));
+        .map(|value| one("shunt", value.uid.as_deref(), value.bus, value.in_service));
+    let branches = network.branches().iter().flat_map(|value| {
+        [(1, value.from), (2, value.to)]
+            .map(|(side, bus)| ("branch", value.uid.clone(), side, bus, value.in_service))
+    });
+    let transformers = network.transformers_3w().iter().flat_map(|value| {
+        let in_service = value.in_service;
+        value
+            .windings
+            .each_ref()
+            .map(|winding| winding.bus)
+            .into_iter()
+            .zip(1_u8..)
+            .map(move |(bus, side)| ("transformer_3w", value.uid.clone(), side, bus, in_service))
+    });
     let mut out_of_service = None;
-    for (kind, uid, bus, in_service) in generators.chain(storage).chain(loads).chain(shunts) {
+    for (kind, uid, terminal, bus, in_service) in generators
+        .chain(storage)
+        .chain(loads)
+        .chain(shunts)
+        .chain(branches)
+        .chain(transformers)
+    {
         let Some(uid) = uid.filter(|_| bus == reference) else {
             continue;
         };
-        let component = component_id(kind, uid).ok()?;
+        let reference = TerminalReference {
+            equipment: component_id(kind, &uid).ok()?,
+            terminal,
+        };
         if in_service {
-            return Some(component);
+            return Some(reference);
         }
-        out_of_service = out_of_service.or(Some(component));
+        out_of_service = out_of_service.or(Some(reference));
     }
     out_of_service
 }
@@ -9336,24 +9795,31 @@ fn slack_terminal_equipment(network: &BalancedNetwork) -> Option<ComponentId> {
 /// is written when the reference bus hosts no emitted connectable, because the
 /// extension states a terminal.
 fn write_slack_terminal_extension(
-    slack_terminal: Option<&ComponentId>,
+    slack_terminal: Option<&TerminalReference>,
     index: &XiidmWriteIndex<'_>,
     included: &dyn Fn(&ComponentId) -> bool,
     indent: usize,
     output: &mut String,
 ) {
-    let Some(component) = slack_terminal.filter(|component| included(component)) else {
+    let Some(reference) = slack_terminal.filter(|reference| included(&reference.equipment)) else {
         return;
     };
-    let Some(terminal) = index.terminal(component, 1) else {
+    let Some(terminal) = index.terminal(&reference.equipment, reference.terminal) else {
         return;
+    };
+    // A branch or transformer terminal names its side, as PowSybl writes it.
+    let side = match (reference.equipment.component_type(), reference.terminal) {
+        ("branch" | "transformer_3w", 1) => " side=\"ONE\"",
+        (_, 2) => " side=\"TWO\"",
+        (_, 3) => " side=\"THREE\"",
+        _ => "",
     };
     let parent_indent = " ".repeat(indent);
     let child_indent = " ".repeat(indent + 2);
     output.push_str(&format!(
-        "{parent_indent}<iidm:extension id=\"{}\">\n{child_indent}<slt:slackTerminal id=\"{}\"/>\n{parent_indent}</iidm:extension>\n",
+        "{parent_indent}<iidm:extension id=\"{}\">\n{child_indent}<slt:slackTerminal id=\"{}\"{side}/>\n{parent_indent}</iidm:extension>\n",
         xml(terminal.voltage_level.local_id()),
-        xml(component.local_id()),
+        xml(reference.equipment.local_id()),
     ));
 }
 
@@ -10871,7 +11337,7 @@ fn write_detailed_body(
         }
     }
     write_hvdc_lines(network, index, included, output, diagnostics);
-    write_areas(network, detailed, index, included, output, diagnostics);
+    write_areas(network, detailed, index, included, output);
 }
 
 fn component_is_included(
@@ -10926,7 +11392,6 @@ fn write_areas(
     index: &XiidmWriteIndex<'_>,
     included: &dyn Fn(&ComponentId) -> bool,
     output: &mut String,
-    diagnostics: &mut Diagnostics,
 ) {
     for area in network.areas().iter().filter(|area| {
         let fallback_id = format!("A{}", area.number);
@@ -10958,6 +11423,16 @@ fn write_areas(
             },
         ));
         write_identifiable_children(metadata, output);
+        // IIDM has no area swing bus or interchange tolerance, and PowSybl's
+        // PSS/E importer drops both (psse-converter `AreaConverter.create`
+        // states only the interchange target and name); PowerIO states them
+        // as properties the reader takes back.
+        for (property, value) in psse_area_properties(area) {
+            output.push_str(&format!(
+                "    <iidm:property name=\"{property}\" value=\"{}\"/>\n",
+                xml(&value)
+            ));
+        }
         for level in &detailed.voltage_levels {
             if level.buses.iter().any(|bus_id| {
                 index
@@ -10972,18 +11447,6 @@ fn write_areas(
             }
         }
         output.push_str("  </iidm:area>\n");
-        if area.slack_bus.is_some() {
-            diagnostics.push(
-                &codes::EMIT_XIIDM.field_dropped,
-                format!("area `{id}` swing bus has no XIIDM area field"),
-            );
-        }
-        if area.tolerance != 0.0 {
-            diagnostics.push(
-                &codes::EMIT_XIIDM.field_dropped,
-                format!("area `{id}` interchange tolerance has no XIIDM area field"),
-            );
-        }
     }
 }
 
@@ -11899,8 +12362,30 @@ fn write_three_winding_transformer(
         });
     let zbase = rated_u0 * rated_u0 / index.base_mva;
     let star = transformer.calc_star_impedances();
-    let taps: [Vec<&NetworkTapChanger>; 3] =
-        std::array::from_fn(|side| transformer_tap_changers(index, &component, side as u8 + 1));
+    let winding_buses = transformer.windings.each_ref().map(|winding| winding.bus);
+    let synthesized: [Option<NetworkTapChanger>; 3] = std::array::from_fn(|side| {
+        let winding = &transformer.windings[side];
+        let control = winding.control.as_ref()?;
+        if !transformer_tap_changers(index, &component, side as u8 + 1).is_empty() {
+            return None;
+        }
+        let base_ratio = winding_nominal_kv(winding, buses[side]) / buses[side].base_kv;
+        tap_changer_from_control(
+            index,
+            &component,
+            side as u8 + 1,
+            &winding_buses,
+            control,
+            (winding.tap, winding.shift),
+            |tap| tap / base_ratio,
+            diagnostics,
+        )
+    });
+    let taps: [Vec<&NetworkTapChanger>; 3] = std::array::from_fn(|side| {
+        let mut taps = transformer_tap_changers(index, &component, side as u8 + 1);
+        taps.extend(synthesized[side].as_ref());
+        taps
+    });
     let unapply = |value: f64, factor: f64| {
         if factor.abs() <= f64::EPSILON {
             value
@@ -11949,12 +12434,26 @@ fn write_three_winding_transformer(
         terminal_attributes(index, &component, 3, true, transformer.in_service),
         limits_attributes,
     ));
+    // The star voltage as PowSybl's PSS/E importer states it: `v` in kV on
+    // `ratedU0` and `angle` in degrees.
+    if (transformer.star_vm - 1.0).abs() > f64::EPSILON || transformer.star_va.abs() > f64::EPSILON
+    {
+        output.push_str(&format!(
+            "      <iidm:property name=\"v\" value=\"{}\"/>\n      <iidm:property name=\"angle\" value=\"{}\"/>\n",
+            number(transformer.star_vm * rated_u0),
+            number(transformer.star_va),
+        ));
+    }
     for (side, (winding, bus)) in transformer.windings.iter().zip(buses).enumerate() {
-        if !taps[side].is_empty() {
+        if synthesized[side].is_none() && !taps[side].is_empty() {
             for tap in &taps[side] {
                 write_tap_changer(tap, true, output, diagnostics);
             }
             continue;
+        }
+        let synthesized_kind = synthesized[side].as_ref().map(|tap| tap.kind);
+        if let Some(tap) = &synthesized[side] {
+            write_tap_changer(tap, true, output, diagnostics);
         }
         let rated_u = winding_nominal_kv(winding, bus);
         let base_ratio = rated_u / bus.base_kv;
@@ -11963,7 +12462,7 @@ fn write_three_winding_transformer(
         } else {
             winding.tap / base_ratio
         };
-        if (rho - 1.0).abs() > f64::EPSILON {
+        if synthesized_kind != Some(TapChangerKind::Ratio) && (rho - 1.0).abs() > f64::EPSILON {
             output.push_str(&format!(
                 "      <iidm:ratioTapChanger{} tapPosition=\"0\" lowTapPosition=\"0\" loadTapChangingCapabilities=\"false\">\n        <iidm:step rho=\"{}\"/>\n      </iidm:ratioTapChanger{}>\n",
                 side + 1,
@@ -11971,7 +12470,7 @@ fn write_three_winding_transformer(
                 side + 1,
             ));
         }
-        if winding.shift != 0.0 {
+        if synthesized_kind != Some(TapChangerKind::Phase) && winding.shift != 0.0 {
             output.push_str(&format!(
                 "      <iidm:phaseTapChanger{} tapPosition=\"0\" lowTapPosition=\"0\" loadTapChangingCapabilities=\"false\">\n        <iidm:step rho=\"1\" alpha=\"{}\"/>\n      </iidm:phaseTapChanger{}>\n",
                 side + 1,
@@ -11984,29 +12483,39 @@ fn write_three_winding_transformer(
         write_exact_operational_limit_groups(index, &component, output, diagnostics);
     } else {
         for (side, winding) in transformer.windings.iter().enumerate() {
-            if winding.rate_a == 0.0 && winding.rate_b == 0.0 && winding.rate_c == 0.0 {
-                continue;
+            if winding.rate_a != 0.0 || winding.rate_b != 0.0 || winding.rate_c != 0.0 {
+                output.push_str(&format!(
+                    "      <iidm:operationalLimitsGroup{} id=\"powerio\">\n",
+                    side + 1
+                ));
+                write_loading_limits(
+                    "apparentPowerLimits",
+                    winding.rate_a,
+                    winding.rate_b,
+                    winding.rate_c,
+                    output,
+                );
+                output.push_str(&format!(
+                    "      </iidm:operationalLimitsGroup{}>\n",
+                    side + 1
+                ));
             }
-            output.push_str(&format!(
-                "      <iidm:operationalLimitsGroup{} id=\"powerio\">\n",
-                side + 1
-            ));
-            write_loading_limits(
-                "apparentPowerLimits",
-                winding.rate_a,
-                winding.rate_b,
-                winding.rate_c,
-                output,
-            );
-            output.push_str(&format!(
-                "      </iidm:operationalLimitsGroup{}>\n",
-                side + 1
-            ));
+            // Further rating sets (PSS/E RATE4 to RATE12) as unselected
+            // groups, as a two winding branch writes them.
+            for (index, rating) in transformer.winding_rating_sets(side).iter().enumerate() {
+                output.push_str(&format!(
+                    "      <iidm:operationalLimitsGroup{side} id=\"rating-set-{}\">\n        <iidm:apparentPowerLimits permanentLimit=\"{}\" permanentLimitName=\"{}\"/>\n      </iidm:operationalLimitsGroup{side}>\n",
+                    index + 1,
+                    number(rating.rate_mva),
+                    xml(&rating.name),
+                    side = side + 1,
+                ));
+            }
         }
     }
     output.push_str("    </iidm:threeWindingsTransformer>\n");
     for (side, winding) in transformer.windings.iter().enumerate() {
-        if let Some(control) = &winding.control {
+        if let Some(control) = winding.control.as_ref().filter(|_| taps[side].is_empty()) {
             diagnostics.push(
                 &codes::EMIT_XIIDM.field_dropped,
                 format!(
@@ -12016,13 +12525,6 @@ fn write_three_winding_transformer(
                 ),
             );
         }
-    }
-    if (transformer.star_vm - 1.0).abs() > f64::EPSILON || transformer.star_va.abs() > f64::EPSILON
-    {
-        diagnostics.push(
-            &codes::EMIT_XIIDM.field_dropped,
-            format!("three winding transformer `{id}` star voltage has no XIIDM equipment field"),
-        );
     }
 }
 
@@ -12317,7 +12819,7 @@ fn write_line(
         write_branch_operational_limits(index, &component, branch, 2, output, diagnostics);
     }
     output.push_str("  </iidm:line>\n");
-    warn_branch_fields(id, branch, diagnostics);
+    warn_branch_fields(id, branch, false, diagnostics);
 }
 
 fn write_transformer(
@@ -12333,7 +12835,24 @@ fn write_transformer(
     let to = index.bus(branch.to);
     let zbase = to.base_kv * to.base_kv / index.base_mva;
     let charging = branch.calc_terminal_charging();
-    let taps = transformer_tap_changers(index, &component, 1);
+    let mut taps = transformer_tap_changers(index, &component, 1);
+    let synthesized = if taps.is_empty() {
+        branch.control.as_ref().and_then(|control| {
+            tap_changer_from_control(
+                index,
+                &component,
+                1,
+                &[branch.from, branch.to],
+                control,
+                (branch.calc_effective_tap(), branch.shift),
+                |tap| 1.0 / tap,
+                diagnostics,
+            )
+        })
+    } else {
+        None
+    };
+    taps.extend(synthesized.as_ref());
     let rho_factor = tap_step_factor(&taps, |step| step.rho);
     let resistance_factor = tap_step_factor(&taps, |step| {
         1.0 + step.resistance_deviation_percent / 100.0
@@ -12385,7 +12904,113 @@ fn write_transformer(
     }
     write_branch_operational_limits(index, &component, branch, 2, output, diagnostics);
     output.push_str("    </iidm:twoWindingsTransformer>\n");
-    warn_branch_fields(id, branch, diagnostics);
+    warn_branch_fields(id, branch, !taps.is_empty(), diagnostics);
+}
+
+/// The XIIDM tap changer for a winding's PSS/E style control when the source
+/// supplied no tap changer, following PowSybl's PSS/E importer
+/// ([`super::powsybl_psse::tap_control_from_psse`]). `present` is the
+/// winding's ratio and shift, `own_buses` the transformer's terminal buses in
+/// side order, and `step_rho` turns a step's tap ratio into the IIDM `rho`.
+#[allow(clippy::too_many_arguments)]
+fn tap_changer_from_control(
+    index: &XiidmWriteIndex<'_>,
+    transformer: &ComponentId,
+    winding: u8,
+    own_buses: &[BusId],
+    control: &crate::network::TransformerControl,
+    present: (f64, f64),
+    step_rho: impl Fn(f64) -> f64,
+    diagnostics: &mut Diagnostics,
+) -> Option<NetworkTapChanger> {
+    let regulated_kv = control
+        .controlled_bus
+        .and_then(|bus| index.buses.get(&bus))
+        .map_or(0.0, |bus| bus.base_kv);
+    let (present_tap, present_shift) = present;
+    let present = if control.mode == TransformerControlMode::ActiveFlow {
+        present_shift
+    } else {
+        present_tap
+    };
+    let tap = super::powsybl_psse::tap_control_from_psse(control, present, regulated_kv)?;
+    // PowSybl regulates a terminal connected at the controlled bus
+    // (psse-converter `TransformerConverter.defineRegulatingTerminal`); the
+    // transformer's own terminal there comes first.
+    let terminal = control.controlled_bus.and_then(|bus| {
+        own_buses
+            .iter()
+            .position(|own| *own == bus)
+            .and_then(|side| u8::try_from(side + 1).ok())
+            .map(|terminal| TerminalReference {
+                equipment: transformer.clone(),
+                terminal,
+            })
+            .or_else(|| terminal_at_bus(index.network, bus))
+    });
+    let quantity = match tap.kind {
+        TapChangerKind::Ratio => "ratio",
+        TapChangerKind::Phase => "phase shift",
+    };
+    if tap.inserted_present {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.value_substituted,
+            format!(
+                "transformer `{}` winding {winding} present {quantity} lies between its {} evenly spaced tap steps; the XIIDM tap changer states it as a step of its own, as PowSybl's PSS/E importer does, so it has {} steps",
+                transformer.local_id(),
+                control.ntp,
+                tap.steps.len(),
+            ),
+        );
+    }
+    if tap.regulation_mode.is_some() && terminal.is_none() {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.field_dropped,
+            format!(
+                "transformer `{}` winding {winding} regulates no bus with an XIIDM terminal; its tap changer is written as not regulating",
+                transformer.local_id(),
+            ),
+        );
+    }
+    let steps = tap
+        .steps
+        .iter()
+        .zip(0..)
+        .map(|(value, position)| NetworkTapChangerStep {
+            position,
+            rho: match tap.kind {
+                TapChangerKind::Ratio => step_rho(*value),
+                TapChangerKind::Phase => 1.0,
+            },
+            alpha_degrees: match tap.kind {
+                TapChangerKind::Ratio => 0.0,
+                TapChangerKind::Phase => -value,
+            },
+            resistance_deviation_percent: 0.0,
+            reactance_deviation_percent: 0.0,
+            conductance_deviation_percent: 0.0,
+            susceptance_deviation_percent: 0.0,
+        })
+        .collect();
+    Some(NetworkTapChanger {
+        component: None,
+        transformer: transformer.clone(),
+        winding,
+        kind: tap.kind,
+        tap_position: i32::try_from(tap.position).ok(),
+        solved_tap_position: None,
+        low_tap_position: 0,
+        neutral_tap_position: None,
+        normal_tap_position: None,
+        voltage_step_increment_percent: None,
+        load_tap_changing_capabilities: tap.kind == TapChangerKind::Ratio,
+        regulating: tap.regulating && terminal.is_some(),
+        regulation_mode: tap.regulation_mode,
+        regulation_value: tap.regulation_value,
+        target_deadband: tap.target_deadband,
+        regulation_terminal: terminal,
+        steps,
+    })
 }
 
 fn has_branch_operational_limits(branch: &Branch) -> bool {
@@ -12711,14 +13336,20 @@ fn write_loading_limits(
     output.push_str(&format!("        </iidm:{element}>\n"));
 }
 
-fn warn_branch_fields(id: &str, branch: &Branch, diagnostics: &mut Diagnostics) {
+/// `control_written` is true when a tap changer states the branch's control.
+fn warn_branch_fields(
+    id: &str,
+    branch: &Branch,
+    control_written: bool,
+    diagnostics: &mut Diagnostics,
+) {
     if branch.has_angle_limits() {
         diagnostics.push(
             &codes::EMIT_XIIDM.field_dropped,
             format!("branch `{id}` angle bounds have no XIIDM branch attribute"),
         );
     }
-    if let Some(control) = &branch.control {
+    if let Some(control) = branch.control.as_ref().filter(|_| !control_written) {
         diagnostics.push(
             &codes::EMIT_XIIDM.field_dropped,
             format!(

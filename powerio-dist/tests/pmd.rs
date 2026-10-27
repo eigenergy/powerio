@@ -1359,3 +1359,210 @@ fn dss_nominal_bases_are_independent_of_emf_and_phase_count() {
         }
     }
 }
+
+/// Asserts `a` and `b` are the same JSON document up to float rounding in the
+/// last place, naming the first path where they differ.
+fn assert_same_json(a: &serde_json::Value, b: &serde_json::Value, path: &str) {
+    use serde_json::Value;
+    match (a, b) {
+        (Value::Object(x), Value::Object(y)) => {
+            let xk: Vec<_> = x.keys().collect();
+            let yk: Vec<_> = y.keys().collect();
+            assert_eq!(xk, yk, "keys differ at {path}");
+            for (k, v) in x {
+                assert_same_json(v, &y[k], &format!("{path}/{k}"));
+            }
+        }
+        (Value::Array(x), Value::Array(y)) => {
+            assert_eq!(x.len(), y.len(), "lengths differ at {path}");
+            for (i, (u, v)) in x.iter().zip(y).enumerate() {
+                assert_same_json(u, v, &format!("{path}[{i}]"));
+            }
+        }
+        (Value::Number(x), Value::Number(y)) => {
+            let (x, y) = (x.as_f64().unwrap(), y.as_f64().unwrap());
+            assert!(
+                (x - y).abs() <= 1e-12 * x.abs().max(1.0),
+                "{x} != {y} at {path}"
+            );
+        }
+        _ => assert_eq!(a, b, "values differ at {path}"),
+    }
+}
+
+/// #646: PMD's stock `case3_balanced`, parsed by PowerModelsDistribution and
+/// written with its `print_file`, imports every component the file states,
+/// and nothing is lost without a finding.
+#[test]
+#[allow(clippy::float_cmp)]
+fn pmd_case3_balanced_imports_every_component() {
+    let path = fixture("pmd/case3_balanced.json");
+    let file: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let count = |section: &str| file[section].as_object().map_or(0, serde_json::Map::len);
+    let net = parse_pmd_file(&path).unwrap();
+
+    assert_eq!(net.name().as_deref(), Some("3bus_example"));
+    assert_eq!(net.base_frequency(), 50.0);
+    assert_eq!(net.buses().len(), count("bus"));
+    assert_eq!(net.buses().len(), 3);
+    assert_eq!(net.line_codes().len(), count("linecode"));
+    assert_eq!(net.line_codes().len(), 2);
+    assert_eq!(net.lines().len(), count("line"));
+    assert_eq!(net.lines().len(), 2);
+    assert_eq!(net.loads().len(), count("load"));
+    assert_eq!(net.loads().len(), 3);
+    assert_eq!(net.sources().len(), count("voltage_source"));
+    assert_eq!(net.sources().len(), 1);
+    assert_eq!(net.transformers().len(), count("transformer"));
+    assert_eq!(net.generators().len(), count("generator"));
+    assert_eq!(net.shunts().len(), count("shunt"));
+    assert_eq!(net.switches().len(), count("switch"));
+    // The load shape has no typed home: it is kept, and reported.
+    let untyped: Vec<_> = net
+        .untyped_objects()
+        .iter()
+        .map(|u| (u.class.as_str(), u.name.as_str()))
+        .collect();
+    assert_eq!(untyped, [("time_series", "ls1")]);
+    let codes: Vec<_> = net
+        .diagnostics
+        .iter()
+        .map(powerio_dist::Diagnostic::code)
+        .collect();
+    assert_eq!(
+        codes,
+        ["READ.PMD.RETAINED_SOURCE_ONLY"],
+        "{:?}",
+        net.warnings
+    );
+
+    // Lines resolve their linecode references; loads keep kW scale.
+    for line in net.lines() {
+        assert!(net.linecode(&line.linecode).is_some(), "{}", line.linecode);
+    }
+    let l1 = net.loads().iter().find(|l| l.name == "l1").unwrap();
+    assert_eq!(l1.p_nom, [6000.0]);
+    assert_eq!(l1.q_nom, [3000.0]);
+    assert_eq!(l1.terminal_map, ["1", "4"]);
+}
+
+/// The PMD writer reproduces the whole document, the load shape and the
+/// loads' references to it included, and PMD reads its output back to the
+/// same network.
+#[test]
+fn pmd_case3_balanced_round_trips_through_the_writer() {
+    let text = std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap();
+    let net = parse_pmd_str(&text).unwrap();
+    let out = emit_pmd_json(&net);
+    assert_eq!(out.warnings, Vec::<String>::new());
+    let input: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let output: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_same_json(&input, &output, "");
+
+    let again = parse_pmd_str(&out.text).unwrap();
+    assert_eq!(again.buses(), net.buses());
+    assert_eq!(again.lines(), net.lines());
+    assert_eq!(again.line_codes(), net.line_codes());
+    assert_eq!(again.loads(), net.loads());
+    assert_eq!(again.sources(), net.sources());
+    assert_eq!(again.untyped_objects(), net.untyped_objects());
+    assert_eq!(emit_pmd_json(&again).text, out.text);
+}
+
+/// A component's time series reference is written only when the output
+/// carries the series it names; otherwise it is reported, not left dangling.
+#[test]
+fn a_dangling_pmd_time_series_reference_is_reported() {
+    let text = std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap();
+    let mut net = parse_pmd_str(&text).unwrap();
+    net.untyped_objects_mut().clear();
+    let out = emit_pmd_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(doc.get("time_series"), None);
+    assert_eq!(doc["load"]["l1"].get("time_series"), None);
+    let dropped = out
+        .warnings
+        .iter()
+        .filter(|w| w.starts_with("EMIT.PMD.FIELD_DROPPED: load") && w.contains("time_series"))
+        .count();
+    assert_eq!(dropped, 3, "{:?}", out.warnings);
+}
+
+/// A top level value the reader does not type survives a PMD rewrite and is
+/// reported on the way in.
+#[test]
+fn an_untyped_pmd_top_level_value_is_kept() {
+    let text = r#"{"data_model": "ENGINEERING", "time_elapsed": 0.25,
+        "bus": {"b": {"terminals": [1], "grounded": [], "rg": [], "xg": [], "status": "ENABLED"}}}"#;
+    let net = parse_pmd_str(text).unwrap();
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("top level `time_elapsed`")),
+        "{:?}",
+        net.warnings
+    );
+    let out = rewrite(text);
+    assert_eq!(out["time_elapsed"], serde_json::json!(0.25));
+}
+
+/// #646: PMD's `make_multinetwork` output holds one network per time step
+/// under `nw`. The single network reader refuses it with a message naming the
+/// time series reader instead of returning an empty network, and the time
+/// series reader imports every component of every step.
+#[test]
+#[allow(clippy::float_cmp)]
+fn pmd_multinetwork_reads_as_a_time_series() {
+    let path = fixture("pmd/case3_balanced_multinetwork.json");
+    let err = parse_pmd_file(&path).unwrap_err();
+    assert!(err.to_string().contains("multinetwork"), "got: {err}");
+
+    let file: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let source = powerio_core::Source::open(&path).unwrap();
+    assert!(powerio_dist::pmd::is_multinetwork(&source));
+    let module = powerio_dist::pmd::parse_multinetwork(source).unwrap();
+    let series = module.value();
+    let labels: Vec<_> = series
+        .time_points()
+        .iter()
+        .map(powerio_core::TimePoint::label)
+        .collect();
+    assert_eq!(labels, ["1", "2"]);
+    for point in series.time_points() {
+        assert_eq!(point.duration(), Some(std::time::Duration::from_secs(3600)));
+    }
+    for (point, net) in series.iter() {
+        let step = &file["nw"][point.label()];
+        let count = |section: &str| step[section].as_object().map_or(0, serde_json::Map::len);
+        assert_eq!(net.name().as_deref(), Some("3bus_example"));
+        assert_eq!(net.base_frequency(), 50.0);
+        assert_eq!(net.buses().len(), count("bus"));
+        assert_eq!(net.buses().len(), 3);
+        assert_eq!(net.line_codes().len(), count("linecode"));
+        assert_eq!(net.lines().len(), count("line"));
+        assert_eq!(net.lines().len(), 2);
+        assert_eq!(net.loads().len(), count("load"));
+        assert_eq!(net.loads().len(), 3);
+        assert_eq!(net.sources().len(), count("voltage_source"));
+        assert_eq!(net.sources().len(), 1);
+    }
+    // The load shape scales each step's demand: 6 kW times 0.005, then 0.01.
+    let demand: Vec<f64> = series
+        .values()
+        .iter()
+        .map(|net| net.loads().iter().find(|l| l.name == "l1").unwrap().p_nom[0])
+        .collect();
+    assert_eq!(demand, [30.0, 60.0]);
+    // Each step repeats the untyped load shape finding; it is reported once.
+    let codes: Vec<_> = module
+        .diagnostics()
+        .iter()
+        .map(powerio_dist::Diagnostic::code)
+        .collect();
+    assert_eq!(codes, ["READ.PMD.RETAINED_SOURCE_ONLY"]);
+
+    let single = powerio_core::Source::open(fixture("pmd/case3_balanced.json")).unwrap();
+    assert!(!powerio_dist::pmd::is_multinetwork(&single));
+}

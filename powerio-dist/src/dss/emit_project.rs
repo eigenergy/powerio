@@ -1,11 +1,19 @@
 //! Byte-exact replay of an acquired DSS project, including binary profiles.
-use crate::diagnostics::codes::EMIT_DSS_PROJECT_UNREPRESENTABLE;
+use crate::diagnostics::codes::{
+    EMIT_DSS_PROJECT_COMPANION_KEPT, EMIT_DSS_PROJECT_UNREPRESENTABLE,
+};
 use crate::{DistSourceFormat, MulticonductorNetwork};
-use powerio_core::{ArtifactPath, Error, MemoryArtifact, PioModule};
+use powerio_core::{ArtifactPath, Diagnostic, Error, MemoryArtifact, PioModule};
+
+/// The replayed files plus a remark naming the companions it kept.
+pub(crate) struct RetainedProject {
+    pub artifacts: Vec<MemoryArtifact>,
+    pub diagnostics: Vec<Diagnostic>,
+}
 
 pub(crate) fn retained_project(
     module: &PioModule<MulticonductorNetwork>,
-) -> Result<Option<Vec<MemoryArtifact>>, Error> {
+) -> Result<Option<RetainedProject>, Error> {
     let Some(source) = module.source() else {
         return Ok(None);
     };
@@ -45,15 +53,26 @@ pub(crate) fn retained_project(
         .get("dependencies")
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| invalid("retained DSS project lacks its dependency inventory"))?;
-    if dependencies.iter().any(|value| !value.is_string()) {
-        return Err(invalid("retained DSS dependency inventory is malformed"));
-    }
+    let dependencies = dependencies
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| invalid("retained DSS dependency inventory is malformed"))
+        })
+        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
     // Every acquired buffer replays: the dependency files the reader followed
     // and the companion files beside them (a `Redirect` that a later edit
     // retargets, a data file the deck names by a path the reader never opened).
+    // The companions are kept on purpose and named in one remark, so the copy
+    // is never silent.
     let mut names = std::collections::BTreeSet::new();
     let mut artifacts = Vec::new();
+    let mut companions = Vec::new();
     for buffer in buffers {
+        if buffer.id() != primary.id() && !dependencies.contains(buffer.id().as_str()) {
+            companions.push(buffer.name().to_owned());
+        }
         let name = if buffer.id() == primary.id() {
             entrypoint.as_str()
         } else {
@@ -82,5 +101,20 @@ pub(crate) fn retained_project(
         ArtifactPath::new("case.dss")?,
         format!("Redirect {token}\n").into_bytes(),
     ));
-    Ok(Some(artifacts))
+    let mut diagnostics = Vec::new();
+    if !companions.is_empty() {
+        let count = companions.len();
+        let noun = if count == 1 { "file" } else { "files" };
+        diagnostics.push(Diagnostic::of(
+            &EMIT_DSS_PROJECT_COMPANION_KEPT,
+            format!(
+                "copied {count} supplied {noun} the deck never read under source/: {}",
+                companions.join(", ")
+            ),
+        ));
+    }
+    Ok(Some(RetainedProject {
+        artifacts,
+        diagnostics,
+    }))
 }

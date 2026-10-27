@@ -59,6 +59,7 @@ mod opfdata;
 mod pandapower;
 mod powermodels;
 pub mod powerworld;
+mod powsybl_psse;
 mod pslf;
 pub(crate) mod psse;
 mod pypsa;

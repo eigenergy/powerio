@@ -915,3 +915,44 @@ fn indexed_terminal_lookup_matches_a_per_element_query() {
     assert_eq!(native.electrical_terminals(30).unwrap().len(), 2);
     assert!(native.electrical_terminals(99).is_err());
 }
+
+#[test]
+fn a_thousand_line_feeder_reads_within_the_fixed_query_budget() {
+    // Before terminals were indexed once per parse, each element scanned the
+    // whole `Terminal` table, so the work grew with elements times terminals
+    // and the fixed query budget ran out near 450 lines. Reading 1,000 lines
+    // and 2,046 terminals on the 250-table native schema inside that same
+    // budget shows the per-element work no longer grows with the terminal
+    // count. The time is printed, not asserted, to keep the test stable.
+    let bytes = crate::formats::sincal::testkit::grown_authentic_feeder(1000);
+    let start = std::time::Instant::now();
+    let native = NativeDatabase::decode(&bytes, None).unwrap();
+    // The fixture's own components lack zero-sequence data, so the whole
+    // network does not map; the report still maps every element in turn.
+    let report = native.mapping_report().unwrap();
+    let elapsed = start.elapsed();
+    assert_eq!(native.elements.len(), 1032);
+    assert_eq!(native.terminals.len(), 2046);
+    let tables: i64 = native
+        .connection
+        .query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE type='table'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(tables, 250);
+    let grown = report
+        .components
+        .iter()
+        .filter(|c| c.element > 200_000)
+        .collect::<Vec<_>>();
+    assert_eq!(grown.len(), 1000);
+    let failed = grown
+        .iter()
+        .filter(|c| !c.component_maps)
+        .map(|c| (c.element, c.first_error.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(failed, []);
+    eprintln!("multiconductor: 1,000 added lines read in {elapsed:?}");
+}

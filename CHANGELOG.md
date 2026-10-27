@@ -227,10 +227,16 @@
   is written at its present impedance with TAB = 0 and a warning, instead of
   a record PowerIO's own reader refuses. A TAB is written only for a table the
   file states, so a cleared correction or a table the source never stated no
-  longer reads back as a dropped reference (a warning lists them). RAWX output
-  of a corrected network now states the corrected impedance with TAB = 0 and
-  a warning per transformer, as RAW 33/34 does for tables it cannot state,
-  instead of the uncorrected impedance and a TAB naming no table.
+  longer reads back as a dropped reference (a warning lists them).
+- PSS/E RAWX now reads and writes transformer impedance correction tables
+  (the `impcor` table, one `itable, tap, refact, imfact` row per point),
+  closing the last reader gap from #592. Before, the reader reported the
+  table as unsupported and every transformer read uncorrected, and RAWX
+  output wrote the uncorrected impedance with a TAB naming no table. Rows of
+  one table may interleave with another's; a row with table number 0 or
+  below, or the all zero point that ends a RAW table, is dropped with a
+  warning. A corrected network now reaches RAWX with its tables and nominal
+  impedances, as RAW 35 output does.
 - TARA contingency statements are read at analysis time. The readers keep
   them as text, as before, because the contingency, subsystem, and monitored
   set layouts are fixed within PowerIO IR 2; the new views read that text.
@@ -250,6 +256,19 @@
   through dispatch blocks, and named operands use the same optional `BUS`
   keywords as numeric ones. Post-file-`END` defaults and non-finite scale
   thresholds remain inert text.
+- A `.mon` file with a four-value `MONITOR VOLTAGE RANGE` now reports one
+  `READ.MON.VOLTAGE_BAND_ORDER_ASSUMED` remark. The reader takes the first
+  pair as the post-contingency band and the second as the pre-contingency
+  band, as before, but no public source confirms that order: the PSS/E
+  manual documents only a low and an optional high value, and PowerGEM's
+  TARA grammar accepts the extra pair without naming it. The remark names
+  the line and the order, so a caller can check it against the tool that
+  wrote the file. The values read and written are unchanged.
+- `MONITOR BRANCHES IN SUBSYSTEM` and `MONITOR TIES FROM SUBSYSTEM` now read
+  the PSS/E 35.2 spelling `IN KVRANGE lo hi` as the TARA `KVRANGE lo hi`
+  tail. Before, such a line was kept as text with
+  `READ.MON.STATEMENT_UNRECOGNIZED` and monitored nothing. The writer states
+  the `KVRANGE lo hi` form.
 - `SharedPsseEquipmentIndex` is a PSS/E equipment index that can be built
   once and kept beside its network, for example in a `OnceLock` next to an
   `Arc<BalancedNetwork>`. `SharedPsseEquipmentIndex::new` takes an
@@ -261,6 +280,70 @@
   them now reports each one with `EMIT.SURGE.RECORD_DROPPED`, naming it by
   name, source UID, or position and listing its three buses, instead of
   dropping it without a diagnostic (#686).
+- A node breaker XIIDM or JIIDM case now writes PSS/E RAWX and revision 34
+  and 35 RAW. IIDM numbers nodes from 0 within each voltage level, so two
+  levels of one substation repeated node numbers and RAWX output failed. A
+  substation whose node numbers repeat or are not positive is now numbered
+  from 1, as PowSybl's exporter numbers it, with a diagnostic. Revision 33
+  output reports the substation records it drops without the RAWX error text.
+- IIDM current limits now reach PSS/E as MVA ratings instead of being dropped
+  as unlimited. A branch that states current limits and no MVA rating is
+  written with `sqrt(3) * Vnom * I / 1000` at its terminal's nominal voltage,
+  sorted into RATE1 to RATE12 as PowSybl's exporter writes them, and a
+  diagnostic reports the conversion. A three winding transformer leg that
+  states only current limits now reads as winding MVA ratings the same way,
+  where it was reported as unmapped; XIIDM output keeps the amperes.
+- PSS/E bus numbers and names now survive a trip through XIIDM or JIIDM. The
+  writers name a bus `B<n>` with its name as the IIDM name, as PowSybl's
+  PSS/E importer does, and the readers take the number back from `B<n>` (or
+  from `powerio-bus-<n>`, the id older PowerIO output used) and the name from
+  the IIDM name. Bus 10 no longer comes back as bus 5, nor "Bus 1" as
+  `powerio-bus-1`. A bus whose id states no number, when others do, is
+  numbered after them with a diagnostic.
+- The reference bus no longer moves on a trip through XIIDM or JIIDM when it
+  hosts only branches. The writers now name a branch or three winding
+  transformer terminal there as the slack terminal, as PowSybl does, where
+  they wrote none and the reader chose another bus (bus 6 instead of bus 1 in
+  PowSybl's eight bus PSS/E export).
+- Transformer tap control now crosses between PSS/E and IIDM in both
+  directions instead of being dropped one way and defaulted the other. A
+  PSS/E winding control becomes an IIDM tap changer with NTP steps spread
+  evenly from RMI to RMA, as PowSybl's importer builds it: COD 1 regulates
+  voltage at the controlled bus to the middle of VMA and VMI with their
+  difference as deadband, COD 2 regulates reactive power, COD 3 becomes a
+  phase tap changer regulating active power, and COD 0 a tap changer that
+  does not regulate. IIDM tap changers read back as the same COD, CONT, RMA,
+  RMI, VMA, VMI, and NTP, for two and three winding transformers. When the
+  present ratio lies between steps it becomes a step of its own, with a
+  diagnostic.
+- A PSS/E bus zone and owner now survive a trip through XIIDM or JIIDM, where
+  zone 2 and owner 3 came back as 1 and 1 without a diagnostic. The writers
+  state them as the IIDM bus properties `psse_zone` and `psse_owner`, as
+  other PSS/E fields IIDM has no field for are stated, and the readers take
+  them back.
+- Three winding transformers keep more through XIIDM and JIIDM. The star
+  point voltage is written as the transformer properties `v` and `angle`, as
+  PowSybl writes them, and read back; a winding out of service is written
+  as that leg's disconnected terminal, and a transformer with two connected
+  legs reads back in service with the third winding out instead of entirely
+  out of service; and winding ratings beyond rate A, B, and C (PSS/E RATE4
+  to RATE12) are written and read as further limit groups, as two winding
+  branches already were. Each of these was reported as dropped before.
+- Storage, such as an IIDM battery, is now written to PSS/E RAW and RAWX as
+  a load that consumes what the storage injects, as PowSybl's exporter
+  writes a battery, with a diagnostic naming the storage fields a load
+  cannot state. It was dropped, which changed the bus injections.
+- An area's swing bus (PSS/E `ISW`) and interchange tolerance (`PTOL`) now
+  survive XIIDM and JIIDM as the area properties `psse_isw` and
+  `psse_ptol`, where both were reported as dropped. A swing bus property
+  that names no bus of the case is reported on read.
+- PSS/E output now names the values it changes instead of changing them
+  silently. A two-terminal DC line whose received (or sent) power the
+  record's drop model does not reproduce is reported with the value a reread
+  gives, and its active power limits and MATPOWER loss model are reported
+  as dropped; a case date, forecast distance, source format, or validation
+  level is reported as dropped; and an area with no area type, or another
+  one, is reported as read back as a control area.
 
 **Balanced-network operations and sensitivities**
 
@@ -276,6 +359,17 @@
   example when a jumper would short an ideal transformer with an off-nominal
   tap; the new `reduce_zero_impedance_with_report` returns the same count
   with the merge's diagnostics, including the error that stopped it (#684).
+- `assign_island_references` with the per island policy now demotes a
+  stated reference bus that hosts no in-service generator, then makes the
+  bus of the island's largest `pmax` generator the reference. Before, an
+  island could keep a lone reference with no generator behind it, and the
+  raw call and per island normalization could pick different slack buses;
+  both now pick the same one. When two generators tie on `pmax`, the one on
+  the smaller bus id wins (before, the earlier generator row won during
+  normalization). `Island::calc_reference_choice` follows the same rule and
+  returns `None` for an island no in-service generator supplies. Two
+  windings of one live three winding transformer joined by a closed switch
+  are still refused; a test now pins that.
 - `BalancedNetwork::de_energize_buses` exposes the de-energizing that
   `assign_island_references` applies to an unsupplied island: the buses are
   typed isolated and everything at or touching them goes out of service,
@@ -373,6 +467,12 @@
   CIM profile schemas in CI. It fails when an expected fixture stops
   producing output, checks nested RDF/XML property values against the
   vocabulary, and reports refusals the baseline does not expect.
+- Format discovery names the distribution CIM release and profile: the
+  `cim-dist` entry of `powerio::grid_formats()` is labeled
+  "CIM distribution (CIM100 cim17v40, GridAPPS-D profile)" instead of
+  "CIM distribution". The distribution guide gains a status note listing
+  the CIM release, the profile, the validation that runs, and what is not
+  mapped yet.
 
 **GridLAB-D, OpenDSS, and the multiconductor model**
 
@@ -455,6 +555,32 @@
   DELTA banks continue to divide the total rating across their physical
   coils. Regression coverage checks both open-delta and three-phase delta
   stamps.
+- A two-terminal delta capacitor bank was already stamped at its full
+  rating (one coil, B = q / V^2) by the admittance builder since #707. A new
+  test pins that the IVR preparation stamps the same value, so the two agree.
+- Multiconductor IVR preparation (`build_mc_ac_opf_preparation`) now finds
+  its transformer start voltages with a sparse solve. The old dense solve
+  held a full row for every equation: about 24 MB and one second at 2,000
+  terminals, and most of a gigabyte near 10,000. The sparse solve stores a
+  few numbers per terminal and takes under a millisecond on the same 2,000
+  terminal case. The start values are unchanged (they agree with the old
+  solve to within 1e-12 on the IEEE 13 and 123 node feeders).
+- Writing an unchanged OpenDSS project back out still copies every file that
+  was supplied with it under `source/`, including files the deck never read,
+  but now says so: a remark, `EMIT.DSS.PROJECT_COMPANION_KEPT`, names those
+  files.
+- PowerModelsDistribution engineering JSON written by PMD's `print_file`
+  after `make_multinetwork` (one network per time step under `nw`) no longer
+  parses to an empty network with no buses, lines, or loads (#646).
+  `parse` now returns a `TimeSeries<MulticonductorNetwork>` with every
+  component of every step, ordered by `mn_lookup` time, labeled by the `nw`
+  key, and with each step's `time_elapsed` as its duration; the single
+  network reader refuses such a document with a message saying so. The PMD
+  writer now writes back the `time_series` section and each component's
+  `time_series` references instead of dropping them with a warning, and a
+  top level value the reader does not type (such as `time_elapsed`) is kept
+  and reported instead of ignored. PMD's stock `case3_balanced`, as PMD
+  writes it, is now a test fixture in both forms.
 
 **SINCAL**
 
@@ -475,6 +601,17 @@
   1e-10 of the matrix's largest diagonal entry, so a line whose zero- and
   positive-sequence values are nearly equal no longer fails on rounding.
   Lines with `Line.fr` other than 1 are still refused.
+- The balanced SINCAL reader now reads a line whose `Line.fr` is not 1. It
+  applies `fr` as the multiconductor reader does: the line's current limit and
+  thermal rating are `Ith * ParSys * fr`, and its impedance is unchanged.
+  Before, such a line was refused. `SincalContainer::archive_with(name,
+  ArchiveOptions::default())` builds `.sinx` packaging through an options
+  struct that can gain fields later; the `Archive { project_name }` variant
+  is kept and writes the same bytes. The multiconductor reader checks the
+  line tables' schema once per parse instead of once per line, and its
+  mapping report looks up one table instead of listing all of them for each
+  element, so a 1,000-line feeder on the 250-table native schema reads in
+  about 0.3 s (release build) within the fixed query budget.
 
 **Bindings: C ABI, Python, and Julia**
 

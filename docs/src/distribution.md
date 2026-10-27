@@ -78,6 +78,16 @@ distinct tagged models; readers without a configuration reject it. Canonical DSS
 writes the typed exponents and voltage limits ahead of stale extras or writer
 defaults. Unequal per-branch parameters emit separate single-phase loads.
 
+PowerModelsDistribution engineering JSON imports every component section the
+typed model has a slot for. Its `time_series` section has none: the series
+stay in the `untyped` table with a diagnostic, and a fresh PMD write restores
+them together with each component's `time_series` references. A multinetwork
+document, the output of PMD's `make_multinetwork` with one network per time
+step under `nw`, parses to `PioModule{TimeSeries{MulticonductorNetwork}}`,
+one network per step in `mn_lookup` time order. Each time point is labeled by
+its `nw` key and carries the step's `time_elapsed` as its duration. Reading
+such a document as a single network is refused with a message saying so.
+
 BMOPF and PMD project voltage-bounded loads to their nominal laws with a
 diagnostic; PMD also diagnoses its lack of exponential load fields. The
 multiconductor IVR OPF and LinDist3Flow preparations refuse these loads by
@@ -238,6 +248,42 @@ tank cases are checked against native OpenDSS grounded admittance stamps and
 loaded coil phasors by `evals/validation/validate_cim_tanks.py`, including fresh
 CIM writing and a clock-1/clock-11 control. This does not establish support for
 producer dialects outside the documented electrical profile.
+
+### Distribution CIM status
+
+- **CIM release.** CIM100 (`http://iec.ch/TC57/CIM100#`): IEC 61970
+  cim17v40 with IEC 61968 cim13v13. The reader also takes the older
+  `CIM-schema-cimNN` namespaces; the writer always emits CIM100. cim18v17,
+  and the IEC 61970-460 and -470 profiles that replace IEC 61968-13 CDPSM,
+  are not implemented.
+- **Application profile.** The single document feeder profile the GridAPPS-D
+  and CIMHub tools exchange, with `ConnectivityNode` (node breaker)
+  connectivity and per phase equipment. Format discovery
+  (`powerio::grid_formats`) labels the `cim-dist` token
+  "CIM distribution (CIM100 cim17v40, GridAPPS-D profile)".
+- **Input.** One document, or the top level `.xml` documents of a directory,
+  read through the same `Source` acquisition as every directory format: the
+  `POWERIO_MAX_REFERENCED_BYTES` budget applies and symbolic links are
+  refused. ZIP archives are not read; the bounded ZIP reader is still private
+  to the CGMES reader.
+- **Validation.** The CIM schema workflow checks fresh output for every
+  committed distribution fixture against the cim17v40 vocabulary and the
+  GridAPPS-D `rc4_2021` profile classes CIM-Graph generates
+  (`evals/validation/cim_dist`); PowerIO output has no vocabulary errors.
+  `evals/validation/validate_cim_tanks.py` compares the tank fixture with
+  native OpenDSS. CIM-Graph round trips and cimhub-opendss comparisons are
+  not run yet.
+- **Not mapped.** Regulator and tap changer controls (`RegulatingControl`,
+  `TapChangerControl`), distributed energy resources
+  (`PowerElectronicsConnection`) and machines, wire and cable geometry,
+  operational limits, and `LoadResponseCharacteristic` are reported on read
+  (`READ.CIM_DIST.CLASS_UNMAPPED`, `READ.CIM_DIST.FIELD_UNMAPPED`). A
+  document that connects equipment through `TopologicalNode` (bus branch)
+  only is refused. On write, generators, inverter based resources, and
+  control profiles are reported as dropped (`EMIT.CIM_DIST.RECORD_DROPPED`),
+  as are conductors beyond A, B, C, and N (`EMIT.CIM_DIST.FIELD_DROPPED`).
+  Because generators do not survive a CIM round trip, `cim-dist` is not yet
+  in the conversion matrix.
 
 ## GridLAB-D profiles and projects
 
