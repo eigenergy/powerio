@@ -8,6 +8,8 @@ Vocabulary errors against `cim17v40` and profile warnings against `rc4_2021` (CI
 | `tests/data/dist/bmopf/example_ieee13.json output` | ok | 0 | 22 |
 | `tests/data/dist/cim/micro_feeder.xml source` | ok | 6 | 13 |
 | `tests/data/dist/cim/micro_feeder.xml output` | ok | 0 | 11 |
+| `tests/data/dist/cim/tank_feeder.xml source` | ok | 0 | 13 |
+| `tests/data/dist/cim/tank_feeder.xml output` | ok | 0 | 13 |
 | `tests/data/dist/micro/defaults_degenerate.dss output` | ok | 0 | 9 |
 | `tests/data/dist/micro/fourwire_linecode.dss output` | ok | 0 | 6 |
 | `tests/data/dist/micro/ibr_pv_control.dss output` | ok | 0 | 6 |

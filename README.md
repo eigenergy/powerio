@@ -204,6 +204,7 @@ backend, and `default-features = false` leaves it out.
 - [Rust, Python, Julia, and C](https://eigenergy.github.io/powerio/guide/languages.html)
 - [Rust API reference](https://eigenergy.github.io/powerio/powerio/)
 - [PowerIO.jl](https://eigenergy.github.io/PowerIO.jl)
+- [Contributing](https://github.com/eigenergy/powerio/blob/main/CONTRIBUTING.md)
 
 ## License
 
