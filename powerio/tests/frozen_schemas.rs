@@ -338,9 +338,93 @@ fn assert_only_optional_property_added(
     );
 }
 
+/// The constants that tag one alternative of a union: string constants
+/// (such as source format names, which may share one alternative as a list
+/// of allowed values), or an object's one required property with a constant
+/// value (such as an objective term's `term`), named with that property.
+fn alternative_tags(alternative: &serde_json::Value) -> Option<(Option<&str>, Vec<&str>)> {
+    if let Some(tag) = alternative["const"].as_str() {
+        return Some((None, vec![tag]));
+    }
+    if let Some(values) = alternative["enum"].as_array() {
+        return values
+            .iter()
+            .map(serde_json::Value::as_str)
+            .collect::<Option<Vec<_>>>()
+            .map(|tags| (None, tags));
+    }
+    let mut tags = alternative["required"]
+        .as_array()?
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .filter_map(|property| {
+            alternative["properties"][property]["const"]
+                .as_str()
+                .map(|tag| (Some(property), vec![tag]))
+        });
+    let tag = tags.next()?;
+    tags.next().is_none().then_some(tag)
+}
+
+/// A union whose alternatives each carry a constant tag may gain
+/// alternatives, as a list of allowed values may gain values: every
+/// alternative the earlier schema file states stays byte for byte the same,
+/// every alternative carries a tag on the same property, no two share a tag,
+/// and nothing else about the definition changes. A document an earlier
+/// release wrote still matches exactly one alternative with the same
+/// meaning.
+fn assert_tagged_union_only_adds(
+    published: &serde_json::Value,
+    current: &serde_json::Value,
+    context: &str,
+) {
+    if published == current {
+        return;
+    }
+    let old = published["oneOf"].as_array().unwrap();
+    let new = current["oneOf"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{context} is no longer a union of alternatives"));
+    for alternative in old {
+        assert!(
+            new.contains(alternative),
+            "{context}: an alternative of the earlier schema changed or was removed: {alternative}"
+        );
+    }
+    let mut property = None;
+    let mut tags = std::collections::BTreeSet::new();
+    for alternative in new {
+        let (tag_property, alternative_tags) = alternative_tags(alternative)
+            .unwrap_or_else(|| panic!("{context}: an alternative carries no constant tag"));
+        assert_eq!(
+            *property.get_or_insert(tag_property),
+            tag_property,
+            "{context}: alternatives are tagged on different properties"
+        );
+        for tag in alternative_tags {
+            assert!(
+                tags.insert(tag),
+                "{context}: two alternatives share the tag {tag}"
+            );
+        }
+    }
+    let without_alternatives = |definition: &serde_json::Value| {
+        let mut definition = definition.clone();
+        definition.as_object_mut().unwrap().remove("oneOf");
+        definition
+    };
+    assert_eq!(
+        without_alternatives(current),
+        without_alternatives(published),
+        "{context} changed beyond gaining alternatives"
+    );
+}
+
 /// Each earlier IR version 2 schema file is checked against the current one.
-/// A release can add structural types and definitions, and a list of allowed
-/// string values (such as the distribution source formats) can gain values.
+/// A release can add structural types and definitions, a list of allowed
+/// string values (such as the distribution source formats) can gain values,
+/// and a union of constant-tagged alternatives (such as the source formats
+/// and the objective terms) can gain alternatives.
 /// Every other existing definition, and the document rules, stay byte for
 /// byte the same, so a document an earlier 0.11 release wrote still reads
 /// with the same meaning. Renaming or reshaping an existing type fails here.
@@ -368,7 +452,7 @@ fn ir_version_2_schemas_only_add() {
         for (name, definition) in published_defs.as_object().unwrap() {
             // An unchanged definition satisfies every rule below; the rules
             // describe how a definition may differ from an earlier file.
-            if current_defs[name] == *definition {
+            if current_defs.get(name) == Some(definition) {
                 continue;
             }
             if name == "StoredValue" {
@@ -385,26 +469,6 @@ fn ir_version_2_schemas_only_add() {
                         "{earlier}: type {type_name} changed"
                     );
                 }
-            } else if name == "SourceFormat" {
-                // The public format enum is nonexhaustive. Adding one new
-                // format must leave every existing spelling and schema rule
-                // intact; this is not permission to change arbitrary records.
-                let mut without_sincal = current_defs[name].clone();
-                let alternatives = without_sincal["oneOf"].as_array_mut().unwrap();
-                let before = alternatives.len();
-                alternatives.retain(|v| v["const"] != "sincal");
-                assert_eq!(before, alternatives.len() + 1);
-                assert_eq!(
-                    &without_sincal, definition,
-                    "{earlier}: existing format changed"
-                );
-                let sincal = current_defs[name]["oneOf"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .find(|v| v["const"] == "sincal")
-                    .unwrap();
-                assert_eq!(sincal["type"], "string");
             } else if name == "VoltageSource" {
                 // IR 2 also admits a distinctly tagged nested source type.
                 // Keep the legacy branch byte-for-byte equivalent as JSON;
@@ -433,6 +497,12 @@ fn ir_version_2_schemas_only_add() {
                     definition,
                     &current_defs[name],
                     &format!("{earlier}: record {name}"),
+                );
+            } else if definition["oneOf"].is_array() {
+                assert_tagged_union_only_adds(
+                    definition,
+                    &current_defs[name],
+                    &format!("{earlier}: {name}"),
                 );
             } else if let Some(values) = definition["enum"].as_array() {
                 // A list of allowed values keeps every value it had; it may
@@ -625,5 +695,61 @@ fn monitor_guard_allows_disjoint_tags_and_reordering() {
         let old = serde_json::json!({"oneOf": [first.clone(), second.clone()]});
         let extended = serde_json::json!({"oneOf": [new, second, first]});
         assert_monitor_schema_preserved(&old, &extended, "probe");
+    }
+}
+
+fn objective_term_alternative(term: &str) -> serde_json::Value {
+    serde_json::json!({
+        "additionalProperties": false,
+        "properties": {"term": {"const": term, "type": "string"}},
+        "required": ["term"],
+        "type": "object"
+    })
+}
+
+#[test]
+fn a_tagged_union_may_gain_alternatives_and_nothing_else() {
+    let published = serde_json::json!({
+        "description": "The PowerIO objective vocabulary.",
+        "oneOf": [objective_term_alternative("network_generator_cost")]
+    });
+    let mut grown = published.clone();
+    grown["oneOf"]
+        .as_array_mut()
+        .unwrap()
+        .push(objective_term_alternative("branch_switching_cost"));
+    assert_tagged_union_only_adds(&published, &grown, "probe");
+
+    let mut changed = grown.clone();
+    changed["oneOf"][0]["additionalProperties"] = serde_json::Value::Bool(true);
+    let mut duplicate = published.clone();
+    duplicate["oneOf"]
+        .as_array_mut()
+        .unwrap()
+        .push(objective_term_alternative("network_generator_cost"));
+    let mut untagged = published.clone();
+    untagged["oneOf"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"type": "object"}));
+    let mut other_property = published.clone();
+    other_property["oneOf"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "properties": {"kind": {"const": "new", "type": "string"}},
+            "required": ["kind"],
+            "type": "object"
+        }));
+    let mut redescribed = grown.clone();
+    redescribed["description"] = serde_json::Value::from("changed");
+    for refused in [changed, duplicate, untagged, other_property, redescribed] {
+        assert!(
+            std::panic::catch_unwind(|| {
+                assert_tagged_union_only_adds(&published, &refused, "probe");
+            })
+            .is_err(),
+            "{refused} must not pass as an addition"
+        );
     }
 }

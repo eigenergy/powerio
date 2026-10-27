@@ -372,6 +372,96 @@
       ],
       "type": "object"
     },
+    "AcOtsInstance": {
+      "additionalProperties": false,
+      "description": "An AC optimal power flow base, whose network holds the initial branch\nstatuses, plus the switching options.",
+      "properties": {
+        "base": {
+          "$ref": "#/$defs/AcOpfInstance"
+        },
+        "options": {
+          "$ref": "#/$defs/AcOtsOptions"
+        }
+      },
+      "required": [
+        "base",
+        "options"
+      ],
+      "type": "object"
+    },
+    "AcOtsOptions": {
+      "additionalProperties": false,
+      "description": "The switching options of an AC optimal transmission switching instance.",
+      "properties": {
+        "current_limits": {
+          "$ref": "#/$defs/CurrentLimitPolicy"
+        },
+        "islanding": {
+          "$ref": "#/$defs/IslandingPolicy"
+        },
+        "max_open": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_switched": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stated_current_limits": {
+          "items": {
+            "$ref": "#/$defs/BranchCurrentLimit"
+          },
+          "type": "array"
+        },
+        "switchable": {
+          "$ref": "#/$defs/BranchSelection"
+        },
+        "switching_costs": {
+          "items": {
+            "$ref": "#/$defs/BranchSwitchingCost"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "switchable",
+        "islanding",
+        "current_limits"
+      ],
+      "type": "object"
+    },
+    "AcOtsSolution": {
+      "additionalProperties": false,
+      "description": "The final branch statuses and the AC optimal power flow solution of the\nfixed-topology problem they derive.",
+      "properties": {
+        "ac_solution": {
+          "$ref": "#/$defs/AcOpfSolution"
+        },
+        "branch_closed": {
+          "items": {
+            "type": "boolean"
+          },
+          "type": "array"
+        },
+        "instance": {
+          "$ref": "#/$defs/AcOtsInstance"
+        }
+      },
+      "required": [
+        "instance",
+        "branch_closed",
+        "ac_solution"
+      ],
+      "type": "object"
+    },
     "AcPfInstance": {
       "additionalProperties": false,
       "properties": {
@@ -1637,6 +1727,39 @@
       ],
       "type": "object"
     },
+    "BranchCurrentLimit": {
+      "additionalProperties": false,
+      "description": "Explicit per unit current limits at a branch's two terminals; an absent\nside is unbounded.",
+      "properties": {
+        "from_pu": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StoredF64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/StoredIdentity"
+        },
+        "to_pu": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StoredF64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
     "BranchCurrentRatings": {
       "description": "Current limits for a branch, in source units.",
       "properties": {
@@ -1746,6 +1869,57 @@
       ],
       "type": "object"
     },
+    "BranchSelection": {
+      "description": "Which physical branches an AC optimal transmission switching instance may\nswitch, by branch identity.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "select": {
+              "const": "all",
+              "type": "string"
+            }
+          },
+          "required": [
+            "select"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "select": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "select"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "identities": {
+              "items": {
+                "$ref": "#/$defs/StoredIdentity"
+              },
+              "type": "array"
+            },
+            "select": {
+              "const": "only",
+              "type": "string"
+            }
+          },
+          "required": [
+            "select",
+            "identities"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "BranchSolution": {
       "description": "Solved branch terminal flows in MW/MVAr.",
       "properties": {
@@ -1819,6 +1993,27 @@
         "qf",
         "pt",
         "qt"
+      ],
+      "type": "object"
+    },
+    "BranchSwitchingCost": {
+      "additionalProperties": false,
+      "description": "The opening and closing cost of one branch.",
+      "properties": {
+        "close_cost": {
+          "$ref": "#/$defs/StoredF64"
+        },
+        "id": {
+          "$ref": "#/$defs/StoredIdentity"
+        },
+        "open_cost": {
+          "$ref": "#/$defs/StoredF64"
+        }
+      },
+      "required": [
+        "id",
+        "open_cost",
+        "close_cost"
       ],
       "type": "object"
     },
@@ -2877,6 +3072,14 @@
         "synthetic",
         "manual",
         "derived"
+      ],
+      "type": "string"
+    },
+    "CurrentLimitPolicy": {
+      "enum": [
+        "skip",
+        "stated",
+        "derive_from_rate_a"
       ],
       "type": "string"
     },
@@ -7640,6 +7843,13 @@
       ],
       "type": "object"
     },
+    "IslandingPolicy": {
+      "enum": [
+        "forbidden",
+        "allowed"
+      ],
+      "type": "string"
+    },
     "JoinName": {
       "description": "What a `JOIN` statement stated after the keyword.",
       "oneOf": [
@@ -10142,6 +10352,19 @@
           "properties": {
             "term": {
               "const": "active_power_dispatch_cost",
+              "type": "string"
+            }
+          },
+          "required": [
+            "term"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "term": {
+              "const": "branch_switching_cost",
               "type": "string"
             }
           },
@@ -14872,6 +15095,23 @@
           "additionalProperties": false,
           "properties": {
             "data": {
+              "$ref": "#/$defs/AcOtsInstance"
+            },
+            "type": {
+              "const": "powerio.AcOtsInstance",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
               "$ref": "#/$defs/McAcPfInstance"
             },
             "type": {
@@ -15012,6 +15252,23 @@
             },
             "type": {
               "const": "powerio.AcOpfSolution",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/AcOtsSolution"
+            },
+            "type": {
+              "const": "powerio.AcOtsSolution",
               "type": "string"
             }
           },
