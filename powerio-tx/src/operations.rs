@@ -5,18 +5,46 @@
 //! [`subset`](BalancedNetwork::subset) selects a subnetwork from a larger case;
 //! [`merge_bus`](BalancedNetwork::merge_bus) collapses two buses into one (re-homing the
 //! incident elements), and [`reduce_zero_impedance`](BalancedNetwork::reduce_zero_impedance)
-//! builds on it to remove jumper branches.
+//! removes jumper branches through [`merge_buses`](BalancedNetwork::merge_buses).
 //! [`reduce_passthrough_buses`](BalancedNetwork::reduce_passthrough_buses) folds dummy-bus
 //! line sections back into one equivalent branch.
 
 use std::collections::HashSet;
 
+mod subset;
+pub use subset::BusSubset;
+pub(crate) use subset::filter_connectivity;
+use subset::filter_rows;
+
 use serde_json::Value;
 
+use crate::merge::{BusMergeRule, MergeSurvivor, ZeroImpedanceRule, kind_priority};
 use crate::network::{
-    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, Generator, Shunt,
-    SourceFormat,
+    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras,
+    IMPEDANCE_CORRECTION_NOMINAL_EXTRA, ImpedanceCorrectionVariable, SourceFormat,
 };
+
+/// The nominal impedance an earlier impedance correction recorded in `extras`,
+/// or `current`, recorded there now.
+fn recorded_nominal<T>(extras: &mut Extras, current: T) -> T
+where
+    T: serde::Serialize + serde::de::DeserializeOwned,
+{
+    if let Some(nominal) = extras
+        .get(IMPEDANCE_CORRECTION_NOMINAL_EXTRA)
+        .and_then(|value| T::deserialize(value).ok())
+    {
+        return nominal;
+    }
+    let value = serde_json::to_value(&current).expect("an impedance serializes to JSON");
+    extras.insert(IMPEDANCE_CORRECTION_NOMINAL_EXTRA.to_owned(), value);
+    current
+}
+
+/// `(a.0 + j·a.1)·(b.0 + j·b.1)`.
+fn complex_product(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+    (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0)
+}
 
 /// The endpoint of `b` other than `m` (assumes `m` is an endpoint).
 fn other_end(b: &Branch, m: BusId) -> BusId {
@@ -31,18 +59,6 @@ fn combine_rate(a: f64, b: f64) -> f64 {
         (true, _) => b,
         (_, true) => a,
         _ => a.min(b),
-    }
-}
-
-/// Bus-kind importance, so a [`merge_bus`](BalancedNetwork::merge_bus) keeps the stronger
-/// designation (a slack outranks a PV bus, which outranks PQ, which outranks an
-/// isolated stub).
-fn kind_priority(kind: BusType) -> u8 {
-    match kind {
-        BusType::Ref => 3,
-        BusType::Pv => 2,
-        BusType::Pq => 1,
-        BusType::Isolated => 0,
     }
 }
 
@@ -88,15 +104,15 @@ impl BalancedNetwork {
     /// ends; without it, a straddling branch is dropped. A tie bus is a stub: its
     /// own loads/generators are not pulled in. A control reference (regulated bus)
     /// that falls outside the kept set is cleared so the result is
-    /// reference-consistent.
+    /// reference-consistent. Detailed connectivity is filtered with the electrical
+    /// tables; unassigned source topology remains, and an emptied voltage level
+    /// is removed when no retained topology uses it.
     ///
-    /// The result is a fresh [`SourceFormat::InMemory`] network (no retained
-    /// source); an empty `Selector` returns a clone-equivalent of the whole case,
+    /// The result preserves normalized units for normalized input; otherwise it
+    /// is a fresh [`SourceFormat::InMemory`] network. An empty `Selector` returns
+    /// a clone-equivalent of the whole case,
     /// and a selector matching no bus returns an empty network.
     #[must_use]
-    // A flat filter pipeline, one stanza per element table; splitting it would add
-    // indirection without clarity.
-    #[expect(clippy::too_many_lines)]
     pub fn subset(&self, sel: &Selector, keep_boundary: bool) -> BalancedNetwork {
         let in_scope: HashSet<BusId> = self
             .buses()
@@ -104,10 +120,70 @@ impl BalancedNetwork {
             .filter(|b| sel.matches(b))
             .map(|b| b.id)
             .collect();
+        self.subset_scope(&in_scope, keep_boundary, &HashSet::new())
+            .network
+    }
 
+    /// Carve out the sub-network and source-to-result row maps on `buses`, such as one island of
+    /// [`calc_islands`](BalancedNetwork::calc_islands): the
+    /// [`subset`](BalancedNetwork::subset) rules with no boundary buses, so a
+    /// branch, switch, HVDC line, or 3-winding transformer is kept when every
+    /// bus it touches is in the set. Ids the network does not declare are
+    /// ignored.
+    ///
+    /// A 3-winding transformer with a winding in the set is also kept when
+    /// each of its other windings is dead: its bus is typed isolated, or the
+    /// winding is out of service ([`crate::Transformer3W::winding_in_service`]).
+    /// That winding's bus comes along as an isolated stub (tagged
+    /// `extras["tie_bus"]`), so an island that such a transformer joins stays
+    /// one island. The returned [`BusSubset`] maps every source table row to
+    /// its result row, including stub buses and excluded injections.
+    #[must_use]
+    pub fn subset_buses(&self, buses: &std::collections::BTreeSet<BusId>) -> BusSubset {
+        let in_scope: HashSet<BusId> = buses.iter().copied().collect();
+        let isolated: HashSet<BusId> = self
+            .buses()
+            .iter()
+            .filter(|bus| bus.kind == BusType::Isolated)
+            .map(|bus| bus.id)
+            .collect();
+        let mut stubs = HashSet::new();
+        for transformer in self.transformers_3w().iter().filter(|t| t.in_service) {
+            let windings = || {
+                transformer
+                    .windings
+                    .iter()
+                    .zip(transformer.winding_in_service())
+            };
+            let touches = windings().any(|(w, _)| in_scope.contains(&w.bus));
+            let dead_outside = windings().all(|(w, connected)| {
+                in_scope.contains(&w.bus) || !connected || isolated.contains(&w.bus)
+            });
+            if touches && dead_outside {
+                stubs.extend(
+                    windings()
+                        .map(|(w, _)| w.bus)
+                        .filter(|bus| !in_scope.contains(bus)),
+                );
+            }
+        }
+        self.subset_scope(&in_scope, false, &stubs)
+    }
+
+    /// [`subset`](BalancedNetwork::subset) over a bus set already chosen.
+    /// `stubs` are out-of-scope buses kept as isolated tie buses.
+    // A flat filter pipeline, one stanza per element table; splitting it would add
+    // indirection without clarity.
+    #[expect(clippy::too_many_lines)]
+    fn subset_scope(
+        &self,
+        in_scope: &HashSet<BusId>,
+        keep_boundary: bool,
+        stubs: &HashSet<BusId>,
+    ) -> BusSubset {
         // Boundary: the out-of-scope endpoint of any branch/HVDC with exactly one
-        // endpoint in scope.
-        let mut boundary: HashSet<BusId> = HashSet::new();
+        // endpoint in scope, plus the stubs.
+        let mut boundary: HashSet<BusId> = stubs.clone();
         if keep_boundary {
             let mut edge = |a: BusId, b: BusId| match (in_scope.contains(&a), in_scope.contains(&b))
             {
@@ -128,80 +204,34 @@ impl BalancedNetwork {
         }
         let kept: HashSet<BusId> = in_scope.union(&boundary).copied().collect();
 
-        let buses: Vec<Bus> = self
-            .buses()
-            .iter()
-            .filter(|b| kept.contains(&b.id))
-            .map(|b| {
-                let mut b = b.clone();
-                if boundary.contains(&b.id) {
-                    b.extras.insert("tie_bus".into(), Value::Bool(true));
-                }
-                b
-            })
-            .collect();
+        let (mut buses, bus_rows) = filter_rows(self.buses(), |b| kept.contains(&b.id));
+        for bus in &mut buses {
+            if boundary.contains(&bus.id) {
+                bus.extras.insert("tie_bus".into(), Value::Bool(true));
+            }
+            if stubs.contains(&bus.id) {
+                bus.kind = BusType::Isolated;
+            }
+        }
 
-        // Injection elements live only on in-scope buses; tie buses are stubs.
-        let loads = self
-            .loads()
-            .iter()
-            .filter(|l| in_scope.contains(&l.bus))
-            .cloned()
-            .collect::<Vec<_>>()
-            .into();
-        let mut shunts: Vec<Shunt> = self
-            .shunts()
-            .iter()
-            .filter(|s| in_scope.contains(&s.bus))
-            .cloned()
-            .collect();
-        let static_var_compensators = self
-            .static_var_compensators()
-            .iter()
-            .filter(|svc| in_scope.contains(&svc.bus))
-            .cloned()
-            .collect::<Vec<_>>()
-            .into();
-        let mut generators: Vec<Generator> = self
-            .generators()
-            .iter()
-            .filter(|g| in_scope.contains(&g.bus))
-            .cloned()
-            .collect();
-        let storage = self
-            .storage()
-            .iter()
-            .filter(|s| in_scope.contains(&s.bus))
-            .cloned()
-            .collect::<Vec<_>>()
-            .into();
-
-        let mut branches: Vec<Branch> = self
-            .branches()
-            .iter()
-            .filter(|br| kept.contains(&br.from) && kept.contains(&br.to))
-            .cloned()
-            .collect();
-        let switches = self
-            .switches()
-            .iter()
-            .filter(|sw| kept.contains(&sw.from) && kept.contains(&sw.to))
-            .cloned()
-            .collect::<Vec<_>>()
-            .into();
-        let hvdc = self
-            .hvdc()
-            .iter()
-            .filter(|d| kept.contains(&d.from) && kept.contains(&d.to))
-            .cloned()
-            .collect::<Vec<_>>()
-            .into();
-        let mut transformers_3w = self
-            .transformers_3w()
-            .iter()
-            .filter(|t| t.windings.iter().all(|w| kept.contains(&w.bus)))
-            .cloned()
-            .collect::<Vec<_>>();
+        // Build the source-to-result maps in the same pass that selects rows.
+        // Injections on retained boundary/stub buses are deliberately excluded.
+        let (loads, load_rows) = filter_rows(self.loads(), |v| in_scope.contains(&v.bus));
+        let (mut shunts, shunt_rows) = filter_rows(self.shunts(), |v| in_scope.contains(&v.bus));
+        let (static_var_compensators, static_var_compensator_rows) =
+            filter_rows(self.static_var_compensators(), |v| {
+                in_scope.contains(&v.bus)
+            });
+        let (mut generators, generator_rows) =
+            filter_rows(self.generators(), |v| in_scope.contains(&v.bus));
+        let (storage, storage_rows) = filter_rows(self.storage(), |v| in_scope.contains(&v.bus));
+        let ends_kept = |from: BusId, to: BusId| kept.contains(&from) && kept.contains(&to);
+        let (mut branches, branch_rows) = filter_rows(self.branches(), |v| ends_kept(v.from, v.to));
+        let (switches, switch_rows) = filter_rows(self.switches(), |v| ends_kept(v.from, v.to));
+        let (hvdc, hvdc_rows) = filter_rows(self.hvdc(), |v| ends_kept(v.from, v.to));
+        let (mut transformers_3w, transformer_3w_rows) = filter_rows(self.transformers_3w(), |v| {
+            v.windings.iter().all(|w| kept.contains(&w.bus))
+        });
 
         // Clear control references that point outside the kept set.
         for br in &mut branches {
@@ -240,20 +270,15 @@ impl BalancedNetwork {
         // can't carry the interchange schedule or the solver tolerances, so dropping
         // them would silently lose data a PSS/E/PSLF write of the subset emits.
         let kept_area_numbers: HashSet<usize> = buses.iter().map(|b| b.area).collect();
-        let areas = self
-            .areas()
-            .iter()
-            .filter(|a| kept_area_numbers.contains(&a.number))
-            .cloned()
-            .map(|mut a| {
-                if a.slack_bus.is_some_and(|b| !kept.contains(&b)) {
-                    a.slack_bus = None;
-                }
-                a
-            })
-            .collect::<Vec<_>>();
+        let (mut areas, area_rows) =
+            filter_rows(self.areas(), |a| kept_area_numbers.contains(&a.number));
+        for area in &mut areas {
+            if area.slack_bus.is_some_and(|b| !kept.contains(&b)) {
+                area.slack_bus = None;
+            }
+        }
 
-        let net = BalancedNetwork::from_tables(BalancedNetworkTables {
+        let mut net = BalancedNetwork::from_tables(BalancedNetworkTables {
             name: format!("{} (subset)", self.name()),
             base_mva: self.base_mva(),
             base_frequency: self.base_frequency(),
@@ -262,100 +287,63 @@ impl BalancedNetwork {
             detailed_connectivity: self.detailed_connectivity().clone(),
             generated_uids: self.generated_uids().clone(),
             buses: buses.into(),
-            loads,
+            loads: loads.into(),
             shunts: shunts.into(),
-            static_var_compensators,
+            static_var_compensators: static_var_compensators.into(),
             branches: branches.into(),
-            switches,
+            switches: switches.into(),
             generators: generators.into(),
-            storage,
-            hvdc,
+            storage: storage.into(),
+            hvdc: hvdc.into(),
             transformers_3w: transformers_3w.into(),
             areas: areas.into(),
             solver: self.solver().clone(),
-            source_format: SourceFormat::InMemory,
+            source_format: if self.is_normalized() {
+                SourceFormat::Normalized
+            } else {
+                SourceFormat::InMemory
+            },
         });
+        subset::filter_connectivity(self, &mut net);
         debug_assert!(
             net.validate().is_ok(),
             "subset produced a dangling reference"
         );
-        net
+        BusSubset {
+            network: net,
+            bus_rows,
+            load_rows,
+            shunt_rows,
+            static_var_compensator_rows,
+            branch_rows,
+            switch_rows,
+            generator_rows,
+            storage_rows,
+            hvdc_rows,
+            transformer_3w_rows,
+            area_rows,
+        }
     }
 
     /// Merge bus `from` into bus `into`: re-home every element on `from` (loads,
     /// shunts, generators, storage, branch/HVDC/transformer endpoints, and control
-    /// references) onto `into`, drop the branches and HVDC lines that ran directly
-    /// between the two (now self-loops), and remove the `from` bus. The surviving
-    /// bus keeps the stronger of the two bus kinds (a slack is not demoted).
+    /// references) onto `into`, drop the branches, switches, and HVDC lines that
+    /// ran directly between the two (now self-loops), and remove the `from` bus.
+    /// The surviving bus keeps the stronger of the two bus kinds (a slack is not
+    /// demoted).
     ///
     /// A no-op when `into == from`. The other attributes of `from` (its voltage,
     /// limits, name) are discarded; the topology and injections are what move.
+    /// [`merge_buses`](BalancedNetwork::merge_buses) is the rule driven merge
+    /// that also reports what it removed.
     pub fn merge_bus(&mut self, into: BusId, from: BusId) {
         if into == from {
             return;
         }
-        let remap = |b: &mut BusId| {
-            if *b == from {
-                *b = into;
-            }
-        };
-
-        for l in self.loads_mut() {
-            remap(&mut l.bus);
-        }
-        for s in self.shunts_mut() {
-            remap(&mut s.bus);
-            if let Some(cb) = s.control.as_mut().and_then(|c| c.control_bus.as_mut()) {
-                remap(cb);
-            }
-        }
-        for svc in self.static_var_compensators_mut() {
-            remap(&mut svc.bus);
-        }
-        for g in self.generators_mut() {
-            remap(&mut g.bus);
-            if let Some(rb) = g.regulated_bus.as_mut() {
-                remap(rb);
-            }
-        }
-        for st in self.storage_mut() {
-            remap(&mut st.bus);
-        }
-        for br in self.branches_mut() {
-            remap(&mut br.from);
-            remap(&mut br.to);
-            if let Some(cb) = br.control.as_mut().and_then(|c| c.controlled_bus.as_mut()) {
-                remap(cb);
-            }
-        }
+        self.remap_buses(|bus| if bus == from { into } else { bus });
         self.branches_mut().retain(|b| b.from != b.to);
-        for sw in self.switches_mut() {
-            remap(&mut sw.from);
-            remap(&mut sw.to);
-        }
         self.switches_mut().retain(|s| s.from != s.to);
-        for d in self.hvdc_mut() {
-            remap(&mut d.from);
-            remap(&mut d.to);
-        }
         self.hvdc_mut().retain(|d| d.from != d.to);
-        for t in self.transformers_3w_mut() {
-            for w in &mut t.windings {
-                remap(&mut w.bus);
-                if let Some(controlled_bus) = w
-                    .control
-                    .as_mut()
-                    .and_then(|control| control.controlled_bus.as_mut())
-                {
-                    remap(controlled_bus);
-                }
-            }
-        }
-        for a in self.areas_mut() {
-            if let Some(slack) = a.slack_bus.as_mut() {
-                remap(slack);
-            }
-        }
 
         // Promote the surviving bus kind, then drop the merged bus.
         let from_kind = self.buses().iter().find(|b| b.id == from).map(|b| b.kind);
@@ -370,40 +358,141 @@ impl BalancedNetwork {
         // The topology changed, so the retained source text is stale.
     }
 
+    /// Rewrite every element's bus references through `map`, one pass per
+    /// table: load, shunt, static var compensator, generator, storage, branch,
+    /// switch, and HVDC buses; generator regulated buses; switched shunt,
+    /// transformer, and winding control buses; three winding transformer
+    /// windings; and area swing buses. The bus table and the detailed
+    /// connectivity are the caller's to keep consistent. A table none of
+    /// whose references change is not copied.
+    pub(crate) fn remap_buses(&mut self, map: impl Fn(BusId) -> BusId) {
+        fn remap_table<T: Clone>(
+            table: &mut std::sync::Arc<Vec<T>>,
+            touches: impl Fn(&T) -> bool,
+            apply: impl FnMut(&mut T),
+        ) {
+            if table.iter().any(touches) {
+                std::sync::Arc::make_mut(table).iter_mut().for_each(apply);
+            }
+        }
+        let moved = |bus: BusId| map(bus) != bus;
+        let moved_opt = |bus: Option<BusId>| bus.is_some_and(moved);
+        let set = |bus: &mut BusId| *bus = map(*bus);
+        let set_opt = |bus: &mut Option<BusId>| {
+            if let Some(bus) = bus {
+                *bus = map(*bus);
+            }
+        };
+        let tables = self.tables_mut();
+        remap_table(&mut tables.loads, |l| moved(l.bus), |l| set(&mut l.bus));
+        remap_table(
+            &mut tables.shunts,
+            |s| moved(s.bus) || moved_opt(s.control.as_ref().and_then(|c| c.control_bus)),
+            |s| {
+                set(&mut s.bus);
+                if let Some(control) = s.control.as_mut() {
+                    set_opt(&mut control.control_bus);
+                }
+            },
+        );
+        remap_table(
+            &mut tables.static_var_compensators,
+            |svc| moved(svc.bus),
+            |svc| set(&mut svc.bus),
+        );
+        remap_table(
+            &mut tables.generators,
+            |g| moved(g.bus) || moved_opt(g.regulated_bus),
+            |g| {
+                set(&mut g.bus);
+                set_opt(&mut g.regulated_bus);
+            },
+        );
+        remap_table(&mut tables.storage, |s| moved(s.bus), |s| set(&mut s.bus));
+        remap_table(
+            &mut tables.branches,
+            |b| {
+                moved(b.from)
+                    || moved(b.to)
+                    || moved_opt(b.control.as_ref().and_then(|c| c.controlled_bus))
+            },
+            |b| {
+                set(&mut b.from);
+                set(&mut b.to);
+                if let Some(control) = b.control.as_mut() {
+                    set_opt(&mut control.controlled_bus);
+                }
+            },
+        );
+        remap_table(
+            &mut tables.switches,
+            |s| moved(s.from) || moved(s.to),
+            |s| {
+                set(&mut s.from);
+                set(&mut s.to);
+            },
+        );
+        remap_table(
+            &mut tables.hvdc,
+            |d| moved(d.from) || moved(d.to),
+            |d| {
+                set(&mut d.from);
+                set(&mut d.to);
+            },
+        );
+        remap_table(
+            &mut tables.transformers_3w,
+            |t| {
+                t.windings.iter().any(|w| {
+                    moved(w.bus) || moved_opt(w.control.as_ref().and_then(|c| c.controlled_bus))
+                })
+            },
+            |t| {
+                for w in &mut t.windings {
+                    set(&mut w.bus);
+                    if let Some(control) = w.control.as_mut() {
+                        set_opt(&mut control.controlled_bus);
+                    }
+                }
+            },
+        );
+        remap_table(
+            &mut tables.areas,
+            |a| moved_opt(a.slack_bus),
+            |a| set_opt(&mut a.slack_bus),
+        );
+    }
+
     /// Collapse every in-service, non-transformer branch whose series impedance
     /// magnitude is at or below `threshold` by merging its endpoints (the to-bus
     /// into the from-bus), returning the number of branches removed. Parallel
     /// jumpers between the same pair go in the same step.
     ///
-    /// Zero-impedance branches (bus ties, breakers modeled as jumpers) carry no
-    /// power flow drop, so collapsing them shrinks the network without changing
-    /// its electrical behavior. An out-of-service jumper is an open switch whose
-    /// endpoints are not electrically joined, so it is left in place. Transformers
-    /// are never collapsed (a unity-ratio transformer is a real device, not a
-    /// jumper); a jumper between two windings of the same 3-winding transformer is
-    /// also skipped, since merging would collapse that transformer onto one node.
+    /// This is [`merge_buses`](BalancedNetwork::merge_buses) under
+    /// [`ZeroImpedanceRule::ImpedanceMagnitude`] and [`MergeSurvivor::FromBus`]
+    /// with closed switches left alone, applied in place; prefer `merge_buses`,
+    /// which also returns the bus map, the removed elements, and diagnostics.
+    /// A threshold that is negative or not finite merges nothing.
+    ///
+    /// An out-of-service jumper is an open switch whose endpoints are not
+    /// electrically joined, so it is left in place. Transformers are never
+    /// collapsed (a unity-ratio transformer is a real device, not a jumper); a
+    /// jumper between two windings of the same 3-winding transformer is also
+    /// kept, since merging would collapse that transformer onto one node.
     pub fn reduce_zero_impedance(&mut self, threshold: f64) -> usize {
-        let before = self.branches().len();
-        // Re-scan after each merge: bus ids and the branch list both change.
-        while let Some((into, from)) = self.branches().iter().find_map(|b| {
-            (b.in_service
-                && !b.is_transformer()
-                && b.from != b.to
-                && b.r.hypot(b.x) <= threshold
-                && !self.shares_transformer_3w(b.from, b.to))
-            .then_some((b.from, b.to))
-        }) {
-            self.merge_bus(into, from);
+        let rule = BusMergeRule::new(
+            false,
+            Some(ZeroImpedanceRule::ImpedanceMagnitude(threshold)),
+        )
+        .with_survivor(MergeSurvivor::FromBus);
+        match self.merge_buses(&rule) {
+            Ok(merge) => {
+                let removed = merge.removed_branches.len();
+                *self = merge.network;
+                removed
+            }
+            Err(_) => 0,
         }
-        before - self.branches().len()
-    }
-
-    /// Whether buses `a` and `b` are two windings of the same 3-winding
-    /// transformer; merging them would short two windings onto one node.
-    fn shares_transformer_3w(&self, a: BusId, b: BusId) -> bool {
-        self.transformers_3w()
-            .iter()
-            .any(|t| t.windings.iter().any(|w| w.bus == a) && t.windings.iter().any(|w| w.bus == b))
     }
 
     /// Collapse degree-2 passthrough buses, returning the number removed. A
@@ -556,9 +645,114 @@ impl BalancedNetwork {
         // The topology changed, so the retained source text is stale.
     }
 
+    /// Scale every transformer's series impedance by its impedance correction
+    /// table, at the winding's present turns ratio or phase shift, returning
+    /// the number of two winding transformers and three winding correction
+    /// targets (windings or pairs, according to ZCOD) scaled.
+    ///
+    /// A two winding transformer's factor multiplies `r + jx`. A three winding
+    /// transformer's factor for a winding multiplies that winding's star
+    /// impedance, and the pairwise impedances are restated from the scaled
+    /// star. With PSS/E `ZCOD=1`, TAB1/2/3 instead scale nominal Z12/Z23/Z31
+    /// at the sole winding with a nonfixed control (even if disabled).
+    /// A ZCOD=1 transformer with no unique adjustable winding is skipped;
+    /// the RAW reader refuses that ambiguous configuration.
+    /// The first call records each scaled transformer's nominal
+    /// impedance under `extras["impedance_correction_nominal"]`, and every
+    /// call scales that nominal value: a repeated call changes nothing, and a
+    /// call after a tap or shift change evaluates the table there. The PSS/E
+    /// writer states the nominal impedance beside the table, as the format
+    /// does.
+    pub fn apply_impedance_correction(&mut self) -> usize {
+        // A normalized network states phase shifts in radians; the tables
+        // state degrees.
+        let angle_scale = if self.is_normalized() {
+            crate::normalize::RAD_TO_DEG
+        } else {
+            1.0
+        };
+        let mut scaled = 0;
+        for branch in self.branches_mut().iter_mut() {
+            let Some(correction) = branch.impedance_correction() else {
+                continue;
+            };
+            let at = match correction.variable {
+                ImpedanceCorrectionVariable::Angle => branch.shift * angle_scale,
+                _ => branch.calc_effective_tap(),
+            };
+            let Some(factor) = correction.calc_factor(at) else {
+                continue;
+            };
+            let [r, x] = recorded_nominal(&mut branch.extras, [branch.r, branch.x]);
+            (branch.r, branch.x) = complex_product((r, x), factor);
+            scaled += 1;
+        }
+        for transformer in self.transformers_3w_mut().iter_mut() {
+            let pairwise_mode =
+                transformer.extras.get("psse_zcod").and_then(Value::as_i64) == Some(1);
+            let controlling = transformer.impedance_correction_control_winding();
+            // The RAW reader refuses this ambiguous configuration. If controls
+            // were edited afterward, leave this transformer unchanged and
+            // contribute zero to the aggregate applied count.
+            if pairwise_mode && controlling.is_none() {
+                continue;
+            }
+            let factors: [Option<(f64, f64)>; 3] = std::array::from_fn(|winding| {
+                let correction = transformer.winding_impedance_correction(winding)?;
+                let setting = if pairwise_mode {
+                    controlling.unwrap_or(winding)
+                } else {
+                    winding
+                };
+                let w = &transformer.windings[setting];
+                let at = match correction.variable {
+                    ImpedanceCorrectionVariable::Angle => w.shift * angle_scale,
+                    _ => w.tap,
+                };
+                correction.calc_factor(at)
+            });
+            if factors.iter().all(Option::is_none) {
+                continue;
+            }
+            let pairwise = transformer.z.map(|z| [z.r, z.x]);
+            let nominal = recorded_nominal(&mut transformer.extras, pairwise);
+            if pairwise_mode {
+                for ((z, [r, x]), factor) in transformer.z.iter_mut().zip(nominal).zip(factors) {
+                    (z.r, z.x) = if let Some(factor) = factor {
+                        scaled += 1;
+                        complex_product((r, x), factor)
+                    } else {
+                        (r, x)
+                    };
+                }
+                continue;
+            }
+            let [z12, z23, z31] = nominal;
+            let star = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| {
+                ((a[0] + b[0] - c[0]) / 2.0, (a[1] + b[1] - c[1]) / 2.0)
+            };
+            let mut stars = [
+                star(z12, z31, z23),
+                star(z12, z23, z31),
+                star(z23, z31, z12),
+            ];
+            for (star, factor) in stars.iter_mut().zip(factors) {
+                if let Some(factor) = factor {
+                    *star = complex_product(*star, factor);
+                    scaled += 1;
+                }
+            }
+            for (pair, (a, b)) in [(0, 1), (1, 2), (2, 0)].into_iter().enumerate() {
+                transformer.z[pair].r = stars[a].0 + stars[b].0;
+                transformer.z[pair].x = stars[a].1 + stars[b].1;
+            }
+        }
+        scaled
+    }
+
     /// Retype to [`BusType::Isolated`] every bus with no in-service electrical
-    /// connection — no in-service incident branch, HVDC line, or 3-winding
-    /// transformer — returning the number retyped.
+    /// connection — no in-service incident branch, closed switch, HVDC line,
+    /// or 3-winding transformer — returning the number retyped.
     ///
     /// A stranded bus (retired or not-yet-built equipment, or the residue of a
     /// topology edit) otherwise keeps a PQ/PV/slack kind that tells a solver to
@@ -573,13 +767,19 @@ impl BalancedNetwork {
             connected.insert(br.from);
             connected.insert(br.to);
         }
+        for sw in self.switches().iter().filter(|sw| sw.closed) {
+            connected.insert(sw.from);
+            connected.insert(sw.to);
+        }
         for d in self.hvdc().iter().filter(|d| d.in_service) {
             connected.insert(d.from);
             connected.insert(d.to);
         }
         for t in self.transformers_3w().iter().filter(|t| t.in_service) {
-            for w in &t.windings {
-                connected.insert(w.bus);
+            for (w, in_service) in t.windings.iter().zip(t.winding_in_service()) {
+                if in_service {
+                    connected.insert(w.bus);
+                }
             }
         }
         let mut retyped = 0;
@@ -982,6 +1182,31 @@ mod tests {
     }
 
     #[test]
+    fn retype_isolated_counts_a_closed_switch_as_a_connection() {
+        // Bus 3 is reached only through a closed switch; bus 4 only through an
+        // open one.
+        let mut net = BalancedNetwork::in_memory(
+            "net",
+            100.0,
+            vec![
+                bus(1, 1, 230.0),
+                bus(2, 1, 230.0),
+                bus(3, 1, 230.0),
+                bus(4, 1, 230.0),
+            ],
+            vec![line(1, 2)],
+        );
+        net.switches_mut().extend([
+            crate::network::Switch::new(BusId(2), BusId(3), true),
+            crate::network::Switch::new(BusId(2), BusId(4), false),
+        ]);
+        assert_eq!(net.retype_isolated_buses(), 1);
+        let kind = |id| net.buses().iter().find(|b| b.id == BusId(id)).unwrap().kind;
+        assert_eq!(kind(3), BusType::Pq);
+        assert_eq!(kind(4), BusType::Isolated);
+    }
+
+    #[test]
     fn retype_isolated_is_idempotent() {
         let mut net = BalancedNetwork::in_memory(
             "net",
@@ -1014,6 +1239,28 @@ mod tests {
             net.loads().iter().any(|l| l.bus == BusId(2)),
             "load re-homed"
         );
+        net.validate().unwrap();
+    }
+
+    #[test]
+    fn reduce_zero_impedance_keeps_the_from_bus() {
+        // The jumper runs from bus 3 to bus 2, so bus 3 survives although bus
+        // 2 has the smaller id.
+        let mut jumper = line(3, 2);
+        jumper.x = 0.0;
+        let mut net = BalancedNetwork::in_memory(
+            "net",
+            100.0,
+            vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
+            vec![line(1, 2), jumper],
+        );
+        net.loads_mut().push(load(2));
+
+        assert_eq!(net.reduce_zero_impedance(1e-9), 1);
+        let ids: Vec<BusId> = net.buses().iter().map(|b| b.id).collect();
+        assert_eq!(ids, [BusId(1), BusId(3)]);
+        assert_eq!(net.branches()[0].to, BusId(3));
+        assert_eq!(net.loads()[0].bus, BusId(3));
         net.validate().unwrap();
     }
 

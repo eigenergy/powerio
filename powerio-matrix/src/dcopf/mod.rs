@@ -18,6 +18,7 @@ use crate::{
 use crate::Result;
 use powerio_prob::DcOpfInstance;
 use powerio_tx::HvdcTreatment;
+use powerio_tx::AngleDifferenceBounds;
 use prep::{DcOpfOptions, apply_instance_semantics, preparation_from_view};
 
 pub use bundle::{DcOpfBundleMetadata, DcOpfBundleOptions, DcOpfOutputs, emit_dcopf_bundle};
@@ -48,6 +49,11 @@ pub struct DcOpfAssemblyOptions {
     /// carries each as a fixed injection at its stated terminal powers
     /// ([`DcOpfPreparation::p_hvdc`]).
     pub hvdc_treatment: HvdcTreatment,
+    /// The angle difference bounds selected with
+    /// `with_angle_difference_bounds`. `None`, the default, leaves the choice
+    /// to `correct_angle_difference_bounds`
+    /// ([`AngleDifferenceBounds::from_correct_flag`]).
+    pub angle_difference_bounds: Option<AngleDifferenceBounds>,
 }
 
 impl Default for DcOpfAssemblyOptions {
@@ -58,6 +64,7 @@ impl Default for DcOpfAssemblyOptions {
             synthesize_unrated_limits: false,
             correct_angle_difference_bounds: true,
             hvdc_treatment: HvdcTreatment::default(),
+            angle_difference_bounds: None,
         }
     }
 }
@@ -81,9 +88,12 @@ impl DcOpfAssemblyOptions {
         self
     }
 
+    /// Turn PowerModels' angle difference pad on or off. This clears a
+    /// selection made with `with_angle_difference_bounds`.
     #[must_use]
     pub const fn with_correct_angle_difference_bounds(mut self, correct: bool) -> Self {
         self.correct_angle_difference_bounds = correct;
+        self.angle_difference_bounds = None;
         self
     }
 
@@ -91,6 +101,25 @@ impl DcOpfAssemblyOptions {
     pub const fn with_hvdc_treatment(mut self, treatment: HvdcTreatment) -> Self {
         self.hvdc_treatment = treatment;
         self
+    }
+
+    /// Select the angle difference bounds the prepared arrays carry. The
+    /// selection takes precedence over `correct_angle_difference_bounds`,
+    /// which it sets to whether the selection pads.
+    #[must_use]
+    pub const fn with_angle_difference_bounds(mut self, bounds: AngleDifferenceBounds) -> Self {
+        self.correct_angle_difference_bounds = bounds.is_padded();
+        self.angle_difference_bounds = Some(bounds);
+        self
+    }
+
+    /// The angle difference bounds these options select.
+    #[must_use]
+    pub const fn selected_angle_difference_bounds(&self) -> AngleDifferenceBounds {
+        match self.angle_difference_bounds {
+            Some(bounds) => bounds,
+            None => AngleDifferenceBounds::from_correct_flag(self.correct_angle_difference_bounds),
+        }
     }
 }
 
@@ -152,7 +181,7 @@ pub fn build_dc_opf_preparation(
             units: options.units,
             skip_zero_impedance: options.skip_zero_impedance,
             synthesize_unrated_limits: options.synthesize_unrated_limits,
-            correct_angle_difference_bounds: options.correct_angle_difference_bounds,
+            angle_difference_bounds: options.selected_angle_difference_bounds(),
             hvdc_treatment: options.hvdc_treatment,
             objective,
         },

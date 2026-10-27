@@ -958,6 +958,8 @@ pub fn neutral_kron_reduce(
     network: &MulticonductorNetwork,
     options: &NeutralKronOptions,
 ) -> Result<NeutralKronReduction> {
+    crate::readiness::require_earth_referenced_sources(network)
+        .map_err(|error| fail(error.to_string()))?;
     let buses = identify_neutrals(network, options)?;
     let mut report = NeutralKronReport {
         buses,

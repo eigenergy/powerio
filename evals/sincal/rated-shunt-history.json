@@ -1,0 +1,20 @@
+{
+  "scope": "CSIRO03 local reactor check against aligned historical node/branch records.\n\nUses measured terminal voltages, not a feeder solve. No fitted parameters,\ninput repair, historical-result fixture or native SINCAL execution.\n",
+  "case": 3,
+  "element": 3766,
+  "snapshots": 49,
+  "node_limit_violations": 12,
+  "maximum_power_error_va": 2.434800425099963e-11,
+  "maximum_current_error_a": 8.881784197001252e-16,
+  "minimum_wrong_factor_three_error_va": 13136.670384377034,
+  "power_tolerance_va": 1e-06,
+  "current_tolerance_a": 1e-09,
+  "source_sha256": "9eaf7c785fe0962af4e9ea5e6a5efb56477ed7427b660481c5cc66f9460bd759",
+  "export_sha256": "265959324fc4d7495c1ee739ce3ec6b87e054124d981733a090dbf353f887491",
+  "collection": "https://doi.org/10.4225/08/5631B1DF6F1A0",
+  "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
+  "license": "CC-BY-4.0",
+  "native_execution": false,
+  "whole_feeder_validation": false,
+  "passed": true
+}
