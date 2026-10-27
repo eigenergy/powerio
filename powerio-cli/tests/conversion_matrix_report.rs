@@ -1582,7 +1582,7 @@ struct DistributionPayload {
 fn geo_layer_round_trips_through_geo_json() {
     let text = std::fs::read_to_string(data("powerworld/ACTIVSg200.aux")).unwrap();
     let layer = powerio::to_geo_layer_from_aux_text(&text).unwrap();
-    assert!(!layer.features.is_empty());
+    assert_ne!(layer.features.as_slice(), []);
     let module = powerio_core::PioModule::new(powerio::PioValue::GeoLayer(layer.clone()));
     let destination = powerio_core::Destination::memory("layer").unwrap();
     let result = powerio::emit(&module, "geo-json", destination).unwrap();

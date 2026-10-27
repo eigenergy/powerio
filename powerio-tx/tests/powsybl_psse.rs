@@ -666,7 +666,7 @@ fn iidm_batteries_become_psse_loads() {
         .network;
     assert_eq!(source.storage().len(), 2);
     let back = read_rawx(&rawx(&source));
-    assert!(back.storage().is_empty());
+    assert_eq!(back.storage().as_slice(), []);
     assert_eq!(back.loads().len(), source.loads().len() + 2);
     let total = |network: &BalancedNetwork| {
         network.loads().iter().map(|load| load.p).sum::<f64>()
