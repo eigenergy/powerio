@@ -55,6 +55,24 @@ impl Island {
     pub fn is_supplied(&self) -> bool {
         !self.generators.is_empty()
     }
+
+    /// The one reference bus [`IslandReferencePolicy::PerIsland`] gives this
+    /// island, without changing the network: its stated reference when it
+    /// states one, the bus of its largest `pmax` in-service generator when it
+    /// states none, and the stated reference hosting the most in-service
+    /// `pmax` when it states several (the smallest id breaking ties). `None`
+    /// when the island states no reference and no in-service generator
+    /// supplies it. `generators` is the network's generator table.
+    #[must_use]
+    pub fn calc_reference_choice(&self, generators: &[Generator]) -> Option<BusId> {
+        match self.references.as_slice() {
+            [bus] => Some(*bus),
+            [] => largest_generator_bus(generators, &self.generators),
+            references => Some(
+                kept_reference(references, generators, &self.generators).unwrap_or(references[0]),
+            ),
+        }
+    }
 }
 
 /// The result of [`BalancedNetwork::calc_islands`].
@@ -340,8 +358,7 @@ impl BalancedNetwork {
             match island.references.as_slice() {
                 [_] => {}
                 [] => {
-                    let Some(bus) = largest_generator_bus(self.generators(), &island.generators)
-                    else {
+                    let Some(bus) = island.calc_reference_choice(self.generators()) else {
                         continue;
                     };
                     diagnostics.push(Diagnostic::of(
@@ -357,7 +374,8 @@ impl BalancedNetwork {
                     designated.push(bus);
                 }
                 references => {
-                    let kept = kept_reference(references, self.generators(), &island.generators)
+                    let kept = island
+                        .calc_reference_choice(self.generators())
                         .unwrap_or(references[0]);
                     let others: Vec<BusId> = references
                         .iter()
