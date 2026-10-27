@@ -34,8 +34,9 @@ pub use laplacian::{
 pub use powerio_tx::BranchSusceptanceFormula;
 pub use sensitivity::{
     IslandPtdf, SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata,
-    SensitivityOptions, SensitivitySolver, SensitivitySolverPath, calc_lodf, calc_ptdf,
-    calc_ptdf_by_island, calc_ptdf_lodf, calc_ptdf_lodf_with_options,
+    SensitivityOptions, SensitivitySolver, SensitivitySolverPath, calc_lodf, calc_lodf_columns,
+    calc_ptdf, calc_ptdf_by_island, calc_ptdf_columns, calc_ptdf_lodf, calc_ptdf_lodf_with_options,
+    calc_ptdf_rows,
 };
 pub use ybus::{YbusParts, calc_admittance_matrix};
 // Crate-internal: the gridfm columnar export reuses the per-branch admittance and
