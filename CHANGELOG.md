@@ -49,6 +49,15 @@
   other PSS/E fields IIDM has no field for are stated, and the readers take
   them back.
 
+- Three winding transformers keep more through XIIDM and JIIDM. The star
+  point voltage is written as the transformer properties `v` and `angle`, as
+  PowSybl writes them, and read back; a winding out of service is written
+  as that leg's disconnected terminal, and a transformer with two connected
+  legs reads back in service with the third winding out instead of entirely
+  out of service; and winding ratings beyond rate A, B, and C (PSS/E RATE4
+  to RATE12) are written and read as further limit groups, as two winding
+  branches already were. Each of these was reported as dropped before.
+
 - The conversion matrix grades each cell by its worst finding: exact,
   lossless, restated (the target required a value and the writer supplied
   it), approximate, dropped, or failed. The PR comment shows that level, the

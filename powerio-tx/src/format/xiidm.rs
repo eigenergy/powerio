@@ -4009,6 +4009,14 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
                     &voltage_levels,
                     diagnostics,
                 )?;
+                if let Some((v, angle)) = parsed
+                    .metadata
+                    .get(&component_id("transformer_3w", &equipment.id)?)
+                    .and_then(star_voltage_properties)
+                {
+                    transformer.star_vm = v / required_f64(&equipment.attrs, "ratedU0")?;
+                    transformer.star_va = angle;
+                }
                 for side in 0..3 {
                     let rated_u = required_f64(&equipment.attrs, &format!("ratedU{}", side + 1))?;
                     let level = voltage_levels[terminal_records[side].1.voltage_level.local_id()];
@@ -5918,42 +5926,7 @@ fn apply_branch_operational_limits(
                 ),
             );
         }
-        let selected_ids = selected_operational_limit_group_ids(equipment, side)?;
-        let selected =
-            (!selected_ids.is_empty()).then(|| selected_ids.into_iter().collect::<HashSet<_>>());
-        for group in equipment.operational_limits.iter().filter(|group| {
-            group.side == side
-                && !selected
-                    .as_ref()
-                    .is_some_and(|selected| selected.contains(group.id.as_str()))
-        }) {
-            if let Some(limits) = &group.apparent_power {
-                if let Some(value) = limits.permanent_limit {
-                    let name = limits
-                        .permanent_name
-                        .clone()
-                        .unwrap_or_else(|| group.id.clone());
-                    named_apparent_ratings
-                        .entry(name)
-                        .and_modify(|existing| *existing = existing.min(value))
-                        .or_insert(value);
-                }
-                for limit in &limits.temporary_limits {
-                    if let Some(value) = limit.value {
-                        let name = format!(
-                            "{} {} ({} s)",
-                            group.id,
-                            limit.name,
-                            limit.acceptable_duration.unwrap_or(i32::MAX)
-                        );
-                        named_apparent_ratings
-                            .entry(name)
-                            .and_modify(|existing| *existing = existing.min(value))
-                            .or_insert(value);
-                    }
-                }
-            }
-        }
+        add_unselected_apparent_ratings(equipment, side, &mut named_apparent_ratings)?;
     }
     branch.rating_sets.extend(
         named_apparent_ratings
@@ -5987,6 +5960,70 @@ fn apply_branch_operational_limits(
     Ok(())
 }
 
+/// The apparent power limits of the operational limit groups a terminal does
+/// not select, as named MVA rating sets: a permanent limit under its name or
+/// its group id, a temporary limit under its group, name, and duration.
+fn add_unselected_apparent_ratings(
+    equipment: &RawEquipment,
+    side: u8,
+    named_apparent_ratings: &mut BTreeMap<String, f64>,
+) -> Result<()> {
+    let selected_ids = selected_operational_limit_group_ids(equipment, side)?;
+    let selected =
+        (!selected_ids.is_empty()).then(|| selected_ids.into_iter().collect::<HashSet<_>>());
+    for group in equipment.operational_limits.iter().filter(|group| {
+        group.side == side
+            && !selected
+                .as_ref()
+                .is_some_and(|selected| selected.contains(group.id.as_str()))
+    }) {
+        if let Some(limits) = &group.apparent_power {
+            if let Some(value) = limits.permanent_limit {
+                let name = limits
+                    .permanent_name
+                    .clone()
+                    .unwrap_or_else(|| group.id.clone());
+                named_apparent_ratings
+                    .entry(name)
+                    .and_modify(|existing| *existing = existing.min(value))
+                    .or_insert(value);
+            }
+            for limit in &limits.temporary_limits {
+                if let Some(value) = limit.value {
+                    let name = format!(
+                        "{} {} ({} s)",
+                        group.id,
+                        limit.name,
+                        limit.acceptable_duration.unwrap_or(i32::MAX)
+                    );
+                    named_apparent_ratings
+                        .entry(name)
+                        .and_modify(|existing| *existing = existing.min(value))
+                        .or_insert(value);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The star point voltage a three winding transformer states as the
+/// properties `v` (kV) and `angle` (degrees), as PowSybl's PSS/E importer
+/// states `VMSTAR` and `ANSTAR` (psse-converter `TransformerConverter.create`
+/// for three windings). Both must be finite numbers.
+fn star_voltage_properties(metadata: &ComponentMetadata) -> Option<(f64, f64)> {
+    let value = |name: &str| {
+        metadata
+            .properties
+            .get(name)?
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+    };
+    Some((value("v")?, value("angle")?))
+}
+
 fn read_three_winding_transformer(
     equipment: &RawEquipment,
     terminals: &[(BusId, Terminal)],
@@ -6007,6 +6044,7 @@ fn read_three_winding_transformer(
     let mut star_b = [0.0; 3];
     let mut rated_u = [0.0; 3];
     let mut windings = std::array::from_fn(|side| Winding::new(terminals[side].0));
+    let mut winding_rating_sets: [Vec<BranchRatingSet>; 3] = Default::default();
     for side in 0..3 {
         let suffix = side + 1;
         star_r[side] = required_f64(&equipment.attrs, &format!("r{suffix}"))?;
@@ -6073,6 +6111,14 @@ fn read_three_winding_transformer(
             .temporary
             .get(1)
             .map_or(0.0, |(_, _, value)| *value * factor);
+        // Unselected groups are the winding's further rating sets, as they
+        // are a branch's.
+        let mut named = BTreeMap::new();
+        add_unselected_apparent_ratings(equipment, suffix as u8, &mut named)?;
+        winding_rating_sets[side] = named
+            .into_iter()
+            .map(|(name, value)| BranchRatingSet::new(name, value))
+            .collect();
         let selected = selected_operational_limits_groups(equipment, suffix as u8)?;
         let unmapped_current =
             states_apparent && selected.iter().any(|group| group.current.is_some());
@@ -6097,7 +6143,11 @@ fn read_three_winding_transformer(
         .iter()
         .filter(|(_, terminal)| terminal.connected)
         .count();
-    if connected != 0 && connected != 3 {
+    // Two connected legs keep the transformer in service with the third
+    // winding out, as PSS/E `STAT` 2, 3, and 4 state it (psse-converter
+    // `TransformerConverter.getStatus` for three windings); one connected
+    // leg is out of service, as `STAT` 0.
+    if connected == 1 {
         diagnostics.push(
             &codes::READ_XIIDM_FIELD_UNMAPPED,
             format!(
@@ -6126,18 +6176,27 @@ fn read_three_winding_transformer(
             ),
         );
     }
-    Ok(Transformer3W {
+    let mut transformer = Transformer3W {
         windings,
         z: [pair(0, 1), pair(1, 2), pair(2, 0)],
         star_vm: 1.0,
         star_va: 0.0,
         mag_g: star_g.iter().sum::<f64>() * zbase,
         mag_b: star_b.iter().sum::<f64>() * zbase,
-        in_service: connected == 3,
+        in_service: connected >= 2,
         name: equipment.attrs.get("name").cloned(),
         uid: Some(equipment.id.clone()),
         extras,
-    })
+    };
+    if connected == 2 {
+        transformer.set_winding_in_service(std::array::from_fn(|side| terminals[side].1.connected));
+    }
+    for (side, rating_sets) in winding_rating_sets.into_iter().enumerate() {
+        if !rating_sets.is_empty() {
+            transformer.set_winding_rating_sets(side, rating_sets);
+        }
+    }
+    Ok(transformer)
 }
 
 fn read_hvdc_line(
@@ -6671,7 +6730,21 @@ fn build_detailed_connectivity(
         .collect::<Result<Vec<_>>>()?;
     Ok(DetailedConnectivity {
         omitted_fields: collect_omitted_fields(parsed)?,
-        component_metadata: parsed.metadata.values().cloned().collect(),
+        // The star voltage properties are typed on the transformer.
+        component_metadata: parsed
+            .metadata
+            .values()
+            .map(|metadata| {
+                let mut metadata = metadata.clone();
+                if metadata.component.component_type() == "transformer_3w"
+                    && star_voltage_properties(&metadata).is_some()
+                {
+                    metadata.properties.remove("v");
+                    metadata.properties.remove("angle");
+                }
+                metadata
+            })
+            .collect(),
         subnetworks: parsed
             .subnetworks
             .iter()
@@ -7611,6 +7684,7 @@ fn derive_detailed_connectivity(
             transformer.uid.as_deref().expect("prepared identity"),
         )
         .expect("valid stored identity");
+        let winding_in_service = transformer.winding_in_service();
         for (index, winding) in transformer.windings.iter().enumerate() {
             push_derived_terminal(
                 &mut detailed,
@@ -7618,7 +7692,7 @@ fn derive_detailed_connectivity(
                 component.clone(),
                 u8::try_from(index + 1).expect("three windings"),
                 winding.bus,
-                transformer.in_service,
+                transformer.in_service && winding_in_service[index],
             );
         }
     }
@@ -8246,8 +8320,23 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
     for message in converter_model_losses {
         diagnostics.push(&codes::EMIT_XIIDM.field_dropped, message);
     }
-    super::warn_winding_rating_sets(&codes::EMIT_XIIDM, "XIIDM", network, &mut diagnostics);
-    super::warn_winding_status_collapsed(&codes::EMIT_XIIDM, "XIIDM", network, &mut diagnostics);
+    // A winding status and the rating sets beyond rate_a, rate_b, and
+    // rate_c are written as each terminal's connection and further limit
+    // groups when the writer derives the hierarchy; a supplied hierarchy
+    // states its own terminals and limit groups.
+    if network
+        .detailed_connectivity()
+        .as_deref()
+        .is_some_and(|detailed| network.buses().is_empty() || !detailed.voltage_levels.is_empty())
+    {
+        super::warn_winding_rating_sets(&codes::EMIT_XIIDM, "XIIDM", network, &mut diagnostics);
+        super::warn_winding_status_collapsed(
+            &codes::EMIT_XIIDM,
+            "XIIDM",
+            network,
+            &mut diagnostics,
+        );
+    }
     validate_xiidm_hvdc_emission(network)?;
     let metadata = network.case_metadata();
     let case_date = metadata.case_date.as_deref().unwrap_or_else(|| {
@@ -12286,6 +12375,16 @@ fn write_three_winding_transformer(
         terminal_attributes(index, &component, 3, true, transformer.in_service),
         limits_attributes,
     ));
+    // The star voltage as PowSybl's PSS/E importer states it: `v` in kV on
+    // `ratedU0` and `angle` in degrees.
+    if (transformer.star_vm - 1.0).abs() > f64::EPSILON || transformer.star_va.abs() > f64::EPSILON
+    {
+        output.push_str(&format!(
+            "      <iidm:property name=\"v\" value=\"{}\"/>\n      <iidm:property name=\"angle\" value=\"{}\"/>\n",
+            number(transformer.star_vm * rated_u0),
+            number(transformer.star_va),
+        ));
+    }
     for (side, (winding, bus)) in transformer.windings.iter().zip(buses).enumerate() {
         if synthesized[side].is_none() && !taps[side].is_empty() {
             for tap in &taps[side] {
@@ -12325,24 +12424,34 @@ fn write_three_winding_transformer(
         write_exact_operational_limit_groups(index, &component, output, diagnostics);
     } else {
         for (side, winding) in transformer.windings.iter().enumerate() {
-            if winding.rate_a == 0.0 && winding.rate_b == 0.0 && winding.rate_c == 0.0 {
-                continue;
+            if winding.rate_a != 0.0 || winding.rate_b != 0.0 || winding.rate_c != 0.0 {
+                output.push_str(&format!(
+                    "      <iidm:operationalLimitsGroup{} id=\"powerio\">\n",
+                    side + 1
+                ));
+                write_loading_limits(
+                    "apparentPowerLimits",
+                    winding.rate_a,
+                    winding.rate_b,
+                    winding.rate_c,
+                    output,
+                );
+                output.push_str(&format!(
+                    "      </iidm:operationalLimitsGroup{}>\n",
+                    side + 1
+                ));
             }
-            output.push_str(&format!(
-                "      <iidm:operationalLimitsGroup{} id=\"powerio\">\n",
-                side + 1
-            ));
-            write_loading_limits(
-                "apparentPowerLimits",
-                winding.rate_a,
-                winding.rate_b,
-                winding.rate_c,
-                output,
-            );
-            output.push_str(&format!(
-                "      </iidm:operationalLimitsGroup{}>\n",
-                side + 1
-            ));
+            // Further rating sets (PSS/E RATE4 to RATE12) as unselected
+            // groups, as a two winding branch writes them.
+            for (index, rating) in transformer.winding_rating_sets(side).iter().enumerate() {
+                output.push_str(&format!(
+                    "      <iidm:operationalLimitsGroup{side} id=\"rating-set-{}\">\n        <iidm:apparentPowerLimits permanentLimit=\"{}\" permanentLimitName=\"{}\"/>\n      </iidm:operationalLimitsGroup{side}>\n",
+                    index + 1,
+                    number(rating.rate_mva),
+                    xml(&rating.name),
+                    side = side + 1,
+                ));
+            }
         }
     }
     output.push_str("    </iidm:threeWindingsTransformer>\n");
@@ -12357,13 +12466,6 @@ fn write_three_winding_transformer(
                 ),
             );
         }
-    }
-    if (transformer.star_vm - 1.0).abs() > f64::EPSILON || transformer.star_va.abs() > f64::EPSILON
-    {
-        diagnostics.push(
-            &codes::EMIT_XIIDM.field_dropped,
-            format!("three winding transformer `{id}` star voltage has no XIIDM equipment field"),
-        );
     }
 }
 

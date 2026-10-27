@@ -554,3 +554,81 @@ fn psse_bus_zone_and_owner_survive_iidm_as_properties() {
     assert_eq!(back.buses()[0].zone, 1);
     assert_eq!(xml.matches("psse_zone").count(), 1, "{xml}");
 }
+
+fn through_xiidm(network: &BalancedNetwork) -> (TextEmission, BalancedNetwork) {
+    let emitted = emit_value(network, TargetFormat::Xiidm).unwrap();
+    let back = xiidm(&emitted.text);
+    (emitted, back)
+}
+
+#[test]
+fn three_winding_status_and_rating_sets_survive_iidm() {
+    // Winding 2 is out (STAT 2) and the windings state RATE4 to RATE12.
+    let source = parse_file(data("psse/partial_3w_status.raw"), None)
+        .unwrap()
+        .network;
+    let transformer = &source.transformers_3w()[0];
+    assert_eq!(transformer.winding_in_service(), [true, false, true]);
+    let (emitted, back) = through_xiidm(&source);
+    let messages = codes_and_messages(&emitted);
+    assert!(
+        messages
+            .iter()
+            .all(|message| !message.contains("written in service")
+                && !message.contains("rating set")),
+        "{messages:#?}"
+    );
+    let returned = &back.transformers_3w()[0];
+    assert!(returned.in_service);
+    assert_eq!(returned.winding_in_service(), [true, false, true]);
+    for winding in 0..3 {
+        let mut expected = transformer.winding_rating_sets(winding);
+        let mut actual = returned.winding_rating_sets(winding);
+        expected.sort_by(|a, b| a.name.cmp(&b.name));
+        actual.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(actual, expected, "winding {}", winding + 1);
+    }
+    // And on to revision 35, which states RATE4 to RATE12.
+    let raw35 = parse_psse(&emit_psse_rev(&back, 35).text).unwrap();
+    assert_eq!(
+        raw35.transformers_3w()[0].winding_in_service(),
+        [true, false, true]
+    );
+    assert_eq!(
+        raw35.transformers_3w()[0].winding_rating_sets(1).len(),
+        transformer.winding_rating_sets(1).len()
+    );
+}
+
+#[test]
+fn three_winding_star_voltage_survives_iidm_as_properties() {
+    let source = parse_file(data("psse/case3_3w_v33.raw"), None)
+        .unwrap()
+        .network;
+    let transformer = &source.transformers_3w()[0];
+    assert!((transformer.star_vm - 1.0).abs() > 1e-6);
+    let (emitted, back) = through_xiidm(&source);
+    assert!(emitted.text.contains(r#"<iidm:property name="angle""#));
+    let messages = codes_and_messages(&emitted);
+    assert!(
+        messages
+            .iter()
+            .all(|message| !message.contains("star voltage")),
+        "{messages:#?}"
+    );
+    let returned = &back.transformers_3w()[0];
+    assert!((returned.star_vm - transformer.star_vm).abs() < 1e-12);
+    assert!((returned.star_va - transformer.star_va).abs() < 1e-12);
+    // The properties are typed again, not carried as metadata.
+    let metadata = &back
+        .detailed_connectivity()
+        .as_ref()
+        .unwrap()
+        .component_metadata;
+    assert!(
+        metadata
+            .iter()
+            .filter(|value| value.component.component_type() == "transformer_3w")
+            .all(|value| !value.properties.contains_key("v"))
+    );
+}

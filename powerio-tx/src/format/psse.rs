@@ -11554,23 +11554,30 @@ COMMENT
     #[test]
     fn three_winding_detail_other_writers_cannot_state_is_diagnosed() {
         let net = parse_psse(&three_winding_status_case()).unwrap();
+        // XIIDM states each winding's status as its terminal's connection
+        // and its further rating sets as unselected limit groups.
         let xiidm = crate::format::emit_value_text(&net, crate::TargetFormat::Xiidm).unwrap();
         let diagnostics = xiidm.render_diagnostics();
         assert!(
-            diagnostics.iter().any(|line| {
-                line.contains("3 out of service three winding transformer winding(s)")
-            }),
+            diagnostics.iter().all(
+                |line| !line.contains("three winding transformer winding(s)")
+                    && !line.contains("RATING_SET_DROPPED")
+            ),
             "{diagnostics:?}"
         );
-        assert_eq!(
-            diagnostics
-                .iter()
-                .filter(|line| line.contains("RATING_SET_DROPPED")
-                    && line.contains("three winding transformer 1-2-3 winding"))
-                .count(),
-            5 * (3 + 9),
-            "{diagnostics:?}"
-        );
+        let back =
+            super::super::xiidm::parse_xiidm_source(&xiidm.text, &mut Diagnostics::new()).unwrap();
+        assert_eq!(three_winding_statuses(&back), three_winding_statuses(&net));
+        for (actual, expected) in back.transformers_3w().iter().zip(net.transformers_3w()) {
+            for winding in 0..3 {
+                let sorted = |transformer| {
+                    let mut sets = rating_sets(transformer, winding);
+                    sets.sort_by(|a, b| a.0.cmp(&b.0));
+                    sets
+                };
+                assert_eq!(sorted(actual), sorted(expected));
+            }
+        }
 
         // PSLF declares both entries through its dropped extras line.
         let pslf = crate::format::emit_value_text(&net, crate::TargetFormat::Pslf).unwrap();
