@@ -8,6 +8,8 @@ expected=$(python3 - <<'PY'
 names = [
     "powerio.AcOpfInstance",
     "powerio.AcOpfSolution",
+    "powerio.AcOtsInstance",
+    "powerio.AcOtsSolution",
     "powerio.AcPfInstance",
     "powerio.AcPfSolution",
     "powerio.AcScucInstance",
@@ -50,7 +52,7 @@ print("\n".join(sorted(names)))
 PY
 )
 
-schema=$(python3 - "docs/schema/pio-ir/2/0.11.6/schema.json" <<'PY'
+schema=$(python3 - "docs/schema/pio-ir/2/0.11.7/schema.json" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding='utf-8') as handle:
