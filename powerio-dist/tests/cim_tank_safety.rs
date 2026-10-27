@@ -148,3 +148,144 @@ fn writer_derives_clocks_from_current_windings_and_reports_stale_metadata() {
         serde_json::json!([0.0, 1.0])
     );
 }
+
+/// A three-winding tank on one phase: every end is rated 1 kV, 100 kVA,
+/// states no resistance, and every pair is tested at |Z| = 0.5 ohm. Only
+/// the 1-2 test states a load loss.
+fn three_winding_tank(losses: [Option<&str>; 3]) -> String {
+    let end = |n: u8| {
+        format!(
+            r##" <cim:ConnectivityNode rdf:ID="_n{n}"><cim:IdentifiedObject.name>n{n}</cim:IdentifiedObject.name></cim:ConnectivityNode>
+ <cim:Terminal rdf:ID="_t{n}"><cim:Terminal.ConductingEquipment rdf:resource="#_pt"/><cim:Terminal.ConnectivityNode rdf:resource="#_n{n}"/></cim:Terminal>
+ <cim:TransformerTankEnd rdf:ID="_e{n}"><cim:TransformerTankEnd.TransformerTank rdf:resource="#_tank"/><cim:TransformerEnd.endNumber>{n}</cim:TransformerEnd.endNumber><cim:TransformerEnd.Terminal rdf:resource="#_t{n}"/><cim:TransformerTankEnd.phases rdf:resource="http://iec.ch/TC57/CIM100#PhaseCode.A"/></cim:TransformerTankEnd>
+ <cim:TransformerEndInfo rdf:ID="_i{n}"><cim:TransformerEndInfo.TransformerTankInfo rdf:resource="#_info"/><cim:TransformerEndInfo.endNumber>{n}</cim:TransformerEndInfo.endNumber><cim:TransformerEndInfo.connectionKind rdf:resource="http://iec.ch/TC57/CIM100#WindingConnection.I"/><cim:TransformerEndInfo.phaseAngleClock>0</cim:TransformerEndInfo.phaseAngleClock><cim:TransformerEndInfo.ratedU>1000</cim:TransformerEndInfo.ratedU><cim:TransformerEndInfo.ratedS>100000</cim:TransformerEndInfo.ratedS></cim:TransformerEndInfo>
+"##
+        )
+    };
+    let test = |id: &str, from: u8, to: u8, loss: Option<&str>| {
+        let loss = loss.map_or_else(String::new, |l| {
+            format!("<cim:ShortCircuitTest.loss>{l}</cim:ShortCircuitTest.loss>")
+        });
+        format!(
+            r##" <cim:ShortCircuitTest rdf:ID="_{id}"><cim:ShortCircuitTest.EnergisedEnd rdf:resource="#_i{from}"/><cim:ShortCircuitTest.GroundedEnds rdf:resource="#_i{to}"/><cim:ShortCircuitTest.leakageImpedance>0.5</cim:ShortCircuitTest.leakageImpedance>{loss}<cim:TransformerTest.basePower>100000</cim:TransformerTest.basePower></cim:ShortCircuitTest>
+"##
+        )
+    };
+    format!(
+        r##"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/CIM100#">
+ <cim:PowerTransformer rdf:ID="_pt"><cim:IdentifiedObject.name>pt</cim:IdentifiedObject.name></cim:PowerTransformer>
+ <cim:TransformerTank rdf:ID="_tank"><cim:IdentifiedObject.name>tank</cim:IdentifiedObject.name><cim:TransformerTank.PowerTransformer rdf:resource="#_pt"/></cim:TransformerTank>
+ <cim:TransformerTankInfo rdf:ID="_info"/>
+{}{}{}{}{}{} <cim:Asset rdf:ID="_asset"><cim:Asset.AssetInfo rdf:resource="#_info"/><cim:Asset.PowerSystemResources rdf:resource="#_tank"/></cim:Asset>
+</rdf:RDF>"##,
+        end(1),
+        end(2),
+        end(3),
+        test("sc12", 1, 2, losses[0]),
+        test("sc13", 1, 3, losses[1]),
+        test("sc23", 2, 3, losses[2]),
+    )
+}
+
+#[test]
+fn three_winding_split_with_unstated_pair_loss_carries_no_negative_resistance() {
+    // Only pair 1-2 states a loss (the 2-3 test states 0).
+    let net = parse_str(
+        &three_winding_tank([Some("3"), None, Some("0")]),
+        "cim-dist",
+    )
+    .unwrap();
+    // Counting the unstated pairs as 0 would give r1 = r2 = rab/2 and
+    // r3 = -rab/2. The split is not carried and the reader says so.
+    for w in &net.transformers()[0].windings {
+        assert!(w.r_pct.abs() < 1e-12, "{}", w.r_pct);
+    }
+    let notes: Vec<_> = net
+        .warnings
+        .iter()
+        .filter(|w| w.starts_with("READ.CIM_DIST.VALUE_UNSUPPORTED"))
+        .collect();
+    assert_eq!(notes.len(), 1, "{:#?}", net.warnings);
+    assert!(notes[0].contains("1-3, 2-3"), "{}", notes[0]);
+    let dss = helpers::emit_dss(&net);
+    assert!(!dss.text.contains("%r=-") && !dss.text.contains("%rs=-"));
+}
+
+#[test]
+fn three_winding_split_with_every_pair_loss_is_still_carried() {
+    let net = parse_str(
+        &three_winding_tank([Some("3"), Some("3"), Some("3")]),
+        "cim-dist",
+    )
+    .unwrap();
+    // Each pair loses 3 kW on 100 kVA: 3% pair resistance, 1.5% per winding.
+    for w in &net.transformers()[0].windings {
+        assert!((w.r_pct - 1.5).abs() < 1e-9, "{}", w.r_pct);
+    }
+}
+
+#[test]
+fn short_circuit_test_without_leakage_gets_one_note() {
+    let xml = tank().replace(
+        "<cim:ShortCircuitTest.leakageImpedance>0.5</cim:ShortCircuitTest.leakageImpedance>",
+        "",
+    );
+    let net = parse_str(&xml, "cim-dist").unwrap();
+    assert!(net.transformers()[0].xsc_pct[0].abs() < 1e-12);
+    let leakage: Vec<_> = net
+        .warnings
+        .iter()
+        .filter(|w| w.contains("ShortCircuitTest") || w.contains("leakage"))
+        .collect();
+    assert_eq!(leakage.len(), 1, "{:#?}", net.warnings);
+    assert!(
+        leakage[0].starts_with("READ.CIM_DIST.VALUE_DEFAULTED"),
+        "{}",
+        leakage[0]
+    );
+}
+
+/// A two-winding `PowerTransformerEnd` transformer, delta primary and
+/// grounded wye secondary, the Dyn layout of `tank_feeder.xml`.
+fn dyn_end_form(clock: Option<&str>) -> String {
+    let end = |n: u8, kind: &str| {
+        let clock = clock.filter(|_| n == 2).map_or_else(String::new, |c| {
+            format!(
+                "<cim:PowerTransformerEnd.phaseAngleClock>{c}</cim:PowerTransformerEnd.phaseAngleClock>"
+            )
+        });
+        format!(
+            r##" <cim:ConnectivityNode rdf:ID="_n{n}"><cim:IdentifiedObject.name>n{n}</cim:IdentifiedObject.name></cim:ConnectivityNode>
+ <cim:Terminal rdf:ID="_t{n}"><cim:Terminal.ConductingEquipment rdf:resource="#_pt"/><cim:Terminal.ConnectivityNode rdf:resource="#_n{n}"/><cim:Terminal.phases rdf:resource="http://iec.ch/TC57/CIM100#PhaseCode.ABC"/><cim:ACDCTerminal.sequenceNumber>{n}</cim:ACDCTerminal.sequenceNumber></cim:Terminal>
+ <cim:PowerTransformerEnd rdf:ID="_e{n}"><cim:PowerTransformerEnd.PowerTransformer rdf:resource="#_pt"/><cim:TransformerEnd.endNumber>{n}</cim:TransformerEnd.endNumber><cim:TransformerEnd.Terminal rdf:resource="#_t{n}"/><cim:PowerTransformerEnd.ratedU>12470</cim:PowerTransformerEnd.ratedU><cim:PowerTransformerEnd.ratedS>1000000</cim:PowerTransformerEnd.ratedS><cim:PowerTransformerEnd.connectionKind rdf:resource="http://iec.ch/TC57/CIM100#WindingConnection.{kind}"/>{clock}</cim:PowerTransformerEnd>
+"##
+        )
+    };
+    format!(
+        r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/CIM100#">
+ <cim:PowerTransformer rdf:ID="_pt"><cim:IdentifiedObject.name>pt</cim:IdentifiedObject.name></cim:PowerTransformer>
+{}{}</rdf:RDF>"#,
+        end(1, "D"),
+        end(2, "Yn"),
+    )
+}
+
+#[test]
+fn end_form_refuses_the_clocks_the_tank_form_refuses() {
+    // A Dyn layout represents clock 1 on the secondary.
+    parse_str(&dyn_end_form(None), "cim-dist").unwrap();
+    parse_str(&dyn_end_form(Some("1")), "cim-dist").unwrap();
+    for clock in ["11", "0", "-1", "12", "1.5", "NaN", "bad"] {
+        let error = parse_str(&dyn_end_form(Some(clock)), "cim-dist")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("phase-angle clock"), "{clock}: {error}");
+    }
+    let error = parse_str(&dyn_end_form(Some("11")), "cim-dist")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("not represented by its winding layout (clock"),
+        "{error}"
+    );
+}

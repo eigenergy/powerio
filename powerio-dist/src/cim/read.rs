@@ -2206,6 +2206,20 @@ impl<'a> Mapper<'a> {
                     winding.tap = tap;
                 }
             }
+            // The same clocks the tank form refuses; an absent clock reads as
+            // it always has.
+            let mut clocks = Vec::with_capacity(ends.len());
+            for end in &ends {
+                let clock = self.store.f(end, "PowerTransformerEnd.phaseAngleClock");
+                self.check_clock_value(
+                    "PowerTransformerEnd",
+                    end,
+                    "PowerTransformerEnd.phaseAngleClock",
+                    clock,
+                )?;
+                clocks.push(clock);
+            }
+            self.check_clocks("PowerTransformer", &id, &windings, &clocks, false)?;
             let xsc = self.short_circuit_pct(&id, &ends, &windings, &meshes_of);
             let no_load = self.core_admittance(&ends, &windings, &cores_of);
             let name = self.unique_name("transformer", "PowerTransformer", &id);
@@ -2442,19 +2456,12 @@ impl<'a> Mapper<'a> {
                 );
                 return Ok(None);
             };
-            if self
-                .store
-                .text(&info_end.id, "TransformerEndInfo.phaseAngleClock")
-                .is_some()
-                && info_end
-                    .clock
-                    .is_none_or(|c| !c.is_finite() || c.fract() != 0.0 || !(0.0..12.0).contains(&c))
-            {
-                return Err(format_error(format!(
-                    "TransformerEndInfo {}: invalid phase-angle clock; electrical conversion refused",
-                    self.label(&info_end.id)
-                )));
-            }
+            self.check_clock_value(
+                "TransformerEndInfo",
+                &info_end.id,
+                "TransformerEndInfo.phaseAngleClock",
+                info_end.clock,
+            )?;
             let mut winding = DistWinding::new(bus, map, conn, info_end.v_ref, info_end.s_rating);
             winding.r_pct = info_end.r_pct;
             self.grounding(end, &mut winding);
@@ -2469,27 +2476,8 @@ impl<'a> Mapper<'a> {
                     .map_or(serde_json::Value::Null, serde_json::Value::from),
             );
         }
-        let three_phase = windings[0]
-            .terminal_map
-            .iter()
-            .filter(|t| *t != "4")
-            .count()
-            == 3;
-        for (i, winding) in windings.iter().enumerate() {
-            let represented = tank_phase_clock(&windings[0], winding, three_phase);
-            if clocks[i].as_f64().is_some_and(|clock| clock != represented) {
-                return Err(format_error(format!(
-                    "TransformerTank {}: winding {} phase-angle clock {} is not represented by its winding layout (clock {represented}); electrical conversion refused",
-                    self.label(tank),
-                    i + 1,
-                    clocks[i]
-                )));
-            }
-            if clocks[i].is_null() {
-                self.note(&C::READ_CIM_DIST_VALUE_DEFAULTED, "TransformerTank", tank,
-                    format!("TransformerTank {}: winding {} has no phase-angle clock; represented clock {represented} is assumed", self.label(tank), i + 1));
-            }
-        }
+        let stated: Vec<Option<f64>> = clocks.iter().map(serde_json::Value::as_f64).collect();
+        self.check_clocks("TransformerTank", tank, &windings, &stated, true)?;
         let mut xsc = Vec::new();
         let mut missing = Vec::new();
         for i in 0..numbers.len() {
@@ -2544,6 +2532,65 @@ impl<'a> Mapper<'a> {
             extras.insert("%imag".into(), imag.into());
         }
         Ok(Some(transformer))
+    }
+
+    /// Refuse a stated phase-angle clock that is not an integer on a clock
+    /// face. Both transformer forms read their clocks through this.
+    #[allow(clippy::float_cmp)] // clock numbers are discrete
+    fn check_clock_value(
+        &mut self,
+        class: &str,
+        id: &str,
+        property: &str,
+        clock: Option<f64>,
+    ) -> Result<()> {
+        if self.store.text(id, property).is_some()
+            && clock.is_none_or(|c| !c.is_finite() || c.fract() != 0.0 || !(0.0..12.0).contains(&c))
+        {
+            return Err(format_error(format!(
+                "{class} {}: invalid phase-angle clock; electrical conversion refused",
+                self.label(id)
+            )));
+        }
+        Ok(())
+    }
+
+    /// Refuse a transformer whose stated winding clocks differ from the
+    /// clocks its winding layout represents. An end without a clock takes
+    /// the represented one, noted when `note_absent` (the tank form).
+    #[allow(clippy::float_cmp)] // clock numbers are discrete
+    fn check_clocks(
+        &mut self,
+        class: &str,
+        id: &str,
+        windings: &[DistWinding],
+        clocks: &[Option<f64>],
+        note_absent: bool,
+    ) -> Result<()> {
+        let three_phase = windings[0]
+            .terminal_map
+            .iter()
+            .filter(|t| *t != "4")
+            .count()
+            == 3;
+        for (i, winding) in windings.iter().enumerate() {
+            let represented = tank_phase_clock(&windings[0], winding, three_phase);
+            match clocks[i] {
+                Some(clock) if clock != represented => {
+                    return Err(format_error(format!(
+                        "{class} {}: winding {} phase-angle clock {clock} is not represented by its winding layout (clock {represented}); electrical conversion refused",
+                        self.label(id),
+                        i + 1,
+                    )));
+                }
+                None if note_absent => {
+                    self.note(&C::READ_CIM_DIST_VALUE_DEFAULTED, class, id,
+                        format!("{class} {}: winding {} has no phase-angle clock; represented clock {represented} is assumed", self.label(id), i + 1));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     /// A `TransformerTankInfo` and everything under it, read once however
@@ -2652,11 +2699,15 @@ impl<'a> Mapper<'a> {
         if ends.is_empty() {
             return None;
         }
-        let (mut pairs, losses) = self.short_circuit_tests(&ends, index);
+        let (mut pairs, losses, no_reactance) = self.short_circuit_tests(&ends, index);
         self.winding_resistances(info, &mut ends, &losses);
         // Resolve the winding resistances first: a zero/absent test loss
         // does not erase resistance stated by the end infos or other tests.
         for (&(i, j), magnitude) in &mut pairs {
+            // A pair whose test states no reactance is already 0 and noted.
+            if no_reactance.contains(&(i, j)) {
+                continue;
+            }
             let on_base = |number| {
                 ends.iter()
                     .find(|e| end_key(e.number) == number)
@@ -2681,16 +2732,23 @@ impl<'a> Mapper<'a> {
 
     /// The pair reactances of a catalog entry's short circuit tests, and the
     /// pair resistances the tests with a nonzero load loss give, with the
-    /// test stating each. Both are percent on the first end's rating.
+    /// test stating each. Both are percent on the first end's rating. The
+    /// third value holds the pairs whose test states no reactance, which the
+    /// first map carries as 0.
     #[allow(clippy::type_complexity)]
     fn short_circuit_tests(
         &mut self,
         ends: &[CatalogEnd],
         index: &TankIndex,
-    ) -> (HashMap<(i64, i64), f64>, Vec<((i64, i64), f64, String)>) {
+    ) -> (
+        HashMap<(i64, i64), f64>,
+        Vec<((i64, i64), f64, String)>,
+        HashSet<(i64, i64)>,
+    ) {
         let s_1 = ends[0].s_rating;
         let mut pairs: HashMap<(i64, i64), f64> = HashMap::new();
         let mut losses = Vec::new();
+        let mut no_reactance = HashSet::new();
         for (i, energised) in ends.iter().enumerate() {
             for test in index
                 .short_circuit_of
@@ -2766,6 +2824,7 @@ impl<'a> Mapper<'a> {
                         ),
                     );
                     pairs.insert(key, 0.0);
+                    no_reactance.insert(key);
                     continue;
                 };
                 pairs.insert(key, pct.x);
@@ -2785,7 +2844,7 @@ impl<'a> Mapper<'a> {
                 }
             }
         }
-        (pairs, losses)
+        (pairs, losses, no_reactance)
     }
 
     /// Winding resistances: the end infos' own when any states one (a load
@@ -2842,16 +2901,44 @@ impl<'a> Mapper<'a> {
         let split = match ends {
             [a, b] => vec![pair_r(a.number, b.number) / 2.0; 2],
             [a, b, c] => {
-                let (rab, rac, rbc) = (
-                    pair_r(a.number, b.number),
-                    pair_r(a.number, c.number),
-                    pair_r(b.number, c.number),
-                );
-                vec![
+                // A pair whose test states no loss is unknown, not 0, and
+                // the delta to star split needs all three.
+                let (na, nb, nc) = (a.number, b.number, c.number);
+                let missing: Vec<String> = [(na, nb), (na, nc), (nb, nc)]
+                    .iter()
+                    .filter(|(x, y)| !losses.iter().any(|(k, _, _)| *k == pair_key(*x, *y)))
+                    .map(|(x, y)| format!("{x}-{y}"))
+                    .collect();
+                let (rab, rac, rbc) = (pair_r(na, nb), pair_r(na, nc), pair_r(nb, nc));
+                let split = vec![
                     (rab + rac - rbc) / 2.0,
                     (rab + rbc - rac) / 2.0,
                     (rac + rbc - rab) / 2.0,
-                ]
+                ];
+                let tolerance = 1e-9 * (rab + rac + rbc);
+                let reason = if !missing.is_empty() {
+                    format!(
+                        "winding pair(s) {} state no load loss, so the split is not determined",
+                        missing.join(", ")
+                    )
+                } else if split.iter().any(|r| *r < -tolerance) {
+                    "the split gives a negative winding resistance".to_owned()
+                } else {
+                    String::new()
+                };
+                if !reason.is_empty() {
+                    let label = self.label(info);
+                    self.note(
+                        &C::READ_CIM_DIST_VALUE_UNSUPPORTED,
+                        "TransformerTankInfo",
+                        info,
+                        format!(
+                            "TransformerTankInfo {label}: {reason}; the winding resistances are 0"
+                        ),
+                    );
+                    return;
+                }
+                split.into_iter().map(|r| r.max(0.0)).collect()
             }
             _ => {
                 let label = self.label(info);

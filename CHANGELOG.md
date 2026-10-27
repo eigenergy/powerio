@@ -6,6 +6,10 @@
   or disconnected tank/parent/end states. Fresh tank output writes standard
   impedance magnitudes and clocks derived from the current winding layout;
   producer-specific X-in-magnitude inputs require prior normalization (#680).
+  The `PowerTransformerEnd` form now reads `phaseAngleClock` and refuses the
+  same clocks as the tank form. A three-winding tank whose load losses leave
+  a pair unstated, or split to a negative winding resistance, reads zero
+  winding resistance with a diagnostic instead of a negative one.
 
 - Distribution CIM opens switches with disconnected terminals and refuses
   inactive/disconnected non-switch equipment and unsupported delta compensators,
