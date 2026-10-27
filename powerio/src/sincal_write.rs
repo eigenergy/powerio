@@ -18,15 +18,45 @@ pub enum SincalContainer {
     Sqlite,
     /// Deterministic candidate `.sinx` packaging. This does not include an
     /// undocumented desktop `.sin` file, diagrams, results or an Access database.
-    // Callers build this struct variant directly, so it cannot gain a field
-    // within 0.11 without breaking them (#682). The enum is `non_exhaustive`:
-    // when a packaging option is needed, add a new variant carrying a
-    // `#[non_exhaustive]` options struct with `Default`, and keep this one.
+    ///
+    /// Kept for compatibility: callers build this struct variant directly,
+    /// so it cannot gain a field. New code should use
+    /// [`SincalContainer::archive_with`], whose [`ArchiveOptions`] can grow.
     Archive {
         /// Portable project name: 1–128 ASCII letters, digits, `_` or `-`.
         project_name: String,
     },
+    /// The same `.sinx` packaging as [`SincalContainer::Archive`], with
+    /// packaging options. Build it with [`SincalContainer::archive_with`].
+    #[non_exhaustive]
+    ArchiveWithOptions {
+        /// Portable project name: 1–128 ASCII letters, digits, `_` or `-`.
+        project_name: String,
+        /// Packaging options; [`ArchiveOptions::default`] packages exactly as
+        /// [`SincalContainer::Archive`] does.
+        options: ArchiveOptions,
+    },
 }
+
+impl SincalContainer {
+    /// Candidate `.sinx` packaging with explicit options. With
+    /// `ArchiveOptions::default()` the output is the same as
+    /// [`SincalContainer::Archive`] with the same project name.
+    #[must_use]
+    pub fn archive_with(project_name: impl Into<String>, options: ArchiveOptions) -> Self {
+        Self::ArchiveWithOptions {
+            project_name: project_name.into(),
+            options,
+        }
+    }
+}
+
+/// Options for [`SincalContainer::archive_with`]. It has no fields yet; it is
+/// `non_exhaustive` so packaging options can be added without a break. Start
+/// from [`ArchiveOptions::default`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ArchiveOptions {}
 
 /// Explicit opt-in to the experimental static SINCAL writer. Native SINCAL
 /// open/save/calculation acceptance has not been established.
@@ -126,7 +156,8 @@ pub(crate) fn emit(
     }
     let (name, bytes) = match &options.container {
         SincalContainer::Sqlite => ("case.db", database),
-        SincalContainer::Archive { project_name } => (
+        SincalContainer::Archive { project_name }
+        | SincalContainer::ArchiveWithOptions { project_name, .. } => (
             "case.sinx",
             powerio_tnd::formats::sincal::storage::authoring::candidate_archive(
                 &database,

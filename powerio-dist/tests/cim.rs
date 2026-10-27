@@ -483,6 +483,26 @@ fn a_directory_reads_only_its_top_level_documents() {
     assert!(error.to_string().contains("top level"), "{error}");
 }
 
+/// A directory case reads through the shared `Source` acquisition, so the
+/// path checks every directory format gets apply: a top level `.xml` that is
+/// a symbolic link to a document outside the directory is refused, not
+/// followed.
+#[cfg(unix)]
+#[test]
+fn a_directory_refuses_a_symlinked_document() {
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("feeder.xml"), feeder("")).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a_eq.xml"), feeder("")).unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("feeder.xml"),
+        dir.path().join("b_link.xml"),
+    )
+    .unwrap();
+    let error = parse_file(dir.path(), Some("cim-dist")).unwrap_err();
+    assert!(error.to_string().contains("symbolic link"), "{error}");
+}
+
 /// A property holding nested elements has no value: its inner text is not
 /// read as a number, and the property is reported.
 #[test]
@@ -603,6 +623,65 @@ fn unmapped_and_partial_content_is_reported() {
             .iter()
             .any(|f| f.contains("ShuntCompensator.nomU")),
         "{w:#?}"
+    );
+}
+
+/// The content the profile defines and the 0.11 mapping does not type
+/// (regulator and tap changer controls, distributed energy resources) is
+/// reported with a code on read and on write, and a bus branch document with
+/// no `ConnectivityNode` is refused rather than read as an empty feeder.
+#[test]
+fn controls_der_and_bus_branch_input_are_reported_not_mapped() {
+    let extra = r#"
+  <cim:RegulatingControl rdf:ID="_rc">
+    <cim:IdentifiedObject.name>rc</cim:IdentifiedObject.name>
+    <cim:RegulatingControl.targetValue>122</cim:RegulatingControl.targetValue>
+  </cim:RegulatingControl>
+  <cim:TapChangerControl rdf:ID="_tcc">
+    <cim:IdentifiedObject.name>tcc</cim:IdentifiedObject.name>
+  </cim:TapChangerControl>
+  <cim:PowerElectronicsConnection rdf:ID="_pec">
+    <cim:IdentifiedObject.name>pv</cim:IdentifiedObject.name>
+    <cim:PowerElectronicsConnection.p>1000</cim:PowerElectronicsConnection.p>
+  </cim:PowerElectronicsConnection>
+"#;
+    let net = parse_str(&feeder(extra), "cim-dist").unwrap();
+    let classes = findings(&net.warnings, "READ.CIM_DIST.CLASS_UNMAPPED");
+    for class in [
+        "RegulatingControl",
+        "TapChangerControl",
+        "PowerElectronicsConnection",
+    ] {
+        assert!(
+            classes.iter().any(|f| f.contains(class)),
+            "{class}: {:#?}",
+            net.warnings
+        );
+    }
+
+    // An inverter and its control written to CIM are reported as dropped.
+    let net = parse_file(micro("ibr_pv_control.dss"), None).unwrap();
+    let out = emit_value(&net, DistTargetFormat::CimDist);
+    let dropped = findings(&out.warnings, "EMIT.CIM_DIST.RECORD_DROPPED");
+    assert!(
+        dropped
+            .iter()
+            .any(|f| f.contains("inverter based resource")),
+        "{:#?}",
+        out.warnings
+    );
+
+    let bus_branch = format!(
+        r#"{RDF_OPEN}
+  <cim:TopologicalNode rdf:ID="_tn1"><cim:IdentifiedObject.name>tn1</cim:IdentifiedObject.name></cim:TopologicalNode>
+  <cim:ACLineSegmentPhase rdf:ID="_p"/>
+</rdf:RDF>
+"#
+    );
+    let error = parse_str(&bus_branch, "cim-dist").unwrap_err();
+    assert!(
+        error.to_string().contains("TopologicalNode only"),
+        "{error}"
     );
 }
 

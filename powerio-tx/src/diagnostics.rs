@@ -381,6 +381,8 @@ pub mod codes {
             "the PSS/E monitored element reader stopped recording notes at its budget";
         READ_MON_SOURCE_MALFORMED = "READ.MON.SOURCE_MALFORMED", Warning,
             "a line inside a PSS/E monitored element block states no branch";
+        READ_MON_VOLTAGE_BAND_ORDER_ASSUMED = "READ.MON.VOLTAGE_BAND_ORDER_ASSUMED", Remark,
+            "a four-value PSS/E monitored voltage range was read as the post-contingency band, then the pre-contingency band, an order no public source states";
         READ_MON_NOT_TEXT = "READ.MON.NOT_TEXT", Error,
             "a PSS/E monitored element file is not valid UTF-8 text", category = Parse;
 

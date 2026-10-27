@@ -2,8 +2,8 @@
 mod helpers;
 
 use powerio::{
-    Destination, EmitOptions, EmitResult, EmittedOutput, Fidelity, ParseOptions, PioModule,
-    PioValue, SincalContainer, SincalExperimentalOptions, Source,
+    ArchiveOptions, Destination, EmitOptions, EmitResult, EmittedOutput, Fidelity, ParseOptions,
+    PioModule, PioValue, SincalContainer, SincalExperimentalOptions, Source,
 };
 use std::collections::BTreeMap;
 
@@ -283,6 +283,41 @@ fn default_options_preserve_other_emitters_and_experimental_options_do_not_leak(
             .diagnostics()
             .iter()
             .any(|d| d.code() == "REQUEST.EMIT.INVALID_OPTIONS")
+    );
+}
+
+#[test]
+fn archive_options_package_exactly_as_the_compatibility_variant() {
+    let module = balanced();
+    let compat = bytes(fresh(
+        &module,
+        &options(
+            SincalContainer::Archive {
+                project_name: "sample".into(),
+            },
+            BTreeMap::new(),
+        ),
+    ));
+    let with_options = bytes(fresh(
+        &module,
+        &options(
+            SincalContainer::archive_with("sample", ArchiveOptions::default()),
+            BTreeMap::new(),
+        ),
+    ));
+    assert_eq!(compat, with_options);
+    let invalid = options(
+        SincalContainer::archive_with("../escape", ArchiveOptions::default()),
+        BTreeMap::new(),
+    );
+    assert!(
+        powerio::emit_with_options(
+            &module,
+            "sincal",
+            &invalid,
+            Destination::memory("bad.sinx").unwrap()
+        )
+        .is_err()
     );
 }
 

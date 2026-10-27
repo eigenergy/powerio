@@ -2,6 +2,62 @@
 
 ## Unreleased
 
+- `assign_island_references` with the per island policy now demotes a
+  stated reference bus that hosts no in-service generator, then makes the
+  bus of the island's largest `pmax` generator the reference. Before, an
+  island could keep a lone reference with no generator behind it, and the
+  raw call and per island normalization could pick different slack buses;
+  both now pick the same one. When two generators tie on `pmax`, the one on
+  the smaller bus id wins (before, the earlier generator row won during
+  normalization). `Island::calc_reference_choice` follows the same rule and
+  returns `None` for an island no in-service generator supplies. Two
+  windings of one live three winding transformer joined by a closed switch
+  are still refused; a test now pins that.
+
+- A `.mon` file with a four-value `MONITOR VOLTAGE RANGE` now reports one
+  `READ.MON.VOLTAGE_BAND_ORDER_ASSUMED` remark. The reader takes the first
+  pair as the post-contingency band and the second as the pre-contingency
+  band, as before, but no public source confirms that order: the PSS/E
+  manual documents only a low and an optional high value, and PowerGEM's
+  TARA grammar accepts the extra pair without naming it. The remark names
+  the line and the order, so a caller can check it against the tool that
+  wrote the file. The values read and written are unchanged.
+- `MONITOR BRANCHES IN SUBSYSTEM` and `MONITOR TIES FROM SUBSYSTEM` now read
+  the PSS/E 35.2 spelling `IN KVRANGE lo hi` as the TARA `KVRANGE lo hi`
+  tail. Before, such a line was kept as text with
+  `READ.MON.STATEMENT_UNRECOGNIZED` and monitored nothing. The writer states
+  the `KVRANGE lo hi` form.
+
+- Format discovery names the distribution CIM release and profile: the
+  `cim-dist` entry of `powerio::grid_formats()` is labeled
+  "CIM distribution (CIM100 cim17v40, GridAPPS-D profile)" instead of
+  "CIM distribution". The distribution guide gains a status note listing
+  the CIM release, the profile, the validation that runs, and what is not
+  mapped yet.
+
+- PSS/E RAWX now reads and writes transformer impedance correction tables
+  (the `impcor` table, one `itable, tap, refact, imfact` row per point),
+  closing the last reader gap from #592. Before, the reader reported the
+  table as unsupported and every transformer read uncorrected, and RAWX
+  output wrote the uncorrected impedance with a TAB naming no table. Rows of
+  one table may interleave with another's; a row with table number 0 or
+  below, or the all zero point that ends a RAW table, is dropped with a
+  warning. A corrected network now reaches RAWX with its tables and nominal
+  impedances, as RAW 35 output does.
+
+
+- The balanced SINCAL reader now reads a line whose `Line.fr` is not 1. It
+  applies `fr` as the multiconductor reader does: the line's current limit and
+  thermal rating are `Ith * ParSys * fr`, and its impedance is unchanged.
+  Before, such a line was refused. `SincalContainer::archive_with(name,
+  ArchiveOptions::default())` builds `.sinx` packaging through an options
+  struct that can gain fields later; the `Archive { project_name }` variant
+  is kept and writes the same bytes. The multiconductor reader checks the
+  line tables' schema once per parse instead of once per line, and its
+  mapping report looks up one table instead of listing all of them for each
+  element, so a 1,000-line feeder on the 250-table native schema reads in
+  about 0.3 s (release build) within the fixed query budget.
+
 - Multiconductor IVR preparation (`build_mc_ac_opf_preparation`) now finds
   its transformer start voltages with a sparse solve. The old dense solve
   held a full row for every equation: about 24 MB and one second at 2,000
@@ -16,6 +72,19 @@
   was supplied with it under `source/`, including files the deck never read,
   but now says so: a remark, `EMIT.DSS.PROJECT_COMPANION_KEPT`, names those
   files.
+
+- PowerModelsDistribution engineering JSON written by PMD's `print_file`
+  after `make_multinetwork` (one network per time step under `nw`) no longer
+  parses to an empty network with no buses, lines, or loads (#646).
+  `parse` now returns a `TimeSeries<MulticonductorNetwork>` with every
+  component of every step, ordered by `mn_lookup` time, labeled by the `nw`
+  key, and with each step's `time_elapsed` as its duration; the single
+  network reader refuses such a document with a message saying so. The PMD
+  writer now writes back the `time_series` section and each component's
+  `time_series` references instead of dropping them with a warning, and a
+  top level value the reader does not type (such as `time_elapsed`) is kept
+  and reported instead of ignored. PMD's stock `case3_balanced`, as PMD
+  writes it, is now a test fixture in both forms.
 - The conversion matrix grades each cell by its worst finding: exact,
   lossless, restated (the target required a value and the writer supplied
   it), approximate, dropped, or failed. The PR comment shows that level, the
@@ -35,10 +104,7 @@
   is written at its present impedance with TAB = 0 and a warning, instead of
   a record PowerIO's own reader refuses. A TAB is written only for a table the
   file states, so a cleared correction or a table the source never stated no
-  longer reads back as a dropped reference (a warning lists them). RAWX output
-  of a corrected network now states the corrected impedance with TAB = 0 and
-  a warning per transformer, as RAW 33/34 does for tables it cannot state,
-  instead of the uncorrected impedance and a TAB naming no table.
+  longer reads back as a dropped reference (a warning lists them).
 
 - Pull requests now build and smoke-test one Linux wheel (x86_64) and the
   sdist. The five-platform wheel matrix runs on pushes to main and on

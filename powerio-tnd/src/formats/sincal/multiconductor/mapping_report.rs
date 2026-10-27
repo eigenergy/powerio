@@ -179,10 +179,12 @@ impl NativeDatabase {
         element: i64,
         fields: &[&str],
     ) -> Result<BTreeMap<String, ObservedInput>> {
+        // Naming the table looks up one catalog entry; the bare table list
+        // would walk every table of a native schema for each element.
         let kind: Option<String> = self
             .connection
             .query_row(
-                "SELECT type FROM pragma_table_list WHERE schema='main' AND name=?1 COLLATE NOCASE",
+                "SELECT type FROM pragma_table_list(?1) WHERE schema='main' AND name=?1 COLLATE NOCASE",
                 [table],
                 |row| row.get(0),
             )
