@@ -375,3 +375,156 @@ fn a_reference_bus_with_only_branches_stays_the_reference() {
     let xml = emit_value(&source, TargetFormat::Xiidm).unwrap().text;
     assert_eq!(reference_buses(&xiidm(&xml)), [1]);
 }
+
+/// A 138/138 kV transformer from bus 1 to bus 2 under the given control.
+fn controlled_transformer(
+    control: powerio_tx::network::TransformerControl,
+    tap: f64,
+    shift: f64,
+) -> BalancedNetwork {
+    use powerio_tx::network::{Branch, Bus, BusId, BusType, Generator, Load};
+    let mut branch = Branch::new(BusId::new(1), BusId::new(2), 0.0, 0.1);
+    branch.tap = tap;
+    branch.shift = shift;
+    branch.control = Some(control);
+    let mut network = BalancedNetwork::in_memory(
+        "controlled",
+        100.0,
+        vec![
+            Bus::new(BusId::new(1), BusType::Ref, 138.0),
+            Bus::new(BusId::new(2), BusType::Pq, 138.0),
+        ],
+        vec![branch],
+    );
+    network.generators_mut().push(Generator::new(BusId::new(1)));
+    network
+        .loads_mut()
+        .push(Load::new(BusId::new(2), 10.0, 2.0));
+    // Read it as PSS/E states it.
+    parse_psse(&emit_psse(&network).text).unwrap()
+}
+
+fn voltage_control() -> powerio_tx::network::TransformerControl {
+    use powerio_tx::network::{BusId, TransformerControl, TransformerControlMode};
+    let mut control = TransformerControl::new(TransformerControlMode::Voltage);
+    control.controlled_bus = Some(BusId::new(2));
+    control.tap_min = 0.9;
+    control.tap_max = 1.1;
+    control.band_min = 0.95;
+    control.band_max = 1.05;
+    control.ntp = 5;
+    control
+}
+
+fn control_of(network: &BalancedNetwork) -> powerio_tx::network::TransformerControl {
+    network.branches()[0].control.clone().unwrap()
+}
+
+fn assert_same_control(
+    actual: &powerio_tx::network::TransformerControl,
+    expected: &powerio_tx::network::TransformerControl,
+) {
+    assert_eq!(actual.mode, expected.mode);
+    assert_eq!(actual.enabled, expected.enabled);
+    assert_eq!(actual.controlled_bus, expected.controlled_bus);
+    assert_eq!(actual.ntp, expected.ntp);
+    for (actual, expected) in [
+        (actual.tap_min, expected.tap_min),
+        (actual.tap_max, expected.tap_max),
+        (actual.band_min, expected.band_min),
+        (actual.band_max, expected.band_max),
+    ] {
+        assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}");
+    }
+}
+
+#[test]
+fn psse_voltage_control_crosses_iidm_as_a_regulating_ratio_tap_changer() {
+    let network = controlled_transformer(voltage_control(), 1.0, 0.0);
+    let emitted = emit_value(&network, TargetFormat::Xiidm).unwrap();
+    let xml = &emitted.text;
+    // Five steps from 0.9 to 1.1, regulating bus 2 to 138 kV within 13.8 kV.
+    assert!(xml.contains("regulationMode=\"VOLTAGE\""), "{xml}");
+    assert!(xml.contains("regulating=\"true\""), "{xml}");
+    assert!(xml.contains("regulationValue=\"138\""), "{xml}");
+    assert_eq!(xml.matches("<iidm:step ").count(), 5, "{xml}");
+    let messages = codes_and_messages(&emitted);
+    assert!(
+        messages
+            .iter()
+            .all(|message| !message.contains("data has no XIIDM transformer field")),
+        "{messages:#?}"
+    );
+
+    let iidm = xiidm(xml);
+    assert_same_control(&control_of(&iidm), &control_of(&network));
+    let back = parse_psse(&emit_psse(&iidm).text).unwrap();
+    assert_same_control(&control_of(&back), &control_of(&network));
+    assert!((back.branches()[0].tap - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn psse_active_power_control_crosses_iidm_as_a_phase_tap_changer() {
+    use powerio_tx::network::{BusId, TransformerControl, TransformerControlMode};
+    let mut control = TransformerControl::new(TransformerControlMode::ActiveFlow);
+    control.controlled_bus = Some(BusId::new(2));
+    control.tap_min = -30.0;
+    control.tap_max = 30.0;
+    control.band_min = 40.0;
+    control.band_max = 60.0;
+    control.ntp = 7;
+    let network = controlled_transformer(control, 1.0, 10.0);
+    let xml = emit_value(&network, TargetFormat::Xiidm).unwrap().text;
+    assert!(
+        xml.contains("regulationMode=\"ACTIVE_POWER_CONTROL\""),
+        "{xml}"
+    );
+    assert!(xml.contains("regulationValue=\"50\""), "{xml}");
+    assert!(xml.contains("targetDeadband=\"20\""), "{xml}");
+    let back = parse_psse(&emit_psse(&xiidm(&xml)).text).unwrap();
+    assert_same_control(&control_of(&back), &control_of(&network));
+    assert!((back.branches()[0].shift - 10.0).abs() < 1e-9);
+}
+
+#[test]
+fn a_present_ratio_between_steps_becomes_a_step_of_its_own() {
+    let network = controlled_transformer(voltage_control(), 1.01, 0.0);
+    let emitted = emit_value(&network, TargetFormat::Xiidm).unwrap();
+    let messages = codes_and_messages(&emitted);
+    assert!(
+        messages.iter().any(|message| message
+            .starts_with("EMIT.XIIDM.VALUE_SUBSTITUTED: transformer")
+            && message.contains("so it has 6 steps")),
+        "{messages:#?}"
+    );
+    let back = xiidm(&emitted.text);
+    assert!((back.branches()[0].tap - 1.01).abs() < 1e-12);
+    assert_eq!(control_of(&back).ntp, 6);
+}
+
+#[test]
+fn powsybl_three_winding_tap_regulation_reaches_psse() {
+    let network = parse_file(
+        data("xiidm/powsybl/V1_0/threeWindingsTransformerRoundTripRef.xml"),
+        None,
+    )
+    .unwrap()
+    .network;
+    let back = parse_psse(&emit_psse(&network).text).unwrap();
+    let windings = &back.transformers_3w()[0].windings;
+    // `ratioTapChanger2` regulates LOAD_33 at bus 2 to 33 kV over three steps.
+    let control = windings[1].control.as_ref().unwrap();
+    assert_eq!(
+        control.mode,
+        powerio_tx::network::TransformerControlMode::Voltage
+    );
+    assert!(control.enabled);
+    assert_eq!(control.controlled_bus.map(|bus| bus.0), Some(2));
+    assert_eq!(control.ntp, 3);
+    assert!((control.tap_min - 0.9).abs() < 1e-9 && (control.tap_max - 1.1).abs() < 1e-9);
+    assert!((control.band_min - 1.0).abs() < 1e-9 && (control.band_max - 1.0).abs() < 1e-9);
+    // `ratioTapChanger3` states a target but does not regulate.
+    let control = windings[2].control.as_ref().unwrap();
+    assert!(!control.enabled);
+    assert_eq!(control.controlled_bus.map(|bus| bus.0), Some(3));
+}

@@ -8,7 +8,10 @@ use std::collections::HashMap;
 
 use powerio_core::ComponentId;
 
-use crate::network::{BalancedNetwork, BranchRatingSet, BusId, LoadingLimits};
+use crate::network::{
+    BalancedNetwork, BranchRatingSet, BusId, LoadingLimits, TapChangerKind,
+    TapChangerRegulationMode, TransformerControl, TransformerControlMode,
+};
 
 /// The apparent power of a current limit at a nominal voltage:
 /// `√3 · Vnom · I / 1000` MVA for `I` in A and `Vnom` in kV
@@ -122,4 +125,170 @@ pub(super) fn rate_branches_from_current_limits(
         branch.current_ratings = None;
     }
     Some((projected, count))
+}
+
+/// Two tap values closer than this are one step (PowSybl's
+/// `TransformerConverter.distance` tolerance).
+const TAP_TOLERANCE: f64 = 1e-9;
+
+/// One IIDM tap changer's control stated in PowerIO's transformer terms:
+/// each step's tap ratio (a ratio tap changer, the branch `tap` convention)
+/// or phase shift in degrees (a phase tap changer, the branch `shift`
+/// convention), the present step, and its regulation.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct TapControl {
+    pub kind: TapChangerKind,
+    pub steps: Vec<f64>,
+    pub position: usize,
+    /// Whether the present setting lies between the stated steps and was
+    /// added as a step of its own.
+    pub inserted_present: bool,
+    pub regulation_mode: Option<TapChangerRegulationMode>,
+    pub regulating: bool,
+    pub regulation_value: Option<f64>,
+    pub target_deadband: Option<f64>,
+}
+
+/// The IIDM tap changer PowSybl's PSS/E importer builds from a winding's
+/// control (psse-converter `TransformerConverter.defineRawTapChanger`,
+/// `defineTapPositionAndAdjustTapChangerToCurrentRatio`,
+/// `defineVoltageControl`, and `defineActivePowerControl`):
+///
+/// - `NTP` steps spread evenly from `RMI` to `RMA`, a ratio tap changer for
+///   `COD` 1 and 2 and a phase tap changer for `COD` 3. The present setting
+///   is a step; when it lies between two, it is added as one.
+/// - `COD` 1 regulates voltage at the controlled bus to `(VMA + VMI) / 2`
+///   with deadband `VMA - VMI`, both scaled by that bus's nominal kV.
+/// - `COD` 3 regulates active power to `(VMA + VMI) / 2` MW with deadband
+///   `VMA - VMI`.
+///
+/// PowSybl drops `COD` 2 and `COD` 0. IIDM has a reactive power regulation
+/// mode, so `COD` 2 becomes one, with the same target and deadband rule in
+/// MVAr; `COD` 0 with several steps becomes a ratio tap changer that does
+/// not regulate, so `RMA`, `RMI`, and `NTP` survive. A negative `COD`
+/// writes the regulation with `regulating` false. `COD` 4 and 5, and a
+/// control with one step, have no tap changer.
+///
+/// `present` is the winding's ratio or shift; `regulated_kv` is the nominal
+/// voltage of the controlled bus.
+pub(super) fn tap_control_from_psse(
+    control: &TransformerControl,
+    present: f64,
+    regulated_kv: f64,
+) -> Option<TapControl> {
+    let kind = match control.mode {
+        TransformerControlMode::Fixed
+        | TransformerControlMode::Voltage
+        | TransformerControlMode::ReactiveFlow => TapChangerKind::Ratio,
+        TransformerControlMode::ActiveFlow => TapChangerKind::Phase,
+        _ => return None,
+    };
+    if control.ntp <= 1 || !control.tap_min.is_finite() || !control.tap_max.is_finite() {
+        return None;
+    }
+    let (low, high) = if control.tap_min <= control.tap_max {
+        (control.tap_min, control.tap_max)
+    } else {
+        (control.tap_max, control.tap_min)
+    };
+    let increment = (high - low) / f64::from(control.ntp - 1);
+    let mut steps = (0..control.ntp)
+        .map(|step| low + increment * f64::from(step))
+        .collect::<Vec<_>>();
+    let on_step = steps
+        .iter()
+        .position(|value| (value - present).abs() <= TAP_TOLERANCE);
+    let inserted_present = on_step.is_none();
+    let position = on_step.unwrap_or_else(|| {
+        let position = steps
+            .iter()
+            .position(|value| *value > present)
+            .unwrap_or(steps.len());
+        steps.insert(position, present);
+        position
+    });
+    let middle = f64::midpoint(control.band_min, control.band_max);
+    let width = control.band_max - control.band_min;
+    let (regulation_mode, regulation_value, target_deadband) = match control.mode {
+        TransformerControlMode::Voltage if regulated_kv > 0.0 => (
+            Some(TapChangerRegulationMode::Voltage),
+            Some(middle * regulated_kv),
+            Some(width * regulated_kv),
+        ),
+        TransformerControlMode::ReactiveFlow => (
+            Some(TapChangerRegulationMode::ReactivePower),
+            Some(middle),
+            Some(width),
+        ),
+        TransformerControlMode::ActiveFlow => (
+            Some(TapChangerRegulationMode::ActivePower),
+            Some(middle),
+            Some(width),
+        ),
+        _ => (None, None, None),
+    };
+    let regulating = control.enabled
+        && regulation_mode.is_some()
+        && target_deadband.is_some_and(|deadband| deadband >= 0.0)
+        && (regulation_mode != Some(TapChangerRegulationMode::Voltage)
+            || regulation_value.is_some_and(|value| value > 0.0));
+    Some(TapControl {
+        kind,
+        steps,
+        position,
+        inserted_present,
+        regulation_mode,
+        regulating,
+        regulation_value,
+        target_deadband,
+    })
+}
+
+/// The winding control PowSybl's PSS/E exporter states for an IIDM tap
+/// changer (psse-converter `TransformerConverter.findRatioData`): `NTP` is
+/// the step count, `RMA` and `RMI` the largest and smallest step, and the
+/// mode follows the regulation, the inverse of [`tap_control_from_psse`].
+/// The exporter leaves `VMA` and `VMI` at their defaults; this restates them
+/// from the target and deadband, so a control that crossed IIDM returns its
+/// band. A tap changer with one step states no control.
+pub(super) fn psse_control_from_tap(
+    tap: &TapControl,
+    controlled_bus: Option<BusId>,
+    regulated_kv: f64,
+) -> Option<TransformerControl> {
+    if tap.steps.len() <= 1 {
+        return None;
+    }
+    let mode = match (tap.kind, tap.regulation_mode) {
+        (TapChangerKind::Ratio, Some(TapChangerRegulationMode::Voltage)) => {
+            TransformerControlMode::Voltage
+        }
+        (TapChangerKind::Ratio, Some(TapChangerRegulationMode::ReactivePower)) => {
+            TransformerControlMode::ReactiveFlow
+        }
+        (TapChangerKind::Phase, Some(TapChangerRegulationMode::ActivePower)) => {
+            TransformerControlMode::ActiveFlow
+        }
+        _ => TransformerControlMode::Fixed,
+    };
+    let mut control = TransformerControl::new(mode);
+    control.enabled = mode != TransformerControlMode::Fixed && tap.regulating;
+    control.controlled_bus = controlled_bus;
+    control.tap_min = tap.steps.iter().copied().fold(f64::INFINITY, f64::min);
+    control.tap_max = tap.steps.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    control.ntp = u32::try_from(tap.steps.len()).unwrap_or(u32::MAX);
+    if let Some(value) = tap.regulation_value {
+        // IIDM before 1.12 states a target with no deadband.
+        let deadband = tap.target_deadband.unwrap_or(0.0);
+        let scale = match mode {
+            TransformerControlMode::Voltage if regulated_kv > 0.0 => Some(regulated_kv),
+            TransformerControlMode::ReactiveFlow | TransformerControlMode::ActiveFlow => Some(1.0),
+            _ => None,
+        };
+        if let Some(scale) = scale {
+            control.band_min = (value - deadband / 2.0) / scale;
+            control.band_max = (value + deadband / 2.0) / scale;
+        }
+    }
+    Some(control)
 }

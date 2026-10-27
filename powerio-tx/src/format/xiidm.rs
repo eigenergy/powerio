@@ -3985,16 +3985,42 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
                 };
                 branch.uid = Some(equipment.id.clone());
                 branch.in_service = connected1 && terminal_records[1].1.connected;
+                if equipment.kind == EquipmentKind::Transformer {
+                    let rated_u1 = required_f64(&equipment.attrs, "ratedU1")?;
+                    let rated_u2 = required_f64(&equipment.attrs, "ratedU2")?;
+                    let rho0 = (rated_u2 / level2.nominal_v) / (rated_u1 / level1.nominal_v);
+                    branch.control = winding_tap_control(
+                        parsed,
+                        equipment.ratio_tap.as_ref(),
+                        equipment.phase_tap.as_ref(),
+                        |rho| 1.0 / (rho0 * rho),
+                        &bus_builder,
+                        &voltage_levels,
+                    )?;
+                }
                 apply_branch_operational_limits(equipment, &mut branch, diagnostics)?;
                 branches.push(branch);
             }
             EquipmentKind::ThreeWindingTransformer => {
-                let transformer = read_three_winding_transformer(
+                let mut transformer = read_three_winding_transformer(
                     equipment,
                     &terminal_records,
                     &voltage_levels,
                     diagnostics,
                 )?;
+                for side in 0..3 {
+                    let rated_u = required_f64(&equipment.attrs, &format!("ratedU{}", side + 1))?;
+                    let level = voltage_levels[terminal_records[side].1.voltage_level.local_id()];
+                    let base_ratio = rated_u / level.nominal_v;
+                    transformer.windings[side].control = winding_tap_control(
+                        parsed,
+                        equipment.winding_ratio_taps[side].as_ref(),
+                        equipment.winding_phase_taps[side].as_ref(),
+                        |rho| base_ratio * rho,
+                        &bus_builder,
+                        &voltage_levels,
+                    )?;
+                }
                 transformers_3w.push(transformer);
             }
             EquipmentKind::VscConverterStation | EquipmentKind::LccConverterStation => {
@@ -6966,6 +6992,66 @@ fn resolve_terminal_reference(
     )))
 }
 
+/// The PSS/E style control a winding's IIDM tap changers state, as PowSybl's
+/// PSS/E exporter reads it ([`super::powsybl_psse::psse_control_from_tap`]).
+/// When both tap changers are present, the phase tap changer's control is
+/// stated only when it alone regulates (psse-converter
+/// `TransformerConverter.findRatioDataRtcAndPtc`). `tap_of_rho` turns a
+/// ratio step's combined `rho` into the winding's tap ratio.
+fn winding_tap_control(
+    parsed: &ParsedXiidm,
+    ratio: Option<&TapChanger>,
+    phase: Option<&TapChanger>,
+    tap_of_rho: impl Fn(f64) -> f64,
+    bus_builder: &BusBuilder<'_>,
+    voltage_levels: &HashMap<&str, &RawVoltageLevel>,
+) -> Result<Option<crate::network::TransformerControl>> {
+    let (kind, tap, other, other_kind) = match (ratio, phase) {
+        (Some(ratio), Some(phase)) if phase.regulating && !ratio.regulating => {
+            (TapChangerKind::Phase, phase, Some(ratio), TapKind::Ratio)
+        }
+        (Some(ratio), phase) => (TapChangerKind::Ratio, ratio, phase, TapKind::Phase),
+        (None, Some(phase)) => (TapChangerKind::Phase, phase, None, TapKind::Ratio),
+        (None, None) => return Ok(None),
+    };
+    let other_rho = other
+        .and_then(|other| other.calculation_step(other_kind))
+        .map_or(1.0, |step| step.rho);
+    let steps = tap
+        .steps
+        .iter()
+        .map(|step| match kind {
+            TapChangerKind::Ratio => tap_of_rho(step.rho * other_rho),
+            TapChangerKind::Phase => -step.alpha,
+        })
+        .collect::<Vec<_>>();
+    let position = tap
+        .tap_position
+        .and_then(|position| usize::try_from(position.checked_sub(tap.low_tap_position)?).ok())
+        .unwrap_or(0);
+    let regulated = match &tap.regulation_terminal {
+        Some(reference) => resolve_regulating_bus(parsed, reference, bus_builder, voltage_levels)?,
+        None => None,
+    };
+    let regulated_kv = regulated
+        .and_then(|bus| bus_builder.buses.iter().find(|value| value.id == bus))
+        .map_or(0.0, |bus| bus.base_kv);
+    Ok(super::powsybl_psse::psse_control_from_tap(
+        &super::powsybl_psse::TapControl {
+            kind,
+            steps,
+            position,
+            inserted_present: false,
+            regulation_mode: tap.regulation_mode,
+            regulating: tap.regulating,
+            regulation_value: tap.regulation_value,
+            target_deadband: tap.target_deadband,
+        },
+        regulated,
+        regulated_kv,
+    ))
+}
+
 fn resolve_regulating_bus(
     parsed: &ParsedXiidm,
     reference: &RawTerminalReference,
@@ -7492,6 +7578,7 @@ fn derive_detailed_connectivity(
 /// order in its vectors; each grouped vector below is filled in that same
 /// order so indexing does not change emitted XML ordering.
 struct XiidmWriteIndex<'a> {
+    network: &'a BalancedNetwork,
     /// `true` when the caller supplied detailed terminals. In that case an
     /// absent terminal power value stays absent instead of being filled from
     /// the balanced calculation view.
@@ -7625,6 +7712,7 @@ impl<'a> XiidmWriteIndex<'a> {
         }
 
         let mut index = Self {
+            network,
             supplied_detailed_connectivity: network.detailed_connectivity().is_some(),
             base_mva: network.base_mva(),
             omitted_fields: detailed
@@ -9420,6 +9508,12 @@ fn slack_terminal_equipment(network: &BalancedNetwork) -> Option<TerminalReferen
         .iter()
         .find(|bus| bus.kind == BusType::Ref)?
         .id;
+    terminal_at_bus(network, reference)
+}
+
+/// An equipment terminal at `reference`: an injection before a branch or
+/// three winding transformer terminal, in service before out of service.
+fn terminal_at_bus(network: &BalancedNetwork, reference: BusId) -> Option<TerminalReference> {
     let one = |kind: &'static str, uid: Option<&str>, bus: BusId, in_service: bool| {
         (kind, uid.map(str::to_owned), 1_u8, bus, in_service)
     };
@@ -12054,8 +12148,30 @@ fn write_three_winding_transformer(
         });
     let zbase = rated_u0 * rated_u0 / index.base_mva;
     let star = transformer.calc_star_impedances();
-    let taps: [Vec<&NetworkTapChanger>; 3] =
-        std::array::from_fn(|side| transformer_tap_changers(index, &component, side as u8 + 1));
+    let winding_buses = transformer.windings.each_ref().map(|winding| winding.bus);
+    let synthesized: [Option<NetworkTapChanger>; 3] = std::array::from_fn(|side| {
+        let winding = &transformer.windings[side];
+        let control = winding.control.as_ref()?;
+        if !transformer_tap_changers(index, &component, side as u8 + 1).is_empty() {
+            return None;
+        }
+        let base_ratio = winding_nominal_kv(winding, buses[side]) / buses[side].base_kv;
+        tap_changer_from_control(
+            index,
+            &component,
+            side as u8 + 1,
+            &winding_buses,
+            control,
+            (winding.tap, winding.shift),
+            |tap| tap / base_ratio,
+            diagnostics,
+        )
+    });
+    let taps: [Vec<&NetworkTapChanger>; 3] = std::array::from_fn(|side| {
+        let mut taps = transformer_tap_changers(index, &component, side as u8 + 1);
+        taps.extend(synthesized[side].as_ref());
+        taps
+    });
     let unapply = |value: f64, factor: f64| {
         if factor.abs() <= f64::EPSILON {
             value
@@ -12105,11 +12221,15 @@ fn write_three_winding_transformer(
         limits_attributes,
     ));
     for (side, (winding, bus)) in transformer.windings.iter().zip(buses).enumerate() {
-        if !taps[side].is_empty() {
+        if synthesized[side].is_none() && !taps[side].is_empty() {
             for tap in &taps[side] {
                 write_tap_changer(tap, true, output, diagnostics);
             }
             continue;
+        }
+        let synthesized_kind = synthesized[side].as_ref().map(|tap| tap.kind);
+        if let Some(tap) = &synthesized[side] {
+            write_tap_changer(tap, true, output, diagnostics);
         }
         let rated_u = winding_nominal_kv(winding, bus);
         let base_ratio = rated_u / bus.base_kv;
@@ -12118,7 +12238,7 @@ fn write_three_winding_transformer(
         } else {
             winding.tap / base_ratio
         };
-        if (rho - 1.0).abs() > f64::EPSILON {
+        if synthesized_kind != Some(TapChangerKind::Ratio) && (rho - 1.0).abs() > f64::EPSILON {
             output.push_str(&format!(
                 "      <iidm:ratioTapChanger{} tapPosition=\"0\" lowTapPosition=\"0\" loadTapChangingCapabilities=\"false\">\n        <iidm:step rho=\"{}\"/>\n      </iidm:ratioTapChanger{}>\n",
                 side + 1,
@@ -12126,7 +12246,7 @@ fn write_three_winding_transformer(
                 side + 1,
             ));
         }
-        if winding.shift != 0.0 {
+        if synthesized_kind != Some(TapChangerKind::Phase) && winding.shift != 0.0 {
             output.push_str(&format!(
                 "      <iidm:phaseTapChanger{} tapPosition=\"0\" lowTapPosition=\"0\" loadTapChangingCapabilities=\"false\">\n        <iidm:step rho=\"1\" alpha=\"{}\"/>\n      </iidm:phaseTapChanger{}>\n",
                 side + 1,
@@ -12161,7 +12281,7 @@ fn write_three_winding_transformer(
     }
     output.push_str("    </iidm:threeWindingsTransformer>\n");
     for (side, winding) in transformer.windings.iter().enumerate() {
-        if let Some(control) = &winding.control {
+        if let Some(control) = winding.control.as_ref().filter(|_| taps[side].is_empty()) {
             diagnostics.push(
                 &codes::EMIT_XIIDM.field_dropped,
                 format!(
@@ -12472,7 +12592,7 @@ fn write_line(
         write_branch_operational_limits(index, &component, branch, 2, output, diagnostics);
     }
     output.push_str("  </iidm:line>\n");
-    warn_branch_fields(id, branch, diagnostics);
+    warn_branch_fields(id, branch, false, diagnostics);
 }
 
 fn write_transformer(
@@ -12488,7 +12608,24 @@ fn write_transformer(
     let to = index.bus(branch.to);
     let zbase = to.base_kv * to.base_kv / index.base_mva;
     let charging = branch.calc_terminal_charging();
-    let taps = transformer_tap_changers(index, &component, 1);
+    let mut taps = transformer_tap_changers(index, &component, 1);
+    let synthesized = if taps.is_empty() {
+        branch.control.as_ref().and_then(|control| {
+            tap_changer_from_control(
+                index,
+                &component,
+                1,
+                &[branch.from, branch.to],
+                control,
+                (branch.calc_effective_tap(), branch.shift),
+                |tap| 1.0 / tap,
+                diagnostics,
+            )
+        })
+    } else {
+        None
+    };
+    taps.extend(synthesized.as_ref());
     let rho_factor = tap_step_factor(&taps, |step| step.rho);
     let resistance_factor = tap_step_factor(&taps, |step| {
         1.0 + step.resistance_deviation_percent / 100.0
@@ -12540,7 +12677,113 @@ fn write_transformer(
     }
     write_branch_operational_limits(index, &component, branch, 2, output, diagnostics);
     output.push_str("    </iidm:twoWindingsTransformer>\n");
-    warn_branch_fields(id, branch, diagnostics);
+    warn_branch_fields(id, branch, !taps.is_empty(), diagnostics);
+}
+
+/// The XIIDM tap changer for a winding's PSS/E style control when the source
+/// supplied no tap changer, following PowSybl's PSS/E importer
+/// ([`super::powsybl_psse::tap_control_from_psse`]). `present` is the
+/// winding's ratio and shift, `own_buses` the transformer's terminal buses in
+/// side order, and `step_rho` turns a step's tap ratio into the IIDM `rho`.
+#[allow(clippy::too_many_arguments)]
+fn tap_changer_from_control(
+    index: &XiidmWriteIndex<'_>,
+    transformer: &ComponentId,
+    winding: u8,
+    own_buses: &[BusId],
+    control: &crate::network::TransformerControl,
+    present: (f64, f64),
+    step_rho: impl Fn(f64) -> f64,
+    diagnostics: &mut Diagnostics,
+) -> Option<NetworkTapChanger> {
+    let regulated_kv = control
+        .controlled_bus
+        .and_then(|bus| index.buses.get(&bus))
+        .map_or(0.0, |bus| bus.base_kv);
+    let (present_tap, present_shift) = present;
+    let present = if control.mode == TransformerControlMode::ActiveFlow {
+        present_shift
+    } else {
+        present_tap
+    };
+    let tap = super::powsybl_psse::tap_control_from_psse(control, present, regulated_kv)?;
+    // PowSybl regulates a terminal connected at the controlled bus
+    // (psse-converter `TransformerConverter.defineRegulatingTerminal`); the
+    // transformer's own terminal there comes first.
+    let terminal = control.controlled_bus.and_then(|bus| {
+        own_buses
+            .iter()
+            .position(|own| *own == bus)
+            .and_then(|side| u8::try_from(side + 1).ok())
+            .map(|terminal| TerminalReference {
+                equipment: transformer.clone(),
+                terminal,
+            })
+            .or_else(|| terminal_at_bus(index.network, bus))
+    });
+    let quantity = match tap.kind {
+        TapChangerKind::Ratio => "ratio",
+        TapChangerKind::Phase => "phase shift",
+    };
+    if tap.inserted_present {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.value_substituted,
+            format!(
+                "transformer `{}` winding {winding} present {quantity} lies between its {} evenly spaced tap steps; the XIIDM tap changer states it as a step of its own, as PowSybl's PSS/E importer does, so it has {} steps",
+                transformer.local_id(),
+                control.ntp,
+                tap.steps.len(),
+            ),
+        );
+    }
+    if tap.regulation_mode.is_some() && terminal.is_none() {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.field_dropped,
+            format!(
+                "transformer `{}` winding {winding} regulates no bus with an XIIDM terminal; its tap changer is written as not regulating",
+                transformer.local_id(),
+            ),
+        );
+    }
+    let steps = tap
+        .steps
+        .iter()
+        .zip(0..)
+        .map(|(value, position)| NetworkTapChangerStep {
+            position,
+            rho: match tap.kind {
+                TapChangerKind::Ratio => step_rho(*value),
+                TapChangerKind::Phase => 1.0,
+            },
+            alpha_degrees: match tap.kind {
+                TapChangerKind::Ratio => 0.0,
+                TapChangerKind::Phase => -value,
+            },
+            resistance_deviation_percent: 0.0,
+            reactance_deviation_percent: 0.0,
+            conductance_deviation_percent: 0.0,
+            susceptance_deviation_percent: 0.0,
+        })
+        .collect();
+    Some(NetworkTapChanger {
+        component: None,
+        transformer: transformer.clone(),
+        winding,
+        kind: tap.kind,
+        tap_position: i32::try_from(tap.position).ok(),
+        solved_tap_position: None,
+        low_tap_position: 0,
+        neutral_tap_position: None,
+        normal_tap_position: None,
+        voltage_step_increment_percent: None,
+        load_tap_changing_capabilities: tap.kind == TapChangerKind::Ratio,
+        regulating: tap.regulating && terminal.is_some(),
+        regulation_mode: tap.regulation_mode,
+        regulation_value: tap.regulation_value,
+        target_deadband: tap.target_deadband,
+        regulation_terminal: terminal,
+        steps,
+    })
 }
 
 fn has_branch_operational_limits(branch: &Branch) -> bool {
@@ -12866,14 +13109,20 @@ fn write_loading_limits(
     output.push_str(&format!("        </iidm:{element}>\n"));
 }
 
-fn warn_branch_fields(id: &str, branch: &Branch, diagnostics: &mut Diagnostics) {
+/// `control_written` is true when a tap changer states the branch's control.
+fn warn_branch_fields(
+    id: &str,
+    branch: &Branch,
+    control_written: bool,
+    diagnostics: &mut Diagnostics,
+) {
     if branch.has_angle_limits() {
         diagnostics.push(
             &codes::EMIT_XIIDM.field_dropped,
             format!("branch `{id}` angle bounds have no XIIDM branch attribute"),
         );
     }
-    if let Some(control) = &branch.control {
+    if let Some(control) = branch.control.as_ref().filter(|_| !control_written) {
         diagnostics.push(
             &codes::EMIT_XIIDM.field_dropped,
             format!(

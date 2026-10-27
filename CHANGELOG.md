@@ -31,6 +31,18 @@
   they wrote none and the reader chose another bus (bus 6 instead of bus 1 in
   PowSybl's eight bus PSS/E export).
 
+- Transformer tap control now crosses between PSS/E and IIDM in both
+  directions instead of being dropped one way and defaulted the other. A
+  PSS/E winding control becomes an IIDM tap changer with NTP steps spread
+  evenly from RMI to RMA, as PowSybl's importer builds it: COD 1 regulates
+  voltage at the controlled bus to the middle of VMA and VMI with their
+  difference as deadband, COD 2 regulates reactive power, COD 3 becomes a
+  phase tap changer regulating active power, and COD 0 a tap changer that
+  does not regulate. IIDM tap changers read back as the same COD, CONT, RMA,
+  RMI, VMA, VMI, and NTP, for two and three winding transformers. When the
+  present ratio lies between steps it becomes a step of its own, with a
+  diagnostic.
+
 - The conversion matrix grades each cell by its worst finding: exact,
   lossless, restated (the target required a value and the writer supplied
   it), approximate, dropped, or failed. The PR comment shows that level, the
