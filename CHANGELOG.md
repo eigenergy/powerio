@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- The balanced SINCAL reader now reads a line whose `Line.fr` is not 1. It
+  applies `fr` as the multiconductor reader does: the line's current limit and
+  thermal rating are `Ith * ParSys * fr`, and its impedance is unchanged.
+  Before, such a line was refused. `SincalContainer::archive_with(name,
+  ArchiveOptions::default())` builds `.sinx` packaging through an options
+  struct that can gain fields later; the `Archive { project_name }` variant
+  is kept and writes the same bytes. The multiconductor reader checks the
+  line tables' schema once per parse instead of once per line, and its
+  mapping report looks up one table instead of listing all of them for each
+  element, so a 1,000-line feeder on the 250-table native schema reads in
+  about 0.3 s (release build) within the fixed query budget.
 - The conversion matrix grades each cell by its worst finding: exact,
   lossless, restated (the target required a value and the writer supplied
   it), approximate, dropped, or failed. The PR comment shows that level, the

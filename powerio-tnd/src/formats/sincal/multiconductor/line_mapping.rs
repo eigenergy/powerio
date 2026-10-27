@@ -160,7 +160,11 @@ impl NativeDatabase {
         })
     }
 
+    /// A failed check is not cached, so every line still reports it.
     fn require_line_mapping_tables(&self) -> Result<()> {
+        if self.line_tables_checked.get().is_some() {
+            return Ok(());
+        }
         require_table(&self.connection, "Line", &["Element_ID", "Variant_ID"])?;
         require_table(
             &self.connection,
@@ -181,6 +185,7 @@ impl NativeDatabase {
             &["Variant_ID", "f", "Temp_Cond"],
         )?;
         require_table(&self.connection, "LineSeg", &["Variant_ID", "Line_ID"])?;
+        self.line_tables_checked.get_or_init(|| ());
         Ok(())
     }
 

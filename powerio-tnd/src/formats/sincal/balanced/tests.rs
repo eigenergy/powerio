@@ -76,11 +76,39 @@ fn modern_schemas_apply_the_voltage_level_line_temperature() {
 }
 
 #[test]
-fn a_line_factor_other_than_one_is_refused_until_its_meaning_is_verified() {
-    let error = read_balanced_snapshot(&native("UPDATE Line SET fr=0.8"), "fr")
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains(".fr:"), "{error}");
+fn the_line_factor_scales_the_thermal_rating_and_leaves_impedance_alone() {
+    let base = read_balanced_snapshot(&native(""), "fr=1").unwrap();
+    let rated = read_balanced_snapshot(&native("UPDATE Line SET fr=0.8"), "fr=0.8").unwrap();
+    let mut lines = 0;
+    for (a, b) in base.branches().iter().zip(rated.branches()) {
+        assert_eq!(a.uid, b.uid);
+        assert_eq!(
+            [a.r, a.x, a.b].map(f64::to_bits),
+            [b.r, b.x, b.b].map(f64::to_bits)
+        );
+        if a.uid.as_deref() == Some("sincal:element:19") {
+            assert_eq!(a.rate_a.to_bits(), b.rate_a.to_bits());
+            continue;
+        }
+        let (Some(ia), Some(ib)) = (a.current_ratings, b.current_ratings) else {
+            panic!("line without a current rating");
+        };
+        assert!(ia.c_rating_a > 0.0);
+        assert!((ib.c_rating_a / ia.c_rating_a - 0.8).abs() < 1e-12);
+        assert!((b.rate_a / a.rate_a - 0.8).abs() < 1e-12);
+        lines += 1;
+    }
+    assert_eq!(lines, 13);
+    for edit in [
+        "UPDATE Line SET fr=0",
+        "UPDATE Line SET fr=-1",
+        "UPDATE Line SET fr=5e-324",
+    ] {
+        let error = read_balanced_snapshot(&native(edit), "bad fr")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(".fr:"), "{edit}: {error}");
+    }
 }
 
 #[test]
@@ -327,4 +355,18 @@ fn distribution_schema_admission_does_not_expand_the_balanced_profile() {
         error.contains("balanced electrical adapter does not yet support schema 15"),
         "{error}"
     );
+}
+
+#[test]
+fn a_thousand_line_feeder_reads_within_the_fixed_query_budget() {
+    // Terminals by element, buses by ID and the profile tables are each read
+    // once per parse, so 1,000 lines fit the same fixed query budget as 13.
+    let bytes = crate::formats::sincal::testkit::grown_authentic_feeder(1000);
+    let start = std::time::Instant::now();
+    let db = DatabaseSnapshot::decode(&bytes, None).unwrap();
+    let net = read_balanced_snapshot(&db, "grown").unwrap();
+    let elapsed = start.elapsed();
+    assert_eq!(net.buses().len(), 1015);
+    assert_eq!(net.branches().len(), 1014);
+    eprintln!("balanced: 1,000 added lines read in {elapsed:?}");
 }
