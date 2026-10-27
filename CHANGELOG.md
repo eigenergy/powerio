@@ -65,31 +65,51 @@
   PTDF columns, and LODF columns from one factorization and one solve per
   row or column, without forming the full matrices.
 
-- HVDC lines no longer vanish from the balanced calculations. Every reader
-  stores an `Hvdc` line in the MATPOWER `dcline` convention, and
-  `IndexedNetwork::p_hvdc` and `q_hvdc` now fold each in-service line onto
-  its terminal buses as a fixed injection at its stated operating point: the
-  from end withdraws `pf` and injects `qf`, the to end injects `pt` and `qt`.
-  `DcPfInstance` and `AcPfInstance` add the injections to each bus's stated
-  net injection, and the DC OPF preparation carries them as `p_hvdc`, so
-  `fixed_withdrawal` is now `pd + gs + p_shift - p_hvdc` and the bundle adds
-  `p_hvdc.mtx`. A PSS/E two-terminal DC line therefore moves its scheduled
-  power between the AC systems it joins, and a MATPOWER `dcline` row injects
-  what MATPOWER's `toggle_dcline` injects. A line that is out of service, or
-  whose terminal bus is isolated or undeclared, injects nothing.
-  `HvdcTreatment::Ignore` gives the earlier result through
-  `DcPfInstance::from_network_with_hvdc`,
-  `AcPfInstance::from_network_with_hvdc`,
+- HVDC lines enter the balanced power flow instances and the DC OPF
+  preparation as fixed bus injections (#572). The canonical interface is the
+  named bus-to-device terminal view `Hvdc::calc_bus_to_device_powers`, which
+  returns `HvdcTerminalPowers`: at each end, active and reactive power
+  positive from that end's AC bus into the HVDC system (both converters and
+  the DC line as one device), the direction AC branch terminal flows use, so
+  `p_from + p_to` is the active power lost. The stored `pf`, `pt`, `qf`, and
+  `qt` keep MATPOWER's `dcline` signs throughout 0.11.x, in Rust, PowerIO IR,
+  and the C ABI; the view converts them in one place (`p_from = pf`,
+  `q_from = -qf`, `p_to = -pt`, `q_to = -qt`), and changing the stored
+  representation waits for an agreed migration (#700). A line sending 100 MW
+  and delivering 97 MW, its converters absorbing 30 and 25 MVAr, has terminal
+  powers `(100, 30)` and `(-97, 25)` and a 3 MW loss. Each bus receives the
+  negative of its terminal power: `IndexedNetwork::p_hvdc` and `q_hvdc` fold
+  each in service line onto its terminal buses, `DcPfInstance` and
+  `AcPfInstance` add the injections to each bus's stated net injection, and
+  the DC OPF preparation carries them as `p_hvdc`, so `fixed_withdrawal` is
+  now `pd + gs + p_shift - p_hvdc` and the bundle adds `p_hvdc.mtx`. A PSS/E
+  two-terminal DC line therefore moves its scheduled power between the AC
+  systems it joins, and a MATPOWER `dcline` row injects what MATPOWER's
+  `toggle_dcline` injects. A line that is out of service, or whose terminal
+  bus is isolated or undeclared, injects nothing. `HvdcTreatment::Ignore`
+  gives the earlier result through `DcPfInstance::from_network_with_hvdc`,
+  `AcPfInstance::from_network_with_hvdc`, `AcPfInstance::new_with_hvdc`,
   `DcOpfAssemblyOptions::with_hvdc_treatment`, and `powerio dcopf --hvdc
   ignore`. `BalancedNetwork::calc_hvdc_injections` lists the injections, and
   the `BUILD.HVDC.FIXED_INJECTION`, `BUILD.HVDC.IGNORED`, and
   `BUILD.HVDC.TERMINAL_INACTIVE` diagnostics state what was injected or left
-  out. A PowerIO IR `DcPfInstance` derives its injections from its network
-  on read, so one an earlier release wrote from a network with in-service
-  HVDC lines now reads back with them; `serialize` refuses a `DcPfInstance`
-  that ignores an injecting line rather than store it changed.
+  out.
+
+  The PowerIO IR change is additive. `powerio.DcPfInstance` and
+  `powerio.AcPfInstance` gain one optional field, `hvdc_treatment`
+  (`fixed_injection` or `ignore`, in `pio-ir/2/0.11.7/schema.json`); no
+  existing field changes layout or meaning, and IR stays at version 2.
+  Writing always states the treatment, so an instance, alone or inside a
+  stored solution, reads back with the treatment it was built with. A
+  document without the field, as every earlier release wrote, reads as
+  `ignore`, the calculation it denoted when written: a bus specification of
+  -40 MW stays -40 MW, also after `with_network` replaces the network with an
+  identical one. An earlier reader rejects a document that states the field
+  as an unknown field rather than read it under another treatment.
   `pio_build_dc_opf_preparation` keeps HVDC lines out, because the ABI 7 bus
-  view has no column to state their injection.
+  view has no column to state their injection. The AC OPF preparation does
+  not carry HVDC injections yet, and GridFM output reports HVDC lines as
+  omitted.
 
 
 ## 0.11.6
