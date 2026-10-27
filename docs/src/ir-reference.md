@@ -1466,7 +1466,7 @@ Schema definition: `AcOtsOptions`.
 |---|---|---|---|---|---|
 | `switchable` | `BranchSelection` | | | an `only` identity names one branch, once | required |
 | `switching_costs` | array of `BranchSwitchingCost` | | | one record per branch at most | `[]`: switching costs nothing |
-| `islanding` | token | | | `forbidden` (one AC island) or `allowed` (each island gets one reference bus; no load is shed) | required |
+| `islanding` | token | | | `forbidden` (no AC island of the initial topology may split; islands that are separate initially stay valid, and closing a branch may join islands) or `allowed` (islands may split, and each final island gets one reference bus). Under either policy a final topology that leaves buses a generator supplied initially in an island with no in-service generator is refused; no load is shed | required |
 | `max_open` | integer or null | branches | | at most the branch count, at least the open branches that cannot switch; counts every open branch | null: no budget |
 | `max_switched` | integer or null | branches | | at most the switchable count; counts changes against the initial status | null: no budget |
 | `current_limits` | token | | | `skip`, `stated` (the records below), or `derive_from_rate_a` (PowerModels' `calc_current_limits!`) | required |
@@ -1908,8 +1908,11 @@ Schema definition: `AcOpfSolution`.
 The final branch statuses of an AC optimal transmission switching instance
 and the AC optimal power flow solution of the fixed-topology problem they
 derive. Reading the document checks the topology against the instance and
-requires `ac_solution.instance` to state exactly that fixed problem, every
-value to be finite, and every open branch to carry zero flow. The objective
+requires `ac_solution.instance` to state exactly that fixed problem and every
+open branch to carry zero flow. A `NaN` flow on an open branch records no
+flow. Other values follow the AC optimal power flow solution's own rules,
+which accept `NaN` for an out-of-service generator or a non-converged
+objective. The objective
 is the AC objective plus the switching cost when the instance's objective
 states `branch_switching_cost`.
 

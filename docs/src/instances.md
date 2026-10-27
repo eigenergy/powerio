@@ -78,9 +78,9 @@ limitations, and applicability decisions define the mathematical problem.
 `AcOtsInstance` is an AC OPF whose branch statuses are decisions. It keeps
 every physical branch, takes the network's `in_service` bits as the initial
 topology, and states which branches may switch, what opening or closing each
-one costs, budgets on open branches and on status changes, whether islands may
-form, and which branch current limits apply. `to_ac_ots_instance` builds the
-default from a network or an AC OPF: every initially in-service branch may
+one costs, budgets on open branches and on status changes, whether an island
+of the initial topology may split, and which branch current limits apply.
+`to_ac_ots_instance` builds the default from a network or an AC OPF: every initially in-service branch may
 switch, at zero cost. A solver chooses the final statuses;
 `fix_ac_ots_topology` derives the AC OPF to solve over them and reports what
 that problem leaves out, and `ac_ots_solution` attaches its solution after
