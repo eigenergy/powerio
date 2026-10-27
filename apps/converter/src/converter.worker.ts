@@ -1,5 +1,6 @@
 import init, { capabilities, Conversion } from './wasm/powerio_wasm';
 import type { BrowserFile } from './types';
+import { inputLimit } from './input-limits';
 
 let conversion: Conversion | undefined;
 self.onmessage = async ({ data }) => {
@@ -14,9 +15,8 @@ self.onmessage = async ({ data }) => {
       conversion?.free();
       conversion = new Conversion(data.name);
       const files = data.files as BrowserFile[];
-      if (files.length > 4096 || files.reduce((sum, entry) => sum + entry.file.size, 0) > 64 * 1024 * 1024) {
-        throw new Error('This project exceeds 4096 files or 64 MiB. Choose a smaller project or use PowerIO in the terminal.');
-      }
+      const limit = inputLimit(files);
+      if (limit) throw new Error(limit.message);
       for (const entry of files) {
         const added = JSON.parse(conversion.add_file(entry.path, new Uint8Array(await entry.file.arrayBuffer())));
         if (!added.ok) { result = added; break; }
