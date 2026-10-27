@@ -21,17 +21,46 @@ ADDITIVE_TYPES = {
     "powerio.MonitoredSet",
     "powerio.SubsystemSet",
 }
+# Records that gained an optional field after 0.11.0. The power flow
+# instances `to_dc_pf_instance` and `to_ac_pf_instance` build carry HVDC lines
+# as fixed injections, which their documents state as `hvdc_treatment`; a
+# 0.11.0 reader rejects the field as unknown rather than read the document
+# under a different meaning. An `ignore` instance is written without the field.
+# Without it the record is the one 0.11.0 wrote, and 0.11.0 reads it.
+ADDED_FIELDS = {
+    "powerio.AcPfInstance": "hvdc_treatment",
+    "powerio.DcPfInstance": "hvdc_treatment",
+}
 
 
 def read_with_legacy(directory: Path) -> None:
     assert powerio.__version__ == "0.11.0", powerio.__version__
     accepted = 0
     rejected = set()
+    rejected_fields = set()
     for path in sorted(directory.glob("*.json")):
         document = json.loads(path.read_text())
         kind = document["value"]["type"]
         assert document["version"] == 2, path
-        if kind in ADDITIVE_TYPES:
+        if kind in ADDED_FIELDS:
+            field = ADDED_FIELDS[kind]
+            assert field in document["value"]["data"], (path, field)
+            try:
+                powerio.deserialize(path)
+            except powerio.PowerIOError as error:
+                assert "unknown field" in str(error) and field in str(error), error
+                rejected_fields.add(kind)
+            else:
+                raise AssertionError(f"0.11.0 unexpectedly read {kind} with {field}")
+            del document["value"]["data"][field]
+            without = directory / "without-field" / path.name
+            without.parent.mkdir(exist_ok=True)
+            without.write_text(json.dumps(document))
+            module = powerio.deserialize(without)
+            decoded = json.loads(powerio.serialize(module).text)
+            assert decoded["value"] == document["value"], path
+            accepted += 1
+        elif kind in ADDITIVE_TYPES:
             try:
                 powerio.deserialize(path)
             except powerio.PowerIOError as error:
@@ -45,9 +74,11 @@ def read_with_legacy(directory: Path) -> None:
             assert decoded["value"] == document["value"], path
             accepted += 1
     assert accepted == 8 and rejected == ADDITIVE_TYPES, (accepted, sorted(rejected))
+    assert rejected_fields == set(ADDED_FIELDS), sorted(rejected_fields)
     print(
         f"IR 2 compatibility: 0.11.0 read {accepted} existing types "
-        f"and rejected only the {len(rejected)} new types"
+        f"and rejected only the {len(rejected)} new types and the "
+        f"{len(rejected_fields)} records stating a new field"
     )
 
 
