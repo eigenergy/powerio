@@ -415,6 +415,16 @@ file `END` are written after the `END` the writer states.
 
 `mon.rs` reads `.mon` into `MonitoredSet` and writes it back with `to_mon`.
 
+### kV-qualified monitor statements
+
+Subsystem branch and tie monitors accept an optional inclusive `KVRANGE lo hi`. For branches, both terminals must be within the band; for ties, the terminal inside the subsystem must be within the band. Bounds must be finite and ascending. Reversed or non-finite bounds remain retained source text.
+
+A voltage scope may qualify a subsystem by base kV (`SUBSYSTEM name KV x`). The selected buses are filtered using the existing `KV_TOLERANCE`.
+
+### Four-value voltage ranges
+
+`MONITOR VOLTAGE RANGE scope lo hi pre_min pre_max` states post-contingency low/high first and pre-contingency low/high second. The existing two-value form remains unchanged; invalid bands stay as retained source text. The writer preserves the form, and resolution exposes the pre-contingency band.
+
 ```text
 /PSS(R)E 34
 COM MONITORED element file entry created by PSS(R)E Config File Builder
@@ -426,11 +436,12 @@ END
 
 | Statement | Synonyms | Reads as |
 | --- | --- | --- |
-| `MONITOR BRANCHES IN SUBSYSTEM name [3WLOWVOLTAGE]` | `BRANCHES`, `LINES`; `IN`, `FROM` | `BranchesInSubsystem { subsystem, low_voltage_3w }` |
-| `MONITOR TIES FROM SUBSYSTEM name` | `IN`, `FROM` | `TiesFromSubsystem { subsystem }` |
-| `MONITOR BRANCHES` ... `END`, holding `i j [ckt]` | `BRANCHES`, `LINES` | `Branches(Vec<BranchRef>)` |
+| `MONITOR BRANCHES IN SUBSYSTEM name [3WLOWVOLTAGE] [KVRANGE lo hi]` | `BRANCHES`, `LINES`; `IN`, `FROM` | `BranchesInSubsystem { subsystem, low_voltage_3w }`, or with `KVRANGE` `BranchesInSubsystemKvRange { subsystem, low_voltage_3w, kv_range }` |
+| `MONITOR TIES FROM SUBSYSTEM name [KVRANGE lo hi]` | `IN`, `FROM` | `TiesFromSubsystem { subsystem }`, or with `KVRANGE` `TiesFromSubsystemKvRange { subsystem, kv_range }` |
+| `MONITOR BRANCHES` ... `END`, holding `i j [ckt]` or `[BRANCH] FROM BUS i TO BUS j [CIRCUIT c]` | `BRANCHES`, `LINES`; `LINE` | `Branches(Vec<BranchRef>)` |
+| `MONITOR BRANCH FROM BUS i TO BUS j [CIRCUIT c]` | `LINE`; `BUS` optional; `CKT` | `Branches` holding that one branch |
 | `MONITOR INTERFACE name [RATING x [MW]]` ... `END` | | `Interface { name, rating_mw, branches }` |
-| `MONITOR VOLTAGE RANGE scope lo hi` | | `VoltageRange { scope, vmin, vmax }` |
+| `MONITOR VOLTAGE RANGE scope lo hi [pre_min pre_max]` | | `VoltageRange { scope, vmin, vmax }`, or with the pre-contingency pair `VoltageRangeWithPre { scope, vmin, vmax, pre_min, pre_max }` |
 | `MONITOR VOLTAGE DEVIATION scope down [up]` | | `VoltageDeviation { scope, down, up }` |
 
 A `MONITOR VOLTAGE RANGE` states its band low end first; one whose ends run
@@ -439,9 +450,15 @@ finite, so a value that is not keeps its line the same way.
 
 A `MONITOR BRANCHES` line with nothing after it opens a block of branch lines
 that runs to the next `END`, and `MONITOR INTERFACE` always opens one. Inside a
-block, `i j` names circuit `1` and `i j ckt` names that circuit. A scope is one
-of `ALL BUSES`, `SUBSYSTEM name`, `BUS n`, `AREA n`, `ZONE n`, `OWNER n`, and
-`KV x`.
+block, `i j` names circuit `1` and `i j ckt` names that circuit, and a line in
+the contingency file spelling, `[BRANCH | LINE] FROM BUS i TO BUS j [CIRCUIT
+c]`, names the same branch, with or without a leading `MONITOR`. A `MONITOR
+BRANCH` line in that spelling outside a block is a block of one branch, and
+the writer states it as one. A third `TO BUS k`, which names
+a three winding transformer, has no `BranchRef`, so the line is kept as text. A
+scope is one
+of `ALL BUSES`, `SUBSYSTEM name [KV x]`, `BUS n`, `AREA n`, `ZONE n`,
+`OWNER n`, and `KV x`.
 
 Files carry one or two file level `END`s and both read the same: the first ends
 the file, a further bare `END` states nothing, and any other statement after it

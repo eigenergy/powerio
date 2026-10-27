@@ -1251,7 +1251,7 @@ fn insert_impedance_matrices(o: &mut Map<String, Value>, c: &DistLineCode, base_
 /// (the same math the reference dss2eng inherits): sequence impedances from
 /// the short circuit levels, then self/mutual phase values filled over all
 /// conductors including the neutral.
-fn thevenin(vs: &VoltageSource, n_cond: usize) -> (ConductorMatrix, ConductorMatrix) {
+pub(crate) fn thevenin(vs: &VoltageSource, n_cond: usize) -> (ConductorMatrix, ConductorMatrix) {
     let get = |key: &str| Writer::extras_f64(&vs.extras, key);
     let basekv = get("basekv").unwrap_or_else(|| {
         // Reconstruct from the magnitude when basekv was defaulted.

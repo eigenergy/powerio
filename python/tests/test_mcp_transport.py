@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -12,17 +13,20 @@ pytest.importorskip("mcp", reason="powerio[mcp] not installed (needs Python 3.10
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from powerio.mcp.sandbox import ALLOWED_ROOTS_ENV
+
+import powerio
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
 TIMEOUT = 60.0
 
 
-def _run(steps):
+def _run(steps, env=None):
     async def go():
         parameters = StdioServerParameters(
             command=sys.executable,
             args=["-m", "powerio.mcp"],
-            env=dict(os.environ),
+            env={**os.environ, **(env or {})},
         )
         async with stdio_client(parameters) as (read, write):
             async with ClientSession(
@@ -37,6 +41,92 @@ def _run(steps):
 def _payload(result):
     assert not result.is_error, result.content[0].text
     return json.loads(result.content[0].text)
+
+
+def _refusal(result):
+    assert result.is_error, result.content[0].text
+    return result.content[0].text
+
+
+def test_refusals_reach_the_client_with_their_reason(tmp_path, time_series_powerio_ir):
+    outside = tmp_path / "case9.m"
+    shutil.copy2(DATA / "case9.m", outside)
+    network = powerio.parse(DATA / "case9.m").value
+    scenarios = powerio.ScenarioSet({"base": network, "high": network})
+    scenario_ir = powerio.serialize(scenarios.module).text
+
+    async def steps(session):
+        return [
+            _refusal(await session.call_tool("parse", {"path": str(outside)})),
+            # A missing directory and a path through a file, both outside the
+            # roots, get the same refusal as the existing file.
+            _refusal(
+                await session.call_tool(
+                    "parse", {"path": str(tmp_path / "missing" / "x.m")}
+                )
+            ),
+            _refusal(
+                await session.call_tool("parse", {"path": str(outside / "x.m")})
+            ),
+            _refusal(
+                await session.call_tool(
+                    "emit",
+                    {
+                        "format": "psse",
+                        "path": str(DATA / "case9.m"),
+                        "destination": str(tmp_path / "missing" / "out.raw"),
+                    },
+                )
+            ),
+            _refusal(
+                await session.call_tool(
+                    "parse", {"content": "x", "format": "no-such-format"}
+                )
+            ),
+            _refusal(
+                await session.call_tool(
+                    "summarize",
+                    {"powerio_ir": time_series_powerio_ir, "time_index": 2},
+                )
+            ),
+            _refusal(
+                await session.call_tool(
+                    "calc_matrix",
+                    {"matrix": "ptdf", "path": str(DATA / "case9.m"),
+                     "skip_zero_impedance": True},
+                )
+            ),
+            _refusal(
+                await session.call_tool(
+                    "summarize", {"powerio_ir": scenario_ir, "scenario_id": "peak"}
+                )
+            ),
+        ]
+
+    (
+        outside_roots,
+        missing_directory,
+        through_a_file,
+        destination,
+        unknown_format,
+        time_index,
+        flag,
+        scenario,
+    ) = _run(steps, env={ALLOWED_ROOTS_ENV: str(DATA)})
+    roots = f"outside allowed MCP roots: {DATA}"
+    assert outside_roots.endswith(f"`path` is {roots}")
+    assert missing_directory == outside_roots
+    assert through_a_file == outside_roots
+    assert destination.endswith(f"`destination` is {roots}")
+    assert (
+        "REQUEST.FORMAT.UNKNOWN: unknown or unsupported case format: no-such-format"
+        in unknown_format
+    )
+    assert (
+        "`time_index` 2 is out of range: the TimeSeries has 2 time points" in time_index
+    )
+    assert "ptdf does not take skip_zero_impedance" in flag
+    assert "unknown `scenario_id` 'peak': the ScenarioSet holds 'base', 'high'" in scenario
 
 
 def test_module_round_trip_over_stdio():

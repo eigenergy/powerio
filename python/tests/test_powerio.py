@@ -133,7 +133,7 @@ def test_primary_file_limit_is_host_configurable(monkeypatch, tmp_path):
     monkeypatch.delenv("POWERIO_MAX_PRIMARY_BYTES")
     assert powerio.parse(path).value.n_buses == 3
     with path.open("wb") as stream:
-        stream.truncate((64 << 20) + 1)
+        stream.truncate((1 << 30) + 1)
     with pytest.raises(powerio.PowerIOError) as failure:
         powerio.parse(path)
     assert failure.value.code == "READ.IO.PRIMARY_BUDGET"
@@ -1258,6 +1258,18 @@ def test_typed_collection_protocols_use_contained_values(time_series_powerio_ir)
     assert peak.branches[0]["rate_a"] == 321.0
     assert scenarios["peak"].branches[0]["rate_a"] == 321.0
     assert scenarios["base"].branches[0]["rate_a"] == original_base_rating
+
+    # A count read before an entry update is not served stale afterwards.
+    assert peak.n_islands == 1
+    powerio.apply_updates(
+        peak,
+        [
+            powerio.OperatingPointUpdate.set_branch_in_service(
+                powerio.ComponentId("branch", "1-2"), False
+            )
+        ],
+    )
+    assert peak.n_islands == 2
 
 
 def test_typed_collections_construct_without_powerio_ir():
