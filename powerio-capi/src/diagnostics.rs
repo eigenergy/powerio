@@ -26,6 +26,8 @@ pub mod codes {
         BIND_CAPI_INVALID_OPTIONS = "BIND.CAPI.INVALID_OPTIONS", Error,
             "an options struct declared a size or a field value this build cannot honor",
             category = Data;
+        BIND_CAPI_INVALID_ARGUMENT = "BIND.CAPI.INVALID_ARGUMENT", Error,
+            "a non-handle argument holds a value outside its domain", category = Data;
         EMIT_CAPI_SERIALIZE_FAILED = "EMIT.CAPI.SERIALIZE_FAILED", Error,
             "a document or table an entry point returns could not be built or serialized",
             category = Output;

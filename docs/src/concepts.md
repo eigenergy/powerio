@@ -46,11 +46,11 @@ OperatingPoint<BalancedNetwork>
 OperatingPoint<MulticonductorNetwork>
 TimeSeries<T>
 ScenarioSet<T>
-DcPfInstance, AcPfInstance, DcOpfInstance, AcOpfInstance,
+DcPfInstance, AcPfInstance, DcOpfInstance, AcOpfInstance, AcOtsInstance,
 McAcPfInstance, McAcOpfInstance, LinDist3FlowPfInstance,
 LinDist3FlowOpfInstance, AcScucInstance
-DcPfSolution, AcPfSolution, DcOpfSolution, AcOpfSolution, SocwrOpfSolution,
-McAcPfSolution, McAcOpfSolution, LinDist3FlowPfSolution,
+DcPfSolution, AcPfSolution, DcOpfSolution, AcOpfSolution, AcOtsSolution,
+SocwrOpfSolution, McAcPfSolution, McAcOpfSolution, LinDist3FlowPfSolution,
 LinDist3FlowOpfSolution, AcScucSolution
 GeoLayer
 ContingencySet, SubsystemSet, MonitoredSet
