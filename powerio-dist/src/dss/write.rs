@@ -1462,10 +1462,32 @@ impl DssWriter {
     /// Emit the complete pair table for four or more windings.
     fn transformer_reactances(&mut self, t: &DistTransformer, output: &mut String) {
         let nw = t.windings.len();
-        // Scalar XHL=0 is trapped to 7 percent by the native setter.
-        // The complete array sets an actual zero without adding leakage.
+        // A scalar XHL, XHT or XLT of zero is trapped to the OpenDSS default
+        // (7, 35 and 30 percent) by the native setter. The complete array sets
+        // an actual zero without adding leakage.
         if nw == 2 && t.xsc_pct.as_slice() == [0.0] {
             output.push_str(" xscarray=(0)");
+        } else if nw <= 3 && t.xsc_pct.len() >= 3 {
+            let (xhl, xht) = (t.xsc_pct[0], t.xsc_pct[1]);
+            let xlt = self.star_xlt(t);
+            #[allow(clippy::float_cmp)] // Only an exact zero is trapped.
+            if xhl == 0.0 || xht == 0.0 || xlt == 0.0 {
+                let _ = write!(
+                    output,
+                    " xscarray=({}, {}, {})",
+                    num(xhl),
+                    num(xht),
+                    num(xlt)
+                );
+            } else {
+                let _ = write!(
+                    output,
+                    " xhl={} xht={} xlt={}",
+                    num(xhl),
+                    num(xht),
+                    num(xlt)
+                );
+            }
         } else if nw > 3 {
             let expected = nw * (nw - 1) / 2;
             if t.xsc_pct.len() != expected {
@@ -1478,14 +1500,15 @@ impl DssWriter {
             let _ = write!(output, " xscarray=({})", values.join(", "));
         } else if let Some(xhl) = t.xsc_pct.first() {
             let _ = write!(output, " xhl={}", num(*xhl));
-            if t.xsc_pct.len() >= 3 {
-                let xlt = self.star_xlt(t);
-                let _ = write!(output, " xht={} xlt={}", num(t.xsc_pct[1]), num(xlt));
-            }
         } else {
+            // OpenDSS traps a scalar xhl=0 to its 7 percent default, so this
+            // deck states the default leakage rather than a zero.
             self.warn(
                 &C::EMIT_DSS_VALUE_DEFAULTED,
-                format!("transformer {}: xsc_pct is empty; emitted xhl=0", t.name),
+                format!(
+                    "transformer {}: xsc_pct is empty; emitted xhl=0, which OpenDSS reads as its default of 7 percent",
+                    t.name
+                ),
             );
             output.push_str(" xhl=0");
         }
