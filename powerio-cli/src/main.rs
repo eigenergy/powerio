@@ -227,6 +227,10 @@ enum Command {
         /// CSV with columns gen_index,bus,c2,c1,c0 and optional startup,shutdown.
         #[arg(long)]
         gen_cost_csv: Option<PathBuf>,
+        /// How in-service HVDC lines enter the fixed withdrawal: as fixed
+        /// injections at their stated terminal powers, or not at all.
+        #[arg(long, value_enum, default_value = "fixed-injection")]
+        hvdc: HvdcArg,
         /// Which angle difference bounds `angle_min` and `angle_max` carry:
         /// PowerModels' ±60 degree pad for a side the case leaves
         /// unconstrained (the default), the same pad centered on each
@@ -934,6 +938,21 @@ impl From<UnitsArg> for Units {
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
+enum HvdcArg {
+    FixedInjection,
+    Ignore,
+}
+
+impl From<HvdcArg> for powerio_tx::HvdcTreatment {
+    fn from(value: HvdcArg) -> Self {
+        match value {
+            HvdcArg::FixedInjection => Self::FixedInjection,
+            HvdcArg::Ignore => Self::Ignore,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
 enum AngleDifferenceBoundsArg {
     PowermodelsPad,
     ShiftCenteredPad,
@@ -1033,6 +1052,7 @@ fn main() -> std::process::ExitCode {
             missing_gen_cost,
             default_gen_cost,
             gen_cost_csv,
+            hvdc,
             angle_difference_bounds,
         } => run_dcopf(
             &input,
@@ -1046,6 +1066,7 @@ fn main() -> std::process::ExitCode {
                 gen_cost_csv.as_deref(),
             ),
             angle_difference_bounds.into(),
+            hvdc.into(),
         ),
         Command::Sensitivities {
             input,
@@ -1720,6 +1741,7 @@ fn run_dcopf(
     units: Units,
     gen_cost: GenCostCliOptions<'_>,
     angle_difference_bounds: AngleDifferenceBounds,
+    hvdc: powerio_tx::HvdcTreatment,
 ) -> anyhow::Result<()> {
     let mpc = balanced_case(input, from).with_context(|| format!("parse {}", input.display()))?;
     let cost_opts = gen_cost.emit_options()?;
@@ -1731,7 +1753,14 @@ fn run_dcopf(
         .with_branch_susceptance_formula(formula);
     let assembly = DcOpfAssemblyOptions::default()
         .with_units(units)
-        .with_angle_difference_bounds(angle_difference_bounds);
+        .with_angle_difference_bounds(angle_difference_bounds)
+        .with_hvdc_treatment(hvdc);
+    report_diagnostics(
+        &instance
+            .network()
+            .calc_hvdc_injections()
+            .to_diagnostics(hvdc),
+    );
     let bundle_options = DcOpfBundleOptions {
         assembly,
         metadata: DcOpfBundleMetadata {
