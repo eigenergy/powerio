@@ -198,13 +198,14 @@ pub use powerio_prob::solution::{SocwrOpfDuals, SocwrOpfSolution, SocwrOpfValues
 /// vocabulary lives in [`powerio_prob`]; these types sit at the facade root so
 /// a consumer does not need a second PowerIO dependency to name its boundary.
 pub use powerio_prob::{
-    AcBusSpecification, AcOpfInstance, AcOpfSolution, AcPfInstance, AcPfSolution, AcScucInstance,
-    AcScucSolution, ActivePower, ActivePowerUnit, ApparentPower, ApparentPowerUnit,
-    BalancedCalculationInstance, CalculationUpdate, DcBusSpecification, DcOpfInstance,
-    DcOpfSolution, DcPfInstance, DcPfSolution, LinDist3FlowApplicability,
-    LinDist3FlowApplicabilityStatus, LinDist3FlowBuildOptions, LinDist3FlowLimitCheck,
-    LinDist3FlowLimitKind, LinDist3FlowNode, LinDist3FlowOpfInstance, LinDist3FlowOpfSolution,
-    LinDist3FlowOpfValues, LinDist3FlowPfInstance, LinDist3FlowPfSolution,
+    AcBusSpecification, AcOpfInstance, AcOpfSolution, AcOtsInstance, AcOtsOptions, AcOtsSolution,
+    AcPfInstance, AcPfSolution, AcScucInstance, AcScucSolution, ActivePower, ActivePowerUnit,
+    ApparentPower, ApparentPowerUnit, BalancedCalculationInstance, BranchCurrentLimit,
+    BranchSelection, BranchSwitchingCost, CalculationUpdate, CurrentLimitPolicy,
+    DcBusSpecification, DcOpfInstance, DcOpfSolution, DcPfInstance, DcPfSolution, IslandingPolicy,
+    LinDist3FlowApplicability, LinDist3FlowApplicabilityStatus, LinDist3FlowBuildOptions,
+    LinDist3FlowLimitCheck, LinDist3FlowLimitKind, LinDist3FlowNode, LinDist3FlowOpfInstance,
+    LinDist3FlowOpfSolution, LinDist3FlowOpfValues, LinDist3FlowPfInstance, LinDist3FlowPfSolution,
     LinDist3FlowPreparationAction, LinDist3FlowPreparationActionKind,
     LinDist3FlowPreparationReport, LinDist3FlowReferencePolicy, LinDist3FlowReferenceProvenance,
     LinDist3FlowReferenceState, LinDist3FlowTopology, LinDist3FlowUnsupported, LoadAllocation,
@@ -247,8 +248,10 @@ pub use ir::generate_ir_schema;
 pub use ir::{deserialize, serialize, serialize_diagnostics};
 pub mod transform;
 pub use transform::{
-    apply_geo_layer, network_with_operating_point, neutral_kron, neutral_kron_with_options,
-    to_ac_opf_instance, to_ac_pf_instance, to_dc_opf_instance, to_dc_pf_instance,
+    ac_ots_instance_from_base, ac_ots_solution, apply_geo_layer, fix_ac_ots_topology,
+    materialize_ac_ots_solution, network_with_operating_point, neutral_kron,
+    neutral_kron_with_options, to_ac_opf_instance, to_ac_ots_instance,
+    to_ac_ots_instance_with_options, to_ac_pf_instance, to_dc_opf_instance, to_dc_pf_instance,
     to_lindist3flow_opf_instance, to_lindist3flow_opf_instance_with_options,
     to_lindist3flow_pf_instance, to_lindist3flow_pf_instance_with_options, to_mc_ac_opf_instance,
     to_mc_ac_pf_instance,

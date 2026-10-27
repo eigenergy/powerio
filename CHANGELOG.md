@@ -178,6 +178,64 @@
   omitted.
 
 
+- Add typed AC optimal transmission switching to `powerio-prob`
+  ([#671](https://github.com/eigenergy/powerio/issues/671)).
+  `AcOtsInstance` is an AC OPF base plus switching options:
+  - which branches may switch;
+  - per-branch opening and closing costs;
+  - an islanding policy: `forbidden` keeps every island of the initial
+    topology in one piece, so a base that already has several islands stays
+    valid and only a split is refused, and `allowed` lets islands split;
+  - budgets on open branches and on status changes;
+  - branch current limits, either stated per terminal or derived as
+    PowerModels' `calc_current_limits!` derives them.
+
+  The instance keeps every physical branch and its initial status.
+  - `validate_topology` checks a final status vector and returns its
+    switching cost. Under either policy it refuses a topology that leaves
+    buses that had a generator in an island with none, because no load is shed
+    or de-energized.
+  - `fix_topology` derives the AC OPF to solve and reports what it discards.
+  - `AcOtsSolution` attaches that AC OPF solution, after checking that it
+    solves exactly the fixed problem and that open branches carry no flow.
+
+  The new objective term `branch_switching_cost` adds the switching cost to
+  the objective. No solver or formulation is included.
+- PowerIO IR reads and writes `powerio.AcOtsInstance` and
+  `powerio.AcOtsSolution`, and the objective terms gain
+  `branch_switching_cost`. The IR version stays 2. The schema snapshot is
+  `pio-ir/2/0.11.7/schema.json`. The schema compatibility test now lets a
+  union of constant-tagged alternatives gain alternatives, as it already let
+  lists of allowed names gain names.
+- New facade functions:
+  - `to_ac_ots_instance` and `to_ac_ots_instance_with_options` build or
+    reconfigure the instance from a network, AC OPF, or AC OTS module.
+  - `ac_ots_instance_from_base` combines an AC OPF base with explicit options.
+  - `fix_ac_ots_topology` derives the AC OPF over a final topology.
+  - `ac_ots_solution` attaches that AC OPF's solution.
+  - `materialize_ac_ots_solution` returns the network with the final statuses
+    and solved values, which is what `emit` should write. Emitting an AC OTS
+    solution directly is refused.
+- Python reads the two types as `powerio.AcOtsInstance` and
+  `powerio.AcOtsSolution`, and `PioModule.to_ac_ots_instance()` builds the
+  default instance.
+- C ABI 7 gains these entry points:
+  - instance: `pio_value_ac_ots_instance`, `pio_module_to_ac_ots_instance`,
+    `pio_module_to_ac_ots_instance_with_options`, `pio_ac_ots_instance_create`,
+    `pio_ac_ots_instance_options`, `pio_ac_ots_instance_branch_at`,
+    `pio_ac_ots_instance_validate_topology`, `pio_ac_ots_instance_fix_topology`;
+  - solution: `pio_value_ac_ots_solution`, `pio_ac_ots_solution_create`,
+    `pio_ac_ots_solution_summary`, `pio_ac_ots_solution_branch_closed_at`,
+    `pio_ac_ots_solution_materialize`.
+
+  It also gains the structs `PioAcOtsOptions`, `PioBranchSwitchingCost`,
+  `PioBranchCurrentLimit`, `PioAcOtsOptionsView`, `PioAcOtsBranchView`, and
+  `PioAcOtsSolutionView`, and the error code `BIND.CAPI.INVALID_ARGUMENT`.
+  The generic calculation accessors (network, instance, objective terms,
+  constraints, termination, objective, and named quantities) accept the AC
+  OTS kinds. PowerIO.jl binds them in
+  [PowerIO.jl#178](https://github.com/eigenergy/PowerIO.jl/pull/178).
+
 ## 0.11.6
 
 - Preserve CIM distribution topology by mapping an out-of-service switch to an
