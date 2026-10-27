@@ -5947,7 +5947,8 @@
         "dss",
         "bmopf-json",
         "pmd-json",
-        "cim-dist"
+        "cim-dist",
+        "sincal"
       ],
       "type": "string"
     },
@@ -9376,6 +9377,40 @@
             "kv"
           ],
           "type": "object"
+        },
+        {
+          "description": "Subsystem buses filtered to a single base-kV level.",
+          "properties": {
+            "kind": {
+              "const": "subsystem_kv",
+              "type": "string"
+            },
+            "kv": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name",
+            "kv"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -9598,6 +9633,209 @@
             "kind",
             "scope",
             "down"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Every branch with both terminals in a subsystem and an inclusive kV band.",
+          "properties": {
+            "kind": {
+              "const": "branches_in_subsystem_kv_range",
+              "type": "string"
+            },
+            "kv_range": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "anyOf": [
+                    {
+                      "format": "double",
+                      "type": "number"
+                    },
+                    {
+                      "enum": [
+                        "Infinity",
+                        "-Infinity",
+                        "NaN"
+                      ],
+                      "type": "string"
+                    }
+                  ]
+                },
+                {
+                  "anyOf": [
+                    {
+                      "format": "double",
+                      "type": "number"
+                    },
+                    {
+                      "enum": [
+                        "Infinity",
+                        "-Infinity",
+                        "NaN"
+                      ],
+                      "type": "string"
+                    }
+                  ]
+                }
+              ],
+              "type": "array"
+            },
+            "low_voltage_3w": {
+              "type": "boolean"
+            },
+            "subsystem": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "subsystem",
+            "low_voltage_3w",
+            "kv_range"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Every tie from a subsystem where the inside terminal is within an inclusive kV band.",
+          "properties": {
+            "kind": {
+              "const": "ties_from_subsystem_kv_range",
+              "type": "string"
+            },
+            "kv_range": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "anyOf": [
+                    {
+                      "format": "double",
+                      "type": "number"
+                    },
+                    {
+                      "enum": [
+                        "Infinity",
+                        "-Infinity",
+                        "NaN"
+                      ],
+                      "type": "string"
+                    }
+                  ]
+                },
+                {
+                  "anyOf": [
+                    {
+                      "format": "double",
+                      "type": "number"
+                    },
+                    {
+                      "enum": [
+                        "Infinity",
+                        "-Infinity",
+                        "NaN"
+                      ],
+                      "type": "string"
+                    }
+                  ]
+                }
+              ],
+              "type": "array"
+            },
+            "subsystem": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "subsystem",
+            "kv_range"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A four-value voltage range with distinct pre-contingency limits.",
+          "properties": {
+            "kind": {
+              "const": "voltage_range_with_pre",
+              "type": "string"
+            },
+            "pre_max": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "pre_min": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "scope": {
+              "$ref": "#/$defs/MonitorScope"
+            },
+            "vmax": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "vmin": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "scope",
+            "vmin",
+            "vmax",
+            "pre_min",
+            "pre_max"
           ],
           "type": "object"
         }
@@ -9968,6 +10206,166 @@
       ],
       "type": "object"
     },
+    "PartialTransformer3WFields": {
+      "description": "A three winding transformer with three terminal buses joined at a star point.\n\nSeries impedance is stored for winding pairs 1-2, 2-3, and 3-1. The record\nalso retains star point voltage and per winding control data. PSS/E three\nwinding records and PSLF tertiary winding records map to this type.\n[`to_star_expansion`](Transformer3W::to_star_expansion) turns it into the synthetic\nstar bus plus three branches for a consumer that works in the bus-branch model;\n[`IndexedNetwork`](crate::IndexedNetwork) applies it before building any matrix,\nso a 3-winding transformer contributes to `Y_bus` and connectivity.",
+      "properties": {
+        "extras": {
+          "additionalProperties": true,
+          "properties": {
+            "winding_in_service": {
+              "items": {
+                "type": "boolean"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "not": {
+                "const": [
+                  true,
+                  true,
+                  true
+                ]
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "winding_in_service"
+          ],
+          "type": "object"
+        },
+        "in_service": {
+          "type": "boolean"
+        },
+        "mag_b": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "mag_g": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Magnetizing shunt referred to the star point (p.u. on the system base)."
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "star_va": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "star_vm": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Star-point voltage magnitude (p.u.) and angle (degrees), as solved."
+        },
+        "uid": {
+          "description": "Stable row identity; see [`Bus::uid`].",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "windings": {
+          "description": "The three windings, in order (primary, secondary, tertiary).",
+          "items": {
+            "$ref": "#/$defs/Winding"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "z": {
+          "description": "Pairwise series impedance `[z12, z23, z31]` (primary-secondary,\nsecondary-tertiary, tertiary-primary), each per unit on the system base\nwith its declared MVA base.",
+          "items": {
+            "$ref": "#/$defs/Impedance"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      },
+      "required": [
+        "windings",
+        "z",
+        "star_vm",
+        "star_va",
+        "mag_g",
+        "mag_b",
+        "in_service",
+        "extras"
+      ],
+      "type": "object"
+    },
+    "PartialTransformer3WWire": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "powerio.PartialTransformer3W",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/PartialTransformer3WFields"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "PowerFactorControl": {
       "properties": {
         "pf": {
@@ -10150,6 +10548,123 @@
         "VAR"
       ],
       "type": "string"
+    },
+    "ReferencedSourceFields": {
+      "properties": {
+        "bus": {
+          "type": "string"
+        },
+        "energy_cost_rate": {
+          "description": "Energy cost rate in $/kWh, one entry per phase in terminal-map order.",
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "extras": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        },
+        "reference_terminal": {
+          "description": "Declared reference terminal on the source bus; does not imply grounding.",
+          "type": "string"
+        },
+        "terminal_map": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "v_angle": {
+          "description": "Radians per terminal-to-reference difference.",
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "v_magnitude": {
+          "description": "Volts per terminal-to-reference difference, including at grounded phase terminals.",
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "bus",
+        "terminal_map",
+        "v_magnitude",
+        "v_angle",
+        "extras",
+        "reference_terminal"
+      ],
+      "type": "object"
+    },
+    "ReferencedSourceWire": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "powerio.ReferencedVoltageSource",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/ReferencedSourceFields"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "Residuals": {
       "description": "Numerical residuals of the solved equations, in the problem's power unit.\nA field is `None` when the producer did not report it.",
@@ -12815,6 +13330,11 @@
         {
           "const": "ieee-cdf",
           "description": "Read from an IEEE Common Data Format case. Read only: there is no\nwriter, so writing goes through another format's writer.",
+          "type": "string"
+        },
+        {
+          "const": "sincal",
+          "description": "A SINCAL project read using the explicitly selected balanced profile.",
           "type": "string"
         }
       ]
@@ -15832,124 +16352,131 @@
       "type": "object"
     },
     "Transformer3W": {
-      "description": "A three winding transformer with three terminal buses joined at a star point.\n\nSeries impedance is stored for winding pairs 1-2, 2-3, and 3-1. The record\nalso retains star point voltage and per winding control data. PSS/E three\nwinding records and PSLF tertiary winding records map to this type.\n[`to_star_expansion`](Transformer3W::to_star_expansion) turns it into the synthetic\nstar bus plus three branches for a consumer that works in the bus-branch model;\n[`IndexedNetwork`](crate::IndexedNetwork) applies it before building any matrix,\nso a 3-winding transformer contributes to `Y_bus` and connectivity.",
-      "properties": {
-        "extras": {
-          "additionalProperties": true,
+      "anyOf": [
+        {
+          "description": "A three winding transformer with three terminal buses joined at a star point.\n\nSeries impedance is stored for winding pairs 1-2, 2-3, and 3-1. The record\nalso retains star point voltage and per winding control data. PSS/E three\nwinding records and PSLF tertiary winding records map to this type.\n[`to_star_expansion`](Transformer3W::to_star_expansion) turns it into the synthetic\nstar bus plus three branches for a consumer that works in the bus-branch model;\n[`IndexedNetwork`](crate::IndexedNetwork) applies it before building any matrix,\nso a 3-winding transformer contributes to `Y_bus` and connectivity.",
+          "properties": {
+            "extras": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "in_service": {
+              "type": "boolean"
+            },
+            "mag_b": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "mag_g": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ],
+              "description": "Magnetizing shunt referred to the star point (p.u. on the system base)."
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "star_va": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "star_vm": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ],
+              "description": "Star-point voltage magnitude (p.u.) and angle (degrees), as solved."
+            },
+            "uid": {
+              "description": "Stable row identity; see [`Bus::uid`].",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "windings": {
+              "description": "The three windings, in order (primary, secondary, tertiary).",
+              "items": {
+                "$ref": "#/$defs/Winding"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "z": {
+              "description": "Pairwise series impedance `[z12, z23, z31]` (primary-secondary,\nsecondary-tertiary, tertiary-primary), each per unit on the system base\nwith its declared MVA base.",
+              "items": {
+                "$ref": "#/$defs/Impedance"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            }
+          },
+          "required": [
+            "windings",
+            "z",
+            "star_vm",
+            "star_va",
+            "mag_g",
+            "mag_b",
+            "in_service",
+            "extras"
+          ],
           "type": "object"
         },
-        "in_service": {
-          "type": "boolean"
-        },
-        "mag_b": {
-          "anyOf": [
-            {
-              "format": "double",
-              "type": "number"
-            },
-            {
-              "enum": [
-                "Infinity",
-                "-Infinity",
-                "NaN"
-              ],
-              "type": "string"
-            }
-          ]
-        },
-        "mag_g": {
-          "anyOf": [
-            {
-              "format": "double",
-              "type": "number"
-            },
-            {
-              "enum": [
-                "Infinity",
-                "-Infinity",
-                "NaN"
-              ],
-              "type": "string"
-            }
-          ],
-          "description": "Magnetizing shunt referred to the star point (p.u. on the system base)."
-        },
-        "name": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "star_va": {
-          "anyOf": [
-            {
-              "format": "double",
-              "type": "number"
-            },
-            {
-              "enum": [
-                "Infinity",
-                "-Infinity",
-                "NaN"
-              ],
-              "type": "string"
-            }
-          ]
-        },
-        "star_vm": {
-          "anyOf": [
-            {
-              "format": "double",
-              "type": "number"
-            },
-            {
-              "enum": [
-                "Infinity",
-                "-Infinity",
-                "NaN"
-              ],
-              "type": "string"
-            }
-          ],
-          "description": "Star-point voltage magnitude (p.u.) and angle (degrees), as solved."
-        },
-        "uid": {
-          "description": "Stable row identity; see [`Bus::uid`].",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "windings": {
-          "description": "The three windings, in order (primary, secondary, tertiary).",
-          "items": {
-            "$ref": "#/$defs/Winding"
-          },
-          "maxItems": 3,
-          "minItems": 3,
-          "type": "array"
-        },
-        "z": {
-          "description": "Pairwise series impedance `[z12, z23, z31]` (primary-secondary,\nsecondary-tertiary, tertiary-primary), each per unit on the system base\nwith its declared MVA base.",
-          "items": {
-            "$ref": "#/$defs/Impedance"
-          },
-          "maxItems": 3,
-          "minItems": 3,
-          "type": "array"
+        {
+          "$ref": "#/$defs/PartialTransformer3WWire"
         }
-      },
-      "required": [
-        "windings",
-        "z",
-        "star_vm",
-        "star_va",
-        "mag_g",
-        "mag_b",
-        "in_service",
-        "extras"
-      ],
-      "type": "object"
+      ]
     },
     "TransformerControl": {
       "description": "Automatic-control data for a regulating transformer ([`Branch::control`]).\n\nThe limits carry whatever the [`mode`](TransformerControl::mode) regulates:\n`tap_min`/`tap_max` bound the tap ratio (or the phase angle for active power\ncontrol), and `band_min`/`band_max` bound the controlled quantity (the\nregulated voltage band or the scheduled MW/MVAr). `ntp` is the number of\ndiscrete tap positions and `controlled_bus` is the regulated bus (`None` =\nthe transformer's own terminal). `mva_base` is the winding MVA base the\nimpedance is referred to.",
@@ -16458,96 +16985,103 @@
       "type": "object"
     },
     "VoltageSource": {
-      "properties": {
-        "bus": {
-          "type": "string"
-        },
-        "energy_cost_rate": {
-          "description": "Energy cost rate in $/kWh, one entry per phase in terminal-map order.",
-          "items": {
-            "anyOf": [
-              {
-                "format": "double",
-                "type": "number"
+      "anyOf": [
+        {
+          "properties": {
+            "bus": {
+              "type": "string"
+            },
+            "energy_cost_rate": {
+              "description": "Energy cost rate in $/kWh, one entry per phase in terminal-map order.",
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
               },
-              {
-                "enum": [
-                  "Infinity",
-                  "-Infinity",
-                  "NaN"
-                ],
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "extras": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "name": {
+              "type": "string"
+            },
+            "terminal_map": {
+              "items": {
                 "type": "string"
-              }
-            ]
+              },
+              "type": "array"
+            },
+            "v_angle": {
+              "description": "Radians per terminal.",
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "v_magnitude": {
+              "description": "Volts per terminal (0.0 on grounded terminals).",
+              "items": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            }
           },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "extras": {
-          "additionalProperties": true,
+          "required": [
+            "name",
+            "bus",
+            "terminal_map",
+            "v_magnitude",
+            "v_angle",
+            "extras"
+          ],
           "type": "object"
         },
-        "name": {
-          "type": "string"
-        },
-        "terminal_map": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "v_angle": {
-          "description": "Radians per terminal.",
-          "items": {
-            "anyOf": [
-              {
-                "format": "double",
-                "type": "number"
-              },
-              {
-                "enum": [
-                  "Infinity",
-                  "-Infinity",
-                  "NaN"
-                ],
-                "type": "string"
-              }
-            ]
-          },
-          "type": "array"
-        },
-        "v_magnitude": {
-          "description": "Volts per terminal (0.0 on grounded terminals).",
-          "items": {
-            "anyOf": [
-              {
-                "format": "double",
-                "type": "number"
-              },
-              {
-                "enum": [
-                  "Infinity",
-                  "-Infinity",
-                  "NaN"
-                ],
-                "type": "string"
-              }
-            ]
-          },
-          "type": "array"
+        {
+          "$ref": "#/$defs/ReferencedSourceWire"
         }
-      },
-      "required": [
-        "name",
-        "bus",
-        "terminal_map",
-        "v_magnitude",
-        "v_angle",
-        "extras"
-      ],
-      "type": "object"
+      ]
     },
     "VoltageSourceConverter": {
       "description": "A voltage source converter connected to an AC voltage level and two DC nodes.",

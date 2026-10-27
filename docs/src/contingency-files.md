@@ -71,6 +71,9 @@ and `MonitoredSet::resolve` binds monitored branches, interfaces, and voltage
 scopes to table rows against a network and a subsystem set. The binding
 recomputes the PSS/E machine and circuit identifier of every element with the
 RAW writer's own allocation, because a network row's identity carries neither.
+A branch statement such as `OPEN BRANCH FROM BUS 1 TO BUS 5 CIRCUIT '@1'`
+that names no line or two winding transformer binds to a system switching
+device on that pair, as component type `switch`.
 
 Python reaches the same three values and the same two operations:
 
@@ -104,6 +107,22 @@ line kept inside a case becomes `ContingencyAction::Unrecognized`; a line kept
 at file level becomes a `RetainedStatement` with the 1-based source line. A
 tool that writes its own directives into a `.con` therefore reads completely
 rather than failing on its first line, and `to_con` writes those lines back.
+
+The TARA statements among those lines are read at analysis time rather than
+into new fields, because the three sets' PowerIO IR layouts are fixed within
+0.11. `ContingencySet::resolve` binds a statement that names buses by quoted
+name and base kV (`BUSNAMES`) or one branch by quoted name (`BRANCHNAMES`): an
+exact name first, then one equal without regard to letter case and runs of
+whitespace, and a name matching several elements binds none and is reported as
+ambiguous. Numeric bus operands keep their identities even when quoted.
+Named bus operands support the same optional `BUS` keywords as numbered ones.
+`ContingencySet::calc_default_dispatch` and
+`ContingencyAction::calc_dispatched_action` read `DEFAULT DISPATCH` blocks and
+case actions that close with `DISPATCH`, and `Subsystem::calc_dispatch_rules`
+reads a subsystem's `PARTICIPATE`, `SCALE`, `BASELOAD`, `TURBINETYPE`, and
+`EXCEPT` lines.
+Defaults after the file's `END` remain inert retained text. Non-finite scaling
+thresholds also stay retained instead of becoming typed dispatch rules.
 
 Only three shapes are errors: a case that never closes, a case that starts
 inside another, and a block left open at end of input. The reader's note

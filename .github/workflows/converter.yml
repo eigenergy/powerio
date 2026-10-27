@@ -1,0 +1,82 @@
+name: Converter
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: converter-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  engine:
+    name: Browser conversion engine
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked -p powerio-wasm
+      - run: cargo clippy --locked -p powerio-wasm --all-targets -- -D warnings
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/converter/package-lock.json
+      - run: cargo install wasm-pack --version 0.15.0 --locked
+      - run: npm ci
+        working-directory: apps/converter
+      - run: npm run wasm
+        working-directory: apps/converter
+      - run: npm test
+        working-directory: apps/converter
+      - run: npm run check
+        working-directory: apps/converter
+      - run: npm run build:ui
+        working-directory: apps/converter
+      - uses: actions/upload-artifact@v4
+        with:
+          name: powerio-converter-site
+          path: apps/converter/dist
+          retention-days: 7
+
+  browser:
+    name: Converter (${{ matrix.browser }})
+    needs: engine
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/converter/package-lock.json
+      - run: npm ci
+        working-directory: apps/converter
+      - uses: actions/download-artifact@v4
+        with:
+          name: powerio-converter-site
+          path: apps/converter/dist
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
+        working-directory: apps/converter
+      - run: npm run test:browser -- --project=${{ matrix.browser }}
+        working-directory: apps/converter
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: converter-failures-${{ matrix.browser }}
+          path: apps/converter/test-results
+          retention-days: 7

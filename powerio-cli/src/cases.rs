@@ -431,7 +431,7 @@ mod tests {
             "/../tests/data/dist/micro/fourwire_linecode.dss"
         );
         let source = powerio_core::Source::open(dss).unwrap();
-        let module = powerio_dist::parse(source).unwrap();
+        let module = powerio::dist::parse(source).unwrap();
         let emission = crate::module_io::emit_multiconductor_module(
             &module,
             powerio_dist::DistTargetFormat::BmopfJson,

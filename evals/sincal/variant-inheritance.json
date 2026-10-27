@@ -1,0 +1,932 @@
+{
+  "scope": "Audit complete-row variant inheritance against native active-row selections.\n\nResearch only: this does not enable derived variants in either electrical reader.\nThe native Flag_Variant cache is an independent check for the stored active\nvariant, not a rule for selecting arbitrary variants or a deletion marker.\nDeletion encoding remains unverified. Sources and acquired rows are never edited.\n",
+  "specification": {
+    "url": "https://sincal.s3.amazonaws.com/6.0/ReleaseNotes-Eng.pdf",
+    "section": "1.3",
+    "printed_pages": [
+      4,
+      5
+    ]
+  },
+  "collection": "https://doi.org/10.4225/08/5631B1DF6F1A0",
+  "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
+  "license": "CC-BY-4.0",
+  "cases": [
+    {
+      "case": 10,
+      "source_sha256": "09098007af02fea6215b2c2d0fc993ba49920a35815b110f68f0f3bb5a6fd9d6",
+      "record_sha256": "a8b7ff3c4a8c01fce8b3e24f4701e741a268b076f9949fcfe34cdb5b4b671229",
+      "active_variant": 14,
+      "native_cache_comparison": [
+        {
+          "table": "CalcParameter",
+          "rows": 1,
+          "differing_rows": 0
+        },
+        {
+          "table": "Element",
+          "rows": 124,
+          "differing_rows": 0
+        },
+        {
+          "table": "Infeeder",
+          "rows": 1,
+          "differing_rows": 0
+        },
+        {
+          "table": "Line",
+          "rows": 99,
+          "differing_rows": 0
+        },
+        {
+          "table": "Load",
+          "rows": 23,
+          "differing_rows": 0
+        },
+        {
+          "table": "Node",
+          "rows": 100,
+          "differing_rows": 0
+        },
+        {
+          "table": "OpSer",
+          "rows": 88,
+          "differing_rows": 0
+        },
+        {
+          "table": "OpSerVal",
+          "rows": 4202,
+          "differing_rows": 0
+        },
+        {
+          "table": "Terminal",
+          "rows": 223,
+          "differing_rows": 0
+        },
+        {
+          "table": "VoltageLevel",
+          "rows": 1,
+          "differing_rows": 0
+        }
+      ],
+      "active_rows_compared": 4862,
+      "mutation_disagreements": {
+        "parent_overrides_child": 24,
+        "child_rows_only": 3782,
+        "numeric_union_of_all_variants": 12772,
+        "dangling_profile_reference": 1
+      },
+      "variants": [
+        {
+          "variant": 1,
+          "ancestry": [
+            1
+          ],
+          "counts": {
+            "Node": 100,
+            "Element": 124,
+            "Terminal": 223,
+            "Load": 23,
+            "OpSer": 66,
+            "OpSerVal": 3168
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 2,
+          "ancestry": [
+            1,
+            2
+          ],
+          "counts": {
+            "Node": 100,
+            "Element": 124,
+            "Terminal": 223,
+            "Load": 23,
+            "OpSer": 88,
+            "OpSerVal": 4202
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 3,
+          "ancestry": [
+            1,
+            3
+          ],
+          "counts": {
+            "Node": 100,
+            "Element": 124,
+            "Terminal": 223,
+            "Load": 23,
+            "OpSer": 88,
+            "OpSerVal": 4202
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 4,
+          "ancestry": [
+            1,
+            4
+          ],
+          "counts": {
+            "Node": 100,
+            "Element": 124,
+            "Terminal": 223,
+            "Load": 23,
+            "OpSer": 88,
+            "OpSerVal": 4202
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 5,
+          "ancestry": [
+            1,
+            5
+          ],
+          "counts": {
+            "Node": 100,
+            "Element": 124,
+            "Terminal": 223,
+            "Load": 23,
+            "OpSer": 88,
+            "OpSerVal": 4202
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 6,
+          "ancestry": [
+            1,
+            6
+          ],
+          "counts": {
+            "Node": 100,
+            "Element": 124,
+            "Terminal": 223,
+            "Load": 23,
+            "OpSer": 88,
+            "OpSerVal": 4202
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 7,
+          "ancestry": [
+            1,
+            7
+          ],
+          "counts": {
+            "Node": 100,
+            "Element": 124,
+            "Terminal": 223,
+            "Load": 23,
+            "OpSer": 88,
+            "OpSerVal": 4202
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 8,
+          "ancestry": [
+            1,
+            8
+          ],
+          "counts": {
+            "Node": 100,
+            "Element": 124,
+            "Terminal": 223,
+            "Load": 23,
+            "OpSer": 88,
+            "OpSerVal": 4202
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 9,
+          "ancestry": [
+            1,
+            9
+          ],
+          "counts": {
+            "Node": 100,
+            "Element": 124,
+            "Terminal": 223,
+            "Load": 23,
+            "OpSer": 88,
+            "OpSerVal": 4202
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 10,
+          "ancestry": [
+            1,
+            10
+          ],
+          "counts": {
+            "Node": 100,
+            "Element": 124,
+            "Terminal": 223,
+            "Load": 23,
+            "OpSer": 88,
+            "OpSerVal": 4202
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 11,
+          "ancestry": [
+            1,
+            11
+          ],
+          "counts": {
+            "Node": 100,
+            "Element": 124,
+            "Terminal": 223,
+            "Load": 23,
+            "OpSer": 88,
+            "OpSerVal": 4202
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 12,
+          "ancestry": [
+            1,
+            12
+          ],
+          "counts": {
+            "Node": 100,
+            "Element": 124,
+            "Terminal": 223,
+            "Load": 23,
+            "OpSer": 88,
+            "OpSerVal": 4202
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 13,
+          "ancestry": [
+            1,
+            13
+          ],
+          "counts": {
+            "Node": 100,
+            "Element": 124,
+            "Terminal": 223,
+            "Load": 23,
+            "OpSer": 88,
+            "OpSerVal": 4202
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 14,
+          "ancestry": [
+            1,
+            14
+          ],
+          "counts": {
+            "Node": 100,
+            "Element": 124,
+            "Terminal": 223,
+            "Load": 23,
+            "OpSer": 88,
+            "OpSerVal": 4202
+          },
+          "matched_native_active_cache": true
+        }
+      ]
+    },
+    {
+      "case": 11,
+      "source_sha256": "4ad08f2eaf1bab4863aa0a6c2b72c6bdea9a7d0027626c49f224b960e6c667d7",
+      "record_sha256": "5d266c3905b5e7a049f118052a90fc8da91511913acb26369210ac20eda93552",
+      "active_variant": 14,
+      "native_cache_comparison": [
+        {
+          "table": "CalcParameter",
+          "rows": 1,
+          "differing_rows": 0
+        },
+        {
+          "table": "Element",
+          "rows": 104,
+          "differing_rows": 0
+        },
+        {
+          "table": "Infeeder",
+          "rows": 1,
+          "differing_rows": 0
+        },
+        {
+          "table": "Line",
+          "rows": 85,
+          "differing_rows": 0
+        },
+        {
+          "table": "Load",
+          "rows": 15,
+          "differing_rows": 0
+        },
+        {
+          "table": "Node",
+          "rows": 82,
+          "differing_rows": 0
+        },
+        {
+          "table": "OpSer",
+          "rows": 60,
+          "differing_rows": 0
+        },
+        {
+          "table": "OpSerVal",
+          "rows": 2865,
+          "differing_rows": 0
+        },
+        {
+          "table": "Terminal",
+          "rows": 189,
+          "differing_rows": 0
+        },
+        {
+          "table": "VoltageLevel",
+          "rows": 1,
+          "differing_rows": 0
+        }
+      ],
+      "active_rows_compared": 3403,
+      "mutation_disagreements": {
+        "parent_overrides_child": 16,
+        "child_rows_only": 2667,
+        "numeric_union_of_all_variants": 8722,
+        "dangling_profile_reference": 1
+      },
+      "variants": [
+        {
+          "variant": 1,
+          "ancestry": [
+            1
+          ],
+          "counts": {
+            "Node": 82,
+            "Element": 104,
+            "Terminal": 189,
+            "Load": 15,
+            "OpSer": 45,
+            "OpSerVal": 2160
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 2,
+          "ancestry": [
+            1,
+            2
+          ],
+          "counts": {
+            "Node": 82,
+            "Element": 104,
+            "Terminal": 189,
+            "Load": 15,
+            "OpSer": 60,
+            "OpSerVal": 2865
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 3,
+          "ancestry": [
+            1,
+            3
+          ],
+          "counts": {
+            "Node": 82,
+            "Element": 104,
+            "Terminal": 189,
+            "Load": 15,
+            "OpSer": 60,
+            "OpSerVal": 2865
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 4,
+          "ancestry": [
+            1,
+            4
+          ],
+          "counts": {
+            "Node": 82,
+            "Element": 104,
+            "Terminal": 189,
+            "Load": 15,
+            "OpSer": 60,
+            "OpSerVal": 2865
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 5,
+          "ancestry": [
+            1,
+            5
+          ],
+          "counts": {
+            "Node": 82,
+            "Element": 104,
+            "Terminal": 189,
+            "Load": 15,
+            "OpSer": 60,
+            "OpSerVal": 2865
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 6,
+          "ancestry": [
+            1,
+            6
+          ],
+          "counts": {
+            "Node": 82,
+            "Element": 104,
+            "Terminal": 189,
+            "Load": 15,
+            "OpSer": 60,
+            "OpSerVal": 2865
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 7,
+          "ancestry": [
+            1,
+            7
+          ],
+          "counts": {
+            "Node": 82,
+            "Element": 104,
+            "Terminal": 189,
+            "Load": 15,
+            "OpSer": 60,
+            "OpSerVal": 2865
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 8,
+          "ancestry": [
+            1,
+            8
+          ],
+          "counts": {
+            "Node": 82,
+            "Element": 104,
+            "Terminal": 189,
+            "Load": 15,
+            "OpSer": 60,
+            "OpSerVal": 2865
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 9,
+          "ancestry": [
+            1,
+            9
+          ],
+          "counts": {
+            "Node": 82,
+            "Element": 104,
+            "Terminal": 189,
+            "Load": 15,
+            "OpSer": 60,
+            "OpSerVal": 2865
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 10,
+          "ancestry": [
+            1,
+            10
+          ],
+          "counts": {
+            "Node": 82,
+            "Element": 104,
+            "Terminal": 189,
+            "Load": 15,
+            "OpSer": 60,
+            "OpSerVal": 2865
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 11,
+          "ancestry": [
+            1,
+            11
+          ],
+          "counts": {
+            "Node": 82,
+            "Element": 104,
+            "Terminal": 189,
+            "Load": 15,
+            "OpSer": 60,
+            "OpSerVal": 2865
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 12,
+          "ancestry": [
+            1,
+            12
+          ],
+          "counts": {
+            "Node": 82,
+            "Element": 104,
+            "Terminal": 189,
+            "Load": 15,
+            "OpSer": 60,
+            "OpSerVal": 2865
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 13,
+          "ancestry": [
+            1,
+            13
+          ],
+          "counts": {
+            "Node": 82,
+            "Element": 104,
+            "Terminal": 189,
+            "Load": 15,
+            "OpSer": 60,
+            "OpSerVal": 2865
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 14,
+          "ancestry": [
+            1,
+            14
+          ],
+          "counts": {
+            "Node": 82,
+            "Element": 104,
+            "Terminal": 189,
+            "Load": 15,
+            "OpSer": 60,
+            "OpSerVal": 2865
+          },
+          "matched_native_active_cache": true
+        }
+      ]
+    },
+    {
+      "case": 14,
+      "source_sha256": "024921716247315468611028d09f6dff6ff438e5399ae2773cd9ed004d05f7b6",
+      "record_sha256": "aee7c3c7600edd3f131c4d86a98309ca0a8328ff1633363221160759c10bc3e6",
+      "active_variant": 2,
+      "native_cache_comparison": [
+        {
+          "table": "CalcParameter",
+          "rows": 1,
+          "differing_rows": 0
+        },
+        {
+          "table": "Element",
+          "rows": 65,
+          "differing_rows": 0
+        },
+        {
+          "table": "Infeeder",
+          "rows": 1,
+          "differing_rows": 0
+        },
+        {
+          "table": "Line",
+          "rows": 55,
+          "differing_rows": 0
+        },
+        {
+          "table": "Load",
+          "rows": 7,
+          "differing_rows": 0
+        },
+        {
+          "table": "Node",
+          "rows": 57,
+          "differing_rows": 0
+        },
+        {
+          "table": "OpSer",
+          "rows": 28,
+          "differing_rows": 0
+        },
+        {
+          "table": "OpSerVal",
+          "rows": 1337,
+          "differing_rows": 0
+        },
+        {
+          "table": "Terminal",
+          "rows": 122,
+          "differing_rows": 0
+        },
+        {
+          "table": "TwoWindingTransformer",
+          "rows": 2,
+          "differing_rows": 0
+        },
+        {
+          "table": "VoltageLevel",
+          "rows": 2,
+          "differing_rows": 0
+        }
+      ],
+      "active_rows_compared": 1677,
+      "mutation_disagreements": {
+        "parent_overrides_child": 8,
+        "child_rows_only": 1333,
+        "numeric_union_of_all_variants": 4712,
+        "dangling_profile_reference": 1
+      },
+      "variants": [
+        {
+          "variant": 1,
+          "ancestry": [
+            1
+          ],
+          "counts": {
+            "Node": 57,
+            "Element": 65,
+            "Terminal": 122,
+            "Load": 7,
+            "OpSer": 21,
+            "OpSerVal": 1008
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 2,
+          "ancestry": [
+            1,
+            2
+          ],
+          "counts": {
+            "Node": 57,
+            "Element": 65,
+            "Terminal": 122,
+            "Load": 7,
+            "OpSer": 28,
+            "OpSerVal": 1337
+          },
+          "matched_native_active_cache": true
+        },
+        {
+          "variant": 3,
+          "ancestry": [
+            1,
+            3
+          ],
+          "counts": {
+            "Node": 57,
+            "Element": 65,
+            "Terminal": 122,
+            "Load": 7,
+            "OpSer": 28,
+            "OpSerVal": 1337
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 4,
+          "ancestry": [
+            1,
+            4
+          ],
+          "counts": {
+            "Node": 57,
+            "Element": 65,
+            "Terminal": 122,
+            "Load": 7,
+            "OpSer": 28,
+            "OpSerVal": 1337
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 5,
+          "ancestry": [
+            1,
+            5
+          ],
+          "counts": {
+            "Node": 57,
+            "Element": 65,
+            "Terminal": 122,
+            "Load": 7,
+            "OpSer": 28,
+            "OpSerVal": 1337
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 6,
+          "ancestry": [
+            1,
+            6
+          ],
+          "counts": {
+            "Node": 57,
+            "Element": 65,
+            "Terminal": 122,
+            "Load": 7,
+            "OpSer": 28,
+            "OpSerVal": 1337
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 7,
+          "ancestry": [
+            1,
+            7
+          ],
+          "counts": {
+            "Node": 57,
+            "Element": 65,
+            "Terminal": 122,
+            "Load": 7,
+            "OpSer": 28,
+            "OpSerVal": 1337
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 8,
+          "ancestry": [
+            1,
+            8
+          ],
+          "counts": {
+            "Node": 57,
+            "Element": 65,
+            "Terminal": 122,
+            "Load": 7,
+            "OpSer": 28,
+            "OpSerVal": 1337
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 9,
+          "ancestry": [
+            1,
+            9
+          ],
+          "counts": {
+            "Node": 57,
+            "Element": 65,
+            "Terminal": 122,
+            "Load": 7,
+            "OpSer": 28,
+            "OpSerVal": 1337
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 10,
+          "ancestry": [
+            1,
+            10
+          ],
+          "counts": {
+            "Node": 57,
+            "Element": 65,
+            "Terminal": 122,
+            "Load": 7,
+            "OpSer": 28,
+            "OpSerVal": 1337
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 11,
+          "ancestry": [
+            1,
+            11
+          ],
+          "counts": {
+            "Node": 57,
+            "Element": 65,
+            "Terminal": 122,
+            "Load": 7,
+            "OpSer": 28,
+            "OpSerVal": 1337
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 12,
+          "ancestry": [
+            1,
+            12
+          ],
+          "counts": {
+            "Node": 57,
+            "Element": 65,
+            "Terminal": 122,
+            "Load": 7,
+            "OpSer": 28,
+            "OpSerVal": 1337
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 13,
+          "ancestry": [
+            1,
+            13
+          ],
+          "counts": {
+            "Node": 57,
+            "Element": 65,
+            "Terminal": 122,
+            "Load": 7,
+            "OpSer": 28,
+            "OpSerVal": 1337
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 14,
+          "ancestry": [
+            1,
+            14
+          ],
+          "counts": {
+            "Node": 57,
+            "Element": 65,
+            "Terminal": 122,
+            "Load": 7,
+            "OpSer": 28,
+            "OpSerVal": 1337
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 15,
+          "ancestry": [
+            1,
+            15
+          ],
+          "counts": {
+            "Node": 57,
+            "Element": 65,
+            "Terminal": 122,
+            "Load": 7,
+            "OpSer": 28,
+            "OpSerVal": 1337
+          },
+          "matched_native_active_cache": false
+        },
+        {
+          "variant": 16,
+          "ancestry": [
+            1,
+            16
+          ],
+          "counts": {
+            "Node": 57,
+            "Element": 65,
+            "Terminal": 122,
+            "Load": 7,
+            "OpSer": 28,
+            "OpSerVal": 1337
+          },
+          "matched_native_active_cache": false
+        }
+      ]
+    }
+  ],
+  "reconstructed_variants": 44,
+  "variants_with_native_active_cache": 3,
+  "native_active_rows_compared": 9942,
+  "source_data_changed": false,
+  "deletion_encoding_verified": false,
+  "production_derived_variant_support": false,
+  "native_execution": false,
+  "disposition": "Complete-row ancestry agrees with all acquired active native input rows in three projects. Other reconstructed variants have reference checks only. Deletion encoding and production materialization remain work.",
+  "passed": true
+}
