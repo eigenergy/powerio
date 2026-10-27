@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- The conversion matrix grades each cell by its worst finding: exact,
+  lossless, restated (the target required a value and the writer supplied
+  it), approximate, dropped, or failed. The PR comment shows that level, the
+  count of findings at it, and their most common kind, with source parse
+  findings in one Source column. The diagonal now checks that a parsed file
+  writes back byte for byte. The expected results live in
+  `powerio-cli/tests/conversion_matrix.baseline`, one readable line per
+  cell, and `POWERIO_MATRIX_BLESS=1` regenerates it. Four cells show red
+  because the model changes with no finding: PSLF to PSS/E RAW and RAWX
+  (DC line power limits and setpoints) and IEEE CDF to PSS/E RAW and RAWX
+  (the case date and the area type).
+
 - Pull requests now build and smoke-test one Linux wheel (x86_64) and the
   sdist. The five-platform wheel matrix runs on pushes to main and on
   releases, and the browser converter suite on pushes to main, the commits

@@ -336,10 +336,11 @@ and calculation:
   or docs saying why. A performance change comes with before and after
   measurements.
 
-`powerio-cli/tests/conversion_matrix_report.rs` pins the warning count of
-every source and target pair in its `*_WARNING_BASELINE` arrays. An
-intentional change edits the baseline in the same pull request, and the
-description lists the cells that changed and why.
+`powerio-cli/tests/conversion_matrix_report.rs` pins the level and finding
+codes of every source and target pair in
+`powerio-cli/tests/conversion_matrix.baseline`, one line per pair. An
+intentional change regenerates that file with `POWERIO_MATRIX_BLESS=1` in the
+same pull request, and the description lists the cells that changed and why.
 
 ### Rust API changes
 
