@@ -8,7 +8,8 @@
     "VOCAB.PROPERTY_UNKNOWN RegulatingControl.discrete, ConnectivityNode.OperationalLimitSet (Powergrid-Models sources)": "Upstream: neither property is declared in cim17v40 (both appear in older CIM16 or GridAPPS-D usage).",
     "PROFILE.PROPERTY_OUTSIDE Terminal.phases, PowerTransformerEnd.x (PowerIO output)": "The rc4_2021 profile leaves out Terminal.phases and the PowerTransformerEnd series impedance (GridAPPS-D uses per-phase classes and TransformerMeshImpedance); both are valid cim17v40.",
     "CONVERT.REFUSED BUILD.DIST.ELECTRICAL_INCOMPLETE (IEEE13_Assets, 9500 node)": "Segments described by wire spacing and wire data have no impedance the reader can use yet (wire geometry follow-up).",
-    "CONVERT.REFUSED PARSE.CLI.ERRORS_REPORTED (bmopf/example_enwl_n1_f2.json)": "The CLI refuses to convert a case whose reader reported errors; the Rust stable-CIM test writes it through the library instead."
+    "CONVERT.REFUSED PARSE.CLI.ERRORS_REPORTED (bmopf/example_enwl_n1_f2.json)": "The CLI refuses to convert a case whose reader reported errors; the Rust stable-CIM test writes it through the library instead.",
+    "PROFILE.PROPERTY_OUTSIDE Asset.PowerSystemResources (tank output)": "The rc4_2021 profile omits this valid cim17v40 association. Eight Assets link the synthetic fixture tanks to their catalogs; no vocabulary errors are accepted."
   },
   "cases": {
     "corpus/IEEE123.xml output": {
@@ -119,6 +120,16 @@
       "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 5,
       "VOCAB.PROPERTY_UNKNOWN ShuntCompensatorPhase.bPerSection": 3,
       "VOCAB.PROPERTY_UNKNOWN ShuntCompensatorPhase.gPerSection": 3
+    },
+    "tests/data/dist/cim/tank_feeder.xml output": {
+      "PROFILE.PROPERTY_OUTSIDE Asset.PowerSystemResources": 8,
+      "PROFILE.PROPERTY_OUTSIDE PowerTransformerEnd.x": 2,
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 3
+    },
+    "tests/data/dist/cim/tank_feeder.xml source": {
+      "PROFILE.PROPERTY_OUTSIDE Asset.PowerSystemResources": 8,
+      "PROFILE.PROPERTY_OUTSIDE PowerTransformerEnd.x": 2,
+      "PROFILE.PROPERTY_OUTSIDE Terminal.phases": 3
     },
     "tests/data/dist/micro/defaults_degenerate.dss output": {
       "PROFILE.PROPERTY_OUTSIDE PowerTransformerEnd.x": 2,
