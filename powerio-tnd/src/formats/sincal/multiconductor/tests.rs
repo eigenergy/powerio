@@ -372,7 +372,7 @@ fn sequence_line_agrees_with_existing_dss_conversion() {
     let native = NativeDatabase::decode(&sequence_database(""), None).unwrap();
     let code = native.sequence_line(30).unwrap().code;
     let dss = crate::formats::sincal::testkit::parse_str(
-        "Set DefaultBaseFrequency=50\nNew Linecode.lc nphases=3 units=km r1=0.3 x1=0.1 c1=10 r0=0.9 x0=0.4 c0=4 basefreq=50 normamps=200",
+        "Set DefaultBaseFrequency=50\nNew Linecode.lc nphases=3 units=km r1=0.3 x1=0.1 c1=10 r0=0.9 x0=0.4 c0=4 basefreq=50 normamps=200\nNew Line.witness phases=3 bus1=a bus2=b linecode=lc length=1 units=km",
         "dss").unwrap();
     let other = &dss.line_codes()[0];
     for (a, b) in [

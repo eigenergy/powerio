@@ -75,6 +75,8 @@ pub mod reactor {
 }
 
 pub mod generator {
+    pub const VMINPU: f64 = 0.9;
+    pub const VMAXPU: f64 = 1.1;
     pub const PHASES: usize = 3;
     pub const KV: f64 = 12.47;
     pub const KW: f64 = 1000.0;

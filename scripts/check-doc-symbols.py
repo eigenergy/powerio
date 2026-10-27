@@ -110,7 +110,7 @@ for page in PAGES:
     # Quoted IR identity literals describe wire data, not Python attributes.
     attribute_text = re.sub(r'`"powerio\.[A-Za-z_][A-Za-z_0-9]*"`', '', text)
     # Python attribute references.
-    for attr in set(re.findall(r"\bpowerio\.([a-z_A-Z][A-Za-z_0-9]*)", attribute_text)):
+    for attr in set(re.findall(r"(?<![.\w])powerio\.([a-z_A-Z][A-Za-z_0-9]*)", attribute_text)):
         if attr in {"dev", "h", "versions", "dcopf"}:
             continue
         if (ROOT / "python/powerio" / attr).is_dir():

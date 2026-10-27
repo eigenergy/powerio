@@ -193,7 +193,11 @@ def _coded_error(prefix: str, exc: Exception) -> ValueError:
         text = f"{prefix}: {text}"
     diagnostics = getattr(exc, "diagnostics", None)
     if diagnostics:
-        text = f"{text} | {json.dumps(diagnostics)}"
+        records = [
+            item if isinstance(item, dict) else powerio.diagnostic_record(item)
+            for item in diagnostics
+        ]
+        text = f"{text} | {json.dumps(records)}"
     return ValueError(text)
 
 
