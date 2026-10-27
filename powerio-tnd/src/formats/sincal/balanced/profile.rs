@@ -1,7 +1,74 @@
 //! Selected absolute daily load powers in the schema-11.5 profile.
 //! Input Data (April 2014), pp.292–295, Database Description pp.84–85:
 //! OpSerVal P/Q are kW/kvar; Load fP/fQ apply once. No result tables enter here.
+use std::cell::OnceCell;
+use std::collections::BTreeMap;
+
 use super::{DatabaseSnapshot, NativeRow, Result, error, get, table};
+
+/// `OpSer` and `OpSerVal`, each read on first use and kept for the parse.
+/// Before, every profiled load read both tables again. The two stay separate
+/// so a missing `OpSerVal` still reports after the series checks.
+#[derive(Default)]
+pub(super) struct Tables {
+    series: OnceCell<BTreeMap<i64, NativeRow>>,
+    values: OnceCell<Samples>,
+}
+
+/// `OpSerVal` rows with their keys grouped by `OpSer_ID`.
+struct Samples {
+    rows: BTreeMap<i64, NativeRow>,
+    by_series: BTreeMap<i64, Vec<i64>>,
+    /// The first row, in key order, whose `OpSer_ID` is not an integer.
+    first_invalid: Option<i64>,
+}
+
+impl Tables {
+    fn series(&self, db: &DatabaseSnapshot) -> Result<&BTreeMap<i64, NativeRow>> {
+        if let Some(rows) = self.series.get() {
+            return Ok(rows);
+        }
+        let rows = table(db, "OpSer", "OpSer_ID")?;
+        Ok(self.series.get_or_init(|| rows))
+    }
+
+    fn values(&self, db: &DatabaseSnapshot) -> Result<&Samples> {
+        if let Some(samples) = self.values.get() {
+            return Ok(samples);
+        }
+        let rows = table(db, "OpSerVal", "OpSerVal_ID")?;
+        let mut by_series = BTreeMap::<i64, Vec<i64>>::new();
+        let mut first_invalid = None;
+        for (&key, row) in &rows {
+            match row.integer("OpSer_ID") {
+                Ok(series) => by_series.entry(series).or_default().push(key),
+                Err(_) => {
+                    first_invalid.get_or_insert(key);
+                }
+            }
+        }
+        Ok(self.values.get_or_init(|| Samples {
+            rows,
+            by_series,
+            first_invalid,
+        }))
+    }
+}
+
+impl Samples {
+    /// The samples of one series in key order. A row with an invalid
+    /// `OpSer_ID` fails every lookup, at the place a scan of the whole table
+    /// in key order would have reached it.
+    fn of(&self, id: i64) -> impl Iterator<Item = Result<(i64, &NativeRow)>> {
+        let keys = self.by_series.get(&id).map_or(&[][..], Vec::as_slice);
+        let invalid = self.first_invalid;
+        let before = invalid.map_or(keys.len(), |bad| keys.partition_point(|&k| k < bad));
+        keys[..before]
+            .iter()
+            .map(|&key| Ok((key, &self.rows[&key])))
+            .chain(invalid.map(|bad| Err(self.rows[&bad].integer("OpSer_ID").unwrap_err())))
+    }
+}
 
 #[derive(serde::Serialize)]
 pub(super) struct Selection {
@@ -27,13 +94,13 @@ pub(super) fn absolute_daily(
     db: &DatabaseSnapshot,
     load: &NativeRow,
     hours: Option<f64>,
+    tables: &Tables,
 ) -> Result<Option<Selection>> {
     let Some(id) = load.reference("DayOpSer_ID")? else {
         return Ok(None);
     };
     let requested = hours.ok_or_else(|| load.bad("DayOpSer_ID", "explicit snapshot required"))?;
-    let profiles = table(db, "OpSer", "OpSer_ID")?;
-    let series = get(&profiles, id, "OpSer")?;
+    let series = get(tables.series(db)?, id, "OpSer")?;
     series.equals("Flag_Ser", 1)?;
     series.equals("Flag_Typ", 3)?;
     // Variant selection is explicit; the stored active-row cache is not selection.
@@ -46,12 +113,9 @@ pub(super) fn absolute_daily(
         0.0 => 24.0,
         v => v,
     };
-    let values = table(db, "OpSerVal", "OpSerVal_ID")?;
     let mut points = Vec::new();
-    for (&key, row) in &values {
-        if row.integer("OpSer_ID")? != id {
-            continue;
-        }
+    for sample in tables.values(db)?.of(id) {
+        let (key, row) = sample?;
         let time = row.nonnegative("OpTime")?;
         let curve = row.integer("Flag_Curve")?;
         row.inactive(&["Op_ID"])?;

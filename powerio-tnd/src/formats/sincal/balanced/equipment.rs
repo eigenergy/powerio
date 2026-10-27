@@ -7,12 +7,7 @@ use powerio_tx::network::{
 };
 
 fn kv(network: &BalancedNetwork, bus: BusId) -> f64 {
-    network
-        .buses()
-        .iter()
-        .find(|b| b.id == bus)
-        .unwrap()
-        .base_kv
+    super::find_bus(network, bus).unwrap().base_kv
 }
 
 fn finite(value: f64, context: &str) -> Result<f64> {
@@ -208,7 +203,7 @@ pub(super) fn load(
         _ => return Err(row.bad("Flag_Lf", "unsupported balanced load mode")),
     };
     let selected = if row.legacy() {
-        super::profile::absolute_daily(db, row, profiles.hours)?
+        super::profile::absolute_daily(db, row, profiles.hours, &profiles.tables)?
     } else {
         None
     };
@@ -310,11 +305,7 @@ pub(super) fn generator(
     if limits == 1 && in_service {
         let low = row.positive("ull")? / 100.0;
         let high = row.positive("uul")? / 100.0;
-        let node = network
-            .buses_mut()
-            .iter_mut()
-            .find(|b| b.id == bus)
-            .unwrap();
+        let node = super::find_bus_mut(network, bus).unwrap();
         node.vmin = node.vmin.max(low);
         node.vmax = node.vmax.min(high);
         if node.vmin > node.vmax {
@@ -339,11 +330,7 @@ pub(super) fn generator(
         }
         let angle = row.number("delta")?;
         if in_service {
-            let bus = network
-                .buses_mut()
-                .iter_mut()
-                .find(|b| b.id == bus)
-                .unwrap();
+            let bus = super::find_bus_mut(network, bus).unwrap();
             if bus.kind == BusType::Ref
                 && ((bus.vm - generator.vg).abs() > 1e-12 || (bus.va - angle).abs() > 1e-12)
             {

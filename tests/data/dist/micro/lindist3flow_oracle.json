@@ -9,5 +9,13 @@
   "line_sending_active_power_w": 10420.418729008848,
   "line_sending_reactive_power_var": 2210.2093645047103,
   "load_active_power_w": 9999.999999999554,
-  "load_reactive_power_var": 1999.9999999997888
+  "load_reactive_power_var": 1999.9999999997888,
+  "source_impedance_r_ohm": 5.29e-10,
+  "source_impedance_x_ohm": 5.29e-07,
+  "engine_library_version": "DSS C-API Library version 0.14.5 revision 87d85c2622c8281b92255335bc7c09b11191b21d based on OpenDSS SVN 3723 [FPC 3.2.2] (64-bit build) MVMULT INCREMENTAL_Y CONTEXT_API PM 20240329033829; License Status: Open \nDSS-Python version: 0.15.7\nOpenDSSDirect.py version: 0.9.4",
+  "source_impedance_reference": "inverse of Vsource.source YPrim[0,0] from the pinned native engine",
+  "line_impedance_r_ohm": 0.19600000000000004,
+  "line_impedance_x_ohm": 0.09800000000000002,
+  "linear_lossless_source_squared_voltage_v2": 52899.99787342,
+  "linear_lossless_load_voltage_magnitude_v": 220.42685379376988
 }

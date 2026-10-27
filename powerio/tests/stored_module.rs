@@ -454,6 +454,40 @@ fn an_unreadable_powerio_ir_generation_is_refused_with_the_remedy() {
 // ---- the remaining promoted kinds round trip ---------------------------------
 
 #[test]
+#[ignore = "round-trips external distribution oracle networks through the facade IR"]
+fn oracle_multiconductor_networks_round_trip_through_ir() {
+    let input = std::env::var("POWERIO_DIST_IR_INPUT").expect("network collection path");
+    let output = std::path::PathBuf::from(
+        std::env::var("POWERIO_DIST_IR_OUTPUT").expect("new IR output directory"),
+    );
+    let networks: std::collections::BTreeMap<String, serde_json::Value> =
+        serde_json::from_slice(&std::fs::read(input).unwrap()).unwrap();
+    assert!(!networks.is_empty());
+    std::fs::create_dir(&output).unwrap();
+    let mut manifest = std::collections::BTreeMap::new();
+    for (index, (name, expected)) in networks.into_iter().enumerate() {
+        let network: powerio_dist::MulticonductorNetwork =
+            serde_json::from_value(expected.clone()).unwrap();
+        let module = PioModule::new(PioValue::MulticonductorNetwork(network));
+        let text = serialize_module_text(&module).unwrap();
+        let restored = deserialize_module_text(&text).unwrap();
+        let PioValue::MulticonductorNetwork(network) = restored.value() else {
+            panic!("{name}: IR changed the structural type");
+        };
+        assert_eq!(serde_json::to_value(network).unwrap(), expected, "{name}");
+        assert_eq!(serialize_module_text(&restored).unwrap(), text, "{name}");
+        let filename = format!("{index}.pio.json");
+        std::fs::write(output.join(&filename), text).unwrap();
+        manifest.insert(name, filename);
+    }
+    std::fs::write(
+        output.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
 fn multiconductor_network_round_trips() {
     let mut network = powerio_dist::MulticonductorNetwork::named("mc-roundtrip");
     network.buses_mut().push(powerio_dist::DistBus::new(

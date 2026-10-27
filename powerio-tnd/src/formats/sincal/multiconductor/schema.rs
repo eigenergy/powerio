@@ -13,6 +13,9 @@ use powerio_dist::Result;
 pub(super) struct NativeDatabase {
     snapshot: DatabaseSnapshot,
     pub assume_inactive_source_controls: bool,
+    /// Electrical terminal fields by element, read from `Terminal` once per
+    /// parse on first use (`semantics.rs`).
+    pub(super) terminal_index: std::cell::OnceCell<super::semantics::TerminalIndex>,
 }
 
 impl NativeDatabase {
@@ -31,6 +34,7 @@ impl NativeDatabase {
         Ok(Self {
             snapshot,
             assume_inactive_source_controls: false,
+            terminal_index: std::cell::OnceCell::new(),
         })
     }
 

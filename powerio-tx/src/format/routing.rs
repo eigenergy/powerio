@@ -102,6 +102,8 @@ pub enum DistributionFormat {
     /// Distribution CIM (CIM100 RDF/XML).
     CimDist,
     SincalMulticonductor,
+    Gridlabd,
+    GridlabdArras,
 }
 
 impl DistributionFormat {
@@ -109,6 +111,8 @@ impl DistributionFormat {
         match self {
             Self::SincalMulticonductor => "sincal-multiconductor",
             Self::Dss => "dss",
+            Self::Gridlabd => "gridlabd",
+            Self::GridlabdArras => "gridlabd-arras",
             Self::PmdJson => "pmd-json",
             Self::BmopfJson => "bmopf-json",
             Self::CimDist => "cim-dist",
@@ -194,6 +198,8 @@ pub fn parse_distribution_format(name: &str) -> Option<DistributionFormat> {
     match key.as_str() {
         "sincalmulticonductor" => Some(DistributionFormat::SincalMulticonductor),
         "dss" | "opendss" => Some(DistributionFormat::Dss),
+        "glm" | "gridlabd" | "gridlabdpnnl" => Some(DistributionFormat::Gridlabd),
+        "gridlabdarras" => Some(DistributionFormat::GridlabdArras),
         "pmd" | "pmdjson" | "engineering" => Some(DistributionFormat::PmdJson),
         "bmopf" | "bmopfjson" => Some(DistributionFormat::BmopfJson),
         "cimdist" => Some(DistributionFormat::CimDist),
