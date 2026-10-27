@@ -995,3 +995,112 @@ fn bounded_load_laws_are_not_silently_projected_by_ivr_preparation() {
         );
     }
 }
+
+#[test]
+fn projecting_bounded_load_laws_is_an_explicit_opt_in_with_one_diagnostic_per_load() {
+    use powerio_dist::DistLoadVoltageModel as Law;
+    use powerio_matrix::BoundedLoadLawPolicy;
+    let bounded = |alpha_z: f64, alpha_p: f64| Law::BoundedZip {
+        v_nom: vec![230.0],
+        alpha_z: vec![alpha_z],
+        alpha_i: vec![0.0],
+        alpha_p: vec![alpha_p],
+        beta_z: vec![alpha_z],
+        beta_i: vec![0.0],
+        beta_p: vec![alpha_p],
+        v_low_pu: 0.5,
+        v_min_pu: 0.95,
+        v_max_pu: 1.05,
+        cutoff_pu: 0.0,
+    };
+    let opt_in = McAcOpfAssemblyOptions::default()
+        .with_bounded_load_laws(BoundedLoadLawPolicy::ProjectToNominal);
+    assert_eq!(
+        McAcOpfAssemblyOptions::default().bounded_load_laws,
+        BoundedLoadLawPolicy::Refuse
+    );
+
+    // The OpenDSS default (model=1) is constant power inside the band.
+    let mut net = network();
+    net.loads_mut()[0].voltage_model = bounded(0.0, 1.0);
+    let instance = McAcOpfInstance::from_network(net).unwrap();
+    assert!(
+        build_mc_ac_opf_preparation(&instance, &McAcOpfAssemblyOptions::default()).is_err(),
+        "the default stays strict"
+    );
+    let prepared = build_mc_ac_opf_preparation(&instance, &opt_in).unwrap();
+    assert_eq!(prepared.load_law_projections.len(), 1);
+    let projection = &prepared.load_law_projections[0];
+    assert_eq!(projection.source_model, "bounded_zip");
+    assert_eq!(projection.projected_model, "constant_power");
+    let diagnostics = prepared.diagnostics();
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code(), "BUILD.MULTI.LOAD_LAW_PROJECTED");
+    let load = prepared
+        .devices
+        .iter()
+        .find(|d| d.kind == McOpfDeviceKind::Load)
+        .unwrap();
+    assert!(load.coils.iter().all(|coil| coil.load_law.is_none()));
+
+    // A constant impedance band projects to the nominal ZIP law.
+    let mut net = network();
+    net.loads_mut()[0].voltage_model = bounded(1.0, 0.0);
+    let instance = McAcOpfInstance::from_network(net).unwrap();
+    let prepared = build_mc_ac_opf_preparation(&instance, &opt_in).unwrap();
+    assert_eq!(prepared.load_law_projections[0].projected_model, "zip");
+    let load = prepared
+        .devices
+        .iter()
+        .find(|d| d.kind == McOpfDeviceKind::Load)
+        .unwrap();
+    assert!(load.coils.iter().all(|coil| coil.load_law.is_some()));
+
+    // OpenDSS models 3 and 4 read as a bounded exponential law.
+    let mut net = network();
+    net.loads_mut()[0].voltage_model = Law::BoundedExponential {
+        v_nom: vec![230.0],
+        gamma_p: vec![0.0],
+        gamma_q: vec![2.0],
+        v_low_pu: 0.5,
+        v_min_pu: 0.95,
+        v_max_pu: 1.05,
+    };
+    let instance = McAcOpfInstance::from_network(net).unwrap();
+    assert!(build_mc_ac_opf_preparation(&instance, &McAcOpfAssemblyOptions::default()).is_err());
+    let prepared = build_mc_ac_opf_preparation(&instance, &opt_in).unwrap();
+    assert_eq!(
+        prepared.load_law_projections[0].source_model,
+        "bounded_exponential"
+    );
+    assert_eq!(
+        prepared.load_law_projections[0].projected_model,
+        "exponential"
+    );
+
+    // A voltage-bounded constant-power law projects to constant power.
+    let mut net = network();
+    net.loads_mut()[0].voltage_model = Law::BoundedConstantPower {
+        v_nom: vec![230.0],
+        v_min_pu: 0.9,
+        v_max_pu: 1.1,
+        current_limit_pu: None,
+    };
+    let instance = McAcOpfInstance::from_network(net).unwrap();
+    assert!(build_mc_ac_opf_preparation(&instance, &McAcOpfAssemblyOptions::default()).is_err());
+    let prepared = build_mc_ac_opf_preparation(&instance, &opt_in).unwrap();
+    assert_eq!(
+        prepared.load_law_projections[0].source_model,
+        "bounded_constant_power"
+    );
+    assert_eq!(
+        prepared.load_law_projections[0].projected_model,
+        "constant_power"
+    );
+
+    // Loads that carry no bounded law are not touched.
+    let instance = McAcOpfInstance::from_network(network()).unwrap();
+    let prepared = build_mc_ac_opf_preparation(&instance, &opt_in).unwrap();
+    assert!(prepared.load_law_projections.is_empty());
+    assert!(prepared.diagnostics().is_empty());
+}

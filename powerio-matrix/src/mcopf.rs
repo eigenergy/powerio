@@ -7,7 +7,7 @@
 //! solver. Rejection of an ideal cycle, initial point, or angle window indicates
 //! a profile limitation, not electrical infeasibility. See the MC IVR guide for
 //! supported equipment and the downstream expression/derivative boundary.
-use crate::diagnostics::codes;
+use crate::diagnostics::{Diagnostic, codes};
 use powerio_core::Error;
 use powerio_dist::{Configuration, DistLoadVoltageModel, MulticonductorNetwork};
 use powerio_prob::{ConstraintSelection, McAcOpfInstance, ObjectiveTerm};
@@ -24,6 +24,25 @@ type Positions = BTreeMap<(String, String), usize>;
 type CoilPairs = Vec<(usize, Option<usize>)>;
 type Result<T> = std::result::Result<T, Error>;
 
+/// What preparation does with a voltage-bounded load law.
+///
+/// The IVR power-law terms cannot represent the low-voltage transitions,
+/// high-voltage continuation and dropout of a bounded ZIP law, so the default
+/// refuses it. Ordinary OpenDSS loads with `model=1` or `model=5` read as such
+/// a law.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum BoundedLoadLawPolicy {
+    /// Refuse the load with an unsupported-equipment error.
+    #[default]
+    Refuse,
+    /// Replace the law by its nominal (middle-band) law and record one
+    /// [`McOpfLoadLawProjection`] per load. This is an approximation of the
+    /// source model, chosen by the caller.
+    ProjectToNominal,
+}
+
 /// Explicit system bases; no physical bound is inferred from these values.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -32,6 +51,10 @@ pub struct McAcOpfAssemblyOptions {
     pub voltage_base_v: f64,
     /// Power base in VA per coil; I_base = S_base / V_base.
     pub power_base_va: f64,
+    /// Handling of voltage-bounded load laws. Refused unless the caller opts
+    /// in to the nominal projection.
+    #[serde(default)]
+    pub bounded_load_laws: BoundedLoadLawPolicy,
 }
 impl McAcOpfAssemblyOptions {
     /// Choose voltage (V) and power (VA) bases. The preparation builder validates
@@ -41,7 +64,14 @@ impl McAcOpfAssemblyOptions {
         Self {
             voltage_base_v,
             power_base_va,
+            bounded_load_laws: BoundedLoadLawPolicy::Refuse,
         }
+    }
+    /// Choose how voltage-bounded load laws are handled.
+    #[must_use]
+    pub const fn with_bounded_load_laws(mut self, policy: BoundedLoadLawPolicy) -> Self {
+        self.bounded_load_laws = policy;
+        self
     }
 }
 impl Default for McAcOpfAssemblyOptions {
@@ -49,6 +79,7 @@ impl Default for McAcOpfAssemblyOptions {
         Self {
             voltage_base_v: 230.0,
             power_base_va: 1000.0,
+            bounded_load_laws: BoundedLoadLawPolicy::Refuse,
         }
     }
 }
@@ -245,6 +276,39 @@ pub struct McAcOpfPreparation {
     pub devices: Vec<McOpfDevice>,
     /// Winding-current descriptors with their own local current axes.
     pub transformers: Vec<McOpfTransformer>,
+    /// Loads whose bounded law was projected to its nominal law under
+    /// [`BoundedLoadLawPolicy::ProjectToNominal`]; empty by default.
+    #[serde(default)]
+    pub load_law_projections: Vec<McOpfLoadLawProjection>,
+}
+/// One load whose voltage-bounded law was replaced by its nominal law.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct McOpfLoadLawProjection {
+    /// Source load name.
+    pub load: String,
+    /// Tag of the source law (`bounded_zip`, `bounded_exponential` or `bounded_constant_power`).
+    pub source_model: String,
+    /// Tag of the nominal law the preparation used.
+    pub projected_model: String,
+}
+impl McAcOpfPreparation {
+    /// One warning per load whose bounded law was projected to its nominal law.
+    #[must_use]
+    pub fn diagnostics(&self) -> Vec<Diagnostic> {
+        self.load_law_projections
+            .iter()
+            .map(|projection| {
+                Diagnostic::of(
+                    &codes::BUILD_MC_OPF_LOAD_LAW_PROJECTED,
+                    format!(
+                        "load `{}`: {} law projected to its nominal {} law; low-voltage transitions, high-voltage continuation and dropout are not modeled",
+                        projection.load, projection.source_model, projection.projected_model
+                    ),
+                )
+            })
+            .collect()
+    }
 }
 fn invalid(owner: &str, message: impl std::fmt::Display) -> Error {
     Error::new(&codes::BUILD_MC_OPF_INVALID, format!("{owner}: {message}"))
@@ -435,7 +499,14 @@ pub fn build_mc_ac_opf_preparation(
     let voltage_limits = prepare_voltage_limits(&ctx, instance, vb)?;
     let mut branches = prepare_branches(&ctx, instance, ib, sb, zb)?;
     let mut shunts = prepare_shunts(&ctx, zb)?;
-    let mut devices = prepare_loads(&ctx, sb, vb)?;
+    let mut load_law_projections = Vec::new();
+    let mut devices = prepare_loads(
+        &ctx,
+        sb,
+        vb,
+        bases.bounded_load_laws,
+        &mut load_law_projections,
+    )?;
     devices.extend(prepare_generators(&ctx, instance, ib, sb, cost_weight)?);
     devices.extend(inverter::prepare(&ctx, instance, ib, sb, vb, cost_weight)?);
     devices.extend(prepare_source_devices(&ctx, &terminals, sb, cost_weight)?);
@@ -468,6 +539,7 @@ pub fn build_mc_ac_opf_preparation(
         shunts,
         devices,
         transformers,
+        load_law_projections,
     })
 }
 fn validate_profile(
@@ -1008,7 +1080,13 @@ fn prepare_shunts(ctx: &Context<'_>, zb: f64) -> Result<Vec<McOpfShunt>> {
     }
     Ok(shunts)
 }
-fn prepare_loads(ctx: &Context<'_>, sb: f64, vb: f64) -> Result<Vec<McOpfDevice>> {
+fn prepare_loads(
+    ctx: &Context<'_>,
+    sb: f64,
+    vb: f64,
+    policy: BoundedLoadLawPolicy,
+    projections: &mut Vec<McOpfLoadLawProjection>,
+) -> Result<Vec<McOpfDevice>> {
     let net = ctx.net;
     let coil_map = |name: &str, bus: &str, tm: &[String], config| ctx.coils(name, bus, tm, config);
     let mut devices = Vec::new();
@@ -1026,7 +1104,31 @@ fn prepare_loads(ctx: &Context<'_>, sb: f64, vb: f64) -> Result<Vec<McOpfDevice>
         for (&p, &q) in load.p_nom.iter().zip(&load.q_nom) {
             finite(&load.name, &[p / sb, q / sb])?;
         }
-        let laws = prepare_load_laws(load, n, sb, vb)?;
+        let projected;
+        let model = if policy == BoundedLoadLawPolicy::ProjectToNominal
+            && matches!(
+                load.voltage_model,
+                DistLoadVoltageModel::BoundedZip { .. }
+                    | DistLoadVoltageModel::BoundedExponential { .. }
+                    | DistLoadVoltageModel::BoundedConstantPower { .. }
+            ) {
+            projected = load.voltage_model.without_voltage_bounds();
+            let tag = |model: &DistLoadVoltageModel| {
+                serde_json::to_value(model)
+                    .ok()
+                    .and_then(|value| value["model"].as_str().map(str::to_owned))
+                    .unwrap_or_default()
+            };
+            projections.push(McOpfLoadLawProjection {
+                load: load.name.clone(),
+                source_model: tag(&load.voltage_model),
+                projected_model: tag(&projected),
+            });
+            &projected
+        } else {
+            &load.voltage_model
+        };
+        let laws = prepare_load_laws(load, model, n, sb, vb)?;
         let coils = pairs
             .into_iter()
             .enumerate()
@@ -1313,12 +1415,13 @@ fn push_voltage_limits(
 
 fn prepare_load_laws(
     load: &powerio_dist::DistLoad,
+    model: &DistLoadVoltageModel,
     n: usize,
     sb: f64,
     vb: f64,
 ) -> Result<Vec<Option<McOpfLoadLaw>>> {
     use DistLoadVoltageModel as Law;
-    if matches!(load.voltage_model, Law::ConstantPower { .. }) {
+    if matches!(model, Law::ConstantPower { .. }) {
         return Ok(vec![None; n]);
     }
     let at = |v: &[f64], k: usize, default: f64| -> Result<f64> {
@@ -1336,7 +1439,7 @@ fn prepare_load_laws(
     };
     (0..n)
         .map(|k| {
-            let nominal = at(load.voltage_model.v_nom(), k, f64::NAN)? / vb;
+            let nominal = at(model.v_nom(), k, f64::NAN)? / vb;
             if !nominal.is_finite() || nominal <= 0.0 {
                 return Err(invalid(
                     &load.name,
@@ -1345,7 +1448,7 @@ fn prepare_load_laws(
             }
             let p = load.p_nom[k] / sb;
             let q = load.q_nom[k] / sb;
-            let terms = match &load.voltage_model {
+            let terms = match &model {
                 Law::ConstantImpedance { .. } => [vec![[p, 2.0]], vec![[q, 2.0]]],
                 Law::ConstantCurrent { .. } => [vec![[p, 1.0]], vec![[q, 1.0]]],
                 Law::Exponential {
@@ -1379,7 +1482,7 @@ fn prepare_load_laws(
                     ]
                 }
                 Law::BoundedZip { .. } | Law::BoundedExponential { .. } | Law::BoundedConstantPower { .. } => {
-                    return Err(unsupported(&load.name, "voltage-bounded load laws require piecewise IVR equations; a nominal-law approximation is not implicit"));
+                    return Err(unsupported(&load.name, "voltage-bounded load laws require piecewise IVR equations; a nominal-law approximation is not implicit (opt in with BoundedLoadLawPolicy::ProjectToNominal)"));
                 }
                 _ => return Err(unsupported(&load.name, "unknown load voltage law")),
             };
