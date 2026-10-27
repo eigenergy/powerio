@@ -445,6 +445,12 @@ pub struct RemovedFlows {
 
 /// Union-find over dense bus indices that refuses a union joining two
 /// windings of one three winding transformer.
+///
+/// The refusal covers every pair of live windings, including two secondaries
+/// tied by a closed switch. Such a tie is a valid parallel connection, and
+/// the star lowering could model it by joining the two windings at one bus;
+/// admitting it is deferred, so for now normalization refuses it with
+/// `BUILD.SWITCH.CLOSED`.
 struct MergeSets {
     parent: Vec<usize>,
     /// Per root, the three winding transformers with a winding in the set.

@@ -1,7 +1,7 @@
 //! Winding-current descriptor; no inverse of a leakage impedance is formed.
 use super::{
-    BTreeSet, Configuration, Context, Deserialize, McAcOpfAssemblyOptions, McOpfBranch, McOpfShunt,
-    McOpfTerminal, Result, Serialize, caps, extras, finite, invalid, join, root, unsupported,
+    Configuration, Context, Deserialize, McAcOpfAssemblyOptions, McOpfBranch, McOpfShunt,
+    McOpfTerminal, Result, Serialize, caps, extras, finite, invalid, unsupported,
 };
 use powerio_dist::DistWindingConn;
 
@@ -226,104 +226,6 @@ pub(super) fn prepare(
     }
     Ok(out)
 }
-/// Solve the no-load voltage equations for starts. Free common modes are zero;
-/// these starts never impose a physical voltage reference on the OPF.
-pub(super) fn initialize(
-    branches: &[McOpfBranch],
-    transformers: &[McOpfTransformer],
-    terminals: &mut [McOpfTerminal],
-) -> Result<()> {
-    let n = terminals.len();
-    let mut rows = Vec::new();
-    let mut connected: Vec<_> = (0..n).collect();
-    for (k, t) in terminals.iter().enumerate() {
-        if let Some(v) = t.fixed {
-            let mut row = vec![0.0; n + 2];
-            row[k] = 1.0;
-            row[n] = v[0];
-            row[n + 1] = v[1];
-            rows.push(row);
-        }
-    }
-    for br in branches.iter().filter(|b| !b.open) {
-        for (&a, &b) in br.from.iter().zip(&br.to) {
-            let mut row = vec![0.0; n + 2];
-            row[a] = 1.0;
-            row[b] -= 1.0;
-            rows.push(row);
-            join(&mut connected, a, b);
-        }
-    }
-    for tx in transformers {
-        for coil in &tx.coils {
-            if let Some(q) = coil.negative {
-                join(&mut connected, coil.positive, q);
-            }
-            join(&mut connected, tx.coils[0].positive, coil.positive);
-        }
-        for (index, eq) in tx.equations.iter().enumerate() {
-            if eq.voltage.is_empty() {
-                continue;
-            }
-            let mut row = vec![0.0; n + 2];
-            for &(k, c) in eq.voltage.iter().chain(
-                tx.tap_equations
-                    .get(index)
-                    .into_iter()
-                    .flat_map(|r| &r.voltage),
-            ) {
-                row[k] += c[0];
-            }
-            rows.push(row);
-        }
-    }
-    let anchors: BTreeSet<_> = terminals
-        .iter()
-        .enumerate()
-        .filter(|(_, t)| t.fixed.is_some())
-        .map(|(k, _)| root(&mut connected, k))
-        .collect();
-    for (k, t) in terminals.iter().enumerate() {
-        if !anchors.contains(&root(&mut connected, k)) {
-            return Err(unsupported(&t.bus, "unreferenced transformer island"));
-        }
-    }
-    let mut pivot = 0;
-    let mut pivots = Vec::new();
-    for col in 0..n {
-        let best =
-            (pivot..rows.len()).max_by(|&a, &b| rows[a][col].abs().total_cmp(&rows[b][col].abs()));
-        let Some(best) = best.filter(|&r| rows[r][col].abs() > 1e-12) else {
-            continue;
-        };
-        rows.swap(pivot, best);
-        let d = rows[pivot][col];
-        for v in &mut rows[pivot][col..] {
-            *v /= d;
-        }
-        let row = rows[pivot].clone();
-        for (j, r) in rows.iter_mut().enumerate() {
-            if j != pivot {
-                let f = r[col];
-                for k in col..n + 2 {
-                    r[k] -= f * row[k];
-                }
-            }
-        }
-        pivots.push((pivot, col));
-        pivot += 1;
-    }
-    for t in terminals.iter_mut().filter(|t| t.fixed.is_none()) {
-        t.start = [0.0, 0.0];
-    }
-    for (r, c) in pivots {
-        if terminals[c].fixed.is_none() {
-            terminals[c].start = [rows[r][n], rows[r][n + 1]];
-        }
-    }
-    Ok(())
-}
-
 fn explicit_core(
     profile: &TransformerProfile<'_>,
     tx: &McOpfTransformer,
@@ -1058,33 +960,31 @@ fn tap_equations(
     Ok(())
 }
 
+/// Transformer extras the preparation interprets.
+pub(super) const INTERPRETED_EXTRAS: &[&str] = &[
+    "tap_min",
+    "tap_max",
+    "tap_ratio_min",
+    "tap_ratio_max",
+    "bmopf_open_delta",
+    "bmopf_subtype",
+    "bmopf_power_base",
+    "bmopf_winding_metadata",
+    "bmopf_delta_rolls",
+    "no_load_shunt",
+    "g_no_load",
+    "b_no_load",
+    "i_max_from",
+    "i_max_to",
+    "regulator_type",
+    "r_series_from",
+    "r_series_to",
+    "x_series_from",
+    "x_series_to",
+];
+
 fn validate_extras(t: &powerio_dist::DistTransformer) -> Result<()> {
-    extras(
-        &t.name,
-        &t.extras,
-        &[
-            "tap_min",
-            "tap_max",
-            "tap_ratio_min",
-            "tap_ratio_max",
-            "bmopf_open_delta",
-            "bmopf_subtype",
-            "bmopf_power_base",
-            "bmopf_winding_metadata",
-            "bmopf_delta_rolls",
-            "no_load_shunt",
-            "g_no_load",
-            "b_no_load",
-            "i_max_from",
-            "i_max_to",
-            "regulator_type",
-            "r_series_from",
-            "r_series_to",
-            "x_series_from",
-            "x_series_to",
-        ],
-    )?;
-    Ok(())
+    extras(&t.name, &t.extras, INTERPRETED_EXTRAS)
 }
 
 // Canonical two-terminal delta nameplates use a single-coil base even though

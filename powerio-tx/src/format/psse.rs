@@ -510,8 +510,6 @@ fn warn_unbacked_table_references(net: &BalancedNetwork, warnings: &mut Diagnost
 /// Why a write states a transformer's corrected impedance with no table.
 #[derive(Clone, Copy)]
 enum CorrectionFreeze {
-    /// RAWX states no impedance correction table.
-    Rawx,
     /// Revisions before 35 cannot state ZCOD=1 pairwise tables.
     PairwiseBeforeRevision35,
     /// ZCOD=1 names no single adjustable winding, which the reader refuses.
@@ -519,16 +517,9 @@ enum CorrectionFreeze {
 }
 
 /// The reason a write must freeze transformer `t`'s correction tables, if any.
-fn three_winding_correction_freeze(
-    t: &Transformer3W,
-    rev: u32,
-    rawx: bool,
-) -> Option<CorrectionFreeze> {
+fn three_winding_correction_freeze(t: &Transformer3W, rev: u32) -> Option<CorrectionFreeze> {
     if !(0..3).any(|w| t.winding_impedance_correction(w).is_some()) {
         return None;
-    }
-    if rawx {
-        return Some(CorrectionFreeze::Rawx);
     }
     if extra_i64(&t.extras, "psse_zcod") != Some(1) {
         return None;
@@ -549,36 +540,18 @@ fn three_winding_correction_freeze(
 fn freeze_unwritable_corrections(
     net: &BalancedNetwork,
     rev: u32,
-    rawx: bool,
     warnings: &mut Diagnostics,
 ) -> Option<BalancedNetwork> {
     let reasons: Vec<_> = net
         .transformers_3w()
         .iter()
-        .map(|t| three_winding_correction_freeze(t, rev, rawx))
+        .map(|t| three_winding_correction_freeze(t, rev))
         .collect();
-    let branch_frozen = rawx
-        && net
-            .branches()
-            .iter()
-            .any(|b| b.impedance_correction().is_some());
-    if !branch_frozen && reasons.iter().all(Option::is_none) {
+    if reasons.iter().all(Option::is_none) {
         return None;
     }
     let mut projected = net.clone();
     projected.apply_impedance_correction();
-    if rawx {
-        for b in projected.branches_mut() {
-            if let Some(correction) = b.impedance_correction() {
-                b.set_impedance_correction(None);
-                b.extras.remove("psse_tab");
-                warnings.push(&F.value_collapsed, format!(
-                    "transformer {}-{} impedance correction table {} frozen at its present setting: the RAWX writer writes no impcor table, so the corrected R, X are written with TAB = 0",
-                    b.from, b.to, correction.table,
-                ));
-            }
-        }
-    }
     for (t, reason) in projected.transformers_3w_mut().iter_mut().zip(reasons) {
         let Some(reason) = reason else {
             continue;
@@ -589,9 +562,6 @@ fn freeze_unwritable_corrections(
         }
         let [i, j, k] = t.windings.each_ref().map(|w| w.bus);
         let message = match reason {
-            CorrectionFreeze::Rawx => format!(
-                "three winding transformer {i}-{j}-{k} impedance correction frozen at its present setting: the RAWX writer writes no impcor table, so the corrected impedances are written with TAB = 0"
-            ),
             CorrectionFreeze::PairwiseBeforeRevision35 => {
                 t.extras.remove("psse_zcod");
                 format!(
@@ -977,16 +947,15 @@ fn write_psse(net: &BalancedNetwork) -> TextEmission {
 /// this serializer is the cross format path.
 #[must_use]
 pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> TextEmission {
-    write_psse_rev_inner(net, rev, true, false)
+    write_psse_rev_inner(net, rev, true)
 }
 
 /// The RAWX writer reuses the electrical records but writes detailed
 /// connectivity directly into JSON tables. Omitting the nested RAW substation
 /// records here prevents duplicate conversion work and duplicate diagnostics.
-/// RAWX states no impedance correction table, so every correction is frozen
-/// at its present setting.
+/// The impedance correction section becomes the RAWX `impcor` table.
 pub(super) fn write_psse_rev_for_rawx(net: &BalancedNetwork, rev: u32) -> TextEmission {
-    write_psse_rev_inner(net, rev, false, true)
+    write_psse_rev_inner(net, rev, false)
 }
 
 #[expect(clippy::too_many_lines)]
@@ -994,18 +963,17 @@ fn write_psse_rev_inner(
     net: &BalancedNetwork,
     rev: u32,
     include_detailed_connectivity: bool,
-    rawx: bool,
 ) -> TextEmission {
     // v34+ wraps the global parameters in a system-wide data section, names
     // branches and carries 12 ratings, and adds load DG / load-type columns.
     let modern = rev >= 34;
     let mut warnings = Diagnostics::new();
     warn_edited_correction_nominals(net, &mut warnings);
-    // Freeze the correction tables this write cannot state (RAWX, ZCOD=1
-    // before revision 35, ZCOD=1 with no single adjustable winding) at their
+    // Freeze the correction tables this write cannot state (ZCOD=1 before
+    // revision 35, ZCOD=1 with no single adjustable winding) at their
     // present operating point rather than reinterpret them or write a record
     // the reader refuses. Other transformers retain their tables.
-    let projected = freeze_unwritable_corrections(net, rev, rawx, &mut warnings);
+    let projected = freeze_unwritable_corrections(net, rev, &mut warnings);
     let net = projected.as_ref().unwrap_or(net);
     // Number the connectivity nodes as PSS/E numbers them before any record
     // resolves a regulating node. Revision 33 writes no node, so it reports no
@@ -8906,6 +8874,109 @@ Q
         );
     }
 
+    /// Issue #592 items 2 and 8: one two winding transformer stated as
+    /// PSS/E 34 writes it (NOD last), as revision 35 states it (NODE after
+    /// CONT), and as a RAWX row with named fields. All three read the same
+    /// control columns, and bus I sees `MAG1 + jMAG2` itself, outside the
+    /// winding 1 ratio (`1.02 / 1.05`), as PSS/E connects it.
+    #[test]
+    fn winding_node_columns_and_magnetizing_admittance_agree_across_revisions() {
+        let case = |rev: u32, winding1: &str| {
+            format!(
+                "0, 100.00, {rev}, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 115.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN SYSTEM SWITCHING DEVICE DATA
+0 / END OF SYSTEM SWITCHING DEVICE DATA, BEGIN TRANSFORMER DATA
+1,2,0,'1 ',1,1,1,0.002,-0.015,2,'T12A        ',1,1,1,0,1,0,1,0,1,'            '
+0.005,0.08,100
+{winding1}
+1.05,0.0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+"
+            )
+        };
+        let ratings = "100,0,0,0,0,0,0,0,0,0,0,0";
+        // COD 1, CONT 2, RMA/RMI 1.12/0.88, VMA/VMI 1.04/0.96, NTP 25, node 0.
+        let rev34 = case(
+            34,
+            &format!("1.02,0.0,0.0,{ratings},1,2,1.12,0.88,1.04,0.96,25,0,0,0,0,0"),
+        );
+        let rev35 = case(
+            35,
+            &format!("1.02,0.0,0.0,{ratings},1,2,0,1.12,0.88,1.04,0.96,25,0,0,0,0"),
+        );
+        let rawx = serde_json::json!({
+            "network": {
+                "caseid": {"fields": ["rev", "sbase", "basfrq"], "data": [35, 100, 60]},
+                "bus": {
+                    "fields": ["ibus", "name", "baskv", "ide"],
+                    "data": [[1, "B1", 230.0, 3], [2, "B2", 115.0, 1]]
+                },
+                "transformer": {
+                    "fields": [
+                        "ibus", "jbus", "kbus", "ckt", "cw", "cz", "cm", "mag1", "mag2", "name",
+                        "r1_2", "x1_2", "sbase1_2", "windv1", "nomv1", "ang1", "wdg1rate1",
+                        "cod1", "cont1", "node1", "rma1", "rmi1", "vma1", "vmi1", "ntp1",
+                        "windv2", "nomv2"
+                    ],
+                    "data": [[
+                        1, 2, 0, "1", 1, 1, 1, 0.002, -0.015, "T12A",
+                        0.005, 0.08, 100.0, 1.02, 0.0, 0.0, 100.0,
+                        1, 2, 0, 1.12, 0.88, 1.04, 0.96, 25,
+                        1.05, 0.0
+                    ]]
+                }
+            }
+        })
+        .to_string();
+        let mut nets = Vec::new();
+        for (label, net) in [
+            ("RAW 34", parse_psse(&rev34)),
+            ("RAW 35", parse_psse(&rev35)),
+            (
+                "RAWX",
+                super::super::rawx::parse_rawx_source(&rawx, None, &mut Diagnostics::new()),
+            ),
+        ] {
+            let net = net.unwrap_or_else(|error| panic!("{label}: {error}"));
+            let branch = &net.branches()[0];
+            let tap = branch.calc_effective_tap();
+            close(tap, 1.02 / 1.05);
+            let control = branch.control.as_ref().unwrap();
+            assert_eq!(control.mode, TransformerControlMode::Voltage, "{label}");
+            assert_eq!(control.controlled_bus, Some(BusId(2)), "{label}");
+            // RMA and RMI are winding 1 ratios; in branch tap terms they
+            // divide by the winding 2 ratio as the tap does.
+            close(control.tap_max, 1.12 / 1.05);
+            close(control.tap_min, 0.88 / 1.05);
+            close(control.band_max, 1.04);
+            close(control.band_min, 0.96);
+            assert_eq!(control.ntp, 25, "{label}");
+            // The pi model divides the from side charging by tap²; bus I
+            // sees exactly MAG1 + jMAG2.
+            let charging = branch.calc_terminal_charging();
+            close(charging.g_fr / (tap * tap), 0.002);
+            close(charging.b_fr / (tap * tap), -0.015);
+            close(charging.g_to, 0.0);
+            close(charging.b_to, 0.0);
+            nets.push(net);
+        }
+        assert_eq!(nets[0].branches(), nets[1].branches());
+        // RAWX also assigns the row a stable identity.
+        let mut rawx_branch = nets[2].branches()[0].clone();
+        rawx_branch.uid = None;
+        assert_eq!(*nets[1].branches(), [rawx_branch]);
+    }
+
     /// A revision 34 case in which a two winding transformer, the second
     /// winding of a three winding transformer, a generator, and a switched
     /// shunt each regulate node 2 of bus 1's substation. Revision 34 appends
@@ -13109,31 +13180,53 @@ Q
     }
 
     #[test]
-    fn rawx_writes_corrected_impedances_with_no_table() {
+    fn rawx_writes_impedance_correction_tables_as_impcor() {
         let net = parse_psse(&impedance_correction_case()).unwrap();
-        let mut corrected = net.clone();
-        corrected.apply_impedance_correction();
         let emission = super::super::rawx::write_rawx(&net).unwrap();
-        assert!(has_diagnostic(
-            &emission,
-            "transformer 1-2 impedance correction table 1 frozen at its present setting"
-        ));
-        assert!(has_diagnostic(
-            &emission,
-            "three winding transformer 1-3-5 impedance correction frozen"
-        ));
+        assert!(
+            !has_diagnostic(&emission, "frozen"),
+            "{:?}",
+            emission.render_diagnostics()
+        );
+        let root: serde_json::Value = serde_json::from_str(&emission.text).unwrap();
+        let impcor = &root["network"]["impcor"];
+        assert_eq!(
+            impcor["fields"],
+            serde_json::json!(["itable", "tap", "refact", "imfact"])
+        );
+        // One row per point: table 1's five angle points, then table 2's
+        // three ratio points, then table 4's.
+        let rows = impcor["data"].as_array().unwrap();
+        assert_eq!(rows.len(), 11, "{rows:?}");
+        assert_eq!(rows[0], serde_json::json!([1, -60.0, 1.5, 0.1]));
+        assert_eq!(rows[4], serde_json::json!([1, 60.0, 1.5, -0.1]));
+        assert_eq!(rows[5], serde_json::json!([2, 0.9, 1.1, 0.0]));
+        let mut warnings = Diagnostics::new();
         let back =
-            super::super::rawx::parse_rawx_source(&emission.text, None, &mut Diagnostics::new())
-                .unwrap();
-        for (read, written) in back.branches().iter().zip(corrected.branches()) {
-            assert_eq!(read.impedance_correction(), None);
-            assert_eq!(read.extras.get("psse_tab"), None);
+            super::super::rawx::parse_rawx_source(&emission.text, None, &mut warnings).unwrap();
+        assert_eq!(
+            transformer_corrections(&back),
+            transformer_corrections(&net)
+        );
+        let lines = warnings.lines();
+        assert!(
+            !lines.iter().any(|line| line.contains("impcor")),
+            "{lines:?}"
+        );
+        // Applying the tables read back gives the impedance the RAW case
+        // gives.
+        let (mut applied, mut back) = (net.clone(), back);
+        applied.apply_impedance_correction();
+        back.apply_impedance_correction();
+        for (read, written) in back.branches().iter().zip(applied.branches()) {
             close(read.r, written.r);
             close(read.x, written.x);
         }
-        let t = &back.transformers_3w()[0];
-        assert_eq!(t.extras.get("psse_tab3"), None);
-        for (read, written) in t.z.iter().zip(corrected.transformers_3w()[0].z) {
+        for (read, written) in back.transformers_3w()[0]
+            .z
+            .iter()
+            .zip(applied.transformers_3w()[0].z)
+        {
             close(read.r, written.r);
             close(read.x, written.x);
         }

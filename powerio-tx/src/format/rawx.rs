@@ -6,6 +6,7 @@
 //! `.raw` reader and writer in [`super::psse`].
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 
 use serde_json::{Map, Value};
 
@@ -61,6 +62,9 @@ const TRANSFORMER_IMPEDANCE_FIELDS: &[&str] = &[
     "anstar",
 ];
 const AREA_FIELDS: &[&str] = &["iarea", "isw", "pdes", "ptol", "arname"];
+/// One impedance correction point per row: the table number, the winding
+/// ratio or angle `T`, and the complex factor `F`.
+const IMPEDANCE_CORRECTION_FIELDS: &[&str] = &["itable", "tap", "refact", "imfact"];
 /// The revision 35 FACTS device record, field for field.
 const FACTS_FIELDS: &[&str] = &[
     "name", "ibus", "jbus", "mode", "pdes", "qdes", "vset", "shmx", "trmx", "vtmn", "vtmx", "vsmx",
@@ -109,7 +113,6 @@ const SUBSTATION_TERMINAL_FIELDS: &[&str] =
 const EXPLICIT_NULL: &str = "null";
 
 const UNSUPPORTED_TABLES: &[(&str, &str)] = &[
-    ("impcor", "transformer impedance correction tables"),
     ("ntermdc", "multi-terminal DC lines"),
     ("ntermdcconv", "multi-terminal DC converters"),
     ("ntermdcbus", "multi-terminal DC buses"),
@@ -439,6 +442,7 @@ pub(super) fn parse_rawx_source(
     raw.push_str("0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA\n");
     append_vsc_dc(network, &mut raw, warnings, &mut substituted_strings)?;
     raw.push_str("0 / END OF VSC DC LINE DATA, BEGIN IMPEDANCE CORRECTION DATA\n");
+    append_impedance_corrections(network, &mut raw, warnings)?;
     raw.push_str("0 / END OF IMPEDANCE CORRECTION DATA, BEGIN MULTI-TERMINAL DC DATA\n");
     raw.push_str("0 / END OF MULTI-TERMINAL DC DATA, BEGIN MULTI-SECTION LINE DATA\n");
     raw.push_str("0 / END OF MULTI-SECTION LINE DATA, BEGIN ZONE DATA\n");
@@ -640,6 +644,75 @@ fn append_vsc_dc(
             )?);
             out.push('\n');
         }
+    }
+    Ok(())
+}
+
+/// RAWX states one impedance correction point per `impcor` row; RAW 35 states
+/// a table as one record, `I, T1, Re(F1), Im(F1), ...`, ended by a
+/// `0.0, 0.0, 0.0` point. Group the rows by table in order of first
+/// appearance, keep each table's row order, and write each table as one
+/// record for the shared reader, which classifies and attaches it. A row the
+/// RAW record cannot state (a table number of 0 or below, or the all zero
+/// point that ends a RAW table) is dropped and reported.
+fn append_impedance_corrections(
+    network: &Map<String, Value>,
+    out: &mut String,
+    warnings: &mut Diagnostics,
+) -> Result<()> {
+    let Some(table) = Table::parse(network, "impcor")? else {
+        return Ok(());
+    };
+    table.warn_unknown_fields(IMPEDANCE_CORRECTION_FIELDS, warnings);
+    let mut tables: Vec<(i64, Vec<[f64; 3]>)> = Vec::new();
+    let mut positions = BTreeMap::new();
+    let mut unnumbered = 0usize;
+    let mut zero_points = 0usize;
+    for row in table.rows {
+        let number = integer_value(table.value(row, "itable"), "impcor.itable", None)?;
+        let point = [
+            numeric_value(table.value(row, "tap"), "impcor.tap", None)?,
+            numeric_value(table.value(row, "refact"), "impcor.refact", None)?,
+            numeric_value(table.value(row, "imfact"), "impcor.imfact", Some(0.0))?,
+        ];
+        if number <= 0 {
+            unnumbered += 1;
+            continue;
+        }
+        if point.iter().all(|value| *value == 0.0) {
+            zero_points += 1;
+            continue;
+        }
+        let position = *positions.entry(number).or_insert_with(|| {
+            tables.push((number, Vec::new()));
+            tables.len() - 1
+        });
+        tables[position].1.push(point);
+    }
+    if unnumbered > 0 {
+        warnings.push(
+            &codes::READ_PSSE_FIELD_DROPPED,
+            format!(
+                "PSS/E RAWX `impcor` table: {unnumbered} row(s) with a table number of 0 or below dropped; a transformer winding names a table by a positive number"
+            ),
+        );
+    }
+    if zero_points > 0 {
+        warnings.push(
+            &codes::READ_PSSE_FIELD_DROPPED,
+            format!(
+                "PSS/E RAWX `impcor` table: {zero_points} row(s) stating T = 0, F = 0 dropped; PSS/E reads that point as the end of a table"
+            ),
+        );
+    }
+    for (number, points) in tables {
+        out.push_str(&number.to_string());
+        for [value, factor_re, factor_im] in points {
+            // `{:?}` states the shortest decimal that reads back to the
+            // same f64.
+            let _ = write!(out, ", {value:?}, {factor_re:?}, {factor_im:?}");
+        }
+        out.push_str(", 0.0, 0.0, 0.0\n");
     }
     Ok(())
 }
@@ -2055,6 +2128,7 @@ fn raw_to_rawx(net: &BalancedNetwork, raw: &str, diagnostics: &mut Diagnostics) 
     add_simple_output_table(&mut network, "area", AREA_FIELDS, &["arname"], &sections);
     add_two_terminal_output_table(&mut network, &sections)?;
     add_vsc_output_table(&mut network, &sections)?;
+    add_impedance_correction_output_table(&mut network, &sections)?;
     add_simple_output_table(
         &mut network,
         "swshunt",
@@ -2372,6 +2446,65 @@ fn add_vsc_output_table(
         network.insert(
             "vscdc".to_owned(),
             table_object(VSC_DC_FIELDS, Value::Array(rows)),
+        );
+    }
+    Ok(())
+}
+
+/// Split the RAW 35 impedance correction records, each `I, T1, Re(F1),
+/// Im(F1), ...` over as many lines as it takes and ended by a `0.0, 0.0, 0.0`
+/// point, into one `impcor` row per point.
+fn add_impedance_correction_output_table(
+    network: &mut Map<String, Value>,
+    sections: &BTreeMap<String, Vec<String>>,
+) -> Result<()> {
+    let Some(lines) = sections.get("IMPEDANCE CORRECTION") else {
+        return Ok(());
+    };
+    let is_zero = |token: &String| token.parse::<f64>().is_ok_and(|value| value == 0.0);
+    let mut rows = Vec::new();
+    let mut table: Option<String> = None;
+    let mut pending: Vec<String> = Vec::new();
+    for line in lines {
+        let mut tokens = line_tokens(line).into_iter();
+        if table.is_none() {
+            table = tokens.next();
+        }
+        let Some(number) = table.clone() else {
+            continue;
+        };
+        pending.extend(tokens);
+        let complete = pending.len() / 3 * 3;
+        let mut ended = false;
+        for point in pending[..complete].chunks(3) {
+            if point.iter().all(is_zero) {
+                ended = true;
+                break;
+            }
+            let mut tokens = vec![number.clone()];
+            tokens.extend_from_slice(point);
+            rows.push(Value::Array(tokens_as_values(
+                &tokens,
+                IMPEDANCE_CORRECTION_FIELDS,
+                &[],
+            )?));
+        }
+        if ended {
+            table = None;
+            pending.clear();
+        } else {
+            pending.drain(..complete);
+        }
+    }
+    if table.is_some() {
+        return Err(malformed(
+            "internal PSS/E impedance correction record has no 0.0, 0.0, 0.0 end point",
+        ));
+    }
+    if !rows.is_empty() {
+        network.insert(
+            "impcor".to_owned(),
+            table_object(IMPEDANCE_CORRECTION_FIELDS, Value::Array(rows)),
         );
     }
     Ok(())
@@ -3689,6 +3822,100 @@ mod tests {
         let back = parse_rawx_source(&emitted.text, None, &mut diagnostics).unwrap();
         assert_eq!(back.buses().len(), 2);
         close(back.loads()[0].p, 24.0);
+    }
+
+    /// RAWX states one impedance correction point per `impcor` row. Rows of
+    /// different tables may interleave; each table keeps its row order, and
+    /// the windings that name a table read its points as the RAW reader does.
+    #[test]
+    fn impcor_rows_read_as_the_tables_the_windings_name() {
+        use crate::network::ImpedanceCorrectionVariable;
+
+        let mut root: Value = serde_json::from_str(MINIMAL).unwrap();
+        root["network"]["transformer"] = serde_json::json!({
+            "fields": ["ibus", "jbus", "kbus", "ckt", "r1_2", "x1_2", "windv1", "nomv1", "ang1", "tab1", "windv2", "nomv2"],
+            "data": [
+                [1, 2, 0, "1", 0.01, 0.1, 1.0, 0.0, -15.0, 7, 1.0, 0.0],
+                [1, 2, 0, "2", 0.02, 0.2, 1.05, 0.0, 0.0, 3, 1.0, 0.0]
+            ]
+        });
+        root["network"]["impcor"] = serde_json::json!({
+            "fields": ["itable", "tap", "refact", "imfact"],
+            "data": [
+                [7, -30.0, 1.2, 0.1],
+                [3, 0.9, 1.1, 0.0],
+                [7, 0.0, 1.0, 0.0],
+                [3, 1.1, 1.05, -0.05],
+                [7, 30.0, 1.2, 0.0],
+                [0, 1.0, 1.0, 0.0],
+                [3, 0.0, 0.0, 0.0]
+            ]
+        });
+        let mut diagnostics = Diagnostics::new();
+        let net = parse_rawx_source(&root.to_string(), None, &mut diagnostics).unwrap();
+        let lines = diagnostics.lines();
+        for expected in [
+            "1 row(s) with a table number of 0 or below dropped",
+            "1 row(s) stating T = 0, F = 0 dropped",
+        ] {
+            assert!(
+                lines.iter().any(|line| line.contains(expected)),
+                "{expected}: {lines:?}"
+            );
+        }
+        assert!(
+            !lines.iter().any(|line| line.contains("not modeled")
+                || line.contains("retained only in a same format source echo")),
+            "the impcor table is read: {lines:?}"
+        );
+        let points = |row: usize| {
+            let correction = net.branches()[row].impedance_correction().unwrap();
+            let points: Vec<_> = correction
+                .points
+                .iter()
+                .map(|point| (point.value, point.factor_re, point.factor_im))
+                .collect();
+            (correction.table, correction.variable, points)
+        };
+        // Branch 0 is the AC line; the two transformers follow it.
+        assert_eq!(
+            points(1),
+            (
+                7,
+                ImpedanceCorrectionVariable::Angle,
+                vec![(-30.0, 1.2, 0.1), (0.0, 1.0, 0.0), (30.0, 1.2, 0.0)]
+            )
+        );
+        assert_eq!(
+            points(2),
+            (
+                3,
+                ImpedanceCorrectionVariable::Ratio,
+                vec![(0.9, 1.1, 0.0), (1.1, 1.05, -0.05)]
+            )
+        );
+
+        // The writer states the tables back as impcor rows, and they read
+        // back to the same corrections.
+        let emitted = write_rawx(&net).unwrap();
+        let written: Value = serde_json::from_str(&emitted.text).unwrap();
+        assert_eq!(
+            written["network"]["impcor"]["data"],
+            serde_json::json!([
+                [3, 0.9, 1.1, 0.0],
+                [3, 1.1, 1.05, -0.05],
+                [7, -30.0, 1.2, 0.1],
+                [7, 0.0, 1.0, 0.0],
+                [7, 30.0, 1.2, 0.0]
+            ])
+        );
+        let back = parse_rawx_source(&emitted.text, None, &mut Diagnostics::new()).unwrap();
+        for row in 1..3 {
+            assert_eq!(
+                back.branches()[row].impedance_correction(),
+                net.branches()[row].impedance_correction()
+            );
+        }
     }
 
     #[test]

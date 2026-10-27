@@ -27,9 +27,14 @@ Benchmarking Multiconductor OPF.
 ## cim/
 
 `micro_feeder.xml` is a synthetic, hand written distribution CIM feeder
-original to this repository (CIM100 namespace, 243 lines, 13,883 bytes). It
+original to this repository (CIM100 namespace, 243 lines, 13,829 bytes). It
 exercises the mapped element set with hand computed expected values, pinned in
-`powerio-dist/tests/cim.rs`. See `cim/README.md`.
+`powerio-dist/tests/cim.rs`. `tank_feeder.xml` is a synthetic distribution
+CIM feeder, also original to this repository (CIM100 namespace, 533 lines,
+30,526 bytes), of transformers in the `TransformerTank` form, pinned in the
+same test file and compared with native OpenDSS by
+`evals/validation/validate_cim_tanks.py`. Both are MIT OR Apache-2.0
+(`cim/License.md`). See `cim/README.md`.
 
 ## opendss/
 
@@ -93,6 +98,27 @@ commit 87dc18b0) via the committed oracle:
 `fourwire_linecode.json` comes from `micro/fourwire_linecode.dss` the same
 way. PMD's `parse_file` ran with `kron_reduce=false`; `print_file` wrote the
 dict. Regenerate with the same command when bumping the PMD version.
+
+`case3_balanced.json` and `case3_balanced_multinetwork.json` reproduce issue
+#646. Both come from `test/data/opendss/case3_balanced.dss` as shipped in the
+PowerModelsDistribution v0.16.0 package (JSON.jl 0.21.4, Julia 1.13.1), read
+with PMD's defaults:
+
+```julia
+using PowerModelsDistribution
+eng = parse_file(joinpath(pkgdir(PowerModelsDistribution),
+    "test/data/opendss/case3_balanced.dss"); data_model=ENGINEERING)
+print_file("case3_balanced.json", eng)
+# The multinetwork file keeps the first two points of the load shape.
+ts = eng["time_series"]["ls1"]
+ts["values"] = ts["values"][1:2]; ts["time"] = ts["time"][1:2]
+print_file("case3_balanced_multinetwork.json", make_multinetwork(eng))
+```
+
+One edit follows `print_file` in each: the `files` entry, an absolute path
+into the local Julia depot, is replaced with the package relative
+`test/data/opendss/case3_balanced.dss`. `case3_balanced.json` is 509 lines,
+8,283 bytes; `case3_balanced_multinetwork.json` is 994 lines, 20,121 bytes.
 
 ## Licensing
 
