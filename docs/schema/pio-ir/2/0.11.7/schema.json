@@ -465,6 +465,17 @@
     "AcPfInstance": {
       "additionalProperties": false,
       "properties": {
+        "hvdc_treatment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HvdcTreatment"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How a replacement network's specifications treat its HVDC lines.\nAbsent means `ignore`, the treatment of every document written before\nthe field existed."
+        },
         "initial_point": {
           "anyOf": [
             {
@@ -3584,6 +3595,17 @@
       "properties": {
         "approximation": {
           "type": "string"
+        },
+        "hvdc_treatment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HvdcTreatment"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the bus specifications treat the network's HVDC lines. Absent\nmeans `ignore`, the treatment of every document written before the\nfield existed."
         },
         "initial_point": {
           "anyOf": [
@@ -7701,6 +7723,21 @@
         "side1_inverter_side2_rectifier"
       ],
       "type": "string"
+    },
+    "HvdcTreatment": {
+      "description": "How a calculation treats the network's HVDC lines.",
+      "oneOf": [
+        {
+          "const": "fixed_injection",
+          "description": "Each in service line enters the bus balance as a fixed injection: the\nnegative of its bus-to-device terminal powers, which in the stored\nMATPOWER signs is `-pf` and `+qf` at the from bus and `+pt` and `+qt`\nat the to bus.",
+          "type": "string"
+        },
+        {
+          "const": "ignore",
+          "description": "Leave every HVDC line out of the bus balance. The power the lines\ntransfer is absent from the calculation, and a `BUILD.HVDC.IGNORED`\nwarning states how much.",
+          "type": "string"
+        }
+      ]
     },
     "IbrPrimeMover": {
       "enum": [
