@@ -1040,6 +1040,19 @@ fn write_psse_rev_inner(
     } else {
         net
     };
+    let stored;
+    let net = if let Some((projected, count)) = super::powsybl_psse::storage_as_loads(net) {
+        warnings.push(
+            &F.value_collapsed,
+            format!(
+                "{count} storage unit(s) written as PSS/E loads consuming the negated storage injection, as PowSybl's exporter writes a battery: PSS/E has no storage record, so energy, charge and discharge ratings, efficiencies, and reactive limits are dropped"
+            ),
+        );
+        stored = projected;
+        &stored
+    } else {
+        net
+    };
     let mut nonfinite = false;
     let mut sanitized_quoted = 0usize;
     let mut s = String::new();
@@ -2205,15 +2218,6 @@ fn write_psse_rev_inner(
             "DC line converter detail (firing angles, converter transformer taps, reactive \
              output) defaulted: PSS/E two-terminal DC is written from the power setpoint and \
              line resistance only",
-        );
-    }
-    if !net.storage().is_empty() {
-        warnings.push(
-            &F.record_dropped,
-            format!(
-                "{} storage unit(s) dropped: PSS/E has no storage record",
-                net.storage().len()
-            ),
         );
     }
     if net.generators().iter().any(|g| g.cost.is_some()) {

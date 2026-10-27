@@ -58,6 +58,11 @@
   to RATE12) are written and read as further limit groups, as two winding
   branches already were. Each of these was reported as dropped before.
 
+- Storage, such as an IIDM battery, is now written to PSS/E RAW and RAWX as
+  a load that consumes what the storage injects, as PowSybl's exporter
+  writes a battery, with a diagnostic naming the storage fields a load
+  cannot state. It was dropped, which changed the bus injections.
+
 - The conversion matrix grades each cell by its worst finding: exact,
   lossless, restated (the target required a value and the writer supplied
   it), approximate, dropped, or failed. The PR comment shows that level, the

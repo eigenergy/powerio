@@ -632,3 +632,45 @@ fn three_winding_star_voltage_survives_iidm_as_properties() {
             .all(|value| !value.properties.contains_key("v"))
     );
 }
+
+#[test]
+fn iidm_batteries_become_psse_loads() {
+    use powerio_tx::network::Storage;
+    let mut network = two_numbered_buses();
+    let mut unit = Storage::new(powerio_tx::network::BusId::new(10));
+    unit.ps = 20.0;
+    unit.qs = -5.0;
+    network.storage_mut().push(unit);
+    for rev in [33, 35] {
+        let emitted = emit_psse_rev(&network, rev);
+        let messages = codes_and_messages(&emitted);
+        assert!(
+            messages.iter().any(|message| message.starts_with(
+                "EMIT.PSSE.VALUE_COLLAPSED: 1 storage unit(s) written as PSS/E loads"
+            )),
+            "{messages:#?}"
+        );
+        let back = parse_psse(&emitted.text).unwrap();
+        let loads = back
+            .loads()
+            .iter()
+            .map(|load| (load.bus.0, load.p, load.q))
+            .collect::<Vec<_>>();
+        assert_eq!(loads, [(10, 10.0, 2.0), (10, -20.0, 5.0)]);
+    }
+
+    // PowSybl's battery fixture: two batteries at NBAT inject 9999.99 and
+    // 100 MW.
+    let source = parse_file(data("xiidm/powsybl/V1_0/batteryRoundTripRef.xml"), None)
+        .unwrap()
+        .network;
+    assert_eq!(source.storage().len(), 2);
+    let back = read_rawx(&rawx(&source));
+    assert!(back.storage().is_empty());
+    assert_eq!(back.loads().len(), source.loads().len() + 2);
+    let total = |network: &BalancedNetwork| {
+        network.loads().iter().map(|load| load.p).sum::<f64>()
+            - network.storage().iter().map(|unit| unit.ps).sum::<f64>()
+    };
+    close(total(&back), total(&source));
+}

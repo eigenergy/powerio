@@ -8,6 +8,8 @@ use std::collections::HashMap;
 
 use powerio_core::ComponentId;
 
+use crate::network::Load;
+
 use crate::network::{
     BalancedNetwork, BranchRatingSet, BusId, LoadingLimits, TapChangerKind,
     TapChangerRegulationMode, TransformerControl, TransformerControlMode,
@@ -291,4 +293,30 @@ pub(super) fn psse_control_from_tap(
         }
     }
     Some(control)
+}
+
+/// PSS/E has no storage record, so PowSybl's exporter writes an IIDM battery
+/// as a PSS/E load (psse-converter `BatteryConverter.create`; the equipment
+/// type a battery terminal takes is `PSSE_LOAD`, `AbstractConverter
+/// .getPsseEquipmentType`). The load consumes what the storage injects:
+/// `P = -ps`, `Q = -qs`, in the storage's status. Its energy, ratings,
+/// efficiencies, and limits have no load field.
+///
+/// Returns the projected network and the number of storage units it
+/// converted, or `None` when there is none.
+pub(super) fn storage_as_loads(net: &BalancedNetwork) -> Option<(BalancedNetwork, usize)> {
+    if net.storage().is_empty() {
+        return None;
+    }
+    let mut projected = net.clone();
+    let storage = std::mem::take(projected.storage_mut());
+    let count = storage.len();
+    projected
+        .loads_mut()
+        .extend(storage.into_iter().map(|unit| {
+            let mut load = Load::new(unit.bus, -unit.ps, -unit.qs);
+            load.in_service = unit.in_service;
+            load
+        }));
+    Some((projected, count))
 }
