@@ -469,6 +469,12 @@ fn ir_version_2_schemas_only_add() {
                         "{earlier}: type {type_name} changed"
                     );
                 }
+            } else if name == "DistLoadVoltageModel" {
+                assert_additive_load_laws(earlier, definition, &current_defs[name]);
+            } else if name == "MulticonductorNetwork" {
+                assert_located_network_schema_preserved(earlier, definition, &current_defs);
+            } else if name == "SourceFormat" {
+                assert_source_format_schema_preserved(earlier, definition, &current_defs[name]);
             } else if name == "VoltageSource" {
                 // IR 2 also admits a distinctly tagged nested source type.
                 // Keep the legacy branch byte-for-byte equivalent as JSON;
@@ -650,6 +656,102 @@ fn every_powerio_ir_property_is_typed() {
     assert!(bad.is_empty(), "untyped properties: {bad:?}");
 }
 
+fn assert_additive_load_laws(
+    earlier: &str,
+    published: &serde_json::Value,
+    current: &serde_json::Value,
+) {
+    // Explicit discriminators add electrical laws without changing any
+    // published variant. Pin each addition and its fields, rather than
+    // accepting an arbitrary increase in the enum's variant count.
+    let old = published["oneOf"].as_array().unwrap();
+    let new = current["oneOf"].as_array().unwrap();
+    let additions: [(&str, &[&str], &[&str]); 3] = [
+        (
+            "bounded_zip",
+            &[
+                "model",
+                "v_nom",
+                "alpha_z",
+                "alpha_i",
+                "alpha_p",
+                "beta_z",
+                "beta_i",
+                "beta_p",
+                "v_low_pu",
+                "v_min_pu",
+                "v_max_pu",
+                "cutoff_pu",
+            ],
+            &[],
+        ),
+        (
+            "bounded_exponential",
+            &[
+                "model", "v_nom", "gamma_p", "gamma_q", "v_low_pu", "v_min_pu", "v_max_pu",
+            ],
+            &[],
+        ),
+        (
+            "bounded_constant_power",
+            &["model", "v_nom", "v_min_pu", "v_max_pu"],
+            &["current_limit_pu"],
+        ),
+    ];
+    assert_eq!(new.len(), old.len() + additions.len());
+    for variant in old {
+        let tag = &variant["properties"]["model"]["const"];
+        assert_eq!(
+            new.iter()
+                .find(|candidate| candidate["properties"]["model"]["const"] == *tag),
+            Some(variant),
+            "{earlier}: load law {tag} changed",
+        );
+    }
+    let nominal_voltage = &old
+        .iter()
+        .find(|variant| variant["properties"]["model"]["const"] == "constant_power")
+        .unwrap()["properties"]["v_nom"];
+    for (tag, required, optional) in additions {
+        assert!(
+            !old.iter()
+                .any(|variant| variant["properties"]["model"]["const"] == tag),
+            "{earlier}: {tag} was already published",
+        );
+        let added = new
+            .iter()
+            .find(|variant| variant["properties"]["model"]["const"] == tag)
+            .unwrap();
+        assert_eq!(added["type"], "object");
+        assert_eq!(added["required"], serde_json::json!(required));
+        let fields = added["properties"].as_object().unwrap();
+        let mut expected_fields: Vec<_> = required.iter().chain(optional).copied().collect();
+        expected_fields.sort_unstable();
+        assert_eq!(
+            fields.keys().map(String::as_str).collect::<Vec<_>>(),
+            expected_fields
+        );
+        for (name, schema) in fields {
+            let expected = match name.as_str() {
+                "model" => serde_json::json!({"type": "string", "const": tag}),
+                "v_nom" | "alpha_z" | "alpha_i" | "alpha_p" | "beta_z" | "beta_i" | "beta_p"
+                | "gamma_p" | "gamma_q" => nominal_voltage.clone(),
+                "current_limit_pu" => serde_json::json!({
+                    "anyOf": [
+                        {"format": "double", "type": ["number", "null"]},
+                        {"enum": ["Infinity", "-Infinity", "NaN"], "type": "string"},
+                    ],
+                }),
+                "v_low_pu" | "v_min_pu" | "v_max_pu" | "cutoff_pu" => {
+                    nominal_voltage["items"].clone()
+                }
+                _ => panic!("unexpected {tag} field {name}"),
+            };
+            assert_eq!(schema, &expected, "{tag}.{name} schema changed");
+        }
+    }
+}
+
 fn tagged_monitor_variant(property: &str, tag: &str) -> serde_json::Value {
     serde_json::json!({
         "type": "object",
@@ -696,6 +798,60 @@ fn monitor_guard_allows_disjoint_tags_and_reordering() {
         let extended = serde_json::json!({"oneOf": [new, second, first]});
         assert_monitor_schema_preserved(&old, &extended, "probe");
     }
+}
+
+fn assert_located_network_schema_preserved(
+    earlier: &str,
+    definition: &serde_json::Value,
+    current_defs: &serde_json::Value,
+) {
+    // Component geography uses a new mandatory nested type tag.
+    // The legacy network branch and the nested electrical body
+    // keep every published field and meaning unchanged.
+    let branches = current_defs["MulticonductorNetwork"]["anyOf"]
+        .as_array()
+        .unwrap();
+    assert_eq!(branches.len(), 2);
+    assert_eq!(
+        &branches[0], definition,
+        "{earlier}: legacy network changed"
+    );
+    assert_eq!(branches[1]["$ref"], "#/$defs/LocatedNetworkWire");
+    assert_eq!(&current_defs["MulticonductorNetworkBody"], definition);
+    assert_eq!(
+        current_defs["LocatedNetworkTag"]["enum"],
+        serde_json::json!(["powerio.LocatedMulticonductorNetwork"])
+    );
+    assert_eq!(
+        current_defs["LocatedNetworkWire"]["required"],
+        serde_json::json!(["type", "value"])
+    );
+}
+
+fn assert_source_format_schema_preserved(
+    earlier: &str,
+    definition: &serde_json::Value,
+    current: &serde_json::Value,
+) {
+    // The public format enum is nonexhaustive. Adding one new
+    // format must leave every existing spelling and schema rule
+    // intact; this is not permission to change arbitrary records.
+    let mut without_sincal = current.clone();
+    let alternatives = without_sincal["oneOf"].as_array_mut().unwrap();
+    let before = alternatives.len();
+    alternatives.retain(|v| v["const"] != "sincal");
+    assert_eq!(before, alternatives.len() + 1);
+    assert_eq!(
+        &without_sincal, definition,
+        "{earlier}: existing format changed"
+    );
+    let sincal = current["oneOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["const"] == "sincal")
+        .unwrap();
+    assert_eq!(sincal["type"], "string");
 }
 
 fn objective_term_alternative(term: &str) -> serde_json::Value {

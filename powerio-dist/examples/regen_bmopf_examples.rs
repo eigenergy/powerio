@@ -62,7 +62,7 @@ fn check_or_update(rel: &str, emitted: &ExampleEmission, check: bool) -> bool {
     true
 }
 
-fn update_readme(check: bool) -> bool {
+fn update_readme(check: bool, diagnostics: &std::collections::BTreeMap<&str, usize>) -> bool {
     let path = root().join("examples/bmopf/README.md");
     let before = std::fs::read_to_string(&path).unwrap();
     let mut after = String::new();
@@ -90,6 +90,7 @@ fn update_readme(check: bool) -> bool {
             }
             let mut columns: Vec<_> = line.split('|').map(str::to_owned).collect();
             columns[3] = format!(" {grouped} bytes ");
+            columns[4] = format!(" {} ", diagnostics[filename]);
             after.push_str(&columns.join("|"));
         } else {
             after.push_str(line);
@@ -115,6 +116,7 @@ fn main() {
     };
     assert!(args.next().is_none(), "expected at most one argument");
     let mut current = true;
+    let mut diagnostics = std::collections::BTreeMap::new();
     for (dss, out) in [
         ("opendss/ieee34/ieee34Mod1.dss", "ieee34.json"),
         ("opendss/ieee123/IEEE123Master.dss", "ieee123.json"),
@@ -122,12 +124,16 @@ fn main() {
         let source =
             powerio_core::Source::open(root().join("../tests/data/dist").join(dss)).unwrap();
         let module = powerio_dist::parse(source).unwrap();
-        current &= check_or_update(out, &emit_bmopf(module), check);
+        let emitted = emit_bmopf(module);
+        diagnostics.insert(out, emitted.diagnostic_count);
+        current &= check_or_update(out, &emitted, check);
     }
     let source = powerio_core::Source::open(root().join("examples/bmopf/4bus_dy.json")).unwrap();
     let module = powerio_dist::parse(source).unwrap();
-    current &= check_or_update("4bus_dy.json", &emit_bmopf(module), check);
-    current &= update_readme(check);
+    let emitted = emit_bmopf(module);
+    diagnostics.insert("4bus_dy.json", emitted.diagnostic_count);
+    current &= check_or_update("4bus_dy.json", &emitted, check);
+    current &= update_readme(check, &diagnostics);
     if !current {
         std::process::exit(1);
     }

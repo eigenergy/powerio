@@ -9,6 +9,7 @@ powerio convert case14.m --to psse -o case14.raw   # parse + emit, findings on s
 powerio summary case14.m                           # the canonical network summary JSON
 powerio serialize case14.m -o case14.pio.json      # PowerIO IR
 powerio verify case30.m --kind bdoubleprime        # matrix stats and the SDDM check
+powerio verify case.raw --stated-state             # AC bus balance at the stored voltages
 powerio batch -i tests/data -o out --matrices bprime,bdoubleprime
 powerio sensitivities case30.m -o out              # PTDF and LODF
 powerio dcopf case30.m -o out                      # the static DC OPF bundle

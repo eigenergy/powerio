@@ -214,7 +214,8 @@ powerio-matrix/src            matrix/ (bprime, bdoubleprime, ybus, lacpf,
                               ac_jacobian.rs, dcopf/ (prep, nodal, limits, bundle),
                               acopf.rs, opf.rs, io/ (mtx, meta, sensitivity, gridfm),
                               lindist3flow*.rs (LinDist3Flow OPF and PF),
-                              pipeline.rs, synth/, diagnostics.rs, error.rs
+                              pipeline.rs, stated_state.rs, synth/, diagnostics.rs,
+                              error.rs
 powerio/src                   lib.rs (parse, emit), value.rs (PioValue), ir.rs,
                               stored/ (dto.rs, convert.rs), formats.rs, transform.rs,
                               write.rs, gridfm.rs, dist_geo.rs, collect.rs, codes.rs

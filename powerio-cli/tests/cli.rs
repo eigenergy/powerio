@@ -681,7 +681,8 @@ fn summary_routes_json_inputs_through_the_classifier() {
     assert_success(&out);
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(value["domain"], "distribution");
-    assert_eq!(value["elements"]["buses"], 2);
+    // Canonical output keeps the finite source impedance behind an EMF bus.
+    assert_eq!(value["elements"]["buses"], 3);
 
     let _ = std::fs::remove_file(dist_json);
 }
@@ -1024,8 +1025,8 @@ fn batch_scan_where_nothing_loads_fails() {
 
 #[test]
 fn convert_exits_nonzero_on_a_refused_include() {
-    // #275: the parse continues past a refused include and the output is
-    // still written, but the run must not exit 0.
+    // A refused include invalidates the static snapshot. Surface its
+    // diagnostic and do not publish a partial electrical output.
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     let case_dir = dir.join("case");
@@ -1058,12 +1059,12 @@ fn convert_exits_nonzero_on_a_refused_include() {
         "stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("the output is incomplete"),
+        stderr.contains("READ.DSS.LINE_UNRESOLVED"),
         "stderr:\n{stderr}"
     );
     assert!(
-        out_path.is_file(),
-        "the output must still be written for inspection"
+        !out_path.exists(),
+        "an invalid snapshot must not be emitted"
     );
 }
 
@@ -1109,16 +1110,19 @@ fn convert_exits_nonzero_on_an_include_refused_through_a_symbolic_link() {
         "the refusal must name the route:\n{stderr}"
     );
     assert!(
-        stderr.contains("references unknown linecode"),
-        "the linked file must stay unread:\n{stderr}"
+        stderr.contains("READ.DSS.LINE_UNRESOLVED"),
+        "the linked definition must stay unavailable:\n{stderr}"
+    );
+    assert!(
+        !out_path.exists(),
+        "an invalid snapshot must not be emitted"
     );
 }
 
 #[test]
 fn serialize_exits_nonzero_on_a_refused_include() {
-    // PowerIO IR carries the same `Error` finding convert fails on,
-    // so the module subcommand has to fail with it too — otherwise a script
-    // gating on the exit code accepts IR built from a truncated network.
+    // Serialization must retain the read failure on stderr and produce
+    // no IR value from an invalid electrical snapshot.
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     let case_dir = dir.join("case");
@@ -1149,8 +1153,8 @@ fn serialize_exits_nonzero_on_a_refused_include() {
         "stderr:\n{stderr}"
     );
     assert!(
-        out_path.is_file(),
-        "the PowerIO IR must still be serialized for inspection"
+        !out_path.exists(),
+        "an invalid snapshot must not be serialized"
     );
 }
 
@@ -1237,6 +1241,63 @@ fn convert_writes_a_deserialized_distribution_module_through_the_writer() {
     assert!(stdout.contains("new circuit"), "{stdout}");
 
     std::fs::remove_file(ir).unwrap();
+}
+
+/// `verify --stated-state` refuses an unmerged zero-impedance branch with its
+/// code, and balances the case after `--merge-buses exact`.
+#[test]
+fn verify_stated_state_refuses_then_merges_a_zero_impedance_branch() {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let case = std::env::temp_dir().join(format!("powerio-cli-stated-state-{stamp}.m"));
+    // Bus 2's load is served across a zero impedance branch at equal
+    // voltages, so the merged case balances exactly.
+    std::fs::write(
+        &case,
+        "function mpc = stated\n\
+         mpc.version = '2';\n\
+         mpc.baseMVA = 100;\n\
+         mpc.bus = [\n\
+         1 3 0 0 0 0 1 1 0 230 1 1.1 0.9;\n\
+         2 1 10 5 0 0 1 1 0 230 1 1.1 0.9;\n\
+         ];\n\
+         mpc.gen = [\n\
+         1 10 5 100 -100 1 100 1 100 0 0 0 0 0 0 0 0 0 0 0 0;\n\
+         ];\n\
+         mpc.branch = [\n\
+         1 2 0 0 0 100 100 100 0 0 1 -360 360;\n\
+         ];\n",
+    )
+    .unwrap();
+    let path = case.to_str().unwrap();
+    let refused = run(&[
+        "--diagnostics-format",
+        "json",
+        "verify",
+        path,
+        "--stated-state",
+    ]);
+    assert_eq!(refused.status.code(), Some(5));
+    let records = json_diagnostics(&refused);
+    assert_eq!(
+        records[0]["code"], "BUILD.BRANCH.ZERO_IMPEDANCE",
+        "{records:?}"
+    );
+
+    let merged = run(&["verify", path, "--stated-state", "--merge-buses", "exact"]);
+    assert!(
+        merged.status.success(),
+        "{}",
+        String::from_utf8_lossy(&merged.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&merged.stdout);
+    assert!(stdout.contains("1 buses in 1 islands"), "{stdout}");
+    assert!(stdout.contains("max |dS| = 0.000 MVA"), "{stdout}");
+    assert!(stdout.contains("merged_group"), "{stdout}");
+
+    std::fs::remove_file(case).unwrap();
 }
 
 /// A failure raised by a typed library error inside a matrix command exits

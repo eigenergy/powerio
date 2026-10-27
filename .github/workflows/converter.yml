@@ -12,6 +12,37 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # The Playwright browser suite runs on every push to main and every manual
+  # run, but on a pull request only when the pull request changes the
+  # converter app, its WebAssembly crate, or the workflows that run it. The
+  # engine job below always runs: it tests the WebAssembly crate and builds
+  # the site that the Docs workflow deploys.
+  changes:
+    name: Converter changes
+    runs-on: ubuntu-latest
+    outputs:
+      browser: ${{ steps.diff.outputs.browser }}
+    steps:
+      - uses: actions/checkout@v6
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 2
+      - name: Decide whether to run the browser suite
+        id: diff
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "browser=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A pull request checks out its merge commit, whose first parent is
+          # the base branch, so this diff is exactly the pull request's change.
+          changed="$(git diff --name-only HEAD^1 HEAD)"
+          if grep -qE '^(apps/converter/|powerio-wasm/|\.github/workflows/(converter|docs)\.yml$)' <<<"$changed"; then
+            echo "browser=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "browser=false" >> "$GITHUB_OUTPUT"
+          fi
+
   engine:
     name: Browser conversion engine
     runs-on: ubuntu-latest
@@ -51,7 +82,8 @@ jobs:
 
   browser:
     name: Converter (${{ matrix.browser }})
-    needs: engine
+    needs: [ changes, engine ]
+    if: needs.changes.outputs.browser == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

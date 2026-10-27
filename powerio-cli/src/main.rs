@@ -192,11 +192,29 @@ enum Command {
         kind: MatrixKindArg,
         #[arg(long, value_enum, default_value = "bx")]
         scheme: SchemeArg,
+        /// Instead of a matrix check, evaluate every bus's AC balance at the
+        /// voltages the case stores, with each device at its stated output.
+        #[arg(long)]
+        stated_state: bool,
+        /// With `--stated-state`: how many of the largest bus mismatches to list.
+        #[arg(long, default_value_t = 20, requires = "stated_state")]
+        top: usize,
+        /// With `--stated-state`: how in-service HVDC lines enter the balance.
+        #[arg(
+            long,
+            value_enum,
+            default_value = "fixed-injection",
+            requires = "stated_state"
+        )]
+        hvdc: HvdcArg,
         /// Merge buses first. SPEC is `switches` (closed switches), `exact`
         /// (and branches with r = 0 and x = 0), `psse` (and PSS/E zero
         /// impedance lines: non-transformer, r = 0, |x| at most the case's
         /// THRSHZ), `psse=<x>` (the same at threshold x), or `impedance=<z>`
-        /// (and non-transformer branches with |r + jx| at most z).
+        /// (and non-transformer branches with |r + jx| at most z). With
+        /// `--stated-state`, a closed switch or a zero-impedance branch is
+        /// refused until a rule merges it, since the stored voltages do not
+        /// determine its flow.
         #[arg(long, value_name = "SPEC")]
         merge_buses: Option<String>,
     },
@@ -670,6 +688,12 @@ enum FormatArg {
     /// Parse an IEEE Common Data Format case (parse only).
     #[value(name = "ieee-cdf", alias = "cdf")]
     IeeeCdf,
+    /// GridLAB-D GLM with the PNNL 5.3 input profile.
+    #[value(name = "gridlabd", alias = "glm", alias = "gridlabd-pnnl")]
+    Gridlabd,
+    /// GridLAB-D GLM with the Arras 4.3 input profile.
+    #[value(name = "gridlabd-arras")]
+    GridlabdArras,
     /// OpenDSS `.dss` distribution case (parse and emit).
     #[value(name = "dss", alias = "opendss")]
     Dss,
@@ -727,6 +751,8 @@ impl FormatArg {
             | FormatArg::SincalMulticonductor
             | FormatArg::SincalBalanced
             | FormatArg::Dss
+            | FormatArg::Gridlabd
+            | FormatArg::GridlabdArras
             | FormatArg::PmdJson
             | FormatArg::BmopfJson
             | FormatArg::Bmopf010
@@ -748,6 +774,8 @@ impl FormatArg {
         use powerio_dist::DistTargetFormat;
         match self {
             FormatArg::Dss => Some(DistTargetFormat::Dss),
+            FormatArg::Gridlabd => Some(DistTargetFormat::Gridlabd),
+            FormatArg::GridlabdArras => Some(DistTargetFormat::GridlabdArras),
             FormatArg::PmdJson => Some(DistTargetFormat::PmdJson),
             FormatArg::BmopfJson | FormatArg::Bmopf010 | FormatArg::Bmopf020 => {
                 Some(DistTargetFormat::BmopfJson)
@@ -810,6 +838,8 @@ impl FormatArg {
             FormatArg::Pwb => "pwb",
             FormatArg::IeeeCdf => "ieee-cdf",
             FormatArg::Dss => "dss",
+            FormatArg::Gridlabd => "gridlabd",
+            FormatArg::GridlabdArras => "gridlabd-arras",
             FormatArg::PmdJson => "pmd-json",
             FormatArg::BmopfJson => "bmopf-json",
             FormatArg::Bmopf010 => "bmopf-json@0.1.0",
@@ -1023,14 +1053,23 @@ fn main() -> std::process::ExitCode {
             from,
             kind,
             scheme,
+            stated_state,
+            top,
+            hvdc,
             merge_buses,
-        } => run_verify(
-            &input,
-            from,
-            kind.into(),
-            scheme.into(),
-            merge_buses.as_deref(),
-        ),
+        } => {
+            if stated_state {
+                run_verify_stated_state(&input, from, top, hvdc.into(), merge_buses.as_deref())
+            } else {
+                run_verify(
+                    &input,
+                    from,
+                    kind.into(),
+                    scheme.into(),
+                    merge_buses.as_deref(),
+                )
+            }
+        }
         Command::DcOpf {
             input,
             from,
@@ -1386,6 +1425,18 @@ fn print_error_chain(error: &anyhow::Error) {
     for (_, text) in failure_frames(error) {
         eprintln!("{prefix}: {text}");
         prefix = "Caused by";
+    }
+    // The primary finding appears in the cause frames above. Include the
+    // remaining records so a parse failure does not hide its source findings.
+    if let Some(failure) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<powerio_core::Error>())
+    {
+        for line in
+            powerio_core::render_diagnostics(failure.diagnostics().get(1..).unwrap_or_default())
+        {
+            eprintln!("{line}");
+        }
     }
 }
 
@@ -1839,6 +1890,67 @@ fn run_verify(
         stats.skipped_zero_impedance,
         sddm
     );
+    Ok(())
+}
+
+/// `powerio verify --stated-state`: the AC bus balance at the stored
+/// voltages, summed per island, with the largest bus mismatches and the
+/// equipment attached to each.
+fn run_verify_stated_state(
+    input: &Path,
+    from: Option<FormatArg>,
+    top: usize,
+    hvdc: powerio_tx::HvdcTreatment,
+    merge_buses: Option<&str>,
+) -> anyhow::Result<()> {
+    let mut network = balanced_case(input, from)?;
+    let mut merged_buses = std::collections::BTreeMap::new();
+    if let Some(spec) = merge_buses {
+        let merge = network.merge_buses(&bus_merge_rule(spec, &network)?)?;
+        report_diagnostics(&merge.diagnostics);
+        network = merge.network;
+        merged_buses = merge.merged_buses;
+    }
+    report_diagnostics(&network.calc_hvdc_injections().to_diagnostics(hvdc));
+    let options = powerio_matrix::StatedStateOptions::default()
+        .with_hvdc_treatment(hvdc)
+        .with_top_k(top)
+        .with_merged_buses(merged_buses);
+    let mismatch = powerio_matrix::calc_stated_state_mismatch(&network, &options)?;
+    let energized = mismatch.buses.iter().filter(|b| b.island.is_some()).count();
+    println!(
+        "stated state ({}): {energized} buses in {} islands; sum |dP| = {:.3} MW, sum |dQ| = {:.3} MVAr, max |dS| = {:.3} MVA",
+        network.name(),
+        mismatch.islands.len(),
+        mismatch.calc_total_abs_p_mw(),
+        mismatch.calc_total_abs_q_mvar(),
+        mismatch.calc_max_magnitude_mva(),
+    );
+    println!("island  buses  dP_MW  dQ_MVAr  sum|dP|_MW  sum|dQ|_MVAr  largest_bus");
+    for (index, island) in mismatch.islands.iter().enumerate() {
+        println!(
+            "{index}  {}  {:.3}  {:.3}  {:.3}  {:.3}  {}",
+            island.n_buses,
+            island.p_mw,
+            island.q_mvar,
+            island.abs_p_mw,
+            island.abs_q_mvar,
+            island.largest_bus
+        );
+    }
+    println!("bus  island  dP_MW  dQ_MVAr  |dS|_MVA  flags");
+    for &row in &mismatch.top {
+        let bus = &mismatch.buses[row];
+        println!(
+            "{}  {}  {:.3}  {:.3}  {:.3}  {}",
+            bus.bus,
+            bus.island.map_or_else(|| "-".to_owned(), |i| i.to_string()),
+            bus.p_mw,
+            bus.q_mvar,
+            bus.calc_magnitude_mva(),
+            bus.flags.names().join(",")
+        );
+    }
     Ok(())
 }
 
@@ -2603,6 +2715,13 @@ fn convert_multiconductor_module(
     to: FormatArg,
     output: Option<&Path>,
 ) -> anyhow::Result<()> {
+    if matches!(to, FormatArg::Gridlabd | FormatArg::GridlabdArras) {
+        return convert_typed_module(
+            &module.clone().map_value(powerio::PioValue::from),
+            to,
+            output,
+        );
+    }
     if to == FormatArg::SincalMulticonductor {
         let Some(output) = output.filter(|p| p.as_os_str() != "-") else {
             fail_with!(
@@ -2855,7 +2974,9 @@ fn run_geo_extract(
     let layer = match parse_family_case(input, from)? {
         FamilyCase::Distribution(module) => {
             report_diagnostics(module.diagnostics());
-            powerio::dist_geo::to_dist_geo_layer(module.value())
+            let (layer, diagnostics) = powerio::dist_geo::to_dist_geo_layer_report(module.value());
+            report_diagnostics(&diagnostics);
+            layer
         }
         FamilyCase::Transmission(module) => {
             report_diagnostics(module.diagnostics());
@@ -3538,6 +3659,84 @@ mod tests {
             .join(path)
     }
 
+    #[test]
+    fn gridlabd_cli_preserves_projects_and_canonicalizes_ir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let input = tmp.path().join("main.glm");
+        let head = "module powerflow; object node { name source; phases AN; bustype SWING; nominal_voltage 240; }\n#include \"load.glm\"\n";
+        let load = "object load { name demand; parent source; phases AN; nominal_voltage 240; constant_power_A 100+20j; }\n";
+        std::fs::write(&input, head).unwrap();
+        std::fs::write(tmp.path().join("load.glm"), load).unwrap();
+        assert_eq!(infer_input_family(&input).unwrap(), Some(true));
+        for (token, profile) in [
+            ("glm", FormatArg::Gridlabd),
+            ("gridlabd-pnnl", FormatArg::Gridlabd),
+            ("gridlabd-arras", FormatArg::GridlabdArras),
+        ] {
+            let cli = Cli::try_parse_from([
+                "powerio", "convert", "main.glm", "--from", token, "--to", token, "-o", "copy",
+            ])
+            .unwrap();
+            let Command::Convert { from, to, .. } = cli.command.unwrap() else {
+                panic!("expected convert");
+            };
+            assert_eq!(from, Some(profile));
+            assert_eq!(to, profile);
+            let output = tmp.path().join(token);
+            run_convert(
+                &input,
+                profile,
+                Some(&output),
+                Some(profile),
+                0,
+                GenCostCliOptions::preserve(),
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                std::fs::read(output.join("main.glm")).unwrap(),
+                head.as_bytes()
+            );
+            assert_eq!(
+                std::fs::read(output.join("load.glm")).unwrap(),
+                load.as_bytes()
+            );
+        }
+        for output in [None, Some(Path::new("-"))] {
+            assert!(
+                run_convert(
+                    &input,
+                    FormatArg::Gridlabd,
+                    output,
+                    None,
+                    0,
+                    GenCostCliOptions::preserve(),
+                    None
+                )
+                .is_err()
+            );
+        }
+        let ir = tmp.path().join("network.pio.json");
+        run_serialize(&input, Some(&ir), None, &SincalCliOptions::default()).unwrap();
+        let output = tmp.path().join("restored");
+        run_convert(
+            &ir,
+            FormatArg::Gridlabd,
+            Some(&output),
+            None,
+            0,
+            GenCostCliOptions::preserve(),
+            None,
+        )
+        .unwrap();
+        let FamilyCase::Distribution(restored) =
+            parse_family_case(&output.join("case.glm"), None).unwrap()
+        else {
+            panic!("expected distribution");
+        };
+        assert_eq!(restored.value().loads()[0].p_nom, [100.0]);
+    }
+
     fn deserialize_module(text: &str) -> powerio::PioModule<powerio::PioValue> {
         let source =
             powerio::Source::from_memory("module.pio.json", text.as_bytes().to_vec()).unwrap();
@@ -3620,7 +3819,8 @@ mod tests {
         assert_eq!(value["domain"], "distribution");
         assert_eq!(value["model"], "multiconductor");
         assert_eq!(value["json_format"], "bmopf-json");
-        assert_eq!(value["elements"]["buses"], 2);
+        // The finite source impedance has a separate internal EMF bus.
+        assert_eq!(value["elements"]["buses"], 3);
         assert!(value["topology"]["connected_components"].is_null());
     }
 

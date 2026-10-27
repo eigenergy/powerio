@@ -1712,17 +1712,13 @@ fn write_source(doc: &mut Doc, source: &VoltageSource, node: &str) {
 
 /// Positive and zero sequence series impedance, `z1 = self − mutual` and
 /// `z0 = self + 2·mutual`, from the `rs`/`xs` phase matrices (the PMD
-/// reader's and this reader's convention), else from a dss source's Thevenin
-/// parameters with the OpenDSS defaults, as the PMD writer computes them.
-/// `None` for a source that states neither (an ideal source).
+/// reader's and this reader's convention). DSS imports materialize finite
+/// source impedance as a separate line; their ideal EMF source must not gain
+/// another impedance from retained native defaults.
 fn sequence_impedance(source: &VoltageSource) -> Option<(f64, f64, f64, f64)> {
     if let Some(stated) = stated_sequence(source) {
         return Some(stated);
     }
-    let row_parts = |m: &ConductorMatrix| -> Option<(f64, f64)> {
-        let row = m.first()?;
-        Some((*row.first()?, row.get(1).copied().unwrap_or(0.0)))
-    };
     let parts = |key: &str| -> Option<(f64, f64)> {
         let row = source.extras.get(key)?.as_array()?.first()?.as_array()?;
         let self_z = row.first()?.as_f64()?;
@@ -1732,13 +1728,8 @@ fn sequence_impedance(source: &VoltageSource) -> Option<(f64, f64, f64, f64)> {
             .unwrap_or(0.0);
         Some((self_z, mutual))
     };
-    let ((rs, rm), (xs, xm)) = match (parts("rs"), parts("xs")) {
-        (Some(r), Some(x)) => (r, x),
-        _ if source.extras.contains_key("basekv") => {
-            let (r, x) = crate::pmd::thevenin(source, source.terminal_map.len());
-            (row_parts(&r)?, row_parts(&x)?)
-        }
-        _ => return None,
+    let (Some((rs, rm)), Some((xs, xm))) = (parts("rs"), parts("xs")) else {
+        return None;
     };
     Some((rs - rm, xs - xm, rs + 2.0 * rm, xs + 2.0 * xm))
 }

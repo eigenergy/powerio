@@ -19,7 +19,7 @@ fn parse_text(
 }
 
 #[test]
-fn parsed_geometry_is_blocked_before_analysis() {
+fn parsed_overhead_geometry_is_ready_for_analysis() {
     let module = parse_text(
         "geometry",
         r"clear
@@ -35,16 +35,12 @@ new line.l bus1=sourcebus bus2=b geometry=g length=1 units=m
     );
 
     let report = audit_electrical_readiness(module.value());
-    assert!(!report.is_ready());
-    assert!(
-        report
-            .blockers()
-            .any(|finding| finding.code == "READINESS.DSS.GEOMETRY_DEFERRED")
-    );
+    assert!(report.is_ready(), "{:?}", report.findings);
+    assert!(report.blockers().next().is_none());
 }
 
 #[test]
-fn parsed_swer_geometry_is_also_blocked() {
+fn parsed_single_conductor_geometry_is_ready() {
     let module = parse_text(
         "swer",
         r"clear
@@ -57,21 +53,17 @@ new line.l bus1=sourcebus.1 bus2=b.1 geometry=g length=1 units=m
     );
 
     let report = audit_electrical_readiness(module.value());
-    assert!(!report.is_ready());
-    assert!(
-        report
-            .blockers()
-            .any(|finding| finding.code == "READINESS.DSS.GEOMETRY_DEFERRED")
-    );
+    assert!(report.is_ready(), "{:?}", report.findings);
+    assert!(report.blockers().next().is_none());
 }
 
-// Unresolved geometry retains its source object and emits a parse diagnostic.
+// Resolved geometry retains definitions, without substituting factory matrices.
 // The Line factory self resistance is (R0 + 2 R1) / 3 in the phase domain.
 
 const OPENDSS_FACTORY_R11_PER_M: f64 = 0.098_133_333_333_333_34;
 
 #[test]
-fn geometry_line_is_reported_at_parse_time_and_not_replaced_by_factory_defaults() {
+fn geometry_line_materializes_without_factory_defaults() {
     let module = parse_text(
         "geometry-defaults",
         r"clear
@@ -87,16 +79,18 @@ new line.l bus1=sourcebus bus2=b geometry=g length=1 units=m
     );
 
     assert!(
-        module
+        !module
             .diagnostics()
             .iter()
             .any(|finding| finding.code() == "READ.DSS.GEOMETRY_UNRESOLVED"),
-        "the reader reports unresolved geometry on the parsed module, not only at emission"
+        "the geometry was electrically resolved"
     );
     let net = module.value();
     assert!(
-        net.lines().iter().all(|line| line.name != "l"),
-        "a geometry defined line has no typed line"
+        net.lines()
+            .iter()
+            .any(|line| line.name == "l" && line.terminal_map_from.len() == 4),
+        "all four declared conductors become a typed line"
     );
     assert!(
         net.line_codes().iter().all(|code| {
@@ -110,8 +104,8 @@ new line.l bus1=sourcebus bus2=b geometry=g length=1 units=m
     assert!(
         net.untyped_objects()
             .iter()
-            .any(|object| object.class.eq_ignore_ascii_case("line") && object.name == "l"),
-        "the complete source object is retained"
+            .any(|object| object.class.eq_ignore_ascii_case("linegeometry") && object.name == "g"),
+        "the source geometry definition is retained"
     );
 }
 
@@ -129,7 +123,7 @@ new line.l bus1=sourcebus.1 bus2=b.1 geometry=g length=1 units=m
     );
 
     assert!(
-        module
+        !module
             .diagnostics()
             .iter()
             .any(|finding| finding.code() == "READ.DSS.GEOMETRY_UNRESOLVED")
@@ -145,4 +139,18 @@ new line.l bus1=sourcebus.1 bus2=b.1 geometry=g length=1 units=m
         net.line_codes().iter().all(|code| code.n_conductors != 3),
         "no three conductor linecode was synthesized for a one conductor geometry"
     );
+}
+
+#[test]
+fn missing_geometry_still_blocks_without_a_factory_line() {
+    let module = parse_text(
+        "missing-geometry",
+        "new circuit.c\nnew line.l bus1=sourcebus bus2=end geometry=missing\n",
+    );
+    assert!(
+        audit_electrical_readiness(module.value())
+            .blockers()
+            .any(|f| f.code == "READINESS.DSS.GEOMETRY_DEFERRED")
+    );
+    assert!(!module.value().lines().iter().any(|line| line.name == "l"));
 }

@@ -38,8 +38,9 @@ use powerio::{
 use powerio_core::{ComponentId, HistoryEntry, HistoryId, HistoryKind, Producer};
 use powerio_matrix::{
     AcOpfAssemblyOptions, AcOpfPreparation, AnalysisBranchSource, DcOperatorOptions, DcOperators,
-    DcOpfAssemblyOptions, DcOpfPreparation, PreparedObjective, SparseMatrix, Units,
-    build_ac_opf_preparation, build_dc_opf_preparation,
+    DcOpfAssemblyOptions, DcOpfPreparation, IndexedNetwork, PreparedObjective, SensitivityOptions,
+    SensitivitySolver, SparseMatrix, Units, build_ac_opf_preparation, build_dc_opf_preparation,
+    calc_ptdf_lodf_with_options,
 };
 use powerio_prob::{
     ActivePower, ActivePowerUnit, ApparentPower, ApparentPowerUnit, CalculationUpdate,
@@ -1532,6 +1533,58 @@ pub struct PioMulticonductorLoadView {
     pub reactive_power_constant_power: PioF64View,
     pub active_power_exponent: PioF64View,
     pub reactive_power_exponent: PioF64View,
+}
+
+/// Complete borrowed load voltage law, including piecewise transitions.
+/// Presence flags distinguish absent transition parameters from zero.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioDistLoadVoltageModelView {
+    pub model: PioStringView,
+    pub nominal_voltage_v: PioF64View,
+    pub active_power_constant_impedance: PioF64View,
+    pub active_power_constant_current: PioF64View,
+    pub active_power_constant_power: PioF64View,
+    pub reactive_power_constant_impedance: PioF64View,
+    pub reactive_power_constant_current: PioF64View,
+    pub reactive_power_constant_power: PioF64View,
+    pub active_power_exponent: PioF64View,
+    pub reactive_power_exponent: PioF64View,
+    pub voltage_low_pu: f64,
+    pub has_voltage_low: bool,
+    pub voltage_min_pu: f64,
+    pub has_voltage_min: bool,
+    pub voltage_max_pu: f64,
+    pub has_voltage_max: bool,
+    pub cutoff_pu: f64,
+    pub has_cutoff: bool,
+    pub current_limit_pu: f64,
+    pub has_current_limit: bool,
+}
+
+/// One multiconductor load with its complete voltage law. Existing load views
+/// retain their ABI layout and continue to reject laws they cannot describe.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioMulticonductorLoadDetailsView {
+    pub name: PioStringView,
+    pub bus: PioStringView,
+    pub terminal_map_count: usize,
+    pub configuration: PioStringView,
+    pub active_power_nominal_w: PioF64View,
+    pub reactive_power_nominal_var: PioF64View,
+    pub voltage_model: PioDistLoadVoltageModelView,
+}
+
+/// Prescribed terminal powers and the full borrowed voltage law of one PF load.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioPrescribedLoadDetailsView {
+    pub load: PioStringView,
+    pub terminal_count: usize,
+    pub active_power_w: PioF64View,
+    pub reactive_power_var: PioF64View,
+    pub voltage_model: PioDistLoadVoltageModelView,
 }
 
 /// One multiconductor generator.
@@ -8182,6 +8235,23 @@ pub unsafe extern "C" fn pio_calculation_instance_initial_point(
     }
 }
 
+fn require_legacy_load_voltage_model(
+    model: &powerio_dist::DistLoadVoltageModel,
+) -> Result<(), *mut PioError> {
+    if matches!(
+        model,
+        powerio_dist::DistLoadVoltageModel::BoundedZip { .. }
+            | powerio_dist::DistLoadVoltageModel::BoundedExponential { .. }
+            | powerio_dist::DistLoadVoltageModel::BoundedConstantPower { .. }
+    ) {
+        return Err(boundary_error(
+            &codes::REQUEST_CAPI_TYPE_MISMATCH,
+            "legacy load view cannot describe voltage-band transitions, current limits or dropout",
+        ));
+    }
+    Ok(())
+}
+
 fn dist_load_voltage_model_name(model: &powerio_dist::DistLoadVoltageModel) -> &'static str {
     match model {
         powerio_dist::DistLoadVoltageModel::ConstantPower { .. } => "constant_power",
@@ -8189,6 +8259,9 @@ fn dist_load_voltage_model_name(model: &powerio_dist::DistLoadVoltageModel) -> &
         powerio_dist::DistLoadVoltageModel::ConstantImpedance { .. } => "constant_impedance",
         powerio_dist::DistLoadVoltageModel::Zip { .. } => "zip",
         powerio_dist::DistLoadVoltageModel::Exponential { .. } => "exponential",
+        powerio_dist::DistLoadVoltageModel::BoundedZip { .. } => "bounded_zip",
+        powerio_dist::DistLoadVoltageModel::BoundedExponential { .. } => "bounded_exponential",
+        powerio_dist::DistLoadVoltageModel::BoundedConstantPower { .. } => "bounded_constant_power",
         _ => "unknown",
     }
 }
@@ -8231,6 +8304,7 @@ pub unsafe extern "C" fn pio_mc_ac_pf_instance_load_at(
                     format!("prescribed load index {index} is out of range"),
                 )
             })?;
+            require_legacy_load_voltage_model(&load.voltage_model)?;
             *require_output(output, "output")? = PioPrescribedTerminalPowerView {
                 load: PioStringView::new(&load.load),
                 terminal_count: load.terminals.len(),
@@ -8238,6 +8312,80 @@ pub unsafe extern "C" fn pio_mc_ac_pf_instance_load_at(
                     &load.voltage_model,
                 )),
             };
+            Ok(true)
+        })
+    }
+}
+
+/// Borrow prescribed powers and their full voltage law from a PF instance.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_mc_ac_pf_instance_load_details_at(
+    instance: *const PioCalculationInstance,
+    index: usize,
+    output: *mut PioPrescribedLoadDetailsView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let instance = require_calculation_instance(instance)?
+                .mc_ac_pf()
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                        "the calculation instance is not powerio.McAcPfInstance",
+                    )
+                })?;
+            let load = instance.loads().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("prescribed load index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = PioPrescribedLoadDetailsView {
+                load: PioStringView::new(&load.load),
+                terminal_count: load.terminals.len(),
+                active_power_w: PioF64View::new(&load.p_w),
+                reactive_power_var: PioF64View::new(&load.q_var),
+                voltage_model: dist_load_voltage_model_view(&load.voltage_model),
+            };
+            Ok(true)
+        })
+    }
+}
+
+/// Borrow one prescribed load terminal name, including for bounded laws.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_mc_ac_pf_instance_load_terminal_name_at(
+    instance: *const PioCalculationInstance,
+    load_index: usize,
+    terminal_index: usize,
+    output: *mut PioStringView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let instance = require_calculation_instance(instance)?
+                .mc_ac_pf()
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::REQUEST_CAPI_TYPE_MISMATCH,
+                        "the calculation instance is not powerio.McAcPfInstance",
+                    )
+                })?;
+            let load = instance.loads().get(load_index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("prescribed load index {load_index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? =
+                string_slice_at(&load.terminals, terminal_index, "prescribed load terminal")?;
             Ok(true)
         })
     }
@@ -8277,6 +8425,7 @@ pub unsafe extern "C" fn pio_mc_ac_pf_instance_load_terminal_at(
                     format!("prescribed load index {load_index} is out of range"),
                 )
             })?;
+            require_legacy_load_voltage_model(&load.voltage_model)?;
             let terminal = load.terminals.get(terminal_index).ok_or_else(|| {
                 boundary_error(
                     &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
@@ -14909,96 +15058,122 @@ fn multiconductor_switch_view(switch: &powerio_dist::DistSwitch) -> PioMulticond
     }
 }
 
-fn multiconductor_load_view(load: &powerio_dist::DistLoad) -> PioMulticonductorLoadView {
+fn dist_load_voltage_model_view(
+    model: &powerio_dist::DistLoadVoltageModel,
+) -> PioDistLoadVoltageModelView {
+    use powerio_dist::DistLoadVoltageModel as M;
     let empty = PioF64View::EMPTY;
-    let (
-        voltage_model,
-        nominal_voltage,
-        alpha_z,
-        alpha_i,
-        alpha_p,
-        beta_z,
-        beta_i,
-        beta_p,
-        gamma_p,
-        gamma_q,
-    ) = match &load.voltage_model {
-        powerio_dist::DistLoadVoltageModel::ConstantPower { v_nom } => (
-            "constant_power",
-            PioF64View::new(v_nom),
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-        ),
-        powerio_dist::DistLoadVoltageModel::ConstantCurrent { v_nom } => (
-            "constant_current",
-            PioF64View::new(v_nom),
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-        ),
-        powerio_dist::DistLoadVoltageModel::ConstantImpedance { v_nom } => (
-            "constant_impedance",
-            PioF64View::new(v_nom),
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-        ),
-        powerio_dist::DistLoadVoltageModel::Zip {
-            v_nom,
+    let mut view = PioDistLoadVoltageModelView {
+        model: PioStringView::new(dist_load_voltage_model_name(model)),
+        nominal_voltage_v: PioF64View::new(model.v_nom()),
+        active_power_constant_impedance: empty,
+        active_power_constant_current: empty,
+        active_power_constant_power: empty,
+        reactive_power_constant_impedance: empty,
+        reactive_power_constant_current: empty,
+        reactive_power_constant_power: empty,
+        active_power_exponent: empty,
+        reactive_power_exponent: empty,
+        voltage_low_pu: 0.0,
+        has_voltage_low: false,
+        voltage_min_pu: 0.0,
+        has_voltage_min: false,
+        voltage_max_pu: 0.0,
+        has_voltage_max: false,
+        cutoff_pu: 0.0,
+        has_cutoff: false,
+        current_limit_pu: 0.0,
+        has_current_limit: false,
+    };
+    match model {
+        M::Zip {
             alpha_z,
             alpha_i,
             alpha_p,
             beta_z,
             beta_i,
             beta_p,
-        } => (
-            "zip",
-            PioF64View::new(v_nom),
-            PioF64View::new(alpha_z),
-            PioF64View::new(alpha_i),
-            PioF64View::new(alpha_p),
-            PioF64View::new(beta_z),
-            PioF64View::new(beta_i),
-            PioF64View::new(beta_p),
-            empty,
-            empty,
-        ),
-        powerio_dist::DistLoadVoltageModel::Exponential {
-            v_nom,
-            gamma_p,
-            gamma_q,
-        } => (
-            "exponential",
-            PioF64View::new(v_nom),
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            empty,
-            PioF64View::new(gamma_p),
-            PioF64View::new(gamma_q),
-        ),
-        _ => (
-            "unknown", empty, empty, empty, empty, empty, empty, empty, empty, empty,
-        ),
-    };
+            ..
+        }
+        | M::BoundedZip {
+            alpha_z,
+            alpha_i,
+            alpha_p,
+            beta_z,
+            beta_i,
+            beta_p,
+            ..
+        } => {
+            view.active_power_constant_impedance = PioF64View::new(alpha_z);
+            view.active_power_constant_current = PioF64View::new(alpha_i);
+            view.active_power_constant_power = PioF64View::new(alpha_p);
+            view.reactive_power_constant_impedance = PioF64View::new(beta_z);
+            view.reactive_power_constant_current = PioF64View::new(beta_i);
+            view.reactive_power_constant_power = PioF64View::new(beta_p);
+        }
+        M::Exponential {
+            gamma_p, gamma_q, ..
+        }
+        | M::BoundedExponential {
+            gamma_p, gamma_q, ..
+        } => {
+            view.active_power_exponent = PioF64View::new(gamma_p);
+            view.reactive_power_exponent = PioF64View::new(gamma_q);
+        }
+        _ => {}
+    }
+    match model {
+        M::BoundedZip {
+            v_low_pu,
+            v_min_pu,
+            v_max_pu,
+            cutoff_pu,
+            ..
+        } => {
+            view.voltage_low_pu = *v_low_pu;
+            view.has_voltage_low = true;
+            view.voltage_min_pu = *v_min_pu;
+            view.has_voltage_min = true;
+            view.voltage_max_pu = *v_max_pu;
+            view.has_voltage_max = true;
+            view.cutoff_pu = *cutoff_pu;
+            view.has_cutoff = true;
+        }
+        M::BoundedExponential {
+            v_low_pu,
+            v_min_pu,
+            v_max_pu,
+            ..
+        } => {
+            view.voltage_low_pu = *v_low_pu;
+            view.has_voltage_low = true;
+            view.voltage_min_pu = *v_min_pu;
+            view.has_voltage_min = true;
+            view.voltage_max_pu = *v_max_pu;
+            view.has_voltage_max = true;
+        }
+        M::BoundedConstantPower {
+            v_min_pu,
+            v_max_pu,
+            current_limit_pu,
+            ..
+        } => {
+            view.voltage_min_pu = *v_min_pu;
+            view.has_voltage_min = true;
+            view.voltage_max_pu = *v_max_pu;
+            view.has_voltage_max = true;
+            if let Some(limit) = current_limit_pu {
+                view.current_limit_pu = *limit;
+                view.has_current_limit = true;
+            }
+        }
+        _ => {}
+    }
+    view
+}
+
+fn multiconductor_load_view(load: &powerio_dist::DistLoad) -> PioMulticonductorLoadView {
+    let model = dist_load_voltage_model_view(&load.voltage_model);
     PioMulticonductorLoadView {
         name: PioStringView::new(&load.name),
         bus: PioStringView::new(&load.bus),
@@ -15006,16 +15181,16 @@ fn multiconductor_load_view(load: &powerio_dist::DistLoad) -> PioMulticonductorL
         configuration: PioStringView::new(multiconductor_configuration_name(load.configuration)),
         active_power_nominal_w: PioF64View::new(&load.p_nom),
         reactive_power_nominal_var: PioF64View::new(&load.q_nom),
-        voltage_model: PioStringView::new(voltage_model),
-        nominal_voltage_v: nominal_voltage,
-        active_power_constant_impedance: alpha_z,
-        active_power_constant_current: alpha_i,
-        active_power_constant_power: alpha_p,
-        reactive_power_constant_impedance: beta_z,
-        reactive_power_constant_current: beta_i,
-        reactive_power_constant_power: beta_p,
-        active_power_exponent: gamma_p,
-        reactive_power_exponent: gamma_q,
+        voltage_model: model.model,
+        nominal_voltage_v: model.nominal_voltage_v,
+        active_power_constant_impedance: model.active_power_constant_impedance,
+        active_power_constant_current: model.active_power_constant_current,
+        active_power_constant_power: model.active_power_constant_power,
+        reactive_power_constant_impedance: model.reactive_power_constant_impedance,
+        reactive_power_constant_current: model.reactive_power_constant_current,
+        reactive_power_constant_power: model.reactive_power_constant_power,
+        active_power_exponent: model.active_power_exponent,
+        reactive_power_exponent: model.reactive_power_exponent,
     }
 }
 
@@ -16136,7 +16311,46 @@ pub unsafe extern "C" fn pio_multiconductor_network_load_at(
                     format!("multiconductor load index {index} is out of range"),
                 )
             })?;
+            require_legacy_load_voltage_model(&load.voltage_model)?;
             *require_output(output, "output")? = multiconductor_load_view(load);
+            Ok(true)
+        })
+    }
+}
+
+/// Borrow a load and its complete voltage law, without cloning or serializing its network.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_load_details_at(
+    network: *const PioMulticonductorNetwork,
+    index: usize,
+    output: *mut PioMulticonductorLoadDetailsView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let load = require_multiconductor_network(network)?
+                .loads()
+                .get(index)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        format!("multiconductor load index {index} is out of range"),
+                    )
+                })?;
+            *require_output(output, "output")? = PioMulticonductorLoadDetailsView {
+                name: PioStringView::new(&load.name),
+                bus: PioStringView::new(&load.bus),
+                terminal_map_count: load.terminal_map.len(),
+                configuration: PioStringView::new(multiconductor_configuration_name(
+                    load.configuration,
+                )),
+                active_power_nominal_w: PioF64View::new(&load.p_nom),
+                reactive_power_nominal_var: PioF64View::new(&load.q_nom),
+                voltage_model: dist_load_voltage_model_view(&load.voltage_model),
+            };
             Ok(true)
         })
     }
@@ -19095,6 +19309,471 @@ pub unsafe extern "C" fn pio_dc_operators_release(operators: *mut PioDcOperators
     unsafe { PioDcOperators::release_raw(operators) };
 }
 
+// ---- islands -----------------------------------------------------------------
+
+/// One AC island of a balanced network, read from a `PioIslands` handle.
+/// Every view is borrowed from the handle. Bus indices are zero based
+/// positions in the network's bus table; bus ids are the source's own.
+/// `generator_rows` and `hvdc_rows` are zero based positions in the generator
+/// and HVDC tables: the in service generators on the island's buses and the in
+/// service HVDC lines that tie it to another island. `supplied` is true when an
+/// in service generator can supply the island.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioIslandView {
+    pub bus_indices: PioSizeView,
+    pub bus_ids: PioSizeView,
+    pub reference_bus_indices: PioSizeView,
+    pub reference_bus_ids: PioSizeView,
+    pub generator_rows: PioSizeView,
+    pub hvdc_rows: PioSizeView,
+    pub supplied: bool,
+}
+
+struct IslandRows {
+    bus_indices: Vec<usize>,
+    bus_ids: Vec<usize>,
+    reference_bus_indices: Vec<usize>,
+    reference_bus_ids: Vec<usize>,
+    generator_rows: Vec<usize>,
+    hvdc_rows: Vec<usize>,
+    supplied: bool,
+}
+
+struct IslandsInner {
+    islands: Vec<IslandRows>,
+    isolated_bus_indices: Vec<usize>,
+    isolated_bus_ids: Vec<usize>,
+}
+
+opaque_handle!(
+    /// The AC islands of a balanced network and its isolated buses, computed
+    /// once. The handle owns its data and does not keep the network alive.
+    PioIslands,
+    IslandsInner
+);
+
+/// Partition a balanced network into AC islands, as the Rust
+/// `BalancedNetwork::calc_islands` does. Two buses share an island when a path
+/// of in service branches, closed switches, and in service three winding
+/// transformer windings joins them; HVDC lines do not join islands. Buses
+/// typed isolated belong to no island and are listed by
+/// `pio_islands_isolated_bus_ids`. Islands come largest first, ties in
+/// ascending order of their smallest bus id; buses within an island in
+/// ascending id order. Release with `pio_islands_release`.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_balanced_network_islands(
+    network: *const PioBalancedNetwork,
+    error: *mut *mut PioError,
+) -> *mut PioIslands {
+    unsafe {
+        entry(error, std::ptr::null_mut(), || {
+            let network = require_balanced_network(network)?;
+            let position: std::collections::HashMap<powerio_tx::BusId, usize> = network
+                .buses()
+                .iter()
+                .enumerate()
+                .map(|(index, bus)| (bus.id, index))
+                .collect();
+            let indices = |ids: &[powerio_tx::BusId]| -> Vec<usize> {
+                ids.iter()
+                    .filter_map(|id| position.get(id).copied())
+                    .collect()
+            };
+            let raw =
+                |ids: &[powerio_tx::BusId]| -> Vec<usize> { ids.iter().map(|id| id.0).collect() };
+            let partition = network.calc_islands();
+            let islands = partition
+                .islands
+                .iter()
+                .map(|island| IslandRows {
+                    bus_indices: indices(&island.buses),
+                    bus_ids: raw(&island.buses),
+                    reference_bus_indices: indices(&island.references),
+                    reference_bus_ids: raw(&island.references),
+                    generator_rows: island.generators.clone(),
+                    hvdc_rows: island.hvdc.clone(),
+                    supplied: island.is_supplied(),
+                })
+                .collect();
+            Ok(PioIslands::new_raw(IslandsInner {
+                islands,
+                isolated_bus_indices: indices(&partition.isolated),
+                isolated_bus_ids: raw(&partition.isolated),
+            }))
+        })
+    }
+}
+
+/// The number of islands. A NULL handle has none.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_islands_count(islands: *const PioIslands) -> usize {
+    unsafe { PioIslands::get(islands) }.map_or(0, |inner| inner.islands.len())
+}
+
+/// Read island `index`, zero based in the order `pio_balanced_network_islands`
+/// documents. The views stay valid while the handle is alive.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_islands_at(
+    islands: *const PioIslands,
+    index: usize,
+    output: *mut PioIslandView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            let inner = PioIslands::get(islands).ok_or_else(|| {
+                boundary_error(&codes::BIND_CAPI_NULL_HANDLE, "PioIslands must not be NULL")
+            })?;
+            let island = inner.islands.get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("island index {index} is out of range"),
+                )
+            })?;
+            *require_output(output, "output")? = PioIslandView {
+                bus_indices: PioSizeView::new(&island.bus_indices),
+                bus_ids: PioSizeView::new(&island.bus_ids),
+                reference_bus_indices: PioSizeView::new(&island.reference_bus_indices),
+                reference_bus_ids: PioSizeView::new(&island.reference_bus_ids),
+                generator_rows: PioSizeView::new(&island.generator_rows),
+                hvdc_rows: PioSizeView::new(&island.hvdc_rows),
+                supplied: island.supplied,
+            };
+            Ok(true)
+        })
+    }
+}
+
+/// Zero based bus table positions of the buses typed isolated, in ascending
+/// bus id order. Borrowed from the handle.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_islands_isolated_bus_indices(
+    islands: *const PioIslands,
+) -> PioSizeView {
+    unsafe { PioIslands::get(islands) }.map_or(PioSizeView::EMPTY, |inner| {
+        PioSizeView::new(&inner.isolated_bus_indices)
+    })
+}
+
+/// Source bus ids of the buses typed isolated, in ascending order. Borrowed
+/// from the handle.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_islands_isolated_bus_ids(islands: *const PioIslands) -> PioSizeView {
+    unsafe { PioIslands::get(islands) }.map_or(PioSizeView::EMPTY, |inner| {
+        PioSizeView::new(&inner.isolated_bus_ids)
+    })
+}
+
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_islands_retain(islands: *const PioIslands) -> *mut PioIslands {
+    unsafe { PioIslands::retain_raw(islands) }
+}
+
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_islands_release(islands: *mut PioIslands) {
+    unsafe { PioIslands::release_raw(islands) };
+}
+
+// ---- DC sensitivities --------------------------------------------------------
+
+struct SensitivitiesInner {
+    bus_ids: Vec<usize>,
+    branch_rows: Vec<usize>,
+    branch_identities: Vec<String>,
+    reference_bus_indices: Vec<usize>,
+    ptdf: Vec<f64>,
+    lodf: Vec<f64>,
+    solver_path: &'static str,
+    reduced_dimension: usize,
+}
+
+opaque_handle!(
+    /// Dense DC PTDF and LODF of a balanced network with the axes that name
+    /// their rows and columns. The handle owns its data.
+    PioSensitivities,
+    SensitivitiesInner
+);
+
+fn sensitivity_solver(name: Option<&str>) -> Result<SensitivitySolver, *mut PioError> {
+    match name.unwrap_or("auto") {
+        "auto" => Ok(SensitivitySolver::Auto),
+        "dense" => Ok(SensitivitySolver::Dense),
+        "sparse" => Ok(SensitivitySolver::Sparse),
+        other => Err(boundary_error(
+            &codes::BIND_CAPI_INVALID_ARGUMENT,
+            format!("unknown sensitivity solver '{other}'; expected auto, dense, or sparse"),
+        )),
+    }
+}
+
+/// Copy a sparse matrix into a dense row major buffer of `rows * columns`.
+fn dense_row_major(matrix: &SparseMatrix) -> Result<Vec<f64>, *mut PioError> {
+    let (rows, columns) = matrix.shape();
+    let len = rows.checked_mul(columns).ok_or_else(|| {
+        boundary_error(
+            &codes::BIND_CAPI_INVALID_ARGUMENT,
+            format!("a dense {rows} by {columns} matrix does not fit in memory"),
+        )
+    })?;
+    let mut dense = vec![0.0; len];
+    for (&value, (row, column)) in matrix {
+        dense[row * columns + column] = value;
+    }
+    Ok(dense)
+}
+
+/// DC power transfer and line outage distribution factors of a balanced
+/// network, through the same Rust routine the Python binding calls
+/// (`calc_ptdf_lodf_with_options`). `formula` selects the branch susceptance
+/// as in `pio_calc_incidence_matrix`; NULL means `series_susceptance`.
+/// `solver` is `auto`, `dense`, or `sparse`; NULL means `auto`, which takes the
+/// dense factorization on small cases and the sparse one on large cases.
+///
+/// The DC bus susceptance matrix is grounded at every reference bus, one row
+/// and column each, so a network needs one reference per island; a network
+/// that leaves an island without one fails with the matrix crate's finding.
+/// Every reference bus column of the PTDF is zero. The bus axis is the bus
+/// table in order, followed by one star bus per in service three winding
+/// transformer; the branch axis is every in service, non self loop branch in
+/// table order, followed by the three winding transformer windings. Entries
+/// at or below `1e-12` in magnitude read as zero. Release with
+/// `pio_sensitivities_release`.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_calc_sensitivities(
+    network: *const PioBalancedNetwork,
+    formula: *const c_char,
+    formula_len: usize,
+    solver: *const c_char,
+    solver_len: usize,
+    error: *mut *mut PioError,
+) -> *mut PioSensitivities {
+    unsafe {
+        entry(error, std::ptr::null_mut(), || {
+            let network = require_balanced_network(network)?;
+            let formula = self::formula(optional_str(formula, formula_len, "formula")?)?;
+            let solver = sensitivity_solver(optional_str(solver, solver_len, "solver")?)?;
+            let options = SensitivityOptions {
+                formula,
+                solver,
+                ..SensitivityOptions::default()
+            };
+            let view = IndexedNetwork::new(network);
+            let matrices = calc_ptdf_lodf_with_options(&view, &options)
+                .map_err(|failure| error_from_matrix(&failure))?;
+            let bus_ids = (0..view.n()).map(|index| view.bus_id(index).0).collect();
+            let (branch_rows, branch_identities): (Vec<usize>, Vec<String>) = view
+                .in_service_branches()
+                .filter(|(_, branch)| branch.from != branch.to)
+                .map(|(row, branch)| {
+                    let identity = branch
+                        .uid
+                        .clone()
+                        .unwrap_or_else(|| format!("branches:{row}"));
+                    (row, identity)
+                })
+                .unzip();
+            if branch_rows.len() != matrices.ptdf.rows() || view.n() != matrices.ptdf.cols() {
+                return Err(boundary_error(
+                    &codes::BIND_CAPI_UNCODED_FAILURE,
+                    "the PTDF shape does not match the network's DC axes",
+                ));
+            }
+            Ok(PioSensitivities::new_raw(SensitivitiesInner {
+                bus_ids,
+                branch_rows,
+                branch_identities,
+                reference_bus_indices: view.reference_bus_indices(),
+                ptdf: dense_row_major(&matrices.ptdf)?,
+                lodf: dense_row_major(&matrices.lodf)?,
+                solver_path: matrices.metadata.solver_path.as_str(),
+                reduced_dimension: matrices.metadata.reduced_dimension,
+            }))
+        })
+    }
+}
+
+/// The length of the bus axis: the PTDF column count.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_sensitivities_n_buses(
+    sensitivities: *const PioSensitivities,
+) -> usize {
+    unsafe { PioSensitivities::get(sensitivities) }.map_or(0, |inner| inner.bus_ids.len())
+}
+
+/// The length of the branch axis: the PTDF row count and the LODF order.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_sensitivities_n_branches(
+    sensitivities: *const PioSensitivities,
+) -> usize {
+    unsafe { PioSensitivities::get(sensitivities) }.map_or(0, |inner| inner.branch_rows.len())
+}
+
+/// Bus axis position to source bus id. Borrowed from the handle.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_sensitivities_bus_ids(
+    sensitivities: *const PioSensitivities,
+) -> PioSizeView {
+    unsafe { PioSensitivities::get(sensitivities) }
+        .map_or(PioSizeView::EMPTY, |inner| PioSizeView::new(&inner.bus_ids))
+}
+
+/// Branch axis position to the branch table row it represents, with three
+/// winding transformer windings after the branches. Borrowed from the handle.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_sensitivities_branch_rows(
+    sensitivities: *const PioSensitivities,
+) -> PioSizeView {
+    unsafe { PioSensitivities::get(sensitivities) }.map_or(PioSizeView::EMPTY, |inner| {
+        PioSizeView::new(&inner.branch_rows)
+    })
+}
+
+/// The stable identity of branch axis position `index`: the source uid when
+/// one exists, else `branches:<row>`. An index past the branch axis returns an
+/// empty view. Borrowed from the handle.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_sensitivities_branch_identity(
+    sensitivities: *const PioSensitivities,
+    index: usize,
+) -> PioStringView {
+    unsafe { PioSensitivities::get(sensitivities) }
+        .and_then(|inner| inner.branch_identities.get(index))
+        .map_or(PioStringView::EMPTY, |identity| {
+            PioStringView::new(identity)
+        })
+}
+
+/// Bus axis positions of the reference buses the build grounded, in ascending
+/// order: every reference bus of the network. Borrowed from the handle.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_sensitivities_reference_bus_indices(
+    sensitivities: *const PioSensitivities,
+) -> PioSizeView {
+    unsafe { PioSensitivities::get(sensitivities) }.map_or(PioSizeView::EMPTY, |inner| {
+        PioSizeView::new(&inner.reference_bus_indices)
+    })
+}
+
+/// The PTDF, branches by buses, row major: entry `(l, k)` sits at
+/// `l * n_buses + k` and is the flow on branch `l` per unit injected at bus `k`
+/// and withdrawn at the reference bus of its island. Borrowed from the handle.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_sensitivities_ptdf(
+    sensitivities: *const PioSensitivities,
+) -> PioF64View {
+    unsafe { PioSensitivities::get(sensitivities) }
+        .map_or(PioF64View::EMPTY, |inner| PioF64View::new(&inner.ptdf))
+}
+
+/// The LODF, branches by branches, row major: entry `(l, k)` sits at
+/// `l * n_branches + k` and is the share of branch `k`'s pre-outage flow that
+/// moves onto branch `l` when `k` goes out. The diagonal is `-1`; a branch
+/// whose outage splits an island has a zero column. Borrowed from the handle.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_sensitivities_lodf(
+    sensitivities: *const PioSensitivities,
+) -> PioF64View {
+    unsafe { PioSensitivities::get(sensitivities) }
+        .map_or(PioF64View::EMPTY, |inner| PioF64View::new(&inner.lodf))
+}
+
+/// The factorization the build used: `dense_cholesky`, `dense_inverse`,
+/// `sparse_cholesky`, `sparse_ldlt`, `sparse_lu`, or `sparse_empty`.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_sensitivities_solver_path(
+    sensitivities: *const PioSensitivities,
+) -> PioStringView {
+    unsafe { PioSensitivities::get(sensitivities) }.map_or(PioStringView::EMPTY, |inner| {
+        PioStringView::new(inner.solver_path)
+    })
+}
+
+/// The order of the grounded system the build factored: the bus count less
+/// the reference count.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_sensitivities_reduced_dimension(
+    sensitivities: *const PioSensitivities,
+) -> usize {
+    unsafe { PioSensitivities::get(sensitivities) }.map_or(0, |inner| inner.reduced_dimension)
+}
+
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// The input handle must remain live and immutable throughout this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_sensitivities_retain(
+    sensitivities: *const PioSensitivities,
+) -> *mut PioSensitivities {
+    unsafe { PioSensitivities::retain_raw(sensitivities) }
+}
+
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+/// A non-null handle must be owned and unused by concurrent calls.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_sensitivities_release(sensitivities: *mut PioSensitivities) {
+    unsafe { PioSensitivities::release_raw(sensitivities) };
+}
+
 unsafe fn dc_matrix(
     network: *const PioBalancedNetwork,
     formula: *const c_char,
@@ -21225,6 +21904,149 @@ mod tests {
             );
             pio_error_release(null_error);
             pio_multiconductor_network_release(retained);
+        }
+    }
+
+    #[test]
+    fn legacy_load_views_refuse_unrepresented_voltage_bands() {
+        for model in [0, 1, 3, 4, 8] {
+            check_legacy_load_voltage_refusal(model);
+        }
+    }
+
+    fn check_legacy_load_voltage_refusal(model: u8) {
+        let device = if model == 0 {
+            "New Storage.l phases=1 bus1=b.1.0 kv=.24 kwrated=100 kva=100 limitcurrent=yes"
+                .to_owned()
+        } else {
+            let zip = if model == 8 {
+                " zipv=[0 .5 .5 0 .3 .7 .2]"
+            } else {
+                ""
+            };
+            format!("New Load.l phases=1 bus1=b.1.0 kv=.24 kw=1 kvar=.5 model={model}{zip}")
+        };
+        let source = powerio_core::Source::from_memory(
+            "load.dss",
+            format!("New Circuit.c phases=1 bus1=b.1 basekv=.24\n{device}\n").into_bytes(),
+        )
+        .unwrap();
+        let parsed = powerio_dist::parse(source).unwrap();
+        let pf = powerio_prob::McAcPfInstance::from_network(parsed.value().clone()).unwrap();
+        unsafe {
+            let module = module_handle(powerio::PioModule::new(PioValue::from(pf)));
+            let value = pio_module_value(module);
+            let mut error = std::ptr::null_mut();
+            let instance = pio_value_mc_ac_pf_instance(value, &mut error);
+            assert!(!instance.is_null());
+            let network = pio_calculation_instance_multiconductor_network(instance, &mut error);
+            assert!(!network.is_null());
+            let mut load = std::mem::MaybeUninit::<PioMulticonductorLoadView>::uninit();
+            assert!(!pio_multiconductor_network_load_at(
+                network,
+                0,
+                load.as_mut_ptr(),
+                &mut error
+            ));
+            assert!(error_text(error).contains("voltage-band"));
+            pio_error_release(error);
+            error = std::ptr::null_mut();
+            let mut prescribed = std::mem::MaybeUninit::<PioPrescribedTerminalPowerView>::uninit();
+            assert!(!pio_mc_ac_pf_instance_load_at(
+                instance,
+                0,
+                prescribed.as_mut_ptr(),
+                &mut error
+            ));
+            assert!(error_text(error).contains("voltage-band"));
+            pio_error_release(error);
+            error = std::ptr::null_mut();
+            let mut terminal = std::mem::MaybeUninit::<PioTerminalPowerView>::uninit();
+            assert!(!pio_mc_ac_pf_instance_load_terminal_at(
+                instance,
+                0,
+                0,
+                terminal.as_mut_ptr(),
+                &mut error
+            ));
+            assert!(error_text(error).contains("voltage-band"));
+            pio_error_release(error);
+            error = std::ptr::null_mut();
+            // Child handles keep the owner alive; each detailed view borrows
+            // the original coefficients and bounds after parent release.
+            pio_value_release(value);
+            pio_module_release(module);
+            let mut details = std::mem::MaybeUninit::<PioMulticonductorLoadDetailsView>::uninit();
+            assert!(pio_multiconductor_network_load_details_at(
+                network,
+                0,
+                details.as_mut_ptr(),
+                &mut error
+            ));
+            let details = details.assume_init();
+            let expected = match model {
+                3 | 4 => "bounded_exponential",
+                0 => "bounded_constant_power",
+                _ => "bounded_zip",
+            };
+            assert_eq!(view_text(details.voltage_model.model), expected);
+            assert_eq!(details.active_power_nominal_w.len, 1);
+            assert_eq!(details.reactive_power_nominal_var.len, 1);
+            assert_eq!(details.voltage_model.nominal_voltage_v.len, 1);
+            assert!(details.voltage_model.has_voltage_min);
+            assert!(details.voltage_model.has_voltage_max);
+            assert_eq!(details.voltage_model.has_cutoff, expected == "bounded_zip");
+            assert_eq!(details.voltage_model.has_current_limit, model == 0);
+            let original = &require_multiconductor_network(network).unwrap().loads()[0];
+            assert_eq!(details.active_power_nominal_w.data, original.p_nom.as_ptr());
+            assert_eq!(
+                details.voltage_model.nominal_voltage_v.data,
+                original.voltage_model.v_nom().as_ptr()
+            );
+            let mut powers = std::mem::MaybeUninit::<PioPrescribedLoadDetailsView>::uninit();
+            assert!(pio_mc_ac_pf_instance_load_details_at(
+                instance,
+                0,
+                powers.as_mut_ptr(),
+                &mut error
+            ));
+            let powers = powers.assume_init();
+            let pf = require_calculation_instance(instance)
+                .unwrap()
+                .mc_ac_pf()
+                .unwrap();
+            assert_eq!(powers.terminal_count, pf.loads()[0].terminals.len());
+            assert_eq!(view_text(powers.voltage_model.model), expected);
+            assert_eq!(powers.active_power_w.len, pf.loads()[0].p_w.len());
+            assert_eq!(powers.reactive_power_var.len, pf.loads()[0].q_var.len());
+            assert_eq!(powers.active_power_w.data, pf.loads()[0].p_w.as_ptr());
+            assert_eq!(powers.reactive_power_var.data, pf.loads()[0].q_var.as_ptr());
+            let mut terminal_name = std::mem::MaybeUninit::<PioStringView>::uninit();
+            assert!(pio_mc_ac_pf_instance_load_terminal_name_at(
+                instance,
+                0,
+                0,
+                terminal_name.as_mut_ptr(),
+                &mut error
+            ));
+            let pf = require_calculation_instance(instance)
+                .unwrap()
+                .mc_ac_pf()
+                .unwrap();
+            assert_eq!(
+                view_text(terminal_name.assume_init()),
+                pf.loads()[0].terminals[0]
+            );
+            assert!(!pio_multiconductor_network_load_details_at(
+                network,
+                1,
+                std::ptr::null_mut(),
+                &mut error
+            ));
+            assert!(error_text(error).contains("out of range"));
+            pio_error_release(error);
+            pio_multiconductor_network_release(network);
+            pio_calculation_instance_release(instance);
         }
     }
 
@@ -25189,6 +26011,447 @@ mod tests {
             pio_sparse_matrix_release(incidence);
             pio_balanced_network_release(network);
             pio_value_release(value);
+            pio_module_release(module);
+        }
+    }
+
+    /// Two AC islands and an isolated bus: buses 1 to 3 form a triangle with
+    /// reference 1, buses 4 and 5 a pair with reference 4, and bus 6 is typed
+    /// isolated. The tie 3-4 and the branch 5-6 are out of service.
+    const ISLANDED_CASE: &str = "\
+function mpc = case6_islands
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+  1 3  0 0 0 0 1 1 0 230 1 1.1 0.9;
+  2 1 40 0 0 0 1 1 0 230 1 1.1 0.9;
+  3 1 30 0 0 0 1 1 0 230 1 1.1 0.9;
+  4 3  0 0 0 0 1 1 0 230 1 1.1 0.9;
+  5 1 20 0 0 0 1 1 0 230 1 1.1 0.9;
+  6 4  0 0 0 0 1 1 0 230 1 1.1 0.9;
+];
+mpc.gen = [
+  1 70 0 100 -100 1 100 1 200 0;
+  4 20 0 100 -100 1 100 1 200 0;
+];
+mpc.branch = [
+  1 2 0.01 0.10 0 100 100 100 0 0 1 -60 60;
+  2 3 0.01 0.20 0 100 100 100 0 0 1 -60 60;
+  1 3 0.01 0.25 0 100 100 100 0 0 1 -60 60;
+  4 5 0.01 0.10 0 100 100 100 0 0 1 -60 60;
+  3 4 0.01 0.10 0 100 100 100 0 0 0 -60 60;
+  5 6 0.01 0.10 0 100 100 100 0 0 0 -60 60;
+];
+mpc.gencost = [
+  2 0 0 3 0.01 10 0;
+  2 0 0 3 0.01 10 0;
+];
+";
+
+    unsafe fn parse_matpower_text(text: &str) -> *mut PioModule {
+        unsafe {
+            let name = b"case.m";
+            let format = b"matpower";
+            let mut error = std::ptr::null_mut();
+            let source = pio_source_from_memory(
+                name.as_ptr().cast(),
+                name.len(),
+                text.as_ptr(),
+                text.len(),
+                &mut error,
+            );
+            assert!(!source.is_null(), "{}", error_text(error));
+            let module = pio_parse(source, format.as_ptr().cast(), format.len(), &mut error);
+            pio_source_release(source);
+            assert!(!module.is_null(), "{}", error_text(error));
+            module
+        }
+    }
+
+    unsafe fn parse_case14() -> *mut PioModule {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case14.m");
+        let path = path.to_string_lossy();
+        let mut error = std::ptr::null_mut();
+        let source = unsafe { pio_source_open(path.as_ptr().cast(), path.len(), &mut error) };
+        assert!(!source.is_null(), "{}", unsafe { error_text(error) });
+        let module = unsafe { pio_parse(source, std::ptr::null(), 0, &mut error) };
+        unsafe { pio_source_release(source) };
+        assert!(!module.is_null(), "{}", unsafe { error_text(error) });
+        module
+    }
+
+    unsafe fn balanced_network_of(module: *const PioModule) -> *mut PioBalancedNetwork {
+        unsafe {
+            let mut error = std::ptr::null_mut();
+            let value = pio_module_value(module);
+            let network = pio_value_balanced_network(value, &mut error);
+            pio_value_release(value);
+            assert!(!network.is_null(), "{}", error_text(error));
+            network
+        }
+    }
+
+    unsafe fn sizes(view: PioSizeView) -> Vec<usize> {
+        if view.data.is_null() {
+            return Vec::new();
+        }
+        unsafe { std::slice::from_raw_parts(view.data, view.len) }.to_vec()
+    }
+
+    unsafe fn doubles(view: PioF64View) -> Vec<f64> {
+        if view.data.is_null() {
+            return Vec::new();
+        }
+        unsafe { std::slice::from_raw_parts(view.data, view.len) }.to_vec()
+    }
+
+    /// The dense row major copy of a matrix the Rust routine returns.
+    fn dense_of(matrix: &SparseMatrix) -> Vec<f64> {
+        let (rows, columns) = matrix.shape();
+        let mut dense = vec![0.0; rows * columns];
+        for (&value, (row, column)) in matrix {
+            dense[row * columns + column] = value;
+        }
+        dense
+    }
+
+    /// Check one `PioSensitivities` build against `calc_ptdf_lodf_with_options`
+    /// on the same network and options, entry for entry.
+    unsafe fn check_sensitivities_match_rust(
+        network: *const PioBalancedNetwork,
+        formula: &str,
+        solver: SensitivitySolver,
+        solver_name: &str,
+    ) -> *mut PioSensitivities {
+        unsafe {
+            let mut error = std::ptr::null_mut();
+            let handle = pio_calc_sensitivities(
+                network,
+                formula.as_ptr().cast(),
+                formula.len(),
+                solver_name.as_ptr().cast(),
+                solver_name.len(),
+                &mut error,
+            );
+            assert!(!handle.is_null(), "{}", error_text(error));
+            let net = require_balanced_network(network).unwrap_or_else(|_| unreachable!());
+            let options = SensitivityOptions {
+                formula: BranchSusceptanceFormula::from_formula_name(formula)
+                    .expect("a known formula"),
+                solver,
+                ..SensitivityOptions::default()
+            };
+            let view = IndexedNetwork::new(net);
+            let expected =
+                calc_ptdf_lodf_with_options(&view, &options).expect("the Rust build succeeds");
+            assert_eq!(pio_sensitivities_n_branches(handle), expected.ptdf.rows());
+            assert_eq!(pio_sensitivities_n_buses(handle), expected.ptdf.cols());
+            assert_eq!(
+                doubles(pio_sensitivities_ptdf(handle)),
+                dense_of(&expected.ptdf)
+            );
+            assert_eq!(
+                doubles(pio_sensitivities_lodf(handle)),
+                dense_of(&expected.lodf)
+            );
+            assert_eq!(
+                view_text(pio_sensitivities_solver_path(handle)),
+                expected.metadata.solver_path.as_str()
+            );
+            assert_eq!(
+                pio_sensitivities_reduced_dimension(handle),
+                expected.metadata.reduced_dimension
+            );
+            assert_eq!(
+                sizes(pio_sensitivities_reference_bus_indices(handle)),
+                view.reference_bus_indices()
+            );
+            handle
+        }
+    }
+
+    #[test]
+    fn sensitivities_on_case14_match_the_rust_routine() {
+        unsafe {
+            let module = parse_case14();
+            let mut error = std::ptr::null_mut();
+            let network = balanced_network_of(module);
+            assert!(!network.is_null(), "{}", error_text(error));
+
+            for (solver, name) in [
+                (SensitivitySolver::Auto, "auto"),
+                (SensitivitySolver::Dense, "dense"),
+                (SensitivitySolver::Sparse, "sparse"),
+            ] {
+                for formula in [
+                    "series_susceptance",
+                    "tap_adjusted_reactance",
+                    "reactance_only",
+                ] {
+                    let handle = check_sensitivities_match_rust(network, formula, solver, name);
+                    pio_sensitivities_release(handle);
+                }
+            }
+
+            // MATPOWER's makePTDF over makeBdc (b = 1 / (x * tap), slack bus 1),
+            // evaluated on the case14.m branch table in plain Julia
+            // LinearAlgebra: PTDF[:, 2:14] = Bf[:, 2:14] / Bbus[2:14, 2:14].
+            let formula = b"tap_adjusted_reactance";
+            let handle = pio_calc_sensitivities(
+                network,
+                formula.as_ptr().cast(),
+                formula.len(),
+                std::ptr::null(),
+                0,
+                &mut error,
+            );
+            assert!(!handle.is_null(), "{}", error_text(error));
+            let ptdf = doubles(pio_sensitivities_ptdf(handle));
+            for (branch, bus, matpower) in [
+                (0, 1, -0.838_018_649_617_430_2),
+                (6, 3, 0.502_572_102_534_224_5),
+                (7, 6, -0.633_831_600_927_454_8),
+                (19, 13, -0.399_182_226_185_603_56),
+            ] {
+                let value = ptdf[branch * 14 + bus];
+                assert!((value - matpower).abs() < 1e-12, "{value} vs {matpower}");
+            }
+            pio_sensitivities_release(handle);
+
+            // NULL options mean series susceptance and the auto solver.
+            let handle = pio_calc_sensitivities(
+                network,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                &mut error,
+            );
+            assert!(!handle.is_null(), "{}", error_text(error));
+            let (m, n) = (20, 14);
+            assert_eq!(pio_sensitivities_n_branches(handle), m);
+            assert_eq!(pio_sensitivities_n_buses(handle), n);
+            assert_eq!(
+                sizes(pio_sensitivities_bus_ids(handle)),
+                (1..=14).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                sizes(pio_sensitivities_branch_rows(handle)),
+                (0..20).collect::<Vec<_>>()
+            );
+            // The axes are the DC operators' axes.
+            let operators = pio_calc_dc_operators(network, std::ptr::null(), 0, false, &mut error);
+            assert!(!operators.is_null(), "{}", error_text(error));
+            assert_eq!(
+                sizes(pio_sensitivities_bus_ids(handle)),
+                sizes(pio_dc_operators_bus_ids(operators))
+            );
+            assert_eq!(
+                sizes(pio_sensitivities_branch_rows(handle)),
+                sizes(pio_dc_operators_branch_rows(operators))
+            );
+            for row in 0..m {
+                assert_eq!(
+                    view_text(pio_sensitivities_branch_identity(handle, row)),
+                    view_text(pio_dc_operators_branch_identity(operators, row))
+                );
+            }
+            pio_dc_operators_release(operators);
+            let past_end = pio_sensitivities_branch_identity(handle, m);
+            assert!(past_end.data.is_null());
+            // Bus 1 is the reference: its PTDF column is zero.
+            assert_eq!(sizes(pio_sensitivities_reference_bus_indices(handle)), [0]);
+            let ptdf = doubles(pio_sensitivities_ptdf(handle));
+            assert_eq!(ptdf.len(), m * n);
+            assert!((0..m).all(|row| ptdf[row * n] == 0.0));
+            // A unit injected at bus 2 and withdrawn at bus 1 crosses the
+            // branches leaving bus 1 against their from-to direction.
+            let leaving_bus_1 = ptdf[2] + ptdf[n + 2];
+            assert!((leaving_bus_1 + 1.0).abs() < 1e-12, "{leaving_bus_1}");
+            let lodf = doubles(pio_sensitivities_lodf(handle));
+            assert_eq!(lodf.len(), m * m);
+            assert!((0..m).all(|k| lodf[k * m + k] == -1.0));
+            assert_eq!(
+                view_text(pio_sensitivities_solver_path(handle)),
+                "dense_cholesky"
+            );
+            assert_eq!(pio_sensitivities_reduced_dimension(handle), 13);
+
+            let retained = pio_sensitivities_retain(handle);
+            pio_sensitivities_release(handle);
+            assert_eq!(pio_sensitivities_n_buses(retained), n);
+            pio_sensitivities_release(retained);
+
+            // An unknown solver or formula is a coded failure.
+            let solver = b"cholesky";
+            let refused = pio_calc_sensitivities(
+                network,
+                std::ptr::null(),
+                0,
+                solver.as_ptr().cast(),
+                solver.len(),
+                &mut error,
+            );
+            assert!(refused.is_null());
+            assert_eq!(
+                view_text(pio_error_code(error)),
+                "BIND.CAPI.INVALID_ARGUMENT"
+            );
+            pio_error_release(error);
+            let formula = b"admittance";
+            let refused = pio_calc_sensitivities(
+                network,
+                formula.as_ptr().cast(),
+                formula.len(),
+                std::ptr::null(),
+                0,
+                &mut error,
+            );
+            assert!(refused.is_null());
+            assert_eq!(
+                view_text(pio_error_code(error)),
+                "REQUEST.CAPI.UNKNOWN_FORMULA"
+            );
+            pio_error_release(error);
+
+            // A NULL handle reads as empty rather than faulting.
+            assert_eq!(pio_sensitivities_n_buses(std::ptr::null()), 0);
+            assert_eq!(pio_sensitivities_n_branches(std::ptr::null()), 0);
+            assert!(pio_sensitivities_ptdf(std::ptr::null()).data.is_null());
+            assert!(pio_sensitivities_lodf(std::ptr::null()).data.is_null());
+
+            // case14 is one supplied island with reference bus 1.
+            let islands = pio_balanced_network_islands(network, &mut error);
+            assert!(!islands.is_null(), "{}", error_text(error));
+            assert_eq!(pio_islands_count(islands), 1);
+            let mut island = std::mem::zeroed::<PioIslandView>();
+            assert!(pio_islands_at(islands, 0, &mut island, &mut error));
+            assert_eq!(sizes(island.bus_ids), (1..=14).collect::<Vec<_>>());
+            assert_eq!(sizes(island.bus_indices), (0..14).collect::<Vec<_>>());
+            assert_eq!(sizes(island.reference_bus_ids), [1]);
+            assert!(island.supplied);
+            assert_eq!(sizes(pio_islands_isolated_bus_ids(islands)), [0_usize; 0]);
+            pio_islands_release(islands);
+
+            pio_balanced_network_release(network);
+            pio_module_release(module);
+        }
+    }
+
+    #[test]
+    fn islands_follow_calc_islands_and_sensitivities_ground_every_reference() {
+        unsafe {
+            let module = parse_matpower_text(ISLANDED_CASE);
+            let mut error = std::ptr::null_mut();
+            let network = balanced_network_of(module);
+            assert!(!network.is_null(), "{}", error_text(error));
+
+            let islands = pio_balanced_network_islands(network, &mut error);
+            assert!(!islands.is_null(), "{}", error_text(error));
+            let net = require_balanced_network(network).unwrap_or_else(|_| unreachable!());
+            let partition = net.calc_islands();
+            assert_eq!(pio_islands_count(islands), partition.islands.len());
+            assert_eq!(pio_islands_count(islands), 2);
+            let mut view = std::mem::zeroed::<PioIslandView>();
+            for (index, expected) in partition.islands.iter().enumerate() {
+                assert!(pio_islands_at(islands, index, &mut view, &mut error));
+                let ids: Vec<usize> = expected.buses.iter().map(|bus| bus.0).collect();
+                let references: Vec<usize> = expected.references.iter().map(|bus| bus.0).collect();
+                assert_eq!(sizes(view.bus_ids), ids);
+                assert_eq!(sizes(view.reference_bus_ids), references);
+                assert_eq!(sizes(view.generator_rows), expected.generators);
+                assert_eq!(sizes(view.hvdc_rows), expected.hvdc);
+                assert_eq!(view.supplied, expected.is_supplied());
+            }
+            assert!(pio_islands_at(islands, 0, &mut view, &mut error));
+            assert_eq!(sizes(view.bus_ids), [1, 2, 3]);
+            assert_eq!(sizes(view.bus_indices), [0, 1, 2]);
+            assert_eq!(sizes(view.reference_bus_indices), [0]);
+            assert_eq!(sizes(view.generator_rows), [0]);
+            assert!(pio_islands_at(islands, 1, &mut view, &mut error));
+            assert_eq!(sizes(view.bus_ids), [4, 5]);
+            assert_eq!(sizes(view.bus_indices), [3, 4]);
+            assert_eq!(sizes(view.reference_bus_ids), [4]);
+            assert_eq!(sizes(view.reference_bus_indices), [3]);
+            assert_eq!(sizes(pio_islands_isolated_bus_ids(islands)), [6]);
+            assert_eq!(sizes(pio_islands_isolated_bus_indices(islands)), [5]);
+
+            assert!(!pio_islands_at(islands, 2, &mut view, &mut error));
+            assert_eq!(
+                view_text(pio_error_code(error)),
+                "BIND.CAPI.INDEX_OUT_OF_RANGE"
+            );
+            pio_error_release(error);
+            assert_eq!(pio_islands_count(std::ptr::null()), 0);
+            assert!(
+                pio_islands_isolated_bus_ids(std::ptr::null())
+                    .data
+                    .is_null()
+            );
+            let retained = pio_islands_retain(islands);
+            pio_islands_release(islands);
+            assert_eq!(pio_islands_count(retained), 2);
+            pio_islands_release(retained);
+
+            // The DC builders ground per connected component of the in
+            // service branches, whatever the bus type: bus 6 stands alone
+            // with no reference, so the build refuses the network.
+            let refused = pio_calc_sensitivities(
+                network,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                &mut error,
+            );
+            assert!(refused.is_null());
+            assert_eq!(
+                view_text(pio_error_code(error)),
+                "BUILD.INDEX.UNGROUNDED_COMPONENT"
+            );
+            pio_error_release(error);
+            pio_balanced_network_release(network);
+            pio_module_release(module);
+
+            // Without bus 6 both islands carry a reference and each is
+            // grounded at its own.
+            let two_islands = ISLANDED_CASE
+                .replace("  6 4  0 0 0 0 1 1 0 230 1 1.1 0.9;\n", "")
+                .replace("  5 6 0.01 0.10 0 100 100 100 0 0 0 -60 60;\n", "");
+            let module = parse_matpower_text(&two_islands);
+            let network = balanced_network_of(module);
+            assert!(!network.is_null(), "{}", error_text(error));
+            for (solver, name) in [
+                (SensitivitySolver::Dense, "dense"),
+                (SensitivitySolver::Sparse, "sparse"),
+            ] {
+                let handle =
+                    check_sensitivities_match_rust(network, "series_susceptance", solver, name);
+                assert_eq!(
+                    sizes(pio_sensitivities_reference_bus_indices(handle)),
+                    [0, 3]
+                );
+                // Branch rows 0 to 3 are in service; row 4 (the tie) is not.
+                assert_eq!(sizes(pio_sensitivities_branch_rows(handle)), [0, 1, 2, 3]);
+                let ptdf = doubles(pio_sensitivities_ptdf(handle));
+                let n = 5;
+                // Reference columns are zero, and no injection in one island
+                // moves flow in the other.
+                for row in 0..4 {
+                    assert_eq!(ptdf[row * n], 0.0);
+                    assert_eq!(ptdf[row * n + 3], 0.0);
+                }
+                for row in 0..3 {
+                    assert_eq!(ptdf[row * n + 4], 0.0);
+                }
+                for column in 1..3 {
+                    assert_eq!(ptdf[3 * n + column], 0.0);
+                }
+                // A unit at bus 5 returns to reference 4 over branch 4-5.
+                assert!((ptdf[3 * n + 4] + 1.0).abs() < 1e-12);
+                pio_sensitivities_release(handle);
+            }
+            pio_balanced_network_release(network);
             pio_module_release(module);
         }
     }

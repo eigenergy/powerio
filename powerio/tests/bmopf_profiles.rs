@@ -233,8 +233,15 @@ fn unresolved_geometry_cannot_reach_instances_matrices_or_canonical_exports() {
     let PioValue::MulticonductorNetwork(network) = module.value() else {
         panic!("expected network")
     };
-    assert_eq!(network.lines().as_slice(), []);
-    assert_eq!(network.line_codes().as_slice(), []);
+    // The source has an explicit Thevenin branch. The unresolved physical
+    // line must not acquire fabricated impedance or disappear from readiness.
+    assert!(!network.lines().iter().any(|line| line.name == "l"));
+    assert!(
+        network
+            .untyped_objects()
+            .iter()
+            .any(|object| object.class == "line" && object.name == "l")
+    );
     assert!(powerio_prob::McAcPfInstance::from_network(network.clone()).is_err());
     assert!(powerio_prob::McAcOpfInstance::from_network(network.clone()).is_err());
     assert!(powerio_matrix::calc_multiconductor_admittance_matrix(network).is_err());
