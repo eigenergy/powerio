@@ -2,6 +2,9 @@
 
 ## 0.11.6
 
+- Preserve CIM distribution topology by mapping an out-of-service switch to an
+  open switch, with an explicit diagnostic instead of importing it closed.
+
 - Replace the unreleased SINCAL support crate with `powerio-tnd`: checked integrated
   transmission/distribution composition, cross-model transformations, and optional
   SINCAL adapters. The facade retains its existing format and binding APIs.

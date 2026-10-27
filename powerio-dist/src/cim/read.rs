@@ -1815,9 +1815,13 @@ impl<'a> Mapper<'a> {
                     self.drop_record(class, &id, "it needs two terminals on connectivity nodes");
                     continue;
                 };
+                let in_service = self.store.boolean(&id, "Equipment.inService");
+                let normally_in_service = self.store.boolean(&id, "Equipment.normallyInService");
+                let out_of_service = in_service == Some(false)
+                    || (in_service.is_none() && normally_in_service == Some(false));
                 let open_now = self.store.boolean(&id, "Switch.open");
                 let normal = self.store.boolean(&id, "Switch.normalOpen");
-                let open = match (open_now, normal) {
+                let stated_open = match (open_now, normal) {
                     (Some(open), Some(normal)) => {
                         if open != normal {
                             let label = self.label(&id);
@@ -1846,6 +1850,10 @@ impl<'a> Mapper<'a> {
                         false
                     }
                 };
+                // CIM has an equipment service state but the distribution model
+                // has only a switch's open/closed state. Preserve the source
+                // topology by representing an out-of-service switch as open.
+                let open = stated_open || out_of_service;
                 let children = phase_children.get(&id).cloned().unwrap_or_default();
                 let (map_from, map_to) = if children.is_empty() {
                     let map = self.fallback_map(class, &id);
@@ -1860,7 +1868,17 @@ impl<'a> Mapper<'a> {
                     self.drop_record(class, &id, "no readable phase");
                     continue;
                 }
-                self.check_in_service(class, &id);
+                if out_of_service {
+                    let label = self.label(&id);
+                    self.note(
+                        &C::READ_CIM_DIST_VALUE_UNSUPPORTED,
+                        class,
+                        &id,
+                        format!(
+                            "{class} {label}: is out of service; represented as an open switch to preserve topology"
+                        ),
+                    );
+                }
                 let name = self.unique_name("switch", class, &id);
                 let mut switch = DistSwitch::new(name, from, to, map_from.clone(), map_to, open);
                 if let Some(rated) = self
