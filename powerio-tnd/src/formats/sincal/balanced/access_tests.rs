@@ -129,3 +129,76 @@ fn legacy_voltage_and_temperature_defaults_stay_scoped_and_recorded() {
         }
     }
 }
+
+#[test]
+fn shared_profile_tables_keep_results_and_failures() {
+    // Two loads share the profile; both read it from the one cached copy.
+    let db = legacy(
+        "UPDATE Load SET DayOpSer_ID=901,Flag_Lf=1,Flag_LoadType=2,fP=2,fQ=3 WHERE Element_ID=2",
+    );
+    let net = read_balanced_snapshot_at(&db, "shared", Some(6.)).unwrap();
+    let profiled = net
+        .loads()
+        .iter()
+        .filter(|l| l.extras.contains_key("sincal_profile"))
+        .collect::<Vec<_>>();
+    assert_eq!(profiled.len(), 2);
+    for load in profiled {
+        assert!((load.p - 0.036).abs() < 1e-14 && (load.q - 0.006).abs() < 1e-14);
+    }
+    // A sample row of another series, or one without a series reference,
+    // is still checked the way a scan of the whole table checked it.
+    for (edit, ok) in [
+        ("INSERT INTO OpSerVal VALUES(800,1,902,0,1,NULL,1,1)", true),
+        (
+            "INSERT INTO OpSerVal VALUES(800,1,NULL,0,1,NULL,1,1)",
+            false,
+        ),
+        (
+            "INSERT INTO OpSerVal VALUES(803,1,NULL,0,1,NULL,1,1)",
+            false,
+        ),
+    ] {
+        let result = read_balanced_snapshot_at(&legacy(edit), "other", Some(6.));
+        assert_eq!(result.is_ok(), ok, "{edit}");
+        if let Err(error) = result {
+            assert!(error.to_string().contains("OpSerVal["), "{error}");
+        }
+    }
+    // A matching row that fails before the invalid one reports its own error.
+    let error = read_balanced_snapshot_at(
+        &legacy(
+            "UPDATE OpSerVal SET Op_ID=1 WHERE OpSerVal_ID=801;
+             INSERT INTO OpSerVal VALUES(803,1,NULL,0,1,NULL,1,1)",
+        ),
+        "first",
+        Some(6.),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("OpSerVal[801].Op_ID"), "{error}");
+}
+
+#[test]
+fn profile_tables_are_source_only_unless_a_profile_was_applied() {
+    let reported = |db: &DatabaseSnapshot, applied: bool| {
+        source::retention_inventory(db, applied)
+            .unwrap()
+            .into_iter()
+            .filter_map(|d| {
+                let details = d.details();
+                (details["whole_table"] == true)
+                    .then(|| details["table"].as_str().unwrap().to_owned())
+            })
+            .filter(|table| table.starts_with("OpSer"))
+            .collect::<Vec<_>>()
+    };
+    let db = legacy("");
+    let net = read_balanced_snapshot_at(&db, "daily", Some(6.)).unwrap();
+    assert!(source::profile_applied(&net));
+    assert!(reported(&db, true).is_empty());
+    // No load references a profile: the reader never reads the tables.
+    let db = legacy("UPDATE Load SET DayOpSer_ID=NULL");
+    let net = read_balanced_snapshot_at(&db, "static", Some(6.)).unwrap();
+    assert!(!source::profile_applied(&net));
+    assert_eq!(reported(&db, false), ["OpSer", "OpSerVal"]);
+}

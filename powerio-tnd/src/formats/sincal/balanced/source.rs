@@ -81,10 +81,11 @@ pub fn parse_with_options(
     let geometry = snapshot
         .drawing_geometry()
         .map_err(|e| failure(e, &retained))?;
-    let inventory = retention_inventory(&snapshot).map_err(|e| failure(e, &retained))?;
     let mut network =
         super::read_balanced_snapshot_at(&snapshot, retained.name(), options.snapshot_hours)
             .map_err(|e| failure(e, &retained))?;
+    let inventory = retention_inventory(&snapshot, profile_applied(&network))
+        .map_err(|e| failure(e, &retained))?;
     let mut diagnostics = vec![
         Diagnostic::of(
             &codes::READ_SINCAL_CONVERSION_BASE,
@@ -133,28 +134,48 @@ fn default_diagnostics(
     }).collect()
 }
 
-fn retention_inventory(
+/// Whether a selected daily snapshot set any load from its profile.
+pub(super) fn profile_applied(network: &BalancedNetwork) -> bool {
+    network
+        .loads()
+        .iter()
+        .any(|load| load.extras.contains_key("sincal_profile"))
+}
+
+/// `OpSer` and `OpSerVal` count as interpreted only when a selected daily
+/// snapshot applied a profile to a load. Otherwise the reader never read
+/// them, and their rows are reported as source-only like any other table.
+pub(super) fn retention_inventory(
     snapshot: &DatabaseSnapshot,
+    profile_applied: bool,
 ) -> crate::formats::sincal::storage::Result<Vec<Diagnostic>> {
+    let profile_tables: &[&str] = if profile_applied {
+        &["OpSer", "OpSerVal"]
+    } else {
+        &[]
+    };
+    let interpreted = [
+        "Version",
+        "Variant",
+        "Node",
+        "Element",
+        "Terminal",
+        "VoltageLevel",
+        "CalcParameter",
+        "Line",
+        "Load",
+        "Infeeder",
+        "TwoWindingTransformer",
+        "DCInfeeder",
+        "ShuntCondensator",
+    ]
+    .iter()
+    .chain(profile_tables)
+    .copied()
+    .collect::<Vec<_>>();
     snapshot.retention_diagnostics(
         &codes::READ_SINCAL_RETAINED_SOURCE_ONLY,
-        &[
-            "Version",
-            "Variant",
-            "Node",
-            "Element",
-            "Terminal",
-            "VoltageLevel",
-            "CalcParameter",
-            "Line",
-            "Load",
-            "Infeeder",
-            "TwoWindingTransformer",
-            "DCInfeeder",
-            "OpSer",
-            "OpSerVal",
-            "ShuntCondensator",
-        ],
+        &interpreted,
         &[
             (
                 "Infeeder",

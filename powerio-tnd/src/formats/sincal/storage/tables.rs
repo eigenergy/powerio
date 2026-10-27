@@ -4,12 +4,21 @@
 //! claimed source hashes are provenance metadata, not an authenticity proof.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+use std::marker::PhantomData;
 
 use rusqlite::{Connection, params_from_iter, types::Value};
 use serde::Deserialize;
+use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use sha2::{Digest, Sha256};
 
 use crate::formats::sincal::storage::{MAX_BYTES, Result, format_error};
+
+const MAX_TABLES: usize = 512;
+const MAX_COLUMNS: usize = 2048;
+const MAX_TABLE_ROWS: usize = 100_000;
+const MAX_CELLS: usize = 4_000_000;
+const MAX_TEXT_BYTES: usize = 1 << 20;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -19,6 +28,10 @@ pub struct TableRecords {
     transport: String,
     source: Origin,
     tools: BTreeMap<String, String>,
+    // The table, row, column and cell caps apply while the document is
+    // read, so an oversized document stops at the first element past a cap
+    // instead of being deserialized whole and checked afterwards.
+    #[serde(deserialize_with = "bounded_tables")]
     tables: Vec<Table>,
     excluded_tables: Vec<String>,
     absent_requested_tables: Vec<String>,
@@ -32,8 +45,6 @@ struct Origin {
     bytes: u64,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Table {
     name: String,
     columns: Vec<Column>,
@@ -52,25 +63,272 @@ struct Column {
 struct Cell(Value);
 
 impl<'de> Deserialize<'de> for Cell {
-    fn deserialize<D: serde::Deserializer<'de>>(
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        deserializer.deserialize_any(CellVisitor)
+    }
+}
+
+/// Accept only scalar cells. An array or object fails at its first token
+/// rather than after it has been read into a generic JSON value.
+struct CellVisitor;
+
+impl Visitor<'_> for CellVisitor {
+    type Value = Cell;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a native cell: null, a bounded string, an i64 integer or a float")
+    }
+
+    fn visit_unit<E: de::Error>(self) -> std::result::Result<Cell, E> {
+        Ok(Cell(Value::Null))
+    }
+
+    fn visit_none<E: de::Error>(self) -> std::result::Result<Cell, E> {
+        Ok(Cell(Value::Null))
+    }
+
+    fn visit_i64<E: de::Error>(self, v: i64) -> std::result::Result<Cell, E> {
+        Ok(Cell(Value::Integer(v)))
+    }
+
+    fn visit_u64<E: de::Error>(self, v: u64) -> std::result::Result<Cell, E> {
+        i64::try_from(v)
+            .map(|v| Cell(Value::Integer(v)))
+            .map_err(|_| E::custom("unsupported or oversized native cell"))
+    }
+
+    fn visit_f64<E: de::Error>(self, v: f64) -> std::result::Result<Cell, E> {
+        Ok(Cell(Value::Real(v)))
+    }
+
+    fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<Cell, E> {
+        self.visit_string(v.to_owned())
+    }
+
+    fn visit_string<E: de::Error>(self, v: String) -> std::result::Result<Cell, E> {
+        if v.len() <= MAX_TEXT_BYTES {
+            Ok(Cell(Value::Text(v)))
+        } else {
+            Err(E::custom("unsupported or oversized native cell"))
+        }
+    }
+}
+
+fn bounded_tables<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Vec<Table>, D::Error> {
+    struct Tables;
+    impl<'de> Visitor<'de> for Tables {
+        type Value = Vec<Table>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a bounded list of acquired tables")
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> std::result::Result<Vec<Table>, A::Error> {
+            let mut cells = 0;
+            let mut tables = Vec::new();
+            while let Some(table) = seq.next_element_seed(TableSeed { cells: &mut cells })? {
+                if tables.len() == MAX_TABLES {
+                    return Err(de::Error::custom("invalid acquired table count"));
+                }
+                tables.push(table);
+            }
+            Ok(tables)
+        }
+    }
+    deserializer.deserialize_seq(Tables)
+}
+
+/// One table; `cells` counts every cell of the document read so far.
+struct TableSeed<'a> {
+    cells: &'a mut usize,
+}
+
+#[derive(Deserialize)]
+#[serde(field_identifier, rename_all = "lowercase")]
+enum TableField {
+    Name,
+    Columns,
+    Rows,
+}
+
+impl<'de> DeserializeSeed<'de> for TableSeed<'_> {
+    type Value = Table;
+
+    fn deserialize<D: Deserializer<'de>>(
+        self,
         deserializer: D,
-    ) -> std::result::Result<Self, D::Error> {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        Ok(Self(match value {
-            serde_json::Value::Null => Value::Null,
-            serde_json::Value::String(text) if text.len() <= 1 << 20 => Value::Text(text),
-            serde_json::Value::Number(number) if number.is_i64() => {
-                Value::Integer(number.as_i64().expect("checked signed number"))
+    ) -> std::result::Result<Table, D::Error> {
+        deserializer.deserialize_struct("Table", &["name", "columns", "rows"], self)
+    }
+}
+
+impl<'de> Visitor<'de> for TableSeed<'_> {
+    type Value = Table;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("an acquired table")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> std::result::Result<Table, A::Error> {
+        let (mut name, mut columns, mut rows) = (None, None, None);
+        while let Some(field) = map.next_key()? {
+            match field {
+                TableField::Name if name.is_none() => name = Some(map.next_value()?),
+                TableField::Columns if columns.is_none() => {
+                    columns = Some(map.next_value_seed(Bounded::<Column>::new(
+                        MAX_COLUMNS,
+                        "acquired table dimensions exceed limits",
+                    ))?);
+                }
+                TableField::Rows if rows.is_none() => {
+                    rows = Some(map.next_value_seed(RowsSeed {
+                        cells: &mut *self.cells,
+                    })?);
+                }
+                TableField::Name => return Err(de::Error::duplicate_field("name")),
+                TableField::Columns => return Err(de::Error::duplicate_field("columns")),
+                TableField::Rows => return Err(de::Error::duplicate_field("rows")),
             }
-            serde_json::Value::Number(number) if number.is_f64() => {
-                Value::Real(number.as_f64().expect("checked float"))
+        }
+        Ok(Table {
+            name: name.ok_or_else(|| de::Error::missing_field("name"))?,
+            columns: columns.ok_or_else(|| de::Error::missing_field("columns"))?,
+            rows: rows.ok_or_else(|| de::Error::missing_field("rows"))?,
+        })
+    }
+}
+
+/// A list of at most `max` elements.
+struct Bounded<T> {
+    max: usize,
+    message: &'static str,
+    element: PhantomData<T>,
+}
+
+impl<T> Bounded<T> {
+    fn new(max: usize, message: &'static str) -> Self {
+        Self {
+            max,
+            message,
+            element: PhantomData,
+        }
+    }
+}
+
+impl<'de, T: Deserialize<'de>> DeserializeSeed<'de> for Bounded<T> {
+    type Value = Vec<T>;
+
+    fn deserialize<D: Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> std::result::Result<Vec<T>, D::Error> {
+        deserializer.deserialize_seq(self)
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Visitor<'de> for Bounded<T> {
+    type Value = Vec<T>;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "a list of at most {} elements", self.max)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<Vec<T>, A::Error> {
+        let mut values = Vec::new();
+        while let Some(value) = seq.next_element()? {
+            if values.len() == self.max {
+                return Err(de::Error::custom(self.message));
             }
-            _ => {
-                return Err(serde::de::Error::custom(
-                    "unsupported or oversized native cell",
+            values.push(value);
+        }
+        Ok(values)
+    }
+}
+
+/// The rows of one table, at most `MAX_TABLE_ROWS`.
+struct RowsSeed<'a> {
+    cells: &'a mut usize,
+}
+
+impl<'de> DeserializeSeed<'de> for RowsSeed<'_> {
+    type Value = Vec<Vec<Cell>>;
+
+    fn deserialize<D: Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> std::result::Result<Self::Value, D::Error> {
+        deserializer.deserialize_seq(self)
+    }
+}
+
+impl<'de> Visitor<'de> for RowsSeed<'_> {
+    type Value = Vec<Vec<Cell>>;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a bounded list of acquired rows")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(
+        self,
+        mut seq: A,
+    ) -> std::result::Result<Self::Value, A::Error> {
+        let mut rows = Vec::new();
+        while let Some(row) = seq.next_element_seed(RowSeed {
+            cells: &mut *self.cells,
+        })? {
+            if rows.len() == MAX_TABLE_ROWS {
+                return Err(de::Error::custom("acquired table dimensions exceed limits"));
+            }
+            rows.push(row);
+        }
+        Ok(rows)
+    }
+}
+
+/// One row, counted toward the document's cell cap cell by cell. A row
+/// wider than the column cap can never match its declared schema.
+struct RowSeed<'a> {
+    cells: &'a mut usize,
+}
+
+impl<'de> DeserializeSeed<'de> for RowSeed<'_> {
+    type Value = Vec<Cell>;
+
+    fn deserialize<D: Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> std::result::Result<Vec<Cell>, D::Error> {
+        deserializer.deserialize_seq(self)
+    }
+}
+
+impl<'de> Visitor<'de> for RowSeed<'_> {
+    type Value = Vec<Cell>;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("an acquired row")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<Vec<Cell>, A::Error> {
+        let mut row = Vec::new();
+        while let Some(cell) = seq.next_element()? {
+            if row.len() == MAX_COLUMNS {
+                return Err(de::Error::custom(
+                    "acquired row width differs from declared schema",
                 ));
             }
-        }))
+            *self.cells += 1;
+            if *self.cells > MAX_CELLS {
+                return Err(de::Error::custom("acquired cell limit exceeded"));
+            }
+            row.push(cell);
+        }
+        Ok(row)
     }
 }
 
@@ -155,7 +413,7 @@ impl TableRecords {
                 return Err(format_error("ambiguous or invalid acquired table catalog"));
             }
         }
-        if self.tables.is_empty() || self.tables.len() > 512 {
+        if self.tables.is_empty() || self.tables.len() > MAX_TABLES {
             return Err(format_error("invalid acquired table count"));
         }
         let mut cells = 0_usize;
@@ -163,8 +421,8 @@ impl TableRecords {
             let mut columns = BTreeSet::new();
             if !identifier(&table.name)
                 || table.columns.is_empty()
-                || table.columns.len() > 2048
-                || table.rows.len() > 100_000
+                || table.columns.len() > MAX_COLUMNS
+                || table.rows.len() > MAX_TABLE_ROWS
             {
                 return Err(format_error("acquired table dimensions exceed limits"));
             }
@@ -184,7 +442,7 @@ impl TableRecords {
                     ));
                 }
                 cells += row.len();
-                if cells > 4_000_000 {
+                if cells > MAX_CELLS {
                     return Err(format_error("acquired cell limit exceeded"));
                 }
             }
@@ -263,6 +521,50 @@ mod tests {
                 "rows":[[1,0.0,"0"],[2,null,""]]}],
             "excluded_tables":["ULFNodeResult"],"absent_requested_tables":["LineSeg"]
         })
+    }
+
+    /// The document up to the open `rows` list of its one table, then
+    /// `body`, then nothing: the document is cut off and is not valid JSON.
+    fn truncated_after(body: &str) -> Vec<u8> {
+        let mut doc = document();
+        doc["tables"][0]["rows"] = serde_json::json!("ROWS");
+        let text = serde_json::to_string(&doc).unwrap();
+        let prefix = &text[..text.find("\"ROWS\"").unwrap()];
+        format!("{prefix}[{body}").into_bytes()
+    }
+
+    fn decode_error(bytes: &[u8]) -> String {
+        match TableRecords::decode(bytes) {
+            Ok(_) => panic!("over-cap records accepted"),
+            Err(error) => error.to_string(),
+        }
+    }
+
+    #[test]
+    fn decoding_stops_at_the_first_element_past_a_cap() {
+        // Each document is cut off after its over-cap element. A decode that
+        // read the whole document first would report the truncation instead.
+        let complete = "[],".repeat(MAX_TABLE_ROWS);
+        assert!(decode_error(&truncated_after(&complete)).contains("EOF"));
+        let over = "[],".repeat(MAX_TABLE_ROWS + 1);
+        assert!(
+            decode_error(&truncated_after(&over))
+                .contains("acquired table dimensions exceed limits")
+        );
+        let wide = format!("[{}null]", "null,".repeat(MAX_COLUMNS));
+        assert!(
+            decode_error(&truncated_after(&wide))
+                .contains("acquired row width differs from declared schema")
+        );
+        // A nested cell fails at its first token, not after being read.
+        assert!(decode_error(&truncated_after("[[[[[[[[")).contains("expected a native cell"));
+        let mut doc = document();
+        doc["tables"] = serde_json::json!("TABLES");
+        let text = serde_json::to_string(&doc).unwrap();
+        let prefix = &text[..text.find("\"TABLES\"").unwrap()];
+        let table = r#"{"name":"T","columns":[{"name":"a","native_type":"x"}],"rows":[]},"#;
+        let tables = format!("{prefix}[{}", table.repeat(MAX_TABLES + 1));
+        assert!(decode_error(tables.as_bytes()).contains("invalid acquired table count"));
     }
 
     #[test]

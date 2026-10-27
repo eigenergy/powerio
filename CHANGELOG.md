@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- SINCAL reading does less work on large projects, and its source-only
+  report is truthful (#682). The multiconductor reader reads the `Terminal`
+  table once per parse instead of once per element, and the balanced reader
+  reads the `OpSer` and `OpSerVal` profile tables once instead of once per
+  profiled load and finds terminals and buses without scanning every one,
+  which leaves more of the fixed query budget for larger projects. Acquired
+  Access table records stop at the first table, row, column, or cell past
+  their limits while they are read, instead of after the whole document has
+  been decoded, and a cell holding an array or object fails at its first
+  token. The balanced reader reports `OpSer` and `OpSerVal` rows as
+  source-only unless a selected daily snapshot actually applied a profile to
+  a load; before, they were listed as interpreted even when nothing read
+  them. The experimental multiconductor writer's readback check accepts an
+  off-diagonal line matrix entry that differs from its input by at most
+  1e-10 of the matrix's largest diagonal entry, so a line whose zero- and
+  positive-sequence values are nearly equal no longer fails on rounding.
+  Lines with `Line.fr` other than 1 are still refused.
+
 - Distribution CIM opens switches with disconnected terminals and refuses
   inactive/disconnected non-switch equipment and unsupported delta compensators,
   instead of constructing an energized or phase-to-ground equivalent (#687).
