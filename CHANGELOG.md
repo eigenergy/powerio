@@ -16,6 +16,14 @@
   byte exact. Load voltage-band transitions, deferred geometry and several
   static device states remain compatibility gaps documented in the guide.
 
+- OpenDSS switch semantics change. A line with `switch=y` now reads as a closed
+  1 mOhm line. A SwtControl's `Action` and `Normal` are controller settings:
+  they are excluded from the fixed circuit with a `READ.DSS.RETAINED_SOURCE_ONLY`
+  warning, and `net.switches()` is empty for such files. An explicit `State=` on
+  a SwtControl, or an `Open` or `Close` command, is refused with
+  `READ.DSS.LINE_UNRESOLVED`. Before, SwtControl state produced typed open and
+  closed switches.
+
 - TARA contingency statements are read at analysis time. The readers keep
   them as text, as before, because the contingency, subsystem, and monitored
   set layouts are fixed within PowerIO IR 2; the new views read that text.
