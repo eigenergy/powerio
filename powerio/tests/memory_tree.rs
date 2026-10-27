@@ -266,7 +266,7 @@ fn dss_project_entry_names_reparse_or_are_refused() {
 }
 
 #[test]
-fn dss_replay_copies_only_referenced_buffers_with_the_released_layout() {
+fn dss_replay_copies_every_acquired_buffer_with_the_released_layout() {
     let source = tree(
         &[
             (
@@ -277,7 +277,7 @@ fn dss_replay_copies_only_referenced_buffers_with_the_released_layout() {
                 "loads.dss",
                 "New Load.l phases=1 bus1=sourcebus.1.0 kv=.24 kw=1 kvar=0\n",
             ),
-            ("unused.dss", "This buffer is not referenced.\n"),
+            ("unused.dss", "This buffer is a companion file.\n"),
         ],
         Some("master.dss"),
     );
@@ -287,10 +287,12 @@ fn dss_replay_copies_only_referenced_buffers_with_the_released_layout() {
         panic!("memory output expected")
     };
     let names: Vec<_> = artifacts.iter().map(|a| a.name().as_str()).collect();
-    assert_eq!(artifacts.len(), 3, "{names:?}");
+    assert_eq!(artifacts.len(), 4, "{names:?}");
     assert!(names.contains(&"out/case.dss"));
     assert!(names.contains(&"out/source/master.dss"));
     assert!(names.contains(&"out/source/loads.dss"));
+    // Companions replay with the project even when no include names them.
+    assert!(names.contains(&"out/source/unused.dss"));
     let entry = artifacts
         .iter()
         .find(|a| a.name().as_str() == "out/case.dss")
