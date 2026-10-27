@@ -78,7 +78,8 @@ def network_boundary_violations(edges: set[tuple[str, str]]) -> set[tuple[str, s
     forbidden = {("powerio-tx", "powerio-dist"), ("powerio-dist", "powerio-tx"),
                  ("powerio-tx", "powerio"), ("powerio-dist", "powerio")}
     return {edge for edge in edges if edge in forbidden
-            or (edge[0] == "powerio-sincal" and edge[1] != "powerio-core")}
+            or (edge[0] in {"powerio-tx", "powerio-dist"} and edge[1] == "powerio-tnd")
+            or (edge[0] == "powerio-tnd" and edge[1] not in {"powerio-core", "powerio-tx", "powerio-dist"})}
 
 def main() -> int:
     render = "--render" in sys.argv
@@ -112,9 +113,9 @@ def main() -> int:
         return 1
     core_edges = {e for e in actual
                   if e[0] in {"powerio", "powerio-tx", "powerio-dist", "powerio-prob",
-                              "powerio-matrix", "powerio-sincal"}
+                              "powerio-matrix", "powerio-tnd"}
                   and e[1] in {"powerio-core", "powerio-tx", "powerio-dist",
-                               "powerio-prob", "powerio-matrix", "powerio-sincal"}}
+                               "powerio-prob", "powerio-matrix", "powerio-tnd"}}
     undrawn = core_edges - drawn
     if undrawn:
         print(f"cargo metadata has component edges architecture.dot does not draw: {sorted(undrawn)}",

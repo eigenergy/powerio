@@ -86,7 +86,9 @@ branch's phase shift, `Stated` (`stated`) keeps the bounds the case states and
 reads an absent side as negative or positive infinity, and `None` (`none`)
 removes both bounds for every branch. The MATPOWER `0`/`0` pair denotes no
 bounds; a lower side at or below −360 degrees and an upper side at or above
-360 degrees denote absent sides. Other stated sides remain unchanged.
+360 degrees denote absent sides. Other stated sides remain unchanged, so a
+single zero side, as in `0`/`30`, stays a bound at zero; MATPOWER's `makeAang`
+reads each zero side as absent instead.
 Unwrapped DC angle differences can exceed a full turn, so ±360 degrees is
 not a substitute for no constraint. Bundle vectors spell infinities `-inf`
 and `inf`; consumers must omit the corresponding inequality side. Preparation

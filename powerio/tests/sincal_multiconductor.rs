@@ -1,3 +1,4 @@
+#![cfg(feature = "sincal")]
 mod helpers;
 
 use powerio::{Destination, EmittedOutput, Fidelity, FormatId, ParseOptions, PioValue, Source};
@@ -176,7 +177,8 @@ fn invalid_components_and_conflicting_options_never_fall_back() {
     assert!(error.retained_source().is_some());
     for token in ["sincal", "sincal-balanced", "dss"] {
         let mut options = ParseOptions::default().format(token).unwrap();
-        options.sincal_multiconductor = Some(powerio_dist::SincalReadOptions::default());
+        options.sincal_multiconductor =
+            Some(powerio_tnd::formats::sincal::SincalReadOptions::default());
         let error = powerio::parse_with_options(source(""), &options).unwrap_err();
         assert!(
             error

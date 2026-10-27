@@ -10,18 +10,20 @@ powerio-core          Source, FormatId, Diagnostic, Error, PioModule<T>,
 ├── powerio-tx        BalancedNetwork and the balanced readers and writers
 └── powerio-dist      MulticonductorNetwork and the OpenDSS, PMD, BMOPF, and CIM converters
 
-powerio-sincal        internal model-neutral SINCAL transport and schema validation;
-                      depends on core; tx uses it for its explicit balanced SINCAL adapter
+powerio-tnd          IntegratedNetwork, cross-model transformations, and
+                      optional SINCAL adapters; depends on core, tx, and dist
 
-powerio-prob          operating points, updates, the seven instances, the eight
+powerio-prob          operating points, updates, the nine instances, the ten
                       solutions, and GO Challenge 3, OPFData, and BMOPF assembly;
                       depends on core, tx, and dist; matrix free
+powerio-synth        deterministic topology-only network generators;
+                      depends on tx
 powerio-matrix        sparse matrices and graph data for both network families;
-                      depends on core, tx, dist, and prob
+                      depends on core, tx, dist, prob, and synth
 powerio               PioValue, parse, emit, serialize, deserialize, and the
-                      re-exports; depends on core, tx, dist, prob, sincal, and on
-                      matrix behind the `matrix` feature
-powerio-cli, powerio-capi, powerio-py    over the facade
+                      re-exports; depends on core, tx, dist, prob, tnd, and on matrix
+                      behind the `matrix` feature
+powerio-cli, powerio-capi, powerio-py, powerio-wasm    over the facade
 ```
 
 A change has to keep that shape. `powerio-core` owns no electrical type,
@@ -33,22 +35,17 @@ balanced model nor the matrix stack. `powerio-prob` does not depend on
 matrix crate without creating a cycle. CI checks these edges against
 `cargo metadata`, so the map below and the manifests cannot drift apart.
 
-The internal `powerio-sincal` crate shares acquisition and retained archive
-bytes and bounded structural schema validation without introducing a dependency
-between the network crates. It owns no electrical model, profile selection,
-mapper or solver. The balanced SINCAL profile is exposed by `powerio-tx`; the conductor-resolved
-adapter is being completed in `powerio-dist`. Both depend on this shared crate,
-never on each other. The facade uses the shared crate to package experimental
-fresh SQLite output; electrical validation still belongs to each backend.
-Shared structural admission does not imply that a family
-adapter supports all of the admitted schemas or electrical modes.
-The architecture gate also rejects cross-dependencies between the two network
-crates and any internal workspace dependency of `powerio-sincal` other than
-`powerio-core`, even if a proposed diagram draws such an edge.
+The `powerio-tnd` crate composes the independent network models through checked
+interfaces and owns cross-model transformations. SINCAL is its first optional
+format module. The facade enables `powerio-tnd/sincal` by default; disabling
+that feature keeps SQLite out of the dependency graph. The architecture gate
+requires the model crates to remain independent of tnd and each other.
+See [Integrated transmission/distribution modeling](tnd.md) for the interface
+rules and planned extensions.
 
 ## Components
 
-![The PowerIO component map: powerio-core at the bottom; powerio-tx and powerio-dist as independent siblings above it; powerio-prob over both networks; powerio-matrix over the networks and prob; the powerio facade over the component crates with an optional matrix feature edge; powerio-cli, powerio-capi, and powerio-py over the facade; solvers consume instances from powerio-prob and the GridFM pipeline reads Parquet datasets from powerio-matrix.](assets/architecture.svg)
+![The PowerIO component map: powerio-core at the bottom; powerio-tx and powerio-dist as independent siblings above it; powerio-prob over both networks; powerio-matrix over the networks and prob; the powerio facade over the component crates with an optional matrix feature edge; powerio-cli, powerio-capi, powerio-py, and powerio-wasm over the facade; solvers consume instances from powerio-prob and the GridFM pipeline reads Parquet datasets from powerio-matrix.](assets/architecture.svg)
 
 The facade does not force a consumer to depend on every component crate, and
 the two network crates are siblings with no edge between them. Solvers consume

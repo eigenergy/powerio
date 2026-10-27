@@ -1,11 +1,14 @@
 //! MATPOWER `.m` case file parser. Standard MATPOWER 7.x format.
 
+mod conversions;
 mod locate;
 mod matlab;
 mod rows;
 mod tokens;
 mod writer;
 
+#[cfg(test)]
+mod conversion_tests;
 #[cfg(test)]
 mod tests;
 
@@ -69,23 +72,25 @@ fn parse_matpower_named(
     name: &str,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    warn_indexed_assignments(source, warnings);
     // Locate each assignment's text directly in `source` and build the network
     // from those borrowed slices in one pass; the typed model owns its data, so
     // the borrows end with `located` and the source Arc moves into the network.
-    let net = {
-        let located = locate::locate_assignments(source);
-        build_case(
-            name,
-            |field| {
-                located
-                    .iter()
-                    .find(|assignment| assignment.field == field)
-                    .copied()
-            },
-            warnings,
-        )?
-    };
+    let located = locate::locate_assignments(source);
+    let mut net = build_case(
+        name,
+        |field| {
+            located
+                .iter()
+                .find(|assignment| assignment.field == field)
+                .copied()
+        },
+        warnings,
+    )?;
+    if !indexed_assignment_spans(source).is_empty()
+        && !conversions::apply(source, &located, &mut net)
+    {
+        warn_indexed_assignments(source, warnings);
+    }
     // The other format readers validate references; the MATPOWER path must too,
     // or a duplicate or dangling bus id reaches `IndexedNetwork` as silently
     // collapsed aggregates (the dense bus-id map only debug-asserts uniqueness).
@@ -93,18 +98,29 @@ fn parse_matpower_named(
     Ok(net)
 }
 
-/// Warn about direct indexed assignments without evaluating MATLAB expressions.
-///
-/// This is diagnostic-only: the literal values are not corrected, including
-/// unevaluated unit conversions in cases such as case33bw. Issue #662 tracks
-/// the broader conversion/scope disposition.
+/// Warn when the bounded conversion profile cannot interpret every statement.
+/// No conversions are applied to an ambiguous case; the original literal values
+/// remain available, accompanied by one diagnostic per indexed assignment.
 fn warn_indexed_assignments(source: &str, warnings: &mut Diagnostics) {
-    for (start, end, field) in indexed_assignment_spans(source) {
+    // One diagnostic per assignment, up to a bound; a crafted file of millions
+    // of assignments must not exceed the module's diagnostic cap.
+    const LISTED: usize = 1_000;
+    let spans = indexed_assignment_spans(source);
+    if spans.len() > LISTED {
+        warnings.push(
+            &READ_MATPOWER_INDEXED_ASSIGNMENT,
+            format!(
+                "{} indexed assignments to mpc fields are not evaluated; the first {LISTED} are listed; no post-literal conversions were applied",
+                spans.len()
+            ),
+        );
+    }
+    for (start, end, field) in spans.into_iter().take(LISTED) {
         warnings.enter_record(start, end);
         warnings.push(
             &READ_MATPOWER_INDEXED_ASSIGNMENT,
             format!(
-                "indexed assignment to mpc.{field} is not evaluated; parsed values may differ from MATLAB execution"
+                "indexed assignment to mpc.{field} is not evaluated; no post-literal conversions were applied; parsed values may differ from MATLAB execution"
             ),
         );
         warnings.leave_record();
@@ -115,8 +131,12 @@ fn warn_indexed_assignments(source: &str, warnings: &mut Diagnostics) {
 fn indexed_assignment_spans(source: &str) -> Vec<(usize, usize, &str)> {
     let b = source.as_bytes();
     let mut out = Vec::new();
-    let (mut i, mut statement, mut line_start) = (0, 0, 0);
-    let mut block = false;
+    let (mut i, mut line_start) = (0, 0);
+    // Whether only whitespace, comments, or continuations follow the current
+    // statement's start; re-trimming the statement text at every `mpc` token
+    // would be quadratic.
+    let mut fresh = true;
+    let mut block_depth = 0usize;
     let mut quote = None;
     let (mut p, mut square, mut brace) = (0usize, 0usize, 0usize);
 
@@ -131,22 +151,25 @@ fn indexed_assignment_spans(source: &str) -> Vec<(usize, usize, &str)> {
                 .position(|x| *x == b'\n')
                 .map_or(b.len(), |n| first + n);
 
-            if block {
-                if b.get(first..first + 2) == Some(b"%}") {
-                    block = false;
+            let delimiter = source[first..end].trim();
+            if block_depth > 0 {
+                match delimiter {
+                    "%{" => block_depth += 1,
+                    "%}" => block_depth -= 1,
+                    _ => {}
                 }
                 i = end;
                 if i < b.len() {
                     i += 1;
                     line_start = i;
                     if p == 0 && square == 0 && brace == 0 {
-                        statement = i;
+                        fresh = true;
                     }
                 }
                 continue;
             }
-            if b.get(first..first + 2) == Some(b"%{") {
-                block = true;
+            if delimiter == "%{" {
+                block_depth = 1;
                 i = end;
                 if i < b.len() {
                     i += 1;
@@ -168,12 +191,15 @@ fn indexed_assignment_spans(source: &str) -> Vec<(usize, usize, &str)> {
             i += 1;
             continue;
         }
-        if c == b'"' || (c == b'\'' && !is_transpose_quote(b, i)) {
+        if c == b'"' || (c == b'\'' && !is_transpose_quote(b, i, square > 0 || brace > 0)) {
             quote = Some(c);
+            fresh = false;
             i += 1;
             continue;
         }
         if let Some(end) = matlab_continuation_end(b, i) {
+            // MATLAB joins the next line; a statement that began before the
+            // ellipsis is still at its start.
             i = end;
             line_start = i;
             continue;
@@ -185,8 +211,8 @@ fn indexed_assignment_spans(source: &str) -> Vec<(usize, usize, &str)> {
             continue;
         }
 
-        if b.get(i..i + 4) == Some(b"mpc.")
-            && source[statement..i].trim().is_empty()
+        if fresh
+            && mpc_field_start(b, i).is_some()
             && let Some((lhs_end, field)) = indexed_assignment_at(source, i)
         {
             out.push((i, matlab_statement_end(source, i).max(lhs_end), field));
@@ -199,8 +225,12 @@ fn indexed_assignment_spans(source: &str) -> Vec<(usize, usize, &str)> {
             b']' => square = square.saturating_sub(1),
             b'{' => brace += 1,
             b'}' => brace = brace.saturating_sub(1),
-            b',' | b';' | b'\n' if p == 0 && square == 0 && brace == 0 => statement = i + 1,
             _ => {}
+        }
+        if matches!(c, b',' | b';' | b'\n') && p == 0 && square == 0 && brace == 0 {
+            fresh = true;
+        } else if !c.is_ascii_whitespace() {
+            fresh = false;
         }
         if c == b'\n' {
             line_start = i + 1;
@@ -210,7 +240,13 @@ fn indexed_assignment_spans(source: &str) -> Vec<(usize, usize, &str)> {
     out
 }
 
-fn is_transpose_quote(b: &[u8], at: usize) -> bool {
+fn is_transpose_quote(b: &[u8], at: usize, in_array: bool) -> bool {
+    // Within matrix/cell construction whitespace separates elements. A quote
+    // after that separator opens a character literal, not a transpose of the
+    // previous element (which might itself be a quoted literal).
+    if in_array && at > 0 && b[at - 1].is_ascii_whitespace() {
+        return false;
+    }
     let mut j = at;
     while j > 0 && b[j - 1].is_ascii_whitespace() {
         j -= 1;
@@ -250,9 +286,20 @@ fn skip_matlab_assignment_trivia(b: &[u8], mut at: usize) -> usize {
     }
 }
 
+fn mpc_field_start(b: &[u8], start: usize) -> Option<usize> {
+    if b.get(start..start + 3) != Some(b"mpc") {
+        return None;
+    }
+    let dot = skip_matlab_assignment_trivia(b, start + 3);
+    if b.get(dot) != Some(&b'.') {
+        return None;
+    }
+    Some(skip_matlab_assignment_trivia(b, dot + 1))
+}
+
 fn indexed_assignment_at(source: &str, start: usize) -> Option<(usize, &str)> {
     let b = source.as_bytes();
-    let mut i = start + 4;
+    let mut i = mpc_field_start(b, start)?;
     let field_start = i;
     while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
         i += 1;
@@ -267,6 +314,7 @@ fn indexed_assignment_at(source: &str, start: usize) -> Option<(usize, &str)> {
     }
     i += 1;
     let mut depth = 0usize;
+    let (mut square, mut brace) = (0usize, 0usize);
     let mut quote = None;
 
     while i < b.len() {
@@ -282,7 +330,7 @@ fn indexed_assignment_at(source: &str, start: usize) -> Option<(usize, &str)> {
             i += 1;
             continue;
         }
-        if c == b'"' || (c == b'\'' && !is_transpose_quote(b, i)) {
+        if c == b'"' || (c == b'\'' && !is_transpose_quote(b, i, square > 0 || brace > 0)) {
             quote = Some(c);
             i += 1;
             continue;
@@ -299,10 +347,24 @@ fn indexed_assignment_at(source: &str, start: usize) -> Option<(usize, &str)> {
         }
 
         match c {
+            // MATLAB needs `...` to break a line inside parentheses, so the
+            // index ends here; scanning on would be quadratic across a file.
+            b'\n' if square == 0 && brace == 0 => return None,
+            b'[' => square += 1,
+            b']' => square = square.saturating_sub(1),
+            b'{' => brace += 1,
+            b'}' => brace = brace.saturating_sub(1),
             b'(' => depth += 1,
             b')' if depth == 0 => {
                 let end = i + 1;
                 i = skip_matlab_assignment_trivia(b, end);
+                // Octave's `mpc.bus(:, 3) /= 1e3` mutates the same element.
+                if matches!(b.get(i), Some(b'+' | b'-' | b'*' | b'/' | b'\\' | b'^'))
+                    && b.get(i + 1) == Some(&b'=')
+                    && b.get(i + 2) != Some(&b'=')
+                {
+                    return Some((end, field));
+                }
                 if b.get(i) == Some(&b'=')
                     && b.get(i + 1) != Some(&b'=')
                     && !matches!(
@@ -341,7 +403,7 @@ fn matlab_statement_end(source: &str, start: usize) -> usize {
             i += 1;
             continue;
         }
-        if c == b'"' || (c == b'\'' && !is_transpose_quote(b, i)) {
+        if c == b'"' || (c == b'\'' && !is_transpose_quote(b, i, square > 0 || brace > 0)) {
             quote = Some(c);
             i += 1;
             continue;

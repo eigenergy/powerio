@@ -6,7 +6,7 @@ after measurements.
 
 ## Baseline checks
 
-`scripts/ci-mirror.sh` runs the Linux side of the Rust, Docs, and Python workflows in the feature combinations CI uses: format, clippy, the terminology and symbol gates, header parity and regeneration, every crate's tests in each gated feature set, the C smoke and header programs, schema generation, packaging checks, the book, and the Python lint, stub, and test lanes. Run it before you mark a larger implementation change ready for review, rather than assembling your own subset, because a hand assembled subset misses feature configurations. `cargo test --workspace`, for example, tests one configuration: Cargo unifies features across the workspace, so `powerio-cli` turns `gridfm` on in the facade and matrix crates for the whole build, a build without it is never checked, and nothing turns on the facade's `matrix` feature or the C ABI's `gridfm` feature. CI runs separate commands to exercise each configuration it supports, minimal builds included.
+`scripts/ci-mirror.sh` runs the Linux side of the Rust, Docs, and Python workflows in the feature combinations CI uses: format, clippy, the terminology and symbol gates, header parity and regeneration, every crate's tests in each gated feature set, the C smoke and header programs, schema generation, packaging checks, the book, and the Python lint, stub, and test lanes. Run it before you mark a larger implementation change ready for review, rather than assembling your own subset, because a hand assembled subset misses feature configurations. `cargo test --workspace`, for example, tests one configuration: Cargo unifies features across the workspace, so `powerio-cli` turns `gridfm` on in the facade and matrix crates for the whole build, a build without it is never checked, and nothing turns on the facade's `matrix` feature or the C ABI's `gridfm` feature. It builds powerio-capi with default features only, so the C ABI release-feature diagnostic tests are skipped, and it does not test each crate's opt-in features in isolation. CI runs separate commands to exercise each configuration it supports, minimal builds included. The deprecated C ABI `arrow` compatibility flag adds no code or tests. Legacy commands remain accepted in 0.11.x, but maintained source-build commands omit it; [#673](https://github.com/eigenergy/powerio/issues/673) tracks its eventual breaking removal.
 
 The script needs `cbindgen` for the header regeneration, and skips the wasm check, the semver check, and the book when `wasm32-unknown-unknown`, `cargo-semver-checks`, or `mdbook` is missing. It leaves to CI the MSRV build, `cargo deny`, Miri, the sanitizer and Go client builds, the macOS, Windows, and FreeBSD jobs, and the Julia binding, validation, PowSybl, and fuzz workflows. A PowerIO.jl checkout at `../PowerIO.jl`, or wherever `POWERIO_JL` points, adds the check that every C entry point is bound or exempted there; the script runs without one. To run the Julia tests themselves, see the Julia binding row below.
 
@@ -36,10 +36,11 @@ Pick the smallest set of gates that covers what you changed, then run the
 | rich model fields | `bash evals/validation/run_rich_validation.sh` |
 | matrix calculations | `cargo test -p powerio-matrix`; `cargo bench -p powerio-matrix --bench matrix` |
 | problem instances or DC OPF bundles | `cargo test -p powerio-prob --no-default-features`; `cargo test -p powerio --features matrix` |
+| SINCAL readers, writers, or the `sincal` feature | `cargo test -p powerio -p powerio-tx -p powerio-dist -p powerio-tnd --no-default-features`; `bash scripts/ci-clippy.sh no-sincal`; `cargo check -p powerio --no-default-features --features matrix --target wasm32-unknown-unknown` |
 | PowerWorld binary reader | PowerWorld parser tests plus `cargo bench -p powerio-tx --bench parse -- "parse_aux_|parse_pwb_"` |
-| C ABI | `scripts/capi-header-parity.sh`; `scripts/capi-smoke.sh`; `cargo test -p powerio-capi --no-default-features`; `cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,prob`; `bash scripts/ci-clippy.sh capi-no-default`; `bash scripts/ci-clippy.sh capi-release` |
+| C ABI | `scripts/capi-header-parity.sh`; `scripts/capi-smoke.sh`; `cargo test -p powerio-capi --no-default-features`; `cargo test -p powerio-capi --features matrix,gridfm,dist,prob`; `bash scripts/ci-clippy.sh capi-no-default`; `bash scripts/ci-clippy.sh capi-release` |
 | Python package metadata or extras | `maturin build --release --out /tmp/powerio-wheel-check`; inspect wheel `METADATA` |
-| Julia binding compatibility | build `powerio-capi --features arrow,matrix,gridfm,dist,prob`, then run `PowerIO.jl` tests with `POWERIO_CAPI` |
+| Julia binding compatibility | build `powerio-capi --features matrix,gridfm,dist,prob`, then run `PowerIO.jl` tests with `POWERIO_CAPI` |
 | shared surface with PowerIO.jl | push a same-named PowerIO.jl companion branch; the tandem CI job tests against it |
 | public Rust API | `bash scripts/check-semver.sh` (needs `cargo install cargo-semver-checks --locked`) |
 | CLI behavior | `cargo test -p powerio-cli --test cli` |
@@ -58,10 +59,10 @@ baseline checks:
 
 ```sh
 cargo test -p powerio-capi --no-default-features
-cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,prob
+cargo test -p powerio-capi --features matrix,gridfm,dist,prob
 bash scripts/ci-clippy.sh capi-no-default
 bash scripts/ci-clippy.sh capi-release
-cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
+cargo build -p powerio-capi --release --features matrix,gridfm,dist,prob
 scripts/capi-header-parity.sh
 scripts/capi-smoke.sh
 POWERIO_CAPI=$PWD/target/release/libpowerio_capi.so \

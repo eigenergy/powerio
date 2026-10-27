@@ -216,6 +216,7 @@ fn unknown_format(format: &str) -> Error {
 pub struct EmitOptions {
     /// Fresh SINCAL generation is experimental and must be requested explicitly.
     /// When present, this bypasses retained-source echo even for unchanged input.
+    #[cfg(feature = "sincal")]
     pub sincal_experimental: Option<crate::SincalExperimentalOptions>,
 }
 
@@ -265,9 +266,13 @@ where
 {
     let module = module.clone().map_value(Into::into);
     let destination = output.into_destination()?;
+    #[cfg(feature = "sincal")]
     if let Some(options) = &options.sincal_experimental {
         return crate::sincal_write::emit(&module, format, options, destination);
     }
+    // Without the sincal feature no option changes emission yet.
+    #[cfg(not(feature = "sincal"))]
+    let _: &EmitOptions = options;
     let result = emit_dynamic(&module, format, destination)?;
     let from_sincal = module.sources().iter().any(|source| {
         source
@@ -689,7 +694,16 @@ fn emit_multiconductor_network(
         return Err(unknown_format(format));
     };
     let typed = typed_sibling(module, network)?;
-    let typed = if preserve_retained_source && retained_source_matches_case_format(module, format) {
+    let retained_dss_project = target == powerio_dist::DistTargetFormat::Dss
+        && module
+            .source()
+            .and_then(powerio_core::Source::format)
+            .is_some_and(|source_format| {
+                powerio_dist::parse_dist_target_format(source_format.as_str()) == Some(target)
+            });
+    let typed = if preserve_retained_source
+        && (retained_dss_project || retained_source_matches_case_format(module, format))
+    {
         typed
     } else {
         typed.sever_source()
@@ -1095,7 +1109,7 @@ fn emit_versioned_bmopf(
     .map(|result| result.__with_diagnostics(diagnostics))
 }
 
-fn is_sincal_format(format: &str) -> bool {
+pub(crate) fn is_sincal_format(format: &str) -> bool {
     crate::resolve_format(format).is_some_and(|f| {
         matches!(
             f.token,
@@ -1105,6 +1119,7 @@ fn is_sincal_format(format: &str) -> bool {
 }
 
 /// Binary retained-source echo is separate from fresh electrical writing.
+#[cfg(feature = "sincal")]
 fn echo_sincal(
     module: &PioModule<PioValue>,
     format: &str,
@@ -1157,7 +1172,10 @@ fn emit_dynamic(
     destination: Destination,
 ) -> Result<EmitResult, Error> {
     if is_sincal_format(format) {
+        #[cfg(feature = "sincal")]
         return echo_sincal(module, format, destination);
+        #[cfg(not(feature = "sincal"))]
+        return Err(crate::sincal_feature_disabled());
     }
     if let Some(version) = format.strip_prefix("bmopf-json@") {
         return emit_versioned_bmopf(module, version, destination);

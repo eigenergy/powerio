@@ -36,6 +36,24 @@ fn assert_closed(error: Error, expected: (usize, BusId, BusId, usize)) {
 }
 
 #[test]
+fn a_closed_switch_across_a_dead_transformer_or_winding_still_merges() {
+    // Only live windings couple, so these merges short nothing; 0.11.5
+    // normalized both networks.
+    let mut out = network();
+    out.transformers_3w_mut()[0].in_service = false;
+    out.switches_mut()
+        .push(Switch::new(BusId(1), BusId(2), true));
+    assert!(out.to_normalized().is_ok());
+
+    let mut open_winding = network();
+    open_winding.transformers_3w_mut()[0].set_winding_in_service([true, true, false]);
+    open_winding
+        .switches_mut()
+        .push(Switch::new(BusId(2), BusId(3), true));
+    assert!(open_winding.to_normalized().is_ok());
+}
+
+#[test]
 fn every_merge_entry_point_rejects_a_refused_winding_pair() {
     let mut net = network();
     net.switches_mut()

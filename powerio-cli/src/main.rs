@@ -4,8 +4,8 @@
 //! Subcommands: `convert`, `summary`, `serialize` (PowerIO IR), `verify`,
 //! `batch` (matrix families), `dcopf` (DC OPF bundle), `sensitivities` (PTDF
 //! and LODF), `gridfm` (GridFM Parquet), `gen` (synthetic cases), `geo`
-//! (geographic layers), and `corpus` (the private corpus harness). With no
-//! subcommand it opens the TUI. Run `powerio --help` for the full surface.
+//! (geographic layers), `contingency` (PSS/E contingency files), `corpus` (the
+//! private corpus harness), and `tui`. With no subcommand it opens the TUI. Run `powerio --help` for the full surface.
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -16,11 +16,11 @@ use powerio_core::ErrorCategory;
 use powerio_matrix::io::gridfm::{GridfmOptions, emit_gridfm_batch, number_snapshots};
 use powerio_matrix::matrix::{BranchSusceptanceFormula, BuildOptions, Scheme, check_sddm};
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
-use powerio_matrix::synth::{SynthSpec, Topology};
 use powerio_matrix::{
     DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions, Units, emit_dcopf_bundle,
 };
 use powerio_matrix::{SensitivityOptions, SensitivitySolver};
+use powerio_synth::{SynthSpec, Topology};
 use powerio_tx::{AngleDifferenceBounds, EmitOptions, MissingGenCostPolicy};
 use serde_json::json;
 mod cases;
@@ -88,7 +88,8 @@ impl SincalCliOptions {
                             "--sincal-assume-inactive-source-controls requires --from sincal-multiconductor",
                         ));
                     }
-                    let mut selection = powerio_tx::format::SincalBalancedReadOptions::default();
+                    let mut selection =
+                        powerio::tnd::formats::sincal::SincalBalancedReadOptions::default();
                     selection.variant = self.sincal_variant;
                     selection.snapshot_hours = self.sincal_snapshot_hours;
                     selection
@@ -97,7 +98,7 @@ impl SincalCliOptions {
                     options.sincal_balanced = Some(selection);
                 }
                 Some(FormatArg::SincalMulticonductor) => {
-                    let mut selection = powerio_dist::SincalReadOptions::default();
+                    let mut selection = powerio::tnd::formats::sincal::SincalReadOptions::default();
                     selection.assume_inactive_source_controls =
                         self.sincal_assume_inactive_source_controls;
                     selection.variant = self.sincal_variant;
@@ -1522,7 +1523,7 @@ fn run_gen(
         mean_x,
         seed,
     };
-    let case = powerio_matrix::synth::generate(&spec);
+    let case = powerio_synth::generate(&spec);
     let pipeline = Pipeline {
         matrices: matrices.into_iter().map(MatrixKind::from).collect(),
         ..Default::default()
@@ -3058,6 +3059,14 @@ fn unresolved_reason_text(reason: powerio::UnresolvedReason) -> String {
         Reason::NoSuchLoad => "names no load".to_owned(),
         Reason::NoSuchTransformer3w => "names no three winding transformer".to_owned(),
         Reason::Unrecognized => "was kept as text and names no element".to_owned(),
+        Reason::NoSuchBusName => "names a bus by a name no bus has".to_owned(),
+        Reason::AmbiguousBusName { matches } => {
+            format!("names a bus by a name {matches} buses have")
+        }
+        Reason::NoSuchBranchName => "names a branch by a name no branch has".to_owned(),
+        Reason::AmbiguousBranchName { matches } => {
+            format!("names a branch by a name {matches} branches have")
+        }
         _ => "names no element".to_owned(),
     }
 }
@@ -3368,10 +3377,11 @@ fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<Fa
         let source = module_io::declare_format(stdin_source()?, Some(f.name()))
             .context("declaring the standard input format")?;
         return if f.is_distribution_input() {
-            let net = powerio_dist::parse(source).context("reading standard input")?;
+            let net = powerio::dist::parse(source).context("reading standard input")?;
             Ok(FamilyCase::Distribution(Box::new(net)))
         } else {
-            let parsed = powerio_tx::parse(source).context("reading standard input")?;
+            let parsed = crate::module_io::parse_balanced_source(source)
+                .context("reading standard input")?;
             Ok(FamilyCase::Transmission(Box::new(parsed)))
         };
     }

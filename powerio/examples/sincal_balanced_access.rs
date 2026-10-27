@@ -18,7 +18,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let records = std::fs::read(&args[1])?;
     let source = Source::from_memory("original.mdb", original.clone())?
         .with_named_buffer("acquired.json", records.clone())?;
-    let mut selection = powerio_tx::format::SincalBalancedReadOptions::default();
+    let mut selection = powerio_tnd::formats::sincal::SincalBalancedReadOptions::default();
     selection.variant = Some(1);
     selection.snapshot_hours = Some(args[2].parse()?);
     selection.acquired_tables = Some("acquired.json".into());

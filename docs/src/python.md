@@ -140,10 +140,7 @@ in a `.sub` file through bus, area, zone, owner and kV range selectors; a
 `.con` automatic specification and a `.mon` statement refer to a subsystem by
 name, and selecting a subsystem's buses evaluates its selectors against a
 network. A monitored set is the content of a `.mon` file: the elements whose
-loading and voltage a study reports. A geo layer is a coordinate document kept
-beside a case: points for buses and routes for branches in one coordinate
-space, keyed by element identity, read from five text forms and written as a
-GeoJSON FeatureCollection carrying a `powerio_geo` member.
+loading and voltage a study reports.
 
 A `.con`, `.sub`, or `.mon` file parses to `ContingencySet`, `SubsystemSet`,
 or `MonitoredSet`. Each has a `text` property holding the file. A contingency

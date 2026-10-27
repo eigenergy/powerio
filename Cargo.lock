@@ -1005,7 +1005,7 @@ dependencies = [
 
 [[package]]
 name = "facade-only"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "powerio",
 ]
@@ -1560,9 +1560,9 @@ dependencies = [
 
 [[package]]
 name = "jsonschema"
-version = "0.56.0"
+version = "0.59.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6a806f80c1f5560431009ce5ec29b59d38f950e0cd7db5f1b8925e6d8104e21"
+checksum = "1b320ad34c177093d21622edc9215bb608294c2333ff296672c0c8265a5ee60c"
 dependencies = [
  "ahash",
  "bytecount",
@@ -1588,18 +1588,18 @@ dependencies = [
 
 [[package]]
 name = "jsonschema-regex"
-version = "0.56.0"
+version = "0.59.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb862addfa7782108933abcf842fe25334523a9df5b89ea4d9620e3dd7b42181"
+checksum = "1472f7be79026f79e01a9b172263311e829d7c210d57b39cb57037abc0ce0500"
 dependencies = [
  "regex-syntax",
 ]
 
 [[package]]
 name = "jsonschema-value"
-version = "0.56.0"
+version = "0.59.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a05cd404c5ff6e2731dbbf7e290a27417750acfb59e329560a1d0af384c93fb0"
+checksum = "e5a7550a7a84787e715ead0b47e01fa8c6bb7c3413630f91a8f2094c06c2078a"
 dependencies = [
  "ahash",
  "bytecount",
@@ -2411,7 +2411,7 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
 name = "powerio"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "arrow",
  "bytes",
@@ -2421,7 +2421,7 @@ dependencies = [
  "powerio-dist",
  "powerio-matrix",
  "powerio-prob",
- "powerio-sincal",
+ "powerio-tnd",
  "powerio-tx",
  "rusqlite",
  "schemars",
@@ -2433,13 +2433,14 @@ dependencies = [
 
 [[package]]
 name = "powerio-capi"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "powerio",
  "powerio-core",
  "powerio-dist",
  "powerio-matrix",
  "powerio-prob",
+ "powerio-tnd",
  "powerio-tx",
  "rusqlite",
  "serde_json",
@@ -2449,7 +2450,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-cli"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -2459,6 +2460,7 @@ dependencies = [
  "powerio-dist",
  "powerio-matrix",
  "powerio-prob",
+ "powerio-synth",
  "powerio-tx",
  "ratatui",
  "rusqlite",
@@ -2474,7 +2476,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-core"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "errno",
  "libc",
@@ -2485,16 +2487,14 @@ dependencies = [
 
 [[package]]
 name = "powerio-dist"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "jsonschema",
  "libc",
  "memchr",
  "num-complex",
  "powerio-core",
- "powerio-sincal",
  "quick-xml",
- "rusqlite",
  "schemars",
  "serde",
  "serde_json",
@@ -2507,7 +2507,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-matrix"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "approx",
  "arrow",
@@ -2518,6 +2518,7 @@ dependencies = [
  "powerio-core",
  "powerio-dist",
  "powerio-prob",
+ "powerio-synth",
  "powerio-tx",
  "rand 0.10.3",
  "rand_chacha",
@@ -2532,7 +2533,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-prob"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "powerio-core",
  "powerio-dist",
@@ -2545,7 +2546,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-py"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "mimalloc",
  "powerio",
@@ -2553,6 +2554,7 @@ dependencies = [
  "powerio-dist",
  "powerio-matrix",
  "powerio-prob",
+ "powerio-tnd",
  "powerio-tx",
  "pyo3",
  "rusqlite",
@@ -2561,29 +2563,42 @@ dependencies = [
 ]
 
 [[package]]
-name = "powerio-sincal"
-version = "0.11.5"
+name = "powerio-tnd"
+version = "0.11.6"
 dependencies = [
+ "num-complex",
  "powerio-core",
+ "powerio-dist",
+ "powerio-tx",
  "rusqlite",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "zip",
 ]
 
 [[package]]
+name = "powerio-synth"
+version = "0.11.6"
+dependencies = [
+ "powerio-tx",
+ "rand 0.10.3",
+ "rand_chacha",
+ "serde",
+]
+
+[[package]]
 name = "powerio-tx"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "criterion",
  "lexical-core",
  "memchr",
  "petgraph",
  "powerio-core",
- "powerio-sincal",
  "quick-xml",
- "rusqlite",
  "schemars",
  "serde",
  "serde_json",
@@ -2591,6 +2606,16 @@ dependencies = [
  "thiserror 2.0.21",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "powerio-wasm"
+version = "0.11.6"
+dependencies = [
+ "powerio",
+ "rusqlite",
+ "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2648,9 +2673,9 @@ checksum = "1d8f70e07b9c3962945a74e59ca1c511bba65b6419468acc217c457d93f3c740"
 
 [[package]]
 name = "pyo3"
-version = "0.29.2"
+version = "0.29.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4688ddedf473e32662b9b067670129a8afb8c18e351482c70d62ba4a88171e8b"
+checksum = "700d18fa267b73b9b521fd7e13580e2f446916f176cacee1ab63fcc8191f1655"
 dependencies = [
  "libc",
  "once_cell",
@@ -2662,18 +2687,18 @@ dependencies = [
 
 [[package]]
 name = "pyo3-build-config"
-version = "0.29.2"
+version = "0.29.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f41027e41b4bd03f6e60f9f417fe24a6341a6bb744edd62b6f709f2a52ea30e9"
+checksum = "7b3fc0c4d08f6bb10e71fe39dfb9e2f59c6eb6854e22ec8092f50c69a4499adb"
 dependencies = [
  "target-lexicon",
 ]
 
 [[package]]
 name = "pyo3-ffi"
-version = "0.29.2"
+version = "0.29.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e591a95526fead067432c3b3a33fc74770b87b1e04e73671090d9c2055a2b327"
+checksum = "dfc0b8e19df29aad7086cf977bb0c2a2f143e30567eb113e9cf72b62ca698330"
 dependencies = [
  "libc",
  "pyo3-build-config",
@@ -2681,9 +2706,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros"
-version = "0.29.2"
+version = "0.29.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73225868fc1cd84eef2c3c230ddb91273bf1de46aeb8a4248da76d32a0924a1c"
+checksum = "6100e8a4b5eba53afaa5ed078364851a0b2499c553a44c31026b929049b49dc6"
 dependencies = [
  "proc-macro2",
  "pyo3-macros-backend",
@@ -2693,9 +2718,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros-backend"
-version = "0.29.2"
+version = "0.29.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "571575aa3749fa6216757dd47d2a3e7ef360f329a40f0666a9fbd14889024952"
+checksum = "6143877a16e82b5a727b7127ff4cd86858a24a28d745d72f43e6f227c7b1bdb3"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -2940,9 +2965,9 @@ dependencies = [
 
 [[package]]
 name = "referencing"
-version = "0.56.0"
+version = "0.59.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3b4a92fac7e28c27de3ad26df2ecb9e652f227b258e845af034052e5b22c96c"
+checksum = "473f4dcca28ead7ee0f8e5b5d0bbae2549f4fc4c958fb20af328961b6c174be3"
 dependencies = [
  "ahash",
  "fluent-uri",

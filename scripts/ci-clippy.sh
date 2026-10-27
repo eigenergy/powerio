@@ -9,9 +9,9 @@ Targets:
   all             Run every clippy target below.
   workspace       Root Rust CI clippy for non extension crates.
   matrix-gridfm   powerio-matrix with the gridfm feature.
+  no-sincal       powerio, powerio-tx, and powerio-dist without the sincal feature.
   capi-no-default powerio-capi with no default features.
-  capi-arrow      powerio-capi with arrow.
-  capi-release    powerio-capi with arrow,matrix,gridfm,dist,prob.
+  capi-release    powerio-capi with matrix,gridfm,dist,prob.
   capi-dist       powerio-capi with dist.
   powerio-py      PyO3 extension with extension-module,gridfm.
 
@@ -34,8 +34,8 @@ case "$target" in
   all)
     bash "$0" workspace
     bash "$0" matrix-gridfm
+    bash "$0" no-sincal
     bash "$0" capi-no-default
-    bash "$0" capi-arrow
     bash "$0" capi-release
     bash "$0" capi-dist
     bash "$0" powerio-py
@@ -47,29 +47,30 @@ case "$target" in
       -p powerio-core \
       -p powerio-matrix \
       -p powerio-prob \
+      -p powerio-synth \
       -p powerio-cli \
       -p powerio-capi \
       -p powerio-dist \
-      -p powerio-sincal \
+      -p powerio-tnd \
       -- -D warnings
     ;;
   matrix-gridfm)
     run cargo clippy -p powerio-matrix --all-targets --features gridfm -- -D warnings
     ;;
+  no-sincal)
+    run cargo clippy -p powerio -p powerio-tx -p powerio-dist -p powerio-tnd --all-targets --no-default-features -- -D warnings
+    ;;
   capi-no-default)
     run cargo clippy -p powerio-capi --all-targets --no-default-features -- -D warnings
     ;;
-  capi-arrow)
-    run cargo clippy -p powerio-capi --all-targets --features arrow -- -D warnings
-    ;;
   capi-release)
-    run cargo clippy -p powerio-capi --all-targets --features arrow,matrix,gridfm,dist,prob -- -D warnings
+    run cargo clippy -p powerio-capi --all-targets --features matrix,gridfm,dist,prob -- -D warnings
     ;;
   capi-dist)
     run cargo clippy -p powerio-capi --all-targets --features dist -- -D warnings
     ;;
   powerio-py)
-    run cargo clippy -p powerio-py --no-deps --features extension-module,gridfm -- -D warnings
+    run cargo clippy -p powerio-py --no-deps --all-targets --features extension-module,gridfm -- -D warnings
     ;;
   -h|--help|help)
     usage

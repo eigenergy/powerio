@@ -683,7 +683,7 @@ fn indexed_assignment_scanner_handles_ellipsis_continuation_and_statement_bounda
         let src = format!("{CASE_TINY}\n{mutation}\n");
         let mut warnings = crate::collect::Diagnostics::new();
         warnings.locate_in(powerio_core::SourceId::new("/input").unwrap(), 0);
-        super::parse_matpower_source(&src, None, &mut warnings).expect("literal case parses");
+        super::warn_indexed_assignments(&src, &mut warnings);
         let records = warnings.records();
         assert_eq!(records.len(), 1, "{mutation:?}: {:?}", warnings.lines());
         assert_eq!(records[0].code(), "READ.MATPOWER.INDEXED_ASSIGNMENT");
@@ -784,7 +784,7 @@ fn indexed_assignment_scanner_stops_spans_at_top_level_commas() {
 fn assert_indexed_warning_span(source: &str, mutation: &str) {
     let mut warnings = crate::collect::Diagnostics::new();
     warnings.locate_in(powerio_core::SourceId::new("/input").unwrap(), 0);
-    super::parse_matpower_source(source, None, &mut warnings).unwrap();
+    super::warn_indexed_assignments(source, &mut warnings);
     let records = warnings.records();
     assert_eq!(records.len(), 1, "{mutation:?}: {:?}", warnings.lines());
     assert_eq!(records[0].code(), "READ.MATPOWER.INDEXED_ASSIGNMENT");
@@ -798,4 +798,17 @@ fn assert_indexed_warning_span(source: &str, mutation: &str) {
         byte_range(source, mutation),
         "span must cover only the original mutation: {mutation:?}",
     );
+}
+
+#[test]
+fn case33bw_applies_post_literal_unit_conversions() {
+    let src = include_str!("../../../../tests/data/case33bw.m");
+    let mut warnings = crate::collect::Diagnostics::new();
+    let net = super::parse_matpower_source(src, None, &mut warnings).unwrap();
+    assert!((net.loads().iter().map(|load| load.p).sum::<f64>() - 3.715).abs() < 1e-12);
+    assert!((net.loads().iter().map(|load| load.q).sum::<f64>() - 2.3).abs() < 1e-12);
+    let zbase = 12.66_f64.powi(2) / 10.0;
+    assert!((net.branches()[0].r - 0.0922 / zbase).abs() < 1e-14);
+    assert!((net.branches()[0].x - 0.0470 / zbase).abs() < 1e-14);
+    assert!(warnings.is_empty());
 }

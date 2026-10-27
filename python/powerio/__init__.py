@@ -15,8 +15,10 @@ and whose ``diagnostics`` record what the parser found::
     Y = net.calc_admittance_matrix()         # complex csr, G + jB
     G = net.to_networkx()                    # networkx.Graph keyed by bus id
 
-PyPSA CSV folders carry static network topology. NetCDF and HDF5 time series
-are tracked in https://github.com/eigenergy/powerio/issues/107.
+A PyPSA CSV directory parses to a network or a time series, depending on its
+declared snapshots and supported series files. A time series keeps its
+snapshot axis even when the values are identical. NetCDF and HDF5 are tracked
+in https://github.com/eigenergy/powerio/issues/107.
 
 A source that defines a calculation parses to that calculation's typed value.
 Use ``isinstance(module.value, ...)`` to branch on the result type.
@@ -435,6 +437,7 @@ class BusMerge:
         )
 
 
+@_guard_class
 class BalancedNetwork:
     """A parsed balanced power network.
 

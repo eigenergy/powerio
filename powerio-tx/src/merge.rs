@@ -736,8 +736,19 @@ impl BalancedNetwork {
         };
 
         let mut windings: HashMap<usize, Vec<usize>> = HashMap::new();
+        // Only live windings couple through the star point, so a merge across
+        // an out-of-service transformer or winding shorts nothing.
         for (t, transformer) in self.transformers_3w().iter().enumerate() {
-            for winding in &transformer.windings {
+            if !transformer.in_service {
+                continue;
+            }
+            let live = transformer.winding_in_service();
+            for (winding, _) in transformer
+                .windings
+                .iter()
+                .zip(live)
+                .filter(|(_, live)| *live)
+            {
                 if let Some(&index) = index_of.get(&winding.bus) {
                     let list = windings.entry(index).or_default();
                     if !list.contains(&t) {

@@ -91,6 +91,7 @@ __all__ = [
     "ScucStartupLimit",
     "ScucTransformerControl",
     "ScucViolationCosts",
+    "SincalBalancedReadOptions",
     "SocwrOpfSolution",
     "SourceSpan",
     "SubsystemSet",

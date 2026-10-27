@@ -277,7 +277,8 @@ review. The size, stack, and open pull request limits exist for that reason.
   `main`, review fixes, tests. On a fork, leave "Allow edits by maintainers"
   checked.
 - The maintainer may fold your work into another pull request, with credit in
-  the commit and the changelog, and says so on yours before closing it.
+  the commit and the changelog (see [Contributor credit](#contributor-credit)),
+  and says so on yours before closing it.
 - Most pull requests are squash merged. A branch that carries commits from
   several people, such as one the maintainer finished, may be merged with a
   merge commit so that each author keeps their commits.
@@ -296,6 +297,28 @@ review. The size, stack, and open pull request limits exist for that reason.
 - A PowerIO.jl companion in a fork is pinned by commit rather than found by
   branch name; see
   [Tandem changes with PowerIO.jl](#tandem-changes-with-poweriojl).
+
+## Contributor credit
+
+Record issue reports, reproductions, and proposals that lead to merged work in
+[CONTRIBUTORS.md](CONTRIBUTORS.md). Name the concrete contribution and link both
+the source issue and the implementing merged pull request or commit. An open
+issue can qualify when part of its proposal has landed; state the implemented
+part rather than implying that the whole issue is resolved.
+
+Acknowledgment and commit coauthorship are different. Use a `Co-authored-by`
+trailer when the commit incorporates the person's actual contribution,
+including design or reproduction material, not merely because it adds their
+name to the list. Use a verified account-associated name and email, preferring
+the person's GitHub noreply address when appropriate. Do not rewrite published
+history solely to add recognition.
+
+When squash merging, preserve justified trailers in the final commit message,
+after an empty line, and check the landed commit's attribution. A list entry or
+a trailer alone does not guarantee every GitHub contributor display will show
+the person; default-branch and account-association requirements also apply.
+See GitHub's [coauthor instructions](https://docs.github.com/en/pull-requests/how-tos/commit-changes/creating-a-commit-with-multiple-authors)
+and [repository contributors guidance](https://docs.github.com/en/repositories/viewing-activity-and-data-for-your-repository/viewing-a-projects-contributors).
 
 ## Rules every change follows
 
@@ -481,12 +504,25 @@ updates `Cargo.lock`. Then:
 3. Inspect the draft and its five binary assets, then publish the release.
    The release event fires the PyPI publish
    (python.yml) and the crates.io publish (crates.yml: powerio-core,
-   powerio-sincal, powerio-tx, powerio-dist, powerio-prob, powerio-matrix,
-   powerio, and powerio-cli, in dependency order). Both deploy through reviewer protected
-   environments (`pypi` and `crates-io`; the protection lives in the repo
-   settings). PyPI skips files it already has and crates.io skips versions
-   already in the index, so if one of them fails partway you recover by
-   running it again.
+   powerio-tx, powerio-dist, powerio-tnd, powerio-prob, powerio-matrix,
+   powerio, and powerio-cli, in dependency order). Both deploy through
+   reviewer protected environments (`pypi` and `crates-io`; the protection
+   lives in the repo settings). PyPI skips files it already has and crates.io
+   skips versions already in the index, so if one of them fails partway you
+   recover by running it again.
+
+   A crate's first version cannot use trusted publishing
+   ([crates.io](https://blog.rust-lang.org/2025/07/11/crates-io-development-update-2025-07/)).
+   For a release that adds a crate, run `scripts/release-verified.py` from a
+   clean checkout of the tested main commit with `--bootstrap-crate <name>`,
+   using your existing GitHub CLI login and local Cargo credentials. It waits
+   for the native packages and Julia checks, then for the protected crates.io
+   job; when that job fails at the new crate, it publishes only the named
+   crate, checks the registry, and reruns the job to publish the rest. When a
+   protected environment awaits approval, approve it in GitHub and rerun the
+   same command; the helper never approves it. Afterwards configure the new
+   crate's trusted publisher: owner `eigenergy`, repository `powerio`,
+   workflow `crates.yml`, environment `crates-io`.
 4. Publishing also starts PowerIO.jl's "Release" workflow, which releases
    PowerIO.jl X.Y.Z with no PowerIO.jl change: it sets the version, pins the
    release tarballs in `Artifacts.toml`, runs the Julia tests against them,
