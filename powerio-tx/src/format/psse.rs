@@ -878,6 +878,21 @@ fn write_psse_rev_inner(
     } else {
         net
     };
+    let rated;
+    let net = if let Some((projected, count)) =
+        super::powsybl_psse::rate_branches_from_current_limits(net)
+    {
+        warnings.push(
+            &F.value_substituted,
+            format!(
+                "{count} branch current limit set(s) written as MVA ratings, sqrt(3) * Vnom * I / 1000 at the terminal's nominal voltage and sorted into RATE1-RATE12 as PowSybl's exporter writes them: PSS/E branch ratings are MVA ratings"
+            ),
+        );
+        rated = projected;
+        &rated
+    } else {
+        net
+    };
     let mut nonfinite = false;
     let mut sanitized_quoted = 0usize;
     let mut s = String::new();

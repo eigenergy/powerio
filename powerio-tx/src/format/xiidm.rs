@@ -5885,19 +5885,34 @@ fn read_three_winding_transformer(
         let apparent = calc_loading_limit_projection(equipment, suffix as u8, |group| {
             group.apparent_power.as_ref()
         })?;
-        windings[side].rate_a = apparent.permanent;
-        windings[side].rate_b = apparent
+        let states_apparent = apparent.permanent > 0.0 || !apparent.temporary.is_empty();
+        // A leg that states current limits and no apparent power limits is
+        // rated in MVA at its terminal's nominal voltage, as PowSybl's PSS/E
+        // exporter rates it (psse-converter `TransformerConverter.createRates(Leg)`
+        // through `AbstractConverter.convertToMva`). The selected groups stay
+        // in the detailed connectivity, so XIIDM output restates the amperes.
+        let (ratings, factor) = if states_apparent {
+            (apparent, 1.0)
+        } else {
+            let current = calc_loading_limit_projection(equipment, suffix as u8, |group| {
+                group.current.as_ref()
+            })?;
+            let factor = super::powsybl_psse::current_limit_mva(1.0, level.nominal_v);
+            (current, factor)
+        };
+        windings[side].rate_a = ratings.permanent * factor;
+        windings[side].rate_b = ratings
             .temporary
             .first()
-            .map_or(0.0, |(_, _, value)| *value);
-        windings[side].rate_c = apparent
+            .map_or(0.0, |(_, _, value)| *value * factor);
+        windings[side].rate_c = ratings
             .temporary
             .get(1)
-            .map_or(0.0, |(_, _, value)| *value);
-        if selected_operational_limits_groups(equipment, suffix as u8)?
-            .iter()
-            .any(|group| group.current.is_some() || group.active_power.is_some())
-        {
+            .map_or(0.0, |(_, _, value)| *value * factor);
+        let selected = selected_operational_limits_groups(equipment, suffix as u8)?;
+        let unmapped_current =
+            states_apparent && selected.iter().any(|group| group.current.is_some());
+        if unmapped_current || selected.iter().any(|group| group.active_power.is_some()) {
             diagnostics.push(
                 &codes::READ_XIIDM_FIELD_UNMAPPED,
                 format!(

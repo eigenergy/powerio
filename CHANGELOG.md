@@ -9,6 +9,14 @@
   from 1, as PowSybl's exporter numbers it, with a diagnostic. Revision 33
   output reports the substation records it drops without the RAWX error text.
 
+- IIDM current limits now reach PSS/E as MVA ratings instead of being dropped
+  as unlimited. A branch that states current limits and no MVA rating is
+  written with `sqrt(3) * Vnom * I / 1000` at its terminal's nominal voltage,
+  sorted into RATE1 to RATE12 as PowSybl's exporter writes them, and a
+  diagnostic reports the conversion. A three winding transformer leg that
+  states only current limits now reads as winding MVA ratings the same way,
+  where it was reported as unmapped; XIIDM output keeps the amperes.
+
 - Pull requests now build and smoke-test one Linux wheel (x86_64) and the
   sdist. The five-platform wheel matrix runs on pushes to main and on
   releases, and the browser converter suite on pushes to main, the commits

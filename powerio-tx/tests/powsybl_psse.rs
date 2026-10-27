@@ -151,3 +151,111 @@ fn powsybl_fictitious_switch_case_writes_rawx() {
             .len()
     );
 }
+
+fn close(actual: f64, expected: f64) {
+    assert!(
+        (actual - expected).abs() <= 1e-9 * expected.abs().max(1.0),
+        "{actual} != {expected}"
+    );
+}
+
+/// Two 380 kV buses joined by a line that states current limits only.
+const LINE_CURRENT_LIMITS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/1_17" id="limits" caseDate="2025-01-01T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="STEADY_STATE_HYPOTHESIS">
+  <iidm:substation id="S">
+    <iidm:voltageLevel id="VL1" nominalV="380" topologyKind="BUS_BREAKER">
+      <iidm:busBreakerTopology><iidm:bus id="B1" v="380" angle="0"/></iidm:busBreakerTopology>
+      <iidm:generator id="G1" energySource="OTHER" minP="0" maxP="200" voltageRegulatorOn="true" targetP="100" targetQ="10" targetV="380" bus="B1" connectableBus="B1">
+        <iidm:minMaxReactiveLimits minQ="-50" maxQ="50"/>
+      </iidm:generator>
+    </iidm:voltageLevel>
+    <iidm:voltageLevel id="VL2" nominalV="380" topologyKind="BUS_BREAKER">
+      <iidm:busBreakerTopology><iidm:bus id="B2" v="378" angle="-2"/></iidm:busBreakerTopology>
+      <iidm:load id="L1" loadType="UNDEFINED" p0="90" q0="30" bus="B2" connectableBus="B2"/>
+    </iidm:voltageLevel>
+  </iidm:substation>
+  <iidm:line id="LINE" r="2" x="20" g1="0" b1="0" g2="0" b2="0" bus1="B1" connectableBus1="B1" voltageLevelId1="VL1" bus2="B2" connectableBus2="B2" voltageLevelId2="VL2" selectedOperationalLimitsGroupIds1="DEFAULT">
+    <iidm:operationalLimitsGroup1 id="DEFAULT">
+      <iidm:currentLimits permanentLimit="931.0">
+        <iidm:temporaryLimit name="IT20" acceptableDuration="1200" value="1100.0"/>
+        <iidm:temporaryLimit name="IT1" acceptableDuration="60" value="1500.0"/>
+      </iidm:currentLimits>
+    </iidm:operationalLimitsGroup1>
+  </iidm:line>
+</iidm:network>"#;
+
+#[test]
+fn iidm_current_limits_become_psse_mva_ratings() {
+    let network = xiidm(LINE_CURRENT_LIMITS);
+    let mva = |amperes: f64| 3f64.sqrt() * 380.0 * amperes / 1000.0;
+    for rev in [33, 35] {
+        let emitted = emit_psse_rev(&network, rev);
+        let messages = codes_and_messages(&emitted);
+        assert!(
+            messages.iter().any(|message| message.starts_with(
+                "EMIT.PSSE.VALUE_SUBSTITUTED: 1 branch current limit set(s) written as MVA ratings"
+            )),
+            "{messages:#?}"
+        );
+        assert!(
+            messages
+                .iter()
+                .all(|message| !message.contains("current rating record(s) dropped")),
+            "{messages:#?}"
+        );
+        let back = parse_psse(&emitted.text).unwrap();
+        let line = &back.branches()[0];
+        close(line.rate_a, mva(931.0));
+        close(line.rate_b, mva(1100.0));
+        close(line.rate_c, mva(1500.0));
+    }
+    let back = read_rawx(&rawx(&network));
+    close(back.branches()[0].rate_a, mva(931.0));
+}
+
+#[test]
+fn powsybl_line_current_limit_becomes_rate_a() {
+    let network = parse_file(data("xiidm/powsybl/V1_17/fictitiousSwitchRef.xml"), None)
+        .unwrap()
+        .network;
+    let back = parse_psse(&emit_psse_rev(&network, 35).text).unwrap();
+    // 931 A on each side of the 225 kV line `CJ`.
+    let line = back
+        .branches()
+        .iter()
+        .find(|branch| !branch.is_transformer())
+        .unwrap();
+    close(line.rate_a, 3f64.sqrt() * 225.0 * 0.931);
+}
+
+#[test]
+fn three_winding_leg_current_limits_rate_each_winding() {
+    let network = parse_file(
+        data("xiidm/powsybl/V1_0/threeWindingsTransformerRoundTripRef.xml"),
+        None,
+    )
+    .unwrap()
+    .network;
+    let windings = &network.transformers_3w()[0].windings;
+    // Each leg states 1000/1200/1400 A scaled by its voltage level: 132, 33,
+    // and 11 kV legs carry 1000, 100, and 10 A permanently.
+    for (winding, (kv, amperes)) in
+        windings
+            .iter()
+            .zip([(132.0, 1000.0), (33.0, 100.0), (11.0, 10.0)])
+    {
+        let mva = |factor: f64| 3f64.sqrt() * kv * amperes * factor / 1000.0;
+        close(winding.rate_a, mva(1.0));
+        close(winding.rate_b, mva(1.2));
+        close(winding.rate_c, mva(1.4));
+    }
+    let back = parse_psse(&emit_psse_rev(&network, 33).text).unwrap();
+    close(
+        back.transformers_3w()[0].windings[0].rate_a,
+        3f64.sqrt() * 132.0,
+    );
+    // XIIDM output restates the amperes from the retained limit groups.
+    let xml = emit_value(&network, TargetFormat::Xiidm).unwrap().text;
+    assert!(xml.contains("permanentLimit=\"1000\""), "{xml}");
+    assert!(!xml.contains("apparentPowerLimits"), "{xml}");
+}
