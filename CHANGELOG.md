@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Pull requests now build and smoke-test one Linux wheel (x86_64) and the
+  sdist. The five-platform wheel matrix runs on pushes to main and on
+  releases, and the browser converter suite on pushes to main, the commits
+  releases are tagged from; a pull request that changes the
+  converter app, its WebAssembly crate, or the workflows that run it still
+  runs the browser suite. A `rust-toolchain.toml` pins the stable channel
+  with clippy and rustfmt, so local and CI lints agree.
+
 - GLM project replay copies only referenced files, retaining unrelated supplied
   buffers on the source module. NR delta-grounded-wye imports and canonical
   output refuse the known unqualified fixed-source zero-sequence profile;

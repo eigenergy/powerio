@@ -41,16 +41,18 @@ env:
   SOURCE_REF: ${{ github.event_name == 'release' && format('refs/tags/{0}', github.event.release.tag_name) || github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.sha }}
 
 jobs:
-  # A release or recovery run verifies the published tag here. Every other run
-  # only decides whether to build the release wheels: always on a push to main,
-  # and on a pull request that changes what goes into a wheel, so a build that
-  # only fails on one platform shows up before a tag rather than at publish.
+  # A release or recovery run verifies the published tag here. Every run also
+  # chooses the wheel platforms: a pull request builds and smoke-tests the
+  # x86_64 Linux wheel only, while a push to main, a release, and a recovery
+  # dispatch build all five, so a build that only fails on one platform shows
+  # up on main before a tag rather than at publish.
   release-preflight:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.release.outputs.tag }}
       sha: ${{ steps.release.outputs.sha || steps.source.outputs.sha }}
       wheels: ${{ steps.release.outputs.sha && 'true' || steps.source.outputs.wheels }}
+      platforms: ${{ steps.platforms.outputs.platforms }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -64,7 +66,8 @@ jobs:
           wheels=true
           # A pull request checks out its merge commit, whose first parent is
           # the base branch.
-          # Run sdist, all wheel builds and wheel smoke tests on every PR.
+          # Run the sdist and the wheel build and smoke test on every PR (the
+          # platforms step below narrows a PR to the x86_64 Linux wheel).
           # Publishing remains protected by the separate release-only gate.
           # These build checks are validation and should not disappear because
           # the PR happens not to touch packaging inputs.
@@ -72,6 +75,31 @@ jobs:
             wheels=true
           fi
           echo "wheels=$wheels" >> "$GITHUB_OUTPUT"
+      # The one list of wheel platforms. `wheels` and `wheel-smoke` both run
+      # over it, and the distribution gate counts the built wheels against it.
+      # aarch64 Linux builds natively: the manylinux cross image's gcc rejects
+      # flags that the mimalloc allocator's C build passes. macos-13 (the last
+      # x86_64 image) is retired, so maturin-action cross-compiles the x86_64
+      # macOS wheel on the arm64 runner.
+      - name: Choose the wheel platforms
+        id: platforms
+        run: |
+          all="$(jq -c . <<'JSON'
+          [
+            { "runner": "ubuntu-latest",    "target": "x86_64"  },
+            { "runner": "ubuntu-24.04-arm", "target": "aarch64" },
+            { "runner": "macos-14",         "target": "x86_64"  },
+            { "runner": "macos-14",         "target": "aarch64" },
+            { "runner": "windows-latest",   "target": "x64"     }
+          ]
+          JSON
+          )"
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            platforms="$(jq -c '[.[] | select(.runner == "ubuntu-latest" and .target == "x86_64")]' <<<"$all")"
+          else
+            platforms="$all"
+          fi
+          echo "platforms=$platforms" >> "$GITHUB_OUTPUT"
       - name: Release identity agreement
         if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         run: bash scripts/check-release-versions.sh
@@ -371,16 +399,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform:
-          - { runner: ubuntu-latest,  target: x86_64 }
-          # Built natively: the manylinux cross image's gcc rejects flags that
-          # the mimalloc allocator's C build passes.
-          - { runner: ubuntu-24.04-arm, target: aarch64 }
-          # macos-13 (the last x86_64 image) is retired; maturin-action
-          # cross-compiles the x86_64 wheel on the arm64 runner.
-          - { runner: macos-14,       target: x86_64 }
-          - { runner: macos-14,       target: aarch64 }
-          - { runner: windows-latest, target: x64 }
+        platform: ${{ fromJSON(needs.release-preflight.outputs.platforms) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -413,7 +432,8 @@ jobs:
           name: wheels-${{ matrix.platform.runner }}-${{ matrix.platform.target }}
           path: dist
 
-  # Install and import every built wheel before anything can publish (#325):
+  # Install and import every wheel built on the platforms release-preflight
+  # chose before anything can publish (#325):
   # a clean environment per platform installs the wheel with the `all` extra,
   # imports powerio, parses a case, verifies the reported version and schema
   # identity, narrows a typed module, builds one matrix, and checks the
@@ -427,19 +447,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform:
-          - { runner: ubuntu-latest,  target: x86_64,  artifact: wheels-ubuntu-latest-x86_64 }
-          - { runner: ubuntu-24.04-arm, target: aarch64, artifact: wheels-ubuntu-24.04-arm-aarch64 }
-          - { runner: macos-14,       target: x86_64,  artifact: wheels-macos-14-x86_64 }
-          - { runner: macos-14,       target: aarch64, artifact: wheels-macos-14-aarch64 }
-          - { runner: windows-latest, target: x64,     artifact: wheels-windows-latest-x64 }
+        platform: ${{ fromJSON(needs.release-preflight.outputs.platforms) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_REF }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: ${{ matrix.platform.artifact }}
+          name: wheels-${{ matrix.platform.runner }}-${{ matrix.platform.target }}
           path: dist
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -524,6 +539,19 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.x"
+      # One wheel per chosen platform and one sdist, so no run passes the gate
+      # with a platform's wheel missing.
+      - name: Count the built distributions
+        env:
+          PLATFORMS: ${{ needs.release-preflight.outputs.platforms }}
+        run: |
+          expected="$(jq length <<<"$PLATFORMS")"
+          wheels="$(find dist -maxdepth 1 -name '*.whl' | wc -l)"
+          sdists="$(find dist -maxdepth 1 -name '*.tar.gz' | wc -l)"
+          if [ "$wheels" -ne "$expected" ] || [ "$sdists" -ne 1 ]; then
+            echo "expected $expected wheels and 1 sdist, found $wheels wheels and $sdists sdists" >&2
+            exit 1
+          fi
       - name: Check distribution metadata
         run: |
           python -m pip install twine
