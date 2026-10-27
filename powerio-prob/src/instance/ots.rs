@@ -13,7 +13,9 @@
 use std::collections::{BTreeSet, HashMap};
 
 use powerio_core::{Diagnostic, Error};
-use powerio_tx::{BalancedNetwork, BusId, BusType, correct_angle_difference_bounds};
+use powerio_tx::{
+    BalancedNetwork, BusId, BusType, IslandPartition, correct_angle_difference_bounds,
+};
 
 use crate::diagnostics::codes;
 use crate::instance::balanced::{AcOpfInstance, transform_assumption, transform_discarded};
@@ -73,14 +75,27 @@ impl BranchSwitchingCost {
     }
 }
 
-/// Whether the final topology may split the network into several AC islands.
+/// Whether the final topology may split an AC island of the initial
+/// topology. An AC island is a set of energized buses joined by in-service
+/// branches; HVDC lines do not join islands, and a bus with no in-service
+/// branch is an island of its own.
+///
+/// Under either policy the initial topology's own islands are not a fault: a
+/// base network that already has several islands accepts its initial status
+/// vector. Under either policy a final topology is refused when it leaves a
+/// bus that an in-service generator supplied initially in an island with no
+/// in-service generator, because opening branches does not shed load or
+/// de-energize buses.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum IslandingPolicy {
-    /// Every energized bus stays in one AC island.
+    /// No island of the initial topology may split: the buses of each
+    /// initial island stay in one island. The final topology may have fewer
+    /// islands than the initial one, because closing a branch can join them,
+    /// and islands that are separate initially may stay separate.
     #[default]
     Forbidden,
-    /// Islands may form. Each final island gets one reference bus and keeps
+    /// Islands may split. Each final island gets one reference bus and keeps
     /// every load; no load is shed, and a feasible dispatch is not implied.
     Allowed,
 }
@@ -223,6 +238,8 @@ pub struct AcOtsInstance {
     base: AcOpfInstance,
     options: AcOtsOptions,
     branches: Vec<AcOtsBranch>,
+    /// The AC islands of the initial topology.
+    initial_islands: IslandPartition,
 }
 
 impl AcOtsInstance {
@@ -236,10 +253,12 @@ impl AcOtsInstance {
     /// open budget below the number of fixed open branches.
     pub fn new(base: AcOpfInstance, options: AcOtsOptions) -> Result<Self, Error> {
         let branches = resolve_branches(&base, &options)?;
+        let initial_islands = base.network().calc_islands();
         Ok(Self {
             base,
             options,
             branches,
+            initial_islands,
         })
     }
 
@@ -355,10 +374,14 @@ impl AcOtsInstance {
     /// against the fixed branches, the budgets, and the islanding policy, and
     /// return its switching cost. This does not certify AC feasibility.
     ///
+    /// The initial topology's own islands are not checked against the policy:
+    /// a base network with several islands accepts its initial statuses.
+    ///
     /// # Errors
     /// A vector of the wrong length, a changed fixed branch, a budget
-    /// exceeded, or, when islands are forbidden, a final topology that splits
-    /// the energized buses.
+    /// exceeded, when islands are forbidden a final topology that splits an
+    /// island of the initial topology, or a final topology that leaves buses
+    /// supplied initially in an island with no in-service generator.
     pub fn validate_topology(&self, branch_closed: &[bool]) -> Result<f64, Error> {
         if branch_closed.len() != self.branches.len() {
             return Err(topology_invalid(format!(
@@ -403,15 +426,7 @@ impl AcOtsInstance {
                 "the final topology changes {switched} branch statuses; at most {max_switched} may change"
             )));
         }
-        if self.options.islanding == IslandingPolicy::Forbidden {
-            let islands = self.network_with(branch_closed).calc_islands().islands;
-            if islands.len() > 1 {
-                return Err(topology_invalid(format!(
-                    "the final topology splits the energized buses into {} islands, and islanding is forbidden",
-                    islands.len()
-                )));
-            }
-        }
+        self.check_islands(branch_closed)?;
         Ok(cost)
     }
 
@@ -467,6 +482,40 @@ impl AcOtsInstance {
             }
         }
         Ok((fixed, diagnostics))
+    }
+
+    /// The islanding rules for a final status vector of the right length.
+    fn check_islands(&self, branch_closed: &[bool]) -> Result<(), Error> {
+        let initial = &self.initial_islands;
+        let fin = self.network_with(branch_closed).calc_islands();
+        if self.options.islanding == IslandingPolicy::Forbidden {
+            for island in &initial.islands {
+                let pieces: BTreeSet<Option<usize>> =
+                    island.buses.iter().map(|&bus| fin.island_of(bus)).collect();
+                if pieces.len() > 1 {
+                    return Err(topology_invalid(format!(
+                        "the final topology splits the initial island of {} buses holding bus {} into {} islands, and islanding is forbidden",
+                        island.buses.len(),
+                        island.buses[0],
+                        pieces.len()
+                    )));
+                }
+            }
+        }
+        for island in fin.islands.iter().filter(|island| !island.is_supplied()) {
+            let cut_off = island.buses.iter().find(|&&bus| {
+                initial
+                    .island_of(bus)
+                    .is_some_and(|position| initial.islands[position].is_supplied())
+            });
+            if let Some(bus) = cut_off {
+                return Err(topology_invalid(format!(
+                    "the final topology leaves an island of {} buses holding bus {bus} with no in-service generator; opening branches does not shed load or de-energize buses",
+                    island.buses.len()
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// The network with `branch_closed` as the branch statuses. The caller
@@ -730,8 +779,10 @@ fn derive_current_limits(base: &AcOpfInstance) -> Vec<Option<f64>> {
 /// Give every island of `network` exactly one reference bus, the choice
 /// [`powerio_tx::Island::calc_reference_choice`] makes, else the island's
 /// smallest bus. Nothing is de-energized: an island with no generator keeps
-/// its loads. Demoted references become PV when they host an in-service
-/// generator, else PQ.
+/// its loads. [`AcOtsInstance::validate_topology`] refuses a final island
+/// that switching leaves with no generator, so only an island that had none
+/// initially reaches the smallest bus fallback. Demoted references become PV
+/// when they host an in-service generator, else PQ.
 fn assign_island_references(network: &mut BalancedNetwork) -> Vec<Diagnostic> {
     let partition = network.calc_islands();
     let hosts_generator: BTreeSet<BusId> = network

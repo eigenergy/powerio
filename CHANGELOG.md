@@ -70,14 +70,18 @@
   `AcOtsInstance` is an AC OPF base plus switching options:
   - which branches may switch;
   - per-branch opening and closing costs;
-  - an islanding policy;
+  - an islanding policy: `forbidden` keeps every island of the initial
+    topology in one piece, so a base that already has several islands stays
+    valid and only a split is refused, and `allowed` lets islands split;
   - budgets on open branches and on status changes;
   - branch current limits, either stated per terminal or derived as
     PowerModels' `calc_current_limits!` derives them.
 
   The instance keeps every physical branch and its initial status.
   - `validate_topology` checks a final status vector and returns its
-    switching cost.
+    switching cost. Under either policy it refuses a topology that leaves
+    buses that had a generator in an island with none, because no load is shed
+    or de-energized.
   - `fix_topology` derives the AC OPF to solve and reports what it discards.
   - `AcOtsSolution` attaches that AC OPF solution, after checking that it
     solves exactly the fixed problem and that open branches carry no flow.

@@ -4,9 +4,10 @@
 //! optimal power flow solution of the problem
 //! [`AcOtsInstance::fix_topology`] derives from it. Construction checks that
 //! the topology is valid for the instance, that the AC solution solves
-//! exactly that fixed problem, that every value is finite, and that open
-//! branches carry no flow. It does not check power flow residuals or
-//! optimality.
+//! exactly that fixed problem, and that open branches carry no flow. Finiteness
+//! is [`AcOpfSolution`]'s own rule: values it accepts, such as the NaN rows of
+//! an out-of-service generator or a non-converged result, are accepted here.
+//! It does not check power flow residuals or optimality.
 
 use std::sync::Arc;
 
@@ -35,8 +36,10 @@ impl AcOtsSolution {
     /// # Errors
     /// The topology fails [`AcOtsInstance::validate_topology`], the AC
     /// solution answers a different problem than the fixed topology states
-    /// (its network, objective, or constraint selections differ), a value is
-    /// non-finite, or an open branch carries flow.
+    /// (its network, objective, or constraint selections differ), or an open
+    /// branch carries flow. A NaN flow on an open branch means no flow was
+    /// recorded and is accepted; a NaN anywhere else is left to
+    /// [`AcOpfSolution`].
     pub fn new(
         instance: Arc<AcOtsInstance>,
         branch_closed: Vec<bool>,
@@ -45,7 +48,6 @@ impl AcOtsSolution {
         let switching_cost = instance.validate_topology(&branch_closed)?;
         let (fixed, _) = instance.fix_topology(&branch_closed)?;
         require_same_problem(&fixed, ac_solution.instance())?;
-        require_finite(&ac_solution)?;
         require_open_branches_idle(&instance, &branch_closed, &ac_solution)?;
         Ok(Self {
             instance,
@@ -188,90 +190,6 @@ fn require_same_problem(fixed: &AcOpfInstance, solved: &AcOpfInstance) -> Result
     Ok(())
 }
 
-fn require_finite(solution: &AcOpfSolution) -> Result<(), Error> {
-    let mut columns: Vec<(&str, &[f64])> = vec![
-        ("bus voltage magnitudes", solution.bus_voltage_magnitudes()),
-        ("bus voltage angles", solution.bus_voltage_angles()),
-        ("bus active injections", solution.bus_active_injections()),
-        (
-            "bus reactive injections",
-            solution.bus_reactive_injections(),
-        ),
-        (
-            "branch from-side active flows",
-            solution.branch_from_active_flows(),
-        ),
-        (
-            "branch from-side reactive flows",
-            solution.branch_from_reactive_flows(),
-        ),
-        (
-            "branch to-side active flows",
-            solution.branch_to_active_flows(),
-        ),
-        (
-            "branch to-side reactive flows",
-            solution.branch_to_reactive_flows(),
-        ),
-        (
-            "generator active dispatch",
-            solution.generator_active_powers(),
-        ),
-        (
-            "generator reactive dispatch",
-            solution.generator_reactive_powers(),
-        ),
-    ];
-    if let Some(values) = solution.bus_active_power_marginals() {
-        columns.push(("bus active power marginals", values));
-    }
-    if let Some(values) = solution.bus_reactive_power_marginals() {
-        columns.push(("bus reactive power marginals", values));
-    }
-    for (what, values) in columns {
-        if let Some((row, value)) = values
-            .iter()
-            .copied()
-            .enumerate()
-            .find(|(_, value)| !value.is_finite())
-        {
-            return Err(Error::new(
-                &codes::BUILD_SOLUTION_VALUE_INVALID,
-                format!("{what} row {row} is {value}; solution values must be finite"),
-            ));
-        }
-    }
-    for (row, power) in solution
-        .three_winding_transformer_terminal_powers()
-        .iter()
-        .enumerate()
-    {
-        if power
-            .p_mw
-            .iter()
-            .chain(&power.q_mvar)
-            .any(|value| !value.is_finite())
-        {
-            return Err(Error::new(
-                &codes::BUILD_SOLUTION_VALUE_INVALID,
-                format!(
-                    "three winding transformer row {row} has a non-finite terminal power; solution values must be finite"
-                ),
-            ));
-        }
-    }
-    if !solution.objective().is_finite() {
-        return Err(Error::new(
-            &codes::BUILD_SOLUTION_VALUE_INVALID,
-            format!(
-                "the objective is {}; solution values must be finite",
-                solution.objective()
-            ),
-        ));
-    }
-    Ok(())
-}
-
 #[allow(clippy::float_cmp)] // an open branch carries exactly zero flow
 fn require_open_branches_idle(
     instance: &AcOtsInstance,
@@ -285,7 +203,12 @@ fn require_open_branches_idle(
         solution.branch_to_reactive_flows(),
     ];
     for (row, (branch, &closed)) in instance.branches().iter().zip(branch_closed).enumerate() {
-        if !closed && flows.iter().any(|column| column[row] != 0.0) {
+        // A NaN compares unequal to zero, but records no flow.
+        if !closed
+            && flows
+                .iter()
+                .any(|column| !column[row].is_nan() && column[row] != 0.0)
+        {
             return Err(Error::new(
                 &codes::BUILD_SOLUTION_VALUE_INVALID,
                 format!(

@@ -328,19 +328,128 @@ fn allowed_islands_take_one_reference_each() {
     }
 
     // Opening 4-5 (row 1) and 5-6 (row 2) strands load bus 5, which no
-    // generator supplies: it keeps its load and becomes its own reference.
+    // generator supplies. OTS does not shed load, so the topology is refused
+    // rather than handed on as an AC OPF that is infeasible by construction.
     let mut stranded = vec![true; 9];
     stranded[1] = false;
     stranded[2] = false;
-    let (fixed, _) = allowed.fix_topology(&stranded).unwrap();
-    assert_eq!(bus_kind(fixed.network(), 5), BusType::Ref);
+    let error = allowed.validate_topology(&stranded).unwrap_err();
+    assert_eq!(code(&error), Some("BUILD.INSTANCE.TOPOLOGY_INVALID"));
     assert!(
-        fixed
-            .network()
-            .loads()
-            .iter()
-            .filter(|load| load.bus == BusId::new(5))
-            .all(|load| load.in_service)
+        error.to_string().contains("no in-service generator"),
+        "{error}"
+    );
+    assert!(allowed.fix_topology(&stranded).is_err());
+}
+
+/// Two triangles of three buses each, with generators on buses 1, 2, and 4,
+/// plus bus 7, which has no branch. Branch rows 0 to 2 close the first
+/// triangle (1-2, 2-3, 3-1) and rows 3 to 5 the second (4-5, 5-6, 6-4), so
+/// the initial topology has three AC islands.
+fn three_islands() -> BalancedNetwork {
+    let case = "function mpc = islands\n\
+        mpc.version = '2';\n\
+        mpc.baseMVA = 100;\n\
+        mpc.bus = [\n\
+        \t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;\n\
+        \t2\t2\t10\t2\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;\n\
+        \t3\t1\t10\t2\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;\n\
+        \t4\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;\n\
+        \t5\t1\t10\t2\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;\n\
+        \t6\t1\t10\t2\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;\n\
+        \t7\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;\n\
+        ];\n\
+        mpc.gen = [\n\
+        \t1\t0\t0\t100\t-100\t1\t100\t1\t200\t0;\n\
+        \t2\t0\t0\t100\t-100\t1\t100\t1\t200\t0;\n\
+        \t4\t0\t0\t100\t-100\t1\t100\t1\t200\t0;\n\
+        ];\n\
+        mpc.branch = [\n\
+        \t1\t2\t0.01\t0.1\t0\t100\t100\t100\t0\t0\t1\t-360\t360;\n\
+        \t2\t3\t0.01\t0.1\t0\t100\t100\t100\t0\t0\t1\t-360\t360;\n\
+        \t3\t1\t0.01\t0.1\t0\t100\t100\t100\t0\t0\t1\t-360\t360;\n\
+        \t4\t5\t0.01\t0.1\t0\t100\t100\t100\t0\t0\t1\t-360\t360;\n\
+        \t5\t6\t0.01\t0.1\t0\t100\t100\t100\t0\t0\t1\t-360\t360;\n\
+        \t6\t4\t0.01\t0.1\t0\t100\t100\t100\t0\t0\t1\t-360\t360;\n\
+        ];\n\
+        mpc.gencost = [\n\
+        \t2\t0\t0\t3\t0\t1\t0;\n\
+        \t2\t0\t0\t3\t0\t1\t0;\n\
+        \t2\t0\t0\t3\t0\t1\t0;\n\
+        ];\n";
+    let source = Source::from_memory("islands.m", case.as_bytes().to_vec()).unwrap();
+    powerio_tx::parse(source).unwrap().into_value()
+}
+
+#[test]
+fn forbidden_means_no_initial_island_splits() {
+    let network = three_islands();
+    assert_eq!(network.calc_islands().islands.len(), 3);
+    let instance = AcOtsInstance::from_network(network).unwrap();
+    assert_eq!(instance.options().islanding, IslandingPolicy::Forbidden);
+
+    // A base with several islands accepts its own initial statuses.
+    assert_eq!(instance.validate_topology(&[true; 6]).unwrap(), 0.0);
+    let (fixed, _) = instance.fix_topology(&[true; 6]).unwrap();
+    // An opening that keeps every initial island connected is accepted, in
+    // either triangle.
+    for open in [0, 4] {
+        let mut closed = [true; 6];
+        closed[open] = false;
+        assert_eq!(instance.validate_topology(&closed).unwrap(), 0.0, "{open}");
+    }
+    let mut both = [true; 6];
+    both[0] = false;
+    both[3] = false;
+    instance.validate_topology(&both).unwrap();
+    // The solution can be built over the initial topology.
+    let instance = Arc::new(instance);
+    AcOtsSolution::new(
+        Arc::clone(&instance),
+        vec![true; 6],
+        synthetic_ac_solution(Arc::new(fixed), 0.0),
+    )
+    .unwrap();
+
+    // Opening two branches of one triangle cuts bus 2 or bus 3 off.
+    for open in [[0, 1], [1, 2], [0, 2]] {
+        let mut closed = [true; 6];
+        closed[open[0]] = false;
+        closed[open[1]] = false;
+        let error = instance.validate_topology(&closed).unwrap_err();
+        assert_eq!(code(&error), Some("BUILD.INSTANCE.TOPOLOGY_INVALID"));
+        assert!(
+            error.to_string().contains("islanding is forbidden"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn allowed_splits_supplied_islands_but_never_strands_buses() {
+    let mut options = AcOtsOptions::default();
+    options.switchable = BranchSelection::All;
+    options.islanding = IslandingPolicy::Allowed;
+    let instance = AcOtsInstance::new(
+        AcOpfInstance::from_network(three_islands()).unwrap(),
+        options,
+    )
+    .unwrap();
+    assert_eq!(instance.validate_topology(&[true; 6]).unwrap(), 0.0);
+    // Opening 1-2 and 2-3 isolates bus 2, which hosts a generator.
+    let mut supplied = [true; 6];
+    supplied[0] = false;
+    supplied[1] = false;
+    instance.fix_topology(&supplied).unwrap();
+    // Opening 2-3 and 3-1 isolates load bus 3, which has no generator.
+    let mut stranded = [true; 6];
+    stranded[1] = false;
+    stranded[2] = false;
+    let error = instance.validate_topology(&stranded).unwrap_err();
+    assert_eq!(code(&error), Some("BUILD.INSTANCE.TOPOLOGY_INVALID"));
+    assert!(
+        error.to_string().contains("no in-service generator"),
+        "{error}"
     );
 }
 
@@ -407,7 +516,7 @@ fn a_solution_answers_its_fixed_topology_problem() {
 }
 
 #[test]
-fn a_solution_refuses_flow_on_open_branches_and_nonfinite_values() {
+fn a_solution_refuses_flow_on_open_branches() {
     let instance = Arc::new(explicit_instance());
     let closed = closed_example();
     let fixed = Arc::new(instance.fix_topology(&closed).unwrap().0);
@@ -417,36 +526,81 @@ fn a_solution_refuses_flow_on_open_branches_and_nonfinite_values() {
         network.branches().len(),
         network.generators().len(),
     );
-    let mut flows = vec![0.0; branches];
-    flows[2] = 1.0;
-    let flowing = AcOpfSolution::new(
+    // Row 2 is the only open branch in the final topology.
+    let flows_with = |value: f64| {
+        let mut flows = vec![0.0; branches];
+        flows[2] = value;
+        flows
+    };
+    let solution_with = |flows: Vec<f64>| {
+        AcOpfSolution::new(
+            Arc::clone(&fixed),
+            Termination::Converged,
+            vec![1.0; buses],
+            vec![0.0; buses],
+            vec![0.0; buses],
+            vec![0.0; buses],
+            flows,
+            vec![0.0; branches],
+            vec![0.0; branches],
+            vec![0.0; branches],
+            vec![0.0; generators],
+            vec![0.0; generators],
+            1.0,
+            Vec::new(),
+        )
+        .unwrap()
+    };
+    let error = AcOtsSolution::new(
+        Arc::clone(&instance),
+        closed.clone(),
+        solution_with(flows_with(1.0)),
+    )
+    .unwrap_err();
+    assert_eq!(code(&error), Some("BUILD.SOLUTION.VALUE_INVALID"));
+    assert!(error.to_string().contains("carries flow"), "{error}");
+    // A NaN flow on an open branch records no flow.
+    AcOtsSolution::new(instance, closed, solution_with(flows_with(f64::NAN))).unwrap();
+}
+
+#[test]
+fn nan_rows_the_ac_solution_accepts_construct() {
+    let instance = Arc::new(explicit_instance());
+    let closed = closed_example();
+    let fixed = Arc::new(instance.fix_topology(&closed).unwrap().0);
+    let network = fixed.network();
+    let (buses, branches, generators) = (
+        network.buses().len(),
+        network.branches().len(),
+        network.generators().len(),
+    );
+    // A non-converged result: a NaN objective, a NaN dispatch row for an
+    // out-of-service generator, and NaN flows on branches with no solution.
+    let mut dispatch = vec![12.0; generators];
+    dispatch[0] = f64::NAN;
+    let mut flows = vec![5.0; branches];
+    flows[2] = 0.0;
+    flows[3] = f64::NAN;
+    let ac = AcOpfSolution::new(
         Arc::clone(&fixed),
-        Termination::Converged,
+        Termination::NotReported,
         vec![1.0; buses],
         vec![0.0; buses],
         vec![0.0; buses],
         vec![0.0; buses],
+        flows.clone(),
+        flows.clone(),
+        flows.clone(),
         flows,
-        vec![0.0; branches],
-        vec![0.0; branches],
-        vec![0.0; branches],
-        vec![0.0; generators],
-        vec![0.0; generators],
-        1.0,
+        dispatch.clone(),
+        dispatch,
+        f64::NAN,
         Vec::new(),
     )
     .unwrap();
-    let error = AcOtsSolution::new(Arc::clone(&instance), closed.clone(), flowing).unwrap_err();
-    assert_eq!(code(&error), Some("BUILD.SOLUTION.VALUE_INVALID"));
-    assert!(error.to_string().contains("carries flow"), "{error}");
-
-    let error = AcOtsSolution::new(
-        Arc::clone(&instance),
-        closed,
-        synthetic_ac_solution(fixed, f64::NAN),
-    )
-    .unwrap_err();
-    assert_eq!(code(&error), Some("BUILD.SOLUTION.VALUE_INVALID"));
+    let solution = AcOtsSolution::new(instance, closed, ac).unwrap();
+    assert!(solution.objective().is_nan());
+    assert_eq!(solution.switching_cost(), 9.0);
 }
 
 #[test]
