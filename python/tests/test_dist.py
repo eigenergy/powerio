@@ -13,6 +13,7 @@ from powerio import dist
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data" / "dist"
 FOURWIRE = DATA / "micro" / "fourwire_linecode.dss"
 CIM_FEEDER = DATA / "cim" / "micro_feeder.xml"
+CIM_TANKS = DATA / "cim" / "tank_feeder.xml"
 LOWERABLE_DSS = """Clear
 Set DefaultBaseFrequency=60
 New Circuit.tiny basekv=12.47 pu=1.0 phases=3 bus1=src MVAsc3=2000 MVAsc1=2100
@@ -117,6 +118,13 @@ def test_distribution_cim_reads_converts_and_saves():
     assert "bus" in json.loads(_emit_value(case, "bmopf-json").text)
     stored = _parse_module(_emit_module(module))
     assert stored.value.source_format == "cim-dist"
+
+
+def test_distribution_cim_reads_the_transformer_tank_form():
+    case = powerio.parse(CIM_TANKS).value
+    assert isinstance(case, dist.MulticonductorNetwork)
+    # Eight tanks and one PowerTransformerEnd transformer.
+    assert case.n_transformers == 9
 
 
 def test_cross_format_writes():

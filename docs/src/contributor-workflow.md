@@ -6,9 +6,9 @@ after measurements.
 
 ## Baseline checks
 
-`scripts/ci-mirror.sh` runs everything `rust.yml` runs, in the same feature combinations: format, clippy, the terminology and symbol gates, header parity, every crate's tests in each gated feature set, the C smoke and header programs, schema generation, packaging checks, and the docs build. Run it before pushing rather than assembling your own subset, because a hand assembled subset misses the feature gated suites. `cargo test --workspace`, for example, skips the C ABI release-feature diagnostic tests and does not test each crate's opt-in features in isolation. The deprecated C ABI `arrow` compatibility flag adds no code or tests. Legacy commands remain accepted in 0.11.x, but maintained source-build commands omit it; [#673](https://github.com/eigenergy/powerio/issues/673) tracks its eventual breaking removal.
+`scripts/ci-mirror.sh` runs the Linux side of the Rust, Docs, and Python workflows in the feature combinations CI uses: format, clippy, the terminology and symbol gates, header parity and regeneration, every crate's tests in each gated feature set, the C smoke and header programs, schema generation, packaging checks, the book, and the Python lint, stub, and test lanes. Run it before you mark a larger implementation change ready for review, rather than assembling your own subset, because a hand assembled subset misses feature configurations. `cargo test --workspace`, for example, tests one configuration: Cargo unifies features across the workspace, so `powerio-cli` turns `gridfm` on in the facade and matrix crates for the whole build, a build without it is never checked, and nothing turns on the facade's `matrix` feature or the C ABI's `gridfm` feature. It builds powerio-capi with default features only, so the C ABI release-feature diagnostic tests are skipped, and it does not test each crate's opt-in features in isolation. CI runs separate commands to exercise each configuration it supports, minimal builds included. The deprecated C ABI `arrow` compatibility flag adds no code or tests. Legacy commands remain accepted in 0.11.x, but maintained source-build commands omit it; [#673](https://github.com/eigenergy/powerio/issues/673) tracks its eventual breaking removal.
 
-Point `POWERIO_JL` at a PowerIO.jl checkout to include the Julia binding suite against the freshly built library, or set `POWERIO_JL_OPTIONAL=1` to run without one.
+The script needs `cbindgen` for the header regeneration, and skips the wasm check, the semver check, and the book when `wasm32-unknown-unknown`, `cargo-semver-checks`, or `mdbook` is missing. It leaves to CI the MSRV build, `cargo deny`, Miri, the sanitizer and Go client builds, the macOS, Windows, and FreeBSD jobs, and the Julia binding, validation, PowSybl, and fuzz workflows. A PowerIO.jl checkout at `../PowerIO.jl`, or wherever `POWERIO_JL` points, adds the check that every C entry point is bound or exempted there; the script runs without one. To run the Julia tests themselves, see the Julia binding row below.
 
 The Python binding tests need a wheel built into a virtual environment. Build
 it from the repository root, where `pyproject.toml` lives:
@@ -78,8 +78,9 @@ bash evals/validation/run_rich_validation.sh
 ```
 
 `run_validation.sh` checks the classic transmission paths against
-PowerModels.jl, ExaPowerIO.jl, egret, and pandapower to
-writer matrix; `run_rich_validation.sh` covers fields outside the MATPOWER row
+PowerModels.jl, ExaPowerIO.jl, egret, pandapower, and PyPSA, the distribution
+fixtures against OpenDSS and the BMOPF schema, and runs the reader to writer
+conversion matrix; `run_rich_validation.sh` covers fields outside the MATPOWER row
 shape (branch terminal admittance, switches, current ratings, solution values,
 HVDC costs, load voltage models). GOC3 has its own `goc3-reference` CI job,
 which pins the GO-3 data model, C3DataUtilities, and the D1, D2, and D3 files
