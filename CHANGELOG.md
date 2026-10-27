@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Multiconductor IVR preparation (`build_mc_ac_opf_preparation`) now finds
+  its transformer start voltages with a sparse solve. The old dense solve
+  held a full row for every equation: about 24 MB and one second at 2,000
+  terminals, and most of a gigabyte near 10,000. The sparse solve stores a
+  few numbers per terminal and takes under a millisecond on the same 2,000
+  terminal case. The start values are unchanged (they agree with the old
+  solve to within 1e-12 on the IEEE 13 and 123 node feeders).
+- A two-terminal delta capacitor bank was already stamped at its full
+  rating (one coil, B = q / V^2) by the admittance builder since #707. A new
+  test pins that the IVR preparation stamps the same value, so the two agree.
+- Writing an unchanged OpenDSS project back out still copies every file that
+  was supplied with it under `source/`, including files the deck never read,
+  but now says so: a remark, `EMIT.DSS.PROJECT_COMPANION_KEPT`, names those
+  files.
 - The conversion matrix grades each cell by its worst finding: exact,
   lossless, restated (the target required a value and the writer supplied
   it), approximate, dropped, or failed. The PR comment shows that level, the

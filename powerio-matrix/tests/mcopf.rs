@@ -647,6 +647,50 @@ fn canonical_wye_capacitor_nameplate_matches_the_admittance_builder() {
     assert!((p.shunts[0].b[0][0] - 0.1).abs() < 1e-14);
 }
 
+/// #685: a two-terminal delta bank is one phase-to-phase coil at line-to-line
+/// voltage, so both consumers stamp B = q / V^2 (50 var at 230 V), not half.
+#[test]
+fn two_terminal_delta_capacitor_stamps_its_full_rating_in_both_consumers() {
+    let capacitor = powerio_dist::DistCapacitor::new(
+        "cap",
+        "load",
+        names(&["a", "n"]),
+        Configuration::Delta,
+        50.0,
+        230.0,
+    );
+    let siemens = 50.0 / (230.0 * 230.0);
+
+    let mut alone = MulticonductorNetwork::new();
+    alone
+        .buses_mut()
+        .push(DistBus::new("load", names(&["a", "n"])));
+    alone.capacitors_mut().push(capacitor.clone());
+    let system = powerio_matrix::calc_multiconductor_admittance_matrix(&alone).unwrap();
+    let b = system.susceptance();
+    for (i, j, sign) in [(0, 0, 1.0), (1, 1, 1.0), (0, 1, -1.0), (1, 0, -1.0)] {
+        let stamped = b.get(i, j).copied().unwrap_or(0.0);
+        assert!(
+            (stamped - sign * siemens).abs() < 1e-15,
+            "Y[{i},{j}] = {stamped}"
+        );
+    }
+
+    // Preparation stamps the same coil on the 230 V, 1 kVA base (Z_base 52.9).
+    let mut n = network();
+    n.capacitors_mut().push(capacitor);
+    let p = prepare(n);
+    let per_unit = siemens * 230.0 * 230.0 / 1000.0;
+    for (actual, want) in p.shunts[0]
+        .b
+        .iter()
+        .flatten()
+        .zip([per_unit, -per_unit, -per_unit, per_unit])
+    {
+        assert!((*actual - want).abs() < 1e-14, "{actual} vs {want}");
+    }
+}
+
 #[test]
 fn per_coil_bmopf_capacitors_enter_ivr_as_the_same_canonical_shunt() {
     let text = r#"{"bus":{"s":{"terminal_names":["a","b","c","n"],"perfectly_grounded_terminals":["n"]}},"voltage_source":{"grid":{"bus":"s","terminal_map":["a","b","c","n"],"v_magnitude":[230,230,230,0],"v_angle":[0,-2.0943951023931953,2.0943951023931953,0]}},"capacitor":{"c":{"bus":"s","terminal_map":["a","b","c","n"],"configuration":"WYE","q_rated":[13,25,7],"v_nom":230}}}"#;

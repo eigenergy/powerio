@@ -679,7 +679,9 @@ pub(crate) fn emit_value_text(
 /// writes a single file from a network value.
 /// An unchanged multi-file DSS project retains the paths and bytes of every
 /// acquired file, dependencies and companions alike, beneath `source/`;
-/// `case.dss` redirects to its entry file.
+/// `case.dss` redirects to its entry file. A remark
+/// (`EMIT.DSS.PROJECT_COMPANION_KEPT`) names the companions, the supplied
+/// files the deck never read.
 ///
 /// # Errors
 /// Unsupported electrical features, nonportable retained projects, or the
@@ -725,9 +727,11 @@ pub fn emit_with_options(
     let conv = emit_text_with_options(module, format, options)?;
     if format == DistTargetFormat::Dss
         && options.is_default_for(format)
-        && let Some(artifacts) = crate::dss::retained_project(module)?
+        && let Some(project) = crate::dss::retained_project(module)?
     {
-        return destination.__commit_artifacts(true, conv.fidelity, artifacts, conv.diagnostics);
+        let mut diagnostics = conv.diagnostics;
+        diagnostics.extend(project.diagnostics);
+        return destination.__commit_artifacts(true, conv.fidelity, project.artifacts, diagnostics);
     }
     match format {
         DistTargetFormat::Gridlabd | DistTargetFormat::GridlabdArras => {
