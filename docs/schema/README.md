@@ -47,7 +47,13 @@ objective terms gain `branch_switching_cost` the same way in 0.11.7. A version
 bump requires an incompatible change to an existing representation and an
 explicit release decision. Adding fields to a record is not automatically
 compatible: readers can reject unknown fields, so existing records retain
-their layout throughout the 0.11.x line.
+their layout throughout the 0.11.x line. The one field added so far is the
+optional `hvdc_treatment` of `powerio.DcPfInstance` and
+`powerio.AcPfInstance` in 0.11.7. A document without it reads as the earlier
+release read it, with HVDC lines left out (`ignore`). 0.11.7 writes the field
+only for `fixed_injection`, so an `ignore` instance keeps the earlier layout,
+and an earlier reader rejects a `fixed_injection` document as an unknown field
+rather than read it under a different HVDC treatment.
 
 `powerio::IR_VERSION` is the IR version a build writes and
 `powerio::IR_MIN_VERSION` the oldest it reads. Both remain 2 in 0.11.7.
@@ -70,6 +76,9 @@ It also extends monitor scopes and statements with kV-qualified selection and
 pre/post voltage bands while preserving previously accepted monitor records.
 The 0.11.7 snapshot adds `powerio.AcOtsInstance`, `powerio.AcOtsSolution`,
 their option definitions, and the `branch_switching_cost` objective term.
+The 0.11.7 snapshot adds the optional `hvdc_treatment` field to
+`DcPfInstance` and `AcPfInstance` and its `HvdcTreatment` definition
+(`fixed_injection` or `ignore`).
 
 The release name in the snapshot path does not create a new IR version.
 A later release without catalog changes can reuse that snapshot (0.11.2
@@ -77,7 +86,8 @@ reused 0.11.1). CI preserves existing definitions and document rules, with
 narrow checks for added format names and other constant-tagged alternatives
 (every alternative an earlier schema file states stays byte for byte the
 same, and every tag stays distinct), the distinctly tagged voltage-source
-and partial-transformer alternatives, and additive monitor fields and variants.
+and partial-transformer alternatives, additive monitor fields and variants,
+and the optional `hvdc_treatment` field of the power flow instance records.
 The monitor checks preserve existing property schemas and required fields and require distinct
 constant tags for added alternatives; they reject new restrictions and
 ambiguous variants. Every earlier published snapshot keeps its exact bytes.

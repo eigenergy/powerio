@@ -6965,11 +6965,17 @@ pub unsafe extern "C" fn pio_build_dc_opf_preparation(
                     )
                 })?;
             let units = opf_preparation_units(required_str(units, units_len, "units")?)?;
+            // ABI 7's bus view states demand, shunt conductance, and phase
+            // shift injection, and has no column for an HVDC injection. A
+            // preparation that carried one would hand C callers a fixed
+            // withdrawal they cannot reconstruct, so this entry point keeps
+            // HVDC lines out until the view can state them.
             let options = DcOpfAssemblyOptions::default()
                 .with_units(units)
                 .with_skip_zero_impedance(skip_zero_impedance)
                 .with_synthesize_unrated_limits(synthesize_unrated_limits)
-                .with_correct_angle_difference_bounds(correct_angle_difference_bounds);
+                .with_correct_angle_difference_bounds(correct_angle_difference_bounds)
+                .with_hvdc_treatment(powerio_tx::HvdcTreatment::Ignore);
             build_dc_opf_preparation(instance, &options)
                 .map(PioDcOpfPreparation::new_raw)
                 .map_err(|failure| error_from_matrix(&failure))
@@ -20861,6 +20867,36 @@ mod tests {
                 view_text(pio_multiconductor_network_source_format(network)),
                 "cim-dist"
             );
+            pio_multiconductor_network_release(network);
+            pio_value_release(value);
+            pio_module_release(module);
+        }
+    }
+
+    #[test]
+    fn distribution_cim_reads_the_transformer_tank_form() {
+        unsafe {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/data/dist/cim/tank_feeder.xml");
+            let path = path.to_string_lossy();
+            let format = b"cim-dist";
+            let mut error = std::ptr::null_mut();
+            let source = pio_source_open(path.as_ptr().cast(), path.len(), &mut error);
+            assert!(!source.is_null(), "{}", error_text(error));
+            let module = pio_parse(source, format.as_ptr().cast(), format.len(), &mut error);
+            pio_source_release(source);
+            assert!(!module.is_null(), "{}", error_text(error));
+            let value = pio_module_value(module);
+            let network = pio_value_multiconductor_network(value, &mut error);
+            assert!(!network.is_null(), "{}", error_text(error));
+            let mut counts = std::mem::MaybeUninit::<PioMulticonductorNetworkCountsView>::uninit();
+            assert!(pio_multiconductor_network_counts(
+                network,
+                counts.as_mut_ptr(),
+                &mut error,
+            ));
+            // Eight tanks and one PowerTransformerEnd transformer.
+            assert_eq!(counts.assume_init().transformers, 9);
             pio_multiconductor_network_release(network);
             pio_value_release(value);
             pio_module_release(module);
