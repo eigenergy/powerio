@@ -195,7 +195,7 @@ fn profile_tables_are_source_only_unless_a_profile_was_applied() {
     let db = legacy("");
     let net = read_balanced_snapshot_at(&db, "daily", Some(6.)).unwrap();
     assert!(source::profile_applied(&net));
-    assert!(reported(&db, true).is_empty());
+    assert_eq!(reported(&db, true), Vec::<String>::new());
     // No load references a profile: the reader never reads the tables.
     let db = legacy("UPDATE Load SET DayOpSer_ID=NULL");
     let net = read_balanced_snapshot_at(&db, "static", Some(6.)).unwrap();
