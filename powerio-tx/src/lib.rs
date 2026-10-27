@@ -137,7 +137,7 @@ pub use geo::{
     GeoLayer, GeoMeta, GeoParsed, GeoTarget, Location, apply_substation_points,
     to_geo_layer_from_aux_substations, to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
 };
-pub use hvdc::{HvdcInjections, HvdcTerminalInjection, HvdcTreatment};
+pub use hvdc::{HvdcInjections, HvdcTerminalInjection, HvdcTerminalPowers, HvdcTreatment};
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
 pub use islands::{Island, IslandPartition, IslandReferencePolicy, IslandReferenceReport};
 pub use merge::{
