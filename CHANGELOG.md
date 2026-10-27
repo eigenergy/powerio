@@ -600,7 +600,6 @@
   off-diagonal line matrix entry that differs from its input by at most
   1e-10 of the matrix's largest diagonal entry, so a line whose zero- and
   positive-sequence values are nearly equal no longer fails on rounding.
-  Lines with `Line.fr` other than 1 are still refused.
 - The balanced SINCAL reader now reads a line whose `Line.fr` is not 1. It
   applies `fr` as the multiconductor reader does: the line's current limit and
   thermal rating are `Ith * ParSys * fr`, and its impedance is unchanged.
@@ -659,10 +658,11 @@
   findings in one Source column. The diagonal now checks that a parsed file
   writes back byte for byte. The expected results live in
   `powerio-cli/tests/conversion_matrix.baseline`, one readable line per
-  cell, and `POWERIO_MATRIX_BLESS=1` regenerates it. Four cells show red
-  because the model changes with no finding: PSLF to PSS/E RAW and RAWX
-  (DC line power limits and setpoints) and IEEE CDF to PSS/E RAW and RAWX
-  (the case date and the area type).
+  cell, and `POWERIO_MATRIX_BLESS=1` regenerates it. No cell changes the
+  model without a finding: PSLF to PSS/E RAW and RAWX (DC line power limits
+  and setpoints) and IEEE CDF to PSS/E RAW and RAWX (the case date and the
+  area type) did when the grading landed, and PSS/E output now reports them
+  (see the PSS/E section above).
 - Pull requests now build and smoke-test one Linux wheel (x86_64) and the
   sdist. The five-platform wheel matrix runs on pushes to main and on
   releases, and the browser converter suite on pushes to main, the commits
