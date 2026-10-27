@@ -25,11 +25,14 @@ pub enum IslandReferencePolicy {
     /// [`BalancedNetwork::assign_island_references`] changes nothing.
     #[default]
     Stated,
-    /// One reference per island. An island that states none takes the bus of
-    /// its in-service generator with the largest `pmax`; an island stating
-    /// several keeps the one with the most generation and demotes the
-    /// others; an island with no in-service generator cannot be solved and is
-    /// de-energized.
+    /// One reference per island, on a bus that hosts an in-service
+    /// generator. A stated reference that hosts none is demoted first. An
+    /// island left with no reference takes the bus of its in-service
+    /// generator with the largest `pmax` (the smallest bus id breaking ties);
+    /// an island left with several keeps the one with the most generation and
+    /// demotes the others; an island with no in-service generator cannot be
+    /// solved and is de-energized. Normalization under this policy picks the
+    /// same reference buses.
     PerIsland,
 }
 
@@ -57,21 +60,35 @@ impl Island {
     }
 
     /// The one reference bus [`IslandReferencePolicy::PerIsland`] gives this
-    /// island, without changing the network: its stated reference when it
-    /// states one, the bus of its largest `pmax` in-service generator when it
-    /// states none, and the stated reference hosting the most in-service
-    /// `pmax` when it states several (the smallest id breaking ties). `None`
-    /// when the island states no reference and no in-service generator
-    /// supplies it. `generators` is the network's generator table.
+    /// island, without changing the network. Only a stated reference that
+    /// hosts an in-service generator counts: the island keeps it when it
+    /// states one, takes the bus of its largest `pmax` in-service generator
+    /// (the smallest bus id breaking ties) when it states none, and keeps the
+    /// one hosting the most in-service `pmax` (the smallest id breaking ties)
+    /// when it states several. `None` when no in-service generator supplies
+    /// the island, which that policy de-energizes. `generators` is the
+    /// network's generator table.
     #[must_use]
     pub fn calc_reference_choice(&self, generators: &[Generator]) -> Option<BusId> {
-        match self.references.as_slice() {
+        match self.supplied_references(generators).as_slice() {
             [bus] => Some(*bus),
             [] => largest_generator_bus(generators, &self.generators),
-            references => Some(
-                kept_reference(references, generators, &self.generators).unwrap_or(references[0]),
-            ),
+            references => kept_reference(references, generators, &self.generators),
         }
+    }
+
+    /// The stated references that host one of the island's in-service
+    /// generators, in ascending id order.
+    fn supplied_references(&self, generators: &[Generator]) -> Vec<BusId> {
+        self.references
+            .iter()
+            .copied()
+            .filter(|&bus| {
+                self.generators
+                    .iter()
+                    .any(|&row| generators[row].bus == bus)
+            })
+            .collect()
     }
 }
 
@@ -104,7 +121,8 @@ pub struct IslandReferenceReport {
     pub partition: IslandPartition,
     /// Buses made the reference of their island.
     pub designated: Vec<BusId>,
-    /// Reference buses demoted because their island kept another.
+    /// Reference buses demoted, because they host no in-service generator
+    /// or because their island kept another, in ascending id order.
     pub demoted: Vec<BusId>,
     /// Buses of the islands that were de-energized, now typed isolated.
     pub de_energized: Vec<BusId>,
@@ -123,14 +141,15 @@ fn pmax_key(generator: &Generator) -> f64 {
 }
 
 /// The bus of the in-service generator with the largest `pmax` among `rows`,
-/// the smallest row breaking ties.
+/// the smallest bus id breaking ties, so the choice does not depend on row
+/// order.
 pub(crate) fn largest_generator_bus(generators: &[Generator], rows: &[usize]) -> Option<BusId> {
     rows.iter()
         .copied()
         .max_by(|&a, &b| {
             pmax_key(&generators[a])
                 .total_cmp(&pmax_key(&generators[b]))
-                .then(b.cmp(&a))
+                .then(generators[b].bus.cmp(&generators[a].bus))
         })
         .map(|row| generators[row].bus)
 }
@@ -298,14 +317,16 @@ impl BalancedNetwork {
     /// Give every island one reference bus under `policy`, returning what
     /// changed.
     ///
-    /// Under [`IslandReferencePolicy::PerIsland`]:
+    /// Under [`IslandReferencePolicy::PerIsland`], in a supplied island:
     ///
-    /// - An island that states one reference keeps it.
-    /// - An island that states none and holds an in-service generator gets
-    ///   the bus of its largest `pmax` generator as its reference.
-    /// - An island that states several keeps the one hosting the most
-    ///   in-service `pmax` (the smallest id breaking ties) and demotes the
-    ///   others to PV when they host an in-service generator, else PQ.
+    /// - A stated reference that hosts no in-service generator cannot balance
+    ///   the island and is demoted to PQ first. What follows counts only the
+    ///   references that remain.
+    /// - An island with one reference keeps it.
+    /// - An island with none gets the bus of its largest `pmax` in-service
+    ///   generator (the smallest bus id breaking ties) as its reference.
+    /// - An island with several keeps the one hosting the most in-service
+    ///   `pmax` (the smallest id breaking ties) and demotes the others to PV.
     /// - An island with no in-service generator has no source to balance it,
     ///   so it is de-energized: its buses are typed isolated, and the
     ///   in-service loads, shunts, static var compensators, storage, and every
@@ -313,7 +334,8 @@ impl BalancedNetwork {
     ///   winding transformer loses the windings on those buses and goes out
     ///   whole only when fewer than two windings remain.
     ///
-    /// Each change records one finding. [`IslandReferencePolicy::Stated`]
+    /// Each change records one finding. Normalization under the same policy
+    /// picks the same reference buses. [`IslandReferencePolicy::Stated`]
     /// changes nothing and reports the partition.
     #[allow(clippy::too_many_lines)] // one stanza per island outcome
     pub fn assign_island_references(
@@ -332,12 +354,6 @@ impl BalancedNetwork {
         let mut demoted: Vec<(BusId, BusType)> = Vec::new();
         let mut dead: BTreeSet<BusId> = BTreeSet::new();
         let mut diagnostics = Vec::new();
-        let hosts_generator: BTreeSet<BusId> = self
-            .generators()
-            .iter()
-            .filter(|generator| generator.in_service)
-            .map(|generator| generator.bus)
-            .collect();
         for island in &partition.islands {
             if !island.is_supplied() {
                 let load: f64 = self
@@ -355,28 +371,45 @@ impl BalancedNetwork {
                 dead.extend(island.buses.iter().copied());
                 continue;
             }
-            match island.references.as_slice() {
+            let supplied = island.supplied_references(self.generators());
+            let unsupplied: Vec<BusId> = island
+                .references
+                .iter()
+                .copied()
+                .filter(|bus| !supplied.contains(bus))
+                .collect();
+            if !unsupplied.is_empty() {
+                diagnostics.push(Diagnostic::of(
+                    &codes::CANONICALIZE_ISLAND_REFERENCE_DEMOTED,
+                    format!(
+                        "the island of {} bus(es) ({}) states reference bus(es) {} that host no \
+                         in-service generator and cannot balance it; they were demoted to PQ",
+                        island.buses.len(),
+                        bus_list(&island.buses),
+                        bus_list(&unsupplied)
+                    ),
+                ));
+                demoted.extend(unsupplied.iter().map(|&bus| (bus, BusType::Pq)));
+            }
+            let Some(kept) = island.calc_reference_choice(self.generators()) else {
+                continue;
+            };
+            match supplied.as_slice() {
                 [_] => {}
                 [] => {
-                    let Some(bus) = island.calc_reference_choice(self.generators()) else {
-                        continue;
-                    };
                     diagnostics.push(Diagnostic::of(
                         &codes::CANONICALIZE_ISLAND_REFERENCE_DESIGNATED,
                         format!(
-                            "the island of {} bus(es) ({}) states no reference bus; bus {bus} \
-                             hosts its largest pmax in-service generator and was designated the \
-                             reference",
+                            "the island of {} bus(es) ({}) states no reference bus that hosts an \
+                             in-service generator; bus {kept} hosts its largest pmax in-service \
+                             generator and was designated the reference",
                             island.buses.len(),
                             bus_list(&island.buses)
                         ),
                     ));
-                    designated.push(bus);
+                    designated.push(kept);
                 }
                 references => {
-                    let kept = island
-                        .calc_reference_choice(self.generators())
-                        .unwrap_or(references[0]);
                     let others: Vec<BusId> = references
                         .iter()
                         .copied()
@@ -385,22 +418,15 @@ impl BalancedNetwork {
                     diagnostics.push(Diagnostic::of(
                         &codes::CANONICALIZE_ISLAND_REFERENCE_DEMOTED,
                         format!(
-                            "the island of {} bus(es) states {} reference buses; bus {kept} \
-                             hosts the most generation and stays the reference, and bus(es) {} \
-                             were demoted",
+                            "the island of {} bus(es) states {} reference buses that host \
+                             generation; bus {kept} hosts the most and stays the reference, and \
+                             bus(es) {} were demoted to PV",
                             island.buses.len(),
                             references.len(),
                             bus_list(&others)
                         ),
                     ));
-                    for bus in others {
-                        let kind = if hosts_generator.contains(&bus) {
-                            BusType::Pv
-                        } else {
-                            BusType::Pq
-                        };
-                        demoted.push((bus, kind));
-                    }
+                    demoted.extend(others.into_iter().map(|bus| (bus, BusType::Pv)));
                 }
             }
         }
@@ -420,10 +446,12 @@ impl BalancedNetwork {
             self.de_energize_buses(&dead);
         }
 
+        let mut demoted: Vec<BusId> = demoted.into_iter().map(|(bus, _)| bus).collect();
+        demoted.sort_unstable();
         IslandReferenceReport {
             partition: self.calc_islands(),
             designated,
-            demoted: demoted.into_iter().map(|(bus, _)| bus).collect(),
+            demoted,
             de_energized: dead.into_iter().collect(),
             diagnostics,
         }
@@ -812,6 +840,44 @@ mod tests {
 
     #[test]
     fn of_two_references_in_one_island_the_larger_source_stays() {
+        let mut net = three_references();
+        let report = net.assign_island_references(IslandReferencePolicy::PerIsland);
+        assert_eq!(report.demoted, [BusId(1), BusId(3)]);
+        assert_eq!(kind(&net, 2), BusType::Ref);
+        assert_eq!(kind(&net, 1), BusType::Pv, "it hosts a generator");
+        assert_eq!(kind(&net, 3), BusType::Pq);
+        // Bus 3 hosts no generator and goes first; then bus 1 yields to bus 2.
+        assert_eq!(
+            codes(&report.diagnostics),
+            [
+                "CANONICALIZE.ISLAND.REFERENCE_DEMOTED",
+                "CANONICALIZE.ISLAND.REFERENCE_DEMOTED"
+            ]
+        );
+    }
+
+    /// Buses 1-2-3-4 in a line, the reference on bus 1 with no generator,
+    /// and generators of 50 MW on bus 3 and 120 MW on bus 4.
+    fn lone_generator_less_reference() -> BalancedNetwork {
+        let mut buses: Vec<Bus> = (1..=4)
+            .map(|id| Bus::new(BusId(id), BusType::Pq, 230.0))
+            .collect();
+        buses[0].kind = BusType::Ref;
+        let line = |from, to| Branch::new(BusId(from), BusId(to), 0.01, 0.1);
+        let mut net = BalancedNetwork::in_memory(
+            "generator-less-reference",
+            100.0,
+            buses,
+            vec![line(1, 2), line(2, 3), line(3, 4)],
+        );
+        net.generators_mut()
+            .extend([generator(3, 50.0), generator(4, 120.0)]);
+        net.loads_mut().push(Load::new(BusId(2), 60.0, 0.0));
+        net
+    }
+
+    /// Buses 1, 2, and 3 all stated references, generators on buses 1 and 2.
+    fn three_references() -> BalancedNetwork {
         let buses = (1..=3)
             .map(|id| Bus::new(BusId(id), BusType::Ref, 230.0))
             .collect();
@@ -820,15 +886,112 @@ mod tests {
             BalancedNetwork::in_memory("refs", 100.0, buses, vec![line(1, 2), line(2, 3)]);
         net.generators_mut()
             .extend([generator(1, 100.0), generator(2, 300.0)]);
+        net
+    }
+
+    #[test]
+    fn a_lone_generator_less_reference_yields_to_the_largest_generator() {
+        let mut net = lone_generator_less_reference();
+        let island = &net.calc_islands().islands[0];
+        assert_eq!(island.references, [BusId(1)]);
+        assert_eq!(
+            island.calc_reference_choice(net.generators()),
+            Some(BusId(4))
+        );
+
         let report = net.assign_island_references(IslandReferencePolicy::PerIsland);
-        assert_eq!(report.demoted, [BusId(1), BusId(3)]);
-        assert_eq!(kind(&net, 2), BusType::Ref);
-        assert_eq!(kind(&net, 1), BusType::Pv, "it hosts a generator");
-        assert_eq!(kind(&net, 3), BusType::Pq);
+        assert_eq!(report.demoted, [BusId(1)]);
+        assert_eq!(report.designated, [BusId(4)]);
+        assert_eq!(report.de_energized, []);
+        assert_eq!(kind(&net, 1), BusType::Pq);
+        assert_eq!(kind(&net, 4), BusType::Ref);
+        assert_eq!(
+            kind(&net, 3),
+            BusType::Pq,
+            "the smaller generator stays put"
+        );
         assert_eq!(
             codes(&report.diagnostics),
-            ["CANONICALIZE.ISLAND.REFERENCE_DEMOTED"]
+            [
+                "CANONICALIZE.ISLAND.REFERENCE_DEMOTED",
+                "CANONICALIZE.ISLAND.REFERENCE_DESIGNATED"
+            ]
         );
+        assert_eq!(report.partition.islands[0].references, [BusId(4)]);
+        net.validate().unwrap();
+        let again = net.assign_island_references(IslandReferencePolicy::PerIsland);
+        assert_eq!(again.diagnostics.as_slice(), []);
+
+        // Stated keeps the source's designation.
+        let mut stated = lone_generator_less_reference();
+        let report = stated.assign_island_references(IslandReferencePolicy::Stated);
+        assert_eq!(report.diagnostics.as_slice(), []);
+        assert_eq!(kind(&stated, 1), BusType::Ref);
+    }
+
+    #[test]
+    fn equal_generators_go_to_the_smallest_bus_id() {
+        let mut net = lone_generator_less_reference();
+        // A second 120 MW generator, on a smaller bus but a later row.
+        net.generators_mut().push(generator(2, 120.0));
+        let report = net.assign_island_references(IslandReferencePolicy::PerIsland);
+        assert_eq!(report.designated, [BusId(2)]);
+    }
+
+    /// The raw assignment and normalization under the per island policy
+    /// pick the same reference buses. Closed switches are kept so that bus
+    /// ids survive normalization.
+    #[test]
+    fn raw_and_normalized_per_island_references_agree() {
+        let references = |network: &BalancedNetwork| -> Vec<BusId> {
+            let mut ids: Vec<BusId> = network
+                .buses()
+                .iter()
+                .filter(|bus| bus.kind == BusType::Ref)
+                .map(|bus| bus.id)
+                .collect();
+            ids.sort_unstable();
+            ids
+        };
+        let settings = NormalizeSettings::default()
+            .with_island_references(IslandReferencePolicy::PerIsland)
+            .with_closed_switches(ClosedSwitchPolicy::Keep);
+        let fixtures = [
+            ("three islands", three_islands(), vec![1, 5]),
+            (
+                "dead tertiary",
+                line_with_a_tertiary(BusType::Isolated),
+                vec![1],
+            ),
+            ("live tertiary", line_with_a_tertiary(BusType::Pq), vec![1]),
+            (
+                "generator-less reference",
+                lone_generator_less_reference(),
+                vec![4],
+            ),
+            ("three references", three_references(), vec![2]),
+        ];
+        for (name, net, expected) in fixtures {
+            let expected: Vec<BusId> = expected.into_iter().map(BusId).collect();
+            let (normalized, _) = net.to_normalized_with(&settings).unwrap();
+            assert_eq!(
+                references(&normalized.network),
+                expected,
+                "{name}: normalized"
+            );
+            let mut raw = net.clone();
+            raw.assign_island_references(IslandReferencePolicy::PerIsland);
+            assert_eq!(references(&raw), expected, "{name}: raw");
+            let choices: Vec<BusId> = net
+                .calc_islands()
+                .islands
+                .iter()
+                .filter_map(|island| island.calc_reference_choice(net.generators()))
+                .collect();
+            let mut choices = choices;
+            choices.sort_unstable();
+            assert_eq!(choices, expected, "{name}: calc_reference_choice");
+        }
     }
 
     #[test]

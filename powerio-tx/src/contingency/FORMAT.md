@@ -459,13 +459,39 @@ file `END` are written after the `END` the writer states.
 
 ### kV-qualified monitor statements
 
-Subsystem branch and tie monitors accept an optional inclusive `KVRANGE lo hi`. For branches, both terminals must be within the band; for ties, the terminal inside the subsystem must be within the band. Bounds must be finite and ascending. Reversed or non-finite bounds remain retained source text.
+Subsystem branch and tie monitors accept an optional inclusive `KVRANGE lo hi`, TARA's spelling, or `IN KVRANGE lo hi`, the spelling the PSS(R)E 35.2.0 release notes give for `MONITOR BRANCHES` and `TIES` ([copy](https://pdfcoffee.com/psse-35-release-notes-pdf-free.html)); the two read the same and the writer states `KVRANGE lo hi`. For branches, both terminals must be within the band; for ties, the terminal inside the subsystem must be within the band. Bounds must be finite and ascending. Reversed or non-finite bounds remain retained source text.
 
 A voltage scope may qualify a subsystem by base kV (`SUBSYSTEM name KV x`). The selected buses are filtered using the existing `KV_TOLERANCE`.
 
 ### Four-value voltage ranges
 
-`MONITOR VOLTAGE RANGE scope lo hi pre_min pre_max` states post-contingency low/high first and pre-contingency low/high second. The existing two-value form remains unchanged; invalid bands stay as retained source text. The writer preserves the form, and resolution exposes the pre-contingency band.
+`MONITOR VOLTAGE RANGE scope lo hi pre_min pre_max` is read as the post-contingency low and high first and the pre-contingency low and high second. The existing two-value form remains unchanged; invalid bands stay as retained source text. The writer preserves the form, and resolution exposes the pre-contingency band.
+
+No public source states that order, so the reader reports it. The first
+four-value range in a file earns one `READ.MON.VOLTAGE_BAND_ORDER_ASSUMED`
+remark naming its line and the order every four-value range in the file was
+read in. The sources checked for issue #554:
+
+- The PSS(R)E 34.2 Program Operation Manual, section 8.1.3, "Voltage
+  Monitoring Records" ([copy](https://pdfcoffee.com/program-operation-manual-del-pss-pdf-free.html)),
+  states `[MONITOR] VOLTAGE RANGE scope r [r]`, where "the first r value is the
+  lower bound of the per unit voltage band and the optional second r value is
+  the upper bound". PSS/E states no four-value form.
+- The PSS(R)E 35.2.0 release notes
+  ([copy](https://pdfcoffee.com/psse-35-release-notes-pdf-free.html)) add an
+  optional `KV r1` or `KVRANGE r1 r2` clause to the subsystem of every voltage
+  monitoring record, which is the `SUBSYSTEM name KV x` scope this reader
+  accepts, and an `IN KVRANGE r1 r2` clause to `MONITOR BRANCHES` and `TIES`.
+  They add no voltage values.
+- PowerGEM's TARA `.mon` grammar
+  ([`mon.tmLanguage.json`](https://github.com/PowerGem/VSCodeExtension/blob/master/syntaxes/mon.tmLanguage.json))
+  accepts two optional values after a voltage band, and a bare `KVRANGE lo hi`
+  after the subsystem of `BRANCHES IN` and `TIES FROM`, but names neither pair.
+- Every public `.mon` file found states two values.
+
+The order read follows the TARA study files issue #554 was written from, in
+which the first pair (0.90 to 1.05) is the wider one, as post-contingency
+limits usually are. A source that labels the pairs settles it.
 
 ```text
 /PSS(R)E 34
@@ -478,8 +504,8 @@ END
 
 | Statement | Synonyms | Reads as |
 | --- | --- | --- |
-| `MONITOR BRANCHES IN SUBSYSTEM name [3WLOWVOLTAGE] [KVRANGE lo hi]` | `BRANCHES`, `LINES`; `IN`, `FROM` | `BranchesInSubsystem { subsystem, low_voltage_3w }`, or with `KVRANGE` `BranchesInSubsystemKvRange { subsystem, low_voltage_3w, kv_range }` |
-| `MONITOR TIES FROM SUBSYSTEM name [KVRANGE lo hi]` | `IN`, `FROM` | `TiesFromSubsystem { subsystem }`, or with `KVRANGE` `TiesFromSubsystemKvRange { subsystem, kv_range }` |
+| `MONITOR BRANCHES IN SUBSYSTEM name [3WLOWVOLTAGE] [[IN] KVRANGE lo hi]` | `BRANCHES`, `LINES`; `IN`, `FROM` | `BranchesInSubsystem { subsystem, low_voltage_3w }`, or with `KVRANGE` `BranchesInSubsystemKvRange { subsystem, low_voltage_3w, kv_range }` |
+| `MONITOR TIES FROM SUBSYSTEM name [[IN] KVRANGE lo hi]` | `IN`, `FROM` | `TiesFromSubsystem { subsystem }`, or with `KVRANGE` `TiesFromSubsystemKvRange { subsystem, kv_range }` |
 | `MONITOR BRANCHES` ... `END`, holding `i j [ckt]` or `[BRANCH] FROM BUS i TO BUS j [CIRCUIT c]` | `BRANCHES`, `LINES`; `LINE` | `Branches(Vec<BranchRef>)` |
 | `MONITOR BRANCH FROM BUS i TO BUS j [CIRCUIT c]` | `LINE`; `BUS` optional; `CKT` | `Branches` holding that one branch |
 | `MONITOR INTERFACE name [RATING x [MW]]` ... `END` | | `Interface { name, rating_mw, branches }` |
