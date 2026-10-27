@@ -14,7 +14,11 @@ use crate::geo::{GeoApplyTarget, apply_geo_features};
 use crate::{CoordinateSpace, ElementKey, GeoApplyReport, GeoFeature, GeoGeometry, GeoLayer};
 use powerio_dist::MulticonductorNetwork;
 
-/// Transform a multiconductor network's coordinates to a geographic layer.
+/// Transform legacy bus drawing positions and line routes to a geographic layer.
+/// Component geography (`component_locations`) is a separate typed table:
+/// partial axes, unknown datums and arbitrary device attachments cannot be
+/// expressed by this legacy layer. Use [`to_dist_geo_layer_report`] when
+/// extracting a network that may contain that table.
 #[must_use]
 pub fn to_dist_geo_layer(net: &MulticonductorNetwork) -> GeoLayer {
     let mut features = Vec::new();
@@ -64,6 +68,23 @@ pub fn to_dist_geo_layer(net: &MulticonductorNetwork) -> GeoLayer {
         kind: meta.and_then(|geo| geo.kind),
         features,
     }
+}
+
+/// Extract the legacy layer and report component geography it cannot express.
+#[must_use]
+pub fn to_dist_geo_layer_report(net: &MulticonductorNetwork) -> (GeoLayer, Vec<crate::Diagnostic>) {
+    let diagnostics = if net.component_locations().is_empty() {
+        Vec::new()
+    } else {
+        vec![crate::Diagnostic::of(
+            &powerio_dist::diagnostics::codes::EMIT_DIST_COMPONENT_COORDINATES_DROPPED,
+            format!(
+                "{} component geographic point(s) cannot be expressed by the legacy GeoLayer; partial axes, datum and device identities remain in the typed network",
+                net.component_locations().len()
+            ),
+        )]
+    };
+    (to_dist_geo_layer(net), diagnostics)
 }
 
 /// Apply a [`GeoLayer`] onto a multiconductor network: matched bus points

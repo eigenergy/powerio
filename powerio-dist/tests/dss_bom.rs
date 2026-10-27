@@ -15,7 +15,7 @@ fn byte_order_marks_are_retained_and_never_reach_the_reader() {
     .unwrap();
     let master_text = format!(
         "\u{feff}clear\nnew circuit.c basekv=12.47 bus1=src\nredirect {}\n",
-        linecodes.display()
+        linecodes.file_name().unwrap().to_str().unwrap()
     );
     let master = tmp.path().join("master.dss");
     std::fs::write(&master, &master_text).unwrap();
@@ -29,7 +29,11 @@ fn byte_order_marks_are_retained_and_never_reach_the_reader() {
     );
     // The linecode from the redirected file parsed: its own mark was skipped
     // by the decode slice, never tokenized into the first command word.
-    assert!(net.line_codes().iter().any(|lc| lc.name == "lc1"));
+    assert!(
+        net.untyped_objects()
+            .iter()
+            .any(|lc| lc.class == "linecode" && lc.name == "lc1")
+    );
     let output = net.emit(powerio_dist::DistTargetFormat::Dss);
     assert_eq!(output.text, "Redirect \"source/master.dss\"\n");
     let retained = output

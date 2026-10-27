@@ -96,8 +96,10 @@ jobs:
       with:
         toolchain: ${{ steps.msrv.outputs.version }}
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+    # rust-toolchain.toml names stable and outranks the default the action
+    # sets, so name the minimum toolchain on the command line.
     - name: Check the publishable crates on the minimum toolchain
-      run: cargo check --locked --workspace --exclude powerio-py --exclude powerio-capi
+      run: cargo +${{ steps.msrv.outputs.version }} check --locked --workspace --exclude powerio-py --exclude powerio-capi
 
   # A RUSTSEC advisory against the dependency graph must fail its own job
   # rather than hide inside a build. deny.toml records the one accepted

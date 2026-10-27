@@ -16,7 +16,15 @@ pub fn capabilities() -> String {
                 "label": entry.label,
                 "family": entry.family,
                 "canRead": entry.can_read,
-                "canEmit": entry.format.can_emit && entry.format.token != "bmopf-json",
+                // The converter offers no GridLAB-D target: an ordinary OpenDSS
+                // feeder states no explicit conductor and ground interpretation
+                // for it, so the bulk targets stay as they were. The catalog
+                // still lists both profiles for reading and family detection.
+                "canEmit": entry.format.can_emit
+                    && !matches!(
+                        entry.format.token,
+                        "bmopf-json" | "gridlabd" | "gridlabd-arras"
+                    ),
                 "isDirectory": entry.format.is_directory,
                 "extension": entry.format.extension,
                 "requiresValueType": (entry.format.token == "goc3-json")
@@ -265,6 +273,22 @@ mod tests {
                 .iter()
                 .find(|format| format["token"] == token)
                 .unwrap();
+            assert_eq!(format["canRead"], true);
+            assert_eq!(format["canEmit"], false);
+        }
+    }
+
+    #[test]
+    fn gridlabd_profiles_are_listed_for_reading_but_not_offered_as_targets() {
+        let catalog: Value = serde_json::from_str(&capabilities()).unwrap();
+        for token in ["gridlabd", "gridlabd-arras"] {
+            let format = catalog["formats"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|format| format["token"] == token)
+                .unwrap();
+            assert_eq!(format["family"], "distribution");
             assert_eq!(format["canRead"], true);
             assert_eq!(format["canEmit"], false);
         }

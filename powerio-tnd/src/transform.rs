@@ -210,6 +210,12 @@ pub fn to_balanced_network_report(
     check_switches(net, &mut report);
     check_transformers(net, &mut report);
     check_untyped_objects(net, &mut report);
+    if !net.component_locations().is_empty() {
+        report.diagnostics.push(Diagnostic::of(
+            &codes::TRANSFORM_MULTI_TO_BALANCED_COMPONENT_COORDINATES_DROPPED,
+            format!("{} component geographic point(s) are omitted by this balanced projection; the original network retains them", net.component_locations().len()),
+        ));
+    }
     report
 }
 
@@ -2154,6 +2160,13 @@ fn classify_transformer<'net>(
 
 fn check_untyped_objects(net: &MulticonductorNetwork, report: &mut MulticonductorToBalancedReport) {
     for (i, obj) in net.untyped_objects().iter().enumerate() {
+        if obj.class.eq_ignore_ascii_case("linecode") {
+            report.diagnostics.push(Diagnostic::of(
+                &codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_OBJECT,
+                format!("linecode {} source definition is omitted; typed line matrices supply the electrical data", obj.name),
+            ).with_severity(DiagnosticSeverity::Remark).with_value_target(format!("/untyped/{i}")));
+            continue;
+        }
         report.diagnostics.push(
             Diagnostic::of(
                 &codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_OBJECT,

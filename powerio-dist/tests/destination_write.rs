@@ -88,3 +88,53 @@ fn a_memory_dss_emission_returns_the_inventory() {
     );
     assert!(artifacts.len() >= 2, "sidecar rides the inventory");
 }
+
+#[test]
+fn a_retained_dss_project_replays_dependencies_and_companions() {
+    use std::sync::Arc;
+    let files: [(&str, &[u8]); 3] = [
+        (
+            "one/Master.dss",
+            b"Clear\nNew Circuit.c basekv=12.47 bus1=source\nRedirect loads.inc\n",
+        ),
+        (
+            "one/loads.inc",
+            b"New Load.ld bus1=source phases=3 kv=12.47 kw=10 kvar=2\n",
+        ),
+        ("one/notes.asset", b"opaque companion bytes\x00\xff"),
+    ];
+    let source = powerio_core::Source::from_memory_tree(
+        "project",
+        files.iter().map(|(name, bytes)| {
+            (
+                powerio_core::ArtifactPath::new(*name).unwrap(),
+                Arc::<[u8]>::from(*bytes),
+            )
+        }),
+        Some(powerio_core::ArtifactPath::new("one/Master.dss").unwrap()),
+    )
+    .unwrap()
+    .with_format(powerio_core::FormatId::new("dss").unwrap());
+    let module = powerio_dist::parse(source).expect("project parses");
+    let result = powerio_dist::emit(
+        &module,
+        DistTargetFormat::Dss,
+        Destination::memory("out").unwrap(),
+    )
+    .expect("retained project emits");
+    let EmittedOutput::Memory { artifacts } = result.output() else {
+        panic!("memory destination returns memory output");
+    };
+    for (name, bytes) in files {
+        let artifact = artifacts
+            .iter()
+            .find(|artifact| artifact.name().as_str() == format!("out/source/{name}"))
+            .unwrap_or_else(|| panic!("{name} is missing from the replay"));
+        assert_eq!(artifact.bytes(), bytes, "{name}");
+    }
+    assert!(
+        artifacts
+            .iter()
+            .any(|artifact| artifact.name().as_str() == "out/case.dss")
+    );
+}
