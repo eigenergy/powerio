@@ -319,6 +319,40 @@ fn transformer_reactances_follow_opendss_edit_boundaries() {
 }
 
 #[test]
+fn three_winding_zero_leakage_pairs_survive_a_typed_edit_through_xscarray() {
+    // The reader raises a scalar zero xhl, xht or xlt to the OpenDSS defaults
+    // (7, 35 and 30 percent), so a zero pair must go out in the array form.
+    let source =
+        "New Circuit.test basekv=115\nNew Transformer.t phases=3 windings=3 xscarray=[8 9 6]";
+    for leakage in [
+        [0.0, 0.0, 1.0],
+        [0.0, 5.0, 6.0],
+        [4.0, 0.0, 6.0],
+        [4.0, 5.0, 0.0],
+    ] {
+        let mut parsed = parse_dss_str(source);
+        parsed.transformers_mut()[0].xsc_pct = leakage.to_vec();
+        let emitted = emit_dss(&parsed);
+        assert!(
+            emitted.text.contains("xscarray=(") && !emitted.text.contains("xhl="),
+            "{leakage:?}: {}",
+            emitted.text
+        );
+        let restored = parse_dss_str(&emitted.text);
+        assert_eq!(restored.transformers()[0].xsc_pct, leakage, "{leakage:?}");
+    }
+    // Without a zero pair the scalar spelling is unchanged.
+    let mut parsed = parse_dss_str(source);
+    parsed.transformers_mut()[0].xsc_pct = vec![4.0, 5.0, 6.0];
+    let emitted = emit_dss(&parsed);
+    assert!(
+        emitted.text.contains("xhl=4 xht=5 xlt=6"),
+        "{}",
+        emitted.text
+    );
+}
+
+#[test]
 fn transformer_xscarray_wrong_dimensions_report_defaulting() {
     let parsed = parse_dss_str("New Circuit.test\nNew Transformer.t windings=4 xscarray=[8 8 8]");
     assert!(

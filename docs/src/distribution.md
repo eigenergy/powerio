@@ -73,7 +73,11 @@ without the configuration reject it. Canonical DSS writes the typed limits, incl
 native defaults, ahead of stale extras or writer defaults.
 
 BMOPF and PMD currently project these bounded loads to their nominal laws with
-a diagnostic. Per-phase differences in bounded ZIP coefficients are retained
+a diagnostic. The multiconductor IVR OPF and LinDist3Flow preparations refuse
+them by default; each has an explicit opt-in that projects to the nominal law
+with a diagnostic (`BoundedLoadLawPolicy::ProjectToNominal`, and the
+`approximate` or `permissive` LinDist3Flow policy), described in the
+multiconductor IVR guide. Per-phase differences in bounded ZIP coefficients are retained
 in the typed model but currently block DSS emission. The legacy C load views
 cannot expose the voltage window and reject these loads; additive binding
 views remain unfinished. Models 3, 4, 6 and 7 still need complete typed laws.

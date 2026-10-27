@@ -11,8 +11,16 @@
   distinct bounded ZIP model, including the native constructor defaults.
   Canonical DSS and IR preserve these limits; Rust can evaluate their power
   factors at a supplied voltage. JSON projections diagnose the lost bounds.
-  Legacy C load views reject the new law until full binding views are supplied.
   Source phasors also follow the pinned engine's rounded angle conversion.
+  Ordinary OpenDSS loads, which default to `model=1`, now read as bounded laws.
+  The multiconductor IVR OPF preparation and the strict LinDist3Flow device
+  mapping refuse a bounded law by default, so an ordinary OpenDSS feeder needs
+  an explicit choice to reach them: `BoundedLoadLawPolicy::ProjectToNominal`
+  on `McAcOpfAssemblyOptions`, or the `approximate` or `permissive`
+  LinDist3Flow `unsupported` policy, projects each load to its nominal law and
+  reports it (`BUILD.MULTI.LOAD_LAW_PROJECTED`, `load_approximated`). `reject`
+  and `lower` keep refusing. The legacy C load views reject a bounded law; the
+  additive binding views added later in this series expose it.
 
 - OpenDSS static imports now carry full source impedances and ordered effective
   line matrices in the typed network. Canonical DSS output preserves independent
@@ -20,6 +28,14 @@
   PMD output no longer invents a second source impedance. Source replay remains
   byte exact. Load voltage-band transitions, deferred geometry and several
   static device states remain compatibility gaps documented in the guide.
+
+- OpenDSS switch semantics change. A line with `switch=y` now reads as a closed
+  1 mOhm line. A SwtControl's `Action` and `Normal` are controller settings:
+  they are excluded from the fixed circuit with a `READ.DSS.RETAINED_SOURCE_ONLY`
+  warning, and `net.switches()` is empty for such files. An explicit `State=` on
+  a SwtControl, or an `Open` or `Close` command, is refused with
+  `READ.DSS.LINE_UNRESOLVED`. Before, SwtControl state produced typed open and
+  closed switches.
 
 - TARA contingency statements are read at analysis time. The readers keep
   them as text, as before, because the contingency, subsystem, and monitored
