@@ -41,9 +41,9 @@
 // the top level facade. `Error` and `Result` are this crate's own: the variants
 // below are raised here and nowhere in the hub.
 pub use powerio_tx::{
-    BalancedNetwork, Branch, Bus, BusId, BusType, ConnectivityReport, Extras, GenCost, Generator,
-    Hvdc, IndexCore, IndexedNetwork, Load, POWER_MODELS_ANGLE_BOUND_PAD, Shunt, SourceFormat,
-    Storage,
+    AngleDifferenceBounds, BalancedNetwork, Branch, Bus, BusId, BusType, ConnectivityReport,
+    Extras, GenCost, Generator, Hvdc, IndexCore, IndexedNetwork, Load,
+    POWER_MODELS_ANGLE_BOUND_PAD, Shunt, SourceFormat, Storage,
 };
 
 // Internal compatibility paths used throughout the matrix implementation.
@@ -58,6 +58,13 @@ pub type SparseMatrix = sprs::CsMat<f64>;
 
 mod ac_jacobian;
 mod acopf;
+mod mcopf;
+pub use mcopf::{
+    McAcOpfAssemblyOptions, McAcOpfPreparation, McOpfAngleLimit, McOpfBranch, McOpfCoil,
+    McOpfComplexRow, McOpfDevice, McOpfDeviceKind, McOpfDroop, McOpfLoadLaw, McOpfShunt,
+    McOpfTerminal, McOpfTransformer, McOpfTransformerCoil, McOpfTransformerPort, McOpfVoltageLimit,
+    build_mc_ac_opf_preparation,
+};
 mod dc_operators;
 mod dcopf;
 pub mod io;
@@ -122,14 +129,14 @@ pub use matrix::multiconductor::{
     calc_multiconductor_admittance_matrix,
 };
 pub use matrix::{
-    BranchSusceptanceFormula, BuildOptions, GroundedIndexMap, MatrixStats, Scheme,
+    BranchSusceptanceFormula, BuildOptions, GroundedIndexMap, IslandPtdf, MatrixStats, Scheme,
     SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata, SensitivityOptions,
     SensitivitySolver, SensitivitySolverPath, ZeroImpedanceRule, ZeroImpedanceSkips,
     calc_adjacency_matrix, calc_admittance_matrix, calc_bdoubleprime_matrix, calc_bprime_matrix,
-    calc_diagonal, calc_lacpf_matrix, calc_lodf, calc_ptdf, calc_ptdf_lodf,
-    calc_ptdf_lodf_with_options, calc_reference_indicator, calc_susceptance_diagonal,
-    calc_unit_vector, calc_weighted_laplacian, calc_zero_impedance_skips, check_sddm, ground_at,
-    ground_at_each,
+    calc_diagonal, calc_lacpf_matrix, calc_lodf, calc_lodf_columns, calc_ptdf, calc_ptdf_by_island,
+    calc_ptdf_columns, calc_ptdf_lodf, calc_ptdf_lodf_with_options, calc_ptdf_rows,
+    calc_reference_indicator, calc_susceptance_diagonal, calc_unit_vector, calc_weighted_laplacian,
+    calc_zero_impedance_skips, check_sddm, ground_at, ground_at_each,
 };
 pub use pipeline::{
     MatrixKind, Pipeline, PipelineOutputs, RhsKind, calc_matrix, calc_matrix_stats_for_kind,

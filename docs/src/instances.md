@@ -28,7 +28,7 @@ calculation:
 | DOE GO Challenge 3 problem file | `AcScucInstance` |
 | that problem file beside its solution file | `AcScucSolution` |
 | DeepMind OPFData JSON | `AcOpfSolution` |
-| BMOPF JSON | `MulticonductorNetwork`; construct the instance explicitly |
+| BMOPF JSON or distribution CIM | `MulticonductorNetwork`; construct the instance explicitly |
 
 A MATPOWER case or a PowerModels file stays a network, because it has ratings
 and costs that power flow, DC OPF, and AC OPF can all use and nothing in the

@@ -12,6 +12,17 @@ cargo add powerio -F matrix   # and sparse matrices, sensitivities, graph data
 Use Rust 1.88 or newer. Add the `gridfm` feature when your application reads
 or writes GridFM Parquet directories: `cargo add powerio -F gridfm`.
 
+Native SINCAL projects are the `sincal` feature, on by default. It compiles
+SQLite, which a `wasm32-unknown-unknown` build needs a C compiler with a
+WebAssembly backend for. A browser build that never reads SINCAL leaves it out:
+
+```toml
+powerio = { version = "0.11", default-features = false, features = ["matrix"] }
+```
+
+Such a build lists no SINCAL format and refuses a SINCAL source or target with
+`REQUEST.SINCAL.FEATURE_DISABLED`.
+
 Python:
 
 ```sh
@@ -37,8 +48,9 @@ checked in header.
 ```sh
 git clone https://github.com/eigenergy/powerio
 cd powerio
-cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
-# target/release/libpowerio_capi.{so,dylib,dll}; header powerio-capi/include/powerio.h
+cargo build -p powerio-capi --release --features gridfm
+# target/release/libpowerio_capi.so (Linux), libpowerio_capi.dylib (macOS),
+# or powerio_capi.dll (Windows); header powerio-capi/include/powerio.h
 ```
 
 ## Parse, inspect, emit

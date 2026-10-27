@@ -96,6 +96,23 @@ typedef struct {
 } PioDiagnosticSpanView;
 
 /**
+ * Borrowed binary bytes.
+ */
+typedef struct {
+    const uint8_t *data;
+    size_t len;
+} PioByteView;
+
+/**
+ * One caller-owned companion for an in-memory source. Both views are copied
+ * during source construction; no filesystem acquisition is permitted.
+ */
+typedef struct {
+    PioStringView name;
+    PioByteView bytes;
+} PioNamedBufferView;
+
+/**
  * Borrowed stable component identity.
  */
 typedef struct {
@@ -116,6 +133,57 @@ typedef struct {
     size_t row;
     bool in_service;
 } PioContingencyComponentView;
+
+/**
+ * Explicit conductor-resolved SINCAL reader selection. Zero initialization
+ * means no selected variant, no snapshot, and no acquired-table companion.
+ * The presence flags distinguish omission from an explicit zero.
+ */
+typedef struct {
+    bool has_variant;
+    int64_t variant;
+    bool has_snapshot_hours;
+    double snapshot_hours;
+    /**
+     * Relative companion name. NULL/0 omits it; non-NULL empty text is invalid.
+     */
+    PioStringView acquired_tables;
+    /**
+     * Experimental schema-11.5 NULL source controls as inactive; default false.
+     */
+    bool assume_inactive_source_controls;
+} PioSincalReadOptions;
+
+/**
+ * Explicit balanced SINCAL reader selection; presence flags preserve zero.
+ */
+typedef struct {
+    bool has_variant;
+    int64_t variant;
+    bool has_snapshot_hours;
+    double snapshot_hours;
+    PioStringView acquired_tables;
+} PioSincalBalancedReadOptions;
+
+/**
+ * Borrowed parsing options. Zero initialization preserves pio_parse behavior.
+ * All nested pointers need remain valid only during the call. These layouts
+ * are fixed; a future incompatible layout requires a new ABI or input type.
+ */
+typedef struct {
+    /**
+     * Optional explicit file acquisition root (NULL/0 means default).
+     */
+    PioStringView acquisition_root;
+    /**
+     * NULL omits SINCAL selection. Otherwise requires sincal-multiconductor.
+     */
+    const PioSincalReadOptions *sincal_multiconductor;
+    /**
+     * NULL omits balanced selection. Otherwise requires sincal-balanced.
+     */
+    const PioSincalBalancedReadOptions *sincal_balanced;
+} PioParseOptions;
 
 /**
  * Program identity recorded with one module.
@@ -2181,12 +2249,16 @@ typedef struct {
 } PioMulticonductorCommandView;
 
 /**
- * Borrowed binary bytes.
+ * Complete source boundary without changing the legacy source-view layout.
+ * Source phasors specify V(terminal) - V(reference). A named reference is
+ * on source.bus and does not imply grounding; an absent reference means
+ * earth. Borrowed data lives with the owner.
  */
 typedef struct {
-    const uint8_t *data;
-    size_t len;
-} PioByteView;
+    PioVoltageSourceView source;
+    PioStringView reference_terminal;
+    bool has_reference_terminal;
+} PioVoltageSourceBoundaryView;
 
 #ifdef __cplusplus
 extern "C" {
@@ -2401,6 +2473,23 @@ PioSource *pio_source_from_memory(const char *name,
                                   const uint8_t *data,
                                   size_t data_len,
                                   PioError **error);
+
+/**
+ * Construct a memory source with explicitly supplied relative companions.
+ * Copies the primary and companion bytes before returning an owned handle.
+ * This source never reads referenced files from the filesystem.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * buffers addresses buffers_len readable views; NULL is valid only at zero length.
+ */
+PioSource *pio_source_from_memory_with_buffers(const char *name,
+                                               size_t name_len,
+                                               const uint8_t *data,
+                                               size_t data_len,
+                                               const PioNamedBufferView *buffers,
+                                               size_t buffers_len,
+                                               PioError **error);
 
 /**
  *
@@ -2823,6 +2912,22 @@ PioModule *pio_parse(const PioSource *source,
                      const char *format,
                      size_t format_len,
                      PioError **error);
+
+/**
+ * Parse with optional typed reader and acquisition selections. NULL options
+ * is identical to pio_parse. Explicit SINCAL options require the matching
+ * format token and never select or balance a network family implicitly.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * Non-NULL options and nested selections must be readable for their declared
+ * types, with all borrowed strings valid through the call.
+ */
+PioModule *pio_parse_with_options(const PioSource *source,
+                                  const char *format,
+                                  size_t format_len,
+                                  const PioParseOptions *selections,
+                                  PioError **error);
 
 /**
  * Deserialize one PowerIO IR source.
@@ -3837,6 +3942,8 @@ bool pio_mc_ac_pf_instance_load_terminal_at(const PioCalculationInstance *instan
 size_t pio_mc_ac_pf_instance_source_count(const PioCalculationInstance *instance);
 
 /**
+ * Legacy source parameters. Referenced sources fail with a type mismatch;
+ * use pio_mc_ac_pf_instance_source_boundary_at for both voltage endpoints.
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.
@@ -3847,6 +3954,8 @@ bool pio_mc_ac_pf_instance_source_at(const PioCalculationInstance *instance,
                                      PioError **error);
 
 /**
+ * Legacy earth-referenced terminal voltage. Referenced sources fail with a
+ * type mismatch; use pio_mc_ac_pf_instance_source_boundary_at instead.
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.
@@ -6848,6 +6957,33 @@ PioString *pio_string_retain(const PioString *string);
  * A non-null handle must be owned and unused by concurrent calls.
  */
 void pio_string_release(PioString *string);
+
+/**
+ * Read all source parameters and the explicit voltage reference. None is
+ * indicated by has_reference_terminal=false. Terminal names use the existing
+ * network voltage-source terminal accessor at the same source index.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_multiconductor_network_voltage_source_boundary_at(const PioMulticonductorNetwork *network,
+                                                           size_t index,
+                                                           PioVoltageSourceBoundaryView *output,
+                                                           PioError **error);
+
+/**
+ * Read a complete prescribed PF source boundary. The source index and
+ * terminal order match the instance's network; use its voltage-source
+ * terminal accessor to read terminal names. Borrowed arrays and strings
+ * remain valid while their calculation-instance owner is retained.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_mc_ac_pf_instance_source_boundary_at(const PioCalculationInstance *instance,
+                                              size_t index,
+                                              PioVoltageSourceBoundaryView *output,
+                                              PioError **error);
 
 #ifdef __cplusplus
 }  // extern "C"
