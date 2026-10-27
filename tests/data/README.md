@@ -8,11 +8,35 @@ it ships in any released artifact.
 `case9.m`, `case14.m`, `case30.m`, `case57.m`, `case118.m`,
 `case2869pegase.m`, `t_case9_dcline.m`, and `t_case9_oos.m` are vendored
 byte exact from the [MATPOWER repository](https://github.com/MATPOWER/matpower)
-(the `t_*` cases from its test suite). MATPOWER is BSD 3-Clause,
+(the `t_*` cases from its test suite). MATPOWER's code is BSD 3-Clause,
 (c) the Power Systems Engineering Research Center (PSERC) and individual
-contributors; each file keeps its original header. The PEGASE case is
+contributors. Its [upstream license notice](LICENSE-MATPOWER.txt) explicitly
+excludes case data from that license and describes the data as included with
+permission or converted from public sources. Each file keeps its original
+header and data citation. The PEGASE case is
 fictitious data representing the size and complexity of the European
 transmission network (stated in its header).
+
+`case33bw.m` is byte-exact from MATPOWER commit
+[`80b6e16f760f58721ad31221c7287c28259cd4ad`](https://github.com/MATPOWER/matpower/blob/80b6e16f760f58721ad31221c7287c28259cd4ad/data/case33bw.m)
+(upstream Git blob `97e510bee25c543de0453959672fe86b40a999c8`). Its original
+header cites the Baran and Wu 1989 distribution-network data. The upstream
+license notice above is preserved verbatim from the same commit.
+It pins the original kW/kVAr and ohm literals, the post-literal conversion
+statements, and exact-byte source echo. The numerical regression checks
+3.715 MW, 2.300 MVAr, and `Zbase = 12.66^2 / 10` ohms.
+
+## `pio-ir/`
+
+PowerIO IR documents written by published PowerIO releases, original to this
+repository under its code license. `pio-ir/0.11.6/hvdc-dc-pf-instance.pio.json`
+and `pio-ir/0.11.6/hvdc-ac-pf-instance.pio.json` are the DC and AC power flow
+instances the `powerio` 0.11.6 wheel from PyPI wrote (`parse`,
+`to_dc_pf_instance` or `to_ac_pf_instance`, then `serialize`) from a hand
+written two bus MATPOWER case with 40 MW of load and one `dcline` sending
+10 MW and delivering 9.5 MW. They are kept byte exact as that release wrote
+them, without the `hvdc_treatment` field later releases write, and pin the
+calculation such a document denotes.
 
 ## `pglib/`
 

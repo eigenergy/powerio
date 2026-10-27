@@ -158,7 +158,11 @@ extension namespace `http://entsoe.eu/CIM/SchemaExtension/3/1#` (IEC TS
 61970-600-1/-2:2017); CGMES 3.0 uses `http://iec.ch/TC57/CIM100#` and
 `http://iec.ch/TC57/CIM100-European#` (IEC 61970-600-1/-2:2021). Both use the
 IEC 61970-552 CIMXML instance syntax, in which `rdf:ID` defines a record,
-`rdf:about` extends one, and `md:FullModel` heads each profile document. EQ is
+`rdf:about` extends one, and `md:FullModel` heads each profile document. A
+CIM100 document with no `md:FullModel` header and with per phase distribution
+classes (`ACLineSegmentPhase`, `EnergyConsumerPhase`, …) is distribution CIM
+and routes to `cim-dist` instead; see
+[Distribution networks](distribution.md#distribution-cim). EQ is
 required, and SSH, SV, and boundary profile data are used when present. SSH
 assignments take precedence over SV observations, so an SV shunt section count
 that differs from the SSH assignment is reported and not kept. A set with
@@ -263,13 +267,21 @@ transformer `VECGRP` field, and the winding `CNXA` field that revision 33
 added, so the reader lays each record out by the header revision, defaults
 those fields, and reports a revision 32 record that ends before its last typed
 field as `READ.PSSE.VALUE_DEFAULTED` with the record's byte range. RAW 34 maps
-its substation section. RAW 35 and RAWX 35 map and freshly emit substations,
-nodes, switches, busbar sections, and equipment terminal references. Fresh RAW
-34/35 and RAWX output preserves AC line and transformer names, and RAWX
-terminal rows use the exact type, buses, and local identifier chosen for their
-electrical equipment row. When a source neutral connectivity node has no PSS/E
-number, fresh RAWX allocates a positive number within its substation before
-resolving exact regulation targets, and reports the default.
+its substation section, and RAW 34 and 35 both carry a system switching device
+section between branch and transformer data, which fresh output writes at
+either revision. The two revisions place their node columns differently: PSS/E
+34 appends the transformer winding `NOD` after `CNXA`, the generator `NREG`
+after `WPF`, the switched shunt `NREG` after the eighth step pair, and the
+two-terminal DC converter `NDR`/`NDI` after `XCAPR`, and revision 35 moves
+each next to the bus it qualifies. The reader and fresh output follow each
+revision's layout, and fresh revision 34 output keeps a switched shunt to the
+eight step pairs before `NREG` and reports the rest. RAW 35 and RAWX 35 map and freshly emit
+substations, nodes, switches, busbar sections, and equipment terminal
+references. Fresh RAW 34/35 and RAWX output preserves AC line and transformer
+names, and RAWX terminal rows use the exact type, buses, and local identifier
+chosen for their electrical equipment row. When a source neutral connectivity
+node has no PSS/E number, fresh RAWX allocates a positive number within its
+substation before resolving exact regulation targets, and reports the default.
 
 An explicit RAW revision outside 32 through 35, an invalid system base or
 frequency, or a nonfinite record value is rejected. Fresh output accepts only
@@ -298,9 +310,25 @@ control mode, regulated terminal, limits, tap position and range, and number of
 tap positions. A positive `COD` enables automatic adjustment, a negative `COD`
 keeps the same mode with automatic adjustment disabled, and zero is fixed;
 `|COD| = 4` controls a DC line quantity on a two winding transformer, and
-`|COD| = 5` controls asymmetric active power flow. Unsupported RAWX tables,
-including multiterminal DC, FACTS, GNE, induction machine, multisection line,
-zone, owner, and interarea transfer records, remain only in byte exact same
+`|COD| = 5` controls asymmetric active power flow. A shunt FACTS device
+(`J = 0`) reads as a static var compensator: `SHMX` bounds its susceptance at
+the device bus base kV. `VSET` uses the regulated bus base kV (the device bus
+when `FCREG`/`REMOT` is zero), including remote terminals on another voltage
+level. `MODE 0` takes it out of service, and PSS/E output writes each static
+var compensator back as one. RAW/RAWX detailed FACTS terminals and `NREG` map
+to typed equipment and regulation references. Revision 34 puts `NREG` after
+`MNAME`; revision 35 puts it before. Revision 33 drops the node with a
+diagnostic. Retained names are reserved before generated names; sanitation
+collisions receive unique names and a diagnostic, and detailed terminals use
+those same allocated names.
+`SHMX` is a current limit, MVA at unity voltage, so the susceptance bound
+matches the PSS/E reactive limit at 1 p.u. and is slightly tighter below it
+and looser above it. Both reading into the fixed susceptance model and fresh
+PSS/E/RAWX writing report this approximation; same format retained-source
+emission stays byte exact. Series FACTS
+devices are not modeled. Unsupported RAWX tables, including multiterminal DC,
+GNE, induction machine, multisection line, zone, owner, and interarea transfer
+records, and series FACTS devices, remain only in byte exact same
 format emission and produce counted diagnostics. Unknown RAWX tables and
 `caseid` fields get the same retained source diagnostic, and fresh output
 diagnoses detailed records and fields that RAWX cannot carry. Three winding
@@ -310,11 +338,42 @@ the neutral HVDC model. A switched shunt keeps its steady state susceptance
 `BINIT` as the shunt `b` along with its mode, voltage band, regulated bus, and
 step blocks. `MODSW` 0 reads as locked, 1 as discrete, and 2 as continuous
 voltage control; 3 to 6 adjust in discrete steps to control another quantity,
-read as discrete, and keep their code for PSS/E output. A two winding
-transformer's magnetizing susceptance survives a round trip through `MAG2`.
-The reader converts `CW` 1/2/3, `CZ` 1/2/3, and `CM` 1/2 into the neutral tap
-ratio, system base impedance, and magnetizing admittance, and fresh output uses
-the electrically equivalent canonical `CW = CZ = CM = 1` representation.
+read as discrete, and keep their code for PSS/E output. PSS/E connects a two
+winding transformer's magnetizing admittance `MAG1 + jMAG2` from bus I to
+ground, outside winding 1's ratio, while the neutral branch charging sits
+inside the tap. The reader therefore stores the admittance times the square of
+the tap, so bus I sees exactly the stated admittance, and the writer divides
+the square of the tap back out as the shortest decimal that reads back to
+the same charging, so the admittance survives a round trip through
+`MAG1`/`MAG2`. The indexed view still places a three winding transformer's
+magnetizing admittance at its star bus. The reader converts `CW` 1/2/3, `CZ`
+1/2/3, and `CM` 1/2 into the neutral tap ratio, system base impedance, and
+magnetizing admittance, and fresh output uses the electrically equivalent
+canonical `CW = CZ = CM = 1` representation. Fresh two-winding output
+usually puts winding 2 at one; if that would change a retained correction
+table from ratio to angle, it writes equivalent nonunit winding ratios and
+impedance instead. A two
+winding transformer's branch tap is the winding 1 ratio over the winding 2
+ratio \\(t_1 / t_2\\), each in per unit of its bus base voltage, and its series
+impedance and tap control range are referred across \\(t_2\\): the impedance
+scales by \\(t_2^2\\) and the range divides by \\(t_2\\), so the branch states
+the same two port admittance as the PSS/E circuit.
+
+### PSS/E DYR dynamics
+
+PSS/E `.dyr` is parsed separately from `.raw`/RAWX because it describes
+transient-stability models, not the steady-state electrical network. Use
+`parse_dyr` (or `parse_dyr_bytes`) to obtain a `DynamicCase`; the parser
+keeps original source text for exact write-back and retains unknown/custom
+model names and ordered parameter tokens. `DynamicStudy::new(network,
+dynamics)` explicitly pairs that data with a parsed `BalancedNetwork`.
+
+The current study link check only reports DYR bus IDs absent from the static
+case. It intentionally does not infer that a record's second key is a
+generator ID, and does not claim model-specific device references are
+resolved. Typed model schemas, dynamic-device linking, DYR-to-AUX/DYD/SWI
+conversion, and transient simulation are not provided yet. See
+[Dynamics and DYR](dynamics.md) for the API definition.
 
 ### UCTE-DEF
 
@@ -402,6 +461,41 @@ lowers each one as a star into \\(Y_{\mathrm{bus}}\\)/connectivity. Unsupported
 sections stay in the retained source text and produce diagnostics.
 
 ### MATPOWER
+
+The reader applies a bounded, straight-line unit-conversion profile after the
+numeric literals. This covers MATPOWER's `case33bw.m`: demand columns `PD`/`QD`
+are divided by 1000, and branch `BR_R`/`BR_X` by `Vbase^2 / Sbase`. Its interpreted
+network contains 3.715 MW / 2.300 MVAr of demand and first-branch impedance
+0.005752591161723931 + j0.002932448856844086 per unit, rather than the raw
+kW/kVAr and ohm values.
+
+Supported statements are all-row, same-selection self-scaling of bus columns
+3/4 or branch columns 3/4 by a finite, positive scalar. Columns may be stated
+numerically or through earlier scalar definitions or positional output bindings
+from `idx_bus` / `idx_brch`. Scalar expressions may use finite numeric literals,
+earlier scalar locals, `mpc.baseMVA`, `mpc.bus(1, BASE_KV)` (or column 10),
+parentheses, multiplication/division, and squaring. `.*`, `./`, and `.^2` are
+accepted for scalar arithmetic; the scale operand itself must be one atom or a
+parenthesized expression. Scalars and repeated conversions follow source order.
+The voltage lookup is the first matrix row, not the bus whose ID equals one.
+Only constant scalar definitions and these two known index functions are
+interpreted; no MATLAB code or arbitrary function is executed.
+
+This is not general MATLAB support. Control flow, arbitrary calls, partial-row
+indexing, mismatched or duplicate selected columns, other mutations, nonliteral
+matrix expressions, unresolved symbols, nonpositive scales, and nonfinite
+results are unsupported. The entire conversion plan is discarded if any
+executable statement is outside the profile, even if earlier conversions were
+recognized. Original literal values remain available with span-bearing
+`READ.MATPOWER.INDEXED_ASSIGNMENT` warnings; these cases must not be treated as
+fully interpreted networks. The profile is bounded to 128 tokens per executable
+statement, 128 scalar bindings, 128 scaling statements, and 16 nested scalar
+parentheses.
+
+Unchanged same-format emission still returns the exact source bytes, including
+the original literals and conversion statements. Edited/canonical MATPOWER
+output and cross-format writers use the interpreted network values and do not
+append the original conversions, so the conversions are not applied twice.
 
 Canonical MATPOWER output, for a case that did not start as MATPOWER, omits
 dcline; the byte exact echo path keeps it when the case was read from MATPOWER.

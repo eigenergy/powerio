@@ -45,6 +45,9 @@ const EXPECTED: &[(&str, &str, Option<&str>)] = &[
     ("egret/case30.json", "transmission", Some("egret-json")),
     ("egret/case9.json", "transmission", Some("egret-json")),
     ("egret/dcline3.json", "transmission", Some("egret-json")),
+    // PowerIO IR documents a published release wrote.
+    ("pio-ir/0.11.6/hvdc-ac-pf-instance.pio.json", "module", None),
+    ("pio-ir/0.11.6/hvdc-dc-pf-instance.pio.json", "module", None),
     (
         "opfdataset/example_0.json",
         "transmission",

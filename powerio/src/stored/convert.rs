@@ -9,6 +9,7 @@ use powerio_core::{
 };
 
 use super::dto::{self, StoredF64, StoredModule, StoredQuantity};
+
 use crate::codes;
 use crate::value::{PioScenarioSet, PioTimeSeries, PioValue};
 use powerio_prob::{
@@ -17,6 +18,20 @@ use powerio_prob::{
 };
 
 type Result<T> = std::result::Result<T, powerio_core::Error>;
+
+/// Refuse outer IR collections that exceed the reader's bounded-vector limit.
+fn check_collection_len(what: &str, len: usize) -> Result<()> {
+    if len > dto::MAX_STORED_COLLECTION_ENTRIES {
+        return Err(powerio_core::Error::new(
+            &codes::EMIT_MODULE_RECORD_CAP,
+            format!(
+                "a stored {what} would carry {len} entries; PowerIO IR reads at most {}",
+                dto::MAX_STORED_COLLECTION_ENTRIES
+            ),
+        ));
+    }
+    Ok(())
+}
 
 fn invalid(message: impl Into<String>) -> powerio_core::Error {
     powerio_core::Error::new(&codes::READ_MODULE_INVALID, message)
@@ -251,6 +266,8 @@ const MULTICONDUCTOR_POINT_SERIES_TYPE: &str =
     "powerio.TimeSeries<powerio.OperatingPoint<powerio.MulticonductorNetwork>>";
 
 fn encode_time_series(series: &PioTimeSeries) -> Result<dto::StoredValue> {
+    check_collection_len("time points", series.time_points().len())?;
+    check_collection_len("time-series values", series.values().len())?;
     Ok(match series.element_type() {
         BALANCED_NETWORK_TYPE => {
             dto::StoredValue::BalancedNetworkTimeSeries(encode_balanced_network_series(series)?)
@@ -275,6 +292,8 @@ fn encode_time_series(series: &PioTimeSeries) -> Result<dto::StoredValue> {
 fn encode_balanced_network_series(
     series: &PioTimeSeries,
 ) -> Result<dto::StoredTimeSeries<crate::BalancedNetwork>> {
+    check_collection_len("time points", series.time_points().len())?;
+    check_collection_len("time-series values", series.values().len())?;
     let values = series
         .values()
         .values()
@@ -293,6 +312,8 @@ fn encode_balanced_network_series(
 fn encode_multiconductor_network_series(
     series: &PioTimeSeries,
 ) -> Result<dto::StoredTimeSeries<powerio_dist::MulticonductorNetwork>> {
+    check_collection_len("time points", series.time_points().len())?;
+    check_collection_len("time-series values", series.values().len())?;
     let values = series
         .values()
         .values()
@@ -346,6 +367,7 @@ fn encode_scenario_entries<T>(
     set: &PioScenarioSet,
     mut encode: impl FnMut(&PioValue) -> Result<T>,
 ) -> Result<dto::StoredScenarioSet<T>> {
+    check_collection_len("scenario entries", set.values().len())?;
     let scenarios = set
         .values()
         .iter()
@@ -630,6 +652,8 @@ fn ensure_same_network<'a, N: serde::Serialize + 'a>(
 fn encode_balanced_operating_point_series(
     series: &TimeSeries<powerio_prob::OperatingPoint<crate::BalancedNetwork>>,
 ) -> Result<dto::StoredOperatingPointTimeSeries<crate::BalancedNetwork>> {
+    check_collection_len("time-series time points", series.time_points().len())?;
+    check_collection_len("time-series values", series.values().len())?;
     let Some(first) = series.values().first() else {
         return Ok(dto::StoredOperatingPointTimeSeries {
             network: None,
@@ -666,6 +690,8 @@ fn encode_balanced_operating_point_series(
 fn encode_multiconductor_operating_point_series(
     series: &TimeSeries<powerio_prob::OperatingPoint<powerio_dist::MulticonductorNetwork>>,
 ) -> Result<dto::StoredOperatingPointTimeSeries<powerio_dist::MulticonductorNetwork>> {
+    check_collection_len("time-series time points", series.time_points().len())?;
+    check_collection_len("time-series values", series.values().len())?;
     let Some(first) = series.values().first() else {
         return Ok(dto::StoredOperatingPointTimeSeries {
             network: None,
@@ -695,6 +721,7 @@ fn encode_multiconductor_operating_point_series(
 fn encode_balanced_point_scenarios(
     set: &PioScenarioSet,
 ) -> Result<dto::StoredOperatingPointScenarioSet<crate::BalancedNetwork>> {
+    check_collection_len("scenario entries", set.values().len())?;
     let first = set.values().iter().next().map(|scenario| {
         let PioValue::BalancedOperatingPoint(point) = scenario.value() else {
             return Err(collection_element_mismatch(
@@ -746,6 +773,7 @@ fn encode_balanced_point_scenarios(
 fn encode_multiconductor_point_scenarios(
     set: &PioScenarioSet,
 ) -> Result<dto::StoredOperatingPointScenarioSet<powerio_dist::MulticonductorNetwork>> {
+    check_collection_len("scenario entries", set.values().len())?;
     let first = set.values().iter().next().map(|scenario| {
         let PioValue::MulticonductorOperatingPoint(point) = scenario.value() else {
             return Err(collection_element_mismatch(
@@ -1036,19 +1064,7 @@ fn multiconductor_identity_order(
 
 fn encode_dc_pf_instance(instance: &powerio_prob::DcPfInstance) -> Result<dto::DcPfInstance> {
     // The stored instance is its network; reading it back derives the
-    // specifications under the default HVDC treatment. An instance that
-    // leaves injecting HVDC lines out would come back with them in.
-    if instance.hvdc_treatment() != powerio_tx::HvdcTreatment::FixedInjection {
-        let ignored = instance.network().calc_hvdc_injections().n_injecting();
-        if ignored > 0 {
-            return Err(invalid(format!(
-                "this DC power flow instance leaves {ignored} in service HVDC line(s) out of its \
-                 injections, and PowerIO IR stores a DC power flow instance under the fixed \
-                 injection HVDC treatment only; set the lines out of service in the network \
-                 instead"
-            )));
-        }
-    }
+    // specifications under the stated HVDC treatment.
     let network = with_component_ids(instance.network().clone());
     Ok(dto::DcPfInstance {
         initial_point: instance
@@ -1063,6 +1079,7 @@ fn encode_dc_pf_instance(instance: &powerio_prob::DcPfInstance) -> Result<dto::D
             .transpose()?,
         network: Box::new(network),
         approximation: dc_formula_name(instance.branch_susceptance_formula())?.to_string(),
+        hvdc_treatment: stated_hvdc_treatment(instance.hvdc_treatment()),
     })
 }
 
@@ -1081,6 +1098,7 @@ fn encode_ac_pf_instance(instance: &powerio_prob::AcPfInstance) -> Result<dto::A
             .transpose()?,
         network: Box::new(network),
         specifications: instance.specifications().to_vec(),
+        hvdc_treatment: stated_hvdc_treatment(instance.hvdc_treatment()),
     })
 }
 
@@ -1341,14 +1359,15 @@ fn encode_dispatch(
 
 fn encode_three_winding_transformer_terminal_powers(
     values: &[powerio_prob::ThreeWindingTransformerTerminalPower],
-) -> Vec<dto::ThreeWindingTransformerTerminalPower> {
-    values
+) -> Result<Vec<dto::ThreeWindingTransformerTerminalPower>> {
+    check_collection_len("three-winding transformer terminal powers", values.len())?;
+    Ok(values
         .iter()
         .map(|value| dto::ThreeWindingTransformerTerminalPower {
             p_mw: value.p_mw.map(StoredF64),
             q_mvar: value.q_mvar.map(StoredF64),
         })
-        .collect()
+        .collect())
 }
 
 fn decode_three_winding_transformer_terminal_powers(
@@ -1367,13 +1386,17 @@ fn decode_three_winding_transformer_terminal_powers(
 
 fn encode_three_winding_transformer_terminal_active_powers(
     values: &[powerio_prob::ThreeWindingTransformerTerminalActivePower],
-) -> Vec<dto::ThreeWindingTransformerTerminalActivePower> {
-    values
+) -> Result<Vec<dto::ThreeWindingTransformerTerminalActivePower>> {
+    check_collection_len(
+        "three-winding transformer terminal active powers",
+        values.len(),
+    )?;
+    Ok(values
         .iter()
         .map(|value| dto::ThreeWindingTransformerTerminalActivePower {
             p_mw: value.p_mw.map(StoredF64),
         })
-        .collect()
+        .collect())
 }
 
 fn decode_three_winding_transformer_terminal_active_powers(
@@ -1403,7 +1426,7 @@ fn encode_dc_pf_solution(solution: &powerio_prob::DcPfSolution) -> Result<dto::D
         three_winding_transformer_terminal_active_powers:
             encode_three_winding_transformer_terminal_active_powers(
                 solution.three_winding_transformer_terminal_active_powers(),
-            ),
+            )?,
         generator_dispatch: encode_dispatch(solution.generator_dispatch())?,
     })
 }
@@ -1425,9 +1448,10 @@ fn encode_ac_pf_solution(solution: &powerio_prob::AcPfSolution) -> Result<dto::A
         })?,
         branch_to_active_flow: branch_column(network, |id| solution.branch_to_active_flow(id))?,
         branch_to_reactive_flow: branch_column(network, |id| solution.branch_to_reactive_flow(id))?,
-        three_winding_transformer_terminal_powers: encode_three_winding_transformer_terminal_powers(
-            solution.three_winding_transformer_terminal_powers(),
-        ),
+        three_winding_transformer_terminal_powers:
+            encode_three_winding_transformer_terminal_powers(
+                solution.three_winding_transformer_terminal_powers(),
+            )?,
         generator_dispatch: encode_dispatch(solution.generator_dispatch())?,
     })
 }
@@ -1449,7 +1473,7 @@ fn encode_dc_opf_solution(solution: &powerio_prob::DcOpfSolution) -> Result<dto:
         three_winding_transformer_terminal_active_powers:
             encode_three_winding_transformer_terminal_active_powers(
                 solution.three_winding_transformer_terminal_active_powers(),
-            ),
+            )?,
         objective: StoredF64(solution.objective()),
         bus_active_power_marginal: optional_column(solution.bus_active_power_marginals())?,
         branch_from_limit_multiplier: optional_column(solution.branch_from_limit_multipliers())?,
@@ -1480,9 +1504,10 @@ fn encode_ac_opf_solution(solution: &powerio_prob::AcOpfSolution) -> Result<dto:
         generator_reactive_power: generator_column(network, |id| {
             solution.generator_reactive_power(id)
         })?,
-        three_winding_transformer_terminal_powers: encode_three_winding_transformer_terminal_powers(
-            solution.three_winding_transformer_terminal_powers(),
-        ),
+        three_winding_transformer_terminal_powers:
+            encode_three_winding_transformer_terminal_powers(
+                solution.three_winding_transformer_terminal_powers(),
+            )?,
         objective: StoredF64(solution.objective()),
         bus_active_power_marginal: optional_column(solution.bus_active_power_marginals())?,
         bus_reactive_power_marginal: optional_column(solution.bus_reactive_power_marginals())?,
@@ -1516,7 +1541,7 @@ fn encode_socwr_opf_solution(
             three_winding_transformer_terminal_powers:
                 encode_three_winding_transformer_terminal_powers(
                     &values.three_winding_transformer_terminal_powers,
-                ),
+                )?,
         },
         duals: dto::SocwrOpfDuals {
             bus_active_power_marginal: duals
@@ -2529,11 +2554,32 @@ fn with_solution_records<S>(
     Ok(value)
 }
 
+/// The HVDC treatment a stored power flow instance states. A document
+/// without one was written before the treatment existed, when the power flow
+/// instances left HVDC lines out, so it reads as `Ignore` and denotes the
+/// calculation it did then.
+fn stored_hvdc_treatment(stated: Option<powerio_tx::HvdcTreatment>) -> powerio_tx::HvdcTreatment {
+    stated.unwrap_or(powerio_tx::HvdcTreatment::Ignore)
+}
+
+/// The HVDC treatment a power flow instance document states. `Ignore` is what
+/// a document without the field denotes, so it is left out and the document
+/// stays readable by releases that predate the field; any other treatment is
+/// written, and those releases reject it rather than calculate without it.
+fn stated_hvdc_treatment(
+    treatment: powerio_tx::HvdcTreatment,
+) -> Option<powerio_tx::HvdcTreatment> {
+    (treatment != powerio_tx::HvdcTreatment::Ignore).then_some(treatment)
+}
+
 fn decode_dc_pf_instance(instance: dto::DcPfInstance) -> Result<powerio_prob::DcPfInstance> {
     let network = with_component_ids(*instance.network);
-    let mut decoded = powerio_prob::DcPfInstance::from_network(network)
-        .map_err(|error| invalid(error.to_string()))?
-        .with_branch_susceptance_formula(dc_formula_from_name(&instance.approximation)?);
+    let mut decoded = powerio_prob::DcPfInstance::from_network_with_hvdc(
+        network,
+        stored_hvdc_treatment(instance.hvdc_treatment),
+    )
+    .map_err(|error| invalid(error.to_string()))?
+    .with_branch_susceptance_formula(dc_formula_from_name(&instance.approximation)?);
     if let Some(stored) = instance.initial_point {
         let point = decode_balanced_point_assignment(decoded.network(), stored)?;
         decoded = decoded.with_initial_point(point);
@@ -2542,9 +2588,10 @@ fn decode_dc_pf_instance(instance: dto::DcPfInstance) -> Result<powerio_prob::Dc
 }
 
 fn decode_ac_pf_instance(instance: dto::AcPfInstance) -> Result<powerio_prob::AcPfInstance> {
-    let mut decoded = powerio_prob::AcPfInstance::new(
+    let mut decoded = powerio_prob::AcPfInstance::new_with_hvdc(
         with_component_ids(*instance.network),
         instance.specifications,
+        stored_hvdc_treatment(instance.hvdc_treatment),
     )
     .map_err(|error| invalid(error.to_string()))?;
     if let Some(stored) = instance.initial_point {
@@ -3210,9 +3257,6 @@ mod collection_ir_tests {
 mod write_bound_tests {
     use super::*;
 
-    /// The writer refuses a vector at the reader's bound plus one, so
-    /// `serialize` returns an error instead of a document `deserialize`
-    /// refuses.
     #[test]
     fn a_vector_past_the_reader_bound_is_refused_at_write() {
         let bound = dto::MAX_STORED_OPERATING_POINT_VALUES;

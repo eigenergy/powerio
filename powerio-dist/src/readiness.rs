@@ -14,6 +14,17 @@ use crate::model::{DistLineCode, MulticonductorNetwork};
 pub(crate) const DEFERRED_GEOMETRY_KEYS: [&str; 5] =
     ["geometry", "spacing", "wires", "cncables", "tscables"];
 
+/// The line extra the CIM reader sets on a segment whose source states no
+/// impedance it can read. The segment's line code is a zero placeholder.
+pub(crate) const UNRESOLVED_IMPEDANCE_KEY: &str = "cim_impedance_unresolved";
+
+/// Blocker codes that stop canonical conversion: the line exists, but its
+/// impedance is not in the canonical matrices.
+const CONVERSION_BLOCKERS: [&str; 2] = [
+    "READINESS.DSS.GEOMETRY_DEFERRED",
+    "READINESS.CIM_DIST.IMPEDANCE_UNRESOLVED",
+];
+
 /// Reject incomplete electrical data before numerical use.
 pub fn require_electrical_readiness(
     net: &MulticonductorNetwork,
@@ -28,14 +39,37 @@ pub fn require_electrical_readiness(
     Ok(())
 }
 
-/// Reject source-only electrical equipment that a canonical writer cannot reconstruct.
+/// Refuse a projection that has not implemented terminal-referenced sources.
+/// Consumers that support them must instead retain both voltage endpoints.
+pub fn require_earth_referenced_sources(
+    net: &MulticonductorNetwork,
+) -> Result<(), powerio_core::Error> {
+    if let Some(source) = net
+        .sources()
+        .iter()
+        .find(|s| s.reference_terminal.is_some())
+    {
+        return Err(powerio_core::Error::new(
+            &crate::diagnostics::codes::BUILD_DIST_ELECTRICAL_INCOMPLETE,
+            format!(
+                "source `{}`: this projection does not support reference-terminal voltage constraints",
+                source.name
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Reject source-only electrical equipment that a canonical writer cannot
+/// reconstruct: OpenDSS geometry lines, and CIM segments whose impedance the
+/// reader could not read.
 pub(crate) fn require_resolved_geometry(
     net: &MulticonductorNetwork,
 ) -> Result<(), powerio_core::Error> {
     let report = audit_electrical_readiness(net);
     if let Some(finding) = report
         .blockers()
-        .find(|finding| finding.code == "READINESS.DSS.GEOMETRY_DEFERRED")
+        .find(|finding| CONVERSION_BLOCKERS.contains(&finding.code))
     {
         return Err(powerio_core::Error::new(
             &crate::diagnostics::codes::BUILD_DIST_ELECTRICAL_INCOMPLETE,
@@ -122,9 +156,10 @@ impl ElectricalReadiness {
 /// source-format defaults. OpenDSS `geometry=`, `spacing=`, `wires=`,
 /// `cncables=`, and `tscables=` metadata are treated as a hard blocker because
 /// the geometry family is not yet lowered into the canonical impedance
-/// matrices. The audit therefore provides an explicit fail-closed boundary
-/// for applications that need to decide whether a parsed network is safe to
-/// analyse.
+/// matrices. A distribution CIM segment whose source states no impedance the
+/// reader can use is a hard blocker for the same reason. The audit therefore
+/// provides an explicit fail-closed boundary for applications that need to
+/// decide whether a parsed network is safe to analyse.
 #[must_use]
 pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalReadiness {
     let mut report = ElectricalReadiness::default();
@@ -201,6 +236,35 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
 
     audit_lines(net, &buses, &linecodes, identity, &mut report);
 
+    for source in net.sources() {
+        let Some(reference) = &source.reference_terminal else {
+            continue;
+        };
+        let declared = buses.get(&identity(&source.bus)).is_some_and(|bus| {
+            bus.terminals.contains(reference)
+                && source
+                    .terminal_map
+                    .iter()
+                    .all(|t| bus.terminals.contains(t))
+        });
+        let n = source.terminal_map.len();
+        if !declared
+            || n == 0
+            || source.terminal_map.contains(reference)
+            || source.terminal_map.iter().collect::<BTreeSet<_>>().len() != n
+            || source.v_magnitude.len() != n
+            || source.v_angle.len() != n
+            || source
+                .v_magnitude
+                .iter()
+                .any(|v| !v.is_finite() || *v < 0.0)
+            || source.v_angle.iter().any(|v| !v.is_finite())
+        {
+            report.block("READINESS.SOURCE.REFERENCE_INVALID", &source.name,
+                "referenced source needs distinct declared terminals and complete finite voltage differences");
+        }
+    }
+
     report
 }
 
@@ -263,6 +327,18 @@ fn audit_lines(
         }
 
         audit_deferred_geometry(line, report);
+        if line
+            .extras
+            .get(UNRESOLVED_IMPEDANCE_KEY)
+            .is_some_and(|v| v.as_bool() == Some(true))
+        {
+            report.block(
+                "READINESS.CIM_DIST.IMPEDANCE_UNRESOLVED",
+                &line.name,
+                "the CIM source states no impedance the reader can use; its zero placeholder \
+                 impedance would be a short circuit",
+            );
+        }
 
         let Some(code) = linecodes.get(&identity(&line.linecode)) else {
             report.block(
@@ -454,6 +530,20 @@ mod tests {
                 .blockers()
                 .any(|finding| finding.code == "READINESS.DSS.GEOMETRY_DEFERRED")
         );
+    }
+
+    #[test]
+    fn unresolved_cim_impedance_blocks_conversion() {
+        let mut extras = Extras::new();
+        extras.insert(UNRESOLVED_IMPEDANCE_KEY.into(), serde_json::json!(true));
+        let net = network_with_line(extras);
+        let report = audit_electrical_readiness(&net);
+        assert!(
+            report
+                .blockers()
+                .any(|finding| finding.code == "READINESS.CIM_DIST.IMPEDANCE_UNRESOLVED")
+        );
+        assert!(require_resolved_geometry(&net).is_err());
     }
 
     #[test]

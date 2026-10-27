@@ -25,6 +25,9 @@ pub(crate) struct IncidenceParts {
     /// a sparse solver uses (`|b|` of the PowerModels susceptance). The
     /// signed susceptance lives on the DC operator surface.
     pub(crate) b: Vec<f64>,
+    /// Source-network branch indices for the accepted incidence columns.
+    /// Entries align with columns of `a` and `b`; filtered branches are absent.
+    pub(crate) branch_indices: Vec<usize>,
 }
 
 impl IncidenceParts {
@@ -102,22 +105,30 @@ pub(crate) fn build_incidence(
         if !b_e.is_finite() {
             return Err(powerio_tx::Error::NonFiniteSusceptance { row: idx }.into());
         }
-        cols.push(Column { i, j, b_e });
+        cols.push(Column {
+            i,
+            j,
+            b_e,
+            branch_index: idx,
+        });
     }
 
     // Pass 2: assemble.
     let m = cols.len();
     let mut a = CooBuilder::with_capacity_rect(n, m, 2 * m);
     let mut b = Vec::with_capacity(m);
+    let mut branch_indices = Vec::with_capacity(m);
     for (k, col) in cols.iter().enumerate() {
         a.add(col.i, k, 1.0);
         a.add(col.j, k, -1.0);
         b.push(col.b_e);
+        branch_indices.push(col.branch_index);
     }
 
     Ok(IncidenceParts {
         a: a.finish_csr(),
         b,
+        branch_indices,
     })
 }
 
@@ -125,6 +136,7 @@ struct Column {
     i: usize,
     j: usize,
     b_e: f64,
+    branch_index: usize,
 }
 
 /// Sparse diagonal matrix from `values` (square, `len × len`).

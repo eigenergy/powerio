@@ -29,8 +29,10 @@ API is documented in the
 | DC bus injection \\(p_{bus}\\) | \\(n\\) | `DcOperators::calc_bus_injection_dc` | \\(p_{bus} = -Bv_a + p_{shift}\\) |
 | weighted bus factor \\(L\\) | \\(n \times n\\) | `calc_weighted_laplacian` | \\(L = C \operatorname{diag}(w) C^\mathsf{T}\\); internal solver data |
 | solver branch flow matrix | \\(m \times n\\) | `calc_solver_branch_flow_matrix` | positive solver susceptance magnitudes times \\(C^\mathsf{T}\\); internal solver data |
+| Per-island PTDF | one matrix per component | `calc_ptdf_by_island` | partitions one global PTDF solve and returns source bus/branch index mappings |
 | PTDF | \\(m \times n\\) | `calc_ptdf` | routes through `Auto` solver selection; `calc_ptdf_lodf_with_options` exposes the choice |
 | LODF | \\(m \times m\\) | `calc_lodf` | routes through `Auto` solver selection; option based builds can prune small output entries |
+| selected PTDF rows, PTDF columns, LODF columns | \\(k \times n\\), \\(m \times k\\), \\(m \times k\\) | `calc_ptdf_rows`, `calc_ptdf_columns`, `calc_lodf_columns` | one solve per requested row or column, in the order requested; the full matrices are never formed |
 | AC power flow Jacobian | \\(2n \times 2n\\) | `calc_power_flow_jacobian` | polar or rectangular voltage coordinates |
 | multiconductor admittance | conductor by conductor | `calc_multiconductor_admittance_matrix` | from a `MulticonductorNetwork`; Rust only in 0.11 |
 | adjacency | \\(n \times n\\) | `calc_adjacency_matrix` | sparse graph adjacency |
@@ -41,15 +43,26 @@ PTDF and LODF need a linear solve, and `calc_ptdf`, `calc_lodf`,
 through the same solver selection. You pick the path with
 `SensitivitySolver`, the `solver` field on `SensitivityOptions`. `Dense`
 forces the dense grounded factorization. `Sparse` factors the grounded DC bus
-susceptance matrix once with a sparse Cholesky and reuses that factorization
-for every right hand side. `Auto` picks dense up to a reduced dimension of 512
-(with a memory ceiling) and sparse above it. The sparse path avoids forming
-the \\((n-r) \times (n-r)\\) dense inverse, though the PTDF and LODF outputs
-themselves can still be large. It also needs positive finite internal factor
-weights `w = -b`, so the grounded matrix `L = -B` is positive definite once
-reference coverage has been checked; the dense path can handle nonsingular
-indefinite cases. Every connected component must contain at least one
-reference bus. The DC OPF bundle (\\(A\\), \\(b\\), \\(L\\), costs, bounds,
+susceptance matrix once and reuses that factorization for every right hand
+side. `Auto` picks dense up to a reduced dimension of 512 (with a memory
+ceiling) and sparse above it. The sparse path avoids forming the
+\\((n-r) \times (n-r)\\) dense inverse, though the PTDF and LODF outputs
+themselves can still be large. With positive internal factor weights
+`w = -b` the grounded matrix `L = -B` is positive definite and the sparse path
+uses a Cholesky factorization. A negative weight, a series capacitor's, can
+make it indefinite; the sparse path then uses `LDLᵀ`, and LU with partial
+pivoting when that fails, reported as the `sparse_ldlt` and `sparse_lu`
+solver paths. Each factorization must solve a probe right hand side with a
+normwise backward error below 1e-10 and a relative forward error below 1e-4;
+a matrix every factorization fails is refused as singular. Every connected
+component must contain at least one reference bus.
+
+When only some branches or buses matter, `calc_ptdf_rows(case, options,
+branches)`, `calc_ptdf_columns(case, options, buses)`, and
+`calc_lodf_columns(case, options, outaged)` return just those rows or
+columns, indexed by dense branch and bus index in the order requested. They
+factor once and solve one right hand side per requested row or column, so a
+100k bus case never forms its \\(m \times n\\) PTDF or \\(m \times m\\) LODF. The DC OPF bundle (\\(A\\), \\(b\\), \\(L\\), costs, bounds,
 thermal limits, \\(C_g\\)) is prepared from a `DcOpfInstance` and documented
 in [DC OPF bundle](dcopf-bundle.md).
 
@@ -108,7 +121,12 @@ that solved the case.
   isolated has no balance and belongs to no island.
 - **Refusal.** The stored voltages do not determine the flow through a
   branch with zero series impedance, so such a branch is refused with
-  `Error::UnmergedZeroImpedance`; merge the buses it joins first.
+  `Error::UnmergedZeroImpedance`. The balance stamps branches only, so a
+  closed switch joining two buses is refused with `BUILD.SWITCH.CLOSED`, as
+  the PTDF and LODF builders refuse it. Merge the buses either joins first:
+  `BalancedNetwork::merge_buses` in Rust, or `--merge-buses switches` (closed
+  switches) or `--merge-buses exact` (and zero impedance branches) with
+  `powerio verify --stated-state`.
 
 `calc_stated_branch_flows` returns the active and reactive power entering
 both ends of every branch and winding at the stored voltages. From the
@@ -179,8 +197,22 @@ between produces none of these findings.
   \\(r^2 + x^2\\); DC incidence and reactance only FDPF forms use \\(x\\).
   The gridfm export still zeros its admittance and flow columns for these rows
   and records `dropped_zero_impedance` in `gridfm_meta.json`.
+  `BalancedNetwork::merge_buses` resolves them explicitly instead, together
+  with closed switches (see [Merging buses](transmission.md#merging-buses)).
 - **Reference coverage.** `IndexedNetwork::check_reference_coverage` verifies that
-  every in service island has a reference bus.
+  every in service island has a reference bus. Islands are joined by in
+  service branches and closed switches.
+- **Closed switches.** The builders stamp branches only, so on a network
+  that still carries a closed switch they leave its two buses apart.
+  Normalization merges closed switches by default (`ClosedSwitchPolicy` on
+  `NormalizeSettings` keeps or refuses them instead), and `merge_buses` merges
+  them on request (see [Merging buses](transmission.md#merging-buses)).
+  `IndexedNetwork::check_closed_switches` refuses a network that skipped both
+  with `BUILD.SWITCH.CLOSED`, counting the closed switches.
+  Default merging also fails with that code if it cannot eliminate an eligible
+  closed switch, such as a connection between two windings of one three winding
+  transformer. It reports original source rows and returns no partial normalized
+  network. Explicit `Keep` remains for consumers that model switches themselves.
 - **Branch susceptance formulas.** `BranchSusceptanceFormula` selects the
   branch susceptance vector \\(b\\) and, for formulas that include phase shifts,
   the phase shift injection. In the PowerModels form,
@@ -242,3 +274,5 @@ estimate when the solver input is SPD.
 [petgraph](https://docs.rs/petgraph) graph, one node per bus and one edge per
 in service branch. The connectivity report and the radial check are built on
 it, and you can hand the returned graph straight to other petgraph algorithms.
+
+`calc_ptdf_by_island` returns one sparse PTDF per connected component. It uses the same single factorization and global solve as the ordinary PTDF builder, then scatters stored entries into component-local matrices in one pass. Each result carries dense source bus indices and source branch indices so callers can relate local matrix rows and columns back to the network. Closed switches must be merged before this call; the DC incidence matrix models branches, not unmerged switch connections.

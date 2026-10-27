@@ -72,7 +72,7 @@ pub enum Error {
     InvalidSensitivityOptions { reason: String },
 
     #[error(
-        "{element} between buses {from} and {to} has zero series impedance, so the stored voltages do not determine its flow; merge the buses it joins before evaluating the stated state (powerio_prob::merge_zero_impedance_buses)"
+        "{element} between buses {from} and {to} has zero series impedance, so the stored voltages do not determine its flow; merge the buses it joins before evaluating the stated state (BalancedNetwork::merge_buses in Rust, or --merge-buses exact on the command line)"
     )]
     UnmergedZeroImpedance {
         /// The branch or three winding transformer winding, as text.
