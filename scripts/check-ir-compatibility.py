@@ -21,10 +21,12 @@ ADDITIVE_TYPES = {
     "powerio.MonitoredSet",
     "powerio.SubsystemSet",
 }
-# Records that gained an optional field after 0.11.0. Current output states
-# the field, and a 0.11.0 reader rejects it as an unknown field rather than
-# read the document under a different meaning. Without the field the record
-# is the one 0.11.0 wrote, and 0.11.0 reads it.
+# Records that gained an optional field after 0.11.0. The power flow
+# instances `to_dc_pf_instance` and `to_ac_pf_instance` build carry HVDC lines
+# as fixed injections, which their documents state as `hvdc_treatment`; a
+# 0.11.0 reader rejects the field as unknown rather than read the document
+# under a different meaning. An `ignore` instance is written without the field.
+# Without it the record is the one 0.11.0 wrote, and 0.11.0 reads it.
 ADDED_FIELDS = {
     "powerio.AcPfInstance": "hvdc_treatment",
     "powerio.DcPfInstance": "hvdc_treatment",

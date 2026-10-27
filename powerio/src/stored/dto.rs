@@ -609,9 +609,9 @@ pub struct DcPfInstance {
     pub approximation: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_point: Option<StoredOperatingPointAssignment>,
-    /// How the bus specifications treat the network's HVDC lines. A document
-    /// that leaves it out was written before the treatment existed and reads
-    /// as `ignore`, the calculation it denoted then.
+    /// How the bus specifications treat the network's HVDC lines. Absent
+    /// means `ignore`, the treatment of every document written before the
+    /// field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hvdc_treatment: Option<powerio_tx::HvdcTreatment>,
 }
@@ -624,9 +624,9 @@ pub struct AcPfInstance {
     pub specifications: Vec<powerio_prob::AcBusSpecification>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_point: Option<StoredOperatingPointAssignment>,
-    /// How a replacement network's specifications treat its HVDC lines. A
-    /// document that leaves it out was written before the treatment existed
-    /// and reads as `ignore`, the calculation it denoted then.
+    /// How a replacement network's specifications treat its HVDC lines.
+    /// Absent means `ignore`, the treatment of every document written before
+    /// the field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hvdc_treatment: Option<powerio_tx::HvdcTreatment>,
 }

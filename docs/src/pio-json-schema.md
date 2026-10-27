@@ -196,7 +196,8 @@ types they do not implement. A list of allowed names can gain a name the same
 way; an older reader rejects a document that uses the new name. The power
 flow instance records gain the optional `hvdc_treatment` field in 0.11.7: a
 document without it reads with HVDC lines left out, as earlier releases read
-it, and an earlier reader rejects a document that states it. An incompatible change to an existing record's
+it. It is written only for `fixed_injection`, and an earlier reader rejects a
+document that states it. An incompatible change to an existing record's
 representation or meaning requires a version bump and a release decision.
 
 Schema snapshots describe the structural types available in a release.

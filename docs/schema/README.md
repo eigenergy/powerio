@@ -47,8 +47,9 @@ compatible: readers can reject unknown fields, so existing records retain
 their layout throughout the 0.11.x line. The one field added so far is the
 optional `hvdc_treatment` of `powerio.DcPfInstance` and
 `powerio.AcPfInstance` in 0.11.7. A document without it reads as the earlier
-release read it, with HVDC lines left out (`ignore`). 0.11.7 always writes the
-field, and an earlier reader rejects such a document as an unknown field
+release read it, with HVDC lines left out (`ignore`). 0.11.7 writes the field
+only for `fixed_injection`, so an `ignore` instance keeps the earlier layout,
+and an earlier reader rejects a `fixed_injection` document as an unknown field
 rather than read it under a different HVDC treatment.
 
 `powerio::IR_VERSION` is the IR version a build writes and

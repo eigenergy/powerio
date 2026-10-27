@@ -99,13 +99,15 @@
   `powerio.AcPfInstance` gain one optional field, `hvdc_treatment`
   (`fixed_injection` or `ignore`, in `pio-ir/2/0.11.7/schema.json`); no
   existing field changes layout or meaning, and IR stays at version 2.
-  Writing always states the treatment, so an instance, alone or inside a
-  stored solution, reads back with the treatment it was built with. A
-  document without the field, as every earlier release wrote, reads as
+  A document without the field, as every earlier release wrote, reads as
   `ignore`, the calculation it denoted when written: a bus specification of
   -40 MW stays -40 MW, also after `with_network` replaces the network with an
-  identical one. An earlier reader rejects a document that states the field
-  as an unknown field rather than read it under another treatment.
+  identical one. Writing states the field only for `fixed_injection`, so an
+  instance, alone or inside a stored solution, reads back with the treatment
+  it was built with, an `ignore` instance writes the layout earlier releases
+  read, and an earlier reader rejects a `fixed_injection` document as an
+  unknown field rather than calculate it without the injections. The
+  instances `from_network` builds use `fixed_injection`.
   `pio_build_dc_opf_preparation` keeps HVDC lines out, because the ABI 7 bus
   view has no column to state their injection. The AC OPF preparation does
   not carry HVDC injections yet, and GridFM output reports HVDC lines as

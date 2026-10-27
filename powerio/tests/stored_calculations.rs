@@ -200,9 +200,9 @@ fn a_dc_pf_document_without_an_hvdc_treatment_keeps_the_calculation_it_denoted()
         .unwrap();
     assert_eq!(dc_net_active_power(&replaced, 1), -40.0);
 
-    // Written again, the document states the treatment it read as.
+    // Written again, the document keeps the layout 0.11.6 wrote.
     let text = serialize(&module).unwrap();
-    assert_eq!(stated_hvdc_treatment(&text, &[]), "ignore");
+    assert_eq!(stated_hvdc_treatment(&text, &[]), serde_json::Value::Null);
     let PioValue::DcPfInstance(back) = deserialize(&text).unwrap().value().clone() else {
         panic!("expected a DC power flow instance");
     };
@@ -245,7 +245,7 @@ fn an_ac_pf_document_without_an_hvdc_treatment_keeps_the_calculation_it_denoted(
     assert_eq!(dc_net_active_power(&dc, 1), -40.0);
 
     let text = serialize(&module).unwrap();
-    assert_eq!(stated_hvdc_treatment(&text, &[]), "ignore");
+    assert_eq!(stated_hvdc_treatment(&text, &[]), serde_json::Value::Null);
 }
 
 #[test]
@@ -253,8 +253,12 @@ fn an_ac_pf_document_without_an_hvdc_treatment_keeps_the_calculation_it_denoted(
 fn power_flow_instances_keep_their_hvdc_treatment_through_ir() {
     use powerio_tx::HvdcTreatment;
     for (treatment, token, bus_2) in [
-        (HvdcTreatment::FixedInjection, "fixed_injection", -30.5),
-        (HvdcTreatment::Ignore, "ignore", -40.0),
+        (
+            HvdcTreatment::FixedInjection,
+            serde_json::json!("fixed_injection"),
+            -30.5,
+        ),
+        (HvdcTreatment::Ignore, serde_json::Value::Null, -40.0),
     ] {
         let dc = DcPfInstance::from_network_with_hvdc(hvdc_network(), treatment).unwrap();
         assert_eq!(dc_net_active_power(&dc, 1), bus_2);
@@ -279,6 +283,39 @@ fn power_flow_instances_keep_their_hvdc_treatment_through_ir() {
         let replaced = back.clone().with_network(back.network().clone()).unwrap();
         assert_eq!(ac_net_active_power(&replaced, 1), bus_2);
         assert_eq!(back.to_dc_pf().0.hvdc_treatment(), treatment);
+    }
+}
+
+#[test]
+fn only_a_fixed_injection_pf_instance_writes_the_hvdc_treatment() {
+    // `ignore` is what a document without the field denotes, so an `ignore`
+    // instance writes the layout earlier releases read; `fixed_injection`
+    // states the field, which those releases reject rather than calculate
+    // without the injections.
+    use powerio_tx::HvdcTreatment;
+    for (treatment, stated) in [
+        (HvdcTreatment::Ignore, None),
+        (HvdcTreatment::FixedInjection, Some("fixed_injection")),
+    ] {
+        let dc = DcPfInstance::from_network_with_hvdc(hvdc_network(), treatment).unwrap();
+        let ac = AcPfInstance::from_network_with_hvdc(hvdc_network(), treatment).unwrap();
+        for value in [PioValue::DcPfInstance(dc), PioValue::AcPfInstance(ac)] {
+            let type_name = value.type_name().to_owned();
+            let text = serialize(&PioModule::new(value)).unwrap();
+            let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let data = raw["value"]["data"].as_object().unwrap();
+            assert_eq!(
+                data.get("hvdc_treatment")
+                    .and_then(serde_json::Value::as_str),
+                stated,
+                "{type_name} under {treatment:?}"
+            );
+            assert_eq!(
+                data.contains_key("hvdc_treatment"),
+                stated.is_some(),
+                "{type_name} under {treatment:?}"
+            );
+        }
     }
 }
 
@@ -319,11 +356,7 @@ fn stored_pf_solutions_keep_the_hvdc_treatment_of_their_instance() {
     assert_eq!(dc_net_active_power(&instance, 1), -30.5);
 
     // A solution document from before the field embeds an instance without
-    // it, and that instance reads as it did then.
-    let text = serialize(&PioModule::new(PioValue::DcPfSolution(solution(
-        HvdcTreatment::Ignore,
-    ))))
-    .unwrap();
+    // it, and that instance reads as it did then, whatever network it holds.
     let legacy = without_hvdc_treatment(&text, &["instance"]);
     let instance = instance_of(&legacy);
     assert_eq!(instance.hvdc_treatment(), HvdcTreatment::Ignore);
@@ -346,9 +379,11 @@ fn stored_pf_solutions_keep_the_hvdc_treatment_of_their_instance() {
     )
     .unwrap();
     let text = serialize(&PioModule::new(PioValue::AcPfSolution(ac))).unwrap();
-    assert_eq!(stated_hvdc_treatment(&text, &["instance"]), "ignore");
-    let legacy = without_hvdc_treatment(&text, &["instance"]);
-    let PioValue::AcPfSolution(back) = deserialize(&legacy).unwrap().value().clone() else {
+    assert_eq!(
+        stated_hvdc_treatment(&text, &["instance"]),
+        serde_json::Value::Null
+    );
+    let PioValue::AcPfSolution(back) = deserialize(&text).unwrap().value().clone() else {
         panic!("expected an AC power flow solution");
     };
     let instance = back.instance().clone();

@@ -1386,16 +1386,17 @@ Schema definition: `DcPfInstance`.
 | `network` | `BalancedNetwork` | | | at least one `REF` bus | required |
 | `approximation` | token `series_susceptance`, `tap_adjusted_reactance`, `reactance_only` | | | the DC branch susceptance formula | required |
 | `initial_point` | `StoredOperatingPointAssignment` or null | | | | null |
-| `hvdc_treatment` | token `fixed_injection`, `ignore` | | | how the specifications treat HVDC lines; written since 0.11.7 | `ignore` |
+| `hvdc_treatment` | token `fixed_injection`, `ignore` | | | how the specifications treat HVDC lines; written only when not `ignore` | `ignore` |
 
 The bus specifications are derived from the network: a `REF` bus contributes
 its stated angle, an `ISOLATED` bus no equation, and every other bus its net
 active injection over in service generators and loads. Under
 `fixed_injection` each in service HVDC line whose terminal buses are energized
 adds a fixed injection of `-pf` at its from bus and `+pt` at its to bus; under
-`ignore` HVDC lines add nothing. A document without `hvdc_treatment` was
-written before the field existed, when the instance left HVDC lines out, and
-reads as `ignore`, so it denotes the calculation it did when written.
+`ignore` HVDC lines add nothing. A document without `hvdc_treatment` reads as
+`ignore`: a document written before the field existed, when the instance left
+HVDC lines out, denotes the calculation it did when written, and an `ignore`
+instance is written without the field.
 
 ### powerio.AcPfInstance
 
@@ -1406,7 +1407,7 @@ Schema definition: `AcPfInstance`.
 | `network` | `BalancedNetwork` | | | at least one `REF` bus | required |
 | `specifications` | array of `AcBusSpecification` | | | one per bus, in bus table order | required |
 | `initial_point` | `StoredOperatingPointAssignment` or null | | | | null |
-| `hvdc_treatment` | token `fixed_injection`, `ignore` | | | how specifications derived for a replacement network treat HVDC lines; written since 0.11.7 | `ignore` |
+| `hvdc_treatment` | token `fixed_injection`, `ignore` | | | how specifications derived for a replacement network treat HVDC lines; written only when not `ignore` | `ignore` |
 
 `AcBusSpecification` is tagged by `kind`. `pq` gives `p` (MW) and `q`
 (MVAr), the prescribed net injection; `pv` gives `p` and `vm` (p.u.);

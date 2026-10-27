@@ -384,7 +384,7 @@
               "type": "null"
             }
           ],
-          "description": "How a replacement network's specifications treat its HVDC lines. A\ndocument that leaves it out was written before the treatment existed\nand reads as `ignore`, the calculation it denoted then."
+          "description": "How a replacement network's specifications treat its HVDC lines.\nAbsent means `ignore`, the treatment of every document written before\nthe field existed."
         },
         "initial_point": {
           "anyOf": [
@@ -3402,7 +3402,7 @@
               "type": "null"
             }
           ],
-          "description": "How the bus specifications treat the network's HVDC lines. A document\nthat leaves it out was written before the treatment existed and reads\nas `ignore`, the calculation it denoted then."
+          "description": "How the bus specifications treat the network's HVDC lines. Absent\nmeans `ignore`, the treatment of every document written before the\nfield existed."
         },
         "initial_point": {
           "anyOf": [

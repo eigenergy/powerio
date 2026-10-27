@@ -1064,8 +1064,7 @@ fn multiconductor_identity_order(
 
 fn encode_dc_pf_instance(instance: &powerio_prob::DcPfInstance) -> Result<dto::DcPfInstance> {
     // The stored instance is its network; reading it back derives the
-    // specifications under the stated HVDC treatment. The treatment is
-    // always written, because a document without it reads as `ignore`.
+    // specifications under the stated HVDC treatment.
     let network = with_component_ids(instance.network().clone());
     Ok(dto::DcPfInstance {
         initial_point: instance
@@ -1080,7 +1079,7 @@ fn encode_dc_pf_instance(instance: &powerio_prob::DcPfInstance) -> Result<dto::D
             .transpose()?,
         network: Box::new(network),
         approximation: dc_formula_name(instance.branch_susceptance_formula())?.to_string(),
-        hvdc_treatment: Some(instance.hvdc_treatment()),
+        hvdc_treatment: stated_hvdc_treatment(instance.hvdc_treatment()),
     })
 }
 
@@ -1099,7 +1098,7 @@ fn encode_ac_pf_instance(instance: &powerio_prob::AcPfInstance) -> Result<dto::A
             .transpose()?,
         network: Box::new(network),
         specifications: instance.specifications().to_vec(),
-        hvdc_treatment: Some(instance.hvdc_treatment()),
+        hvdc_treatment: stated_hvdc_treatment(instance.hvdc_treatment()),
     })
 }
 
@@ -2561,6 +2560,16 @@ fn with_solution_records<S>(
 /// calculation it did then.
 fn stored_hvdc_treatment(stated: Option<powerio_tx::HvdcTreatment>) -> powerio_tx::HvdcTreatment {
     stated.unwrap_or(powerio_tx::HvdcTreatment::Ignore)
+}
+
+/// The HVDC treatment a power flow instance document states. `Ignore` is what
+/// a document without the field denotes, so it is left out and the document
+/// stays readable by releases that predate the field; any other treatment is
+/// written, and those releases reject it rather than calculate without it.
+fn stated_hvdc_treatment(
+    treatment: powerio_tx::HvdcTreatment,
+) -> Option<powerio_tx::HvdcTreatment> {
+    (treatment != powerio_tx::HvdcTreatment::Ignore).then_some(treatment)
 }
 
 fn decode_dc_pf_instance(instance: dto::DcPfInstance) -> Result<powerio_prob::DcPfInstance> {
