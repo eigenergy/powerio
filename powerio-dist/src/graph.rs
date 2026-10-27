@@ -427,13 +427,19 @@ mod tests {
     }
 
     #[test]
-    fn graph_projects_open_switch_fixture() {
+    fn graph_preserves_finite_switch_lines_without_executing_controls() {
         let net =
             crate::testkit::parse_file(fixture("micro/switch.dss"), None).expect("parse switch");
         let graph = net.to_graph();
 
-        let open = edge(&graph, DistGraphEdgeKind::Switch, "sw_open");
-        assert!(!open.closed);
+        let open = edge(&graph, DistGraphEdgeKind::Line, "sw_open");
+        // Normal/Action are controller settings, not explicit line state.
+        assert!(open.closed);
+        assert!(
+            net.warnings
+                .iter()
+                .any(|w| w.contains("active control execution is excluded"))
+        );
         assert_eq!(open.from, "mid");
         assert_eq!(open.to, "stub");
         assert_eq!(
@@ -446,11 +452,20 @@ mod tests {
         );
         assert_eq!(open.n_phases, 3);
 
-        let closed = edge(&graph, DistGraphEdgeKind::Switch, "sw_closed");
+        let closed = edge(&graph, DistGraphEdgeKind::Line, "sw_closed");
         assert!(closed.closed);
 
         let sourcebus = bus(&graph, "sourcebus");
-        assert!(sourcebus.has_source);
+        assert!(!sourcebus.has_source);
+        let source = &net.sources()[0];
+        assert!(bus(&graph, &source.bus).has_source);
+        let impedance = edge(
+            &graph,
+            DistGraphEdgeKind::Line,
+            "_pio_vsource_source_impedance",
+        );
+        assert_eq!(impedance.from, source.bus);
+        assert_eq!(impedance.to, sourcebus.id);
         let loadbus = bus(&graph, "loadbus");
         assert_close(loadbus.load_kw, 500.0);
         assert!(

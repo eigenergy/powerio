@@ -495,3 +495,26 @@ fn open_switch_does_not_merge_different_voltage_levels() {
     net.switches_mut()[0].open = false;
     assert!(write_experimental_multiconductor(&net, &options).is_err());
 }
+
+#[test]
+fn near_equal_sequence_values_read_back_within_the_diagonal_tolerance() {
+    // Zero- and positive-sequence values that differ in the last few digits
+    // leave off-diagonal entries far below the diagonal. Their readback
+    // rounding is tiny next to the diagonal but large next to themselves.
+    let (mut net, options) = constructed(false);
+    let code = &mut net.line_codes_mut()[0];
+    for (matrix, diagonal) in [(&mut code.r_series, 0.0004), (&mut code.x_series, 0.0003)] {
+        for (i, row) in matrix.iter_mut().enumerate() {
+            for (j, value) in row.iter_mut().enumerate() {
+                *value = if i == j { diagonal } else { 1e-17 };
+            }
+        }
+    }
+    let out = read(
+        &write_experimental_multiconductor(&net, &options)
+            .unwrap()
+            .database,
+    );
+    let r = &out.line_codes()[0].r_series;
+    assert!((r[0][1] - 1e-17).abs() <= 1e-10 * 0.0004);
+}

@@ -405,7 +405,7 @@ impl BalancedNetwork {
             }
         }
 
-        if !designated.is_empty() || !demoted.is_empty() || !dead.is_empty() {
+        if !designated.is_empty() || !demoted.is_empty() {
             let designated_set: BTreeSet<BusId> = designated.iter().copied().collect();
             let demoted_kind: HashMap<BusId, BusType> = demoted.iter().copied().collect();
             for bus in self.buses_mut() {
@@ -413,13 +413,11 @@ impl BalancedNetwork {
                     bus.kind = BusType::Ref;
                 } else if let Some(&kind) = demoted_kind.get(&bus.id) {
                     bus.kind = kind;
-                } else if dead.contains(&bus.id) {
-                    bus.kind = BusType::Isolated;
                 }
             }
         }
         if !dead.is_empty() {
-            self.de_energize(&dead);
+            self.de_energize_buses(&dead);
         }
 
         IslandReferenceReport {
@@ -470,10 +468,59 @@ impl BalancedNetwork {
         )
     }
 
-    /// Take every element at or touching `buses` out of service. Only a table
-    /// with such an element in service is copied.
-    fn de_energize(&mut self, buses: &BTreeSet<BusId>) {
+    /// Keep `island` energized and de-energize every other bus not already
+    /// typed isolated, with [`de_energize_buses`](Self::de_energize_buses),
+    /// returning the buses de-energized in ascending order.
+    ///
+    /// This is the in-place counterpart of
+    /// [`subset_buses`](BalancedNetwork::subset_buses): every table keeps all
+    /// its rows, so a source row index still names the same element, and the
+    /// elements outside `island` stay in the network out of service. Pass the
+    /// buses of one [`Island`] of [`calc_islands`](Self::calc_islands), or
+    /// the union of several.
+    pub fn keep_island(&mut self, island: &BTreeSet<BusId>) -> Vec<BusId> {
+        let others: BTreeSet<BusId> = self
+            .buses()
+            .iter()
+            .filter(|bus| bus.kind != BusType::Isolated && !island.contains(&bus.id))
+            .map(|bus| bus.id)
+            .collect();
+        if !others.is_empty() {
+            self.de_energize_buses(&others);
+        }
+        others.into_iter().collect()
+    }
+
+    /// De-energize `buses`, as [`assign_island_references`] does to an island
+    /// with no source.
+    ///
+    /// Each bus is typed isolated, and the loads, shunts, static var
+    /// compensators, storage, and generators at them, and every branch and
+    /// HVDC line touching them, are taken out of service. A three winding
+    /// transformer loses the windings on those buses and goes out whole only
+    /// when fewer than two windings remain. Switches keep their state: a
+    /// closed switch joins nothing through an isolated bus. No row is added
+    /// or removed, so data keyed by source rows stays valid. Ids the network
+    /// does not declare are ignored, and only a table with an element to
+    /// change is copied.
+    ///
+    /// [`assign_island_references`]: BalancedNetwork::assign_island_references
+    pub fn de_energize_buses(&mut self, buses: &BTreeSet<BusId>) {
         let at = |bus: BusId| buses.contains(&bus);
+        if self
+            .buses()
+            .iter()
+            .any(|b| b.kind != BusType::Isolated && at(b.id))
+        {
+            for bus in self.buses_mut().iter_mut().filter(|b| at(b.id)) {
+                bus.kind = BusType::Isolated;
+            }
+        }
+        if self.generators().iter().any(|g| g.in_service && at(g.bus)) {
+            for generator in self.generators_mut().iter_mut().filter(|g| at(g.bus)) {
+                generator.in_service = false;
+            }
+        }
         if self.loads().iter().any(|l| l.in_service && at(l.bus)) {
             for load in self.loads_mut().iter_mut().filter(|l| at(l.bus)) {
                 load.in_service = false;
@@ -928,5 +975,140 @@ mod tests {
         assert_eq!(sub.loads().len(), 1);
         assert_eq!(sub.hvdc().as_slice(), []);
         sub.validate().unwrap();
+    }
+
+    /// Every source row of every table maps to its row in the cut, in order,
+    /// or to `None` exactly when the cut leaves it out.
+    #[test]
+    fn island_cut_row_maps_agree_with_the_cut_network() {
+        let fixtures = [
+            three_islands(),
+            line_with_a_tertiary(BusType::Isolated),
+            line_with_a_tertiary(BusType::Pq),
+        ];
+        for net in fixtures {
+            for island in net.calc_islands().islands {
+                let island: BTreeSet<BusId> = island.buses.iter().copied().collect();
+                let cut = net.subset_buses(&island);
+                let kept: BTreeSet<BusId> = cut.network.buses().iter().map(|b| b.id).collect();
+                assert!(island.is_subset(&kept));
+                macro_rules! check {
+                    ($map:ident, $table:ident, $kept:expr) => {{
+                        let source = net.$table();
+                        let result = cut.network.$table();
+                        assert_eq!(cut.$map.len(), source.len(), stringify!($map));
+                        let rows: Vec<usize> = cut.$map.iter().flatten().copied().collect();
+                        assert_eq!(rows, (0..result.len()).collect::<Vec<_>>());
+                        for (row, target) in cut.$map.iter().enumerate() {
+                            let element = &source[row];
+                            #[allow(clippy::redundant_closure_call)]
+                            let expected = ($kept)(element);
+                            assert_eq!(
+                                target.is_some(),
+                                expected,
+                                "{} row {row}",
+                                stringify!($map)
+                            );
+                            if let Some(target) = target {
+                                assert_eq!(&result[*target], element);
+                            }
+                        }
+                    }};
+                }
+                for (row, target) in cut.bus_rows.iter().enumerate() {
+                    let id = net.buses()[row].id;
+                    assert_eq!(target.is_some(), kept.contains(&id));
+                    if let Some(target) = target {
+                        assert_eq!(cut.network.buses()[*target].id, id);
+                    }
+                }
+                let at = |bus: &BusId| island.contains(bus);
+                let spans = |from: &BusId, to: &BusId| kept.contains(from) && kept.contains(to);
+                check!(load_rows, loads, |e: &Load| at(&e.bus));
+                check!(generator_rows, generators, |e: &Generator| at(&e.bus));
+                check!(branch_rows, branches, |e: &Branch| spans(&e.from, &e.to));
+                check!(switch_rows, switches, |e: &Switch| spans(&e.from, &e.to));
+                check!(hvdc_rows, hvdc, |e: &Hvdc| spans(&e.from, &e.to));
+                check!(transformer_3w_rows, transformers_3w, |e: &Transformer3W| e
+                    .windings
+                    .iter()
+                    .all(|w| kept.contains(&w.bus))
+                    && e.windings.iter().any(|w| at(&w.bus)));
+                assert_eq!(cut.shunt_rows.len(), net.shunts().len());
+                assert_eq!(cut.storage_rows.len(), net.storage().len());
+                assert_eq!(
+                    cut.static_var_compensator_rows.len(),
+                    net.static_var_compensators().len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn de_energizing_buses_keeps_every_row() {
+        let mut net = three_islands();
+        let rows = |net: &BalancedNetwork| {
+            [
+                net.buses().len(),
+                net.branches().len(),
+                net.switches().len(),
+                net.generators().len(),
+                net.loads().len(),
+                net.hvdc().len(),
+            ]
+        };
+        let before = rows(&net);
+        // Island B {3, 4, 5} holds generation; de-energizing takes it out too.
+        net.de_energize_buses(&[BusId(3), BusId(4), BusId(5), BusId(99)].into());
+        assert_eq!(rows(&net), before, "no row is added or removed");
+        for bus in [3, 4, 5] {
+            assert_eq!(kind(&net, bus), BusType::Isolated);
+        }
+        assert_eq!(kind(&net, 2), BusType::Pq);
+        assert!(!net.branches()[2].in_service, "the line 3-4");
+        assert!(net.switches()[0].closed, "switches keep their state");
+        assert!(net.generators()[0].in_service);
+        assert!(!net.generators()[1].in_service && !net.generators()[2].in_service);
+        assert!(!net.loads()[1].in_service && net.loads()[0].in_service);
+        let partition = net.calc_islands();
+        assert_eq!(partition.island_of(BusId(4)), None);
+        assert_eq!(partition.islands.len(), 2);
+        net.validate().unwrap();
+    }
+
+    #[test]
+    fn keeping_one_island_de_energizes_the_others_in_place() {
+        let mut net = three_islands();
+        let partition = net.calc_islands();
+        let island: BTreeSet<BusId> = partition.islands[1].buses.iter().copied().collect();
+        let cut = net.subset_buses(&island);
+        let dead = net.keep_island(&island);
+        // Bus 8 was already isolated; the buses of islands A and C go.
+        assert_eq!(dead, [1, 2, 6, 7, 9].map(BusId));
+        let after = net.calc_islands();
+        assert_eq!(after.islands.len(), 1);
+        assert_eq!(after.islands[0].buses, partition.islands[1].buses);
+        // The in-service elements are exactly the ones the cut keeps, at
+        // their source rows.
+        for (row, target) in cut.branch_rows.iter().enumerate() {
+            assert_eq!(net.branches()[row].in_service, target.is_some());
+        }
+        for (row, target) in cut.generator_rows.iter().enumerate() {
+            assert_eq!(net.generators()[row].in_service, target.is_some());
+        }
+        for (row, target) in cut.load_rows.iter().enumerate() {
+            assert_eq!(net.loads()[row].in_service, target.is_some());
+        }
+        for (row, target) in cut.hvdc_rows.iter().enumerate() {
+            assert_eq!(net.hvdc()[row].in_service, target.is_some());
+        }
+        assert_eq!(
+            net.keep_island(&island),
+            [],
+            "a second call changes nothing"
+        );
+        let report = net.assign_island_references(IslandReferencePolicy::PerIsland);
+        assert_eq!(report.de_energized, []);
+        net.validate().unwrap();
     }
 }

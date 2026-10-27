@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use powerio_tx::network::BalancedNetwork;
 use powerio_tx::{
     BranchRef, BusId, InterfaceMember, JoinName, MonitorScope, MonitorStatement, MonitoredParsed,
-    MonitoredSet, PsseEquipmentIndex, RetainedStatement, SubsystemParsed, SubsystemSelector,
-    SubsystemSet, UnresolvedMonitorReason,
+    MonitoredSet, PsseEquipmentIndex, RetainedStatement, SharedPsseEquipmentIndex, SubsystemParsed,
+    SubsystemSelector, SubsystemSet, UnresolvedMonitorReason,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -1106,6 +1106,30 @@ fn an_index_built_once_binds_the_same_set() {
         set.resolve_with(&index, &subsystems),
         set.resolve(&net, &subsystems)
     );
+}
+
+#[test]
+fn a_shared_index_binds_and_expands_like_the_borrowed_one() {
+    let net = select_network();
+    let subsystems = parse_sub("selectors.sub").set;
+    let shared = SharedPsseEquipmentIndex::new(std::sync::Arc::new(net.clone()));
+    for name in ["generated.mon", "blocks.mon"] {
+        let set = parse_mon(name).set;
+        assert_eq!(
+            set.resolve_with(&shared.index(), &subsystems),
+            set.resolve(&net, &subsystems),
+            "{name}"
+        );
+    }
+    for name in ["expand.con", "automatic_skip.con"] {
+        let set = powerio_tx::ContingencySet::parse(&read(name))
+            .expect("parse contingency fixture")
+            .set;
+        let ours = set.expand_with(&shared.index(), &subsystems);
+        let theirs = set.expand(&net, &subsystems);
+        assert_eq!(ours.set, theirs.set, "{name}");
+        assert_eq!(ours.diagnostics, theirs.diagnostics, "{name}");
+    }
 }
 
 #[test]

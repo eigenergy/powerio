@@ -18,6 +18,10 @@ pub enum SincalContainer {
     Sqlite,
     /// Deterministic candidate `.sinx` packaging. This does not include an
     /// undocumented desktop `.sin` file, diagrams, results or an Access database.
+    // Callers build this struct variant directly, so it cannot gain a field
+    // within 0.11 without breaking them (#682). The enum is `non_exhaustive`:
+    // when a packaging option is needed, add a new variant carrying a
+    // `#[non_exhaustive]` options struct with `Default`, and keep this one.
     Archive {
         /// Portable project name: 1–128 ASCII letters, digits, `_` or `-`.
         project_name: String,

@@ -66,13 +66,15 @@ class PanicException(BaseException):
     """A Rust panic pyo3 caught at the boundary; the wrapper converts it."""
 
 class PowerIOError(ValueError):
-    """Base error from the powerio parser, emitter, or matrix calculations.
+    """Base error from parsing, emission, or matrix calculations.
 
-    Failures mapped from the Rust core carry the diagnostic code string as
-    ``code``; it is set at raise time, so it is instance-only.
+    Rust core failures carry a diagnostic code and typed Diagnostic records.
+    Refused conversion passes retain their existing dictionary findings.
+    These attributes are populated when the exception is raised.
     """
 
     code: str
+    diagnostics: list[Diagnostic] | list[dict[str, Any]]
 
 class PowerIOParseError(PowerIOError):
     """A case file is malformed or unparseable."""
@@ -80,13 +82,9 @@ class PowerIOParseError(PowerIOError):
 class PowerIODataError(PowerIOError):
     """A well-formed case cannot satisfy a requested operation.
 
-    A refused pass (e.g. ``_PioModule.lower_to_balanced``) additionally sets
-    ``diagnostics``: the pass's structured findings, each a dict with
-    ``code``, ``severity``, ``message``, and ``target``. Absent on a
-    ``PowerIODataError`` raised elsewhere.
+    Core errors carry typed Diagnostic records. Refused conversion passes
+    retain dictionary findings with code, severity, message, and target.
     """
-
-    diagnostics: List[Dict[str, Any]]
 
 class _BusMerge:
     @property

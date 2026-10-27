@@ -6,6 +6,7 @@ pub(super) struct StaticProfiles {
     operating: bool,
     increase: bool,
     pub hours: Option<f64>,
+    pub tables: super::profile::Tables,
 }
 
 impl StaticProfiles {
@@ -67,6 +68,7 @@ pub(super) fn validate(
             settings.state("Flag_UseIncSer")?
         },
         hours,
+        tables: super::profile::Tables::default(),
     };
     // Flag_Unit controls interchange, not electrical units. A global enable
     // with no enabled group/transfer does not change the static equations.

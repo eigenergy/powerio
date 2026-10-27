@@ -101,36 +101,71 @@ impl NativeDatabase {
         if !self.elements.contains_key(&element) {
             return Err(format_error(format!("unknown Element {element}")));
         }
-        let mut statement = self
-            .connection
-            .prepare(
-                "SELECT Terminal_ID, Flag_Terminal, Flag_State FROM Terminal
-             WHERE Element_ID=?1 AND Variant_ID=?2",
-            )
-            .map_err(format_error)?;
-        let mut rows = statement
-            .query([element, self.variant])
-            .map_err(format_error)?;
+        let index = self.terminal_index()?;
         let mut ports = BTreeMap::new();
-        while let Some(row) = rows.next().map_err(format_error)? {
-            let id: i64 = row.get(0).map_err(format_error)?;
+        for raw in index.get(&element).into_iter().flatten() {
             let terminal = self
                 .terminals
-                .get(&id)
-                .ok_or_else(|| format_error(format!("unknown Terminal {id}")))?;
+                .get(&raw.id)
+                .ok_or_else(|| format_error(format!("unknown Terminal {}", raw.id)))?;
             ports.insert(
                 terminal.position,
                 ElectricalTerminal {
-                    id,
+                    id: raw.id,
                     node: terminal.node,
                     position: terminal.position,
-                    connection: Connection::decode(row.get(1).map_err(format_error)?)?,
-                    state: State::decode(row.get(2).map_err(format_error)?)?,
+                    connection: Connection::decode(raw.connection.clone().map_err(format_error)?)?,
+                    state: State::decode(raw.state.clone().map_err(format_error)?)?,
                 },
             );
         }
         Ok(ports.into_values().collect())
     }
+
+    fn terminal_index(&self) -> Result<&TerminalIndex> {
+        if let Some(index) = self.terminal_index.get() {
+            return Ok(index);
+        }
+        let index = self.read_terminal_index()?;
+        Ok(self.terminal_index.get_or_init(|| index))
+    }
+
+    /// Read the selected variant's `Terminal` rows once and group them by
+    /// element. Native `Terminal` has no `Element_ID` index, so one query per
+    /// element would scan the whole table each time. Field decoding stays
+    /// per lookup: a malformed terminal fails only the element that uses it.
+    fn read_terminal_index(&self) -> Result<TerminalIndex> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT Terminal_ID, Element_ID, Flag_Terminal, Flag_State FROM Terminal
+             WHERE Variant_ID=?1",
+            )
+            .map_err(format_error)?;
+        let mut rows = statement.query([self.variant]).map_err(format_error)?;
+        let mut index = TerminalIndex::new();
+        while let Some(row) = rows.next().map_err(format_error)? {
+            let element: i64 = row.get(1).map_err(format_error)?;
+            let field = |i| row.get::<_, i64>(i).map_err(|e| e.to_string());
+            index.entry(element).or_default().push(RawTerminal {
+                id: row.get(0).map_err(format_error)?,
+                connection: field(2),
+                state: field(3),
+            });
+        }
+        Ok(index)
+    }
+}
+
+/// `Terminal` rows of the selected variant by `Element_ID`, in query order.
+pub(super) type TerminalIndex = BTreeMap<i64, Vec<RawTerminal>>;
+
+/// One terminal's undecoded electrical fields. A conversion failure is kept
+/// as its message and reported when an element asks for the terminal.
+pub(super) struct RawTerminal {
+    id: i64,
+    connection: std::result::Result<i64, String>,
+    state: std::result::Result<i64, String>,
 }
 
 /// Element.Flag_Input has independent category bits. Requiring equality to
