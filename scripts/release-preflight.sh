@@ -7,6 +7,8 @@ cd "$(dirname "$0")/.."
 
 run() { echo "=== $* ==="; "$@"; }
 
+run python3 -m py_compile scripts/check_bmopf_upstream.py
+run python3 scripts/test_release_verified.py
 run bash scripts/check-release-versions.sh
 run bash scripts/check-release-features.sh
 run bash scripts/deprecated-inventory.sh --assert-empty
@@ -28,6 +30,13 @@ fi
 for triplet in $expected_triplets; do
     echo "asset: libpowerio_capi.$triplet.tar.gz"
 done
+# The PowerIO.jl check runs on each packaged tarball before the draft exists.
+julia_platforms=$(grep -oE 'platform: [a-z0-9_-]+' .github/workflows/release-binaries.yml \
+    | sed 's/platform: //' | sort | tr '\n' ' ' | sed 's/ $//')
+if [ "$julia_platforms" != "$expected_triplets" ]; then
+    echo "release-binaries.yml tests PowerIO.jl on \"$julia_platforms\"; the release expects \"$expected_triplets\"" >&2
+    exit 1
+fi
 
 # The publishable crate set, in dependency order, with no retired member. The
 # actual archive audit runs in ci-mirror's package step.
@@ -53,10 +62,16 @@ if [ "$gate_sorted" != "$publishable_line" ]; then
     exit 1
 fi
 
+# The ownership check and the publish step loop over the same crates.
 loop_order=$(grep -oE 'for crate in [^;]+; do' .github/workflows/crates.yml \
-    | sed -E 's/^for crate in //; s/; do$//')
+    | sed -E 's/^for crate in //; s/; do$//' | sort -u)
+if [ "$(printf '%s\n' "$loop_order" | wc -l | tr -d ' ')" != 1 ]; then
+    echo "crates.yml loops over different crate lists:" >&2
+    printf '%s\n' "$loop_order" >&2
+    exit 1
+fi
 PIO_LOOP_ORDER="$loop_order" python3 -c '
-import json, os, subprocess, sys
+import ast, json, os, subprocess, sys
 
 order = os.environ["PIO_LOOP_ORDER"].split()
 meta = json.loads(subprocess.run(
@@ -81,6 +96,14 @@ for name, index in position.items():
     for dep in deps[name]:
         if position[dep] > index:
             sys.exit("crates.yml publishes " + name + " before its dependency " + dep + "; fix the loop order")
+helper = ast.parse(open("scripts/release-verified.py").read())
+crates = next(
+    ast.literal_eval(node.value)
+    for node in helper.body
+    if isinstance(node, ast.Assign) and any(getattr(target, "id", None) == "CRATES" for target in node.targets)
+)
+if list(crates) != order:
+    sys.exit("release-verified.py CRATES " + " ".join(crates) + " differ from the crates.yml publish order")
 print("publish loop order:", " ".join(order))
 '
 

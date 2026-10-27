@@ -762,6 +762,56 @@ mod drawing_tests {
         assert_eq!(truncated.layer.features.len(), 2);
     }
 
+    /// Exercise successful bus and route decoding before corrupting every
+    /// byte and truncation boundary of this small synthetic drawing.
+    #[test]
+    fn corrupt_bus_and_route_records_never_panic() {
+        use crate::geo::{GeoGeometry, GeoTarget};
+
+        let bytes = drawing();
+        let parsed = parse_pwd_layer(&bytes).unwrap();
+        assert_eq!(parsed.diagnostics.as_slice(), []);
+        assert_eq!(
+            parsed
+                .layer
+                .features
+                .iter()
+                .filter(|f| f.target == GeoTarget::Bus)
+                .count(),
+            2
+        );
+        let routes: Vec<_> = parsed
+            .layer
+            .features
+            .iter()
+            .filter(|f| f.target == GeoTarget::Branch)
+            .collect();
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].from.as_deref(), Some("1"));
+        assert_eq!(routes[0].to.as_deref(), Some("2"));
+        assert!(
+            matches!(&routes[0].geometry, GeoGeometry::LineString(points) if points.len() == 2)
+        );
+
+        for len in 0..bytes.len() {
+            assert!(
+                std::panic::catch_unwind(|| parse_pwd_layer(&bytes[..len])).is_ok(),
+                "layer parser panicked at truncation length {len}"
+            );
+        }
+        let mut corrupted = bytes.clone();
+        for offset in 0..bytes.len() {
+            for replacement in [0x00, 0xff] {
+                corrupted[offset] = replacement;
+                assert!(
+                    std::panic::catch_unwind(|| parse_pwd_layer(&corrupted)).is_ok(),
+                    "layer parser panicked at byte {offset}, replacement {replacement:#04x}"
+                );
+            }
+            corrupted[offset] = bytes[offset];
+        }
+    }
+
     #[test]
     fn empty_and_mismatched_drawing_records_fail_explicitly() {
         let mut b = drawing();

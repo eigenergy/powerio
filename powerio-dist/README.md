@@ -2,17 +2,16 @@
 
 `powerio-dist` parses multiconductor distribution networks into a typed model
 in wire coordinates. It converts between OpenDSS `.dss`,
-PowerModelsDistribution ENGINEERING JSON, and BMOPF JSON, the schema of the
+PowerModelsDistribution ENGINEERING JSON, BMOPF JSON, the schema of the
 IEEE PES Task Force on Benchmarking Multiconductor OPF published at
-<https://github.com/distribution-system-opt/dsopt-schema>. It reads schema
-0.1.0 and 0.2.0 and writes 0.2.0.
+<https://github.com/distribution-system-opt/dsopt-schema>, and distribution
+CIM. It reads BMOPF schema 0.1.0 and 0.2.0 and writes 0.2.0. Distribution CIM
+(`cim-dist`) is CIM100 RDF/XML, the iec61970cim17v40 and iec61968cim13v13
+release that GridAPPS-D and CIMHub exchange, read from one document or a
+directory and written as one document.
 
-Emitting back to the source format reproduces the retained bytes; emitting to
-a different format reports the fields the target cannot represent. The DSS
-reader expands OpenDSS class defaults into explicit model values and remembers
-which ones came from defaults, which is why BMOPF output has explicit values
-for those fields. The generated [conversion matrix](docs/conversion-matrix.md)
-shows the behavior for each fixture.
+SINCAL profiles are provided by `powerio-tnd` and the `powerio` facade.
+This crate owns the multiconductor model and its distribution formats.
 
 ```rust
 let source = powerio_core::Source::open("feeder.dss")?;

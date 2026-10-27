@@ -33,6 +33,7 @@ doc = false
 powerio = { workspace = true, features = ["schema", "gridfm"] }
 powerio-core = { workspace = true }
 powerio-matrix = { workspace = true, features = ["gridfm"] }
+powerio-synth.workspace = true
 powerio-prob = { workspace = true }
 powerio-tx.workspace = true
 # Unconditional: the CLI always ships the distribution surface (`convert
@@ -51,6 +52,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+rusqlite.workspace = true
 tempfile = "3"
 
 [lints]

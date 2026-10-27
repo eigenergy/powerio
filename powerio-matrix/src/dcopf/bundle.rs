@@ -84,6 +84,7 @@ struct BuildOptionsMeta {
     skip_zero_impedance: bool,
     synthesize_unrated_limits: bool,
     hvdc_treatment: powerio_tx::HvdcTreatment,
+    angle_difference_bounds: powerio_tx::AngleDifferenceBounds,
 }
 
 #[derive(Serialize)]
@@ -230,6 +231,11 @@ fn emit_prepared(
             skip_zero_impedance: instance.skip_zero_impedance,
             synthesize_unrated_limits: instance.synthesize_unrated_limits,
             hvdc_treatment: instance.hvdc_treatment,
+            angle_difference_bounds: instance.angle_difference_bounds.unwrap_or(
+                powerio_tx::AngleDifferenceBounds::from_correct_flag(
+                    instance.correct_angle_difference_bounds,
+                ),
+            ),
         },
         zero_impedance: ZeroImpedanceMeta {
             skip: instance.skip_zero_impedance,

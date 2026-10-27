@@ -1,13 +1,14 @@
 name: Notify PowerIO.jl
 
-# After a release is published, nudge PowerIO.jl's Update artifacts workflow so
-# its Artifacts.toml repins to the new binaries immediately. PowerIO.jl's daily
+# After a release is published, start PowerIO.jl's Release workflow so the
+# matching PowerIO.jl version is released at once. That workflow's hourly
 # schedule is the no-secret backstop, so a missing token only costs latency.
 #
 # POWERIO_JL_DISPATCH_TOKEN: a fine-grained PAT for eigenergy/PowerIO.jl with
 # Contents read/write (the repository_dispatch endpoint requires write on the
-# target repo). The receiving workflow validates the tag shape and refuses
-# binaries whose ABI the binding does not target.
+# target repo). The receiving workflow picks the version from the published
+# powerio releases and General, and refuses binaries whose ABI the binding
+# does not target.
 
 on:
   release:
@@ -18,8 +19,8 @@ permissions:
 
 jobs:
   dispatch:
-    # A prerelease tag is not a repin target: the receiving workflow only
-    # accepts a bare vX.Y.Z tag and would refuse it anyway.
+    # A prerelease is not a release target: the receiving workflow only
+    # considers published vX.Y.Z releases that are not prereleases.
     if: github.event.release.prerelease == false
     runs-on: ubuntu-latest
     steps:
@@ -29,7 +30,7 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
         run: |
           if [ -z "$TOKEN" ]; then
-            echo "POWERIO_JL_DISPATCH_TOKEN not set; PowerIO.jl's daily schedule will pick up $TAG" \
+            echo "POWERIO_JL_DISPATCH_TOKEN not set; PowerIO.jl's hourly Release run will pick up $TAG" \
               | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi

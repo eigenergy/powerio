@@ -287,7 +287,7 @@ fn bounded_history<'de, D: Deserializer<'de>>(
     )
 }
 
-const MAX_STORED_COLLECTION_ENTRIES: usize = 65_536;
+pub(super) const MAX_STORED_COLLECTION_ENTRIES: usize = 65_536;
 const MAX_STORED_OPERATING_POINT_QUANTITIES: usize = 64;
 
 /// Entries one stored operating point or solution vector may carry, values
@@ -609,6 +609,11 @@ pub struct DcPfInstance {
     pub approximation: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_point: Option<StoredOperatingPointAssignment>,
+    /// How the bus specifications treat the network's HVDC lines. Absent
+    /// means `ignore`, the treatment of every document written before the
+    /// field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hvdc_treatment: Option<powerio_tx::HvdcTreatment>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -619,6 +624,11 @@ pub struct AcPfInstance {
     pub specifications: Vec<powerio_prob::AcBusSpecification>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_point: Option<StoredOperatingPointAssignment>,
+    /// How a replacement network's specifications treat its HVDC lines.
+    /// Absent means `ignore`, the treatment of every document written before
+    /// the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hvdc_treatment: Option<powerio_tx::HvdcTreatment>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1860,8 +1870,16 @@ fn validate_subsystem_set(set: &powerio_tx::SubsystemSet) -> Result<(), String> 
 /// `.sub` file states or by a finite base kV level.
 fn validate_monitor_scope(index: usize, scope: &powerio_tx::MonitorScope) -> Result<(), String> {
     match scope {
-        powerio_tx::MonitorScope::Subsystem { name } if name.trim().is_empty() => Err(format!(
-            "monitor statement {index} states a scope that names no subsystem"
+        powerio_tx::MonitorScope::Subsystem { name }
+        | powerio_tx::MonitorScope::SubsystemKv { name, .. }
+            if name.trim().is_empty() =>
+        {
+            Err(format!(
+                "monitor statement {index} states a scope that names no subsystem"
+            ))
+        }
+        powerio_tx::MonitorScope::SubsystemKv { kv, .. } if !kv.is_finite() => Err(format!(
+            "monitor statement {index} states a subsystem scope whose base kV is not finite"
         )),
         powerio_tx::MonitorScope::Kv { kv } if !kv.is_finite() => Err(format!(
             "monitor statement {index} states a scope whose base kV is not finite"
@@ -1884,10 +1902,22 @@ fn validate_monitored_set(set: &powerio_tx::MonitoredSet) -> Result<(), String> 
             validate_retained(&format!("monitor statement {index}"), retained)?;
         }
         match statement {
-            powerio_tx::MonitorStatement::VoltageRange { scope, vmin, vmax } => {
+            powerio_tx::MonitorStatement::VoltageRange { scope, vmin, vmax }
+            | powerio_tx::MonitorStatement::VoltageRangeWithPre {
+                scope, vmin, vmax, ..
+            } => {
                 if !(vmin.is_finite() && vmax.is_finite() && vmin <= vmax) {
                     return Err(format!(
                         "monitor statement {index} states a voltage range that does not run low to high"
+                    ));
+                }
+                if let powerio_tx::MonitorStatement::VoltageRangeWithPre {
+                    pre_min, pre_max, ..
+                } = statement
+                    && !(pre_min.is_finite() && pre_max.is_finite() && pre_min <= pre_max)
+                {
+                    return Err(format!(
+                        "monitor statement {index} states a pre-contingency voltage range that does not run low to high"
                     ));
                 }
                 validate_monitor_scope(index, scope)?;
@@ -1904,6 +1934,25 @@ fn validate_monitored_set(set: &powerio_tx::MonitoredSet) -> Result<(), String> 
             | powerio_tx::MonitorStatement::TiesFromSubsystem { subsystem } => {
                 if subsystem.trim().is_empty() {
                     return Err(format!("monitor statement {index} names no subsystem"));
+                }
+            }
+            powerio_tx::MonitorStatement::BranchesInSubsystemKvRange {
+                subsystem,
+                kv_range,
+                ..
+            }
+            | powerio_tx::MonitorStatement::TiesFromSubsystemKvRange {
+                subsystem,
+                kv_range,
+            } => {
+                if subsystem.trim().is_empty() {
+                    return Err(format!("monitor statement {index} names no subsystem"));
+                }
+                let (lo, hi) = kv_range;
+                if !(lo.is_finite() && hi.is_finite() && lo <= hi) {
+                    return Err(format!(
+                        "monitor statement {index} states a kV range that does not run low to high on finite ends"
+                    ));
                 }
             }
             powerio_tx::MonitorStatement::Interface {
@@ -2151,5 +2200,41 @@ mod decode_bound_tests {
             error.to_string().contains("more than 64 quantities"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn monitored_kv_scopes_and_ranges_reject_nonfinite_or_reversed_values() {
+        let invalid_scope = powerio_tx::MonitoredSet {
+            statements: vec![powerio_tx::MonitorStatement::VoltageRange {
+                scope: powerio_tx::MonitorScope::SubsystemKv {
+                    name: "A1".to_owned(),
+                    kv: f64::NAN,
+                },
+                vmin: 0.9,
+                vmax: 1.1,
+            }],
+            ..Default::default()
+        };
+        assert!(
+            validate_monitored_set(&invalid_scope)
+                .unwrap_err()
+                .contains("base kV is not finite")
+        );
+
+        for kv_range in [(f64::NAN, 240.0), (240.0, f64::INFINITY), (240.0, 200.0)] {
+            let invalid_range = powerio_tx::MonitoredSet {
+                statements: vec![powerio_tx::MonitorStatement::BranchesInSubsystemKvRange {
+                    subsystem: "A1".to_owned(),
+                    low_voltage_3w: false,
+                    kv_range,
+                }],
+                ..Default::default()
+            };
+            assert!(
+                validate_monitored_set(&invalid_range)
+                    .unwrap_err()
+                    .contains("kV range that does not run low to high on finite ends")
+            );
+        }
     }
 }

@@ -209,6 +209,17 @@ fn unknown_format(format: &str) -> Error {
     )
 }
 
+/// Facade emission options. Defaults preserve the ordinary source-echo and
+/// canonical writer behavior for every format.
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct EmitOptions {
+    /// Fresh SINCAL generation is experimental and must be requested explicitly.
+    /// When present, this bypasses retained-source echo even for unchanged input.
+    #[cfg(feature = "sincal")]
+    pub sincal_experimental: Option<crate::SincalExperimentalOptions>,
+}
+
 /// Emit one module as `format` into `output`. The concrete value routes to its
 /// grid exchange format implementation. PowerIO IR uses [`crate::serialize`]
 /// instead.
@@ -234,8 +245,56 @@ pub fn emit<T>(
 where
     T: Clone + Into<PioValue>,
 {
+    emit_with_options(module, format, &EmitOptions::default(), output)
+}
+
+/// Emit with explicit facade options. An experimental SINCAL request always
+/// creates fresh typed output; it does not fall back to retained source echo.
+/// The default options are equivalent to [`emit`].
+///
+/// # Errors
+/// The same failures as [`emit`], invalid options for the selected format/value,
+/// or unsupported physics in the explicitly selected experimental profile.
+pub fn emit_with_options<T>(
+    module: &PioModule<T>,
+    format: &str,
+    options: &EmitOptions,
+    output: impl powerio_core::IntoDestination,
+) -> Result<EmitResult, Error>
+where
+    T: Clone + Into<PioValue>,
+{
     let module = module.clone().map_value(Into::into);
-    emit_dynamic(&module, format, output.into_destination()?)
+    let destination = output.into_destination()?;
+    #[cfg(feature = "sincal")]
+    if let Some(options) = &options.sincal_experimental {
+        return crate::sincal_write::emit(&module, format, options, destination);
+    }
+    // Without the sincal feature no option changes emission yet.
+    #[cfg(not(feature = "sincal"))]
+    let _: &EmitOptions = options;
+    let result = emit_dynamic(&module, format, destination)?;
+    let from_sincal = module.sources().iter().any(|source| {
+        source
+            .format()
+            .is_some_and(|f| is_sincal_format(f.as_str()))
+    });
+    if from_sincal
+        && !is_sincal_format(format)
+        && !result.diagnostics().iter().any(|d| {
+            matches!(
+                d.code(),
+                "EMIT.SINCAL.RETAINED_SOURCE_OMITTED" | "EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED"
+            )
+        })
+    {
+        Ok(result.__with_diagnostics(vec![Diagnostic::of(
+            &powerio_tx::diagnostics::codes::EMIT_SINCAL_RETAINED_SOURCE_OMITTED,
+            "Cross-format emission includes the typed electrical profile; fault, dynamic, protection, diagram, result and other native source-only data are omitted.",
+        )]))
+    } else {
+        Ok(result)
+    }
 }
 
 fn calculation_data_omitted(value_type: &str, format: &str) -> Diagnostic {
@@ -635,7 +694,16 @@ fn emit_multiconductor_network(
         return Err(unknown_format(format));
     };
     let typed = typed_sibling(module, network)?;
-    let typed = if preserve_retained_source && retained_source_matches_case_format(module, format) {
+    let retained_dss_project = target == powerio_dist::DistTargetFormat::Dss
+        && module
+            .source()
+            .and_then(powerio_core::Source::format)
+            .is_some_and(|source_format| {
+                powerio_dist::parse_dist_target_format(source_format.as_str()) == Some(target)
+            });
+    let typed = if preserve_retained_source
+        && (retained_dss_project || retained_source_matches_case_format(module, format))
+    {
         typed
     } else {
         typed.sever_source()
@@ -1041,11 +1109,74 @@ fn emit_versioned_bmopf(
     .map(|result| result.__with_diagnostics(diagnostics))
 }
 
+pub(crate) fn is_sincal_format(format: &str) -> bool {
+    crate::resolve_format(format).is_some_and(|f| {
+        matches!(
+            f.token,
+            "sincal" | "sincal-balanced" | "sincal-multiconductor"
+        )
+    })
+}
+
+/// Binary retained-source echo is separate from fresh electrical writing.
+#[cfg(feature = "sincal")]
+fn echo_sincal(
+    module: &PioModule<PioValue>,
+    format: &str,
+    destination: Destination,
+) -> Result<EmitResult, Error> {
+    if !matches!(
+        module.value(),
+        PioValue::BalancedNetwork(_) | PioValue::MulticonductorNetwork(_)
+    ) {
+        return Err(unsupported_type(module, "sincal"));
+    }
+    let target = crate::resolve_format(format).map(|f| f.token);
+    if matches!(
+        (target, module.value()),
+        (Some("sincal-balanced"), PioValue::MulticonductorNetwork(_))
+            | (Some("sincal-multiconductor"), PioValue::BalancedNetwork(_))
+    ) {
+        return Err(unsupported_type(module, format));
+    }
+    let source = module.source().filter(|source| source.format().is_some_and(|f| is_sincal_format(f.as_str())))
+        .ok_or_else(|| Error::new(&powerio_tx::diagnostics::codes::EMIT_SINCAL_FRESH_UNSUPPORTED,
+            "SINCAL currently supports unchanged retained-source echo only. Edited, constructed, or IR-restored networks require the separate experimental fresh writer."))?;
+    let primary = source.primary_buffer()?;
+    // deserialize retains the IR document as its acquired source. A caller
+    // supplying a native format hint must not relabel those JSON bytes as a
+    // SINCAL project and enable an invalid native echo.
+    if !primary.bytes().starts_with(b"SQLite format 3\0")
+        && !primary.bytes().starts_with(b"PK\x03\x04")
+        && !primary.bytes().starts_with(b"\0\x01\0\0Standard Jet DB\0")
+    {
+        return Err(Error::new(
+            &powerio_tx::diagnostics::codes::EMIT_SINCAL_FRESH_UNSUPPORTED,
+            "The retained bytes are not a native SINCAL database or archive; source metadata alone cannot enable native echo.",
+        ));
+    }
+    destination.__commit_artifacts(
+        false,
+        powerio_core::Fidelity::ExactSameFormat,
+        vec![powerio_core::MemoryArtifact::new(
+            powerio_core::ArtifactPath::new("case.sinx")?,
+            primary.bytes().to_vec(),
+        )],
+        Vec::new(),
+    )
+}
+
 fn emit_dynamic(
     module: &PioModule<PioValue>,
     format: &str,
     destination: Destination,
 ) -> Result<EmitResult, Error> {
+    if is_sincal_format(format) {
+        #[cfg(feature = "sincal")]
+        return echo_sincal(module, format, destination);
+        #[cfg(not(feature = "sincal"))]
+        return Err(crate::sincal_feature_disabled());
+    }
     if let Some(version) = format.strip_prefix("bmopf-json@") {
         return emit_versioned_bmopf(module, version, destination);
     }

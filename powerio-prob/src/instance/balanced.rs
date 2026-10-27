@@ -216,8 +216,24 @@ impl AcPfInstance {
     /// The specification count differs from the bus count, or no
     /// specification declares a reference bus.
     pub fn new(
+        network: BalancedNetwork,
+        specifications: Vec<AcBusSpecification>,
+    ) -> Result<Self, Error> {
+        Self::new_with_hvdc(network, specifications, HvdcTreatment::default())
+    }
+
+    /// [`new`](Self::new) stating the HVDC treatment the instance applies
+    /// when [`with_network`](Self::with_network) derives a replacement, when
+    /// [`hvdc_diagnostics`](Self::hvdc_diagnostics) reports, and when
+    /// [`to_dc_pf`](Self::to_dc_pf) converts. The specifications are retained
+    /// exactly, whatever the treatment.
+    ///
+    /// # Errors
+    /// As [`new`](Self::new).
+    pub fn new_with_hvdc(
         mut network: BalancedNetwork,
         specifications: Vec<AcBusSpecification>,
+        hvdc_treatment: HvdcTreatment,
     ) -> Result<Self, Error> {
         network.assign_missing_component_ids();
         if specifications.len() != network.buses().len() {
@@ -242,7 +258,7 @@ impl AcPfInstance {
         Ok(Self {
             network,
             specifications,
-            hvdc_treatment: HvdcTreatment::default(),
+            hvdc_treatment,
             initial_point: None,
         })
     }
@@ -300,9 +316,7 @@ impl AcPfInstance {
                 Ok(spec)
             })
             .collect::<Result<Vec<_>, Error>>()?;
-        let mut instance = Self::new(network, specifications)?;
-        instance.hvdc_treatment = hvdc_treatment;
-        Ok(instance)
+        Self::new_with_hvdc(network, specifications, hvdc_treatment)
     }
 
     /// Supply an optional solver initial point.

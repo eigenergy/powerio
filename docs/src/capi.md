@@ -18,13 +18,19 @@ not exported and have no aliases. Compare `pio_abi_version()` with
 `PIO_ABI_VERSION` before you use the library.
 
 The exported symbol set is fixed. The `gridfm` cargo feature adds GridFM
-Parquet parsing and emission behind the same entry points, and the `arrow`,
-`matrix`, `dist`, and `prob` feature names are still accepted by the build but
+Parquet parsing and emission behind the same entry points, and the `matrix`,
+`dist`, and `prob` feature names are still accepted by the build but
 gate nothing. `pio_schema_report` returns a JSON document with the release
 (`powerio_version`), the ABI (`abi`), the PowerIO IR schema name and
 version (`powerio_ir` with `schema` and `version`), the BMOPF schema
 version, the compiled features, and the diagnostic namespaces and error
 categories.
+
+The Arrow C export was removed in 0.11.0. The inert `arrow` build flag is
+deprecated but remains accepted for 0.11.x source-build compatibility; omit
+it from new commands. It enables no code. Its planned breaking removal is
+tracked in [#673](https://github.com/eigenergy/powerio/issues/673). This does
+not affect the Arrow record batches and Parquet support behind `gridfm`.
 
 ## Parse and inspect a module
 
@@ -56,8 +62,8 @@ pio_source_release(source);
 
 Use `pio_source_from_memory` for text or binary bytes you already hold in
 memory; both source constructors feed the same `pio_parse`.
-`pio_geo_layer_parse` reads a geographic layer straight from text, with no
-source object, for callers that have the layer document in memory.
+`pio_geo_layer_parse` reads a geographic layer from a `PioSource`, opened
+from a path or built from memory.
 `pio_geo_layer_diagnostics` reports what that reader found, and
 `pio_geo_layer_to_geojson` writes the layer back as the canonical `.geo.json`
 document, the GeoJSON FeatureCollection with the `powerio_geo` member that
@@ -128,10 +134,7 @@ in a `.sub` file through bus, area, zone, owner and kV range selectors; a
 `.con` automatic specification and a `.mon` statement refer to a subsystem by
 name, and selecting a subsystem's buses evaluates its selectors against a
 network. A monitored set is the content of a `.mon` file: the elements whose
-loading and voltage a study reports. A geo layer is a coordinate document kept
-beside a case: points for buses and routes for branches in one coordinate
-space, keyed by element identity, read from five text forms and written as a
-GeoJSON FeatureCollection carrying a `powerio_geo` member.
+loading and voltage a study reports.
 
 A `.con`, `.sub`, or `.mon` file parses through `pio_parse` like any other
 source; `pio_value_contingency_set`, `pio_value_subsystem_set`, and
