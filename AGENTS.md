@@ -264,9 +264,10 @@ docs/                         the mdBook guide, the schema archive, release note
 - **Two tier fidelity.** Same format round trip is byte exact. Cross format
   emission keeps maximal fidelity and reports anything the target cannot
   represent through a `Diagnostic`; never drop it silently. The conversion
-  matrix test in `powerio-cli/tests/conversion_matrix_report.rs` pins the
-  expected warning counts; an intentional change edits the baseline in the
-  same PR.
+  matrix test in `powerio-cli/tests/conversion_matrix_report.rs` grades each
+  cell by its worst finding and pins every cell's level and finding codes in
+  `powerio-cli/tests/conversion_matrix.baseline`; an intentional change
+  regenerates that file with `POWERIO_MATRIX_BLESS=1` in the same PR.
 - **Adding a format.** A reader produces the value its supported profile
   declares. Balanced formats meet at `BalancedNetwork`; conductor resolved
   formats meet at `MulticonductorNetwork`. Register the token in

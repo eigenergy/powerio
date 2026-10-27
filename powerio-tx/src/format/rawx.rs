@@ -1992,7 +1992,7 @@ pub(crate) fn write_rawx(net: &BalancedNetwork) -> Result<TextEmission> {
     let mut numbering = Diagnostics::new();
     let prepared = with_psse_node_numbers(net, &mut numbering);
     let net = prepared.as_ref().unwrap_or(net);
-    let raw = super::psse::write_psse_rev_without_detailed_connectivity(net, 35);
+    let raw = super::psse::write_psse_rev_for_rawx(net, 35);
     let mut diagnostics = Diagnostics::from(raw.diagnostics);
     diagnostics.absorb(numbering);
     let text = raw_to_rawx(net, &raw.text, &mut diagnostics).map_err(|error| Error::Emit {
@@ -2070,15 +2070,6 @@ fn raw_to_rawx(net: &BalancedNetwork, raw: &str, diagnostics: &mut Diagnostics) 
         &sections,
     );
     add_system_switch_output_table(&mut network, net, diagnostics);
-    if sections
-        .get("IMPEDANCE CORRECTION")
-        .is_some_and(|lines| !lines.is_empty())
-    {
-        diagnostics.push(
-            &codes::EMIT_PSSE.record_dropped,
-            "transformer impedance correction tables dropped: the RAWX writer writes no impcor table, so a transformer that names one keeps the number without the table",
-        );
-    }
     apply_detailed_equipment_ids(&mut network, net)?;
     add_detailed_connectivity_output_tables(&mut network, net, diagnostics)?;
 
