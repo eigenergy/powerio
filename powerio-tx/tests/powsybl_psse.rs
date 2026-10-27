@@ -674,3 +674,70 @@ fn iidm_batteries_become_psse_loads() {
     };
     close(total(&back), total(&source));
 }
+
+fn area_controls(network: &BalancedNetwork) -> Vec<(usize, Option<usize>, f64)> {
+    network
+        .areas()
+        .iter()
+        .map(|area| (area.number, area.slack_bus.map(|bus| bus.0), area.tolerance))
+        .collect()
+}
+
+#[test]
+fn psse_area_swing_bus_and_tolerance_survive_iidm_as_properties() {
+    use powerio_tx::network::{Area, BusId};
+    let mut network = two_numbered_buses();
+    let mut area = Area::new(1);
+    area.slack_bus = Some(BusId::new(10));
+    area.tolerance = 5.0;
+    network.areas_mut().push(area);
+    let network = parse_psse(&emit_psse(&network).text).unwrap();
+    let (emitted, back) = through_xiidm(&network);
+    assert!(
+        emitted
+            .text
+            .contains(r#"<iidm:property name="psse_isw" value="10"/>"#),
+        "{}",
+        emitted.text
+    );
+    let messages = codes_and_messages(&emitted);
+    assert!(
+        messages
+            .iter()
+            .all(|message| !message.contains("swing bus") && !message.contains("tolerance")),
+        "{messages:#?}"
+    );
+    assert_eq!(area_controls(&back), [(1, Some(10), 5.0)]);
+    let back = parse_psse(&emit_psse(&back).text).unwrap();
+    assert_eq!(area_controls(&back), [(1, Some(10), 5.0)]);
+
+    // PowSybl's eight bus export states area 1 with swing bus 1.
+    let source = parse_file(data("psse/ExampleVersion32_exported.raw"), None)
+        .unwrap()
+        .network;
+    let (_, back) = through_xiidm(&source);
+    assert_eq!(area_controls(&back), area_controls(&source));
+    assert!(source.areas()[0].slack_bus.is_some());
+}
+
+#[test]
+fn an_area_swing_bus_property_naming_no_bus_is_reported() {
+    let mut network = two_numbered_buses();
+    network.areas_mut().push(powerio_tx::network::Area::new(1));
+    let xml = emit_value(&network, TargetFormat::Xiidm)
+        .unwrap()
+        .text
+        .replace(
+            "areaType=\"ControlArea\" interchangeTarget=\"0\">\n",
+            "areaType=\"ControlArea\" interchangeTarget=\"0\">\n    <iidm:property name=\"psse_isw\" value=\"99\"/>\n",
+        );
+    let parsed = parse_str(&xml, "xiidm").unwrap();
+    assert_eq!(area_controls(&parsed.network), [(1, None, 0.0)]);
+    let messages = powerio_tx::diagnostics::render_diagnostics(&parsed.diagnostics);
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("`psse_isw=99` names no bus")),
+        "{messages:#?}"
+    );
+}

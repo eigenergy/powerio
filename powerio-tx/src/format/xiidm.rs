@@ -4547,7 +4547,7 @@ fn map_areas(
             members.clear();
         }
 
-        areas.push(Area {
+        let mut area = Area {
             number,
             slack_bus: None,
             net_interchange: raw.interchange_target.unwrap_or(0.0),
@@ -4555,7 +4555,11 @@ fn map_areas(
             name: raw.name.clone(),
             uid: Some(raw.id.clone()),
             area_type: Some(raw.area_type.clone()),
-        });
+        };
+        if let Some(metadata) = parsed.metadata.get(&component_id("area", &raw.id)?) {
+            apply_psse_area_properties(metadata, &mut area, buses, diagnostics);
+        }
+        areas.push(area);
     }
     Ok(areas)
 }
@@ -4565,6 +4569,58 @@ fn map_areas(
 /// as it states other PSS/E fields IIDM does not name (`psse_rmpct` on a
 /// generator), and the reader takes it back.
 const PSSE_ZONE_PROPERTY: &str = "psse_zone";
+/// The IIDM area property that states a PSS/E area swing bus (`ISW`).
+const PSSE_ISW_PROPERTY: &str = "psse_isw";
+/// The IIDM area property that states a PSS/E interchange tolerance (`PTOL`).
+const PSSE_PTOL_PROPERTY: &str = "psse_ptol";
+
+/// The PSS/E area fields IIDM has no field for, as IIDM properties.
+fn psse_area_properties(area: &Area) -> Vec<(&'static str, String)> {
+    let mut properties = Vec::new();
+    if let Some(bus) = area.slack_bus {
+        properties.push((PSSE_ISW_PROPERTY, bus.0.to_string()));
+    }
+    if area.tolerance != 0.0 {
+        properties.push((PSSE_PTOL_PROPERTY, number(area.tolerance)));
+    }
+    properties
+}
+
+/// Read back what [`psse_area_properties`] states, with a diagnostic for a
+/// value that names no bus or no finite tolerance.
+fn apply_psse_area_properties(
+    metadata: &ComponentMetadata,
+    area: &mut Area,
+    buses: &[Bus],
+    diagnostics: &mut Diagnostics,
+) {
+    if let Some(value) = metadata.properties.get(PSSE_ISW_PROPERTY) {
+        match value.trim().parse::<usize>() {
+            Ok(number) if buses.iter().any(|bus| bus.id.0 == number) => {
+                area.slack_bus = Some(BusId::new(number));
+            }
+            _ => diagnostics.push(
+                &codes::READ_XIIDM_FIELD_UNMAPPED,
+                format!(
+                    "area `{}` property `{PSSE_ISW_PROPERTY}={value}` names no bus of the case; the area keeps no swing bus",
+                    metadata.component.local_id()
+                ),
+            ),
+        }
+    }
+    if let Some(value) = metadata.properties.get(PSSE_PTOL_PROPERTY) {
+        match value.trim().parse::<f64>() {
+            Ok(tolerance) if tolerance.is_finite() => area.tolerance = tolerance,
+            _ => diagnostics.push(
+                &codes::READ_XIIDM_FIELD_UNMAPPED,
+                format!(
+                    "area `{}` property `{PSSE_PTOL_PROPERTY}={value}` is not a finite number; the area keeps no interchange tolerance",
+                    metadata.component.local_id()
+                ),
+            ),
+        }
+    }
+}
 /// The IIDM property that states a PSS/E bus owner.
 const PSSE_OWNER_PROPERTY: &str = "psse_owner";
 
@@ -6741,6 +6797,12 @@ fn build_detailed_connectivity(
                 {
                     metadata.properties.remove("v");
                     metadata.properties.remove("angle");
+                }
+                // The area swing bus and tolerance are typed on the area,
+                // and the writer states them again from there.
+                if metadata.component.component_type() == "area" {
+                    metadata.properties.remove(PSSE_ISW_PROPERTY);
+                    metadata.properties.remove(PSSE_PTOL_PROPERTY);
                 }
                 metadata
             })
@@ -11275,7 +11337,7 @@ fn write_detailed_body(
         }
     }
     write_hvdc_lines(network, index, included, output, diagnostics);
-    write_areas(network, detailed, index, included, output, diagnostics);
+    write_areas(network, detailed, index, included, output);
 }
 
 fn component_is_included(
@@ -11330,7 +11392,6 @@ fn write_areas(
     index: &XiidmWriteIndex<'_>,
     included: &dyn Fn(&ComponentId) -> bool,
     output: &mut String,
-    diagnostics: &mut Diagnostics,
 ) {
     for area in network.areas().iter().filter(|area| {
         let fallback_id = format!("A{}", area.number);
@@ -11362,6 +11423,16 @@ fn write_areas(
             },
         ));
         write_identifiable_children(metadata, output);
+        // IIDM has no area swing bus or interchange tolerance, and PowSybl's
+        // PSS/E importer drops both (psse-converter `AreaConverter.create`
+        // states only the interchange target and name); PowerIO states them
+        // as properties the reader takes back.
+        for (property, value) in psse_area_properties(area) {
+            output.push_str(&format!(
+                "    <iidm:property name=\"{property}\" value=\"{}\"/>\n",
+                xml(&value)
+            ));
+        }
         for level in &detailed.voltage_levels {
             if level.buses.iter().any(|bus_id| {
                 index
@@ -11376,18 +11447,6 @@ fn write_areas(
             }
         }
         output.push_str("  </iidm:area>\n");
-        if area.slack_bus.is_some() {
-            diagnostics.push(
-                &codes::EMIT_XIIDM.field_dropped,
-                format!("area `{id}` swing bus has no XIIDM area field"),
-            );
-        }
-        if area.tolerance != 0.0 {
-            diagnostics.push(
-                &codes::EMIT_XIIDM.field_dropped,
-                format!("area `{id}` interchange tolerance has no XIIDM area field"),
-            );
-        }
     }
 }
 

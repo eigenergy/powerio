@@ -63,6 +63,11 @@
   writes a battery, with a diagnostic naming the storage fields a load
   cannot state. It was dropped, which changed the bus injections.
 
+- An area's swing bus (PSS/E `ISW`) and interchange tolerance (`PTOL`) now
+  survive XIIDM and JIIDM as the area properties `psse_isw` and
+  `psse_ptol`, where both were reported as dropped. A swing bus property
+  that names no bus of the case is reported on read.
+
 - The conversion matrix grades each cell by its worst finding: exact,
   lossless, restated (the target required a value and the writer supplied
   it), approximate, dropped, or failed. The PR comment shows that level, the
