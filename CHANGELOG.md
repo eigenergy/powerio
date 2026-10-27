@@ -18,6 +18,9 @@
   entries, and `Subsystem::calc_dispatch_rules` reads `PARTICIPATE`, `SCALE
   ALL ...`, `BASELOAD`, `TURBINETYPE`, and `EXCEPT` lines into
   `SubsystemDispatchRule`s.
+  Quoted numeric bus operands keep their identities through dispatch blocks,
+  and named operands use the same optional `BUS` keywords as numeric ones.
+  Post-file-`END` defaults and non-finite scale thresholds remain inert text.
 
 - PTDF and LODF accept negative branch reactances on the sparse path. A
   series capacitor's negative susceptance can make the reference grounded DC

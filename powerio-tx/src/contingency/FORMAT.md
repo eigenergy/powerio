@@ -206,9 +206,11 @@ and the views below read that text at analysis time.
 **Names.** After `BUSNAMES` a statement names a bus by a quoted token holding
 the bus name and base kV, `'02CHAMBR 345'`, in place of its number; after
 `BRANCHNAMES` a statement such as `OPEN "name"` names one branch by its name;
-`BUSNUMBERS` returns to numbers. A quoted token after `BUS` cannot be a number,
-so `ContingencySet::resolve` reads it as a name whichever mode statement came
-before it. The last word of the token is the base kV when it reads as a number,
+`BUSNUMBERS` returns to numbers. Numeric bus operands keep their numeric
+meaning even when quoted, including ahead of `DISPATCH`. A nonnumeric quoted
+bus operand is read as a name whichever mode statement came before it, with
+the same optional `BUS` keywords as the numbered action grammar. The last
+word of a name token is the base kV when it reads as a number,
 matched within 1e-6 kV; a token without one matches on the name alone. A name
 matches exactly first, then without regard to letter case and runs of
 whitespace. A name that matches no element binds none with `NoSuchBusName` or

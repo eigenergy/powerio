@@ -8,8 +8,10 @@
 //! sets are fixed within 0.11, so the typed forms here are views over that
 //! text rather than fields of the sets:
 //!
-//! - **Names.** A quoted token after `BUS` names a bus by its name and base kV
+//! - **Names.** A quoted bus operand names a bus by its name and base kV
 //!   (`'NAME 345'`), the form TARA reads after `BUSNAMES`.
+//!   The action grammar's optional `BUS` keyword remains optional, and a
+//!   numeric operand keeps its bus number even when quoted.
 //!   [`ContingencySet::resolve`] binds such a statement by name, and a
 //!   statement naming one quoted branch, the form read after `BRANCHNAMES`,
 //!   by the branch's name.
@@ -136,6 +138,7 @@ impl ContingencySet {
     pub fn calc_default_dispatch(&self) -> Vec<DefaultDispatch> {
         self.retained
             .iter()
+            .filter(|statement| !statement.after_end)
             .filter_map(|statement| {
                 let lines = lex(&statement.text);
                 let (head, body) = split_block(&lines)?;
@@ -328,7 +331,13 @@ fn parse_scale(upper: &[String]) -> Option<SubsystemDispatchRule> {
                     && upper.get(at + 2).is_some_and(|w| w == "GREATER")
                     && upper.get(at + 4).is_some_and(|w| w == "MW") =>
             {
-                pmax_greater_mw = Some(upper.get(at + 3)?.parse::<f64>().ok()?);
+                pmax_greater_mw = Some(
+                    upper
+                        .get(at + 3)?
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|value| value.is_finite())?,
+                );
                 at += 5;
             }
             "INCLUDE" if upper.get(at + 1).is_some_and(|w| w == "OFFLINE") => {
@@ -501,22 +510,30 @@ pub(super) fn read_text_action(
     {
         return Some(names.branch(&words[quoted[0]]).map(TextAction::Branch));
     }
-    // Buses named by name: each quoted token after `BUS`.
+    // Only the shared grammar decides which positions are bus operands.
+    // Try the numeric grammar first so quoted numbers cannot bind a decoy
+    // bus with that name, including when a DISPATCH block was unwrapped.
     let mut named = false;
-    for &at in &quoted {
-        if at > 0 && at < upper.len() && upper[at - 1] == "BUS" {
-            match names.bus(&words[at]) {
-                Ok(bus) => {
-                    words[at] = bus.0.to_string();
-                    upper[at].clone_from(&words[at]);
-                    named = true;
-                }
-                Err(reason) => return Some(Err(reason)),
-            }
-        }
-    }
+    let mut unresolved = None;
     let views: Vec<&str> = words.iter().map(String::as_str).collect();
-    let action = parse_action(&upper, &views)?;
+    let action = super::parse_action_with_buses(&upper, &views, &mut |at| {
+        let token = head.tokens.get(at)?;
+        if let Some(bus) = super::parse_bus(token.text) {
+            return Some(bus);
+        }
+        if !token.quoted {
+            return None;
+        }
+        named = true;
+        Some(names.bus(token.text).unwrap_or_else(|reason| {
+            unresolved.get_or_insert(reason);
+            // Keep checking syntax; this placeholder never reaches binding.
+            BusId(0)
+        }))
+    })?;
+    if let Some(reason) = unresolved {
+        return Some(Err(reason));
+    }
     let dispatched = head.keywords().last().is_some_and(|w| w == "DISPATCH");
     (named || dispatched).then_some(Ok(TextAction::Action(action)))
 }

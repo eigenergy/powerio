@@ -114,11 +114,15 @@ into new fields, because the three sets' PowerIO IR layouts are fixed within
 name and base kV (`BUSNAMES`) or one branch by quoted name (`BRANCHNAMES`): an
 exact name first, then one equal without regard to letter case and runs of
 whitespace, and a name matching several elements binds none and is reported as
-ambiguous. `ContingencySet::calc_default_dispatch` and
+ambiguous. Numeric bus operands keep their identities even when quoted.
+Named bus operands support the same optional `BUS` keywords as numbered ones.
+`ContingencySet::calc_default_dispatch` and
 `ContingencyAction::calc_dispatched_action` read `DEFAULT DISPATCH` blocks and
 case actions that close with `DISPATCH`, and `Subsystem::calc_dispatch_rules`
 reads a subsystem's `PARTICIPATE`, `SCALE`, `BASELOAD`, `TURBINETYPE`, and
 `EXCEPT` lines.
+Defaults after the file's `END` remain inert retained text. Non-finite scaling
+thresholds also stay retained instead of becoming typed dispatch rules.
 
 Only three shapes are errors: a case that never closes, a case that starts
 inside another, and a block left open at end of input. The reader's note
