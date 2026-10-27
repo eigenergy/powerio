@@ -256,6 +256,33 @@ the whole batch before it applies anything and returns a `PioUpdateReport`
 listing the exact component IDs and fields it changed, and whether energized
 connectivity changed.
 
+AC optimal transmission switching has its own entry points.
+- **Build an instance.**
+  - `pio_module_to_ac_ots_instance` builds one with the default options from a
+    balanced network or AC OPF module.
+  - `pio_module_to_ac_ots_instance_with_options` takes a `PioAcOtsOptions`, and
+    also reconfigures an AC OTS module. NULL options are the same as
+    `pio_module_to_ac_ots_instance`.
+  - `pio_ac_ots_instance_create` combines an AC OPF instance handle with
+    options and keeps its objective exactly.
+- **Read an instance.** `pio_value_ac_ots_instance` returns the instance view.
+  - `pio_ac_ots_instance_options` reads its stated options and branch count.
+  - `pio_ac_ots_instance_branch_at` reads one branch's initial status, whether
+    it may switch, its costs, and its current limits.
+- **Check and fix a topology.** A final topology is one byte per branch: 0 is
+  open and 1 is closed.
+  - `pio_ac_ots_instance_validate_topology` checks it and writes its switching
+    cost.
+  - `pio_ac_ots_instance_fix_topology` returns the AC OPF module over it.
+- **Attach and read a solution.**
+  - `pio_ac_ots_solution_create` attaches that AC OPF problem's solution.
+  - `pio_value_ac_ots_solution` returns the solution view.
+  - `pio_ac_ots_solution_summary` reads the open and switched counts, the
+    switching cost, and the objective.
+  - `pio_ac_ots_solution_branch_closed_at` reads one final status.
+  - `pio_ac_ots_solution_materialize` returns the network with the final
+    statuses and solved values, ready for `pio_emit`.
+
 Named matrix and vector functions expose the public DC calculations directly:
 
 ```text

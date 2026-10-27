@@ -83,6 +83,7 @@ struct IndexBaseMeta {
 struct BuildOptionsMeta {
     skip_zero_impedance: bool,
     synthesize_unrated_limits: bool,
+    hvdc_treatment: powerio_tx::HvdcTreatment,
     angle_difference_bounds: powerio_tx::AngleDifferenceBounds,
 }
 
@@ -187,6 +188,7 @@ fn emit_prepared(
     put_vec(&mut inventory, "fmax.mtx", &instance.branches.f_max)?;
     put_vec(&mut inventory, "pd.mtx", &instance.p_d)?;
     put_vec(&mut inventory, "gs.mtx", &instance.g_s)?;
+    put_vec(&mut inventory, "p_hvdc.mtx", &instance.p_hvdc)?;
     put_vec(
         &mut inventory,
         "angle_min.mtx",
@@ -228,6 +230,7 @@ fn emit_prepared(
         build_options: BuildOptionsMeta {
             skip_zero_impedance: instance.skip_zero_impedance,
             synthesize_unrated_limits: instance.synthesize_unrated_limits,
+            hvdc_treatment: instance.hvdc_treatment,
             angle_difference_bounds: instance.angle_difference_bounds.unwrap_or(
                 powerio_tx::AngleDifferenceBounds::from_correct_flag(
                     instance.correct_angle_difference_bounds,
@@ -468,6 +471,15 @@ fn operator_meta(
         op(
             "bus_shunt_conductance",
             "gs.mtx",
+            "vector",
+            n,
+            1,
+            "bus",
+            power_units,
+        ),
+        op(
+            "bus_hvdc_injection",
+            "p_hvdc.mtx",
             "vector",
             n,
             1,

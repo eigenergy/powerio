@@ -578,19 +578,15 @@ fn unmapped_and_partial_content_is_reported() {
         "{w:#?}"
     );
     assert!(net.lines().iter().all(|l| l.name != "geo"));
-    // The tank form and the unmapped classes are reported, not dropped
-    // silently.
+    // A tank without catalog data and the unmapped classes are reported,
+    // not dropped silently.
     assert!(
         findings(w, "READ.CIM_DIST.RECORD_DROPPED")
             .iter()
-            .any(|f| f.contains("TransformerTank form")),
+            .any(|f| f.contains("TransformerTank") && f.contains("no TransformerTankInfo")),
         "{w:#?}"
     );
     let classes = findings(w, "READ.CIM_DIST.CLASS_UNMAPPED");
-    assert!(
-        classes.iter().any(|f| f.contains("TransformerTank")),
-        "{w:#?}"
-    );
     assert!(
         classes.iter().any(|f| f.contains("WireSpacingInfo")),
         "{w:#?}"
@@ -1287,4 +1283,424 @@ fn cim_reports_bounded_load_law_loss() {
             .any(|finding| finding.starts_with("EMIT.CIM_DIST.FIELD_DROPPED")
                 && finding.contains("voltage dependence model"))
     );
+}
+
+// ---------------------------------------------------------------------------
+// Transformer tanks
+// ---------------------------------------------------------------------------
+
+fn tank_fixture() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/data/dist/cim/tank_feeder.xml")
+}
+
+fn transformer<'a>(
+    net: &'a powerio_dist::MulticonductorNetwork,
+    name: &str,
+) -> &'a powerio_dist::DistTransformer {
+    net.transformers()
+        .iter()
+        .find(|t| t.name == name)
+        .unwrap_or_else(|| panic!("transformer {name} missing"))
+}
+
+/// Every value the fixture README pins: catalog ratings, resistances from
+/// the end infos, reactances from the short circuit tests, terminal maps
+/// from the tank end phases, taps on tank ends, and no-load data from both
+/// forms.
+#[test]
+fn tank_feeder_maps_exactly() {
+    let net = parse_file(tank_fixture(), None).unwrap();
+    let unexpected: Vec<&String> = net
+        .warnings
+        .iter()
+        .filter(|w| !w.starts_with("READ.CIM_DIST.CONTEXT_UNMAPPED"))
+        .collect();
+    assert!(unexpected.is_empty(), "{unexpected:#?}");
+    assert_eq!(net.transformers().len(), 9);
+
+    // Center tap: s1 is 1, 4 and s2 is 4, 2, so the halves stack.
+    let ct = transformer(&net, "ct_tank");
+    assert_eq!(ct.phases, 1);
+    let maps: Vec<&[String]> = ct.windings.iter().map(|w| &w.terminal_map[..]).collect();
+    assert_eq!(maps, [&["1", "4"][..], &["1", "4"], &["4", "2"]]);
+    for (w, (v, r)) in ct
+        .windings
+        .iter()
+        .zip([(7200.0, 0.6), (120.0, 1.2), (120.0, 1.2)])
+    {
+        assert!(close(w.v_ref, v));
+        assert!(close(w.s_rating, 25_000.0));
+        assert!(close(w.r_pct, r), "r {} vs {r}", w.r_pct);
+    }
+    for (x, expected) in ct.xsc_pct.iter().zip([2.04, 2.04, 1.36]) {
+        assert!(close(*x, expected), "xsc {x} vs {expected}");
+    }
+    assert_eq!(ct.extras["cim_form"], "tank");
+    assert_eq!(ct.extras["cim_power_transformer"], "ct");
+    assert_eq!(ct.extras["cim_tank_info"], "ct_info");
+    assert_eq!(
+        ct.extras["cim_phase_angle_clock"],
+        serde_json::json!([0.0, 0.0, 6.0])
+    );
+    assert_eq!(
+        ct.extras["cim_end_mrids"],
+        serde_json::json!(["ct_tank_e1", "ct_tank_e2", "ct_tank_e3"])
+    );
+
+    // Open wye / open delta: line to line secondaries are delta legs.
+    let t1 = transformer(&net, "od_t1");
+    let t2 = transformer(&net, "od_t2");
+    assert_eq!(t1.windings[1].terminal_map, ["1", "2"]);
+    assert_eq!(t1.windings[1].conn, DistWindingConn::Delta);
+    assert_eq!(t2.windings[0].terminal_map, ["2", "4"]);
+    assert_eq!(t2.windings[1].terminal_map, ["2", "3"]);
+    assert_eq!(t1.extras["cim_power_transformer"], "od");
+    assert_eq!(t2.extras["cim_power_transformer"], "od");
+    assert!(close(t1.xsc_pct[0], 5.75));
+
+    // Single phase with a no-load test: 0.05 kW and 0.538516% on 25 kVA.
+    let sp = transformer(&net, "sp_tank");
+    assert!(close(sp.extras["%noloadloss"].as_f64().unwrap(), 0.2));
+    assert!(close(sp.extras["%imag"].as_f64().unwrap(), 0.5));
+    assert!(close(sp.xsc_pct[0], 2.04));
+
+    // Three phase delta/wye.
+    let dy = transformer(&net, "dy_tank");
+    assert_eq!(dy.phases, 3);
+    assert_eq!(dy.windings[0].terminal_map, ["1", "2", "3"]);
+    assert_eq!(dy.windings[0].conn, DistWindingConn::Delta);
+    assert_eq!(dy.windings[1].terminal_map, ["1", "2", "3", "4"]);
+    assert_eq!(
+        dy.extras["cim_phase_angle_clock"],
+        serde_json::json!([0.0, 1.0])
+    );
+
+    // The regulator bank: taps from the tap changers on the tank ends,
+    // 1 + step · 0.625%.
+    for (name, phase, tap) in [
+        ("rega", "1", 1.0625),
+        ("regb", "2", 1.05),
+        ("regc", "3", 1.06875),
+    ] {
+        let reg = transformer(&net, name);
+        assert_eq!(reg.windings[0].terminal_map, [phase, "4"]);
+        assert!(close(reg.windings[0].tap, 1.0));
+        assert!(close(reg.windings[1].tap, tap), "{name}");
+        assert!(close(reg.xsc_pct[0], 0.01));
+        assert!(close(reg.windings[0].r_pct, 0.005));
+        assert_eq!(reg.windings[0].r_neutral, Some(0.0));
+        assert_eq!(reg.extras["cim_power_transformer"], "reg");
+        assert_eq!(reg.extras["cim_tank_info"], "reg_info");
+    }
+}
+
+/// The tank form and the dss micro fixtures land on the same
+/// `DistTransformer` values.
+#[test]
+fn tank_and_dss_fixtures_agree() {
+    let cim = parse_file(tank_fixture(), None).unwrap();
+    for (dss, pairs) in [
+        ("xfmr_center_tap.dss", &[("t1", "ct_tank")][..]),
+        (
+            "xfmr_open_wye_open_delta.dss",
+            &[("t1", "od_t1"), ("t2", "od_t2")],
+        ),
+        ("xfmr_single_phase.dss", &[("t1", "sp_tank")]),
+        ("xfmr_delta_wye.dss", &[("t1", "dy_tank")]),
+        ("xfmr_wye_delta.dss", &[("t1", "wd")]),
+    ] {
+        let net = parse_file(micro(dss), None).unwrap();
+        for (dss_name, cim_name) in pairs {
+            let a = transformer(&net, dss_name);
+            let b = transformer(&cim, cim_name);
+            let what = format!("{dss} {dss_name} vs {cim_name}");
+            assert_eq!(a.phases, b.phases, "{what}");
+            assert_eq!(a.windings.len(), b.windings.len(), "{what}");
+            for (wa, wb) in a.windings.iter().zip(&b.windings) {
+                assert_eq!(wa.terminal_map, wb.terminal_map, "{what}");
+                assert_eq!(wa.conn, wb.conn, "{what}");
+                assert!(close(wa.v_ref, wb.v_ref), "{what}");
+                assert!(close(wa.s_rating, wb.s_rating), "{what}");
+                assert!(close(wa.r_pct, wb.r_pct), "{what}: r");
+                assert!(close(wa.tap, wb.tap), "{what}: tap");
+            }
+            assert_eq!(a.xsc_pct.len(), b.xsc_pct.len(), "{what}");
+            for (xa, xb) in a.xsc_pct.iter().zip(&b.xsc_pct) {
+                assert!(close(*xa, *xb), "{what}: xsc {xa} vs {xb}");
+            }
+        }
+    }
+}
+
+/// A center tap tank `tank` under PowerTransformer `pt` on the two bus
+/// feeder, after IEEE 13's `ct5`: phases B, s1 and s2, without catalog
+/// data.
+fn center_tap_tank(tank: &str, pt: &str) -> String {
+    let mut out = format!(
+        r##"<cim:PowerTransformer rdf:ID="_{pt}"><cim:IdentifiedObject.name>{pt}</cim:IdentifiedObject.name></cim:PowerTransformer>
+  <cim:TransformerTank rdf:ID="_{tank}"><cim:IdentifiedObject.name>{tank}</cim:IdentifiedObject.name><cim:TransformerTank.PowerTransformer rdf:resource="#_{pt}"/></cim:TransformerTank>
+"##
+    );
+    for (n, (phase, bus)) in [("B", "n1"), ("s1", "n2"), ("s2", "n2")]
+        .into_iter()
+        .enumerate()
+    {
+        let n = n + 1;
+        let _ = write!(
+            out,
+            r##"  <cim:Terminal rdf:ID="_{tank}_t{n}"><cim:Terminal.ConductingEquipment rdf:resource="#_{pt}"/><cim:Terminal.ConnectivityNode rdf:resource="#_{bus}"/></cim:Terminal>
+  <cim:TransformerTankEnd rdf:ID="_{tank}_e{n}"><cim:TransformerTankEnd.TransformerTank rdf:resource="#_{tank}"/><cim:TransformerTankEnd.phases rdf:resource="http://iec.ch/TC57/CIM100#PhaseCode.{phase}"/><cim:TransformerEnd.endNumber>{n}</cim:TransformerEnd.endNumber><cim:TransformerEnd.Terminal rdf:resource="#_{tank}_t{n}"/></cim:TransformerTankEnd>
+"##
+        );
+    }
+    out
+}
+
+/// The `ct5` catalog entry `_info`: 5 kVA, 2400/120/120 V, leakage
+/// impedances 2.04%, 2.04% and 1.36% of the energised end's base, end
+/// resistances `r` (ohm, `None` leaves one unstated) and test losses
+/// `losses` (kW).
+fn center_tap_catalog(r: [Option<f64>; 3], losses: [f64; 3]) -> String {
+    let mut out = String::from(
+        r#"  <cim:TransformerTankInfo rdf:ID="_info"/>
+"#,
+    );
+    for (n, u) in [2400, 120, 120].into_iter().enumerate() {
+        let n = n + 1;
+        let resistance = r[n - 1].map_or_else(String::new, |r| {
+            format!("<cim:TransformerEndInfo.r>{r}</cim:TransformerEndInfo.r>")
+        });
+        let _ = writeln!(
+            out,
+            r##"  <cim:TransformerEndInfo rdf:ID="_info_e{n}"><cim:TransformerEndInfo.TransformerTankInfo rdf:resource="#_info"/><cim:TransformerEndInfo.endNumber>{n}</cim:TransformerEndInfo.endNumber><cim:TransformerEndInfo.connectionKind rdf:resource="http://iec.ch/TC57/CIM100#WindingConnection.I"/><cim:TransformerEndInfo.ratedU>{u}</cim:TransformerEndInfo.ratedU><cim:TransformerEndInfo.ratedS>5000</cim:TransformerEndInfo.ratedS>{resistance}</cim:TransformerEndInfo>"##
+        );
+    }
+    for ((i, j, z), loss) in [
+        (1, 2, 23.5008_f64.hypot(20.736)),
+        (1, 3, 23.5008_f64.hypot(20.736)),
+        (2, 3, 0.039_168_f64.hypot(0.069_12)),
+    ]
+    .into_iter()
+    .zip(losses)
+    {
+        let _ = writeln!(
+            out,
+            r##"  <cim:ShortCircuitTest rdf:ID="_sc{i}{j}"><cim:ShortCircuitTest.EnergisedEnd rdf:resource="#_info_e{i}"/><cim:ShortCircuitTest.GroundedEnds rdf:resource="#_info_e{j}"/><cim:ShortCircuitTest.leakageImpedance>{z}</cim:ShortCircuitTest.leakageImpedance><cim:ShortCircuitTest.loss>{loss}</cim:ShortCircuitTest.loss><cim:TransformerTest.basePower>5000</cim:TransformerTest.basePower></cim:ShortCircuitTest>"##
+        );
+    }
+    out
+}
+
+/// Tank `ct` with its catalog entry, linked by `_asset`.
+fn center_tap(r: [Option<f64>; 3], losses: [f64; 3]) -> String {
+    format!(
+        r##"{}  <cim:Asset rdf:ID="_asset"><cim:Asset.AssetInfo rdf:resource="#_info"/><cim:Asset.PowerSystemResources rdf:resource="#_ct"/></cim:Asset>
+{}"##,
+        center_tap_tank("ct", "pt"),
+        center_tap_catalog(r, losses)
+    )
+}
+
+/// End resistances of 0.6%, 1.2% and 1.2% (6.912 ohm on 1152 ohm, 0.03456
+/// ohm on 2.88 ohm twice).
+const CT5_R: [Option<f64>; 3] = [Some(6.912), Some(0.034_56), Some(0.034_56)];
+
+/// `ct5` states a loss on the 1 to 2 test only (0.09 kW, 1.8%) and 0 on the
+/// others. A loss of 0 states nothing, so the end resistances stand, and the
+/// stated loss agrees with them (0.6 + 1.2).
+#[test]
+fn zero_test_losses_defer_to_end_resistance() {
+    let net = parse_str(&feeder(&center_tap(CT5_R, [0.09, 0.0, 0.0])), "cim-dist").unwrap();
+    let ct = transformer(&net, "ct");
+    let r: Vec<f64> = ct.windings.iter().map(|w| w.r_pct).collect();
+    assert!(
+        close(r[0], 0.6) && close(r[1], 1.2) && close(r[2], 1.2),
+        "{r:?}"
+    );
+    assert!(
+        findings(&net.warnings, "READ.CIM_DIST.VALUE_CONFLICT").is_empty(),
+        "{:#?}",
+        net.warnings
+    );
+    // Standard magnitudes include the resolved end resistances, even on
+    // pairs whose loss is zero/unstated.
+    assert!(close(ct.xsc_pct[0], 2.04));
+    assert!(close(ct.xsc_pct[1], 2.04));
+    assert!(close(ct.xsc_pct[2], 1.36));
+}
+
+/// A nonzero test loss that disagrees with the end resistances is reported,
+/// and the end resistances are kept.
+#[test]
+fn test_losses_and_end_resistance_conflict_is_reported() {
+    let net = parse_str(&feeder(&center_tap(CT5_R, [0.2, 0.0, 0.0])), "cim-dist").unwrap();
+    let ct = transformer(&net, "ct");
+    assert!(close(ct.windings[0].r_pct, 0.6));
+    assert!(close(ct.windings[1].r_pct, 1.2));
+    let conflicts = findings(&net.warnings, "READ.CIM_DIST.VALUE_CONFLICT");
+    assert_eq!(conflicts.len(), 1, "{:#?}", net.warnings);
+    assert!(conflicts[0].contains("end resistances are kept"));
+}
+
+/// With no end resistance stated, the losses split as CIMHub's
+/// `SetWindingResistances` does: the star split for three windings.
+#[test]
+fn losses_split_when_no_end_states_a_resistance() {
+    let net = parse_str(
+        &feeder(&center_tap([None; 3], [0.09, 0.09, 0.12])),
+        "cim-dist",
+    )
+    .unwrap();
+    let ct = transformer(&net, "ct");
+    // r12 = r13 = 1.8%, r23 = 2.4%: r1 = 0.6, r2 = r3 = 1.2.
+    let r: Vec<f64> = ct.windings.iter().map(|w| w.r_pct).collect();
+    assert!(
+        close(r[0], 0.6) && close(r[1], 1.2) && close(r[2], 1.2),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn a_tank_without_catalog_data_is_dropped() {
+    let text = center_tap(CT5_R, [0.09, 0.0, 0.0]).replace(
+        r##"<cim:Asset.PowerSystemResources rdf:resource="#_ct"/>"##,
+        "",
+    );
+    let net = parse_str(&feeder(&text), "cim-dist").unwrap();
+    assert_eq!(net.transformers().as_slice(), []);
+    let dropped = findings(&net.warnings, "READ.CIM_DIST.RECORD_DROPPED");
+    assert!(
+        dropped
+            .iter()
+            .any(|f| f.contains("TransformerTank ct") && f.contains("no TransformerTankInfo")),
+        "{:#?}",
+        net.warnings
+    );
+    // The tank ends go with it rather than being reported field by field.
+    assert!(
+        findings(&net.warnings, "READ.CIM_DIST.FIELD_UNMAPPED")
+            .iter()
+            .all(|f| !f.contains("TransformerTankEnd")),
+        "{:#?}",
+        net.warnings
+    );
+}
+
+/// One `Asset` lists many tanks, in one document or extended from another:
+/// every listed tank resolves its catalog entry, and the repeated role is
+/// not a conflict.
+#[test]
+fn an_asset_lists_many_tanks() {
+    let net = parse_file(tank_fixture(), None).unwrap();
+    for name in ["od_t1", "od_t2"] {
+        assert_eq!(transformer(&net, name).extras["cim_tank_info"], "od_info");
+    }
+
+    // A second tank on the same catalog entry, listed by an extension of
+    // the Asset in another document.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("a.xml"),
+        feeder(&format!(
+            "{}{}",
+            center_tap(CT5_R, [0.09, 0.0, 0.0]),
+            center_tap_tank("ct2", "pt2")
+        )),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("b.xml"),
+        format!(
+            r##"{RDF_OPEN}
+  <cim:Asset rdf:about="#_asset"><cim:Asset.PowerSystemResources rdf:resource="#_ct2"/></cim:Asset>
+</rdf:RDF>
+"##
+        ),
+    )
+    .unwrap();
+    let net = parse_file(dir.path(), Some("cim-dist")).unwrap();
+    assert_eq!(net.transformers().len(), 2, "{:#?}", net.warnings);
+    assert_eq!(transformer(&net, "ct2").extras["cim_tank_info"], "info");
+    assert!(
+        findings(&net.warnings, "READ.CIM_DIST.VALUE_CONFLICT").is_empty(),
+        "{:#?}",
+        net.warnings
+    );
+}
+
+/// The `PowerTransformerEnd` form's core admittance becomes the same
+/// no-load percentages: `g` and `b` times end 1's impedance base.
+#[test]
+fn core_admittance_becomes_no_load_percentages() {
+    let net = parse_file(tank_fixture(), None).unwrap();
+    let wd = transformer(&net, "wd");
+    assert!(!wd.extras.contains_key("cim_form"));
+    assert!(close(wd.extras["%noloadloss"].as_f64().unwrap(), 0.1));
+    assert!(close(wd.extras["%imag"].as_f64().unwrap(), 0.4));
+    // And back: the writer states them as a core admittance on end 1.
+    let out = emit_value(&net, DistTargetFormat::CimDist);
+    assert!(
+        out.text
+            .contains("TransformerCoreAdmittance.TransformerEnd")
+    );
+    let back = parse_str(&out.text, "cim-dist").unwrap();
+    let again = transformer(&back, "wd");
+    assert_eq!(again.extras["%noloadloss"], wd.extras["%noloadloss"]);
+    assert_eq!(again.extras["%imag"], wd.extras["%imag"]);
+}
+
+/// Write then read keeps the tank grouping, the imported mRIDs, catalog
+/// sharing, and the form, and every value comes back bit for bit.
+#[test]
+fn tank_banks_round_trip() {
+    let net = parse_file(tank_fixture(), None).unwrap();
+    let out = emit_value(&net, DistTargetFormat::CimDist);
+    assert!(out.warnings.is_empty(), "{:#?}", out.warnings);
+    let count = |class: &str| out.text.matches(&format!("<cim:{class} ")).count();
+    // Six PowerTransformers (the two banks group their tanks), eight tanks,
+    // and five catalog entries: the regulators share one.
+    assert_eq!(count("PowerTransformer"), 6);
+    assert_eq!(count("TransformerTank"), 8);
+    assert_eq!(count("TransformerTankInfo"), 5);
+    assert_eq!(count("Asset"), 5);
+    assert_eq!(count("NoLoadTest"), 1);
+    assert_eq!(count("TransformerCoreAdmittance"), 1);
+    let back = parse_str(&out.text, "cim-dist").unwrap();
+    assert_eq!(back.transformers().len(), net.transformers().len());
+    for (a, b) in net.transformers().iter().zip(back.transformers()) {
+        assert_eq!(a, b, "{}", a.name);
+    }
+}
+
+/// A dss center tap writes CIM (the `PowerTransformerEnd` form, decision D2)
+/// and reads back as the transformer the dss reader produced, except the
+/// reversed second half: a terminal `PhaseCode` names a set, not an order,
+/// so `4, 2` comes back as `2, 4`, with a finding on output. The tank form
+/// (`s2`) carries it.
+#[test]
+fn dss_center_tap_writes_and_rereads() {
+    let net = parse_file(micro("xfmr_center_tap.dss"), None).unwrap();
+    let out = emit_value(&net, DistTargetFormat::CimDist);
+    assert!(!out.text.contains("TransformerTank"));
+    assert!(
+        findings(&out.warnings, "EMIT.CIM_DIST.VALUE_COLLAPSED")
+            .iter()
+            .any(|f| f.contains("winding 3") && f.contains("[4, 2]")),
+        "{:#?}",
+        out.warnings
+    );
+    let back = parse_str(&out.text, "cim-dist").unwrap();
+    let (a, b) = (transformer(&net, "t1"), transformer(&back, "t1"));
+    assert_eq!(b.windings[2].terminal_map, ["2", "4"]);
+    for (wa, wb) in a.windings.iter().zip(&b.windings).take(2) {
+        assert_eq!(wa.terminal_map, wb.terminal_map);
+    }
+    for (wa, wb) in a.windings.iter().zip(&b.windings) {
+        assert_eq!(wa.conn, wb.conn);
+        assert!(close(wa.v_ref, wb.v_ref));
+        assert!(close(wa.r_pct, wb.r_pct));
+    }
+    for (xa, xb) in a.xsc_pct.iter().zip(&b.xsc_pct) {
+        assert!(close(*xa, *xb));
+    }
 }
