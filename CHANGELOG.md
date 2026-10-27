@@ -7,7 +7,7 @@
   voltage regulating STATCOM, and the RAW and RAWX readers skipped the whole
   section. Each one now becomes a `StaticVarCompensator` at bus `I`: `SHMX`,
   the shunt limit in MVA at unity voltage, bounds the susceptance at
-  `±SHMX / kV²` siemens on the bus base, `VSET`, in per unit of the bus base,
+  `±SHMX / kV²` siemens on the bus base, `VSET`, in per unit of the regulated bus base,
   gives the voltage setpoint, `MODE 0` is out of service, and the device
   regulates its own bus or the bus `FCREG` (`REMOT` before revision 35) names.
   `SHMX` limits the shunt current, so the PSS/E reactive limit moves with the
@@ -19,7 +19,11 @@
   the retained fields, so a case written back states its own records; a
   compensator from another format reports what the record cannot state, such
   as unequal limits, terminal power, or a control other than voltage. RAWX
-  reads and writes the `facts` table.
+  reads and writes the `facts` table. RAW and RAWX bind detailed FACTS
+  terminals and regulating nodes, including revision 34's trailing `NREG`.
+  Both reading and fresh writing diagnose the current-limit approximation.
+  Writers reserve retained names before generated names and resolve sanitation
+  collisions consistently in the electrical and detailed terminal tables.
 
 - PTDF and LODF accept negative branch reactances on the sparse path. A
   series capacitor's negative susceptance can make the reference grounded DC

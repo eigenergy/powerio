@@ -312,11 +312,20 @@ keeps the same mode with automatic adjustment disabled, and zero is fixed;
 `|COD| = 4` controls a DC line quantity on a two winding transformer, and
 `|COD| = 5` controls asymmetric active power flow. A shunt FACTS device
 (`J = 0`) reads as a static var compensator: `SHMX` bounds its susceptance at
-the bus base kV, `VSET` (per unit) sets its voltage, `MODE 0` takes it out of
-service, and PSS/E output writes each static var compensator back as one.
+the device bus base kV. `VSET` uses the regulated bus base kV (the device bus
+when `FCREG`/`REMOT` is zero), including remote terminals on another voltage
+level. `MODE 0` takes it out of service, and PSS/E output writes each static
+var compensator back as one. RAW/RAWX detailed FACTS terminals and `NREG` map
+to typed equipment and regulation references. Revision 34 puts `NREG` after
+`MNAME`; revision 35 puts it before. Revision 33 drops the node with a
+diagnostic. Retained names are reserved before generated names; sanitation
+collisions receive unique names and a diagnostic, and detailed terminals use
+those same allocated names.
 `SHMX` is a current limit, MVA at unity voltage, so the susceptance bound
 matches the PSS/E reactive limit at 1 p.u. and is slightly tighter below it
-and looser above it. Series FACTS
+and looser above it. Both reading into the fixed susceptance model and fresh
+PSS/E/RAWX writing report this approximation; same format retained-source
+emission stays byte exact. Series FACTS
 devices are not modeled. Unsupported RAWX tables, including multiterminal DC,
 GNE, induction machine, multisection line, zone, owner, and interarea transfer
 records, and series FACTS devices, remain only in byte exact same

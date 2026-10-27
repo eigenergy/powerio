@@ -499,6 +499,61 @@ fn write_impedance_tables(
     }
 }
 
+/// Reserve every retained name before allocating generated names, including
+/// names that become identical after PSS/E quoting sanitation.
+fn shunt_facts_names(
+    net: &BalancedNetwork,
+    warnings: &mut Diagnostics,
+    sanitized_quoted: &mut usize,
+) -> Vec<String> {
+    let requested = net
+        .static_var_compensators()
+        .iter()
+        .map(|svc| {
+            svc.extras
+                .get("psse_name")
+                .and_then(Value::as_str)
+                .map(|raw| {
+                    let name = sanitize_quoted(raw, NAME_FORBIDDEN, ' ').trim().to_owned();
+                    *sanitized_quoted += usize::from(name != raw);
+                    name
+                })
+                .filter(|name| !name.is_empty())
+        })
+        .collect::<Vec<_>>();
+    let reserved = requested.iter().flatten().cloned().collect::<BTreeSet<_>>();
+    let mut used = BTreeSet::new();
+    let mut renamed = 0usize;
+    let names = requested
+        .into_iter()
+        .enumerate()
+        .map(|(index, requested)| {
+            if let Some(name) = requested
+                .as_ref()
+                .filter(|name| used.insert((*name).clone()))
+            {
+                return name.clone();
+            }
+            renamed += usize::from(requested.is_some());
+            let base = format!("SVC{}", index + 1);
+            let mut candidate = base.clone();
+            let mut suffix = 2usize;
+            while reserved.contains(&candidate) || used.contains(&candidate) {
+                candidate = format!("{base}_{suffix}");
+                suffix += 1;
+            }
+            used.insert(candidate.clone());
+            candidate
+        })
+        .collect();
+    if renamed > 0 {
+        warnings.push(&F.value_substituted, format!(
+            "{renamed} FACTS device name(s) collided after PSS/E sanitation; allocated unique names"
+        ));
+    }
+    names
+}
+
 /// Write each static var compensator as a shunt FACTS device record
 /// (`J = 0`), the inverse of [`read_shunt_facts`], and report what the
 /// records cannot state.
@@ -509,12 +564,13 @@ fn write_shunt_facts(
     num: &mut impl FnMut(f64) -> String,
     warnings: &mut Diagnostics,
     sanitized_quoted: &mut usize,
-) {
+) -> Vec<String> {
     let mut asymmetric = 0usize;
     let mut stated_output = 0usize;
     let mut other_control = 0usize;
     let mut defaulted_setpoint = 0usize;
-    for (index, svc) in net.static_var_compensators().iter().enumerate() {
+    let names = shunt_facts_names(net, warnings, sanitized_quoted);
+    for (svc, name) in net.static_var_compensators().iter().zip(&names) {
         let limit = svc.b_max_siemens.abs().max(svc.b_min_siemens.abs());
         asymmetric +=
             usize::from((svc.b_max_siemens + svc.b_min_siemens).abs() > 1e-9 * limit.max(1.0));
@@ -523,10 +579,20 @@ fn write_shunt_facts(
             svc.regulation_mode != StaticVarCompensatorRegulationMode::Voltage || !svc.regulating,
         );
         defaulted_setpoint += usize::from(svc.voltage_setpoint_kv <= 0.0);
-        let record = shunt_facts_record(net, svc, index, rev, num, warnings, sanitized_quoted);
+        let record = shunt_facts_record(net, svc, name, rev, num, warnings, sanitized_quoted);
         let _ = writeln!(out, "{record}");
     }
+    let approximated = net
+        .static_var_compensators()
+        .iter()
+        .filter(|svc| svc.b_min_siemens != 0.0 || svc.b_max_siemens != 0.0)
+        .count();
     for (count, code, what) in [
+        (
+            approximated,
+            &F.value_substituted,
+            "have fixed susceptance limits; SHMX is a current limit matched at unity device-bus voltage only, so reactive limits differ away from unity voltage",
+        ),
         (
             asymmetric,
             &F.value_collapsed,
@@ -552,6 +618,7 @@ fn write_shunt_facts(
             warnings.push(code, format!("{count} static var compensator(s) {what}"));
         }
     }
+    names
 }
 
 /// One shunt FACTS device record: `SHMX` is the larger susceptance limit at
@@ -562,7 +629,7 @@ fn write_shunt_facts(
 fn shunt_facts_record(
     net: &BalancedNetwork,
     svc: &StaticVarCompensator,
-    index: usize,
+    name: &str,
     rev: u32,
     num: &mut impl FnMut(f64) -> String,
     warnings: &mut Diagnostics,
@@ -585,19 +652,11 @@ fn shunt_facts_record(
         *sanitized_quoted += usize::from(matches!(value, std::borrow::Cow::Owned(_)));
         value.into_owned()
     };
-    let name = quoted("psse_name", &format!("SVC{}", index + 1));
     let mname = quoted("psse_mname", "");
     let mode = if svc.in_service {
         extra_i64(&svc.extras, "psse_mode").unwrap_or(1)
     } else {
         0
-    };
-    let vset = if svc.voltage_setpoint_kv > 0.0 {
-        extra_f64(&svc.extras, "psse_vset")
-            .filter(|vset| vset * kv == svc.voltage_setpoint_kv)
-            .unwrap_or(svc.voltage_setpoint_kv / kv)
-    } else {
-        1.0
     };
     let (regulated, node) = regulating_target(
         net,
@@ -606,19 +665,38 @@ fn shunt_facts_record(
         format_args!("FACTS device at bus {}", svc.bus),
         warnings,
     );
+    // VSET uses the regulated terminal's base, whereas SHMX uses the
+    // device bus base even when those voltage levels differ.
+    let regulated_kv = if regulated == 0 {
+        kv
+    } else {
+        net.buses().iter().find(|bus| bus.id.0 == regulated)
+            .map(|bus| bus.base_kv).filter(|base| base.is_finite() && *base > 0.0)
+            .unwrap_or_else(|| {
+                warnings.push(&F.value_substituted, format!(
+                    "PSS/E FACTS device {name:?}: regulated bus {regulated} has no positive base kV; VSET uses the device bus base"
+                ));
+                kv
+            })
+    };
+    let vset = if svc.voltage_setpoint_kv > 0.0 {
+        extra_f64(&svc.extras, "psse_vset")
+            .filter(|vset| vset * regulated_kv == svc.voltage_setpoint_kv)
+            .unwrap_or(svc.voltage_setpoint_kv / regulated_kv)
+    } else {
+        1.0
+    };
     let regulation = if rev >= 35 {
-        format!("{regulated}, {node}")
+        format!("{regulated}, {node}, '{mname}'")
+    } else if rev == 34 {
+        format!("{regulated}, '{mname}', {node}")
     } else {
         if node != 0 {
-            warnings.push(
-                &F.field_dropped,
-                format!(
-                    "PSS/E FACTS device at bus {}: regulating node {node} has no NREG field before revision 35; emitted only REMOT",
-                    svc.bus
-                ),
-            );
+            warnings.push(&F.field_dropped, format!(
+                "PSS/E FACTS device at bus {}: regulating node {node} has no NREG field before revision 34; emitted only REMOT", svc.bus
+            ));
         }
-        regulated.to_string()
+        format!("{regulated}, '{mname}'")
     };
     let float = |key: &str, default: f64| extra_f64(&svc.extras, key).unwrap_or(default);
     let limit = svc.b_max_siemens.abs().max(svc.b_min_siemens.abs());
@@ -645,7 +723,7 @@ fn shunt_facts_record(
     let set2 = num(float("psse_set2", 0.0));
     let vsref = extra_i64(&svc.extras, "psse_vsref").unwrap_or(0);
     format!(
-        "'{name}', {}, 0, {mode}, {fields}, {owner}, {set1}, {set2}, {vsref}, {regulation}, '{mname}'",
+        "'{name}', {}, 0, {mode}, {fields}, {owner}, {set1}, {set2}, {vsref}, {regulation}",
         svc.bus
     )
 }
@@ -1769,7 +1847,7 @@ fn write_psse_rev_inner(
     for line in &EMPTY_SECTIONS[3..=8] {
         let _ = writeln!(s, "{line}");
     }
-    write_shunt_facts(
+    let facts_names = write_shunt_facts(
         &mut s,
         net,
         rev,
@@ -1887,7 +1965,7 @@ fn write_psse_rev_inner(
     }
     let detailed_records = if include_detailed_connectivity && net.detailed_connectivity().is_some()
     {
-        match super::rawx::write_raw_substation_data(net) {
+        match super::rawx::write_raw_substation_data(net, &facts_names) {
             Ok((records, detailed_warnings)) => {
                 warnings.absorb(detailed_warnings);
                 records
@@ -4603,8 +4681,8 @@ fn facts_regulated_bus(extras: &Extras) -> Option<BusId> {
 ///
 /// `SHMX`, the shunt element's limit in MVA at unity voltage, bounds the
 /// susceptance at `±SHMX / kV²` siemens on the bus base, and `VSET`, the
-/// voltage setpoint in p.u., becomes kV. `MODE 0` is out of service; a shunt
-/// device regulates voltage at its own bus, or at `FCREG` when that names
+/// voltage setpoint in p.u. on the regulated bus base, becomes kV. `MODE 0`
+/// is out of service; a shunt device regulates its own bus, or `FCREG` when it names
 /// another. The fields the compensator has no home for are retained for a
 /// PSS/E write.
 #[allow(clippy::float_cmp)] // exact: a retained field is restated only when it maps to the typed value
@@ -4616,7 +4694,7 @@ fn read_shunt_facts(
 ) -> Result<Option<(StaticVarCompensator, i32)>> {
     // NAME, I, J, MODE, PDES, QDES, VSET, SHMX, TRMX, VTMN, VTMX, VSMX, IMX,
     // LINX, RMPCT, OWNER, SET1, SET2, VSREF, then REMOT and MNAME before
-    // revision 35 and FCREG, NREG, and MNAME from it.
+    // revision 34 (which appends NREG), then FCREG, NREG, MNAME in 35.
     if id_at(f, 2, 0)? != 0 {
         return Ok(None);
     }
@@ -4640,14 +4718,32 @@ fn read_shunt_facts(
     let mut svc = StaticVarCompensator::new(bus, -shmx / (kv * kv), shmx / (kv * kv));
     svc.in_service = mode != 0;
     svc.regulating = true;
-    svc.voltage_setpoint_kv = vset * kv;
+    let regulated = id_at(f, 19, 0)?;
+    let regulated_kv = if regulated == 0 || regulated == bus.0 {
+        kv
+    } else {
+        bus_base_kv.get(&BusId(regulated)).copied()
+            .filter(|base| base.is_finite() && *base > 0.0)
+            .unwrap_or_else(|| {
+                warnings.push(&codes::READ_PSSE_VALUE_SUBSTITUTED, format!(
+                    "PSS/E FACTS device {name:?}: regulated bus {regulated} has no positive base kV; VSET uses the device bus base"
+                ));
+                kv
+            })
+    };
+    svc.voltage_setpoint_kv = vset * regulated_kv;
+    if shmx != 0.0 {
+        warnings.push(&codes::READ_PSSE_VALUE_SUBSTITUTED, format!(
+            "PSS/E FACTS device {name:?}: SHMX is a current limit; projected to fixed susceptance limits at unity device-bus voltage only, so reactive limits differ away from unity voltage"
+        ));
+    }
     let mut extras = Extras::new();
     // Converting back to p.u. and MVA can land an ulp away; the stated field
     // is kept wherever it would, so a written record restates it.
     if svc.b_max_siemens * (kv * kv) != shmx {
         extras.insert("psse_shmx".into(), jnum(shmx));
     }
-    if svc.voltage_setpoint_kv / kv != vset {
+    if svc.voltage_setpoint_kv / regulated_kv != vset {
         extras.insert("psse_vset".into(), jnum(vset));
     }
     retain_string_extra(&mut extras, f, 0, "psse_name");
@@ -4671,16 +4767,16 @@ fn read_shunt_facts(
     }
     retain_integer_extra(&mut extras, f, 15, "psse_owner", 1)?;
     retain_integer_extra(&mut extras, f, 18, "psse_vsref", 0)?;
-    let regulated = id_at(f, 19, 0)?;
     if regulated != 0 && regulated != bus.0 {
         extras.insert("psse_fcreg".into(), Value::from(regulated as u64));
     }
-    let (node, mname) = if raw_rev >= 35 {
-        let node = i32::try_from(int_at(f, 20, 0)?).map_err(|_| Error::FormatRead {
+    let (node, mname) = if raw_rev >= 34 {
+        let (node_index, name_index) = if raw_rev >= 35 { (20, 21) } else { (21, 20) };
+        let node = i32::try_from(int_at(f, node_index, 0)?).map_err(|_| Error::FormatRead {
             format: FMT,
             message: "FACTS device NREG is outside the i32 range".into(),
         })?;
-        (node, 21)
+        (node, name_index)
     } else {
         (0, 20)
     };
@@ -4689,7 +4785,7 @@ fn read_shunt_facts(
         warnings.push(
             &codes::READ_PSSE_FIELD_DROPPED,
             format!(
-                "PSS/E FACTS device {name:?} at bus {bus} regulates bus {regulated}, which a static var compensator names only through a regulating terminal; retained for PSS/E output and read as regulating its own bus"
+                "PSS/E FACTS device {name:?} at bus {bus} regulates bus {regulated}, which a static var compensator names only through a regulating terminal; retained for PSS/E output; the typed voltage setpoint uses the regulated bus base but its remote control target is unavailable"
             ),
         );
     }
@@ -10382,7 +10478,7 @@ Q
         assert_eq!(a.extras["psse_name"], Value::from("STATCOM A"));
         assert_eq!(a.extras.len(), 1, "{:?}", a.extras);
         close(b.b_max_siemens, 50.0 / (115.0 * 115.0));
-        close(b.voltage_setpoint_kv, 0.98 * 115.0);
+        close(b.voltage_setpoint_kv, 0.98 * 230.0);
         assert!(!b.in_service);
         for (key, value) in [
             ("psse_fcreg", Value::from(2)),
