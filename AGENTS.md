@@ -188,8 +188,8 @@ powerio-core/src              module.rs (PioModule<T>), source.rs, output.rs,
                               time_series.rs, scenario.rs, component_id.rs,
                               validation.rs (limits), bounded.rs, nonfinite.rs
 powerio-tx/src                network.rs (BalancedNetwork and its tables),
-                              indexed.rs, normalize.rs, operations.rs, dc.rs,
-                              gen_cost.rs, geo/ (layer.rs, pwd.rs),
+                              indexed.rs, hvdc.rs, normalize.rs, operations.rs,
+                              dc.rs, gen_cost.rs, geo/ (layer.rs, pwd.rs),
                               contingency/ (.con, .sub, .mon: mod.rs, lexer.rs,
                               resolve.rs, expand.rs, sub.rs, mon.rs),
                               collect.rs, diagnostics.rs, error.rs, version.rs
@@ -233,6 +233,12 @@ docs/                         the mdBook guide, the schema archive, release note
 
 ## Things to know before editing
 
+- **How a change reaches review.** Follow CONTRIBUTING.md: an agreed plan in
+  an issue before a design decision (a small fix that restores documented
+  behavior goes straight to a pull request), one change per pull request
+  against `main`, by default at most three pull requests awaiting review per
+  author, the checks for the change run locally, and a description that
+  covers the whole diff. Agent-written pull requests follow it the same way.
 - **Workspace split.** `powerio-matrix` depends on `powerio-core`,
   `powerio-tx`, `powerio-dist`, and `powerio-prob`; the `powerio` facade
   re-exports matrix types behind the `matrix` feature. Do not introduce a

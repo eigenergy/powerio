@@ -152,6 +152,29 @@ fn derive_balanced_calculation<I>(
     })
 }
 
+/// Derive a calculation value from any module: the module's records carry
+/// over, and one Transform history entry records the module's value type as
+/// the input.
+fn derive_calculation<I>(
+    module: &powerio_core::PioModule<crate::PioValue>,
+    operation: &'static str,
+    output_type: &'static str,
+    value: Result<I, powerio_core::Error>,
+) -> Result<powerio_core::PioModule<I>, powerio_core::Error> {
+    let value = value?;
+    let history = HistoryEntry::new(
+        unused_history_id(module, operation),
+        HistoryKind::Transform,
+        operation,
+    )?
+    .with_input_type(module.value().type_name())?
+    .with_output_type(output_type)?;
+    let producer = powerio_core::Producer::new("powerio", crate::VERSION)?;
+    module
+        .clone()
+        .try_derive_value(producer, history, |_| Ok(value))
+}
+
 fn derive_multiconductor_calculation<I>(
     module: &powerio_core::PioModule<crate::PioValue>,
     operation: &'static str,
@@ -426,6 +449,177 @@ pub fn to_ac_opf_instance(
         "to_ac_opf_instance",
         "powerio.AcOpfInstance",
         powerio_prob::AcOpfInstance::from_network,
+    )
+}
+
+/// Construct an AC optimal transmission switching calculation with the
+/// default switching options: every initially in-service branch may switch,
+/// at zero cost, with no budget, no islands, and no current limits, and the
+/// objective gains the switching cost term. The module holds a balanced
+/// network (the AC optimal power flow base is
+/// [`AcOpfInstance::from_network`](powerio_prob::AcOpfInstance::from_network))
+/// or an AC optimal power flow calculation. An AC optimal transmission
+/// switching module comes back unchanged.
+///
+/// # Errors
+/// A value of another kind, or a base the defaults cannot build on.
+pub fn to_ac_ots_instance(
+    module: &powerio_core::PioModule<crate::PioValue>,
+) -> Result<powerio_core::PioModule<powerio_prob::AcOtsInstance>, powerio_core::Error> {
+    match module.value() {
+        crate::PioValue::AcOtsInstance(_) => Ok(module.clone().map_value(|value| match value {
+            crate::PioValue::AcOtsInstance(instance) => instance,
+            _ => unreachable!("the value type was checked before extraction"),
+        })),
+        crate::PioValue::AcOpfInstance(base) => derive_calculation(
+            module,
+            "to_ac_ots_instance",
+            "powerio.AcOtsInstance",
+            powerio_prob::AcOtsInstance::from_ac_opf(base.clone()),
+        ),
+        _ => derive_balanced_calculation(
+            module,
+            "to_ac_ots_instance",
+            "powerio.AcOtsInstance",
+            powerio_prob::AcOtsInstance::from_network,
+        ),
+    }
+}
+
+/// Construct, or reconfigure, an AC optimal transmission switching
+/// calculation with explicit switching options. The module holds a balanced
+/// network, an AC optimal power flow calculation, or an AC optimal
+/// transmission switching calculation, whose base problem and objective are
+/// kept and whose options are replaced. The objective gains the switching
+/// cost term once.
+///
+/// # Errors
+/// A value of another kind, or options
+/// [`AcOtsInstance::new`](powerio_prob::AcOtsInstance::new) refuses.
+pub fn to_ac_ots_instance_with_options(
+    module: &powerio_core::PioModule<crate::PioValue>,
+    options: powerio_prob::AcOtsOptions,
+) -> Result<powerio_core::PioModule<powerio_prob::AcOtsInstance>, powerio_core::Error> {
+    let configure = |instance: Result<powerio_prob::AcOtsInstance, powerio_core::Error>| {
+        instance.map(powerio_prob::AcOtsInstance::with_switching_objective)
+    };
+    match module.value() {
+        crate::PioValue::AcOtsInstance(instance) => derive_calculation(
+            module,
+            "to_ac_ots_instance",
+            "powerio.AcOtsInstance",
+            configure(instance.clone().with_options(options)),
+        ),
+        crate::PioValue::AcOpfInstance(base) => derive_calculation(
+            module,
+            "to_ac_ots_instance",
+            "powerio.AcOtsInstance",
+            configure(powerio_prob::AcOtsInstance::new(base.clone(), options)),
+        ),
+        _ => derive_balanced_calculation(
+            module,
+            "to_ac_ots_instance",
+            "powerio.AcOtsInstance",
+            |network| {
+                configure(powerio_prob::AcOtsInstance::new(
+                    powerio_prob::AcOpfInstance::from_network(network)?,
+                    options,
+                ))
+            },
+        ),
+    }
+}
+
+/// Combine an AC optimal power flow base with explicit switching options,
+/// keeping the base objective exactly. `module` is the module `base` belongs
+/// to, directly or as a solution's instance; its records carry over to the
+/// result.
+///
+/// # Errors
+/// Options [`AcOtsInstance::new`](powerio_prob::AcOtsInstance::new) refuses.
+pub fn ac_ots_instance_from_base(
+    module: &powerio_core::PioModule<crate::PioValue>,
+    base: &powerio_prob::AcOpfInstance,
+    options: powerio_prob::AcOtsOptions,
+) -> Result<powerio_core::PioModule<powerio_prob::AcOtsInstance>, powerio_core::Error> {
+    derive_calculation(
+        module,
+        "ac_ots_instance",
+        "powerio.AcOtsInstance",
+        powerio_prob::AcOtsInstance::new(base.clone(), options),
+    )
+}
+
+/// The AC optimal power flow over a final topology of `instance`
+/// ([`AcOtsInstance::fix_topology`](powerio_prob::AcOtsInstance::fix_topology)),
+/// with its discards recorded as module diagnostics. `module` is the module
+/// `instance` belongs to, directly or as a solution's instance.
+///
+/// # Errors
+/// A topology the instance refuses.
+pub fn fix_ac_ots_topology(
+    module: &powerio_core::PioModule<crate::PioValue>,
+    instance: &powerio_prob::AcOtsInstance,
+    branch_closed: &[bool],
+) -> Result<powerio_core::PioModule<powerio_prob::AcOpfInstance>, powerio_core::Error> {
+    let (fixed, diagnostics) = instance.fix_topology(branch_closed)?;
+    let mut derived = derive_calculation(
+        module,
+        "fix_ac_ots_topology",
+        "powerio.AcOpfInstance",
+        Ok(fixed),
+    )?;
+    for mut diagnostic in diagnostics {
+        diagnostic.clear_target();
+        derived.add_diagnostic(diagnostic)?;
+    }
+    Ok(derived)
+}
+
+/// Attach the AC optimal power flow solution of `instance`'s fixed-topology
+/// problem ([`AcOtsSolution::new`](powerio_prob::AcOtsSolution::new)).
+/// `module` is the module `instance` belongs to; its records carry over to
+/// the result.
+///
+/// # Errors
+/// As [`AcOtsSolution::new`](powerio_prob::AcOtsSolution::new).
+pub fn ac_ots_solution(
+    module: &powerio_core::PioModule<crate::PioValue>,
+    instance: &powerio_prob::AcOtsInstance,
+    branch_closed: Vec<bool>,
+    ac_solution: powerio_prob::AcOpfSolution,
+) -> Result<powerio_core::PioModule<powerio_prob::AcOtsSolution>, powerio_core::Error> {
+    derive_calculation(
+        module,
+        "ac_ots_solution",
+        "powerio.AcOtsSolution",
+        powerio_prob::AcOtsSolution::new(
+            std::sync::Arc::new(instance.clone()),
+            branch_closed,
+            ac_solution,
+        ),
+    )
+}
+
+/// The network an AC optimal transmission switching solution states: the
+/// final branch statuses, with the AC solution's bus voltages, generator
+/// dispatch, and branch flows applied. Emit this network to write the
+/// solved case; the solution's own network keeps the initial statuses.
+/// `module` is the module `solution` belongs to.
+///
+/// # Errors
+/// A record the derived module cannot carry.
+pub fn materialize_ac_ots_solution(
+    module: &powerio_core::PioModule<crate::PioValue>,
+    solution: &powerio_prob::AcOtsSolution,
+) -> Result<powerio_core::PioModule<BalancedNetwork>, powerio_core::Error> {
+    let mut network = crate::write::network_with_ac_opf_solution(solution.ac_solution());
+    network.assign_missing_component_ids();
+    derive_calculation(
+        module,
+        "materialize_ac_ots_solution",
+        "powerio.BalancedNetwork",
+        Ok(network),
     )
 }
 

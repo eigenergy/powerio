@@ -71,6 +71,7 @@ schema definition beside it.
 | `powerio.AcPfInstance` | `AcPfInstance` |
 | `powerio.DcOpfInstance` | `DcOpfInstance` |
 | `powerio.AcOpfInstance` | `AcOpfInstance` |
+| `powerio.AcOtsInstance` | `AcOtsInstance` |
 | `powerio.McAcPfInstance` | `McAcPfInstance` |
 | `powerio.McAcOpfInstance` | `McAcOpfInstance` |
 | `powerio.LinDist3FlowPfInstance` | `LinDist3FlowPfInstance` |
@@ -80,6 +81,7 @@ schema definition beside it.
 | `powerio.AcPfSolution` | `AcPfSolution` |
 | `powerio.DcOpfSolution` | `DcOpfSolution` |
 | `powerio.AcOpfSolution` | `AcOpfSolution` |
+| `powerio.AcOtsSolution` | `AcOtsSolution` |
 | `powerio.SocwrOpfSolution` | `SocwrOpfSolution` |
 | `powerio.McAcPfSolution` | `McAcPfSolution` |
 | `powerio.McAcOpfSolution` | `McAcOpfSolution` |
@@ -367,7 +369,16 @@ Schema definition: `Storage`.
 ### Hvdc
 
 A two terminal HVDC line in the MATPOWER `dcline` convention, whatever the
-source format.
+source format. The stored `pf`, `pt`, `qf`, and `qt` keep these signs
+throughout 0.11.x: `pf` is positive from the from bus into the line, and
+`pt`, `qf`, and `qt` are positive from the line into their bus. The
+calculations read them through the bus-to-device terminal view
+(`Hvdc::calc_bus_to_device_powers` in Rust), positive from each AC bus into
+the HVDC system: `p_from = pf`, `q_from = -qf`, `p_to = -pt`, `q_to = -qt`,
+with `p_from + p_to` the active power lost. A balanced calculation carries an
+in service line whose two terminal buses are energized as fixed bus
+injections, the negatives of its terminal powers: `-pf` and `+qf` at the from
+bus, `+pt` and `+qt` at the to bus.
 
 Schema definition: `Hvdc`.
 
@@ -1420,10 +1431,17 @@ Schema definition: `DcPfInstance`.
 | `network` | `BalancedNetwork` | | | at least one `REF` bus | required |
 | `approximation` | token `series_susceptance`, `tap_adjusted_reactance`, `reactance_only` | | | the DC branch susceptance formula | required |
 | `initial_point` | `StoredOperatingPointAssignment` or null | | | | null |
+| `hvdc_treatment` | token `fixed_injection`, `ignore` | | | how the specifications treat HVDC lines; written only when not `ignore` | `ignore` |
 
 The bus specifications are derived from the network: a `REF` bus contributes
 its stated angle, an `ISOLATED` bus no equation, and every other bus its net
-active injection over in service generators and loads.
+active injection over in service generators and loads. Under
+`fixed_injection` each in service HVDC line whose terminal buses are energized
+adds a fixed injection of `-pf` at its from bus and `+pt` at its to bus; under
+`ignore` HVDC lines add nothing. A document without `hvdc_treatment` reads as
+`ignore`: a document written before the field existed, when the instance left
+HVDC lines out, denotes the calculation it did when written, and an `ignore`
+instance is written without the field.
 
 ### powerio.AcPfInstance
 
@@ -1434,6 +1452,7 @@ Schema definition: `AcPfInstance`.
 | `network` | `BalancedNetwork` | | | at least one `REF` bus | required |
 | `specifications` | array of `AcBusSpecification` | | | one per bus, in bus table order | required |
 | `initial_point` | `StoredOperatingPointAssignment` or null | | | | null |
+| `hvdc_treatment` | token `fixed_injection`, `ignore` | | | how specifications derived for a replacement network treat HVDC lines; written only when not `ignore` | `ignore` |
 
 `AcBusSpecification` is tagged by `kind`. `pq` gives `p` (MW) and `q`
 (MVAr), the prescribed net injection; `pv` gives `p` and `vm` (p.u.);
@@ -1471,7 +1490,8 @@ Schema definition: `Objective`.
 
 `ObjectiveTerm` is tagged by `term`: `network_generator_cost` sums the
 network's generator cost curves; `active_power_dispatch_cost` prices active
-dispatch.
+dispatch; `branch_switching_cost` adds the opening and closing costs of an AC
+optimal transmission switching instance's status changes.
 
 Schema definition: `ActiveConstraints`.
 
@@ -1486,6 +1506,51 @@ Schema definition: `ActiveConstraints`.
 stated limit), `none` (the family is relaxed), or `only` with `identities`,
 the list of element identities (`uid` values, or bus ids) the family applies
 to.
+
+### powerio.AcOtsInstance
+
+An AC optimal power flow problem whose branch statuses are decisions. The
+base network keeps every physical branch, and its `in_service` bits are the
+initial topology.
+
+Schema definition: `AcOtsInstance`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `base` | `AcOpfInstance` | | | the network, objective, constraint selections, and initial point | required |
+| `options` | `AcOtsOptions` | | | | required |
+
+Schema definition: `AcOtsOptions`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `switchable` | `BranchSelection` | | | an `only` identity names one branch, once | required |
+| `switching_costs` | array of `BranchSwitchingCost` | | | one record per branch at most | `[]`: switching costs nothing |
+| `islanding` | token | | | `forbidden` (no AC island of the initial topology may split; islands that are separate initially stay valid, and closing a branch may join islands) or `allowed` (islands may split, and each final island gets one reference bus). Under either policy a final topology that leaves buses a generator supplied initially in an island with no in-service generator is refused; no load is shed | required |
+| `max_open` | integer or null | branches | | at most the branch count, at least the open branches that cannot switch; counts every open branch | null: no budget |
+| `max_switched` | integer or null | branches | | at most the switchable count; counts changes against the initial status | null: no budget |
+| `current_limits` | token | | | `skip`, `stated` (the records below), or `derive_from_rate_a` (PowerModels' `calc_current_limits!`) | required |
+| `stated_current_limits` | array of `BranchCurrentLimit` | | | one record per branch at most | `[]` |
+
+`BranchSelection` is tagged by `select`: `all` (every physical branch,
+including initially open ones), `none`, or `only` with `identities`, the
+branch identities (`uid` values) that may switch.
+
+Schema definition: `BranchSwitchingCost`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `id` | string | | | a branch identity | required |
+| `open_cost` | float | objective units | | finite and nonnegative; charged when an initially closed branch opens | required |
+| `close_cost` | float | objective units | | finite and nonnegative; charged when an initially open branch closes | required |
+
+Schema definition: `BranchCurrentLimit`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `id` | string | | | a branch identity | required |
+| `from_pu` | float or null | p.u. on `base_mva` and the from bus `base_kv` | | finite and positive | null: unbounded |
+| `to_pu` | float or null | p.u. on `base_mva` and the to bus `base_kv` | | finite and positive | null: unbounded |
 
 ### powerio.McAcPfInstance
 
@@ -1897,6 +1962,27 @@ Schema definition: `AcOpfSolution`.
 | `bus_reactive_power_marginal` | array of float or null | objective units per MVAr | | one per bus | null |
 | `branch_from_limit_multiplier` | array of float or null | objective units per MVA | | one per branch; finite and nonnegative | null |
 | `branch_to_limit_multiplier` | array of float or null | objective units per MVA | | one per branch; finite and nonnegative | null |
+
+### powerio.AcOtsSolution
+
+The final branch statuses of an AC optimal transmission switching instance
+and the AC optimal power flow solution of the fixed-topology problem they
+derive. Reading the document checks the topology against the instance and
+requires `ac_solution.instance` to state exactly that fixed problem and every
+open branch to carry zero flow. A `NaN` flow on an open branch records no
+flow. Other values follow the AC optimal power flow solution's own rules,
+which accept `NaN` for an out-of-service generator or a non-converged
+objective. The objective
+is the AC objective plus the switching cost when the instance's objective
+states `branch_switching_cost`.
+
+Schema definition: `AcOtsSolution`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `instance` | `AcOtsInstance` | | | | required |
+| `branch_closed` | array of boolean | | | one per branch; fixed branches unchanged; within the budgets and islanding policy | required |
+| `ac_solution` | `AcOpfSolution` | | | solves the fixed-topology problem; open branches carry zero flow | required |
 
 ### powerio.SocwrOpfSolution
 

@@ -8,6 +8,8 @@ expected=$(python3 - <<'PY'
 names = [
     "powerio.AcOpfInstance",
     "powerio.AcOpfSolution",
+    "powerio.AcOtsInstance",
+    "powerio.AcOtsSolution",
     "powerio.AcPfInstance",
     "powerio.AcPfSolution",
     "powerio.AcScucInstance",
