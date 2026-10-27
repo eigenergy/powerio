@@ -45,20 +45,15 @@ pub(crate) fn retained_project(
         .get("dependencies")
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| invalid("retained DSS project lacks its dependency inventory"))?;
-    let dependencies: std::collections::BTreeSet<_> = dependencies
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .ok_or_else(|| invalid("retained DSS dependency inventory is malformed"))
-        })
-        .collect::<Result<_, _>>()?;
+    if dependencies.iter().any(|value| !value.is_string()) {
+        return Err(invalid("retained DSS dependency inventory is malformed"));
+    }
+    // Every acquired buffer replays: the dependency files the reader followed
+    // and the companion files beside them (a `Redirect` that a later edit
+    // retargets, a data file the deck names by a path the reader never opened).
     let mut names = std::collections::BTreeSet::new();
     let mut artifacts = Vec::new();
     for buffer in buffers {
-        if buffer.id() != primary.id() && !dependencies.contains(buffer.id().as_str()) {
-            continue;
-        }
         let name = if buffer.id() == primary.id() {
             entrypoint.as_str()
         } else {

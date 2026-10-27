@@ -292,7 +292,7 @@ mod tests {
         assert_eq!(result["ok"], true, "{result}");
         let result: Value = serde_json::from_str(&converter.emit("dss", "feeder".into())).unwrap();
         assert_eq!(result["ok"], true, "{result}");
-        for (name, bytes) in files[..2].iter().copied() {
+        for (name, bytes) in files {
             let index = converter
                 .artifacts
                 .iter()
@@ -300,12 +300,6 @@ mod tests {
                 .unwrap();
             assert_eq!(converter.take_artifact(index), bytes);
         }
-        assert!(
-            !converter
-                .artifacts
-                .iter()
-                .any(|artifact| artifact.name().as_str().ends_with("notes.asset"))
-        );
     }
 
     #[test]

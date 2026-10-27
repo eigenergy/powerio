@@ -483,6 +483,19 @@ fn opendss_oracle_bounds_the_lossless_linear_voltage_approximation() {
         )
         .is_err()
     );
+    // Reject and lower keep refusing the bounded law; approximate and
+    // permissive project it to the nominal law and record the action.
+    use powerio_prob::LinDist3FlowUnsupported as Policy;
+    let build = |policy| {
+        LinDist3FlowOpfInstance::from_network(
+            network.clone(),
+            LinDist3FlowBuildOptions::default()
+                .with_required_neutral_provenance(true)
+                .with_unsupported(policy),
+        )
+    };
+    assert!(build(Policy::Reject).is_err() && build(Policy::Lower).is_err());
+    assert!(build(Policy::Permissive).is_ok());
     let instance = LinDist3FlowOpfInstance::from_network(
         network.clone(),
         LinDist3FlowBuildOptions::default()

@@ -79,7 +79,11 @@ writes the typed exponents and voltage limits ahead of stale extras or writer
 defaults. Unequal per-branch parameters emit separate single-phase loads.
 
 BMOPF and PMD project voltage-bounded loads to their nominal laws with a
-diagnostic; PMD also diagnoses its lack of exponential load fields. Legacy C
+diagnostic; PMD also diagnoses its lack of exponential load fields. The
+multiconductor IVR OPF and LinDist3Flow preparations refuse these loads by
+default; each has an explicit opt-in that projects to the nominal law with a
+diagnostic (`BoundedLoadLawPolicy::ProjectToNominal`, and the `approximate` or
+`permissive` LinDist3Flow policy), described in the multiconductor IVR guide. Legacy C
 load views cannot expose the voltage window and reject these loads; additive
 binding views remain unfinished. Models 6 and 7 still need complete typed laws.
 
