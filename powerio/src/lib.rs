@@ -136,12 +136,13 @@ pub use powerio_tx::{
     Load, LoadVoltageModel, Location, MonitorScope, MonitorStatement, MonitoredParsed,
     MonitoredResolution, MonitoredSet, PsseEquipmentIndex, PwdDisplay, PwdSubstation, ResolvedCase,
     ResolvedComponent, ResolvedInterface, ResolvedVoltageScope, RetainedStatement, Selector,
-    SelectorGroup, Shunt, ShuntBlock, SkipRule, SolverParams, SourceFormat, Storage, Subsystem,
-    SubsystemParsed, SubsystemSelector, SubsystemSet, Switch, SwitchedShuntControl,
-    SwitchedShuntMode, Transformer3W, TransformerControl, TransformerControlMode, UnresolvedAction,
-    UnresolvedMonitor, UnresolvedMonitorReason, UnresolvedReason, Winding, apply_substation_points,
-    calc_series_admittance_of, classify_json_bytes, classify_json_text, repair_values,
-    to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
+    SelectorGroup, SharedPsseEquipmentIndex, Shunt, ShuntBlock, SkipRule, SolverParams,
+    SourceFormat, Storage, Subsystem, SubsystemParsed, SubsystemSelector, SubsystemSet, Switch,
+    SwitchedShuntControl, SwitchedShuntMode, Transformer3W, TransformerControl,
+    TransformerControlMode, UnresolvedAction, UnresolvedMonitor, UnresolvedMonitorReason,
+    UnresolvedReason, Winding, apply_substation_points, calc_series_admittance_of,
+    classify_json_bytes, classify_json_text, repair_values, to_geo_layer_from_pwd,
+    to_lonlat_from_pwd_mercator,
 };
 /// Balanced network records and the public network and geographic submodules.
 /// Derived indexes, normalization data, solver tables, and component error

@@ -15,7 +15,9 @@
 //! `BUILD.CON.CASE_UNRESOLVED`; the actions of that case that did bind stay
 //! listed, so a caller can see how far a case got.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use powerio_core::ComponentId;
 
@@ -50,10 +52,22 @@ const TRANSFORMER_3W: &str = "transformer_3w";
 /// Building the index walks every table once. Resolving many sets against one
 /// network builds it once and calls [`ContingencySet::resolve_with`]. The index
 /// borrows the network it was built from, so a row it states is always a row of
-/// that network.
+/// that network. A caller that must keep the index beside the network, for
+/// example in a `OnceLock` next to an `Arc<BalancedNetwork>`, builds a
+/// [`SharedPsseEquipmentIndex`] and reads this index from it with
+/// [`SharedPsseEquipmentIndex::index`].
 #[derive(Debug, Clone)]
 pub struct PsseEquipmentIndex<'n> {
     net: &'n BalancedNetwork,
+    /// Owned when built by [`PsseEquipmentIndex::new`], borrowed when read
+    /// from a [`SharedPsseEquipmentIndex`].
+    tables: Cow<'n, EquipmentTables>,
+}
+
+/// The ids and rows of a [`PsseEquipmentIndex`]. They hold no reference to the
+/// network, so a [`SharedPsseEquipmentIndex`] can own them beside it.
+#[derive(Debug, Clone)]
+struct EquipmentTables {
     machine_ids: Vec<String>,
     circuit_ids: Vec<String>,
     switch_ids: Vec<String>,
@@ -258,10 +272,8 @@ fn transformer_3w_index(
     (ids, rows)
 }
 
-impl<'n> PsseEquipmentIndex<'n> {
-    /// Recompute every PSS/E id in `net` and index the rows by it.
-    #[must_use]
-    pub fn new(net: &'n BalancedNetwork) -> Self {
+impl EquipmentTables {
+    fn new(net: &BalancedNetwork) -> Self {
         // The writer counts the ids sanitation changed so it can warn about
         // them; the index states the same ids and discards the count.
         let mut sanitized = 0usize;
@@ -271,7 +283,6 @@ impl<'n> PsseEquipmentIndex<'n> {
         let (fixed_shunt_rows, switched_shunt_rows) = shunt_index(net, &mut sanitized);
         let (transformer_3w_ids, transformer_3w_rows) = transformer_3w_index(net, &mut sanitized);
         Self {
-            net,
             machine_ids,
             circuit_ids,
             switch_ids,
@@ -292,6 +303,17 @@ impl<'n> PsseEquipmentIndex<'n> {
             names: super::tara::NameIndex::new(net),
         }
     }
+}
+
+impl<'n> PsseEquipmentIndex<'n> {
+    /// Recompute every PSS/E id in `net` and index the rows by it.
+    #[must_use]
+    pub fn new(net: &'n BalancedNetwork) -> Self {
+        Self {
+            net,
+            tables: Cow::Owned(EquipmentTables::new(net)),
+        }
+    }
 
     /// The network the index was built from. Every row it states indexes a
     /// table of this network.
@@ -303,32 +325,32 @@ impl<'n> PsseEquipmentIndex<'n> {
     /// The machine id of every generator, aligned with `net.generators()`.
     #[must_use]
     pub fn machine_ids(&self) -> &[String] {
-        &self.machine_ids
+        &self.tables.machine_ids
     }
 
     /// The circuit id of every branch, aligned with `net.branches()`.
     #[must_use]
     pub fn circuit_ids(&self) -> &[String] {
-        &self.circuit_ids
+        &self.tables.circuit_ids
     }
 
     /// The circuit id of every switch, aligned with `net.switches()`.
     #[must_use]
     pub fn switch_ids(&self) -> &[String] {
-        &self.switch_ids
+        &self.tables.switch_ids
     }
 
     /// The circuit id of every three winding transformer, aligned with
     /// `net.transformers_3w()`.
     #[must_use]
     pub fn transformer_3w_ids(&self) -> &[String] {
-        &self.transformer_3w_ids
+        &self.tables.transformer_3w_ids
     }
 
     /// The row of `bus` in `net.buses()`.
     #[must_use]
     pub fn bus_row(&self, bus: BusId) -> Option<usize> {
-        self.bus_rows.get(&bus).copied()
+        self.tables.bus_rows.get(&bus).copied()
     }
 
     /// The rows of `net.branches()` joining `from` and `to` on `circuit`, in
@@ -358,11 +380,11 @@ impl<'n> PsseEquipmentIndex<'n> {
     pub fn switch_rows(&self, from: BusId, to: BusId, circuit: &str) -> Vec<usize> {
         let circuit = circuit.trim();
         let mut rows = Vec::new();
-        if let Some(forward) = self.switch_rows.get(&(from, to, circuit.to_owned())) {
+        if let Some(forward) = self.tables.switch_rows.get(&(from, to, circuit.to_owned())) {
             rows.extend_from_slice(forward);
         }
         if from != to
-            && let Some(reverse) = self.switch_rows.get(&(to, from, circuit.to_owned()))
+            && let Some(reverse) = self.tables.switch_rows.get(&(to, from, circuit.to_owned()))
         {
             rows.extend_from_slice(reverse);
         }
@@ -374,15 +396,17 @@ impl<'n> PsseEquipmentIndex<'n> {
     fn family_rows(&self, from: BusId, to: BusId, circuit: &str, transformer: bool) -> Vec<usize> {
         let circuit = circuit.trim();
         let mut rows = Vec::new();
-        if let Some(forward) = self
-            .branch_rows
-            .get(&(from, to, transformer, circuit.to_owned()))
+        if let Some(forward) =
+            self.tables
+                .branch_rows
+                .get(&(from, to, transformer, circuit.to_owned()))
         {
             rows.extend_from_slice(forward);
         }
         if from != to
             && let Some(reverse) =
-                self.branch_rows
+                self.tables
+                    .branch_rows
                     .get(&(to, from, transformer, circuit.to_owned()))
         {
             rows.extend_from_slice(reverse);
@@ -396,14 +420,17 @@ impl<'n> PsseEquipmentIndex<'n> {
     /// trimmed id the writer allocates.
     #[must_use]
     pub fn machine_row(&self, bus: BusId, id: &str) -> Option<usize> {
-        self.machine_rows.get(&(bus, id.trim().to_owned())).copied()
+        self.tables
+            .machine_rows
+            .get(&(bus, id.trim().to_owned()))
+            .copied()
     }
 
     /// The rows of `net.shunts()` holding a fixed shunt at `bus`: the one with
     /// this id, or every fixed shunt there when no id is stated.
     #[must_use]
     pub fn fixed_shunt_rows(&self, bus: BusId, id: Option<&str>) -> Vec<usize> {
-        select_rows(self.fixed_shunt_rows.get(&bus), id)
+        select_rows(self.tables.fixed_shunt_rows.get(&bus), id)
     }
 
     /// The rows of `net.shunts()` holding a switched shunt at `bus`, every one
@@ -412,7 +439,8 @@ impl<'n> PsseEquipmentIndex<'n> {
     /// statement addresses every switched shunt at the bus.
     #[must_use]
     pub fn switched_shunt_rows(&self, bus: BusId) -> Vec<usize> {
-        self.switched_shunt_rows
+        self.tables
+            .switched_shunt_rows
             .get(&bus)
             .cloned()
             .unwrap_or_default()
@@ -422,7 +450,7 @@ impl<'n> PsseEquipmentIndex<'n> {
     /// there when no id is stated.
     #[must_use]
     pub fn load_rows(&self, bus: BusId, id: Option<&str>) -> Vec<usize> {
-        select_rows(self.load_rows.get(&bus), id)
+        select_rows(self.tables.load_rows.get(&bus), id)
     }
 
     /// The row of `net.transformers_3w()` on these three buses and circuit id.
@@ -443,13 +471,59 @@ impl<'n> PsseEquipmentIndex<'n> {
     #[must_use]
     pub fn transformer_3w_rows(&self, buses: [BusId; 3], circuit: &str) -> Vec<usize> {
         let circuit = circuit.trim();
-        self.transformer_3w_rows
+        self.tables
+            .transformer_3w_rows
             .get(&sorted_triple(buses))
             .into_iter()
             .flatten()
             .filter(|(id, _)| id == circuit)
             .map(|(_, row)| *row)
             .collect()
+    }
+}
+
+/// A [`PsseEquipmentIndex`] that owns its network through an [`Arc`], so it
+/// can be built once and kept: in a struct beside the network, in a
+/// `OnceLock`, or across threads.
+///
+/// [`SharedPsseEquipmentIndex::index`] hands out the borrowed index without
+/// rebuilding anything, and every entry point that takes a
+/// [`PsseEquipmentIndex`] ([`ContingencySet::resolve_with`],
+/// [`ContingencySet::expand_with`](super::ContingencySet::expand_with),
+/// [`MonitoredSet::resolve_with`](super::MonitoredSet::resolve_with))
+/// takes it, with the same result as an index built by
+/// [`PsseEquipmentIndex::new`] on the same network.
+#[derive(Debug, Clone)]
+pub struct SharedPsseEquipmentIndex {
+    net: Arc<BalancedNetwork>,
+    tables: EquipmentTables,
+}
+
+impl SharedPsseEquipmentIndex {
+    /// Recompute every PSS/E id in `net` and index the rows by it, keeping the
+    /// network. Takes an `Arc<BalancedNetwork>` to share a network the caller
+    /// already holds, or a `BalancedNetwork` to own it.
+    #[must_use]
+    pub fn new(net: impl Into<Arc<BalancedNetwork>>) -> Self {
+        let net = net.into();
+        let tables = EquipmentTables::new(&net);
+        Self { net, tables }
+    }
+
+    /// The network the index was built from.
+    #[must_use]
+    pub fn network(&self) -> &Arc<BalancedNetwork> {
+        &self.net
+    }
+
+    /// The index as a [`PsseEquipmentIndex`], borrowing the network and the
+    /// tables held here. Nothing is recomputed or copied.
+    #[must_use]
+    pub fn index(&self) -> PsseEquipmentIndex<'_> {
+        PsseEquipmentIndex {
+            net: &self.net,
+            tables: Cow::Borrowed(&self.tables),
+        }
     }
 }
 
@@ -827,7 +901,7 @@ fn bind(
         // A TARA form the reader kept as text: buses or a branch named by
         // name, or the action ahead of a dispatch block.
         ContingencyAction::Unrecognized { text } => {
-            match super::tara::read_text_action(&index.names, text) {
+            match super::tara::read_text_action(&index.tables.names, text) {
                 None => Err(UnresolvedReason::Unrecognized),
                 Some(Err(reason)) => Err(reason),
                 Some(Ok(super::tara::TextAction::Action(action))) => bind(index, &action),

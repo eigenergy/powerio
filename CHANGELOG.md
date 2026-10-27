@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `SharedPsseEquipmentIndex` is a PSS/E equipment index that can be built
+  once and kept beside its network, for example in a `OnceLock` next to an
+  `Arc<BalancedNetwork>`. `SharedPsseEquipmentIndex::new` takes an
+  `Arc<BalancedNetwork>` or an owned network, and `index()` hands out the
+  borrowed `PsseEquipmentIndex` without rebuilding it, so `resolve_with` and
+  `expand_with` give the same results as before; the borrowed index is
+  unchanged (#654).
+
 - Distribution CIM opens switches with disconnected terminals and refuses
   inactive/disconnected non-switch equipment and unsupported delta compensators,
   instead of constructing an energized or phase-to-ground equivalent (#687).

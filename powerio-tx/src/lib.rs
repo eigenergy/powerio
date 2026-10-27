@@ -108,8 +108,9 @@ pub use contingency::{
     InterfaceMember, JoinName, MonitorScope, MonitorStatement, MonitoredParsed,
     MonitoredResolution, MonitoredSet, PsseEquipmentIndex, ResolvedCase, ResolvedComponent,
     ResolvedInterface, ResolvedVoltageScope, RetainedStatement, ScaledQuantity, SelectorGroup,
-    SkipRule, Subsystem, SubsystemDispatchRule, SubsystemParsed, SubsystemSelector, SubsystemSet,
-    UnresolvedAction, UnresolvedMonitor, UnresolvedMonitorReason, UnresolvedReason,
+    SharedPsseEquipmentIndex, SkipRule, Subsystem, SubsystemDispatchRule, SubsystemParsed,
+    SubsystemSelector, SubsystemSet, UnresolvedAction, UnresolvedMonitor, UnresolvedMonitorReason,
+    UnresolvedReason,
 };
 pub use dc::BranchSusceptanceFormula;
 pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, EmitFamily};
