@@ -558,6 +558,13 @@ fn parse_in_subsystem_kv(
     if low_voltage_3w {
         next += 1;
     }
+    // PSS/E 35.2 spells the filter `IN KVRANGE lo hi`; TARA drops the `IN`.
+    // Both read the same, and the writer states the bare TARA form.
+    if upper.get(next).is_some_and(|word| word == "IN")
+        && upper.get(next + 1).is_some_and(|word| word == "KVRANGE")
+    {
+        next += 1;
+    }
     let kv_range = if upper.get(next).is_some_and(|word| word == "KVRANGE") {
         let lo = upper.get(next + 1)?.parse::<f64>().ok()?;
         let hi = upper.get(next + 2)?.parse::<f64>().ok()?;

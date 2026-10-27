@@ -10,6 +10,11 @@
   TARA grammar accepts the extra pair without naming it. The remark names
   the line and the order, so a caller can check it against the tool that
   wrote the file. The values read and written are unchanged.
+- `MONITOR BRANCHES IN SUBSYSTEM` and `MONITOR TIES FROM SUBSYSTEM` now read
+  the PSS/E 35.2 spelling `IN KVRANGE lo hi` as the TARA `KVRANGE lo hi`
+  tail. Before, such a line was kept as text with
+  `READ.MON.STATEMENT_UNRECOGNIZED` and monitored nothing. The writer states
+  the `KVRANGE lo hi` form.
 
 - The conversion matrix grades each cell by its worst finding: exact,
   lossless, restated (the target required a value and the writer supplied

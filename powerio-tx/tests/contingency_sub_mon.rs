@@ -1401,6 +1401,61 @@ END\n",
     );
 }
 
+/// The PSS(R)E 35.2.0 release notes spell the branch and tie filter
+/// `IN KVRANGE r1 r2` ("For all MONITOR BRANCHES or BREAKERS or SWITCHES or
+/// SWDS or TIES ... the subsystem specification may include an additional
+/// optional clause as follows: IN KVRANGE r1 r2",
+/// <https://pdfcoffee.com/psse-35-release-notes-pdf-free.html>). It reads as
+/// the TARA `KVRANGE lo hi` tail does, and the writer states the TARA form.
+fn assert_in_kvrange_alias(psse: &str, tara: &str, written_line: &str) {
+    let net = select_network();
+    let subsystems = parse_sub("selectors.sub").set;
+    let alias = MonitoredSet::parse(&format!("{psse}\nEND\n")).expect("parse IN KVRANGE");
+    let bare = MonitoredSet::parse(&format!("{tara}\nEND\n")).expect("parse KVRANGE");
+    assert_eq!(mon_codes(&alias), Vec::<&str>::new());
+    assert_eq!(alias.set.retained, []);
+    assert_eq!(
+        mon_without_line_numbers(&alias.set),
+        mon_without_line_numbers(&bare.set)
+    );
+    let resolved = alias.set.resolve(&net, &subsystems);
+    let expected = bare.set.resolve(&net, &subsystems);
+    assert_eq!(rows(&resolved.branch_rows), rows(&expected.branch_rows));
+    assert_eq!(rows(&resolved.tie_rows), rows(&expected.tie_rows));
+    let written = check_mon_fixed_point(&alias);
+    assert!(written.contains(written_line), "{written}");
+}
+
+#[test]
+fn monitored_branches_read_the_psse_in_kvrange_spelling() {
+    assert_in_kvrange_alias(
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' IN KVRANGE 200 240",
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' KVRANGE 200 240",
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' KVRANGE 200.0 240.0\n",
+    );
+    assert_in_kvrange_alias(
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' 3WLOWVOLTAGE IN KVRANGE 200 240",
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' 3WLOWVOLTAGE KVRANGE 200 240",
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' 3WLOWVOLTAGE KVRANGE 200.0 240.0\n",
+    );
+}
+
+#[test]
+fn monitored_ties_read_the_psse_in_kvrange_spelling() {
+    assert_in_kvrange_alias(
+        "MONITOR TIES FROM SUBSYSTEM 'A1' IN KVRANGE 200 240",
+        "MONITOR TIES FROM SUBSYSTEM 'A1' KVRANGE 200 240",
+        "MONITOR TIES FROM SUBSYSTEM 'A1' KVRANGE 200.0 240.0\n",
+    );
+    // `IN` with no range after it is outside the grammar.
+    let dangling = MonitoredSet::parse("MONITOR TIES FROM SUBSYSTEM 'A1' IN\nEND\n")
+        .expect("parse dangling IN");
+    assert_eq!(
+        mon_codes(&dangling),
+        vec!["READ.MON.STATEMENT_UNRECOGNIZED"]
+    );
+}
+
 #[test]
 fn monitored_kv_qualified_forms_keep_invalid_ranges_as_text() {
     let reversed = MonitoredSet::parse("MONITOR BRANCHES IN SUBSYSTEM 'A1' KVRANGE 240 200\nEND\n")

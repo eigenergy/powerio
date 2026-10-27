@@ -459,7 +459,7 @@ file `END` are written after the `END` the writer states.
 
 ### kV-qualified monitor statements
 
-Subsystem branch and tie monitors accept an optional inclusive `KVRANGE lo hi`. For branches, both terminals must be within the band; for ties, the terminal inside the subsystem must be within the band. Bounds must be finite and ascending. Reversed or non-finite bounds remain retained source text.
+Subsystem branch and tie monitors accept an optional inclusive `KVRANGE lo hi`, TARA's spelling, or `IN KVRANGE lo hi`, the spelling the PSS(R)E 35.2.0 release notes give for `MONITOR BRANCHES` and `TIES` ([copy](https://pdfcoffee.com/psse-35-release-notes-pdf-free.html)); the two read the same and the writer states `KVRANGE lo hi`. For branches, both terminals must be within the band; for ties, the terminal inside the subsystem must be within the band. Bounds must be finite and ascending. Reversed or non-finite bounds remain retained source text.
 
 A voltage scope may qualify a subsystem by base kV (`SUBSYSTEM name KV x`). The selected buses are filtered using the existing `KV_TOLERANCE`.
 
@@ -504,8 +504,8 @@ END
 
 | Statement | Synonyms | Reads as |
 | --- | --- | --- |
-| `MONITOR BRANCHES IN SUBSYSTEM name [3WLOWVOLTAGE] [KVRANGE lo hi]` | `BRANCHES`, `LINES`; `IN`, `FROM` | `BranchesInSubsystem { subsystem, low_voltage_3w }`, or with `KVRANGE` `BranchesInSubsystemKvRange { subsystem, low_voltage_3w, kv_range }` |
-| `MONITOR TIES FROM SUBSYSTEM name [KVRANGE lo hi]` | `IN`, `FROM` | `TiesFromSubsystem { subsystem }`, or with `KVRANGE` `TiesFromSubsystemKvRange { subsystem, kv_range }` |
+| `MONITOR BRANCHES IN SUBSYSTEM name [3WLOWVOLTAGE] [[IN] KVRANGE lo hi]` | `BRANCHES`, `LINES`; `IN`, `FROM` | `BranchesInSubsystem { subsystem, low_voltage_3w }`, or with `KVRANGE` `BranchesInSubsystemKvRange { subsystem, low_voltage_3w, kv_range }` |
+| `MONITOR TIES FROM SUBSYSTEM name [[IN] KVRANGE lo hi]` | `IN`, `FROM` | `TiesFromSubsystem { subsystem }`, or with `KVRANGE` `TiesFromSubsystemKvRange { subsystem, kv_range }` |
 | `MONITOR BRANCHES` ... `END`, holding `i j [ckt]` or `[BRANCH] FROM BUS i TO BUS j [CIRCUIT c]` | `BRANCHES`, `LINES`; `LINE` | `Branches(Vec<BranchRef>)` |
 | `MONITOR BRANCH FROM BUS i TO BUS j [CIRCUIT c]` | `LINE`; `BUS` optional; `CKT` | `Branches` holding that one branch |
 | `MONITOR INTERFACE name [RATING x [MW]]` ... `END` | | `Interface { name, rating_mw, branches }` |
