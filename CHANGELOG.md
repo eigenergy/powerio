@@ -43,6 +43,12 @@
   present ratio lies between steps it becomes a step of its own, with a
   diagnostic.
 
+- A PSS/E bus zone and owner now survive a trip through XIIDM or JIIDM, where
+  zone 2 and owner 3 came back as 1 and 1 without a diagnostic. The writers
+  state them as the IIDM bus properties `psse_zone` and `psse_owner`, as
+  other PSS/E fields IIDM has no field for are stated, and the readers take
+  them back.
+
 - The conversion matrix grades each cell by its worst finding: exact,
   lossless, restated (the target required a value and the writer supplied
   it), approximate, dropped, or failed. The PR comment shows that level, the

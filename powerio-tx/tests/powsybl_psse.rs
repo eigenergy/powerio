@@ -528,3 +528,29 @@ fn powsybl_three_winding_tap_regulation_reaches_psse() {
     assert!(!control.enabled);
     assert_eq!(control.controlled_bus.map(|bus| bus.0), Some(3));
 }
+
+#[test]
+fn psse_bus_zone_and_owner_survive_iidm_as_properties() {
+    let mut network = two_numbered_buses();
+    network.buses_mut()[1].zone = 2;
+    network.buses_mut()[1]
+        .extras
+        .insert("psse_owner".to_owned(), serde_json::Value::from(3));
+    let network = parse_psse(&emit_psse(&network).text).unwrap();
+    let xml = emit_value(&network, TargetFormat::Xiidm).unwrap().text;
+    assert!(
+        xml.contains(r#"<iidm:property name="psse_zone" value="2"/>"#),
+        "{xml}"
+    );
+    assert!(
+        xml.contains(r#"<iidm:property name="psse_owner" value="3"/>"#),
+        "{xml}"
+    );
+    let back = parse_psse(&emit_psse(&xiidm(&xml)).text).unwrap();
+    let bus = &back.buses()[1];
+    assert_eq!(bus.zone, 2);
+    assert_eq!(bus.extras["psse_owner"], serde_json::Value::from(3));
+    // Bus 1 states PSS/E's defaults and gains no property.
+    assert_eq!(back.buses()[0].zone, 1);
+    assert_eq!(xml.matches("psse_zone").count(), 1, "{xml}");
+}

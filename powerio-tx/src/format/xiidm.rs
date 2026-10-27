@@ -3537,6 +3537,7 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
     let mut bus_builder = BusBuilder::new(parsed);
     bus_builder.build(diagnostics)?;
     let mut buses = bus_builder.buses.clone();
+    apply_psse_bus_properties(parsed, &mut buses, diagnostics)?;
     let areas = map_areas(parsed, &bus_builder, &mut buses, diagnostics)?;
     let missing_assignments = collect_missing_assignments(parsed);
     report_missing_assignment_summaries(&missing_assignments, diagnostics);
@@ -4549,6 +4550,70 @@ fn map_areas(
         });
     }
     Ok(areas)
+}
+
+/// The IIDM property that states a PSS/E bus zone, which IIDM has no field for.
+/// PowSybl's PSS/E importer drops the zone; PowerIO states it as a property,
+/// as it states other PSS/E fields IIDM does not name (`psse_rmpct` on a
+/// generator), and the reader takes it back.
+const PSSE_ZONE_PROPERTY: &str = "psse_zone";
+/// The IIDM property that states a PSS/E bus owner.
+const PSSE_OWNER_PROPERTY: &str = "psse_owner";
+
+/// The PSS/E bus fields IIDM has no field for, as IIDM properties: the zone
+/// when it is not PSS/E's default 1, and the owner a PSS/E source stated.
+fn psse_bus_properties(bus: &Bus) -> BTreeMap<String, String> {
+    let mut properties = BTreeMap::new();
+    if bus.zone != 1 {
+        properties.insert(PSSE_ZONE_PROPERTY.to_owned(), bus.zone.to_string());
+    }
+    if let Some(owner) = bus
+        .extras
+        .get(PSSE_OWNER_PROPERTY)
+        .and_then(serde_json::Value::as_i64)
+    {
+        properties.insert(PSSE_OWNER_PROPERTY.to_owned(), owner.to_string());
+    }
+    properties
+}
+
+/// Read back what [`psse_bus_properties`] states.
+fn apply_psse_bus_properties(
+    parsed: &ParsedXiidm,
+    buses: &mut [Bus],
+    diagnostics: &mut Diagnostics,
+) -> Result<()> {
+    for bus in buses {
+        let Some(uid) = bus.uid.as_deref() else {
+            continue;
+        };
+        let Some(metadata) = parsed.metadata.get(&component_id("bus", uid)?) else {
+            continue;
+        };
+        for (property, value) in &metadata.properties {
+            if property != PSSE_ZONE_PROPERTY && property != PSSE_OWNER_PROPERTY {
+                continue;
+            }
+            let Ok(number) = value.trim().parse::<usize>() else {
+                diagnostics.push(
+                    &codes::READ_XIIDM_FIELD_UNMAPPED,
+                    format!(
+                        "bus `{uid}` property `{property}={value}` is not a PSS/E number; the bus keeps its default"
+                    ),
+                );
+                continue;
+            };
+            if property == PSSE_ZONE_PROPERTY {
+                bus.zone = number;
+            } else {
+                bus.extras.insert(
+                    PSSE_OWNER_PROPERTY.to_owned(),
+                    serde_json::Value::from(number),
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The PSS/E bus number a configured bus id states: `B<n>`, as PowSybl writes
@@ -7407,14 +7472,15 @@ fn derive_detailed_connectivity(
             // reader turns back into the bus number and name.
             let configured_bus =
                 component_id("bus", &format!("B{}", bus.id)).expect("derived bus identity");
-            if let Some(name) = &bus.name {
+            let properties = psse_bus_properties(bus);
+            if bus.name.is_some() || !properties.is_empty() {
                 detailed.component_metadata.push(ComponentMetadata {
                     component: configured_bus.clone(),
-                    name: Some(name.clone()),
+                    name: bus.name.clone(),
                     equipment_container: None,
                     aliases: Vec::new(),
                     external_identifiers: Vec::new(),
-                    properties: BTreeMap::new(),
+                    properties,
                     fictitious: false,
                 });
             }
