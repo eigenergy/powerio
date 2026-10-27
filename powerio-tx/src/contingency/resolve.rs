@@ -35,6 +35,7 @@ const LOAD: &str = "load";
 const SHUNT: &str = "shunt";
 const GENERATOR: &str = "generator";
 const BRANCH: &str = "branch";
+const SWITCH: &str = "switch";
 const TRANSFORMER_3W: &str = "transformer_3w";
 
 /// The PSS/E id every element of a network would carry in a RAW file written
@@ -55,11 +56,15 @@ pub struct PsseEquipmentIndex<'n> {
     net: &'n BalancedNetwork,
     machine_ids: Vec<String>,
     circuit_ids: Vec<String>,
+    switch_ids: Vec<String>,
     transformer_3w_ids: Vec<String>,
     bus_rows: BTreeMap<BusId, usize>,
     /// Keyed on the stored terminal order, as the writer keys it. A lookup
     /// reads both orientations.
     branch_rows: BranchRows,
+    /// System switching device rows keyed on the stored terminal pair and
+    /// the circuit id. A lookup reads both orientations.
+    switch_rows: SwitchRows,
     machine_rows: MachineRows,
     fixed_shunt_rows: DeviceRows,
     switched_shunt_rows: BTreeMap<BusId, Vec<usize>>,
@@ -67,6 +72,8 @@ pub struct PsseEquipmentIndex<'n> {
     /// Keyed on the three bus ids in ascending order, so a statement naming
     /// them in any order finds the transformer.
     transformer_3w_rows: Transformer3wRows,
+    /// Buses and branches by name, for the statements TARA states by name.
+    names: super::tara::NameIndex,
 }
 
 fn sorted_triple(buses: [BusId; 3]) -> [BusId; 3] {
@@ -93,6 +100,10 @@ type BranchRows = BTreeMap<(BusId, BusId, bool, String), Vec<usize>>;
 
 /// Rows of the generators, keyed by bus and machine id.
 type MachineRows = BTreeMap<(BusId, String), usize>;
+
+/// Switch rows keyed by the stored terminal pair and the circuit id. The RAW
+/// writer allocates switching device ids in a namespace of their own.
+type SwitchRows = BTreeMap<(BusId, BusId, String), Vec<usize>>;
 
 /// Three winding transformer rows keyed by their three buses in ascending
 /// order, each with the id the RAW writer would state.
@@ -158,6 +169,28 @@ fn branch_index(net: &BalancedNetwork, sanitized: &mut usize) -> (Vec<String>, B
                 .push(row);
             ids[row] = id;
         }
+    }
+    (ids, rows)
+}
+
+/// The circuit id of every switch, aligned with `net.switches()`, and the rows
+/// each `(from, to, circuit)` key names. The RAW writer states a switching
+/// device's retained circuit id (`@1`, `*2`, ...) when it is free on its
+/// terminal pair, as it does for a line.
+fn switch_index(net: &BalancedNetwork, sanitized: &mut usize) -> (Vec<String>, SwitchRows) {
+    let mut ids = Vec::with_capacity(net.switches().len());
+    let mut rows: SwitchRows = BTreeMap::new();
+    let mut used = BTreeMap::new();
+    for (row, switch) in net.switches().iter().enumerate() {
+        let preferred = switch
+            .extras
+            .get("psse_ckt")
+            .and_then(serde_json::Value::as_str);
+        let id = quoted_circuit_id(preferred, (switch.from, switch.to), &mut used, sanitized);
+        rows.entry((switch.from, switch.to, id.trim().to_owned()))
+            .or_default()
+            .push(row);
+        ids.push(id);
     }
     (ids, rows)
 }
@@ -234,12 +267,14 @@ impl<'n> PsseEquipmentIndex<'n> {
         let mut sanitized = 0usize;
         let (machine_ids, machine_rows) = machine_index(net, &mut sanitized);
         let (circuit_ids, branch_rows) = branch_index(net, &mut sanitized);
+        let (switch_ids, switch_rows) = switch_index(net, &mut sanitized);
         let (fixed_shunt_rows, switched_shunt_rows) = shunt_index(net, &mut sanitized);
         let (transformer_3w_ids, transformer_3w_rows) = transformer_3w_index(net, &mut sanitized);
         Self {
             net,
             machine_ids,
             circuit_ids,
+            switch_ids,
             transformer_3w_ids,
             bus_rows: net
                 .buses()
@@ -248,11 +283,13 @@ impl<'n> PsseEquipmentIndex<'n> {
                 .map(|(row, bus)| (bus.id, row))
                 .collect(),
             branch_rows,
+            switch_rows,
             machine_rows,
             fixed_shunt_rows,
             switched_shunt_rows,
             load_rows: load_index(net, &mut sanitized),
             transformer_3w_rows,
+            names: super::tara::NameIndex::new(net),
         }
     }
 
@@ -273,6 +310,12 @@ impl<'n> PsseEquipmentIndex<'n> {
     #[must_use]
     pub fn circuit_ids(&self) -> &[String] {
         &self.circuit_ids
+    }
+
+    /// The circuit id of every switch, aligned with `net.switches()`.
+    #[must_use]
+    pub fn switch_ids(&self) -> &[String] {
+        &self.switch_ids
     }
 
     /// The circuit id of every three winding transformer, aligned with
@@ -304,6 +347,26 @@ impl<'n> PsseEquipmentIndex<'n> {
         } else {
             lines
         }
+    }
+
+    /// The rows of `net.switches()` joining `from` and `to` on `circuit`, in
+    /// either orientation. A `.con` file opens a system switching device with
+    /// the branch statement, `OPEN BRANCH FROM BUS i TO BUS j CIRCUIT '@1'`,
+    /// so a statement that names no line or two winding transformer is read
+    /// against the switches.
+    #[must_use]
+    pub fn switch_rows(&self, from: BusId, to: BusId, circuit: &str) -> Vec<usize> {
+        let circuit = circuit.trim();
+        let mut rows = Vec::new();
+        if let Some(forward) = self.switch_rows.get(&(from, to, circuit.to_owned())) {
+            rows.extend_from_slice(forward);
+        }
+        if from != to
+            && let Some(reverse) = self.switch_rows.get(&(to, from, circuit.to_owned()))
+        {
+            rows.extend_from_slice(reverse);
+        }
+        rows
     }
 
     /// The rows of one branch family joining `from` and `to` on `circuit`, in
@@ -482,8 +545,8 @@ impl ResolvedCase {
 #[non_exhaustive]
 pub struct ResolvedComponent {
     /// The component type naming the table `row` indexes: `bus`, `load`,
-    /// `shunt`, `generator`, `branch`, or `transformer_3w`. Every component
-    /// states it, including one the network states no identity for.
+    /// `shunt`, `generator`, `branch`, `switch`, or `transformer_3w`. Every
+    /// component states it, including one the network states no identity for.
     pub component_type: &'static str,
     /// The element's identity, when the network states one for the row: its
     /// `uid`, under `component_type`. A row carrying no `uid`, or one
@@ -495,7 +558,7 @@ pub struct ResolvedComponent {
     pub row: usize,
     /// The element's own in service flag as the network states it now, before
     /// the case is applied. For a bus it is whether the bus type is anything
-    /// other than isolated.
+    /// other than isolated; for a switch, whether it is closed.
     pub in_service: bool,
 }
 
@@ -529,6 +592,19 @@ pub enum UnresolvedReason {
     NoSuchTransformer3w,
     /// The reader kept this statement as text, so it names no element.
     Unrecognized,
+    /// A quoted bus name and base kV that names no bus.
+    NoSuchBusName,
+    /// A quoted bus name that names more than one bus, exactly or without
+    /// regard to case and whitespace.
+    AmbiguousBusName {
+        matches: usize,
+    },
+    /// A quoted branch name that names no branch.
+    NoSuchBranchName,
+    /// A quoted branch name that names more than one branch.
+    AmbiguousBranchName {
+        matches: usize,
+    },
 }
 
 impl UnresolvedReason {
@@ -545,6 +621,10 @@ impl UnresolvedReason {
             Self::NoSuchLoad => "no_such_load",
             Self::NoSuchTransformer3w => "no_such_transformer_3w",
             Self::Unrecognized => "unrecognized",
+            Self::NoSuchBusName => "no_such_bus_name",
+            Self::AmbiguousBusName { .. } => "ambiguous_bus_name",
+            Self::NoSuchBranchName => "no_such_branch_name",
+            Self::AmbiguousBranchName { .. } => "ambiguous_branch_name",
         }
     }
 }
@@ -586,6 +666,22 @@ fn describe(action: &ContingencyAction, reason: UnresolvedReason) -> String {
             Some(id) => format!("no load {id} at bus {bus}"),
             None => format!("no load at bus {bus}"),
         },
+        (ContingencyAction::Unrecognized { text }, UnresolvedReason::NoSuchBusName) => {
+            format!("a bus name names no bus: {text}")
+        }
+        (
+            ContingencyAction::Unrecognized { text },
+            UnresolvedReason::AmbiguousBusName { matches },
+        ) => {
+            format!("a bus name names {matches} buses: {text}")
+        }
+        (ContingencyAction::Unrecognized { text }, UnresolvedReason::NoSuchBranchName) => {
+            format!("the branch name names no branch: {text}")
+        }
+        (
+            ContingencyAction::Unrecognized { text },
+            UnresolvedReason::AmbiguousBranchName { matches },
+        ) => format!("the branch name names {matches} branches: {text}"),
         (ContingencyAction::Unrecognized { text }, _) => {
             format!("statement kept as text: {text}")
         }
@@ -669,9 +765,15 @@ fn bind(
     match action {
         ContingencyAction::OpenBranch { from, to, circuit } => {
             let rows = index.branch_rows(*from, *to, circuit);
+            let (rows, component): (_, fn(&BalancedNetwork, usize) -> ResolvedComponent) =
+                if rows.is_empty() {
+                    (index.switch_rows(*from, *to, circuit), switch_component)
+                } else {
+                    (rows, branch_component)
+                };
             match rows.as_slice() {
                 [] => Err(UnresolvedReason::NoSuchBranch),
-                [row] => Ok(vec![branch_component(net, *row)]),
+                [row] => Ok(vec![component(net, *row)]),
                 many => Err(UnresolvedReason::AmbiguousBranch {
                     matches: many.len(),
                 }),
@@ -722,7 +824,18 @@ fn bind(
             .bus_row(*bus)
             .map(|row| vec![bus_component(net, row)])
             .ok_or(UnresolvedReason::NoSuchBus),
-        ContingencyAction::Unrecognized { .. } => Err(UnresolvedReason::Unrecognized),
+        // A TARA form the reader kept as text: buses or a branch named by
+        // name, or the action ahead of a dispatch block.
+        ContingencyAction::Unrecognized { text } => {
+            match super::tara::read_text_action(&index.names, text) {
+                None => Err(UnresolvedReason::Unrecognized),
+                Some(Err(reason)) => Err(reason),
+                Some(Ok(super::tara::TextAction::Action(action))) => bind(index, &action),
+                Some(Ok(super::tara::TextAction::Branch(row))) => {
+                    Ok(vec![branch_component(net, row)])
+                }
+            }
+        }
     }
 }
 
@@ -792,6 +905,16 @@ fn branch_component(net: &BalancedNetwork, row: usize) -> ResolvedComponent {
         id: component_id(BRANCH, branch.uid.as_deref()),
         row,
         in_service: branch.in_service,
+    }
+}
+
+fn switch_component(net: &BalancedNetwork, row: usize) -> ResolvedComponent {
+    let switch = &net.switches()[row];
+    ResolvedComponent {
+        component_type: SWITCH,
+        id: component_id(SWITCH, switch.uid.as_deref()),
+        row,
+        in_service: switch.closed,
     }
 }
 

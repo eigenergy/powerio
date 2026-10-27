@@ -164,10 +164,12 @@ $ powerio geo convert buscoords.csv -o case.geo.json
 
 The `.pwd` reader returns a drawing `GeoLayer` with decoded bus positions,
 branch paths, and substation positions. Coordinates remain in drawing units.
-Unsupported or unmatched bus and branch records produce diagnostics. Python also keeps the raw display compatibility helper
-`parse_display`, which returns
+Unsupported or unmatched bus and branch records produce diagnostics. Read a
+display with `parse`. Python's `parse_display`, which returns
 `DisplayData(kind="powerworld", data=PwdDisplay(...))` with the canvas
-dimensions, a timestamp, and the substation symbols.
+dimensions, the save stamp, and the substation symbols, remains only for 0.11
+compatibility, reads the whole file without the input byte limits, and will be
+removed in 0.12.
 
 The facade helpers connect it to the geo model. `to_geo_layer_from_pwd` lifts
 the substation symbols into a diagram space `GeoLayer`, which is also what

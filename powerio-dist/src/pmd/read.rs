@@ -922,6 +922,7 @@ impl Reader<'_> {
                 &mut self.diagnostics,
             );
             self.net.sources_mut().push(VoltageSource {
+                reference_terminal: None,
                 name: name.clone(),
                 bus: string(o.get("bus")),
                 terminal_map: ints_as_strings(o.get("connections")),

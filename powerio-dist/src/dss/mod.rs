@@ -19,5 +19,5 @@ pub use raw::{BusCoord, RawCommand, RawDss, RawObject, RawProp};
 #[doc(hidden)]
 pub use raw::{__parse_raw_file, __parse_raw_with};
 pub use read::to_network_from_raw;
-pub(crate) use write::emit_dss_text_with_options;
 pub use write::{DssEmitOptions, DssLoadVoltageBounds};
+pub(crate) use write::{dss_value_out, emit_dss_text_with_options};

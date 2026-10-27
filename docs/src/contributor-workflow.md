@@ -6,7 +6,7 @@ after measurements.
 
 ## Baseline checks
 
-`scripts/ci-mirror.sh` runs everything `rust.yml` runs, in the same feature combinations: format, clippy, the terminology and symbol gates, header parity, every crate's tests in each gated feature set, the C smoke and header programs, schema generation, packaging checks, and the docs build. Run it before pushing rather than assembling your own subset, because a hand assembled subset misses the feature gated suites. `cargo test --workspace`, for example, builds powerio-capi with default features only and skips every test behind `arrow`, `gridfm`, `matrix`, or `prob`.
+`scripts/ci-mirror.sh` runs everything `rust.yml` runs, in the same feature combinations: format, clippy, the terminology and symbol gates, header parity, every crate's tests in each gated feature set, the C smoke and header programs, schema generation, packaging checks, and the docs build. Run it before pushing rather than assembling your own subset, because a hand assembled subset misses the feature gated suites. `cargo test --workspace`, for example, skips the C ABI release-feature diagnostic tests and does not test each crate's opt-in features in isolation. The deprecated C ABI `arrow` compatibility flag adds no code or tests. Legacy commands remain accepted in 0.11.x, but maintained source-build commands omit it; [#673](https://github.com/eigenergy/powerio/issues/673) tracks its eventual breaking removal.
 
 Point `POWERIO_JL` at a PowerIO.jl checkout to include the Julia binding suite against the freshly built library, or set `POWERIO_JL_OPTIONAL=1` to run without one.
 
@@ -36,11 +36,13 @@ Pick the smallest set of gates that covers what you changed, then run the
 | rich model fields | `bash evals/validation/run_rich_validation.sh` |
 | matrix calculations | `cargo test -p powerio-matrix`; `cargo bench -p powerio-matrix --bench matrix` |
 | problem instances or DC OPF bundles | `cargo test -p powerio-prob --no-default-features`; `cargo test -p powerio --features matrix` |
+| SINCAL readers, writers, or the `sincal` feature | `cargo test -p powerio -p powerio-tx -p powerio-dist -p powerio-tnd --no-default-features`; `bash scripts/ci-clippy.sh no-sincal`; `cargo check -p powerio --no-default-features --features matrix --target wasm32-unknown-unknown` |
 | PowerWorld binary reader | PowerWorld parser tests plus `cargo bench -p powerio-tx --bench parse -- "parse_aux_|parse_pwb_"` |
-| C ABI | `scripts/capi-header-parity.sh`; `scripts/capi-smoke.sh`; `cargo test -p powerio-capi --no-default-features`; `cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,prob`; `bash scripts/ci-clippy.sh capi-no-default`; `bash scripts/ci-clippy.sh capi-release` |
+| C ABI | `scripts/capi-header-parity.sh`; `scripts/capi-smoke.sh`; `cargo test -p powerio-capi --no-default-features`; `cargo test -p powerio-capi --features matrix,gridfm,dist,prob`; `bash scripts/ci-clippy.sh capi-no-default`; `bash scripts/ci-clippy.sh capi-release` |
 | Python package metadata or extras | `maturin build --release --out /tmp/powerio-wheel-check`; inspect wheel `METADATA` |
-| Julia binding compatibility | build `powerio-capi --features arrow,matrix,gridfm,dist,prob`, then run `PowerIO.jl` tests with `POWERIO_CAPI` |
+| Julia binding compatibility | build `powerio-capi --features matrix,gridfm,dist,prob`, then run `PowerIO.jl` tests with `POWERIO_CAPI` |
 | shared surface with PowerIO.jl | push a same-named PowerIO.jl companion branch; the tandem CI job tests against it |
+| public Rust API | `bash scripts/check-semver.sh` (needs `cargo install cargo-semver-checks --locked`) |
 | CLI behavior | `cargo test -p powerio-cli --test cli` |
 | documentation or website | `mdbook build docs`; `mdbook test docs`; `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`; regenerate schemas and the C header when their source rustdoc changes; run `scripts/capi-header-parity.sh`; check links to retired guide outputs |
 
@@ -57,10 +59,10 @@ baseline checks:
 
 ```sh
 cargo test -p powerio-capi --no-default-features
-cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,prob
+cargo test -p powerio-capi --features matrix,gridfm,dist,prob
 bash scripts/ci-clippy.sh capi-no-default
 bash scripts/ci-clippy.sh capi-release
-cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
+cargo build -p powerio-capi --release --features matrix,gridfm,dist,prob
 scripts/capi-header-parity.sh
 scripts/capi-smoke.sh
 POWERIO_CAPI=$PWD/target/release/libpowerio_capi.so \

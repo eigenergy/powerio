@@ -1,7 +1,7 @@
 name: Docs
 
 # Build the workspace rustdoc and publish it to GitHub Pages. This renders all
-# eight library crates, including powerio-capi and powerio-py (publish = false),
+# library crates, including the unpublished C, Python, and browser bindings,
 # whose //! docs docs.rs would never host. docs.rs takes over for the published
 # crates (powerio, powerio-core, powerio-matrix, powerio-prob, powerio-dist,
 # retired crates) once they reach crates.io.
@@ -32,7 +32,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  converter:
+    uses: ./.github/workflows/converter.yml
+
   build:
+    needs: converter
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -52,7 +56,7 @@ jobs:
     - name: Build docs
       env:
         RUSTDOCFLAGS: "-D warnings"
-      run: cargo doc --no-deps --all-features -p powerio -p powerio-core -p powerio-tx -p powerio-matrix -p powerio-prob -p powerio-dist -p powerio-capi -p powerio-py
+      run: cargo doc --no-deps --all-features -p powerio-tnd -p powerio -p powerio-core -p powerio-tx -p powerio-synth -p powerio-matrix -p powerio-prob -p powerio-dist -p powerio-capi -p powerio-py -p powerio-wasm
     - name: Build Python API docs
       run: |
         python -m pip install --upgrade pip
@@ -128,6 +132,11 @@ jobs:
         <p class="tagline">Case parsing, conversion, matrices, and language bindings.</p>
         <dl>
           <div>
+            <dt>browser converter</dt>
+            <dd><a href="convert/">Convert files locally</a>
+                <a href="guide/converter.html">guide</a></dd>
+          </div>
+          <div>
             <dt>released / docs.rs</dt>
             <dd><a href="https://docs.rs/powerio">powerio</a>
                 <a href="https://docs.rs/powerio-core">powerio-core</a>
@@ -142,9 +151,12 @@ jobs:
                 <a href="powerio_core/index.html">powerio-core</a>
                 <a href="powerio_tx/index.html">powerio-tx</a>
                 <a href="powerio_dist/index.html">powerio-dist</a>
+                <a href="powerio_synth/index.html">powerio-synth</a>
+                <a href="powerio_tnd/index.html">powerio-tnd</a>
                 <a href="powerio_prob/index.html">powerio-prob</a>
                 <a href="powerio_matrix/index.html">powerio-matrix</a>
                 <a href="powerio_capi/index.html">powerio-capi</a>
+                <a href="powerio_wasm/index.html">powerio-wasm</a>
                 <a href="python/powerio.html">python</a></dd>
           </div>
           <div>
@@ -213,6 +225,16 @@ jobs:
             redirect_schema_page "$archive" "$served"
           fi
         done
+    - uses: actions/download-artifact@v4
+      with:
+        name: powerio-converter-site
+        path: target/doc/convert
+    - name: Verify converter deployment files
+      run: |
+        test -f target/doc/convert/index.html
+        test -f target/doc/convert/social.png
+        test -f target/doc/convert/opendss-to-pmd/index.html
+        test -n "$(find target/doc/convert/assets -name '*.wasm' -print -quit)"
     - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
       with:
         path: target/doc

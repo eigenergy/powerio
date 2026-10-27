@@ -12,6 +12,7 @@ from powerio import dist
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data" / "dist"
 FOURWIRE = DATA / "micro" / "fourwire_linecode.dss"
+CIM_FEEDER = DATA / "cim" / "micro_feeder.xml"
 LOWERABLE_DSS = """Clear
 Set DefaultBaseFrequency=60
 New Circuit.tiny basekv=12.47 pu=1.0 phases=3 bus1=src MVAsc3=2000 MVAsc1=2100
@@ -104,6 +105,18 @@ def test_same_format_write_echoes_source():
     conv = _emit_value(case, "dss")
     assert conv.text == FOURWIRE.read_text()
     assert conv.diagnostics == ()
+
+
+def test_distribution_cim_reads_converts_and_saves():
+    module = powerio.parse(CIM_FEEDER)
+    case = module.value
+    assert isinstance(case, dist.MulticonductorNetwork)
+    assert case.source_format == "cim-dist"
+    assert case.n_buses == 4
+    assert powerio.emit(module, "cim-dist").text == CIM_FEEDER.read_text()
+    assert "bus" in json.loads(_emit_value(case, "bmopf-json").text)
+    stored = _parse_module(_emit_module(module))
+    assert stored.value.source_format == "cim-dist"
 
 
 def test_cross_format_writes():
@@ -393,6 +406,31 @@ def test_parse_confines_includes_to_the_case_directory(tmp_path):
         for diagnostic in confined.diagnostics
     )
     assert "include_root" not in inspect.signature(powerio.parse).parameters
+
+
+def test_referenced_source_rows_read_like_earth_source_rows():
+    # The IR keeps a referenced source in a tagged record so older readers
+    # reject it; Python rows stay flat and add `reference_terminal`.
+    document = {
+        "meta": {"schema_version": "0.2.0"},
+        "bus": {"b": {"terminal_names": ["a", "n"]}},
+        "voltage_source": {"s": {
+            "bus": "b", "terminal_map": ["a"],
+            "v_magnitude": [230], "v_angle": [0],
+        }},
+    }
+    module = powerio.parse(io.StringIO(json.dumps(document)), format="bmopf-json")
+    ir = json.loads(_emit_module(module))
+    source = ir["value"]["data"]["sources"][0]
+    ir["value"]["data"]["sources"][0] = {
+        "type": "powerio.ReferencedVoltageSource",
+        "value": {**source, "reference_terminal": "n"},
+    }
+    rows = _parse_module(json.dumps(ir)).value.voltage_sources
+    assert rows[0]["name"] == "s"
+    assert rows[0]["terminal_map"] == ["a"]
+    assert rows[0]["reference_terminal"] == "n"
+    assert "type" not in rows[0]
 
 
 def test_source_energy_prices_and_draft_schema_digest_survive_ir():

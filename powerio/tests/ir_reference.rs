@@ -11,8 +11,8 @@
 use std::collections::BTreeSet;
 
 const PAGE: &str = include_str!("../../docs/src/ir-reference.md");
-const SCHEMA_PATH: &str = "docs/schema/pio-ir/2/0.11.4/schema.json";
-const SCHEMA: &str = include_str!("../../docs/schema/pio-ir/2/0.11.4/schema.json");
+const SCHEMA_PATH: &str = "docs/schema/pio-ir/2/0.11.7/schema.json";
+const SCHEMA: &str = include_str!("../../docs/schema/pio-ir/2/0.11.7/schema.json");
 
 /// A line beginning with this text names the definitions of the next table.
 const MARKER: &str = "Schema definition";
@@ -119,6 +119,9 @@ fn every_documented_field_exists_and_every_schema_field_is_documented() {
         for definition in &table.definitions {
             let Some(properties) = definitions
                 .get(definition)
+                // A documented object may be one explicitly named branch
+                // of an additive tagged union. Still compare every field.
+                .or_else(|| schema["$defs"].pointer(&format!("/{definition}")))
                 .and_then(|entry| entry["properties"].as_object())
             else {
                 problems.push(format!(

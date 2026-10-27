@@ -1154,3 +1154,348 @@ fn a_scope_naming_nothing_in_the_network_names_no_row() {
         [] as [powerio_tx::UnresolvedMonitor; 0]
     );
 }
+
+#[test]
+fn the_contingency_file_branch_spelling_reads_in_a_block_and_on_its_own_line() {
+    let text = "MONITOR BRANCH FROM BUS 101 TO BUS 102 CIRCUIT 2\n\
+                MONITOR LINE FROM BUS 102 TO BUS 103\n\
+                MONITOR BRANCHES\n\
+                BRANCH FROM BUS 103 TO BUS 201 CIRCUIT '1'\n\
+                FROM BUS 201 TO BUS 202 CKT 1\n\
+                101 102 1\n\
+                END\n\
+                MONITOR INTERFACE 'WEST' RATING 200 MW\n\
+                LINE FROM BUS 102 TO BUS 201\n\
+                END\n\
+                END\n";
+    let parsed = MonitoredSet::parse(text).expect("parse");
+    assert_eq!(mon_codes(&parsed), [] as [&str; 0]);
+    let branch = |from: usize, to: usize, circuit: &str| BranchRef {
+        from: BusId(from),
+        to: BusId(to),
+        circuit: circuit.into(),
+    };
+    // A branch on its own line is the one-branch list a block states.
+    assert_eq!(
+        parsed.set.statements,
+        [
+            MonitorStatement::Branches {
+                branches: vec![branch(101, 102, "2")],
+                retained: Vec::new(),
+            },
+            MonitorStatement::Branches {
+                branches: vec![branch(102, 103, "1")],
+                retained: Vec::new(),
+            },
+            MonitorStatement::Branches {
+                branches: vec![
+                    branch(103, 201, "1"),
+                    branch(201, 202, "1"),
+                    branch(101, 102, "1"),
+                ],
+                retained: Vec::new(),
+            },
+            MonitorStatement::Interface {
+                name: "WEST".into(),
+                rating_mw: Some(200.0),
+                branches: vec![branch(102, 201, "1")],
+                retained: Vec::new(),
+            },
+        ]
+    );
+    assert_eq!(parsed.set.retained, []);
+    check_mon_fixed_point(&parsed);
+
+    // Every one of them binds, and nothing is kept as text or left unresolved.
+    let net = select_network();
+    let resolution = parsed.set.resolve(&net, &parse_sub("selectors.sub").set);
+    assert_eq!(rows(&resolution.branch_rows), [0, 1, 2, 3, 4]);
+    assert_eq!(resolution.interfaces[0].members.len(), 1);
+    assert!(
+        resolution.unresolved.is_empty(),
+        "{:?}",
+        resolution.unresolved
+    );
+}
+
+#[test]
+fn a_three_bus_monitor_branch_line_stays_text() {
+    // A third `TO BUS k` names a three winding transformer, which a branch
+    // reference cannot hold, so the line is kept and reported.
+    let parsed = MonitoredSet::parse(
+        "MONITOR BRANCH FROM BUS 101 TO BUS 102 TO BUS 103 CIRCUIT 1\n\
+         MONITOR BRANCHES\n\
+         FROM BUS 101 TO BUS 102 TO BUS 103\n\
+         END\n",
+    )
+    .expect("parse");
+    assert_eq!(
+        mon_codes(&parsed),
+        [
+            "READ.MON.STATEMENT_UNRECOGNIZED",
+            "READ.MON.SOURCE_MALFORMED"
+        ]
+    );
+    assert_eq!(
+        kept_text(&parsed.set.retained),
+        ["MONITOR BRANCH FROM BUS 101 TO BUS 102 TO BUS 103 CIRCUIT 1"]
+    );
+    let MonitorStatement::Branches { branches, retained } = &parsed.set.statements[0] else {
+        panic!("a branch block");
+    };
+    assert_eq!(branches, &[]);
+    assert_eq!(kept_text(retained), ["FROM BUS 101 TO BUS 102 TO BUS 103"]);
+}
+
+#[test]
+fn a_block_line_may_repeat_the_monitor_keyword() {
+    let parsed = MonitoredSet::parse(
+        "MONITOR BRANCHES\n MONITOR BRANCH FROM BUS 11 TO BUS 22 CIRCUIT 1\nEND\nEND\n",
+    )
+    .expect("parse");
+    assert_eq!(mon_codes(&parsed), [] as [&str; 0]);
+    assert_eq!(
+        parsed.set.statements,
+        [MonitorStatement::Branches {
+            branches: vec![BranchRef {
+                from: BusId(11),
+                to: BusId(22),
+                circuit: "1".into(),
+            }],
+            retained: Vec::new(),
+        }]
+    );
+
+    // All three spellings in one block bind, and nothing is kept as text.
+    let parsed = MonitoredSet::parse(
+        "MONITOR BRANCHES\n\
+         101 102 2\n\
+         FROM BUS 102 TO BUS 103 CKT 1\n\
+         MONITOR LINE FROM BUS 103 TO BUS 201 CIRCUIT '1'\n\
+         END\n\
+         END\n",
+    )
+    .expect("parse");
+    assert_eq!(mon_codes(&parsed), [] as [&str; 0]);
+    let MonitorStatement::Branches { branches, retained } = &parsed.set.statements[0] else {
+        panic!("a branch block");
+    };
+    assert_eq!(branches.len(), 3);
+    assert_eq!(retained, &[]);
+    assert_eq!(parsed.set.retained, []);
+    check_mon_fixed_point(&parsed);
+    let resolution = parsed
+        .set
+        .resolve(&select_network(), &parse_sub("selectors.sub").set);
+    assert_eq!(rows(&resolution.branch_rows), [1, 2, 3]);
+    assert!(
+        resolution.unresolved.is_empty(),
+        "{:?}",
+        resolution.unresolved
+    );
+}
+
+#[test]
+fn monitored_kv_qualified_forms_parse_and_round_trip() {
+    let parsed = MonitoredSet::parse(
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' KVRANGE 200 240\n\
+MONITOR TIES FROM SUBSYSTEM 'A1' KVRANGE 200 240\n\
+MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' KV 230 0.95 1.05\n\
+END\n",
+    )
+    .expect("parse kV-qualified monitors");
+    assert!(parsed.diagnostics.is_empty(), "{:?}", mon_codes(&parsed));
+    assert_eq!(
+        parsed.set.statements,
+        vec![
+            MonitorStatement::BranchesInSubsystemKvRange {
+                subsystem: "A1".into(),
+                low_voltage_3w: false,
+                kv_range: (200.0, 240.0),
+            },
+            MonitorStatement::TiesFromSubsystemKvRange {
+                subsystem: "A1".into(),
+                kv_range: (200.0, 240.0),
+            },
+            MonitorStatement::VoltageRange {
+                scope: MonitorScope::SubsystemKv {
+                    name: "A1".into(),
+                    kv: 230.0,
+                },
+                vmin: 0.95,
+                vmax: 1.05,
+            },
+        ]
+    );
+
+    let written = check_mon_fixed_point(&parsed);
+    assert!(written.contains("MONITOR BRANCHES IN SUBSYSTEM 'A1' KVRANGE 200.0 240.0\n"));
+    assert!(written.contains("MONITOR TIES FROM SUBSYSTEM 'A1' KVRANGE 200.0 240.0\n"));
+    assert!(written.contains("MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' KV 230.0 0.95 1.05\n"));
+}
+
+#[test]
+fn monitored_kv_range_filters_low_voltage_three_winding_selection() {
+    let net = select_network();
+    let subsystems = parse_sub("selectors.sub").set;
+
+    let high_voltage = MonitoredSet::parse(
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' 3WLOWVOLTAGE KVRANGE 200 240\nEND\n",
+    )
+    .expect("parse high-voltage filter");
+    let high_resolution = high_voltage.set.resolve(&net, &subsystems);
+    assert_eq!(rows(&high_resolution.branch_rows), [0, 1]);
+    assert!(high_resolution.transformer_3w_rows.is_empty());
+
+    let low_voltage = MonitoredSet::parse(
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' 3WLOWVOLTAGE KVRANGE 100 150\nEND\n",
+    )
+    .expect("parse low-voltage filter");
+    let low_resolution = low_voltage.set.resolve(&net, &subsystems);
+    assert!(low_resolution.branch_rows.is_empty());
+    assert_eq!(rows(&low_resolution.transformer_3w_rows), [0]);
+}
+
+#[test]
+fn monitored_kv_qualified_forms_filter_resolution() {
+    let parsed = MonitoredSet::parse(
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' KVRANGE 200 240\n\
+MONITOR TIES FROM SUBSYSTEM 'A1' KVRANGE 200 240\n\
+MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' KV 230 0.95 1.05\n\
+END\n",
+    )
+    .expect("parse kV-qualified monitors");
+    let net = select_network();
+    let subsystems = parse_sub("selectors.sub").set;
+    let resolution = parsed.set.resolve(&net, &subsystems);
+
+    assert_eq!(rows(&resolution.branch_rows), [0, 1]);
+    assert_eq!(rows(&resolution.tie_rows), [5]);
+    assert_eq!(
+        resolution.voltage_ranges[0].bus_rows,
+        [0, 1].into_iter().collect()
+    );
+}
+
+#[test]
+fn monitored_kv_qualified_forms_keep_invalid_ranges_as_text() {
+    let reversed = MonitoredSet::parse("MONITOR BRANCHES IN SUBSYSTEM 'A1' KVRANGE 240 200\nEND\n")
+        .expect("parse reversed kV range");
+    assert_eq!(
+        mon_codes(&reversed),
+        vec!["READ.MON.STATEMENT_UNRECOGNIZED"]
+    );
+    assert_eq!(
+        reversed.set.retained[0].text,
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' KVRANGE 240 200"
+    );
+
+    let nonfinite =
+        MonitoredSet::parse("MONITOR TIES FROM SUBSYSTEM 'A1' KVRANGE Infinity 240\nEND\n")
+            .expect("parse non-finite kV range");
+    assert_eq!(
+        mon_codes(&nonfinite),
+        vec!["READ.MON.STATEMENT_UNRECOGNIZED"]
+    );
+}
+
+#[test]
+fn monitored_subsystem_kv_scope_uses_kv_tolerance() {
+    let net = select_network();
+    let subsystems = parse_sub("selectors.sub").set;
+    let exact =
+        MonitoredSet::parse("MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' KV 230.0000005 0.95 1.05\nEND\n")
+            .expect("parse tolerant kV scope");
+    let resolution = exact.set.resolve(&net, &subsystems);
+    assert_eq!(
+        resolution.voltage_ranges[0].bus_rows,
+        [0, 1].into_iter().collect()
+    );
+}
+
+#[test]
+fn monitored_four_value_voltage_range_round_trips_and_resolves() {
+    let parsed = MonitoredSet::parse(
+        "MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' KV 230 0.9000 1.0500 0.9500 1.0500\nEND\n",
+    )
+    .expect("parse four-value voltage range");
+    assert!(parsed.diagnostics.is_empty(), "{:?}", mon_codes(&parsed));
+    assert_eq!(
+        parsed.set.statements,
+        vec![MonitorStatement::VoltageRangeWithPre {
+            scope: MonitorScope::SubsystemKv {
+                name: "A1".into(),
+                kv: 230.0,
+            },
+            vmin: 0.9,
+            vmax: 1.05,
+            pre_min: 0.95,
+            pre_max: 1.05,
+        }]
+    );
+
+    let written = check_mon_fixed_point(&parsed);
+    assert!(written.contains("MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' KV 230.0 0.9 1.05 0.95 1.05\n"));
+
+    let net = select_network();
+    let subsystems = parse_sub("selectors.sub").set;
+    let resolution = parsed.set.resolve(&net, &subsystems);
+    assert_eq!(resolution.voltage_ranges.len(), 0);
+    assert_eq!(resolution.voltage_ranges_with_pre.len(), 1);
+    assert_eq!(
+        resolution.voltage_ranges_with_pre[0].0.bus_rows,
+        [0, 1].into_iter().collect()
+    );
+    assert!((resolution.voltage_ranges_with_pre[0].0.low - 0.9).abs() < 1e-12);
+    assert_eq!(resolution.voltage_ranges_with_pre[0].0.high, Some(1.05));
+    assert_eq!(resolution.voltage_ranges_with_pre[0].1, (0.95, 1.05));
+}
+
+#[test]
+fn monitored_four_value_voltage_range_rejects_invalid_bands() {
+    for line in [
+        "MONITOR VOLTAGE RANGE ALL BUSES 1.05 0.95 0.95 1.05\nEND\n",
+        "MONITOR VOLTAGE RANGE ALL BUSES 0.95 1.05 1.05 0.95\nEND\n",
+    ] {
+        let parsed = MonitoredSet::parse(line).expect("parse invalid range");
+        assert_eq!(mon_codes(&parsed), vec!["READ.MON.STATEMENT_UNRECOGNIZED"]);
+        assert_eq!(parsed.set.retained.len(), 1);
+    }
+}
+
+/// Manual scaling probe for indexed kV resolution. Run with
+/// `cargo test -p powerio-tx --test contingency_sub_mon kv_scope_scaling_probe -- --nocapture`.
+/// Timings are reported for inspection, not asserted, so CI is not machine-speed dependent.
+#[test]
+fn kv_scope_scaling_probe() {
+    use powerio_tx::network::{Bus, BusType};
+    use std::time::Instant;
+
+    for size in [5_000usize, 10_000, 20_000] {
+        let buses = (1..=size)
+            .map(|id| Bus::new(BusId(id), BusType::Ref, 230.0))
+            .collect();
+        let net = BalancedNetwork::in_memory("kv-scaling", 100.0, buses, Vec::new());
+        let subsystems = SubsystemSet::parse("SUBSYSTEM 'ALL'\nAREA 1\nEND\n")
+            .expect("parse synthetic subsystem")
+            .set;
+        let monitored = MonitoredSet {
+            statements: vec![MonitorStatement::VoltageRange {
+                scope: MonitorScope::SubsystemKv {
+                    name: "ALL".to_owned(),
+                    kv: 230.0,
+                },
+                vmin: 0.9,
+                vmax: 1.1,
+            }],
+            ..Default::default()
+        };
+        let started = Instant::now();
+        let resolved = monitored.resolve(&net, &subsystems);
+        let elapsed = started.elapsed();
+        assert_eq!(resolved.voltage_ranges.len(), 1);
+        assert_eq!(resolved.voltage_ranges[0].bus_rows.len(), size);
+        // Keep this as a manual scaling probe: no wall-clock threshold is used.
+        eprintln!("subsystem-kV resolution: buses={size}, elapsed={elapsed:?}");
+    }
+}
