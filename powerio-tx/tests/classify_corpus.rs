@@ -40,8 +40,16 @@ const EXPECTED: &[(&str, &str, Option<&str>)] = &[
         "distribution",
         Some("pmd-json"),
     ),
-    ("dist/pmd/case3_balanced.json", "distribution", Some("pmd-json")),
-    ("dist/pmd/case3_balanced_multinetwork.json", "distribution", Some("pmd-json")),
+    (
+        "dist/pmd/case3_balanced.json",
+        "distribution",
+        Some("pmd-json"),
+    ),
+    (
+        "dist/pmd/case3_balanced_multinetwork.json",
+        "distribution",
+        Some("pmd-json"),
+    ),
     ("dist/pmd/ieee13.json", "distribution", Some("pmd-json")),
     ("egret/case14.json", "transmission", Some("egret-json")),
     ("egret/case30.json", "transmission", Some("egret-json")),
