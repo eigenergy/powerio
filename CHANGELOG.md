@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- `assign_island_references` with the per island policy now demotes a
+  stated reference bus that hosts no in-service generator, then makes the
+  bus of the island's largest `pmax` generator the reference. Before, an
+  island could keep a lone reference with no generator behind it, and the
+  raw call and per island normalization could pick different slack buses;
+  both now pick the same one. When two generators tie on `pmax`, the one on
+  the smaller bus id wins (before, the earlier generator row won during
+  normalization). `Island::calc_reference_choice` follows the same rule and
+  returns `None` for an island no in-service generator supplies. Two
+  windings of one live three winding transformer joined by a closed switch
+  are still refused; a test now pins that.
+
 - The conversion matrix grades each cell by its worst finding: exact,
   lossless, restated (the target required a value and the writer supplied
   it), approximate, dropped, or failed. The PR comment shows that level, the
