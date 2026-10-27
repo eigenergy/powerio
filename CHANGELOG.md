@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- A node breaker XIIDM or JIIDM case now writes PSS/E RAWX and revision 34
+  and 35 RAW. IIDM numbers nodes from 0 within each voltage level, so two
+  levels of one substation repeated node numbers and RAWX output failed. A
+  substation whose node numbers repeat or are not positive is now numbered
+  from 1, as PowSybl's exporter numbers it, with a diagnostic. Revision 33
+  output reports the substation records it drops without the RAWX error text.
+
 - Pull requests now build and smoke-test one Linux wheel (x86_64) and the
   sdist. The five-platform wheel matrix runs on pushes to main and on
   releases, and the browser converter suite on pushes to main, the commits

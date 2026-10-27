@@ -860,6 +860,24 @@ fn write_psse_rev_inner(
     } else {
         net
     };
+    // Number the connectivity nodes as PSS/E numbers them before any record
+    // resolves a regulating node. Revision 33 writes no node, so it reports no
+    // renumbering either.
+    let numbered;
+    let net = if include_detailed_connectivity {
+        let mut numbering = Diagnostics::new();
+        if let Some(prepared) = super::rawx::with_psse_node_numbers(net, &mut numbering) {
+            if modern {
+                warnings.absorb(numbering);
+            }
+            numbered = prepared;
+            &numbered
+        } else {
+            net
+        }
+    } else {
+        net
+    };
     let mut nonfinite = false;
     let mut sanitized_quoted = 0usize;
     let mut s = String::new();
@@ -1984,12 +2002,22 @@ fn write_psse_rev_inner(
                 warnings.absorb(detailed_warnings);
                 records
             }
-            Err(error) => {
+            Err(error) if modern => {
                 warnings.push(
                     &F.field_dropped,
                     format!(
                         "detailed connectivity dropped from PSS/E revision {rev} output: {error}"
                     ),
+                );
+                None
+            }
+            // Revision 33 has no substation block, so the records are dropped
+            // whether or not they could be written; the reason they could not
+            // belongs to a revision that states them.
+            Err(_) => {
+                warnings.push(
+                    &F.record_dropped,
+                    "detailed substation connectivity dropped: PSS/E revision 33 has no substation data block",
                 );
                 None
             }

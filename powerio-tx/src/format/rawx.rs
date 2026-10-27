@@ -1989,28 +1989,12 @@ fn transformer_fields() -> Vec<String> {
 /// Emit a neutral network through the shared PSS/E revision 35 writer, then
 /// encode those records as RAWX tables.
 pub(crate) fn write_rawx(net: &BalancedNetwork) -> Result<TextEmission> {
-    let allocated_node_numbers = net
-        .detailed_connectivity()
-        .as_deref()
-        .map_or(0, |detailed| {
-            detailed
-                .connectivity_nodes
-                .iter()
-                .filter(|node| node.node_number.is_none())
-                .count()
-        });
-    let prepared = with_rawx_node_numbers(net)?;
+    let mut numbering = Diagnostics::new();
+    let prepared = with_psse_node_numbers(net, &mut numbering);
     let net = prepared.as_ref().unwrap_or(net);
     let raw = super::psse::write_psse_rev_without_detailed_connectivity(net, 35);
     let mut diagnostics = Diagnostics::from(raw.diagnostics);
-    if allocated_node_numbers > 0 {
-        diagnostics.push(
-            &codes::EMIT_PSSE.value_defaulted,
-            format!(
-                "{allocated_node_numbers} connectivity node(s) state no PSS/E node number; RAWX requires one, so deterministic positive numbers were allocated within each substation"
-            ),
-        );
-    }
+    diagnostics.absorb(numbering);
     let text = raw_to_rawx(net, &raw.text, &mut diagnostics).map_err(|error| Error::Emit {
         format: FMT,
         message: error.to_string(),
@@ -2106,20 +2090,23 @@ fn raw_to_rawx(net: &BalancedNetwork, raw: &str, diagnostics: &mut Diagnostics) 
     Ok(text)
 }
 
-/// Assign deterministic positive node numbers before the electrical writer
-/// resolves exact regulation targets. PSS/E node numbers are unique within a
-/// substation, while source-neutral connectivity nodes need not state one.
-fn with_rawx_node_numbers(net: &BalancedNetwork) -> Result<Option<BalancedNetwork>> {
-    let Some(detailed) = net.detailed_connectivity().as_deref() else {
-        return Ok(None);
-    };
-    if detailed
-        .connectivity_nodes
-        .iter()
-        .all(|node| node.node_number.is_some())
-    {
-        return Ok(None);
-    }
+/// Assign PSS/E node numbers before the electrical writer resolves exact
+/// regulation targets. PSS/E numbers nodes from 1 within a substation, while
+/// source-neutral connectivity nodes need not state a number, and IIDM numbers
+/// them from 0 within each voltage level, so two voltage levels of one IIDM
+/// substation both state node 0.
+///
+/// A substation whose stated numbers are positive and distinct keeps them and
+/// only its unnumbered nodes are allocated. A substation whose stated numbers
+/// repeat or are not positive is renumbered from 1 in node order, as PowSybl's
+/// exporter numbers every substation it writes (powsybl-core psse-converter,
+/// `VoltageLevelConverter.createNodeBreakerContextExportForFullExport`, which
+/// takes each node from `getFullExport().getNewPsseNode(psseSubstationId)`).
+pub(super) fn with_psse_node_numbers(
+    net: &BalancedNetwork,
+    diagnostics: &mut Diagnostics,
+) -> Option<BalancedNetwork> {
+    let detailed = net.detailed_connectivity().as_deref()?;
     let level_substations = detailed
         .voltage_levels
         .iter()
@@ -2127,54 +2114,79 @@ fn with_rawx_node_numbers(net: &BalancedNetwork) -> Result<Option<BalancedNetwor
             level
                 .substation
                 .as_ref()
-                .map(|substation| (level.component.clone(), substation.clone()))
+                .map(|substation| (&level.component, substation))
         })
         .collect::<BTreeMap<_, _>>();
-    let mut used = BTreeMap::<ComponentId, BTreeSet<i32>>::new();
-    for node in &detailed.connectivity_nodes {
-        let substation = level_substations.get(&node.voltage_level).ok_or_else(|| {
-            malformed(format!(
-                "connectivity node {} has no substation through voltage level {}",
-                node.component, node.voltage_level
-            ))
-        })?;
-        if let Some(number) = node.node_number
-            && !used.entry(substation.clone()).or_default().insert(number)
-        {
-            return Err(malformed(format!(
-                "detailed connectivity repeats PSS/E node number {number} in substation {substation}"
-            )));
+    // A node whose voltage level names no substation is left for the table
+    // writer, which reports it.
+    let mut by_substation = BTreeMap::<&ComponentId, Vec<usize>>::new();
+    for (index, node) in detailed.connectivity_nodes.iter().enumerate() {
+        if let Some(substation) = level_substations.get(&node.voltage_level) {
+            by_substation.entry(*substation).or_default().push(index);
         }
+    }
+    let mut assigned = BTreeMap::<usize, i32>::new();
+    let mut allocated = 0usize;
+    let mut renumbered = 0usize;
+    let mut renumbered_substations = 0usize;
+    for nodes in by_substation.values() {
+        let mut used = BTreeSet::new();
+        let stated_fits = nodes.iter().all(|index| {
+            detailed.connectivity_nodes[*index]
+                .node_number
+                .is_none_or(|number| number > 0 && used.insert(number))
+        });
+        if !stated_fits {
+            renumbered_substations += 1;
+            for (number, index) in (1_i32..).zip(nodes) {
+                renumbered += 1;
+                assigned.insert(*index, number);
+            }
+            continue;
+        }
+        let mut next = 1_i32;
+        for index in nodes {
+            if detailed.connectivity_nodes[*index].node_number.is_some() {
+                continue;
+            }
+            while used.contains(&next) {
+                next = next.saturating_add(1);
+            }
+            used.insert(next);
+            assigned.insert(*index, next);
+            allocated += 1;
+        }
+    }
+    if assigned.is_empty() {
+        return None;
+    }
+    if allocated > 0 {
+        diagnostics.push(
+            &codes::EMIT_PSSE.value_defaulted,
+            format!(
+                "{allocated} connectivity node(s) state no PSS/E node number; RAWX requires one, so deterministic positive numbers were allocated within each substation"
+            ),
+        );
+    }
+    if renumbered > 0 {
+        diagnostics.push(
+            &codes::EMIT_PSSE.value_substituted,
+            format!(
+                "{renumbered} connectivity node(s) in {renumbered_substations} substation(s) renumbered from 1: their stated node numbers repeat or are not positive within the substation, and PSS/E numbers nodes from 1 within each substation"
+            ),
+        );
     }
 
     // Copy the connectivity directly rather than through
     // `detailed_connectivity_mut`, which clears the source omission markers
     // the writer still reports as dropped.
     let mut numbered = detailed.clone();
-    let mut next = BTreeMap::<ComponentId, i32>::new();
-    for node in &mut numbered.connectivity_nodes {
-        if node.node_number.is_some() {
-            continue;
-        }
-        let substation = level_substations
-            .get(&node.voltage_level)
-            .expect("voltage levels were checked before cloning");
-        let used = used.entry(substation.clone()).or_default();
-        let candidate = next.entry(substation.clone()).or_insert(1);
-        while used.contains(candidate) {
-            *candidate = candidate.checked_add(1).ok_or_else(|| {
-                malformed(format!(
-                    "RAWX substation {substation} has no available node number"
-                ))
-            })?;
-        }
-        node.node_number = Some(*candidate);
-        used.insert(*candidate);
-        *candidate = candidate.checked_add(1).unwrap_or(i32::MAX);
+    for (index, number) in assigned {
+        numbered.connectivity_nodes[index].node_number = Some(number);
     }
     let mut prepared = net.clone();
     prepared.tables_mut().detailed_connectivity = Some(std::sync::Arc::new(numbered));
-    Ok(Some(prepared))
+    Some(prepared)
 }
 
 type RawSections = BTreeMap<String, Vec<String>>;
