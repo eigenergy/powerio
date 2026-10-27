@@ -32,6 +32,19 @@
   `READ.DSS.LINE_UNRESOLVED`. Before, SwtControl state produced typed open and
   closed switches.
 
+- Distribution CIM tank imports refuse unsupported phase clocks and inactive
+  or disconnected tank/parent/end states. Fresh tank output writes standard
+  impedance magnitudes and clocks derived from the current winding layout;
+  producer-specific X-in-magnitude inputs require prior normalization (#680).
+  The `PowerTransformerEnd` form now reads `phaseAngleClock` and refuses the
+  same clocks as the tank form. A three-winding tank whose load losses leave
+  a pair unstated, or split to a negative winding resistance, reads zero
+  winding resistance with a diagnostic instead of a negative one.
+
+- Distribution CIM opens switches with disconnected terminals and refuses
+  inactive/disconnected non-switch equipment and unsupported delta compensators,
+  instead of constructing an energized or phase-to-ground equivalent (#687).
+
 - TARA contingency statements are read at analysis time. The readers keep
   them as text, as before, because the contingency, subsystem, and monitored
   set layouts are fixed within PowerIO IR 2; the new views read that text.
@@ -91,6 +104,112 @@
   PTDF columns, and LODF columns from one factorization and one solve per
   row or column, without forming the full matrices.
 
+- HVDC lines enter the balanced power flow instances and the DC OPF
+  preparation as fixed bus injections (#572). The canonical interface is the
+  named bus-to-device terminal view `Hvdc::calc_bus_to_device_powers`, which
+  returns `HvdcTerminalPowers`: at each end, active and reactive power
+  positive from that end's AC bus into the HVDC system (both converters and
+  the DC line as one device), the direction AC branch terminal flows use, so
+  `p_from + p_to` is the active power lost. The stored `pf`, `pt`, `qf`, and
+  `qt` keep MATPOWER's `dcline` signs throughout 0.11.x, in Rust, PowerIO IR,
+  and the C ABI; the view converts them in one place (`p_from = pf`,
+  `q_from = -qf`, `p_to = -pt`, `q_to = -qt`), and changing the stored
+  representation waits for an agreed migration (#700). A line sending 100 MW
+  and delivering 97 MW, its converters absorbing 30 and 25 MVAr, has terminal
+  powers `(100, 30)` and `(-97, 25)` and a 3 MW loss. Each bus receives the
+  negative of its terminal power: `IndexedNetwork::p_hvdc` and `q_hvdc` fold
+  each in service line onto its terminal buses, `DcPfInstance` and
+  `AcPfInstance` add the injections to each bus's stated net injection, and
+  the DC OPF preparation carries them as `p_hvdc`, so `fixed_withdrawal` is
+  now `pd + gs + p_shift - p_hvdc` and the bundle adds `p_hvdc.mtx`. A PSS/E
+  two-terminal DC line therefore moves its scheduled power between the AC
+  systems it joins, and a MATPOWER `dcline` row injects what MATPOWER's
+  `toggle_dcline` injects. A line that is out of service, or whose terminal
+  bus is isolated or undeclared, injects nothing. `HvdcTreatment::Ignore`
+  gives the earlier result through `DcPfInstance::from_network_with_hvdc`,
+  `AcPfInstance::from_network_with_hvdc`, `AcPfInstance::new_with_hvdc`,
+  `DcOpfAssemblyOptions::with_hvdc_treatment`, and `powerio dcopf --hvdc
+  ignore`. `BalancedNetwork::calc_hvdc_injections` lists the injections, and
+  the `BUILD.HVDC.FIXED_INJECTION`, `BUILD.HVDC.IGNORED`, and
+  `BUILD.HVDC.TERMINAL_INACTIVE` diagnostics state what was injected or left
+  out.
+
+  The PowerIO IR change is additive. `powerio.DcPfInstance` and
+  `powerio.AcPfInstance` gain one optional field, `hvdc_treatment`
+  (`fixed_injection` or `ignore`, in `pio-ir/2/0.11.7/schema.json`); no
+  existing field changes layout or meaning, and IR stays at version 2.
+  A document without the field, as every earlier release wrote, reads as
+  `ignore`, the calculation it denoted when written: a bus specification of
+  -40 MW stays -40 MW, also after `with_network` replaces the network with an
+  identical one. Writing states the field only for `fixed_injection`, so an
+  instance, alone or inside a stored solution, reads back with the treatment
+  it was built with, an `ignore` instance writes the layout earlier releases
+  read, and an earlier reader rejects a `fixed_injection` document as an
+  unknown field rather than calculate it without the injections. The
+  instances `from_network` builds use `fixed_injection`.
+  `pio_build_dc_opf_preparation` keeps HVDC lines out, because the ABI 7 bus
+  view has no column to state their injection. The AC OPF preparation does
+  not carry HVDC injections yet, and GridFM output reports HVDC lines as
+  omitted.
+
+
+- Add typed AC optimal transmission switching to `powerio-prob`
+  ([#671](https://github.com/eigenergy/powerio/issues/671)).
+  `AcOtsInstance` is an AC OPF base plus switching options:
+  - which branches may switch;
+  - per-branch opening and closing costs;
+  - an islanding policy: `forbidden` keeps every island of the initial
+    topology in one piece, so a base that already has several islands stays
+    valid and only a split is refused, and `allowed` lets islands split;
+  - budgets on open branches and on status changes;
+  - branch current limits, either stated per terminal or derived as
+    PowerModels' `calc_current_limits!` derives them.
+
+  The instance keeps every physical branch and its initial status.
+  - `validate_topology` checks a final status vector and returns its
+    switching cost. Under either policy it refuses a topology that leaves
+    buses that had a generator in an island with none, because no load is shed
+    or de-energized.
+  - `fix_topology` derives the AC OPF to solve and reports what it discards.
+  - `AcOtsSolution` attaches that AC OPF solution, after checking that it
+    solves exactly the fixed problem and that open branches carry no flow.
+
+  The new objective term `branch_switching_cost` adds the switching cost to
+  the objective. No solver or formulation is included.
+- PowerIO IR reads and writes `powerio.AcOtsInstance` and
+  `powerio.AcOtsSolution`, and the objective terms gain
+  `branch_switching_cost`. The IR version stays 2. The schema snapshot is
+  `pio-ir/2/0.11.7/schema.json`. The schema compatibility test now lets a
+  union of constant-tagged alternatives gain alternatives, as it already let
+  lists of allowed names gain names.
+- New facade functions:
+  - `to_ac_ots_instance` and `to_ac_ots_instance_with_options` build or
+    reconfigure the instance from a network, AC OPF, or AC OTS module.
+  - `ac_ots_instance_from_base` combines an AC OPF base with explicit options.
+  - `fix_ac_ots_topology` derives the AC OPF over a final topology.
+  - `ac_ots_solution` attaches that AC OPF's solution.
+  - `materialize_ac_ots_solution` returns the network with the final statuses
+    and solved values, which is what `emit` should write. Emitting an AC OTS
+    solution directly is refused.
+- Python reads the two types as `powerio.AcOtsInstance` and
+  `powerio.AcOtsSolution`, and `PioModule.to_ac_ots_instance()` builds the
+  default instance.
+- C ABI 7 gains these entry points:
+  - instance: `pio_value_ac_ots_instance`, `pio_module_to_ac_ots_instance`,
+    `pio_module_to_ac_ots_instance_with_options`, `pio_ac_ots_instance_create`,
+    `pio_ac_ots_instance_options`, `pio_ac_ots_instance_branch_at`,
+    `pio_ac_ots_instance_validate_topology`, `pio_ac_ots_instance_fix_topology`;
+  - solution: `pio_value_ac_ots_solution`, `pio_ac_ots_solution_create`,
+    `pio_ac_ots_solution_summary`, `pio_ac_ots_solution_branch_closed_at`,
+    `pio_ac_ots_solution_materialize`.
+
+  It also gains the structs `PioAcOtsOptions`, `PioBranchSwitchingCost`,
+  `PioBranchCurrentLimit`, `PioAcOtsOptionsView`, `PioAcOtsBranchView`, and
+  `PioAcOtsSolutionView`, and the error code `BIND.CAPI.INVALID_ARGUMENT`.
+  The generic calculation accessors (network, instance, objective terms,
+  constraints, termination, objective, and named quantities) accept the AC
+  OTS kinds. PowerIO.jl binds them in
+  [PowerIO.jl#178](https://github.com/eigenergy/PowerIO.jl/pull/178).
 
 ## 0.11.6
 
@@ -285,12 +404,25 @@
   sequence impedance, loads, linear shunt compensators with their sections,
   switches, transformers of any winding count with mesh impedances and ratio
   tap changer positions, and energy sources with their series impedance.
-  What it does not map yet (the transformer tank form, controls, distributed
-  energy resources, wire geometry, limits) is reported through
+  What it does not map yet (controls, distributed energy resources, wire
+  geometry, limits) is reported through
   `READ.CIM_DIST.*` codes, and the writer reports what CIM cannot state
   through `EMIT.CIM_DIST.*` codes. Same format emission returns the retained
   bytes of a single document; canonical output carries UUIDv5 mRIDs and is
   byte stable from write to read to write.
+
+- The CIM reader maps the transformer tank form that GridAPPS-D and CIMHub
+  feeders use for single phase, center tap, and regulator banks: each
+  `TransformerTank` becomes one transformer, with ratings, resistances, and
+  short circuit reactances from its `TransformerTankInfo` catalog entry
+  (`TransformerEndInfo`, `ShortCircuitTest`, whose `leakageImpedance` is read
+  as the standard magnitude after resolving winding resistance), taps from tap
+  changers on its ends, and `NoLoadTest` data in the `%noloadloss` and `%imag` extras the
+  dss, PMD, and BMOPF writers read. A `TransformerCoreAdmittance` on the
+  `PowerTransformerEnd` form gives the same extras. The writer writes tanks
+  read from CIM back as tanks, grouped under their `PowerTransformer` with
+  shared catalog entries; other transformers keep the `PowerTransformerEnd`
+  form.
 
 - A CIM line segment whose impedance the reader cannot read, for example one
   described only by wire spacing and wire data, parses with an error finding,
