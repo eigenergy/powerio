@@ -5,7 +5,7 @@ changes to existing record layouts or meanings. A release can add structural
 types without changing the IR version. Schema snapshots list the types
 implemented by a release and keep their published bytes and identifiers.
 
-| IR version | First release | Document identity | Schema snapshot | Read by 0.11.6 |
+| IR version | First release | Document identity | Schema snapshot | Read by 0.11.7 |
 |---|---|---|---|---|
 | none | v0.6.1 | `pio-package` lineage `0.1` | `pio-ir/0.1/schema.json` | no |
 | none | v0.8.0 | `pio-package` lineage `0.2` | `pio-ir/0.2/schema.json` | no |
@@ -17,6 +17,7 @@ implemented by a release and keep their published bytes and identifiers.
 | 2 | v0.11.4 | `pio-ir`, version `2` | `pio-ir/2/0.11.4/schema.json` | yes |
 | 2 | v0.11.5 | `pio-ir`, version `2` | `pio-ir/2/0.11.5/schema.json` | yes |
 | 2 | v0.11.6 | `pio-ir`, version `2` | `pio-ir/2/0.11.6/schema.json` | yes |
+| 2 | v0.11.7 | `pio-ir`, version `2` | `pio-ir/2/0.11.7/schema.json` | yes |
 
 The current document begins:
 
@@ -30,7 +31,7 @@ The current document begins:
 
 ## Compatibility
 
-PowerIO 0.11.6 keeps IR version 2 and every existing record layout. The
+PowerIO 0.11.7 keeps IR version 2 and every existing record layout. The
 LinDist3Flow OPF instance and solution types added in 0.11.1, the three PSS/E
 contingency analysis files added in 0.11.3, and the fixed-dispatch LinDist3Flow
 instance and solution types added in 0.11.4 use distinct structural type names.
@@ -43,10 +44,15 @@ uses an unknown format while still reading documents using known formats. A vers
 bump requires an incompatible change to an existing representation and an
 explicit release decision. Adding fields to a record is not automatically
 compatible: readers can reject unknown fields, so existing records retain
-their layout throughout the 0.11.x line.
+their layout throughout the 0.11.x line. The one field added so far is the
+optional `hvdc_treatment` of `powerio.DcPfInstance` and
+`powerio.AcPfInstance` in 0.11.7. A document without it reads as the earlier
+release read it, with HVDC lines left out (`ignore`). 0.11.7 always writes the
+field, and an earlier reader rejects such a document as an unknown field
+rather than read it under a different HVDC treatment.
 
 `powerio::IR_VERSION` is the IR version a build writes and
-`powerio::IR_MIN_VERSION` the oldest it reads. Both remain 2 in 0.11.6.
+`powerio::IR_MIN_VERSION` the oldest it reads. Both remain 2 in 0.11.7.
 `producer.version` records the producing release for diagnostics; it does not
 determine whether a document can be read. The C ABI remains independently
 versioned at 7. [The PowerIO IR chapter](../src/pio-json-schema.md) sets this
@@ -64,12 +70,16 @@ to `SourceFormat`, and the distinctly tagged `powerio.ReferencedVoltageSource`
 nested record. Ordinary voltage sources retain their original representation.
 It also extends monitor scopes and statements with kV-qualified selection and
 pre/post voltage bands while preserving previously accepted monitor records.
+The 0.11.7 snapshot adds the optional `hvdc_treatment` field to
+`DcPfInstance` and `AcPfInstance` and its `HvdcTreatment` definition
+(`fixed_injection` or `ignore`).
 
 The release name in the snapshot path does not create a new IR version.
 A later release without catalog changes can reuse that snapshot (0.11.2
 reused 0.11.1). CI preserves existing definitions and document rules, with
 narrow checks for added format names, the distinctly tagged voltage-source
-and partial-transformer alternatives, and additive monitor fields and variants.
+and partial-transformer alternatives, additive monitor fields and variants,
+and the optional `hvdc_treatment` field of the power flow instance records.
 The monitor checks preserve existing property schemas and required fields and require distinct
 constant tags for added alternatives; they reject new restrictions and
 ambiguous variants. Every earlier published snapshot keeps its exact bytes.
@@ -90,9 +100,10 @@ Every published snapshot keeps its `$id` and original archive path. The
 historical identifiers are `pio-package/0.1`, `pio-package/0.2`,
 `pio-package/0.9/schema.json`, `pio-module/1/schema.json`,
 `pio-ir/2/schema.json`, `pio-ir/2/0.11.1/schema.json`,
-`pio-ir/2/0.11.3/schema.json`, `pio-ir/2/0.11.4/schema.json`, and
-`pio-ir/2/0.11.5/schema.json` beneath `https://powerio.dev/schema/`.
-The current schema uses `pio-ir/2/0.11.6/schema.json` under that same root.
+`pio-ir/2/0.11.3/schema.json`, `pio-ir/2/0.11.4/schema.json`,
+`pio-ir/2/0.11.5/schema.json`, and `pio-ir/2/0.11.6/schema.json` beneath
+`https://powerio.dev/schema/`. The current schema uses
+`pio-ir/2/0.11.7/schema.json` under that same root.
 The documentation site serves the archive paths and published identifiers.
 
 ## Regenerating the current catalog
@@ -102,5 +113,5 @@ cargo run -p powerio --example generate_schemas --features schema -- docs/schema
 ```
 
 The generator writes the path named by `powerio::IR_SCHEMA_ID`, currently
-`pio-ir/2/0.11.6/schema.json`. It leaves earlier snapshots untouched. CI fails
+`pio-ir/2/0.11.7/schema.json`. It leaves earlier snapshots untouched. CI fails
 if the generated catalog differs from the committed file.

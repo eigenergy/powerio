@@ -4,7 +4,7 @@
 use std::path::Path;
 
 const SCHEMA_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/schema");
-const CURRENT_SCHEMA: &str = "pio-ir/2/0.11.6/schema.json";
+const CURRENT_SCHEMA: &str = "pio-ir/2/0.11.7/schema.json";
 
 fn monitor_discriminator(value: &serde_json::Value) -> Option<(&str, &str)> {
     if value["type"] != "object" {
@@ -194,6 +194,7 @@ fn the_schema_directory_contains_the_documented_powerio_ir_history() {
             "pio-ir/2/0.11.3/schema.json",
             "pio-ir/2/0.11.4/schema.json",
             "pio-ir/2/0.11.5/schema.json",
+            "pio-ir/2/0.11.6/schema.json",
             CURRENT_SCHEMA,
             "pio-ir/2/schema.json",
         ]
@@ -239,6 +240,10 @@ fn historical_schemas_preserve_their_original_identifiers() {
         (
             "pio-ir/2/0.11.5/schema.json",
             "https://powerio.dev/schema/pio-ir/2/0.11.5/schema.json",
+        ),
+        (
+            "pio-ir/2/0.11.6/schema.json",
+            "https://powerio.dev/schema/pio-ir/2/0.11.6/schema.json",
         ),
     ] {
         let schema: serde_json::Value = serde_json::from_str(&read_schema_file(path)).unwrap();
@@ -304,6 +309,35 @@ fn assert_partial_transformer_schema_preserved(
     assert_eq!(&partial_body, definition);
 }
 
+/// The power flow instance records gain one optional field in 0.11.7,
+/// `hvdc_treatment`. Without that field the record is byte for byte the
+/// earlier one, and the field is not required, so a document an earlier 0.11
+/// release wrote still reads; the reader gives a document without the field
+/// the treatment it denoted then.
+fn assert_only_optional_property_added(
+    published: &serde_json::Value,
+    current: &serde_json::Value,
+    property: &str,
+    context: &str,
+) {
+    let mut without = current.clone();
+    let removed = without["properties"]
+        .as_object_mut()
+        .unwrap_or_else(|| panic!("{context}: no longer a record"))
+        .remove(property);
+    assert!(removed.is_some(), "{context}: {property} is missing");
+    assert!(
+        !current["required"]
+            .as_array()
+            .is_some_and(|fields| fields.iter().any(|field| field == property)),
+        "{context}: {property} became required"
+    );
+    assert_eq!(
+        &without, published,
+        "{context} changed beyond gaining {property}"
+    );
+}
+
 /// Each earlier IR version 2 schema file is checked against the current one.
 /// A release can add structural types and definitions, and a list of allowed
 /// string values (such as the distribution source formats) can gain values.
@@ -311,8 +345,10 @@ fn assert_partial_transformer_schema_preserved(
 /// byte the same, so a document an earlier 0.11 release wrote still reads
 /// with the same meaning. Renaming or reshaping an existing type fails here.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn ir_version_2_schemas_only_add() {
     for earlier in [
+        "pio-ir/2/0.11.6/schema.json",
         "pio-ir/2/0.11.5/schema.json",
         "pio-ir/2/0.11.4/schema.json",
         "pio-ir/2/schema.json",
@@ -330,6 +366,11 @@ fn ir_version_2_schemas_only_add() {
         assert_eq!(published, current, "{earlier}: document rules changed");
 
         for (name, definition) in published_defs.as_object().unwrap() {
+            // An unchanged definition satisfies every rule below; the rules
+            // describe how a definition may differ from an earlier file.
+            if current_defs[name] == *definition {
+                continue;
+            }
             if name == "StoredValue" {
                 for variant in definition["oneOf"].as_array().unwrap() {
                     let type_name = &variant["properties"]["type"]["const"];
@@ -380,6 +421,13 @@ fn ir_version_2_schemas_only_add() {
                 assert_eq!(new_source["required"], serde_json::json!(["type", "value"]));
             } else if name == "Transformer3W" {
                 assert_partial_transformer_schema_preserved(definition, &current_defs, earlier);
+            } else if name == "DcPfInstance" || name == "AcPfInstance" {
+                assert_only_optional_property_added(
+                    definition,
+                    &current_defs[name],
+                    "hvdc_treatment",
+                    &format!("{earlier}: record {name}"),
+                );
             } else if name == "MonitorScope" || name == "MonitorStatement" {
                 assert_monitor_schema_preserved(
                     definition,

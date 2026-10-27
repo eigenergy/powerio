@@ -8,9 +8,10 @@ use powerio::BranchSusceptanceFormula;
 use powerio::{BalancedNetwork, PioValue};
 use powerio_core::{PioModule, TimePoint};
 use powerio_prob::{
-    AcOpfInstance, AcOpfSolution, AcPfInstance, AcPfSolution, AcScucSolution, DcOpfInstance,
-    DcOpfSolution, DcPfInstance, DcPfSolution, LinDist3FlowBuildOptions, LinDist3FlowOpfInstance,
-    LinDist3FlowOpfSolution, LinDist3FlowOpfValues, LinDist3FlowPfInstance, LinDist3FlowPfSolution,
+    AcBusSpecification, AcOpfInstance, AcOpfSolution, AcPfInstance, AcPfSolution, AcScucSolution,
+    DcBusSpecification, DcOpfInstance, DcOpfSolution, DcPfInstance, DcPfSolution,
+    LinDist3FlowBuildOptions, LinDist3FlowOpfInstance, LinDist3FlowOpfSolution,
+    LinDist3FlowOpfValues, LinDist3FlowPfInstance, LinDist3FlowPfSolution,
     LinDist3FlowPreparationActionKind, LinDist3FlowUnsupported, McAcOpfInstance, McAcOpfSolution,
     McAcPfInstance, McAcPfSolution, Objective, ObjectiveTerm, Residuals, ScucDeviceOutputs,
     ScucNetworkOutputs, Termination, ThreeWindingTransformerTerminalActivePower,
@@ -115,27 +116,248 @@ fn round_trip(value: PioValue, label: &str) -> String {
     text
 }
 
-#[test]
-fn a_dc_pf_instance_that_ignores_injecting_hvdc_is_refused_rather_than_changed() {
-    // The stored DC power flow instance re-derives its injections under the
-    // fixed injection treatment, so writing one that leaves an in service
-    // line out would read back with the line in.
+/// A DC and an AC power flow instance document the published PowerIO 0.11.6
+/// wrote from a two bus case: 40 MW of load at bus 2 and an in service HVDC
+/// line sending 10 MW from bus 1 and delivering 9.5 MW to bus 2. That release
+/// left HVDC lines out of the power flow specifications and wrote no HVDC
+/// treatment.
+const LEGACY_DC_PF: &str =
+    include_str!("../../tests/data/pio-ir/0.11.6/hvdc-dc-pf-instance.pio.json");
+const LEGACY_AC_PF: &str =
+    include_str!("../../tests/data/pio-ir/0.11.6/hvdc-ac-pf-instance.pio.json");
+
+/// The network of the legacy documents, built in memory: [`network`] plus the
+/// HVDC line.
+fn hvdc_network() -> BalancedNetwork {
     let mut net = network();
     let mut line = powerio_tx::Hvdc::new(BusId(1), BusId(2));
     line.pf = 10.0;
     line.pt = 9.5;
     net.hvdc_mut().push(line);
-    let ignored =
-        DcPfInstance::from_network_with_hvdc(net.clone(), powerio_tx::HvdcTreatment::Ignore)
-            .unwrap();
-    let error = serialize(&PioModule::new(PioValue::DcPfInstance(ignored))).unwrap_err();
-    assert!(error.to_string().contains("HVDC"), "{error}");
+    net
+}
 
-    // With the line out of service there is nothing to ignore.
-    net.hvdc_mut()[0].in_service = false;
-    let ignored =
-        DcPfInstance::from_network_with_hvdc(net, powerio_tx::HvdcTreatment::Ignore).unwrap();
-    serialize(&PioModule::new(PioValue::DcPfInstance(ignored))).unwrap();
+fn dc_net_active_power(instance: &DcPfInstance, row: usize) -> f64 {
+    match instance.specifications()[row] {
+        DcBusSpecification::NetActivePower { p_mw } => p_mw,
+        other => panic!("bus row {row} states {other:?}"),
+    }
+}
+
+fn ac_net_active_power(instance: &AcPfInstance, row: usize) -> f64 {
+    match instance.specifications()[row] {
+        AcBusSpecification::Pq { p, .. } | AcBusSpecification::Pv { p, .. } => p,
+        other => panic!("bus row {row} states {other:?}"),
+    }
+}
+
+fn stated_hvdc_treatment(text: &str, path: &[&str]) -> serde_json::Value {
+    let raw: serde_json::Value = serde_json::from_str(text).unwrap();
+    path.iter()
+        .fold(raw["value"]["data"].clone(), |value, key| {
+            value[*key].clone()
+        })["hvdc_treatment"]
+        .clone()
+}
+
+/// Remove `hvdc_treatment` from the instance at `path` below the value data,
+/// as a document from a release before the field existed lacks it.
+fn without_hvdc_treatment(text: &str, path: &[&str]) -> String {
+    let mut raw: serde_json::Value = serde_json::from_str(text).unwrap();
+    let mut instance = &mut raw["value"]["data"];
+    for key in path {
+        instance = &mut instance[*key];
+    }
+    assert!(
+        instance
+            .as_object_mut()
+            .unwrap()
+            .remove("hvdc_treatment")
+            .is_some()
+    );
+    serde_json::to_string_pretty(&raw).unwrap()
+}
+
+#[test]
+#[allow(clippy::float_cmp)] // Stated specifications compare exactly.
+fn a_dc_pf_document_without_an_hvdc_treatment_keeps_the_calculation_it_denoted() {
+    let raw: serde_json::Value = serde_json::from_str(LEGACY_DC_PF).unwrap();
+    assert_eq!(raw["producer"]["version"], "0.11.6");
+    assert!(raw["value"]["data"].get("hvdc_treatment").is_none());
+
+    let module = deserialize(LEGACY_DC_PF).unwrap();
+    let PioValue::DcPfInstance(instance) = module.value() else {
+        panic!("expected a DC power flow instance");
+    };
+    assert_eq!(instance.network().hvdc().len(), 1);
+    assert_eq!(instance.hvdc_treatment(), powerio_tx::HvdcTreatment::Ignore);
+    // 0.11.6 states the 40 MW load alone; the 9.5 MW the line delivers is
+    // not in the specification.
+    assert_eq!(dc_net_active_power(instance, 1), -40.0);
+    let replaced = instance
+        .clone()
+        .with_network(instance.network().clone())
+        .unwrap();
+    assert_eq!(dc_net_active_power(&replaced, 1), -40.0);
+
+    // Written again, the document states the treatment it read as.
+    let text = serialize(&module).unwrap();
+    assert_eq!(stated_hvdc_treatment(&text, &[]), "ignore");
+    let PioValue::DcPfInstance(back) = deserialize(&text).unwrap().value().clone() else {
+        panic!("expected a DC power flow instance");
+    };
+    assert_eq!(back.hvdc_treatment(), powerio_tx::HvdcTreatment::Ignore);
+    assert_eq!(dc_net_active_power(&back, 1), -40.0);
+
+    // The same network built today carries the line.
+    let fixed = DcPfInstance::from_network(instance.network().clone()).unwrap();
+    assert_eq!(dc_net_active_power(&fixed, 1), -30.5);
+}
+
+#[test]
+#[allow(clippy::float_cmp)] // Stated specifications compare exactly.
+fn an_ac_pf_document_without_an_hvdc_treatment_keeps_the_calculation_it_denoted() {
+    let raw: serde_json::Value = serde_json::from_str(LEGACY_AC_PF).unwrap();
+    assert_eq!(raw["producer"]["version"], "0.11.6");
+    assert!(raw["value"]["data"].get("hvdc_treatment").is_none());
+
+    let module = deserialize(LEGACY_AC_PF).unwrap();
+    let PioValue::AcPfInstance(instance) = module.value() else {
+        panic!("expected an AC power flow instance");
+    };
+    assert_eq!(instance.hvdc_treatment(), powerio_tx::HvdcTreatment::Ignore);
+    assert_eq!(
+        instance.specifications()[1],
+        AcBusSpecification::Pq { p: -40.0, q: -10.0 }
+    );
+    // Replacing the network with the identical one derives the same
+    // specification, not -30.5 MW.
+    let replaced = instance
+        .clone()
+        .with_network(instance.network().clone())
+        .unwrap();
+    assert_eq!(replaced.specifications(), instance.specifications());
+    assert_eq!(ac_net_active_power(&replaced, 1), -40.0);
+    // The DC conversion keeps the treatment too.
+    let (dc, _) = instance.to_dc_pf();
+    assert_eq!(dc.hvdc_treatment(), powerio_tx::HvdcTreatment::Ignore);
+    let dc = dc.with_network(instance.network().clone()).unwrap();
+    assert_eq!(dc_net_active_power(&dc, 1), -40.0);
+
+    let text = serialize(&module).unwrap();
+    assert_eq!(stated_hvdc_treatment(&text, &[]), "ignore");
+}
+
+#[test]
+#[allow(clippy::float_cmp)] // Stated specifications compare exactly.
+fn power_flow_instances_keep_their_hvdc_treatment_through_ir() {
+    use powerio_tx::HvdcTreatment;
+    for (treatment, token, bus_2) in [
+        (HvdcTreatment::FixedInjection, "fixed_injection", -30.5),
+        (HvdcTreatment::Ignore, "ignore", -40.0),
+    ] {
+        let dc = DcPfInstance::from_network_with_hvdc(hvdc_network(), treatment).unwrap();
+        assert_eq!(dc_net_active_power(&dc, 1), bus_2);
+        let text = round_trip(PioValue::DcPfInstance(dc), "dc_pf_hvdc");
+        assert_eq!(stated_hvdc_treatment(&text, &[]), token);
+        let PioValue::DcPfInstance(back) = deserialize(&text).unwrap().value().clone() else {
+            panic!("expected a DC power flow instance");
+        };
+        assert_eq!(back.hvdc_treatment(), treatment);
+        assert_eq!(dc_net_active_power(&back, 1), bus_2);
+        let replaced = back.clone().with_network(back.network().clone()).unwrap();
+        assert_eq!(dc_net_active_power(&replaced, 1), bus_2);
+
+        let ac = AcPfInstance::from_network_with_hvdc(hvdc_network(), treatment).unwrap();
+        assert_eq!(ac_net_active_power(&ac, 1), bus_2);
+        let text = round_trip(PioValue::AcPfInstance(ac), "ac_pf_hvdc");
+        assert_eq!(stated_hvdc_treatment(&text, &[]), token);
+        let PioValue::AcPfInstance(back) = deserialize(&text).unwrap().value().clone() else {
+            panic!("expected an AC power flow instance");
+        };
+        assert_eq!(back.hvdc_treatment(), treatment);
+        let replaced = back.clone().with_network(back.network().clone()).unwrap();
+        assert_eq!(ac_net_active_power(&replaced, 1), bus_2);
+        assert_eq!(back.to_dc_pf().0.hvdc_treatment(), treatment);
+    }
+}
+
+#[test]
+#[allow(clippy::float_cmp)] // Stated specifications compare exactly.
+fn stored_pf_solutions_keep_the_hvdc_treatment_of_their_instance() {
+    use powerio_tx::HvdcTreatment;
+    let solution = |treatment| {
+        let instance = DcPfInstance::from_network_with_hvdc(hvdc_network(), treatment).unwrap();
+        DcPfSolution::new(
+            Arc::new(instance),
+            Termination::Converged,
+            vec![0.0, -0.02],
+            vec![40.0, -40.0],
+            vec![40.0],
+            vec![-40.0],
+            Vec::new(),
+        )
+        .unwrap()
+    };
+    let instance_of = |text: &str| {
+        let PioValue::DcPfSolution(back) = deserialize(text).unwrap().value().clone() else {
+            panic!("expected a DC power flow solution");
+        };
+        back.instance().clone()
+    };
+
+    let text = round_trip(
+        PioValue::DcPfSolution(solution(HvdcTreatment::FixedInjection)),
+        "dc_pf_solution_hvdc",
+    );
+    assert_eq!(
+        stated_hvdc_treatment(&text, &["instance"]),
+        "fixed_injection"
+    );
+    let instance = instance_of(&text);
+    assert_eq!(instance.hvdc_treatment(), HvdcTreatment::FixedInjection);
+    assert_eq!(dc_net_active_power(&instance, 1), -30.5);
+
+    // A solution document from before the field embeds an instance without
+    // it, and that instance reads as it did then.
+    let text = serialize(&PioModule::new(PioValue::DcPfSolution(solution(
+        HvdcTreatment::Ignore,
+    ))))
+    .unwrap();
+    let legacy = without_hvdc_treatment(&text, &["instance"]);
+    let instance = instance_of(&legacy);
+    assert_eq!(instance.hvdc_treatment(), HvdcTreatment::Ignore);
+    assert_eq!(dc_net_active_power(&instance, 1), -40.0);
+
+    // The AC solution embeds its instance the same way.
+    let ac = AcPfInstance::from_network_with_hvdc(hvdc_network(), HvdcTreatment::Ignore).unwrap();
+    let ac = AcPfSolution::new(
+        Arc::new(ac),
+        Termination::Converged,
+        vec![1.01, 0.99],
+        vec![0.0, -1.2],
+        vec![40.5, -40.0],
+        vec![10.4, -10.0],
+        vec![40.5],
+        vec![10.4],
+        vec![-40.0],
+        vec![-10.0],
+        Vec::new(),
+    )
+    .unwrap();
+    let text = serialize(&PioModule::new(PioValue::AcPfSolution(ac))).unwrap();
+    assert_eq!(stated_hvdc_treatment(&text, &["instance"]), "ignore");
+    let legacy = without_hvdc_treatment(&text, &["instance"]);
+    let PioValue::AcPfSolution(back) = deserialize(&legacy).unwrap().value().clone() else {
+        panic!("expected an AC power flow solution");
+    };
+    let instance = back.instance().clone();
+    assert_eq!(instance.hvdc_treatment(), HvdcTreatment::Ignore);
+    let replaced = instance
+        .clone()
+        .with_network(instance.network().clone())
+        .unwrap();
+    assert_eq!(ac_net_active_power(&replaced, 1), -40.0);
 }
 
 #[test]

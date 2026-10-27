@@ -26,8 +26,8 @@ both sides consume PowerIO values, including calculation instances, solutions,
 time series, and scenario sets.
 
 The generated JSON Schema is checked in at
-`docs/schema/pio-ir/2/0.11.6/schema.json` and served from
-`https://powerio.dev/schema/pio-ir/2/0.11.6/schema.json`. That schema, the
+`docs/schema/pio-ir/2/0.11.7/schema.json` and served from
+`https://powerio.dev/schema/pio-ir/2/0.11.7/schema.json`. That schema, the
 serializer, and the deserializer are all tested from the same Rust types.
 `docs/schema/README.md` lists the earlier `pio-package` and
 `powerio.module` documents as one history under `pio-ir`.
@@ -189,11 +189,14 @@ only when an existing representation changes incompatibly. `producer.version` re
 that wrote the document; the reader reports it and ignores it when deciding
 compatibility.
 
-PowerIO 0.11.6 keeps IR version 2. `powerio::IR_VERSION` and
+PowerIO 0.11.7 keeps IR version 2. `powerio::IR_VERSION` and
 `powerio::IR_MIN_VERSION` are both `2`. Additive structural types do not change
 the IR version: older readers continue to accept existing types and reject
 types they do not implement. A list of allowed names can gain a name the same
-way; an older reader rejects a document that uses the new name. An incompatible change to an existing record's
+way; an older reader rejects a document that uses the new name. The power
+flow instance records gain the optional `hvdc_treatment` field in 0.11.7: a
+document without it reads with HVDC lines left out, as earlier releases read
+it, and an earlier reader rejects a document that states it. An incompatible change to an existing record's
 representation or meaning requires a version bump and a release decision.
 
 Schema snapshots describe the structural types available in a release.
@@ -207,8 +210,10 @@ republishes the 0.11.4 catalog under its own identifier, and
 source formats, `sincal` to balanced source formats, the distinctly tagged
 `ReferencedVoltageSource` and `PartialTransformer3W` nested IR records,
 and additive monitor scopes
-and statements for kV qualifiers and pre/post voltage bands. Existing source
-and monitor representations remain accepted; published snapshots stay frozen.
+and statements for kV qualifiers and pre/post voltage bands, and
+`pio-ir/2/0.11.7/schema.json` adds the optional `hvdc_treatment` field of
+`DcPfInstance` and `AcPfInstance`. Existing source, monitor, and power flow
+instance representations remain accepted; published snapshots stay frozen.
 The release in that path identifies the snapshot, not another
 document version. A release without catalog changes can reuse the previous
 snapshot, as 0.11.2 did.
