@@ -73,6 +73,13 @@ pub fn grid_formats() -> impl Iterator<Item = GridFormatInfo> {
             true,
         ),
         ("dss", "OpenDSS", Distribution, true),
+        ("gridlabd", "GridLAB-D (PNNL GLM)", Distribution, true),
+        (
+            "gridlabd-arras",
+            "GridLAB-D (Arras GLM)",
+            Distribution,
+            true,
+        ),
         ("cim-dist", "CIM distribution", Distribution, true),
         ("pmd-json", "PMD JSON", Distribution, true),
         (
@@ -253,6 +260,31 @@ mod tests {
         assert!(!cdf.is_directory);
         assert!(!cdf.can_emit);
         assert_eq!(cdf.extension, Some("txt"));
+    }
+
+    #[test]
+    fn catalog_lists_every_distribution_token_the_resolver_accepts() {
+        // The distribution writers are the closed set the resolver maps by
+        // name; each canonical token must be discoverable and round trip.
+        for token in [
+            "dss",
+            "gridlabd",
+            "gridlabd-arras",
+            "pmd-json",
+            "bmopf-json",
+            "cim-dist",
+        ] {
+            let resolved = resolve_format(token).expect(token);
+            let entry = grid_formats()
+                .find(|entry| entry.format.token == token)
+                .unwrap_or_else(|| panic!("{token} resolves but is not in the catalog"));
+            assert_eq!(entry.format, resolved, "{token}");
+            assert_eq!(entry.family, NetworkFamily::Distribution, "{token}");
+            assert!(entry.can_read, "{token}");
+        }
+        // Aliases land on the canonical catalog entry.
+        assert_eq!(resolve_format("glm").unwrap().token, "gridlabd");
+        assert_eq!(resolve_format("gridlabd-pnnl").unwrap().token, "gridlabd");
     }
 
     #[test]

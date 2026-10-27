@@ -137,10 +137,13 @@ impl DistLoadVoltageModel {
         }
     }
 
-    /// Nominal law without voltage bounds. Writers use this only with an
+    /// Nominal law without voltage bounds: the middle-band law, with the
+    /// low-voltage transitions, high-voltage continuation and dropout removed.
+    /// Any other law is returned unchanged. A caller uses this only with an
     /// explicit diagnostic when the destination cannot carry the full law.
+    #[must_use]
     #[allow(clippy::float_cmp)] // Only exact coefficient identities permit this projection.
-    pub(crate) fn without_voltage_bounds(&self) -> Self {
+    pub fn without_voltage_bounds(&self) -> Self {
         let Self::BoundedZip {
             v_nom,
             alpha_z,
