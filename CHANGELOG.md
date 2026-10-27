@@ -6,8 +6,16 @@
   distinct bounded ZIP model, including the native constructor defaults.
   Canonical DSS and IR preserve these limits; Rust can evaluate their power
   factors at a supplied voltage. JSON projections diagnose the lost bounds.
-  Legacy C load views reject the new law until full binding views are supplied.
   Source phasors also follow the pinned engine's rounded angle conversion.
+  Ordinary OpenDSS loads, which default to `model=1`, now read as bounded laws.
+  The multiconductor IVR OPF preparation and the strict LinDist3Flow device
+  mapping refuse a bounded law by default, so an ordinary OpenDSS feeder needs
+  an explicit choice to reach them: `BoundedLoadLawPolicy::ProjectToNominal`
+  on `McAcOpfAssemblyOptions`, or the `approximate` or `permissive`
+  LinDist3Flow `unsupported` policy, projects each load to its nominal law and
+  reports it (`BUILD.MULTI.LOAD_LAW_PROJECTED`, `load_approximated`). `reject`
+  and `lower` keep refusing. The legacy C load views reject a bounded law; the
+  additive binding views added later in this series expose it.
 
 - OpenDSS static imports now carry full source impedances and ordered effective
   line matrices in the typed network. Canonical DSS output preserves independent
