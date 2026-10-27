@@ -138,22 +138,34 @@ describe separate interfaces.
 | pandapower JSON | `pandapower-json` | yes | yes |
 | PyPSA CSV directory | `pypsa-csv` | yes | yes |
 | Surge JSON | `surge-json` | yes | yes |
-| GridFM Parquet directory | `gridfm` | yes | yes |
+| GridFM Parquet directory, `gridfm` feature | `gridfm` | yes | yes |
 | DOE GO Challenge 3 JSON | `goc3-json` | problem, or problem with solution | a complete solution |
 | DeepMind OPFData JSON | `opfdata-json` | yes | no |
 | OpenDSS `.dss` | `dss` | yes | yes |
 | PowerModelsDistribution engineering JSON | `pmd-json` | yes | yes |
-| BMOPF JSON | `bmopf-json` | 0.1.0, 0.2.0 | 0.2.0 |
+| BMOPF JSON | `bmopf-json`, `bmopf-json@0.1.0`, `bmopf-json@0.2.0` | 0.1.0, 0.2.0 | 0.1.0, 0.2.0 (default) |
 | Distribution CIM, CIM100 RDF/XML | `cim-dist` | cim17v40, one document or a directory | cim17v40, one document |
+| PSS SINCAL project, `sincal` feature | `sincal-balanced`, `sincal-multiconductor` | yes, with an explicit profile | an unchanged source byte for byte; an experimental fresh writer in Rust |
 | Geographic layer `.geo.json` | `geo-json` | yes | yes |
 
 The balanced transmission formats parse to `BalancedNetwork`, and OpenDSS,
-PMD, BMOPF, and distribution CIM parse to `MulticonductorNetwork`. A GO Challenge 3 problem
+PMD, BMOPF, and distribution CIM parse to `MulticonductorNetwork`. SINCAL
+holds both kinds of network in one project, so a parse names its profile:
+`sincal-balanced` gives a `BalancedNetwork` and `sincal-multiconductor` a
+`MulticonductorNetwork`. A GO Challenge 3 problem
 parses to `AcScucInstance`, a problem with its solution to `AcScucSolution`,
 an OPFData file to `AcOpfSolution`, a GridFM dataset to
 `ScenarioSet<BalancedNetwork>`, a PyPSA directory with several snapshots to a
-`TimeSeries`, and the PSS/E `.con`, `.sub`, and `.mon` files to
-`ContingencySet`, `SubsystemSet`, and `MonitoredSet`. The
+`TimeSeries<BalancedNetwork>`, or to `TimeSeries<OperatingPoint<BalancedNetwork>>`
+when only the electrical state varies, a PowerWorld `.pwd` display and a
+`.geo.json` file to `GeoLayer`, and the PSS/E `.con`, `.sub`, and `.mon` files to
+`ContingencySet`, `SubsystemSet`, and `MonitoredSet`. PowerIO IR is not in the
+table: it moves only through `serialize` and `deserialize`, and `parse`
+refuses it.
+
+The `gridfm` and `sincal` cargo features gate their formats. The facade
+leaves `gridfm` off and turns `sincal` on by default; the CLI and the Python
+wheel include both. The
 [format guide](https://eigenergy.github.io/powerio/guide/format-fidelity.html)
 says what each reader keeps, what each writer reports, and how each is
 checked against its reference implementation.
