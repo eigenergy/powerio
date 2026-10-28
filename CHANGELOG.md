@@ -2,10 +2,14 @@
 
 ## Unreleased
 
-- Keep foreign time-series controls verbatim under BMOPF extras instead of
-  asserting multiplicative-profile semantics. Validate every snapshot of PMD
-  multinetwork fixtures. Remove the obsolete Julia companion pin now that the
-  required bindings have merged upstream.
+## 0.11.8
+
+Corrections to the multiconductor IVR OPF preparation and to release
+validation. The `v0.11.7` tag predates them, so they ship here. C ABI 7 and
+PowerIO IR version 2 are unchanged, and the IR schema snapshot stays
+`pio-ir/2/0.11.7`.
+
+**Multiconductor IVR OPF preparation**
 
 - Add bounded fixed-PF coefficients to MC IVR preparation, avoiding the loss
   of tiny signed PF values in `tan(acos(abs(pf)))`. Keep the legacy Q/P ratio
@@ -14,6 +18,13 @@
 - Reject neutral and earth endpoints during MC IVR DELTA coil preparation,
   including THREE_LEG inverters and DELTA transformer windings. Explicit
   terminal conventions are honored; valid phase-to-phase coil order is unchanged.
+
+**Release validation**
+
+- Keep foreign time-series controls verbatim under BMOPF extras instead of
+  asserting multiplicative-profile semantics. Validate every snapshot of PMD
+  multinetwork fixtures. Remove the obsolete Julia companion pin now that the
+  required bindings have merged upstream.
 
 ## 0.11.7
 
