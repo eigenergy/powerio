@@ -739,6 +739,17 @@ impl Context<'_> {
             .collect();
         let coils = match config {
             Configuration::Delta => {
+                // A delta edge joins phases. Grounding a phase does not change
+                // its role; use the declared conventions, not voltage or names.
+                if let Some(&i) = nonphase.first() {
+                    return Err(invalid(
+                        name,
+                        format!(
+                            "delta requires phase terminals; {bus_id}:{} is neutral or earth",
+                            tm[i]
+                        ),
+                    ));
+                }
                 if ids.len() == 2 {
                     vec![(ids[0], Some(ids[1]))]
                 } else if ids.len() == 3 {
