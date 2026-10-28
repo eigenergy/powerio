@@ -36,7 +36,7 @@ powerio-tx.workspace = true
 # Unconditional: the wheel always ships the distribution surface (powerio.dist);
 # only the C ABI gates it behind a feature.
 powerio-dist.workspace = true
-pyo3 = { version = "0.29", features = ["abi3-py39"] }
+pyo3 = { version = "0.30", features = ["abi3-py39"] }
 # The extension is loaded dynamically, including after other native modules.
 # v2 reclaims freed parser allocations sooner than v3's default purge delay.
 mimalloc = { version = "0.1.52", features = ["local_dynamic_tls", "v2"] }
