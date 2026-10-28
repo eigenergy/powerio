@@ -4096,3 +4096,49 @@ fn bmopf_geometry_without_element_identity_is_reported() {
             .any(|warning| warning.contains("missing kind or id"))
     );
 }
+
+#[test]
+fn foreign_profile_controls_are_retained_without_claiming_bmopf_semantics() {
+    let input = r#"{"data_model":"ENGINEERING","bus":{},"time_series":{"shape":{"values":[0.5,1.0],"time":[0,1],"replace":true,"offset":2.0,"source_id":"loadshape.shape"}}}"#;
+    let parsed = parse_pmd_str(input).unwrap();
+    let expected: serde_json::Value = serde_json::from_str(input).unwrap();
+    for profile in [BmopfSchemaVersion::Bmopf010, BmopfSchemaVersion::Bmopf020] {
+        let output = emit_bmopf_json_with_options(
+            &parsed,
+            BmopfEmitOptions::default().with_schema_version(profile),
+        );
+        let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+        assert!(doc.get("time_series").is_none());
+        assert_eq!(
+            doc["extras"]["time_series"]["shape"],
+            expected["time_series"]["shape"]
+        );
+        assert!(schema_validator_for(profile).is_valid(&doc));
+        assert!(output.warnings.iter().any(|warning| {
+            warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("shape")
+        }));
+        let reparsed = parse_bmopf_str(&output.text).unwrap();
+        let again = emit_bmopf_json_with_options(
+            &reparsed,
+            BmopfEmitOptions::default().with_schema_version(profile),
+        );
+        let again: serde_json::Value = serde_json::from_str(&again.text).unwrap();
+        assert_eq!(
+            again["extras"]["time_series"]["shape"],
+            expected["time_series"]["shape"]
+        );
+        assert!(again.get("time_series").is_none());
+    }
+}
+
+#[test]
+fn native_multiplicative_profiles_stay_in_the_bmopf_schema_table() {
+    let parsed = parse_bmopf_str(r#"{"bus":{},"voltage_source":{},"time_series":{"shape":{"values":[0.5,1.0],"time":[0,1],"description":"native"}}}"#).unwrap();
+    let output = emit_bmopf_json(&parsed);
+    let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+    assert_eq!(
+        doc["time_series"]["shape"]["values"],
+        serde_json::json!([0.5, 1.0])
+    );
+    assert!(schema_validator().is_valid(&doc));
+}
