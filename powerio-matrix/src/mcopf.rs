@@ -218,8 +218,15 @@ pub struct McOpfCoil {
     pub prescribed: Option<[f64; 2]>,
     /// Voltage-dependent demand, normalized to its physical coil voltage.
     pub load_law: Option<McOpfLoadLaw>,
-    /// Signed Q/P ratio for fixed power factor.
+    /// Legacy signed Q/P ratio. Prefer `power_factor_coefficients` for assembly.
+    /// None also means the ratio is not representable, when bounded coefficients
+    /// are present. Do not use this field to detect whether PF control is active.
     pub reactive_slope: Option<f64>,
+    /// Bounded `[a,b]` for fixed PF: `a * P + b * Q = 0`, where
+    /// `a = sqrt((1 - |pf|) * (1 + |pf|))` and `b = pf`.
+    /// Coefficients retain tiny nonzero PF without trigonometric cancellation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub power_factor_coefficients: Option<[f64; 2]>,
     /// Reactive injection as a smoothed function of monitored voltage.
     pub volt_var: Option<McOpfDroop>,
     /// Active injection as a smoothed function of monitored voltage.
@@ -1150,6 +1157,7 @@ fn prepare_loads(
                 prescribed: Some([load.p_nom[k] / sb, load.q_nom[k] / sb]),
                 load_law: laws[k].clone(),
                 reactive_slope: None,
+                power_factor_coefficients: None,
                 volt_var: None,
                 volt_watt: None,
                 p_min: None,
@@ -1251,6 +1259,7 @@ fn prepare_generators(
                 prescribed: None,
                 load_law: None,
                 reactive_slope: None,
+                power_factor_coefficients: None,
                 volt_var: None,
                 volt_watt: None,
                 p_min: pmin[k],
@@ -1305,6 +1314,7 @@ fn prepare_source_devices(
                 prescribed: None,
                 load_law: None,
                 reactive_slope: None,
+                power_factor_coefficients: None,
                 volt_var: None,
                 volt_watt: None,
                 p_min: None,
