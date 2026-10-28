@@ -39,6 +39,6 @@ powerio-prob.workspace = true
 serde_json = { workspace = true }
 
 [dev-dependencies]
-sha2 = "0.10"
+sha2 = "0.11"
 rusqlite.workspace = true
 tempfile = "3"
