@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add `powerio-archive`: bounded ZIP indexing and verified member reads with
+  explicit limits and namespace checks, as shared infrastructure for #774.
+
 ## 0.11.7
 
 **AC optimal transmission switching**

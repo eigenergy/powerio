@@ -2432,6 +2432,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "powerio-archive"
+version = "0.11.7"
+dependencies = [
+ "powerio-core",
+ "zip",
+]
+
+[[package]]
 name = "powerio-capi"
 version = "0.11.7"
 dependencies = [

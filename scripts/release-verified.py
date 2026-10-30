@@ -38,6 +38,7 @@ MAIN_WORKFLOWS = {
 CRATE_OWNER = "samtalki"
 CRATES = (
     "powerio-core",
+    "powerio-archive",
     "powerio-tx",
     "powerio-dist",
     "powerio-tnd",

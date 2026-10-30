@@ -1,0 +1,20 @@
+[package]
+name = "powerio-archive"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Bounded in-memory ZIP transport for PowerIO inputs."
+readme = "README.md"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/powerio-archive"
+keywords = ["zip", "archive", "powerio"]
+categories = ["compression", "parsing"]
+
+[dependencies]
+powerio-core.workspace = true
+zip.workspace = true
+
+[lints]
+workspace = true
