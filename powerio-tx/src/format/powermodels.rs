@@ -503,34 +503,34 @@ pub(crate) fn parse_powermodels_json_source(
         loads: sorted_rows(document.load, |row| row.index)
             .into_iter()
             .map(|(_, row)| read_load(row, pscale))
-            .collect::<Vec<_>>()
+            .collect::<Result<Vec<_>>>()?
             .into(),
         shunts: sorted_rows(document.shunt, |row| row.index)
             .into_iter()
             .map(|(_, row)| read_shunt(row, pscale))
-            .collect::<Vec<_>>()
+            .collect::<Result<Vec<_>>>()?
             .into(),
         static_var_compensators: Vec::new().into(),
-        branches: read_branches(document.branch, pscale, ascale, warnings).into(),
+        branches: read_branches(document.branch, pscale, ascale, warnings)?.into(),
         switches: sorted_rows(document.switch, |row| row.index)
             .into_iter()
             .map(|(_, row)| read_switch(row, pscale))
-            .collect::<Vec<_>>()
+            .collect::<Result<Vec<_>>>()?
             .into(),
         generators: sorted_rows(document.generators, |row| row.index)
             .into_iter()
             .map(|(_, row)| read_gen(&row, pscale, base_mva, per_unit))
-            .collect::<Vec<_>>()
+            .collect::<Result<Vec<_>>>()?
             .into(),
         storage: sorted_rows(document.storage, |row| row.index)
             .into_iter()
             .map(|(_, row)| read_storage(row, pscale))
-            .collect::<Vec<_>>()
+            .collect::<Result<Vec<_>>>()?
             .into(),
         hvdc: sorted_rows(document.dcline, |row| row.index)
             .into_iter()
             .map(|(_, row)| read_hvdc(row, pscale, base_mva, per_unit))
-            .collect::<Vec<_>>()
+            .collect::<Result<Vec<_>>>()?
             .into(),
         transformers_3w: Vec::new().into(),
         areas: Vec::new().into(),
@@ -611,6 +611,26 @@ struct BusRow {
     extras: crate::network::Extras,
 }
 
+// Validate source identifiers before narrowing them to usize or constructing
+// canonical IDs; missing references must not silently alias bus 0.
+fn read_bus_id(id: Option<u64>, field: &str) -> Result<BusId> {
+    let id = id.ok_or_else(|| Error::FormatRead {
+        format: FMT,
+        message: format!("missing integer `{field}`"),
+    })?;
+    let id = usize::try_from(id).map_err(|_| Error::FormatRead {
+        format: FMT,
+        message: format!("`{field}` {id} exceeds the platform's bus ID range"),
+    })?;
+    if id > BusId::MAX.0 {
+        return Err(Error::FormatRead {
+            format: FMT,
+            message: format!("`{field}` {id} exceeds PowerIO's bus ID range"),
+        });
+    }
+    Ok(BusId(id))
+}
+
 fn read_bus(row: BusRow, ascale: f64) -> Result<Bus> {
     let id = row
         .bus_i
@@ -618,9 +638,10 @@ fn read_bus(row: BusRow, ascale: f64) -> Result<Bus> {
         .ok_or_else(|| Error::FormatRead {
             format: FMT,
             message: "bus record missing integer `bus_i`".into(),
-        })? as usize;
+        })?;
+    let id = read_bus_id(Some(id), "bus_i")?;
     Ok(Bus {
-        id: BusId(id),
+        id,
         kind: bustype(row.bus_type.unwrap_or(1)),
         vm: row.vm.unwrap_or(1.0),
         va: row.va.unwrap_or(0.0) * ascale,
@@ -656,16 +677,16 @@ struct LoadRow {
     extras: crate::network::Extras,
 }
 
-fn read_load(row: LoadRow, pscale: f64) -> Load {
-    Load {
-        bus: BusId(row.load_bus.unwrap_or(0) as usize),
+fn read_load(row: LoadRow, pscale: f64) -> Result<Load> {
+    Ok(Load {
+        bus: read_bus_id(row.load_bus, "load_bus")?,
         p: row.pd.unwrap_or(0.0) * pscale,
         q: row.qd.unwrap_or(0.0) * pscale,
         voltage_model: None,
         in_service: row.status.unwrap_or(true),
         uid: None,
         extras: row.extras,
-    }
+    })
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -686,9 +707,9 @@ struct ShuntRow {
     extras: crate::network::Extras,
 }
 
-fn read_shunt(row: ShuntRow, pscale: f64) -> Shunt {
-    Shunt {
-        bus: BusId(row.shunt_bus.unwrap_or(0) as usize),
+fn read_shunt(row: ShuntRow, pscale: f64) -> Result<Shunt> {
+    Ok(Shunt {
+        bus: read_bus_id(row.shunt_bus, "shunt_bus")?,
         g: row.gs.unwrap_or(0.0) * pscale,
         b: row.bs.unwrap_or(0.0) * pscale,
         in_service: row.status.unwrap_or(true),
@@ -696,7 +717,7 @@ fn read_shunt(row: ShuntRow, pscale: f64) -> Shunt {
         control: None,
         uid: None,
         extras: row.extras,
-    }
+    })
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -766,13 +787,13 @@ fn read_branches(
     pscale: f64,
     ascale: f64,
     warnings: &mut Diagnostics,
-) -> Vec<Branch> {
+) -> Result<Vec<Branch>> {
     const NAMED: usize = 3;
     let mut discarded: Vec<String> = Vec::new();
     let branches = sorted_rows(rows, |row| row.index)
         .into_iter()
         .map(|(key, row)| read_branch(row, pscale, ascale, &key, &mut discarded))
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     if !discarded.is_empty() {
         let head = discarded
             .iter()
@@ -795,7 +816,7 @@ fn read_branches(
             ),
         );
     }
-    branches
+    Ok(branches)
 }
 
 // Exact compare on purpose: only the literal 1.0 carries no information.
@@ -807,7 +828,7 @@ fn read_branch(
     ascale: f64,
     key: &str,
     discarded: &mut Vec<String>,
-) -> Branch {
+) -> Result<Branch> {
     // PowerModels stores the effective tap (1.0 for a line); the `transformer`
     // flag disambiguates an explicit-tap transformer from a line, which is what
     // the neutral raw-tap convention (0 = line) needs.
@@ -832,10 +853,10 @@ fn read_branch(
     };
     let b_fr = row.b_fr.unwrap_or(0.0);
     let b_to = row.b_to.unwrap_or(0.0);
-    Branch {
+    Ok(Branch {
         name: None,
-        from: BusId(row.f_bus.unwrap_or(0) as usize),
-        to: BusId(row.t_bus.unwrap_or(0) as usize),
+        from: read_bus_id(row.f_bus, "f_bus")?,
+        to: read_bus_id(row.t_bus, "t_bus")?,
         r: row.br_r.unwrap_or(0.0),
         x: row.br_x.unwrap_or(0.0),
         b: b_fr + b_to,
@@ -873,7 +894,7 @@ fn read_branch(
         uid: None,
         route: None,
         extras: row.extras,
-    }
+    })
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -906,11 +927,11 @@ struct SwitchRow {
     extras: crate::network::Extras,
 }
 
-fn read_switch(row: SwitchRow, pscale: f64) -> Switch {
+fn read_switch(row: SwitchRow, pscale: f64) -> Result<Switch> {
     let closed = row.state.or(row.status).unwrap_or(true);
-    Switch {
-        from: BusId(row.f_bus.unwrap_or(0) as usize),
-        to: BusId(row.t_bus.unwrap_or(0) as usize),
+    Ok(Switch {
+        from: read_bus_id(row.f_bus, "f_bus")?,
+        to: read_bus_id(row.t_bus, "t_bus")?,
         closed,
         thermal_rating: row.thermal_rating.map(|x| x * pscale),
         current_rating: row.current_rating,
@@ -920,7 +941,7 @@ fn read_switch(row: SwitchRow, pscale: f64) -> Switch {
         qt: row.qt.map(|x| x * pscale),
         uid: None,
         extras: row.extras,
-    }
+    })
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -953,7 +974,7 @@ struct GenRow {
     extras: crate::network::Extras,
 }
 
-fn read_gen(row: &GenRow, pscale: f64, base_mva: f64, per_unit: bool) -> Generator {
+fn read_gen(row: &GenRow, pscale: f64, base_mva: f64, per_unit: bool) -> Result<Generator> {
     let mut caps: crate::network::GenCaps = [None; GEN_EXTRA_KEYS.len()];
     for (i, key) in GEN_EXTRA_KEYS.iter().enumerate() {
         if let Some(val) = row.extras.get(*key).and_then(Value::as_f64) {
@@ -966,8 +987,8 @@ fn read_gen(row: &GenRow, pscale: f64, base_mva: f64, per_unit: bool) -> Generat
         }
     }
     let cost = row.cost.read(base_mva, per_unit);
-    Generator {
-        bus: BusId(row.gen_bus.unwrap_or(0) as usize),
+    Ok(Generator {
+        bus: read_bus_id(row.gen_bus, "gen_bus")?,
         energy_source: GeneratorEnergySource::default(),
         pg: row.pg.unwrap_or(0.0) * pscale,
         qg: row.qg.unwrap_or(0.0) * pscale,
@@ -987,7 +1008,7 @@ fn read_gen(row: &GenRow, pscale: f64, base_mva: f64, per_unit: bool) -> Generat
         regulated_bus: None,
         active_power_control: None,
         uid: None,
-    }
+    })
 }
 
 /// The MATPOWER cost columns generators and dclines share. `model`'s
@@ -1124,7 +1145,7 @@ struct DclineRow {
     extras: crate::network::Extras,
 }
 
-fn read_hvdc(row: DclineRow, pscale: f64, base_mva: f64, per_unit: bool) -> Hvdc {
+fn read_hvdc(row: DclineRow, pscale: f64, base_mva: f64, per_unit: bool) -> Result<Hvdc> {
     // Aggregate bounds come from PowerModels' raw originals (mp_pmin/mp_pmax);
     // fall back to the from-end per-unit bounds for input that lacks them.
     let pmin = row
@@ -1134,9 +1155,9 @@ fn read_hvdc(row: DclineRow, pscale: f64, base_mva: f64, per_unit: bool) -> Hvdc
         .mp_pmax
         .unwrap_or_else(|| row.pmaxf.unwrap_or(0.0) * pscale);
     let cost = row.cost.read(base_mva, per_unit);
-    Hvdc {
-        from: BusId(row.f_bus.unwrap_or(0) as usize),
-        to: BusId(row.t_bus.unwrap_or(0) as usize),
+    Ok(Hvdc {
+        from: read_bus_id(row.f_bus, "f_bus")?,
+        to: read_bus_id(row.t_bus, "t_bus")?,
         in_service: row.br_status.unwrap_or(true),
         pf: row.pf.unwrap_or(0.0) * pscale,
         // PowerModels flips Pt/Qf/Qt vs MATPOWER; undo it for the neutral model.
@@ -1162,7 +1183,7 @@ fn read_hvdc(row: DclineRow, pscale: f64, base_mva: f64, per_unit: bool) -> Hvdc
         cost,
         uid: None,
         extras: row.extras,
-    }
+    })
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -1211,9 +1232,9 @@ struct StorageRow {
     extras: crate::network::Extras,
 }
 
-fn read_storage(row: StorageRow, pscale: f64) -> Storage {
-    Storage {
-        bus: BusId(row.storage_bus.unwrap_or(0) as usize),
+fn read_storage(row: StorageRow, pscale: f64) -> Result<Storage> {
+    Ok(Storage {
+        bus: read_bus_id(row.storage_bus, "storage_bus")?,
         ps: row.ps.unwrap_or(0.0),
         qs: row.qs.unwrap_or(0.0),
         energy: row.energy.unwrap_or(0.0) * pscale,
@@ -1235,7 +1256,7 @@ fn read_storage(row: StorageRow, pscale: f64) -> Storage {
         active_power_control: None,
         uid: None,
         extras: row.extras,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -1294,6 +1315,26 @@ mod tests {
             lines[0].contains("1 branch(es)") && lines[0].contains("`1` (1 -> 2) tap 1.05"),
             "{lines:?}"
         );
+    }
+
+    #[test]
+    fn bus_ids_outside_powerio_range_are_rejected() {
+        // PowerModels IDs are unsigned JSON integers, but they still have to
+        // fit the canonical BusId domain rather than survive an unchecked cast.
+        let too_large = BusId::MAX.0.saturating_add(1);
+        let doc = format!(
+            r#"{{"baseMVA":100.0,"bus":{{"1":{{"bus_i":{too_large},"bus_type":3,"vm":1.0,"va":0.0,"base_kv":345.0}}}}}}"#
+        );
+        let err = parse_powermodels_json(&doc).unwrap_err().to_string();
+        assert!(err.contains("exceeds PowerIO's bus ID range"), "{err}");
+    }
+
+    #[test]
+    fn missing_equipment_bus_reference_is_rejected() {
+        let doc = r#"{"baseMVA":100.0,"bus":{"1":{"bus_i":1,"bus_type":3,"vm":1.0,"va":0.0,"base_kv":345.0}},
+            "load":{"1":{"pd":10.0,"qd":2.0}}}"#;
+        let err = parse_powermodels_json(doc).unwrap_err().to_string();
+        assert!(err.contains("missing integer `load_bus`"), "{err}");
     }
 
     #[test]
