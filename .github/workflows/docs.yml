@@ -59,7 +59,7 @@ jobs:
     - name: Build docs
       env:
         RUSTDOCFLAGS: "-D warnings"
-      run: cargo doc --no-deps --all-features -p powerio-tnd -p powerio -p powerio-core -p powerio-tx -p powerio-synth -p powerio-matrix -p powerio-prob -p powerio-dist -p powerio-capi -p powerio-py -p powerio-wasm
+      run: cargo doc --no-deps --all-features -p powerio-tnd -p powerio -p powerio-core -p powerio-archive -p powerio-tx -p powerio-synth -p powerio-matrix -p powerio-prob -p powerio-dist -p powerio-capi -p powerio-py -p powerio-wasm
     - name: Build Python API docs
       run: |
         python -m pip install --upgrade pip
@@ -143,6 +143,7 @@ jobs:
             <dt>released / docs.rs</dt>
             <dd><a href="https://docs.rs/powerio">powerio</a>
                 <a href="https://docs.rs/powerio-core">powerio-core</a>
+                <a href="https://docs.rs/powerio-archive">powerio-archive</a>
                 <a href="https://docs.rs/powerio-tx">powerio-tx</a>
                 <a href="https://docs.rs/powerio-dist">powerio-dist</a>
                 <a href="https://docs.rs/powerio-prob">powerio-prob</a>
@@ -152,6 +153,7 @@ jobs:
             <dt>development / main</dt>
             <dd><a href="powerio/index.html">powerio</a>
                 <a href="powerio_core/index.html">powerio-core</a>
+                <a href="powerio_archive/index.html">powerio-archive</a>
                 <a href="powerio_tx/index.html">powerio-tx</a>
                 <a href="powerio_dist/index.html">powerio-dist</a>
                 <a href="powerio_synth/index.html">powerio-synth</a>

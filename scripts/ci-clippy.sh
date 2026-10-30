@@ -45,6 +45,7 @@ case "$target" in
       -p powerio \
       -p powerio-tx \
       -p powerio-core \
+      -p powerio-archive \
       -p powerio-matrix \
       -p powerio-prob \
       -p powerio-synth \

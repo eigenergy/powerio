@@ -179,6 +179,7 @@ depend on just the layer they use.
 |---|---|
 | `powerio` | `PioValue`, `parse`, `emit`, `serialize`, `deserialize` |
 | `powerio-core` | `Source`, `PioModule`, diagnostics, collections, destinations |
+| `powerio-archive` | Bounded ZIP indexing and verified member reads |
 | `powerio-tx` | `BalancedNetwork` and balanced format readers and writers |
 | `powerio-dist` | `MulticonductorNetwork` and OpenDSS, PMD, BMOPF, CIM converters |
 | `powerio-prob` | Operating points, updates, calculation instances and solutions |

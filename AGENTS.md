@@ -16,6 +16,9 @@ check the current source, tests, and release notes.
   `Diagnostic`, `Error`, `PioModule<T>`, common module records,
   `TimeSeries<T>`, `ScenarioSet<T>`, and output destination types. It has no
   electrical network, matrix, or solver dependencies.
+- **`powerio-archive`**: bounded in-memory ZIP transport over core, with explicit
+  limits, namespace validation, and lazy verified reads; no electrical types
+  or case discovery.
 - **`powerio-tx`**: the format neutral `BalancedNetwork`, the balanced format
   readers and writers, normalization, and derived indexed views.
 - **`powerio-tnd`**: integrated transmission/distribution composition, explicit
@@ -161,8 +164,8 @@ release on its own.
    its platform. Only then does it stage a **draft** GitHub release with the
    five assets.
 4. A human inspects and publishes the draft. Publishing starts `python.yml`
-   (PyPI) and `crates.yml` (crates.io: `powerio-core`, `powerio-tx`, `powerio-dist`,
-   `powerio-tnd`, `powerio-prob`, `powerio-matrix`, `powerio`, and
+   (PyPI) and `crates.yml` (crates.io: `powerio-core`, `powerio-archive`,
+   `powerio-tx`, `powerio-dist`, `powerio-tnd`, `powerio-prob`, `powerio-matrix`, `powerio`, and
    `powerio-cli`, in dependency order). Both deploy through the `pypi` and
    `crates-io` environments, which wait for the maintainer's approval. A
    rerun skips files and versions already published. A crate's first
@@ -183,6 +186,7 @@ release on its own.
 ## Layout
 
 ```
+powerio-archive/src           lib.rs (ZIP index/cache/limits), preflight.rs, local.rs
 powerio-core/src              module.rs (PioModule<T>), source.rs, output.rs,
                               diagnostic.rs, codes.rs, error.rs, records.rs,
                               time_series.rs, scenario.rs, component_id.rs,

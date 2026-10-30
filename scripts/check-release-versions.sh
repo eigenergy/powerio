@@ -82,7 +82,7 @@ if [ "$schema_name" != "pio-ir" ]; then
     exit 1
 fi
 
-for manifest in powerio/Cargo.toml powerio-core/Cargo.toml powerio-tx/Cargo.toml \
+for manifest in powerio/Cargo.toml powerio-core/Cargo.toml powerio-archive/Cargo.toml powerio-tx/Cargo.toml \
                 powerio-dist/Cargo.toml powerio-tnd/Cargo.toml powerio-matrix/Cargo.toml powerio-prob/Cargo.toml \
                 powerio-cli/Cargo.toml; do
     grep -q '^version.workspace = true' "$manifest" \

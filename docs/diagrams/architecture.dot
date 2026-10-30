@@ -36,6 +36,8 @@ digraph powerio_architecture {
     "powerio-core" [label = "powerio-core\nSource, Diagnostic, Error,\nPioModule<T>, series, output"];
     "powerio-tnd" [label = "powerio-tnd\nIntegratedNetwork + transforms\nSINCAL adapters"];
 
+    "powerio-archive" [label = "powerio-archive\nbounded ZIP transport"];
+    "powerio-archive" -> "powerio-core";
     "powerio-synth" -> "powerio-tx";
     "powerio-tx" -> "powerio-core";
     "powerio-tnd" -> "powerio-tx";
