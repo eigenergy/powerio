@@ -4,6 +4,8 @@
 
 - Add shared `SourceTree` file and directory views with explicit admission limits
   and independent successful-read dependency tracking for each selection (#774).
+- Add `powerio-archive`: bounded ZIP indexing and verified member reads with
+  explicit limits and namespace checks, as shared infrastructure for #774.
 
 ## 0.11.9
 
