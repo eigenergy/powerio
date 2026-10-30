@@ -8,6 +8,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use crate::validation::{MAX_FORMAT_ID_BYTES, valid_nonempty_text};
 use crate::{Error, SourceId};
 
+mod tree;
+pub use tree::{SourceTree, SourceTreeLimits};
+
 /// Referenced files one source may acquire. Matches the OpenDSS include
 /// budget the distribution reader has enforced since 0.7.
 const MAX_REFERENCED_FILES: usize = 4_096;
@@ -287,6 +290,7 @@ impl AcquisitionState {
 
 #[derive(Debug)]
 enum SourceProvider {
+    Tree(tree::TreeView),
     Memory {
         primary: Option<SourceBuffer>,
         named: BTreeMap<String, SourceBuffer>,
@@ -320,6 +324,7 @@ pub struct Source {
     name: Arc<str>,
     provider: Arc<SourceProvider>,
     declared_format: Option<FormatId>,
+    dependencies: Arc<Mutex<BTreeMap<String, SourceBuffer>>>,
 }
 
 impl Source {
@@ -395,6 +400,7 @@ impl Source {
                 },
             }),
             declared_format: None,
+            dependencies: Arc::default(),
         })
     }
 
@@ -412,6 +418,7 @@ impl Source {
                 },
             }),
             declared_format: None,
+            dependencies: Arc::default(),
         })
     }
 
@@ -442,6 +449,7 @@ impl Source {
                 named: BTreeMap::new(),
             }),
             declared_format: None,
+            dependencies: Arc::default(),
         })
     }
 
@@ -504,6 +512,7 @@ impl Source {
             name: name.into(),
             provider: Arc::new(SourceProvider::Memory { primary, named }),
             declared_format: None,
+            dependencies: Arc::default(),
         })
     }
 
@@ -538,6 +547,7 @@ impl Source {
             name: self.name,
             provider: Arc::new(provider),
             declared_format: self.declared_format,
+            dependencies: self.dependencies,
         })
     }
 
@@ -602,6 +612,7 @@ impl Source {
                 },
             }),
             declared_format: self.declared_format,
+            dependencies: Arc::default(),
         })
     }
 
@@ -624,6 +635,9 @@ impl Source {
 
     #[must_use]
     pub fn is_directory(&self) -> bool {
+        if let SourceProvider::Tree(view) = &*self.provider {
+            return view.primary.is_none();
+        }
         matches!(
             &*self.provider,
             SourceProvider::Directory { .. } | SourceProvider::Memory { primary: None, .. }
@@ -632,9 +646,11 @@ impl Source {
 
     /// Byte limit for cumulative acquisition and expanded archive contents.
     /// Filesystem sources capture `POWERIO_MAX_REFERENCED_BYTES` when opened;
-    /// memory sources read it when a parser requests expansion. Defaults to 1 GiB.
+    /// legacy memory sources read it when a parser requests expansion. Both
+    /// default to 1 GiB. Shared tree views use their explicit view limit.
     pub fn acquisition_byte_limit(&self) -> Result<u64, Error> {
         match &*self.provider {
+            SourceProvider::Tree(view) => Ok(view.limits.max_bytes()),
             SourceProvider::File { acquisition, .. }
             | SourceProvider::Directory { acquisition } => Ok(acquisition.max_bytes),
             SourceProvider::Memory { .. } => referenced_byte_limit(),
@@ -644,6 +660,19 @@ impl Source {
     /// Borrow the sole primary buffer of a file or memory source.
     pub fn primary_buffer(&self) -> Result<SourceBuffer, Error> {
         match &*self.provider {
+            SourceProvider::Tree(view) => view.primary.as_ref().map_or_else(
+                || {
+                    Err(Error::new(
+                        &crate::codes::REQUEST_SOURCE_DIRECTORY_REQUIRED,
+                        "a directory source has no implicit primary buffer",
+                    )
+                    .with_source(self.clone()))
+                },
+                |path| {
+                    view.buffer(path.as_str(), u64::MAX)
+                        .map_err(|error| error.with_source(self.clone()))
+                },
+            ),
             SourceProvider::Memory {
                 primary: Some(primary),
                 ..
@@ -662,6 +691,9 @@ impl Source {
     /// Acquire and retain one file of a directory source by its root relative
     /// name.
     pub fn buffer(&self, name: &crate::ArtifactPath) -> Result<SourceBuffer, Error> {
+        if matches!(&*self.provider, SourceProvider::Tree(view) if view.primary.is_none()) {
+            return self.root_buffer(name.as_str());
+        }
         if matches!(
             &*self.provider,
             SourceProvider::Memory { primary: None, .. }
@@ -679,6 +711,7 @@ impl Source {
             .map_err(|error| error.with_source(self.clone()))?;
         acquisition
             .acquire(&segments)
+            .map(|buffer| self.observe_dependency(buffer))
             .map_err(|error| error.with_source(self.clone()))
     }
 
@@ -688,6 +721,9 @@ impl Source {
     /// buffers the caller supplied.
     pub fn root_buffer(&self, name: &str) -> Result<SourceBuffer, Error> {
         match &*self.provider {
+            SourceProvider::Tree(view) => view
+                .buffer(name, u64::MAX)
+                .map_err(|error| error.with_source(self.clone())),
             SourceProvider::Memory { named, .. } => {
                 let segments = resolve_segments(&[], name)?;
                 let key = segments.join("/");
@@ -709,6 +745,7 @@ impl Source {
                     .map_err(|error| error.with_source(self.clone()))
             }
         }
+        .map(|buffer| self.observe_dependency(buffer))
     }
 
     /// The canonical root selected with [`Source::with_acquisition_root`],
@@ -719,7 +756,9 @@ impl Source {
     #[must_use]
     pub fn selected_acquisition_root(&self) -> Option<&Path> {
         match &*self.provider {
-            SourceProvider::Memory { .. } | SourceProvider::Directory { .. } => None,
+            SourceProvider::Tree(_)
+            | SourceProvider::Memory { .. }
+            | SourceProvider::Directory { .. } => None,
             SourceProvider::File { acquisition, .. } => acquisition
                 .selected
                 .then_some(acquisition.root_display.as_path()),
@@ -757,6 +796,21 @@ impl Source {
     ) -> Result<SourceBuffer, Error> {
         let referrer_directory: Vec<&str> = referrer.directory_segments().collect();
         match &*self.provider {
+            SourceProvider::Tree(view) => {
+                let owner = view
+                    .buffer(referrer.name(), u64::MAX)
+                    .map_err(|error| error.with_source(self.clone()))?;
+                if !Arc::ptr_eq(&owner.0, &referrer.0) {
+                    return Err(Error::new(
+                        &crate::codes::REQUEST_SOURCE_UNKNOWN_BUFFER,
+                        "the referring buffer belongs to another source selection",
+                    )
+                    .with_source(self.clone()));
+                }
+                let segments = resolve_segments(&referrer_directory, name)?;
+                view.buffer(&segments.join("/"), max_bytes)
+                    .map_err(|error| error.with_source(self.clone()))
+            }
             SourceProvider::Memory { named, .. } => {
                 let segments = resolve_segments(&referrer_directory, name)?;
                 let key = segments.join("/");
@@ -787,6 +841,7 @@ impl Source {
                     .map_err(|error| error.with_source(self.clone()))
             }
         }
+        .map(|buffer| self.observe_dependency(buffer))
     }
 
     /// The root relative file names of a directory source, in sorted order,
@@ -797,6 +852,7 @@ impl Source {
     #[allow(clippy::too_many_lines)] // one bounded walk, framed and budgeted in place
     pub fn entry_names(&self) -> Result<Vec<crate::ArtifactPath>, Error> {
         match &*self.provider {
+            SourceProvider::Tree(view) => Ok(view.names()),
             SourceProvider::Memory { named, .. } => named
                 .keys()
                 .map(|name| crate::ArtifactPath::new(name.clone()))
@@ -927,6 +983,7 @@ impl Source {
     #[must_use]
     pub fn acquired_buffers(&self) -> Vec<SourceBuffer> {
         match &*self.provider {
+            SourceProvider::Tree(view) => view.retained_buffers(),
             SourceProvider::Memory { primary, named } => {
                 let mut buffers: Vec<_> = primary.iter().cloned().collect();
                 buffers.extend(
@@ -953,6 +1010,33 @@ impl Source {
                 acquisition.lock().cache.values().cloned().collect()
             }
         }
+    }
+
+    /// Successfully read nonprimary buffers, deduplicated in name order.
+    ///
+    /// Listing files and inspecting retained companions do not count as reads.
+    /// Failed reads are excluded, including per-buffer size refusals. Clones
+    /// share observations; independent [`SourceTree::source`] selections do not.
+    /// This records actual reads, not every possible dependency under other
+    /// parser options, and does not replace [`Self::acquired_buffers`] for replay.
+    #[must_use]
+    pub fn dependencies(&self) -> Vec<SourceBuffer> {
+        self.dependencies
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .cloned()
+            .collect()
+    }
+
+    fn observe_dependency(&self, buffer: SourceBuffer) -> SourceBuffer {
+        if buffer.id().as_str() != PRIMARY_SOURCE_ID {
+            self.dependencies
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(buffer.name().to_owned(), buffer.clone());
+        }
+        buffer
     }
 }
 

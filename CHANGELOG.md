@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add shared `SourceTree` file and directory views with explicit admission limits
+  and independent successful-read dependency tracking for each selection (#774).
+
 ## 0.11.7
 
 **AC optimal transmission switching**
