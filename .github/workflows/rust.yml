@@ -182,7 +182,7 @@ jobs:
     # Bare `cargo test` only covers the default-members; name the C ABI crate
     # explicitly so its end-to-end ABI tests run in CI too.
     - name: Run tests
-      run: cargo test -p powerio -p powerio-tx -p powerio-core -p powerio-synth -p powerio-matrix -p powerio-prob -p powerio-cli -p powerio-capi -p powerio-dist -p powerio-tnd --verbose
+      run: cargo test -p powerio -p powerio-tx -p powerio-core -p powerio-archive -p powerio-synth -p powerio-matrix -p powerio-prob -p powerio-cli -p powerio-capi -p powerio-dist -p powerio-tnd --verbose
     - name: Test problem matrix feature
       run: cargo test -p powerio --features matrix --verbose
     - name: Test gridfm reader feature
@@ -265,7 +265,7 @@ jobs:
     - name: Check wasm32 component crates
       run: |
         cargo check --target wasm32-unknown-unknown -p powerio -p powerio-tx -p powerio-dist \
-          -p powerio-core -p powerio-prob -p powerio-matrix
+          -p powerio-core -p powerio-archive -p powerio-prob -p powerio-matrix
         cargo check --target wasm32-unknown-unknown -p powerio --features matrix
     # A browser consumer that sets `default-features = false` builds with no C
     # compiler: SQLite enters only through the default-on `sincal` feature.

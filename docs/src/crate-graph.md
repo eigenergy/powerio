@@ -7,6 +7,7 @@ network crates do not depend on each other.
 ```text
 powerio-core          Source, FormatId, Diagnostic, Error, PioModule<T>,
                       TimePoint, TimeSeries<T>, ScenarioSet<T>, Destination
+├── powerio-archive   bounded ZIP indexing and verified reads; no case discovery
 ├── powerio-tx        BalancedNetwork and the balanced readers and writers
 └── powerio-dist      MulticonductorNetwork and the OpenDSS, PMD, BMOPF, and CIM converters
 
