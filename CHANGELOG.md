@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Keep BMOPF output schema-valid for PMD profiles with neutral metadata and verify the expected refusal for PMD multinetwork output.
+- Add regression coverage proving that preserving a reference bus does not mark an island supplied when no in-service balancing generator exists.
+
 ## 0.11.7
 
 **AC optimal transmission switching**

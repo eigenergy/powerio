@@ -672,6 +672,45 @@ impl Writer {
         RAW_BMOPF_EXTRAS_TABLES.contains(&u.class.as_str()) || u.class.starts_with("transformer.")
     }
 
+    /// Removes only PMD time-series metadata that has a neutral default
+    /// or is source identity, neither of which BMOPF can represent.
+    /// Non-default transformations are deliberately left visible so schema
+    /// validation rejects rather than silently changes their meaning.
+    fn normalize_time_series_profile(&mut self, class: &str, name: &str, value: &mut Value) {
+        if class != "time_series" {
+            return;
+        }
+        let Some(profile) = value.as_object_mut() else {
+            return;
+        };
+        if profile.remove("source_id").is_some() {
+            self.warn(
+                &C::EMIT_BMOPF_FIELD_DROPPED,
+                format!("time_series {name}: PMD source identity has no BMOPF field; dropped"),
+            );
+        }
+        if profile
+            .get("offset")
+            .is_some_and(|v| v.as_f64() == Some(0.0))
+        {
+            profile.remove("offset");
+            self.warn(
+                &C::EMIT_BMOPF_FIELD_DROPPED,
+                format!("time_series {name}: zero PMD offset is a neutral default with no BMOPF field; dropped"),
+            );
+        }
+        if profile
+            .get("replace")
+            .is_some_and(|v| v.as_bool() == Some(false))
+        {
+            profile.remove("replace");
+            self.warn(
+                &C::EMIT_BMOPF_FIELD_DROPPED,
+                format!("time_series {name}: PMD replace=false is the neutral default with no BMOPF field; dropped"),
+            );
+        }
+    }
+
     /// Untyped BMOPF ecosystem objects, one pass: the tables that lost
     /// their top-level slots in schema 0.1.0 re-emit under `extras`, while
     /// untyped transformer subtypes keep their place under `transformer`.
@@ -688,7 +727,7 @@ impl Writer {
                 continue;
             }
             let mut unplaced = Vec::new();
-            let Some(value) = raw_bmopf_value(u, &mut unplaced) else {
+            let Some(mut value) = raw_bmopf_value(u, &mut unplaced) else {
                 self.warn(
                     &C::EMIT_BMOPF_RECORD_DROPPED,
                     format!(
@@ -711,6 +750,7 @@ impl Writer {
                     Map::new(),
                 );
             }
+            self.normalize_time_series_profile(&u.class, &u.name, &mut value);
             // An untyped transformer subtype lands in the top-level
             // `transformer` table, not under `extras`. Name the slot the
             // object really went to, so a warning points at the part of the
