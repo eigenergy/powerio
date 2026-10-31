@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Clarify that `BusType::Ref` follows the source format's reference/slack convention; angle reference and balancing-source semantics are not universal invariants.
+
 ## 0.11.7
 
 **AC optimal transmission switching**
