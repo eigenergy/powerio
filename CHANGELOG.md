@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Map PMD load-shape references and default profiles into BMOPF time-series fields. Keep PMD-only metadata under `extras`, and report profiles with non-default semantics as unrepresentable instead of emitting invalid BMOPF JSON.
+
 ## 0.11.7
 
 **AC optimal transmission switching**

@@ -308,6 +308,7 @@ fn every_dist_fixture_emits_valid_bmopf() {
         "micro/onephase_zip_load.dss",
         "pmd/ieee13.json",
         "pmd/fourwire_linecode.json",
+        "pmd/case3_balanced.json",
         "bmopf/example_ieee13.json",
         "bmopf/example_enwl_n1_f2.json",
     ] {
@@ -323,6 +324,45 @@ fn every_dist_fixture_emits_valid_bmopf() {
         );
         assert_eq!(out.text, twice.text, "{case} is not idempotent");
     }
+}
+
+#[test]
+fn pmd_loadshape_maps_to_bmopf_profile() {
+    let net = helpers::parse_file(fixture("pmd/case3_balanced.json"), None).unwrap();
+    let out = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+
+    assert!(
+        schema_validator().is_valid(&doc),
+        "BMOPF output does not validate: {}",
+        out.text
+    );
+    assert_eq!(
+        doc["time_series"]["ls1"]["values"],
+        serde_json::json!([
+            0.005, 0.01, 0.015, 0.02, 0.025, 0.03, 0.035, 0.04, 0.045, 0.05
+        ])
+    );
+    assert_eq!(
+        doc["time_series"]["ls1"]["time"],
+        serde_json::json!([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0])
+    );
+    assert_eq!(
+        doc["load"]["l1"]["time_series"],
+        serde_json::json!({"p_nom": "ls1", "q_nom": "ls1"})
+    );
+    assert_eq!(
+        doc["extras"]["pmd_time_series_metadata"]["ls1"]["source_id"],
+        "loadshape.ls1"
+    );
+    assert_eq!(
+        doc["extras"]["pmd_time_series_metadata"]["ls1"]["offset"],
+        0.0
+    );
+    assert_eq!(
+        doc["extras"]["pmd_time_series_metadata"]["ls1"]["replace"],
+        false
+    );
 }
 
 /// A reference to a bus that does not exist warns instead of parsing

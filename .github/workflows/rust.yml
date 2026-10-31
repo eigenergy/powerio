@@ -370,7 +370,7 @@ jobs:
     # The unsafe ownership helpers behind every ABI v6 handle, under Miri.
     # FFI entry points cannot run under Miri; the pure handle core can.
     - name: Miri over the handle lifecycle
-      run: cargo +nightly miri test -p powerio-capi handle_lifecycle_is_sound
+      run: cargo +nightly miri test -p powerio-capi module_records_are_typed_and_structured_values_keep_the_owner_alive
 
   c-abi-gridfm:
     name: C ABI (release features)

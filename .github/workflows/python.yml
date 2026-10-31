@@ -204,11 +204,15 @@ jobs:
             --allowlist "$GITHUB_WORKSPACE/python/stubtest_allowlist.txt"
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python: [ "3.9", "3.12" ]
+        include:
+          - python: "3.9"
+            os: ubuntu-24.04
+          - python: "3.12"
+            os: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -387,9 +391,18 @@ jobs:
         run: |
           wheel=$(ls dist/*.whl)
           pip install "${wheel}[all,gridfm,pandas]" pytest
-      # `_has_gridfm` is now true, so the @gridfm_only tests run instead of skipping.
+      # The Python tests exercise the CLI's on-disk Parquet writer as well as
+      # the extension surface. Build the actual binary; the test module skips
+      # its CLI cases when target/release/powerio is absent.
+      - name: Build GridFM CLI
+        run: cargo build -p powerio-cli --release
+      - name: Require GridFM CLI
+        run: test -x target/release/powerio
+      # Report optional skips explicitly; the four CLI writer checks must run.
       - name: Run gridfm tests
-        run: pytest python/tests -q -k gridfm
+        env:
+          POWERIO_BIN: target/release/powerio
+        run: pytest python/tests -q -k gridfm -rs
 
   wheels:
     name: wheels (${{ matrix.platform.target }} on ${{ matrix.platform.runner }})
