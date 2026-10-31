@@ -1783,3 +1783,136 @@ fn dss_center_tap_writes_and_rereads() {
         assert!(close(*xa, *xb));
     }
 }
+
+/// A feeder whose bus, line, line code, load, and source names hold
+/// characters the OpenDSS tokenizer splits on.
+fn free_text_feeder() -> String {
+    format!(
+        r##"{RDF_OPEN}
+  <cim:BaseFrequency rdf:ID="_f"><cim:BaseFrequency.frequency>50</cim:BaseFrequency.frequency></cim:BaseFrequency>
+  <cim:ConnectivityNode rdf:ID="_n1"><cim:IdentifiedObject.name>Node 1</cim:IdentifiedObject.name></cim:ConnectivityNode>
+  <cim:ConnectivityNode rdf:ID="_n2"><cim:IdentifiedObject.name>Node.2</cim:IdentifiedObject.name></cim:ConnectivityNode>
+  <cim:EnergySource rdf:ID="_src">
+    <cim:IdentifiedObject.name>grid source</cim:IdentifiedObject.name>
+    <cim:EnergySource.voltageMagnitude>400</cim:EnergySource.voltageMagnitude>
+  </cim:EnergySource>
+  <cim:Terminal rdf:ID="_src_t1">
+    <cim:Terminal.ConductingEquipment rdf:resource="#_src"/>
+    <cim:Terminal.ConnectivityNode rdf:resource="#_n1"/>
+    <cim:Terminal.phases rdf:resource="http://iec.ch/TC57/CIM100#PhaseCode.ABC"/>
+    <cim:ACDCTerminal.sequenceNumber>1</cim:ACDCTerminal.sequenceNumber>
+  </cim:Terminal>
+  <cim:PerLengthSequenceImpedance rdf:ID="_pli">
+    <cim:IdentifiedObject.name>Cable type A, 4x70</cim:IdentifiedObject.name>
+    <cim:PerLengthSequenceImpedance.r>0.0004</cim:PerLengthSequenceImpedance.r>
+    <cim:PerLengthSequenceImpedance.x>0.00008</cim:PerLengthSequenceImpedance.x>
+  </cim:PerLengthSequenceImpedance>
+  <cim:ACLineSegment rdf:ID="_l1">
+    <cim:IdentifiedObject.name>Cable 1 (main)</cim:IdentifiedObject.name>
+    <cim:Conductor.length>50</cim:Conductor.length>
+    <cim:ACLineSegment.PerLengthImpedance rdf:resource="#_pli"/>
+  </cim:ACLineSegment>
+  <cim:Terminal rdf:ID="_l1_t1">
+    <cim:Terminal.ConductingEquipment rdf:resource="#_l1"/>
+    <cim:Terminal.ConnectivityNode rdf:resource="#_n1"/>
+    <cim:Terminal.phases rdf:resource="http://iec.ch/TC57/CIM100#PhaseCode.ABC"/>
+    <cim:ACDCTerminal.sequenceNumber>1</cim:ACDCTerminal.sequenceNumber>
+  </cim:Terminal>
+  <cim:Terminal rdf:ID="_l1_t2">
+    <cim:Terminal.ConductingEquipment rdf:resource="#_l1"/>
+    <cim:Terminal.ConnectivityNode rdf:resource="#_n2"/>
+    <cim:Terminal.phases rdf:resource="http://iec.ch/TC57/CIM100#PhaseCode.ABC"/>
+    <cim:ACDCTerminal.sequenceNumber>2</cim:ACDCTerminal.sequenceNumber>
+  </cim:Terminal>
+  <cim:EnergyConsumer rdf:ID="_ld">
+    <cim:IdentifiedObject.name>House 1 = flat!</cim:IdentifiedObject.name>
+    <cim:EnergyConsumer.p>3000</cim:EnergyConsumer.p>
+    <cim:EnergyConsumer.q>300</cim:EnergyConsumer.q>
+    <cim:EnergyConsumer.phaseConnection rdf:resource="http://iec.ch/TC57/CIM100#PhaseShuntConnectionKind.Y"/>
+  </cim:EnergyConsumer>
+  <cim:Terminal rdf:ID="_ld_t1">
+    <cim:Terminal.ConductingEquipment rdf:resource="#_ld"/>
+    <cim:Terminal.ConnectivityNode rdf:resource="#_n2"/>
+    <cim:Terminal.phases rdf:resource="http://iec.ch/TC57/CIM100#PhaseCode.ABCN"/>
+    <cim:ACDCTerminal.sequenceNumber>1</cim:ACDCTerminal.sequenceNumber>
+  </cim:Terminal>
+</rdf:RDF>
+"##
+    )
+}
+
+#[test]
+fn free_text_names_write_a_dss_deck_that_reads_back() {
+    // CIM names are free text. OpenDSS output replaces what its tokenizer
+    // cannot carry, consistently in every reference, and reports each
+    // replacement, so the deck reads back with every element connected.
+    let text = free_text_feeder();
+    let net = parse_str(&text, "cim-dist").unwrap();
+    assert_eq!(net.lines()[0].linecode, "Cable type A, 4x70");
+
+    let first = emit_value(&net, DistTargetFormat::Dss);
+    for (old, new) in [
+        ("Node 1", "Node_1"),
+        ("Node.2", "Node_2"),
+        ("Cable type A, 4x70", "Cable_type_A__4x70"),
+        ("Cable 1 (main)", "Cable_1__main_"),
+        ("House 1 = flat!", "House_1___flat_"),
+        ("grid source", "grid_source"),
+    ] {
+        assert!(
+            findings(&first.warnings, "EMIT.DSS.VALUE_SUBSTITUTED")
+                .iter()
+                .any(|w| w.contains(&format!("`{}`", old.to_ascii_lowercase()))
+                    && w.contains(&format!("written as `{new}`"))),
+            "{old}: {:#?}",
+            first.warnings
+        );
+    }
+    assert!(
+        !first
+            .warnings
+            .iter()
+            .any(|w| w.contains("will not reparse")),
+        "{:#?}",
+        first.warnings
+    );
+
+    let back = parse_str(&first.text, "dss").unwrap_or_else(|e| panic!("{e}\n{}", first.text));
+    // The OpenDSS reader adds its ideal source equivalents; the cable is the
+    // line under its replaced name.
+    let line = back
+        .lines()
+        .iter()
+        .find(|l| l.name == "Cable_1__main_")
+        .unwrap_or_else(|| panic!("{:#?}\n{}", back.lines(), first.text));
+    assert!(
+        first.text.contains("New Linecode.Cable_type_A__4x70 ")
+            && first.text.contains("linecode=Cable_type_A__4x70 "),
+        "{}",
+        first.text
+    );
+    assert_eq!(
+        (line.bus_from.as_str(), line.bus_to.as_str()),
+        ("Node_1", "Node_2")
+    );
+    let [load] = back.loads().as_slice() else {
+        panic!("{:#?}", back.loads())
+    };
+    assert_eq!(
+        (load.name.as_str(), load.bus.as_str()),
+        ("House_1___flat_", "Node_2")
+    );
+
+    // The written names are safe, so a second write renames nothing and
+    // repeats the deck.
+    let second = emit_value(&back, DistTargetFormat::Dss);
+    assert_eq!(
+        findings(&second.warnings, "EMIT.DSS.VALUE_SUBSTITUTED")
+            .iter()
+            .filter(|w| w.contains("written as"))
+            .count(),
+        0,
+        "{:#?}",
+        second.warnings
+    );
+}

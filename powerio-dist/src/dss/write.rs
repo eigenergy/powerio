@@ -35,6 +35,7 @@ mod current_form;
 mod ideal_switches;
 mod ideal_transformers;
 mod loads;
+mod safe_names;
 mod sources;
 mod storage;
 mod terminal_voltage;
@@ -93,15 +94,23 @@ pub(crate) fn emit_dss_text_with_options(
 }
 
 pub(crate) fn validate_emission(net: &MulticonductorNetwork) -> Result<(), powerio_core::Error> {
-    sources::validate(net)
+    // Validate the network as written: with the names dss cannot carry
+    // replaced, a bus id such as `Node 1` is representable. The replacement
+    // findings are recorded again when the writer runs.
+    let mut replacements = crate::diagnostics::Diagnostics::new();
+    let net = safe_names::apply(net, &mut replacements);
+    sources::validate(net.as_ref())
         .map_err(|message| powerio_core::Error::new(&C::BUILD_DIST_ELECTRICAL_INCOMPLETE, message))
 }
 
 fn emit_snapshot(net: &MulticonductorNetwork, options: &DssEmitOptions) -> TextEmission {
+    let mut warnings = crate::diagnostics::Diagnostics::new();
+    let net = safe_names::apply(net, &mut warnings);
+    let net = net.as_ref();
     let mut w = DssWriter {
         out: String::new(),
         sidecars: Vec::new(),
-        warnings: crate::diagnostics::Diagnostics::new(),
+        warnings,
         options: options.clone(),
         grounded: net
             .buses()
@@ -3437,11 +3446,11 @@ mod tests {
     }
 
     #[test]
-    fn unrepresentable_names_are_reported() {
+    fn unrepresentable_names_are_replaced_and_reported() {
         let (b, vs) = three_phase_source(2400.0);
         let mut load = load_on("sb", &["1", "2", "3", "4"], Configuration::Wye);
         load.name = "load 1".into();
-        let net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
+        let mut net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
             name: Some("my circuit".into()),
             base_frequency: 60.0,
             buses: vec![b, bus("a=b", &["1"], &[])],
@@ -3449,17 +3458,7 @@ mod tests {
             loads: vec![load],
             ..MulticonductorNetworkTables::default()
         });
-        let out = emit_dss_text(&net);
-        let hits = |needle: &str| {
-            out.render_diagnostics()
-                .iter()
-                .any(|w| w.contains(needle) && w.contains("cannot represent"))
-        };
-        assert!(hits("load 1"), "{:?}", out.render_diagnostics());
-        assert!(hits("my circuit"), "{:?}", out.render_diagnostics());
-        // The bad bus id warns at its bus_ref emission site.
-        let mut net2 = net.clone();
-        net2.lines_mut().push(DistLine {
+        net.lines_mut().push(DistLine {
             name: "l1".into(),
             bus_from: "sb".into(),
             bus_to: "a=b".into(),
@@ -3472,14 +3471,28 @@ mod tests {
             s_max: None,
             extras: Extras::new(),
         });
-        let out2 = emit_dss_text(&net2);
+        let out = emit_dss_text(&net);
+        let rendered = out.render_diagnostics();
+        for (old, new) in [
+            ("load 1", "load_1"),
+            ("my circuit", "my_circuit"),
+            ("a=b", "a_b"),
+        ] {
+            assert!(
+                rendered.iter().any(|w| w.contains(&format!("`{old}`"))
+                    && w.contains(&format!("written as `{new}`"))),
+                "{old}: {rendered:?}"
+            );
+        }
         assert!(
-            out2.render_diagnostics()
-                .iter()
-                .any(|w| w.contains("a=b") && w.contains("cannot represent")),
-            "{:?}",
-            out2.render_diagnostics()
+            !rendered.iter().any(|w| w.contains("cannot represent")),
+            "{rendered:?}"
         );
+        // Every reference uses the replacement.
+        assert!(out.text.contains("New Circuit.my_circuit "), "{}", out.text);
+        assert!(out.text.contains("New Load.load_1 "), "{}", out.text);
+        assert!(out.text.contains("bus2=a_b.1 "), "{}", out.text);
+        assert!(!out.text.contains("a=b"), "{}", out.text);
     }
 
     #[test]
