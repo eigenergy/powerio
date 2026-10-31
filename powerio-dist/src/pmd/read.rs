@@ -212,10 +212,8 @@ fn engineering_document(text: &str) -> Result<Map<String, Value>> {
         return Err(Error::Json {
             format: "PMD",
             message: format!(
-                "`data_model` is `{dm}`; this reader supports the ENGINEERING model \
-                     (convert MATHEMATICAL output back with \
-                     PowerModelsDistribution.transform_solution or export the ENGINEERING \
-                     model)"
+                "`data_model` is `{dm}`; this reader supports the ENGINEERING model, and \
+                 the MATHEMATICAL model is the `pmd-math-json` format"
             ),
         });
     }
@@ -227,6 +225,11 @@ struct Reader<'a> {
     /// The reader's findings, flushed into the network once the parse is
     /// done so a helper never borrows the network the caller is writing into.
     diagnostics: crate::diagnostics::Diagnostics,
+}
+
+/// PMD's null restoration for the MATHEMATICAL reader, the same rule.
+pub(crate) fn restore_null(key: &str, v: &Value) -> f64 {
+    restore(key, v)
 }
 
 /// PMD's null restoration: the field suffix picks the value.
@@ -598,7 +601,13 @@ impl Reader<'_> {
                 .extras_mut()
                 .insert("bmopf_terminal_conventions".into(), roles);
         }
-        if let Some(name) = doc.get("name").and_then(Value::as_str) {
+        // The ENGINEERING model always carries `name`; an empty one is a
+        // network without a name, not a network named "".
+        if let Some(name) = doc
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|n| !n.is_empty())
+        {
             *self.net.name_mut() = Some(name.to_string());
         }
         let settings = doc.get("settings").and_then(Value::as_object);
@@ -884,12 +893,13 @@ impl Reader<'_> {
                     "g_to",
                     "b_fr",
                     "b_to",
+                    "length",
                 ],
             );
             // The series matrices ride along raw so a dss regeneration can
             // override the engine's switch dummy impedance with the real
             // one, and the PMD writer can reproduce them.
-            for key in ["rs", "xs"] {
+            for key in ["rs", "xs", "g_fr", "g_to", "b_fr", "b_to", "length"] {
                 if let Some(m) = o.get(key) {
                     extras.insert(format!("pmd_{key}"), m.clone());
                 }
@@ -957,7 +967,7 @@ impl Reader<'_> {
                 let dss_model = match model {
                     "IMPEDANCE" => 2,
                     "CURRENT" => 5,
-                    "ZIPV" => 8,
+                    "ZIP" | "ZIPV" => 8,
                     _ => 1,
                 };
                 if dss_model != 1 {
@@ -973,15 +983,28 @@ impl Reader<'_> {
             let voltage_model = match o.get("model").and_then(Value::as_str) {
                 Some("IMPEDANCE") => DistLoadVoltageModel::ConstantImpedance { v_nom },
                 Some("CURRENT") => DistLoadVoltageModel::ConstantCurrent { v_nom },
-                Some("ZIPV") => DistLoadVoltageModel::Zip {
-                    v_nom,
-                    alpha_z: Vec::new(),
-                    alpha_i: Vec::new(),
-                    alpha_p: Vec::new(),
-                    beta_z: Vec::new(),
-                    beta_i: Vec::new(),
-                    beta_p: Vec::new(),
-                },
+                Some("ZIP" | "ZIPV") => {
+                    // `zipv` is Z, I, P for active power, Z, I, P for
+                    // reactive power, then the cutoff voltage.
+                    let zipv: Vec<f64> = o
+                        .get("zipv")
+                        .and_then(Value::as_array)
+                        .map(|a| a.iter().map(|v| restore("zipv", v)).collect())
+                        .unwrap_or_default();
+                    let phases = connections.len().max(1);
+                    let coeff = |k: usize| -> Vec<f64> {
+                        zipv.get(k).map_or_else(Vec::new, |v| vec![*v; phases])
+                    };
+                    DistLoadVoltageModel::Zip {
+                        v_nom,
+                        alpha_z: coeff(0),
+                        alpha_i: coeff(1),
+                        alpha_p: coeff(2),
+                        beta_z: coeff(3),
+                        beta_i: coeff(4),
+                        beta_p: coeff(5),
+                    }
+                }
                 _ => DistLoadVoltageModel::ConstantPower { v_nom },
             };
             stash_status(

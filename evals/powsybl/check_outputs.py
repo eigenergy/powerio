@@ -1467,7 +1467,7 @@ def check_ucte_fixtures(powsybl_core: Path, ucte_dir: Path) -> None:
             message, powerio_reads = rejection
             try:
                 pp.network.load(str(powsybl_core / relative))
-            except Exception as error:  # noqa: BLE001
+            except Exception as error:
                 require(
                     message in str(error),
                     f"{label}: PyPowSybl refused it for another reason: {error}",
@@ -3892,10 +3892,12 @@ def is_uuid(value: str) -> bool:
 def check_generated_cgmes_substitution_diagnostics(
     ir_path: Path,
     emit_log_path: Path,
+    fresh_path: Path,
     label: str,
 ) -> dict[str, Any]:
     stored = json.loads(ir_path.read_text(encoding="utf-8"))
-    detailed = stored["value"]["data"]["detailed_connectivity"]
+    data = stored["value"]["data"]
+    detailed = data["detailed_connectivity"]
     expected_lines: list[str] = []
     identity_rows: list[tuple[str, str]] = []
     for metadata in detailed["component_metadata"]:
@@ -3914,6 +3916,60 @@ def check_generated_cgmes_substitution_diagnostics(
             )
             identity_rows.append((component_name, source_id))
 
+    # Derive the bus identity inventory from source facts, independently of
+    # PowerIO's emitter and of the diagnostic text being checked. These native
+    # generated fixtures have one configured TopologicalNode per calculation bus.
+    configured = {
+        int(row["calculated_bus"]): row["component"]
+        for row in detailed["bus_breaker_buses"]
+        if row.get("calculated_bus") is not None
+    }
+    require(
+        len(configured) == len(detailed["bus_breaker_buses"])
+        and configured.keys() == {int(bus["id"]) for bus in data["buses"]},
+        f"{label}: configured nodes do not uniquely cover the calculation buses",
+    )
+    metadata_by_component = {
+        (row["component"]["component_type"], row["component"]["local_id"]): row
+        for row in detailed["component_metadata"]
+    }
+    bus_identity_rows: list[tuple[int, str, str]] = []
+    expected_node_ids: set[str] = set()
+    for bus in data["buses"]:
+        bus_id = int(bus["id"])
+        component = configured[bus_id]
+        kind, local_id = component["component_type"], component["local_id"]
+        metadata = metadata_by_component.get((kind, local_id), {})
+        imported = [
+            str(identifier["value"])
+            for identifier in metadata.get("external_identifiers", [])
+            if (identifier.get("authority") or "").lower() == "cgmes"
+            and is_uuid(str(identifier["value"]))
+        ]
+        require(len(set(imported)) <= 1, f"{label}: conflicting node mRIDs for bus {bus_id}")
+        emitted_id = (
+            imported[0]
+            if imported
+            else deterministic_cgmes_id(kind, f"{kind}/{local_id}")
+        )
+        require(emitted_id not in expected_node_ids, f"{label}: duplicate derived node mRID")
+        expected_node_ids.add(emitted_id)
+        source_uid = bus.get("uid")
+        if source_uid is not None and source_uid != emitted_id:
+            expected_lines.append(
+                CGMES_VALUE_SUBSTITUTED_PREFIX
+                + f"bus {bus_id} uid `{source_uid}` is replaced by CGMES "
+                + f"TopologicalNode mRID `{emitted_id}`"
+            )
+            bus_identity_rows.append((bus_id, source_uid, emitted_id))
+    emitted_node_ids = cgmes_definition_ids(fresh_path, CIM100, "TopologicalNode")
+    require(
+        emitted_node_ids == expected_node_ids,
+        f"{label}: emitted TopologicalNode mRIDs disagree with the independently "
+        f"derived bus inventory; missing={sorted(expected_node_ids - emitted_node_ids)[:3]}, "
+        f"extra={sorted(emitted_node_ids - expected_node_ids)[:3]}",
+    )
+
     actual_lines = [
         line
         for line in emit_log_path.read_text(encoding="utf-8").splitlines()
@@ -3923,7 +3979,7 @@ def check_generated_cgmes_substitution_diagnostics(
     actual_counter = Counter(actual_lines)
     require(
         actual_counter == expected_counter,
-        f"{label}: exact non-UUID substitution diagnostics changed; "
+        f"{label}: exact CGMES identifier substitution diagnostics changed; "
         f"missing={list((expected_counter - actual_counter).elements())[:3]}, "
         f"extra={list((actual_counter - expected_counter).elements())[:3]}",
     )
@@ -3940,7 +3996,8 @@ def check_generated_cgmes_substitution_diagnostics(
     ).hexdigest()
     print(
         f"{label}: non-UUID identity diagnostics={len(identity_rows)}, "
-        f"identity inventory SHA-256={digest}"
+        f"identity inventory SHA-256={digest}; "
+        f"bus UID substitutions checked against emitted XML={len(bus_identity_rows)}"
     )
     return detailed
 
@@ -4134,7 +4191,7 @@ def check_generated_cgmes_equivalence(
 ) -> None:
     expected = XIIDM_EXPECTATIONS["XIIDM remote control"]
     detailed = check_generated_cgmes_substitution_diagnostics(
-        ir_path, emit_log_path, label
+        ir_path, emit_log_path, fresh_path, label
     )
     source_to_fresh: dict[str, str] = {}
     fresh_to_source: dict[str, str] = {}

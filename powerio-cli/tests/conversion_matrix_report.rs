@@ -28,19 +28,29 @@
 //! 1. Its level and finding codes equal its line in
 //!    `conversion_matrix.baseline`. `POWERIO_MATRIX_BLESS=1` rewrites that
 //!    file from the current run.
-//! 2. Element counts and total load and generation survive.
-//! 3. The admittance matrix, entry for entry by bus id pair, and the per bus
-//!    injections survive. Three allowances, each a property of the target
+//! 2. Element counts and total load and generation survive the explicitly
+//!    described target projection. All nine distribution fixtures run in
+//!    every cell, including the ten-conductor case.
+//! 3. For transmission, the admittance matrix, entry for entry by bus id pair,
+//!    and the per bus injections survive. Three allowances, each a property of the target
 //!    format and stated at its own site: a format that names buses rather
 //!    than numbering them is compared up to relabeling
 //!    (`electrical_change_up_to_relabeling`), a fixed width format is held
 //!    to the digits its fields carry (`electrical_tolerance`), and a format
 //!    with no record for an element is compared against the network it can
 //!    hold (`network_a_target_holds`).
-//! 4. A cell at restated or better leaves the typed model unchanged, field
-//!    for field. A model change that no finding reports makes the cell
-//!    failed. The baseline records such a cell, so it shows red until the
-//!    writer reports or carries the data, and a new one fails the test.
+//! 4. Distribution checks independently compare conductor-keyed line R/X/G/B,
+//!    switch poles, load/generator P/Q branches, shunt G/B, and transformer
+//!    winding ratios and ohmic R/X. Source constraints are checked separately.
+//!    Exact fixture/field projections require named loss diagnostics and
+//!    their exact recovered values. An ambiguous fixture transformer is
+//!    explicitly marked unverified, component by component. Neither warning
+//!    severity nor unrelated metadata losses waive these checks.
+//! 5. Typed-model differences are always shown with fixture identity, without
+//!    the corpus reporter's truncation. A fixture with changes but no loss
+//!    finding makes its cell failed. The baseline records such a cell, so it
+//!    stays visibly red until its writer reports or carries the data. These
+//!    finite physical checks are not a proof of universal equivalence.
 //!
 //! # Making a cell better
 //!
@@ -78,13 +88,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use powerio::BalancedNetwork;
 use powerio_cli::invariants::{
-    DistributionCore, YbusUnavailable, distribution_core, distribution_value,
+    DistributionCore, YbusUnavailable, all_model_diffs, distribution_core, distribution_value,
     electrical_change_up_to_relabeling, injection_change_within, model_diffs, transmission_core,
     transmission_value, ybus_change_within,
 };
 use powerio_core::{Diagnostic, DiagnosticSeverity};
 use powerio_dist::{DistTargetFormat, MulticonductorNetwork};
 
+#[path = "../../powerio-dist/tests/helpers/electrical_projection.rs"]
+mod electrical_projection;
 #[path = "../../powerio-dist/tests/helpers/source_equivalents.rs"]
 mod source_equivalents;
 
@@ -94,7 +106,6 @@ const BLESS_ENV: &str = "POWERIO_MATRIX_BLESS";
 const REPORT_MARKER: &str = "<!-- powerio-conversion-matrix-report -->";
 const DETAILS_MARKER: &str = "<!-- powerio-conversion-matrix-details -->";
 const BASELINE_FILE: &str = "tests/conversion_matrix.baseline";
-const MAX_DETAILS_PER_CELL: usize = 6;
 static DSS_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 const LEGEND: [&str; 4] = [
@@ -187,7 +198,15 @@ fn warning_level(segment: &str, leg: Leg) -> Option<(Level, String)> {
         "TRANSFORMER_UNSUPPORTED" => (Level::Dropped, "transformer"),
         // The sources are all written, but the BMOPF formulation reads only
         // one of them.
-        "SOURCE_COUNT" => (Level::Approximate, "source"),
+        // An unbalanced source is written as one single phase source per
+        // conductor: the same terminal phasors, more source records.
+        "SOURCE_COUNT" | "SOURCE_SPLIT" => (Level::Approximate, "source"),
+        // A three phase wye-wye transformer becomes one BMOPF unit per
+        // phase: the same windings, more transformer records.
+        "TRANSFORMER_WYE_WYE_DECOMPOSED" => (Level::Approximate, "transformer"),
+        // Untyped source objects pass through the neutral reduction
+        // unchanged; they stay source only.
+        "KRON_UNTYPED_RETAINED" => (Level::Dropped, "untyped"),
         _ => {
             let stem = segment
                 .strip_suffix("_DROPPED")
@@ -241,11 +260,16 @@ fn every_level_has_a_finding_shape() {
 /// One source and target pair, or a row's Source column.
 #[derive(Default)]
 struct Cell {
-    findings: Vec<(Leg, Diagnostic)>,
+    findings: Vec<(&'static str, Leg, Diagnostic)>,
+    cases: BTreeSet<&'static str>,
     /// Write and read failures and invariant failures.
     failures: Vec<String>,
     /// Typed model fields the conversion changed.
-    model_diffs: Vec<String>,
+    model_diffs: Vec<(&'static str, String)>,
+    /// Narrow field equivalences; the original measured differences stay visible.
+    model_restatements: BTreeMap<(&'static str, String), &'static str>,
+    /// Explicit physical projections and component-scoped unavailable checks.
+    verification_notes: Vec<(&'static str, String)>,
     /// On the diagonal, whether every payload re-emitted its retained source
     /// byte for byte.
     echo_exact: Option<bool>,
@@ -264,21 +288,24 @@ struct Grade {
     unclassified: BTreeSet<String>,
     /// Findings at error severity.
     errors: usize,
+    /// Their codes, for the report.
+    error_codes: BTreeSet<String>,
     /// The typed model changed while no finding said so.
     unreported_change: bool,
 }
 
 impl Cell {
-    fn record(&mut self, leg: Leg, diagnostics: &[Diagnostic]) {
+    fn record(&mut self, case: &'static str, leg: Leg, diagnostics: &[Diagnostic]) {
+        self.cases.insert(case);
         self.findings
-            .extend(diagnostics.iter().map(|d| (leg, d.clone())));
+            .extend(diagnostics.iter().map(|d| (case, leg, d.clone())));
     }
 
     fn grade(&self) -> Grade {
         let mut graded = Vec::new();
         let mut codes = BTreeMap::new();
         let mut unclassified = BTreeSet::new();
-        for (leg, diagnostic) in &self.findings {
+        for (_, leg, diagnostic) in &self.findings {
             match grade_finding(*leg, diagnostic) {
                 Ok(None) => continue,
                 Ok(Some(found)) => graded.push(found),
@@ -293,6 +320,12 @@ impl Cell {
             .map(|(level, _)| *level)
             .max()
             .unwrap_or(Level::Lossless);
+        if !self.model_restatements.is_empty() {
+            level = level.max(Level::Restated);
+        }
+        if !self.verification_notes.is_empty() {
+            level = level.max(Level::Approximate);
+        }
         if level == Level::Lossless && self.echo_exact == Some(true) {
             level = Level::Exact;
         }
@@ -300,7 +333,27 @@ impl Cell {
             .iter()
             .filter(|(level, _)| *level == Level::Failed)
             .count();
-        let unreported_change = level <= Level::Restated && !self.model_diffs.is_empty();
+        let error_codes: BTreeSet<String> = self
+            .findings
+            .iter()
+            .filter(|(_, _, d)| d.severity() == DiagnosticSeverity::Error)
+            .map(|(_, _, d)| d.code().to_owned())
+            .collect();
+        // One fixture's loss never authorizes a change in another fixture.
+        // Independent electrical checks below also apply when a fixture has
+        // metadata-loss findings of its own.
+        let unreported_change = self.model_diffs.iter().any(|(case, difference)| {
+            !self
+                .model_restatements
+                .contains_key(&(*case, difference.clone()))
+                && !self.findings.iter().any(|(found_case, leg, finding)| {
+                    found_case == case
+                        && grade_finding(*leg, finding)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|(level, _)| level > Level::Restated)
+                })
+        });
         if unreported_change || !self.failures.is_empty() {
             level = Level::Failed;
         }
@@ -322,6 +375,7 @@ impl Cell {
             codes,
             unclassified,
             errors,
+            error_codes,
             unreported_change,
         }
     }
@@ -358,7 +412,16 @@ fn cell_problems(cell: &Cell, grade: &Grade, expected: Option<&str>) -> Vec<Stri
         ));
     }
     if grade.errors > 0 {
-        problems.push(format!("{} finding(s) at error severity", grade.errors));
+        problems.push(format!(
+            "{} finding(s) at error severity: {}",
+            grade.errors,
+            grade
+                .error_codes
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
     let observed = grade.baseline_value();
     if expected != Some(observed.as_str()) {
@@ -565,17 +628,16 @@ fn render_details(matrices: &[(&str, Matrix)], judged: &BTreeMap<String, Judged>
         writeln!(markdown).unwrap();
         for (key, cell) in matrix.keyed_cells() {
             let judged = &judged[&key];
-            if cell.findings.is_empty()
-                && judged.problems.is_empty()
-                && !judged.grade.unreported_change
+            if cell.findings.is_empty() && judged.problems.is_empty() && cell.model_diffs.is_empty()
             {
                 continue;
             }
             writeln!(
                 markdown,
-                "- **{}** ({})",
+                "- **{}** ({}, {} fixtures)",
                 judged.key,
-                judged.grade.level.name()
+                judged.grade.level.name(),
+                cell.cases.len()
             )
             .unwrap();
             for problem in &judged.problems {
@@ -586,22 +648,38 @@ fn render_details(matrices: &[(&str, Matrix)], judged: &BTreeMap<String, Judged>
                 )
                 .unwrap();
             }
-            if judged.grade.unreported_change {
+            // Always expose measured changes, including cells with declared
+            // losses. Otherwise an unrelated metadata warning hides numerical
+            // corruption from the detailed artifact as well as the summary.
+            for (case, note) in &cell.verification_notes {
                 writeln!(
                     markdown,
-                    "  - unreported model change: {}",
-                    one_line(&sanitize_report_text(&cell.model_diffs.join("; ")))
+                    "  - electrical verification [{case}]: {}",
+                    one_line(note)
+                )
+                .unwrap();
+            }
+            for (case, difference) in &cell.model_diffs {
+                writeln!(
+                    markdown,
+                    "  - model change [{case}]: {}{}",
+                    one_line(&sanitize_report_text(difference)),
+                    cell.model_restatements
+                        .get(&(*case, difference.clone()))
+                        .map_or_else(String::new, |reason| format!(
+                            " (equivalent restatement: {reason})"
+                        ))
                 )
                 .unwrap();
             }
             let mut texts = BTreeMap::<(String, String), usize>::new();
-            for (leg, diagnostic) in &cell.findings {
+            for (case, leg, diagnostic) in &cell.findings {
                 let level = grade_finding(*leg, diagnostic)
                     .ok()
                     .flatten()
                     .map_or("unclassified", |(level, _)| level.name());
                 let text = format!(
-                    "{}: {}",
+                    "[{case}] {}: {}",
                     diagnostic.code(),
                     sanitize_report_text(diagnostic.message())
                 );
@@ -611,12 +689,8 @@ fn render_details(matrices: &[(&str, Matrix)], judged: &BTreeMap<String, Judged>
             }
             let mut texts: Vec<_> = texts.into_iter().collect();
             texts.sort_by(|(a, x), (b, y)| y.cmp(x).then_with(|| a.cmp(b)));
-            for ((leg, text), count) in texts.iter().take(MAX_DETAILS_PER_CELL) {
+            for ((leg, text), count) in &texts {
                 writeln!(markdown, "  - {leg}: {count}x {}", one_line(text)).unwrap();
-            }
-            let omitted = texts.len().saturating_sub(MAX_DETAILS_PER_CELL);
-            if omitted > 0 {
-                writeln!(markdown, "  - {omitted} more finding texts").unwrap();
             }
         }
     }
@@ -687,6 +761,9 @@ fn sanitize_report_text_handles_multibyte_whitespace_before_generated_dss_dir() 
 
 struct TextEmission {
     text: String,
+    /// The other artifacts of the emission (an OpenDSS bus coordinate file),
+    /// by file name, which a readback of the text needs beside it.
+    sidecars: Vec<(String, String)>,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -698,22 +775,43 @@ fn text_emission(
     let powerio_core::EmittedOutput::Memory { artifacts } = result.into_output() else {
         return Err("memory destination returned path output".to_owned());
     };
-    let mut primary = None;
+    let mut texts = Vec::new();
     for artifact in artifacts {
-        let is_primary =
-            primary_suffix.is_none_or(|suffix| artifact.name().as_str().ends_with(suffix));
-        if is_primary {
-            if primary.is_some() {
-                return Err("emission returned several primary artifacts".to_owned());
-            }
-            primary = Some(
-                String::from_utf8(artifact.into_bytes())
-                    .map_err(|err| format!("emitted text is not UTF-8: {err}"))?,
-            );
+        let name = artifact.name().as_str().to_owned();
+        let text = String::from_utf8(artifact.into_bytes())
+            .map_err(|err| format!("emitted text is not UTF-8: {err}"))?;
+        texts.push((name, text));
+    }
+    // The case text. A same format OpenDSS echo of a project with sidecars
+    // returns the retained files under `source/` behind a redirect stub at
+    // the destination; the retained case file is the text then.
+    let candidates: Vec<usize> = texts
+        .iter()
+        .enumerate()
+        .filter(|(_, (name, _))| primary_suffix.is_none_or(|suffix| name.ends_with(suffix)))
+        .map(|(i, _)| i)
+        .collect();
+    let chosen = match candidates.as_slice() {
+        [one] => *one,
+        [] => return Err("emission returned no primary artifact".to_owned()),
+        several => *several
+            .iter()
+            .find(|i| texts[**i].0.contains("source/"))
+            .ok_or_else(|| "emission returned several primary artifacts".to_owned())?,
+    };
+    let mut primary = None;
+    let mut sidecars = Vec::new();
+    for (i, (name, text)) in texts.into_iter().enumerate() {
+        if i == chosen {
+            primary = Some(text);
+        } else {
+            let file = name.rsplit('/').next().unwrap_or(&name).to_owned();
+            sidecars.push((file, text));
         }
     }
     Ok(TextEmission {
         text: primary.ok_or_else(|| "emission returned no primary artifact".to_owned())?,
+        sidecars,
         diagnostics,
     })
 }
@@ -840,7 +938,7 @@ fn emit_distribution_module(
 ) -> Result<TextEmission, String> {
     let destination = powerio_core::Destination::memory("case").map_err(|err| err.to_string())?;
     let result = powerio_dist::emit(module, target, destination).map_err(|err| err.to_string())?;
-    let suffix = (target == DistTargetFormat::Dss).then_some("case.dss");
+    let suffix = (target == DistTargetFormat::Dss).then_some(".dss");
     text_emission(result, suffix)
 }
 
@@ -932,7 +1030,7 @@ const fn read_only(
 /// Every 0.11 transmission format. The writable ones are both source rows and
 /// target columns, in this order; the read only ones are source rows only and
 /// come last, so a target column index indexes this array directly.
-const TRANSMISSION_FORMATS: [TransmissionFormat; 19] = [
+const TRANSMISSION_FORMATS: [TransmissionFormat; 20] = [
     transmission("MATPOWER .m", "matpower", Emission::Document, Family::Case),
     transmission(
         "PowerModels JSON",
@@ -961,6 +1059,12 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 19] = [
         Family::Case,
     ),
     transmission("Surge JSON", "surge-json", Emission::Document, Family::Case),
+    transmission(
+        "MG-RAVENS JSON (balanced)",
+        "ravens-json",
+        Emission::Document,
+        Family::Case,
+    ),
     transmission("PSLF .epc", "pslf", Emission::Document, Family::Case),
     transmission("XIIDM 1.17", "xiidm", Emission::Document, Family::Exchange),
     transmission("JIIDM 1.17", "jiidm", Emission::Document, Family::Exchange),
@@ -1060,7 +1164,7 @@ fn run_transmission_matrix() -> Matrix {
         match &payloads {
             Ok(payloads) => {
                 for payload in payloads {
-                    source_cell.record(Leg::Source, &payload.parse_findings);
+                    source_cell.record(payload.label, Leg::Source, &payload.parse_findings);
                 }
             }
             Err(err) => source_cell.failures.push(err.clone()),
@@ -1147,7 +1251,7 @@ fn echo_transmission(payload: &TransmissionPayload, target: TransmissionFormat, 
         }
     };
     let echoed = emit_transmission(&payload.module, target).and_then(|echo| {
-        cell.record(Leg::Write, &echo.diagnostics);
+        cell.record(payload.label, Leg::Write, &echo.diagnostics);
         echo.emitted.files()
     });
     let exact = match echoed {
@@ -1204,7 +1308,7 @@ fn validate_transmission_pair(
             return;
         }
     };
-    cell.record(Leg::Write, &conversion.diagnostics);
+    cell.record(payload.label, Leg::Write, &conversion.diagnostics);
     let parsed = match parse_transmission_emitted(&conversion.emitted, target) {
         Ok(parsed) => parsed,
         Err(err) => {
@@ -1215,7 +1319,7 @@ fn validate_transmission_pair(
             return;
         }
     };
-    cell.record(Leg::Readback, &parsed.diagnostics);
+    cell.record(payload.label, Leg::Readback, &parsed.diagnostics);
     let held = network_a_target_holds(&payload.network, target);
     let tolerance = electrical_tolerance(target, &held);
     let actual = transmission_core(&parsed.network);
@@ -1226,7 +1330,7 @@ fn validate_transmission_pair(
             payload.label, target.name
         ));
     }
-    record_model_diffs(
+    record_transmission_model_diffs(
         payload.label,
         &transmission_value(&payload.network),
         &transmission_value(&parsed.network),
@@ -1434,20 +1538,15 @@ fn network_a_target_holds(
     }
     // UCTE-DEF states one node record per bus with one generation set and no
     // shunt record: a bus shunt has no record at all, a generator has no
-    // status field, so an out of service machine states zero generation at a
-    // node the reader still sees as a generator bus, and several machines at
-    // one bus state one generation.
+    // status field. Only live machines contribute; a PV/REF node itself can
+    // require a zero-output generator, but an inactive-only PQ node does not.
+    // Several live machines at one bus state one generation.
     let mut held = network.clone();
     held.shunts_mut().clear();
     held.branches_mut()
         .retain(|branch| branch.from != branch.to);
-    for generator in held.generators_mut() {
-        if !generator.in_service {
-            generator.in_service = true;
-            generator.pg = 0.0;
-            generator.qg = 0.0;
-        }
-    }
+    held.generators_mut()
+        .retain(|generator| generator.in_service);
     let mut merged: Vec<powerio_tx::Generator> = Vec::new();
     for generator in held.generators() {
         match merged
@@ -1470,7 +1569,10 @@ fn network_a_target_holds(
     let empty_references = held
         .buses()
         .iter()
-        .filter(|bus| bus.kind == powerio_tx::BusType::Ref && !generator_buses.contains(&bus.id))
+        .filter(|bus| {
+            matches!(bus.kind, powerio_tx::BusType::Ref | powerio_tx::BusType::Pv)
+                && !generator_buses.contains(&bus.id)
+        })
         .map(|bus| bus.id)
         .collect::<Vec<_>>();
     for bus in empty_references {
@@ -1483,16 +1585,79 @@ fn network_a_target_holds(
 /// findings declare a loss keeps these as context; a cell at restated or
 /// better fails on any of them, so a quiet writer cannot pass by dropping
 /// data without saying so.
+fn record_transmission_model_diffs(
+    label: &'static str,
+    before: &serde_json::Value,
+    after: &serde_json::Value,
+    cell: &mut Cell,
+) {
+    let mut equivalent_polynomials = BTreeSet::new();
+    if let (Some(a), Some(b)) = (
+        before["generators"].as_array(),
+        after["generators"].as_array(),
+    ) {
+        for (index, (a, b)) in a.iter().zip(b).enumerate() {
+            let (a, b) = (&a["cost"], &b["cost"]);
+            let (Some(x), Some(y)) = (a["coeffs"].as_array(), b["coeffs"].as_array()) else {
+                continue;
+            };
+            if a["model"] != 2
+                || b["model"] != 2
+                || a["ncost"].as_u64() != Some(x.len() as u64)
+                || b["ncost"].as_u64() != Some(y.len() as u64)
+            {
+                continue;
+            }
+            let trim = |coefficients: &[serde_json::Value]| -> Option<Vec<f64>> {
+                let numbers: Option<Vec<_>> =
+                    coefficients.iter().map(serde_json::Value::as_f64).collect();
+                let numbers = numbers?;
+                let first = numbers
+                    .iter()
+                    .position(|x| *x != 0.0)
+                    .unwrap_or(numbers.len());
+                Some(numbers[first..].to_vec())
+            };
+            if trim(x).is_some() && trim(x) == trim(y) {
+                equivalent_polynomials.insert(format!(".generators[{index}].cost"));
+            }
+        }
+    }
+    for difference in all_model_diffs(before, after) {
+        let reason = if difference.path == ".generated_uids"
+            && before["generated_uids"].is_array()
+            && after.get("generated_uids").is_none()
+        {
+            Some(
+                "the internal generated-identifier provenance ledger is omitted; identifiers themselves are compared separately",
+            )
+        } else if equivalent_polynomials.iter().any(|prefix| {
+            difference.path == format!("{prefix}.ncost")
+                || difference.path.starts_with(&format!("{prefix}.coeffs"))
+        }) {
+            Some("leading zero coefficients change polynomial storage, not the cost function")
+        } else {
+            None
+        };
+        let rendered = difference.to_string();
+        if let Some(reason) = reason {
+            cell.model_restatements
+                .insert((label, rendered.clone()), reason);
+        }
+        cell.model_diffs.push((label, rendered));
+    }
+}
+
 fn record_model_diffs(
-    label: &str,
+    label: &'static str,
     before: &serde_json::Value,
     after: &serde_json::Value,
     cell: &mut Cell,
 ) {
     cell.model_diffs.extend(
-        model_diffs(before, after)
+        all_model_diffs(before, after)
             .iter()
-            .map(|d| format!("{label}: {d}")),
+            .map(|d| (label, d.to_string())),
     );
 }
 
@@ -1509,7 +1674,7 @@ struct DistributionFormat {
     target: DistTargetFormat,
 }
 
-const DISTRIBUTION_FORMATS: [DistributionFormat; 3] = [
+const DISTRIBUTION_FORMATS: [DistributionFormat; 5] = [
     DistributionFormat {
         name: "OpenDSS .dss",
         token: "dss",
@@ -1525,9 +1690,19 @@ const DISTRIBUTION_FORMATS: [DistributionFormat; 3] = [
         token: "pmd-json",
         target: DistTargetFormat::PmdJson,
     },
+    DistributionFormat {
+        name: "MG-RAVENS JSON (multiconductor)",
+        token: "ravens-json",
+        target: DistTargetFormat::RavensJson,
+    },
+    DistributionFormat {
+        name: "PMD MATHEMATICAL JSON",
+        token: "pmd-math-json",
+        target: DistTargetFormat::PmdMathJson,
+    },
 ];
 
-const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 7] = [
+const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 9] = [
     (
         "single phase transformer",
         "dist/micro/xfmr_single_phase.dss",
@@ -1563,6 +1738,16 @@ const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 7] = [
         "dist/pmd/fourwire_linecode.json",
         DISTRIBUTION_FORMATS[2],
     ),
+    (
+        "MG-RAVENS case3",
+        "dist/ravens/case3_balanced.json",
+        DISTRIBUTION_FORMATS[3],
+    ),
+    (
+        "PMD MATH two winding",
+        "dist/pmd/math/ut_trans_2w_yy_math.json",
+        DISTRIBUTION_FORMATS[4],
+    ),
 ];
 
 struct DistributionPayload {
@@ -1572,7 +1757,6 @@ struct DistributionPayload {
     /// The source text the module was read from.
     text: String,
     parse_findings: Vec<Diagnostic>,
-    core: DistributionCore,
 }
 
 /// A geographic layer is a `powerio.GeoLayer`, not a network, and no grid
@@ -1630,7 +1814,7 @@ fn run_distribution_matrix() -> Matrix {
         match &payloads {
             Ok(payloads) => {
                 for payload in payloads {
-                    source_cell.record(Leg::Source, &payload.parse_findings);
+                    source_cell.record(payload.label, Leg::Source, &payload.parse_findings);
                 }
             }
             Err(err) => source_cell.failures.push(err.clone()),
@@ -1643,7 +1827,20 @@ fn run_distribution_matrix() -> Matrix {
                 Ok(payloads) => {
                     for payload in payloads {
                         let diagonal = source_idx == target_idx;
-                        validate_distribution_pair(payload, *target, diagonal, &mut cell);
+                        validate_distribution_pair(
+                            payload,
+                            source.name,
+                            *target,
+                            diagonal,
+                            &mut cell,
+                        );
+                    }
+                    let expected: BTreeSet<_> = payloads.iter().map(|p| p.label).collect();
+                    if cell.cases != expected {
+                        cell.failures.push(format!(
+                            "incomplete fixture coverage: expected {expected:?}, checked {:?}",
+                            cell.cases
+                        ));
                     }
                 }
                 Err(err) => cell.failures.push(err.clone()),
@@ -1671,42 +1868,70 @@ fn distribution_payloads(format: DistributionFormat) -> Result<Vec<DistributionP
                 .map_err(|err| format!("parse {rel}: {err}"))?;
             *base.network.source_format_mut() = None;
             let rendered = emit_distribution_value(&base.network, format.target)?;
-            let parsed = parse_distribution_text(&rendered.text, format)
+            let parsed = parse_distribution_text(&rendered, format)
                 .map_err(|err| format!("read generated {rel} as {}: {err}", format.name))?;
-            let core =
-                distribution_core(&source_equivalents::contract_source_pairs(&parsed.network));
             Ok(DistributionPayload {
                 label,
                 network: parsed.network,
                 module: parsed.module,
                 text: rendered.text,
                 parse_findings: parsed.diagnostics,
-                core,
             })
         })
         .collect()
 }
 
-/// The write and readback legs. The write starts from the parsed module,
-/// whose read findings a writer may carry forward. On the diagonal the module
-/// echoes its retained source, which must come back byte for byte; reading
-/// those same bytes back repeats the source parse, whose findings the Source
-/// column already shows.
+/// The canonical write and readback legs start from the electrical value,
+/// without retained bytes. The diagonal independently checks the module echo;
+/// source-byte equality must never stand in for exercising the writer.
 fn validate_distribution_pair(
     payload: &DistributionPayload,
+    row: &str,
     target: DistributionFormat,
     diagonal: bool,
     cell: &mut Cell,
 ) {
-    let conversion = match emit_distribution_module(&payload.module, target.target) {
+    cell.cases.insert(payload.label);
+    if diagonal {
+        match emit_distribution_module(&payload.module, target.target) {
+            Ok(echo) => {
+                let exact = echo.text == payload.text;
+                cell.echo_exact = Some(cell.echo_exact.unwrap_or(true) && exact);
+                if !exact {
+                    cell.failures.push(format!(
+                        "{} did not re-emit its retained source byte for byte as {}",
+                        payload.label, target.name
+                    ));
+                }
+            }
+            Err(error) => cell.failures.push(format!(
+                "{} echo as {}: {error}",
+                payload.label, target.name
+            )),
+        }
+    }
+    let conversion = match emit_distribution_value(&payload.network, target.target) {
         Ok(conversion) => conversion,
         Err(err) => {
-            cell.failures
-                .push(format!("{} emit as {}: {err}", payload.label, target.name));
+            cell.failures.push(format!(
+                "{} canonical emit as {}: {err}",
+                payload.label, target.name
+            ));
             return;
         }
     };
-    cell.record(Leg::Write, &conversion.diagnostics);
+    validate_distribution_emission(payload, row, target, false, cell, &conversion);
+}
+
+fn validate_distribution_emission(
+    payload: &DistributionPayload,
+    row: &str,
+    target: DistributionFormat,
+    diagonal: bool,
+    cell: &mut Cell,
+    conversion: &TextEmission,
+) {
+    cell.record(payload.label, Leg::Write, &conversion.diagnostics);
     let echoed = diagonal && conversion.text == payload.text;
     if diagonal {
         if !echoed {
@@ -1717,29 +1942,51 @@ fn validate_distribution_pair(
         }
         cell.echo_exact = Some(cell.echo_exact.unwrap_or(true) && echoed);
     }
-    match parse_distribution_text(&conversion.text, target) {
+    match parse_distribution_text(conversion, target) {
         Ok(parsed) => {
             if !echoed {
-                cell.record(Leg::Readback, &parsed.diagnostics);
+                cell.record(payload.label, Leg::Readback, &parsed.diagnostics);
             }
-            let before = source_equivalents::contract_source_pairs(&payload.network);
+            let before = distribution_target_projection(
+                &payload.network,
+                target.target,
+                conversion,
+                payload.label,
+                cell,
+            );
+            let before = source_equivalents::contract_source_pairs(&before);
             let after = source_equivalents::contract_source_pairs(&parsed.network);
+            let before = source_equivalents::contract_transformer_pairs(&before);
+            let after = source_equivalents::contract_transformer_pairs(&after);
             source_equivalents::assert_source_constraints(
                 &before,
                 &after,
-                &format!("{} to {}", payload.label, target.name),
+                &format!("{} as {row} to {}", payload.label, target.name),
             );
             let actual = distribution_core(&after);
-            if !core_survives(&payload.core, &actual, target.target) {
+            let expected = distribution_core(&before);
+            if !core_survives(&expected, &actual, target.target) {
                 cell.failures.push(format!(
                     "{} core changed for {}: before {:?}, after {:?}",
-                    payload.label, target.name, payload.core, actual
+                    payload.label, target.name, expected, actual
                 ));
             }
+            let (checked_before, checked_after) =
+                distribution_check_scope(before.clone(), after.clone(), payload.label, cell);
+            cell.failures.extend(
+                electrical_projection::differences(&checked_before, &checked_after)
+                    .into_iter()
+                    .map(|problem| {
+                        format!(
+                            "{} electrical change for {}: {problem}",
+                            payload.label, target.name
+                        )
+                    }),
+            );
             record_model_diffs(
                 payload.label,
-                &distribution_value(&payload.network),
-                &distribution_value(&parsed.network),
+                &distribution_report_value(&payload.network),
+                &distribution_report_value(&parsed.network),
                 cell,
             );
         }
@@ -1748,6 +1995,225 @@ fn validate_distribution_pair(
             payload.label, target.name
         )),
     }
+}
+
+/// Component arrays have identity, not positional semantics. Sort only these
+/// top-level tables; conductor, phase and winding arrays remain in their stated
+/// order, so a real terminal permutation remains a measured difference.
+fn distribution_report_value(network: &MulticonductorNetwork) -> serde_json::Value {
+    let mut value = distribution_value(network);
+    for table in value.as_object_mut().unwrap().values_mut() {
+        let Some(rows) = table.as_array_mut() else {
+            continue;
+        };
+        let key = |row: &serde_json::Value| {
+            row.get("name")
+                .or_else(|| row.get("id"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        };
+        if rows.iter().all(|row| key(row).is_some()) {
+            rows.sort_by_key(key);
+        }
+    }
+    value
+}
+
+/// Explicit target projections, never inferred from the presence of a generic
+/// warning. Unsupported RAVENS conductors remove precisely the affected device,
+/// and every removal must name that device in a RECORD_DROPPED finding. The
+/// remainder of that fixture still undergoes all checks and contributes its
+/// findings to the baseline.
+#[allow(clippy::too_many_lines)] // each fixture-specific projection states and verifies its loss
+fn distribution_target_projection(
+    network: &MulticonductorNetwork,
+    target: DistTargetFormat,
+    emission: &TextEmission,
+    label: &'static str,
+    cell: &mut Cell,
+) -> MulticonductorNetwork {
+    let mut held = network.clone();
+    if target == DistTargetFormat::RavensJson {
+        let (projected, problems) =
+            electrical_projection::ravens_projection(&held, &emission.diagnostics);
+        held = projected;
+        for transformer in held.transformers_mut() {
+            // These are measured, documented losses in two exact fixtures,
+            // not permission to waive other transformer parameters.
+            if label == "center tap transformer"
+                && transformer.name == "t1"
+                && transformer.windings.len() == 3
+                && transformer.xsc_pct.len() == 3
+                && transformer.xsc_pct[1..].iter().any(|x| *x != 0.0)
+            {
+                let prefix =
+                    "transformer t1: only the first winding pair's short-circuit reactance";
+                if !emission.diagnostics.iter().any(|d| {
+                    d.code() == "EMIT.RAVENS_DIST.VALUE_COLLAPSED"
+                        && d.message().starts_with(prefix)
+                }) {
+                    cell.failures.push(format!(
+                        "{label}: missing named multi-winding reactance loss finding"
+                    ));
+                }
+                cell.verification_notes.push((label, format!("known RAVENS projection: transformer t1 leakage pairs 1 and 2 {:?} -> [0, 0]; exact projected values checked; electrical equivalence is not claimed", &transformer.xsc_pct[1..])));
+                transformer.xsc_pct[1..].fill(0.0);
+            }
+            if label == "PMD MATH two winding"
+                && ["tx1", "tx1_1", "tx1_2", "tx1_3"].contains(&transformer.name.as_str())
+            {
+                for (index, winding) in transformer.windings.iter_mut().enumerate() {
+                    if winding.tap.total_cmp(&1.0).is_eq() {
+                        continue;
+                    }
+                    let prefix = format!(
+                        "transformer {}: winding {} tap {} is dropped",
+                        transformer.name,
+                        index + 1,
+                        winding.tap
+                    );
+                    if !emission.diagnostics.iter().any(|d| {
+                        d.code() == "EMIT.RAVENS_DIST.FIELD_DROPPED"
+                            && d.message().starts_with(&prefix)
+                    }) {
+                        cell.failures.push(format!(
+                            "{label}: missing named winding {} tap loss finding",
+                            index + 1
+                        ));
+                    }
+                    cell.verification_notes.push((label, format!("known RAVENS projection: transformer {} winding {} tap {} -> 1; exact projected ratio checked; electrical equivalence is not claimed", transformer.name, index + 1, winding.tap)));
+                    winding.tap = 1.0;
+                }
+            }
+        }
+        cell.failures.extend(
+            problems
+                .into_iter()
+                .map(|problem| format!("{label}: {problem}")),
+        );
+    }
+    if target == DistTargetFormat::Dss && label == "BMOPF IEEE 13" {
+        // In these two buses the ungrounded named return conductor is bus-local;
+        // DSS's diagnosed n -> 2 rename is bijective (the other conductor is
+        // respectively 3 or 1). Preserve the branch, not a global phase alias.
+        for (bus_id, phase) in [("611", "3"), ("652", "1")] {
+            if held
+                .bus(bus_id)
+                .is_some_and(|bus| bus.terminals == [phase, "n"] && bus.grounded.is_empty())
+            {
+                let message = format!(
+                    "bus {bus_id}: terminal `n` is not a dss node number; emitted as node 2, its position on the bus"
+                );
+                if !emission
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.code() == "EMIT.DSS.VALUE_SUBSTITUTED" && d.message() == message)
+                {
+                    cell.failures.push(format!(
+                        "{label}: missing named terminal rename finding for bus {bus_id}"
+                    ));
+                }
+                let bus = held
+                    .buses_mut()
+                    .iter_mut()
+                    .find(|bus| bus.id == bus_id)
+                    .unwrap();
+                "2".clone_into(&mut bus.terminals[1]);
+                for load in held
+                    .loads_mut()
+                    .iter_mut()
+                    .filter(|load| load.bus == bus_id)
+                {
+                    for terminal in &mut load.terminal_map {
+                        if terminal == "n" {
+                            "2".clone_into(terminal);
+                        }
+                    }
+                }
+                cell.verification_notes.push((label, format!("equivalent DSS conductor rename: bus {bus_id} ungrounded n -> 2, with phase {phase} unchanged; the two-terminal injection and all other ports remain checked")));
+            }
+        }
+    }
+    if target == DistTargetFormat::PmdMathJson {
+        let document: serde_json::Value = serde_json::from_str(&emission.text).unwrap();
+        if document["is_kron_reduced"] == true {
+            match powerio_dist::neutral_kron_reduce(&held, &powerio_dist::NeutralKronOptions::default()) {
+                Ok(reduced) => {
+                    // Eliminating a grounded neutral cannot reverse a winding.
+                    // Preserve the original transformer circuit for the physical
+                    // check instead of sharing the writer's winding projection.
+                    let mut projected = reduced.into_parts().0;
+                    restore_transformer_circuits(&held, &mut projected);
+                    held = projected;
+                }
+                Err(error) => cell.failures.push(format!(
+                    "{label}: output claims Kron reduction but the source does not permit it: {error}"
+                )),
+            }
+        }
+    }
+    held
+}
+
+/// Retain each winding's original orientation and the grounding identity of
+/// its eliminated return. Reintroducing a perfectly grounded port adds no
+/// electrical degree of freedom; forgetting its grounding would instead
+/// compare terminal 4 against earth as though they were different nodes.
+fn restore_transformer_circuits(
+    original: &MulticonductorNetwork,
+    projected: &mut MulticonductorNetwork,
+) {
+    projected
+        .transformers_mut()
+        .clone_from(original.transformers());
+    for winding in original.transformers().iter().flat_map(|t| &t.windings) {
+        let Some(source_bus) = original.bus(&winding.bus) else {
+            continue;
+        };
+        let Some(bus) = projected
+            .buses_mut()
+            .iter_mut()
+            .find(|bus| bus.id.eq_ignore_ascii_case(&winding.bus))
+        else {
+            continue;
+        };
+        for terminal in &winding.terminal_map {
+            if source_bus.grounded.contains(terminal) {
+                if !bus.terminals.contains(terminal) {
+                    bus.terminals.push(terminal.clone());
+                }
+                if !bus.grounded.contains(terminal) {
+                    bus.grounded.push(terminal.clone());
+                }
+            }
+        }
+    }
+}
+
+/// This vendored BMOPF source declares a single-phase transformer with three
+/// ungrounded terminals per winding. It does not identify the winding branch.
+/// State the unavailable check instead of inventing a circuit; the exception
+/// covers only this named component, never another transformer or device.
+fn distribution_check_scope(
+    mut before: MulticonductorNetwork,
+    mut after: MulticonductorNetwork,
+    label: &'static str,
+    cell: &mut Cell,
+) -> (MulticonductorNetwork, MulticonductorNetwork) {
+    // The source row is itself a generated conversion of this fixture.
+    // Preparation may already have guessed a phase count or terminal map, but
+    // it cannot turn the original ambiguous winding into independent evidence.
+    if label == "BMOPF IEEE 13" {
+        cell.verification_notes.push((label, "UNVERIFIED component xfm2: source declares one phase with winding terminals [1, 2, 3]; no branch identity is specified. Transformer electrical comparison excludes only xfm2; its typed changes and all other component checks remain visible.".to_owned()));
+        let unchecked = ["xfm2", "xfm2_1", "xfm2_2", "xfm2_3"];
+        before
+            .transformers_mut()
+            .retain(|t| !unchecked.contains(&t.name.as_str()));
+        after
+            .transformers_mut()
+            .retain(|t| !unchecked.contains(&t.name.as_str()));
+    }
+    (before, after)
 }
 
 struct DistParsed {
@@ -1774,27 +2240,39 @@ fn load_distribution_case(
     powerio_dist::parse(source).map(dist_module_to_parsed)
 }
 
+/// Read an emission back. OpenDSS text goes through a file of its own, with
+/// the emission's sidecars (a bus coordinate file the text includes) beside
+/// it, in a directory per call so the two tests of this file do not race.
 fn parse_distribution_text(
-    text: &str,
+    emission: &TextEmission,
     format: DistributionFormat,
 ) -> Result<DistParsed, powerio_core::Error> {
     if format.target != DistTargetFormat::Dss {
-        let source = powerio_core::Source::from_memory("<memory>", text.as_bytes().to_vec())?
-            .with_format(powerio_core::FormatId::new(
-                format.token.to_ascii_lowercase().replace('_', "-"),
-            )?);
+        let source =
+            powerio_core::Source::from_memory("<memory>", emission.text.as_bytes().to_vec())?
+                .with_format(powerio_core::FormatId::new(
+                    format.token.to_ascii_lowercase().replace('_', "-"),
+                )?);
         return powerio_dist::parse(source).map(dist_module_to_parsed);
     }
 
-    let dir = std::env::temp_dir().join("powerio-conversion-matrix");
+    let dir = std::env::temp_dir()
+        .join("powerio-conversion-matrix")
+        .join(format!(
+            "case-{}-{}",
+            std::process::id(),
+            DSS_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!(
-        "case-{}.dss",
-        DSS_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::write(&path, text).unwrap();
+    // Not `case.dss`: a same format echo returns the retained file under
+    // its own name beside the destination's `case.dss`.
+    let path = dir.join("input.dss");
+    std::fs::write(&path, &emission.text).unwrap();
+    for (file, text) in &emission.sidecars {
+        std::fs::write(dir.join(file), text).unwrap();
+    }
     let parsed = load_distribution_case(&path, format.token);
-    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_dir_all(dir);
     parsed
 }
 
@@ -1982,4 +2460,299 @@ fn balanced_network(value: &powerio::PioValue) -> Option<&BalancedNetwork> {
         powerio::PioValue::AcScucInstance(instance) => Some(instance.network()),
         _ => None,
     }
+}
+
+#[test]
+fn finding_artifact_preserves_rare_findings_and_case_identity() {
+    let mut cell = Cell::default();
+    for index in 0..8 {
+        let finding = Diagnostic::new(
+            powerio_core::DiagnosticCode::new("EMIT.TEST.FIELD_DROPPED").unwrap(),
+            DiagnosticSeverity::Warning,
+            format!("field {index} was dropped"),
+        );
+        cell.record("transformer with taps", Leg::Write, &[finding]);
+    }
+    let matrix = Matrix {
+        sources: vec!["source"],
+        targets: vec!["target"],
+        groups: vec![],
+        source_cells: vec![Cell::default()],
+        cells: vec![vec![cell]],
+    };
+    let judged = matrix
+        .keyed_cells()
+        .into_iter()
+        .map(|(key, cell)| {
+            let entry = Judged {
+                key: key.clone(),
+                grade: cell.grade(),
+                problems: vec![],
+            };
+            (key, entry)
+        })
+        .collect();
+    let details = render_details(&[("Test", matrix)], &judged);
+    for index in 0..8 {
+        assert!(details.contains(&format!(
+            "[transformer with taps] EMIT.TEST.FIELD_DROPPED: field {index} was dropped"
+        )));
+    }
+}
+
+#[test]
+fn a_loss_in_one_fixture_does_not_authorize_another_fixtures_change() {
+    let mut cell = Cell::default();
+    cell.record(
+        "metadata fixture",
+        Leg::Write,
+        &[Diagnostic::new(
+            powerio_core::DiagnosticCode::new("EMIT.TEST.EXTRAS_DROPPED").unwrap(),
+            DiagnosticSeverity::Warning,
+            "a source comment was dropped",
+        )],
+    );
+    record_model_diffs(
+        "electrical fixture",
+        &serde_json::json!({"resistance": 0.1}),
+        &serde_json::json!({"resistance": 777_123.0}),
+        &mut cell,
+    );
+    let grade = cell.grade();
+    assert_eq!(grade.level, Level::Failed);
+    assert!(grade.unreported_change);
+}
+
+#[test]
+fn metadata_losses_cannot_hide_a_corrupted_distribution_impedance() {
+    fn corrupt(value: &mut serde_json::Value) -> usize {
+        match value {
+            serde_json::Value::Object(fields) => {
+                let mut count = 0;
+                if let Some(resistance) = fields.get_mut("PhaseImpedanceData.r") {
+                    *resistance = serde_json::json!(777_123.0);
+                    count += 1;
+                }
+                count + fields.values_mut().map(corrupt).sum::<usize>()
+            }
+            serde_json::Value::Array(values) => values.iter_mut().map(corrupt).sum(),
+            _ => 0,
+        }
+    }
+    let source = DISTRIBUTION_FORMATS[2];
+    let target = DISTRIBUTION_FORMATS[3];
+    let payloads = distribution_payloads(source).unwrap();
+    let payload = payloads
+        .iter()
+        .find(|payload| payload.label == "four wire linecode")
+        .unwrap();
+    let mut conversion = emit_distribution_module(&payload.module, target.target).unwrap();
+    let mut control = Cell::default();
+    validate_distribution_emission(
+        payload,
+        source.name,
+        target,
+        false,
+        &mut control,
+        &conversion,
+    );
+    assert!(control.failures.is_empty(), "{:?}", control.failures);
+
+    let mut document: serde_json::Value = serde_json::from_str(&conversion.text).unwrap();
+    assert!(corrupt(&mut document) > 0);
+    conversion.text = document.to_string();
+    let mut corrupted = Cell::default();
+    validate_distribution_emission(
+        payload,
+        source.name,
+        target,
+        false,
+        &mut corrupted,
+        &conversion,
+    );
+    // Before the physical checks, the fixture's pre-existing EXTRAS_DROPPED
+    // warning left this mutation at exactly the same orange baseline level.
+    assert_eq!(corrupted.grade().codes, control.grade().codes);
+    assert!(
+        corrupted
+            .failures
+            .iter()
+            .any(|failure| { failure.contains("R (ohm)") && failure.contains("777123") }),
+        "{:?}",
+        corrupted.failures
+    );
+    assert_eq!(corrupted.grade().level, Level::Failed);
+
+    // Even a declared-loss cell must expose all measured typed differences.
+    let matrix = Matrix {
+        sources: vec!["PMD"],
+        targets: vec!["RAVENS"],
+        groups: vec![],
+        source_cells: vec![Cell::default()],
+        cells: vec![vec![corrupted]],
+    };
+    let judged = matrix
+        .keyed_cells()
+        .into_iter()
+        .map(|(key, cell)| {
+            let entry = Judged {
+                key: key.clone(),
+                grade: cell.grade(),
+                problems: vec![],
+            };
+            (key, entry)
+        })
+        .collect();
+    let details = render_details(&[("Distribution", matrix)], &judged);
+    assert!(details.contains("model change [four wire linecode]: .linecodes"));
+    assert!(details.contains("777123"));
+}
+
+#[test]
+fn matrix_model_change_details_are_not_truncated_at_the_corpus_limit() {
+    let before = serde_json::json!((0..40).map(|_| 1.0).collect::<Vec<_>>());
+    let after = serde_json::json!((0..40).map(|_| 2.0).collect::<Vec<_>>());
+    assert_eq!(model_diffs(&before, &after).len(), 24);
+    let mut cell = Cell::default();
+    record_model_diffs("many changed impedances", &before, &after, &mut cell);
+    assert_eq!(cell.model_diffs.len(), 40);
+    assert!(cell.model_diffs.last().unwrap().1.contains("[39]"));
+    assert!(
+        cell.model_diffs
+            .iter()
+            .all(|(case, _)| *case == "many changed impedances")
+    );
+    let resized = serde_json::json!([777_123.0]);
+    let differences = all_model_diffs(&before, &resized);
+    assert!(differences.iter().any(|d| d.path == "[0]"));
+    assert!(differences.iter().any(|d| d.path == "[39]"));
+}
+
+#[test]
+fn kron_projection_preserves_ground_identity_without_waiving_winding_orientation() {
+    let original = load_distribution_case(
+        data("dist/pmd/math/ut_trans_2w_yy_math.json"),
+        "pmd-math-json",
+    )
+    .unwrap()
+    .network;
+    let mut projected =
+        powerio_dist::neutral_kron_reduce(&original, &powerio_dist::NeutralKronOptions::default())
+            .unwrap()
+            .into_parts()
+            .0;
+    restore_transformer_circuits(&original, &mut projected);
+    assert_eq!(
+        electrical_projection::differences(&original, &projected),
+        Vec::<String>::new()
+    );
+    let terminals = &mut projected.transformers_mut()[0].windings[0].terminal_map;
+    let last = terminals.len() - 1;
+    terminals.swap(0, last);
+    assert_ne!(
+        electrical_projection::differences(&original, &projected),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_unverified_transformer_cannot_mask_a_changed_line_or_another_transformer() {
+    let (_, fixture, format) = DISTRIBUTION_CASES
+        .iter()
+        .find(|(label, _, _)| *label == "BMOPF IEEE 13")
+        .unwrap();
+    let parsed = load_distribution_case(data(fixture), format.token).unwrap();
+    let mut cell = Cell::default();
+    let (before, mut after) = distribution_check_scope(
+        parsed.network.clone(),
+        parsed.network,
+        "BMOPF IEEE 13",
+        &mut cell,
+    );
+    assert_eq!(cell.verification_notes.len(), 1);
+    assert!(
+        cell.verification_notes[0]
+            .1
+            .contains("UNVERIFIED component xfm2")
+    );
+    assert!(!before.transformers().iter().any(|t| t.name == "xfm2"));
+    assert_eq!(
+        electrical_projection::differences(&before, &after),
+        Vec::<String>::new()
+    );
+    after.line_codes_mut()[0].r_series[0][0] = 777_123.0;
+    after.transformers_mut()[0].windings[1].tap = 1.25;
+    let differences = electrical_projection::differences(&before, &after);
+    assert!(
+        differences
+            .iter()
+            .any(|difference| difference.contains("R (ohm)")),
+        "{differences:?}"
+    );
+    assert!(
+        differences
+            .iter()
+            .any(|difference| difference.contains("voltage ratio")),
+        "{differences:?}"
+    );
+}
+
+#[test]
+fn transmission_restatements_do_not_waive_other_fields() {
+    let before = serde_json::json!({"generated_uids": ["g1"], "generators": [{"uid": "g1", "cost": {"model": 2, "ncost": 2, "coeffs": [2.0, 3.0]}}]});
+    let after = serde_json::json!({"generators": [{"uid": "g1", "cost": {"model": 2, "ncost": 3, "coeffs": [0.0, 2.0, 3.0]}}]});
+    let mut restated = Cell::default();
+    record_transmission_model_diffs("polynomial", &before, &after, &mut restated);
+    assert_eq!(restated.grade().level, Level::Restated);
+    assert_eq!(
+        restated.model_diffs.len(),
+        restated.model_restatements.len()
+    );
+    let mut changed = after.clone();
+    changed["generators"][0]["cost"]["coeffs"][2] = serde_json::json!(4.0);
+    changed["generators"][0]["uid"] = serde_json::json!("different generator");
+    let mut corrupted = Cell::default();
+    record_transmission_model_diffs("polynomial", &before, &changed, &mut corrupted);
+    assert_eq!(corrupted.grade().level, Level::Failed);
+    assert_eq!(corrupted.model_restatements.len(), 1);
+}
+
+#[test]
+fn distribution_diagonal_checks_canonical_emission_as_well_as_byte_echo() {
+    let format = DISTRIBUTION_FORMATS[3];
+    let mut payloads = distribution_payloads(format).unwrap();
+    let payload = payloads
+        .iter_mut()
+        .find(|p| p.label == "four wire linecode")
+        .unwrap();
+    // The retained module remains intact. Only the value passed to the fresh
+    // writer has this name, which RAVENS must diagnose as unrepresentable.
+    *payload.network.name_mut() = Some("canonical writer sentinel".to_owned());
+    let mut cell = Cell::default();
+    validate_distribution_pair(payload, format.name, format, true, &mut cell);
+    assert_eq!(cell.echo_exact, Some(true));
+    assert!(
+        cell.findings
+            .iter()
+            .any(|(_, leg, diagnostic)| *leg == Leg::Write
+                && diagnostic.message().contains("canonical writer sentinel"))
+    );
+}
+
+#[test]
+fn distribution_report_orders_components_but_preserves_conductor_order() {
+    let parsed = load_distribution_case(data("dist/micro/fourwire_linecode.dss"), "dss").unwrap();
+    let mut reordered = parsed.network.clone();
+    reordered.buses_mut().reverse();
+    reordered.loads_mut().reverse();
+    reordered.lines_mut().reverse();
+    assert_eq!(
+        distribution_report_value(&parsed.network),
+        distribution_report_value(&reordered)
+    );
+    reordered.lines_mut()[0].terminal_map_from.reverse();
+    assert_ne!(
+        distribution_report_value(&parsed.network),
+        distribution_report_value(&reordered)
+    );
 }

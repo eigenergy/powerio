@@ -273,7 +273,11 @@ impl DssWriter {
         let Some(native) = equivalent(net, source) else {
             return false;
         };
-        let circuit = net.name().as_deref().unwrap_or("converted");
+        let circuit = net
+            .name()
+            .as_deref()
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or("converted");
         self.check_name("circuit", circuit);
         let port = self.bus_ref(&native.line.bus_to, &native.line.terminal_map_to);
         let impedance = if let Some(mva) = native.mva {

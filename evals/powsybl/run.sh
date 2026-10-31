@@ -14,6 +14,9 @@ output_dir=$(mktemp -d "${TMPDIR:-/tmp}/powerio-powsybl.XXXXXX")
 trap 'rm -rf "$output_dir"' EXIT
 powsybl_inputs="$output_dir/powsybl-inputs"
 
+"$python_binary" -m unittest discover -s "$repository_root/evals/powsybl" -p 'test_check_outputs.py'
+"$python_binary" "$repository_root/evals/powsybl/check_ravens.py" "$powerio_binary"
+
 cgmes_2415_source="$powsybl_core/cgmes/cgmes-conformity/src/main/resources/conformity/cas-2/MicroGrid/Type2_T2/CGMES_v2.4.15_MicroGridTestConfiguration_T2_Assembled_Complete_v2"
 cgmes_30_source="$powsybl_core/cgmes/cgmes-conformity/src/main/resources/conformity/cas-3-data-3.0.2/MicroGrid/BaseCase/MicroGrid-BaseCase-Merged"
 remote_control_source="$powsybl_core/psse/psse-converter/src/test/resources/remoteControl.xiidm"

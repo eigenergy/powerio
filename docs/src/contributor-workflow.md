@@ -33,6 +33,7 @@ Pick the smallest set of gates that covers what you changed, then run the
 | changed surface | extra gates |
 | --- | --- |
 | parser or writer semantics | `bash evals/validation/run_validation.sh`; format round trip tests; affected `cargo +nightly fuzz run <target> -- -runs=1` harnesses |
+| MG-RAVENS or PMD MATHEMATICAL | the RAVENS schema workflow; `cargo test -p powerio-dist --test pmd_math --test ravens --test ravens_physics --test format_input_robustness`; the PowSybl RAVENS routes in `evals/powsybl/run.sh` |
 | rich model fields | `bash evals/validation/run_rich_validation.sh` |
 | matrix calculations | `cargo test -p powerio-matrix`; `cargo bench -p powerio-matrix --bench matrix` |
 | problem instances or DC OPF bundles | `cargo test -p powerio-prob --no-default-features`; `cargo test -p powerio --features matrix` |

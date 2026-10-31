@@ -3,6 +3,20 @@
 The [CGMES contribution audit](cgmes-contribution-audit.md) compares the final
 implementation with Mohamed Numair's original CGMES reader and writer commits.
 
+`check_ravens.py` also checks MATPOWER cases 9, 14, 30, 57, and 118 through
+RAVENS and PowerIO IR, then imports fresh RAW 33/35, RAWX, XIIDM, and JIIDM
+with native PowSybl. It compares every column of ten electrical tables with
+the direct conversion at `atol=1e-8`, `rtol=1e-9`, including topology, taps,
+power, impedances, voltages, and limits. Two explicit balanced-profile losses
+are checked separately: generator voltage setpoints recover at 1 pu and
+third branch ratings disappear. Each loss must have its own emission finding;
+the corresponding native values are asserted rather than ignored. These
+checks verify the supported profile, not lossless conversion or load-flow
+equivalence when a setpoint has changed.
+An additional two-bus case preserves a fixed-Q generator beside a regulating
+slack generator and compares both converged native AC solutions. It catches
+an unintended regulator change even when voltage setpoints happen to be 1 pu.
+
 The gate keeps the case9 XIIDM, JIIDM, CGMES, PSS/E RAW revisions 33 through
 35, and PSS/E RAWX smoke outputs. It also reads official PowSybl Core reference
 cases for CGMES 2.4.15, CGMES 3.0, XIIDM 1.12 through 1.17, RAW, and RAWX, and

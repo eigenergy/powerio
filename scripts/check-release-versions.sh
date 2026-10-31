@@ -60,9 +60,13 @@ import hashlib
 from pathlib import Path
 
 path, version, expected_id = sys.argv[1], int(sys.argv[2]), sys.argv[3]
-published = Path("docs/schema/pio-ir/2/schema.json").read_bytes()
-if hashlib.sha256(published).hexdigest() != "8700329706173edb90924460464673310dabb5f4c5264b96fc0ff03eea42c812":
-    raise SystemExit("the published 0.11.0 IR 2 schema changed")
+for snapshot, expected_hash in {
+    "2/schema.json": "8700329706173edb90924460464673310dabb5f4c5264b96fc0ff03eea42c812",
+    "2/0.11.7/schema.json": "b74ba4faff286efcb07981de515a9787a242280fd6edda966daea7de6ba16cde",
+}.items():
+    published = Path("docs/schema/pio-ir", snapshot).read_bytes()
+    if hashlib.sha256(published).hexdigest() != expected_hash:
+        raise SystemExit(f"the published IR schema {snapshot} changed")
 with open(path, encoding="utf-8") as handle:
     schema = json.load(handle)
 header = schema["properties"]

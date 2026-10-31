@@ -10,6 +10,8 @@ use std::sync::Arc;
 
 use powerio_dist::{DistLoadVoltageModel, DistTargetFormat, MulticonductorNetwork, Result};
 
+#[path = "helpers/electrical_projection.rs"]
+mod electrical_projection;
 mod helpers;
 #[path = "helpers/source_equivalents.rs"]
 mod source_equivalents;
@@ -26,6 +28,7 @@ enum Fmt {
     Dss,
     Bmopf,
     Pmd,
+    Ravens,
 }
 
 impl Fmt {
@@ -34,6 +37,7 @@ impl Fmt {
             Fmt::Dss => DistTargetFormat::Dss,
             Fmt::Bmopf => DistTargetFormat::BmopfJson,
             Fmt::Pmd => DistTargetFormat::PmdJson,
+            Fmt::Ravens => DistTargetFormat::RavensJson,
         }
     }
 
@@ -67,6 +71,7 @@ impl Fmt {
             }
             Fmt::Bmopf => parse_bmopf_str(text),
             Fmt::Pmd => parse_pmd_str(text),
+            Fmt::Ravens => helpers::parse_str(text, "ravens-json"),
         }
     }
 
@@ -75,6 +80,7 @@ impl Fmt {
             Fmt::Dss => "dss",
             Fmt::Bmopf => "BMOPF",
             Fmt::Pmd => "PMD",
+            Fmt::Ravens => "RAVENS",
         }
     }
 }
@@ -229,6 +235,7 @@ fn parse_case(case: &Case) -> helpers::Parsed {
         Fmt::Dss => parse_dss_file(&path).unwrap(),
         Fmt::Bmopf => helpers::parse_bmopf_file(&path).unwrap(),
         Fmt::Pmd => helpers::parse_pmd_file(&path).unwrap(),
+        Fmt::Ravens => helpers::parse_file(&path, Some("ravens-json")).unwrap(),
     }
 }
 
@@ -869,6 +876,7 @@ fn canonical_writers_preserve_electrical_equivalents() {
                 Fmt::Dss => helpers::emit_dss(&net),
                 Fmt::Bmopf => helpers::emit_bmopf_json(&net),
                 Fmt::Pmd => helpers::emit_pmd_json(&net),
+                Fmt::Ravens => helpers::emit_value(&net, DistTargetFormat::RavensJson),
             };
             let reparsed = match target.parse_emission(&first) {
                 Ok(n) => n,
@@ -878,6 +886,7 @@ fn canonical_writers_preserve_electrical_equivalents() {
                 Fmt::Dss => helpers::emit_dss(&reparsed),
                 Fmt::Bmopf => helpers::emit_bmopf_json(&reparsed),
                 Fmt::Pmd => helpers::emit_pmd_json(&reparsed),
+                Fmt::Ravens => helpers::emit_value(&reparsed, DistTargetFormat::RavensJson),
             };
             if target == Fmt::Dss {
                 let third = target.parse_emission(&second).unwrap();
@@ -891,6 +900,70 @@ fn canonical_writers_preserve_electrical_equivalents() {
                 "{} → {}: canonical JSON is not stable",
                 case.label,
                 target.name()
+            );
+        }
+    }
+}
+
+/// Every fixture converts to MG-RAVENS and the canonical write is byte
+/// idempotent (write, parse, write). RAVENS is not in the strict
+/// projection grid above: its transformer-tank and per-phase restatement
+/// makes the structural comparison a separate concern (see `tests/ravens.rs`
+/// for the projection round trips), but byte idempotence is the writer's
+/// core guarantee and holds across the whole corpus.
+#[test]
+fn ravens_writer_idempotent_across_fixtures() {
+    for case in CASES {
+        let net = parse_case(case);
+        let first = helpers::emit_value(&net, Fmt::Ravens.target());
+        let (expected, projection_problems) =
+            electrical_projection::ravens_projection(&net, &first.diagnostics);
+        assert!(
+            projection_problems.is_empty(),
+            "{}: {}",
+            case.label,
+            projection_problems.join("; ")
+        );
+        let reparsed = Fmt::Ravens.parse_emission(&first).unwrap_or_else(|e| {
+            panic!(
+                "{} -> {}: reparse failed: {e}",
+                case.label,
+                Fmt::Ravens.name()
+            )
+        });
+        // Unsupported-conductor cases still check the surviving circuit and
+        // canonical stability; a diagnostic is not a reason to skip a case.
+        if expected.lines().len() != net.lines().len()
+            || expected.loads().len() != net.loads().len()
+        {
+            let before = source_equivalents::contract_source_pairs(&expected);
+            let after = source_equivalents::contract_source_pairs(&reparsed);
+            let differences = electrical_projection::differences(&before, &after);
+            assert!(
+                differences.is_empty(),
+                "{}: {}",
+                case.label,
+                differences.join("; ")
+            );
+        }
+        let second = helpers::emit_value(&reparsed, Fmt::Ravens.target());
+        if first.text != second.text {
+            let (a, b): (Vec<&str>, Vec<&str>) =
+                (first.text.lines().collect(), second.text.lines().collect());
+            let at = a
+                .iter()
+                .zip(&b)
+                .position(|(x, y)| x != y)
+                .unwrap_or(a.len().min(b.len()));
+            let window =
+                |lines: &[&str]| lines[at.saturating_sub(3)..(at + 4).min(lines.len())].join("\n");
+            panic!(
+                "{} -> {}: canonical output is not idempotent at line {}:\n--- first\n{}\n--- second\n{}",
+                case.label,
+                Fmt::Ravens.name(),
+                at + 1,
+                window(&a),
+                window(&b)
             );
         }
     }
@@ -1119,7 +1192,7 @@ fn renumbering_legs_are_position_stable_bijections() {
             let conv = match target {
                 Fmt::Dss => helpers::emit_dss(&net),
                 Fmt::Pmd => helpers::emit_pmd_json(&net),
-                Fmt::Bmopf => unreachable!("BMOPF keeps terminal names"),
+                Fmt::Bmopf | Fmt::Ravens => unreachable!("not a renumbering leg"),
             };
             let round_tripped = target
                 .parse_emission(&conv)

@@ -158,17 +158,32 @@ fn formats_without_geometry_report_dropped_locations() {
             conv.render_diagnostics()
         );
     }
-    // Formats with a coordinate representation stay silent.
-    for format in [TargetFormat::PowerWorld, TargetFormat::PandapowerJson] {
+    // Coordinate support does not suppress unrelated fidelity findings.
+    for (format, token) in [
+        (TargetFormat::PowerWorld, "powerworld"),
+        (TargetFormat::PandapowerJson, "pandapower-json"),
+    ] {
         let conv = emit_value(&net, format).unwrap();
         assert!(
             !conv
                 .render_diagnostics()
                 .iter()
-                .any(|w| w.contains("dropped: ")),
+                .any(|w| w.contains("bus location(s)") && w.contains("dropped")),
             "{format:?} warned: {:?}",
             conv.render_diagnostics()
         );
+        let restored = parse_str(&conv.text, token).unwrap().network;
+        assert_eq!(restored.buses().len(), net.buses().len());
+        for bus in net.buses() {
+            let recovered = restored.buses().iter().find(|b| b.id == bus.id).unwrap();
+            match (bus.location, recovered.location) {
+                (Some(before), Some(after)) => {
+                    assert!((before.x - after.x).abs() < 1e-6);
+                    assert!((before.y - after.y).abs() < 1e-6);
+                }
+                (before, after) => assert_eq!(before, after),
+            }
+        }
     }
 }
 

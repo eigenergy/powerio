@@ -645,7 +645,7 @@ impl Writer {
 
     fn warn_unemitted_untyped(&mut self, net: &MulticonductorNetwork) {
         for u in net.untyped_objects() {
-            if Self::is_emitted_untyped(u) {
+            if Self::is_emitted_untyped(net, u) {
                 continue;
             }
             let message = format!(
@@ -668,7 +668,19 @@ impl Writer {
         }
     }
 
-    fn is_emitted_untyped(u: &crate::model::UntypedObject) -> bool {
+    fn is_emitted_untyped(net: &MulticonductorNetwork, u: &crate::model::UntypedObject) -> bool {
+        // PMD retains its unknown ENGINEERING tables as raw JSON. A table
+        // named `time_series` has different fields and semantics in BMOPF.
+        // Its retained model marker survives IR and canonical value writes,
+        // including callers clearing source_format to disable source echo.
+        if net.extras().contains_key("pmd_data_model")
+            || matches!(
+                net.source_format(),
+                Some(crate::DistSourceFormat::PmdJson | crate::DistSourceFormat::PmdMathJson)
+            )
+        {
+            return false;
+        }
         RAW_BMOPF_EXTRAS_TABLES.contains(&u.class.as_str()) || u.class.starts_with("transformer.")
     }
 
@@ -684,7 +696,7 @@ impl Writer {
         self.clear_non_table_extras_slots(net, extras);
         for u in net.untyped_objects() {
             let subtype = u.class.strip_prefix("transformer.");
-            if subtype.is_none() && !RAW_BMOPF_EXTRAS_TABLES.contains(&u.class.as_str()) {
+            if !Self::is_emitted_untyped(net, u) {
                 continue;
             }
             let mut unplaced = Vec::new();
@@ -2858,7 +2870,19 @@ fn classify(t: &DistTransformer) -> Kind {
                 DistWindingConn::Wye,
                 DistWindingConn::Wye,
             ],
-        ) => Kind::CenterTap,
+        ) => {
+            // The compact center-tap subtype has one shared secondary
+            // leakage arm, so its two primary-to-secondary tests must
+            // agree. Keep unequal tests (including explicit zero) in the
+            // general pair table instead of silently symmetrizing them.
+            let xhl = t.xsc_pct.first().copied().unwrap_or(0.0);
+            let xht = t.xsc_pct.get(1).copied().unwrap_or(xhl);
+            if (xhl - xht).abs() > 0.0 {
+                Kind::NWinding
+            } else {
+                Kind::CenterTap
+            }
+        }
         (3, [DistWindingConn::Wye, DistWindingConn::Delta]) => Kind::WyeDelta,
         (3, [DistWindingConn::Delta, DistWindingConn::Wye]) => Kind::DeltaWye,
         // The decomposition indexes terminal_map[phase] and takes the last

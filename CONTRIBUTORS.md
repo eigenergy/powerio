@@ -25,6 +25,13 @@ change in the linked pull request.
   informed the separate study API in
   [#660](https://github.com/eigenergy/powerio/pull/660); that issue retains
   work beyond the merged API.
+- [ferrandor](https://github.com/ferrandor) reported that a PMD ENGINEERING
+  export of a stock PMD case imported with no components
+  ([#646](https://github.com/eigenergy/powerio/issues/646), fixed in
+  [#738](https://github.com/eigenergy/powerio/pull/738)) and proposed reading
+  and writing the PowerModelsDistribution MATHEMATICAL model
+  ([#645](https://github.com/eigenergy/powerio/issues/645)), implemented as
+  `pmd-math-json`.
 - [frederikgeth](https://github.com/frederikgeth) reported a valid
   106,038-terminal solution that PowerIO could serialize but not read back
   ([#544](https://github.com/eigenergy/powerio/issues/544), addressed in
@@ -41,9 +48,12 @@ change in the linked pull request.
 - [MohamedNumair](https://github.com/MohamedNumair) proposed CIM/CGMES
   coverage for both network families in
   [#237](https://github.com/eigenergy/powerio/issues/237), addressed by
-  [#454](https://github.com/eigenergy/powerio/pull/454), and contributed the
+  [#454](https://github.com/eigenergy/powerio/pull/454), contributed the
   distribution CIM reader and writer ported in
-  [#631](https://github.com/eigenergy/powerio/pull/631).
+  [#631](https://github.com/eigenergy/powerio/pull/631), and wrote the
+  MG-RAVENS JSON readers and writers for both profiles
+  ([#27](https://github.com/eigenergy/powerio/issues/27)), whose commits
+  this repository carries.
 - [qian-harvard](https://github.com/qian-harvard) reported and cross-checked
   PSS/E reader defects against actual exports in
   [#592](https://github.com/eigenergy/powerio/issues/592), then implemented

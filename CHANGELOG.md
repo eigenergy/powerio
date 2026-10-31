@@ -2,6 +2,83 @@
 
 ## Unreleased
 
+- PMD MATHEMATICAL emission retains purely resistive or reactive source
+  impedance. MG-RAVENS emission respects line ampacity overrides, including
+  distinct limits on segments sharing a linecode.
+- MG-RAVENS JSON (`ravens-json`) parses and writes
+  ([#27](https://github.com/eigenergy/powerio/issues/27)). MG-RAVENS is
+  LANL's CIM derived microgrid interchange schema
+  (lanl-ansi/MG-RAVENS, Apache-2.0); its two profiles share one token and the
+  document's classes pick the reader. The balanced profile is a `powerio-tx`
+  format following the upstream MATPOWER converter's conventions and maps to
+  `BalancedNetwork`; the multiconductor profile is a `powerio-dist` format
+  following `opendss2xml` and maps to `MulticonductorNetwork` (per phase
+  segments and loads, `PerLengthPhaseImpedance` matrices, tanks with catalog
+  end records and tests, `EnergySource`, machines and power electronics,
+  shunt banks, switches). `powerio_tnd::formats::ravens` reads a document
+  into whichever network its profile states and refuses a mixed one; the
+  facade, the CLI, and `.json` detection route through it. Both writers use
+  deterministic mRIDs and are byte stable across write, read, write. The
+  multiconductor profile states a grounded terminal as a CIM `Ground`, a
+  wye load's return on the neutral and whether it is grounded, a four wire
+  segment's neutral conductor, each segment end's own phase code (so a
+  lateral landing on another phase keeps both ends), `Yn` for a bank whose
+  neutral is grounded, and an unbalanced source as one single phase
+  `EnergySource` per conductor (`EMIT.RAVENS_DIST.SOURCE_SPLIT`); a segment with
+  a conductor outside the CIM phase identities is dropped with a finding.
+  Mohamed Numair wrote both readers and writers; this release ports them
+  onto the shared `powerio-dist` and `powerio-tx` hubs.
+- `powerio_core::cim`: the vocabulary the CIM derived formats share, namely
+  deterministic UUIDv5 mRIDs, the phase letter and terminal conversions
+  (`1` to `4` and `a` to `n` both read), `PhaseCode` expansion, and MG-RAVENS
+  profile detection. The distribution CIM and CGMES formats keep their own
+  helpers for now.
+- PowerModelsDistribution MATHEMATICAL JSON (`pmd-math-json`) parses and
+  writes ([#645](https://github.com/eigenergy/powerio/issues/645), proposed
+  by Robert Ferrando). The writer follows `transform_data_model`: PMD's
+  transformer loss model, sources as generators behind their Thevenin
+  impedance, `calc_voltage_bases`, `make_per_unit!`, and Kron reduction of
+  grounded neutrals (`PmdMathEmitOptions::kron_reduce`), with the `map` PMD
+  writes. The reader folds through the map, restores the neutral a Kron
+  reduced wye load returns on as a grounded bus terminal, and restates
+  winding impedances on the emergency rating, which it reports since the
+  MATHEMATICAL model carries no winding power rating. A load without a
+  nominal voltage takes the bus base and an island no stated base reaches
+  takes a load's nominal voltage, each with a finding. The tests compare the
+  writer field by field against PMD v0.16 exports of five PMD cases, vendored
+  under `tests/data/dist/pmd/math/` (BSD-3), and hold write, read, write to
+  byte identity. The ENGINEERING reader points a MATHEMATICAL document at the
+  new token.
+- PMD ENGINEERING JSON: a ZIP load is written as PMD spells it (`ZIP`, with
+  `zipv` only when the coefficients are known) and read under both `ZIP` and
+  `ZIPV`; a switch keeps its linecode's rating and impedance fields; an empty
+  `name` is a network without a name.
+- OpenDSS writer: a network whose name is empty writes `Circuit.converted`,
+  as a nameless one does, instead of `New Circuit.`.
+- The `.json` classifier sends a document with PMD's `data_model` marker to
+  the PMD readers even when its tables are shaped like PowerModels'. RAVENS
+  profile detection reads decoded class identities and class containers;
+  object names and descriptive text do not select a profile.
+- The conversion matrix gains the MG-RAVENS profiles and PMD MATHEMATICAL
+  JSON as formats and the MG-RAVENS example and a PMD two winding case as
+  cases; an OpenDSS readback in the matrix now loads the bus coordinate
+  sidecar, and the report names the codes of any error severity finding.
+- RAVENS preserves disabled voltage regulators, isolated bus voltage bases,
+  distribution source impedance, finite transformer neutral impedance,
+  conductor order, and load voltage references. Unsupported representations
+  produce specific findings. PMD MATHEMATICAL restores eliminated transformer
+  neutrals, keeps degree/radian and shunt-unit conventions, and preserves
+  leakage impedance and unbounded ratings when recovering transformers.
+  Malformed allocation dimensions are rejected before matrix construction.
+- Independent validation now checks fresh RAVENS output through PowerIO IR
+  against the pinned native schema and converter profile, and compares
+  RAVENS-mediated PSS/E and PowSybl imports with direct native imports.
+  The conversion matrix retains fixture-labelled field differences and tests
+  electrical changes independently of unrelated metadata warnings.
+- The additive source-format catalog uses `pio-ir/2/0.11.8/schema.json`.
+  The released 0.11.7 snapshot stays byte exact; IR version 2 and C ABI 7
+  remain unchanged.
+
 ## 0.11.7
 
 **AC optimal transmission switching**

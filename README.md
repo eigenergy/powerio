@@ -138,11 +138,13 @@ describe separate interfaces.
 | pandapower JSON | `pandapower-json` | yes | yes |
 | PyPSA CSV directory | `pypsa-csv` | yes | yes |
 | Surge JSON | `surge-json` | yes | yes |
+| MG-RAVENS JSON, balanced and multiconductor profiles | `ravens-json` | yes | yes |
 | GridFM Parquet directory, `gridfm` feature | `gridfm` | yes | yes |
 | DOE GO Challenge 3 JSON | `goc3-json` | problem, or problem with solution | a complete solution |
 | DeepMind OPFData JSON | `opfdata-json` | yes | no |
 | OpenDSS `.dss` | `dss` | yes | yes |
-| PowerModelsDistribution engineering JSON | `pmd-json` | yes | yes |
+| PowerModelsDistribution ENGINEERING JSON | `pmd-json` | yes | yes |
+| PowerModelsDistribution MATHEMATICAL JSON | `pmd-math-json` | yes | yes |
 | BMOPF JSON | `bmopf-json`, `bmopf-json@0.1.0`, `bmopf-json@0.2.0` | 0.1.0, 0.2.0 | 0.1.0, 0.2.0 (default) |
 | Distribution CIM, CIM100 RDF/XML | `cim-dist` | cim17v40, one document or a directory | cim17v40, one document |
 | PSS SINCAL project, `sincal` feature | `sincal-balanced`, `sincal-multiconductor` | yes, with an explicit profile | an unchanged source byte for byte; an experimental fresh writer in Rust |

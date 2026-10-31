@@ -14,9 +14,11 @@
 //! [`TimeSeries`] of networks, and [`crate::parse`] refuses it with a message
 //! that says so.
 
+pub mod math;
 pub(crate) mod read;
 mod write;
 
+pub use math::PmdMathEmitOptions;
 pub(crate) use write::emit_pmd_json_text;
 
 use powerio_core::{PioModule, Source, TimeSeries};

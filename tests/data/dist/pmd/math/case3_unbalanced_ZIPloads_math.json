@@ -1,0 +1,1031 @@
+{
+  "storage": {},
+  "transformer": {},
+  "name": "3bus_example",
+  "is_projected": true,
+  "bus_lookup": {
+    "primary": 1,
+    "sourcebus": 2,
+    "loadbus": 3
+  },
+  "switch": {},
+  "data_model": "MATHEMATICAL",
+  "bus": {
+    "3": {
+      "name": "loadbus",
+      "vbase": 0.23094010767585033,
+      "index": 3,
+      "grounded": [
+        false,
+        false,
+        false
+      ],
+      "bus_type": 1,
+      "vm_pair_ub": [],
+      "bus_i": 3,
+      "source_id": "bus.loadbus",
+      "vmax": [
+        null,
+        null,
+        null
+      ],
+      "terminals": [
+        1,
+        2,
+        3
+      ],
+      "vmin": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "vm_pair_lb": []
+    },
+    "4": {
+      "bus_type": 3,
+      "va": [
+        0.0,
+        -2.0943951023931953,
+        2.0943951023931957
+      ],
+      "vm_pair_ub": [],
+      "bus_i": 4,
+      "name": "_virtual_bus.voltage_source.source",
+      "vm": [
+        0.9958999999999999,
+        0.9958999999999999,
+        0.9958999999999999
+      ],
+      "source_id": "voltage_source.source",
+      "vmax": [
+        0.9958999999999999,
+        0.9958999999999999,
+        0.9958999999999999
+      ],
+      "vbase": 0.23094010767585033,
+      "terminals": [
+        1,
+        2,
+        3
+      ],
+      "index": 4,
+      "grounded": [
+        false,
+        false,
+        false
+      ],
+      "vmin": [
+        0.9958999999999999,
+        0.9958999999999999,
+        0.9958999999999999
+      ],
+      "vm_pair_lb": []
+    },
+    "1": {
+      "name": "primary",
+      "vbase": 0.23094010767585033,
+      "index": 1,
+      "grounded": [
+        false,
+        false,
+        false
+      ],
+      "bus_type": 1,
+      "vm_pair_ub": [],
+      "bus_i": 1,
+      "source_id": "bus.primary",
+      "vmax": [
+        null,
+        null,
+        null
+      ],
+      "terminals": [
+        1,
+        2,
+        3
+      ],
+      "vmin": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "vm_pair_lb": []
+    },
+    "2": {
+      "name": "sourcebus",
+      "vbase": 0.23094010767585033,
+      "index": 2,
+      "grounded": [
+        false,
+        false,
+        false
+      ],
+      "bus_type": 1,
+      "vm_pair_ub": [],
+      "bus_i": 2,
+      "source_id": "bus.sourcebus",
+      "vmax": [
+        null,
+        null,
+        null
+      ],
+      "terminals": [
+        1,
+        2,
+        3
+      ],
+      "vmin": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "vm_pair_lb": []
+    }
+  },
+  "shunt": {},
+  "per_unit": true,
+  "time_elapsed": 1.0,
+  "gen": {
+    "1": {
+      "gen_bus": 4,
+      "name": "_virtual_gen.voltage_source.source",
+      "vbase": 0.23094010767585033,
+      "gen_status": 1,
+      "index": 1,
+      "pmin": [
+        null,
+        null,
+        null
+      ],
+      "configuration": "WYE",
+      "shutdown": 0.0,
+      "source_id": "voltage_source.source",
+      "qmax": [
+        null,
+        null,
+        null
+      ],
+      "qmin": [
+        null,
+        null,
+        null
+      ],
+      "control_mode": 1,
+      "startup": 0.0,
+      "connections": [
+        1,
+        2,
+        3
+      ],
+      "pmax": [
+        null,
+        null,
+        null
+      ],
+      "model": 2,
+      "qg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "pg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "cost": [
+        0.5,
+        0.0
+      ],
+      "vg": [
+        0.0009959,
+        0.0009959,
+        0.0009959
+      ],
+      "ncost": 2
+    }
+  },
+  "is_kron_reduced": true,
+  "map": [
+    {
+      "unmap_function": "_map_math2eng_root!"
+    },
+    {
+      "from": "primary",
+      "unmap_function": "_map_math2eng_bus!",
+      "to": "bus.1"
+    },
+    {
+      "from": "sourcebus",
+      "unmap_function": "_map_math2eng_bus!",
+      "to": "bus.2"
+    },
+    {
+      "from": "loadbus",
+      "unmap_function": "_map_math2eng_bus!",
+      "to": "bus.3"
+    },
+    {
+      "from": "quad",
+      "unmap_function": "_map_math2eng_line!",
+      "to": "branch.1"
+    },
+    {
+      "from": "ohline",
+      "unmap_function": "_map_math2eng_line!",
+      "to": "branch.2"
+    },
+    {
+      "from": "l1",
+      "unmap_function": "_map_math2eng_load!",
+      "to": [
+        "load.1",
+        "load.2",
+        "load.3"
+      ]
+    },
+    {
+      "from": "l2",
+      "unmap_function": "_map_math2eng_load!",
+      "to": [
+        "load.4",
+        "load.5",
+        "load.6"
+      ]
+    },
+    {
+      "from": "l4",
+      "unmap_function": "_map_math2eng_load!",
+      "to": [
+        "load.7",
+        "load.8",
+        "load.9"
+      ]
+    },
+    {
+      "from": "l3",
+      "unmap_function": "_map_math2eng_load!",
+      "to": [
+        "load.10",
+        "load.11",
+        "load.12"
+      ]
+    },
+    {
+      "from": "source",
+      "unmap_function": "_map_math2eng_voltage_source!",
+      "to": [
+        "gen.1",
+        "bus.4",
+        "branch.3"
+      ]
+    }
+  ],
+  "load": {
+    "11": {
+      "qd": [
+        0.003
+      ],
+      "name": "l3_CURRENT",
+      "source_id": "load.l3",
+      "vnom_kv": 1.0,
+      "pd": [
+        0.009000000000000001
+      ],
+      "vbase": 0.23094010767585033,
+      "connections": [
+        2
+      ],
+      "index": 11,
+      "model": "CURRENT",
+      "load_bus": 3,
+      "dispatchable": 0,
+      "status": 1,
+      "configuration": "WYE"
+    },
+    "3": {
+      "qd": [
+        0.0008,
+        0.0008,
+        0.0008
+      ],
+      "name": "l1_POWER",
+      "source_id": "load.l1",
+      "vnom_kv": 1.7320508075688772,
+      "pd": [
+        0.0024000000000000002,
+        0.0024000000000000002,
+        0.0024000000000000002
+      ],
+      "vbase": 0.23094010767585033,
+      "connections": [
+        1,
+        2,
+        3
+      ],
+      "index": 3,
+      "model": "POWER",
+      "load_bus": 3,
+      "dispatchable": 0,
+      "status": 1,
+      "configuration": "DELTA"
+    },
+    "4": {
+      "qd": [
+        0.0018
+      ],
+      "name": "l2_IMPEDANCE",
+      "source_id": "load.l2",
+      "vnom_kv": 1.0,
+      "pd": [
+        0.005399999999999999
+      ],
+      "vbase": 0.23094010767585033,
+      "connections": [
+        1
+      ],
+      "index": 4,
+      "model": "IMPEDANCE",
+      "load_bus": 3,
+      "dispatchable": 0,
+      "status": 1,
+      "configuration": "WYE"
+    },
+    "5": {
+      "qd": [
+        0.0018
+      ],
+      "name": "l2_CURRENT",
+      "source_id": "load.l2",
+      "vnom_kv": 1.0,
+      "pd": [
+        0.005399999999999999
+      ],
+      "vbase": 0.23094010767585033,
+      "connections": [
+        1
+      ],
+      "index": 5,
+      "model": "CURRENT",
+      "load_bus": 3,
+      "dispatchable": 0,
+      "status": 1,
+      "configuration": "WYE"
+    },
+    "6": {
+      "qd": [
+        0.0024000000000000002
+      ],
+      "name": "l2_POWER",
+      "source_id": "load.l2",
+      "vnom_kv": 1.0,
+      "pd": [
+        0.007200000000000001
+      ],
+      "vbase": 0.23094010767585033,
+      "connections": [
+        1
+      ],
+      "index": 6,
+      "model": "POWER",
+      "load_bus": 3,
+      "dispatchable": 0,
+      "status": 1,
+      "configuration": "WYE"
+    },
+    "10": {
+      "qd": [
+        0.0012000000000000001
+      ],
+      "name": "l3_IMPEDANCE",
+      "source_id": "load.l3",
+      "vnom_kv": 1.0,
+      "pd": [
+        0.0036000000000000003
+      ],
+      "vbase": 0.23094010767585033,
+      "connections": [
+        2
+      ],
+      "index": 10,
+      "model": "IMPEDANCE",
+      "load_bus": 3,
+      "dispatchable": 0,
+      "status": 1,
+      "configuration": "WYE"
+    },
+    "9": {
+      "qd": [
+        0.0012000000000000001
+      ],
+      "name": "l4_POWER",
+      "source_id": "load.l4",
+      "vnom_kv": 1.0,
+      "pd": [
+        0.0036000000000000003
+      ],
+      "vbase": 0.23094010767585033,
+      "connections": [
+        3
+      ],
+      "index": 9,
+      "model": "POWER",
+      "load_bus": 3,
+      "dispatchable": 0,
+      "status": 1,
+      "configuration": "WYE"
+    },
+    "1": {
+      "qd": [
+        0.0006,
+        0.0006,
+        0.0006
+      ],
+      "name": "l1_IMPEDANCE",
+      "source_id": "load.l1",
+      "vnom_kv": 1.7320508075688772,
+      "pd": [
+        0.0018,
+        0.0018,
+        0.0018
+      ],
+      "vbase": 0.23094010767585033,
+      "connections": [
+        1,
+        2,
+        3
+      ],
+      "index": 1,
+      "model": "IMPEDANCE",
+      "load_bus": 3,
+      "dispatchable": 0,
+      "status": 1,
+      "configuration": "DELTA"
+    },
+    "2": {
+      "qd": [
+        0.0006,
+        0.0006,
+        0.0006
+      ],
+      "name": "l1_CURRENT",
+      "source_id": "load.l1",
+      "vnom_kv": 1.7320508075688772,
+      "pd": [
+        0.0018,
+        0.0018,
+        0.0018
+      ],
+      "vbase": 0.23094010767585033,
+      "connections": [
+        1,
+        2,
+        3
+      ],
+      "index": 2,
+      "model": "CURRENT",
+      "load_bus": 3,
+      "dispatchable": 0,
+      "status": 1,
+      "configuration": "DELTA"
+    },
+    "8": {
+      "qd": [
+        0.0012000000000000001
+      ],
+      "name": "l4_CURRENT",
+      "source_id": "load.l4",
+      "vnom_kv": 1.0,
+      "pd": [
+        0.0036000000000000003
+      ],
+      "vbase": 0.23094010767585033,
+      "connections": [
+        3
+      ],
+      "index": 8,
+      "model": "CURRENT",
+      "load_bus": 3,
+      "dispatchable": 0,
+      "status": 1,
+      "configuration": "WYE"
+    },
+    "12": {
+      "qd": [
+        0.0018
+      ],
+      "name": "l3_POWER",
+      "source_id": "load.l3",
+      "vnom_kv": 1.0,
+      "pd": [
+        0.005399999999999999
+      ],
+      "vbase": 0.23094010767585033,
+      "connections": [
+        2
+      ],
+      "index": 12,
+      "model": "POWER",
+      "load_bus": 3,
+      "dispatchable": 0,
+      "status": 1,
+      "configuration": "WYE"
+    },
+    "7": {
+      "qd": [
+        0.0036
+      ],
+      "name": "l4_IMPEDANCE",
+      "source_id": "load.l4",
+      "vnom_kv": 1.0,
+      "pd": [
+        0.010799999999999999
+      ],
+      "vbase": 0.23094010767585033,
+      "connections": [
+        3
+      ],
+      "index": 7,
+      "model": "IMPEDANCE",
+      "load_bus": 3,
+      "dispatchable": 0,
+      "status": 1,
+      "configuration": "WYE"
+    }
+  },
+  "settings": {
+    "sbase": 500.0,
+    "voltage_scale_factor": 1000.0,
+    "sbase_default": 500.0,
+    "power_scale_factor": 1000.0,
+    "base_frequency": 50.0,
+    "vbases_default": {
+      "2": 0.23094010767585033
+    }
+  },
+  "branch": {
+    "3": {
+      "name": "_virtual_branch.voltage_source.source",
+      "source_id": "voltage_source.source",
+      "angmax": [
+        0.17453292519943295,
+        0.17453292519943295,
+        0.17453292519943295
+      ],
+      "vbase": 0.23094010767585033,
+      "t_connections": [
+        1,
+        2,
+        3
+      ],
+      "index": 3,
+      "b_to": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "f_bus": 4,
+      "br_status": 1,
+      "g_to": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "g_fr": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "angmin": [
+        -0.17453292519943295,
+        -0.17453292519943295,
+        -0.17453292519943295
+      ],
+      "f_connections": [
+        1,
+        2,
+        3
+      ],
+      "br_x": [
+        [
+          1.4454171288649941e-6,
+          -9.796621353003634e-9,
+          -9.796621353003634e-9
+        ],
+        [
+          -9.796621353003634e-9,
+          1.4454171288649941e-6,
+          -9.796621353003634e-9
+        ],
+        [
+          -9.796621353003634e-9,
+          -9.796621353003634e-9,
+          1.4454171288649941e-6
+        ]
+      ],
+      "b_fr": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "br_r": [
+        [
+          4.009605012762204e-7,
+          3.7157063721720964e-8,
+          3.7157063721720964e-8
+        ],
+        [
+          3.7157063721720964e-8,
+          4.009605012762204e-7,
+          3.7157063721720964e-8
+        ],
+        [
+          3.7157063721720964e-8,
+          3.7157063721720964e-8,
+          4.009605012762204e-7
+        ]
+      ],
+      "c_rating_a": [
+        null,
+        null,
+        null
+      ],
+      "t_bus": 2
+    },
+    "1": {
+      "rate_b": [
+        null,
+        null,
+        null
+      ],
+      "name": "quad",
+      "vbase": 0.23094010767585033,
+      "t_connections": [
+        1,
+        2,
+        3
+      ],
+      "index": 1,
+      "b_to": [
+        [
+          8.533333333333337e-7,
+          -0.0,
+          -0.0
+        ],
+        [
+          -0.0,
+          8.533333333333337e-7,
+          -0.0
+        ],
+        [
+          -0.0,
+          -0.0,
+          8.533333333333337e-7
+        ]
+      ],
+      "g_fr": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "f_connections": [
+        1,
+        2,
+        3
+      ],
+      "br_x": [
+        [
+          0.6253124999999998,
+          0.2503125,
+          0.2503125
+        ],
+        [
+          0.2503125,
+          0.6253124999999998,
+          0.2503125
+        ],
+        [
+          0.2503125,
+          0.2503125,
+          0.6253124999999998
+        ]
+      ],
+      "br_r": [
+        [
+          1.0940624999999997,
+          0.4378124999999999,
+          0.4378124999999999
+        ],
+        [
+          0.4378124999999999,
+          1.0940624999999997,
+          0.4378124999999999
+        ],
+        [
+          0.4378124999999999,
+          0.4378124999999999,
+          1.0940624999999997
+        ]
+      ],
+      "t_bus": 3,
+      "rate_a": [
+        null,
+        null,
+        null
+      ],
+      "source_id": "line.quad",
+      "angmax": [
+        1.0471975511965976,
+        1.0471975511965976,
+        1.0471975511965976
+      ],
+      "c_rating_b": [
+        null,
+        null,
+        null
+      ],
+      "f_bus": 1,
+      "g_to": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "rate_c": [
+        null,
+        null,
+        null
+      ],
+      "br_status": 1,
+      "angmin": [
+        -1.0471975511965976,
+        -1.0471975511965976,
+        -1.0471975511965976
+      ],
+      "c_rating_c": [
+        null,
+        null,
+        null
+      ],
+      "b_fr": [
+        [
+          8.533333333333337e-7,
+          -0.0,
+          -0.0
+        ],
+        [
+          -0.0,
+          8.533333333333337e-7,
+          -0.0
+        ],
+        [
+          -0.0,
+          -0.0,
+          8.533333333333337e-7
+        ]
+      ],
+      "c_rating_a": [
+        0.2771281292110204,
+        0.2771281292110204,
+        0.2771281292110204
+      ]
+    },
+    "2": {
+      "rate_b": [
+        null,
+        null,
+        null
+      ],
+      "name": "ohline",
+      "vbase": 0.23094010767585033,
+      "t_connections": [
+        1,
+        2,
+        3
+      ],
+      "index": 2,
+      "b_to": [
+        [
+          8.533333333333337e-7,
+          -0.0,
+          -0.0
+        ],
+        [
+          -0.0,
+          8.533333333333337e-7,
+          -0.0
+        ],
+        [
+          -0.0,
+          -0.0,
+          8.533333333333337e-7
+        ]
+      ],
+      "g_fr": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "f_connections": [
+        1,
+        2,
+        3
+      ],
+      "br_x": [
+        [
+          0.5465624999999998,
+          0.21843749999999998,
+          0.21843749999999998
+        ],
+        [
+          0.21843749999999998,
+          0.5465624999999998,
+          0.21843749999999998
+        ],
+        [
+          0.21843749999999998,
+          0.21843749999999998,
+          0.5465624999999998
+        ]
+      ],
+      "br_r": [
+        [
+          0.9374999999999999,
+          0.37499999999999994,
+          0.37499999999999994
+        ],
+        [
+          0.37499999999999994,
+          0.9374999999999999,
+          0.37499999999999994
+        ],
+        [
+          0.37499999999999994,
+          0.37499999999999994,
+          0.9374999999999999
+        ]
+      ],
+      "t_bus": 1,
+      "rate_a": [
+        null,
+        null,
+        null
+      ],
+      "source_id": "line.ohline",
+      "angmax": [
+        1.0471975511965976,
+        1.0471975511965976,
+        1.0471975511965976
+      ],
+      "c_rating_b": [
+        null,
+        null,
+        null
+      ],
+      "f_bus": 2,
+      "g_to": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "rate_c": [
+        null,
+        null,
+        null
+      ],
+      "br_status": 1,
+      "angmin": [
+        -1.0471975511965976,
+        -1.0471975511965976,
+        -1.0471975511965976
+      ],
+      "c_rating_c": [
+        null,
+        null,
+        null
+      ],
+      "b_fr": [
+        [
+          8.533333333333337e-7,
+          -0.0,
+          -0.0
+        ],
+        [
+          -0.0,
+          8.533333333333337e-7,
+          -0.0
+        ],
+        [
+          -0.0,
+          -0.0,
+          8.533333333333337e-7
+        ]
+      ],
+      "c_rating_a": [
+        0.2771281292110204,
+        0.2771281292110204,
+        0.2771281292110204
+      ]
+    }
+  },
+  "conductor_ids": [
+    1,
+    2,
+    3
+  ]
+}

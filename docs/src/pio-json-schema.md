@@ -26,8 +26,8 @@ both sides consume PowerIO values, including calculation instances, solutions,
 time series, and scenario sets.
 
 The generated JSON Schema is checked in at
-`docs/schema/pio-ir/2/0.11.7/schema.json` and served from
-`https://powerio.dev/schema/pio-ir/2/0.11.7/schema.json`. That schema, the
+`docs/schema/pio-ir/2/0.11.8/schema.json` and served from
+`https://powerio.dev/schema/pio-ir/2/0.11.8/schema.json`. That schema, the
 serializer, and the deserializer are all tested from the same Rust types.
 `docs/schema/README.md` lists the earlier `pio-package` and
 `powerio.module` documents as one history under `pio-ir`.
@@ -216,6 +216,9 @@ and statements for kV qualifiers and pre/post voltage bands, and
 `pio-ir/2/0.11.7/schema.json` adds the AC optimal transmission switching
 instance and solution types, the `branch_switching_cost` objective term, and
 the optional `hvdc_treatment` field of `DcPfInstance` and `AcPfInstance`.
+The current `pio-ir/2/0.11.8/schema.json` adds `ravens-json` and `pmd-math-json`
+source-format names for the next release, leaving the published 0.11.7 bytes
+unchanged. The catalog advance does not change IR version 2 or the C ABI.
 Existing source, monitor, and power flow instance representations remain
 accepted; published snapshots stay frozen.
 The release in that path identifies the snapshot, not another

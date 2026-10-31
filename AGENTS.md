@@ -14,14 +14,17 @@ check the current source, tests, and release notes.
 
 - **`powerio-core`**: the shared foundation: `Source`, `FormatId`,
   `Diagnostic`, `Error`, `PioModule<T>`, common module records,
-  `TimeSeries<T>`, `ScenarioSet<T>`, and output destination types. It has no
-  electrical network, matrix, or solver dependencies.
+  `TimeSeries<T>`, `ScenarioSet<T>`, output destination types, and the
+  `cim` vocabulary the CIM derived formats share (deterministic mRIDs, the
+  phase letters, MG-RAVENS profile detection). It has no electrical network,
+  matrix, or solver dependencies.
 - **`powerio-tx`**: the format neutral `BalancedNetwork`, the balanced format
   readers and writers, normalization, and derived indexed views.
 - **`powerio-tnd`**: integrated transmission/distribution composition, explicit
   cross-model transforms, and format adapters that span both electrical models.
   It depends on core, tx, and dist. SINCAL lives under `formats::sincal` behind
-  an opt-in feature; the facade enables it by default.
+  an opt-in feature; the facade enables it by default. `formats::ravens`
+  reads an MG-RAVENS document into whichever network its profile states.
 - **`powerio-dist`**: the multiconductor distribution model
   (`MulticonductorNetwork`) with the OpenDSS `.dss`, PMD JSON, BMOPF JSON, and
   distribution CIM (`cim-dist`) converters. It does **not** depend on the transmission crate; both share
@@ -57,13 +60,18 @@ Formats. MATPOWER `.m`, PSS/E `.raw` (revisions 32 to 35 in, 33 to 35 out),
 PSS/E RAWX 35, PowSybl XIIDM and JIIDM (1.0 to 1.17 in, 1.17 out), CIM CGMES
 (2.4.15 and 3.0 in, 3.0 out), ENTSO-E UCTE-DEF, PowerWorld `.aux`, PSLF
 `.epc`, PowerModels JSON, Egret JSON, pandapower JSON, PyPSA CSV directories,
-and Surge JSON parse and write. The IEEE Common Data Format, DOE GO Challenge
+Surge JSON, and the balanced MG-RAVENS JSON profile parse and write. The IEEE Common Data Format, DOE GO Challenge
 3 problem data, DeepMind OPFData JSON, and PowerWorld `.pwb` are read only;
 a complete `AcScucSolution` writes the official GO Challenge 3 solution
 file. A PowerWorld `.pwd` display parses to `PioValue::GeoLayer`. GridFM
 Parquet directories parse and write behind the `gridfm` feature. OpenDSS
-`.dss`, PMD engineering JSON, BMOPF JSON, and distribution CIM (`cim-dist`,
-CIM100 RDF/XML) meet at `MulticonductorNetwork`. The PSS/E contingency,
+`.dss`, PMD ENGINEERING and MATHEMATICAL JSON (`pmd-json`, `pmd-math-json`),
+BMOPF JSON, the multiconductor MG-RAVENS profile, and distribution CIM
+(`cim-dist`, CIM100 RDF/XML) meet at `MulticonductorNetwork`. MG-RAVENS has
+one token, `ravens-json`, for its two profiles: the balanced profile is a
+`powerio-tx` format, the multiconductor profile a `powerio-dist` one, and
+`powerio_tnd::formats::ravens` (which the facade routes through) picks the
+reader from the document's classes. The PSS/E contingency,
 subsystem, and monitored element files (`.con`, `.sub`, `.mon`) parse and
 write as `ContingencySet`, `SubsystemSet`, and `MonitoredSet`.
 PowerIO IR moves through `serialize` and `deserialize` and is not a grid
@@ -186,7 +194,8 @@ release on its own.
 powerio-core/src              module.rs (PioModule<T>), source.rs, output.rs,
                               diagnostic.rs, codes.rs, error.rs, records.rs,
                               time_series.rs, scenario.rs, component_id.rs,
-                              validation.rs (limits), bounded.rs, nonfinite.rs
+                              validation.rs (limits), bounded.rs, nonfinite.rs,
+                              cim.rs (shared CIM vocabulary, MG-RAVENS profiles)
 powerio-tx/src                network.rs (BalancedNetwork and its tables),
                               indexed.rs, hvdc.rs, lcc.rs, normalize.rs,
                               operations.rs, dc.rs, gen_cost.rs,
@@ -201,9 +210,13 @@ powerio-tx/src/format         mod.rs (parse, emit, TargetFormat, EmitOptions),
                               ucte/, ieee_cdf.rs, powerworld/ (auxiliary, pwb,
                               pwd, map, objects),
                               pslf.rs, powermodels.rs, egret.rs, pandapower.rs,
-                              pypsa.rs, surge.rs, goc3.rs, opfdata.rs
-powerio-tnd/src               integrated.rs, transform.rs, formats/sincal/
-powerio-dist/src              model.rs, convert.rs, dss/, pmd/, bmopf/, cim/, graph.rs,
+                              pypsa.rs, surge.rs, goc3.rs, opfdata.rs,
+                              ravens.rs (balanced MG-RAVENS profile)
+powerio-tnd/src               integrated.rs, transform.rs, formats/sincal/,
+                              formats/ravens.rs (profile dispatch)
+powerio-dist/src              model.rs, convert.rs, dss/, pmd/ (read, write,
+                              math/ for the MATHEMATICAL model), bmopf/, cim/,
+                              ravens/ (multiconductor MG-RAVENS), graph.rs,
                               geo.rs, kron.rs, lindist3flow.rs, readiness.rs,
                               collect.rs, diagnostics.rs, error.rs
 powerio-prob/src              operating/, instance/, solution/, update.rs,
@@ -283,7 +296,7 @@ docs/                         the mdBook guide, the schema archive, release note
   IR version; older readers reject types they do not implement. Existing
   type layouts and meanings stay compatible throughout 0.11.x. The DTOs in
   `powerio/src/stored/dto.rs` define the document layout. Regenerate the schema
-  named by `IR_SCHEMA_ID`, currently `docs/schema/pio-ir/2/0.11.7/schema.json`.
+  named by `IR_SCHEMA_ID`, currently `docs/schema/pio-ir/2/0.11.8/schema.json`.
   Published snapshots, including `pio-ir/2/schema.json` from 0.11.0, remain
   byte-exact. The release in a catalog path is not a new IR version.
 - **Bindings stay typed and lazy.** C calls `pio_module_value`, checks the

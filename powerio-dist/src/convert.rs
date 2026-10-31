@@ -69,6 +69,12 @@ pub enum DistTargetFormat {
     CimDist,
     Gridlabd,
     GridlabdArras,
+    /// MG-RAVENS JSON, the multiconductor (distribution) profile of the
+    /// LANL CIM-derived interchange schema.
+    RavensJson,
+    /// PowerModelsDistribution MATHEMATICAL model JSON: index based, per
+    /// unit, with transformers lowered to ideal units and loss branches.
+    PmdMathJson,
 }
 
 /// Format specific policies for distribution network emission.
@@ -77,6 +83,7 @@ pub enum DistTargetFormat {
 pub struct EmitOptions {
     pub dss: crate::dss::DssEmitOptions,
     pub bmopf: crate::bmopf::BmopfEmitOptions,
+    pub pmd_math: crate::pmd::PmdMathEmitOptions,
 }
 
 impl EmitOptions {
@@ -84,10 +91,14 @@ impl EmitOptions {
         match format {
             DistTargetFormat::Dss => self.dss == crate::dss::DssEmitOptions::default(),
             DistTargetFormat::BmopfJson => self.bmopf == crate::bmopf::BmopfEmitOptions::default(),
+            DistTargetFormat::PmdMathJson => {
+                self.pmd_math == crate::pmd::PmdMathEmitOptions::default()
+            }
             DistTargetFormat::PmdJson
             | DistTargetFormat::CimDist
             | DistTargetFormat::Gridlabd
-            | DistTargetFormat::GridlabdArras => true,
+            | DistTargetFormat::GridlabdArras
+            | DistTargetFormat::RavensJson => true,
         }
     }
 }
@@ -100,8 +111,10 @@ pub fn parse_dist_target_format(name: &str) -> Option<DistTargetFormat> {
         "glm" | "gridlabd" | "gridlabdpnnl" => Some(DistTargetFormat::Gridlabd),
         "gridlabdarras" => Some(DistTargetFormat::GridlabdArras),
         "pmd" | "pmdjson" | "engineering" => Some(DistTargetFormat::PmdJson),
+        "pmdmath" | "pmdmathjson" | "mathematical" => Some(DistTargetFormat::PmdMathJson),
         "bmopf" | "bmopfjson" => Some(DistTargetFormat::BmopfJson),
         "cimdist" => Some(DistTargetFormat::CimDist),
+        "ravens" | "ravensjson" | "mgravens" | "mgravensjson" => Some(DistTargetFormat::RavensJson),
         _ => None,
     }
 }
@@ -125,8 +138,10 @@ impl DistTargetFormat {
             DistTargetFormat::Gridlabd => "gridlabd",
             DistTargetFormat::GridlabdArras => "gridlabd-arras",
             DistTargetFormat::PmdJson => "pmd-json",
+            DistTargetFormat::PmdMathJson => "pmd-math-json",
             DistTargetFormat::BmopfJson => "bmopf-json",
             DistTargetFormat::CimDist => "cim-dist",
+            DistTargetFormat::RavensJson => "ravens-json",
         }
     }
 }
@@ -185,6 +200,10 @@ const NOT_BMOPF_KEYS: &[&str] = &[
     "storage",
 ];
 
+/// Top level tables only an MG-RAVENS document carries: its equipment nests
+/// under the CIM class hierarchy root and its buses are connectivity nodes.
+const RAVENS_MARKERS: &[&str] = &["PowerSystemResource", "ConnectivityNode"];
+
 /// The PMD marker. Neither BMOPF nor PowerModels carries this key, so it
 /// identifies the ENGINEERING and MATHEMATICAL models on its own; the PMD
 /// reader then rejects MATHEMATICAL with its own message.
@@ -207,11 +226,16 @@ struct TopLevel {
     /// The document is a JSON object.
     is_object: bool,
     pmd_marker: bool,
+    /// The PMD marker's value names the MATHEMATICAL model.
+    pmd_mathematical: bool,
     bus: bool,
     /// A key from [`DISTRIBUTION_ELEMENT_TABLES`].
     dist_table: bool,
     /// A key from [`NOT_BMOPF_KEYS`].
     not_bmopf: bool,
+    /// An MG-RAVENS table: the CIM class hierarchy root or the connectivity
+    /// node table, which neither PMD nor BMOPF carries.
+    ravens: bool,
 }
 
 impl<'de> serde::Deserialize<'de> for TopLevel {
@@ -243,6 +267,16 @@ impl<'de> serde::Deserialize<'de> for TopLevel {
                     out.bus |= key == "bus";
                     out.dist_table |= DISTRIBUTION_ELEMENT_TABLES.contains(&key);
                     out.not_bmopf |= NOT_BMOPF_KEYS.contains(&key);
+                    out.ravens |= RAVENS_MARKERS.contains(&key);
+                    if key == PMD_MARKER {
+                        // The marker's value picks the PMD model; anything
+                        // but a string reads as the ENGINEERING default.
+                        let value = map.next_value::<serde_json::Value>()?;
+                        out.pmd_mathematical = value
+                            .as_str()
+                            .is_some_and(|m| m.eq_ignore_ascii_case("MATHEMATICAL"));
+                        continue;
+                    }
                     map.next_value::<serde::de::IgnoredAny>()?;
                 }
                 Ok(out)
@@ -328,8 +362,15 @@ pub fn classify_distribution_json(text: &str) -> crate::Result<DistTargetFormat>
     // the rest), so the marker separates them, not the table set. The PMD
     // reader is what judges the marker's value, and it rejects the
     // MATHEMATICAL model with its own message.
+    if top.ravens {
+        return Ok(DistTargetFormat::RavensJson);
+    }
     if top.pmd_marker {
-        return Ok(DistTargetFormat::PmdJson);
+        return Ok(if top.pmd_mathematical {
+            DistTargetFormat::PmdMathJson
+        } else {
+            DistTargetFormat::PmdJson
+        });
     }
     if top.bus && top.dist_table && !top.not_bmopf {
         return Ok(DistTargetFormat::BmopfJson);
@@ -495,6 +536,14 @@ fn parse_to_network(
             crate::pmd::read::parse_pmd_collecting(source_text(&buffer)?, warnings)
         }
         DistTargetFormat::CimDist => crate::cim::parse_cim_collecting(source, warnings),
+        DistTargetFormat::RavensJson => {
+            let buffer = primary(source)?;
+            crate::ravens::read::parse_ravens_collecting(source_text(&buffer)?, warnings)
+        }
+        DistTargetFormat::PmdMathJson => {
+            let buffer = primary(source)?;
+            crate::pmd::math::read::parse_pmd_math_collecting(source_text(&buffer)?, warnings)
+        }
     }?;
     Ok((network, format))
 }
@@ -529,7 +578,15 @@ impl DistTargetFormat {
                     Some(DistSourceFormat::BmopfJson)
                 )
                 | (DistTargetFormat::PmdJson, Some(DistSourceFormat::PmdJson))
+                | (
+                    DistTargetFormat::PmdMathJson,
+                    Some(DistSourceFormat::PmdMathJson)
+                )
                 | (DistTargetFormat::CimDist, Some(DistSourceFormat::CimDist))
+                | (
+                    DistTargetFormat::RavensJson,
+                    Some(DistSourceFormat::RavensJson)
+                )
         )
     }
 }
@@ -622,7 +679,12 @@ pub(crate) fn emit_value_text_with_options(
             crate::bmopf::emit_bmopf_json_text_with_options(net, options.bmopf)
         }
         DistTargetFormat::PmdJson => crate::pmd::emit_pmd_json_text(net),
+        DistTargetFormat::PmdMathJson => {
+            crate::pmd::math::write::validate_emission(net)?;
+            crate::pmd::math::write::emit_pmd_math_json_text(net, &options.pmd_math)
+        }
         DistTargetFormat::CimDist => crate::cim::emit_cim_dist_text(net),
+        DistTargetFormat::RavensJson => crate::ravens::emit_ravens_json_text(net),
     };
     if !net.component_locations().is_empty() {
         conv.push(&crate::diagnostics::codes::EMIT_DIST_COMPONENT_COORDINATES_DROPPED,
@@ -755,7 +817,11 @@ pub fn emit_with_options(
             }
             destination.__commit_artifacts(true, conv.fidelity, artifacts, conv.diagnostics)
         }
-        DistTargetFormat::BmopfJson | DistTargetFormat::PmdJson | DistTargetFormat::CimDist => {
+        DistTargetFormat::BmopfJson
+        | DistTargetFormat::PmdJson
+        | DistTargetFormat::PmdMathJson
+        | DistTargetFormat::CimDist
+        | DistTargetFormat::RavensJson => {
             let artifact = powerio_core::MemoryArtifact::new(
                 powerio_core::ArtifactPath::new("case")
                     .expect("static name is a valid artifact path"),
@@ -774,7 +840,6 @@ mod tests {
     fn distribution_json_classifier_preserves_pmd_marker_and_bmopf_fallback() {
         for doc in [
             r#"{"data_model": "ENGINEERING"}"#,
-            r#"{"data_model": "MATHEMATICAL"}"#,
             // The marker identifies the family whatever its value is; the
             // PMD reader is what judges the value.
             r#"{"data_model": 7}"#,
@@ -786,6 +851,11 @@ mod tests {
                 "{doc}"
             );
         }
+        // The one value that names the other PMD model routes to its reader.
+        assert_eq!(
+            classify_distribution_json(r#"{"data_model": "MATHEMATICAL"}"#).unwrap(),
+            DistTargetFormat::PmdMathJson
+        );
         for doc in [
             r#"{"bus": {}, "voltage_source": {}}"#,
             // A pre-0.1.0 feeder fragment: no `voltage_source`, but the

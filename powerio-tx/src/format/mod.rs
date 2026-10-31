@@ -63,6 +63,7 @@ mod powsybl_psse;
 mod pslf;
 pub(crate) mod psse;
 mod pypsa;
+mod ravens;
 mod rawx;
 pub mod routing;
 mod surge;
@@ -94,6 +95,7 @@ pub(crate) use powermodels::write_powermodels_json;
 pub(crate) use powerworld::write_powerworld;
 pub(crate) use pslf::write_pslf;
 pub(crate) use psse::write_psse_rev;
+pub(crate) use ravens::write_ravens_json;
 pub(crate) use rawx::write_rawx;
 pub(crate) use surge::write_surge_json;
 pub(crate) use xiidm::{write_jiidm, write_xiidm};
@@ -137,6 +139,9 @@ pub enum TargetFormat {
     Cgmes,
     /// ENTSO-E UCTE-DEF `.uct`; fresh output uses revision 2007.05.01.
     Ucte,
+    /// MG-RAVENS JSON, the LANL CIM-derived interchange schema
+    /// (<https://github.com/lanl-ansi/MG-RAVENS>), balanced subset.
+    RavensJson,
 }
 
 impl TargetFormat {
@@ -149,6 +154,7 @@ impl TargetFormat {
             | TargetFormat::PandapowerJson
             | TargetFormat::Goc3Json
             | TargetFormat::SurgeJson
+            | TargetFormat::RavensJson
             | TargetFormat::DeepMindOpfDataJson => "json",
             TargetFormat::Psse { .. } => "raw",
             TargetFormat::PsseRawx => "rawx",
@@ -176,6 +182,7 @@ impl TargetFormat {
             TargetFormat::Pslf => "PSLF .epc",
             TargetFormat::Goc3Json => "GO Challenge 3 JSON",
             TargetFormat::SurgeJson => "Surge JSON",
+            TargetFormat::RavensJson => "MG-RAVENS JSON",
             TargetFormat::DeepMindOpfDataJson => "DeepMind OPFData JSON",
             TargetFormat::Xiidm => "XIIDM 1.17 XML",
             TargetFormat::Jiidm => "JIIDM 1.17 JSON",
@@ -200,6 +207,7 @@ impl TargetFormat {
             TargetFormat::Pslf => "pslf",
             TargetFormat::Goc3Json => "goc3-json",
             TargetFormat::SurgeJson => "surge-json",
+            TargetFormat::RavensJson => "ravens-json",
             TargetFormat::DeepMindOpfDataJson => "opfdata-json",
             TargetFormat::Xiidm => "xiidm",
             TargetFormat::Jiidm => "jiidm",
@@ -258,6 +266,7 @@ pub fn parse_target_format(name: &str) -> Option<TargetFormat> {
         TransmissionFormat::Pslf => TargetFormat::Pslf,
         TransmissionFormat::Goc3Json => TargetFormat::Goc3Json,
         TransmissionFormat::SurgeJson => TargetFormat::SurgeJson,
+        TransmissionFormat::RavensJson => TargetFormat::RavensJson,
         TransmissionFormat::DeepMindOpfDataJson => TargetFormat::DeepMindOpfDataJson,
         TransmissionFormat::Xiidm => TargetFormat::Xiidm,
         TransmissionFormat::Jiidm => TargetFormat::Jiidm,
@@ -747,6 +756,7 @@ fn read_source(
             ));
         }
         TargetFormat::SurgeJson => surge::parse_surge_source(text, name_hint, warnings),
+        TargetFormat::RavensJson => ravens::parse_ravens_source(text, name_hint, warnings),
         TargetFormat::DeepMindOpfDataJson => {
             opfdata::parse_opfdata_source(text, name_hint, warnings)
         }
@@ -921,8 +931,8 @@ pub(crate) fn reject_empty_case(net: &BalancedNetwork, format: &'static str) -> 
 pub const SOURCE_FORMAT_NAMES: &str = "matpower/m, powermodels-json/powermodels/pm, \
      egret-json/egret, psse/raw, psse34, psse35, psse-rawx/rawx, powerworld/aux, \
      pandapower-json/pandapower/pp, pslf/epc, pypsa-csv/pypsa, pwb, goc3-json/goc3, \
-     surge-json/surge, opfdata-json/opfdata/gridopt, xiidm/iidm, jiidm, cgmes, ucte/uct, \
-     ieee-cdf/cdf";
+     surge-json/surge, ravens-json/ravens/mg-ravens, opfdata-json/opfdata/gridopt, xiidm/iidm, \
+     jiidm, cgmes, ucte/uct, ieee-cdf/cdf";
 
 /// An unrecognized source format token. When the token names a distribution
 /// format (`dss`, `pmd`, `bmopf`), the error points at the distribution
@@ -1155,6 +1165,7 @@ pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Re
         TargetFormat::Matpower => matpower::write_matpower_conversion(net),
         TargetFormat::Pslf => write_pslf(net),
         TargetFormat::SurgeJson => write_surge_json(net),
+        TargetFormat::RavensJson => write_ravens_json(net),
         TargetFormat::Goc3Json => {
             return Err(Error::WriteUnsupported {
                 format: "goc3-json",
@@ -1607,11 +1618,19 @@ fn warn_dropped_exchange_context(
             | TargetFormat::PandapowerJson
             | TargetFormat::Pslf
             | TargetFormat::SurgeJson
+            | TargetFormat::RavensJson
             | TargetFormat::Ucte
     ) {
         return;
     }
-    if let Some(message) = exchange_context_loss(net, format.label()) {
+    let message = if format == TargetFormat::RavensJson {
+        // MG-RAVENS carries stable component identities as mRIDs, but not
+        // the source-neutral topology hierarchy or case/solver metadata.
+        exchange_context_loss_with_identity_policy(net, format.label(), true)
+    } else {
+        exchange_context_loss(net, format.label())
+    };
+    if let Some(message) = message {
         conv.push(&format.emit_family().field_dropped, message);
     }
 }
@@ -1619,8 +1638,16 @@ fn warn_dropped_exchange_context(
 /// Describe the source-neutral network context absent from a target format.
 /// One diagnostic represents one format boundary even when the detailed model
 /// contains many CIM or IIDM objects.
-#[allow(clippy::too_many_lines)] // one inventory counts every exchange-context family
 pub(super) fn exchange_context_loss(net: &BalancedNetwork, target: &str) -> Option<String> {
+    exchange_context_loss_with_identity_policy(net, target, false)
+}
+
+#[allow(clippy::too_many_lines)] // one inventory counts every exchange-context family
+fn exchange_context_loss_with_identity_policy(
+    net: &BalancedNetwork,
+    target: &str,
+    preserves_identities: bool,
+) -> Option<String> {
     let mut dropped = Vec::new();
     let metadata = net.case_metadata();
     let mut metadata_fields = Vec::new();
@@ -1738,7 +1765,7 @@ pub(super) fn exchange_context_loss(net: &BalancedNetwork, target: &str) -> Opti
             .iter()
             .filter(|value| value.uid.is_some())
             .count();
-    if source_uids > 0 {
+    if source_uids > 0 && !preserves_identities {
         dropped.push(format!(
             "{source_uids} source-assigned stable component identity value(s)"
         ));
@@ -2355,6 +2382,7 @@ mod tests {
             TF::Pwb,
             TF::Goc3Json,
             TF::SurgeJson,
+            TF::RavensJson,
             TF::DeepMindOpfDataJson,
             TF::Ucte,
             TF::Xiidm,
@@ -2526,6 +2554,35 @@ mpc.branch = [
         assert!(message.contains("case_date"), "{message}");
         assert!(message.contains("detailed_connectivity"), "{message}");
         assert!(message.contains("1 source-assigned"), "{message}");
+
+        let ravens = emit_value_text(&net, TargetFormat::RavensJson).unwrap();
+        let context = ravens
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code() == "EMIT.RAVENS.FIELD_DROPPED"
+                    && diagnostic.message().contains("grid exchange context")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(context.len(), 1, "{:?}", ravens.render_diagnostics());
+        let message = context[0].message();
+        assert!(message.contains("case_date"), "{message}");
+        assert!(message.contains("detailed_connectivity"), "{message}");
+        assert!(!message.contains("source-assigned"), "{message}");
+        let reparsed = parse_str(&ravens.text, "ravens-json").unwrap().network;
+        assert_eq!(reparsed.buses()[0].uid.as_deref(), Some("source-bus"));
+
+        *net.case_metadata_mut() = crate::network::CaseMetadata::default();
+        *net.detailed_connectivity_mut() = None;
+        let ravens = emit_value_text(&net, TargetFormat::RavensJson).unwrap();
+        assert!(
+            ravens
+                .diagnostics
+                .iter()
+                .all(|diagnostic| !diagnostic.message().contains("grid exchange context")),
+            "retained identities alone are not a loss: {:?}",
+            ravens.render_diagnostics()
+        );
     }
 
     #[test]
@@ -2543,6 +2600,7 @@ mpc.branch = [
             (SourceFormat::Pslf, TargetFormat::Pslf),
             (SourceFormat::Goc3Json, TargetFormat::Goc3Json),
             (SourceFormat::SurgeJson, TargetFormat::SurgeJson),
+            (SourceFormat::RavensJson, TargetFormat::RavensJson),
             (SourceFormat::Ucte, TargetFormat::Ucte),
             (
                 SourceFormat::DeepMindOpfDataJson,

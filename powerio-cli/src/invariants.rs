@@ -882,13 +882,28 @@ impl std::fmt::Display for ModelDiff {
 #[must_use]
 pub fn model_diffs(before: &serde_json::Value, after: &serde_json::Value) -> Vec<ModelDiff> {
     let mut out = Vec::new();
-    diff_values(before, after, "", &mut out);
+    diff_values(before, after, "", &mut out, MAX_MODEL_DIFFS);
     out
 }
 
-fn diff_values(a: &serde_json::Value, b: &serde_json::Value, path: &str, out: &mut Vec<ModelDiff>) {
+/// Every typed-model difference, without the corpus display limit. Use this
+/// for archived validation evidence where truncation could hide a regression.
+#[must_use]
+pub fn all_model_diffs(before: &serde_json::Value, after: &serde_json::Value) -> Vec<ModelDiff> {
+    let mut out = Vec::new();
+    diff_values(before, after, "", &mut out, usize::MAX);
+    out
+}
+
+fn diff_values(
+    a: &serde_json::Value,
+    b: &serde_json::Value,
+    path: &str,
+    out: &mut Vec<ModelDiff>,
+    limit: usize,
+) {
     use serde_json::Value;
-    if out.len() >= MAX_MODEL_DIFFS {
+    if out.len() >= limit {
         return;
     }
     match (a, b) {
@@ -916,10 +931,28 @@ fn diff_values(a: &serde_json::Value, b: &serde_json::Value, path: &str, out: &m
                     before: DiffSide::Len(xs.len()),
                     after: DiffSide::Len(ys.len()),
                 });
-                return;
+                if limit != usize::MAX {
+                    return;
+                }
             }
             for (i, (x, y)) in xs.iter().zip(ys).enumerate() {
-                diff_values(x, y, &format!("{path}[{i}]"), out);
+                diff_values(x, y, &format!("{path}[{i}]"), out, limit);
+            }
+            if limit == usize::MAX {
+                for (i, x) in xs.iter().enumerate().skip(ys.len()) {
+                    out.push(ModelDiff {
+                        path: format!("{path}[{i}]"),
+                        before: DiffSide::Value(x.to_string()),
+                        after: DiffSide::Absent,
+                    });
+                }
+                for (i, y) in ys.iter().enumerate().skip(xs.len()) {
+                    out.push(ModelDiff {
+                        path: format!("{path}[{i}]"),
+                        before: DiffSide::Absent,
+                        after: DiffSide::Value(y.to_string()),
+                    });
+                }
             }
         }
         (Value::Object(xs), Value::Object(ys)) => {
@@ -927,12 +960,12 @@ fn diff_values(a: &serde_json::Value, b: &serde_json::Value, path: &str, out: &m
                 // Rechecked per key: the recursive call guards itself, but the
                 // two direct pushes below do not, and an object of many
                 // one-sided keys would otherwise carry the list past the cap.
-                if out.len() >= MAX_MODEL_DIFFS {
+                if out.len() >= limit {
                     return;
                 }
                 let sub = format!("{path}.{key}");
                 match (xs.get(key), ys.get(key)) {
-                    (Some(x), Some(y)) => diff_values(x, y, &sub, out),
+                    (Some(x), Some(y)) => diff_values(x, y, &sub, out, limit),
                     (Some(x), None) => out.push(ModelDiff {
                         path: sub,
                         before: DiffSide::Value(x.to_string()),

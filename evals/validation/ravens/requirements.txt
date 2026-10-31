@@ -1,0 +1,15 @@
+# Oracle-only dependencies. MG-RAVENS itself is installed from the pinned
+# checkout. Pin its direct runtime dependencies within its declared ranges.
+jsonschema==4.26.0
+cffi==2.1.1
+numpy==2.5.4
+networkx==3.7
+pandas==2.3.3
+rdflib==7.6.0
+json-schema-for-humans==1.5.1
+markdownify==0.13.1
+lxml==5.4.0
+opendssdirect.py[extras]==0.9.4
+jschon[requests]==0.11.1
+openpyxl==3.1.5
+grg-mpdata==0.1.1

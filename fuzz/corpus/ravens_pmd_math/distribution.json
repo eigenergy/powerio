@@ -1,0 +1,1 @@
+{"ConnectivityNode":{"a":{"Ravens.cimObjectType":"ConnectivityNode"}},"PerLengthLineParameter":{"lc":{"Ravens.cimObjectType":"PerLengthPhaseImpedance","PerLengthPhaseImpedance.conductorCount":1,"PerLengthPhaseImpedance.PhaseImpedanceData":[{"PhaseImpedanceData.row":1,"PhaseImpedanceData.column":1,"PhaseImpedanceData.r":1,"PhaseImpedanceData.x":2}]}}}

@@ -157,6 +157,32 @@ pub fn classified_json(input: &Path) -> anyhow::Result<Option<ClassifiedCase>> {
     let text = std::fs::read_to_string(input)
         .with_context(|| format!("reading JSON format markers from {}", input.display()))?;
     let format = classify_case_json(&text, input)?;
+    // Either header verdict is provisional: an AssetInfo container alone
+    // does not make a balanced document multiconductor, and per-phase
+    // records may be nested below the top level.
+    let format = match format {
+        DetectedFormat::Transmission(
+            powerio_tx::format::routing::TransmissionFormat::RavensJson,
+        )
+        | DetectedFormat::Distribution(
+            powerio_tx::format::routing::DistributionFormat::RavensJson,
+        ) => match powerio_core::cim::ravens::detect_profile(&text) {
+            powerio_core::cim::ravens::Profile::Multiconductor => DetectedFormat::Distribution(
+                powerio_tx::format::routing::DistributionFormat::RavensJson,
+            ),
+            powerio_core::cim::ravens::Profile::Mixed => {
+                return Err(powerio_core::Error::new(
+                    &powerio::tnd::diagnostics::PARSE_RAVENS_MIXED_PROFILE,
+                    format!("{} carries both MG-RAVENS profiles", input.display()),
+                )
+                .into());
+            }
+            _ => DetectedFormat::Transmission(
+                powerio_tx::format::routing::TransmissionFormat::RavensJson,
+            ),
+        },
+        other => other,
+    };
     if !matches!(
         format,
         DetectedFormat::Transmission(_) | DetectedFormat::Distribution(_)
@@ -444,6 +470,39 @@ mod tests {
         std::fs::write(&path, doc.to_string()).unwrap();
         let loaded = load_network(&path).unwrap();
         assert_eq!(loaded.network.name(), "myfeeder");
+    }
+
+    #[test]
+    fn ravens_family_uses_semantic_profile_for_both_header_verdicts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("case.json");
+        for (text, distribution) in [
+            (
+                r#"{"ConnectivityNode":{},"AssetInfo":{},"MySettings":{"Ravens.cimObjectType":"AlgorithmSettings"}}"#,
+                false,
+            ),
+            (
+                r#"{"ConnectivityNode":{"TransformerTank":{"IdentifiedObject.description":"TransformerTank"}},"AssetInfo":{}}"#,
+                false,
+            ),
+            (
+                r#"{"ConnectivityNode":{},"nested":{"Ravens.cimObjectType":"EnergyConsumer\u0050hase"}}"#,
+                true,
+            ),
+        ] {
+            std::fs::write(&path, text).unwrap();
+            let classified = classified_json(&path).unwrap().unwrap();
+            assert_eq!(classified.is_distribution(), distribution, "{text}");
+        }
+        std::fs::write(
+            &path,
+            r#"{"ConnectivityNode":{},"PerLengthLineParameter":{},"MySettings":{"Ravens.cimObjectType":"AlgorithmSettings"}}"#,
+        )
+        .unwrap();
+        let error = classified_json(&path)
+            .err()
+            .expect("mixed profiles are refused");
+        assert!(error.to_string().contains("PARSE.RAVENS.MIXED_PROFILE"));
     }
 
     #[test]

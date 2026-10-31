@@ -695,6 +695,40 @@ treated as source metadata. A native GridFM network writes without findings.
 Both directions need the `gridfm` cargo feature, which the CLI and the Python
 wheel include.
 
+### MG-RAVENS JSON
+
+One token, two profiles, picked from the document's classes (see
+[Distribution networks](distribution.md#mg-ravens-json)). The balanced
+profile follows the upstream MATPOWER converter's conventions, and a bus
+with `base_kv` 0 is reported: the SI conversions use 1 kV for it, so the
+per unit values round trip and the volt and ohm magnitudes are not
+physical. The multiconductor profile follows `opendss2xml`. Identifiers are
+deterministic mRIDs, so a canonical write is byte stable. What the schema
+has no supported slot for is reported and dropped: passthrough extras,
+generation costs in the multiconductor profile, a
+segment with a conductor outside the CIM phase identities, and a bus whose
+grounded terminals have no phase letter. An unbalanced source becomes one
+single phase `EnergySource` per conductor, reported as `SOURCE_SPLIT`.
+
+The external schema gate uses the pinned upstream schema unchanged for the
+distribution profile. The balanced converter profile adds strict definitions
+for `ConnectivityNode.SvVoltage` and `MySettings`, which the upstream MATPOWER
+converter emits but its own schema omits. The supplement preserves every other
+upstream constraint; it does not make otherwise unknown properties acceptable.
+The report identifies this distinction and validates fresh output through IR;
+it does not equate schema acceptance with electrical equivalence.
+
+### PMD MATHEMATICAL JSON
+
+The writer reproduces PMD's `transform_data_model` (see
+[Distribution networks](distribution.md#powermodelsdistribution-mathematical-model)),
+and the tests hold it to PMD v0.16 exports of PMD's own cases. Findings
+state what the MATHEMATICAL model does not carry: the winding power rating
+(the reader restates impedances on the emergency rating), a load's voltage
+band transitions and dropout, regulator controls, a load without a nominal
+voltage (the bus base stands in), and an island no stated base reaches.
+Storage and objects no `map` entry claims are kept untyped.
+
 ### IIDM versions
 
 PowerIO reads every IIDM serialization version PowSybl has published and writes

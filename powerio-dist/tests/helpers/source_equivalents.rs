@@ -204,10 +204,14 @@ fn constraints(net: &MulticonductorNetwork) -> BTreeMap<(Node, Node), Complex64>
                 );
                 continue;
             }
-            if let Some(prior) = result.insert((phase, reference.clone()), emf) {
+            if let Some(prior) = result.insert((phase.clone(), reference.clone()), emf) {
                 assert!(
                     (prior - emf).norm() <= 1e-9,
-                    "inconsistent duplicate source constraints"
+                    "inconsistent duplicate source constraints: source {} at bus {} terminal {} \
+                     ({phase:?} against {reference:?}) states {emf} where another states {prior}",
+                    source.name,
+                    source.bus,
+                    terminal,
                 );
             }
         }

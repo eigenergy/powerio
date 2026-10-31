@@ -79,18 +79,31 @@ def declared_schema_version(doc: dict, schema_ids: dict[str, str]) -> str:
 
 def validate_case(validators_by_version, schema_ids: dict[str, str], case: Path) -> list[str]:
     module = powerio.parse(case)
-    out = powerio.emit(module, "bmopf-json")
-    if not out.text.strip():
-        return ["writer returned an empty document"]
-
-    doc = json.loads(out.text)
-    version = declared_schema_version(doc, schema_ids)
-    validator = validators_by_version[version]
-    errors = sorted(
-        validator.iter_errors(doc),
-        key=lambda err: (tuple(err.absolute_path), err.message),
-    )
-    return [f"{error_path(err)}: {err.message}" for err in errors]
+    values = module.value
+    if isinstance(values, powerio.TimeSeries):
+        if not len(values):
+            return ["time series contains no snapshots to validate"]
+        modules = [
+            (point.label, powerio.PioModule.from_value(value))
+            for point, value in zip(values.time_points, values)
+        ]
+    else:
+        modules = [("network", module)]
+    failures = []
+    for label, snapshot in modules:
+        out = powerio.emit(snapshot, "bmopf-json")
+        if not out.text.strip():
+            failures.append(f"{label}: writer returned an empty document")
+            continue
+        doc = json.loads(out.text)
+        version = declared_schema_version(doc, schema_ids)
+        validator = validators_by_version[version]
+        errors = sorted(
+            validator.iter_errors(doc),
+            key=lambda err: (tuple(err.absolute_path), err.message),
+        )
+        failures.extend(f"{label} {error_path(err)}: {err.message}" for err in errors)
+    return failures
 
 
 def check_paths(paths: Iterable[Path]) -> list[str]:

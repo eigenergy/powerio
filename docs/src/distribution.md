@@ -1,8 +1,9 @@
 # Distribution networks
 
 A multiconductor network is the conductor level distribution model, and
-OpenDSS, GridLAB-D, PowerModelsDistribution engineering JSON, BMOPF JSON, and
-distribution CIM all parse to it. When you need a calculation, construct an
+OpenDSS, GridLAB-D, PowerModelsDistribution ENGINEERING and MATHEMATICAL
+JSON, BMOPF JSON, the multiconductor MG-RAVENS JSON profile, and distribution
+CIM all parse to it. When you need a calculation, construct an
 `McAcPfInstance`, `McAcOpfInstance`, `LinDist3FlowPfInstance`, or
 `LinDist3FlowOpfInstance` from it explicitly (see
 [Calculation instances and solutions](instances.md)).
@@ -149,6 +150,82 @@ can be handed to a native or WebAssembly-compatible conic backend.
 The supported physical slice, rejected equipment and validation evidence are
 recorded in the
 [multiconductor LinDist3Flow design review](https://github.com/eigenergy/powerio/blob/main/docs/design/lindist3flow-multiconductor.md).
+
+## MG-RAVENS JSON
+
+MG-RAVENS is LANL's CIM derived microgrid interchange schema
+(<https://github.com/lanl-ansi/MG-RAVENS>): one JSON document of name keyed
+tables nested under the CIM class hierarchy. The format has one token,
+`ravens-json`, and two profiles that share the top level shape and differ in
+the classes they use. A document whose equipment is per phase
+(`ACLineSegmentPhase`, `PerLengthPhaseImpedance`, `EnergyConsumerPhase`,
+`TransformerTank`) is the multiconductor profile and parses here; a document
+of balanced equipment (`PowerTransformer` ends with `PowerTransformerEnd`,
+positive sequence line parameters, generating units with cost curves) is the
+balanced profile and parses to a `BalancedNetwork` through the transmission
+hub. The facade and the CLI pick the reader from the content, so
+`powerio convert feeder.json --to dss` and `powerio convert case9.json --to
+matpower` both work without a profile flag; `powerio_tnd::formats::ravens`
+is that dispatch for library users, and a document mixing the two profiles
+is refused.
+
+| MG-RAVENS | Model |
+|---|---|
+| `ConnectivityNode`, `Terminal.phases` | buses, with the terminals the equipment uses; a `Ground` at a node grounds the conductors its phase code names |
+| `ACLineSegment` with `ACLineSegmentPhase` | lines, every conductor in `sequenceNumber` order, the neutral included; each end's `Terminal.phases` is its own map, so a lateral landing on another phase keeps both |
+| `PerLengthPhaseImpedance` | line codes in ohm/m and S/m |
+| `EnergyConsumer` with `EnergyConsumerPhase` | loads; a wye load returns on the neutral terminal, and `grounded` says whether that neutral is grounded at the bus |
+| `LinearShuntCompensator` | shunt banks; `Yn` is a wye bank whose neutral is grounded, `Y` one on an ungrounded neutral |
+| the `Switch` classes with `SwitchPhase` | switches with their state |
+| `PowerTransformer`, `TransformerTank`, `TransformerTankEnd`, `TransformerEndInfo` with its tests | transformers, one tank per unit |
+| `EnergySource` | voltage sources; a source whose phasors are not one balanced set is written as one single phase `EnergySource` per conductor with the same phasors |
+| `RotatingMachine`, `PowerElectronicsConnection` | generators and inverter based resources |
+
+Everything the schema cannot name is reported: a conductor outside the four
+CIM phase identities (the fifth wire of a five wire code) has no
+`ACLineSegmentPhase`, so such a segment is dropped with a finding, and a
+network's generation costs, which belong to the balanced profile, are
+dropped from the multiconductor one. Objects the reader has no typed slot
+for stay untyped at their source paths and are written back there. Writing
+is byte stable: a document written, read, and written again is identical.
+`tests/data/dist/ravens/` holds the vendored example (Apache-2.0).
+
+The RAVENS schema CI gate validates regenerated output after a PowerIO IR
+round trip against the pinned upstream schema generator. Distribution output
+uses the unmodified schema. The upstream balanced MATPOWER converter emits
+two fields its own schema omits: `ConnectivityNode.SvVoltage` and `MySettings`.
+Balanced output is checked against that schema with a strict supplement for
+these two fields. The report distinguishes these profiles, lists every case
+and diagnostic, and includes controls that reject malformed output. See
+[`evals/validation/ravens/`](https://github.com/eigenergy/powerio/tree/main/evals/validation/ravens)
+for the revision, commands, and scope; schema validity alone does not establish
+electrical equivalence.
+
+## PowerModelsDistribution MATHEMATICAL model
+
+`pmd-math-json` is the PowerModelsDistribution MATHEMATICAL model, the per
+unit, index keyed form that PMD builds its JuMP models from. The writer
+follows `transform_data_model`: it lowers each transformer into PMD's loss
+model (one virtual bus and resistance branch per winding, star reactances
+between windings, the no load admittance at the first winding's internal
+bus, and an ideal two winding unit per winding), lowers sources into
+generators behind their Thevenin impedance, floods `settings.vbases_default`
+across lines and switches and through the ideal units' ratios as
+`calc_voltage_bases` does, and rebases every object as `make_per_unit!`
+does. A grounded neutral is Kron reduced by default
+(`PmdMathEmitOptions::kron_reduce`), and the document says
+`is_kron_reduced`. The `map` entries PMD writes are written too, and the
+reader folds through them: a load's ZIP parts, a transformer's virtual buses
+and branches, and a source's generator and virtual bus come back as one
+element each; a wye load that lists as many connections as powers returns
+on the neutral the reduction eliminated, restored at its bus as a grounded
+terminal. The reader restates the winding impedances on the emergency
+rating, since the MATHEMATICAL model carries no winding power rating, and
+says so. A load without a nominal voltage and an island no stated base
+reaches are written with a stated default and a finding where PMD's own
+functions would stop. `tests/data/dist/pmd/math/` holds PMD v0.16 exports of
+five of its own cases, ENGINEERING and MATHEMATICAL side by side, which the
+tests compare the writer against field by field.
 
 ## Distribution CIM
 

@@ -16,3 +16,9 @@ license of its source case:
   They are modified from PMD's output as `../README.md` records (the
   multinetwork file keeps two load shape points, and both replace a local
   file path).
+- The files under `math/` derive from `test/data/opendss/case3_balanced.dss`,
+  `case3_balanced_cap.dss`, `case3_unbalanced_switch.dss`,
+  `case3_unbalanced_ZIPloads.dss`, and `ut_trans_2w_yy.dss` in the same
+  PowerModelsDistribution v0.16.0 package, under the same BSD 3 clause
+  license; the only edit replaces a local file path, as `../README.md`
+  records.
