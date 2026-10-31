@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve apostrophes in PSS/E RAWX `caseid.title1`; normalize embedded line terminators only.
+
 ## 0.11.7
 
 **AC optimal transmission switching**
