@@ -4142,3 +4142,37 @@ fn native_multiplicative_profiles_stay_in_the_bmopf_schema_table() {
     );
     assert!(schema_validator().is_valid(&doc));
 }
+
+/// PMD's `replace` defaults to true, so a bare profile is not multiplicative.
+#[test]
+fn pmd_profiles_without_explicit_controls_are_not_multiplicative() {
+    let input = r#"{"data_model":"ENGINEERING","bus":{},"time_series":{"shape":{"values":[0.5,1.0],"time":[0,1]}}}"#;
+    let parsed = parse_pmd_str(input).unwrap();
+    let output = emit_bmopf_json(&parsed);
+    let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+    assert!(doc.get("time_series").is_none());
+    assert_eq!(
+        doc["extras"]["time_series"]["shape"]["values"],
+        serde_json::json!([0.5, 1.0])
+    );
+    assert!(schema_validator().is_valid(&doc));
+    assert!(output.warnings.iter().any(|warning| {
+        warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("shape")
+    }));
+}
+
+/// The schema requires `values`; a profile without it has no top-level slot.
+#[test]
+fn profiles_without_values_stay_in_extras() {
+    let parsed =
+        parse_bmopf_str(r#"{"bus":{},"voltage_source":{},"time_series":{"shape":{"time":[0,1]}}}"#)
+            .unwrap();
+    let output = emit_bmopf_json(&parsed);
+    let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+    assert!(doc.get("time_series").is_none());
+    assert_eq!(
+        doc["extras"]["time_series"]["shape"]["time"],
+        serde_json::json!([0, 1])
+    );
+    assert!(schema_validator().is_valid(&doc));
+}

@@ -715,7 +715,7 @@ impl Writer {
             // `transformer` table, not under `extras`. Name the slot the
             // object really went to, so a warning points at the part of the
             // document a reader must look at.
-            let top_level = subtype.is_none() && self.raw_object_at_top_level(u);
+            let top_level = subtype.is_none() && self.raw_object_at_top_level(net, u);
             if u.class == "time_series" && !top_level {
                 self.warn(
                     &C::EMIT_BMOPF_RETAINED_SOURCE_ONLY,
@@ -781,17 +781,25 @@ impl Writer {
 
     /// Foreign profile controls (for example PMD replacement and offset rules)
     /// are not BMOPF multiplicative profiles. Preserve the complete record in
-    /// extras instead of silently assigning it BMOPF semantics.
-    fn raw_object_at_top_level(&self, object: &crate::model::UntypedObject) -> bool {
+    /// extras instead of silently assigning it BMOPF semantics. A PMD profile
+    /// never qualifies: PMD's `replace` defaults to true, so even a bare
+    /// `values`/`time` record replaces rather than multiplies.
+    fn raw_object_at_top_level(
+        &self,
+        net: &MulticonductorNetwork,
+        object: &crate::model::UntypedObject,
+    ) -> bool {
         self.raw_table_at_top_level(&object.class)
             && (object.class != "time_series"
-                || raw_bmopf_value(object, &mut Vec::new())
-                    .and_then(|value| value.as_object().cloned())
-                    .is_some_and(|fields| {
-                        fields
-                            .keys()
-                            .all(|key| matches!(key.as_str(), "values" | "time" | "description"))
-                    }))
+                || (*net.source_format() != Some(crate::model::DistSourceFormat::PmdJson)
+                    && raw_bmopf_value(object, &mut Vec::new())
+                        .and_then(|value| value.as_object().cloned())
+                        .is_some_and(|fields| {
+                            fields.contains_key("values")
+                                && fields.keys().all(|key| {
+                                    matches!(key.as_str(), "values" | "time" | "description")
+                                })
+                        })))
     }
 
     /// `extras` is seeded from the source document's own `extras` object, so
@@ -808,7 +816,7 @@ impl Writer {
             .untyped_objects()
             .iter()
             .filter(|u| RAW_BMOPF_EXTRAS_TABLES.contains(&u.class.as_str()))
-            .filter(|u| !self.raw_object_at_top_level(u))
+            .filter(|u| !self.raw_object_at_top_level(net, u))
             .map(|u| u.class.as_str())
             .collect();
         for class in classes {
