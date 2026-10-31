@@ -36,7 +36,7 @@ regex = "1"
 
 
 [dev-dependencies]
-sha2 = "0.10"
+sha2 = "0.11"
 zip.workspace = true
 # Draft 2020-12 validation against the vendored BMOPF schema in tests.
 jsonschema = { version = "0.59", default-features = false }
