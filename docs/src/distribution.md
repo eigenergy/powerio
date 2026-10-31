@@ -162,7 +162,8 @@ CIM16 and CIM100. Input is one document, or a directory whose top level `.xml`
 documents read as one case, with `rdf:about` records extending the ones
 another document defines. Files in subdirectories are not part of the case,
 and ZIP archives are not read yet. A `.xml` document, a nameless source, or a
-directory routes here when it carries per phase classes and no CGMES
+directory routes here when it carries per phase classes or the IEC 61968
+customer classes (`ServiceLocation`, `UsagePoint`) and no CGMES
 `md:FullModel` header.
 
 | CIM | Model |
@@ -179,10 +180,31 @@ directory routes here when it carries per phase classes and no CGMES
 | `ShortCircuitTest` | short circuit reactances between winding pairs, and winding resistances when no end info states one |
 | `NoLoadTest`, `TransformerCoreAdmittance` | the `%noloadloss` and `%imag` extras |
 | `EnergySource` | voltage sources, with the series impedance in `rs`/`xs` extras |
+| `WireInfo.ratedCurrent` of a segment's `PowerSystemResource.AssetDatasheet` | the segment's ampacity, `i_max` on each conductor |
+| `Diagram` with its `DiagramObject`s and `DiagramObjectPoint`s | coordinates: a segment's points, in `sequenceNumber` order, are its route, the first at terminal 1. A connectivity node has no diagram object, so its bus takes the end of the first segment there, else the point of other equipment at it or of the composite switch that holds a switch; bus locations are marked derived |
 
 `SinglePhaseKind` A, B, C, and N map to terminals 1, 2, 3, and 4, and the
 split phase s1 and s2 to 1 and 2. A conductor beyond those four has no CIM
-phase, so the writer reports it.
+phase, so the writer reports it. An enumeration written as text
+(`<cim:Terminal.phases>A</cim:Terminal.phases>`), as some CIM16 exports
+state it, reads like the reference form.
+
+One `Diagram` gives the coordinates: the first whose name or description
+names an `EPSG:` code, else the first. A named code makes them projected
+coordinates in that CRS (geographic for EPSG:4326), and a diagram without
+one is a drawing. PowerIO does not reproject: the network's `geo` metadata
+names the CRS, and a geographic layer applied with `apply_geo_layer`
+replaces the coordinates with reprojected ones.
+
+Without a `BaseFrequency`, a CIM16 document set reads at 50 Hz, the ENTSO-E
+default the CGMES reader also assumes, while CIM100 keeps 60 Hz. Either
+default is a `READ.CIM_DIST.VALUE_DEFAULTED` finding.
+`Circuit`, `CompositeSwitch`, and `PSRType` are context
+(`READ.CIM_DIST.CONTEXT_UNMAPPED`). The IEC 61968 customer classes route a
+document here but are not mapped yet, so `ServiceLocation` and `UsagePoint`
+are reported as unmapped classes unless the
+[ADMS extension](#cim16-lv-exports-with-the-schneider-electric-adms-extension)
+maps them.
 
 A tank end's terminals follow from its `TransformerTankEnd.phases`, in the
 form the dss reader gives the equivalent OpenDSS transformer: a line to
@@ -219,7 +241,8 @@ its `cim_power_transformer` extra names, with tanks of identical catalog data
 sharing one `TransformerTankInfo`; every other transformer, including those
 from other formats, takes the `PowerTransformerEnd` form.
 
-Regulator controls, distributed energy resources, machines, wire and cable geometry, operational limits,
+Regulator controls, distributed energy resources
+(`PowerElectronicsConnection`), machines, wire and cable geometry, operational limits,
 `LoadResponseCharacteristic`, and `TopologicalNode` only documents are not
 mapped yet, and the reader reports each of them: a class with no mapping is
 counted per class (`READ.CIM_DIST.CLASS_UNMAPPED`), a property no mapping reads
@@ -249,6 +272,38 @@ loaded coil phasors by `evals/validation/validate_cim_tanks.py`, including fresh
 CIM writing and a clock-1/clock-11 control. This does not establish support for
 producer dialects outside the documented electrical profile.
 
+### CIM16 LV exports with the Schneider Electric ADMS extension
+
+Some ADMS exports state an LV network as one header-less CIM16 document
+with the extension namespace
+`http://www.schneider-electric-dms.com/CIM16v33/2017/extension`, read as
+`sedms:` whatever prefix the document declares. Such an export states
+sequence impedances, connects customers without an `EnergyConsumer`, writes
+enumerations such as `Terminal.phases` as text, and leaves out the
+substation that supplies the network. The reader maps the extension into
+the multiconductor model, so the network converts to every distribution
+format through the shared writers.
+
+| CIM | Model |
+|---|---|
+| `UsagePoint` at a `ServiceLocation` | one load per usage point (meter) at the bus of the terminal the location is served from (`sedms:ServiceLocation.Terminal`), on the location's phases (`sedms:ServiceLocation.phases`); `sedms:UsagePoint.p` and `.q` (W and var) are shared evenly over them. A location with the neutral gives a wye or single phase load, one without it a delta load on three phases and a phase to phase load on two |
+| `FlexibleLoad` | an inverter based resource at the service location of its customer (`sedms:FlexibleLoad.Customer`): `pMax` is the nameplate, and a resource that is not dispatchable holds its average output `pAvg` at unity power factor, so its bounds are pinned there. Three phases without the neutral make a three leg inverter |
+| `ConnectivityNode` with `sedms:ConnectivityNode.stitchingInfo` | when no `EnergySource` exists, the nodes stitched to the same circuits (`sedms:ConnectivityNode.connectedCircuits`) join at a new bus `sourcebus` through closed switches named after each node's container (its feeder), and an ideal three phase source sits there at the rated voltage of their equipment (`sedms:ConductingEquipment.ratedVoltage`, read at the single precision the export states it in), 1 pu and 0° |
+
+The reader applies this mapping only when a document uses the extension
+namespace; without it, `ServiceLocation` and `UsagePoint` stay unmapped
+classes. In the Diagram Layout, a node that no equipment places takes the
+point of a service location served from it, a `sedms:Diagram.type` of `GIS`
+makes a diagram that names no CRS projected, and a supply busbar the reader
+places sits at the centroid of the nodes it feeds. The supply and every
+value the reader fills in are reported as `READ.CIM_DIST.VALUE_DEFAULTED`
+findings. A
+`cim-dist` write states the network in CIM100 with the placed supply as an
+`EnergySource`; like every inverter based resource, a `FlexibleLoad` is
+reported as dropped there. The mapping is pinned by a synthetic feeder in
+the export's form (`powerio-dist/tests/cim.rs`), not yet by a published
+export.
+
 ### Distribution CIM status
 
 - **CIM release.** CIM100 (`http://iec.ch/TC57/CIM100#`): IEC 61970
@@ -258,7 +313,8 @@ producer dialects outside the documented electrical profile.
   are not implemented.
 - **Application profile.** The single document feeder profile the GridAPPS-D
   and CIMHub tools exchange, with `ConnectivityNode` (node breaker)
-  connectivity and per phase equipment. Format discovery
+  connectivity and per phase equipment, and the CIM16 LV exports with the
+  Schneider Electric ADMS extension described above. Format discovery
   (`powerio::grid_formats`) labels the `cim-dist` token
   "CIM distribution (CIM100 cim17v40, GridAPPS-D profile)".
 - **Input.** One document, or the top level `.xml` documents of a directory,

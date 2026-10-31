@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- The `cim-dist` reader maps the Schneider Electric ADMS extension of CIM16
+  (`sedms:`), so the LV networks such an ADMS exports read into
+  `MulticonductorNetwork` and convert to every distribution format. Each
+  `UsagePoint` is a load at its service location, each `FlexibleLoad` an
+  inverter based resource, and when the documents define no
+  `EnergySource`, the nodes that `sedms:ConnectivityNode.stitchingInfo`
+  marks join a new busbar through closed switches, with an ideal source at
+  their rated voltage. The mapping applies only to documents that use the
+  extension namespace, and every value it fills in is a `READ.CIM_DIST.*`
+  finding.
+
+- The `cim-dist` reader reads CIM16 LV feeders stated with sequence
+  impedances and no per phase class. A header-less CIM document with the
+  IEC 61968 customer classes (`ServiceLocation`, `UsagePoint`) now routes to
+  `cim-dist` instead of failing as CGMES. Enumerations written as text
+  (`<cim:Terminal.phases>A</cim:Terminal.phases>`) read like references, so
+  a single phase fuse is no longer read as a three phase switch. A segment
+  takes its ampacity from the `WireInfo.ratedCurrent` its `AssetDatasheet`
+  names, and the Diagram Layout gives segment routes and bus locations in
+  the coordinate reference system the diagram names. A CIM16 document set
+  without a `BaseFrequency` reads at 50 Hz. `Circuit`, `CompositeSwitch`,
+  and `PSRType` are reported as context.
+
 ## 0.11.7
 
 **AC optimal transmission switching**

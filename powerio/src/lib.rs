@@ -947,8 +947,8 @@ fn routed_family(
         {
             return Ok(RoutedFamily::Gridfm);
         }
-        // Distribution CIM documents carry per phase classes and no CGMES
-        // model header; a CGMES profile directory has neither.
+        // Distribution CIM documents carry per phase or customer classes and
+        // no CGMES model header; a CGMES profile directory has neither.
         if powerio_dist::source_looks_like_cim_dist(source) {
             return Ok(RoutedFamily::Distribution(Some(
                 format::routing::DistributionFormat::CimDist,
