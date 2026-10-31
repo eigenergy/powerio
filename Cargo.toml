@@ -73,7 +73,7 @@ zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2
 # The browser backend preserves the existing wasm32 component build.
 # Shared SINCAL snapshot queries expose rusqlite row/connection types to the
 # family adapters; keep both their version and safety features consistent.
-rusqlite = { version = "0.40.2", default-features = false, features = ["bundled", "serialize", "hooks", "limits", "ffi-sqlite-wasm-rs"] }
+rusqlite = { version = "0.41.0", default-features = false, features = ["bundled", "serialize", "hooks", "limits", "ffi-sqlite-wasm-rs"] }
 # uuid 1.27 and later require Rust 1.89; preserve the workspace's Rust 1.88 MSRV.
 uuid = { version = ">=1, <1.27", default-features = false, features = ["v5"] }
 schemars = { version = "1", features = ["derive"] }
