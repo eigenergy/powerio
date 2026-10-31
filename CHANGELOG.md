@@ -8,6 +8,10 @@
   multinetwork fixtures. Remove the obsolete Julia companion pin now that the
   required bindings have merged upstream.
 
+- Reject neutral and earth endpoints during MC IVR DELTA coil preparation,
+  including THREE_LEG inverters and DELTA transformer windings. Explicit
+  terminal conventions are honored; valid phase-to-phase coil order is unchanged.
+
 ## 0.11.7
 
 **AC optimal transmission switching**
