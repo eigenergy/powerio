@@ -23,6 +23,7 @@ use super::{
     wrap_angle, z_base,
 };
 use crate::diagnostics::{Diagnostic, DiagnosticInfo, codes as C};
+use crate::geo::{CoordinateSpace, DistCoordsKind, DistGeoMeta, DistLocation};
 use crate::model::{
     ConductorMatrix, Configuration, DistBus, DistLine, DistLineCode, DistLoad, DistShunt,
     DistSourceFormat, DistSwitch, DistTransformer, DistWinding, DistWindingConn,
@@ -87,8 +88,9 @@ const MULTI_VALUED: [&str; 2] = [
 
 /// Containment, naming, version, and base voltage classes: context the
 /// multiconductor model has no table for. They are reported at `Remark`
-/// severity, since they carry no electrical data the network loses.
-const CONTEXT_CLASSES: [&str; 18] = [
+/// severity, since they carry no electrical data the network loses. A
+/// `CompositeSwitch` only groups switches the mapping reads one by one.
+const CONTEXT_CLASSES: [&str; 21] = [
     "BaseVoltage",
     "GeographicalRegion",
     "SubGeographicalRegion",
@@ -96,7 +98,10 @@ const CONTEXT_CLASSES: [&str; 18] = [
     "VoltageLevel",
     "Bay",
     "Feeder",
+    "Circuit",
     "Line",
+    "CompositeSwitch",
+    "PSRType",
     "Name",
     "NameType",
     "NameTypeAuthority",
@@ -110,9 +115,9 @@ const CONTEXT_CLASSES: [&str; 18] = [
 ];
 
 /// Properties of mapped objects that only carry context (descriptions,
-/// containment, catalog and location links). Reported at `Remark` severity
-/// when present, like [`CONTEXT_CLASSES`].
-const CONTEXT_PROPERTIES: [&str; 8] = [
+/// containment, grouping, catalog and location links). Reported at `Remark`
+/// severity when present, like [`CONTEXT_CLASSES`].
+const CONTEXT_PROPERTIES: [&str; 9] = [
     "IdentifiedObject.description",
     "IdentifiedObject.aliasName",
     "IdentifiedObject.Names",
@@ -121,6 +126,17 @@ const CONTEXT_PROPERTIES: [&str; 8] = [
     "ConnectivityNode.ConnectivityNodeContainer",
     "PowerSystemResource.Location",
     "PowerSystemResource.PSRType",
+    "Switch.CompositeSwitch",
+];
+
+/// The wire and cable catalog classes whose `WireInfo.ratedCurrent` a
+/// segment's `PowerSystemResource.AssetDatasheet` can name.
+const WIRE_INFO_CLASSES: [&str; 5] = [
+    "WireInfo",
+    "OverheadWireInfo",
+    "CableInfo",
+    "ConcentricNeutralCableInfo",
+    "TapeShieldCableInfo",
 ];
 
 // ---------------------------------------------------------------------------
@@ -406,9 +422,15 @@ impl Store {
         }
     }
 
-    /// The `value` tail of an `EnumClass.value` reference.
+    /// The value of an enumeration property: the `value` tail of an
+    /// `EnumClass.value` reference, or the literal an export writes as text
+    /// instead (`<cim:Terminal.phases>ABC</cim:Terminal.phases>`), as some
+    /// CIM16 exports do.
     fn enum_value(&self, id: &str, key: &str) -> Option<&str> {
-        self.refv(id, key)?.rsplit('.').next()
+        match self.prop(id, key)? {
+            PropValue::Ref(target) => target.rsplit('.').next(),
+            PropValue::Text(text) => text.trim().rsplit('.').next().filter(|v| !v.is_empty()),
+        }
     }
 
     /// The object's name, when it states a nonempty one.
@@ -495,6 +517,30 @@ fn three_phases() -> Vec<String> {
     vec!["1".to_owned(), "2".to_owned(), "3".to_owned()]
 }
 
+/// The shape each diagram object draws, by the mRID of the element it
+/// draws: its points in order.
+type Shapes = HashMap<String, Vec<(f64, f64)>>;
+
+/// What the Diagram Layout places: the network's coordinate metadata and a
+/// location for each connectivity node it reaches, by node mRID.
+struct Layout {
+    meta: DistGeoMeta,
+    at_node: HashMap<String, DistLocation>,
+}
+
+/// The `EPSG:<code>` token in a text (`EPSG:4326`, or the `EPSG::4326` of a
+/// URN), as `EPSG:<code>`.
+fn epsg_code(text: &str) -> Option<String> {
+    let upper = text.to_ascii_uppercase();
+    let at = upper.find("EPSG:")?;
+    let digits: String = upper[at + 5..]
+        .trim_start_matches(':')
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    (!digits.is_empty()).then(|| format!("EPSG:{digits}"))
+}
+
 // ---------------------------------------------------------------------------
 // Reader
 // ---------------------------------------------------------------------------
@@ -531,6 +577,7 @@ fn read_documents(
             namespaces.into_iter().collect::<Vec<_>>().join(", ")
         )));
     }
+    let cim16 = namespaces.iter().all(|n| n.contains("CIM-schema-cim16"));
     store.seal();
     if store.count_of("ConnectivityNode") == 0 {
         let message = if store.count_of("TopologicalNode") > 0 {
@@ -544,12 +591,13 @@ fn read_documents(
 
     let mut mapper = Mapper::new(&store, diags);
     mapper.validate_electrical_state()?;
-    let (line_codes, lines) = mapper.lines();
+    let (line_codes, mut lines) = mapper.lines();
     let loads = mapper.loads();
     let shunts = mapper.shunts()?;
     let switches = mapper.switches();
     let transformers = mapper.transformers()?;
     let sources = mapper.sources();
+    let layout = mapper.layout(&mut lines);
 
     // Each bus presents the terminals its elements connect.
     let mut used: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -578,8 +626,12 @@ fn read_documents(
     for source in &sources {
         connect(&source.bus, &source.terminal_map);
     }
-    let buses = derive_buses(&mapper.nodes, &used);
-    let base_frequency = mapper.base_frequency();
+    let mut buses = derive_buses(&mapper.nodes, &used);
+    let geo = layout.map(|layout| {
+        locate_buses(&mut buses, &layout);
+        layout.meta
+    });
+    let base_frequency = mapper.base_frequency(cim16);
     let name = description
         .or_else(|| mapper.feeder_name())
         .or_else(|| name_hint.map(str::to_owned));
@@ -589,6 +641,7 @@ fn read_documents(
         name,
         source_format: Some(DistSourceFormat::CimDist),
         base_frequency,
+        geo,
         buses,
         line_codes,
         lines,
@@ -696,7 +749,8 @@ struct Mapper<'a> {
     /// again as unmapped.
     dropped: HashSet<String>,
     /// Objects of an otherwise unmapped class the mapping read (the feeder
-    /// that names the network, the catalog entries tanks link).
+    /// that names the network, the catalog entries tanks and segment ratings
+    /// come from, the diagram the layout reads).
     consumed: HashSet<String>,
     /// Transformer catalog entries read so far, by `TransformerTankInfo`
     /// mRID; `None` for one without end infos.
@@ -968,18 +1022,31 @@ impl<'a> Mapper<'a> {
         out
     }
 
-    fn base_frequency(&mut self) -> f64 {
+    /// The stated base frequency. Without one, a CIM16 document set takes
+    /// 50 Hz: CIM16 is the CGMES 2.4.15 release, and the CGMES reader
+    /// assumes the same ENTSO-E default. CIM100, the GridAPPS-D and CIMHub release, takes 60 Hz.
+    fn base_frequency(&mut self, cim16: bool) -> f64 {
         let frequencies = self.store.ids_of("BaseFrequency");
         let stated = frequencies
             .iter()
             .find_map(|f| self.store.f(f, "BaseFrequency.frequency"))
             .filter(|f| *f > 0.0);
         stated.unwrap_or_else(|| {
-            self.diags.record(Diagnostic::of(
-                &C::READ_CIM_DIST_VALUE_DEFAULTED,
-                "no BaseFrequency states a frequency; 60 Hz is assumed",
-            ));
-            60.0
+            let (frequency, message) = if cim16 {
+                (
+                    50.0,
+                    "no BaseFrequency states a frequency; 50 Hz is assumed for the CIM16 \
+                     namespace, the ENTSO-E default",
+                )
+            } else {
+                (
+                    60.0,
+                    "no BaseFrequency states a frequency; 60 Hz is assumed",
+                )
+            };
+            self.diags
+                .record(Diagnostic::of(&C::READ_CIM_DIST_VALUE_DEFAULTED, message));
+            frequency
         })
     }
 
@@ -1062,7 +1129,11 @@ impl<'a> Mapper<'a> {
                 &mut line_codes,
                 &mut seen,
             );
+            let conductors = map.len();
             let mut line = DistLine::new(name, from, to, map.clone(), map, code, length);
+            if let Some(rated) = self.wire_rating(&id) {
+                line.i_max = Some(vec![rated; conductors]);
+            }
             line.extras.insert("cim_mrid".into(), id.clone().into());
             if !resolved {
                 // Conversion refuses the segment: its zero placeholder
@@ -1251,6 +1322,32 @@ impl<'a> Mapper<'a> {
         );
         line_codes.push(code);
         (name, resolved)
+    }
+
+    /// The ampacity of a segment's conductors, amps: the `ratedCurrent` of
+    /// the wire or cable catalog entry its `PowerSystemResource.AssetDatasheet`
+    /// names.
+    fn wire_rating(&mut self, line: &str) -> Option<f64> {
+        let info = self.target("ACLineSegment", line, "PowerSystemResource.AssetDatasheet")?;
+        let class = self.store.class_of(&info)?.to_owned();
+        if !WIRE_INFO_CLASSES.contains(&class.as_str()) {
+            let label = self.label(line);
+            let datasheet = self.label(&info);
+            self.note(
+                &C::READ_CIM_DIST_VALUE_UNSUPPORTED,
+                "ACLineSegment",
+                line,
+                format!(
+                    "ACLineSegment {label}: its AssetDatasheet {datasheet} is a {class}, not a \
+                     wire or cable catalog entry; no ampacity is read"
+                ),
+            );
+            return None;
+        }
+        self.consumed.insert(info.clone());
+        self.store
+            .f(&info, "WireInfo.ratedCurrent")
+            .filter(|rated| *rated > 0.0)
     }
 
     /// A line code name no earlier line code holds.
@@ -3333,6 +3430,191 @@ impl<'a> Mapper<'a> {
         sources
     }
 
+    // -- layout ------------------------------------------------------------
+
+    /// The coordinate reference system a diagram names: an `EPSG:<code>`
+    /// token in its name or description, as a GIS export states it.
+    fn diagram_crs(&self, diagram: &str) -> Option<String> {
+        ["IdentifiedObject.name", "IdentifiedObject.description"]
+            .iter()
+            .filter_map(|key| self.store.text(diagram, key))
+            .find_map(epsg_code)
+    }
+
+    /// Coordinates from the Diagram Layout. A segment's points are its
+    /// route, the first at terminal 1. A connectivity node has no diagram
+    /// object of its own, so it takes the end of the first segment there
+    /// (segment ends meet at the nodes they share), else the point of other
+    /// equipment at it or of the composite switch that holds a switch; these
+    /// node locations are derived. `None` when the layout places nothing.
+    fn layout(&mut self, lines: &mut [DistLine]) -> Option<Layout> {
+        let (space, shape_of) = self.diagram_shapes()?;
+        let mut placed = false;
+        for line in lines.iter_mut() {
+            let path = line
+                .extras
+                .get("cim_mrid")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|id| shape_of.get(id))
+                .filter(|path| path.len() >= 2);
+            if let Some(path) = path {
+                line.route = Some(
+                    path.iter()
+                        .map(|&(x, y)| DistLocation { x, y, kind: None })
+                        .collect(),
+                );
+                placed = true;
+            }
+        }
+
+        let mut at_node = HashMap::new();
+        for segment in self.store.ids_of("ACLineSegment") {
+            if let Some(shape) = shape_of.get(&segment) {
+                self.place_terminals(&segment, shape, &mut at_node);
+            }
+        }
+        let mut equipment = Vec::new();
+        let mut seen = HashSet::new();
+        for terminal in self.store.ids_of("Terminal") {
+            if let Some(owner) = self.store.refv(&terminal, "Terminal.ConductingEquipment")
+                && self.store.class_of(owner) != Some("ACLineSegment")
+                && seen.insert(owner.to_owned())
+            {
+                equipment.push(owner.to_owned());
+            }
+        }
+        for owner in equipment {
+            let shape = shape_of.get(&owner).or_else(|| {
+                self.store
+                    .refv(&owner, "Switch.CompositeSwitch")
+                    .and_then(|composite| shape_of.get(composite))
+            });
+            if let Some(shape) = shape {
+                self.place_terminals(&owner, shape, &mut at_node);
+            }
+        }
+        placed |= !at_node.is_empty();
+        placed.then_some(Layout {
+            meta: DistGeoMeta {
+                space,
+                kind: Some(DistCoordsKind::Source),
+            },
+            at_node,
+        })
+    }
+
+    /// The coordinate space of one `Diagram` (the first that names an
+    /// `EPSG:` coordinate reference system, else the first) and the shape of
+    /// each element its `DiagramObject`s draw: their `DiagramObjectPoint`s in
+    /// `sequenceNumber` order. A named CRS makes the coordinates projected
+    /// (geographic for EPSG:4326), and a diagram without one is a drawing.
+    fn diagram_shapes(&mut self) -> Option<(CoordinateSpace, Shapes)> {
+        let diagrams = self.store.ids_of("Diagram");
+        let named: Vec<Option<String>> = diagrams.iter().map(|d| self.diagram_crs(d)).collect();
+        let at = named.iter().position(Option::is_some).unwrap_or(0);
+        let diagram = diagrams.get(at)?.clone();
+        let space = match named[at].clone() {
+            Some(crs) if crs == "EPSG:4326" => CoordinateSpace::Geographic { crs: Some(crs) },
+            Some(crs) => CoordinateSpace::Projected { crs: Some(crs) },
+            None => CoordinateSpace::Diagram { canvas: None },
+        };
+        self.consumed.insert(diagram.clone());
+
+        // The diagram's objects by the element they draw, the first per
+        // element. An object that names no diagram belongs to the only one.
+        let only = diagrams.len() == 1;
+        let mut drawn: HashMap<String, String> = HashMap::new();
+        for object in self.store.ids_of("DiagramObject") {
+            let ours = self
+                .store
+                .refv(&object, "DiagramObject.Diagram")
+                .map_or(only, |d| d == diagram);
+            if !ours {
+                continue;
+            }
+            self.consumed.insert(object.clone());
+            if let Some(element) =
+                self.target("DiagramObject", &object, "DiagramObject.IdentifiedObject")
+            {
+                drawn.entry(element).or_insert(object);
+            }
+        }
+        let objects: HashSet<String> = drawn.values().cloned().collect();
+        let mut points: HashMap<String, Vec<(f64, usize, f64, f64)>> = HashMap::new();
+        for (order, point) in self
+            .store
+            .ids_of("DiagramObjectPoint")
+            .into_iter()
+            .enumerate()
+        {
+            let Some(object) = self
+                .store
+                .refv(&point, "DiagramObjectPoint.DiagramObject")
+                .filter(|object| objects.contains(*object))
+                .map(str::to_owned)
+            else {
+                continue;
+            };
+            let x = self.store.f(&point, "DiagramObjectPoint.xPosition");
+            let y = self.store.f(&point, "DiagramObjectPoint.yPosition");
+            let sequence = self
+                .store
+                .f(&point, "DiagramObjectPoint.sequenceNumber")
+                .unwrap_or(f64::MAX);
+            self.consumed.insert(point.clone());
+            let (Some(x), Some(y)) = (x, y) else {
+                self.drop_record(
+                    "DiagramObjectPoint",
+                    &point,
+                    "it states no finite xPosition and yPosition",
+                );
+                continue;
+            };
+            points
+                .entry(object)
+                .or_default()
+                .push((sequence, order, x, y));
+        }
+        let mut shape_of = Shapes::new();
+        for (element, object) in drawn {
+            if let Some(mut path) = points.remove(&object) {
+                path.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+                shape_of.insert(
+                    element,
+                    path.into_iter().map(|(_, _, x, y)| (x, y)).collect(),
+                );
+            }
+        }
+        Some((space, shape_of))
+    }
+
+    /// Place the nodes at an equipment's terminals from its drawn shape: the
+    /// last terminal of several at the last point, every other terminal at
+    /// the first. A node keeps the first location it gets.
+    fn place_terminals(
+        &self,
+        equipment: &str,
+        shape: &[(f64, f64)],
+        at_node: &mut HashMap<String, DistLocation>,
+    ) {
+        let (Some(&first), Some(&last)) = (shape.first(), shape.last()) else {
+            return;
+        };
+        let terminals = self.terminals(equipment);
+        let end = terminals.len().saturating_sub(1);
+        for (k, terminal) in terminals.iter().enumerate() {
+            let Some(node) = self.wiring.node_of.get(terminal) else {
+                continue;
+            };
+            let (x, y) = if k == end && k > 0 { last } else { first };
+            at_node.entry(node.clone()).or_insert(DistLocation {
+                x,
+                y,
+                kind: Some(DistCoordsKind::Derived),
+            });
+        }
+    }
+
     // -- unmapped content --------------------------------------------------
 
     /// Report every object of a class the mapping does not read, per class,
@@ -3425,6 +3707,19 @@ impl<'a> Mapper<'a> {
             let _ = diagnostic.insert_detail("property", serde_json::Value::from(key));
             let _ = diagnostic.insert_detail("count", serde_json::Value::from(count));
             self.diags.record(diagnostic);
+        }
+    }
+}
+
+/// Each bus at the location the layout derives for its connectivity node.
+fn locate_buses(buses: &mut [DistBus], layout: &Layout) {
+    for bus in buses.iter_mut() {
+        let node = bus
+            .extras
+            .get("cim_mrid")
+            .and_then(serde_json::Value::as_str);
+        if let Some(location) = node.and_then(|node| layout.at_node.get(node)) {
+            bus.location = Some(*location);
         }
     }
 }

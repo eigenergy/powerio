@@ -11,6 +11,10 @@
 //! A directory of `.xml` documents reads as one case, with `rdf:about`
 //! objects extending the ones another document defines.
 //!
+//! CIM16 documents may state an enumeration as text rather than as a
+//! reference, and draw the network in a Diagram Layout; the reader reads
+//! both.
+//!
 //! Same format emission returns the retained source bytes of a single
 //! document. Canonical output is one CIM100 document with deterministic
 //! mRIDs: imported ids pass through the `cim_mrid` extras, and everything
@@ -48,8 +52,11 @@ pub(crate) use read::parse_cim_collecting;
 pub(crate) use write::emit_cim_dist_text;
 
 /// Per phase and distribution only classes: CGMES never uses them, so one of
-/// them in a header-less CIM document marks distribution CIM.
-const DISTRIBUTION_MARKERS: [&[u8]; 10] = [
+/// them in a header-less CIM document marks distribution CIM. The IEC 61968
+/// customer and metering classes (`ServiceLocation`, `UsagePoint`) mark a
+/// distribution feeder stated with sequence impedances and no per phase
+/// class.
+const DISTRIBUTION_MARKERS: [&[u8]; 12] = [
     b"ACLineSegmentPhase",
     b"EnergyConsumerPhase",
     b"EnergySourcePhase",
@@ -60,6 +67,8 @@ const DISTRIBUTION_MARKERS: [&[u8]; 10] = [
     b"TransformerTank",
     b"PowerElectronicsConnectionPhase",
     b"ConcentricNeutralCableInfo",
+    b"ServiceLocation",
+    b"UsagePoint",
 ];
 
 /// How much of a document the header checks read.
@@ -378,6 +387,15 @@ mod tests {
     #[test]
     fn a_distribution_document_is_recognized_by_its_per_phase_classes() {
         let doc = format!("{RDF}<cim:ACLineSegmentPhase rdf:ID=\"_p\"/></rdf:RDF>");
+        assert!(looks_like_cim_dist(doc.as_bytes()));
+    }
+
+    #[test]
+    fn a_feeder_with_usage_points_is_distribution_cim() {
+        let cim16 = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/2013/CIM-schema-cim16#">"#;
+        let doc = format!(
+            "{cim16}<cim:ACLineSegment rdf:ID=\"_l\"/><cim:UsagePoint rdf:ID=\"_u\"/></rdf:RDF>"
+        );
         assert!(looks_like_cim_dist(doc.as_bytes()));
     }
 

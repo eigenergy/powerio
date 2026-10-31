@@ -160,8 +160,9 @@ extension namespace `http://entsoe.eu/CIM/SchemaExtension/3/1#` (IEC TS
 IEC 61970-552 CIMXML instance syntax, in which `rdf:ID` defines a record,
 `rdf:about` extends one, and `md:FullModel` heads each profile document. A
 CIM100 document with no `md:FullModel` header and with per phase distribution
-classes (`ACLineSegmentPhase`, `EnergyConsumerPhase`, …) is distribution CIM
-and routes to `cim-dist` instead; see
+classes (`ACLineSegmentPhase`, `EnergyConsumerPhase`, …), or a header-less
+document with the IEC 61968 customer classes (`ServiceLocation`,
+`UsagePoint`), is distribution CIM and routes to `cim-dist` instead; see
 [Distribution networks](distribution.md#distribution-cim). EQ is
 required, and SSH, SV, and boundary profile data are used when present. SSH
 assignments take precedence over SV observations, so an SV shunt section count

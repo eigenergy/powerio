@@ -162,7 +162,8 @@ CIM16 and CIM100. Input is one document, or a directory whose top level `.xml`
 documents read as one case, with `rdf:about` records extending the ones
 another document defines. Files in subdirectories are not part of the case,
 and ZIP archives are not read yet. A `.xml` document, a nameless source, or a
-directory routes here when it carries per phase classes and no CGMES
+directory routes here when it carries per phase classes or the IEC 61968
+customer classes (`ServiceLocation`, `UsagePoint`) and no CGMES
 `md:FullModel` header.
 
 | CIM | Model |
@@ -179,10 +180,29 @@ directory routes here when it carries per phase classes and no CGMES
 | `ShortCircuitTest` | short circuit reactances between winding pairs, and winding resistances when no end info states one |
 | `NoLoadTest`, `TransformerCoreAdmittance` | the `%noloadloss` and `%imag` extras |
 | `EnergySource` | voltage sources, with the series impedance in `rs`/`xs` extras |
+| `WireInfo.ratedCurrent` of a segment's `PowerSystemResource.AssetDatasheet` | the segment's ampacity, `i_max` on each conductor |
+| `Diagram` with its `DiagramObject`s and `DiagramObjectPoint`s | coordinates: a segment's points, in `sequenceNumber` order, are its route, the first at terminal 1. A connectivity node has no diagram object, so its bus takes the end of the first segment there, else the point of other equipment at it or of the composite switch that holds a switch; bus locations are marked derived |
 
 `SinglePhaseKind` A, B, C, and N map to terminals 1, 2, 3, and 4, and the
 split phase s1 and s2 to 1 and 2. A conductor beyond those four has no CIM
-phase, so the writer reports it.
+phase, so the writer reports it. An enumeration written as text
+(`<cim:Terminal.phases>A</cim:Terminal.phases>`), as some CIM16 exports
+state it, reads like the reference form.
+
+One `Diagram` gives the coordinates: the first whose name or description
+names an `EPSG:` code, else the first. A named code makes them projected
+coordinates in that CRS (geographic for EPSG:4326), and a diagram without
+one is a drawing. PowerIO does not reproject: the network's `geo` metadata
+names the CRS, and a geographic layer applied with `apply_geo_layer`
+replaces the coordinates with reprojected ones.
+
+Without a `BaseFrequency`, a CIM16 document set reads at 50 Hz, the ENTSO-E
+default the CGMES reader also assumes, while CIM100 keeps 60 Hz. Either
+default is a `READ.CIM_DIST.VALUE_DEFAULTED` finding.
+`Circuit`, `CompositeSwitch`, and `PSRType` are context
+(`READ.CIM_DIST.CONTEXT_UNMAPPED`). The IEC 61968 customer classes route a
+document here but are not mapped yet, so `ServiceLocation` and `UsagePoint`
+are reported as unmapped classes.
 
 A tank end's terminals follow from its `TransformerTankEnd.phases`, in the
 form the dss reader gives the equivalent OpenDSS transformer: a line to
@@ -219,7 +239,8 @@ its `cim_power_transformer` extra names, with tanks of identical catalog data
 sharing one `TransformerTankInfo`; every other transformer, including those
 from other formats, takes the `PowerTransformerEnd` form.
 
-Regulator controls, distributed energy resources, machines, wire and cable geometry, operational limits,
+Regulator controls, distributed energy resources
+(`PowerElectronicsConnection`), machines, wire and cable geometry, operational limits,
 `LoadResponseCharacteristic`, and `TopologicalNode` only documents are not
 mapped yet, and the reader reports each of them: a class with no mapping is
 counted per class (`READ.CIM_DIST.CLASS_UNMAPPED`), a property no mapping reads
