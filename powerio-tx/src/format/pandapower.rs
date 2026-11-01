@@ -2103,7 +2103,16 @@ fn read_frame(root: &Map<String, Value>, name: &str) -> Result<Option<DataFrame>
     let mut data = Vec::with_capacity(raw_data.len());
     for (i, row) in raw_data.into_iter().enumerate() {
         match row {
-            Value::Array(cells) => data.push(cells),
+            Value::Array(cells) => {
+                if cells.len() != columns.len() {
+                    return Err(bad(format!(
+                        "`{name}` table: row {i} has {} cells for {} columns",
+                        cells.len(),
+                        columns.len()
+                    )));
+                }
+                data.push(cells);
+            }
             _ => return Err(bad(format!("`{name}` table: row {i} is not an array"))),
         }
     }
@@ -2808,6 +2817,18 @@ mod tests {
         let frame = pp_frame(&["vn_kv"], json!([0]), json!([42]));
         let msg = err(&pp_net(vec![("bus", frame)]));
         assert!(msg.contains("`bus` table: row 0 is not an array"), "{msg}");
+    }
+
+    #[test]
+    fn read_frame_rejects_row_column_length_mismatch() {
+        // Reject malformed row shape before field decoding: otherwise reader defaults such as
+        // a zero-MW load when the row simply omitted its declared p/q cells.
+        let frame = pp_frame(&["bus", "p_mw", "q_mvar"], json!([0]), json!([[0, 10.0]]));
+        let msg = err(&pp_net(vec![bus_table(json!([0])), ("load", frame)]));
+        assert!(
+            msg.contains("`load` table: row 0 has 2 cells for 3 columns"),
+            "{msg}"
+        );
     }
 
     #[test]

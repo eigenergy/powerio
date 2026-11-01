@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reject pandapower split-table rows whose cell count does not match the declared columns, rather than silently defaulting missing electrical values.
+
 ## 0.11.7
 
 **AC optimal transmission switching**
