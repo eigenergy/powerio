@@ -1,163 +1,449 @@
-"""Check the distribution gate in .github/workflows/python.yml.
+name: Release binaries
 
-The gate step is extracted from the workflow and run under every combination of
-prerequisite results, so a change to its shell logic fails here. The structural
-checks keep the productive workers conditional on their prerequisites and keep
-publishing to release and recovery events. The platform choice is run for each
-event, so a pull request builds the x86_64 Linux wheel and every other event
-builds all five, and the gate's wheel count is run against both shapes.
-"""
+# Build the powerio-capi cdylib with the release feature tuple. Only gridfm
+# enables code; ABI 7 exposes one fixed typed symbol set.
+# For the five platforms PowerIO.jl's Artifacts.toml covers, package
+# each as the artifact tarball that file references (lib/ or bin/ layout, Julia
+# platform triplet in the name), and attach them to the GitHub release on a
+# version tag. A workflow_dispatch run builds the same tarballs as workflow
+# artifacts only.
+#
+# After the release is published, PowerIO.jl's Release workflow pins these
+# tarballs in its Artifacts.toml and registers the matching PowerIO.jl version.
+#
+# linux builds run on ubuntu-22.04 for the older glibc floor (2.35); aarch64
+# linux is cross-compiled so the job doesn't need an ARM runner label.
 
-import itertools
-import json
-import os
-import re
-import subprocess
-import tempfile
-import textwrap
-from pathlib import Path
+on:
+  push:
+    tags: [ "v*" ]
+  workflow_dispatch:
 
-ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW = (ROOT / ".github/workflows/python.yml").read_text()
+permissions:
+  contents: read
 
+# A moved, unpublished tag supersedes its previous build. Keep one run per
+# ref so its assets cannot race another run for the same draft release.
+concurrency:
+  group: release-binaries-${{ github.ref }}
+  cancel-in-progress: true
 
-def job(name: str) -> str:
-    match = re.search(rf"^  {re.escape(name)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)", WORKFLOW, re.M | re.S)
-    assert match, f"job {name} is missing"
-    return match.group(1)
+env:
+  CARGO_TERM_COLOR: always
 
+jobs:
+  # Release gate. PIO_ABI_VERSION does not cover document formats, so a
+  # release can break the Julia binding while both ABI integers stay the
+  # same. This job tests the tag against the default branch of PowerIO.jl.
+  # It gates `build`: a failure makes no tarballs and no draft release.
+  # It also checks that PowerIO.jl binds or exempts every entry point the
+  # tagged ABI declares, so a release never ships an entry point the binding
+  # has never seen.
+  # For a planned binding break, merge the PowerIO.jl change first, then
+  # run this workflow again on the tag.
+  binding-gate:
+    name: PowerIO.jl main against this tag
+    # Tag pushes only. A workflow_dispatch run builds artifact-only
+    # tarballs and attaches nothing to a release, so it has no gate. That
+    # run is also the bypass for a planned binding break.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Probe PowerIO.jl access
+      id: powerio-jl
+      env:
+        POWERIO_JL_TOKEN: ${{ secrets.POWERIO_JL_REPO_TOKEN }}
+      run: |
+        # Test the token now. An expired token would fail later in checkout
+        # with an unclear error.
+        if [ -n "${POWERIO_JL_TOKEN}" ] \
+          && git ls-remote "https://x-access-token:${POWERIO_JL_TOKEN}@github.com/eigenergy/PowerIO.jl.git" HEAD >/dev/null 2>&1; then
+          echo "available=true" >> "$GITHUB_OUTPUT"
+        elif git ls-remote https://github.com/eigenergy/PowerIO.jl.git HEAD >/dev/null 2>&1; then
+          echo "available=true" >> "$GITHUB_OUTPUT"
+        else
+          # Do not pass silently. On a release, an unreachable binding
+          # means the gate did not run.
+          echo "available=false" >> "$GITHUB_OUTPUT"
+        fi
+    - name: Require the binding to be reachable
+      if: steps.powerio-jl.outputs.available != 'true'
+      run: |
+        echo "::error::Cannot reach eigenergy/PowerIO.jl, so the release gate cannot run. \
+        Set a valid POWERIO_JL_REPO_TOKEN to release. A workflow_dispatch run builds \
+        artifact-only tarballs without the gate."
+        exit 1
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+    - name: Build powerio-capi
+      run: |
+        cargo build -p powerio-capi --release \
+          --features matrix,gridfm,dist,prob
+    - name: Check out PowerIO.jl default branch
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: eigenergy/PowerIO.jl
+        path: PowerIO.jl
+        token: ${{ secrets.POWERIO_JL_REPO_TOKEN || github.token }}
+    - uses: julia-actions/setup-julia@da908477b5db94c10ffce8cfea9f2b3b9d5db687 # v3.0.3
+      with:
+        version: '1'
+    - uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
+    # Every entry point this tag declares is bound by PowerIO.jl main or
+    # listed in its gen/unbound_entry_points.txt with a reason.
+    - name: Entry point coverage of PowerIO.jl main
+      run: POWERIO_JL=PowerIO.jl bash scripts/check-capi-v7.sh
+    - name: Test PowerIO.jl against this tag
+      env:
+        POWERIO_CAPI: ${{ github.workspace }}/target/release/libpowerio_capi.so
+        POWERIO_HEADER: ${{ github.workspace }}/powerio-capi/include/powerio.h
+      run: |
+        julia --project=PowerIO.jl -e 'using Pkg; Pkg.instantiate(); Pkg.test()' || {
+          echo "::error::PowerIO.jl's default branch fails against this tag. Merge the \
+          companion PowerIO.jl change, then re-run this workflow on the tag. A \
+          workflow_dispatch run builds artifact-only tarballs without the gate."
+          exit 1
+        }
 
-def condition(name: str) -> str:
-    match = re.search(r"^    if: (.*)$", job(name), re.M)
-    assert match, f"job {name} has no if condition"
-    return match.group(1)
+  build:
+    needs: binding-gate
+    # Run when the gate passed or was skipped, never when it failed. A
+    # plain `needs:` would also skip this job on workflow_dispatch runs.
+    if: always() && (needs.binding-gate.result == 'success' || needs.binding-gate.result == 'skipped')
+    name: ${{ matrix.triplet }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            triplet: x86_64-linux-gnu
+            lib: libpowerio_capi.so
+          - runner: ubuntu-22.04
+            rust_target: aarch64-unknown-linux-gnu
+            triplet: aarch64-linux-gnu
+            lib: libpowerio_capi.so
+            cross_gcc: gcc-aarch64-linux-gnu
+          # Cross-compiled: the macos-13 x86_64 runners are retired, and an
+          # arm64 runner with the x86_64 toolchain target links fine.
+          - runner: macos-15
+            rust_target: x86_64-apple-darwin
+            triplet: x86_64-apple-darwin
+            lib: libpowerio_capi.dylib
+          - runner: macos-15
+            rust_target: aarch64-apple-darwin
+            triplet: aarch64-apple-darwin
+            lib: libpowerio_capi.dylib
+          - runner: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            triplet: x86_64-w64-mingw32
+            lib: powerio_capi.dll
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          targets: ${{ matrix.rust_target }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.rust_target }}
+      # The tarballs and the draft release are named for the tag, and PowerIO.jl
+      # pins them by it. A tag pushed without the workspace version bump would
+      # ship a library that calls itself the previous version, stamps it into
+      # every document it writes, and serves its schema under the previous
+      # lineage. crates.yml catches the mismatch, but only after a human has
+      # published the release.
+      - name: Check the tag against the workspace version
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: bash scripts/release-tag-check.sh
+      - name: Install cross linker
+        if: matrix.cross_gcc != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.cross_gcc }} qemu-user
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+      - name: Build powerio-capi
+        run: cargo build -p powerio-capi --release --features matrix,gridfm,dist,prob --target ${{ matrix.rust_target }}
+      # Artifact layout PowerIO.jl's _artifact_lib() resolves: the cdylib under
+      # lib/ (bin/ on Windows, renamed to the lib-prefixed name BinaryBuilder
+      # would produce), the C header under include/, licenses at the root.
+      - name: Package tarball
+        shell: bash
+        run: |
+          stage=stage/libpowerio_capi
+          built="target/${{ matrix.rust_target }}/release/${{ matrix.lib }}"
+          case "${{ matrix.triplet }}" in
+            *-mingw32)
+              mkdir -p "$stage/bin"
+              cp "$built" "$stage/bin/libpowerio_capi.dll"
+              ;;
+            *)
+              mkdir -p "$stage/lib"
+              cp "$built" "$stage/lib/${{ matrix.lib }}"
+              ;;
+          esac
+          mkdir -p "$stage/include"
+          cp powerio-capi/include/powerio.h "$stage/include/"
+          cp LICENSE-MIT LICENSE-APACHE "$stage/"
+          mkdir -p "$stage/schemas"
+          cp -R powerio-dist/schemas/bmopf "$stage/schemas/"
+          tar -czf "libpowerio_capi.${{ matrix.triplet }}.tar.gz" -C "$stage" .
+          python3 scripts/audit-release-archives.py \
+            "libpowerio_capi.${{ matrix.triplet }}.tar.gz"
+          python3 scripts/check-bmopf-archive.py --archive "libpowerio_capi.${{ matrix.triplet }}.tar.gz"
+          # informational; gen/update_artifacts.jl recomputes from the release assets
+          shasum -a 256 "libpowerio_capi.${{ matrix.triplet }}.tar.gz" \
+            || sha256sum "libpowerio_capi.${{ matrix.triplet }}.tar.gz"
+      - name: Runtime smoke test packaged Unix library
+        if: matrix.triplet != 'x86_64-w64-mingw32'
+        shell: bash
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -er '.packages[] | select(.name == "powerio-capi") | .version')"
+          stage="stage/libpowerio_capi"
+          defs=(-DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PROB)
+          case "${{ matrix.triplet }}" in
+            x86_64-linux-gnu)
+              # shellcheck disable=SC2016
+              cc "${defs[@]}" -I "$stage/include" powerio-capi/examples/release_smoke.c \
+                -L "$stage/lib" -lpowerio_capi \
+                -Wl,-rpath,'$ORIGIN/stage/libpowerio_capi/lib' -o release-smoke
+              ./release-smoke "$version"
+              ;;
+            aarch64-linux-gnu)
+              # shellcheck disable=SC2016
+              aarch64-linux-gnu-gcc "${defs[@]}" -I "$stage/include" \
+                powerio-capi/examples/release_smoke.c \
+                -L "$stage/lib" -lpowerio_capi \
+                -Wl,-rpath,'$ORIGIN/stage/libpowerio_capi/lib' -o release-smoke
+              qemu-aarch64 -L /usr/aarch64-linux-gnu ./release-smoke "$version"
+              ;;
+            x86_64-apple-darwin)
+              /usr/sbin/softwareupdate --install-rosetta --agree-to-license
+              cc -arch x86_64 "${defs[@]}" -I "$stage/include" \
+                powerio-capi/examples/release_smoke.c \
+                -L "$stage/lib" -lpowerio_capi \
+                -Wl,-rpath,@executable_path/stage/libpowerio_capi/lib \
+                -o release-smoke
+              arch -x86_64 ./release-smoke "$version"
+              ;;
+            aarch64-apple-darwin)
+              cc -arch arm64 "${defs[@]}" -I "$stage/include" \
+                powerio-capi/examples/release_smoke.c \
+                -L "$stage/lib" -lpowerio_capi \
+                -Wl,-rpath,@executable_path/stage/libpowerio_capi/lib \
+                -o release-smoke
+              arch -arm64 ./release-smoke "$version"
+              ;;
+          esac
+      - name: Runtime smoke test packaged Windows library
+        if: matrix.triplet == 'x86_64-w64-mingw32'
+        shell: pwsh
+        run: |
+          # cargo reaches the MSVC toolset through the cc crate, but a bare
+          # cl.exe is not on PATH until the developer shell is entered.
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          if (-not $vsPath) { throw 'no Visual Studio C++ toolset on this runner' }
+          Import-Module "$vsPath\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation `
+            -DevCmdArguments '-arch=x64 -host_arch=x64'
+          $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $version = ($metadata.packages | Where-Object { $_.name -eq 'powerio-capi' }).version
+          $defines = @('/DPIO_MATRIX', '/DPIO_GRIDFM', '/DPIO_DIST', '/DPIO_PROB')
+          $importLib = Get-ChildItem target/${{ matrix.rust_target }}/release -Filter '*powerio_capi*.dll.lib' |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $importLib) { throw 'powerio-capi import library is missing' }
+          cl.exe /nologo /std:c11 $defines /Istage/libpowerio_capi/include `
+            powerio-capi/examples/release_smoke.c `
+            $importLib `
+            /Fe:release-smoke.exe
+          Copy-Item stage/libpowerio_capi/bin/libpowerio_capi.dll powerio_capi.dll
+          ./release-smoke.exe $version
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: libpowerio_capi.${{ matrix.triplet }}
+          path: libpowerio_capi.${{ matrix.triplet }}.tar.gz
 
+  # Release gate on the packaged tarballs. After publication, PowerIO.jl's
+  # Release workflow pins the published tarballs in its Artifacts.toml and runs
+  # its tests against them. It cannot skip a version, so a tarball that fails
+  # there would leave PyPI and crates.io published and the Julia release stuck.
+  # These two jobs run that check on the tarballs `build` made, before the
+  # draft release exists. `julia-pin` runs PowerIO.jl's gen/update_artifacts.jl
+  # on them. `julia-tarballs` installs each platform's tarball as the artifact
+  # Artifacts.toml names, checking its sha256 and tree hash, and runs the
+  # PowerIO.jl tests on that platform against it. A workflow_dispatch run
+  # checks the tarballs against the workspace version and attaches nothing.
+  julia-pin:
+    name: PowerIO.jl pins the packaged tarballs
+    needs: build
+    # A skipped binding gate (workflow_dispatch) would otherwise skip this job
+    # too, as it skips every job downstream of it.
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out PowerIO.jl default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: eigenergy/PowerIO.jl
+          path: PowerIO.jl
+          token: ${{ secrets.POWERIO_JL_REPO_TOKEN || github.token }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: libpowerio_capi.*
+          path: release-assets
+          merge-multiple: true
+      - uses: julia-actions/setup-julia@da908477b5db94c10ffce8cfea9f2b3b9d5db687 # v3.0.3
+        with:
+          version: '1'
+      - name: Pin the tarballs with gen/update_artifacts.jl
+        shell: bash
+        env:
+          TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
+        run: |
+          tag="${TAG:-v$(grep -oE '^version = "[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')}"
+          julia --project=PowerIO.jl scripts/check-julia-artifacts.jl pin PowerIO.jl release-assets "$tag"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: powerio-jl-artifacts
+          path: PowerIO.jl/Artifacts.toml
 
-# The gate rejects every prerequisite that is not a success.
-gate = job("validate-distributions")
-marker = "      - name: Require every distribution prerequisite to succeed\n"
-step = gate.split(marker, 1)[1]
-env_block, run_block = step.split("        run: |\n", 1)
-script = textwrap.dedent(run_block.split("      - uses:", 1)[0])
-variables = re.findall(r"^          (\w+_RESULT): \$\{\{ needs\.([\w-]+)\.result \}\}$", env_block, re.M)
-assert [needs for _, needs in variables] == ["release-preflight", "wheels", "wheel-smoke", "sdist"], variables
-needs_line = re.search(r"^    needs: \[ (.*) \]$", gate, re.M)
-assert needs_line and [n.strip() for n in needs_line.group(1).split(",")] == [n for _, n in variables]
+  julia-tarballs:
+    name: PowerIO.jl on ${{ matrix.platform }}
+    needs: julia-pin
+    if: ${{ !cancelled() && needs.julia-pin.result == 'success' }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: x86_64-linux-gnu
+          - runner: ubuntu-24.04-arm
+            platform: aarch64-linux-gnu
+          # x64 Julia under Rosetta; the Intel macOS runners are retired.
+          - runner: macos-15
+            platform: x86_64-apple-darwin
+            julia_arch: x64
+          - runner: macos-15
+            platform: aarch64-apple-darwin
+          - runner: windows-latest
+            platform: x86_64-w64-mingw32
+    steps:
+      # Pkg installs a package from its git tree without converting line
+      # endings, so check PowerIO.jl out the same way; its tests compare
+      # emitted text with fixture bytes.
+      - name: Keep committed line endings
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out PowerIO.jl default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: eigenergy/PowerIO.jl
+          path: PowerIO.jl
+          token: ${{ secrets.POWERIO_JL_REPO_TOKEN || github.token }}
+      - name: Use the Artifacts.toml julia-pin wrote
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: powerio-jl-artifacts
+          path: PowerIO.jl
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: libpowerio_capi.${{ matrix.platform }}
+          path: release-assets
+      - name: Install Rosetta
+        if: matrix.julia_arch == 'x64'
+        run: /usr/sbin/softwareupdate --install-rosetta --agree-to-license
+      - uses: julia-actions/setup-julia@da908477b5db94c10ffce8cfea9f2b3b9d5db687 # v3.0.3
+        with:
+          version: '1'
+          arch: ${{ matrix.julia_arch || 'default' }}
+          force-arch: ${{ matrix.julia_arch == 'x64' }}
+      - name: Install the packaged tarball as the powerio_capi artifact
+        shell: bash
+        run: julia --project=PowerIO.jl scripts/check-julia-artifacts.jl install PowerIO.jl release-assets
+      # No POWERIO_CAPI and no library build in this job, so the binding
+      # resolves the installed artifact, and the suite fails without it.
+      - name: Test PowerIO.jl against the packaged library
+        shell: bash
+        env:
+          POWERIO_REQUIRE_LIBRARY: '1'
+        run: |
+          # Git Bash puts GNU tar first on PATH, and GNU tar reads the C: of a
+          # Windows path as a remote host. The tests' tar calls need Windows'
+          # own tar, which accepts drive letters.
+          if [ "$RUNNER_OS" = Windows ]; then export PATH="/c/Windows/System32:$PATH"; fi
+          julia --project=PowerIO.jl -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 
-for results in itertools.product(["success", "failure", "skipped", "cancelled", ""], repeat=len(variables)):
-    env = {name: result for (name, _), result in zip(variables, results)}
-    done = subprocess.run(["bash", "-euo", "pipefail", "-c", script], env=env, capture_output=True, text=True)
-    expected = all(result == "success" for result in results)
-    assert (done.returncode == 0) == expected, (results, done.returncode, done.stderr)
-
-# The gate runs after failures but not after cancellation, and checks metadata.
-assert condition("validate-distributions") == "${{ !cancelled() }}"
-assert "twine check" in gate
-
-# Productive workers keep the default success condition on their prerequisites.
-for name in ["wheels", "wheel-smoke", "sdist"]:
-    assert "always()" not in condition(name) and "cancelled()" not in condition(name), name
-    assert condition(name) == "needs.release-preflight.outputs.wheels == 'true'", name
-
-
-def step_script(job_text: str, name: str) -> tuple[str, str]:
-    """Return the text before `run: |` and the dedented script of one step."""
-    step = job_text.split(f"      - name: {name}\n", 1)[1]
-    step = re.split(r"^      - ", step, maxsplit=1, flags=re.M)[0]
-    head, run_block = step.split("        run: |\n", 1)
-    return head, textwrap.dedent(run_block)
-
-
-# The preflight chooses the wheel platforms on every event: a pull request gets
-# the x86_64 Linux wheel, every other event all five release platforms.
-preflight = job("release-preflight")
-assert "      platforms: ${{ steps.platforms.outputs.platforms }}\n" in preflight
-head, choose = step_script(preflight, "Choose the wheel platforms")
-assert "        id: platforms\n" in head and "if:" not in head, head
-linux = {"runner": "ubuntu-latest", "target": "x86_64"}
-release_platforms = [
-    linux,
-    {"runner": "ubuntu-24.04-arm", "target": "aarch64"},
-    {"runner": "macos-15", "target": "x86_64"},
-    {"runner": "macos-15", "target": "aarch64"},
-    {"runner": "windows-latest", "target": "x64"},
-]
-with tempfile.TemporaryDirectory() as tmp:
-    for event, expected in [
-        ("pull_request", [linux]),
-        ("push", release_platforms),
-        ("release", release_platforms),
-        ("workflow_dispatch", release_platforms),
-    ]:
-        output = Path(tmp) / f"{event}.out"
-        env = {"PATH": os.environ["PATH"], "GITHUB_EVENT_NAME": event, "GITHUB_OUTPUT": str(output)}
-        done = subprocess.run(["bash", "-euo", "pipefail", "-c", choose], env=env, capture_output=True, text=True)
-        assert done.returncode == 0, (event, done.stderr)
-        lines = output.read_text().splitlines()
-        assert len(lines) == 1 and lines[0].startswith("platforms="), lines
-        assert json.loads(lines[0].removeprefix("platforms=")) == expected, (event, lines)
-
-# Both wheel jobs run over that one list, and the smoke job downloads exactly
-# the artifact the build job uploaded for its platform.
-artifact = "wheels-${{ matrix.platform.runner }}-${{ matrix.platform.target }}"
-for name in ["wheels", "wheel-smoke"]:
-    assert "        platform: ${{ fromJSON(needs.release-preflight.outputs.platforms) }}\n" in job(name), name
-assert f"          name: {artifact}\n" in job("wheels")
-assert f"          name: {artifact}\n" in job("wheel-smoke")
-
-# The gate counts one wheel per chosen platform and one sdist.
-head, count = step_script(gate, "Count the built distributions")
-assert "PLATFORMS: ${{ needs.release-preflight.outputs.platforms }}" in head
-for platforms, wheels, sdists, expected in [
-    (release_platforms, 5, 1, True),
-    ([linux], 1, 1, True),
-    (release_platforms, 4, 1, False),
-    (release_platforms, 1, 1, False),
-    ([linux], 1, 0, False),
-    ([linux], 2, 1, False),
-]:
-    with tempfile.TemporaryDirectory() as tmp:
-        dist = Path(tmp) / "dist"
-        dist.mkdir()
-        for i in range(wheels):
-            (dist / f"powerio-{i}.whl").touch()
-        for i in range(sdists):
-            (dist / f"powerio-{i}.tar.gz").touch()
-        env = {"PATH": os.environ["PATH"], "PLATFORMS": json.dumps(platforms)}
-        done = subprocess.run(["bash", "-euo", "pipefail", "-c", count], env=env, cwd=tmp, capture_output=True, text=True)
-        assert (done.returncode == 0) == expected, (len(platforms), wheels, sdists, done.stderr)
-
-# Nothing but the release-only publish job may upload to PyPI.
-assert WORKFLOW.count("pypa/gh-action-pypi-publish") == 1
-assert "pypa/gh-action-pypi-publish" in job("publish")
-assert "environment: pypi" in job("publish")
-assert "always()" not in condition("publish")
-assert "pull_request" not in condition("publish")
-assert re.search(r"^  (upload|publish-[\w-]+):", WORKFLOW, re.M) is None
-
-# The C ABI release workflow has separate macOS matrices for building the
-# libraries and testing the packaged Julia artifacts. It is release-triggered,
-# so PR CI never executes it; inspect both matrices here to catch retired
-# runners before a release is attempted.
-RELEASE_WORKFLOW = (ROOT / ".github/workflows/release-binaries.yml").read_text()
-
-
-def release_job(name: str) -> str:
-    match = re.search(
-        rf"^  {re.escape(name)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
-        RELEASE_WORKFLOW,
-        re.M | re.S,
-    )
-    assert match, f"release job {name} is missing"
-    return match.group(1)
-
-
-for name in ("build", "julia-tarballs"):
-    macos_runners = re.findall(
-        r"^[ \t]*- runner: (macos-[A-Za-z0-9.-]+)$",
-        release_job(name),
-        re.M,
-    )
-    assert macos_runners == ["macos-15", "macos-15"], (name, macos_runners)
-
-print("Python and release workflow checks passed")
+  attach:
+    name: attach draft release assets
+    if: github.event_name == 'push'
+    needs: [ build, julia-tarballs ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify the tag still names this build
+        shell: bash
+        env:
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          # Annotated tags resolve through ^{}; lightweight tags name the
+          # commit directly. A missing or moved tag must attach no assets.
+          refs="$(git ls-remote --tags origin "$RELEASE_REF" "${RELEASE_REF}^{}")"
+          tag_sha="$(printf '%s\n' "$refs" | awk '$2 !~ /\^\{\}$/ { print $1 }')"
+          peeled_sha="$(printf '%s\n' "$refs" | awk '$2 ~ /\^\{\}$/ { print $1 }')"
+          current_sha="${peeled_sha:-$tag_sha}"
+          if [ "$current_sha" != "$RELEASE_SHA" ]; then
+            echo "::error::Release tag moved or disappeared while this build ran."
+            exit 1
+          fi
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: libpowerio_capi.*
+          path: release-assets
+          merge-multiple: true
+      # The draft release body is the CHANGELOG section for this version (the
+      # v0.0.1 release shipped with a bare one-liner); auto-generated notes are
+      # appended below it.
+      - name: Release body from CHANGELOG
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          awk -v ver="${TAG#v}" '
+            $0 == "## " ver { hit = 1; next }
+            /^## / { hit = 0 }
+            hit { print }
+          ' CHANGELOG.md > release-body.md
+          if ! [ -s release-body.md ]; then
+            echo "CHANGELOG.md has no \"## ${TAG#v}\" section" >&2
+            exit 1
+          fi
+          asset_count="$(find release-assets -maxdepth 1 -type f -name '*.tar.gz' | wc -l | tr -d ' ')"
+          if [ "$asset_count" != 5 ]; then
+            echo "expected five release assets, found $asset_count" >&2
+            exit 1
+          fi
+      - name: Attach to release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          files: release-assets/*.tar.gz
+          body_path: release-body.md
+          generate_release_notes: true
+          # Stage the release as a draft a human publishes: the release event
+          # then has a user actor, so it actually triggers python.yml (the
+          # GITHUB_TOKEN recursion guard swallows bot-published events), and
+          # nothing ships until the maintainer clicks publish.
+          draft: true
