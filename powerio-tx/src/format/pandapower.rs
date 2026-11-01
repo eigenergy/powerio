@@ -763,7 +763,7 @@ pub(crate) fn parse_pandapower_source(
         if !looks_like_frame {
             continue;
         }
-        if let Ok(Some(frame)) = read_frame(obj, key)
+        if let Some(frame) = read_frame(obj, key)?
             && !frame.data.is_empty()
         {
             warnings.push(
@@ -2827,6 +2827,18 @@ mod tests {
         let msg = err(&pp_net(vec![bus_table(json!([0])), ("load", frame)]));
         assert!(
             msg.contains("`load` table: row 0 has 2 cells for 3 columns"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn malformed_unmapped_table_is_not_silently_ignored() {
+        // Unknown DataFrames are still parsed before a warning is emitted.
+        // A malformed row must not disappear merely because its table is unmapped.
+        let frame = pp_frame(&["bus", "x_l_ohm"], json!([0]), json!([[0]]));
+        let msg = err(&pp_net(vec![bus_table(json!([0])), ("svc", frame)]));
+        assert!(
+            msg.contains("`svc` table: row 0 has 1 cells for 2 columns"),
             "{msg}"
         );
     }
