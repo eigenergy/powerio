@@ -2228,7 +2228,7 @@ fn validate_stored_assignment(
     point.map_or(Ok(()), |point| validate_quantities(&point.quantities, 1))
 }
 
-fn validate_spans(spans: &[SourceSpan], sources: &BTreeMap<String, u64>) -> Result<(), String> {
+fn validate_spans(spans: &[SourceSpan], sources: &BTreeMap<&str, u64>) -> Result<(), String> {
     for span in spans {
         let Some(byte_length) = sources.get(span.source.0.as_str()) else {
             return Err(format!("unknown source id `{}`", span.source.0));
