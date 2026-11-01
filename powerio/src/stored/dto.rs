@@ -1710,11 +1710,14 @@ fn validate_records<'a, V: Serialize>(
     };
     let value_data = stored_value.as_ref();
 
-    let mut sources = BTreeMap::new();
+    // Borrow source identifiers from the owned descriptors instead of cloning
+    // every key into the lookup map. This keeps validation allocation-light for
+    // large provenance inventories without changing duplicate or span checks.
+    let mut sources: BTreeMap<&str, u64> = BTreeMap::new();
     for source in module_sources {
         nonempty("source id", &source.id.0)?;
         if sources
-            .insert(source.id.0.clone(), source.byte_length)
+            .insert(source.id.0.as_str(), source.byte_length)
             .is_some()
         {
             return Err(format!("duplicate source id `{}`", source.id.0));
@@ -2225,7 +2228,7 @@ fn validate_stored_assignment(
     point.map_or(Ok(()), |point| validate_quantities(&point.quantities, 1))
 }
 
-fn validate_spans(spans: &[SourceSpan], sources: &BTreeMap<String, u64>) -> Result<(), String> {
+fn validate_spans(spans: &[SourceSpan], sources: &BTreeMap<&str, u64>) -> Result<(), String> {
     for span in spans {
         let Some(byte_length) = sources.get(span.source.0.as_str()) else {
             return Err(format!("unknown source id `{}`", span.source.0));
