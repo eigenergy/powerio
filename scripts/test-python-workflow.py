@@ -78,8 +78,8 @@ linux = {"runner": "ubuntu-latest", "target": "x86_64"}
 release_platforms = [
     linux,
     {"runner": "ubuntu-24.04-arm", "target": "aarch64"},
-    {"runner": "macos-14", "target": "x86_64"},
-    {"runner": "macos-14", "target": "aarch64"},
+    {"runner": "macos-15", "target": "x86_64"},
+    {"runner": "macos-15", "target": "aarch64"},
     {"runner": "windows-latest", "target": "x64"},
 ]
 with tempfile.TemporaryDirectory() as tmp:
