@@ -1710,11 +1710,14 @@ fn validate_records<'a, V: Serialize>(
     };
     let value_data = stored_value.as_ref();
 
-    let mut sources = BTreeMap::new();
+    // Borrow source identifiers from the already-owned descriptors. Cloning
+    // every identifier here is needlessly expensive for large provenance
+    // inventories and does not improve lookup or duplicate detection.
+    let mut sources: BTreeMap<&str, u64> = BTreeMap::new();
     for source in module_sources {
         nonempty("source id", &source.id.0)?;
         if sources
-            .insert(source.id.0.clone(), source.byte_length)
+            .insert(source.id.0.as_str(), source.byte_length)
             .is_some()
         {
             return Err(format!("duplicate source id `{}`", source.id.0));
