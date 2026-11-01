@@ -128,11 +128,11 @@ jobs:
             cross_gcc: gcc-aarch64-linux-gnu
           # Cross-compiled: the macos-13 x86_64 runners are retired, and an
           # arm64 runner with the x86_64 toolchain target links fine.
-          - runner: macos-14
+          - runner: macos-15
             rust_target: x86_64-apple-darwin
             triplet: x86_64-apple-darwin
             lib: libpowerio_capi.dylib
-          - runner: macos-14
+          - runner: macos-15
             rust_target: aarch64-apple-darwin
             triplet: aarch64-apple-darwin
             lib: libpowerio_capi.dylib
@@ -330,10 +330,10 @@ jobs:
           - runner: ubuntu-24.04-arm
             platform: aarch64-linux-gnu
           # x64 Julia under Rosetta; the Intel macOS runners are retired.
-          - runner: macos-14
+          - runner: macos-15
             platform: x86_64-apple-darwin
             julia_arch: x64
-          - runner: macos-14
+          - runner: macos-15
             platform: aarch64-apple-darwin
           - runner: windows-latest
             platform: x86_64-w64-mingw32

@@ -78,8 +78,8 @@ linux = {"runner": "ubuntu-latest", "target": "x86_64"}
 release_platforms = [
     linux,
     {"runner": "ubuntu-24.04-arm", "target": "aarch64"},
-    {"runner": "macos-14", "target": "x86_64"},
-    {"runner": "macos-14", "target": "aarch64"},
+    {"runner": "macos-15", "target": "x86_64"},
+    {"runner": "macos-15", "target": "aarch64"},
     {"runner": "windows-latest", "target": "x64"},
 ]
 with tempfile.TemporaryDirectory() as tmp:
@@ -134,4 +134,30 @@ assert "environment: pypi" in job("publish")
 assert "always()" not in condition("publish")
 assert "pull_request" not in condition("publish")
 assert re.search(r"^  (upload|publish-[\w-]+):", WORKFLOW, re.M) is None
-print("python.yml distribution gate checks passed")
+
+# The C ABI release workflow has separate macOS matrices for building the
+# libraries and testing the packaged Julia artifacts. It is release-triggered,
+# so PR CI never executes it; inspect both matrices here to catch retired
+# runners before a release is attempted.
+RELEASE_WORKFLOW = (ROOT / ".github/workflows/release-binaries.yml").read_text()
+
+
+def release_job(name: str) -> str:
+    match = re.search(
+        rf"^  {re.escape(name)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+        RELEASE_WORKFLOW,
+        re.M | re.S,
+    )
+    assert match, f"release job {name} is missing"
+    return match.group(1)
+
+
+for name in ("build", "julia-tarballs"):
+    macos_runners = re.findall(
+        r"^[ \t]*- runner: (macos-[A-Za-z0-9.-]+)$",
+        release_job(name),
+        re.M,
+    )
+    assert macos_runners == ["macos-15", "macos-15"], (name, macos_runners)
+
+print("Python and release workflow checks passed")
