@@ -1318,15 +1318,19 @@ mod tests {
     }
 
     #[test]
-    fn bus_ids_outside_powerio_range_are_rejected() {
-        // PowerModels IDs are unsigned JSON integers, but they still have to
-        // fit the canonical BusId domain rather than survive an unchecked cast.
-        let too_large = BusId::MAX.0.saturating_add(1);
+    fn bus_ids_outside_supported_range_are_rejected() {
+        // Construct the first value beyond the canonical limit in u64 space.
+        // On 32-bit targets it fails the usize conversion; on 64-bit targets
+        // it reaches the explicit PowerIO/i64 ceiling. Both must be rejected.
+        let too_large = u64::try_from(BusId::MAX.0)
+            .expect("BusId::MAX fits in u64")
+            .checked_add(1)
+            .expect("BusId::MAX is below u64::MAX");
         let doc = format!(
             r#"{{"baseMVA":100.0,"bus":{{"1":{{"bus_i":{too_large},"bus_type":3,"vm":1.0,"va":0.0,"base_kv":345.0}}}}}}"#
         );
         let err = parse_powermodels_json(&doc).unwrap_err().to_string();
-        assert!(err.contains("exceeds PowerIO's bus ID range"), "{err}");
+        assert!(err.contains("bus ID range"), "{err}");
     }
 
     #[test]
