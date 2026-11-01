@@ -1,7 +1,7 @@
 //! Exact data types for PowerIO IR. Runtime types do not derive this
 //! layout; the mapping in [`super::convert`] is the one bridge.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 
 use serde::de::{DeserializeSeed, Error as _, Visitor};
@@ -1713,7 +1713,7 @@ fn validate_records<'a, V: Serialize>(
     // Borrow source identifiers from the owned descriptors instead of cloning
     // every key into the lookup map. This keeps validation allocation-light for
     // large provenance inventories without changing duplicate or span checks.
-    let mut sources: BTreeMap<&str, u64> = BTreeMap::new();
+    let mut sources: HashMap<&str, u64> = HashMap::with_capacity(module_sources.len());
     for source in module_sources {
         nonempty("source id", &source.id.0)?;
         if sources
@@ -1734,7 +1734,7 @@ fn validate_records<'a, V: Serialize>(
         }
     }
 
-    let mut diagnostics = BTreeSet::new();
+    let mut diagnostics = HashSet::with_capacity(module_diagnostics.len());
     for diagnostic in module_diagnostics {
         nonempty("diagnostic id", &diagnostic.id.0)?;
         if !diagnostics.insert(diagnostic.id.0.as_str()) {
@@ -1769,7 +1769,7 @@ fn validate_records<'a, V: Serialize>(
         }
     }
 
-    let mut history = BTreeSet::new();
+    let mut history = HashSet::new();
     for (id, name) in module_history {
         nonempty("history id", id)?;
         if !history.insert(id) {
@@ -2228,7 +2228,7 @@ fn validate_stored_assignment(
     point.map_or(Ok(()), |point| validate_quantities(&point.quantities, 1))
 }
 
-fn validate_spans(spans: &[SourceSpan], sources: &BTreeMap<&str, u64>) -> Result<(), String> {
+fn validate_spans(spans: &[SourceSpan], sources: &HashMap<&str, u64>) -> Result<(), String> {
     for span in spans {
         let Some(byte_length) = sources.get(span.source.0.as_str()) else {
             return Err(format!("unknown source id `{}`", span.source.0));
