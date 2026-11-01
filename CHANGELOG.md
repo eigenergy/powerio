@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Validate PowerModels bus IDs and equipment references before converting them into canonical bus identifiers, rejecting missing or out-of-range IDs instead of silently casting defaults.
+
 ## 0.11.7
 
 **AC optimal transmission switching**
