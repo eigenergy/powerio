@@ -61,6 +61,16 @@ returns using exact equivalent circuits. Reimport can introduce auxiliary
 components, so canonical output is electrically equivalent rather than a text
 fixed point. Unchanged source replay remains byte exact.
 
+Names from other formats can be free text (a CIM `IdentifiedObject.name`
+such as `Cable type A`), but OpenDSS splits a token on whitespace, `,`, `=`,
+quotes, and brackets, reads `!` and `//` as comment openers, and reads a `.`
+in a bus reference as the node separator. Canonical DSS output replaces each
+such character with `_` in the element, line code, bus, and circuit name and
+in every typed reference to it, adds a numeric suffix when the result is
+already taken in the same OpenDSS class, and reports each replacement
+(`EMIT.DSS.VALUE_SUBSTITUTED`). The written deck reads back with every
+element connected; the model keeps the original names.
+
 Direct `Open`/`Close` commands and explicit `SwtControl.State` on lines
 preserve their fixed terminal states through equivalent circuits. Other device
 classes remain unresolved. Active `Action`/`Normal` control execution is
