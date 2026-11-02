@@ -6,6 +6,8 @@
   building a `serde_json::Value` per coordinate. The text is unchanged, and a
   city-scale distribution layer writes three to five times faster.
 
+- Preserve apostrophes in PSS/E RAWX `caseid.title1`; normalize embedded line terminators only.
+
 - Keep PMD time-series profiles verbatim under BMOPF extras instead of
   asserting multiplicative-profile semantics (PMD's `replace` defaults to
   true). Validate every snapshot of PMD
