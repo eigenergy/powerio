@@ -85,17 +85,12 @@ def validate_case(validators_by_version, schema_ids: dict[str, str], case: Path)
             return ["time series contains no snapshots"]
         failures = []
         for index, snapshot in enumerate(value):
-            try:
-                failures.extend(
-                    f"snapshot[{index}]: {error}"
-                    for error in validate_module(
-                        validators_by_version,
-                        schema_ids,
-                        powerio.PioModule.from_value(snapshot),
-                    )
+            failures.extend(
+                f"snapshot[{index}]: {error}"
+                for error in validate_module(
+                    validators_by_version, schema_ids, powerio.PioModule.from_value(snapshot)
                 )
-            except Exception as err:  # noqa: BLE001
-                failures.append(f"snapshot[{index}]: emission or validation failed: {err}")
+            )
         return failures
     return validate_module(validators_by_version, schema_ids, module)
 

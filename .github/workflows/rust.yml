@@ -152,12 +152,6 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
-    # Keep the complete workspace test matrix while limiting retained build
-    # artifacts; the previous run exhausted runner disk while linking tests.
-    env:
-      CARGO_PROFILE_DEV_DEBUG: 0
-      CARGO_PROFILE_TEST_DEBUG: 0
-      CARGO_INCREMENTAL: 0
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
