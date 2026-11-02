@@ -289,7 +289,6 @@ pub(super) fn units(text: &str) -> usize {
 
 /// Evaluate captured prefixes without recursion or replaying copied property
 /// text as setters. The cache stores at most the bounded evaluation budget.
-#[cfg(test)]
 pub(super) fn resolve(raw: &RawDss, point: Snapshot) -> Result<State, String> {
     resolve_with_budget(raw, point, &mut (1_usize << 22))
 }

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- OpenDSS lines that keep an assigned LineCode unchanged share one per meter
+  linecode named after it instead of one copy per line, so the BMOPF JSON of a
+  50,353 line city model falls from 171 MB to 73 MB.
+
 - Require Python 3.11 or newer: 3.9 and 3.10 are past end of life. Wheels
   are `cp311-abi3`, and the `bench`, `pandas` and `mcp` extras drop their
   Python version markers.

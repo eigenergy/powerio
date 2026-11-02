@@ -1,7 +1,7 @@
 use std::f64::consts::TAU;
 
 use crate::dss::geometry::{EarthModel, cache::Context, definition::Definition, direct::Binding};
-use crate::dss::{linecode, raw::RawDss, raw::RawProp};
+use crate::dss::{line_history::Snapshot, linecode, raw::RawDss, raw::RawProp};
 use linecode::LineMatrices;
 
 #[derive(Clone, Debug)]
@@ -24,6 +24,13 @@ pub(in crate::dss) struct State {
     matrices: LineMatrices,
     units_convert: f64,
     code_units: Option<usize>,
+    // The LineCode prefix last fetched. Native Line keeps no live reference;
+    // this only names the definition its fetched fields came from.
+    code: Option<Snapshot>,
+    // Set by MakeLike, which copies matrices without invalidating `cached`,
+    // and cleared by the next LineCode fetch. Until then the primitive need
+    // not follow the fetched code, so the Line keeps its own code.
+    copied: bool,
     rg: f64,
     xg: f64,
     rho: f64,
@@ -76,6 +83,8 @@ impl State {
             },
             units_convert: 1.0,
             code_units: None,
+            code: None,
+            copied: false,
             rg: code.rg,
             xg: code.xg,
             rho: code.rho,
@@ -152,9 +161,11 @@ impl State {
         self.sequence.changed = false;
     }
 
-    pub fn fetch_code(&mut self, code: &linecode::State) {
+    pub fn fetch_code(&mut self, point: Snapshot, code: &linecode::State) {
         self.kill_geometry();
         self.kill_spacing();
+        self.code = Some(point);
+        self.copied = false;
         self.frequency = code.frequency;
         self.rg = code.rg;
         self.xg = code.xg;
@@ -179,6 +190,87 @@ impl State {
         self.dirty = true;
     }
 
+    /// A Line that has fetched `code` and nothing else: the reference
+    /// [`Self::fetched_meters`] compares a resolved Line against.
+    pub fn fetched(point: Snapshot, code: &linecode::State) -> Self {
+        let mut state = Self::new(code.frequency, "");
+        state.fetch_code(point, code);
+        state
+    }
+
+    /// The LineCode prefix this Line last fetched.
+    pub fn code(&self) -> Option<Snapshot> {
+        self.code
+    }
+
+    /// Meters per declared length unit when this Line's primitive still
+    /// follows from exactly the fields `reference` fetched from the same
+    /// LineCode, so their per-meter matrices coincide. `None` when a later
+    /// setter, copy, geometry or spacing changed one of those fields, or
+    /// when neither the LineCode nor the Line declares a length unit.
+    pub fn fetched_meters(&self, reference: &Self) -> Option<f64> {
+        fn same(a: &[Vec<f64>], b: &[Vec<f64>]) -> bool {
+            a.len() == b.len()
+                && a.iter().zip(b).all(|(a, b)| {
+                    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| a.to_bits() == b.to_bits())
+                })
+        }
+        let scalars = |s: &Self| [s.frequency, s.rg, s.xg, s.kxg].map(f64::to_bits);
+        if self.code.is_none()
+            || self.copied
+            || self.code != reference.code
+            || self.code_units != reference.code_units
+            || self.geometry.is_some()
+            || self.spacing.is_some()
+            || self.sequence.changed
+            || self.n != reference.n
+            || scalars(self) != scalars(reference)
+            || !same(&self.matrices.r, &reference.matrices.r)
+            || !same(&self.matrices.x, &reference.matrices.x)
+            || !same(&self.matrices.b, &reference.matrices.b)
+        {
+            return None;
+        }
+        // While a fetched unit is kept, units_convert is conversion(code,
+        // line), so length / units_convert / physical_length() reduces to
+        // one over the meters in the LineCode's unit, else the Line's.
+        let units = match self.code_units? {
+            0 => self.units,
+            code => code,
+        };
+        (units != 0).then(|| conversion(units, 4))
+    }
+
+    /// Series impedance and shunt susceptance per meter at `frequency`:
+    /// [`Self::primitive`]'s arithmetic without a length, then one division
+    /// by `meters`, so every Line sharing these fields gets the same values.
+    pub fn per_meter(&self, frequency: f64, meters: f64) -> Result<LineMatrices, String> {
+        if !frequency.is_finite() || frequency <= 0.51 {
+            return Err("Line AC frequency must exceed 0.51 Hz".into());
+        }
+        let ratio = frequency / self.frequency;
+        let xgmod = if self.xg == 0.0 {
+            0.0
+        } else {
+            0.5 * self.kxg * ratio.ln()
+        };
+        let mut matrix = self.matrices.clone();
+        for i in 0..self.n {
+            for j in 0..self.n {
+                matrix.r[i][j] = (matrix.r[i][j] + self.rg * (ratio - 1.0)) / meters;
+                matrix.x[i][j] = (matrix.x[i][j] - xgmod) * ratio / meters;
+                matrix.b[i][j] = matrix.b[i][j] * ratio / meters;
+                if !matrix.r[i][j].is_finite()
+                    || !matrix.x[i][j].is_finite()
+                    || !matrix.b[i][j].is_finite()
+                {
+                    return Err("Line per-meter matrices became nonfinite".into());
+                }
+            }
+        }
+        Ok(matrix)
+    }
+
     pub fn make_like(&mut self, source: &Self) {
         // Native Line.MakeLike copies selected fields. Buses, units, earth
         // parameters, linecode binding, switch flag and pending recalculation
@@ -196,6 +288,7 @@ impl State {
         self.length = source.length;
         self.sequence.model = source.sequence.model;
         self.sequence.cap_specified = source.sequence.cap_specified;
+        self.copied = true;
     }
 
     fn reset_units(&mut self) {
