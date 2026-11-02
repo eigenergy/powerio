@@ -227,7 +227,7 @@ fn names<'a>(values: impl Iterator<Item = &'a str>) -> BTreeSet<String> {
     values.map(str::to_ascii_lowercase).collect()
 }
 
-fn unique_name(base: &str, used: &mut BTreeSet<String>) -> String {
+pub(super) fn unique_name(base: &str, used: &mut BTreeSet<String>) -> String {
     let mut name = base.to_owned();
     let mut suffix = 0;
     while !used.insert(name.to_ascii_lowercase()) {
