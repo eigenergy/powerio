@@ -3,6 +3,11 @@
 ## Unreleased
 
 - Clarify that `BusType::Ref` follows the source format's reference/slack convention; angle reference and balancing-source semantics are not universal invariants.
+- Keep PMD time-series profiles verbatim under BMOPF extras instead of
+  asserting multiplicative-profile semantics (PMD's `replace` defaults to
+  true). Validate every snapshot of PMD
+  multinetwork fixtures. Remove the obsolete Julia companion pin now that the
+  required bindings have merged upstream.
 
 ## 0.11.7
 
