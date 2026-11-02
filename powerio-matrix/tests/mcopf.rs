@@ -192,10 +192,19 @@ fn unhandled_physics_and_reference_conflicts_fail_closed() {
 }
 #[test]
 fn delta_two_terminal_device_is_one_coil_and_limits_use_coils() {
-    let mut n = network();
-    n.loads_mut()[0].configuration = Configuration::Delta;
+    let mut n = three_phase_source();
+    n.loads_mut().push(DistLoad::new(
+        "d",
+        "b",
+        names(&["c", "a"]),
+        Configuration::Delta,
+        vec![100.],
+        vec![20.],
+    ));
     let p = prepare(n);
     assert_eq!(p.devices[0].coils.len(), 1);
+    assert_eq!(p.devices[0].coils[0].positive, 2);
+    assert_eq!(p.devices[0].coils[0].negative, Some(0));
 }
 #[test]
 fn generator_bounds_are_optional_and_single_phase_ratings_collapse() {
@@ -653,8 +662,8 @@ fn canonical_wye_capacitor_nameplate_matches_the_admittance_builder() {
 fn two_terminal_delta_capacitor_stamps_its_full_rating_in_both_consumers() {
     let capacitor = powerio_dist::DistCapacitor::new(
         "cap",
-        "load",
-        names(&["a", "n"]),
+        "b",
+        names(&["a", "b"]),
         Configuration::Delta,
         50.0,
         230.0,
@@ -664,7 +673,7 @@ fn two_terminal_delta_capacitor_stamps_its_full_rating_in_both_consumers() {
     let mut alone = MulticonductorNetwork::new();
     alone
         .buses_mut()
-        .push(DistBus::new("load", names(&["a", "n"])));
+        .push(DistBus::new("b", names(&["a", "b"])));
     alone.capacitors_mut().push(capacitor.clone());
     let system = powerio_matrix::calc_multiconductor_admittance_matrix(&alone).unwrap();
     let b = system.susceptance();
@@ -677,7 +686,7 @@ fn two_terminal_delta_capacitor_stamps_its_full_rating_in_both_consumers() {
     }
 
     // Preparation stamps the same coil on the 230 V, 1 kVA base (Z_base 52.9).
-    let mut n = network();
+    let mut n = three_phase_source();
     n.capacitors_mut().push(capacitor);
     let p = prepare(n);
     let per_unit = siemens * 230.0 * 230.0 / 1000.0;
@@ -1147,4 +1156,192 @@ fn projecting_bounded_load_laws_is_an_explicit_opt_in_with_one_diagnostic_per_lo
     let prepared = build_mc_ac_opf_preparation(&instance, &opt_in).unwrap();
     assert_eq!(prepared.load_law_projections, []);
     assert_eq!(prepared.diagnostics(), []);
+}
+
+fn assert_delta_role_error(net: MulticonductorNetwork, terminal: &str) {
+    let instance = McAcOpfInstance::from_network(net).unwrap();
+    let err =
+        build_mc_ac_opf_preparation(&instance, &McAcOpfAssemblyOptions::default()).unwrap_err();
+    assert!(
+        err.diagnostics()
+            .iter()
+            .any(|d| d.code() == "BUILD.MULTI.OPF_INVALID")
+    );
+    let message = err.to_string();
+    assert!(
+        message.contains("bad")
+            && message.contains("delta requires phase terminals")
+            && message.contains(terminal),
+        "{message}"
+    );
+}
+
+/// Role checks must precede stamping for every consumer of shared delta geometry.
+#[test]
+fn delta_terminal_roles_reject_neutral_earth_and_zero_for_every_device() {
+    use powerio_dist::{
+        DistCapacitor, DistIbr, DistTransformer, DistWinding, DistWindingConn, IbrPrimeMover,
+        IbrTopology,
+    };
+    for (terminal, conventions) in [
+        ("n", None),
+        ("0", None),
+        (
+            "return",
+            Some(serde_json::json!({"neutral":["return"], "earth":[]})),
+        ),
+        (
+            "soil",
+            Some(serde_json::json!({"neutral":[], "earth":["soil"]})),
+        ),
+    ] {
+        for kind in ["load", "generator", "capacitor", "inverter", "transformer"] {
+            for count in [2, 3] {
+                let mut net = three_phase_source();
+                net.buses_mut()[0].terminals[3] = terminal.into();
+                net.buses_mut()[0].grounded[0] = terminal.into();
+                net.sources_mut()[0].terminal_map[3] = terminal.into();
+                if let Some(roles) = &conventions {
+                    net.extras_mut()
+                        .insert("bmopf_terminal_conventions".into(), roles.clone());
+                }
+                let map = if count == 2 {
+                    names(&["a", terminal])
+                } else {
+                    names(&["a", "b", terminal])
+                };
+                let coils = if count == 2 { 1 } else { 3 };
+                match kind {
+                    "load" => net.loads_mut().push(DistLoad::new(
+                        "bad",
+                        "b",
+                        map,
+                        Configuration::Delta,
+                        vec![100.; coils],
+                        vec![20.; coils],
+                    )),
+                    "generator" => net.generators_mut().push(DistGenerator::new(
+                        "bad",
+                        "b",
+                        map,
+                        Configuration::Delta,
+                        vec![0.; coils],
+                        vec![0.; coils],
+                    )),
+                    "capacitor" => net.capacitors_mut().push(DistCapacitor::new(
+                        "bad",
+                        "b",
+                        map,
+                        Configuration::Delta,
+                        50.,
+                        400.,
+                    )),
+                    "inverter" => net.ibrs_mut().push(DistIbr::new(
+                        "bad",
+                        "b",
+                        map,
+                        IbrTopology::ThreeLeg,
+                        IbrPrimeMover::Battery,
+                        vec![1000.; coils],
+                    )),
+                    "transformer" => {
+                        net.buses_mut()
+                            .push(DistBus::new("secondary", names(&["a", "b", "c"])));
+                        net.transformers_mut().push(DistTransformer::new(
+                            "bad",
+                            vec![
+                                DistWinding::new("b", map, DistWindingConn::Delta, 400., 1000.),
+                                DistWinding::new(
+                                    "secondary",
+                                    names(&["a", "b", "c"]),
+                                    DistWindingConn::Delta,
+                                    400.,
+                                    1000.,
+                                ),
+                            ],
+                            vec![1.],
+                            3,
+                        ));
+                    }
+                    _ => unreachable!(),
+                }
+                assert_delta_role_error(net, terminal);
+            }
+        }
+    }
+}
+
+#[test]
+fn delta_terminal_roles_preserve_declared_phases_and_cyclic_order() {
+    use powerio_dist::{DistIbr, IbrPrimeMover, IbrTopology};
+    // Explicit roles override label heuristics: `n` is a phase here.
+    let mut net = three_phase_source();
+    net.buses_mut()[0].terminals = names(&["n", "y", "z", "return"]);
+    net.buses_mut()[0].grounded = names(&["return"]);
+    net.sources_mut()[0].terminal_map = names(&["n", "y", "z", "return"]);
+    net.extras_mut().insert(
+        "bmopf_terminal_conventions".into(),
+        serde_json::json!({"phase":["n","y","z"], "neutral":["return"], "earth":[]}),
+    );
+    net.loads_mut().push(DistLoad::new(
+        "d",
+        "b",
+        names(&["z", "n"]),
+        Configuration::Delta,
+        vec![100.],
+        vec![20.],
+    ));
+    net.ibrs_mut().push(DistIbr::new(
+        "inv",
+        "b",
+        names(&["y", "z", "n"]),
+        IbrTopology::ThreeLeg,
+        IbrPrimeMover::Battery,
+        vec![1000.; 3],
+    ));
+    let prep = prepare(net);
+    let pairs = |name: &str| {
+        prep.devices
+            .iter()
+            .find(|d| d.identity == name)
+            .unwrap()
+            .coils
+            .iter()
+            .map(|c| (c.positive, c.negative))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(pairs("d"), vec![(2, Some(0))]);
+    assert_eq!(pairs("inv"), vec![(1, Some(2)), (2, Some(0)), (0, Some(1))]);
+}
+
+#[test]
+fn delta_terminal_roles_distinguish_numeric_neutral_from_grounded_phase() {
+    let mut net = three_phase_source();
+    net.buses_mut()[0].terminals = names(&["1", "2", "3", "4"]);
+    net.buses_mut()[0].grounded = names(&["4"]);
+    net.sources_mut()[0].terminal_map = names(&["1", "2", "3", "4"]);
+    net.loads_mut().push(DistLoad::new(
+        "bad",
+        "b",
+        names(&["1", "4"]),
+        Configuration::Delta,
+        vec![100.],
+        vec![20.],
+    ));
+    assert_delta_role_error(net, "4");
+
+    let mut net = three_phase_source();
+    net.buses_mut()[0].grounded.push("c".into());
+    net.sources_mut()[0].v_magnitude[2] = 0.;
+    net.loads_mut().push(DistLoad::new(
+        "d",
+        "b",
+        names(&["a", "c"]),
+        Configuration::Delta,
+        vec![100.],
+        vec![20.],
+    ));
+    let prep = prepare(net);
+    assert_eq!(prep.devices[0].coils[0].negative, Some(2));
+    assert!(prep.terminals[2].grounded);
 }

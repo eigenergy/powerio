@@ -14,6 +14,14 @@ Choose explicit voltage and per-coil power bases with
 [API example](https://eigenergy.github.io/powerio/powerio_matrix/fn.build_mc_ac_opf_preparation.html#examples)
 shows the call and is compiled by the crate's documentation tests.
 
+DELTA loads, generators, capacitors and transformer windings, and THREE_LEG
+inverters, must connect only phase terminals. Preparation rejects neutral and
+earth endpoints with `BUILD.MULTI.OPF_INVALID`, using explicit terminal
+conventions when supplied. A two-terminal DELTA is one phase-to-phase coil;
+three-terminal DELTA coils follow the declared cyclic order. Grounding a phase
+does not by itself change its terminal role. WYE and SINGLE_PHASE return
+connections retain their existing semantics.
+
 ## Units and axes
 
 Canonical inputs are SI. Explicit bases are voltage in V and power in VA per
