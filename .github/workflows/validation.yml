@@ -91,6 +91,11 @@ jobs:
     # setup step.
     - name: Verify the oracle stack imports
       run: .venv/bin/python -c "import egret, jsonschema, opendssdirect, pandapower, pypsa"
+    - name: Fetch phase-shift-sign validation fixture
+      run: |
+        mkdir -p tests/data/large
+        curl --fail --location --retry 3 --retry-all-errors https://raw.githubusercontent.com/MATPOWER/matpower/80b6e16f760f58721ad31221c7287c28259cd4ad/data/case13659pegase.m --output tests/data/large/case13659pegase.m
+        test -s tests/data/large/case13659pegase.m
     - name: Test snapshot schema validation
       run: .venv/bin/python -m unittest discover -s evals/validation -p test_validate_bmopf_schema.py
     - name: Run the validation matrix
