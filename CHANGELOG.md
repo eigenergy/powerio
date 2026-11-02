@@ -3,11 +3,20 @@
 ## Unreleased
 
 - Clarify that `BusType::Ref` follows the source format's reference/slack convention; angle reference and balancing-source semantics are not universal invariants.
+
 - Keep PMD time-series profiles verbatim under BMOPF extras instead of
   asserting multiplicative-profile semantics (PMD's `replace` defaults to
   true). Validate every snapshot of PMD
   multinetwork fixtures. Remove the obsolete Julia companion pin now that the
   required bindings have merged upstream.
+
+- Add bounded fixed-PF coefficients to MC IVR preparation, avoiding the loss
+  of tiny signed PF values in `tan(acos(abs(pf)))`. Keep the legacy Q/P ratio
+  only when finite; consumers should assemble from the bounded coefficients.
+
+- Reject neutral and earth endpoints during MC IVR DELTA coil preparation,
+  including THREE_LEG inverters and DELTA transformer windings. Explicit
+  terminal conventions are honored; valid phase-to-phase coil order is unchanged.
 
 ## 0.11.7
 

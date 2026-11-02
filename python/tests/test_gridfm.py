@@ -222,7 +222,18 @@ def test_graphkit_loads_dataset(case14_raw):
     environment that has the full training stack."""
     pytest.importorskip("torch")
     mod = pytest.importorskip("gridfm_graphkit.datasets.powergrid_hetero_dataset")
+
+    class IdentityNormalizer:
+        """Graph-structure test: leave features unscaled after graph construction."""
+
+        def transform(self, data):
+            return data
+
     # The PyG Dataset roots at the network dir, whose `raw/` holds our parquet.
-    ds = mod.HeteroGridDatasetDisk(root=str(case14_raw.parent))
+    # Current gridfm-graphkit requires an explicit data_normalizer argument.
+    ds = mod.HeteroGridDatasetDisk(
+        root=str(case14_raw.parent),
+        data_normalizer=IdentityNormalizer(),
+    )
     assert len(ds) >= 1
     assert ds[0]["bus"].x.shape[0] == 14
