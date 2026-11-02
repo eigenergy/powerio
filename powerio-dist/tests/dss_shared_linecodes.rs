@@ -182,3 +182,27 @@ fn shared_codes_survive_dss_bmopf_and_pmd_round_trips() {
         assert_eq!(line_codes(&again), ["lc", "lc_1", "lc_2"], "{target:?}");
     }
 }
+
+/// Native MakeLike copies matrices and length without invalidating a solved
+/// primitive. `target` solves with cb's 3+j4 ohm, and `like=a` then restores
+/// matrices that match `ca` while the cached primitive stays 3+j4, so it must
+/// keep its own code rather than share `ca`'s 1+j2.
+#[test]
+fn make_like_after_a_solve_keeps_the_cached_primitive() {
+    let net = parse_dss_str(
+        "New Circuit.c
+New LineCode.ca nphases=1 rmatrix=[1] xmatrix=[2] cmatrix=[0] units=m
+New LineCode.cb nphases=1 rmatrix=[3] xmatrix=[4] cmatrix=[0] units=m
+New Line.a bus1=sourcebus.1 bus2=a.1 linecode=ca length=1 units=m
+New Line.b bus1=sourcebus.1 bus2=b.1 linecode=cb length=1 units=m
+New Line.target bus1=sourcebus.1 bus2=t.1 linecode=ca like=b length=1 units=m
+Solve
+Edit Line.target like=a
+",
+    );
+    assert_eq!(code(&net, "a").name, "ca");
+    let target = code(&net, "target");
+    assert!(target.name.starts_with("_pio_line_"), "{}", target.name);
+    assert!((target.r_series[0][0] - 3.0).abs() <= 1e-12, "{:?}", target.r_series);
+    assert!((target.x_series[0][0] - 4.0).abs() <= 1e-12, "{:?}", target.x_series);
+}

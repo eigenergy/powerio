@@ -27,6 +27,10 @@ pub(in crate::dss) struct State {
     // The LineCode prefix last fetched. Native Line keeps no live reference;
     // this only names the definition its fetched fields came from.
     code: Option<Snapshot>,
+    // Set by MakeLike, which copies matrices without invalidating `cached`,
+    // and cleared by the next LineCode fetch. Until then the primitive need
+    // not follow the fetched code, so the Line keeps its own code.
+    copied: bool,
     rg: f64,
     xg: f64,
     rho: f64,
@@ -80,6 +84,7 @@ impl State {
             units_convert: 1.0,
             code_units: None,
             code: None,
+            copied: false,
             rg: code.rg,
             xg: code.xg,
             rho: code.rho,
@@ -160,6 +165,7 @@ impl State {
         self.kill_geometry();
         self.kill_spacing();
         self.code = Some(point);
+        self.copied = false;
         self.frequency = code.frequency;
         self.rg = code.rg;
         self.xg = code.xg;
@@ -211,6 +217,7 @@ impl State {
         }
         let scalars = |s: &Self| [s.frequency, s.rg, s.xg, s.kxg].map(f64::to_bits);
         if self.code.is_none()
+            || self.copied
             || self.code != reference.code
             || self.code_units != reference.code_units
             || self.geometry.is_some()
@@ -281,6 +288,7 @@ impl State {
         self.length = source.length;
         self.sequence.model = source.sequence.model;
         self.sequence.cap_specified = source.sequence.cap_specified;
+        self.copied = true;
     }
 
     fn reset_units(&mut self) {
