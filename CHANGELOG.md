@@ -6,6 +6,16 @@
   linecode named after it instead of one copy per line, so the BMOPF JSON of a
   50,353 line city model falls from 171 MB to 73 MB.
 
+- Require Python 3.11 or newer: 3.9 and 3.10 are past end of life. Wheels
+  are `cp311-abi3`, and the `bench`, `pandas` and `mcp` extras drop their
+  Python version markers.
+
+- Write `GeoLayer::to_geojson` straight from the typed features instead of
+  building a `serde_json::Value` per coordinate. The text is unchanged, and a
+  city-scale distribution layer writes three to five times faster.
+
+- Clarify that `BusType::Ref` follows the source format's reference/slack convention; angle reference and balancing-source semantics are not universal invariants.
+
 - Preserve apostrophes in PSS/E RAWX `caseid.title1`; normalize embedded line terminators only.
 
 - Keep PMD time-series profiles verbatim under BMOPF extras instead of
