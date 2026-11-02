@@ -1345,3 +1345,75 @@ fn delta_terminal_roles_distinguish_numeric_neutral_from_grounded_phase() {
     assert_eq!(prep.devices[0].coils[0].negative, Some(2));
     assert!(prep.terminals[2].grounded);
 }
+
+#[test]
+fn fixed_pf_coefficients_are_bounded_at_unity_and_near_zero() {
+    use powerio_dist::{DistControlProfile, DistIbr, IbrPrimeMover, IbrTopology};
+    for magnitude in [
+        1.,
+        0.8,
+        f64::from_bits(1.0_f64.to_bits() - 1),
+        1e-18,
+        1e-300,
+        f64::from_bits(1),
+    ] {
+        for sign in [-1., 1.] {
+            let pf = magnitude * sign;
+            let mut net = network();
+            let mut inv = DistIbr::new(
+                "inv",
+                "load",
+                names(&["a", "n"]),
+                IbrTopology::SinglePhase,
+                IbrPrimeMover::Battery,
+                vec![1000.],
+            );
+            inv.control_profile = Some("pf".into());
+            net.ibrs_mut().push(inv);
+            let mut profile = DistControlProfile::new("pf");
+            profile.power_factor =
+                Some(serde_json::from_value(serde_json::json!({"pf":pf})).unwrap());
+            net.control_profiles_mut().push(profile);
+            let prep = prepare(net);
+            let coil = &prep
+                .devices
+                .iter()
+                .find(|d| d.identity == "inv")
+                .unwrap()
+                .coils[0];
+            let [a, b] = coil.power_factor_coefficients.unwrap();
+            assert_eq!(b.to_bits(), pf.to_bits());
+            assert!(a.is_finite() && (0.0..=1.0).contains(&a));
+            assert!((a.hypot(b) - 1.).abs() < 2e-16);
+            // Choose an analytic unit-power point without dividing by PF.
+            assert!((a * magnitude + b * (-sign * a)).abs() < 2e-16);
+            if magnitude < 1e-15 {
+                assert_eq!(a.to_bits(), 1.0_f64.to_bits());
+            }
+            if magnitude.to_bits() == 0.8_f64.to_bits() {
+                assert!((a - 0.6).abs() < 2e-16);
+            }
+            if let Some(slope) = coil.reactive_slope {
+                assert!(slope.is_finite());
+                assert!((slope * pf + a).abs() < 2e-16);
+            } else {
+                assert!((-a / pf).is_infinite());
+            }
+            // Even the smallest positive subnormal PF yields serializable data.
+            let decoded: powerio_matrix::McAcOpfPreparation =
+                serde_json::from_str(&serde_json::to_string(&prep).unwrap()).unwrap();
+            assert_eq!(
+                decoded
+                    .devices
+                    .iter()
+                    .find(|d| d.identity == "inv")
+                    .unwrap()
+                    .coils[0]
+                    .power_factor_coefficients
+                    .unwrap()[1]
+                    .to_bits(),
+                pf.to_bits()
+            );
+        }
+    }
+}
