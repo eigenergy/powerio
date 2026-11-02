@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Preserve explicit system frequency through the PowerIO PowerModels JSON
+  metadata extension and dictionary construction (#773).
+
 ## 0.11.7
 
 **AC optimal transmission switching**

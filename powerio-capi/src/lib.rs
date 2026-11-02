@@ -20820,6 +20820,34 @@ pub unsafe extern "C" fn pio_ac_ots_solution_materialize(
 mod tests {
     use super::*;
 
+    #[test]
+    fn powermodels_construction_preserves_stated_frequency() {
+        unsafe {
+            let name = b"frequency.json";
+            let format = b"powermodels-json";
+            let text = br#"{"baseMVA":100,"base_frequency":50,"bus":{"1":{"bus_i":1,"bus_type":3,"base_kv":220}}}"#;
+            let mut error = std::ptr::null_mut();
+            let source = pio_source_from_memory(
+                name.as_ptr().cast(),
+                name.len(),
+                text.as_ptr(),
+                text.len(),
+                &mut error,
+            );
+            assert!(!source.is_null(), "{}", error_text(error));
+            let module = pio_parse(source, format.as_ptr().cast(), format.len(), &mut error);
+            pio_source_release(source);
+            assert!(!module.is_null(), "{}", error_text(error));
+            let value = pio_module_value(module);
+            let network = pio_value_balanced_network(value, &mut error);
+            assert!(!network.is_null(), "{}", error_text(error));
+            assert_eq!(pio_balanced_network_base_frequency_hz(network), 50.0);
+            pio_balanced_network_release(network);
+            pio_value_release(value);
+            pio_module_release(module);
+        }
+    }
+
     unsafe fn view_text(view: PioStringView) -> String {
         if view.data.is_null() {
             return String::new();
