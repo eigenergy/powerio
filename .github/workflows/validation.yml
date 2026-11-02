@@ -93,6 +93,15 @@ jobs:
       run: .venv/bin/python -c "import egret, jsonschema, opendssdirect, pandapower, pypsa"
     - name: Test snapshot schema validation
       run: .venv/bin/python -m unittest discover -s evals/validation -p test_validate_bmopf_schema.py
+    # This large MATPOWER fixture is intentionally gitignored; fetch the one case
+    # required by the phase-shift-sign oracle so the validation leg executes in CI.
+    - name: Fetch phase-shift-sign validation fixture
+      run: |
+        mkdir -p tests/data/large
+        curl --fail --location --retry 3 --retry-all-errors \\
+          https://raw.githubusercontent.com/MATPOWER/matpower/master/data/case13659pegase.m \\
+          --output tests/data/large/case13659pegase.m
+        test -s tests/data/large/case13659pegase.m
     - name: Run the validation matrix
       run: bash evals/validation/run_validation.sh
     - name: Compare explicit BMOPF core admittances with OpenDSS
