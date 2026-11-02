@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reject pandapower split-table rows whose cell count does not match the declared columns, rather than silently defaulting missing electrical values.
+
 - Keep PMD time-series profiles verbatim under BMOPF extras instead of
   asserting multiplicative-profile semantics (PMD's `replace` defaults to
   true). Validate every snapshot of PMD

@@ -763,7 +763,7 @@ pub(crate) fn parse_pandapower_source(
         if !looks_like_frame {
             continue;
         }
-        if let Ok(Some(frame)) = read_frame(obj, key)
+        if let Some(frame) = read_frame(obj, key)?
             && !frame.data.is_empty()
         {
             warnings.push(
@@ -2103,7 +2103,16 @@ fn read_frame(root: &Map<String, Value>, name: &str) -> Result<Option<DataFrame>
     let mut data = Vec::with_capacity(raw_data.len());
     for (i, row) in raw_data.into_iter().enumerate() {
         match row {
-            Value::Array(cells) => data.push(cells),
+            Value::Array(cells) => {
+                if cells.len() != columns.len() {
+                    return Err(bad(format!(
+                        "`{name}` table: row {i} has {} cells for {} columns",
+                        cells.len(),
+                        columns.len()
+                    )));
+                }
+                data.push(cells);
+            }
             _ => return Err(bad(format!("`{name}` table: row {i} is not an array"))),
         }
     }
@@ -2808,6 +2817,40 @@ mod tests {
         let frame = pp_frame(&["vn_kv"], json!([0]), json!([42]));
         let msg = err(&pp_net(vec![("bus", frame)]));
         assert!(msg.contains("`bus` table: row 0 is not an array"), "{msg}");
+    }
+
+    #[test]
+    fn read_frame_rejects_row_column_length_mismatch() {
+        // Reject malformed row shape before field decoding: otherwise reader defaults such as
+        // a zero-MW load when the row simply omitted its declared p/q cells.
+        let frame = pp_frame(&["bus", "p_mw", "q_mvar"], json!([0]), json!([[0, 10.0]]));
+        let msg = err(&pp_net(vec![bus_table(json!([0])), ("load", frame)]));
+        assert!(
+            msg.contains("`load` table: row 0 has 2 cells for 3 columns"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn read_frame_rejects_overlong_row() {
+        let frame = pp_frame(&["bus", "p_mw"], json!([0]), json!([[0, 10.0, 2.0]]));
+        let msg = err(&pp_net(vec![bus_table(json!([0])), ("load", frame)]));
+        assert!(
+            msg.contains("`load` table: row 0 has 3 cells for 2 columns"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn malformed_unmapped_table_is_not_silently_ignored() {
+        // Unknown DataFrames are still parsed before a warning is emitted.
+        // A malformed row must not disappear merely because its table is unmapped.
+        let frame = pp_frame(&["bus", "x_l_ohm"], json!([0]), json!([[0]]));
+        let msg = err(&pp_net(vec![bus_table(json!([0])), ("svc", frame)]));
+        assert!(
+            msg.contains("`svc` table: row 0 has 1 cells for 2 columns"),
+            "{msg}"
+        );
     }
 
     #[test]
