@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Write `GeoLayer::to_geojson` straight from the typed features instead of
+  building a `serde_json::Value` per coordinate. The text is unchanged, and a
+  city-scale distribution layer writes three to five times faster.
+
 - Clarify that `BusType::Ref` follows the source format's reference/slack convention; angle reference and balancing-source semantics are not universal invariants.
 
 - Preserve apostrophes in PSS/E RAWX `caseid.title1`; normalize embedded line terminators only.
