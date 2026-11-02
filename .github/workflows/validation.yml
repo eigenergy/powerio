@@ -96,7 +96,7 @@ jobs:
       run: |
         mkdir -p tests/data/large
         curl --fail --location --retry 3 --retry-all-errors \\
-          https://raw.githubusercontent.com/MATPOWER/matpower/master/data/case13659pegase.m \\
+          https://raw.githubusercontent.com/MATPOWER/matpower/80b6e16f760f58721ad31221c7287c28259cd4ad/data/case13659pegase.m \\
           --output tests/data/large/case13659pegase.m
         test -s tests/data/large/case13659pegase.m
     - name: Run the validation matrix
