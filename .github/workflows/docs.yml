@@ -228,7 +228,7 @@ jobs:
             redirect_schema_page "$archive" "$served"
           fi
         done
-    - uses: actions/download-artifact@v4
+    - uses: actions/download-artifact@v8
       with:
         name: powerio-converter-site
         path: target/doc/convert
