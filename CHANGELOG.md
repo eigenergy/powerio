@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Require Python 3.11 or newer: 3.9 and 3.10 are past end of life. Wheels
+  are `cp311-abi3`, and the `bench`, `pandas` and `mcp` extras drop their
+  Python version markers.
+
 - Preserve apostrophes in PSS/E RAWX `caseid.title1`; normalize embedded line terminators only.
 
 - Keep PMD time-series profiles verbatim under BMOPF extras instead of
