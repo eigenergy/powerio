@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 
+use serde::ser::{Serialize, SerializeMap, Serializer};
 use serde_json::{Map, Value, json};
 
 use super::{Canvas, CoordinateSpace, CoordsKind, GeoMeta, Location};
@@ -248,6 +249,7 @@ impl GeoLayer {
     /// `powerio_geo` foreign member. Valid RFC 7946 GeoJSON when the space is
     /// geographic, so GIS tools open it directly.
     #[must_use]
+    #[allow(clippy::missing_panics_doc)] // strings and numbers written to memory cannot fail
     pub fn to_geojson(&self) -> String {
         let mut member = Map::new();
         member.insert(
@@ -268,15 +270,105 @@ impl GeoLayer {
         if let Some(kind) = self.kind {
             member.insert("kind".to_owned(), kind_value(kind));
         }
-        let features: Vec<Value> = self.features.iter().map(feature_value).collect();
-        let document = json!({
-            "type": "FeatureCollection",
-            "powerio_geo": Value::Object(member),
-            "features": features,
-        });
-        // Serializing an in-memory `Value` does not fail; `Display` is the
-        // infallible (compact) fallback.
-        serde_json::to_string_pretty(&document).unwrap_or_else(|_| document.to_string())
+        let document = DocumentJson {
+            member: &member,
+            features: &self.features,
+        };
+        serde_json::to_string_pretty(&document)
+            .expect("a GeoJSON document of strings and numbers always serializes")
+    }
+}
+
+// The features are written straight from the typed layer. A
+// `serde_json::Value` per feature would allocate for every coordinate, which
+// is most of the cost of writing a city-scale layer. Every object writes its
+// keys in sorted order, the order a `serde_json::Map` keeps without the
+// `preserve_order` feature, so the text is what serializing the equivalent
+// `Value` gives.
+
+struct DocumentJson<'a> {
+    member: &'a Map<String, Value>,
+    features: &'a [GeoFeature],
+}
+
+impl Serialize for DocumentJson<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(3))?;
+        map.serialize_entry("features", &FeaturesJson(self.features))?;
+        map.serialize_entry("powerio_geo", self.member)?;
+        map.serialize_entry("type", "FeatureCollection")?;
+        map.end()
+    }
+}
+
+struct FeaturesJson<'a>(&'a [GeoFeature]);
+
+impl Serialize for FeaturesJson<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.0.iter().map(FeatureJson))
+    }
+}
+
+struct FeatureJson<'a>(&'a GeoFeature);
+
+impl Serialize for FeatureJson<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(3))?;
+        map.serialize_entry("geometry", &GeometryJson(&self.0.geometry))?;
+        map.serialize_entry("properties", &PropertiesJson(self.0))?;
+        map.serialize_entry("type", "Feature")?;
+        map.end()
+    }
+}
+
+struct GeometryJson<'a>(&'a GeoGeometry);
+
+impl Serialize for GeometryJson<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(2))?;
+        match self.0 {
+            GeoGeometry::Point(point) => {
+                map.serialize_entry("coordinates", point)?;
+                map.serialize_entry("type", "Point")?;
+            }
+            GeoGeometry::LineString(path) => {
+                map.serialize_entry("coordinates", path)?;
+                map.serialize_entry("type", "LineString")?;
+            }
+        }
+        map.end()
+    }
+}
+
+/// A feature's identity and provenance; `index` is a read alias and is never
+/// written.
+struct PropertiesJson<'a>(&'a GeoFeature);
+
+impl Serialize for PropertiesJson<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let feature = self.0;
+        let key = &feature.key;
+        let mut map = serializer.serialize_map(None)?;
+        if let Some(from) = &feature.from {
+            map.serialize_entry("from", from)?;
+        }
+        if let Some(id) = &key.id {
+            map.serialize_entry("id", id)?;
+        }
+        if let Some(kind) = feature.kind {
+            map.serialize_entry("kind", &kind)?;
+        }
+        if let Some(name) = &key.name {
+            map.serialize_entry("name", name)?;
+        }
+        map.serialize_entry("target", feature.target.token())?;
+        if let Some(to) = &feature.to {
+            map.serialize_entry("to", to)?;
+        }
+        if let Some(uid) = &key.uid {
+            map.serialize_entry("uid", uid)?;
+        }
+        map.end()
     }
 }
 
@@ -293,34 +385,6 @@ fn canvas_entry(canvas: &Canvas) -> (&'static str, Value) {
 
 fn kind_value(kind: CoordsKind) -> Value {
     serde_json::to_value(kind).unwrap_or(Value::Null)
-}
-
-fn feature_value(feature: &GeoFeature) -> Value {
-    let mut properties = Map::new();
-    properties.insert("target".to_owned(), json!(feature.target.token()));
-    if let Some(uid) = &feature.key.uid {
-        properties.insert("uid".to_owned(), json!(uid));
-    }
-    if let Some(id) = &feature.key.id {
-        properties.insert("id".to_owned(), json!(id));
-    }
-    if let Some(name) = &feature.key.name {
-        properties.insert("name".to_owned(), json!(name));
-    }
-    if let Some(from) = &feature.from {
-        properties.insert("from".to_owned(), json!(from));
-    }
-    if let Some(to) = &feature.to {
-        properties.insert("to".to_owned(), json!(to));
-    }
-    if let Some(kind) = feature.kind {
-        properties.insert("kind".to_owned(), kind_value(kind));
-    }
-    let geometry = match &feature.geometry {
-        GeoGeometry::Point(point) => json!({"type": "Point", "coordinates": point}),
-        GeoGeometry::LineString(path) => json!({"type": "LineString", "coordinates": path}),
-    };
-    json!({"type": "Feature", "geometry": geometry, "properties": Value::Object(properties)})
 }
 
 // ---------------------------------------------------------------------------
@@ -1219,5 +1283,179 @@ mod bmopftools_geo_tests {
         let p = GeoLayer::parse(source, None).unwrap();
         assert_eq!(p.layer.features.len(), 1);
         assert_ne!(p.diagnostics.as_slice(), []);
+    }
+}
+
+#[cfg(test)]
+mod geojson_write_tests {
+    use super::*;
+    use crate::format::powerworld::{__parse_aux, __parse_pwd_display};
+
+    /// The `Value` built writer `to_geojson` replaced, kept as the reference
+    /// its text must match byte for byte.
+    fn value_geojson(layer: &GeoLayer) -> String {
+        let mut member = Map::new();
+        member.insert(
+            crate::version::VERSION_KEY.to_owned(),
+            json!(crate::VERSION),
+        );
+        let detail = match &layer.space {
+            CoordinateSpace::Geographic { crs } | CoordinateSpace::Projected { crs } => {
+                crs.as_ref().map(crs_entry)
+            }
+            CoordinateSpace::Diagram { canvas } => canvas.as_ref().map(canvas_entry),
+            _ => None,
+        };
+        member.insert("space".to_owned(), json!(layer.space.token()));
+        if let Some((key, value)) = detail {
+            member.insert(key.to_owned(), value);
+        }
+        if let Some(kind) = layer.kind {
+            member.insert("kind".to_owned(), kind_value(kind));
+        }
+        let features: Vec<Value> = layer.features.iter().map(feature_value).collect();
+        let document = json!({
+            "type": "FeatureCollection",
+            "powerio_geo": Value::Object(member),
+            "features": features,
+        });
+        serde_json::to_string_pretty(&document).unwrap()
+    }
+
+    fn feature_value(feature: &GeoFeature) -> Value {
+        let mut properties = Map::new();
+        properties.insert("target".to_owned(), json!(feature.target.token()));
+        if let Some(uid) = &feature.key.uid {
+            properties.insert("uid".to_owned(), json!(uid));
+        }
+        if let Some(id) = &feature.key.id {
+            properties.insert("id".to_owned(), json!(id));
+        }
+        if let Some(name) = &feature.key.name {
+            properties.insert("name".to_owned(), json!(name));
+        }
+        if let Some(from) = &feature.from {
+            properties.insert("from".to_owned(), json!(from));
+        }
+        if let Some(to) = &feature.to {
+            properties.insert("to".to_owned(), json!(to));
+        }
+        if let Some(kind) = feature.kind {
+            properties.insert("kind".to_owned(), kind_value(kind));
+        }
+        let geometry = match &feature.geometry {
+            GeoGeometry::Point(point) => json!({"type": "Point", "coordinates": point}),
+            GeoGeometry::LineString(path) => json!({"type": "LineString", "coordinates": path}),
+        };
+        json!({"type": "Feature", "geometry": geometry, "properties": Value::Object(properties)})
+    }
+
+    fn assert_same_text(layer: &GeoLayer) {
+        assert_eq!(layer.to_geojson(), value_geojson(layer));
+    }
+
+    fn feature(target: GeoTarget, key: ElementKey, geometry: GeoGeometry) -> GeoFeature {
+        GeoFeature {
+            target,
+            key,
+            geometry,
+            from: None,
+            to: None,
+            kind: None,
+        }
+    }
+
+    #[test]
+    fn every_property_space_and_geometry_writes_the_value_text() {
+        let mut every = feature(
+            GeoTarget::Bus,
+            ElementKey {
+                uid: Some("buses:0".into()),
+                id: Some("a \"quoted\" \\ id\n\u{e9}\u{1f50c}".into()),
+                name: Some("Alpha".into()),
+                index: Some(3),
+            },
+            GeoGeometry::Point([-83.743_038_1, 42.280_826_7]),
+        );
+        every.kind = Some(CoordsKind::Manual);
+        let mut route = feature(
+            GeoTarget::Branch,
+            ElementKey {
+                uid: Some("lines:7".into()),
+                ..Default::default()
+            },
+            GeoGeometry::LineString(vec![[0.0, 1.0], [1e-300, -2.5e17], [123_456.789, 0.1]]),
+        );
+        route.from = Some("a".into());
+        route.to = Some("B".into());
+        route.kind = Some(CoordsKind::Derived);
+        let bare = feature(
+            GeoTarget::Substation,
+            ElementKey::default(),
+            GeoGeometry::LineString(Vec::new()),
+        );
+        let non_finite = feature(
+            GeoTarget::Bus,
+            ElementKey {
+                id: Some("nan".into()),
+                ..Default::default()
+            },
+            GeoGeometry::Point([f64::NAN, f64::INFINITY]),
+        );
+        let features = vec![every, route, bare, non_finite];
+        let spaces = [
+            CoordinateSpace::Geographic { crs: None },
+            CoordinateSpace::Geographic {
+                crs: Some("EPSG:4326".into()),
+            },
+            CoordinateSpace::Projected {
+                crs: Some("EPSG:2193".into()),
+            },
+            CoordinateSpace::Diagram {
+                canvas: Some(Canvas {
+                    width: Some(1920.0),
+                    height: None,
+                    units: Some("px".into()),
+                }),
+            },
+            CoordinateSpace::Diagram { canvas: None },
+            CoordinateSpace::Unknown,
+        ];
+        for space in spaces {
+            for kind in [None, Some(CoordsKind::Synthetic)] {
+                for features in [Vec::new(), features.clone()] {
+                    assert_same_text(&GeoLayer {
+                        space: space.clone(),
+                        kind,
+                        features,
+                    });
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn powerworld_fixture_layers_write_the_value_text() {
+        let bytes = std::fs::read("../tests/data/powerworld/ACTIVSg200.pwd").expect("read pwd");
+        let display = __parse_pwd_display(&bytes).expect("parse pwd");
+        assert_same_text(&crate::geo::to_geo_layer_from_pwd(&display));
+
+        let text =
+            std::fs::read_to_string("../tests/data/powerworld/ACTIVSg200.aux").expect("read aux");
+        let aux = __parse_aux(&text).expect("parse aux");
+        assert_same_text(&crate::geo::to_geo_layer_from_aux_substations(&aux));
+        let parsed =
+            crate::format::test_parse::parse_file("../tests/data/powerworld/ACTIVSg200.aux", None)
+                .expect("parse aux network");
+        let layer = parsed.network.to_geo_layer();
+        assert_ne!(layer.features, [] as [GeoFeature; 0]);
+        assert_same_text(&layer);
+    }
+
+    #[test]
+    fn a_parsed_geojson_layer_writes_the_value_text() {
+        let source = r#"{"type":"FeatureCollection","crs":"EPSG:2193","features":[{"type":"Feature","properties":{"kind":"bus","id":"a"},"geometry":{"type":"Point","coordinates":[1700000,5400000]}},{"type":"Feature","properties":{"kind":"line","id":"21","bus_from":"a","bus_to":"b"},"geometry":{"type":"LineString","coordinates":[[1700000,5400000],[1700010.5,5400000.25],[1700020,5400001]]}}]}"#;
+        let parsed = GeoLayer::parse(source, None).unwrap();
+        assert_same_text(&parsed.layer);
     }
 }
