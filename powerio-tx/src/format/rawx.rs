@@ -372,7 +372,7 @@ pub(super) fn parse_rawx_source(
         });
     }
     let title = string_value(case_value("title1"), "caseid.title1")?.unwrap_or("");
-    let title = sanitize_record_text(title, &mut substituted_strings);
+    let title = sanitize_title_text(title, &mut substituted_strings);
     let mut raw = format!("{}\n{}\n\n", case_tokens.join(", "), title);
     raw.push_str("0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA\n");
 
@@ -767,6 +767,18 @@ fn sanitize_record_text<'a>(text: &'a str, substitutions: &mut usize) -> std::bo
     if text.contains(['\'', '\n', '\r']) {
         *substitutions += 1;
         std::borrow::Cow::Owned(text.replace(['\'', '\n', '\r'], " "))
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
+}
+
+// PSS/E's title line is plain text, not a quoted record field. Apostrophes
+// are therefore valid title content; only line terminators must be replaced
+// before the title is passed through the shared RAW reader.
+fn sanitize_title_text<'a>(text: &'a str, substitutions: &mut usize) -> std::borrow::Cow<'a, str> {
+    if text.contains(['\n', '\r']) {
+        *substitutions += 1;
+        std::borrow::Cow::Owned(text.replace(['\n', '\r'], " "))
     } else {
         std::borrow::Cow::Borrowed(text)
     }
@@ -4640,6 +4652,44 @@ mod tests {
                 .lines()
                 .iter()
                 .all(|line| !line.contains("outside the typed balanced calculation view"))
+        );
+    }
+
+    #[test]
+    fn preserves_apostrophes_in_rawx_case_title() {
+        let mut root: Value = serde_json::from_str(MINIMAL).unwrap();
+        root["network"]["caseid"]["data"][3] = Value::from("O'Brien's grid");
+        let source = serde_json::to_string(&root).unwrap();
+        let mut diagnostics = Diagnostics::new();
+
+        let net = parse_rawx_source(&source, None, &mut diagnostics).unwrap();
+
+        assert_eq!(net.name(), "O'Brien's grid");
+        assert!(
+            diagnostics
+                .lines()
+                .iter()
+                .all(|line| !line.contains("RAWX string value(s)")),
+            "an apostrophe in title1 is valid title text: {:?}",
+            diagnostics.lines()
+        );
+    }
+
+    #[test]
+    fn normalizes_line_terminators_in_rawx_case_title() {
+        let mut root: Value = serde_json::from_str(MINIMAL).unwrap();
+        root["network"]["caseid"]["data"][3] = Value::from("first line\nsecond line");
+        let source = serde_json::to_string(&root).unwrap();
+        let mut diagnostics = Diagnostics::new();
+
+        let net = parse_rawx_source(&source, None, &mut diagnostics).unwrap();
+
+        assert_eq!(net.name(), "first line second line");
+        assert!(
+            diagnostics
+                .lines()
+                .iter()
+                .any(|line| { line.contains("RAWX string value(s)") })
         );
     }
 }
