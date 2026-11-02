@@ -6,6 +6,8 @@
   linecode named after it instead of one copy per line, so the BMOPF JSON of a
   50,353 line city model falls from 171 MB to 73 MB.
 
+- Preserve apostrophes in PSS/E RAWX `caseid.title1`; normalize embedded line terminators only.
+
 - Keep PMD time-series profiles verbatim under BMOPF extras instead of
   asserting multiplicative-profile semantics (PMD's `replace` defaults to
   true). Validate every snapshot of PMD
