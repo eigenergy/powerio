@@ -22,6 +22,17 @@ three-terminal DELTA coils follow the declared cyclic order. Grounding a phase
 does not by itself change its terminal role. WYE and SINGLE_PHASE return
 connections retain their existing semantics.
 
+Fixed inverter PF uses `McOpfCoil::power_factor_coefficients`: bounded `[a,b]`
+for `a*P + b*Q = 0`, with `a = sqrt((1 - |pf|) * (1 + |pf|))` and `b = pf`.
+The signed input domain remains `0 < |pf| <= 1`; even subnormal inputs keep a
+finite row. Solvers should use these coefficients, not the legacy
+`reactive_slope` ratio. That ratio is computed without trigonometric
+cancellation when representable and is `None` if division would overflow;
+`None` therefore does not imply absence of PF control when bounded coefficients
+are present. Hard P/Q/S/I limits still intersect the control equation.
+Absolute residual tolerance on this bounded row does not certify relative PF
+accuracy, especially near zero PF or zero apparent-power dispatch.
+
 ## Units and axes
 
 Canonical inputs are SI. Explicit bases are voltage in V and power in VA per
