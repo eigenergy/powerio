@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Keep PMD time-series profiles verbatim under BMOPF extras instead of
+  asserting multiplicative-profile semantics (PMD's `replace` defaults to
+  true). Validate every snapshot of PMD
+  multinetwork fixtures. Remove the obsolete Julia companion pin now that the
+  required bindings have merged upstream.
+
 ## 0.11.7
 
 **AC optimal transmission switching**
