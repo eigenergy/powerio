@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Validate PowerModels bus IDs and equipment references before converting them into canonical bus identifiers, rejecting missing or out-of-range IDs instead of silently casting defaults.
+
 - Keep PMD time-series profiles verbatim under BMOPF extras instead of
   asserting multiplicative-profile semantics (PMD's `replace` defaults to
   true). Validate every snapshot of PMD
