@@ -203,6 +203,14 @@ Edit Line.target like=a
     assert_eq!(code(&net, "a").name, "ca");
     let target = code(&net, "target");
     assert!(target.name.starts_with("_pio_line_"), "{}", target.name);
-    assert!((target.r_series[0][0] - 3.0).abs() <= 1e-12, "{:?}", target.r_series);
-    assert!((target.x_series[0][0] - 4.0).abs() <= 1e-12, "{:?}", target.x_series);
+    assert!(
+        (target.r_series[0][0] - 3.0).abs() <= 1e-12,
+        "{:?}",
+        target.r_series
+    );
+    assert!(
+        (target.x_series[0][0] - 4.0).abs() <= 1e-12,
+        "{:?}",
+        target.x_series
+    );
 }
