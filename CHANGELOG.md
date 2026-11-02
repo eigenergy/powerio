@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Require Python 3.11 or newer: 3.9 and 3.10 are past end of life. Wheels
+  are `cp311-abi3`, and the `bench`, `pandas` and `mcp` extras drop their
+  Python version markers.
+
 - Write `GeoLayer::to_geojson` straight from the typed features instead of
   building a `serde_json::Value` per coordinate. The text is unchanged, and a
   city-scale distribution layer writes three to five times faster.
