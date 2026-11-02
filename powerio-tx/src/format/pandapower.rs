@@ -2832,6 +2832,16 @@ mod tests {
     }
 
     #[test]
+    fn read_frame_rejects_overlong_row() {
+        let frame = pp_frame(&["bus", "p_mw"], json!([0]), json!([[0, 10.0, 2.0]]));
+        let msg = err(&pp_net(vec![bus_table(json!([0])), ("load", frame)]));
+        assert!(
+            msg.contains("`load` table: row 0 has 3 cells for 2 columns"),
+            "{msg}"
+        );
+    }
+
+    #[test]
     fn malformed_unmapped_table_is_not_silently_ignored() {
         // Unknown DataFrames are still parsed before a warning is emitted.
         // A malformed row must not disappear merely because its table is unmapped.
