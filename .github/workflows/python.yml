@@ -392,9 +392,38 @@ jobs:
         run: |
           wheel=$(ls dist/*.whl)
           pip install "${wheel}[all,gridfm,pandas]" pytest
-      # `_has_gridfm` is now true, so the @gridfm_only tests run instead of skipping.
+      # Exercise the optional downstream graph consumer rather than letting
+      # pytest.importorskip silently leave its integration test unexecuted.
+      # Match GridFM's published CPU stack and its PyG wheel index.
+      - name: Install GridFM GraphKit CPU integration dependencies
+        run: |
+          pip install "torch==2.12.0+cpu" "gridfm-graphkit==0.9.0.3" \
+            --extra-index-url https://download.pytorch.org/whl/cpu \
+            --find-links https://data.pyg.org/whl/torch-2.12.0+cpu.html
+      - name: Require GraphKit integration dependencies
+        run: |
+          python - <<'PY'
+          import torch
+          from gridfm_graphkit.datasets import powergrid_hetero_dataset
+          print(f"PyTorch {torch.__version__}; GraphKit module {powergrid_hetero_dataset.__file__}")
+          PY
+      # The Python tests exercise the CLI's on-disk Parquet writer as well as
+      # the extension surface. Build the actual binary; the test module skips
+      # its CLI cases when target/release/powerio is absent.
+      - name: Build GridFM CLI
+        run: cargo build -p powerio-cli --release
+      - name: Require GridFM CLI
+        run: test -x target/release/powerio
+      # Report optional skips explicitly; the four CLI writer checks must run.
       - name: Run gridfm tests
-        run: pytest python/tests -q -k gridfm
+        env:
+          POWERIO_BIN: target/release/powerio
+        run: pytest python/tests/test_gridfm.py -q -rs
+      # The core Python matrix intentionally compiles GridFM out. Run its
+      # feature-enabled extension-surface regression here so that test is
+      # exercised rather than reported as a skip in the core matrix.
+      - name: Run GridFM extension-surface regression
+        run: pytest python/tests/test_powerio.py -q -rs -k gridfm_public_surface
 
   wheels:
     name: wheels (${{ matrix.platform.target }} on ${{ matrix.platform.runner }})
