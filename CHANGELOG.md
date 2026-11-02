@@ -4,6 +4,10 @@
 
 - Add regression coverage proving that preserving a reference bus does not mark an island supplied when no in-service balancing generator exists.
 
+- Clarify that `BusType::Ref` follows the source format's reference/slack convention; angle reference and balancing-source semantics are not universal invariants.
+
+- Preserve apostrophes in PSS/E RAWX `caseid.title1`; normalize embedded line terminators only.
+
 - Keep PMD time-series profiles verbatim under BMOPF extras instead of
   asserting multiplicative-profile semantics (PMD's `replace` defaults to
   true). Validate every snapshot of PMD
