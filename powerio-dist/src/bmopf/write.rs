@@ -798,8 +798,7 @@ impl Writer {
         value: Value,
         extras: &mut Map<String, Value>,
     ) -> Value {
-        let Some((profile, metadata)) = self.time_series_profiles.get(name).cloned()
-        else {
+        let Some((profile, metadata)) = self.time_series_profiles.get(name).cloned() else {
             self.warn(
                 &C::EMIT_BMOPF_RETAINED_SOURCE_ONLY,
                 format!(
@@ -858,11 +857,7 @@ impl Writer {
             // preserve the original profile under extras.time_series.
             let top_level = subtype.is_none() && self.raw_object_at_top_level(u);
             let value = if u.class == "time_series" && top_level {
-                self.normalize_time_series_for_emit(
-                    &u.name,
-                    value,
-                    extras,
-                )
+                self.normalize_time_series_for_emit(&u.name, value, extras)
             } else {
                 if u.class == "time_series" {
                     self.warn(
@@ -939,10 +934,7 @@ impl Writer {
     /// A raw object is top-level only when the selected schema declares its
     /// table and, for time series, the profile has BMOPF multiplicative
     /// semantics and satisfies the schema's required-values constraint.
-    fn raw_object_at_top_level(
-        &self,
-        object: &crate::model::UntypedObject,
-    ) -> bool {
+    fn raw_object_at_top_level(&self, object: &crate::model::UntypedObject) -> bool {
         if !self.raw_table_at_top_level(&object.class) {
             return false;
         }
