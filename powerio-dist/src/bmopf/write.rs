@@ -3102,18 +3102,24 @@ fn normalized_bmopf_time_series_for_source(
     // numeric offsets are seconds. Convert only a fully numeric PMD axis;
     // timestamp/string axes have no equivalent in this BMOPF representation.
     // Native BMOPF axes are already seconds and must remain unchanged.
+    if let Some(time) = profile.get("time") {
+        let values = time.as_array()?;
+        // BMOPF only accepts numeric offsets. Validate the native axis too,
+        // but leave its seconds and original JSON representation unchanged.
+        for value in values {
+            let offset = value.as_f64()?;
+            if !offset.is_finite() || (is_pmd && !(offset * 3600.0).is_finite()) {
+                return None;
+            }
+        }
+    }
     if is_pmd {
         if let Some(time) = profile.get_mut("time") {
             let values = time.as_array()?;
-            let mut seconds = Vec::with_capacity(values.len());
-            for value in values {
-                let hours = value.as_f64()?;
-                let offset_seconds = hours * 3600.0;
-                if !offset_seconds.is_finite() {
-                    return None;
-                }
-                seconds.push(json!(offset_seconds));
-            }
+            let seconds = values
+                .iter()
+                .map(|value| json!(value.as_f64().expect("validated numeric PMD time") * 3600.0))
+                .collect();
             *time = Value::Array(seconds);
         }
     }
@@ -3473,6 +3479,14 @@ mod tests {
         assert!(
             normalized_bmopf_time_series(&json!({"time": [0.0, 1.0]})).is_none(),
             "BMOPF requires the schema-mandated values property"
+        );
+        assert!(
+            normalized_bmopf_time_series(&json!({
+                "values": [1.0],
+                "time": ["2026-01-01T00:00:00Z"]
+            }))
+            .is_none(),
+            "BMOPF time axes must be numeric even for non-PMD sources"
         );
         assert!(
             normalized_bmopf_time_series(&json!({
