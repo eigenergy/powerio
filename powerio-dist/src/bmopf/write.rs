@@ -3525,6 +3525,7 @@ mod tests {
         let doc: Value = serde_json::from_str(&output.text).unwrap();
         assert_eq!(doc["time_series"]["ls1"]["time"], json!([0, 3600, 7200]));
         assert_eq!(doc["load"]["l1"]["time_series"]["p_nom"], "ls1");
+        assert!(schema_validator().is_valid(&doc), "{doc}");
 
         source["time_series"]["ls1"]["time"] =
             json!(["2026-01-01T00:00:00Z", "2026-01-01T01:00:00Z"]);
@@ -3534,6 +3535,7 @@ mod tests {
         assert!(doc.get("time_series").is_none(), "{doc}");
         assert!(doc["load"]["l1"].get("time_series").is_none(), "{doc}");
         assert_eq!(doc["extras"]["time_series"]["ls1"], source["time_series"]["ls1"]);
+        assert!(schema_validator().is_valid(&doc), "{doc}");
         assert!(output.warnings.iter().any(|warning| {
             warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("ls1")
         }));
