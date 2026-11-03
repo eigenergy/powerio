@@ -993,7 +993,7 @@ class BalancedNetwork:
                     g["pmin"],
                 ]
                 + ([0.0 if c is None else c for c in row] if width == 21 else [])
-                for g, row in zip(gens, caps)
+                for g, row in zip(gens, caps, strict=True)
             ],
             dtype=float,
         ).reshape(len(gens), width)

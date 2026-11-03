@@ -1767,7 +1767,7 @@ def _real_matrix_arrow_payload(matrix, table):
     value_bits = []
     for row in range(csr.shape[0]):
         start, end = csr.indptr[row], csr.indptr[row + 1]
-        for col, value in zip(csr.indices[start:end], csr.data[start:end]):
+        for col, value in zip(csr.indices[start:end], csr.data[start:end], strict=True):
             row_index.append(row)
             col_index.append(int(col))
             value_bits.append(_float_bits(value))
@@ -1792,7 +1792,9 @@ def _ybus_arrow_payload(case):
     for key, matrix in [("g_bits", g.tocsr()), ("b_bits", b.tocsr())]:
         for row in range(matrix.shape[0]):
             start, end = matrix.indptr[row], matrix.indptr[row + 1]
-            for col, value in zip(matrix.indices[start:end], matrix.data[start:end]):
+            for col, value in zip(
+                matrix.indices[start:end], matrix.data[start:end], strict=True
+            ):
                 entries.setdefault((row, int(col)), {})[key] = _float_bits(value)
 
     row_index = []
@@ -2061,9 +2063,9 @@ def test_skip_zero_impedance_kwarg_is_accepted(case9, method):
     default = matrices(call())
     explicit_false = matrices(call(skip_zero_impedance=False))
     explicit_true = matrices(call(skip_zero_impedance=True))
-    for a, b in zip(default, explicit_false):
+    for a, b in zip(default, explicit_false, strict=True):
         assert np.allclose(a.toarray(), b.toarray())
-    for a, b in zip(default, explicit_true):
+    for a, b in zip(default, explicit_true, strict=True):
         assert np.allclose(a.toarray(), b.toarray())
 
 

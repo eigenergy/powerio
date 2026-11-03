@@ -114,7 +114,7 @@ fn execute(raw: &RawDss, finalize: bool) -> (States, Result<EarthModel, String>)
                                     .ok_or("missing LineCode binding")?
                                     .ok_or("LineCode did not exist at assignment")?;
                                 let code = linecode::resolve_with_budget(raw, source, &mut budget)?;
-                                state.fetch_code(&code);
+                                state.fetch_code(source, &code);
                                 Ok(())
                             }
                             _ => {
