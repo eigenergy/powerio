@@ -3,12 +3,13 @@
 ## Unreleased
 
 - Preserve PMD load-shape semantics across BMOPF output: activate only profiles
-  with explicit `replace = false` and zero `offset` in BMOPF 0.2.0; map load
-  references to `p_nom`/`q_nom` and retain source metadata. Profiles whose
-  semantics cannot be represented remain verbatim under `extras.time_series`
-  with diagnostics. Keep schema 0.1.0 references inactive and validate each
-  PMD multinetwork snapshot independently. Whole-TimeSeries emission remains
-  unsupported; remove the obsolete Julia companion pin.
+  with explicit `replace = false` and zero `offset` in BMOPF 0.2.0; convert
+  numeric PMD time axes from hours to BMOPF seconds and retain unsupported
+  timestamp axes verbatim under `extras.time_series` with diagnostics. Map
+  load references to `p_nom`/`q_nom`, retain source metadata, and prepare
+  compatible profiles once per emission. Keep schema 0.1.0 references inactive
+  and validate each PMD multinetwork snapshot independently. Whole-TimeSeries
+  emission remains unsupported; remove the obsolete Julia companion pin.
 - Add bounded fixed-PF coefficients to MC IVR preparation, avoiding the loss
   of tiny signed PF values in `tan(acos(abs(pf)))`. Keep the legacy Q/P ratio
   only when finite; consumers should assemble from the bounded coefficients.
