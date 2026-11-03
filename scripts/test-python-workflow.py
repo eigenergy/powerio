@@ -171,4 +171,35 @@ for name in ("build", "julia-tarballs"):
     )
     assert macos_runners == ["macos-15", "macos-15"], (name, macos_runners)
 
+# Docs are built on pull requests but publication is strictly non-PR.
+DOCS_WORKFLOW = (ROOT / ".github/workflows/docs.yml").read_text()
+
+
+def docs_job(name: str) -> str:
+    match = re.search(
+        rf"^  {re.escape(name)}:\\n(.*?)(?=^  [A-Za-z0-9_-]+:\\n|\\Z)",
+        DOCS_WORKFLOW,
+        re.M | re.S,
+    )
+    assert match, f"Docs job {name} is missing"
+    return match.group(1)
+
+
+docs_build = docs_job("build")
+docs_deploy = docs_job("deploy")
+assert "actions/deploy-pages@" not in docs_build
+assert "actions/deploy-pages@" in docs_deploy
+assert re.search(r"^    if: github.event_name != 'pull_request'$", docs_deploy, re.M)
+assert "-p powerio-tnd" in docs_build, "retain the current main rustdoc package set"
+
+# Keep the release workflow independent of the retired paired-release hook.
+assert "PAIRED_RELEASES" not in WORKFLOW
+assert "paired_release.py" not in WORKFLOW
+assert "scripts/paired_release.py" not in RELEASE_WORKFLOW
+
+# No placeholder publish/upload jobs may report a green PR check by echoing.
+assert re.search(r"^  (upload|publish-[\\w-]+):", WORKFLOW, re.M) is None
+assert "echo success" not in WORKFLOW.lower()
+assert "echo \\"success\\"" not in WORKFLOW.lower()
+
 print("Python and release workflow checks passed")
