@@ -217,6 +217,7 @@ pub(crate) fn emit_bmopf_json_text_with_options(
         warnings: crate::diagnostics::Diagnostics::new(),
         transformer_overflow: Map::new(),
         dropped_extras: BTreeMap::new(),
+        time_series_profiles: BTreeMap::new(),
     };
     let doc = w.document(net);
     w.flush_dropped_extras();
@@ -239,9 +240,27 @@ struct Writer {
     /// field: on a real feeder one warning per field per element buried
     /// every finding a consumer would act on (#377).
     dropped_extras: BTreeMap<String, Vec<String>>,
+    /// Normalized, schema-compatible profiles prepared once for this emission.
+    time_series_profiles: BTreeMap<String, (Value, Option<Value>)>,
 }
 
 impl Writer {
+    fn prepare_time_series_profiles(&mut self, net: &MulticonductorNetwork) {
+        let is_pmd = *net.source_format() == Some(crate::model::DistSourceFormat::PmdJson);
+        self.time_series_profiles = net
+            .untyped_objects()
+            .iter()
+            .filter(|object| object.class == "time_series")
+            .filter_map(|object| {
+                let mut unplaced = Vec::new();
+                raw_bmopf_value(object, &mut unplaced)
+                    .filter(|_| unplaced.is_empty())
+                    .and_then(|value| normalized_bmopf_time_series_for_source(&value, is_pmd))
+                    .map(|normalized| (object.name.clone(), normalized))
+            })
+            .collect();
+    }
+
     fn warn(&mut self, info: &'static DiagnosticInfo, msg: impl Into<String>) {
         self.warnings.push(info, msg);
     }
@@ -417,6 +436,7 @@ impl Writer {
     }
 
     fn document(&mut self, net: &MulticonductorNetwork) -> Value {
+        self.prepare_time_series_profiles(net);
         let mut doc = Map::new();
         if let Some(name) = &net.name() {
             doc.insert("name".into(), json!(name));
@@ -677,7 +697,6 @@ impl Writer {
     /// be represented by BMOPF's multiplicative profile semantics.
     fn load_time_series_refs(
         &mut self,
-        net: &MulticonductorNetwork,
         extras: &crate::model::Extras,
         out: &mut Map<String, Value>,
         what: &str,
@@ -701,12 +720,6 @@ impl Writer {
             );
             return;
         };
-        let compatible: BTreeSet<&str> = net
-            .untyped_objects()
-            .iter()
-            .filter(|u| u.class == "time_series" && bmopf_time_series_compatible(net, u))
-            .map(|u| u.name.as_str())
-            .collect();
         let mut mapped = Map::new();
         for (field, value) in refs {
             let target = match field.as_str() {
@@ -727,7 +740,7 @@ impl Writer {
                 );
                 continue;
             };
-            if !compatible.contains(name) {
+            if !self.time_series_profiles.contains_key(name) {
                 self.warn(
                     &C::EMIT_BMOPF_FIELD_DROPPED,
                     format!(
@@ -783,10 +796,9 @@ impl Writer {
         &mut self,
         name: &str,
         value: Value,
-        is_pmd: bool,
         extras: &mut Map<String, Value>,
     ) -> Value {
-        let Some((profile, metadata)) = normalized_bmopf_time_series_for_source(&value, is_pmd)
+        let Some((profile, metadata)) = self.time_series_profiles.get(name).cloned()
         else {
             self.warn(
                 &C::EMIT_BMOPF_RETAINED_SOURCE_ONLY,
@@ -844,12 +856,11 @@ impl Writer {
             // A profile only gets an active BMOPF slot when its complete
             // semantics are representable in the selected schema. Otherwise
             // preserve the original profile under extras.time_series.
-            let top_level = subtype.is_none() && self.raw_object_at_top_level(net, u);
+            let top_level = subtype.is_none() && self.raw_object_at_top_level(u);
             let value = if u.class == "time_series" && top_level {
                 self.normalize_time_series_for_emit(
                     &u.name,
                     value,
-                    *net.source_format() == Some(crate::model::DistSourceFormat::PmdJson),
                     extras,
                 )
             } else {
@@ -930,7 +941,6 @@ impl Writer {
     /// semantics and satisfies the schema's required-values constraint.
     fn raw_object_at_top_level(
         &self,
-        net: &MulticonductorNetwork,
         object: &crate::model::UntypedObject,
     ) -> bool {
         if !self.raw_table_at_top_level(&object.class) {
@@ -939,12 +949,7 @@ impl Writer {
         if object.class != "time_series" {
             return true;
         }
-        let is_pmd = *net.source_format() == Some(crate::model::DistSourceFormat::PmdJson);
-        let mut unplaced = Vec::new();
-        raw_bmopf_value(object, &mut unplaced)
-            .filter(|_| unplaced.is_empty())
-            .and_then(|value| normalized_bmopf_time_series_for_source(&value, is_pmd))
-            .is_some()
+        self.time_series_profiles.contains_key(&object.name)
     }
 
     /// `extras` is seeded from the source document's own `extras` object, so
@@ -961,7 +966,7 @@ impl Writer {
             .untyped_objects()
             .iter()
             .filter(|u| RAW_BMOPF_EXTRAS_TABLES.contains(&u.class.as_str()))
-            .filter(|u| !self.raw_object_at_top_level(net, u))
+            .filter(|u| !self.raw_object_at_top_level(u))
             .map(|u| u.class.as_str())
             .collect();
         for class in classes {
@@ -1058,7 +1063,7 @@ impl Writer {
             o.insert("bus".into(), json!(l.bus));
             o.insert("terminal_map".into(), json!(l.terminal_map));
             let what = format!("load {}", l.name);
-            self.load_time_series_refs(net, &l.extras, &mut o, &what);
+            self.load_time_series_refs(&l.extras, &mut o, &what);
             self.load_voltage_model(&mut o, &l.voltage_model, &what);
             let mut extras = l.extras.clone();
             extras.remove("time_series");
@@ -3101,6 +3106,25 @@ fn normalized_bmopf_time_series_for_source(
             None => source_id.is_none() && offset.is_none(),
         }
     };
+    // PMD time axes are expressed in hours, while BMOPF 0.2.0
+    // numeric offsets are seconds. Convert only a fully numeric PMD axis;
+    // timestamp/string axes have no equivalent in this BMOPF representation.
+    // Native BMOPF axes are already seconds and must remain unchanged.
+    if is_pmd {
+        if let Some(time) = profile.get_mut("time") {
+            let values = time.as_array()?;
+            let mut seconds = Vec::with_capacity(values.len());
+            for value in values {
+                let hours = value.as_f64()?;
+                let offset_seconds = hours * 3600.0;
+                if !offset_seconds.is_finite() {
+                    return None;
+                }
+                seconds.push(json!(offset_seconds));
+            }
+            *time = Value::Array(seconds);
+        }
+    }
     let allowed = ["values", "time", "description"];
     if !offset_is_default
         || !replace_is_default
@@ -3125,22 +3149,7 @@ fn normalized_bmopf_time_series_for_source(
     ))
 }
 
-fn bmopf_time_series_compatible(
-    net: &MulticonductorNetwork,
-    object: &crate::model::UntypedObject,
-) -> bool {
-    if object.class != "time_series" {
-        return false;
-    }
-    let is_pmd = *net.source_format() == Some(crate::model::DistSourceFormat::PmdJson);
-    let mut unplaced = Vec::new();
-    raw_bmopf_value(object, &mut unplaced)
-        .filter(|_| unplaced.is_empty())
-        .and_then(|value| normalized_bmopf_time_series_for_source(&value, is_pmd))
-        .is_some()
-}
-
-/// Rebuild the value of an untyped object. One unnamed property alone is the
+delete redundant compatible helper/// Rebuild the value of an untyped object. One unnamed property alone is the
 /// whole object as JSON text. Otherwise each named property is one field.
 ///
 /// An unnamed property beside named ones has no field name, so this writer
@@ -3382,7 +3391,7 @@ mod tests {
             "replace": false
         });
         let (profile, metadata) = normalized_bmopf_time_series(&source).unwrap();
-        assert_eq!(profile, json!({"values": [1.0, 0.5], "time": [0.0, 60.0]}));
+        assert_eq!(profile, json!({"values": [1.0, 0.5], "time": [0.0, 216000.0]}));
         assert_eq!(
             metadata,
             Some(json!({
@@ -3451,6 +3460,24 @@ mod tests {
             .is_none(),
             "PMD replace=true cannot be represented by BMOPF multiplicative profiles"
         );
+        assert_eq!(
+            normalized_bmopf_time_series_for_source(
+                &json!({"values": [0.5, 1.0], "time": [0.0, 1.0], "replace": false}),
+                true,
+            )
+            .unwrap()
+            .0["time"],
+            json!([0.0, 3600.0]),
+            "PMD hours must be converted to BMOPF seconds"
+        );
+        assert!(
+            normalized_bmopf_time_series_for_source(
+                &json!({"values": [0.5, 1.0], "time": ["2026-01-01T00:00:00Z"], "replace": false}),
+                true,
+            )
+            .is_none(),
+            "string PMD axes must remain source-only"
+        );
         assert!(
             normalized_bmopf_time_series(&json!({"time": [0.0, 1.0]})).is_none(),
             "BMOPF requires the schema-mandated values property"
@@ -3482,6 +3509,7 @@ mod tests {
             warnings: crate::diagnostics::Diagnostics::new(),
             transformer_overflow: Map::new(),
             dropped_extras: BTreeMap::new(),
+            time_series_profiles: BTreeMap::new(),
         };
 
         // A non-object control_profile extra and an ibr extra outside the
