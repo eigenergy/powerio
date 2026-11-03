@@ -21,6 +21,10 @@ pub enum ObjectiveTerm {
     /// Active power dispatch costs on the resources represented by a
     /// multiconductor calculation record (the BMOPF objective).
     ActivePowerDispatchCost,
+    /// The opening and closing costs of the branch status changes an AC
+    /// optimal transmission switching instance chooses, against its initial
+    /// topology.
+    BranchSwitchingCost,
 }
 
 /// The complete typed objective of one OPF instance: a sum of terms.
@@ -64,6 +68,25 @@ impl Objective {
     #[must_use]
     pub fn terms(&self) -> &[ObjectiveTerm] {
         &self.terms
+    }
+
+    /// Whether the objective states `term`.
+    #[must_use]
+    pub fn contains(&self, term: &ObjectiveTerm) -> bool {
+        self.terms.contains(term)
+    }
+
+    /// This objective without any occurrence of `term`.
+    #[must_use]
+    pub(crate) fn without(&self, term: &ObjectiveTerm) -> Self {
+        Self {
+            terms: self
+                .terms
+                .iter()
+                .filter(|stated| *stated != term)
+                .cloned()
+                .collect(),
+        }
     }
 }
 

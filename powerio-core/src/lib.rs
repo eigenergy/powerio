@@ -22,8 +22,8 @@ pub use codes::CORE_DIAGNOSTIC_CODES;
 pub use component_id::ComponentId;
 pub use diagnostic::{
     CodeStatus, Diagnostic, DiagnosticCode, DiagnosticInfo, DiagnosticSeverity, DiagnosticStage,
-    ErrorCategory, check_registry, check_scope_ownership, code_is_well_formed, render_diagnostic,
-    render_diagnostics,
+    ErrorCategory, attach_retention_details, check_registry, check_scope_ownership,
+    code_is_well_formed, render_diagnostic, render_diagnostics,
 };
 pub use error::Error;
 pub use module::{PioModule, StagedEdit};

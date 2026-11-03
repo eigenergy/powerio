@@ -388,13 +388,37 @@ impl PyBalancedNetwork {
     }
 }
 
-/// The parse options a binding builds from its optional `format` argument.
-fn parse_options(format: Option<&str>) -> PyResult<powerio::ParseOptions> {
+/// Private transport for the Python SincalReadOptions fields.
+type SincalBalancedSelection = (Option<i64>, Option<f64>, Option<String>);
+type SincalSelection = (Option<i64>, Option<f64>, Option<String>, bool);
+
+fn parse_options(
+    format: Option<&str>,
+    sincal: Option<SincalSelection>,
+    balanced: Option<SincalBalancedSelection>,
+) -> PyResult<powerio::ParseOptions> {
     let mut options = powerio::ParseOptions::default();
     if let Some(format) = format {
         options = options
             .format(format)
             .map_err(|error| core_error_pyerr(&error))?;
+    }
+    if let Some((variant, snapshot_hours, acquired_tables, assume_inactive_source_controls)) =
+        sincal
+    {
+        let mut selection = powerio_tnd::formats::sincal::SincalReadOptions::default();
+        selection.variant = variant;
+        selection.snapshot_hours = snapshot_hours;
+        selection.acquired_tables = acquired_tables;
+        selection.assume_inactive_source_controls = assume_inactive_source_controls;
+        options.sincal_multiconductor = Some(selection);
+    }
+    if let Some((variant, snapshot_hours, acquired_tables)) = balanced {
+        let mut selection = powerio_tnd::formats::sincal::SincalBalancedReadOptions::default();
+        selection.variant = variant;
+        selection.snapshot_hours = snapshot_hours;
+        selection.acquired_tables = acquired_tables;
+        options.sincal_balanced = Some(selection);
     }
     Ok(options)
 }
@@ -407,11 +431,13 @@ fn core_error_pyerr(error: &powerio_core::Error) -> PyErr {
         powerio_core::ErrorCategory::Data => PowerIODataError::new_err(error.to_string()),
         _ => PowerIOError::new_err(error.to_string()),
     };
-    if let Some(code) = error.diagnostics().first().map(|d| d.code().to_owned()) {
-        Python::attach(|py| {
-            let _ = err.value(py).setattr("code", code);
-        });
-    }
+    Python::attach(|py| {
+        if let Some(diagnostic) = error.diagnostics().first() {
+            let _ = err.value(py).setattr("code", diagnostic.code());
+        }
+        let diagnostics: Vec<_> = error.diagnostics().iter().map(PyDiagnostic::from).collect();
+        let _ = err.value(py).setattr("diagnostics", diagnostics);
+    });
     err
 }
 
@@ -941,6 +967,139 @@ impl PyBalancedNetwork {
         Ok(d)
     }
 
+    /// The AC bus balance at the voltages this case stores, with every
+    /// device at its stated output: per bus columns in analysis bus order,
+    /// island totals, and the ranked largest mismatches.
+    #[pyo3(signature = (*, top_k=20, hvdc="fixed_injection", low_impedance_threshold=1e-3, merge_zero_impedance=false, lcc_reactive_power="converter_model"))]
+    #[allow(clippy::too_many_arguments)]
+    fn calc_stated_state_mismatch<'py>(
+        &self,
+        py: Python<'py>,
+        top_k: usize,
+        hvdc: &str,
+        low_impedance_threshold: f64,
+        merge_zero_impedance: bool,
+        lcc_reactive_power: &str,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let lcc = match normalize(lcc_reactive_power).as_str() {
+            "convertermodel" => powerio_matrix::LccReactivePower::ConverterModel,
+            "stated" => powerio_matrix::LccReactivePower::Stated,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown lcc_reactive_power {other:?}; expected 'converter_model' or 'stated'"
+                )));
+            }
+        };
+        let treatment = match normalize(hvdc).as_str() {
+            "fixedinjection" => powerio_tx::HvdcTreatment::FixedInjection,
+            "ignore" => powerio_tx::HvdcTreatment::Ignore,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown hvdc treatment {other:?}; expected 'fixed_injection' or 'ignore'"
+                )));
+            }
+        };
+        let mut options = powerio_matrix::StatedStateOptions::default()
+            .with_hvdc_treatment(treatment)
+            .with_top_k(top_k)
+            .with_low_impedance_threshold(low_impedance_threshold)
+            .with_lcc_reactive_power(lcc);
+        let merged;
+        let network = if merge_zero_impedance {
+            let (network, merge, _) = powerio_prob::merge_zero_impedance_buses(self.inner())
+                .map_err(|error| core_error_pyerr(&error))?;
+            options = options.with_merged_buses(merge.merged_buses);
+            merged = network;
+            &merged
+        } else {
+            self.inner()
+        };
+        let mismatch =
+            powerio_matrix::calc_stated_state_mismatch(network, &options).map_err(to_pyerr)?;
+        let d = PyDict::new(py);
+        d.set_item(
+            "bus_ids",
+            mismatch.buses.iter().map(|b| b.bus.0).collect::<Vec<_>>(),
+        )?;
+        d.set_item(
+            "island",
+            mismatch.buses.iter().map(|b| b.island).collect::<Vec<_>>(),
+        )?;
+        d.set_item(
+            "p_mw",
+            mismatch.buses.iter().map(|b| b.p_mw).collect::<Vec<_>>(),
+        )?;
+        d.set_item(
+            "q_mvar",
+            mismatch.buses.iter().map(|b| b.q_mvar).collect::<Vec<_>>(),
+        )?;
+        d.set_item(
+            "flags",
+            mismatch
+                .buses
+                .iter()
+                .map(|b| b.flags.names())
+                .collect::<Vec<_>>(),
+        )?;
+        let islands = PyList::empty(py);
+        for island in &mismatch.islands {
+            let row = PyDict::new(py);
+            row.set_item("n_buses", island.n_buses)?;
+            row.set_item("p_mw", island.p_mw)?;
+            row.set_item("q_mvar", island.q_mvar)?;
+            row.set_item("abs_p_mw", island.abs_p_mw)?;
+            row.set_item("abs_q_mvar", island.abs_q_mvar)?;
+            row.set_item("largest_bus", island.largest_bus.0)?;
+            islands.append(row)?;
+        }
+        d.set_item("islands", islands)?;
+        d.set_item("top", mismatch.top.clone())?;
+        d.set_item("total_abs_p_mw", mismatch.calc_total_abs_p_mw())?;
+        d.set_item("total_abs_q_mvar", mismatch.calc_total_abs_q_mvar())?;
+        d.set_item("max_magnitude_mva", mismatch.calc_max_magnitude_mva())?;
+        let diagnostics: Vec<PyDiagnostic> = mismatch
+            .diagnostics
+            .iter()
+            .map(PyDiagnostic::from)
+            .collect();
+        d.set_item("diagnostics", diagnostics)?;
+        Ok(d)
+    }
+
+    /// Active and reactive power entering every analysis branch at both
+    /// ends, at the voltages this case stores, MW and MVAr.
+    fn calc_stated_branch_flows<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let flows = powerio_matrix::calc_stated_branch_flows(self.inner()).map_err(to_pyerr)?;
+        let d = PyDict::new(py);
+        let sources = PyList::empty(py);
+        for source in &flows.sources {
+            let row = PyDict::new(py);
+            match *source {
+                powerio_matrix::AnalysisBranchSource::Branch { row: branch } => {
+                    row.set_item("kind", "branch")?;
+                    row.set_item("row", branch)?;
+                }
+                powerio_matrix::AnalysisBranchSource::ThreeWindingTransformerWinding {
+                    transformer_row,
+                    winding,
+                } => {
+                    row.set_item("kind", "three_winding_transformer_winding")?;
+                    row.set_item("row", transformer_row)?;
+                    row.set_item("winding", winding)?;
+                }
+                _ => row.set_item("kind", "other")?,
+            }
+            sources.append(row)?;
+        }
+        d.set_item("sources", sources)?;
+        d.set_item("in_service", flows.in_service)?;
+        d.set_item("p_from_mw", flows.p_from_mw)?;
+        d.set_item("q_from_mvar", flows.q_from_mvar)?;
+        d.set_item("p_to_mw", flows.p_to_mw)?;
+        d.set_item("q_to_mvar", flows.q_to_mvar)?;
+        Ok(d)
+    }
+
     /// A normalized, computation-ready copy of this case: per unit, radians,
     /// out-of-service filtered, densely reindexed (1-based), bus types
     /// canonicalized. The raw case is unchanged; the result carries no retained
@@ -950,23 +1109,105 @@ impl PyBalancedNetwork {
         Ok(case_from_parts(normalized, self.diagnostics().to_vec()))
     }
 
-    #[pyo3(signature = (*, clamp_angle_bounds=false, angle_bound_pad=None))]
+    #[pyo3(signature = (*, clamp_angle_bounds=false, angle_bound_pad=None, closed_switches="merge", island_references="stated"))]
     fn to_normalized_with_options(
         &self,
         clamp_angle_bounds: bool,
         angle_bound_pad: Option<f64>,
+        closed_switches: &str,
+        island_references: &str,
     ) -> PyResult<PyBalancedNetwork> {
+        let closed_switches = match closed_switches {
+            "merge" => powerio_tx::ClosedSwitchPolicy::Merge,
+            "refuse" => powerio_tx::ClosedSwitchPolicy::Refuse,
+            "keep" => powerio_tx::ClosedSwitchPolicy::Keep,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown closed_switches policy {other:?}; expected \"merge\", \"refuse\", or \"keep\""
+                )));
+            }
+        };
+        let island_references = match island_references {
+            "stated" => powerio_tx::IslandReferencePolicy::Stated,
+            "per_island" => powerio_tx::IslandReferencePolicy::PerIsland,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown island_references policy {other:?}; expected \"stated\" or \"per_island\""
+                )));
+            }
+        };
         let options = NormalizeOptions {
             clamp_angle_bounds,
             angle_bound_pad: angle_bound_pad.unwrap_or(POWER_MODELS_ANGLE_BOUND_PAD),
         };
-        let normalized = self
+        let settings = powerio_tx::NormalizeSettings::new(options)
+            .with_closed_switches(closed_switches)
+            .with_island_references(island_references);
+        let (normalized, _) = self
             .inner()
-            .to_normalized_with_options(&options)
+            .to_normalized_with(&settings)
             .map_err(core_pyerr)?;
         let mut diagnostics = self.diagnostics().to_vec();
         diagnostics.extend(normalized.diagnostics);
         Ok(case_from_parts(normalized.network, diagnostics))
+    }
+
+    /// Merge the buses closed switches and zero impedance branches join.
+    /// `zero_impedance` is `None`, `"exact"`, `"psse"`, or `"impedance"`;
+    /// `"psse"` reads the case's stated threshold unless `threshold` names
+    /// one, and `"impedance"` requires `threshold`.
+    #[pyo3(signature = (*, closed_switches=true, zero_impedance=None, threshold=None, charging="fold"))]
+    fn merge_buses(
+        &self,
+        closed_switches: bool,
+        zero_impedance: Option<&str>,
+        threshold: Option<f64>,
+        charging: &str,
+    ) -> PyResult<PyBusMerge> {
+        use powerio_tx::{BusMergeRule, MergedCharging, ZeroImpedanceRule};
+        let charging = match charging {
+            "fold" => MergedCharging::FoldToShunt,
+            "drop" => MergedCharging::Drop,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown charging treatment {other:?}; expected \"fold\" or \"drop\""
+                )));
+            }
+        };
+        let branch_rule = match (zero_impedance, threshold) {
+            (None, None) => None,
+            (Some("exact"), None) => Some(ZeroImpedanceRule::Exact),
+            (Some("psse"), Some(threshold)) => Some(ZeroImpedanceRule::PsseThreshold(threshold)),
+            (Some("psse"), None) => {
+                BusMergeRule::psse(self.inner())
+                    .map_err(core_pyerr)?
+                    .zero_impedance
+            }
+            (Some("impedance"), Some(threshold)) => {
+                Some(ZeroImpedanceRule::ImpedanceMagnitude(threshold))
+            }
+            (Some("impedance"), None) => {
+                return Err(PyValueError::new_err(
+                    "zero_impedance=\"impedance\" requires a threshold",
+                ));
+            }
+            (None | Some("exact"), Some(_)) => {
+                return Err(PyValueError::new_err(
+                    "threshold applies only to zero_impedance=\"psse\" or \"impedance\"",
+                ));
+            }
+            (Some(other), _) => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown zero_impedance rule {other:?}; expected \"exact\", \"psse\", or \"impedance\""
+                )));
+            }
+        };
+        let rule = BusMergeRule::new(closed_switches, branch_rule).with_charging(charging);
+        let merge = self.inner().merge_buses(&rule).map_err(core_pyerr)?;
+        let mut diagnostics = self.diagnostics().to_vec();
+        diagnostics.extend(merge.diagnostics.iter().cloned());
+        let network = case_from_parts(merge.network.clone(), diagnostics);
+        Ok(PyBusMerge { merge, network })
     }
 
     // --- matrix calculations: each returns a COO tuple -----------------
@@ -1428,7 +1669,8 @@ impl PyMulticonductorNetwork {
         self.inner().name().as_deref()
     }
 
-    /// Format the case was parsed from (`dss`, `pmd-json`, `bmopf-json`).
+    /// Format the case was parsed from (`dss`, `pmd-json`, `bmopf-json`,
+    /// `cim-dist`); `None` for a network built in code.
     fn source_format(&self) -> Option<&'static str> {
         self.inner().source_format().map(|f| f.name())
     }
@@ -1642,7 +1884,27 @@ fn balanced_field_to_py<'py>(
     model: &BalancedNetwork,
     field: &str,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let value = serde_json::to_value(model).map_err(serialize_pyerr)?;
+    let mut value = serde_json::to_value(model).map_err(serialize_pyerr)?;
+    // Python exposes physical table rows, not the tagged IR representation.
+    // Partial three-winding transformers keep the same dictionary fields as
+    // ordinary transformers even though their durable IR must fail closed in
+    // older readers that do not implement per-winding status.
+    if field == "transformers_3w"
+        && let Some(rows) = value
+            .get_mut(field)
+            .and_then(serde_json::Value::as_array_mut)
+    {
+        for row in rows {
+            if row.get("type").and_then(serde_json::Value::as_str)
+                == Some("powerio.PartialTransformer3W")
+            {
+                *row = row
+                    .get_mut("value")
+                    .expect("partial transformer body")
+                    .take();
+            }
+        }
+    }
     serialized_value_field_to_py(py, value, field)
 }
 
@@ -1653,7 +1915,23 @@ fn dist_field_to_py<'py>(
     model: &powerio_dist::MulticonductorNetwork,
     field: &str,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let value = serde_json::to_value(model).map_err(serialize_pyerr)?;
+    let mut value = serde_json::to_value(model).map_err(serialize_pyerr)?;
+    // Python exposes physical source rows, not the tagged IR record: a
+    // referenced source keeps every earth-referenced field and adds
+    // `reference_terminal`, so `row["name"]` reads the same for both.
+    if field == "sources"
+        && let Some(rows) = value
+            .get_mut(field)
+            .and_then(serde_json::Value::as_array_mut)
+    {
+        for row in rows {
+            if row.get("type").and_then(serde_json::Value::as_str)
+                == Some("powerio.ReferencedVoltageSource")
+            {
+                *row = row.get_mut("value").expect("referenced source body").take();
+            }
+        }
+    }
     // These tables omit their JSON key when empty. The Python table surface
     // still returns an empty list so every declared table is always readable.
     if value.get(field).is_none() && matches!(field, "ibrs" | "control_profiles" | "capacitors") {
@@ -1725,6 +2003,218 @@ impl From<&powerio_core::SourceSpan> for PySourceSpan {
             byte_start: span.byte_start(),
             byte_end: span.byte_end(),
         }
+    }
+}
+
+/// The result of `BalancedNetwork.merge_buses`: the merged network and what
+/// the merge did.
+#[pyclass(name = "_BusMerge", module = "powerio._powerio", frozen)]
+struct PyBusMerge {
+    merge: powerio_tx::BusMerge,
+    /// The merged network as a handle, carrying the source's findings and
+    /// the merge's.
+    network: PyBalancedNetwork,
+}
+
+fn removal_reason(reason: powerio_tx::RemovalReason) -> &'static str {
+    match reason {
+        powerio_tx::RemovalReason::ZeroImpedance => "zero_impedance",
+        powerio_tx::RemovalReason::ClosedSwitch => "closed_switch",
+        powerio_tx::RemovalReason::Shorted => "shorted",
+        _ => "other",
+    }
+}
+
+fn removed_flow_dict<'py>(
+    py: Python<'py>,
+    flow: &powerio_tx::RemovedFlow,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("p_from", flow.p_from)?;
+    let method = match flow.method {
+        powerio_tx::RemovedFlowMethod::OutOfService => "out_of_service",
+        powerio_tx::RemovedFlowMethod::Tree => "tree",
+        powerio_tx::RemovedFlowMethod::Reactance => "reactance",
+        powerio_tx::RemovedFlowMethod::MinimumNorm => "minimum_norm",
+        _ => "other",
+    };
+    d.set_item("method", method)?;
+    Ok(d)
+}
+
+#[pymethods]
+impl PyBusMerge {
+    /// The merged network.
+    #[getter]
+    fn network(&self) -> PyBalancedNetwork {
+        PyBalancedNetwork {
+            module: self.network.module.clone(),
+            core: self.network.core.clone(),
+        }
+    }
+
+    /// The rule, in words.
+    #[getter]
+    fn rule(&self) -> String {
+        self.merge.rule.to_string()
+    }
+
+    /// Every merged bus to the bus that now carries it.
+    #[getter]
+    fn merged_buses(&self) -> HashMap<usize, usize> {
+        self.merge
+            .merged_buses
+            .iter()
+            .map(|(bus, survivor)| (bus.0, survivor.0))
+            .collect()
+    }
+
+    /// Every group of two or more buses, as `{"survivor", "members"}`.
+    #[getter]
+    fn groups<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        self.merge
+            .groups
+            .iter()
+            .map(|group| {
+                let d = PyDict::new(py);
+                d.set_item("survivor", group.survivor.0)?;
+                let members: Vec<usize> = group.members.iter().map(|bus| bus.0).collect();
+                d.set_item("members", members)?;
+                Ok(d)
+            })
+            .collect()
+    }
+
+    /// Each removed branch with its source row, identity, endpoints,
+    /// survivor, reason, status, impedance, charging, and ratings.
+    #[getter]
+    fn removed_branches<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        self.merge
+            .removed_branches
+            .iter()
+            .map(|removed| {
+                let d = PyDict::new(py);
+                d.set_item("row", removed.row)?;
+                d.set_item("id", &removed.identity)?;
+                d.set_item("from_id", removed.from.0)?;
+                d.set_item("to_id", removed.to.0)?;
+                d.set_item("survivor", removed.survivor.0)?;
+                d.set_item("reason", removal_reason(removed.reason))?;
+                d.set_item("in_service", removed.in_service)?;
+                d.set_item("r", removed.r)?;
+                d.set_item("x", removed.x)?;
+                d.set_item("b", removed.b)?;
+                d.set_item("rate_a", removed.rate_a)?;
+                d.set_item("rate_b", removed.rate_b)?;
+                d.set_item("rate_c", removed.rate_c)?;
+                Ok(d)
+            })
+            .collect()
+    }
+
+    /// Each removed switch with its source row, identity, endpoints,
+    /// survivor, reason, state, and thermal rating.
+    #[getter]
+    fn removed_switches<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        self.merge
+            .removed_switches
+            .iter()
+            .map(|removed| {
+                let d = PyDict::new(py);
+                d.set_item("row", removed.row)?;
+                d.set_item("id", &removed.identity)?;
+                d.set_item("from_id", removed.from.0)?;
+                d.set_item("to_id", removed.to.0)?;
+                d.set_item("survivor", removed.survivor.0)?;
+                d.set_item("reason", removal_reason(removed.reason))?;
+                d.set_item("closed", removed.closed)?;
+                d.set_item("thermal_rating", removed.thermal_rating)?;
+                Ok(d)
+            })
+            .collect()
+    }
+
+    /// For each source branch row, its merged row or `None`.
+    #[getter]
+    fn branch_rows(&self) -> Vec<Option<usize>> {
+        self.merge.branch_rows.clone()
+    }
+
+    /// For each source switch row, its merged row or `None`.
+    #[getter]
+    fn switch_rows(&self) -> Vec<Option<usize>> {
+        self.merge.switch_rows.clone()
+    }
+
+    /// Rows of the merged shunt table that hold removed branches' equivalent admittances.
+    #[getter]
+    fn charging_shunts(&self) -> Vec<usize> {
+        self.merge.charging_shunts.clone()
+    }
+
+    /// The merge's own findings.
+    #[getter]
+    fn diagnostics(&self) -> Vec<PyDiagnostic> {
+        self.merge
+            .diagnostics
+            .iter()
+            .map(PyDiagnostic::from)
+            .collect()
+    }
+
+    /// The bus that carries `bus` in the merged network.
+    fn survivor(&self, bus: usize) -> usize {
+        self.merge.survivor(powerio_tx::BusId(bus)).0
+    }
+
+    /// Recover the active power on every removed element from a merged
+    /// solution, in the network's units.
+    #[pyo3(signature = (branch_p_from, branch_p_to, *, generator_p=None, transformer_3w_p=None))]
+    fn calc_removed_flows<'py>(
+        &self,
+        py: Python<'py>,
+        branch_p_from: Vec<f64>,
+        branch_p_to: Vec<f64>,
+        generator_p: Option<Vec<f64>>,
+        transformer_3w_p: Option<Vec<[f64; 3]>>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let windings = transformer_3w_p.unwrap_or_default();
+        let mut flows = powerio_tx::MergedFlows::new(&branch_p_from, &branch_p_to)
+            .with_transformer_3w_p(&windings);
+        if let Some(generator_p) = generator_p.as_deref() {
+            flows = flows.with_generator_p(generator_p);
+        }
+        let recovered = self.merge.calc_removed_flows(&flows).map_err(core_pyerr)?;
+        let d = PyDict::new(py);
+        let branches = recovered
+            .branches
+            .iter()
+            .map(|flow| removed_flow_dict(py, flow))
+            .collect::<PyResult<Vec<_>>>()?;
+        let switches = recovered
+            .switches
+            .iter()
+            .map(|flow| removed_flow_dict(py, flow))
+            .collect::<PyResult<Vec<_>>>()?;
+        d.set_item("branches", branches)?;
+        d.set_item("switches", switches)?;
+        let diagnostics: Vec<PyDiagnostic> = recovered
+            .diagnostics
+            .iter()
+            .map(PyDiagnostic::from)
+            .collect();
+        d.set_item("diagnostics", diagnostics)?;
+        Ok(d)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "BusMerge(rule={:?}, merged_buses={}, removed_branches={}, removed_switches={})",
+            self.merge.rule.to_string(),
+            self.merge.merged_buses.len(),
+            self.merge.removed_branches.len(),
+            self.merge.removed_switches.len()
+        )
     }
 }
 
@@ -3433,6 +3923,26 @@ impl PyPioModule {
         }
     }
 
+    fn ac_ots_instance(&self) -> PyResult<&powerio_prob::AcOtsInstance> {
+        match &self.module()?.value() {
+            powerio::PioValue::AcOtsInstance(instance) => Ok(instance),
+            other => Err(PyTypeError::new_err(format!(
+                "{} is not an AC optimal transmission switching instance",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn ac_ots_solution(&self) -> PyResult<&powerio_prob::AcOtsSolution> {
+        match &self.module()?.value() {
+            powerio::PioValue::AcOtsSolution(solution) => Ok(solution),
+            other => Err(PyTypeError::new_err(format!(
+                "{} is not an AC optimal transmission switching solution",
+                other.type_name()
+            ))),
+        }
+    }
+
     fn balanced_calculation_network(&self) -> PyResult<&powerio::BalancedNetwork> {
         let value = &self.module()?.value();
         match value {
@@ -3440,11 +3950,13 @@ impl PyPioModule {
             powerio::PioValue::AcPfInstance(instance) => Ok(instance.network()),
             powerio::PioValue::DcOpfInstance(instance) => Ok(instance.network()),
             powerio::PioValue::AcOpfInstance(instance) => Ok(instance.network()),
+            powerio::PioValue::AcOtsInstance(instance) => Ok(instance.network()),
             powerio::PioValue::AcScucInstance(instance) => Ok(instance.network()),
             powerio::PioValue::DcPfSolution(solution) => Ok(solution.network()),
             powerio::PioValue::AcPfSolution(solution) => Ok(solution.network()),
             powerio::PioValue::DcOpfSolution(solution) => Ok(solution.network()),
             powerio::PioValue::AcOpfSolution(solution) => Ok(solution.network()),
+            powerio::PioValue::AcOtsSolution(solution) => Ok(solution.network()),
             powerio::PioValue::SocwrOpfSolution(solution) => Ok(solution.network()),
             powerio::PioValue::AcScucSolution(solution) => Ok(solution.instance().network()),
             other => Err(PyTypeError::new_err(format!(
@@ -3896,11 +4408,19 @@ impl PyPioModule {
 
     /// Private path acquisition used by the public `parse` function.
     #[staticmethod]
-    #[pyo3(signature = (path, format=None))]
-    fn _parse_path(path: &str, format: Option<&str>) -> PyResult<Self> {
+    #[pyo3(signature = (path, format=None, sincal=None, acquisition_root=None, sincal_balanced=None))]
+    fn _parse_path(
+        path: &str,
+        format: Option<&str>,
+        sincal: Option<SincalSelection>,
+        acquisition_root: Option<&str>,
+        sincal_balanced: Option<SincalBalancedSelection>,
+    ) -> PyResult<Self> {
         let source = powerio_core::Source::open(Path::new(path))
             .map_err(|error| core_open_pyerr(Path::new(path), &error))?;
-        powerio::parse_with_options(source, &parse_options(format)?)
+        let mut options = parse_options(format, sincal, sincal_balanced)?;
+        options.acquisition_root = acquisition_root.map(std::path::PathBuf::from);
+        powerio::parse_with_options(source, &options)
             .map(|module| Self {
                 module: Some(module),
             })
@@ -3909,11 +4429,23 @@ impl PyPioModule {
 
     /// Private memory acquisition used for bytes-like and file-like sources.
     #[staticmethod]
-    #[pyo3(signature = (data, name, format=None))]
-    fn _parse_memory(data: &[u8], name: &str, format: Option<&str>) -> PyResult<Self> {
-        let source = powerio_core::Source::from_memory(name, data.to_vec())
+    #[pyo3(signature = (data, name, format=None, sincal=None, named_buffers=None, sincal_balanced=None))]
+    fn _parse_memory(
+        data: &[u8],
+        name: &str,
+        format: Option<&str>,
+        sincal: Option<SincalSelection>,
+        named_buffers: Option<Vec<(String, Vec<u8>)>>,
+        sincal_balanced: Option<SincalBalancedSelection>,
+    ) -> PyResult<Self> {
+        let mut source = powerio_core::Source::from_memory(name, data.to_vec())
             .map_err(|error| core_error_pyerr(&error))?;
-        powerio::parse_with_options(source, &parse_options(format)?)
+        for (name, bytes) in named_buffers.unwrap_or_default() {
+            source = source
+                .with_named_buffer(name, bytes)
+                .map_err(|error| core_error_pyerr(&error))?;
+        }
+        powerio::parse_with_options(source, &parse_options(format, sincal, sincal_balanced)?)
             .map(|module| Self {
                 module: Some(module),
             })
@@ -4010,6 +4542,227 @@ impl PyPioModule {
         let module = powerio::transform::to_ac_opf_instance(self.module()?)
             .map_err(|error| core_error_pyerr(&error))?
             .map_value(powerio::PioValue::AcOpfInstance);
+        Ok(Self {
+            module: Some(module),
+        })
+    }
+
+    fn _to_ac_ots_instance(&self) -> PyResult<Self> {
+        let module = powerio::transform::to_ac_ots_instance(self.module()?)
+            .map_err(|error| core_error_pyerr(&error))?
+            .map_value(powerio::PioValue::AcOtsInstance);
+        Ok(Self {
+            module: Some(module),
+        })
+    }
+
+    /// Construct, or reconfigure, an AC optimal transmission switching
+    /// instance with explicit options. The wrapper calls `_to_ac_ots_instance`
+    /// when no option is given, as the C ABI does for NULL options.
+    #[allow(clippy::too_many_arguments)]
+    fn _to_ac_ots_instance_with_options(
+        &self,
+        switchable: &str,
+        identities: Vec<String>,
+        switching_costs: Vec<(String, f64, f64)>,
+        islanding: &str,
+        max_open: Option<usize>,
+        max_switched: Option<usize>,
+        current_limits: &str,
+        stated_current_limits: Vec<(String, Option<f64>, Option<f64>)>,
+    ) -> PyResult<Self> {
+        let mut options = powerio_prob::AcOtsOptions::default();
+        options.switchable = match switchable {
+            "only" => powerio_prob::BranchSelection::Only(identities),
+            "all" | "none" if !identities.is_empty() => {
+                return Err(PyValueError::new_err(format!(
+                    "identities name branches, but the selection is '{switchable}'; \
+                     identities require 'only'"
+                )));
+            }
+            "all" => powerio_prob::BranchSelection::All,
+            "none" => powerio_prob::BranchSelection::None,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown branch selection '{other}'; expected 'all', 'none', or a list of branch identities"
+                )));
+            }
+        };
+        options.switching_costs = switching_costs
+            .into_iter()
+            .map(|(id, open, close)| powerio_prob::BranchSwitchingCost::new(id, open, close))
+            .collect();
+        options.islanding = match islanding {
+            "forbidden" => powerio_prob::IslandingPolicy::Forbidden,
+            "allowed" => powerio_prob::IslandingPolicy::Allowed,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown islanding policy '{other}'; expected 'forbidden' or 'allowed'"
+                )));
+            }
+        };
+        options.max_open = max_open;
+        options.max_switched = max_switched;
+        options.current_limits = match current_limits {
+            "skip" => powerio_prob::CurrentLimitPolicy::Skip,
+            "stated" => powerio_prob::CurrentLimitPolicy::Stated,
+            "derive_from_rate_a" => powerio_prob::CurrentLimitPolicy::DeriveFromRateA,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown current limit policy '{other}'; expected 'skip', 'stated', or 'derive_from_rate_a'"
+                )));
+            }
+        };
+        options.stated_current_limits = stated_current_limits
+            .into_iter()
+            .map(|(id, from_pu, to_pu)| powerio_prob::BranchCurrentLimit::new(id, from_pu, to_pu))
+            .collect();
+        let module = powerio::transform::to_ac_ots_instance_with_options(self.module()?, options)
+            .map_err(|error| core_error_pyerr(&error))?
+            .map_value(powerio::PioValue::AcOtsInstance);
+        Ok(Self {
+            module: Some(module),
+        })
+    }
+
+    /// The switching options an AC OTS instance states, spelled as the
+    /// keyword arguments of `PioModule.to_ac_ots_instance`.
+    fn _ac_ots_options<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let options = self.ac_ots_instance()?.options();
+        let out = PyDict::new(py);
+        match &options.switchable {
+            powerio_prob::BranchSelection::Only(identities) => {
+                out.set_item("switchable", PyList::new(py, identities)?)?;
+            }
+            other => out.set_item("switchable", other.kind_name())?,
+        }
+        let costs = PyDict::new(py);
+        for cost in &options.switching_costs {
+            costs.set_item(&cost.id, (cost.open_cost, cost.close_cost))?;
+        }
+        out.set_item("switching_costs", costs)?;
+        out.set_item("islanding", options.islanding.name())?;
+        out.set_item("max_open", options.max_open)?;
+        out.set_item("max_switched", options.max_switched)?;
+        out.set_item("current_limits", options.current_limits.name())?;
+        let limits = PyDict::new(py);
+        for limit in &options.stated_current_limits {
+            limits.set_item(&limit.id, (limit.from_pu, limit.to_pu))?;
+        }
+        out.set_item("stated_current_limits", limits)?;
+        Ok(out)
+    }
+
+    /// Every physical branch of an AC OTS instance in table order, with its
+    /// resolved switching settings.
+    fn _ac_ots_branches<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let out = PyList::empty(py);
+        for branch in self.ac_ots_instance()?.branches() {
+            let row = PyDict::new(py);
+            row.set_item("id", &branch.id)?;
+            row.set_item("initial_closed", branch.initial_closed)?;
+            row.set_item("switchable", branch.switchable)?;
+            row.set_item(
+                "switching_cost",
+                branch.switching_cost.map(|cost| (cost.open, cost.close)),
+            )?;
+            row.set_item(
+                "stated_current",
+                (branch.stated_current.from_pu, branch.stated_current.to_pu),
+            )?;
+            row.set_item("current", (branch.current.from_pu, branch.current.to_pu))?;
+            out.append(row)?;
+        }
+        Ok(out)
+    }
+
+    /// Check a final branch status vector and return its switching cost.
+    fn _ac_ots_validate_topology(&self, branch_closed: Vec<bool>) -> PyResult<f64> {
+        self.ac_ots_instance()?
+            .validate_topology(&branch_closed)
+            .map_err(|error| core_error_pyerr(&error))
+    }
+
+    /// The AC OPF module over a final topology, and the diagnostics that
+    /// report the switching data it drops.
+    fn _ac_ots_fix_topology(
+        &self,
+        branch_closed: Vec<bool>,
+    ) -> PyResult<(Self, Vec<PyDiagnostic>)> {
+        let module = self.module()?;
+        let inherited = module.diagnostics().len();
+        let derived = powerio::transform::fix_ac_ots_topology(
+            module,
+            self.ac_ots_instance()?,
+            &branch_closed,
+        )
+        .map_err(|error| core_error_pyerr(&error))?
+        .map_value(powerio::PioValue::AcOpfInstance);
+        let diagnostics = derived.diagnostics()[inherited..]
+            .iter()
+            .map(PyDiagnostic::from)
+            .collect();
+        Ok((
+            Self {
+                module: Some(derived),
+            },
+            diagnostics,
+        ))
+    }
+
+    /// Attach the AC OPF solution computed on this instance's fixed topology.
+    fn _ac_ots_solution(
+        &self,
+        branch_closed: Vec<bool>,
+        ac_solution: PyRef<'_, Self>,
+    ) -> PyResult<Self> {
+        let ac_solution = match ac_solution.module()?.value() {
+            powerio::PioValue::AcOpfSolution(solution) => solution.clone(),
+            other => {
+                return Err(PyTypeError::new_err(format!(
+                    "the AC solution must be powerio.AcOpfSolution; this value is {}",
+                    other.type_name()
+                )));
+            }
+        };
+        let module = powerio::transform::ac_ots_solution(
+            self.module()?,
+            self.ac_ots_instance()?,
+            branch_closed,
+            ac_solution,
+        )
+        .map_err(|error| core_error_pyerr(&error))?
+        .map_value(powerio::PioValue::AcOtsSolution);
+        Ok(Self {
+            module: Some(module),
+        })
+    }
+
+    /// The final branch statuses of an AC OTS solution, in branch table order.
+    fn _ac_ots_solution_branch_closed(&self) -> PyResult<Vec<bool>> {
+        Ok(self.ac_ots_solution()?.branch_closed().to_vec())
+    }
+
+    /// The switching cost, open count, switched count, and objective of an
+    /// AC OTS solution.
+    fn _ac_ots_solution_summary(&self) -> PyResult<(f64, usize, usize, f64)> {
+        let solution = self.ac_ots_solution()?;
+        Ok((
+            solution.switching_cost(),
+            solution.branches_open(),
+            solution.branches_switched(),
+            solution.objective(),
+        ))
+    }
+
+    /// The balanced network an AC OTS solution states, ready for `emit`.
+    fn _ac_ots_solved_network(&self) -> PyResult<Self> {
+        let module = powerio::transform::materialize_ac_ots_solution(
+            self.module()?,
+            self.ac_ots_solution()?,
+        )
+        .map_err(|error| core_error_pyerr(&error))?
+        .map_value(powerio::PioValue::from);
         Ok(Self {
             module: Some(module),
         })
@@ -4250,6 +5003,9 @@ impl PyPioModule {
             }
             powerio::PioValue::AcOpfSolution(solution) => {
                 powerio::PioValue::AcOpfInstance(solution.instance().clone())
+            }
+            powerio::PioValue::AcOtsSolution(solution) => {
+                powerio::PioValue::AcOtsInstance(solution.instance().clone())
             }
             powerio::PioValue::SocwrOpfSolution(solution) => {
                 powerio::PioValue::AcOpfInstance(solution.instance().clone())
@@ -4743,6 +5499,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     m.add("PANIC_CODE", codes::BIND_PY_PANIC.code)?;
     m.add_class::<PyBalancedNetwork>()?;
+    m.add_class::<PyBusMerge>()?;
     m.add_function(wrap_pyfunction!(parse_display, m)?)?;
     m.add_class::<PyMulticonductorNetwork>()?;
     m.add_class::<PyPioModule>()?;
@@ -4793,6 +5550,59 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::module_with_records;
+
+    #[test]
+    fn sincal_multiconductor_reaches_the_existing_python_module_type() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(include_str!(
+                "../../tests/data/sincal/synthetic-multiconductor.sql"
+            ))
+            .unwrap();
+        let native = connection.serialize("main").unwrap().to_vec();
+        let parsed = super::PyPioModule::_parse_memory(
+            &native,
+            "case.db",
+            Some("sincal-multiconductor"),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let module = parsed.module().unwrap();
+        let powerio::PioValue::MulticonductorNetwork(network) = module.value() else {
+            panic!("wrong SINCAL family")
+        };
+        assert_eq!(network.loads()[0].p_nom, [2000.0, 4000.0, 6000.0]);
+        assert_eq!(
+            module.source().unwrap().primary_buffer().unwrap().bytes(),
+            native
+        );
+    }
+
+    #[test]
+    fn sincal_balanced_reaches_the_existing_python_module_type() {
+        const NATIVE: &[u8] = include_bytes!("../../tests/data/sincal/1-LV-rural1--0-sw.sinx");
+        let parsed = super::PyPioModule::_parse_memory(
+            NATIVE,
+            "case.sinx",
+            Some("sincal-balanced"),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let module = parsed.module().unwrap();
+        let powerio::PioValue::BalancedNetwork(network) = module.value() else {
+            panic!("SINCAL balanced profile changed value family");
+        };
+        assert_eq!(network.buses().len(), 15);
+        assert_eq!(network.loads().len(), 13);
+        assert_eq!(
+            module.source().unwrap().primary_buffer().unwrap().bytes(),
+            NATIVE
+        );
+    }
 
     #[test]
     fn typed_module_copy_keeps_every_common_record_and_retained_source() {

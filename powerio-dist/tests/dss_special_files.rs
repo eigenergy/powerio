@@ -26,7 +26,11 @@ fn a_redirect_to_a_named_pipe_is_refused_promptly() {
     // failure rather than a hang.
     let (sender, receiver) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
-        sender.send(helpers::parse_dss_file(&master)).unwrap();
+        sender
+            .send(powerio_dist::parse(
+                powerio_core::Source::open(&master).unwrap(),
+            ))
+            .unwrap();
     });
     let outcome = receiver
         .recv_timeout(std::time::Duration::from_secs(10))
@@ -34,14 +38,14 @@ fn a_redirect_to_a_named_pipe_is_refused_promptly() {
     worker.join().unwrap();
     // The pipe is refused as an include, with the error finding a refused
     // include records; its content was never read.
-    let parsed = outcome.unwrap();
+    let error = outcome.unwrap_err();
     assert!(
-        parsed
-            .diagnostics
+        error
+            .diagnostics()
             .iter()
             .any(|d| d.code() == "READ.DSS.INCLUDE_REFUSED"),
         "{:?}",
-        parsed.warnings
+        error.diagnostics()
     );
-    assert_eq!(parsed.line_codes().as_slice(), []);
+    assert!(error.retained_source().is_some());
 }

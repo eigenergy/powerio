@@ -1,0 +1,52 @@
+[package]
+name = "powerio-tnd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Integrated transmission/distribution models, transformations, and format adapters."
+readme = "README.md"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = []
+sincal = ["dep:zip", "dep:rusqlite", "dep:sha2"]
+schema = ["dep:schemars", "powerio-tx/schema", "powerio-dist/schema"]
+
+[dependencies]
+powerio-tx.workspace = true
+powerio-dist.workspace = true
+num-complex.workspace = true
+schemars = { workspace = true, optional = true }
+powerio-core.workspace = true
+zip = { workspace = true, optional = true }
+rusqlite = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = { version = "0.10", optional = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[[example]]
+name = "sincal_drawing"
+required-features = ["sincal"]
+
+[[example]]
+name = "inspect_records"
+required-features = ["sincal"]
+
+[[example]]
+name = "sincal_multiconductor"
+required-features = ["sincal"]
+
+[[example]]
+name = "sincal_balanced"
+required-features = ["sincal"]

@@ -44,6 +44,13 @@ pub mod codes {
         BUILD_INSTANCE_SHAPE_MISMATCH = "BUILD.INSTANCE.SHAPE_MISMATCH", Error,
             "a calculation input disagrees with the network's element tables",
             category = Data;
+        BUILD_INSTANCE_SWITCHING_OPTIONS_INVALID =
+            "BUILD.INSTANCE.SWITCHING_OPTIONS_INVALID", Error,
+            "a switching option names an unknown or repeated branch, or states an invalid cost, current limit, or budget",
+            category = Data;
+        BUILD_INSTANCE_TOPOLOGY_INVALID = "BUILD.INSTANCE.TOPOLOGY_INVALID", Error,
+            "a final branch status vector violates the fixed branches, budgets, or islanding policy",
+            category = Data;
         BUILD_LINDIST3FLOW_EXPLICIT_NEUTRAL = "BUILD.LINDIST3FLOW.EXPLICIT_NEUTRAL", Error,
             "LinDist3Flow requires a neutral-reduced conductor model", category = Data;
         BUILD_LINDIST3FLOW_UNSUPPORTED_COMPONENT =
@@ -96,14 +103,15 @@ pub mod codes {
             category = Data;
         BUILD_SOLUTION_MULTIPLIER_INVALID = "BUILD.SOLUTION.MULTIPLIER_INVALID", Error,
             "a constraint multiplier is negative or non-finite", category = Data;
+        BUILD_SOLUTION_TOPOLOGY_MISMATCH = "BUILD.SOLUTION.TOPOLOGY_MISMATCH", Error,
+            "an AC solution does not solve the switching instance's fixed-topology problem",
+            category = Data;
+        BUILD_SOLUTION_VALUE_INVALID = "BUILD.SOLUTION.VALUE_INVALID", Error,
+            "a solution value is non-finite, or an open branch carries flow", category = Data;
         TRANSFORM_INSTANCE_DATA_DISCARDED = "TRANSFORM.INSTANCE.DATA_DISCARDED", Warning,
             "the derived calculation does not carry part of the source instance";
         TRANSFORM_INSTANCE_ASSUMPTION = "TRANSFORM.INSTANCE.ASSUMPTION", Warning,
             "the derived calculation rests on a stated modeling assumption";
-        CANONICALIZE_MERGE_ZERO_IMPEDANCE = "CANONICALIZE.MERGE.ZERO_IMPEDANCE", Warning,
-            "a zero impedance branch was merged and its flow is no longer recoverable";
-        CANONICALIZE_MERGE_ATTRIBUTE_CONFLICT = "CANONICALIZE.MERGE.ATTRIBUTE_CONFLICT", Warning,
-            "merged buses stated different attributes; the surviving bus's values were kept";
         BUILD_INSTANCE_UNSUPPORTED_COST_MODEL = "BUILD.INSTANCE.UNSUPPORTED_COST_MODEL", Error,
             "a generator cost model the instance builder cannot state", category = Data;
         BUILD_INSTANCE_PIECEWISE_COST_INVALID = "BUILD.INSTANCE.PIECEWISE_COST_INVALID", Error,
@@ -118,6 +126,17 @@ pub mod codes {
             "the named GOC3 source format is not one this build reads",
             category = Request;
     }
+
+    // The bus merge codes, which the balanced model crate owns now that the
+    // merge lives there. They stay constants of this module, which names
+    // them since 0.11.0.
+
+    /// `CANONICALIZE.MERGE.ZERO_IMPEDANCE`, from the `powerio-tx` registry.
+    pub const CANONICALIZE_MERGE_ZERO_IMPEDANCE: powerio_core::DiagnosticInfo =
+        powerio_tx::diagnostics::codes::CANONICALIZE_MERGE_ZERO_IMPEDANCE;
+    /// `CANONICALIZE.MERGE.ATTRIBUTE_CONFLICT`, from the `powerio-tx` registry.
+    pub const CANONICALIZE_MERGE_ATTRIBUTE_CONFLICT: powerio_core::DiagnosticInfo =
+        powerio_tx::diagnostics::codes::CANONICALIZE_MERGE_ATTRIBUTE_CONFLICT;
 }
 
 /// Every code this crate declares.

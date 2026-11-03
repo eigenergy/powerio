@@ -15,8 +15,10 @@ and whose ``diagnostics`` record what the parser found::
     Y = net.calc_admittance_matrix()         # complex csr, G + jB
     G = net.to_networkx()                    # networkx.Graph keyed by bus id
 
-PyPSA CSV folders carry static network topology. NetCDF and HDF5 time series
-are tracked in https://github.com/eigenergy/powerio/issues/107.
+A PyPSA CSV directory parses to a network or a time series, depending on its
+declared snapshots and supported series files. A time series keeps its
+snapshot axis even when the values are identical. NetCDF and HDF5 are tracked
+in https://github.com/eigenergy/powerio/issues/107.
 
 A source that defines a calculation parses to that calculation's typed value.
 Use ``isinstance(module.value, ...)`` to branch on the result type.
@@ -81,10 +83,13 @@ from ._powerio import (
     UpdateReport,
     __version__,
 )
+from ._sincal import SincalBalancedReadOptions
 
 __all__ = [
     "AcOpfInstance",
     "AcOpfSolution",
+    "AcOtsInstance",
+    "AcOtsSolution",
     "AcPfInstance",
     "AcPfSolution",
     "AcScucInstance",
@@ -93,6 +98,7 @@ __all__ = [
     "ApparentPower",
     "Artifact",
     "BalancedNetwork",
+    "BusMerge",
     "CalculationUpdate",
     "ComponentId",
     "ContingencySet",
@@ -149,6 +155,7 @@ __all__ = [
     "ScucStartupLimit",
     "ScucTransformerControl",
     "ScucViolationCosts",
+    "SincalBalancedReadOptions",
     "SocwrOpfSolution",
     "SourceSpan",
     "SubsystemSet",
@@ -332,6 +339,107 @@ _BALANCED_DELEGATED_NAMES = frozenset(
 
 
 @_guard_class
+class BusMerge:
+    """The result of :meth:`BalancedNetwork.merge_buses`.
+
+    ``network`` is the merged network. ``merged_buses`` maps every merged
+    bus to the bus that now carries it, and ``groups`` lists each joined set
+    as ``{"survivor", "members"}``. ``removed_branches`` and
+    ``removed_switches`` describe every element the merge removed: its source
+    ``row``, ``id``, ``from_id`` and ``to_id`` buses, ``survivor``, ``reason``
+    (``"zero_impedance"``, ``"closed_switch"``, or ``"shorted"``), status, and
+    ratings. ``branch_rows`` and ``switch_rows`` map each source row to its
+    merged row, or ``None`` when removed, and ``charging_shunts`` lists the
+    merged shunt rows that hold removed branches' equivalent admittances. ``diagnostics`` holds the merge's
+    findings, which the merged network's module carries as well.
+    """
+
+    def __init__(self, inner: "_powerio._BusMerge"):
+        self._inner = inner
+
+    def __repr__(self) -> str:
+        return repr(self._inner)
+
+    @property
+    def network(self) -> "BalancedNetwork":
+        return BalancedNetwork(self._inner.network)
+
+    @property
+    def rule(self) -> str:
+        return self._inner.rule
+
+    @property
+    def merged_buses(self) -> dict[int, int]:
+        return self._inner.merged_buses
+
+    @property
+    def groups(self) -> list[dict[str, Any]]:
+        return self._inner.groups
+
+    @property
+    def removed_branches(self) -> list[dict[str, Any]]:
+        return self._inner.removed_branches
+
+    @property
+    def removed_switches(self) -> list[dict[str, Any]]:
+        return self._inner.removed_switches
+
+    @property
+    def branch_rows(self) -> list[Optional[int]]:
+        return self._inner.branch_rows
+
+    @property
+    def switch_rows(self) -> list[Optional[int]]:
+        return self._inner.switch_rows
+
+    @property
+    def charging_shunts(self) -> list[int]:
+        return self._inner.charging_shunts
+
+    @property
+    def diagnostics(self) -> list[Diagnostic]:
+        return self._inner.diagnostics
+
+    def survivor(self, bus: int) -> int:
+        """The bus that carries ``bus`` in the merged network."""
+        return self._inner.survivor(bus)
+
+    def calc_removed_flows(
+        self,
+        branch_p_from: Any,
+        branch_p_to: Any,
+        *,
+        generator_p: Any = None,
+        transformer_3w_p: Any = None,
+    ) -> dict[str, Any]:
+        """Recover the active power on every removed element.
+
+        ``branch_p_from`` and ``branch_p_to`` are the power entering each
+        merged network branch at its from and to ends; ``generator_p``
+        replaces the stated generator outputs, and ``transformer_3w_p`` gives
+        the power entering each three winding transformer winding from its
+        bus, three values per transformer. Values are in the network's units
+        (MW for a parsed network). The result has ``branches`` and
+        ``switches``, one ``{"p_from", "method"}`` per removed element in the
+        order of :attr:`removed_branches` and :attr:`removed_switches`, and
+        ``diagnostics``. ``method`` is ``"tree"`` where Kirchhoff's current
+        law fixes the flow, ``"reactance"`` on a loop split by reactance,
+        ``"minimum_norm"`` on a loop of zero reactance elements, and
+        ``"out_of_service"`` for an element that carries none.
+        """
+        return self._inner.calc_removed_flows(
+            [float(p) for p in branch_p_from],
+            [float(p) for p in branch_p_to],
+            generator_p=None
+            if generator_p is None
+            else [float(p) for p in generator_p],
+            transformer_3w_p=None
+            if transformer_3w_p is None
+            else [tuple(float(p) for p in row) for row in transformer_3w_p],
+        )
+
+
+@_guard_class
 class BalancedNetwork:
     """A parsed balanced power network.
 
@@ -390,6 +498,57 @@ class BalancedNetwork:
     def calc_connectivity_report(self) -> dict[str, Any]:
         """Calculate the in-service topology summary."""
         return self._inner.calc_connectivity_report()
+
+    def calc_stated_state_mismatch(
+        self,
+        *,
+        top_k: int = 20,
+        hvdc: str = "fixed_injection",
+        low_impedance_threshold: float = 1e-3,
+        merge_zero_impedance: bool = False,
+        lcc_reactive_power: str = "converter_model",
+    ) -> dict[str, Any]:
+        """Evaluate every bus's AC balance at the voltages the case stores.
+
+        Each device sits at its stated output: generators at ``pg``/``qg``,
+        loads through their voltage model at the stored magnitude, shunts at
+        their stated admittance, and HVDC lines as fixed injections (or not,
+        with ``hvdc="ignore"``). A bus mismatch is the power the network draws
+        at the stored voltages minus the stated injection, MW and MVAr, so an
+        injection equal to it closes the bus.
+
+        The result holds per bus columns in analysis bus order (``bus_ids``,
+        ``island``, ``p_mw``, ``q_mvar``, and ``flags``, the attached
+        equipment a residual is traced to), ``islands`` totals largest first,
+        ``top`` (row indices of the largest mismatches), the totals, and
+        ``diagnostics`` (a warning per LCC line that kept its stated reactive
+        powers because its converter record reaches no operating point).
+        ``merge_zero_impedance`` first merges the buses joined by in-service
+        zero-impedance branches, whose flows the stored voltages cannot
+        determine; without it such a branch raises. A closed switch joining
+        two buses also raises (``BUILD.SWITCH.CLOSED``); merge it first with
+        ``merge_buses(closed_switches=True)``. ``lcc_reactive_power``
+        selects where a PSS/E two-terminal converter's reactive demand comes
+        from: its bridge equations at the stored voltages
+        (``"converter_model"``) or the line's stated reactive powers
+        (``"stated"``).
+        """
+        return self._inner.calc_stated_state_mismatch(
+            top_k=top_k,
+            hvdc=hvdc,
+            low_impedance_threshold=low_impedance_threshold,
+            merge_zero_impedance=merge_zero_impedance,
+            lcc_reactive_power=lcc_reactive_power,
+        )
+
+    def calc_stated_branch_flows(self) -> dict[str, Any]:
+        """Calculate the power entering every branch end at the stored voltages.
+
+        Columns follow analysis branch order: every branch row, then the three
+        windings of each in-service three-winding transformer, as ``sources``
+        states. Powers are MW and MVAr; an out-of-service branch carries zero.
+        """
+        return self._inner.calc_stated_branch_flows()
 
     def to_geo_layer(self) -> dict[str, Any]:
         """Transform coordinates to a canonical GeoJSON FeatureCollection.
@@ -668,11 +827,55 @@ class BalancedNetwork:
         """Weighted Laplacian ``L = -B``. ``formula`` as in :meth:`calc_ptdf`."""
         return _to_csr(self._inner.weighted_laplacian(formula))
 
+    def merge_buses(
+        self,
+        *,
+        closed_switches: bool = True,
+        zero_impedance: Optional[str] = None,
+        threshold: Optional[float] = None,
+        charging: str = "fold",
+    ) -> "BusMerge":
+        """Merge the buses closed switches and zero impedance branches join.
+
+        ``closed_switches`` merges the two buses of every closed switch.
+        ``zero_impedance`` selects the branches merged as well: ``None``
+        merges none, ``"exact"`` merges ``r == 0`` and ``x == 0``,
+        ``"psse"`` merges non-transformer branches with ``r == 0`` and
+        ``|x| <= threshold`` (PSS/E zero impedance lines; the threshold
+        defaults to the ``THRSHZ`` the case states), and ``"impedance"``
+        merges non-transformer branches with ``|r + jx| <= threshold``.
+
+        Each joined set keeps one bus: its reference bus, else a bus with an
+        in-service generator, else a bus a generator regulates, smallest id
+        first. Every element moves onto it. The merged elements and any
+        branch the merge shorts are removed and listed with their source rows
+        and ratings. ``charging="fold"`` turns each removed branch's line
+        charging and line shunts, including tap scaling, into a fixed shunt
+        at the survivor. ``"drop"`` discards only terminal charging. Both
+        choices preserve the series equivalent of a bypassed transformer.
+        An ideal transformer with a nonunity tap or phase shift cannot be
+        bypassed and raises an error. This network is unchanged.
+
+        Raises :class:`PowerIODataError` for a threshold that is negative or
+        not finite, or for ``"psse"`` with no threshold when the case states
+        none; an unknown rule name raises ``ValueError``.
+        """
+        return BusMerge(
+            self._inner.merge_buses(
+                closed_switches=closed_switches,
+                zero_impedance=zero_impedance,
+                threshold=threshold,
+                charging=charging,
+            )
+        )
+
     def to_normalized(
         self,
         *,
         clamp_angle_bounds: bool = False,
         angle_bound_pad: Optional[float] = None,
+        closed_switches: str = "merge",
+        island_references: str = "stated",
     ) -> "BalancedNetwork":
         """Return a normalized copy with per unit power and radian angles.
 
@@ -688,12 +891,37 @@ class BalancedNetwork:
         become ``[-angle_bound_pad, angle_bound_pad]``. A repair that would
         invert the interval widens to that same window. The default pad is
         1.0472 radians.
+
+        The default ``closed_switches="merge"`` merges the buses closed
+        switches join first, as :meth:`merge_buses` does with
+        ``closed_switches=True``, since the matrix and DC calculations model
+        no switches. ``"keep"`` leaves the switches as data, and ``"refuse"``
+        raises :class:`PowerIODataError` with code ``BUILD.SWITCH.CLOSED``.
+        ``"merge"`` also raises that error when the merge cannot complete,
+        for example across two windings of one three winding transformer.
+        The error names the original switch row and endpoints; no partial
+        normalized network is returned.
+
+        ``island_references="per_island"`` gives every island one reference
+        bus: an island that states none takes the bus of its largest ``pmax``
+        in-service generator, an island stating several keeps one, and an
+        island no in-service generator supplies is left out. The default
+        ``"stated"`` keeps the case's references and designates one only when
+        none survives.
         """
-        if not clamp_angle_bounds and angle_bound_pad is None:
+        if (
+            not clamp_angle_bounds
+            and angle_bound_pad is None
+            and closed_switches == "merge"
+            and island_references == "stated"
+        ):
             return BalancedNetwork(self._inner.to_normalized())
         return BalancedNetwork(
             self._inner.to_normalized_with_options(
-                clamp_angle_bounds=clamp_angle_bounds, angle_bound_pad=angle_bound_pad
+                clamp_angle_bounds=clamp_angle_bounds,
+                angle_bound_pad=angle_bound_pad,
+                closed_switches=closed_switches,
+                island_references=island_references,
             )
         )
 
@@ -765,7 +993,7 @@ class BalancedNetwork:
                     g["pmin"],
                 ]
                 + ([0.0 if c is None else c for c in row] if width == 21 else [])
-                for g, row in zip(gens, caps)
+                for g, row in zip(gens, caps, strict=True)
             ],
             dtype=float,
         ).reshape(len(gens), width)
@@ -1225,6 +1453,70 @@ class AcOpfInstance(_BalancedCalculation):
     """An AC optimal power flow calculation instance."""
 
 
+def _branch_statuses(closed: Sequence[bool]) -> list[bool]:
+    """A final branch status vector as a list of booleans, in branch order."""
+    if isinstance(closed, (str, bytes)):
+        raise TypeError("branch statuses are a sequence of booleans")
+    return list(closed)
+
+
+@_guard_class
+class AcOtsInstance(_BalancedCalculation):
+    """An AC optimal transmission switching calculation instance.
+
+    Its network holds every candidate branch at its initial status.
+    """
+
+    @property
+    def options(self) -> dict[str, Any]:
+        """The switching options as stated, spelled as the keyword arguments of
+        :meth:`PioModule.to_ac_ots_instance`: ``switchable`` (``"all"``,
+        ``"none"``, or a list of branch identities), ``switching_costs``
+        (``{id: (open_cost, close_cost)}``), ``islanding``, ``max_open``,
+        ``max_switched``, ``current_limits``, and ``stated_current_limits``
+        (``{id: (from_pu, to_pu)}``, ``None`` for an unbounded side).
+        """
+        return self.module._inner._ac_ots_options()
+
+    @property
+    def branches(self) -> list[dict[str, Any]]:
+        """One row per physical branch, in branch table order: ``id``,
+        ``initial_closed``, ``switchable``, ``switching_cost`` (``(open_cost,
+        close_cost)``, or ``None`` when no cost is stated and the branch
+        switches at zero cost), ``stated_current`` (the stated ``(from_pu,
+        to_pu)`` limits), and ``current`` (the limits that apply under the
+        current limit policy). ``None`` in a limit pair is unbounded.
+        """
+        return self.module._inner._ac_ots_branches()
+
+    def validate_topology(self, closed: Sequence[bool]) -> float:
+        """Check a final topology and return its switching cost.
+
+        ``closed`` holds one boolean per branch, in branch table order. The
+        check covers the length, the branches that cannot switch, the
+        ``max_open`` and ``max_switched`` budgets, and the islanding policy;
+        it does not certify AC feasibility. A refused topology raises
+        :class:`PowerIOError` with code ``BUILD.INSTANCE.TOPOLOGY_INVALID``.
+        """
+        return self.module._inner._ac_ots_validate_topology(_branch_statuses(closed))
+
+    def fix_topology(
+        self, closed: Sequence[bool]
+    ) -> tuple["AcOpfInstance", list[Diagnostic]]:
+        """The AC optimal power flow over a final topology.
+
+        Every branch row stays in the network with its final status. The
+        switching options, current limits, and switching cost term are not
+        part of the AC optimal power flow; the returned diagnostics report
+        each one dropped, and the instance's module carries them too. The
+        topology is checked as :meth:`validate_topology` checks it.
+        """
+        inner, diagnostics = self.module._inner._ac_ots_fix_topology(
+            _branch_statuses(closed)
+        )
+        return PioModule(inner).value, list(diagnostics)
+
+
 class McAcPfInstance(_MulticonductorCalculation):
     """A multiconductor AC power flow calculation instance."""
 
@@ -1277,6 +1569,75 @@ class DcOpfSolution(_BalancedCalculation, _CalculationSolution):
 
 class AcOpfSolution(_BalancedCalculation, _CalculationSolution):
     """An AC optimal power flow solution."""
+
+
+@_guard_class
+class AcOtsSolution(_BalancedCalculation, _CalculationSolution):
+    """An AC optimal transmission switching result.
+
+    Its network is the instance's network, with the initial branch statuses;
+    :meth:`solved_network` gives the network with the final statuses and
+    solved values.
+    """
+
+    @classmethod
+    def from_ac_opf_solution(
+        cls,
+        instance: AcOtsInstance,
+        closed: Sequence[bool],
+        solution: "AcOpfSolution",
+    ) -> "AcOtsSolution":
+        """Attach the AC optimal power flow solution computed on
+        ``instance.fix_topology(closed)``.
+
+        The topology is checked as :meth:`AcOtsInstance.validate_topology`
+        checks it, the solution must answer exactly the fixed-topology problem
+        (its network, objective, and constraint selections), and open branches
+        must carry no flow. Residuals and optimality are not checked. The
+        result's module carries the instance module's records.
+        """
+        if not isinstance(instance, AcOtsInstance):
+            raise TypeError("instance must be a powerio.AcOtsInstance")
+        if not isinstance(solution, AcOpfSolution):
+            raise TypeError("solution must be a powerio.AcOpfSolution")
+        inner = instance.module._inner._ac_ots_solution(
+            _branch_statuses(closed), solution.module._inner
+        )
+        return PioModule(inner).value
+
+    @property
+    def branch_closed(self) -> list[bool]:
+        """The final branch statuses, in branch table order."""
+        return self.module._inner._ac_ots_solution_branch_closed()
+
+    @property
+    def switching_cost(self) -> float:
+        """The cost of the status changes against the initial topology."""
+        return self.module._inner._ac_ots_solution_summary()[0]
+
+    @property
+    def branches_open(self) -> int:
+        """The number of branches open in the final topology."""
+        return self.module._inner._ac_ots_solution_summary()[1]
+
+    @property
+    def branches_switched(self) -> int:
+        """The number of branches whose final status differs from the initial one."""
+        return self.module._inner._ac_ots_solution_summary()[2]
+
+    @property
+    def objective(self) -> float:
+        """The AC solution's objective, plus the switching cost when the
+        instance's objective states the switching cost term."""
+        return self.module._inner._ac_ots_solution_summary()[3]
+
+    def solved_network(self) -> "PioModule":
+        """The balanced network this result states: the final branch statuses
+        with the solved bus voltages, generator dispatch, and branch flows
+        applied, ready for :func:`emit`. The C ABI's
+        ``pio_ac_ots_solution_materialize`` and PowerIO.jl's
+        ``materialize_ac_ots_solution`` return the same network."""
+        return PioModule(self.module._inner._ac_ots_solved_network())
 
 
 class SocwrOpfSolution(_BalancedCalculation, _CalculationSolution):
@@ -1457,6 +1818,7 @@ _VALUE_CLASSES: dict[str, type[_TypedValue]] = {
     "powerio.AcPfInstance": AcPfInstance,
     "powerio.DcOpfInstance": DcOpfInstance,
     "powerio.AcOpfInstance": AcOpfInstance,
+    "powerio.AcOtsInstance": AcOtsInstance,
     "powerio.McAcPfInstance": McAcPfInstance,
     "powerio.McAcOpfInstance": McAcOpfInstance,
     "powerio.LinDist3FlowPfInstance": LinDist3FlowPfInstance,
@@ -1466,6 +1828,7 @@ _VALUE_CLASSES: dict[str, type[_TypedValue]] = {
     "powerio.AcPfSolution": AcPfSolution,
     "powerio.DcOpfSolution": DcOpfSolution,
     "powerio.AcOpfSolution": AcOpfSolution,
+    "powerio.AcOtsSolution": AcOtsSolution,
     "powerio.SocwrOpfSolution": SocwrOpfSolution,
     "powerio.McAcPfSolution": McAcPfSolution,
     "powerio.McAcOpfSolution": McAcOpfSolution,
@@ -1565,6 +1928,98 @@ class PioModule:
     def to_ac_opf_instance(self) -> "PioModule":
         """Build an AC optimal power flow instance from a balanced network module."""
         return PioModule(self._inner._to_ac_opf_instance())
+
+    def to_ac_ots_instance(
+        self,
+        *,
+        switchable: Union[str, Sequence[str], None] = None,
+        switching_costs: Optional[Mapping[str, tuple[float, float]]] = None,
+        islanding: Optional[str] = None,
+        max_open: Optional[int] = None,
+        max_switched: Optional[int] = None,
+        current_limits: Optional[str] = None,
+        stated_current_limits: Optional[
+            Mapping[str, tuple[Optional[float], Optional[float]]]
+        ] = None,
+    ) -> "PioModule":
+        """Build an AC optimal transmission switching instance from a balanced
+        network, AC optimal power flow, or AC optimal transmission switching
+        module.
+
+        With no option, this gives the default instance: every initially
+        in-service branch may switch, at zero cost, islanding is forbidden,
+        there is no budget and no current limit, and the objective gains the
+        switching cost term. An AC optimal transmission switching module comes
+        back unchanged.
+
+        Any option makes the options explicit, as the C ABI's options struct
+        and PowerIO.jl's ``AcOtsOptions`` do, and an option not given takes
+        its explicit default:
+
+        - ``switchable``: ``"all"`` (the default, which includes initially
+          open branches), ``"none"``, or a list of branch identities.
+        - ``switching_costs``: ``{branch_id: (open_cost, close_cost)}``; a
+          branch with no entry switches at zero cost.
+        - ``islanding``: ``"forbidden"`` (the default) or ``"allowed"``.
+        - ``max_open``: the most branches open in the final topology,
+          counting fixed open rows; ``None`` is no budget.
+        - ``max_switched``: the most status changes; ``None`` is no budget.
+        - ``current_limits``: ``"skip"`` (the default), ``"stated"``, or
+          ``"derive_from_rate_a"``.
+        - ``stated_current_limits``: ``{branch_id: (from_pu, to_pu)}``, per
+          unit; ``None`` on a side is unbounded.
+
+        The base problem and objective are kept, and the objective gains the
+        switching cost term once. Refused options raise
+        :class:`PowerIOError` with code
+        ``BUILD.INSTANCE.SWITCHING_OPTIONS_INVALID``; an unknown policy name
+        raises :class:`ValueError`.
+        """
+        if (
+            switchable is None
+            and switching_costs is None
+            and islanding is None
+            and max_open is None
+            and max_switched is None
+            and current_limits is None
+            and stated_current_limits is None
+        ):
+            return PioModule(self._inner._to_ac_ots_instance())
+        if switchable is None:
+            selection, identities = "all", []
+        elif isinstance(switchable, str):
+            selection, identities = switchable, []
+        else:
+            selection, identities = "only", [str(identity) for identity in switchable]
+        for name, budget in (("max_open", max_open), ("max_switched", max_switched)):
+            if budget is not None and (
+                isinstance(budget, bool) or not isinstance(budget, int) or budget < 0
+            ):
+                raise ValueError(f"{name} must be a nonnegative integer or None")
+        costs = [
+            (str(identity), float(open_cost), float(close_cost))
+            for identity, (open_cost, close_cost) in (switching_costs or {}).items()
+        ]
+        limits = [
+            (
+                str(identity),
+                None if from_pu is None else float(from_pu),
+                None if to_pu is None else float(to_pu),
+            )
+            for identity, (from_pu, to_pu) in (stated_current_limits or {}).items()
+        ]
+        return PioModule(
+            self._inner._to_ac_ots_instance_with_options(
+                selection,
+                identities,
+                costs,
+                "forbidden" if islanding is None else islanding,
+                max_open,
+                max_switched,
+                "skip" if current_limits is None else current_limits,
+                limits,
+            )
+        )
 
     def to_mc_ac_pf_instance(self) -> "PioModule":
         """Build a multiconductor AC power flow instance from a network module."""
@@ -1731,19 +2186,58 @@ def parse(
     *,
     format: Optional[str] = None,
     name: Optional[str] = None,
+    sincal_multiconductor: Optional[dist.SincalReadOptions] = None,
+    sincal_balanced: Optional[SincalBalancedReadOptions] = None,
+    acquisition_root: Optional[Any] = None,
+    named_buffers: Optional[Mapping[str, bytes]] = None,
 ) -> PioModule:
     """Parse a path, file object, or bytes-like source.
 
     A string is always a path. Pass raw text through ``io.StringIO`` or
-    another file object.
+    another file object. ``sincal_multiconductor`` requires explicit format
+    ``sincal-multiconductor``; ``sincal_balanced`` requires ``sincal-balanced``.
+    File companions stay beneath the file's parent,
+    or an explicitly selected ``acquisition_root``. Memory sources use only
+    ``named_buffers`` and never acquire companions from the filesystem.
     """
+    balanced_selection = None
+    if sincal_balanced is not None:
+        if not isinstance(sincal_balanced, SincalBalancedReadOptions):
+            raise TypeError("sincal_balanced must be SincalBalancedReadOptions")
+        balanced_selection = (sincal_balanced.variant, sincal_balanced.snapshot_hours, sincal_balanced.acquired_tables)
+    selection = None
+    if sincal_multiconductor is not None:
+        if not isinstance(sincal_multiconductor, dist.SincalReadOptions):
+            raise TypeError("sincal_multiconductor must be dist.SincalReadOptions")
+        selection = (
+            sincal_multiconductor.variant,
+            sincal_multiconductor.snapshot_hours,
+            sincal_multiconductor.acquired_tables,
+            sincal_multiconductor.assume_inactive_source_controls,
+        )
     path = _path_from_source(source)
     if path is not None:
         if name is not None:
             raise ValueError("name is only valid for memory and file object sources")
-        return PioModule(_powerio._PioModule._parse_path(path, format))
+        if named_buffers is not None:
+            raise ValueError("named_buffers applies only to memory and file object sources")
+        root = _path_from_source(acquisition_root) if acquisition_root is not None else None
+        if acquisition_root is not None and root is None:
+            raise TypeError("acquisition_root must be a path")
+        return PioModule(_powerio._PioModule._parse_path(path, format, selection, root, balanced_selection))
+    if acquisition_root is not None:
+        raise ValueError("acquisition_root applies only to path sources")
+    buffers = None
+    if named_buffers is not None:
+        if not isinstance(named_buffers, Mapping):
+            raise TypeError("named_buffers must map relative names to bytes-like data")
+        buffers = []
+        for buffer_name, buffer_data in named_buffers.items():
+            if not isinstance(buffer_name, str) or not isinstance(buffer_data, (bytes, bytearray, memoryview)):
+                raise TypeError("named_buffers must map relative names to bytes-like data")
+            buffers.append((buffer_name, bytes(buffer_data)))
     data, source_name = _memory_from_source(source, name)
-    return PioModule(_powerio._PioModule._parse_memory(data, source_name, format))
+    return PioModule(_powerio._PioModule._parse_memory(data, source_name, format, selection, buffers, balanced_selection))
 
 
 def _result_from_native(result: dict[str, Any]) -> EmitResult:

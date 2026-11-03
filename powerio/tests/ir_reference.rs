@@ -11,8 +11,8 @@
 use std::collections::BTreeSet;
 
 const PAGE: &str = include_str!("../../docs/src/ir-reference.md");
-const SCHEMA_PATH: &str = "docs/schema/pio-ir/2/0.11.5/schema.json";
-const SCHEMA: &str = include_str!("../../docs/schema/pio-ir/2/0.11.5/schema.json");
+const SCHEMA_PATH: &str = "docs/schema/pio-ir/2/0.11.7/schema.json";
+const SCHEMA: &str = include_str!("../../docs/schema/pio-ir/2/0.11.7/schema.json");
 
 /// A line beginning with this text names the definitions of the next table.
 const MARKER: &str = "Schema definition";
@@ -119,6 +119,9 @@ fn every_documented_field_exists_and_every_schema_field_is_documented() {
         for definition in &table.definitions {
             let Some(properties) = definitions
                 .get(definition)
+                // A documented object may be one explicitly named branch
+                // of an additive tagged union. Still compare every field.
+                .or_else(|| schema["$defs"].pointer(&format!("/{definition}")))
                 .and_then(|entry| entry["properties"].as_object())
             else {
                 problems.push(format!(
@@ -153,10 +156,28 @@ fn every_documented_field_exists_and_every_schema_field_is_documented() {
         let type_name = arm["properties"]["type"]["const"].as_str().unwrap();
         let reference = arm["properties"]["data"]["$ref"].as_str().unwrap();
         let definition = reference.rsplit('/').next().unwrap();
-        if !documented.contains(definition) {
-            problems.push(format!(
-                "`{definition}`, the data of `{type_name}`, has no field table"
-            ));
+        let branches = definitions[definition]["anyOf"].as_array();
+        let required = branches.map_or_else(
+            || vec![definition.to_owned()],
+            |branches| {
+                branches
+                    .iter()
+                    .enumerate()
+                    .map(|(index, branch)| {
+                        branch["$ref"].as_str().map_or_else(
+                            || format!("{definition}/anyOf/{index}"),
+                            |reference| reference.rsplit('/').next().unwrap().to_owned(),
+                        )
+                    })
+                    .collect()
+            },
+        );
+        for required in required {
+            if !documented.contains(&required) {
+                problems.push(format!(
+                    "`{required}`, the data of `{type_name}`, has no field table"
+                ));
+            }
         }
         if !PAGE.contains(&format!("`{type_name}`")) {
             problems.push(format!("`{type_name}` is not named on the page"));

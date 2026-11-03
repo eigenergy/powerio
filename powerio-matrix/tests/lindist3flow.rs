@@ -449,8 +449,7 @@ fn bmopf_kron_standard_form_and_si_decode_match_reference_feeder() {
     assert_relative_eq!(objective, 10.0, epsilon = 1e-12);
 }
 
-#[test]
-fn opendss_oracle_bounds_the_lossless_linear_voltage_approximation() {
+fn opendss_lindist_oracle_fixture() -> (MulticonductorNetwork, serde_json::Value) {
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../tests/data/dist/micro/lindist3flow_oracle.dss");
     let oracle_path = fixture.with_extension("json");
@@ -465,20 +464,76 @@ fn opendss_oracle_bounds_the_lossless_linear_voltage_approximation() {
         module.value(),
         &NeutralKronOptions::default()
             .with_neutral_terminal("source", "4")
-            .with_neutral_terminal("loadbus", "4"),
+            .with_neutral_terminal("loadbus", "4")
+            .with_neutral_terminal(&module.value().sources()[0].bus, "4"),
     )
     .unwrap();
+    (reduction.network().clone(), oracle)
+}
+
+#[test]
+fn bounded_load_laws_are_refused_until_the_approximate_policy() {
+    use powerio_prob::LinDist3FlowUnsupported as Policy;
+    let (network, _) = opendss_lindist_oracle_fixture();
+    let build = |policy| {
+        LinDist3FlowOpfInstance::from_network(
+            network.clone(),
+            LinDist3FlowBuildOptions::default()
+                .with_required_neutral_provenance(true)
+                .with_unsupported(policy),
+        )
+    };
+    // Reject and lower keep refusing the bounded law; approximate and
+    // permissive project it to the nominal law and record the action.
+    assert!(build(Policy::Reject).is_err() && build(Policy::Lower).is_err());
+    assert!(build(Policy::Approximate).is_ok() && build(Policy::Permissive).is_ok());
+}
+
+#[test]
+fn opendss_oracle_bounds_the_lossless_linear_voltage_approximation() {
+    let (network, oracle) = opendss_lindist_oracle_fixture();
+    // The native load retains its voltage band. Nominal linearization is an
+    // explicit approximation, never a change made by the reader or strict LP.
+    assert!(
+        LinDist3FlowOpfInstance::from_network(
+            network.clone(),
+            LinDist3FlowBuildOptions::default().with_required_neutral_provenance(true),
+        )
+        .is_err()
+    );
     let instance = LinDist3FlowOpfInstance::from_network(
-        reduction.network().clone(),
-        LinDist3FlowBuildOptions::default().with_required_neutral_provenance(true),
+        network.clone(),
+        LinDist3FlowBuildOptions::default()
+            .with_required_neutral_provenance(true)
+            .with_unsupported(powerio_prob::LinDist3FlowUnsupported::Approximate),
     )
     .unwrap();
+    let action = instance
+        .preparation()
+        .actions
+        .iter()
+        .find(|action| {
+            action.kind == powerio_dist::LinDist3FlowPreparationActionKind::LoadApproximated
+        })
+        .unwrap();
+    assert_eq!(
+        action.details["source_voltage_model"]["model"],
+        "bounded_zip"
+    );
+    assert!(matches!(
+        instance.source_instance().network().loads()[0].voltage_model,
+        powerio_dist::DistLoadVoltageModel::BoundedZip { .. }
+    ));
     let form = build_lindist3flow_standard_form(&instance).unwrap();
 
-    // For the lossless model the line and source powers equal the constant
-    // load. The squared-voltage drop is
-    // 230^2 - 2 * (0.196 * 10_000 + 0.098 * 2_000) = 48_588 V^2.
-    let linear_squared_voltage = 48_588.0;
+    // Native Model=Ideal still has finite impedance. Its independent YPrim
+    // reference supplies the lossless drop before the feeder line.
+    let r = oracle["source_impedance_r_ohm"].as_f64().unwrap();
+    let x = oracle["source_impedance_x_ohm"].as_f64().unwrap();
+    let source_squared_voltage = 230.0f64.powi(2) - 2.0 * (r * 10_000.0 + x * 2_000.0);
+    let linear_squared_voltage =
+        source_squared_voltage - 2.0 * (0.196 * 10_000.0 + 0.098 * 2_000.0);
+    let source_bus = &instance.base_instance().network().sources()[0].bus;
     let solver_primal = form
         .canonical
         .variables
@@ -493,8 +548,9 @@ fn opendss_oracle_bounds_the_lossless_linear_voltage_approximation() {
                         .to_ascii_lowercase()
                         .as_str()
                     {
-                        "source" => 230.0f64.powi(2),
+                        "source" => source_squared_voltage,
                         "loadbus" => linear_squared_voltage,
+                        bus if bus.eq_ignore_ascii_case(source_bus) => 230.0f64.powi(2),
                         bus => panic!("unexpected voltage bus {bus}"),
                     }
                 }
@@ -530,7 +586,13 @@ fn opendss_oracle_bounds_the_lossless_linear_voltage_approximation() {
     let exact_voltage = oracle["load_voltage_magnitude_v"].as_f64().unwrap();
     let linear_voltage = linear_squared_voltage.sqrt();
     let relative_error = (linear_voltage - exact_voltage).abs() / exact_voltage;
-    assert_relative_eq!(linear_voltage, 220.426_858_617_546_88, epsilon = 1e-12);
+    assert_relative_eq!(
+        linear_voltage,
+        oracle["linear_lossless_load_voltage_magnitude_v"]
+            .as_f64()
+            .unwrap(),
+        epsilon = 1e-12
+    );
     assert!(
         relative_error < 0.0011,
         "LinDist3Flow voltage error {relative_error:e} exceeds its declared 0.11% oracle bound"

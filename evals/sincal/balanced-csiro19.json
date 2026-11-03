@@ -1,0 +1,89 @@
+{
+  "scope": "Compare original CSIRO19 balanced Access snapshots with independent pandapower.\n\nThe reference uses only hash-pinned native acquired input, not Rust parameters\nor stored SINCAL results. Actual Rust output is solved separately by nodal current\ninjection. This is explicitly balanced coverage, not an unbalanced acceptance.\n",
+  "collection": "https://doi.org/10.4225/08/5631B1DF6F1A0",
+  "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
+  "license": "CC-BY-4.0",
+  "source_sha256": "5540e956effe9a8e6e691f834e79f62c86d96924fdd38092e5fd5c6fa84789c4",
+  "record_sha256": "c762c848f4f239fa751b2f30cd4bfce10912afbcad64ae5fa4f5782965aea0fd",
+  "reader_sha256": "cae657ccf642d4035e15dc6d62121f18b560d07be89e4eb84b8ad9c5fc76f7fc",
+  "profile": "balanced",
+  "schema": 11.5,
+  "variant": 1,
+  "native_nodes": 26,
+  "native_elements": 33,
+  "lines": 25,
+  "loads": 7,
+  "sources": 1,
+  "snapshots": [
+    {
+      "hours": 0,
+      "total_load_mw": 1.71328989,
+      "maximum_complex_voltage_error_pu": 1.7432432386749607e-11,
+      "maximum_power_error_mw_mvar": 0.0,
+      "nodal_iterations": 4,
+      "nodal_power_mismatch_pu": 1.7147513181508973e-13
+    },
+    {
+      "hours": 0.25,
+      "total_load_mw": 1.7572536380000001,
+      "maximum_complex_voltage_error_pu": 1.9304334029887614e-11,
+      "maximum_power_error_mw_mvar": 1.3877787807814457e-17,
+      "nodal_iterations": 4,
+      "nodal_power_mismatch_pu": 2.9242437979799494e-13
+    },
+    {
+      "hours": 6,
+      "total_load_mw": 1.696226145,
+      "maximum_complex_voltage_error_pu": 1.674582528296167e-11,
+      "maximum_power_error_mw_mvar": 5.551115123125783e-17,
+      "nodal_iterations": 4,
+      "nodal_power_mismatch_pu": 1.6933954486317475e-13
+    },
+    {
+      "hours": 12,
+      "total_load_mw": 3.71381871,
+      "maximum_complex_voltage_error_pu": 3.153201056562803e-14,
+      "maximum_power_error_mw_mvar": 1.1102230246251565e-16,
+      "nodal_iterations": 5,
+      "nodal_power_mismatch_pu": 1.5952626836713177e-13
+    },
+    {
+      "hours": 18,
+      "total_load_mw": 2.761583808,
+      "maximum_complex_voltage_error_pu": 2.2474986824602492e-13,
+      "maximum_power_error_mw_mvar": 0.0,
+      "nodal_iterations": 4,
+      "nodal_power_mismatch_pu": 5.494545298543214e-13
+    },
+    {
+      "hours": 23.75,
+      "total_load_mw": 1.766944803,
+      "maximum_complex_voltage_error_pu": 1.9740655551225575e-11,
+      "maximum_power_error_mw_mvar": 5.551115123125783e-17,
+      "nodal_iterations": 4,
+      "nodal_power_mismatch_pu": 1.8770863990542038e-13
+    },
+    {
+      "hours": 24,
+      "total_load_mw": 1.71328989,
+      "maximum_complex_voltage_error_pu": 1.7432432386749607e-11,
+      "maximum_power_error_mw_mvar": 0.0,
+      "nodal_iterations": 4,
+      "nodal_power_mismatch_pu": 1.7147513181508973e-13
+    }
+  ],
+  "negative_controls": [
+    "power_units",
+    "impedance_base",
+    "charging",
+    "source_voltage"
+  ],
+  "pandapower": "3.2.2",
+  "numpy": "2.5.3",
+  "native_sincal_execution": false,
+  "public_facade_access_selection": true,
+  "source_echo_and_ir_checked": true,
+  "wrong_family_missing_time_variant_and_origin_rejected": true,
+  "additional_unbalanced_cases": 0,
+  "passed": true
+}

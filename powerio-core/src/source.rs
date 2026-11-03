@@ -69,12 +69,13 @@ fn parse_byte_limit(name: &str, value: Option<&OsStr>, default: u64) -> Result<u
 enum ReadBudget {
     Primary(u64),
     Referenced { remaining: u64, total: u64 },
+    ReferencedBuffer(u64),
 }
 
 impl ReadBudget {
     fn bytes(self) -> u64 {
         match self {
-            Self::Primary(n) => n,
+            Self::Primary(n) | Self::ReferencedBuffer(n) => n,
             Self::Referenced { remaining, .. } => remaining,
         }
     }
@@ -89,6 +90,10 @@ impl ReadBudget {
                 format!(
                     "referenced file `{name}` would take this source past its {total} byte acquisition budget"
                 ),
+            ),
+            Self::ReferencedBuffer(limit) => Error::new(
+                &crate::codes::READ_IO_BUFFER_BUDGET,
+                format!("referenced buffer `{name}` exceeds the caller's {limit} byte limit"),
             ),
         }
     }
@@ -283,7 +288,7 @@ impl AcquisitionState {
 #[derive(Debug)]
 enum SourceProvider {
     Memory {
-        primary: SourceBuffer,
+        primary: Option<SourceBuffer>,
         named: BTreeMap<String, SourceBuffer>,
     },
     File {
@@ -433,9 +438,71 @@ impl Source {
         Ok(Self {
             name: name.into(),
             provider: Arc::new(SourceProvider::Memory {
-                primary,
+                primary: Some(primary),
                 named: BTreeMap::new(),
             }),
+            declared_format: None,
+        })
+    }
+
+    /// Retain a tree of caller-owned files without filesystem access.
+    ///
+    /// A primary path selects a file and resolves its references relative to
+    /// its containing directory. Without a primary path, the source is a
+    /// directory. Paths must be unique and portable; the tree shares the
+    /// referenced-file count, depth, and byte limits of filesystem sources.
+    pub fn from_memory_tree(
+        name: impl Into<String>,
+        files: impl IntoIterator<Item = (crate::ArtifactPath, Arc<[u8]>)>,
+        primary: Option<crate::ArtifactPath>,
+    ) -> Result<Self, Error> {
+        let name = name.into();
+        if !valid_nonempty_text(&name) {
+            return Err(Error::new(
+                &crate::codes::REQUEST_SOURCE_INVALID_NAME,
+                "an in-memory source requires a nonempty bounded name",
+            ));
+        }
+        let mut named = BTreeMap::new();
+        let mut total_bytes = 0u64;
+        for (path, bytes) in files {
+            let segments = resolve_segments(&[], path.as_str())?;
+            let key = segments.join("/");
+            total_bytes = total_bytes.saturating_add(bytes.len() as u64);
+            if named.len() >= MAX_REFERENCED_FILES || total_bytes > MAX_REFERENCED_BYTES {
+                return Err(Error::new(
+                    &crate::codes::READ_IO_REFERENCE_BUDGET,
+                    "an in-memory tree exceeds 4096 files or 1 GiB",
+                ));
+            }
+            let id = if primary.as_ref() == Some(&path) {
+                PRIMARY_SOURCE_ID
+            } else {
+                &key
+            };
+            let directory = segments[..segments.len() - 1].to_vec();
+            let buffer = SourceBuffer::new(SourceId::new(id)?, key.clone(), bytes, directory);
+            if named.insert(key.clone(), buffer).is_some() {
+                return Err(Error::new(
+                    &crate::codes::REQUEST_SOURCE_INVALID_PATH,
+                    format!("duplicate in-memory file `{key}`"),
+                ));
+            }
+        }
+        let primary = primary
+            .map(|path| {
+                named.get(path.as_str()).cloned().ok_or_else(|| {
+                    Error::new(
+                        &crate::codes::REQUEST_SOURCE_UNKNOWN_BUFFER,
+                        format!("primary file `{}` was not supplied", path.as_str()),
+                    )
+                })
+            })
+            .transpose()?;
+        let name = primary.as_ref().map_or(name.as_str(), SourceBuffer::name);
+        Ok(Self {
+            name: name.into(),
+            provider: Arc::new(SourceProvider::Memory { primary, named }),
             declared_format: None,
         })
     }
@@ -557,7 +624,10 @@ impl Source {
 
     #[must_use]
     pub fn is_directory(&self) -> bool {
-        matches!(&*self.provider, SourceProvider::Directory { .. })
+        matches!(
+            &*self.provider,
+            SourceProvider::Directory { .. } | SourceProvider::Memory { primary: None, .. }
+        )
     }
 
     /// Byte limit for cumulative acquisition and expanded archive contents.
@@ -574,20 +644,30 @@ impl Source {
     /// Borrow the sole primary buffer of a file or memory source.
     pub fn primary_buffer(&self) -> Result<SourceBuffer, Error> {
         match &*self.provider {
-            SourceProvider::Memory { primary, .. } | SourceProvider::File { primary, .. } => {
-                Ok(primary.clone())
+            SourceProvider::Memory {
+                primary: Some(primary),
+                ..
             }
-            SourceProvider::Directory { .. } => Err(Error::new(
-                &crate::codes::REQUEST_SOURCE_DIRECTORY_REQUIRED,
-                "a directory source has no implicit primary buffer",
-            )
-            .with_source(self.clone())),
+            | SourceProvider::File { primary, .. } => Ok(primary.clone()),
+            SourceProvider::Directory { .. } | SourceProvider::Memory { primary: None, .. } => {
+                Err(Error::new(
+                    &crate::codes::REQUEST_SOURCE_DIRECTORY_REQUIRED,
+                    "a directory source has no implicit primary buffer",
+                )
+                .with_source(self.clone()))
+            }
         }
     }
 
     /// Acquire and retain one file of a directory source by its root relative
     /// name.
     pub fn buffer(&self, name: &crate::ArtifactPath) -> Result<SourceBuffer, Error> {
+        if matches!(
+            &*self.provider,
+            SourceProvider::Memory { primary: None, .. }
+        ) {
+            return self.root_buffer(name.as_str());
+        }
         let SourceProvider::Directory { acquisition } = &*self.provider else {
             return Err(Error::new(
                 &crate::codes::REQUEST_SOURCE_DIRECTORY_REQUIRED,
@@ -655,12 +735,32 @@ impl Source {
         referrer: &SourceBuffer,
         name: &str,
     ) -> Result<SourceBuffer, Error> {
+        self.referenced_buffer_with_limit(referrer, name, u64::MAX)
+    }
+
+    /// Acquire a reference with an additional limit on this buffer's length.
+    /// The tighter of `max_bytes` and the source's remaining acquisition budget
+    /// bounds the read before allocation, through the same confined open as
+    /// [`Self::referenced_buffer`]. A caller can pass its remaining format budget
+    /// without changing the budget shared by other users of this source.
+    ///
+    /// Cached and caller-supplied buffers must also fit `max_bytes`, even though
+    /// they require no read. Zero permits only an empty buffer. Exceeding this
+    /// limit emits `READ.IO.BUFFER_BUDGET`; exceeding the source's tighter budget
+    /// retains `READ.IO.REFERENCE_BUDGET`. Refused reads acquire no buffer and do
+    /// not charge the source's budget.
+    pub fn referenced_buffer_with_limit(
+        &self,
+        referrer: &SourceBuffer,
+        name: &str,
+        max_bytes: u64,
+    ) -> Result<SourceBuffer, Error> {
         let referrer_directory: Vec<&str> = referrer.directory_segments().collect();
         match &*self.provider {
             SourceProvider::Memory { named, .. } => {
                 let segments = resolve_segments(&referrer_directory, name)?;
                 let key = segments.join("/");
-                named.get(&key).cloned().ok_or_else(|| {
+                let buffer = named.get(&key).ok_or_else(|| {
                     Error::new(
                         &crate::codes::REQUEST_SOURCE_UNKNOWN_BUFFER,
                         format!(
@@ -668,7 +768,13 @@ impl Source {
                         ),
                     )
                     .with_source(self.clone())
-                })
+                })?;
+                if buffer.bytes().len() as u64 > max_bytes {
+                    return Err(ReadBudget::ReferencedBuffer(max_bytes)
+                        .exceeded(&key)
+                        .with_source(self.clone()));
+                }
+                Ok(buffer.clone())
             }
             SourceProvider::File { acquisition, .. }
             | SourceProvider::Directory { acquisition } => {
@@ -677,7 +783,7 @@ impl Source {
                     None => resolve_segments(&referrer_directory, name)?,
                 };
                 acquisition
-                    .acquire(&segments)
+                    .acquire_with_limit(&segments, max_bytes)
                     .map_err(|error| error.with_source(self.clone()))
             }
         }
@@ -822,8 +928,17 @@ impl Source {
     pub fn acquired_buffers(&self) -> Vec<SourceBuffer> {
         match &*self.provider {
             SourceProvider::Memory { primary, named } => {
-                let mut buffers = vec![primary.clone()];
-                buffers.extend(named.values().cloned());
+                let mut buffers: Vec<_> = primary.iter().cloned().collect();
+                buffers.extend(
+                    named
+                        .values()
+                        .filter(|buffer| {
+                            primary
+                                .as_ref()
+                                .is_none_or(|entry| entry.id() != buffer.id())
+                        })
+                        .cloned(),
+                );
                 buffers
             }
             SourceProvider::File {
@@ -867,9 +982,20 @@ impl FileAcquisition {
     /// file that would overrun the budget is refused before its bytes are
     /// reserved.
     fn acquire(&self, segments: &[String]) -> Result<SourceBuffer, Error> {
+        self.acquire_with_limit(segments, u64::MAX)
+    }
+
+    fn acquire_with_limit(
+        &self,
+        segments: &[String],
+        max_bytes: u64,
+    ) -> Result<SourceBuffer, Error> {
         let key = segments.join("/");
         let mut state = self.lock();
         if let Some(buffer) = state.cache.get(&key) {
+            if buffer.bytes().len() as u64 > max_bytes {
+                return Err(ReadBudget::ReferencedBuffer(max_bytes).exceeded(&key));
+            }
             return Ok(buffer.clone());
         }
         if state.files >= MAX_REFERENCED_FILES {
@@ -879,6 +1005,14 @@ impl FileAcquisition {
             ));
         }
         let remaining = self.max_bytes.saturating_sub(state.bytes);
+        let budget = if max_bytes <= remaining {
+            ReadBudget::ReferencedBuffer(max_bytes)
+        } else {
+            ReadBudget::Referenced {
+                remaining,
+                total: self.max_bytes,
+            }
+        };
         let root = state.pinned_root(&self.root_display)?;
         let file = root.open_beneath(segments).map_err(|error| {
             if platform::is_symlink_refusal(&error) {
@@ -894,14 +1028,7 @@ impl FileAcquisition {
                 .with_cause(error)
             }
         })?;
-        let bytes = read_open_file(
-            file,
-            &key,
-            ReadBudget::Referenced {
-                remaining,
-                total: self.max_bytes,
-            },
-        )?;
+        let bytes = read_open_file(file, &key, budget)?;
         let directory = segments[..segments.len() - 1].to_vec();
         let buffer = SourceBuffer::new(SourceId::new(&key)?, key.clone(), bytes, directory);
         state.files += 1;
@@ -2279,6 +2406,130 @@ mod tests {
             "the refused acquisition allocated {allocated} bytes"
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_caller_reference_limit_refuses_before_allocation_or_acquisition() {
+        let root = test_root("caller-reference-budget");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("master.glm"), b"master").unwrap();
+        let limit = 64 << 20;
+        let big = std::fs::File::create(root.join("big.glm")).unwrap();
+        big.set_len(limit + 1).unwrap();
+        drop(big);
+        let source = Source::open(root.join("master.glm")).unwrap();
+        let primary = source.primary_buffer().unwrap();
+
+        let (error, allocated) = measured_bytes(|| {
+            source
+                .referenced_buffer_with_limit(&primary, "big.glm", limit)
+                .unwrap_err()
+        });
+        assert_eq!(
+            error.diagnostics()[0].code(),
+            crate::codes::READ_IO_BUFFER_BUDGET.code
+        );
+        assert!(
+            (allocated as u64) < limit / 16,
+            "allocated {allocated} bytes"
+        );
+        assert!(error.retained_source().is_some());
+        assert_eq!(source.acquired_buffers().len(), 1);
+        let SourceProvider::File { acquisition, .. } = &*source.provider else {
+            panic!("file provider");
+        };
+        assert_eq!(acquisition.lock().bytes, 0);
+        assert_eq!(acquisition.lock().files, 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn caller_reference_limits_check_cached_buffers_and_preserve_the_source_budget() {
+        let root = test_root("caller-reference-cache");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("master.glm"), b"master").unwrap();
+        std::fs::write(root.join("first.glm"), b"abcd").unwrap();
+        std::fs::write(root.join("second.glm"), b"efgh").unwrap();
+        std::fs::write(root.join("third.glm"), b"i").unwrap();
+        let source = Source::open_with_limits(&root.join("master.glm"), |name| {
+            (name == REFERENCED_LIMIT_VAR).then(|| OsString::from("8"))
+        })
+        .unwrap();
+        let primary = source.primary_buffer().unwrap();
+        let error = source
+            .referenced_buffer_with_limit(&primary, "first.glm", 3)
+            .unwrap_err();
+        assert_eq!(
+            error.diagnostics()[0].code(),
+            crate::codes::READ_IO_BUFFER_BUDGET.code
+        );
+        assert_eq!(source.acquired_buffers().len(), 1);
+        let first = source
+            .referenced_buffer_with_limit(&primary, "first.glm", 4)
+            .unwrap();
+        assert_eq!(first.bytes(), b"abcd");
+        let error = source
+            .referenced_buffer_with_limit(&primary, "first.glm", 3)
+            .unwrap_err();
+        assert_eq!(
+            error.diagnostics()[0].code(),
+            crate::codes::READ_IO_BUFFER_BUDGET.code
+        );
+        // A failed limit must not replace the cached buffer or tighten the
+        // source's own budget, shared by the ordinary acquisition API.
+        let cached = source.referenced_buffer(&primary, "first.glm").unwrap();
+        assert_eq!(cached.bytes().as_ptr(), first.bytes().as_ptr());
+        source.referenced_buffer(&primary, "second.glm").unwrap();
+        let error = source
+            .referenced_buffer_with_limit(&primary, "third.glm", 1)
+            .unwrap_err();
+        assert_eq!(
+            error.diagnostics()[0].code(),
+            crate::codes::READ_IO_REFERENCE_BUDGET.code
+        );
+        // A cached buffer needs no additional acquisition allowance.
+        assert_eq!(
+            source
+                .referenced_buffer_with_limit(&primary, "first.glm", 4)
+                .unwrap()
+                .bytes(),
+            b"abcd"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn caller_reference_limits_also_apply_to_memory_buffers_including_zero() {
+        let source = Source::from_memory("master.glm", &b"master"[..])
+            .unwrap()
+            .with_named_buffer("part.glm", &b"ab"[..])
+            .unwrap()
+            .with_named_buffer("empty.glm", &b""[..])
+            .unwrap();
+        let primary = source.primary_buffer().unwrap();
+        for limit in [0, 1] {
+            let error = source
+                .referenced_buffer_with_limit(&primary, "part.glm", limit)
+                .unwrap_err();
+            assert_eq!(
+                error.diagnostics()[0].code(),
+                crate::codes::READ_IO_BUFFER_BUDGET.code
+            );
+        }
+        assert_eq!(
+            source
+                .referenced_buffer_with_limit(&primary, "part.glm", 2)
+                .unwrap()
+                .bytes(),
+            b"ab"
+        );
+        assert_eq!(
+            source
+                .referenced_buffer_with_limit(&primary, "empty.glm", 0)
+                .unwrap()
+                .bytes(),
+            b""
+        );
     }
 
     #[cfg(unix)]

@@ -6,6 +6,7 @@
 //! `.raw` reader and writer in [`super::psse`].
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 
 use serde_json::{Map, Value};
 
@@ -61,6 +62,14 @@ const TRANSFORMER_IMPEDANCE_FIELDS: &[&str] = &[
     "anstar",
 ];
 const AREA_FIELDS: &[&str] = &["iarea", "isw", "pdes", "ptol", "arname"];
+/// One impedance correction point per row: the table number, the winding
+/// ratio or angle `T`, and the complex factor `F`.
+const IMPEDANCE_CORRECTION_FIELDS: &[&str] = &["itable", "tap", "refact", "imfact"];
+/// The revision 35 FACTS device record, field for field.
+const FACTS_FIELDS: &[&str] = &[
+    "name", "ibus", "jbus", "mode", "pdes", "qdes", "vset", "shmx", "trmx", "vtmn", "vtmx", "vsmx",
+    "imx", "linx", "rmpct", "owner", "set1", "set2", "vsref", "fcreg", "nreg", "mname",
+];
 const TWO_TERMINAL_DC_FIELDS: &[&str] = &[
     "name", "mdc", "rdc", "setvl", "vschd", "vcmod", "rcomp", "delti", "met", "dcvmin", "cccitmx",
     "cccacc", "ipr", "nbr", "anmxr", "anmnr", "rcr", "xcr", "ebasr", "trr", "tapr", "tmxr", "tmnr",
@@ -68,6 +77,14 @@ const TWO_TERMINAL_DC_FIELDS: &[&str] = &[
     "xci", "ebasi", "tri", "tapi", "tmxi", "tmni", "stpi", "ici", "ndi", "ifi", "iti", "idi",
     "xcapi",
 ];
+const VSC_DC_FIELDS: &[&str] = &[
+    "name", "mdc", "rdc", "o1", "f1", "o2", "f2", "o3", "f3", "o4", "f4", "ibus1", "type1",
+    "mode1", "dcset1", "acset1", "aloss1", "bloss1", "minloss1", "smax1", "imax1", "pwf1", "maxq1",
+    "minq1", "vsreg1", "nreg1", "rmpct1", "ibus2", "type2", "mode2", "dcset2", "acset2", "aloss2",
+    "bloss2", "minloss2", "smax2", "imax2", "pwf2", "maxq2", "minq2", "vsreg2", "nreg2", "rmpct2",
+];
+/// The control line and the two converter lines of a VSC DC line record.
+const VSC_DC_LINES: [std::ops::Range<usize>; 3] = [0..11, 11..27, 27..43];
 const SWITCHED_SHUNT_FIELDS: &[&str] = &[
     "ibus", "shntid", "modsw", "adjm", "stat", "vswhi", "vswlo", "swreg", "nreg", "rmpct",
     "rmidnt", "binit", "s1", "n1", "b1", "s2", "n2", "b2", "s3", "n3", "b3", "s4", "n4", "b4",
@@ -96,8 +113,6 @@ const SUBSTATION_TERMINAL_FIELDS: &[&str] =
 const EXPLICIT_NULL: &str = "null";
 
 const UNSUPPORTED_TABLES: &[(&str, &str)] = &[
-    ("vscdc", "voltage source converter DC lines"),
-    ("impcor", "transformer impedance correction tables"),
     ("ntermdc", "multi-terminal DC lines"),
     ("ntermdcconv", "multi-terminal DC converters"),
     ("ntermdcbus", "multi-terminal DC buses"),
@@ -106,7 +121,6 @@ const UNSUPPORTED_TABLES: &[(&str, &str)] = &[
     ("zone", "zones"),
     ("iatransfer", "interarea transfers"),
     ("owner", "owners"),
-    ("facts", "FACTS devices"),
     ("gne", "GNE devices"),
     ("indmach", "induction machines"),
 ];
@@ -358,7 +372,7 @@ pub(super) fn parse_rawx_source(
         });
     }
     let title = string_value(case_value("title1"), "caseid.title1")?.unwrap_or("");
-    let title = sanitize_record_text(title, &mut substituted_strings);
+    let title = sanitize_title_text(title, &mut substituted_strings);
     let mut raw = format!("{}\n{}\n\n", case_tokens.join(", "), title);
     raw.push_str("0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA\n");
 
@@ -426,13 +440,24 @@ pub(super) fn parse_rawx_source(
     raw.push_str("0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA\n");
     append_two_terminal_dc(network, &mut raw, warnings, &mut substituted_strings)?;
     raw.push_str("0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA\n");
+    append_vsc_dc(network, &mut raw, warnings, &mut substituted_strings)?;
     raw.push_str("0 / END OF VSC DC LINE DATA, BEGIN IMPEDANCE CORRECTION DATA\n");
+    append_impedance_corrections(network, &mut raw, warnings)?;
     raw.push_str("0 / END OF IMPEDANCE CORRECTION DATA, BEGIN MULTI-TERMINAL DC DATA\n");
     raw.push_str("0 / END OF MULTI-TERMINAL DC DATA, BEGIN MULTI-SECTION LINE DATA\n");
     raw.push_str("0 / END OF MULTI-SECTION LINE DATA, BEGIN ZONE DATA\n");
     raw.push_str("0 / END OF ZONE DATA, BEGIN INTER-AREA TRANSFER DATA\n");
     raw.push_str("0 / END OF INTER-AREA TRANSFER DATA, BEGIN OWNER DATA\n");
     raw.push_str("0 / END OF OWNER DATA, BEGIN FACTS DEVICE DATA\n");
+    append_simple_table(
+        network,
+        "facts",
+        FACTS_FIELDS,
+        &["name", "mname"],
+        &mut raw,
+        warnings,
+        &mut substituted_strings,
+    )?;
     raw.push_str("0 / END OF FACTS DEVICE DATA, BEGIN SWITCHED SHUNT DATA\n");
     append_simple_table(
         network,
@@ -598,6 +623,100 @@ fn append_two_terminal_dc(
     Ok(())
 }
 
+fn append_vsc_dc(
+    network: &Map<String, Value>,
+    out: &mut String,
+    warnings: &mut Diagnostics,
+    substituted_strings: &mut usize,
+) -> Result<()> {
+    let Some(table) = Table::parse(network, "vscdc")? else {
+        return Ok(());
+    };
+    table.warn_unknown_fields(VSC_DC_FIELDS, warnings);
+    for row in table.rows {
+        for (line, strings) in VSC_DC_LINES.iter().zip([&["name"][..], &[], &[]]) {
+            out.push_str(&record_line(
+                &table,
+                row,
+                &VSC_DC_FIELDS[line.clone()],
+                strings,
+                substituted_strings,
+            )?);
+            out.push('\n');
+        }
+    }
+    Ok(())
+}
+
+/// RAWX states one impedance correction point per `impcor` row; RAW 35 states
+/// a table as one record, `I, T1, Re(F1), Im(F1), ...`, ended by a
+/// `0.0, 0.0, 0.0` point. Group the rows by table in order of first
+/// appearance, keep each table's row order, and write each table as one
+/// record for the shared reader, which classifies and attaches it. A row the
+/// RAW record cannot state (a table number of 0 or below, or the all zero
+/// point that ends a RAW table) is dropped and reported.
+fn append_impedance_corrections(
+    network: &Map<String, Value>,
+    out: &mut String,
+    warnings: &mut Diagnostics,
+) -> Result<()> {
+    let Some(table) = Table::parse(network, "impcor")? else {
+        return Ok(());
+    };
+    table.warn_unknown_fields(IMPEDANCE_CORRECTION_FIELDS, warnings);
+    let mut tables: Vec<(i64, Vec<[f64; 3]>)> = Vec::new();
+    let mut positions = BTreeMap::new();
+    let mut unnumbered = 0usize;
+    let mut zero_points = 0usize;
+    for row in table.rows {
+        let number = integer_value(table.value(row, "itable"), "impcor.itable", None)?;
+        let point = [
+            numeric_value(table.value(row, "tap"), "impcor.tap", None)?,
+            numeric_value(table.value(row, "refact"), "impcor.refact", None)?,
+            numeric_value(table.value(row, "imfact"), "impcor.imfact", Some(0.0))?,
+        ];
+        if number <= 0 {
+            unnumbered += 1;
+            continue;
+        }
+        if point.iter().all(|value| *value == 0.0) {
+            zero_points += 1;
+            continue;
+        }
+        let position = *positions.entry(number).or_insert_with(|| {
+            tables.push((number, Vec::new()));
+            tables.len() - 1
+        });
+        tables[position].1.push(point);
+    }
+    if unnumbered > 0 {
+        warnings.push(
+            &codes::READ_PSSE_FIELD_DROPPED,
+            format!(
+                "PSS/E RAWX `impcor` table: {unnumbered} row(s) with a table number of 0 or below dropped; a transformer winding names a table by a positive number"
+            ),
+        );
+    }
+    if zero_points > 0 {
+        warnings.push(
+            &codes::READ_PSSE_FIELD_DROPPED,
+            format!(
+                "PSS/E RAWX `impcor` table: {zero_points} row(s) stating T = 0, F = 0 dropped; PSS/E reads that point as the end of a table"
+            ),
+        );
+    }
+    for (number, points) in tables {
+        out.push_str(&number.to_string());
+        for [value, factor_re, factor_im] in points {
+            // `{:?}` states the shortest decimal that reads back to the
+            // same f64.
+            let _ = write!(out, ", {value:?}, {factor_re:?}, {factor_im:?}");
+        }
+        out.push_str(", 0.0, 0.0, 0.0\n");
+    }
+    Ok(())
+}
+
 fn raw_token(
     value: Option<&Value>,
     string_field: bool,
@@ -648,6 +767,18 @@ fn sanitize_record_text<'a>(text: &'a str, substitutions: &mut usize) -> std::bo
     if text.contains(['\'', '\n', '\r']) {
         *substitutions += 1;
         std::borrow::Cow::Owned(text.replace(['\'', '\n', '\r'], " "))
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
+}
+
+// PSS/E's title line is plain text, not a quoted record field. Apostrophes
+// are therefore valid title content; only line terminators must be replaced
+// before the title is passed through the shared RAW reader.
+fn sanitize_title_text<'a>(text: &'a str, substitutions: &mut usize) -> std::borrow::Cow<'a, str> {
+    if text.contains(['\n', '\r']) {
+        *substitutions += 1;
+        std::borrow::Cow::Owned(text.replace(['\n', '\r'], " "))
     } else {
         std::borrow::Cow::Borrowed(text)
     }
@@ -1081,6 +1212,26 @@ fn rawx_equipment_mappings(
         }
     }
 
+    if let Some(table) = Table::parse(source, "facts")? {
+        let mut compensators = parsed.static_var_compensators().iter().enumerate();
+        for row in table.rows {
+            if table_bus(&table, row, "jbus")? != 0 {
+                continue;
+            }
+            let (index, svc) = compensators
+                .next()
+                .ok_or_else(|| malformed("RAWX shunt FACTS table did not map one for one"))?;
+            insert_equipment_mapping(
+                &mut mappings,
+                table_equipment_key(&table, row, "A", "name", &["ibus"])?,
+                stable_id("static_var_compensator", svc.uid.as_deref(), "facts", index)?,
+            )?;
+        }
+        if compensators.next().is_some() {
+            return Err(malformed("RAWX shunt FACTS table did not map one for one"));
+        }
+    }
+
     if let Some(table) = Table::parse(source, "twotermdc")? {
         if table.rows.len() != parsed.hvdc().len() {
             return Err(malformed(
@@ -1193,6 +1344,29 @@ fn apply_regulating_terminals(
                 bus,
                 node,
                 format!("PSS/E switched shunt at bus {}", shunt.bus),
+            );
+        }
+    }
+
+    if let Some(table) = Table::parse(source, "facts")? {
+        let mut compensators = parsed.static_var_compensators_mut().iter_mut();
+        for row in table.rows {
+            if table_bus(&table, row, "jbus")? != 0 {
+                continue;
+            }
+            let svc = compensators
+                .next()
+                .ok_or_else(|| malformed("RAWX shunt FACTS controls did not map one for one"))?;
+            let fcreg = BusId(table_bus(&table, row, "fcreg")?);
+            let node = integer_value(table.value(row, "nreg"), "facts.nreg", Some(0))?;
+            let node = i32::try_from(node)
+                .map_err(|_| malformed("RAWX facts.nreg is outside the i32 range"))?;
+            let bus = if fcreg.0 == 0 { svc.bus } else { fcreg };
+            assign(
+                &mut svc.regulating_terminal,
+                bus,
+                node,
+                format!("PSS/E FACTS device at bus {}", svc.bus),
             );
         }
     }
@@ -1836,6 +2010,15 @@ pub(super) fn read_raw_detailed_connectivity(
         &["shntid", "rmidnt"],
         &sections,
     );
+    // Only the common identity prefix is needed here; revision 34 and 35
+    // place the later MNAME/NREG fields in different orders.
+    add_simple_output_table(
+        &mut network,
+        "facts",
+        &["name", "ibus", "jbus"],
+        &["name"],
+        &sections,
+    );
     add_two_terminal_output_table(&mut network, &sections)?;
     network.insert(
         "sub".to_owned(),
@@ -1891,28 +2074,12 @@ fn transformer_fields() -> Vec<String> {
 /// Emit a neutral network through the shared PSS/E revision 35 writer, then
 /// encode those records as RAWX tables.
 pub(crate) fn write_rawx(net: &BalancedNetwork) -> Result<TextEmission> {
-    let allocated_node_numbers = net
-        .detailed_connectivity()
-        .as_deref()
-        .map_or(0, |detailed| {
-            detailed
-                .connectivity_nodes
-                .iter()
-                .filter(|node| node.node_number.is_none())
-                .count()
-        });
-    let prepared = with_rawx_node_numbers(net)?;
+    let mut numbering = Diagnostics::new();
+    let prepared = with_psse_node_numbers(net, &mut numbering);
     let net = prepared.as_ref().unwrap_or(net);
-    let raw = super::psse::write_psse_rev_without_detailed_connectivity(net, 35);
+    let raw = super::psse::write_psse_rev_for_rawx(net, 35);
     let mut diagnostics = Diagnostics::from(raw.diagnostics);
-    if allocated_node_numbers > 0 {
-        diagnostics.push(
-            &codes::EMIT_PSSE.value_defaulted,
-            format!(
-                "{allocated_node_numbers} connectivity node(s) state no PSS/E node number; RAWX requires one, so deterministic positive numbers were allocated within each substation"
-            ),
-        );
-    }
+    diagnostics.absorb(numbering);
     let text = raw_to_rawx(net, &raw.text, &mut diagnostics).map_err(|error| Error::Emit {
         format: FMT,
         message: error.to_string(),
@@ -1972,11 +2139,20 @@ fn raw_to_rawx(net: &BalancedNetwork, raw: &str, diagnostics: &mut Diagnostics) 
     add_transformer_output_table(&mut network, &sections)?;
     add_simple_output_table(&mut network, "area", AREA_FIELDS, &["arname"], &sections);
     add_two_terminal_output_table(&mut network, &sections)?;
+    add_vsc_output_table(&mut network, &sections)?;
+    add_impedance_correction_output_table(&mut network, &sections)?;
     add_simple_output_table(
         &mut network,
         "swshunt",
         SWITCHED_SHUNT_FIELDS,
         &["shntid", "rmidnt"],
+        &sections,
+    );
+    add_simple_output_table(
+        &mut network,
+        "facts",
+        FACTS_FIELDS,
+        &["name", "mname"],
         &sections,
     );
     add_system_switch_output_table(&mut network, net, diagnostics);
@@ -1991,20 +2167,23 @@ fn raw_to_rawx(net: &BalancedNetwork, raw: &str, diagnostics: &mut Diagnostics) 
     Ok(text)
 }
 
-/// Assign deterministic positive node numbers before the electrical writer
-/// resolves exact regulation targets. PSS/E node numbers are unique within a
-/// substation, while source-neutral connectivity nodes need not state one.
-fn with_rawx_node_numbers(net: &BalancedNetwork) -> Result<Option<BalancedNetwork>> {
-    let Some(detailed) = net.detailed_connectivity().as_deref() else {
-        return Ok(None);
-    };
-    if detailed
-        .connectivity_nodes
-        .iter()
-        .all(|node| node.node_number.is_some())
-    {
-        return Ok(None);
-    }
+/// Assign PSS/E node numbers before the electrical writer resolves exact
+/// regulation targets. PSS/E numbers nodes from 1 within a substation, while
+/// source-neutral connectivity nodes need not state a number, and IIDM numbers
+/// them from 0 within each voltage level, so two voltage levels of one IIDM
+/// substation both state node 0.
+///
+/// A substation whose stated numbers are positive and distinct keeps them and
+/// only its unnumbered nodes are allocated. A substation whose stated numbers
+/// repeat or are not positive is renumbered from 1 in node order, as PowSybl's
+/// exporter numbers every substation it writes (powsybl-core psse-converter,
+/// `VoltageLevelConverter.createNodeBreakerContextExportForFullExport`, which
+/// takes each node from `getFullExport().getNewPsseNode(psseSubstationId)`).
+pub(super) fn with_psse_node_numbers(
+    net: &BalancedNetwork,
+    diagnostics: &mut Diagnostics,
+) -> Option<BalancedNetwork> {
+    let detailed = net.detailed_connectivity().as_deref()?;
     let level_substations = detailed
         .voltage_levels
         .iter()
@@ -2012,54 +2191,79 @@ fn with_rawx_node_numbers(net: &BalancedNetwork) -> Result<Option<BalancedNetwor
             level
                 .substation
                 .as_ref()
-                .map(|substation| (level.component.clone(), substation.clone()))
+                .map(|substation| (&level.component, substation))
         })
         .collect::<BTreeMap<_, _>>();
-    let mut used = BTreeMap::<ComponentId, BTreeSet<i32>>::new();
-    for node in &detailed.connectivity_nodes {
-        let substation = level_substations.get(&node.voltage_level).ok_or_else(|| {
-            malformed(format!(
-                "connectivity node {} has no substation through voltage level {}",
-                node.component, node.voltage_level
-            ))
-        })?;
-        if let Some(number) = node.node_number
-            && !used.entry(substation.clone()).or_default().insert(number)
-        {
-            return Err(malformed(format!(
-                "detailed connectivity repeats PSS/E node number {number} in substation {substation}"
-            )));
+    // A node whose voltage level names no substation is left for the table
+    // writer, which reports it.
+    let mut by_substation = BTreeMap::<&ComponentId, Vec<usize>>::new();
+    for (index, node) in detailed.connectivity_nodes.iter().enumerate() {
+        if let Some(substation) = level_substations.get(&node.voltage_level) {
+            by_substation.entry(*substation).or_default().push(index);
         }
+    }
+    let mut assigned = BTreeMap::<usize, i32>::new();
+    let mut allocated = 0usize;
+    let mut renumbered = 0usize;
+    let mut renumbered_substations = 0usize;
+    for nodes in by_substation.values() {
+        let mut used = BTreeSet::new();
+        let stated_fits = nodes.iter().all(|index| {
+            detailed.connectivity_nodes[*index]
+                .node_number
+                .is_none_or(|number| number > 0 && used.insert(number))
+        });
+        if !stated_fits {
+            renumbered_substations += 1;
+            for (number, index) in (1_i32..).zip(nodes) {
+                renumbered += 1;
+                assigned.insert(*index, number);
+            }
+            continue;
+        }
+        let mut next = 1_i32;
+        for index in nodes {
+            if detailed.connectivity_nodes[*index].node_number.is_some() {
+                continue;
+            }
+            while used.contains(&next) {
+                next = next.saturating_add(1);
+            }
+            used.insert(next);
+            assigned.insert(*index, next);
+            allocated += 1;
+        }
+    }
+    if assigned.is_empty() {
+        return None;
+    }
+    if allocated > 0 {
+        diagnostics.push(
+            &codes::EMIT_PSSE.value_defaulted,
+            format!(
+                "{allocated} connectivity node(s) state no PSS/E node number; RAWX requires one, so deterministic positive numbers were allocated within each substation"
+            ),
+        );
+    }
+    if renumbered > 0 {
+        diagnostics.push(
+            &codes::EMIT_PSSE.value_substituted,
+            format!(
+                "{renumbered} connectivity node(s) in {renumbered_substations} substation(s) renumbered from 1: their stated node numbers repeat or are not positive within the substation, and PSS/E numbers nodes from 1 within each substation"
+            ),
+        );
     }
 
     // Copy the connectivity directly rather than through
     // `detailed_connectivity_mut`, which clears the source omission markers
     // the writer still reports as dropped.
     let mut numbered = detailed.clone();
-    let mut next = BTreeMap::<ComponentId, i32>::new();
-    for node in &mut numbered.connectivity_nodes {
-        if node.node_number.is_some() {
-            continue;
-        }
-        let substation = level_substations
-            .get(&node.voltage_level)
-            .expect("voltage levels were checked before cloning");
-        let used = used.entry(substation.clone()).or_default();
-        let candidate = next.entry(substation.clone()).or_insert(1);
-        while used.contains(candidate) {
-            *candidate = candidate.checked_add(1).ok_or_else(|| {
-                malformed(format!(
-                    "RAWX substation {substation} has no available node number"
-                ))
-            })?;
-        }
-        node.node_number = Some(*candidate);
-        used.insert(*candidate);
-        *candidate = candidate.checked_add(1).unwrap_or(i32::MAX);
+    for (index, number) in assigned {
+        numbered.connectivity_nodes[index].node_number = Some(number);
     }
     let mut prepared = net.clone();
     prepared.tables_mut().detailed_connectivity = Some(std::sync::Arc::new(numbered));
-    Ok(Some(prepared))
+    Some(prepared)
 }
 
 type RawSections = BTreeMap<String, Vec<String>>;
@@ -2125,6 +2329,7 @@ fn add_simple_output_table(
         "acline" => "BRANCH",
         "area" => "AREA",
         "swshunt" => "SWITCHED SHUNT",
+        "facts" => "FACTS DEVICE",
         _ => return,
     };
     let rows: Vec<Value> = sections
@@ -2222,6 +2427,96 @@ fn add_two_terminal_output_table(
         network.insert(
             "twotermdc".to_owned(),
             table_object(TWO_TERMINAL_DC_FIELDS, Value::Array(rows)),
+        );
+    }
+    Ok(())
+}
+
+fn add_vsc_output_table(
+    network: &mut Map<String, Value>,
+    sections: &BTreeMap<String, Vec<String>>,
+) -> Result<()> {
+    let Some(lines) = sections.get("VSC DC LINE") else {
+        return Ok(());
+    };
+    if lines.len() % 3 != 0 {
+        return Err(malformed("internal PSS/E VSC DC line record is truncated"));
+    }
+    let mut rows = Vec::new();
+    for record in lines.chunks(3) {
+        let mut flat = Vec::new();
+        for (line, fields) in record.iter().zip(VSC_DC_LINES.iter()) {
+            append_padded(&mut flat, &line_tokens(line), fields.len());
+        }
+        rows.push(Value::Array(tokens_as_values(
+            &flat,
+            VSC_DC_FIELDS,
+            &["name"],
+        )?));
+    }
+    if !rows.is_empty() {
+        network.insert(
+            "vscdc".to_owned(),
+            table_object(VSC_DC_FIELDS, Value::Array(rows)),
+        );
+    }
+    Ok(())
+}
+
+/// Split the RAW 35 impedance correction records, each `I, T1, Re(F1),
+/// Im(F1), ...` over as many lines as it takes and ended by a `0.0, 0.0, 0.0`
+/// point, into one `impcor` row per point.
+fn add_impedance_correction_output_table(
+    network: &mut Map<String, Value>,
+    sections: &BTreeMap<String, Vec<String>>,
+) -> Result<()> {
+    let Some(lines) = sections.get("IMPEDANCE CORRECTION") else {
+        return Ok(());
+    };
+    let is_zero = |token: &String| token.parse::<f64>().is_ok_and(|value| value == 0.0);
+    let mut rows = Vec::new();
+    let mut table: Option<String> = None;
+    let mut pending: Vec<String> = Vec::new();
+    for line in lines {
+        let mut tokens = line_tokens(line).into_iter();
+        if table.is_none() {
+            table = tokens.next();
+        }
+        let Some(number) = table.clone() else {
+            continue;
+        };
+        pending.extend(tokens);
+        let complete = pending.len() / 3 * 3;
+        let mut ended = false;
+        for point in pending[..complete].chunks(3) {
+            if point.iter().all(is_zero) {
+                ended = true;
+                break;
+            }
+            let mut tokens = vec![number.clone()];
+            tokens.extend_from_slice(point);
+            rows.push(Value::Array(tokens_as_values(
+                &tokens,
+                IMPEDANCE_CORRECTION_FIELDS,
+                &[],
+            )?));
+        }
+        if ended {
+            table = None;
+            pending.clear();
+        } else {
+            pending.drain(..complete);
+        }
+    }
+    if table.is_some() {
+        return Err(malformed(
+            "internal PSS/E impedance correction record has no 0.0, 0.0, 0.0 end point",
+        ));
+    }
+    if !rows.is_empty() {
+        network.insert(
+            "impcor".to_owned(),
+            table_object(IMPEDANCE_CORRECTION_FIELDS, Value::Array(rows)),
         );
     }
     Ok(())
@@ -2463,6 +2758,7 @@ fn psse_equipment_type(
                     ("load", 1) => "L",
                     ("shunt", 1) => "F",
                     ("generator", 1) => "M",
+                    ("static_var_compensator", 1) => "A",
                     ("branch", 2) => "B",
                     ("transformer", 2) => "2",
                     ("transformer", 3) => "3",
@@ -2584,6 +2880,16 @@ fn output_equipment_keys(
                 &["shunt"],
                 shunt.uid.as_deref(),
                 &table_equipment_key(&table, row, "S", "shntid", &["ibus"])?,
+            )?;
+        }
+    }
+    if let Some(table) = Table::parse(network, "facts")? {
+        for (row, svc) in table.rows.iter().zip(net.static_var_compensators()) {
+            insert_output_equipment_key(
+                &mut keys,
+                &["static_var_compensator"],
+                svc.uid.as_deref(),
+                &table_equipment_key(&table, row, "A", "name", &["ibus"])?,
             )?;
         }
     }
@@ -3211,13 +3517,35 @@ fn add_detailed_connectivity_output_tables(
     Ok(())
 }
 
+/// Use the electrical writer's allocated FACTS names in subterm EQID,
+/// including generated names and sanitized collisions.
+fn shunt_facts_identity_table(net: &BalancedNetwork, names: &[String]) -> Value {
+    let rows = net
+        .static_var_compensators()
+        .iter()
+        .zip(names)
+        .map(|(svc, name)| {
+            Value::Array(vec![
+                Value::String(name.clone()),
+                Value::from(svc.bus.0),
+                Value::from(0),
+            ])
+        })
+        .collect();
+    table_object(&["name", "ibus", "jbus"], Value::Array(rows))
+}
+
 /// Encode detailed connectivity as the nested revision 35 RAW substation
 /// records. RAWX stores the same records in four flat tables.
 pub(super) fn write_raw_substation_data(
     net: &BalancedNetwork,
+    facts_names: &[String],
 ) -> Result<(Option<String>, Diagnostics)> {
     let mut network = Map::new();
     let mut warnings = Diagnostics::new();
+    if !facts_names.is_empty() {
+        network.insert("facts".into(), shunt_facts_identity_table(net, facts_names));
+    }
     add_detailed_connectivity_output_tables(&mut network, net, &mut warnings)?;
     let Some(substations) = Table::parse(&network, "sub")? else {
         return Ok((None, warnings));
@@ -3421,7 +3749,8 @@ mod tests {
         let net = parse_rawx_source(MINIMAL, None, &mut diagnostics).unwrap();
         assert_eq!(net.buses().len(), 2);
         close(net.loads()[0].p, 24.0);
-        close(net.loads()[0].q, 11.0);
+        // YQ 4 is capacitive: Q = QL + IQ - YQ.
+        close(net.loads()[0].q, 3.0);
         assert_eq!(net.generators()[0].regulated_bus, Some(BusId(2)));
         close(net.branches()[0].rate_a, 100.0);
     }
@@ -3505,6 +3834,151 @@ mod tests {
         let back = parse_rawx_source(&emitted.text, None, &mut diagnostics).unwrap();
         assert_eq!(back.buses().len(), 2);
         close(back.loads()[0].p, 24.0);
+    }
+
+    /// RAWX states one impedance correction point per `impcor` row. Rows of
+    /// different tables may interleave; each table keeps its row order, and
+    /// the windings that name a table read its points as the RAW reader does.
+    #[test]
+    fn impcor_rows_read_as_the_tables_the_windings_name() {
+        use crate::network::ImpedanceCorrectionVariable;
+
+        let mut root: Value = serde_json::from_str(MINIMAL).unwrap();
+        root["network"]["transformer"] = serde_json::json!({
+            "fields": ["ibus", "jbus", "kbus", "ckt", "r1_2", "x1_2", "windv1", "nomv1", "ang1", "tab1", "windv2", "nomv2"],
+            "data": [
+                [1, 2, 0, "1", 0.01, 0.1, 1.0, 0.0, -15.0, 7, 1.0, 0.0],
+                [1, 2, 0, "2", 0.02, 0.2, 1.05, 0.0, 0.0, 3, 1.0, 0.0]
+            ]
+        });
+        root["network"]["impcor"] = serde_json::json!({
+            "fields": ["itable", "tap", "refact", "imfact"],
+            "data": [
+                [7, -30.0, 1.2, 0.1],
+                [3, 0.9, 1.1, 0.0],
+                [7, 0.0, 1.0, 0.0],
+                [3, 1.1, 1.05, -0.05],
+                [7, 30.0, 1.2, 0.0],
+                [0, 1.0, 1.0, 0.0],
+                [3, 0.0, 0.0, 0.0]
+            ]
+        });
+        let mut diagnostics = Diagnostics::new();
+        let net = parse_rawx_source(&root.to_string(), None, &mut diagnostics).unwrap();
+        let lines = diagnostics.lines();
+        for expected in [
+            "1 row(s) with a table number of 0 or below dropped",
+            "1 row(s) stating T = 0, F = 0 dropped",
+        ] {
+            assert!(
+                lines.iter().any(|line| line.contains(expected)),
+                "{expected}: {lines:?}"
+            );
+        }
+        assert!(
+            !lines.iter().any(|line| line.contains("not modeled")
+                || line.contains("retained only in a same format source echo")),
+            "the impcor table is read: {lines:?}"
+        );
+        let points = |row: usize| {
+            let correction = net.branches()[row].impedance_correction().unwrap();
+            let points: Vec<_> = correction
+                .points
+                .iter()
+                .map(|point| (point.value, point.factor_re, point.factor_im))
+                .collect();
+            (correction.table, correction.variable, points)
+        };
+        // Branch 0 is the AC line; the two transformers follow it.
+        assert_eq!(
+            points(1),
+            (
+                7,
+                ImpedanceCorrectionVariable::Angle,
+                vec![(-30.0, 1.2, 0.1), (0.0, 1.0, 0.0), (30.0, 1.2, 0.0)]
+            )
+        );
+        assert_eq!(
+            points(2),
+            (
+                3,
+                ImpedanceCorrectionVariable::Ratio,
+                vec![(0.9, 1.1, 0.0), (1.1, 1.05, -0.05)]
+            )
+        );
+
+        // The writer states the tables back as impcor rows, and they read
+        // back to the same corrections.
+        let emitted = write_rawx(&net).unwrap();
+        let written: Value = serde_json::from_str(&emitted.text).unwrap();
+        assert_eq!(
+            written["network"]["impcor"]["data"],
+            serde_json::json!([
+                [3, 0.9, 1.1, 0.0],
+                [3, 1.1, 1.05, -0.05],
+                [7, -30.0, 1.2, 0.1],
+                [7, 0.0, 1.0, 0.0],
+                [7, 30.0, 1.2, 0.0]
+            ])
+        );
+        let back = parse_rawx_source(&emitted.text, None, &mut Diagnostics::new()).unwrap();
+        for row in 1..3 {
+            assert_eq!(
+                back.branches()[row].impedance_correction(),
+                net.branches()[row].impedance_correction()
+            );
+        }
+    }
+
+    #[test]
+    fn vsc_dc_lines_read_and_write_as_the_vscdc_table() {
+        // MINIMAL plus one VSC line from bus 1 to bus 2: converter 1 schedules
+        // 50 MW out of its AC bus, converter 2 holds 320 kV and regulates
+        // its AC bus at 1.01 per unit.
+        let mut root: Value = serde_json::from_str(MINIMAL).unwrap();
+        root["network"]["vscdc"] = serde_json::json!({
+            "fields": VSC_DC_FIELDS,
+            "data": [[
+                "LINK", 1, 1.5, 1, 1.0, null, null, null, null, null, null,
+                1, 2, 2, -50.0, 0.98, 100.0, 1.0, 200.0, 120.0, 400.0, 1.0, 40.0, -40.0, 0, 0, 100.0,
+                2, 1, 1, 320.0, 1.01, 100.0, 1.0, 200.0, 120.0, 400.0, 1.0, 45.0, -45.0, 0, 0, 250.0
+            ]]
+        });
+        let mut diagnostics = Diagnostics::new();
+        let net = parse_rawx_source(&root.to_string(), None, &mut diagnostics).unwrap();
+        assert!(
+            !diagnostics
+                .lines()
+                .iter()
+                .any(|line| line.contains("vscdc")),
+            "the table is read: {diagnostics:?}"
+        );
+        assert!(
+            diagnostics
+                .lines()
+                .iter()
+                .any(|line| line.contains("RMPCT 250 is outside (0, 100]")),
+            "{diagnostics:?}"
+        );
+        assert_eq!(net.hvdc().len(), 1);
+        let dc = &net.hvdc()[0];
+        close(dc.pf, 50.0);
+        assert!(dc.pt < 50.0 && dc.pt > 49.0, "{}", dc.pt);
+
+        let emitted = write_rawx(&net).unwrap();
+        let written: Value = serde_json::from_str(&emitted.text).unwrap();
+        assert_eq!(table_value(&written, "vscdc", 0, "name"), "LINK");
+        assert_eq!(table_value(&written, "vscdc", 0, "dcset1"), -50.0);
+        assert_eq!(table_value(&written, "vscdc", 0, "type2"), 1);
+        assert_eq!(table_value(&written, "vscdc", 0, "rmpct2"), 100.0);
+        assert!(written["network"].get("twotermdc").is_none());
+        let mut diagnostics = Diagnostics::new();
+        let back = parse_rawx_source(&emitted.text, None, &mut diagnostics).unwrap();
+        let again = &back.hvdc()[0];
+        close(again.pf, dc.pf);
+        close(again.pt, dc.pt);
+        close(again.qf, dc.qf);
+        assert_eq!(again.extras, dc.extras);
     }
 
     #[test]
@@ -3677,7 +4151,7 @@ mod tests {
             .properties
             .insert("psse_eqid".into(), "EQ'ID".into());
 
-        let (records, warnings) = write_raw_substation_data(&net).unwrap();
+        let (records, warnings) = write_raw_substation_data(&net, &[]).unwrap();
         let records = records.unwrap();
         for sanitized in [
             "'SUB NAME'",
@@ -4178,6 +4652,44 @@ mod tests {
                 .lines()
                 .iter()
                 .all(|line| !line.contains("outside the typed balanced calculation view"))
+        );
+    }
+
+    #[test]
+    fn preserves_apostrophes_in_rawx_case_title() {
+        let mut root: Value = serde_json::from_str(MINIMAL).unwrap();
+        root["network"]["caseid"]["data"][3] = Value::from("O'Brien's grid");
+        let source = serde_json::to_string(&root).unwrap();
+        let mut diagnostics = Diagnostics::new();
+
+        let net = parse_rawx_source(&source, None, &mut diagnostics).unwrap();
+
+        assert_eq!(net.name(), "O'Brien's grid");
+        assert!(
+            diagnostics
+                .lines()
+                .iter()
+                .all(|line| !line.contains("RAWX string value(s)")),
+            "an apostrophe in title1 is valid title text: {:?}",
+            diagnostics.lines()
+        );
+    }
+
+    #[test]
+    fn normalizes_line_terminators_in_rawx_case_title() {
+        let mut root: Value = serde_json::from_str(MINIMAL).unwrap();
+        root["network"]["caseid"]["data"][3] = Value::from("first line\nsecond line");
+        let source = serde_json::to_string(&root).unwrap();
+        let mut diagnostics = Diagnostics::new();
+
+        let net = parse_rawx_source(&source, None, &mut diagnostics).unwrap();
+
+        assert_eq!(net.name(), "first line second line");
+        assert!(
+            diagnostics
+                .lines()
+                .iter()
+                .any(|line| { line.contains("RAWX string value(s)") })
         );
     }
 }

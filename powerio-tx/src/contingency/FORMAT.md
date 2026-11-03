@@ -191,11 +191,51 @@ their lines, with the surrounding whitespace dropped:
 - `BUSDOUBLE` and the other `DOUBLE` spellings beyond
   `DOUBLE BRANCH|UNIT|TIE IN|FROM SUBSYSTEM`.
 - `PARALLEL` branch statements.
-- What a `DISPATCH` block's body means: the subsystem, the participating
-  machines, and the dispatch method are kept as lines rather than as fields.
-  Every such block is reported at its opening line.
-- Bus-name mode, where a statement names `'02CHAMBR 345'` in place of a bus
-  number. Reading these needs the case, which this module does not take.
+- The dispatch method a `DISPATCH` block states beyond its `SUBSYSTEM`,
+  `BUS`, and `PARTICIPATING MACHINES` lines. Every such block is reported at
+  its opening line, and [TARA statements](#tara-statements) reads the lines it
+  can.
+
+## TARA statements
+
+TARA reads statements beyond the PSS/E grammar, drawn here from the PowerGEM
+example file cited in the fixture README. The readers keep each of them as
+text, because the PowerIO IR layouts of the three sets are fixed within 0.11,
+and the views below read that text at analysis time.
+
+**Names.** After `BUSNAMES` a statement names a bus by a quoted token holding
+the bus name and base kV, `'02CHAMBR 345'`, in place of its number; after
+`BRANCHNAMES` a statement such as `OPEN "name"` names one branch by its name;
+`BUSNUMBERS` returns to numbers. Numeric bus operands keep their numeric
+meaning even when quoted, including ahead of `DISPATCH`. A nonnumeric quoted
+bus operand is read as a name whichever mode statement came before it, with
+the same optional `BUS` keywords as the numbered action grammar. The last
+word of a name token is the base kV when it reads as a number,
+matched within 1e-6 kV; a token without one matches on the name alone. A name
+matches exactly first, then without regard to letter case and runs of
+whitespace. A name that matches no element binds none with `NoSuchBusName` or
+`NoSuchBranchName`, and one that matches several at the stage that decided
+binds none with `AmbiguousBusName` or `AmbiguousBranchName`. A statement whose
+named buses all resolve binds as the same statement with numbers would.
+`OPEN`, `TRIP`, or `DISCONNECT`, optionally followed by `BRANCH` or `LINE`,
+then one quoted token is the branch name form.
+
+**Dispatch blocks.** `ContingencySet::calc_default_dispatch` reads each file
+level `DEFAULT DISPATCH [UP | DOWN | FIRSTLEVEL]` block into its
+`DispatchLevel` and `DispatchBlock`, and
+`ContingencyAction::calc_dispatched_action` reads a case action that closes
+with `DISPATCH` into the action ahead of the keyword and the block under it.
+A block line `SUBSYSTEM name [x]` or `BUS n [x]` reads as an entry with the
+number the line states after it, `PARTICIPATING MACHINES` as its own entry, and
+any other line stays in the block's `unread` lines. The binding of a dispatched
+action is the binding of the action ahead of `DISPATCH`.
+
+**Subsystem rules.** `Subsystem::calc_dispatch_rules` reads the lines a
+subsystem keeps, its own and then each `JOIN` group's: `PARTICIPATE [INCLUDE
+OFFLINE]`; `SCALE ALL GENERATION [WITH PMAX GREATER x MW]`, `SCALE ALL LOAD
+[INCLUDE NONCONFORMING]`, and `SCALE ALL FOR IMPORT | EXPORT [WITH PMAX
+GREATER x MW] [INCLUDE OFFLINE]`; `BASELOAD n`; `TURBINETYPE n`; and `EXCEPT`
+with the words after it as written. Any other line stays text only.
 
 ## Resolution against a network
 
@@ -261,7 +301,8 @@ stored in different winding orders are ambiguous the same way.
 | `RemoveLoad` | the `load` with that id, or every load at the bus | `NoSuchLoad` |
 | `DisconnectBus` | the `bus` row alone | `NoSuchBus` |
 | `ChangeLoad`, `ChangeGeneration` | the `bus` row alone | `NoSuchBus` |
-| `Unrecognized` | nothing | `Unrecognized` |
+| `Unrecognized` naming buses or a branch by name, or ahead of `DISPATCH` | what the statement binds to with numbers, or the branch | `NoSuchBusName`, `AmbiguousBusName`, `NoSuchBranchName`, `AmbiguousBranchName`, or the numbered statement's reason |
+| any other `Unrecognized` | nothing | `Unrecognized` |
 
 `DisconnectBus` binds to the bus and to nothing else: which elements at that
 bus leave service depends on what the consumer models, so expanding the bus is
@@ -286,7 +327,8 @@ switched shunt at the bus.
 Every reason states a snake_case `name`, for reports and bindings:
 `no_such_bus`, `no_such_branch`, `ambiguous_branch`,
 `ambiguous_transformer_3w`, `no_such_machine`, `no_such_shunt`, `no_such_load`,
-`no_such_transformer_3w`, `unrecognized`.
+`no_such_transformer_3w`, `unrecognized`, `no_such_bus_name`,
+`ambiguous_bus_name`, `no_such_branch_name`, `ambiguous_branch_name`.
 
 Resolution reports rather than refuses. A case holding any unresolved action is
 counted unresolved and earns one `BUILD.CON.CASE_UNRESOLVED` note naming the
@@ -415,6 +457,42 @@ file `END` are written after the `END` the writer states.
 
 `mon.rs` reads `.mon` into `MonitoredSet` and writes it back with `to_mon`.
 
+### kV-qualified monitor statements
+
+Subsystem branch and tie monitors accept an optional inclusive `KVRANGE lo hi`, TARA's spelling, or `IN KVRANGE lo hi`, the spelling the PSS(R)E 35.2.0 release notes give for `MONITOR BRANCHES` and `TIES` ([copy](https://pdfcoffee.com/psse-35-release-notes-pdf-free.html)); the two read the same and the writer states `KVRANGE lo hi`. For branches, both terminals must be within the band; for ties, the terminal inside the subsystem must be within the band. Bounds must be finite and ascending. Reversed or non-finite bounds remain retained source text.
+
+A voltage scope may qualify a subsystem by base kV (`SUBSYSTEM name KV x`). The selected buses are filtered using the existing `KV_TOLERANCE`.
+
+### Four-value voltage ranges
+
+`MONITOR VOLTAGE RANGE scope lo hi pre_min pre_max` is read as the post-contingency low and high first and the pre-contingency low and high second. The existing two-value form remains unchanged; invalid bands stay as retained source text. The writer preserves the form, and resolution exposes the pre-contingency band.
+
+No public source states that order, so the reader reports it. The first
+four-value range in a file earns one `READ.MON.VOLTAGE_BAND_ORDER_ASSUMED`
+remark naming its line and the order every four-value range in the file was
+read in. The sources checked for issue #554:
+
+- The PSS(R)E 34.2 Program Operation Manual, section 8.1.3, "Voltage
+  Monitoring Records" ([copy](https://pdfcoffee.com/program-operation-manual-del-pss-pdf-free.html)),
+  states `[MONITOR] VOLTAGE RANGE scope r [r]`, where "the first r value is the
+  lower bound of the per unit voltage band and the optional second r value is
+  the upper bound". PSS/E states no four-value form.
+- The PSS(R)E 35.2.0 release notes
+  ([copy](https://pdfcoffee.com/psse-35-release-notes-pdf-free.html)) add an
+  optional `KV r1` or `KVRANGE r1 r2` clause to the subsystem of every voltage
+  monitoring record, which is the `SUBSYSTEM name KV x` scope this reader
+  accepts, and an `IN KVRANGE r1 r2` clause to `MONITOR BRANCHES` and `TIES`.
+  They add no voltage values.
+- PowerGEM's TARA `.mon` grammar
+  ([`mon.tmLanguage.json`](https://github.com/PowerGem/VSCodeExtension/blob/master/syntaxes/mon.tmLanguage.json))
+  accepts two optional values after a voltage band, and a bare `KVRANGE lo hi`
+  after the subsystem of `BRANCHES IN` and `TIES FROM`, but names neither pair.
+- Every public `.mon` file found states two values.
+
+The order read follows the TARA study files issue #554 was written from, in
+which the first pair (0.90 to 1.05) is the wider one, as post-contingency
+limits usually are. A source that labels the pairs settles it.
+
 ```text
 /PSS(R)E 34
 COM MONITORED element file entry created by PSS(R)E Config File Builder
@@ -426,12 +504,12 @@ END
 
 | Statement | Synonyms | Reads as |
 | --- | --- | --- |
-| `MONITOR BRANCHES IN SUBSYSTEM name [3WLOWVOLTAGE]` | `BRANCHES`, `LINES`; `IN`, `FROM` | `BranchesInSubsystem { subsystem, low_voltage_3w }` |
-| `MONITOR TIES FROM SUBSYSTEM name` | `IN`, `FROM` | `TiesFromSubsystem { subsystem }` |
+| `MONITOR BRANCHES IN SUBSYSTEM name [3WLOWVOLTAGE] [[IN] KVRANGE lo hi]` | `BRANCHES`, `LINES`; `IN`, `FROM` | `BranchesInSubsystem { subsystem, low_voltage_3w }`, or with `KVRANGE` `BranchesInSubsystemKvRange { subsystem, low_voltage_3w, kv_range }` |
+| `MONITOR TIES FROM SUBSYSTEM name [[IN] KVRANGE lo hi]` | `IN`, `FROM` | `TiesFromSubsystem { subsystem }`, or with `KVRANGE` `TiesFromSubsystemKvRange { subsystem, kv_range }` |
 | `MONITOR BRANCHES` ... `END`, holding `i j [ckt]` or `[BRANCH] FROM BUS i TO BUS j [CIRCUIT c]` | `BRANCHES`, `LINES`; `LINE` | `Branches(Vec<BranchRef>)` |
 | `MONITOR BRANCH FROM BUS i TO BUS j [CIRCUIT c]` | `LINE`; `BUS` optional; `CKT` | `Branches` holding that one branch |
 | `MONITOR INTERFACE name [RATING x [MW]]` ... `END` | | `Interface { name, rating_mw, branches }` |
-| `MONITOR VOLTAGE RANGE scope lo hi` | | `VoltageRange { scope, vmin, vmax }` |
+| `MONITOR VOLTAGE RANGE scope lo hi [pre_min pre_max]` | | `VoltageRange { scope, vmin, vmax }`, or with the pre-contingency pair `VoltageRangeWithPre { scope, vmin, vmax, pre_min, pre_max }` |
 | `MONITOR VOLTAGE DEVIATION scope down [up]` | | `VoltageDeviation { scope, down, up }` |
 
 A `MONITOR VOLTAGE RANGE` states its band low end first; one whose ends run
@@ -447,8 +525,8 @@ BRANCH` line in that spelling outside a block is a block of one branch, and
 the writer states it as one. A third `TO BUS k`, which names
 a three winding transformer, has no `BranchRef`, so the line is kept as text. A
 scope is one
-of `ALL BUSES`, `SUBSYSTEM name`, `BUS n`, `AREA n`, `ZONE n`, `OWNER n`, and
-`KV x`.
+of `ALL BUSES`, `SUBSYSTEM name [KV x]`, `BUS n`, `AREA n`, `ZONE n`,
+`OWNER n`, and `KV x`.
 
 Files carry one or two file level `END`s and both read the same: the first ends
 the file, a further bare `END` states nothing, and any other statement after it
@@ -480,7 +558,9 @@ one per line as `{i:>6} {j:>6} {ckt}`, then the block's kept lines, before its
 `MonitoredResolution`, whose rows are positions in the network's tables. A
 caller binding several files to one network builds one `PsseEquipmentIndex` and
 calls `MonitoredSet::resolve_with` and `ContingencySet::expand_with`, which read
-the network the index borrows.
+the network the index borrows. A caller that keeps the index beside the network
+builds a `SharedPsseEquipmentIndex` from an `Arc<BalancedNetwork>` once and
+passes `shared.index()` to the same entry points.
 
 | Statement | Binds to |
 | --- | --- |

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use powerio_tx::{BalancedNetwork, BranchSusceptanceFormula, BusId, IndexedNetwork};
+use powerio_tx::{BalancedNetwork, BranchSusceptanceFormula, BusId, HvdcTreatment, IndexedNetwork};
 
 use crate::{AnalysisBranchSource, Error, Result};
 use powerio_prob::ReferenceBuses;
@@ -75,16 +75,18 @@ pub struct DcOpfOptions {
     /// existed deserialize to the default (off), the pre-field behavior.
     #[serde(default)]
     pub synthesize_unrated_limits: bool,
-    /// Apply PowerModels' ±60 degree correction to unconstrained or unusable
-    /// branch angle difference intervals in the prepared arrays.
-    #[serde(default = "default_true")]
-    pub correct_angle_difference_bounds: bool,
+    /// Which angle difference bounds the prepared arrays carry.
+    #[serde(default = "default_angle_difference_bounds")]
+    pub angle_difference_bounds: powerio_tx::AngleDifferenceBounds,
+    /// How in service HVDC lines enter the fixed withdrawal.
+    #[serde(default)]
+    pub hvdc_treatment: HvdcTreatment,
     /// The already validated instance objective to compile into the arrays.
     pub objective: PreparedObjective,
 }
 
-const fn default_true() -> bool {
-    true
+const fn default_angle_difference_bounds() -> powerio_tx::AngleDifferenceBounds {
+    powerio_tx::AngleDifferenceBounds::PowerModelsPad
 }
 
 impl Default for DcOpfOptions {
@@ -94,7 +96,8 @@ impl Default for DcOpfOptions {
             units: Units::default(),
             skip_zero_impedance: false,
             synthesize_unrated_limits: false,
-            correct_angle_difference_bounds: true,
+            angle_difference_bounds: default_angle_difference_bounds(),
+            hvdc_treatment: HvdcTreatment::default(),
             objective: PreparedObjective::default(),
         }
     }
@@ -149,8 +152,10 @@ pub struct DcBranchParameters {
     pub shift: Vec<f64>,
     /// Thermal limit in the selected power unit. Zero means unlimited.
     pub f_max: Vec<f64>,
-    /// Branch angle bounds in radians.
+    /// Selected branch angle bounds in radians; absent sides are infinities.
+    #[serde(with = "crate::opf::angle_bounds_serde")]
     pub angle_min: Vec<f64>,
+    #[serde(with = "crate::opf::angle_bounds_serde")]
     pub angle_max: Vec<f64>,
     /// Branch column to row in the star-lowered analysis network.
     pub analysis_rows: Vec<usize>,
@@ -208,6 +213,11 @@ pub struct DcOpfPreparation {
     pub synthesize_unrated_limits: bool,
     /// Whether PowerModels' angle difference correction was applied.
     pub correct_angle_difference_bounds: bool,
+    /// Which angle difference bounds `angle_min` and `angle_max` carry.
+    /// `None` only in a document written before the field existed, whose
+    /// `correct_angle_difference_bounds` says whether the pad was applied.
+    #[serde(default)]
+    pub angle_difference_bounds: Option<powerio_tx::AngleDifferenceBounds>,
     /// Dense bus index to external bus ID.
     pub bus_ids: Vec<BusId>,
     /// Dense bus index to row in the star-lowered analysis network.
@@ -227,8 +237,25 @@ pub struct DcOpfPreparation {
     /// beside [`Self::p_d`], as MATPOWER `runpf` does.
     pub g_s: Vec<f64>,
     /// Nodal phase shift injection in dense bus order. The complete fixed
-    /// withdrawal in `L theta = Cg pg - fixed` is `p_d + g_s + p_shift`.
+    /// withdrawal in `L theta = Cg pg - fixed` is
+    /// `p_d + g_s + p_shift - p_hvdc`.
     pub p_shift: Vec<f64>,
+    /// How in service HVDC lines entered [`Self::p_hvdc`].
+    ///
+    /// `#[serde(default)]` keeps documents written before this field
+    /// readable.
+    #[serde(default)]
+    pub hvdc_treatment: HvdcTreatment,
+    /// Nodal fixed HVDC injection in dense bus order: `-pf` at each in
+    /// service line's from bus and `+pt` at its to bus
+    /// ([`IndexedNetwork::p_hvdc`]). All zero under
+    /// [`HvdcTreatment::Ignore`]. An injection, so the fixed withdrawal
+    /// subtracts it.
+    ///
+    /// `#[serde(default)]`: a document written before this field reads as
+    /// empty, which [`Self::calc_fixed_nodal_withdrawal`] takes as zero.
+    #[serde(default)]
+    pub p_hvdc: Vec<f64>,
     pub generators: DcGeneratorParameters,
     pub branches: DcBranchParameters,
 }
@@ -248,11 +275,14 @@ impl DcOpfPreparation {
     ///
     /// With `A` oriented from bus to bus and
     /// `L = A diag(b) A^T`, the DC balance is
-    /// `L theta = Cg pg - (p_d + g_s + p_shift)`.
+    /// `L theta = Cg pg - (p_d + g_s + p_shift - p_hvdc)`.
     #[must_use]
     pub fn calc_fixed_nodal_withdrawal(&self) -> Vec<f64> {
         (0..self.n_buses)
-            .map(|bus| self.p_d[bus] + self.g_s[bus] + self.p_shift[bus])
+            .map(|bus| {
+                let p_hvdc = self.p_hvdc.get(bus).copied().unwrap_or(0.0);
+                self.p_d[bus] + self.g_s[bus] + self.p_shift[bus] - p_hvdc
+            })
             .collect()
     }
 
@@ -453,11 +483,10 @@ pub(crate) fn preparation_from_view(
         }
         let source_amin = case.to_radians(branch.angmin);
         let source_amax = case.to_radians(branch.angmax);
-        let (amin, amax) = if options.correct_angle_difference_bounds {
-            powerio_tx::correct_angle_difference_bounds(source_amin, source_amax)
-        } else {
-            (source_amin, source_amax)
-        };
+        let (amin, amax) =
+            options
+                .angle_difference_bounds
+                .calc_bounds(source_amin, source_amax, shift_rad);
         from_bus.push(from);
         branch_identities.push(crate::opf::row_identity(
             branch.uid.as_deref(),
@@ -490,6 +519,15 @@ pub(crate) fn preparation_from_view(
         .iter()
         .map(|&row| case.gs()[row] * p_scale)
         .collect();
+    let p_hvdc = match options.hvdc_treatment {
+        HvdcTreatment::Ignore => vec![0.0; n_buses],
+        // A future treatment must state its own withdrawal; until then the
+        // stated injection is the only one this preparation knows.
+        _ => bus_analysis_rows
+            .iter()
+            .map(|&row| case.p_hvdc()[row] * p_scale)
+            .collect(),
+    };
     let bus_source_rows = bus_analysis_rows.iter().copied().map(Some).collect();
     Ok(DcOpfPreparation {
         name: case.name().to_owned(),
@@ -502,7 +540,8 @@ pub(crate) fn preparation_from_view(
         objective: options.objective,
         skip_zero_impedance: options.skip_zero_impedance,
         synthesize_unrated_limits: options.synthesize_unrated_limits,
-        correct_angle_difference_bounds: options.correct_angle_difference_bounds,
+        correct_angle_difference_bounds: options.angle_difference_bounds.is_padded(),
+        angle_difference_bounds: Some(options.angle_difference_bounds),
         bus_ids: active_buses.bus_ids,
         bus_analysis_rows,
         bus_source_rows,
@@ -510,6 +549,8 @@ pub(crate) fn preparation_from_view(
         p_d,
         g_s,
         p_shift,
+        hvdc_treatment: options.hvdc_treatment,
+        p_hvdc,
         generators: DcGeneratorParameters {
             identities: generator_identities,
             bus_of_gen,

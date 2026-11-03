@@ -28,6 +28,22 @@ fn main() {
     let net = &passive;
     let y = calc_multiconductor_admittance_matrix(net).unwrap();
     let idx = y.index();
+    // Finite sources add private ideal-EMF nodes absent from OpenDSS's
+    // numbering. Exclude typed source terminals in this passive-only oracle.
+    let source_nodes: Vec<usize> = net
+        .sources()
+        .iter()
+        .flat_map(|source| {
+            source
+                .terminal_map
+                .iter()
+                .chain(source.reference_terminal.iter())
+                .filter_map(|terminal| match idx.resolve(&source.bus, terminal) {
+                    Some(NodeRef::Node(row)) => Some(row),
+                    _ => None,
+                })
+        })
+        .collect();
     let nodes: Vec<String> = idx
         .nodes()
         .iter()
@@ -69,7 +85,7 @@ fn main() {
         .map(|d| format!("{:?}", d.message()))
         .collect();
     println!(
-        "{{\"scope\": \"passive_components\", \"excluded_transformers\": {excluded_transformers}, \"nodes\": {:?}, \"resolution\": [{}], \"entries\": [{}], \"diagnostics\": [{}], \"constraint_labels\": {:?} }}",
+        "{{\"scope\": \"passive_components\", \"excluded_transformers\": {excluded_transformers}, \"source_nodes\": {source_nodes:?}, \"nodes\": {:?}, \"resolution\": [{}], \"entries\": [{}], \"diagnostics\": [{}], \"constraint_labels\": {:?} }}",
         nodes,
         resolution.join(","),
         entries.join(","),

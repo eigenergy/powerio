@@ -7,9 +7,10 @@
 //! no network table — and exposes a borrowed `network()` accessor. Fields
 //! are private, so the sharing strategy can change without a public break.
 //!
-//! The eight instances are [`DcPfInstance`], [`AcPfInstance`],
-//! [`DcOpfInstance`], [`AcOpfInstance`], [`McAcPfInstance`],
-//! [`McAcOpfInstance`], [`LinDist3FlowOpfInstance`], and [`AcScucInstance`]. Power flow instances carry
+//! The instances are [`DcPfInstance`], [`AcPfInstance`],
+//! [`DcOpfInstance`], [`AcOpfInstance`], [`AcOtsInstance`],
+//! [`McAcPfInstance`], [`McAcOpfInstance`], [`LinDist3FlowOpfInstance`],
+//! [`LinDist3FlowPfInstance`], and [`AcScucInstance`]. Power flow instances carry
 //! partial boundary specifications; OPF instances carry typed
 //! [`Objective`] terms and active constraint selections by stable element
 //! identity, with the numerical limits staying on the network.
@@ -20,6 +21,7 @@ mod lindist3flow;
 mod merge;
 mod multiconductor;
 mod objective;
+mod ots;
 mod scuc;
 pub mod scuc_inputs;
 
@@ -37,10 +39,14 @@ pub use lindist3flow::{
 };
 pub use merge::{ZeroImpedanceMerge, merge_zero_impedance_buses};
 pub use multiconductor::{
-    ActiveControlMode, McAcOpfInstance, McAcPfInstance, PrescribedSourceVoltage,
-    PrescribedTerminalPower,
+    ActiveControlMode, McAcOpfInstance, McAcPfInstance, PrescribedSourceBoundary,
+    PrescribedSourceVoltage, PrescribedTerminalPower,
 };
 pub use objective::{Objective, ObjectiveTerm};
+pub use ots::{
+    AcOtsBranch, AcOtsInstance, AcOtsOptions, BranchCurrentLimit, BranchSelection,
+    BranchSwitchingCost, CurrentLimitPolicy, IslandingPolicy, SwitchingCost, TerminalCurrentBounds,
+};
 pub use powerio_dist::{
     LinDist3FlowPreparationAction, LinDist3FlowPreparationActionKind, LinDist3FlowPreparationReport,
 };

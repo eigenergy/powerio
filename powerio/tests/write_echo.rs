@@ -77,6 +77,43 @@ fn a_time_series_kind_still_refuses_a_format_its_retained_source_is_not() {
     );
 }
 
+/// #646: a PMD multinetwork ENGINEERING document (PMD's `make_multinetwork`
+/// output) parses to one multiconductor network per time step rather than an
+/// empty network, and a PMD write echoes it.
+#[test]
+fn a_pmd_multinetwork_document_parses_to_a_time_series_and_echoes() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../tests/data/dist/pmd/case3_balanced_multinetwork.json"
+    );
+    let module = powerio::parse(Source::open(path).unwrap()).unwrap();
+    let PioValue::TimeSeries(series) = module.value() else {
+        panic!("expected a time series, got {}", module.value().type_name());
+    };
+    assert_eq!(series.element_type(), "powerio.MulticonductorNetwork");
+    assert_eq!(series.len(), 2);
+    for (_, value) in series.iter() {
+        let PioValue::MulticonductorNetwork(net) = value else {
+            panic!("expected a network, got {}", value.type_name());
+        };
+        assert_eq!(net.buses().len(), 3);
+        assert_eq!(net.lines().len(), 2);
+        assert_eq!(net.loads().len(), 3);
+        assert_eq!(net.sources().len(), 1);
+    }
+
+    let result = emit(
+        &module,
+        "pmd-json",
+        Destination::memory("case.json").unwrap(),
+    )
+    .unwrap();
+    let EmittedOutput::Memory { artifacts } = result.output() else {
+        panic!("memory emission returned a path output");
+    };
+    assert_eq!(artifacts[0].bytes(), std::fs::read(path).unwrap());
+}
+
 fn memory_directory(result: &powerio_core::EmitResult) -> BTreeMap<String, Vec<u8>> {
     let EmittedOutput::Memory { artifacts } = result.output() else {
         panic!("a memory destination must return memory artifacts");

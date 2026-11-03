@@ -11,6 +11,7 @@ run() { echo "=== $* ==="; "$@"; }
 # Every Rust example in the workspace compiles in the feature set it needs.
 run cargo build -q --examples -p powerio-tx
 run cargo build -q --examples -p powerio --features schema
+run cargo build -q --examples -p powerio-tnd --features sincal
 run cargo build -q --examples -p powerio-dist
 
 # The ones that take no external input run.

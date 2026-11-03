@@ -20,6 +20,26 @@ pub use powerio_core::{
 
 pub mod codes {
     powerio_core::diagnostic_codes! {
+        PARSE_SINCAL_MULTICONDUCTOR = "PARSE.DIST.SINCAL", Error,
+            "the selected conductor-resolved SINCAL profile cannot be parsed", category = Parse;
+        REQUEST_SINCAL_MULTICONDUCTOR_FEATURE_DISABLED = "REQUEST.DIST_FORMAT.SINCAL_FEATURE_DISABLED", Error,
+            "conductor-resolved SINCAL is not available through this build or entry point", category = Request;
+        READ_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_ONLY = "READ.DIST.SINCAL_RETAINED_SOURCE_ONLY", Remark,
+            "native data outside the selected conductor-resolved profile remain only in source";
+        READ_SINCAL_GEOMETRY = "READ.DIST.SINCAL_GEOMETRY", Warning,
+            "optional SINCAL drawing geometry retains native view metadata and reports mapping limits";
+        READ_SINCAL_UNCONNECTED_NODES = "READ.DIST.SINCAL_UNCONNECTED_NODES", Remark,
+            "native nodes with no declared conductors remain in network extras";
+        READ_SINCAL_ASSUMED_INACTIVE_SOURCE_CONTROLS = "READ.DIST.SINCAL_ASSUMED_INACTIVE_SOURCE_CONTROLS", Warning,
+            "legacy NULL source controls were explicitly assumed inactive";
+        EMIT_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_OMITTED = "EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED", Warning,
+            "native SINCAL source-only data are omitted from cross-format emission";
+        EMIT_SINCAL_MULTICONDUCTOR_UNSUPPORTED = "EMIT.DIST.SINCAL_UNSUPPORTED", Error,
+            "invalid or unsupported candidate multiconductor SINCAL output", category = Output;
+        EMIT_SINCAL_MULTICONDUCTOR_EXPERIMENTAL = "EMIT.DIST.SINCAL_EXPERIMENTAL", Remark,
+            "candidate multiconductor output has no native SINCAL acceptance evidence";
+        EMIT_SINCAL_MULTICONDUCTOR_LOSS = "EMIT.DIST.SINCAL_LOSS", Warning,
+            "candidate multiconductor output canonicalizes topology or omits ancillary data";
         // PARSE: the source text could not be decoded as given.
         PARSE_DSS_SOURCE_MALFORMED = "PARSE.DSS.SOURCE_MALFORMED", Warning,
             "a dss command, object spec, or property assignment does not parse";
@@ -27,6 +47,74 @@ pub mod codes {
             "a distribution document is not valid JSON for its format", category = Parse;
         PARSE_DIST_SOURCE_MALFORMED = "PARSE.DIST.SOURCE_MALFORMED", Error,
             "a distribution reader refused the source it was given", category = Parse;
+        PARSE_GLM_SYNTAX = "PARSE.GLM.SYNTAX", Error,
+            "a GLM source contains invalid or incomplete syntax", category = Parse;
+        PARSE_GLM_LIMIT_EXCEEDED = "PARSE.GLM.LIMIT_EXCEEDED", Error,
+            "a GLM source exceeds the bounded parser resources", category = Parse;
+        PARSE_GLM_PREPROCESSING = "PARSE.GLM.PREPROCESSING", Error,
+            "a GLM preprocessing operation is invalid or requires unsupported external semantics", category = Parse;
+        PARSE_GLM_OBJECT = "PARSE.GLM.OBJECT", Error,
+            "a GLM object identity, declaration or reference cannot be resolved", category = Parse;
+        PARSE_GLM_QUANTITY = "PARSE.GLM.QUANTITY", Error,
+            "a GLM quantity or unit cannot be interpreted in the static profile", category = Parse;
+        READ_GLM_UNIT_IGNORED = "READ.GLM.UNIT_IGNORED", Warning,
+            "native quantity conversion ignores a stated unit suffix";
+        READ_GLM_ELECTRICAL_UNSUPPORTED = "READ.GLM.ELECTRICAL_UNSUPPORTED", Error,
+            "a GLM electrical feature has no verified static mapping", category = Data;
+        READ_GLM_IMPLICIT_SOURCE = "READ.GLM.IMPLICIT_SOURCE", Remark,
+            "a connected directed FBS tree has one implicit upstream voltage source";
+        READ_GLM_SOURCE_ONLY = "READ.GLM.SOURCE_ONLY", Remark,
+            "non-electrical GLM data remains in the retained source";
+        READ_GLM_SWITCH_STATE_NORMALIZED = "READ.GLM.SWITCH_STATE_NORMALIZED", Remark,
+            "static switch status and banked initialization determine contact states";
+        READ_GLM_SWITCH_EQUIVALENT = "READ.GLM.SWITCH_EQUIVALENT", Remark,
+            "finite closed switch contacts use an exact static line equivalent";
+        READ_GLM_REDUCED_TRIPLEX = "READ.GLM.REDUCED_TRIPLEX", Warning,
+            "a direct triplex matrix does not specify physical neutral or ground current";
+        READ_GLM_LOAD_NORMALIZED = "READ.GLM.LOAD_NORMALIZED", Remark,
+            "native ZIP initialization defines the typed load voltage-law terms";
+        READ_GLM_BATTERY_IDLE = "READ.GLM.BATTERY_IDLE", Remark,
+            "Internal battery has zero fixed injection in constant-PF mode; energy and inactive control metadata remain in source";
+        READ_GLM_SOLAR_EQUIVALENT = "READ.GLM.SOLAR_EQUIVALENT", Remark,
+            "a static solar and inverter snapshot uses fixed typed inverter injections";
+        READ_GLM_REACTOR_EQUIVALENT = "READ.GLM.REACTOR_EQUIVALENT", Remark,
+            "a static reactor uses an exact line or ideal-contact equivalent";
+        READ_GLM_SUBSTATION_EQUIVALENT = "READ.GLM.SUBSTATION_EQUIVALENT", Remark,
+            "a standalone substation supplies initialized sequence-derived phase voltages";
+        READ_GLM_GENERATOR_EQUIVALENT = "READ.GLM.GENERATOR_EQUIVALENT", Remark,
+            "initialized static generator powers and ratings use phase-resolved records";
+        READ_GLM_REGULATOR_EQUIVALENT = "READ.GLM.REGULATOR_EQUIVALENT", Remark,
+            "fixed regulator phases use equivalent winding records on explicit normalization bases";
+        READ_GLM_TRANSFORMER_EQUIVALENT = "READ.GLM.TRANSFORMER_EQUIVALENT", Warning,
+            "native NR delta-delta transformer equations use an equivalent grounded-wye circuit";
+        READ_GLM_CONTROL_FROZEN = "READ.GLM.CONTROL_FROZEN", Warning,
+            "active control behavior is omitted while declared fixed electrical states are preserved";
+        READ_GLM_LINE_EQUIVALENT = "READ.GLM.LINE_EQUIVALENT", Remark,
+            "native FBS noncommuting line equations use an exact admittance equivalent";
+        READ_GLM_NATIVE_LINE_DISCREPANCY = "READ.GLM.NATIVE_LINE_DISCREPANCY", Warning,
+            "native line reporting and FBS solved states can differ from the physical pi-line model for noncommuting matrices";
+        READ_GLM_GEOMETRY_MATERIALIZED = "READ.GLM.GEOMETRY_MATERIALIZED", Remark,
+            "overhead conductor geometry is materialized as phase matrices with explicit reduction provenance";
+        EMIT_GLM_UNSUPPORTED = "EMIT.GLM.UNSUPPORTED", Error,
+            "the GLM writer cannot yet represent this electrical feature", category = Data;
+        EMIT_GLM_FIELD_DROPPED = "EMIT.GLM.FIELD_DROPPED", Warning,
+            "non-electrical metadata has no expression in canonical GLM output";
+        EMIT_GLM_VALUE_REBASED = "EMIT.GLM.VALUE_REBASED", Remark,
+            "a GLM nominal voltage or identity was materialized without changing electrical behavior";
+        EMIT_GLM_IDEAL_CONTACTS = "EMIT.GLM.IDEAL_CONTACTS", Remark,
+            "ideal contacts use source-oriented FBS with exact zero impedance and explicit phase grouping";
+        EMIT_GLM_TRANSFORMER_SHUNT_EQUIVALENT = "EMIT.GLM.TRANSFORMER_SHUNT_EQUIVALENT", Remark,
+            "a transformer terminal core shunt uses an exact admittance load";
+        EMIT_GLM_LINE_SHUNT_EQUIVALENT = "EMIT.GLM.LINE_SHUNT_EQUIVALENT", Remark,
+            "line end shunts use exact phase-pair and earth-return admittance loads";
+        EMIT_GLM_PROJECT_UNREPRESENTABLE = "EMIT.GLM.PROJECT_UNREPRESENTABLE", Error,
+            "retained GLM project bytes cannot be replayed as a portable output inventory", category = Output;
+        EMIT_GLM_REPLAY_CONTEXT_REQUIRED = "EMIT.GLM.REPLAY_CONTEXT_REQUIRED", Remark,
+            "exact GLM project replay requires the original explicit preprocessing inputs";
+        VALIDATE_DIST_COORDINATES_INVALID = "VALIDATE.DIST.COORDINATES_INVALID", Error,
+            "component geographic coordinates or their attachment identities are invalid", category = Data;
+        EMIT_DIST_COMPONENT_COORDINATES_DROPPED = "EMIT.DIST.COMPONENT_COORDINATES_DROPPED", Warning,
+            "the target cannot carry typed component geographic coordinates";
 
         // READ.DSS: decoded, but not representable in the multiconductor model.
         /// A `Redirect`/`Compile`/`Buscoords` include the reader refused
@@ -47,6 +135,24 @@ pub mod codes {
             "a property value outside the modeled set was read as the nearest one";
         READ_DSS_OBJECT_UNTYPED = "READ.DSS.OBJECT_UNTYPED", Warning,
             "an object shape the model does not type yet is kept untyped";
+        READ_DSS_SOURCE_DISABLED = "READ.DSS.SOURCE_DISABLED", Remark,
+            "a disabled source is retained without electrical contributions";
+        EMIT_DSS_PROJECT_UNREPRESENTABLE = "EMIT.DSS.PROJECT_UNREPRESENTABLE", Error,
+            "retained DSS dependencies cannot be replayed as a portable project", category = Output;
+        EMIT_DSS_PROJECT_COMPANION_KEPT = "EMIT.DSS.PROJECT_COMPANION_KEPT", Remark,
+            "a supplied file the deck never read was copied into the retained project";
+        READ_DSS_LOADSHAPE_UNRESOLVED = "READ.DSS.LOADSHAPE_UNRESOLVED", Error,
+            "static UseActual loadshape power could not be resolved";
+        READ_DSS_SOURCE_UNRESOLVED = "READ.DSS.SOURCE_UNRESOLVED", Error,
+            "a voltage source is invalid or outside the qualified static profile", category = Data;
+        READ_DSS_FAULT_UNRESOLVED = "READ.DSS.FAULT_UNRESOLVED", Error,
+            "a fault switching state could not be resolved into the static electrical snapshot", category = Data;
+        READ_DSS_TRANSFORMER_UNRESOLVED = "READ.DSS.TRANSFORMER_UNRESOLVED", Error,
+            "a transformer definition could not be resolved into the static electrical snapshot";
+        READ_DSS_LINE_UNRESOLVED = "READ.DSS.LINE_UNRESOLVED", Error,
+            "a line is invalid or outside the qualified static electrical profile", category = Data;
+        READ_DSS_BATCH_UNRESOLVED = "READ.DSS.BATCH_UNRESOLVED", Error,
+            "a BatchEdit selector could not be executed faithfully", category = Data;
         READ_DSS_PROPERTY_UNKNOWN = "READ.DSS.PROPERTY_UNKNOWN", Warning,
             "a property this reader does not model is kept as written";
         READ_DSS_REFERENCE_DROPPED = "READ.DSS.REFERENCE_DROPPED", Warning,
@@ -70,6 +176,14 @@ pub mod codes {
             "a line names a linecode the case does not declare";
 
         // EMIT.DSS: what the canonical dss writer cannot state.
+        EMIT_DSS_IDEAL_SWITCH_EQUIVALENT = "EMIT.DSS.IDEAL_SWITCH_EQUIVALENT", Remark,
+            "an ideal closed switch is emitted using exact impedance cancellation";
+        EMIT_DSS_IDEAL_TRANSFORMER_EQUIVALENT = "EMIT.DSS.IDEAL_TRANSFORMER_EQUIVALENT", Remark,
+            "an ideal transformer is emitted using exact leakage cancellation";
+        EMIT_DSS_SOURCE_EQUIVALENT = "EMIT.DSS.SOURCE_EQUIVALENT", Remark,
+            "an ideal source is emitted as an exact finite-impedance circuit equivalent";
+        EMIT_DSS_IMPEDANCE_EQUIVALENT = "EMIT.DSS.IMPEDANCE_EQUIVALENT", Remark,
+            "a conductor impedance is emitted as an exact zero-EMF source equivalent";
         EMIT_DSS_FIELD_DROPPED = "EMIT.DSS.FIELD_DROPPED", Warning,
             "a field the dss object model has no property for was dropped";
         EMIT_DSS_RECORD_DROPPED = "EMIT.DSS.RECORD_DROPPED", Warning,
@@ -126,6 +240,8 @@ pub mod codes {
             "a BMOPF field with no canonical home was dropped";
         READ_BMOPF_RECORD_DROPPED = "READ.BMOPF.RECORD_DROPPED", Warning,
             "a BMOPF object or winding beyond the modeled set was dropped";
+        READ_BMOPF_CAPACITOR_LOWERED = "READ.BMOPF.CAPACITOR_LOWERED", Remark,
+            "a per-coil capacitor was represented exactly by a terminal shunt";
         READ_BMOPF_VALUE_COLLAPSED = "READ.BMOPF.VALUE_COLLAPSED", Warning,
             "a per phase or per terminal BMOPF value was collapsed to one entry";
         READ_BMOPF_TRANSFORMER_OPEN_DELTA_SPLIT = "READ.BMOPF.TRANSFORMER_OPEN_DELTA_SPLIT", Warning,
@@ -220,6 +336,47 @@ pub mod codes {
             Warning, "a transformer's winding count was clamped to what BMOPF carries";
         EMIT_BMOPF_TRANSFORMER_WYE_WYE_DECOMPOSED = "EMIT.BMOPF.TRANSFORMER_WYE_WYE_DECOMPOSED",
             Warning, "a wye-wye transformer was decomposed into BMOPF pairs";
+
+        // READ.CIM_DIST: distribution CIM decoded, but not representable in
+        // the multiconductor model.
+        READ_CIM_DIST_CLASS_UNMAPPED = "READ.CIM_DIST.CLASS_UNMAPPED", Warning,
+            "objects of a CIM class the distribution mapping does not read were not carried";
+        READ_CIM_DIST_CONTEXT_UNMAPPED = "READ.CIM_DIST.CONTEXT_UNMAPPED", Remark,
+            "containment, naming, or base voltage context the model has no field for was not carried";
+        READ_CIM_DIST_FIELD_UNMAPPED = "READ.CIM_DIST.FIELD_UNMAPPED", Warning,
+            "a property of a mapped CIM object has no model field and was not carried";
+        READ_CIM_DIST_RECORD_DROPPED = "READ.CIM_DIST.RECORD_DROPPED", Warning,
+            "a CIM equipment record could not be mapped and was dropped";
+        READ_CIM_DIST_VALUE_DEFAULTED = "READ.CIM_DIST.VALUE_DEFAULTED", Warning,
+            "a value the model needs was absent or unusable and was defaulted";
+        READ_CIM_DIST_VALUE_UNSUPPORTED = "READ.CIM_DIST.VALUE_UNSUPPORTED", Warning,
+            "a CIM value outside the mapped set was read as the nearest one";
+        READ_CIM_DIST_VALUE_COLLAPSED = "READ.CIM_DIST.VALUE_COLLAPSED", Warning,
+            "CIM structure was reduced to what one model field can carry";
+        READ_CIM_DIST_VALUE_CONFLICT = "READ.CIM_DIST.VALUE_CONFLICT", Warning,
+            "two statements of one CIM property disagree and the first was kept";
+        READ_CIM_DIST_REFERENCE_DROPPED = "READ.CIM_DIST.REFERENCE_DROPPED", Warning,
+            "a CIM reference names an object the document set does not define";
+        READ_CIM_DIST_IDENTIFIER_SUBSTITUTED = "READ.CIM_DIST.IDENTIFIER_SUBSTITUTED", Warning,
+            "a CIM name that is empty or repeats another was replaced by the object's mRID";
+        /// A segment states no impedance (no `PerLengthImpedance` and no
+        /// series values), typically because it is described by wire
+        /// geometry, which the reader does not calculate. Severity `Error`:
+        /// the parse continued, but the segment has no series impedance.
+        READ_CIM_DIST_IMPEDANCE_UNRESOLVED = "READ.CIM_DIST.IMPEDANCE_UNRESOLVED", Error,
+            "a line segment states no impedance the reader can carry";
+
+        // EMIT.CIM_DIST: what the distribution CIM writer cannot state.
+        EMIT_CIM_DIST_FIELD_DROPPED = "EMIT.CIM_DIST.FIELD_DROPPED", Warning,
+            "a field distribution CIM has no property for was dropped";
+        EMIT_CIM_DIST_RECORD_DROPPED = "EMIT.CIM_DIST.RECORD_DROPPED", Warning,
+            "an element the distribution CIM writer does not emit was dropped";
+        EMIT_CIM_DIST_EXTRAS_DROPPED = "EMIT.CIM_DIST.EXTRAS_DROPPED", Warning,
+            "a passthrough extra with no distribution CIM property was dropped";
+        EMIT_CIM_DIST_VALUE_COLLAPSED = "EMIT.CIM_DIST.VALUE_COLLAPSED", Warning,
+            "structure was reduced to what one CIM property can carry";
+        EMIT_CIM_DIST_VALUE_SUBSTITUTED = "EMIT.CIM_DIST.VALUE_SUBSTITUTED", Warning,
+            "an identifier or value was replaced by one distribution CIM can state";
 
         // The multiconductor model itself.
         READ_MULTICONDUCTOR_VALUE_DEFAULTED = "READ.MULTICONDUCTOR.VALUE_DEFAULTED", Warning,

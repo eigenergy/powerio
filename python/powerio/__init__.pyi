@@ -20,10 +20,14 @@ from typing import (
     overload,
 )
 
+from ._sincal import SincalBalancedReadOptions as SincalBalancedReadOptions
+
 _T = TypeVar("_T")
 __all__ = [
     "AcOpfInstance",
     "AcOpfSolution",
+    "AcOtsInstance",
+    "AcOtsSolution",
     "AcPfInstance",
     "AcPfSolution",
     "AcScucInstance",
@@ -32,6 +36,7 @@ __all__ = [
     "ApparentPower",
     "Artifact",
     "BalancedNetwork",
+    "BusMerge",
     "CalculationUpdate",
     "ComponentId",
     "ContingencySet",
@@ -88,6 +93,7 @@ __all__ = [
     "ScucStartupLimit",
     "ScucTransformerControl",
     "ScucViolationCosts",
+    "SincalBalancedReadOptions",
     "SocwrOpfSolution",
     "SourceSpan",
     "SubsystemSet",
@@ -124,13 +130,15 @@ BranchSusceptanceFormula = Literal[
 SensitivitySolver = Literal["auto", "dense", "sparse"]
 
 class PowerIOError(ValueError):
-    """Base error from the powerio parser, emitter, or matrix calculations.
+    """Base error from parsing, emission, or matrix calculations.
 
-    Failures mapped from the Rust core carry the diagnostic code string as
-    ``code``; it is set at raise time, so it is instance-only.
+    Rust core failures carry a diagnostic code and typed Diagnostic records.
+    Refused conversion passes retain their existing dictionary findings.
+    These attributes are populated when the exception is raised.
     """
 
     code: str
+    diagnostics: list[Diagnostic] | list[dict[str, Any]]
 
 class PowerIOParseError(PowerIOError):
     """A case file is malformed or unparseable."""
@@ -138,13 +146,9 @@ class PowerIOParseError(PowerIOError):
 class PowerIODataError(PowerIOError):
     """A well-formed case cannot satisfy a requested operation.
 
-    A refused pass (e.g. :meth:`PioModule.to_balanced`) additionally sets
-    ``diagnostics``: the pass's structured findings, each a dict with
-    ``code``, ``severity``, ``message``, and ``target``. Absent on a
-    ``PowerIODataError`` raised elsewhere.
+    Core errors carry typed Diagnostic records. Refused conversion passes
+    retain dictionary findings with code, severity, message, and target.
     """
-
-    diagnostics: List[Dict[str, Any]]
 
 # The runtime re-exports the native record classes; the stub does the same so
 # a `_powerio.Diagnostic` and a `powerio.Diagnostic` are one type to a checker.
@@ -181,6 +185,26 @@ from ._powerio import ScucViolationCosts as ScucViolationCosts
 from ._powerio import SourceSpan as SourceSpan
 from ._powerio import UpdateChange as UpdateChange
 from ._powerio import UpdateReport as UpdateReport
+
+AcOtsIslanding = Literal["forbidden", "allowed"]
+AcOtsCurrentLimits = Literal["skip", "stated", "derive_from_rate_a"]
+
+class AcOtsOptions(TypedDict):
+    switchable: Union[Literal["all", "none"], List[str]]
+    switching_costs: Dict[str, Tuple[float, float]]
+    islanding: AcOtsIslanding
+    max_open: Optional[int]
+    max_switched: Optional[int]
+    current_limits: AcOtsCurrentLimits
+    stated_current_limits: Dict[str, Tuple[Optional[float], Optional[float]]]
+
+class AcOtsBranch(TypedDict):
+    id: str
+    initial_closed: bool
+    switchable: bool
+    switching_cost: Optional[Tuple[float, float]]
+    stated_current: Tuple[Optional[float], Optional[float]]
+    current: Tuple[Optional[float], Optional[float]]
 
 class GenCost(TypedDict):
     model: int
@@ -829,6 +853,77 @@ class DisplayData(NamedTuple):
     kind: Literal["powerworld"]
     data: PwdDisplay
 
+class BusGroup(TypedDict):
+    survivor: int
+    members: List[int]
+
+class RemovedBranch(TypedDict):
+    row: int
+    id: str
+    from_id: int
+    to_id: int
+    survivor: int
+    reason: Literal["zero_impedance", "closed_switch", "shorted"]
+    in_service: bool
+    r: float
+    x: float
+    b: float
+    rate_a: float
+    rate_b: float
+    rate_c: float
+
+class RemovedSwitch(TypedDict):
+    row: int
+    id: str
+    from_id: int
+    to_id: int
+    survivor: int
+    reason: Literal["zero_impedance", "closed_switch", "shorted"]
+    closed: bool
+    thermal_rating: Optional[float]
+
+class RemovedFlow(TypedDict):
+    p_from: float
+    method: Literal["out_of_service", "tree", "reactance", "minimum_norm"]
+
+class RemovedFlows(TypedDict):
+    branches: List[RemovedFlow]
+    switches: List[RemovedFlow]
+    diagnostics: List[Diagnostic]
+
+class BusMerge:
+    _inner: Any
+    def __init__(self, inner: Any) -> None: ...
+    @property
+    def network(self) -> "BalancedNetwork": ...
+    @property
+    def rule(self) -> str: ...
+    @property
+    def merged_buses(self) -> Dict[int, int]: ...
+    @property
+    def groups(self) -> List[BusGroup]: ...
+    @property
+    def removed_branches(self) -> List[RemovedBranch]: ...
+    @property
+    def removed_switches(self) -> List[RemovedSwitch]: ...
+    @property
+    def branch_rows(self) -> List[Optional[int]]: ...
+    @property
+    def switch_rows(self) -> List[Optional[int]]: ...
+    @property
+    def charging_shunts(self) -> List[int]: ...
+    @property
+    def diagnostics(self) -> List[Diagnostic]: ...
+    def survivor(self, bus: int) -> int: ...
+    def calc_removed_flows(
+        self,
+        branch_p_from: Any,
+        branch_p_to: Any,
+        *,
+        generator_p: Any = ...,
+        transformer_3w_p: Any = ...,
+    ) -> RemovedFlows: ...
+
 class BalancedNetwork:
     def component_counts(self) -> dict[str, int]: ...
     # Data attributes and the non-matrix methods delegate to the compiled
@@ -891,6 +986,19 @@ class BalancedNetwork:
     def reference_bus_index(self) -> int: ...
     def reference_bus_indices(self) -> List[int]: ...
     def calc_connectivity_report(self) -> Dict[str, Any]: ...
+    # Per bus columns `bus_ids`, `island` (None for an isolated bus), `p_mw`,
+    # `q_mvar`, and `flags` (lists of names), plus `islands`, `top`,
+    # `total_abs_p_mw`, `total_abs_q_mvar`, and `max_magnitude_mva`.
+    def calc_stated_state_mismatch(
+        self,
+        *,
+        top_k: int = ...,
+        hvdc: str = ...,
+        low_impedance_threshold: float = ...,
+        merge_zero_impedance: bool = ...,
+        lcc_reactive_power: str = ...,
+    ) -> Dict[str, Any]: ...
+    def calc_stated_branch_flows(self) -> Dict[str, Any]: ...
     def to_geo_layer(self) -> Dict[str, Any]: ...
     def apply_geo_layer(
         self, text: str, name_hint: Optional[str] = ...
@@ -967,11 +1075,21 @@ class BalancedNetwork:
         self,
         formula: BranchSusceptanceFormula = ...,
     ) -> Any: ...
+    def merge_buses(
+        self,
+        *,
+        closed_switches: bool = ...,
+        zero_impedance: Optional[Literal["exact", "psse", "impedance"]] = ...,
+        threshold: Optional[float] = ...,
+        charging: Literal["fold", "drop"] = ...,
+    ) -> "BusMerge": ...
     def to_normalized(
         self,
         *,
         clamp_angle_bounds: bool = ...,
         angle_bound_pad: Optional[float] = ...,
+        closed_switches: Literal["merge", "refuse", "keep"] = ...,
+        island_references: Literal["stated", "per_island"] = ...,
     ) -> "BalancedNetwork": ...
     def to_ppc(self) -> Dict[str, Any]: ...
     def to_networkx(self) -> Any: ...
@@ -1075,6 +1193,16 @@ class DcPfInstance(_BalancedCalculation): ...
 class AcPfInstance(_BalancedCalculation): ...
 class DcOpfInstance(_BalancedCalculation): ...
 class AcOpfInstance(_BalancedCalculation): ...
+class AcOtsInstance(_BalancedCalculation):
+    @property
+    def options(self) -> AcOtsOptions: ...
+    @property
+    def branches(self) -> List[AcOtsBranch]: ...
+    def validate_topology(self, closed: Sequence[bool]) -> float: ...
+    def fix_topology(
+        self, closed: Sequence[bool]
+    ) -> Tuple[AcOpfInstance, List[Diagnostic]]: ...
+
 class McAcPfInstance(_MulticonductorCalculation): ...
 class McAcOpfInstance(_MulticonductorCalculation): ...
 class LinDist3FlowPfInstance(_MulticonductorCalculation):
@@ -1131,6 +1259,27 @@ class MonitoredSet(_TypedValue):
 class AcOpfSolution(_BalancedCalculation, _CalculationSolution):
     @property
     def instance(self) -> AcOpfInstance: ...
+class AcOtsSolution(_BalancedCalculation, _CalculationSolution):
+    @property
+    def instance(self) -> AcOtsInstance: ...
+    @classmethod
+    def from_ac_opf_solution(
+        cls,
+        instance: AcOtsInstance,
+        closed: Sequence[bool],
+        solution: AcOpfSolution,
+    ) -> AcOtsSolution: ...
+    @property
+    def branch_closed(self) -> List[bool]: ...
+    @property
+    def switching_cost(self) -> float: ...
+    @property
+    def branches_open(self) -> int: ...
+    @property
+    def branches_switched(self) -> int: ...
+    @property
+    def objective(self) -> float: ...
+    def solved_network(self) -> PioModule[BalancedNetwork]: ...
 class SocwrOpfSolution(_BalancedCalculation, _CalculationSolution):
     @property
     def instance(self) -> AcOpfInstance: ...
@@ -1192,6 +1341,19 @@ class PioModule(Generic[_T]):
     def to_ac_pf_instance(self) -> PioModule[AcPfInstance]: ...
     def to_dc_opf_instance(self) -> PioModule[DcOpfInstance]: ...
     def to_ac_opf_instance(self) -> PioModule[AcOpfInstance]: ...
+    def to_ac_ots_instance(
+        self,
+        *,
+        switchable: Union[Literal["all", "none"], Sequence[str], None] = ...,
+        switching_costs: Optional[Mapping[str, Tuple[float, float]]] = ...,
+        islanding: Optional[AcOtsIslanding] = ...,
+        max_open: Optional[int] = ...,
+        max_switched: Optional[int] = ...,
+        current_limits: Optional[AcOtsCurrentLimits] = ...,
+        stated_current_limits: Optional[
+            Mapping[str, Tuple[Optional[float], Optional[float]]]
+        ] = ...,
+    ) -> PioModule[AcOtsInstance]: ...
     def to_mc_ac_pf_instance(self) -> PioModule[McAcPfInstance]: ...
     def to_mc_ac_opf_instance(self) -> PioModule[McAcOpfInstance]: ...
     def to_lindist3flow_opf_instance(self) -> PioModule[LinDist3FlowOpfInstance]: ...
@@ -1220,7 +1382,11 @@ def apply_bus_load_active_power(
 ) -> UpdateReport: ...
 
 def parse(
-    source: Any, *, format: Optional[Format] = ..., name: Optional[str] = ...
+    source: Any, *, format: Optional[Format] = ..., name: Optional[str] = ...,
+    sincal_multiconductor: Optional[dist.SincalReadOptions] = ...,
+    sincal_balanced: Optional[SincalBalancedReadOptions] = ...,
+    acquisition_root: Optional[Any] = ...,
+    named_buffers: Optional[Mapping[str, bytes]] = ...,
 ) -> PioModule[Any]: ...
 def emit(
     module: PioModule[Any], format: Format, destination: Optional[Any] = ...

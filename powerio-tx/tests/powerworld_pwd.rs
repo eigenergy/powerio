@@ -19,7 +19,7 @@ use std::path::Path;
 
 use powerio_tx::PwdSubstation;
 use powerio_tx::format::powerworld::{
-    __parse_aux, __parse_pwd, __parse_pwd_display, __parse_pwd_file,
+    __parse_aux, __parse_pwd, __parse_pwd_display, __parse_pwd_file, __parse_pwd_layer,
 };
 
 /// (number, name, latitude, longitude) per aux Substation row. Handles both
@@ -337,4 +337,42 @@ fn a_titled_display_header_finds_the_stamp_past_its_title() {
         (display.canvas_width, display.canvas_height),
         (plain.canvas_width, plain.canvas_height)
     );
+}
+
+/// The shared-layer decoder follows more untrusted offsets than the legacy
+/// substation-only reader. Keep its corruption behavior explicit: truncated
+/// records and byte mutations must return a structured result, never panic.
+#[test]
+fn corrupt_display_layers_never_panic() {
+    let pwd = fs::read(common::powerworld_vendored("ACTIVSg200.pwd")).unwrap();
+    let check = |bytes: &[u8]| {
+        let result = std::panic::catch_unwind(|| __parse_pwd_layer(bytes));
+        assert!(
+            result.is_ok(),
+            "PowerWorld layer parser panicked on {} input bytes",
+            bytes.len()
+        );
+    };
+
+    // Sample the full truncation range and densely cover the final bytes,
+    // where partially present records most often expose unchecked reads.
+    let stride = 9973;
+    for len in (0..pwd.len())
+        .step_by(stride)
+        .chain(pwd.len().saturating_sub(48)..pwd.len())
+    {
+        check(&pwd[..len]);
+    }
+
+    // Mutate the header and record stream at deterministic offsets. Keep the
+    // corpus byte-for-byte reproducible rather than relying on random fuzzing.
+    let mut copy = pwd.clone();
+    for i in (0..pwd.len()).step_by(stride) {
+        let original = copy[i];
+        for byte in [0x00, 0xff] {
+            copy[i] = byte;
+            check(&copy);
+        }
+        copy[i] = original;
+    }
 }

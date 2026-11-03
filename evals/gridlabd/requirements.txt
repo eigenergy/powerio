@@ -1,0 +1,5 @@
+# Oracle-only dependencies; never installed by PowerIO itself.
+opendssdirect.py==0.9.4
+dss-python==0.15.7
+dss-python-backend==0.14.5
+numpy==2.5.3

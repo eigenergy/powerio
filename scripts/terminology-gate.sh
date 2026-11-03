@@ -46,6 +46,8 @@ public_paths=(
   powerio/src
   powerio-core/README.md
   powerio-core/src
+  powerio-tnd/README.md
+  powerio-tnd/src
   powerio-tx/README.md
   powerio-tx/src
   powerio-dist/README.md

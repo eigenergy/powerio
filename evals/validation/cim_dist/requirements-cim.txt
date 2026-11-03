@@ -1,0 +1,11 @@
+# Distribution CIM validation dependencies. Benchmark-only tools, NOT
+# dependencies of a published PowerIO crate or the Python wheel. They live in
+# their own virtualenv, apart from evals/validation/requirements.txt, because
+# CIM-Graph pulls in gridappsd-python:
+#
+#   python -m venv .venv-cim
+#   .venv-cim/bin/python -m pip install -r evals/validation/cim_dist/requirements-cim.txt
+#
+# Exact pins: CIM-Graph is an alpha release whose generated profile classes
+# are the schema oracle for leg D, so a new version is a new oracle.
+cim-graph==0.5.0a12    # schema_check.py: cim17v40 and rc4_2021 profile classes

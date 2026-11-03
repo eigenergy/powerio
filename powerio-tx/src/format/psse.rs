@@ -13,22 +13,24 @@
 //! step blocks on [`SwitchedShuntControl`]. Transformer impedance and winding
 //! bases (`CZ`/`CW`) are normalized to the system base and per unit tap ratios;
 //! the serializer emits the canonical `CZ = 1`, `CW = 1` form.
-//! Two-terminal DC lines parse and emit as the neutral
+//! Two-terminal and VSC DC lines parse and emit as the neutral
 //! [`Hvdc`] (power-setpoint model; converter firing-angle/transformer detail
-//! rides through in extras). The other advanced sections (VSC and multi-terminal
-//! DC, FACTS, GNE) are not modeled: during emission they become empty sections,
+//! and the VSC converter control fields ride through in extras). A shunt FACTS
+//! device reads and writes as a [`StaticVarCompensator`]. The other advanced
+//! sections (multi-terminal DC, series FACTS, GNE) are not modeled: during
+//! emission they become empty sections,
 //! on read they're skipped, and storage carried on the `BalancedNetwork` is reported as
 //! dropped. Same format emission is byte exact through the retained source (see
 //! [`crate::emit`]); this serializer is the cross format path.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 
 use serde_json::Value;
 
 use super::{
     TextEmission, branch_rating_set_drop_warning, jnum, sanitize_quoted,
-    warn_extra_branch_rating_sets,
+    warn_extra_branch_rating_sets, warn_winding_rating_sets,
 };
 use std::borrow::Cow;
 
@@ -37,9 +39,16 @@ use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     Area, BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, BranchRatingSet, Bus,
     BusId, BusType, ComponentMetadata, DetailedConnectivity, Extras, Generator,
-    GeneratorEnergySource, Hvdc, Impedance, Load, LoadVoltageModel, Shunt, ShuntBlock,
-    SolverParams, SourceFormat, Switch, SwitchedShuntControl, SwitchedShuntMode, TerminalReference,
-    Transformer3W, TransformerControl, TransformerControlMode, Winding,
+    GeneratorEnergySource, Hvdc, HvdcConverter, HvdcConverterKind, HvdcConvertersMode, Impedance,
+    Load, LoadVoltageModel, Shunt, ShuntBlock, SolverParams, SourceFormat, StaticVarCompensator,
+    StaticVarCompensatorRegulationMode, Switch, SwitchedShuntControl, SwitchedShuntMode,
+    TerminalReference, Transformer3W, TransformerControl, TransformerControlMode,
+    WINDING_IN_SERVICE_EXTRA, WINDING_RATING_SETS_EXTRA, Winding,
+};
+use crate::network::{
+    IMPEDANCE_CORRECTION_APPLIED_EXTRA, IMPEDANCE_CORRECTION_EXTRA,
+    IMPEDANCE_CORRECTION_NOMINAL_EXTRA, ImpedanceCorrection, ImpedanceCorrectionPoint,
+    ImpedanceCorrectionVariable, correction_nominal_edited, current_correction_nominal,
 };
 use crate::{Error, Result};
 
@@ -80,16 +89,19 @@ fn read_extra_branch_ratings(
     Ok(ratings)
 }
 
-fn psse_extra_rating_values(
-    branch: &Branch,
-    branch_index: usize,
-    warnings: &mut Diagnostics,
+/// Place `rating_sets` in the nine RATE4-RATE12 slots of a PSS/E v34/v35
+/// record. A set named for a free slot takes it; any other set takes the first
+/// free slot and is reported with that slot, and a set left over once every
+/// slot is taken is reported with `None`.
+fn psse_extra_rating_slots(
+    rating_sets: &[BranchRatingSet],
+    mut report: impl FnMut(&BranchRatingSet, Option<usize>),
 ) -> [f64; PSSE_EXTRA_BRANCH_RATINGS] {
     let mut values = [0.0; PSSE_EXTRA_BRANCH_RATINGS];
     let mut used = [false; PSSE_EXTRA_BRANCH_RATINGS];
     let mut deferred = Vec::new();
 
-    for rating in &branch.rating_sets {
+    for rating in rating_sets {
         if let Some(slot) = psse_extra_rating_slot(&rating.name)
             && !used[slot]
         {
@@ -101,27 +113,72 @@ fn psse_extra_rating_values(
     }
 
     for rating in deferred {
-        if let Some(slot) = used.iter().position(|is_used| !*is_used) {
+        let slot = used.iter().position(|is_used| !*is_used);
+        if let Some(slot) = slot {
             values[slot] = rating.rate_mva;
             used[slot] = true;
-            warnings.push(
-                &codes::EMIT_PSSE_RATING_SET_REMAPPED,
-                branch_rating_set_rename_warning(
-                    branch_index,
-                    branch,
-                    rating,
-                    &psse_extra_rating_name(slot),
-                ),
-            );
-        } else {
-            warnings.push(
-                &F.rating_set_dropped,
-                branch_rating_set_drop_warning("PSS/E v34/v35", branch_index, branch, rating),
-            );
         }
+        report(rating, slot);
     }
 
     values
+}
+
+fn psse_extra_rating_values(
+    branch: &Branch,
+    branch_index: usize,
+    warnings: &mut Diagnostics,
+) -> [f64; PSSE_EXTRA_BRANCH_RATINGS] {
+    psse_extra_rating_slots(&branch.rating_sets, |rating, slot| match slot {
+        Some(slot) => warnings.push(
+            &codes::EMIT_PSSE_RATING_SET_REMAPPED,
+            branch_rating_set_rename_warning(
+                branch_index,
+                branch,
+                rating,
+                &psse_extra_rating_name(slot),
+            ),
+        ),
+        None => warnings.push(
+            &F.rating_set_dropped,
+            branch_rating_set_drop_warning("PSS/E v34/v35", branch_index, branch, rating),
+        ),
+    })
+}
+
+/// The RATE4-RATE12 columns of one three winding transformer winding line.
+fn psse_winding_extra_rating_values(
+    transformer: &Transformer3W,
+    winding: usize,
+    warnings: &mut Diagnostics,
+) -> [f64; PSSE_EXTRA_BRANCH_RATINGS] {
+    let label = three_winding_label(transformer, winding);
+    let rating_sets = transformer.winding_rating_sets(winding);
+    psse_extra_rating_slots(&rating_sets, |rating, slot| {
+        let set = format!("{label} rating set {}={} MVA", rating.name, rating.rate_mva);
+        let Some(slot) = slot else {
+            let message = format!("{set} dropped: PSS/E v34/v35 has twelve ratings per winding");
+            warnings.push(&F.rating_set_dropped, message);
+            return;
+        };
+        let name = psse_extra_rating_name(slot);
+        warnings.push(
+            &codes::EMIT_PSSE_RATING_SET_REMAPPED,
+            format!(
+                "{set} emitted as {name} in PSS/E v34/v35; rating set names outside RATE4-RATE12 are not preserved"
+            ),
+        );
+    })
+}
+
+/// `three winding transformer I-J-K winding N`, naming one winding in a
+/// diagnostic.
+fn three_winding_label(transformer: &Transformer3W, winding: usize) -> String {
+    let [i, j, k] = transformer.windings.each_ref().map(|winding| winding.bus);
+    format!(
+        "three winding transformer {i}-{j}-{k} winding {}",
+        winding + 1
+    )
 }
 
 fn branch_rating_set_rename_warning(
@@ -143,6 +200,7 @@ fn branch_rating_set_rename_warning(
 
 fn warn_psse_extra_branch_ratings_dropped(net: &BalancedNetwork, warnings: &mut Diagnostics) {
     warn_extra_branch_rating_sets(&F, "PSS/E v33", net, warnings);
+    warn_winding_rating_sets(&F, "PSS/E v33", net, warnings);
 }
 
 fn warn_generator_energy_sources_dropped(net: &BalancedNetwork, warnings: &mut Diagnostics) {
@@ -177,6 +235,637 @@ fn warn_generator_energy_sources_dropped(net: &BalancedNetwork, warnings: &mut D
             "{total} generator energy source value(s) dropped ({summary}): PSS/E RAW and RAWX generator records have no energy source field"
         ),
     );
+}
+
+/// The impedance correction tables a PSS/E write states, and the table number
+/// each transformer winding names.
+#[derive(Default)]
+struct WrittenImpedanceTables {
+    tables: BTreeMap<u32, Vec<ImpedanceCorrectionPoint>>,
+    /// Two winding transformer rows in the branch table.
+    branches: BTreeMap<usize, u32>,
+    /// Noncanonical winding-2 ratios needed to preserve a ratio table's
+    /// classification after converting branch-tap coordinates back to RAW.
+    branch_ratio2: BTreeMap<usize, f64>,
+    /// Three winding transformer rows and windings.
+    windings: BTreeMap<(usize, usize), u32>,
+}
+
+/// Number the tables the transformers carry. A winding keeps its source
+/// table number unless another winding already wrote different points under
+/// it, which happens when one source table maps to different branch-tap
+/// coordinates through different winding-2 ratios; the table is
+/// then written again under a free number, and the change is reported.
+fn assign_impedance_tables(
+    net: &BalancedNetwork,
+    rev: u32,
+    warnings: &mut Diagnostics,
+) -> WrittenImpedanceTables {
+    let mut corrections = Vec::new();
+    for (row, branch) in net.branches().iter().enumerate() {
+        if branch.is_transformer()
+            && let Some(correction) = branch.impedance_correction()
+        {
+            corrections.push((ImpedanceTarget::Branch(row), correction));
+        }
+    }
+    for (row, transformer) in net.transformers_3w().iter().enumerate() {
+        for winding in 0..3 {
+            if let Some(correction) = transformer.winding_impedance_correction(winding) {
+                corrections.push((ImpedanceTarget::Winding(row, winding), correction));
+            }
+        }
+    }
+    let mut written = WrittenImpedanceTables::default();
+    let mut next_free = corrections
+        .iter()
+        .map(|(_, correction)| correction.table)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+    // A line starting with table number 0 ends the section in PSS/E.
+    let mut zero_table = None;
+    for (target, mut correction) in corrections {
+        let Some(ratio2) = prepare_impedance_points(&mut correction, target, rev, net, warnings)
+        else {
+            continue;
+        };
+        if correction.table == 0 {
+            let table = *zero_table.get_or_insert_with(|| {
+                let table = next_free;
+                next_free = next_free.saturating_add(1);
+                table
+            });
+            warnings.push(
+                &F.value_substituted,
+                format!(
+                    "impedance correction table 0 for {} would end the section; written as table {table}",
+                    impedance_target_label(net, target)
+                ),
+            );
+            correction.table = table;
+        }
+        if let ImpedanceTarget::Branch(row) = target {
+            written.branch_ratio2.insert(row, ratio2);
+        }
+        let same_points = |points: &Vec<ImpedanceCorrectionPoint>| *points == correction.points;
+        let table = match written.tables.get(&correction.table) {
+            None => {
+                written
+                    .tables
+                    .insert(correction.table, correction.points.clone());
+                correction.table
+            }
+            Some(points) if same_points(points) => correction.table,
+            Some(_) => {
+                let existing = written
+                    .tables
+                    .iter()
+                    .find(|(_, points)| same_points(points))
+                    .map(|(table, _)| *table);
+                let table = if let Some(table) = existing {
+                    table
+                } else {
+                    let table = next_free;
+                    next_free = next_free.saturating_add(1);
+                    written.tables.insert(table, correction.points.clone());
+                    table
+                };
+                warnings.push(
+                    &F.value_substituted,
+                    format!(
+                        "impedance correction table {} states different per unit points for {}; written as table {table}",
+                        correction.table,
+                        impedance_target_label(net, target)
+                    ),
+                );
+                table
+            }
+        };
+        match target {
+            ImpedanceTarget::Branch(row) => {
+                written.branches.insert(row, table);
+            }
+            ImpedanceTarget::Winding(row, winding) => {
+                written.windings.insert((row, winding), table);
+            }
+        }
+    }
+    written
+}
+
+/// Map a neutral correction to RAW table coordinates without changing its
+/// ratio/angle classification. Returns the winding-2 ratio to emit, or none
+/// when the table cannot be represented and was reported.
+fn prepare_impedance_points(
+    correction: &mut ImpedanceCorrection,
+    target: ImpedanceTarget,
+    rev: u32,
+    net: &BalancedNetwork,
+    warnings: &mut Diagnostics,
+) -> Option<f64> {
+    let mut ratio2 = 1.0;
+    correction
+        .points
+        .sort_by(|a, b| a.value.total_cmp(&b.value));
+    if correction.variable == ImpedanceCorrectionVariable::Ratio
+        && impedance_table_variable(&correction.points) != ImpedanceCorrectionVariable::Ratio
+    {
+        if let (ImpedanceTarget::Branch(_), Some(first), Some(last)) =
+            (target, correction.points.first(), correction.points.last())
+            && first.value > 0.0
+            && last.value <= 3.0 * first.value
+        {
+            // Keeping WINDV2=1 would turn this ratio table into an angle
+            // table. Choose an equivalent pair of ratios and undo the
+            // t2² impedance referral when emitting the transformer.
+            ratio2 = 2.0 / (first.value + last.value);
+            for point in &mut correction.points {
+                point.value = (point.value * ratio2).clamp(0.5, 1.5);
+            }
+        } else {
+            warnings.push(&F.field_dropped, format!(
+                "impedance correction table {} for {} dropped: its ratio range cannot be represented as a PSS/E ratio table",
+                correction.table, impedance_target_label(net, target),
+            ));
+            return None;
+        }
+    }
+    let written_points = if rev < 34 {
+        correction.points.len().min(11)
+    } else {
+        correction.points.len()
+    };
+    if correction.variable == ImpedanceCorrectionVariable::Angle
+        && let Some(first) = correction.points.first()
+        && first.value >= 0.5
+        && correction.points[..written_points]
+            .last()
+            .is_some_and(|last| last.value <= 1.5)
+    {
+        // Preserve angle classification even if revision 33 truncates
+        // the far end of a long table. Extending the clamped end with
+        // the same factor does not change its interpolation function.
+        correction.points.insert(
+            0,
+            ImpedanceCorrectionPoint::new(-1.0, first.factor_re, first.factor_im),
+        );
+    }
+    Some(ratio2)
+}
+
+fn impedance_target_label(net: &BalancedNetwork, target: ImpedanceTarget) -> String {
+    match target {
+        ImpedanceTarget::Branch(row) => {
+            let branch = &net.branches()[row];
+            format!("transformer {}-{}", branch.from, branch.to)
+        }
+        ImpedanceTarget::Winding(row, winding) => {
+            let [i, j, k] = net.transformers_3w()[row]
+                .windings
+                .each_ref()
+                .map(|winding| winding.bus);
+            format!(
+                "three winding transformer {i}-{j}-{k} winding {}",
+                winding + 1
+            )
+        }
+    }
+}
+
+/// Report every transformer whose impedance was edited after
+/// `apply_impedance_correction` scaled it. The edited impedance is the
+/// nominal value the correction scales from then on, so the writer states it
+/// beside the table rather than the nominal value recorded before the edit.
+fn warn_edited_correction_nominals(net: &BalancedNetwork, warnings: &mut Diagnostics) {
+    for branch in net.branches() {
+        if let Some(correction) = branch.impedance_correction()
+            && correction_nominal_edited(&branch.extras, &[branch.r, branch.x])
+        {
+            warnings.push(
+                &F.value_substituted,
+                format!(
+                    "transformer {}-{} impedance was edited after its impedance correction was applied; the edited R, X are written as the nominal impedance table {} corrects",
+                    branch.from, branch.to, correction.table
+                ),
+            );
+        }
+    }
+    for t in net.transformers_3w() {
+        if (0..3).any(|w| t.winding_impedance_correction(w).is_some())
+            && correction_nominal_edited(&t.extras, &t.z.map(|z| [z.r, z.x]))
+        {
+            warnings.push(
+                &F.value_substituted,
+                format!(
+                    "three winding transformer {}-{}-{} impedance was edited after its impedance correction was applied; the edited pairwise R, X are written as the nominal impedances its tables correct",
+                    t.windings[0].bus, t.windings[1].bus, t.windings[2].bus,
+                ),
+            );
+        }
+    }
+}
+
+/// Report the TAB references that name no table the network carries (one the
+/// source never stated, or a correction cleared since it was read). A write
+/// states TAB = 0 for them, since a TAB naming no written table does not read
+/// back.
+fn warn_unbacked_table_references(net: &BalancedNetwork, warnings: &mut Diagnostics) {
+    let mut unbacked = Vec::new();
+    for b in net.branches() {
+        if b.impedance_correction().is_none()
+            && let Some(tab) = extra_i64(&b.extras, "psse_tab").filter(|tab| *tab != 0)
+        {
+            unbacked.push(format!("transformer {}-{} TAB {tab}", b.from, b.to));
+        }
+    }
+    for t in net.transformers_3w() {
+        for w in 0..3 {
+            if t.winding_impedance_correction(w).is_none()
+                && let Some(tab) =
+                    extra_i64(&t.extras, &format!("psse_tab{}", w + 1)).filter(|tab| *tab != 0)
+            {
+                unbacked.push(format!(
+                    "three winding transformer {}-{}-{} winding {} TAB {tab}",
+                    t.windings[0].bus,
+                    t.windings[1].bus,
+                    t.windings[2].bus,
+                    w + 1
+                ));
+            }
+        }
+    }
+    if !unbacked.is_empty() {
+        warnings.push(
+            &F.field_dropped,
+            format!(
+                "{} impedance correction table reference(s) written as TAB = 0: the network carries no table for them ({})",
+                unbacked.len(),
+                unbacked.join(", ")
+            ),
+        );
+    }
+}
+
+/// Why a write states a transformer's corrected impedance with no table.
+#[derive(Clone, Copy)]
+enum CorrectionFreeze {
+    /// Revisions before 35 cannot state ZCOD=1 pairwise tables.
+    PairwiseBeforeRevision35,
+    /// ZCOD=1 names no single adjustable winding, which the reader refuses.
+    PairwiseWithoutControlWinding,
+}
+
+/// The reason a write must freeze transformer `t`'s correction tables, if any.
+fn three_winding_correction_freeze(t: &Transformer3W, rev: u32) -> Option<CorrectionFreeze> {
+    if !(0..3).any(|w| t.winding_impedance_correction(w).is_some()) {
+        return None;
+    }
+    if extra_i64(&t.extras, "psse_zcod") != Some(1) {
+        return None;
+    }
+    if rev < 35 {
+        Some(CorrectionFreeze::PairwiseBeforeRevision35)
+    } else if t.impedance_correction_control_winding().is_none() {
+        Some(CorrectionFreeze::PairwiseWithoutControlWinding)
+    } else {
+        None
+    }
+}
+
+/// Freeze the correction tables a write cannot state: apply them, then drop
+/// the tables and their TAB references, so the record states the corrected
+/// impedance with TAB = 0. Returns `None` when every table can be written.
+/// Other transformers keep their tables and nominal record.
+fn freeze_unwritable_corrections(
+    net: &BalancedNetwork,
+    rev: u32,
+    warnings: &mut Diagnostics,
+) -> Option<BalancedNetwork> {
+    let reasons: Vec<_> = net
+        .transformers_3w()
+        .iter()
+        .map(|t| three_winding_correction_freeze(t, rev))
+        .collect();
+    if reasons.iter().all(Option::is_none) {
+        return None;
+    }
+    let mut projected = net.clone();
+    projected.apply_impedance_correction();
+    for (t, reason) in projected.transformers_3w_mut().iter_mut().zip(reasons) {
+        let Some(reason) = reason else {
+            continue;
+        };
+        for w in 0..3 {
+            t.set_winding_impedance_correction(w, None);
+            t.extras.remove(&format!("psse_tab{}", w + 1));
+        }
+        let [i, j, k] = t.windings.each_ref().map(|w| w.bus);
+        let message = match reason {
+            CorrectionFreeze::PairwiseBeforeRevision35 => {
+                t.extras.remove("psse_zcod");
+                format!(
+                    "three winding transformer {i}-{j}-{k} ZCOD=1 impedance correction frozen at its present setting: revision {rev} cannot state pairwise correction tables"
+                )
+            }
+            CorrectionFreeze::PairwiseWithoutControlWinding => format!(
+                "three winding transformer {i}-{j}-{k} ZCOD=1 impedance correction frozen at its present impedances with TAB = 0: no single winding has an adjustable control to select the table setting, and PSS/E cannot read a ZCOD=1 table without one"
+            ),
+        };
+        warnings.push(&F.value_collapsed, message);
+    }
+    Some(projected)
+}
+
+/// Write the impedance correction section's records. From revision 34 a
+/// table states complex factors, six points per line, ended by a
+/// `0.0, 0.0, 0.0` point; revision 33 states eleven real `T, F` pairs on one
+/// line, padded with `0.0, 0.0`.
+fn write_impedance_tables(
+    out: &mut String,
+    written: &WrittenImpedanceTables,
+    rev: u32,
+    num: &mut impl FnMut(f64) -> String,
+    warnings: &mut Diagnostics,
+) {
+    const REVISION_33_POINTS: usize = 11;
+    for (table, points) in &written.tables {
+        if rev >= 34 {
+            let mut triples = points
+                .iter()
+                .map(|point| {
+                    format!(
+                        "{}, {}, {}",
+                        num(point.value),
+                        num(point.factor_re),
+                        num(point.factor_im)
+                    )
+                })
+                .collect::<Vec<_>>();
+            triples.push("0.0, 0.0, 0.0".to_owned());
+            for (line, chunk) in triples.chunks(6).enumerate() {
+                if line == 0 {
+                    let _ = writeln!(out, "{table}, {}", chunk.join(", "));
+                } else {
+                    let _ = writeln!(out, "{}", chunk.join(", "));
+                }
+            }
+            continue;
+        }
+        if points.len() > REVISION_33_POINTS {
+            warnings.push(
+                &F.value_truncated,
+                format!(
+                    "impedance correction table {table} states {} points; a PSS/E revision 33 table holds {REVISION_33_POINTS}, so the first {REVISION_33_POINTS} were written",
+                    points.len()
+                ),
+            );
+        }
+        if points.iter().any(|point| point.factor_im != 0.0) {
+            warnings.push(
+                &F.value_collapsed,
+                format!(
+                    "impedance correction table {table} states complex factors; a PSS/E revision 33 table states real factors, so the imaginary parts were dropped"
+                ),
+            );
+        }
+        let mut pairs = points
+            .iter()
+            .take(REVISION_33_POINTS)
+            .map(|point| format!("{}, {}", num(point.value), num(point.factor_re)))
+            .collect::<Vec<_>>();
+        pairs.resize(REVISION_33_POINTS, "0.0, 0.0".to_owned());
+        let _ = writeln!(out, "{table}, {}", pairs.join(", "));
+    }
+}
+
+/// Reserve every retained name before allocating generated names, including
+/// names that become identical after PSS/E quoting sanitation.
+fn shunt_facts_names(
+    net: &BalancedNetwork,
+    warnings: &mut Diagnostics,
+    sanitized_quoted: &mut usize,
+) -> Vec<String> {
+    let requested = net
+        .static_var_compensators()
+        .iter()
+        .map(|svc| {
+            svc.extras
+                .get("psse_name")
+                .and_then(Value::as_str)
+                .map(|raw| {
+                    let name = sanitize_quoted(raw, NAME_FORBIDDEN, ' ').trim().to_owned();
+                    *sanitized_quoted += usize::from(name != raw);
+                    name
+                })
+                .filter(|name| !name.is_empty())
+        })
+        .collect::<Vec<_>>();
+    let reserved = requested.iter().flatten().cloned().collect::<BTreeSet<_>>();
+    let mut used = BTreeSet::new();
+    let mut renamed = 0usize;
+    let names = requested
+        .into_iter()
+        .enumerate()
+        .map(|(index, requested)| {
+            if let Some(name) = requested
+                .as_ref()
+                .filter(|name| used.insert((*name).clone()))
+            {
+                return name.clone();
+            }
+            renamed += usize::from(requested.is_some());
+            let base = format!("SVC{}", index + 1);
+            let mut candidate = base.clone();
+            let mut suffix = 2usize;
+            while reserved.contains(&candidate) || used.contains(&candidate) {
+                candidate = format!("{base}_{suffix}");
+                suffix += 1;
+            }
+            used.insert(candidate.clone());
+            candidate
+        })
+        .collect();
+    if renamed > 0 {
+        warnings.push(&F.value_substituted, format!(
+            "{renamed} FACTS device name(s) collided after PSS/E sanitation; allocated unique names"
+        ));
+    }
+    names
+}
+
+/// Write each static var compensator as a shunt FACTS device record
+/// (`J = 0`), the inverse of [`read_shunt_facts`], and report what the
+/// records cannot state.
+fn write_shunt_facts(
+    out: &mut String,
+    net: &BalancedNetwork,
+    rev: u32,
+    num: &mut impl FnMut(f64) -> String,
+    warnings: &mut Diagnostics,
+    sanitized_quoted: &mut usize,
+) -> Vec<String> {
+    let mut asymmetric = 0usize;
+    let mut stated_output = 0usize;
+    let mut other_control = 0usize;
+    let mut defaulted_setpoint = 0usize;
+    let names = shunt_facts_names(net, warnings, sanitized_quoted);
+    for (svc, name) in net.static_var_compensators().iter().zip(&names) {
+        let limit = svc.b_max_siemens.abs().max(svc.b_min_siemens.abs());
+        asymmetric +=
+            usize::from((svc.b_max_siemens + svc.b_min_siemens).abs() > 1e-9 * limit.max(1.0));
+        stated_output += usize::from(svc.p != 0.0 || svc.q != 0.0);
+        other_control += usize::from(
+            svc.regulation_mode != StaticVarCompensatorRegulationMode::Voltage || !svc.regulating,
+        );
+        defaulted_setpoint += usize::from(svc.voltage_setpoint_kv <= 0.0);
+        let record = shunt_facts_record(net, svc, name, rev, num, warnings, sanitized_quoted);
+        let _ = writeln!(out, "{record}");
+    }
+    let approximated = net
+        .static_var_compensators()
+        .iter()
+        .filter(|svc| svc.b_min_siemens != 0.0 || svc.b_max_siemens != 0.0)
+        .count();
+    for (count, code, what) in [
+        (
+            approximated,
+            &F.value_substituted,
+            "have fixed susceptance limits; SHMX is a current limit matched at unity device-bus voltage only, so reactive limits differ away from unity voltage",
+        ),
+        (
+            asymmetric,
+            &F.value_collapsed,
+            "state unequal capacitive and inductive limits; a shunt FACTS device states one limit, SHMX, so the larger was written",
+        ),
+        (
+            stated_output,
+            &F.field_dropped,
+            "state terminal power; a FACTS device record states none",
+        ),
+        (
+            other_control,
+            &F.value_substituted,
+            "do not regulate voltage; each was written as a shunt FACTS device, which regulates voltage",
+        ),
+        (
+            defaulted_setpoint,
+            &F.value_defaulted,
+            "state no voltage setpoint; VSET 1.0 was written",
+        ),
+    ] {
+        if count > 0 {
+            warnings.push(code, format!("{count} static var compensator(s) {what}"));
+        }
+    }
+    names
+}
+
+/// One shunt FACTS device record: `SHMX` is the larger susceptance limit at
+/// the bus base kV, `VSET` the voltage setpoint in p.u., and the fields the
+/// compensator has no home for come from the retained source fields or the
+/// PSS/E defaults.
+#[allow(clippy::float_cmp)] // exact: a retained field is restated only when it maps to the typed value
+fn shunt_facts_record(
+    net: &BalancedNetwork,
+    svc: &StaticVarCompensator,
+    name: &str,
+    rev: u32,
+    num: &mut impl FnMut(f64) -> String,
+    warnings: &mut Diagnostics,
+    sanitized_quoted: &mut usize,
+) -> String {
+    let kv = net
+        .buses()
+        .iter()
+        .find(|bus| bus.id == svc.bus)
+        .map(|bus| bus.base_kv)
+        .filter(|kv| kv.is_finite() && *kv > 0.0)
+        .unwrap_or(1.0);
+    let mut quoted = |key: &str, fallback: &str| {
+        let raw = svc
+            .extras
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or(fallback);
+        let value = sanitize_quoted(raw, NAME_FORBIDDEN, ' ');
+        *sanitized_quoted += usize::from(matches!(value, std::borrow::Cow::Owned(_)));
+        value.into_owned()
+    };
+    let mname = quoted("psse_mname", "");
+    let mode = if svc.in_service {
+        extra_i64(&svc.extras, "psse_mode").unwrap_or(1)
+    } else {
+        0
+    };
+    let (regulated, node) = regulating_target(
+        net,
+        svc.regulating_terminal.as_ref(),
+        facts_regulated_bus(&svc.extras),
+        format_args!("FACTS device at bus {}", svc.bus),
+        warnings,
+    );
+    // VSET uses the regulated terminal's base, whereas SHMX uses the
+    // device bus base even when those voltage levels differ.
+    let regulated_kv = if regulated == 0 {
+        kv
+    } else {
+        net.buses().iter().find(|bus| bus.id.0 == regulated)
+            .map(|bus| bus.base_kv).filter(|base| base.is_finite() && *base > 0.0)
+            .unwrap_or_else(|| {
+                warnings.push(&F.value_substituted, format!(
+                    "PSS/E FACTS device {name:?}: regulated bus {regulated} has no positive base kV; VSET uses the device bus base"
+                ));
+                kv
+            })
+    };
+    let vset = if svc.voltage_setpoint_kv > 0.0 {
+        extra_f64(&svc.extras, "psse_vset")
+            .filter(|vset| vset * regulated_kv == svc.voltage_setpoint_kv)
+            .unwrap_or(svc.voltage_setpoint_kv / regulated_kv)
+    } else {
+        1.0
+    };
+    let regulation = if rev >= 35 {
+        format!("{regulated}, {node}, '{mname}'")
+    } else if rev == 34 {
+        format!("{regulated}, '{mname}', {node}")
+    } else {
+        if node != 0 {
+            warnings.push(&F.field_dropped, format!(
+                "PSS/E FACTS device at bus {}: regulating node {node} has no NREG field before revision 34; emitted only REMOT", svc.bus
+            ));
+        }
+        format!("{regulated}, '{mname}'")
+    };
+    let float = |key: &str, default: f64| extra_f64(&svc.extras, key).unwrap_or(default);
+    let limit = svc.b_max_siemens.abs().max(svc.b_min_siemens.abs());
+    let shmx = extra_f64(&svc.extras, "psse_shmx")
+        .filter(|shmx| shmx / (kv * kv) == limit)
+        .unwrap_or(limit * (kv * kv));
+    let fields = [
+        float("psse_pdes", 0.0),
+        float("psse_qdes", 0.0),
+        vset,
+        shmx,
+        float("psse_trmx", 9999.0),
+        float("psse_vtmn", 0.9),
+        float("psse_vtmx", 1.1),
+        float("psse_vsmx", 1.0),
+        float("psse_imx", 0.0),
+        float("psse_linx", 0.05),
+        float("psse_rmpct", 100.0),
+    ]
+    .map(&mut *num)
+    .join(", ");
+    let owner = extra_i64(&svc.extras, "psse_owner").unwrap_or(1);
+    let set1 = num(float("psse_set1", 0.0));
+    let set2 = num(float("psse_set2", 0.0));
+    let vsref = extra_i64(&svc.extras, "psse_vsref").unwrap_or(0);
+    format!(
+        "'{name}', {}, 0, {mode}, {fields}, {owner}, {set1}, {set2}, {vsref}, {regulation}",
+        svc.bus
+    )
 }
 
 /// Characters that would corrupt a single-quoted PSS/E name field. The quote
@@ -245,10 +934,14 @@ fn write_psse(net: &BalancedNetwork) -> TextEmission {
 ///
 /// Revisions 34 and 35 add the expanded system-wide header with its
 /// end-of-system-wide-data marker, the named 12-rating branch record, the
-/// 12-rating transformer winding line (COD at 15, NODE after CONT), and the
-/// load distributed-generation / load-type trailing columns; 35 also inserts
-/// the generator NREG/BASLOD columns and the switched shunt ID/NREG columns
-/// with (S, N, B) step triples. The reader keys each layout off the header
+/// system switching device section, the 12-rating transformer winding line
+/// (COD at 15) with the winding node, and the load distributed-generation /
+/// load-type trailing columns. Revision 34 appends each node column to the end
+/// of its record: NOD after CNXA on a winding line, NREG after WPF on a
+/// generator, and NREG after the eighth step block on a switched shunt. 35
+/// moves the winding node to just after CONT, inserts the generator
+/// NREG/BASLOD columns, and inserts the switched shunt ID/NREG columns with
+/// (S, N, B) step triples. The reader keys each layout off the header
 /// revision. Any other `rev` falls back to the 33 layout. Same-format
 /// byte exact echo still rides the retained source (see [`crate::emit`]);
 /// this serializer is the cross format path.
@@ -260,10 +953,8 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> TextEmission {
 /// The RAWX writer reuses the electrical records but writes detailed
 /// connectivity directly into JSON tables. Omitting the nested RAW substation
 /// records here prevents duplicate conversion work and duplicate diagnostics.
-pub(super) fn write_psse_rev_without_detailed_connectivity(
-    net: &BalancedNetwork,
-    rev: u32,
-) -> TextEmission {
+/// The impedance correction section becomes the RAWX `impcor` table.
+pub(super) fn write_psse_rev_for_rawx(net: &BalancedNetwork, rev: u32) -> TextEmission {
     write_psse_rev_inner(net, rev, false)
 }
 
@@ -277,6 +968,59 @@ fn write_psse_rev_inner(
     // branches and carries 12 ratings, and adds load DG / load-type columns.
     let modern = rev >= 34;
     let mut warnings = Diagnostics::new();
+    warn_edited_correction_nominals(net, &mut warnings);
+    // Freeze the correction tables this write cannot state (ZCOD=1 before
+    // revision 35, ZCOD=1 with no single adjustable winding) at their
+    // present operating point rather than reinterpret them or write a record
+    // the reader refuses. Other transformers retain their tables.
+    let projected = freeze_unwritable_corrections(net, rev, &mut warnings);
+    let net = projected.as_ref().unwrap_or(net);
+    // Number the connectivity nodes as PSS/E numbers them before any record
+    // resolves a regulating node. Revision 33 writes no node, so it reports no
+    // renumbering either.
+    let numbered;
+    let net = if include_detailed_connectivity {
+        let mut numbering = Diagnostics::new();
+        if let Some(prepared) = super::rawx::with_psse_node_numbers(net, &mut numbering) {
+            if modern {
+                warnings.absorb(numbering);
+            }
+            numbered = prepared;
+            &numbered
+        } else {
+            net
+        }
+    } else {
+        net
+    };
+    let rated;
+    let net = if let Some((projected, count)) =
+        super::powsybl_psse::rate_branches_from_current_limits(net)
+    {
+        warnings.push(
+            &F.value_substituted,
+            format!(
+                "{count} branch current limit set(s) written as MVA ratings, sqrt(3) * Vnom * I / 1000 at the terminal's nominal voltage and sorted into RATE1-RATE12 as PowSybl's exporter writes them: PSS/E branch ratings are MVA ratings"
+            ),
+        );
+        rated = projected;
+        &rated
+    } else {
+        net
+    };
+    let stored;
+    let net = if let Some((projected, count)) = super::powsybl_psse::storage_as_loads(net) {
+        warnings.push(
+            &F.value_collapsed,
+            format!(
+                "{count} storage unit(s) written as PSS/E loads consuming the negated storage injection, as PowSybl's exporter writes a battery: PSS/E has no storage record, so energy, charge and discharge ratings, efficiencies, and reactive limits are dropped"
+            ),
+        );
+        stored = projected;
+        &stored
+    } else {
+        net
+    };
     let mut nonfinite = false;
     let mut sanitized_quoted = 0usize;
     let mut s = String::new();
@@ -402,6 +1146,28 @@ fn write_psse_rev_inner(
             .unwrap_or(bus_zone);
         let id = quoted_device_id(&l.extras, l.bus, &mut load_ids, &mut sanitized_quoted);
         let (pl, ql, ip, iq, yp, yq) = load_components_for_write(l, &id, &mut warnings);
+        let yq = psse_yq_consumption(yq);
+        // Revisions 34 and 35 state distributed generation in its own columns,
+        // so PL and QL carry the demand it serves; revision 33 has no such
+        // columns and states the load net of it.
+        let (pdgen, qdgen) = load_distributed_generation(&l.extras);
+        let (pl, ql) = if modern {
+            (
+                gross_load_power(pl, pdgen, extra_f64(&l.extras, "psse_pl")),
+                gross_load_power(ql, qdgen, extra_f64(&l.extras, "psse_ql")),
+            )
+        } else {
+            if pdgen != 0.0 || qdgen != 0.0 {
+                warnings.push(
+                    &F.value_collapsed,
+                    format!(
+                        "PSS/E load at bus {} id {id:?}: distributed generation {} MW, {} Mvar has no revision 33 field; PL and QL state the load net of it",
+                        l.bus, pdgen, qdgen
+                    ),
+                );
+            }
+            (pl, ql)
+        };
         let owner = extra_i64(&l.extras, "psse_owner").unwrap_or(1);
         let scal = typed_psse_scal(l, &id, &mut warnings)
             .or_else(|| extra_i64(&l.extras, "psse_scal"))
@@ -492,11 +1258,11 @@ fn write_psse_rev_inner(
             format_args!("generator at bus {}", g.bus),
             &mut warnings,
         );
-        if rev < 35 && regulated_node != 0 {
+        if rev < 34 && regulated_node != 0 {
             warnings.push(
                 &F.field_dropped,
                 format!(
-                    "PSS/E generator at bus {} id {id:?}: regulating node {regulated_node} has no NREG field before revision 35; emitted only IREG",
+                    "PSS/E generator at bus {} id {id:?}: regulating node {regulated_node} has no NREG field before revision 34; emitted only IREG",
                     g.bus
                 ),
             );
@@ -579,6 +1345,10 @@ fn write_psse_rev_inner(
         }
         record.push(wmod.to_string());
         record.push(num(wpf));
+        // Revision 34 states NREG last; 35 moved it after IREG above.
+        if rev == 34 {
+            record.push(regulated_node.to_string());
+        }
         let _ = writeln!(s, "{}", record.join(", "));
     }
     let _ = writeln!(s, "0 / END OF GENERATOR DATA, BEGIN BRANCH DATA");
@@ -686,9 +1456,10 @@ fn write_psse_rev_inner(
             );
         }
     }
-    if rev >= 35 {
-        // Revision 35 inserts system switching device data between branch and
-        // transformer data.
+    if rev >= 34 {
+        // Revision 34 inserts system switching device data between branch and
+        // transformer data. PSS/E reads its sections in order, so a revision
+        // 34 file must state the section even when it is empty.
         let _ = writeln!(
             s,
             "0 / END OF BRANCH DATA, BEGIN SYSTEM SWITCHING DEVICE DATA"
@@ -722,6 +1493,8 @@ fn write_psse_rev_inner(
         }
     }
 
+    let impedance_tables = assign_impedance_tables(net, rev, &mut warnings);
+    warn_unbacked_table_references(net, &mut warnings);
     for (branch_index, br) in net
         .branches()
         .iter()
@@ -745,8 +1518,12 @@ fn write_psse_rev_inner(
         // fixed 43-field record (21 + 3 + 17 + 2), so the owner padding matters.
         // MAG1/MAG2 = the branch charging projected to one magnetizing
         // admittance (CM = 1, so p.u. on the system base); a 2-winding
-        // transformer that carries line charging keeps the total.
+        // transformer that carries line charging keeps the total. The
+        // charging sits inside the tap and PSS/E's admittance at bus I outside
+        // it, so the total is divided by the referral the reader applies
+        // (see `unrefer_magnetizing`).
         let charging = br.calc_terminal_charging();
+        let referral = magnetizing_referral(br.calc_effective_tap());
         let raw_name = br.name.as_deref().unwrap_or("");
         let name = sanitize_quoted(raw_name, NAME_FORBIDDEN, ' ');
         if matches!(name, std::borrow::Cow::Owned(_)) {
@@ -781,8 +1558,8 @@ fn write_psse_rev_inner(
             "1".to_owned(),
             "1".to_owned(),
             "1".to_owned(),
-            num(charging.calc_total_g()),
-            num(charging.calc_total_b()),
+            num(unrefer_magnetizing(charging.calc_total_g(), referral)),
+            num(unrefer_magnetizing(charging.calc_total_b(), referral)),
             nmetr.to_string(),
             format!("'{name:<12}'"),
             i32::from(br.in_service).to_string(),
@@ -823,26 +1600,73 @@ fn write_psse_rev_inner(
                 &mut warnings,
             )
         });
-        let (rma, rmi, vma, vmi, ntp) = ctl.map_or((1.1, 0.9, 1.1, 0.9, 33), |c| {
+        let ratio2 = impedance_tables
+            .branch_ratio2
+            .get(&branch_index)
+            .copied()
+            .unwrap_or(1.0);
+        let (mut rma, mut rmi, vma, vmi, ntp) = ctl.map_or((1.1, 0.9, 1.1, 0.9, 33), |c| {
             (c.tap_max, c.tap_min, c.band_max, c.band_min, c.ntp)
         });
+        if ctl.is_some_and(|control| {
+            matches!(
+                control.mode,
+                TransformerControlMode::Voltage | TransformerControlMode::ReactiveFlow
+            )
+        }) {
+            rma *= ratio2;
+            rmi *= ratio2;
+        }
         let cnxa = ctl
             .and_then(|control| control.winding_connection_angle)
             .unwrap_or(0.0);
-        let tab = extra_i64(&br.extras, "psse_tab").unwrap_or(0);
+        // TAB names only a table this write states.
+        let tab = impedance_tables
+            .branches
+            .get(&branch_index)
+            .map_or(0, |table| i64::from(*table));
         let cr = extra_f64(&br.extras, "psse_cr").unwrap_or(0.0);
         let cx = extra_f64(&br.extras, "psse_cx").unwrap_or(0.0);
-        let _ = writeln!(s, "{}, {}, {}", num(br.r), num(br.x), num(sbase));
+        // A record states the nominal impedance its table corrects.
+        let [r, x] = impedance_tables
+            .branches
+            .contains_key(&branch_index)
+            .then(|| current_correction_nominal(&br.extras, &[br.r, br.x]))
+            .flatten()
+            .unwrap_or([br.r, br.x]);
+        let _ = writeln!(
+            s,
+            "{}, {}, {}",
+            num(r / ratio2.powi(2)),
+            num(x / ratio2.powi(2)),
+            num(sbase)
+        );
+        let control = place_winding_node(
+            vec![
+                cod.to_string(),
+                cont.to_string(),
+                num(rma),
+                num(rmi),
+                num(vma),
+                num(vmi),
+                ntp.to_string(),
+                tab.to_string(),
+                num(cr),
+                num(cx),
+                num(cnxa),
+            ],
+            rev,
+            node,
+        );
         if modern {
             // v34+ winding line: twelve ratings (RATE4-RATE12 from extra rating
-            // sets), then COD, CONT, NODE, RMA, RMI, VMA, VMI, NTP, TAB, CR,
-            // CX, CNXA — COD at 15, matching the reader.
+            // sets), then the control columns from COD at 15, matching the
+            // reader.
             let extra_ratings = psse_extra_rating_values(br, branch_index, &mut warnings);
             let _ = writeln!(
                 s,
-                "{}, 0, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, \
-                 {cod}, {cont}, {node}, {}, {}, {}, {}, {ntp}, {tab}, {}, {}, {}",
-                num(br.calc_effective_tap()),
+                "{}, 0, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {control}",
+                num(br.calc_effective_tap() * ratio2),
                 num(br.shift),
                 num(br.rate_a),
                 num(br.rate_b),
@@ -856,40 +1680,26 @@ fn write_psse_rev_inner(
                 num(extra_ratings[6]),
                 num(extra_ratings[7]),
                 num(extra_ratings[8]),
-                num(rma),
-                num(rmi),
-                num(vma),
-                num(vmi),
-                num(cr),
-                num(cx),
-                num(cnxa)
             );
         } else {
             let _ = writeln!(
                 s,
-                "{}, 0, {}, {}, {}, {}, {cod}, {cont}, {}, {}, {}, {}, {ntp}, {tab}, {}, {}, {}",
-                num(br.calc_effective_tap()),
+                "{}, 0, {}, {}, {}, {}, {control}",
+                num(br.calc_effective_tap() * ratio2),
                 num(br.shift),
                 num(br.rate_a),
                 num(br.rate_b),
                 num(br.rate_c),
-                num(rma),
-                num(rmi),
-                num(vma),
-                num(vmi),
-                num(cr),
-                num(cx),
-                num(cnxa)
             );
         }
-        let _ = writeln!(s, "1.0, 0");
+        let _ = writeln!(s, "{}, 0", num(ratio2));
     }
 
     // 3-winding transformers: a 5-line record. CW=1, CZ=1, CM=1 (same conventions
     // as the 2-winding record); line 2 carries the three pairwise impedances and
     // the star-point voltage, lines 3-5 the per-winding tap/angle/ratings.
     let mut transformer_3w_ids: BTreeMap<(BusId, BusId, BusId), u32> = BTreeMap::new();
-    for t in net.transformers_3w() {
+    for (transformer_index, t) in net.transformers_3w().iter().enumerate() {
         let transformer_id =
             transformer_3w_id(net, t, &mut transformer_3w_ids, &mut sanitized_quoted);
         let raw_name = t.name.as_deref().unwrap_or("");
@@ -918,6 +1728,16 @@ fn write_psse_rev_inner(
                 ),
             );
         }
+        let stat = three_winding_stat(t).unwrap_or_else(|| {
+            warnings.push(
+                &F.value_collapsed,
+                format!(
+                    "PSS/E three winding transformer {}-{}-{} has more than one winding out of service; no STAT code states that, so it was emitted out of service (STAT 0)",
+                    t.windings[0].bus, t.windings[1].bus, t.windings[2].bus
+                ),
+            );
+            0
+        });
         let mut main = vec![
             t.windings[0].bus.to_string(),
             t.windings[1].bus.to_string(),
@@ -930,7 +1750,7 @@ fn write_psse_rev_inner(
             num(t.mag_b),
             nmetr.to_string(),
             format!("'{name:<12}'"),
-            i32::from(t.in_service).to_string(),
+            stat.to_string(),
         ];
         for (owner, fraction) in owners {
             main.push(owner.to_string());
@@ -943,7 +1763,20 @@ fn write_psse_rev_inner(
         let _ = writeln!(s, "{}", main.join(", "));
         // Line 2: the three pairwise (R, X) on the system base (CZ=1), each with
         // its declared SBASE column, then the star voltage.
-        let [z12, z23, z31] = t.z;
+        let [mut z12, mut z23, mut z31] = t.z;
+        let corrected = (0..3).any(|winding| {
+            impedance_tables
+                .windings
+                .contains_key(&(transformer_index, winding))
+        });
+        if let Some(nominal) = corrected
+            .then(|| current_correction_nominal(&t.extras, &t.z.map(|z| [z.r, z.x])))
+            .flatten()
+        {
+            for (z, [r, x]) in [&mut z12, &mut z23, &mut z31].into_iter().zip(nominal) {
+                (z.r, z.x) = (r, x);
+            }
+        }
         let _ = writeln!(
             s,
             "{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}",
@@ -1007,47 +1840,64 @@ fn write_psse_rev_inner(
                 .and_then(|control| control.winding_connection_angle)
                 .unwrap_or(0.0);
             let suffix = winding_index + 1;
-            let tab = extra_i64(&t.extras, &format!("psse_tab{suffix}")).unwrap_or(0);
+            // TAB names only a table this write states.
+            let tab = impedance_tables
+                .windings
+                .get(&(transformer_index, winding_index))
+                .map_or(0, |table| i64::from(*table));
             let cr = extra_f64(&t.extras, &format!("psse_cr{suffix}")).unwrap_or(0.0);
             let cx = extra_f64(&t.extras, &format!("psse_cx{suffix}")).unwrap_or(0.0);
+            let control = place_winding_node(
+                vec![
+                    cod.to_string(),
+                    cont.to_string(),
+                    num(rma),
+                    num(rmi),
+                    num(vma),
+                    num(vmi),
+                    ntp.to_string(),
+                    tab.to_string(),
+                    num(cr),
+                    num(cx),
+                    num(cnxa),
+                ],
+                rev,
+                node,
+            );
             if modern {
-                // v34+ winding layout (twelve ratings, NODE after CONT); the
-                // Winding model carries three ratings, so RATE4-RATE12 are 0.
+                // Twelve winding ratings followed by revision-specific control
+                // columns, including the winding node in its stated position.
+                let extra_ratings =
+                    psse_winding_extra_rating_values(t, winding_index, &mut warnings);
                 let _ = writeln!(
                     s,
-                    "{}, {}, {}, {}, {}, {}, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, \
-                     {cod}, {cont}, {node}, {}, {}, {}, {}, {ntp}, {tab}, {}, {}, {}",
+                    "{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {control}",
                     num(w.tap),
                     num(w.nominal_kv),
                     num(w.shift),
                     num(w.rate_a),
                     num(w.rate_b),
                     num(w.rate_c),
-                    num(rma),
-                    num(rmi),
-                    num(vma),
-                    num(vmi),
-                    num(cr),
-                    num(cx),
-                    num(cnxa)
+                    num(extra_ratings[0]),
+                    num(extra_ratings[1]),
+                    num(extra_ratings[2]),
+                    num(extra_ratings[3]),
+                    num(extra_ratings[4]),
+                    num(extra_ratings[5]),
+                    num(extra_ratings[6]),
+                    num(extra_ratings[7]),
+                    num(extra_ratings[8]),
                 );
             } else {
                 let _ = writeln!(
                     s,
-                    "{}, {}, {}, {}, {}, {}, {cod}, {cont}, {}, {}, {}, {}, {ntp}, {tab}, {}, {}, {}",
+                    "{}, {}, {}, {}, {}, {}, {control}",
                     num(w.tap),
                     num(w.nominal_kv),
                     num(w.shift),
                     num(w.rate_a),
                     num(w.rate_b),
                     num(w.rate_c),
-                    num(rma),
-                    num(rmi),
-                    num(vma),
-                    num(vmi),
-                    num(cr),
-                    num(cx),
-                    num(cnxa)
                 );
             }
         }
@@ -1074,7 +1924,7 @@ fn write_psse_rev_inner(
     // emit their 3-line records (if any) between the begin/end markers, then the
     // remaining sections as bare terminators so the file parses as a complete case.
     let _ = writeln!(s, "{}", EMPTY_SECTIONS[0]);
-    for (i, dc) in net.hvdc().iter().enumerate() {
+    for (i, dc) in net.hvdc().iter().filter(|dc| !is_vsc_line(dc)).enumerate() {
         let raw_name = dc_str(&dc.extras, "psse_dc_name").unwrap_or_else(|| format!("DC{}", i + 1));
         let name = sanitize_quoted(&raw_name, NAME_FORBIDDEN, ' ');
         if matches!(name, std::borrow::Cow::Owned(_)) {
@@ -1089,19 +1939,19 @@ fn write_psse_rev_inner(
         let rdc = dc_f64(&dc.extras, "psse_dc_rdc").unwrap_or(0.0);
         let vschd = dc_f64(&dc.extras, "psse_dc_vschd").unwrap_or(0.0);
         let l1_tail = dc_tail(&dc.extras, "psse_dc_control_tail", DEFAULT_CONTROL_TAIL);
-        let (rect_tail, dropped_rectifier_bridges) =
+        let (rect_tail, dropped_rectifier_node) =
             dc_converter_tail(&dc.extras, "psse_dc_rectifier_tail", rev);
-        let (inv_tail, dropped_inverter_bridges) =
+        let (inv_tail, dropped_inverter_node) =
             dc_converter_tail(&dc.extras, "psse_dc_inverter_tail", rev);
-        for (end, bridges) in [
-            ("rectifier", dropped_rectifier_bridges),
-            ("inverter", dropped_inverter_bridges),
+        for (end, node) in [
+            ("rectifier", dropped_rectifier_node),
+            ("inverter", dropped_inverter_node),
         ] {
-            if let Some(bridges) = bridges {
+            if let Some(node) = node {
                 warnings.push(
                     &codes::EMIT_PSSE.field_dropped,
                     format!(
-                        "DC line `{}` {end} states {bridges} bridge(s) in series; a PSS/E revision 33 two-terminal DC record has no NDR/NDI column",
+                        "DC line `{}` {end} states node {node} of its commutating transformer bus; a PSS/E revision 33 two-terminal DC record has no NDR/NDI column",
                         dc.uid.as_deref().unwrap_or("<unnamed>")
                     ),
                 );
@@ -1139,15 +1989,42 @@ fn write_psse_rev_inner(
         let _ = writeln!(s, "{}, {rect_tail}", dc.from);
         let _ = writeln!(s, "{}, {inv_tail}", dc.to);
     }
-    // Sections up to and including the SWITCHED SHUNT begin marker.
-    for line in &EMPTY_SECTIONS[1..=9] {
+    // VSC DC lines fill the next section.
+    let _ = writeln!(s, "{}", EMPTY_SECTIONS[1]);
+    for (i, dc) in net.hvdc().iter().filter(|dc| is_vsc_line(dc)).enumerate() {
+        for line in vsc_record_lines(
+            net,
+            dc,
+            i,
+            rev,
+            &mut num,
+            &mut warnings,
+            &mut sanitized_quoted,
+        ) {
+            let _ = writeln!(s, "{line}");
+        }
+    }
+    // The impedance correction tables the transformers name.
+    let _ = writeln!(s, "{}", EMPTY_SECTIONS[2]);
+    write_impedance_tables(&mut s, &impedance_tables, rev, &mut num, &mut warnings);
+    for line in &EMPTY_SECTIONS[3..=8] {
         let _ = writeln!(s, "{line}");
     }
+    let facts_names = write_shunt_facts(
+        &mut s,
+        net,
+        rev,
+        &mut num,
+        &mut warnings,
+        &mut sanitized_quoted,
+    );
+    let _ = writeln!(s, "{}", EMPTY_SECTIONS[9]);
     // Switched shunts: BINIT becomes the susceptance, the control record the rest.
     // v35 inserts a quoted shunt ID at field 1 and NREG after SWREG, and its step
     // blocks are (S, N, B) triples with a leading per-block status; v33/34 have
-    // neither and use (N, B) pairs. The writer must match the reader's layout at
-    // each revision or every later field is read columns off.
+    // no ID and use (N, B) pairs, and v34 states NREG after the eighth pair.
+    // The writer must match the reader's layout at each revision or every
+    // later field is read columns off.
     let mut sw_ids: BTreeMap<BusId, BTreeSet<String>> = BTreeMap::new();
     for sh in net.shunts().iter().filter(|s| s.control.is_some()) {
         let Some(c) = sh.control.as_ref() else {
@@ -1173,8 +2050,26 @@ fn write_psse_rev_inner(
             format_args!("switched shunt at bus {}", sh.bus),
             &mut warnings,
         );
+        // Revision 34 states NREG right after the eighth (N, B) pair, so a
+        // ninth pair would read as NREG; the pairs past the eighth are dropped
+        // and reported.
+        let written_blocks = if rev == 34 {
+            c.blocks.len().min(8)
+        } else {
+            c.blocks.len()
+        };
+        if written_blocks < c.blocks.len() {
+            warnings.push(
+                &F.field_dropped,
+                format!(
+                    "PSS/E switched shunt at bus {}: {} step block(s) after the eighth dropped: revision 34 states NREG after the eighth (N, B) pair",
+                    sh.bus,
+                    c.blocks.len() - written_blocks
+                ),
+            );
+        }
         let mut blocks = String::new();
-        for blk in &c.blocks {
+        for blk in &c.blocks[..written_blocks] {
             if rev >= 35 {
                 // The neutral model has no per-block status: every block is in
                 // service (S = 1).
@@ -1197,6 +2092,24 @@ fn write_psse_rev_inner(
                 num(sh.b)
             );
         } else {
+            // A nonzero revision 34 node pads the record to eight (N, B) pairs
+            // and follows them; revision 33 has no NREG field.
+            if nreg != 0 {
+                if rev == 34 {
+                    for _ in written_blocks..8 {
+                        blocks.push_str(", 0, 0.0");
+                    }
+                    let _ = write!(blocks, ", {nreg}");
+                } else {
+                    warnings.push(
+                        &F.field_dropped,
+                        format!(
+                            "PSS/E switched shunt at bus {}: regulating node {nreg} has no NREG field before revision 34; emitted only SWREG",
+                            sh.bus
+                        ),
+                    );
+                }
+            }
             let _ = writeln!(
                 s,
                 "{}, {}, {adjm}, {}, {}, {}, {swrem}, {}, '{rmidnt}', {}{blocks}",
@@ -1215,17 +2128,27 @@ fn write_psse_rev_inner(
     }
     let detailed_records = if include_detailed_connectivity && net.detailed_connectivity().is_some()
     {
-        match super::rawx::write_raw_substation_data(net) {
+        match super::rawx::write_raw_substation_data(net, &facts_names) {
             Ok((records, detailed_warnings)) => {
                 warnings.absorb(detailed_warnings);
                 records
             }
-            Err(error) => {
+            Err(error) if modern => {
                 warnings.push(
                     &F.field_dropped,
                     format!(
                         "detailed connectivity dropped from PSS/E revision {rev} output: {error}"
                     ),
+                );
+                None
+            }
+            // Revision 33 has no substation block, so the records are dropped
+            // whether or not they could be written; the reason they could not
+            // belongs to a revision that states them.
+            Err(_) => {
+                warnings.push(
+                    &F.record_dropped,
+                    "detailed substation connectivity dropped: PSS/E revision 33 has no substation data block",
                 );
                 None
             }
@@ -1253,23 +2176,8 @@ fn write_psse_rev_inner(
     }
     let _ = writeln!(s, "Q");
 
-    if net.hvdc().iter().any(dc_states_beyond_record) {
-        warnings.push(
-            &F.value_defaulted,
-            "DC line converter detail (firing angles, converter transformer taps, reactive \
-             output) defaulted: PSS/E two-terminal DC is written from the power setpoint and \
-             line resistance only",
-        );
-    }
-    if !net.storage().is_empty() {
-        warnings.push(
-            &F.record_dropped,
-            format!(
-                "{} storage unit(s) dropped: PSS/E has no storage record",
-                net.storage().len()
-            ),
-        );
-    }
+    warn_dc_record_gaps(net, &mut warnings);
+    warn_case_metadata_and_area_types(net, &mut warnings);
     if net.generators().iter().any(|g| g.cost.is_some()) {
         warnings.push(
             &F.field_dropped,
@@ -1320,7 +2228,8 @@ fn write_psse_rev_inner(
             "{current_ratings} branch current rating record(s) dropped: PSS/E branch ratings are MVA ratings"
         ));
     }
-    if rev >= 35 {
+    // Revision 34 and later write the system switching device section.
+    if modern {
         let switch_current_ratings = net
             .switches()
             .iter()
@@ -1362,7 +2271,7 @@ fn write_psse_rev_inner(
                 warnings.push(
                     &F.field_dropped,
                     format!(
-                        "{rating_set_names} system switching device rating set name(s) dropped: PSS/E RAW revision 35 writes explicit RATE1-RATE12 fields"
+                        "{rating_set_names} system switching device rating set name(s) dropped: PSS/E RAW revision {rev} writes explicit RATE1-RATE12 fields"
                     ),
                 );
             }
@@ -1371,14 +2280,23 @@ fn write_psse_rev_inner(
     if !modern {
         warn_psse_extra_branch_ratings_dropped(net, &mut warnings);
     }
-    // This writer replays device ids and every `psse_*` key its reader
-    // retained; a foreign format's keys (LoadID, pslf_circuit, ...) have no
-    // record column and drop, declared once (#330).
+    // This writer replays device ids, every `psse_*` key its reader retained,
+    // and the three winding status and rating sets (STAT and RATE4-RATE12; the
+    // revision 33 loss is reported above); a foreign format's keys (LoadID,
+    // pslf_circuit, ...) have no record column and drop, declared once (#330).
     super::warn_dropped_extras(
         &F,
         "PSS/E .raw",
         net,
-        |key| key == "id" || key.starts_with("psse_"),
+        |key| {
+            key == "id"
+                || key.starts_with("psse_")
+                || key == IMPEDANCE_CORRECTION_EXTRA
+                || key == IMPEDANCE_CORRECTION_NOMINAL_EXTRA
+                || key == IMPEDANCE_CORRECTION_APPLIED_EXTRA
+                || key == WINDING_IN_SERVICE_EXTRA
+                || key == WINDING_RATING_SETS_EXTRA
+        },
         &mut warnings,
     );
     let branch_solutions = net
@@ -1495,7 +2413,24 @@ pub(crate) fn quoted_circuit_id<K: Ord + Clone>(
 /// voltage setpoints, reactive limits, its own power band, or a loss model)
 /// earns the dropped-detail warning regardless of which format it came from.
 #[allow(clippy::float_cmp)] // the neutral shape is produced bit-exactly by the reader
-fn dc_states_beyond_record(d: &Hvdc) -> bool {
+/// What a source states about a two-terminal DC line that the PSS/E record,
+/// written from the power setpoint, `RDC`, and `VSCHD`, does not reproduce.
+#[derive(Default)]
+struct DcRecordGaps {
+    /// The end power the record cannot state: which end, the stated value,
+    /// and the value a reread derives from the other end and the drop model.
+    setpoint: Option<(&'static str, f64, f64)>,
+    /// Active power limits other than the `[0, max(|Pf|, |Pt|)]` a reread
+    /// derives.
+    limits: bool,
+    /// A MATPOWER style linear loss model.
+    loss_model: bool,
+    /// Terminal voltages, reactive output, and reactive limits.
+    detail: bool,
+}
+
+#[allow(clippy::float_cmp)]
+fn dc_record_gaps(d: &Hvdc) -> DcRecordGaps {
     let rdc = dc_f64(&d.extras, "psse_dc_rdc").unwrap_or(0.0);
     let vschd = dc_f64(&d.extras, "psse_dc_vschd").unwrap_or(0.0);
     // A blocked line writes MDC 0, under which the reader prices no drop and
@@ -1503,6 +2438,7 @@ fn dc_states_beyond_record(d: &Hvdc) -> bool {
     // service and scheduling a voltage has a current to price the loss with.
     let priced = d.in_service && vschd > 0.0;
     let at_inverter = d.in_service && d.extras.contains_key(SETVL_AT_INVERTER);
+    let mut gaps = DcRecordGaps::default();
     // The drop the rewrite reproduces from the replayed RDC/VSCHD. A whisker
     // of tolerance covers the units round trip of a current-mode record
     // (SETVL -> kA -> SETVL). An inverter-measured record writes back as
@@ -1518,27 +2454,127 @@ fn dc_states_beyond_record(d: &Hvdc) -> bool {
             d.pt
         };
         if (d.pf - expected_pf).abs() > 1e-9 * d.pt.abs().max(1.0) {
-            return true;
+            gaps.setpoint = Some(("sent power Pf", d.pf, expected_pf));
+        }
+    } else {
+        let expected_pt = if priced {
+            let i = d.pf / vschd;
+            d.pf - i * i * rdc
+        } else {
+            d.pf
+        };
+        if (d.pt - expected_pt).abs() > 1e-9 * d.pf.abs().max(1.0) {
+            gaps.setpoint = Some(("received power Pt", d.pt, expected_pt));
         }
     }
-    let expected_pt = if at_inverter {
-        d.pt
-    } else if priced {
-        let i = d.pf / vschd;
-        d.pf - i * i * rdc
-    } else {
-        d.pf
-    };
-    (d.pt - expected_pt).abs() > 1e-9 * d.pf.abs().max(1.0)
-        || d.vf != 1.0
+    gaps.limits = d.pmin != 0.0 || d.pmax != d.pf.abs().max(d.pt.abs());
+    gaps.loss_model = d.loss0 != 0.0 || d.loss1 != 0.0;
+    gaps.detail = d.vf != 1.0
         || d.vt != 1.0
-        || d.pmin != 0.0
-        || d.pmax != d.pf.abs().max(d.pt.abs())
         || [d.qf, d.qt, d.qminf, d.qmaxf, d.qmint, d.qmaxt]
             .iter()
-            .any(|q| *q != 0.0)
-        || d.loss0 != 0.0
-        || d.loss1 != 0.0
+            .any(|q| *q != 0.0);
+    gaps
+}
+
+/// Report what each two-terminal DC record cannot state, by field, so a
+/// reader of the diagnostics learns which values change on a reread.
+fn warn_dc_record_gaps(net: &BalancedNetwork, warnings: &mut Diagnostics) {
+    let mut setpoints = Vec::new();
+    let mut limits = 0usize;
+    let mut loss_models = 0usize;
+    let mut detail = false;
+    for d in net.hvdc().iter().filter(|d| !is_vsc_line(d)) {
+        let gaps = dc_record_gaps(d);
+        if let Some((end, stated, reproduced)) = gaps.setpoint {
+            setpoints.push(format!(
+                "line {}-{} {end} {stated} MW reads back as {reproduced} MW",
+                d.from, d.to
+            ));
+        }
+        limits += usize::from(gaps.limits);
+        loss_models += usize::from(gaps.loss_model);
+        detail |= gaps.detail;
+    }
+    if !setpoints.is_empty() {
+        let count = setpoints.len();
+        setpoints.truncate(3);
+        warnings.push(
+            &F.value_substituted,
+            format!(
+                "{count} two-terminal DC line(s) state an end power the record's SETVL, VSCHD, and RDC do not reproduce; the record is written from the other end, so the stated value is replaced by the one the drop model gives ({})",
+                setpoints.join("; ")
+            ),
+        );
+    }
+    if limits > 0 {
+        warnings.push(
+            &F.field_dropped,
+            format!(
+                "{limits} two-terminal DC line active power limit pair(s) (Pmin, Pmax) dropped: a PSS/E two-terminal DC record has no limit field, and a reread takes 0 to the larger end power"
+            ),
+        );
+    }
+    if loss_models > 0 {
+        warnings.push(
+            &F.field_dropped,
+            format!(
+                "{loss_models} two-terminal DC line loss model(s) (loss0, loss1) dropped: a PSS/E two-terminal DC record prices its loss from RDC and VSCHD only"
+            ),
+        );
+    }
+    if detail {
+        warnings.push(
+            &F.value_defaulted,
+            "DC line converter detail (firing angles, converter transformer taps, reactive \
+             output) defaulted: PSS/E two-terminal DC is written from the power setpoint and \
+             line resistance only",
+        );
+    }
+}
+
+/// PSS/E states no case date, forecast distance, source model format, or
+/// validation level, and every PSS/E area is a control area, which is how
+/// the reader types it back.
+fn warn_case_metadata_and_area_types(net: &BalancedNetwork, warnings: &mut Diagnostics) {
+    let metadata = net.case_metadata();
+    let fields = [
+        ("case_date", metadata.case_date.as_deref()),
+        ("forecast_distance", metadata.forecast_distance.map(|_| "")),
+        (
+            "source_model_format",
+            metadata.source_model_format.as_deref(),
+        ),
+        (
+            "minimum_validation_level",
+            metadata.minimum_validation_level.as_deref(),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(name, value)| value.map(|_| format!("`{name}`")))
+    .collect::<Vec<_>>();
+    if !fields.is_empty() {
+        warnings.push(
+            &F.field_dropped,
+            format!(
+                "case metadata field(s) {} dropped: a PSS/E case states none of them",
+                fields.join(", ")
+            ),
+        );
+    }
+    let retyped = net
+        .areas()
+        .iter()
+        .filter(|area| area.area_type.as_deref() != Some("ControlArea"))
+        .count();
+    if retyped > 0 {
+        warnings.push(
+            &F.value_substituted,
+            format!(
+                "{retyped} area(s) with no area type or another one written as PSS/E areas, which are control areas: they read back with area type `ControlArea`"
+            ),
+        );
+    }
 }
 
 /// The circuit id the three winding transformer record states: the element's
@@ -1726,9 +2762,22 @@ const DEFAULT_CONVERTER_TAIL: &str =
 /// revision 33: NBR through XCAPR.
 const CONVERTER_TAIL_FIELDS_33: usize = 16;
 
-/// Where `NDR`/`NDI`, the number of bridges in series, sits in that tail from
-/// revision 34 on: after ICR and before IFR.
-const CONVERTER_TAIL_BRIDGE_INDEX: usize = 13;
+/// Where `NDR`/`NDI`, the node of the commutating transformer bus ICR/ICI,
+/// sits in a retained converter tail: after ICR and before IFR, where
+/// revision 35 states it. Revision 34 states the node last, after XCAPR, and
+/// the reader moves it here, so a retained tail with a node column is in
+/// revision 35 order whatever revision stated it.
+const CONVERTER_TAIL_NODE_INDEX: usize = 12;
+
+/// Where `rev` states `NDR`/`NDI` in a converter tail, or `None` for a
+/// revision without the column.
+fn converter_tail_node_index(rev: u32) -> Option<usize> {
+    match rev {
+        35.. => Some(CONVERTER_TAIL_NODE_INDEX),
+        34 => Some(CONVERTER_TAIL_FIELDS_33),
+        _ => None,
+    }
+}
 
 /// The converter tail of a two-terminal DC record at `rev`.
 ///
@@ -1736,9 +2785,9 @@ const CONVERTER_TAIL_BRIDGE_INDEX: usize = 13;
 /// have no such column in revision 33, so a tail retained from one revision
 /// carries one field more or fewer than the record being written and the
 /// column belongs at its own position, not at the end. Returns the tail and
-/// the bridge count a revision 33 record has no column for.
+/// the node a revision 33 record has no column for.
 fn dc_converter_tail(extras: &Extras, key: &str, rev: u32) -> (String, Option<String>) {
-    let states_bridges = rev >= 34;
+    let node_index = converter_tail_node_index(rev);
     let stated = extras
         .get(key)
         .and_then(Value::as_array)
@@ -1748,8 +2797,8 @@ fn dc_converter_tail(extras: &Extras, key: &str, rev: u32) -> (String, Option<St
             .split(", ")
             .map(str::to_owned)
             .collect::<Vec<_>>();
-        if states_bridges {
-            fields.insert(CONVERTER_TAIL_BRIDGE_INDEX, "0".to_owned());
+        if let Some(index) = node_index {
+            fields.insert(index, "0".to_owned());
         }
         return (fields.join(", "), None);
     };
@@ -1762,20 +2811,25 @@ fn dc_converter_tail(extras: &Extras, key: &str, rev: u32) -> (String, Option<St
         // record or a section end.
         .map(|field| sanitize_quoted(field, BARE_FORBIDDEN, BARE_REPLACEMENT).into_owned())
         .collect::<Vec<_>>();
-    let mut dropped_bridges = None;
-    match (fields.len() > CONVERTER_TAIL_FIELDS_33, states_bridges) {
-        (true, false) => {
-            let bridges = fields.remove(CONVERTER_TAIL_BRIDGE_INDEX);
-            if bridges.trim() != "0" {
-                dropped_bridges = Some(bridges);
+    let mut dropped_node = None;
+    match (fields.len() > CONVERTER_TAIL_FIELDS_33, node_index) {
+        (true, None) => {
+            let node = fields.remove(CONVERTER_TAIL_NODE_INDEX);
+            // A blank node is PSS/E's default, 0.
+            if !matches!(node.trim(), "" | "0") {
+                dropped_node = Some(node);
             }
         }
-        (false, true) if fields.len() == CONVERTER_TAIL_FIELDS_33 => {
-            fields.insert(CONVERTER_TAIL_BRIDGE_INDEX, "0".to_owned());
+        (true, Some(index)) if index != CONVERTER_TAIL_NODE_INDEX => {
+            let node = fields.remove(CONVERTER_TAIL_NODE_INDEX);
+            fields.insert(index, node);
+        }
+        (false, Some(index)) if fields.len() == CONVERTER_TAIL_FIELDS_33 => {
+            fields.insert(index, "0".to_owned());
         }
         _ => {}
     }
-    (fields.join(", "), dropped_bridges)
+    (fields.join(", "), dropped_node)
 }
 
 /// Control-line tail (everything after VSCHD) for a synthesized two-terminal DC
@@ -1786,6 +2840,247 @@ const DEFAULT_CONTROL_TAIL: &str = "0.0, 0.0, 0.0, 'I', 0.0, 20, 1.0";
 /// negative under MDC 1). Read, written, and audited in three places, so it is
 /// spelled once.
 const SETVL_AT_INVERTER: &str = "psse_dc_setvl_at_inverter";
+
+/// Whether `dc` is a VSC line: both converters are voltage source converters.
+/// The writer states such a line in the VSC DC line section.
+fn is_vsc_line(dc: &Hvdc) -> bool {
+    [&dc.converter1, &dc.converter2]
+        .iter()
+        .all(|c| c.as_ref().is_some_and(|c| c.kind == HvdcConverterKind::Vsc))
+}
+
+/// The three lines of the VSC DC line record for `dc`.
+///
+/// The typed line states the operating point; the retained PSS/E control
+/// fields (`psse_vsc_converter1` and `2`) state everything the neutral model
+/// has no field for. The MW-controlling converter's `DCSET` is restated from
+/// `pf`/`pt` so an edited schedule reaches the record, and a converter's
+/// `MODE` and `ACSET` follow its typed regulation. A line from another format
+/// takes converter 1 as the MW-controlling end and converter 2 as the DC
+/// voltage-controlling one at the line's nominal voltage, whose constant loss
+/// (`ALOSS`) states what the DC line drop leaves of `pf - pt`. When the record
+/// read back would not reproduce the line's terminal powers (converter
+/// losses come from `ALOSS`/`BLOSS`/`MINLOSS` and the DC drop from `RDC`, and
+/// an AC voltage-controlling converter states no reactive power), the
+/// difference is reported.
+#[expect(clippy::too_many_lines)]
+fn vsc_record_lines(
+    net: &BalancedNetwork,
+    dc: &Hvdc,
+    index: usize,
+    rev: u32,
+    num: &mut impl FnMut(f64) -> String,
+    warnings: &mut Diagnostics,
+    sanitized_quoted: &mut usize,
+) -> [String; 3] {
+    let label = dc
+        .uid
+        .clone()
+        .unwrap_or_else(|| format!("{}-{}", dc.from, dc.to));
+    let raw_name =
+        dc_str(&dc.extras, "psse_vsc_name").unwrap_or_else(|| format!("VSC{}", index + 1));
+    let name = sanitize_quoted(&raw_name, NAME_FORBIDDEN, ' ');
+    if matches!(name, Cow::Owned(_)) {
+        *sanitized_quoted += 1;
+    }
+    let mdc = if dc.in_service {
+        dc_int(&dc.extras, "psse_vsc_mdc").unwrap_or(1)
+    } else {
+        0
+    };
+    let owners = dc
+        .extras
+        .get("psse_vsc_owners")
+        .and_then(Value::as_array)
+        .map(|tokens| {
+            tokens
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|tail| !tail.is_empty())
+        .unwrap_or_else(|| "1, 1.0".to_owned());
+    let rdc = dc.resistance_ohm.unwrap_or(0.0);
+    let base_kv = |bus: usize| {
+        net.buses()
+            .iter()
+            .find(|b| b.id.0 == bus)
+            .map(|b| b.base_kv)
+            .filter(|kv| *kv > 0.0)
+    };
+    // PSS/E states each converter's power as an injection into its AC bus,
+    // the convention of the line's terminal injections.
+    let injections = dc.calc_terminal_injections();
+    let mut converters = Vec::with_capacity(2);
+    for side in 1..=2 {
+        let typed = if side == 1 {
+            dc.converter1.as_ref()
+        } else {
+            dc.converter2.as_ref()
+        };
+        let stored = dc
+            .extras
+            .get(&vsc_converter_key(side))
+            .and_then(Value::as_object);
+        let stored_f64 = |key: &str| {
+            stored
+                .and_then(|record| record.get(key))
+                .and_then(Value::as_f64)
+        };
+        let stored_int = |key: &str| {
+            stored
+                .and_then(|record| record.get(key))
+                .and_then(Value::as_i64)
+        };
+        let (bus, p_ac, q_ac) = injections[side - 1];
+        let bus = bus.0;
+        let kind = stored_int("type").unwrap_or(if side == 1 { 2 } else { 1 });
+        let mode = match typed.and_then(|c| c.voltage_regulator_on) {
+            Some(true) => 1,
+            Some(false) => 2,
+            None => stored_int("mode").unwrap_or(1),
+        };
+        let dcset = if kind == 2 {
+            p_ac
+        } else {
+            dc.nominal_voltage_kv
+                .or_else(|| stored_f64("dcset"))
+                .unwrap_or(0.0)
+        };
+        let vsreg = stored_int("vsreg")
+            .and_then(|v| usize::try_from(v).ok())
+            .unwrap_or(0);
+        let regulated = if vsreg == 0 { bus } else { vsreg };
+        let acset = if mode == 1 {
+            let typed_pu = typed
+                .and_then(|c| c.voltage_setpoint_kv)
+                .zip(base_kv(regulated))
+                .map(|(kv, base)| kv / base);
+            // A kV setpoint over a kV base rounds to the per unit value it
+            // names rather than carrying the division's last bit.
+            let typed_pu = typed_pu.map(|pu| (pu * 1e10).round() / 1e10);
+            match (typed_pu, stored_f64("acset")) {
+                // The stored setpoint restates the typed one exactly, so it
+                // is written as read rather than through a division.
+                (Some(pu), Some(acset)) if (pu - acset).abs() <= 1e-9 => acset,
+                (Some(pu), _) => pu,
+                (None, Some(acset)) => acset,
+                (None, None) => {
+                    if side == 1 {
+                        dc.vf
+                    } else {
+                        dc.vt
+                    }
+                }
+            }
+        } else if let Some(pf) = typed.and_then(|c| c.power_factor) {
+            pf
+        } else if p_ac == 0.0 || q_ac == 0.0 {
+            1.0
+        } else {
+            // The inverse of `calc_vsc_reactive_power`: the factor's sign is
+            // the sign of the reactive injection.
+            (p_ac.abs() / p_ac.hypot(q_ac)).copysign(q_ac)
+        };
+        converters.push(VscConverter {
+            bus,
+            kind,
+            mode,
+            dcset,
+            acset,
+            aloss: stored_f64("aloss").unwrap_or(0.0),
+            bloss: stored_f64("bloss").unwrap_or(0.0),
+            minloss: stored_f64("minloss").unwrap_or(0.0),
+            smax: stored_f64("smax").unwrap_or(0.0),
+            imax: stored_f64("imax").unwrap_or(0.0),
+            pwf: stored_f64("pwf").unwrap_or(1.0),
+            maxq: if side == 1 { dc.qmaxf } else { dc.qmaxt },
+            minq: if side == 1 { dc.qminf } else { dc.qmint },
+            vsreg,
+            nreg: stored_int("nreg").unwrap_or(0),
+            rmpct: stored_f64("rmpct").unwrap_or(100.0),
+        });
+    }
+
+    // A line stated by another format carries its losses in `pf - pt` alone.
+    // State what the DC line drop leaves of them as a constant loss of the
+    // voltage-controlling converter, so the record reproduces the line.
+    let synthesized = dc.extras.keys().all(|key| !key.starts_with("psse_vsc_"));
+    if synthesized
+        && dc.in_service
+        && let Some((_, p2, _)) = calc_vsc_powers([&converters[0], &converters[1]], rdc)
+    {
+        let loss = p2 - injections[1].1;
+        if loss > 0.0 {
+            converters[1].aloss = loss * 1000.0;
+        }
+    }
+
+    // What a reader recovers from the written record, against the line.
+    if dc.in_service {
+        let (p1, p2) = calc_vsc_powers([&converters[0], &converters[1]], rdc)
+            .map_or((0.0, 0.0), |(p1, p2, _)| (p1, p2));
+        let reread = [
+            ("from end active", p1, injections[0].1),
+            ("to end active", p2, injections[1].1),
+            (
+                "from end reactive",
+                calc_vsc_reactive_power(&converters[0], p1),
+                injections[0].2,
+            ),
+            (
+                "to end reactive",
+                calc_vsc_reactive_power(&converters[1], p2),
+                injections[1].2,
+            ),
+        ];
+        let changed: Vec<String> = reread
+            .iter()
+            .filter(|(_, back, stated)| (back - stated).abs() > 1e-6 * stated.abs().max(1.0))
+            .map(|(power, back, stated)| {
+                format!("the {power} injection {stated} reads back as {back}")
+            })
+            .collect();
+        if !changed.is_empty() {
+            warnings.push(
+                &F.value_substituted,
+                format!(
+                    "VSC DC line `{label}`: the PSS/E record states converter losses, the DC line drop, and voltage-controlled reactive output through its own model; {}",
+                    changed.join(", ")
+                ),
+            );
+        }
+    }
+
+    let line1 = format!("'{name}', {mdc}, {}, {owners}", num(rdc));
+    let mut lines = [line1, String::new(), String::new()];
+    for (slot, c) in converters.iter().enumerate() {
+        let regulation = if rev >= 35 {
+            format!("{}, {}", c.vsreg, c.nreg)
+        } else {
+            c.vsreg.to_string()
+        };
+        lines[slot + 1] = format!(
+            "{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {regulation}, {}",
+            c.bus,
+            c.kind,
+            c.mode,
+            num(c.dcset),
+            num(c.acset),
+            num(c.aloss),
+            num(c.bloss),
+            num(c.minloss),
+            num(c.smax),
+            num(c.imax),
+            num(c.pwf),
+            num(c.maxq),
+            num(c.minq),
+            num(c.rmpct)
+        );
+    }
+    lines
+}
 
 const EMPTY_SECTIONS: [&str; 13] = [
     "0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA",
@@ -1889,7 +3184,12 @@ fn revision32_shape(section: Section) -> Option<Revision32Shape> {
         Section::Transformer => Revision32Shape::new("TRANSFORMER DATA", 12, "STAT"),
         Section::TwoTerminalDc => Revision32Shape::new("TWO-TERMINAL DC DATA", 5, "VSCHD"),
         Section::Area => Revision32Shape::new("AREA DATA", 4, "PTOL"),
-        Section::SystemSwitch | Section::SystemWide | Section::Skip => return None,
+        Section::SystemSwitch
+        | Section::VscDc
+        | Section::ImpedanceCorrection
+        | Section::Facts
+        | Section::SystemWide
+        | Section::Skip => return None,
     })
 }
 
@@ -1919,6 +3219,7 @@ fn check_revision32_width(f: &[Cow<'_, str>], shape: Revision32Shape, warnings: 
 enum RegulatingNodeTarget {
     Generator(usize),
     SwitchedShunt(usize),
+    StaticVarCompensator(usize),
     Transformer(usize),
     ThreeWindingTransformer { transformer: usize, winding: usize },
 }
@@ -1956,6 +3257,15 @@ fn apply_pending_regulating_nodes(
                         &mut control.regulating_terminal,
                         control.control_bus.unwrap_or(shunt.bus),
                         format!("PSS/E switched shunt at bus {}", shunt.bus),
+                    )
+                }
+                RegulatingNodeTarget::StaticVarCompensator(index) => {
+                    let svc = &mut net.static_var_compensators_mut()[index];
+                    let bus = facts_regulated_bus(&svc.extras).unwrap_or(svc.bus);
+                    (
+                        &mut svc.regulating_terminal,
+                        bus,
+                        format!("PSS/E FACTS device at bus {}", svc.bus),
                     )
                 }
                 RegulatingNodeTarget::Transformer(index) => {
@@ -2126,7 +3436,12 @@ fn parse_psse_source_inner(
     let mut bus_base_kv: BTreeMap<BusId, f64> = BTreeMap::new();
     let mut bus_area_zone: BTreeMap<BusId, (usize, usize)> = BTreeMap::new();
     let mut unmodeled_sections: BTreeMap<String, usize> = BTreeMap::new();
+    let mut vsc_lines = 0usize;
     let mut regulating_nodes = Vec::new();
+    let mut impedance_tables: BTreeMap<u32, Vec<ImpedanceCorrectionPoint>> = BTreeMap::new();
+    let mut impedance_references = Vec::new();
+    let mut static_var_compensators = Vec::new();
+    let mut series_facts = 0usize;
 
     // Sections appear in fixed order, each ended by a record whose first field is
     // `0`. We read the ones we model and treat the rest as skipped.
@@ -2260,6 +3575,26 @@ fn parse_psse_source_inner(
                         &bus_base_kv,
                         warnings,
                     )?;
+                    if let Some(reference) = impedance_reference(
+                        ImpedanceTarget::Branch(index),
+                        &transformer.extras,
+                        "psse_tab",
+                        // Tables always use bus-base per-unit winding ratios,
+                        // independently of CW. The branch uses t1 / t2.
+                        1.0 / two_winding_tap(
+                            &f,
+                            &f3,
+                            &f4,
+                            transformer.from,
+                            transformer.to,
+                            transformer_basis_codes(&f)?.0,
+                            &bus_base_kv,
+                            &mut Diagnostics::new(),
+                        )?
+                        .1,
+                    ) {
+                        impedance_references.push(reference);
+                    }
                     branches.push(transformer);
                     if node != 0 {
                         regulating_nodes.push(PendingRegulatingNode {
@@ -2297,6 +3632,30 @@ fn parse_psse_source_inner(
                         &bus_base_kv,
                         warnings,
                     )?;
+                    if extra_i64(&transformer.extras, "psse_zcod") == Some(1)
+                        && (1..=3).any(|w| {
+                            extra_i64(&transformer.extras, &format!("psse_tab{w}")).unwrap_or(0) > 0
+                        })
+                        && transformer.impedance_correction_control_winding().is_none()
+                    {
+                        return Err(Error::FormatRead {
+                            format: FMT,
+                            message: format!(
+                                "PSS/E transformer {}: ZCOD=1 impedance correction requires exactly one nonzero winding COD",
+                                transformer_label(&f)
+                            ),
+                        });
+                    }
+                    for winding in 0..3 {
+                        if let Some(reference) = impedance_reference(
+                            ImpedanceTarget::Winding(index, winding),
+                            &transformer.extras,
+                            &format!("psse_tab{}", winding + 1),
+                            1.0,
+                        ) {
+                            impedance_references.push(reference);
+                        }
+                    }
                     transformers_3w.push(transformer);
                     for (winding, node) in nodes.into_iter().enumerate() {
                         if node != 0 {
@@ -2331,10 +3690,67 @@ fn parse_psse_source_inner(
                     &fields(rectifier),
                     &fields(inverter),
                     hvdc.len(),
+                    raw_rev,
                     warnings,
                 )?);
             }
+            Section::VscDc => {
+                // 3-line record: control line, then one line per converter
+                // whose first field is its AC bus.
+                let first = next_continuation_line(
+                    &mut lines,
+                    warnings,
+                    "VSC DC line",
+                    "converter 1 line",
+                )?;
+                let second = next_continuation_line(
+                    &mut lines,
+                    warnings,
+                    "VSC DC line",
+                    "converter 2 line",
+                )?;
+                hvdc.push(read_vsc_line(
+                    &f,
+                    &fields(first),
+                    &fields(second),
+                    vsc_lines,
+                    raw_rev,
+                    &bus_base_kv,
+                    warnings,
+                )?);
+                vsc_lines += 1;
+            }
             Section::Area => areas.push(read_area(&f)?),
+            Section::ImpedanceCorrection => {
+                let (table, points) = read_impedance_correction(&f, raw_rev, &mut lines, warnings)?;
+                if let std::collections::btree_map::Entry::Vacant(slot) =
+                    impedance_tables.entry(table)
+                {
+                    slot.insert(points);
+                } else {
+                    warnings.push(
+                        &codes::READ_PSSE_VALUE_SUBSTITUTED,
+                        format!(
+                            "PSS/E impedance correction table {table} is stated twice; kept the first"
+                        ),
+                    );
+                }
+            }
+            Section::Facts => {
+                let index = static_var_compensators.len();
+                match read_shunt_facts(&f, raw_rev, &bus_base_kv, warnings)? {
+                    Some((svc, node)) => {
+                        static_var_compensators.push(svc);
+                        if node != 0 {
+                            regulating_nodes.push(PendingRegulatingNode {
+                                target: RegulatingNodeTarget::StaticVarCompensator(index),
+                                node,
+                            });
+                        }
+                    }
+                    None => series_facts += 1,
+                }
+            }
             Section::SystemWide => parse_solver_line(&f, &mut solver, warnings),
             Section::Skip => {
                 if let Some(name) = skipped_section_name.as_ref() {
@@ -2350,6 +3766,22 @@ fn parse_psse_source_inner(
         unmodeled_sections.retain(|name, _| !name.starts_with("SUBSTATION"));
     }
     warn_unmodeled_sections(unmodeled_sections, raw_rev, warnings);
+    attach_impedance_corrections(
+        &impedance_tables,
+        impedance_references,
+        &mut branches,
+        &mut transformers_3w,
+        warnings,
+    );
+    if series_facts > 0 {
+        warnings.push(
+            &codes::READ_PSSE_SECTION_UNSUPPORTED,
+            format!(
+                "PSS/E FACTS DEVICE section: {series_facts} series device record(s) (J nonzero) are not modeled: {}",
+                unmodeled_retention(raw_rev)
+            ),
+        );
+    }
 
     let mut net = BalancedNetwork::from_tables(BalancedNetworkTables {
         name,
@@ -2362,7 +3794,7 @@ fn parse_psse_source_inner(
         buses: buses.into(),
         loads: loads.into(),
         shunts: shunts.into(),
-        static_var_compensators: Vec::new().into(),
+        static_var_compensators: static_var_compensators.into(),
         branches: branches.into(),
         switches: switches.into(),
         generators: generators.into(),
@@ -2396,7 +3828,10 @@ enum Section {
     SystemSwitch,
     Transformer,
     TwoTerminalDc,
+    VscDc,
     Area,
+    ImpedanceCorrection,
+    Facts,
     SystemWide,
     Skip,
 }
@@ -2418,7 +3853,7 @@ fn section_after_marker(line: &str, rev: u32) -> Section {
         Some("FIXED SHUNT" | "FIXED BUS SHUNT") => Section::Generator,
         Some("GENERATOR" | "GEN") => Section::Branch,
         Some("BRANCH" | "NON TRANSFORMER BRANCH" | "NON-TRANSFORMER BRANCH") => {
-            if rev >= 35 {
+            if rev >= 34 {
                 Section::SystemSwitch
             } else {
                 Section::Transformer
@@ -2427,6 +3862,11 @@ fn section_after_marker(line: &str, rev: u32) -> Section {
         Some("SYSTEM SWITCHING DEVICE") => Section::Transformer,
         Some("TRANSFORMER" | "TRANSFORMER BRANCH") => Section::Area,
         Some("AREA" | "AREA INTERCHANGE") => Section::TwoTerminalDc,
+        Some("TWO-TERMINAL DC" | "TWO TERMINAL DC" | "2-TERMINAL DC" | "2 TERMINAL DC") => {
+            Section::VscDc
+        }
+        Some("VSC DC LINE" | "VOLTAGE SOURCE CONVERTER") => Section::ImpedanceCorrection,
+        Some("OWNER") => Section::Facts,
         Some("FACTS DEVICE" | "FACTS CONTROL DEVICE") => Section::SwitchedShunt,
         _ => Section::Skip,
     }
@@ -2445,7 +3885,10 @@ fn section_from_name(name: &str) -> Section {
         "TWO-TERMINAL DC" | "TWO TERMINAL DC" | "2-TERMINAL DC" | "2 TERMINAL DC" => {
             Section::TwoTerminalDc
         }
+        "VSC DC LINE" | "VSC DC" | "VOLTAGE SOURCE CONVERTER" => Section::VscDc,
         "AREA" | "AREA INTERCHANGE" => Section::Area,
+        "IMPEDANCE CORRECTION" | "TRANSFORMER IMPEDANCE CORRECTION" => Section::ImpedanceCorrection,
+        "FACTS DEVICE" | "FACTS CONTROL DEVICE" | "FACTS" => Section::Facts,
         _ => Section::Skip,
     }
 }
@@ -2459,6 +3902,7 @@ fn is_terminator(line: &str) -> bool {
 /// character, so a record's byte range can be attached to the findings it
 /// produces. A line terminator (`\n` or `\r\n`) is excluded from the yielded
 /// text, as by `str::lines`.
+#[derive(Clone)]
 struct RawLines<'a> {
     text: &'a str,
     offset: usize,
@@ -2596,6 +4040,45 @@ fn convert_transformer_impedance(
             (r, x)
         }
     }
+}
+
+/// The factor that carries a two winding transformer's magnetizing admittance
+/// between PSS/E and the neutral branch.
+///
+/// PSS/E connects `MAG1 + jMAG2` from bus I to ground, outside winding 1's
+/// ratio, so bus I sees it whatever the tap. The neutral pi branch puts its
+/// from-side charging inside the tap, `Y_ff = (y_s + y_fr) / tap²`. Charging
+/// of `Ym · tap²` therefore gives bus I exactly `Ym` at the stated tap. The
+/// reader multiplies by this factor and the writer divides by it. A zero tap
+/// means 1, and a tap too small to divide by, or one whose square overflows,
+/// leaves the admittance as stated.
+fn magnetizing_referral(tap: f64) -> f64 {
+    let square = tap * tap;
+    if tap.abs() >= crate::dc::MIN_DIVISIBLE_MAGNITUDE && square.is_finite() {
+        square
+    } else {
+        1.0
+    }
+}
+
+/// The `MAG1` or `MAG2` the writer states for branch charging `total` that
+/// the reader referred by `referral`: the shortest decimal the reader's
+/// multiplication maps back to `total` exactly. A plain quotient can carry
+/// rounding noise in its last digits (`0.0019` back as
+/// `0.0018999999999999998`), so a value read from PSS/E would not write back
+/// as its source stated it.
+// Exact equality is the point: the candidate must reproduce `total` bit for
+// bit when the reader multiplies it by the same factor.
+#[allow(clippy::float_cmp)]
+fn unrefer_magnetizing(total: f64, referral: f64) -> f64 {
+    let quotient = total / referral;
+    if referral == 1.0 || quotient == 0.0 || !quotient.is_finite() {
+        return quotient;
+    }
+    (0..17)
+        .filter_map(|digits| format!("{quotient:.digits$e}").parse::<f64>().ok())
+        .find(|candidate| candidate * referral == total)
+        .unwrap_or(quotient)
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -2799,9 +4282,9 @@ fn ended_section_name(line: &str) -> Option<String> {
     Some(rest[..end].trim().to_string())
 }
 
-/// Warn about non-empty PSS/E sections the reader does not model (VSC and
-/// multi-terminal DC, impedance correction, substation/node, multi-section line,
-/// induction machine, FACTS, GNE, owner/zone, ...). Counts come from the parser
+/// Warn about non-empty PSS/E sections the reader does not model
+/// (multi-terminal DC, substation/node, multi-section line, induction machine,
+/// series FACTS, GNE, owner/zone, ...). Counts come from the parser
 /// pass itself, so bare `0` terminators and malformed continuation boundaries are
 /// classified the same way as the records that get skipped. No emission target
 /// names revision 32, so a revision 32 source is never written back as its own
@@ -2811,16 +4294,21 @@ fn warn_unmodeled_sections(
     raw_rev: u32,
     warnings: &mut Diagnostics,
 ) {
-    let retention = if raw_rev == 32 {
-        "retained only in the module source; fresh output uses revision 33 or later and drops it"
-    } else {
-        "preserved only in a same-format .raw echo, dropped on any other write"
-    };
+    let retention = unmodeled_retention(raw_rev);
     for (name, rows) in totals {
         warnings.push(
             &codes::READ_PSSE_SECTION_UNSUPPORTED,
             format!("PSS/E {name} section ({rows} record line(s)) is not modeled: {retention}"),
         );
+    }
+}
+
+/// Where a record the reader does not model survives.
+fn unmodeled_retention(raw_rev: u32) -> &'static str {
+    if raw_rev == 32 {
+        "retained only in the module source; fresh output uses revision 33 or later and drops it"
+    } else {
+        "preserved only in a same-format .raw echo, dropped on any other write"
     }
 }
 
@@ -3432,6 +4920,13 @@ fn read_load(f: &[Cow<'_, str>], raw_rev: u32, warnings: &mut Diagnostics) -> Re
     let iq = num_at(f, 8, 0.0)?;
     let yp = num_at(f, 9, 0.0)?;
     let yq = num_at(f, 10, 0.0)?;
+    // Distributed generation joins the record at revision 34; while DGENF is
+    // on, DGENP and DGENQ serve part of the constant power demand.
+    let (pdgen, qdgen) = if raw_rev >= 34 && int_at(f, 16, 0)? != 0 {
+        (num_at(f, 14, 0.0)?, num_at(f, 15, 0.0)?)
+    } else {
+        (0.0, 0.0)
+    };
     let mut extras = device_extras(f, 1);
     for (field, key) in [(3, "psse_area"), (4, "psse_zone")] {
         let value = id_at(f, field, 0)?;
@@ -3439,11 +4934,13 @@ fn read_load(f: &[Cow<'_, str>], raw_rev: u32, warnings: &mut Diagnostics) -> Re
             extras.insert(key.into(), Value::from(value as u64));
         }
     }
-    // A record with zero I/Y components states the constant-power pair alone,
-    // and that pair is exactly the typed p/q the writer falls back to — so the
-    // six components are retained only when one of the distributing terms is
-    // nonzero and the split genuinely says more than the total.
-    if [ip, iq, yp, yq].iter().any(|v| *v != 0.0) {
+    // A record with zero I/Y components and no distributed generation states
+    // the constant-power pair alone, and that pair is exactly the typed p/q the
+    // writer falls back to — so the six components are retained only when one
+    // of the distributing terms is nonzero and the split genuinely says more
+    // than the total, or when distributed generation nets out of PL and QL and
+    // the writer needs them to restate the record exactly.
+    if [ip, iq, yp, yq, pdgen, qdgen].iter().any(|v| *v != 0.0) {
         for (key, value) in [
             ("psse_pl", pl),
             ("psse_ql", ql),
@@ -3491,15 +4988,21 @@ fn read_load(f: &[Cow<'_, str>], raw_rev: u32, warnings: &mut Diagnostics) -> Re
     } else {
         None
     };
+    // PSS/E states YQ as an admittance, negative for an inductive load, while
+    // every other component counts consumption; the load draws QL + IQ·V −
+    // YQ·V². Distributed generation that DGENF switches on serves part of the
+    // constant power demand.
+    let q_impedance = psse_yq_consumption(yq);
+    let (p_power, q_power) = (pl - pdgen, ql - qdgen);
     let has_zip_components = [ip, iq, yp, yq].iter().any(|v| *v != 0.0);
     let voltage_model =
         (has_zip_components || scal != 1 || load_type.is_some()).then_some(LoadVoltageModel::Zip {
-            p_constant_power: pl,
-            q_constant_power: ql,
+            p_constant_power: p_power,
+            q_constant_power: q_power,
             p_constant_current: ip,
             q_constant_current: iq,
             p_constant_impedance: yp,
-            q_constant_impedance: yq,
+            q_constant_impedance: q_impedance,
             v_nom: None,
             load_type,
             scaling: (scal != 1).then_some(scal as f64),
@@ -3515,13 +5018,45 @@ fn read_load(f: &[Cow<'_, str>], raw_rev: u32, warnings: &mut Diagnostics) -> Re
     }
     Ok(Load {
         bus: BusId(bus),
-        p: pl + ip + yp,
-        q: ql + iq + yq,
+        p: p_power + ip + yp,
+        q: q_power + iq + q_impedance,
         voltage_model,
         in_service: on_at(f, 2, true)?,
         uid: None,
         extras,
     })
+}
+
+/// PSS/E `YQ` as consumed reactive power at 1 p.u. voltage, and the reverse:
+/// PSS/E states the admittance part's reactive power negative for an
+/// inductive load. `0.0 - yq` rather than `-yq`, so a zero stays `+0.0`.
+fn psse_yq_consumption(yq: f64) -> f64 {
+    0.0 - yq
+}
+
+/// The distributed generation `(DGENP, DGENQ)` a PSS/E load nets out of its
+/// constant power part while `DGENF` is on, and zero while it is off. The
+/// reader retains the three fields as `psse_pdgen`, `psse_qdgen`, and
+/// `psse_flagstatus`.
+fn load_distributed_generation(extras: &Extras) -> (f64, f64) {
+    if extra_i64(extras, "psse_flagstatus").unwrap_or(0) == 0 {
+        return (0.0, 0.0);
+    }
+    (
+        extra_f64(extras, "psse_pdgen").unwrap_or(0.0),
+        extra_f64(extras, "psse_qdgen").unwrap_or(0.0),
+    )
+}
+
+/// The PL or QL a record states for the constant power demand `net` that
+/// distributed generation `dg` serves part of: the retained source field when
+/// it still nets to `net`, so an unedited load restates its record exactly,
+/// else `net + dg`.
+#[allow(clippy::float_cmp)]
+fn gross_load_power(net: f64, dg: f64, retained: Option<f64>) -> f64 {
+    retained
+        .filter(|gross| gross - dg == net)
+        .unwrap_or(net + dg)
 }
 
 fn read_shunt(f: &[Cow<'_, str>]) -> Result<Shunt> {
@@ -3544,9 +5079,10 @@ fn read_switched_shunt(
     warnings: &mut Diagnostics,
 ) -> Result<(Shunt, i32)> {
     // v33/34: I, MODSW, ADJM, STAT, VSWHI, VSWLO, SWREM, RMPCT, RMIDNT, BINIT(9),
-    // then (Ni, Bi) step pairs. v35: I, ID, MODSW, ADJM, ST, VSWHI, VSWLO,
-    // SWREG, NREG, RMPCT, RMIDNT, BINIT(11), then (Si, Ni, Bi) triples — the ID
-    // shifts everything by one and NREG shifts the fields after SWREG by another.
+    // then (Ni, Bi) step pairs; v34 states NREG(26) after the eighth pair. v35:
+    // I, ID, MODSW, ADJM, ST, VSWHI, VSWLO, SWREG, NREG, RMPCT, RMIDNT,
+    // BINIT(11), then (Si, Ni, Bi) triples — the ID shifts everything by one and
+    // NREG shifts the fields after SWREG by another.
     // BINIT becomes the shunt `b` (gs = 0); the mode, voltage band, regulated
     // bus, RMPCT, and step blocks ride on the switching-control record.
     let o = usize::from(rev >= 35);
@@ -3562,7 +5098,18 @@ fn read_switched_shunt(
     let mut i = 10 + o2;
     let stride = 2 + o;
     let mut block_number = 1usize;
-    while i + stride <= f.len() {
+    // The eight v34 step pairs end where NREG begins.
+    let blocks_end = if rev == 34 { f.len().min(26) } else { f.len() };
+    if rev == 34 && f.len() > 27 {
+        warnings.push(
+            &codes::READ_PSSE_FIELD_DROPPED,
+            format!(
+                "PSS/E switched shunt at bus {bus}: a revision 34 record states NREG after its eighth step pair; the {} field(s) after NREG were ignored",
+                f.len() - 27
+            ),
+        );
+    }
+    while i + stride <= blocks_end {
         if rev >= 35 {
             let status = int_at(f, i, 1)?;
             if status != 1 {
@@ -3616,13 +5163,17 @@ fn read_switched_shunt(
         extras.insert("psse_adjm".into(), Value::from(adjm));
     }
     retain_string_extra(&mut extras, f, 8 + o2, "psse_rmidnt");
-    let regulating_node = if rev >= 35 {
-        i32::try_from(int_at(f, 8, 0)?).map_err(|_| Error::FormatRead {
+    let nreg_at = match rev {
+        35.. => Some(8),
+        34 => Some(26),
+        _ => None,
+    };
+    let regulating_node = match nreg_at {
+        Some(index) => i32::try_from(int_at(f, index, 0)?).map_err(|_| Error::FormatRead {
             format: FMT,
             message: "switched shunt NREG is outside the i32 range".into(),
-        })?
-    } else {
-        0
+        })?,
+        None => 0,
     };
     Ok((
         Shunt {
@@ -3665,6 +5216,132 @@ fn mode_to_modsw(mode: SwitchedShuntMode) -> i64 {
         SwitchedShuntMode::Discrete => 1,
         SwitchedShuntMode::Continuous => 2,
     }
+}
+
+/// The bus a FACTS device's `FCREG` (`REMOT` before revision 35) names
+/// beside its own, retained under `psse_fcreg`.
+fn facts_regulated_bus(extras: &Extras) -> Option<BusId> {
+    extra_i64(extras, "psse_fcreg")
+        .and_then(|bus| usize::try_from(bus).ok())
+        .map(BusId)
+}
+
+/// Read a FACTS device record. A shunt device (`J = 0`) becomes a
+/// [`StaticVarCompensator`] with its regulating node, or `None` for a series
+/// device, which the model has no element for.
+///
+/// `SHMX`, the shunt element's limit in MVA at unity voltage, bounds the
+/// susceptance at `±SHMX / kV²` siemens on the bus base, and `VSET`, the
+/// voltage setpoint in p.u. on the regulated bus base, becomes kV. `MODE 0`
+/// is out of service; a shunt device regulates its own bus, or `FCREG` when it names
+/// another. The fields the compensator has no home for are retained for a
+/// PSS/E write.
+#[allow(clippy::float_cmp)] // exact: a retained field is restated only when it maps to the typed value
+fn read_shunt_facts(
+    f: &[Cow<'_, str>],
+    raw_rev: u32,
+    bus_base_kv: &BTreeMap<BusId, f64>,
+    warnings: &mut Diagnostics,
+) -> Result<Option<(StaticVarCompensator, i32)>> {
+    // NAME, I, J, MODE, PDES, QDES, VSET, SHMX, TRMX, VTMN, VTMX, VSMX, IMX,
+    // LINX, RMPCT, OWNER, SET1, SET2, VSREF, then REMOT and MNAME before
+    // revision 34 (which appends NREG), then FCREG, NREG, MNAME in 35.
+    if id_at(f, 2, 0)? != 0 {
+        return Ok(None);
+    }
+    let bus = BusId(id_at(f, 1, 0)?);
+    let name = f.first().map_or("", |name| name.trim());
+    let kv = bus_base_kv.get(&bus).copied().unwrap_or(0.0);
+    let kv = if kv.is_finite() && kv > 0.0 {
+        kv
+    } else {
+        warnings.push(
+            &codes::READ_PSSE_VALUE_SUBSTITUTED,
+            format!(
+                "PSS/E FACTS device {name:?} at bus {bus}: the bus states no base kV; read SHMX and VSET on a 1 kV base"
+            ),
+        );
+        1.0
+    };
+    let mode = int_at(f, 3, 1)?;
+    let shmx = num_at(f, 7, 9999.0)?;
+    let vset = num_at(f, 6, 1.0)?;
+    let mut svc = StaticVarCompensator::new(bus, -shmx / (kv * kv), shmx / (kv * kv));
+    svc.in_service = mode != 0;
+    svc.regulating = true;
+    let regulated = id_at(f, 19, 0)?;
+    let regulated_kv = if regulated == 0 || regulated == bus.0 {
+        kv
+    } else {
+        bus_base_kv.get(&BusId(regulated)).copied()
+            .filter(|base| base.is_finite() && *base > 0.0)
+            .unwrap_or_else(|| {
+                warnings.push(&codes::READ_PSSE_VALUE_SUBSTITUTED, format!(
+                    "PSS/E FACTS device {name:?}: regulated bus {regulated} has no positive base kV; VSET uses the device bus base"
+                ));
+                kv
+            })
+    };
+    svc.voltage_setpoint_kv = vset * regulated_kv;
+    if shmx != 0.0 {
+        warnings.push(&codes::READ_PSSE_VALUE_SUBSTITUTED, format!(
+            "PSS/E FACTS device {name:?}: SHMX is a current limit; projected to fixed susceptance limits at unity device-bus voltage only, so reactive limits differ away from unity voltage"
+        ));
+    }
+    let mut extras = Extras::new();
+    // Converting back to p.u. and MVA can land an ulp away; the stated field
+    // is kept wherever it would, so a written record restates it.
+    if svc.b_max_siemens * (kv * kv) != shmx {
+        extras.insert("psse_shmx".into(), jnum(shmx));
+    }
+    if svc.voltage_setpoint_kv / regulated_kv != vset {
+        extras.insert("psse_vset".into(), jnum(vset));
+    }
+    retain_string_extra(&mut extras, f, 0, "psse_name");
+    if !matches!(mode, 0 | 1) {
+        extras.insert("psse_mode".into(), Value::from(mode));
+    }
+    for (index, key, default) in [
+        (4, "psse_pdes", 0.0),
+        (5, "psse_qdes", 0.0),
+        (8, "psse_trmx", 9999.0),
+        (9, "psse_vtmn", 0.9),
+        (10, "psse_vtmx", 1.1),
+        (11, "psse_vsmx", 1.0),
+        (12, "psse_imx", 0.0),
+        (13, "psse_linx", 0.05),
+        (14, "psse_rmpct", 100.0),
+        (16, "psse_set1", 0.0),
+        (17, "psse_set2", 0.0),
+    ] {
+        retain_float_extra(&mut extras, f, index, key, default)?;
+    }
+    retain_integer_extra(&mut extras, f, 15, "psse_owner", 1)?;
+    retain_integer_extra(&mut extras, f, 18, "psse_vsref", 0)?;
+    if regulated != 0 && regulated != bus.0 {
+        extras.insert("psse_fcreg".into(), Value::from(regulated as u64));
+    }
+    let (node, mname) = if raw_rev >= 34 {
+        let (node_index, name_index) = if raw_rev >= 35 { (20, 21) } else { (21, 20) };
+        let node = i32::try_from(int_at(f, node_index, 0)?).map_err(|_| Error::FormatRead {
+            format: FMT,
+            message: "FACTS device NREG is outside the i32 range".into(),
+        })?;
+        (node, name_index)
+    } else {
+        (0, 20)
+    };
+    retain_string_extra(&mut extras, f, mname, "psse_mname");
+    if regulated != 0 && regulated != bus.0 && node == 0 {
+        warnings.push(
+            &codes::READ_PSSE_FIELD_DROPPED,
+            format!(
+                "PSS/E FACTS device {name:?} at bus {bus} regulates bus {regulated}, which a static var compensator names only through a regulating terminal; retained for PSS/E output; the typed voltage setpoint uses the regulated bus base but its remote control target is unavailable"
+            ),
+        );
+    }
+    svc.extras = extras;
+    Ok(Some((svc, node)))
 }
 
 fn read_area(f: &[Cow<'_, str>]) -> Result<Area> {
@@ -3764,20 +5441,26 @@ fn read_gen(
     generator_ids: &mut BTreeMap<BusId, BTreeSet<String>>,
 ) -> Result<(Generator, i32, BTreeMap<String, String>)> {
     // v33/34: I, ID, PG, QG, QT, QB, VS, IREG, MBASE(8), ..., STAT(14), ...,
-    // PT(16), PB(17). v35 inserts NREG after IREG (and BASLOD after PB),
-    // shifting MBASE through PB by one; v34 keeps the v33 layout.
+    // PT(16), PB(17). v34 keeps the v33 layout and appends NREG after WPF.
+    // v35 inserts NREG after IREG (and BASLOD after PB), shifting MBASE
+    // through PB by one.
     let o = usize::from(raw_rev >= 35);
     let bus = id_at(f, 0, 0)?;
     // IREG names the regulated bus. Zero means implicit own-terminal control;
     // an explicit same-bus IREG remains distinct so fresh output can retain it.
     let ireg = id_at(f, 7, 0)?;
-    let regulating_node = if raw_rev >= 35 {
-        i32::try_from(int_at(f, 8, 0)?).map_err(|_| Error::FormatRead {
+    let owner_start = if raw_rev >= 35 { 20 } else { 18 };
+    let nreg_at = match raw_rev {
+        35.. => Some(8),
+        34 => Some(owner_start + 10),
+        _ => None,
+    };
+    let regulating_node = match nreg_at {
+        Some(index) => i32::try_from(int_at(f, index, 0)?).map_err(|_| Error::FormatRead {
             format: FMT,
             message: "generator NREG is outside the i32 range".into(),
-        })?
-    } else {
-        0
+        })?,
+        None => 0,
     };
     let mut source_metadata = BTreeMap::new();
     retain_generator_id(&mut source_metadata, f, BusId(bus), generator_ids);
@@ -3791,7 +5474,6 @@ fn read_gen(
     ] {
         retain_generator_float(&mut source_metadata, f, index, property, default)?;
     }
-    let owner_start = if raw_rev >= 35 { 20 } else { 18 };
     if raw_rev >= 35 {
         retain_generator_integer(&mut source_metadata, f, 19, "psse_baslod", 0)?;
     }
@@ -3871,17 +5553,24 @@ fn attach_generator_source_metadata(
             .as_mut()
             .expect("detailed connectivity was initialized"),
     );
+    // One lookup per generator: a linear search of the metadata already
+    // attached made this quadratic in the generator count, a third of the
+    // whole read on a case with tens of thousands of machines.
+    let mut attached: HashMap<powerio_core::ComponentId, usize> =
+        HashMap::with_capacity(detailed.component_metadata.len());
+    for (row, metadata) in detailed.component_metadata.iter().enumerate() {
+        attached.entry(metadata.component.clone()).or_insert(row);
+    }
     for (component, properties) in component_ids.into_iter().zip(generator_metadata) {
         if properties.is_empty() {
             continue;
         }
-        if let Some(existing) = detailed
-            .component_metadata
-            .iter_mut()
-            .find(|metadata| metadata.component == component)
-        {
-            existing.properties.extend(properties);
+        if let Some(&row) = attached.get(&component) {
+            detailed.component_metadata[row]
+                .properties
+                .extend(properties);
         } else {
+            attached.insert(component.clone(), detailed.component_metadata.len());
             detailed.component_metadata.push(ComponentMetadata {
                 component,
                 name: None,
@@ -4012,13 +5701,67 @@ fn retain_transformer_main_extras(
     Ok(())
 }
 
+/// The winding line columns whose position depends on the revision. RMI, VMA,
+/// VMI, NTP, TAB, CR, CX, and CNXA follow RMA in that order in every
+/// revision.
+struct WindingColumns {
+    cod: usize,
+    cont: usize,
+    /// The node of the controlled bus, from revision 34.
+    node: Option<usize>,
+    rma: usize,
+}
+
+/// Where a two or three winding transformer's winding line states its control
+/// fields at `raw_rev`.
+///
+/// Revision 34 widens the three ratings to twelve, so COD moves from 6 to 15,
+/// and adds the winding node. PSS/E 34 writes that node last, after CNXA
+/// (`..., COD1, CONT1, RMA1, ..., CX1, CNXA1, NOD1` in its own column
+/// headers). Revision 35 moves it to just after CONT. The reader and the
+/// writer both take their layout from here.
+fn winding_columns(raw_rev: u32) -> WindingColumns {
+    match raw_rev {
+        35.. => WindingColumns {
+            cod: 15,
+            cont: 16,
+            node: Some(17),
+            rma: 18,
+        },
+        34 => WindingColumns {
+            cod: 15,
+            cont: 16,
+            node: Some(26),
+            rma: 17,
+        },
+        _ => WindingColumns {
+            cod: 6,
+            cont: 7,
+            node: None,
+            rma: 8,
+        },
+    }
+}
+
+/// A winding line's control columns from COD on, in the order `rev` writes
+/// them. `control` holds COD, CONT, RMA, RMI, VMA, VMI, NTP, TAB, CR, CX, and
+/// CNXA; the winding node goes where [`winding_columns`] reads it, and a
+/// revision without the field gets none.
+fn place_winding_node(mut control: Vec<String>, rev: u32, node: i32) -> String {
+    let columns = winding_columns(rev);
+    if let Some(index) = columns.node {
+        control.insert(index - columns.cod, node.to_string());
+    }
+    control.join(", ")
+}
+
 fn retain_transformer_winding_extras(
     extras: &mut Extras,
     fields: &[Cow<'_, str>],
     raw_rev: u32,
     suffix: &str,
 ) -> Result<()> {
-    let start = if raw_rev >= 34 { 23 } else { 13 };
+    let start = winding_columns(raw_rev).rma + 5;
     retain_integer_extra(extras, fields, start, &format!("psse_tab{suffix}"), 0)?;
     retain_float_extra(extras, fields, start + 1, &format!("psse_cr{suffix}"), 0.0)?;
     retain_float_extra(extras, fields, start + 2, &format!("psse_cx{suffix}"), 0.0)?;
@@ -4041,8 +5784,9 @@ fn read_transformer(
     // l3 at v33: WINDV1, NOMV1, ANG1, RATA1, RATB1, RATC1, COD1(6), CONT1,
     //     RMA1, RMI1, VMA1, VMI1, NTP1(12), ...
     // v34/35 widen the winding line to twelve ratings (RATE1..3 succeed
-    // RATA/B/C in place) and insert NODE after CONT: COD1 lands at 15, CONT1
-    // at 16, and RMA1..NTP1 at 18..22.
+    // RATA/B/C in place), so COD1 lands at 15 and CONT1 at 16. v34 then runs
+    // RMA1..NTP1 at 17..21 and ends the line with NOD1 after CNXA1; v35 moves
+    // the node to 17, right after CONT1, and RMA1..NTP1 to 18..22.
     // A nonzero control code COD1 marks a regulating winding; capture its limits
     // and regulated bus, else leave the branch's control unset.
     let (cw, cz) = transformer_basis_codes(l1)?;
@@ -4099,6 +5843,8 @@ fn read_transformer(
         &label,
         warnings,
     );
+    let referral = magnetizing_referral(tap);
+    let (mag_g, mag_b) = (mag_g * referral, mag_b * referral);
     let mut extras = device_extras(l1, 3);
     retain_transformer_main_extras(&mut extras, l1, raw_rev)?;
     retain_transformer_winding_extras(&mut extras, l3, raw_rev, "")?;
@@ -4183,14 +5929,13 @@ fn read_transformer_control(
     winding_name: &str,
     warnings: &mut Diagnostics,
 ) -> Result<(Option<TransformerControl>, i32)> {
-    let (cod_i, cont_i, node_i, rma_i) = if raw_rev >= 34 {
-        (15, 16, Some(17), 18)
-    } else {
-        (6, 7, None, 8)
-    };
-    let cod = int_at(winding, cod_i, 0)?;
-    let (cont, controlled_bus_on_winding_side) = signed_id_at(winding, cont_i, 0)?;
-    let node = node_i.map_or(Ok(0), |index| int_at(winding, index, 0))?;
+    let columns = winding_columns(raw_rev);
+    let rma_i = columns.rma;
+    let cod = int_at(winding, columns.cod, 0)?;
+    let (cont, controlled_bus_on_winding_side) = signed_id_at(winding, columns.cont, 0)?;
+    let node = columns
+        .node
+        .map_or(Ok(0), |index| int_at(winding, index, 0))?;
     let mode = cod_to_mode(cod);
     if cod != 0 && mode == TransformerControlMode::Fixed {
         warnings.push(
@@ -4299,6 +6044,16 @@ fn read_transformer_3w(
         BusId(id_at(l1, 1, 0)?),
         BusId(id_at(l1, 2, 0)?),
     ];
+    let stat = int_at(l1, 11, 1)?;
+    let (in_service, windings_in_service) = three_winding_status(stat).unwrap_or_else(|| {
+        warnings.push(
+            &codes::READ_PSSE_VALUE_SUBSTITUTED,
+            format!(
+                "PSS/E three winding transformer {label}: STAT {stat} is not a code from 0 to 4; read as 1, every winding in service"
+            ),
+        );
+        (true, [true; 3])
+    });
     let z = {
         let mut imp = |off: usize, pair: &str| -> Result<Impedance> {
             let sbase = num_at(l2, off + 2, system_base)?;
@@ -4389,26 +6144,288 @@ fn read_transformer_3w(
     for (winding, suffix) in [(l3, "1"), (l4, "2"), (l5, "3")] {
         retain_transformer_winding_extras(&mut extras, winding, raw_rev, suffix)?;
     }
-    Ok((
-        Transformer3W {
-            windings,
-            z,
-            star_vm: num_at(l2, 9, 1.0)?,
-            star_va: num_at(l2, 10, 0.0)?,
-            mag_g,
-            mag_b,
-            // STAT 0 = out of service; 1-4 mark which windings are in service. Treat
-            // any nonzero status as the transformer being in service.
-            in_service: int_at(l1, 11, 1)? != 0,
-            name: l1
-                .get(10)
-                .filter(|n| !n.is_empty())
-                .map(|n| n.trim().to_string()),
-            uid: None,
-            extras,
-        },
-        control_nodes,
-    ))
+    let mut transformer = Transformer3W {
+        windings,
+        z,
+        star_vm: num_at(l2, 9, 1.0)?,
+        star_va: num_at(l2, 10, 0.0)?,
+        mag_g,
+        mag_b,
+        in_service,
+        name: l1
+            .get(10)
+            .filter(|n| !n.is_empty())
+            .map(|n| n.trim().to_string()),
+        uid: None,
+        extras,
+    };
+    transformer.set_winding_in_service(windings_in_service);
+    for (winding, line) in [l3, l4, l5].into_iter().enumerate() {
+        transformer
+            .set_winding_rating_sets(winding, read_extra_branch_ratings(line, 3, raw_rev >= 34)?);
+    }
+    Ok((transformer, control_nodes))
+}
+
+/// The transformer and per winding status a PSS/E three winding `STAT` states:
+/// 0 takes the transformer out, 1 keeps every winding in, and 2, 3, and 4 take
+/// only winding 2, 3, or 1 out. `None` for any other code.
+fn three_winding_status(stat: i64) -> Option<(bool, [bool; 3])> {
+    match stat {
+        0 => Some((false, [true; 3])),
+        1 => Some((true, [true; 3])),
+        2 => Some((true, [true, false, true])),
+        3 => Some((true, [true, true, false])),
+        4 => Some((true, [false, true, true])),
+        _ => None,
+    }
+}
+
+/// The PSS/E three winding `STAT` for a transformer, the inverse of
+/// [`three_winding_status`]. `None` when the transformer is in service with
+/// two or three windings out, which no code states.
+fn three_winding_stat(transformer: &Transformer3W) -> Option<i64> {
+    if !transformer.in_service {
+        return Some(0);
+    }
+    match transformer.winding_in_service() {
+        [true, true, true] => Some(1),
+        [true, false, true] => Some(2),
+        [true, true, false] => Some(3),
+        [false, true, true] => Some(4),
+        _ => None,
+    }
+}
+
+/// The transformer winding an impedance correction table applies to.
+#[derive(Debug, Clone, Copy)]
+enum ImpedanceTarget {
+    /// A two winding transformer, by its row in the branch table.
+    Branch(usize),
+    /// A three winding transformer's row and winding.
+    Winding(usize, usize),
+}
+
+/// A transformer winding that names an impedance correction table, resolved
+/// once the table section has been read.
+#[derive(Debug, Clone, Copy)]
+struct ImpedanceReference {
+    target: ImpedanceTarget,
+    table: u32,
+    /// Branch-tap units per bus-base per-unit winding ratio. For a two
+    /// winding transformer this is 1/t2; three winding taps already use the
+    /// table's units, including the adjustable winding used by ZCOD=1.
+    ratio_scale: f64,
+}
+
+fn impedance_reference(
+    target: ImpedanceTarget,
+    extras: &Extras,
+    tab_key: &str,
+    ratio_scale: f64,
+) -> Option<ImpedanceReference> {
+    let table = extra_i64(extras, tab_key)
+        .filter(|table| *table > 0)
+        .and_then(|table| u32::try_from(table).ok())?;
+    Some(ImpedanceReference {
+        target,
+        table,
+        ratio_scale,
+    })
+}
+
+/// PSS/E 35.4.1 Data Formats §1.18.1: table range, not COD or the
+/// present operating point, determines whether T means degrees or ratio.
+fn impedance_table_variable(points: &[ImpedanceCorrectionPoint]) -> ImpedanceCorrectionVariable {
+    if points.first().is_some_and(|point| point.value < 0.5)
+        || points.last().is_some_and(|point| point.value > 1.5)
+    {
+        ImpedanceCorrectionVariable::Angle
+    } else {
+        ImpedanceCorrectionVariable::Ratio
+    }
+}
+
+/// Read one impedance correction table record. Before revision 34 the record
+/// is one line, `I, T1, F1, ..., T11, F11`, whose `0.0, 0.0` pairs pad it to
+/// eleven points. From revision 34 the factors are complex,
+/// `I, T1, Re(F1), Im(F1), ...`, and the record continues over as many lines
+/// as it takes until a `0.0, 0.0, 0.0` point ends it.
+fn read_impedance_correction(
+    f: &[Cow<'_, str>],
+    raw_rev: u32,
+    lines: &mut RawLines<'_>,
+    warnings: &mut Diagnostics,
+) -> Result<(u32, Vec<ImpedanceCorrectionPoint>)> {
+    let table = u32::try_from(id_at(f, 0, 0)?).map_err(|_| Error::FormatRead {
+        format: FMT,
+        message: "impedance correction table number exceeds the u32 range".into(),
+    })?;
+    let numbers = |fields: &[Cow<'_, str>], start: usize| {
+        (start..fields.len())
+            .map(|i| finite_field(i, &fields[i]))
+            .collect::<Result<Vec<_>>>()
+    };
+    let mut points = Vec::new();
+    if raw_rev < 34 {
+        for &[value, factor] in numbers(f, 1)?.as_chunks::<2>().0 {
+            if value != 0.0 || factor != 0.0 {
+                points.push(ImpedanceCorrectionPoint::new(value, factor, 0.0));
+            }
+        }
+        return Ok(finish_impedance_correction_table(table, points, warnings));
+    }
+    let mut values = numbers(f, 1)?;
+    // RAW continuation lines continue one flat stream of T, FRE, FIM values;
+    // a point is allowed to straddle a physical line boundary. Keep the
+    // incomplete suffix until the next line rather than dropping it with
+    // `as_chunks`, which only yields complete triples.
+    let mut pending = Vec::new();
+    loop {
+        pending.extend(values);
+        let complete_len = pending.len() / 3 * 3;
+        for &[value, factor_re, factor_im] in pending[..complete_len].as_chunks::<3>().0 {
+            if value == 0.0 && factor_re == 0.0 && factor_im == 0.0 {
+                return Ok(finish_impedance_correction_table(table, points, warnings));
+            }
+            points.push(ImpedanceCorrectionPoint::new(value, factor_re, factor_im));
+        }
+        pending.drain(..complete_len);
+        let Some(line) = next_open_continuation_line(lines, warnings) else {
+            warnings.push(
+                &codes::READ_PSSE_VALUE_SUBSTITUTED,
+                format!(
+                    "PSS/E impedance correction table {table} ends without its 0.0, 0.0, 0.0 point; read the {} point(s) it states and discarded {} trailing field(s)",
+                    points.len(),
+                    pending.len()
+                ),
+            );
+            return Ok(finish_impedance_correction_table(table, points, warnings));
+        };
+        values = numbers(&fields(line), 0)?;
+    }
+}
+
+/// The next data line of a record whose end the record itself states, or
+/// `None`, leaving `lines` where they were, when the next data line ends the
+/// section instead.
+fn next_open_continuation_line<'a>(
+    lines: &mut RawLines<'a>,
+    warnings: &mut Diagnostics,
+) -> Option<&'a str> {
+    let mut ahead = lines.clone();
+    while let Some((start, raw)) = ahead.next_line() {
+        let line = raw.trim();
+        if line.is_empty() || is_comment(line) {
+            continue;
+        }
+        if line.eq_ignore_ascii_case("q") || is_impedance_correction_terminator(line) {
+            return None;
+        }
+        *lines = ahead;
+        let line_start = start + (raw.len() - raw.trim_start().len());
+        warnings.extend_record(line_start + line.len());
+        return Some(line);
+    }
+    None
+}
+
+/// An open impedance-correction table ends only on a bare zero or a
+/// section marker. A continuation may legitimately start with zero when the
+/// previous physical line ended partway through a T, FRE, FIM triple.
+fn is_impedance_correction_terminator(line: &str) -> bool {
+    if line.trim() == "0" {
+        return true;
+    }
+    line.split_once('/').is_some_and(|(record, comment)| {
+        record.trim() == "0"
+            && comment
+                .trim_start()
+                .to_ascii_uppercase()
+                .starts_with("END OF")
+    })
+}
+
+/// Warn when source points are not strictly ascending, then normalize their
+/// order explicitly so classification and interpolation see the same table.
+fn finish_impedance_correction_table(
+    table: u32,
+    mut points: Vec<ImpedanceCorrectionPoint>,
+    warnings: &mut Diagnostics,
+) -> (u32, Vec<ImpedanceCorrectionPoint>) {
+    if points.windows(2).any(|pair| pair[0].value >= pair[1].value) {
+        warnings.push(
+            &codes::READ_PSSE_VALUE_SUBSTITUTED,
+            format!(
+                "PSS/E impedance correction table {table} has non-ascending T values; points were sorted by T"
+            ),
+        );
+        points.sort_by(|a, b| a.value.total_cmp(&b.value));
+    }
+    (table, points)
+}
+
+/// Give each transformer winding that names an impedance correction table the
+/// table's points, its turns ratios in the model's ratio units, and report the
+/// tables no winding names and the names no table answers.
+fn attach_impedance_corrections(
+    tables: &BTreeMap<u32, Vec<ImpedanceCorrectionPoint>>,
+    references: Vec<ImpedanceReference>,
+    branches: &mut [Branch],
+    transformers_3w: &mut [Transformer3W],
+    warnings: &mut Diagnostics,
+) {
+    let mut named = BTreeSet::new();
+    let mut missing = BTreeSet::new();
+    for reference in references {
+        let Some(points) = tables.get(&reference.table) else {
+            missing.insert(reference.table);
+            continue;
+        };
+        named.insert(reference.table);
+        // Classify before mapping ratio coordinates into branch-tap units.
+        let variable = impedance_table_variable(points);
+        let points = points
+            .iter()
+            .map(|point| {
+                let value = match variable {
+                    ImpedanceCorrectionVariable::Ratio => point.value * reference.ratio_scale,
+                    _ => point.value,
+                };
+                ImpedanceCorrectionPoint::new(value, point.factor_re, point.factor_im)
+            })
+            .collect();
+        let correction = ImpedanceCorrection::new(reference.table, variable, points);
+        match reference.target {
+            ImpedanceTarget::Branch(row) => {
+                branches[row].set_impedance_correction(Some(correction));
+            }
+            ImpedanceTarget::Winding(row, winding) => {
+                transformers_3w[row].set_winding_impedance_correction(winding, Some(correction));
+            }
+        }
+    }
+    if !missing.is_empty() {
+        warnings.push(
+            &codes::READ_PSSE_REFERENCE_DROPPED,
+            format!(
+                "PSS/E transformer windings name impedance correction table(s) {} that the case does not state; their impedance is read uncorrected",
+                missing.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")
+            ),
+        );
+    }
+    let unnamed = tables
+        .keys()
+        .filter(|table| !named.contains(*table))
+        .count();
+    if unnamed > 0 {
+        warnings.push(
+            &codes::READ_PSSE_RETAINED_SOURCE_ONLY,
+            format!(
+                "{unnamed} PSS/E impedance correction table(s) that no transformer names are retained only in the same format source"
+            ),
+        );
+    }
 }
 
 /// Read a 3-line two-terminal DC line record into an [`Hvdc`].
@@ -4441,6 +6458,7 @@ fn read_dc_line(
     rect: &[Cow<'_, str>],
     inv: &[Cow<'_, str>],
     index: usize,
+    raw_rev: u32,
     warnings: &mut Diagnostics,
 ) -> Result<Hvdc> {
     let mdc = int_at(l1, 1, 1)?;
@@ -4539,10 +6557,22 @@ fn read_dc_line(
     if unpriceable_current {
         extras.insert("psse_dc_setvl".into(), jnum(setvl));
     }
+    let rect_tail = converter_tail_fields(rect, raw_rev, "rectifier", warnings);
+    let inv_tail = converter_tail_fields(inv, raw_rev, "inverter", warnings);
     for (key, fields, start, default) in [
         ("psse_dc_control_tail", l1, 5, DEFAULT_CONTROL_TAIL),
-        ("psse_dc_rectifier_tail", rect, 1, DEFAULT_CONVERTER_TAIL),
-        ("psse_dc_inverter_tail", inv, 1, DEFAULT_CONVERTER_TAIL),
+        (
+            "psse_dc_rectifier_tail",
+            rect_tail.as_slice(),
+            0,
+            DEFAULT_CONVERTER_TAIL,
+        ),
+        (
+            "psse_dc_inverter_tail",
+            inv_tail.as_slice(),
+            0,
+            DEFAULT_CONVERTER_TAIL,
+        ),
     ] {
         if !tail_is_default(fields, start, default) {
             extras.insert(key.into(), tail_array(fields, start));
@@ -4577,6 +6607,333 @@ fn read_dc_line(
     })
 }
 
+/// Extras key holding one VSC converter's PSS/E control fields
+/// (`psse_vsc_converter1` and `psse_vsc_converter2`).
+fn vsc_converter_key(side: usize) -> String {
+    format!("psse_vsc_converter{side}")
+}
+
+/// One converter line of a PSS/E VSC DC line record.
+#[derive(Debug, Clone, Copy)]
+struct VscConverter {
+    bus: usize,
+    /// 0 out of service, 1 DC voltage control, 2 MW control.
+    kind: i64,
+    /// 0 out of service, 1 AC voltage control, 2 fixed AC power factor.
+    mode: i64,
+    /// kV under TYPE 1, MW under TYPE 2 (positive feeds the AC network).
+    dcset: f64,
+    /// Regulated voltage (per unit) under MODE 1, power factor under MODE 2.
+    acset: f64,
+    /// Converter loss `ALOSS + BLOSS·Idc` in kW (BLOSS in kW per A), never
+    /// below `MINLOSS` kW.
+    aloss: f64,
+    bloss: f64,
+    minloss: f64,
+    smax: f64,
+    imax: f64,
+    pwf: f64,
+    maxq: f64,
+    minq: f64,
+    vsreg: usize,
+    nreg: i64,
+    rmpct: f64,
+}
+
+impl VscConverter {
+    /// Converter loss in MW at DC current `current_ka`.
+    fn calc_loss_mw(&self, current_ka: f64) -> f64 {
+        (self.aloss + self.bloss * current_ka.abs() * 1000.0).max(self.minloss) / 1000.0
+    }
+
+    fn to_extra(self) -> Value {
+        let mut record = serde_json::Map::new();
+        record.insert("type".into(), Value::from(self.kind));
+        record.insert("mode".into(), Value::from(self.mode));
+        for (key, value) in [
+            ("dcset", self.dcset),
+            ("acset", self.acset),
+            ("aloss", self.aloss),
+            ("bloss", self.bloss),
+            ("minloss", self.minloss),
+            ("smax", self.smax),
+            ("imax", self.imax),
+            ("pwf", self.pwf),
+            ("rmpct", self.rmpct),
+        ] {
+            record.insert(key.into(), jnum(value));
+        }
+        record.insert("vsreg".into(), Value::from(self.vsreg));
+        record.insert("nreg".into(), Value::from(self.nreg));
+        Value::Object(record)
+    }
+}
+
+/// Read one VSC converter line: `IBUS, TYPE, MODE, DCSET, ACSET, ALOSS,
+/// BLOSS, MINLOSS, SMAX, IMAX, PWF, MAXQ, MINQ`, then `REMOT, RMPCT` through
+/// revision 34 and `VSREG, NREG, RMPCT` at revision 35. An `RMPCT` outside
+/// `(0, 100]` is not a percentage PSS/E can apply, so it reads as 100 with a
+/// diagnostic.
+fn read_vsc_converter(
+    f: &[Cow<'_, str>],
+    raw_rev: u32,
+    record: usize,
+    side: usize,
+    warnings: &mut Diagnostics,
+) -> Result<VscConverter> {
+    let (nreg, rmpct_at) = if raw_rev >= 35 {
+        (int_at(f, 14, 0)?, 15)
+    } else {
+        (0, 14)
+    };
+    let mut rmpct = num_at(f, rmpct_at, 100.0)?;
+    if !(rmpct > 0.0 && rmpct <= 100.0) {
+        warnings.push(
+            &codes::READ_PSSE_VALUE_SUBSTITUTED,
+            format!(
+                "VSC DC line record {record} converter {side}: RMPCT {rmpct} is outside (0, 100]; read as 100"
+            ),
+        );
+        rmpct = 100.0;
+    }
+    Ok(VscConverter {
+        bus: id_at(f, 0, 0)?,
+        kind: int_at(f, 1, 0)?,
+        mode: int_at(f, 2, 1)?,
+        dcset: num_at(f, 3, 0.0)?,
+        acset: num_at(f, 4, 1.0)?,
+        aloss: num_at(f, 5, 0.0)?,
+        bloss: num_at(f, 6, 0.0)?,
+        minloss: num_at(f, 7, 0.0)?,
+        smax: num_at(f, 8, 0.0)?,
+        imax: num_at(f, 9, 0.0)?,
+        pwf: num_at(f, 10, 1.0)?,
+        maxq: num_at(f, 11, 9999.0)?,
+        minq: num_at(f, 12, -9999.0)?,
+        vsreg: id_at(f, 13, 0)?,
+        nreg,
+        rmpct,
+    })
+}
+
+/// The AC powers of a two-converter VSC line at its schedule, MW injected
+/// into the AC network at converter 1 and converter 2, and the DC voltage
+/// the voltage-controlling converter holds.
+///
+/// One converter schedules power (TYPE 2, `DCSET` MW, positive feeding the
+/// AC network); the other holds the DC voltage (TYPE 1, `DCSET` kV) and
+/// takes whatever the power schedule leaves after both converters' losses
+/// and the `I²·RDC` drop of the DC line. The DC current solves
+/// `V·I + RDC·I² = P_dc` at the voltage-controlling end, and each converter's
+/// loss depends on that current, so the two are iterated together. `None`
+/// when the pair is not one TYPE 2 and one TYPE 1 converter, the scheduled
+/// voltage is not positive, or the schedule has no real current.
+fn calc_vsc_powers(converters: [&VscConverter; 2], rdc: f64) -> Option<(f64, f64, f64)> {
+    let (power, voltage) = match (converters[0].kind, converters[1].kind) {
+        (2, 1) => (0, 1),
+        (1, 2) => (1, 0),
+        _ => return None,
+    };
+    let v = converters[voltage].dcset;
+    if v.is_nan() || v <= 0.0 {
+        return None;
+    }
+    // Power the scheduling converter takes from its AC bus into the DC line.
+    let withdrawn = -converters[power].dcset;
+    let mut current = withdrawn / v;
+    for _ in 0..50 {
+        let sent = withdrawn - converters[power].calc_loss_mw(current);
+        let next = if rdc > 0.0 {
+            let discriminant = v.mul_add(v, 4.0 * rdc * sent);
+            if discriminant < 0.0 {
+                return None;
+            }
+            (discriminant.sqrt() - v) / (2.0 * rdc)
+        } else {
+            sent / v
+        };
+        let settled = (next - current).abs() <= 1e-12 * next.abs().max(1.0);
+        current = next;
+        if settled {
+            break;
+        }
+    }
+    let arrived = v * current;
+    let delivered = arrived - converters[voltage].calc_loss_mw(current);
+    let mut powers = [0.0; 2];
+    powers[power] = -withdrawn;
+    powers[voltage] = delivered;
+    (powers.iter().all(|p| p.is_finite())).then_some((powers[0], powers[1], v))
+}
+
+/// The reactive power a converter injects into its AC bus at active
+/// injection `p`: zero under AC voltage control (MODE 1), whose reactive
+/// output the solution sets, and `|p|·tan(acos|PF|)` signed by the power
+/// factor under fixed power factor control (MODE 2). A positive factor
+/// injects reactive power whether the converter is a rectifier or an
+/// inverter, and a negative one absorbs it.
+///
+/// The sign follows PowSybl's PSS/E importer (powsybl-core,
+/// `psse/psse-converter/.../VscDcTransmissionLineConverter.java`,
+/// `getReactiveSetpoint`, at commit 42cb7b03), which sets the IIDM
+/// `LocalTargetQ`, an injection into the bus, to
+/// `|DCSET|·sqrt(1 - PF²)/PF` at either converter. PowSybl scales by the
+/// line's scheduled power; this reader uses each converter's own active
+/// power, so the two differ in magnitude by the converter losses.
+fn calc_vsc_reactive_power(converter: &VscConverter, p: f64) -> f64 {
+    if converter.mode != 2 {
+        return 0.0;
+    }
+    let pf = converter.acset.abs().min(1.0);
+    if pf == 0.0 {
+        return 0.0;
+    }
+    p.abs() * (1.0 - pf * pf).sqrt() / pf * converter.acset.signum()
+}
+
+/// Read one VSC DC line record into the neutral [`Hvdc`]: the control line
+/// `'NAME', MDC, RDC, O1, F1, ..., O4, F4`, then one line per converter.
+/// `MDC = 0`, or a converter with `TYPE` or `MODE` 0, blocks the line: it
+/// reads out of service and keeps its schedule, as a two-terminal line does.
+///
+/// `from` is converter 1's AC bus and `to` converter 2's, with `pf` the power
+/// converter 1 takes from its bus and `pt` the power converter 2 feeds into
+/// its bus ([`calc_vsc_powers`]), in the MATPOWER `dcline` convention every
+/// reader shares. A converter under AC voltage control states no reactive
+/// power and records its regulation; one under fixed power factor injects
+/// the reactive power that factor implies. The PSS/E control fields of each
+/// converter ride in extras so the writer restates the record.
+#[expect(clippy::too_many_lines)]
+fn read_vsc_line(
+    l1: &[Cow<'_, str>],
+    c1: &[Cow<'_, str>],
+    c2: &[Cow<'_, str>],
+    index: usize,
+    raw_rev: u32,
+    bus_base_kv: &BTreeMap<BusId, f64>,
+    warnings: &mut Diagnostics,
+) -> Result<Hvdc> {
+    let record = index + 1;
+    let name = l1.first().map_or_else(String::new, ToString::to_string);
+    let mdc = int_at(l1, 1, 1)?;
+    let rdc = num_at(l1, 2, 0.0)?;
+    let converters = [
+        read_vsc_converter(c1, raw_rev, record, 1, warnings)?,
+        read_vsc_converter(c2, raw_rev, record, 2, warnings)?,
+    ];
+    let blocked = mdc == 0 || converters.iter().any(|c| c.kind == 0 || c.mode == 0);
+    let schedule = calc_vsc_powers([&converters[0], &converters[1]], rdc);
+    let (p1, p2, nominal) = if let Some(powers) = schedule {
+        powers
+    } else {
+        if !blocked {
+            warnings.push(
+                &codes::READ_PSSE_VALUE_SUBSTITUTED,
+                format!(
+                    "VSC DC line record {record} states converter types {} and {} with DC setpoints {} and {}; a line needs one MW-controlling (TYPE 2) and one DC voltage-controlling (TYPE 1) converter at a positive voltage, so both ends read as zero",
+                    converters[0].kind, converters[1].kind, converters[0].dcset, converters[1].dcset
+                ),
+            );
+        }
+        (0.0, 0.0, 0.0)
+    };
+    let q = [
+        calc_vsc_reactive_power(&converters[0], p1),
+        calc_vsc_reactive_power(&converters[1], p2),
+    ];
+    let converter = |side: usize, c: &VscConverter| -> Result<HvdcConverter> {
+        let regulated = BusId(if c.vsreg == 0 { c.bus } else { c.vsreg });
+        let base_kv = bus_base_kv.get(&regulated).copied().filter(|kv| *kv > 0.0);
+        let local = if name.is_empty() {
+            format!("vsc{record}:{side}")
+        } else {
+            format!("{name}:{side}")
+        };
+        Ok(HvdcConverter {
+            component: powerio_core::ComponentId::new("hvdc_converter", local).map_err(
+                |error| Error::FormatRead {
+                    format: FMT,
+                    message: error.to_string(),
+                },
+            )?,
+            kind: HvdcConverterKind::Vsc,
+            // The losses are the record's own ALOSS/BLOSS/MINLOSS model,
+            // already folded into `pf - pt`.
+            loss_factor_percent: 0.0,
+            voltage_regulator_on: Some(c.mode == 1),
+            voltage_setpoint_kv: (c.mode == 1)
+                .then(|| base_kv.map(|kv| c.acset * kv))
+                .flatten(),
+            reactive_power_setpoint_mvar: None,
+            power_factor: (c.mode == 2).then_some(c.acset),
+            regulating_terminal: None,
+        })
+    };
+    let mut extras = Extras::new();
+    if name != format!("VSC{record}") {
+        extras.insert("psse_vsc_name".into(), Value::String(name.clone()));
+    }
+    if !(0..=1).contains(&mdc) {
+        extras.insert("psse_vsc_mdc".into(), Value::from(mdc));
+    }
+    // The owner tail; a RAWX row states every column, so trailing empty ones
+    // restate nothing.
+    let owners = l1.len()
+        - l1.iter()
+            .skip(3)
+            .rev()
+            .take_while(|token| token.is_empty())
+            .count();
+    if owners > 3 {
+        extras.insert("psse_vsc_owners".into(), tail_array(&l1[..owners], 3));
+    }
+    for (side, c) in converters.iter().enumerate() {
+        extras.insert(vsc_converter_key(side + 1), c.to_extra());
+    }
+    let limit = converters
+        .iter()
+        .map(|c| c.smax)
+        .filter(|s| *s > 0.0)
+        .fold(f64::INFINITY, f64::min);
+    let pmax = if limit.is_finite() {
+        limit
+    } else {
+        p1.abs().max(p2.abs())
+    };
+    let voltage = |c: &VscConverter| if c.mode == 1 { c.acset } else { 1.0 };
+    Ok(Hvdc {
+        from: BusId(converters[0].bus),
+        to: BusId(converters[1].bus),
+        in_service: !blocked,
+        pf: -p1,
+        pt: p2,
+        qf: q[0],
+        qt: q[1],
+        vf: voltage(&converters[0]),
+        vt: voltage(&converters[1]),
+        pmin: -pmax,
+        pmax,
+        qminf: converters[0].minq,
+        qmaxf: converters[0].maxq,
+        qmint: converters[1].minq,
+        qmaxt: converters[1].maxq,
+        loss0: 0.0,
+        loss1: 0.0,
+        resistance_ohm: Some(rdc),
+        nominal_voltage_kv: (nominal > 0.0).then_some(nominal),
+        converters_mode: Some(if p1 <= 0.0 {
+            HvdcConvertersMode::Side1RectifierSide2Inverter
+        } else {
+            HvdcConvertersMode::Side1InverterSide2Rectifier
+        }),
+        converter1: Some(converter(1, &converters[0])?),
+        converter2: Some(converter(2, &converters[1])?),
+        cost: None,
+        uid: None,
+        extras,
+    })
+}
+
 /// Whether the tail of `f` from `start` states exactly the writer's `default`
 /// tail, token for token (quotes stripped, as the field splitter leaves them).
 /// A matching tail restates the synthesized neutral shape and needs no
@@ -4589,17 +6946,74 @@ fn tail_is_default(f: &[Cow<'_, str>], start: usize, default: &str) -> bool {
         .collect::<Vec<_>>();
     let mut tail = f.iter().skip(start).map(Cow::as_ref).collect::<Vec<_>>();
     // Revision 34 and later state one column more in a two-terminal DC
-    // converter tail, the bridge count between ICR and IFR. A record whose
-    // bridge count is zero and whose other fields are the default states the
-    // same converter as the shorter revision 33 default, and retaining it as
-    // an extra would make every later hop report the loss of nothing.
+    // converter tail, the node of the commutating transformer bus, which a
+    // converter tail holds after ICR. A record whose node is zero and whose
+    // other fields are the default states the same converter as the shorter
+    // revision 33 default, and retaining it as an extra would make every later
+    // hop report the loss of nothing.
     if tail.len() == defaults.len() + 1
         && default == DEFAULT_CONVERTER_TAIL
-        && tail[CONVERTER_TAIL_BRIDGE_INDEX] == "0"
+        && tail[CONVERTER_TAIL_NODE_INDEX] == "0"
     {
-        tail.remove(CONVERTER_TAIL_BRIDGE_INDEX);
+        tail.remove(CONVERTER_TAIL_NODE_INDEX);
     }
     tail == defaults
+}
+
+/// The fields of a two-terminal DC converter line after its AC bus, in one of
+/// the two layouts a retained tail keeps: revision 33 order, which has no node
+/// column, or revision 35 order, with `NDR`/`NDI` at
+/// [`CONVERTER_TAIL_NODE_INDEX`]. The writer tells them apart by length.
+///
+/// PSS/E fills a blank or omitted trailing field with its default, so those
+/// take the default here. A field past the record's last column is cut and
+/// reported, and the revision 34 node, which that revision states last after
+/// XCAPR, moves to where revision 35 states it.
+fn converter_tail_fields<'a>(
+    line: &[Cow<'a, str>],
+    raw_rev: u32,
+    end: &str,
+    warnings: &mut Diagnostics,
+) -> Vec<Cow<'a, str>> {
+    let mut defaults = DEFAULT_CONVERTER_TAIL
+        .split(", ")
+        .map(|field| field.trim_matches('\''))
+        .collect::<Vec<_>>();
+    if let Some(index) = converter_tail_node_index(raw_rev) {
+        defaults.insert(index, "0");
+    }
+    let mut tail = line.get(1..).unwrap_or_default().to_vec();
+    let past_end = tail
+        .iter()
+        .skip(defaults.len())
+        .filter(|field| !field.trim().is_empty())
+        .count();
+    if past_end > 0 {
+        warnings.push(
+            &codes::READ_PSSE_FIELD_DROPPED,
+            format!(
+                "PSS/E two-terminal DC {end} line at bus {} states {past_end} field(s) past its last column; ignored",
+                line.first().map_or("", |bus| bus.as_ref())
+            ),
+        );
+    }
+    tail.truncate(defaults.len());
+    for (field, default) in tail.iter_mut().zip(&defaults) {
+        if field.trim().is_empty() {
+            *field = Cow::Borrowed(*default);
+        }
+    }
+    let stated = tail.len();
+    tail.extend(
+        defaults[stated..]
+            .iter()
+            .map(|default| Cow::Borrowed(*default)),
+    );
+    if raw_rev == 34 {
+        let node = tail.remove(CONVERTER_TAIL_FIELDS_33);
+        tail.insert(CONVERTER_TAIL_NODE_INDEX, node);
+    }
+    tail
 }
 
 /// The fields of `f` from index `start` as a JSON string array (for extras).
@@ -4722,6 +7136,9 @@ fn typed_psse_load_type(model: &LoadVoltageModel) -> Option<String> {
     }
 }
 
+/// The six load components in consumption terms, the constant power pair net
+/// of any distributed generation: the caller turns them into PL, QL, IP, IQ,
+/// YP, and YQ.
 fn load_components_for_write(
     l: &Load,
     id: &str,
@@ -4778,12 +7195,15 @@ fn load_components_for_write(
         return (l.p, l.q, 0.0, 0.0, 0.0, 0.0);
     }
 
-    let pl = extra_f64(&l.extras, "psse_pl").unwrap_or(l.p);
-    let ql = extra_f64(&l.extras, "psse_ql").unwrap_or(l.q);
+    // The retained fields are the record's own: PL and QL before distributed
+    // generation and YQ in the PSS/E sign.
+    let (pdgen, qdgen) = load_distributed_generation(&l.extras);
+    let pl = extra_f64(&l.extras, "psse_pl").map_or(l.p, |pl| pl - pdgen);
+    let ql = extra_f64(&l.extras, "psse_ql").map_or(l.q, |ql| ql - qdgen);
     let ip = extra_f64(&l.extras, "psse_ip").unwrap_or(0.0);
     let iq = extra_f64(&l.extras, "psse_iq").unwrap_or(0.0);
     let yp = extra_f64(&l.extras, "psse_yp").unwrap_or(0.0);
-    let yq = extra_f64(&l.extras, "psse_yq").unwrap_or(0.0);
+    let yq = extra_f64(&l.extras, "psse_yq").map_or(0.0, psse_yq_consumption);
     let has_components = [
         "psse_pl", "psse_ql", "psse_ip", "psse_iq", "psse_yp", "psse_yq",
     ]
@@ -5159,13 +7579,12 @@ Q
                 .unwrap(),
             0.0001,
         );
-        assert!(
-            warnings
-                .lines()
-                .iter()
-                .any(|line| line.contains("FACTS DEVICE section (1 record line(s))")),
-            "the FACTS record is one skipped record: {warnings:?}"
-        );
+        assert_eq!(net.static_var_compensators().len(), 1);
+        let svc = &net.static_var_compensators()[0];
+        assert_eq!(svc.bus, BusId(3));
+        assert_eq!(svc.extras["psse_name"], Value::from("FACTS 1"));
+        close(svc.voltage_setpoint_kv, 69.0);
+        close(svc.b_max_siemens, 9999.0 / (69.0 * 69.0));
 
         // A name holding a double quote is written single quoted and reads
         // back unchanged.
@@ -5350,6 +7769,16 @@ Q
             "{:?}",
             conv.render_diagnostics()
         );
+        // The charging sits inside the 1.05 tap; PSS/E states the admittance
+        // at bus I, outside it.
+        let main = conv
+            .text
+            .lines()
+            .find(|line| line.starts_with("1, 2, 0, '1'"))
+            .unwrap();
+        let main_fields = fields(main);
+        close(main_fields[7].parse().unwrap(), 0.01 / (1.05 * 1.05));
+        close(main_fields[8].parse().unwrap(), 0.02 / (1.05 * 1.05));
         let back = parse_psse(&conv.text).unwrap();
         let charging = back.branches()[0].calc_terminal_charging();
         close(charging.g_fr, 0.01);
@@ -5438,8 +7867,10 @@ Q
         let net = parse_psse_source(raw, None, &mut warnings).unwrap();
 
         assert_eq!(net.loads().len(), 1);
-        close(net.loads()[0].p, 13.0);
-        close(net.loads()[0].q, 5.0);
+        // DGENF 1 nets DGENP 4 and DGENQ 2 out of PL and QL, and YQ 1.5 is
+        // capacitive: P = 10 - 4 + 1 + 2 and Q = 3 - 2 + 0.5 - 1.5.
+        close(net.loads()[0].p, 9.0);
+        close(net.loads()[0].q, 0.0);
         let Some(LoadVoltageModel::Zip {
             p_constant_power,
             q_constant_current,
@@ -5449,7 +7880,7 @@ Q
         else {
             panic!("missing typed ZIP load model");
         };
-        close(*p_constant_power, 10.0);
+        close(*p_constant_power, 6.0);
         close(*q_constant_current, 0.5);
         close(*p_constant_impedance, 2.0);
         assert!(
@@ -5470,8 +7901,8 @@ Q
             "modern load tail was not replayed: {text}"
         );
         let net2 = parse_psse(&text).unwrap();
-        close(net2.loads()[0].p, 13.0);
-        close(net2.loads()[0].q, 5.0);
+        close(net2.loads()[0].p, 9.0);
+        close(net2.loads()[0].q, 0.0);
     }
 
     #[test]
@@ -5570,6 +8001,107 @@ Q
         assert_eq!(*load_type, Some(7));
     }
 
+    /// PSS/E defines YQ as the admittance part's reactive power at 1 p.u.,
+    /// negative for an inductive load, so the load consumes QL + IQ·V − YQ·V².
+    /// DGENP and DGENQ serve part of the constant power demand while DGENF is
+    /// on. Each record writes back field for field at revisions 34 and 35 and
+    /// through RAWX; revision 33 has no DG columns and states the load net of it.
+    #[test]
+    fn load_yq_sign_and_distributed_generation_read_as_psse_defines_them() {
+        let records = [
+            // Inductive YQ with distributed generation switched on.
+            "2,'L1',1,1,1,10.1,3.3,1.0,0.5,2.0,-1.7,1,1,0,4.3,1.1,1,''",
+            // Capacitive YQ; distributed generation stated but switched off.
+            "2,'L2',1,1,1,5.0,1.0,0.0,0.0,0.0,0.9,1,1,0,2.0,0.4,0,''",
+            // Constant power only, distributed generation switched on.
+            "3,'L3',1,1,1,7.0,2.0,0.0,0.0,0.0,0.0,1,1,0,1.5,0.25,1,''",
+        ];
+        let raw = format!(
+            "0, 100.00, 35, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+3,'BUS3        ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+{}
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+Q
+",
+            records.join("\n")
+        );
+        let net = parse_psse(&raw).unwrap();
+        let zip = |load: &Load| match &load.voltage_model {
+            Some(LoadVoltageModel::Zip {
+                p_constant_power,
+                q_constant_power,
+                q_constant_impedance,
+                ..
+            }) => Some((*p_constant_power, *q_constant_power, *q_constant_impedance)),
+            _ => None,
+        };
+        let [l1, l2, l3] = [&net.loads()[0], &net.loads()[1], &net.loads()[2]];
+        close(l1.p, 10.1 - 4.3 + 1.0 + 2.0);
+        close(l1.q, 3.3 - 1.1 + 0.5 + 1.7);
+        let (p_power, q_power, q_impedance) = zip(l1).unwrap();
+        close(p_power, 10.1 - 4.3);
+        close(q_power, 3.3 - 1.1);
+        close(q_impedance, 1.7);
+        close(l2.p, 5.0);
+        close(l2.q, 1.0 - 0.9);
+        close(zip(l2).unwrap().2, -0.9);
+        close(l3.p, 7.0 - 1.5);
+        close(l3.q, 2.0 - 0.25);
+        assert_eq!(zip(l3), None);
+
+        let load_fields = |text: &str| {
+            text.lines()
+                .filter(|line| line.contains("'L"))
+                .map(|line| {
+                    fields(line)[5..17]
+                        .iter()
+                        .map(|field| field.parse::<f64>().unwrap())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        let stated = load_fields(&raw);
+        for revision in [34, 35] {
+            let emitted = write_psse_rev(&net, revision);
+            assert_eq!(load_fields(&emitted.text), stated, "revision {revision}");
+            let back = parse_psse(&emitted.text).unwrap();
+            assert_eq!(back.loads(), net.loads(), "revision {revision}");
+        }
+
+        // RAWX assigns each load a stable identity; the record is otherwise
+        // the same.
+        let rawx = super::super::rawx::write_rawx(&net).unwrap();
+        let mut back =
+            super::super::rawx::parse_rawx_source(&rawx.text, None, &mut Diagnostics::new())
+                .unwrap();
+        for load in back.loads_mut() {
+            load.uid = None;
+        }
+        assert_eq!(back.loads(), net.loads(), "RAWX");
+
+        let rev33 = write_psse_rev(&net, 33);
+        let collapsed = rev33
+            .render_diagnostics()
+            .iter()
+            .filter(|line| {
+                line.contains("EMIT.PSSE.VALUE_COLLAPSED")
+                    && line.contains("distributed generation")
+            })
+            .count();
+        assert_eq!(collapsed, 2, "{:?}", rev33.render_diagnostics());
+        let back = parse_psse(&rev33.text).unwrap();
+        for (before, after) in net.loads().iter().zip(back.loads()) {
+            close(after.p, before.p);
+            close(after.q, before.q);
+        }
+    }
+
     #[test]
     fn mutated_load_does_not_replay_stale_psse_zip_extras() {
         let raw = r"0, 100.00, 35, 0, 1, 60.00 / synthetic
@@ -5589,8 +8121,10 @@ Q
 
         let conv = write_psse_rev(&net, 35);
 
+        // The typed p/q are net of the load's distributed generation (DGENF 1,
+        // DGENP 4, DGENQ 2), which the record states in its own columns.
         assert!(
-            conv.text.contains("20.0, 7.0, 0.0, 0.0, 0.0, 0.0"),
+            conv.text.contains("24.0, 9.0, 0.0, 0.0, 0.0, 0.0"),
             "typed p/q were not written as constant power: {}",
             conv.text
         );
@@ -6026,9 +8560,9 @@ Q
         close(back.branches()[0].extras["psse_f1"].as_f64().unwrap(), 0.6);
     }
 
-    #[test]
-    fn revision_35_system_switches_round_trip() {
-        let raw = r"0, 100.00, 35, 0, 0, 60.00 / synthetic v35 switch
+    /// Four revision 35 system switching devices, the first a tie switch with
+    /// twelve ratings.
+    const V35_SWITCHES: &str = r"0, 100.00, 35, 0, 0, 60.00 / synthetic v35 switch
 CASE
 COMMENT
 0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
@@ -6048,7 +8582,24 @@ COMMENT
 0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
 Q
 ";
-        let mut parsed = parse_psse(raw).unwrap();
+
+    /// Give the first switch the fields a system switching device record
+    /// cannot carry: a current rating, a power flow result, and a rating set
+    /// name.
+    fn drop_switch_fields(net: &mut BalancedNetwork) {
+        net.switches_mut()[0].current_rating = Some(2_000.0);
+        net.switches_mut()[0].pf = Some(10.0);
+        net.switches_mut()[0].qf = Some(2.0);
+        net.switches_mut()[0].pt = Some(-9.8);
+        net.switches_mut()[0].qt = Some(-1.9);
+        net.switches_mut()[0]
+            .extras
+            .insert("psse_rsetnam".into(), Value::from("RATESET"));
+    }
+
+    #[test]
+    fn revision_35_system_switches_round_trip() {
+        let mut parsed = parse_psse(V35_SWITCHES).unwrap();
         assert_eq!(parsed.switches().len(), 4);
         let source_ids = parsed
             .switches()
@@ -6068,14 +8619,7 @@ Q
         assert_eq!(switch.extras["psse_stype"], Value::from(3));
         assert_eq!(switch.extras["psse_name"], Value::from("tie switch"));
 
-        parsed.switches_mut()[0].current_rating = Some(2_000.0);
-        parsed.switches_mut()[0].pf = Some(10.0);
-        parsed.switches_mut()[0].qf = Some(2.0);
-        parsed.switches_mut()[0].pt = Some(-9.8);
-        parsed.switches_mut()[0].qt = Some(-1.9);
-        parsed.switches_mut()[0]
-            .extras
-            .insert("psse_rsetnam".into(), Value::from("RATESET"));
+        drop_switch_fields(&mut parsed);
 
         let emitted = write_psse_rev(&parsed, 35);
         assert!(emitted.diagnostics.iter().any(|diagnostic| {
@@ -6106,12 +8650,56 @@ Q
         assert_eq!(switch.thermal_rating, Some(55.0));
         assert_eq!(switch.extras["psse_rate12"], Value::from(44.0));
         assert_eq!(switch.extras["psse_name"], Value::from("tie switch"));
+    }
 
+    #[test]
+    fn revision_34_writes_system_switches_and_reports_what_they_drop() {
+        let mut parsed = parse_psse(V35_SWITCHES).unwrap();
+        drop_switch_fields(&mut parsed);
+        // Revision 34 has the section too, in the same layout.
         let rev34 = write_psse_rev(&parsed, 34);
-        assert!(rev34.diagnostics.iter().any(|diagnostic| {
+        assert!(
+            rev34
+                .text
+                .contains("0 / END OF BRANCH DATA, BEGIN SYSTEM SWITCHING DEVICE DATA")
+        );
+        assert!(
+            !rev34
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code() == "EMIT.PSSE.RECORD_DROPPED"),
+            "{:?}",
+            rev34.render_diagnostics()
+        );
+        // What a switching device record cannot carry is reported at 34 as
+        // at 35.
+        for (dropped, revision) in [
+            ("switch current rating", ""),
+            ("switch power flow result", ""),
+            ("rating set name", "revision 34"),
+        ] {
+            assert!(
+                rev34.diagnostics.iter().any(|diagnostic| {
+                    diagnostic.code() == "EMIT.PSSE.FIELD_DROPPED"
+                        && diagnostic.message().contains(dropped)
+                        && diagnostic.message().contains(revision)
+                }),
+                "{dropped}: {:?}",
+                rev34.render_diagnostics()
+            );
+        }
+        let reparsed = parse_psse(&rev34.text).unwrap();
+        assert_eq!(reparsed.switches().len(), 4);
+        assert_eq!(
+            reparsed.switches()[0].extras["psse_name"],
+            Value::from("tie switch")
+        );
+
+        let rev33 = write_psse_rev(&parsed, 33);
+        assert!(rev33.diagnostics.iter().any(|diagnostic| {
             diagnostic.code() == "EMIT.PSSE.RECORD_DROPPED"
                 && diagnostic.message().contains("system switching device")
-                && diagnostic.message().contains("revision 34")
+                && diagnostic.message().contains("revision 33")
         }));
     }
 
@@ -6120,8 +8708,8 @@ Q
         // v34/35 exporters write K in float form: "0.00" must classify the
         // record as 2-winding (4 lines), or the reader consumes a fifth line and
         // desynchronizes every later section. The winding line uses the v34
-        // layout (twelve ratings, NODE after CONT), putting COD at 15 and
-        // RMA..NTP at 18..22.
+        // layout (twelve ratings, NOD last after CNXA), putting COD at 15 and
+        // RMA..NTP at 17..21.
         let raw = r"0, 100.00, 34, 0, 0, 60.00 / synthetic v34 export
 CASE
 COMMENT
@@ -6135,13 +8723,25 @@ COMMENT
 0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
 1, 2, 0.00, '1', 1, 1, 1, 0.0, 0.0, 1, 'T1          ', 1, 7, 0.6, 8, 0.4, 0, 1, 0, 1, 'YNd1'
 0.01, 0.10, 100.0
-1.05, 0.0, 0.0, 100.0, 90.0, 80.0, 70.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1, 2, 0, 1.08, 0.92, 1.05, 0.98, 17, 9, 0.01, 0.02, 0
+1.05, 0.0, 0.0, 100.0, 90.0, 80.0, 70.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1, 2, 1.08, 0.92, 1.05, 0.98, 17, 9, 0.01, 0.02, 0.0, 0
 1.0, 0.0
 0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
 1, 1, 0.0, 0.0, 'AREA        '
 Q
 ";
-        let net = parse_psse(raw).unwrap();
+        let mut warnings = Diagnostics::new();
+        let net = parse_psse_source(raw, None, &mut warnings).unwrap();
+        let findings = warnings.lines();
+        assert_eq!(
+            findings.len(),
+            1,
+            "a NOD of 0 names no regulating node: {findings:?}"
+        );
+        assert!(
+            findings[0].contains("READ.PSSE.REFERENCE_DROPPED")
+                && findings[0].contains("table(s) 9"),
+            "{findings:?}"
+        );
         assert_eq!(net.branches().len(), 1, "K = 0.00 is a 2-winding record");
         assert_eq!(net.transformers_3w().as_slice(), []);
         assert_eq!(
@@ -6174,16 +8774,561 @@ Q
         close(br.extras["psse_cr"].as_f64().unwrap(), 0.01);
         close(br.extras["psse_cx"].as_f64().unwrap(), 0.02);
 
-        let back = parse_psse(&write_psse_rev(&net, 34).text).unwrap();
+        let emission = write_psse_rev(&net, 34);
+        assert!(
+            emission
+                .render_diagnostics()
+                .iter()
+                .any(|line| line.contains("transformer 1-2 TAB 9")),
+            "{:?}",
+            emission.render_diagnostics()
+        );
+        let back = parse_psse(&emission.text).unwrap();
         assert_eq!(back.branches()[0].name.as_deref(), Some("T1"));
         let br = &back.branches()[0];
         assert_eq!(br.extras["psse_nmetr"], Value::from(1));
         assert_eq!(br.extras["psse_o1"], Value::from(7));
         close(br.extras["psse_f1"].as_f64().unwrap(), 0.6);
         assert_eq!(br.extras["psse_vecgrp"], Value::from("YNd1"));
-        assert_eq!(br.extras["psse_tab"], Value::from(9));
+        // Table 9 is not in the case, so the write names no table rather
+        // than a TAB that does not read back.
+        assert_eq!(br.extras.get("psse_tab"), None);
         close(br.extras["psse_cr"].as_f64().unwrap(), 0.01);
         close(br.extras["psse_cx"].as_f64().unwrap(), 0.02);
+    }
+
+    #[test]
+    fn v34_winding_lines_read_as_pss_e_34_writes_them() {
+        // The column header and the first winding line follow what PSS/E 34.8
+        // writes: NOD1 is the last field, after CNXA1, so RMA1 is at 17. The
+        // second record's winding states COD 3, RMA/RMI 30/-30, VMA/VMI 60/40,
+        // NTP 33, TAB 1, and NOD 7.
+        let raw = r"0,   100.00, 34,     0,     1, 60.00     / PSS(R)E-34 shaped
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+     1,'B1          ', 230.0000,3,   1,   1,   1,1.00000,   0.0000,1.10000,0.90000,1.10000,0.90000
+     2,'B2          ', 115.0000,1,   1,   1,   1,1.00000,   0.0000,1.10000,0.90000,1.10000,0.90000
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN SYSTEM SWITCHING DEVICE DATA
+0 / END OF SYSTEM SWITCHING DEVICE DATA, BEGIN TRANSFORMER DATA
+@!   I,     J,     K,'CKT',CW,CZ,CM,     MAG1,        MAG2,NMETR,               'N A M E',               STAT,O1,  F1,    O2,  F2,    O3,  F3,    O4,  F4,     'VECGRP', ZCOD
+@!   R1-2,       X1-2,   SBASE1-2,     R2-3,       X2-3,   SBASE2-3,     R3-1,       X3-1,   SBASE3-1, VMSTAR,   ANSTAR
+@!WINDV1,  NOMV1,    ANG1,  RATE1-1,  RATE1-2,  RATE1-3,  RATE1-4,  RATE1-5,  RATE1-6,  RATE1-7,  RATE1-8,  RATE1-9, RATE1-10, RATE1-11, RATE1-12,COD1,CONT1,   RMA1,    RMI1,    VMA1,    VMI1, NTP1,TAB1,  CR1,     CX1,   CNXA1,NOD1
+@!WINDV2,  NOMV2
+     1,     2,     0,'1 ', 1, 1, 1, 0.00000E+00, 0.00000E+00,2,'VOLTAGE                                 ',1,   1,1.0000,   0,1.0000,   0,1.0000,   0,1.0000,'            '
+ 0.00000E+00, 1.81000E-02,   100.00
+0.97143,   0.000,   0.000,     0.00,     0.00,     0.00,     0.00,     0.00,     0.00,     0.00,     0.00,     0.00,     0.00,     0.00,     0.00, 1,      2, 1.20000, 0.80000, 1.17000, 0.98000,   8, 0, 0.00000, 0.00000,  0.000,   0
+1.00000,   0.000
+     1,     2,     0,'2 ', 1, 1, 1, 0.00000E+00, 0.00000E+00,2,'ANGLE                                   ',1,   1,1.0000,   0,1.0000,   0,1.0000,   0,1.0000,'            '
+ 0.00000E+00, 5.00000E-02,   100.00
+1.0, 230.0, 10.0, 200, 200, 200, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 30.0, -30.0, 60.0, 40.0, 33, 1, 0.0, 0.0, 0.0, 7
+1.0, 115.0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let mut warnings = Diagnostics::new();
+        let net = parse_psse_source(raw, None, &mut warnings).unwrap();
+        assert_eq!(net.branches().len(), 2);
+
+        let voltage = net.branches()[0].control.as_ref().unwrap();
+        assert_eq!(voltage.mode, TransformerControlMode::Voltage);
+        assert_eq!(voltage.controlled_bus, Some(BusId(2)));
+        close(voltage.tap_max, 1.2);
+        close(voltage.tap_min, 0.8);
+        close(voltage.band_max, 1.17);
+        close(voltage.band_min, 0.98);
+        assert_eq!(voltage.ntp, 8);
+
+        let angle = &net.branches()[1];
+        let control = angle.control.as_ref().unwrap();
+        assert_eq!(control.mode, TransformerControlMode::ActiveFlow);
+        close(control.tap_max, 30.0);
+        close(control.tap_min, -30.0);
+        close(control.band_max, 60.0);
+        close(control.band_min, 40.0);
+        assert_eq!(control.ntp, 33);
+        assert_eq!(control.winding_connection_angle, None, "CNXA is 0.0");
+        assert_eq!(angle.extras["psse_tab"], Value::from(1));
+
+        // The case omits both table 1 and substation data for node 7.
+        // A node read from RMA (1 or 30) would still name the wrong node.
+        let lines = warnings.lines();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.contains("READ.PSSE.REFERENCE_DROPPED")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("node 7 ")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("table(s) 1")),
+            "{lines:?}"
+        );
+    }
+
+    /// Issue #592 items 2 and 8: one two winding transformer stated as
+    /// PSS/E 34 writes it (NOD last), as revision 35 states it (NODE after
+    /// CONT), and as a RAWX row with named fields. All three read the same
+    /// control columns, and bus I sees `MAG1 + jMAG2` itself, outside the
+    /// winding 1 ratio (`1.02 / 1.05`), as PSS/E connects it.
+    #[test]
+    fn winding_node_columns_and_magnetizing_admittance_agree_across_revisions() {
+        let case = |rev: u32, winding1: &str| {
+            format!(
+                "0, 100.00, {rev}, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 115.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN SYSTEM SWITCHING DEVICE DATA
+0 / END OF SYSTEM SWITCHING DEVICE DATA, BEGIN TRANSFORMER DATA
+1,2,0,'1 ',1,1,1,0.002,-0.015,2,'T12A        ',1,1,1,0,1,0,1,0,1,'            '
+0.005,0.08,100
+{winding1}
+1.05,0.0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+"
+            )
+        };
+        let ratings = "100,0,0,0,0,0,0,0,0,0,0,0";
+        // COD 1, CONT 2, RMA/RMI 1.12/0.88, VMA/VMI 1.04/0.96, NTP 25, node 0.
+        let rev34 = case(
+            34,
+            &format!("1.02,0.0,0.0,{ratings},1,2,1.12,0.88,1.04,0.96,25,0,0,0,0,0"),
+        );
+        let rev35 = case(
+            35,
+            &format!("1.02,0.0,0.0,{ratings},1,2,0,1.12,0.88,1.04,0.96,25,0,0,0,0"),
+        );
+        let rawx = serde_json::json!({
+            "network": {
+                "caseid": {"fields": ["rev", "sbase", "basfrq"], "data": [35, 100, 60]},
+                "bus": {
+                    "fields": ["ibus", "name", "baskv", "ide"],
+                    "data": [[1, "B1", 230.0, 3], [2, "B2", 115.0, 1]]
+                },
+                "transformer": {
+                    "fields": [
+                        "ibus", "jbus", "kbus", "ckt", "cw", "cz", "cm", "mag1", "mag2", "name",
+                        "r1_2", "x1_2", "sbase1_2", "windv1", "nomv1", "ang1", "wdg1rate1",
+                        "cod1", "cont1", "node1", "rma1", "rmi1", "vma1", "vmi1", "ntp1",
+                        "windv2", "nomv2"
+                    ],
+                    "data": [[
+                        1, 2, 0, "1", 1, 1, 1, 0.002, -0.015, "T12A",
+                        0.005, 0.08, 100.0, 1.02, 0.0, 0.0, 100.0,
+                        1, 2, 0, 1.12, 0.88, 1.04, 0.96, 25,
+                        1.05, 0.0
+                    ]]
+                }
+            }
+        })
+        .to_string();
+        let mut nets = Vec::new();
+        for (label, net) in [
+            ("RAW 34", parse_psse(&rev34)),
+            ("RAW 35", parse_psse(&rev35)),
+            (
+                "RAWX",
+                super::super::rawx::parse_rawx_source(&rawx, None, &mut Diagnostics::new()),
+            ),
+        ] {
+            let net = net.unwrap_or_else(|error| panic!("{label}: {error}"));
+            let branch = &net.branches()[0];
+            let tap = branch.calc_effective_tap();
+            close(tap, 1.02 / 1.05);
+            let control = branch.control.as_ref().unwrap();
+            assert_eq!(control.mode, TransformerControlMode::Voltage, "{label}");
+            assert_eq!(control.controlled_bus, Some(BusId(2)), "{label}");
+            // RMA and RMI are winding 1 ratios; in branch tap terms they
+            // divide by the winding 2 ratio as the tap does.
+            close(control.tap_max, 1.12 / 1.05);
+            close(control.tap_min, 0.88 / 1.05);
+            close(control.band_max, 1.04);
+            close(control.band_min, 0.96);
+            assert_eq!(control.ntp, 25, "{label}");
+            // The pi model divides the from side charging by tap²; bus I
+            // sees exactly MAG1 + jMAG2.
+            let charging = branch.calc_terminal_charging();
+            close(charging.g_fr / (tap * tap), 0.002);
+            close(charging.b_fr / (tap * tap), -0.015);
+            close(charging.g_to, 0.0);
+            close(charging.b_to, 0.0);
+            nets.push(net);
+        }
+        assert_eq!(nets[0].branches(), nets[1].branches());
+        // RAWX also assigns the row a stable identity.
+        let mut rawx_branch = nets[2].branches()[0].clone();
+        rawx_branch.uid = None;
+        assert_eq!(*nets[1].branches(), [rawx_branch]);
+    }
+
+    /// A revision 34 case in which a two winding transformer, the second
+    /// winding of a three winding transformer, a generator, and a switched
+    /// shunt each regulate node 2 of bus 1's substation. Revision 34 appends
+    /// every node column to the end of its record: NOD after CNXA on a winding
+    /// line, NREG after WPF on a generator, and NREG after the eighth step pair
+    /// on a switched shunt.
+    const V34_NODE_COLUMNS: &str = "0, 100.00, 34, 0, 1, 60.00 / v34 node columns
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 115.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+3,'B3          ', 13.8,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+1,'1 ',100,0,100,-100,1.02,1,100,0,1,0,0,1,1,100,200,0,1,1,0,1,0,1,0,1,0,1,2
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN SYSTEM SWITCHING DEVICE DATA
+0 / END OF SYSTEM SWITCHING DEVICE DATA, BEGIN TRANSFORMER DATA
+1,2,0,'2 ',1,1,1,0,0,2,'T2          ',1,1,1,0,1,0,1,0,1,'            '
+0.01,0.10,100
+1.0,0.0,0.0,100,0,0,0,0,0,0,0,0,0,0,0,1,1,1.12,0.88,1.05,0.95,25,0,0,0,0,2
+1.0,0.0
+1,2,3,'3 ',1,1,1,0,0,2,'T3          ',1,1,1,0,1,0,1,0,1,'            '
+0.01,0.10,100,0.02,0.20,100,0.015,0.25,100,1.0,0.0
+1.0,0.0,0.0,100,0,0,0,0,0,0,0,0,0,0,0,0,0,1.1,0.9,1.1,0.9,33,0,0,0,0,0
+1.0,0.0,0.0,100,0,0,0,0,0,0,0,0,0,0,0,1,1,1.08,0.92,1.04,0.96,17,0,0,0,0,2
+1.0,0.0,0.0,50,0,0,0,0,0,0,0,0,0,0,0,0,0,1.1,0.9,1.1,0.9,33,0,0,0,0,0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
+0 / END OF VSC DC LINE DATA, BEGIN IMPEDANCE CORRECTION DATA
+0 / END OF IMPEDANCE CORRECTION DATA, BEGIN MULTI-TERMINAL DC DATA
+0 / END OF MULTI-TERMINAL DC DATA, BEGIN MULTI-SECTION LINE DATA
+0 / END OF MULTI-SECTION LINE DATA, BEGIN ZONE DATA
+0 / END OF ZONE DATA, BEGIN INTER-AREA TRANSFER DATA
+0 / END OF INTER-AREA TRANSFER DATA, BEGIN OWNER DATA
+0 / END OF OWNER DATA, BEGIN FACTS DEVICE DATA
+0 / END OF FACTS DEVICE DATA, BEGIN SWITCHED SHUNT DATA
+2,1,0,1,1.05,0.95,1,100,'',80.0,1,10.0,1,10.0,1,10.0,1,10.0,1,10.0,1,10.0,1,10.0,1,10.0,2
+0 / END OF SWITCHED SHUNT DATA, BEGIN GNE DATA
+0 / END OF GNE DATA, BEGIN INDUCTION MACHINE DATA
+0 / END OF INDUCTION MACHINE DATA, BEGIN SUBSTATION DATA
+1, 'SUB1', 0.0, 0.0, 0.1
+1, 'N1', 1, 1, 1.0, 0.0
+2, 'N2', 1, 1, 1.0, 0.0
+0 / END OF SUBSTATION NODE DATA, BEGIN SUBSTATION SWITCHING DEVICE DATA
+1, 2, 'S1', 'BREAKER', 2, 1, 1, 0.0001, 100, 90, 80
+0 / END OF SUBSTATION SWITCHING DEVICE DATA, BEGIN SUBSTATION EQUIPMENT TERMINAL DATA
+1, 2, 'M', '1 '
+0 / END OF SUBSTATION EQUIPMENT TERMINAL DATA
+0 / END OF SUBSTATION DATA
+Q
+";
+
+    /// The records of the section `name` opens in RAW `text`, split into fields.
+    fn section_records(text: &str, name: &str) -> Vec<Vec<String>> {
+        let marker = format!("BEGIN {name} DATA");
+        text.lines()
+            .skip_while(|line| !line.contains(&marker))
+            .skip(1)
+            .take_while(|line| !line.starts_with("0 /"))
+            .map(|line| fields(line).iter().map(ToString::to_string).collect())
+            .collect()
+    }
+
+    /// The winding lines of RAW `text` that state COD 1.
+    fn regulating_winding_lines(text: &str) -> Vec<Vec<String>> {
+        section_records(text, "TRANSFORMER")
+            .into_iter()
+            .filter(|fields| fields.len() == 27 && fields[15] == "1")
+            .collect()
+    }
+
+    /// Node 2 of [`V34_NODE_COLUMNS`] holds the generator's terminal, so every
+    /// device regulating node 2 resolves to that terminal.
+    fn assert_v34_nodes_resolved(net: &BalancedNetwork) {
+        let expected = net.generators()[0].regulating_terminal.as_ref();
+        assert!(expected.is_some(), "generator NREG resolved");
+        let transformer = net.branches()[0].control.as_ref().unwrap();
+        assert_eq!(transformer.regulating_terminal.as_ref(), expected);
+        close(transformer.tap_max, 1.12);
+        assert_eq!(transformer.ntp, 25);
+        let winding = net.transformers_3w()[0].windings[1]
+            .control
+            .as_ref()
+            .unwrap();
+        assert_eq!(winding.regulating_terminal.as_ref(), expected);
+        close(winding.tap_max, 1.08);
+        assert_eq!(winding.ntp, 17);
+        let shunt = net.shunts()[0].control.as_ref().unwrap();
+        assert_eq!(shunt.regulating_terminal.as_ref(), expected);
+        assert_eq!(shunt.blocks.len(), 8, "eight step pairs, then NREG");
+    }
+
+    #[test]
+    fn v34_node_columns_follow_their_records_and_round_trip() {
+        let mut warnings = Diagnostics::new();
+        let net = parse_psse_source(V34_NODE_COLUMNS, None, &mut warnings).unwrap();
+        assert!(warnings.is_empty(), "{:?}", warnings.lines());
+        assert_v34_nodes_resolved(&net);
+
+        let rev34 = write_psse_rev(&net, 34);
+        assert!(
+            !rev34
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message().contains("regulating node")),
+            "{:?}",
+            rev34.render_diagnostics()
+        );
+        let generator = &section_records(&rev34.text, "GENERATOR")[0];
+        assert_eq!(generator.len(), 29, "{generator:?}");
+        assert_eq!(generator[28], "2", "NREG after WPF");
+        let shunt = &section_records(&rev34.text, "SWITCHED SHUNT")[0];
+        assert_eq!(shunt.len(), 27, "{shunt:?}");
+        assert_eq!(shunt[26], "2", "NREG after the eighth step pair");
+        let windings = regulating_winding_lines(&rev34.text);
+        assert_eq!(windings.len(), 2, "the 2W and the 3W regulating windings");
+        for winding in &windings {
+            assert_eq!(winding[16], "1", "CONT");
+            assert_eq!(winding[26], "2", "NOD after CNXA");
+        }
+        assert_eq!(windings[0][17], "1.12", "RMA right after CONT");
+        assert_eq!(windings[1][17], "1.08", "RMA right after CONT");
+
+        let mut warnings = Diagnostics::new();
+        let back = parse_psse_source(&rev34.text, None, &mut warnings).unwrap();
+        assert!(warnings.is_empty(), "{:?}", warnings.lines());
+        assert_v34_nodes_resolved(&back);
+
+        // Revision 35 keeps the node right after CONT.
+        let rev35 = write_psse_rev(&net, 35).text;
+        let windings = regulating_winding_lines(&rev35);
+        assert_eq!(windings.len(), 2);
+        for winding in &windings {
+            assert_eq!(winding[17], "2", "NODE after CONT");
+        }
+        assert_v34_nodes_resolved(&parse_psse(&rev35).unwrap());
+
+        // Revision 33 has no node columns and says so for the generator and
+        // the switched shunt.
+        let rev33 = write_psse_rev(&net, 33);
+        for device in ["generator", "switched shunt"] {
+            assert!(
+                rev33.diagnostics.iter().any(|diagnostic| {
+                    diagnostic.code() == "EMIT.PSSE.FIELD_DROPPED"
+                        && diagnostic.message().contains(device)
+                        && diagnostic.message().contains("before revision 34")
+                }),
+                "{device}: {:?}",
+                rev33.render_diagnostics()
+            );
+        }
+    }
+
+    #[test]
+    fn v34_switched_shunt_states_eight_step_pairs_before_nreg() {
+        // A ninth pair would land in the NREG column, so revision 34 output
+        // keeps eight and reports the rest, whether or not a node is stated.
+        let mut net = parse_psse(V34_NODE_COLUMNS).unwrap();
+        net.shunts_mut()[0].control.as_mut().unwrap().blocks = (1..=10)
+            .map(|step| ShuntBlock {
+                steps: 1,
+                g: 0.0,
+                b: f64::from(step) * 10.0,
+            })
+            .collect();
+        for (resolved, fields) in [(true, 27), (false, 26)] {
+            if !resolved {
+                net.shunts_mut()[0]
+                    .control
+                    .as_mut()
+                    .unwrap()
+                    .regulating_terminal = None;
+            }
+            let rev34 = write_psse_rev(&net, 34);
+            assert!(
+                rev34.diagnostics.iter().any(|diagnostic| {
+                    diagnostic.code() == "EMIT.PSSE.FIELD_DROPPED"
+                        && diagnostic
+                            .message()
+                            .contains("2 step block(s) after the eighth dropped")
+                }),
+                "{:?}",
+                rev34.render_diagnostics()
+            );
+            let shunt = &section_records(&rev34.text, "SWITCHED SHUNT")[0];
+            assert_eq!(shunt.len(), fields, "{shunt:?}");
+            let mut warnings = Diagnostics::new();
+            let back = parse_psse_source(&rev34.text, None, &mut warnings).unwrap();
+            assert!(warnings.is_empty(), "{:?}", warnings.lines());
+            let control = back.shunts()[0].control.as_ref().unwrap();
+            assert_eq!(control.blocks.len(), 8);
+            close(control.blocks[7].b, 80.0);
+            assert_eq!(control.regulating_terminal.is_some(), resolved);
+        }
+        // Revision 35 has no such limit in its layout and keeps all ten.
+        let rev35 = parse_psse(&write_psse_rev(&net, 35).text).unwrap();
+        assert_eq!(rev35.shunts()[0].control.as_ref().unwrap().blocks.len(), 10);
+
+        // A revision 34 record that runs past NREG is read up to NREG, and the
+        // rest is reported.
+        let long = V34_NODE_COLUMNS.replace("1,10.0,1,10.0,2\n", "1,10.0,1,10.0,2,0.0\n");
+        let mut warnings = Diagnostics::new();
+        let net = parse_psse_source(&long, None, &mut warnings).unwrap();
+        assert_v34_nodes_resolved(&net);
+        let lines = warnings.lines();
+        assert!(
+            lines.len() == 1 && lines[0].contains("the 1 field(s) after NREG were ignored"),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn dc_converter_node_column_follows_each_revision() {
+        // The rectifier line from ICR on.
+        fn rectifier_columns(text: &str) -> Vec<String> {
+            section_records(text, "TWO-TERMINAL DC")[1][12..].to_vec()
+        }
+        // PSS/E 34 states the converter node NDR/NDI last, after XCAPR; 35
+        // states it after ICR; 33 has none. The rectifier names IC 1, IF 4,
+        // IT 5, and node 3.
+        let raw = "0, 100.00, 34, 0, 1, 60.00 / v34 dc
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+4,'B4          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+5,'B5          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN SYSTEM SWITCHING DEVICE DATA
+0 / END OF SYSTEM SWITCHING DEVICE DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+'DCLINE1', 1, 2.5, 350.0, 500.0, 0.0, 0.0, 0.0, 'I', 0.0, 20, 1.0
+4, 1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 1, 4, 5, '1', 0.0, 3
+5, 1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 0, 0, 0, '1', 0.0, 0
+0 / END OF TWO-TERMINAL DC DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+        let tail = net.hvdc()[0].extras["psse_dc_rectifier_tail"]
+            .as_array()
+            .unwrap();
+        assert_eq!(tail[11..15], ["1", "3", "4", "5"], "ICR, NDR, IFR, ITR");
+        assert!(
+            !net.hvdc()[0].extras.contains_key("psse_dc_inverter_tail"),
+            "a default inverter line with node 0 is not retained"
+        );
+
+        let rev34 = write_psse_rev(&net, 34).text;
+        assert_eq!(rectifier_columns(&rev34), ["1", "4", "5", "1", "0.0", "3"]);
+        let inverter = &section_records(&rev34, "TWO-TERMINAL DC")[2];
+        assert_eq!(inverter.len(), 18, "{inverter:?}");
+        assert_eq!(inverter[17], "0", "a synthesized v34 node is last");
+
+        let rev35 = write_psse_rev(&net, 35).text;
+        assert_eq!(rectifier_columns(&rev35), ["1", "3", "4", "5", "1", "0.0"]);
+        assert_eq!(
+            rectifier_columns(&write_psse_rev(&parse_psse(&rev35).unwrap(), 34).text),
+            ["1", "4", "5", "1", "0.0", "3"],
+            "35 to 34 moves the node to the end"
+        );
+
+        let rev33 = write_psse_rev(&net, 33);
+        assert_eq!(rectifier_columns(&rev33.text), ["1", "4", "5", "1", "0.0"]);
+        assert!(
+            rev33.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code() == "EMIT.PSSE.FIELD_DROPPED"
+                    && diagnostic.message().contains("rectifier states node 3")
+            }),
+            "{:?}",
+            rev33.render_diagnostics()
+        );
+    }
+
+    #[test]
+    fn dc_converter_lines_take_defaults_for_blank_and_omitted_fields() {
+        // A revision 35 rectifier that ends at IDR (XCAPR takes its default)
+        // with node 3, an inverter whose NDR is blank, and a second line whose
+        // rectifier states a field past XCAPR. Each converter names IC 1, IF 4,
+        // IT 5.
+        let raw = "0, 100.00, 35, 0, 1, 60.00 / dc defaults
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+4,'B4          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+5,'B5          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN SYSTEM SWITCHING DEVICE DATA
+0 / END OF SYSTEM SWITCHING DEVICE DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+'DC1', 1, 2.5, 350.0, 500.0, 0.0, 0.0, 0.0, 'I', 0.0, 20, 1.0
+4, 1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 1, 3, 4, 5, 'A'
+5, 1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 1, , 4, 5, 'B', 0.0
+'DC2', 1, 2.5, 350.0, 500.0, 0.0, 0.0, 0.0, 'I', 0.0, 20, 1.0
+4, 1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 1, 0, 4, 5, 'C', 0.0, 9
+5, 1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 1, 0, 4, 5, 'D', 0.0
+0 / END OF TWO-TERMINAL DC DATA
+Q
+";
+        let mut warnings = Diagnostics::new();
+        let net = parse_psse_source(raw, None, &mut warnings).unwrap();
+        let lines = warnings.lines();
+        assert!(
+            lines.len() == 1 && lines[0].contains("states 1 field(s) past its last column"),
+            "{lines:?}"
+        );
+        let rev34 = write_psse_rev(&net, 34).text;
+        let records = section_records(&rev34, "TWO-TERMINAL DC");
+        assert_eq!(records[1][12..], ["1", "4", "5", "A", "0.0", "3"]);
+        assert_eq!(records[2][12..], ["1", "4", "5", "B", "0.0", "0"]);
+        assert_eq!(records[4][12..], ["1", "4", "5", "C", "0.0", "0"]);
+
+        // Revision 33 drops the stated node 3 and nothing for the blank one.
+        let rev33 = write_psse_rev(&net, 33);
+        let records = section_records(&rev33.text, "TWO-TERMINAL DC");
+        assert_eq!(records[1][12..], ["1", "4", "5", "A", "0.0"]);
+        assert_eq!(records[2][12..], ["1", "4", "5", "B", "0.0"]);
+        let node_drops = rev33
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message().contains("NDR/NDI"))
+            .map(|diagnostic| diagnostic.message().to_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            node_drops.len() == 1 && node_drops[0].contains("rectifier states node 3"),
+            "{node_drops:?}"
+        );
+
+        // A revision 33 line that ends in a comma keeps its columns at 34.
+        let v33 = raw
+            .replace("0, 100.00, 35,", "0, 100.00, 33,")
+            .replace("0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA\n", "")
+            .replace(
+                "0 / END OF BRANCH DATA, BEGIN SYSTEM SWITCHING DEVICE DATA\n0 / END OF SYSTEM SWITCHING DEVICE DATA, BEGIN TRANSFORMER DATA",
+                "0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA",
+            )
+            .replace("1, 3, 4, 5, 'A'\n", "1, 4, 5, 'A', 0.5,\n");
+        let net = parse_psse(&v33).unwrap();
+        let records = section_records(&write_psse_rev(&net, 34).text, "TWO-TERMINAL DC");
+        assert_eq!(records[1][12..], ["1", "4", "5", "A", "0.5", "0"]);
     }
 
     #[test]
@@ -6453,6 +9598,8 @@ Q
     fn two_winding_transformer_charging_round_trips_via_mag2() {
         // MAG2 (line-1 field 8) carries the transformer's magnetizing susceptance;
         // at CM = 1 it maps to the branch charging b and must survive a round trip.
+        // PSS/E places it at bus I outside the 1.025 tap, and the neutral
+        // charging sits inside the tap, so the branch carries MAG2 · 1.025².
         let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
 CASE
 COMMENT
@@ -6473,10 +9620,18 @@ Q
         let net = parse_psse(raw).unwrap();
         assert_eq!(net.branches().len(), 1);
         assert!(net.branches()[0].is_transformer());
-        close(net.branches()[0].b, 0.04);
+        let referred = 0.04 * 1.025 * 1.025;
+        close(net.branches()[0].b, referred);
+        close(net.branches()[0].calc_terminal_charging().b_fr, referred);
 
-        let net2 = parse_psse(&write_psse(&net).text).unwrap();
-        close(net2.branches()[0].b, 0.04);
+        let written = write_psse(&net).text;
+        let main = written
+            .lines()
+            .find(|line| line.starts_with("1, 2, 0, '1'"))
+            .unwrap();
+        close(fields(main)[8].parse().unwrap(), 0.04);
+        let net2 = parse_psse(&written).unwrap();
+        close(net2.branches()[0].b, referred);
     }
 
     #[test]
@@ -6501,18 +9656,77 @@ Q
 ";
         let net = parse_psse(raw).unwrap();
         let branch = &net.branches()[0];
-        let expected_g: f64 = 0.001;
-        let expected_b = -f64::sqrt(0.1_f64.powi(2) - expected_g.powi(2));
+        // The bus I admittance PSS/E states, then referred inside the 1.025 tap.
+        let stated_g: f64 = 0.001;
+        let stated_b = -f64::sqrt(0.1_f64.powi(2) - stated_g.powi(2));
+        let referral = 1.025 * 1.025;
         let charging = branch.calc_terminal_charging();
-        close(charging.g_fr, expected_g);
-        close(charging.b_fr, expected_b);
+        close(charging.g_fr, stated_g * referral);
+        close(charging.b_fr, stated_b * referral);
 
-        // The writer emits neutral p.u. admittance as CM=1, so conversion is
-        // not applied a second time on the next read.
-        let back = parse_psse(&write_psse_rev(&net, 35).text).unwrap();
+        // The writer emits the bus I admittance as CM=1, so conversion is not
+        // applied a second time on the next read.
+        let written = write_psse_rev(&net, 35).text;
+        let main = written
+            .lines()
+            .find(|line| line.starts_with("1, 2, 0, '1'"))
+            .unwrap();
+        let main_fields = fields(main);
+        assert_eq!(main_fields[6], "1", "CM");
+        close(main_fields[7].parse().unwrap(), stated_g);
+        close(main_fields[8].parse().unwrap(), stated_b);
+        let back = parse_psse(&written).unwrap();
         let back_charging = back.branches()[0].calc_terminal_charging();
-        close(back_charging.g_fr, expected_g);
-        close(back_charging.b_fr, expected_b);
+        close(back_charging.g_fr, stated_g * referral);
+        close(back_charging.b_fr, stated_b * referral);
+    }
+
+    #[test]
+    fn magnetizing_admittance_writes_back_as_the_source_states_it() {
+        // 0.0019 · 1.025² / 1.025² is 0.0018999999999999998 in f64; the writer
+        // states the shortest decimal the reader maps back to the same
+        // charging, which is the source's own spelling.
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 138.0,1,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1, 2, 0, '1', 1, 1, 1, 0.0019, -0.0151, 2, 'XF          ', 1, 1, 1, 0, 1, 0, 1, 0, 1, '            '
+0.01, 0.10, 100.0
+1.025, 0, 0.0, 100.0, 90.0, 80.0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0
+1.0, 0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let tap_squared: f64 = 1.025 * 1.025;
+        assert!((0.0019 * tap_squared / tap_squared - 0.0019).abs() > 0.0);
+        let net = parse_psse(raw).unwrap();
+        let charging = net.branches()[0].calc_terminal_charging();
+        for rev in [33, 34, 35] {
+            let written = write_psse_rev(&net, rev).text;
+            let main = &section_records(&written, "TRANSFORMER")[0];
+            assert_eq!(main[7..9], ["0.0019", "-0.0151"], "revision {rev}");
+            let back = parse_psse(&written).unwrap();
+            assert_eq!(
+                back.branches()[0].calc_terminal_charging(),
+                charging,
+                "revision {rev} reads back the same charging"
+            );
+        }
+        let rawx: Value =
+            serde_json::from_str(&crate::format::rawx::write_rawx(&net).unwrap().text).unwrap();
+        let table = &rawx["network"]["transformer"];
+        let column = |name: &str| {
+            let fields = table["fields"].as_array().unwrap();
+            let index = fields.iter().position(|field| field == name).unwrap();
+            table["data"][0][index].as_f64().unwrap()
+        };
+        assert_eq!((column("mag1"), column("mag2")), (0.0019, -0.0151));
     }
 
     #[test]
@@ -7246,10 +10460,13 @@ COMMENT
 0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
 0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
 0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
-'VSC1', 1
-2, 3
-0
 0 / END OF VSC DC LINE DATA, BEGIN IMPEDANCE CORRECTION DATA
+0 / END OF IMPEDANCE CORRECTION DATA, BEGIN MULTI-TERMINAL DC DATA
+0 / END OF MULTI-TERMINAL DC DATA, BEGIN MULTI-SECTION LINE DATA
+1, 2, '&1', 1, 3
+1, 3, '&2', 1, 2
+0
+0 / END OF MULTI-SECTION LINE DATA, BEGIN ZONE DATA
 Q
 ";
         let mut warnings = Diagnostics::new();
@@ -7258,7 +10475,7 @@ Q
             warnings
                 .lines()
                 .iter()
-                .any(|w| w.contains("VSC DC LINE section (2 record line(s))")),
+                .any(|w| w.contains("MULTI-SECTION LINE section (2 record line(s))")),
             "bare terminator should not be counted as skipped data: {warnings:?}"
         );
     }
@@ -7307,6 +10524,340 @@ Q
         close(c.blocks[0].b, 25.0);
         assert_eq!(c.blocks[1].steps, 1);
         close(c.blocks[1].b, 50.0);
+    }
+
+    /// A three bus case at revision `rev` with one VSC DC line from bus 4 to
+    /// bus 5. `c1` and `c2` are the converter lines after `IBUS`; revision 35
+    /// states `VSREG, NREG, RMPCT` at their end and earlier revisions
+    /// `REMOT, RMPCT`.
+    fn vsc_case(rev: u32, mdc: &str, c1: &str, c2: &str) -> String {
+        format!(
+            "0, 100.00, {rev}, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+4,'B4          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+5,'B5          ', 345.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
+'LINK A', {mdc}, 2.0, 1, 1.0
+4, {c1}
+5, {c2}
+0 / END OF VSC DC LINE DATA, BEGIN IMPEDANCE CORRECTION DATA
+Q
+"
+        )
+    }
+
+    /// Converter 1 schedules 200 MW out of its AC bus at power factor 0.95;
+    /// converter 2 holds 400 kV and regulates its AC bus at 1.02 per unit.
+    /// Both lose `500 + 2·I` kW, at least 600 kW.
+    fn vsc_converters(rev: u32, rmpct: &str) -> (String, String) {
+        let regulation = if rev >= 35 { "0, 0" } else { "0" };
+        (
+            format!(
+                "2, 2, -200.0, 0.95, 500.0, 2.0, 600.0, 300.0, 1000.0, 1.0, 100.0, -100.0, {regulation}, {rmpct}"
+            ),
+            format!(
+                "1, 1, 400.0, 1.02, 500.0, 2.0, 600.0, 300.0, 1000.0, 1.0, 120.0, -110.0, {regulation}, 100.0"
+            ),
+        )
+    }
+
+    /// The operating point of [`vsc_converters`], worked out independently:
+    /// `(pf, pt, qf)`.
+    fn vsc_expected() -> (f64, f64, f64) {
+        let (v, r) = (400.0_f64, 2.0_f64);
+        let loss = |i: f64| (500.0 + 2.0 * i * 1000.0).max(600.0) / 1000.0;
+        let mut i = 0.5_f64;
+        for _ in 0..100 {
+            let sent = 200.0 - loss(i);
+            i = ((v * v + 4.0 * r * sent).sqrt() - v) / (2.0 * r);
+        }
+        let pt = v * i - loss(i);
+        // 200 MW at power factor +0.95 is 200·tan(acos 0.95) = 65.7368 MVAr.
+        // A positive factor injects reactive power at a rectifier too, as
+        // PowSybl's PSS/E importer reads it, and MATPOWER's `qf` is the from
+        // end's reactive injection.
+        let qf = 65.736_821_035_772_6;
+        (200.0, pt, qf)
+    }
+
+    fn close_to(actual: f64, expected: f64, tol: f64) {
+        assert!((actual - expected).abs() < tol, "{actual} != {expected}");
+    }
+
+    #[test]
+    fn reads_a_vsc_dc_line_at_revisions_33_34_and_35() {
+        let (pf, pt, qf) = vsc_expected();
+        for rev in [33, 34, 35] {
+            let (c1, c2) = vsc_converters(rev, "100.0");
+            let mut warnings = Diagnostics::new();
+            let net = parse_psse_source(&vsc_case(rev, "1", &c1, &c2), None, &mut warnings)
+                .unwrap_or_else(|e| panic!("revision {rev}: {e}"));
+            assert!(
+                !warnings.lines().iter().any(|w| w.contains("VSC DC LINE")),
+                "revision {rev}: the section is read, not skipped: {warnings:?}"
+            );
+            assert_eq!(net.hvdc().len(), 1, "revision {rev}");
+            let dc = &net.hvdc()[0];
+            assert_eq!((dc.from, dc.to), (BusId(4), BusId(5)));
+            assert!(dc.in_service);
+            close_to(dc.pf, pf, 1e-9);
+            close_to(dc.pt, pt, 1e-9);
+            assert!(dc.pt < dc.pf - 2.0, "losses and the DC drop: {}", dc.pt);
+            // Fixed power factor +0.95: the rectifier injects reactive power.
+            close_to(dc.qf, qf, 1e-9);
+            // AC voltage control states no reactive power; the solution does.
+            close(dc.qt, 0.0);
+            close(dc.vt, 1.02);
+            close(dc.qmaxt, 120.0);
+            close(dc.qmint, -110.0);
+            assert_eq!(dc.resistance_ohm, Some(2.0));
+            assert_eq!(dc.nominal_voltage_kv, Some(400.0));
+            let c1 = dc.converter1.as_ref().unwrap();
+            let c2 = dc.converter2.as_ref().unwrap();
+            assert_eq!(c1.kind, HvdcConverterKind::Vsc);
+            assert_eq!(c1.voltage_regulator_on, Some(false));
+            assert_eq!(c1.power_factor, Some(0.95));
+            assert_eq!(c2.voltage_regulator_on, Some(true));
+            close_to(c2.voltage_setpoint_kv.unwrap(), 1.02 * 345.0, 1e-9);
+            assert_eq!(
+                dc.extras["psse_vsc_name"],
+                Value::String("LINK A".into()),
+                "revision {rev}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_vsc_line_injects_its_terminal_powers_into_the_indexed_view() {
+        let (c1, c2) = vsc_converters(35, "100.0");
+        let net = parse_psse(&vsc_case(35, "1", &c1, &c2)).unwrap();
+        let view = crate::IndexedNetwork::new(&net);
+        let (pf, pt, qf) = vsc_expected();
+        let at = |bus| view.bus_index(BusId(bus)).unwrap();
+        close_to(view.p_hvdc()[at(4)], -pf, 1e-9);
+        close_to(view.q_hvdc()[at(4)], qf, 1e-9);
+        close_to(view.p_hvdc()[at(5)], pt, 1e-9);
+        close(view.q_hvdc()[at(5)], 0.0);
+    }
+
+    #[test]
+    fn an_out_of_range_rmpct_reads_as_100_with_a_diagnostic() {
+        let (c1, c2) = vsc_converters(35, "278000.0");
+        let mut warnings = Diagnostics::new();
+        let net = parse_psse_source(&vsc_case(35, "1", &c1, &c2), None, &mut warnings).unwrap();
+        assert!(
+            warnings
+                .lines()
+                .iter()
+                .any(|w| w.contains("RMPCT 278000 is outside (0, 100]; read as 100")),
+            "{warnings:?}"
+        );
+        let stored = &net.hvdc()[0].extras["psse_vsc_converter1"];
+        assert_eq!(stored["rmpct"], Value::from(100.0));
+        // The power schedule does not depend on RMPCT.
+        close_to(net.hvdc()[0].pf, vsc_expected().0, 1e-9);
+    }
+
+    #[test]
+    fn a_vsc_line_with_mdc_0_is_out_of_service_and_keeps_its_record() {
+        let (c1, c2) = vsc_converters(35, "100.0");
+        let net = parse_psse(&vsc_case(35, "0", &c1, &c2)).unwrap();
+        let dc = &net.hvdc()[0];
+        // Blocked, with the schedule it would run at, as a two-terminal line.
+        assert!(!dc.in_service);
+        close_to(dc.pf, vsc_expected().0, 1e-9);
+        close_to(dc.pt, vsc_expected().1, 1e-9);
+        let back = parse_psse(&write_psse_rev(&net, 35).text).unwrap();
+        assert!(!back.hvdc()[0].in_service);
+        assert_eq!(
+            back.hvdc()[0].extras["psse_vsc_converter1"],
+            dc.extras["psse_vsc_converter1"]
+        );
+    }
+
+    #[test]
+    fn two_dc_voltage_controlling_converters_schedule_no_power() {
+        let (_, c2) = vsc_converters(35, "100.0");
+        let mut warnings = Diagnostics::new();
+        let net = parse_psse_source(&vsc_case(35, "1", &c2, &c2), None, &mut warnings).unwrap();
+        let dc = &net.hvdc()[0];
+        assert!(dc.in_service);
+        close(dc.pf, 0.0);
+        close(dc.pt, 0.0);
+        assert!(
+            warnings
+                .lines()
+                .iter()
+                .any(|w| w.contains("converter types 1 and 1")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn the_writer_restates_vsc_lines_in_their_own_section() {
+        for rev in [33, 34, 35] {
+            let (c1, c2) = vsc_converters(rev, "100.0");
+            let net = parse_psse(&vsc_case(rev, "1", &c1, &c2)).unwrap();
+            let written = write_psse_rev(&net, rev);
+            assert!(
+                written
+                    .diagnostics
+                    .iter()
+                    .all(|d| !d.message().contains("VSC")),
+                "revision {rev}: {:?}",
+                written.diagnostics
+            );
+            let vsc_section = written
+                .text
+                .split("BEGIN VSC DC LINE DATA")
+                .nth(1)
+                .and_then(|rest| rest.split("0 / END OF VSC DC LINE DATA").next())
+                .unwrap();
+            assert!(vsc_section.contains("'LINK A', 1, 2.0"), "{vsc_section}");
+            let two_terminal = written
+                .text
+                .split("BEGIN TWO-TERMINAL DC DATA")
+                .nth(1)
+                .and_then(|rest| rest.split("0 / END OF TWO-TERMINAL DC DATA").next())
+                .unwrap();
+            assert_eq!(two_terminal.trim(), "", "no LCC record for a VSC line");
+            let back = parse_psse(&written.text).unwrap();
+            let (dc, again) = (&net.hvdc()[0], &back.hvdc()[0]);
+            assert_eq!(again.extras, dc.extras, "revision {rev}");
+            for (a, b) in [
+                (again.pf, dc.pf),
+                (again.pt, dc.pt),
+                (again.qf, dc.qf),
+                (again.qt, dc.qt),
+            ] {
+                close_to(a, b, 1e-9);
+            }
+            assert_eq!(again.converter2, dc.converter2);
+        }
+
+        // An edited schedule reaches the MW-controlling converter's DCSET.
+        let (c1, c2) = vsc_converters(35, "100.0");
+        let mut net = parse_psse(&vsc_case(35, "1", &c1, &c2)).unwrap();
+        net.hvdc_mut()[0].pf = 150.0;
+        let written = write_psse_rev(&net, 35);
+        assert!(
+            written
+                .diagnostics
+                .iter()
+                .any(|d| d.message().contains("to end active injection")
+                    && d.message().contains("reads back")),
+            "the stated pt no longer matches the record's loss model: {:?}",
+            written.diagnostics
+        );
+        let back = parse_psse(&written.text).unwrap();
+        close_to(back.hvdc()[0].pf, 150.0, 1e-9);
+    }
+
+    #[test]
+    fn a_vsc_line_from_another_format_is_written_with_a_synthesized_record() {
+        let (c1, c2) = vsc_converters(35, "100.0");
+        let mut net = parse_psse(&vsc_case(35, "1", &c1, &c2)).unwrap();
+        // What a reader of another format leaves: typed fields only.
+        let dc = &mut net.hvdc_mut()[0];
+        dc.extras = Extras::new();
+        dc.converter1.as_mut().unwrap().power_factor = None;
+        let written = write_psse_rev(&net, 35);
+        let back = parse_psse(&written.text).unwrap();
+        let again = &back.hvdc()[0];
+        assert_eq!(again.extras["psse_vsc_converter1"]["type"], Value::from(2));
+        assert_eq!(again.extras["psse_vsc_converter2"]["type"], Value::from(1));
+        close_to(again.pf, net.hvdc()[0].pf, 1e-9);
+        // The power factor is derived from the stated terminal powers.
+        close_to(again.qf, net.hvdc()[0].qf, 1e-9);
+        // The losses become a constant loss of the voltage-controlling
+        // converter, so the record delivers what the line states.
+        close_to(again.pt, net.hvdc()[0].pt, 1e-6);
+        assert!(
+            again.extras["psse_vsc_converter2"]["aloss"]
+                .as_f64()
+                .unwrap()
+                > 0.0
+        );
+        assert!(
+            written
+                .diagnostics
+                .iter()
+                .all(|d| !d.message().contains("VSC DC line")),
+            "{:?}",
+            written.diagnostics
+        );
+    }
+
+    /// A hand-written revision 33 record whose DC voltage-controlling
+    /// converter comes first: converter 1 (bus 4, `TYPE 1`, `MODE 1`) holds
+    /// 500 kV and regulates its AC bus at 1.01 per unit, and converter 2
+    /// (bus 5, `TYPE 2`, `MODE 2`) feeds 300 MW into its AC bus at power
+    /// factor 0.98. `RDC` is 2 ohm.
+    ///
+    /// Worked by hand: converter 2 loses `600 kW + 1 kW/A · I`, under its
+    /// 2000 kW `MINLOSS` at any current here, so 2 MW, and the DC line
+    /// must deliver 302 MW to it. `500·I − 2·I² = 302` (I in kA) gives
+    /// I = 0.605466 kA, so converter 1 sends 302.733 MW into the line and
+    /// loses `800 kW + 1.5 kW/A · 605.466 A` = 1.708 MW: bus 4 gives
+    /// 304.441 MW. Converter 2 injects 300 · tan(acos 0.98) = 60.918 MVAr.
+    #[test]
+    fn reads_a_hand_written_vsc_record_with_its_loss_model() {
+        let c1 =
+            "1, 1, 500.0, 1.01, 800.0, 1.5, 1200.0, 400.0, 1000.0, 1.0, 150.0, -150.0, 0, 100.0";
+        let c2 =
+            "2, 2, 300.0, 0.98, 600.0, 1.0, 2000.0, 400.0, 1000.0, 1.0, 100.0, -100.0, 0, 100.0";
+        let mut warnings = Diagnostics::new();
+        let net = parse_psse_source(&vsc_case(33, "1", c1, c2), None, &mut warnings).unwrap();
+        assert!(
+            warnings.lines().iter().all(|w| !w.contains("VSC")),
+            "{warnings:?}"
+        );
+        let dc = &net.hvdc()[0];
+        assert_eq!((dc.from, dc.to), (BusId(4), BusId(5)));
+        assert!(dc.in_service);
+        // RDC in ohm and the DC voltage the TYPE 1 converter holds, in kV.
+        assert_eq!(dc.resistance_ohm, Some(2.0));
+        assert_eq!(dc.nominal_voltage_kv, Some(500.0));
+        assert_eq!(
+            dc.converters_mode,
+            Some(HvdcConvertersMode::Side1RectifierSide2Inverter)
+        );
+        let voltage_end = &dc.extras["psse_vsc_converter1"];
+        assert_eq!(voltage_end["type"], Value::from(1));
+        assert_eq!(voltage_end["dcset"], Value::from(500.0)); // kV
+        assert_eq!(voltage_end["aloss"], Value::from(800.0)); // kW
+        assert_eq!(voltage_end["bloss"], Value::from(1.5)); // kW/A
+        assert_eq!(voltage_end["minloss"], Value::from(1200.0)); // kW
+        let power_end = &dc.extras["psse_vsc_converter2"];
+        assert_eq!(power_end["type"], Value::from(2));
+        assert_eq!(power_end["dcset"], Value::from(300.0)); // MW
+        assert_eq!(power_end["aloss"], Value::from(600.0)); // kW
+        assert_eq!(power_end["bloss"], Value::from(1.0)); // kW/A
+        assert_eq!(power_end["minloss"], Value::from(2000.0)); // kW
+        let c1 = dc.converter1.as_ref().unwrap();
+        assert_eq!(c1.voltage_regulator_on, Some(true));
+        close_to(c1.voltage_setpoint_kv.unwrap(), 1.01 * 230.0, 1e-9);
+        let c2 = dc.converter2.as_ref().unwrap();
+        assert_eq!(c2.voltage_regulator_on, Some(false));
+        assert_eq!(c2.power_factor, Some(0.98));
+
+        // Positive from each AC bus into the HVDC system, MW and MVAr.
+        let terminal = dc.calc_bus_to_device_powers();
+        close_to(terminal.p_from, 304.441_378_558_509, 1e-9);
+        close(terminal.q_from, 0.0);
+        close_to(terminal.p_to, -300.0, 1e-9);
+        close_to(terminal.q_to, -60.917_598_190_201_3, 1e-9);
+        // Both converters' losses and the I²·RDC drop: 1.708 + 2 + 0.733 MW.
+        close_to(terminal.calc_active_loss(), 4.441_378_558_509, 1e-9);
     }
 
     #[test]
@@ -7977,6 +11528,433 @@ Q
         );
     }
 
+    /// A revision 35 case with one three winding transformer per STAT code
+    /// 0 to 4. Winding 1 states RATE1-RATE5 and RATE12, winding 2 all twelve
+    /// ratings, and winding 3 RATE1 only.
+    fn three_winding_status_case() -> String {
+        let mut raw = String::from(
+            "0, 100.00, 35, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'HV          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'MV          ', 115.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+3,'LV          ', 13.8,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN SYSTEM SWITCHING DEVICE DATA
+0 / END OF SYSTEM SWITCHING DEVICE DATA, BEGIN TRANSFORMER DATA
+",
+        );
+        for stat in 0..=4 {
+            let _ = write!(
+                raw,
+                "1, 2, 3, '{stat}', 1, 1, 1, 0.0, 0.0, 2, 'T3W {stat}       ', {stat}, 1, 1.0, 0, 1.0, 0, 1.0, 0, 1.0, 'YNyn0d1     ', 0
+0.01, 0.10, 100.0, 0.02, 0.20, 100.0, 0.03, 0.30, 100.0, 1.0, 0.0
+1.0, 230.0, 0.0, 100.0, 110.0, 120.0, 130.0, 140.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 190.0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0.0, 0.0, 0.0
+1.0, 115.0, 0.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 85.0, 90.0, 95.0, 100.0, 105.0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0.0, 0.0, 0.0
+1.0, 13.8, 0.0, 20.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0.0, 0.0, 0.0
+"
+            );
+        }
+        raw.push_str("0 / END OF TRANSFORMER DATA, BEGIN AREA DATA\nQ\n");
+        raw
+    }
+
+    /// The transformer and per winding status each STAT code 0 to 4 states.
+    const THREE_WINDING_STATUS: [(bool, [bool; 3]); 5] = [
+        (false, [true, true, true]),
+        (true, [true, true, true]),
+        (true, [true, false, true]),
+        (true, [true, true, false]),
+        (true, [false, true, true]),
+    ];
+
+    fn three_winding_statuses(net: &BalancedNetwork) -> Vec<(bool, [bool; 3])> {
+        net.transformers_3w()
+            .iter()
+            .map(|t| (t.in_service, t.winding_in_service()))
+            .collect()
+    }
+
+    fn rating_sets(transformer: &Transformer3W, winding: usize) -> Vec<(String, f64)> {
+        transformer
+            .winding_rating_sets(winding)
+            .into_iter()
+            .map(|set| (set.name, set.rate_mva))
+            .collect()
+    }
+
+    fn assert_three_winding_ratings(net: &BalancedNetwork) {
+        let rate = |n: u32, mva: f64| (format!("RATE{n}"), mva);
+        for t in net.transformers_3w() {
+            assert_eq!(
+                rating_sets(t, 0),
+                [rate(4, 130.0), rate(5, 140.0), rate(12, 190.0)]
+            );
+            assert_eq!(
+                rating_sets(t, 1),
+                (4..=12)
+                    .map(|n| rate(n, 45.0 + 5.0 * f64::from(n)))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(rating_sets(t, 2), []);
+            close(t.windings[1].rate_c, 60.0);
+        }
+    }
+
+    #[test]
+    fn three_winding_stat_states_each_winding_and_round_trips() {
+        let net = parse_psse(&three_winding_status_case()).unwrap();
+        assert_eq!(three_winding_statuses(&net), THREE_WINDING_STATUS);
+        assert_three_winding_ratings(&net);
+
+        for revision in [34, 35] {
+            let emitted = write_psse_rev(&net, revision);
+            let stats = emitted
+                .text
+                .lines()
+                .filter(|line| line.starts_with("1, 2, 3, '"))
+                .map(|line| fields(line)[11].to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(stats, ["0", "1", "2", "3", "4"], "revision {revision}");
+            assert!(
+                !emitted
+                    .render_diagnostics()
+                    .iter()
+                    .any(|line| line.contains("rating set")),
+                "revision {revision} states every rating: {:?}",
+                emitted.render_diagnostics()
+            );
+            let back = parse_psse(&emitted.text).unwrap();
+            assert_eq!(three_winding_statuses(&back), THREE_WINDING_STATUS);
+            assert_three_winding_ratings(&back);
+        }
+
+        // Revision 33 states the same STAT codes but only three ratings per
+        // winding, so each extra rating set is reported.
+        let rev33 = write_psse_rev(&net, 33);
+        let back = parse_psse(&rev33.text).unwrap();
+        assert_eq!(three_winding_statuses(&back), THREE_WINDING_STATUS);
+        assert!(
+            back.transformers_3w()
+                .iter()
+                .all(|t| (0..3).all(|winding| t.winding_rating_sets(winding).is_empty()))
+        );
+        let dropped = rev33
+            .render_diagnostics()
+            .iter()
+            .filter(|line| {
+                line.contains("EMIT.PSSE.RATING_SET_DROPPED")
+                    && line.contains("three winding transformer 1-2-3 winding")
+            })
+            .count();
+        assert_eq!(dropped, 5 * (3 + 9), "{:?}", rev33.render_diagnostics());
+    }
+
+    #[test]
+    fn three_winding_extra_ratings_keep_revision_specific_control_columns() {
+        let mut net = parse_psse(&three_winding_status_case()).unwrap();
+        let mut control = TransformerControl::new(TransformerControlMode::Voltage);
+        control.controlled_bus = Some(BusId(2));
+        control.tap_max = 1.08;
+        control.ntp = 17;
+        net.transformers_3w_mut()[0].windings[0].control = Some(control);
+        for revision in [34, 35] {
+            let emitted = write_psse_rev(&net, revision);
+            let lines: Vec<_> = emitted.text.lines().collect();
+            let header = lines
+                .iter()
+                .position(|line| line.starts_with("1, 2, 3, '"))
+                .unwrap();
+            let winding = fields(lines[header + 2]);
+            assert_eq!(winding.len(), 27);
+            close(winding[6].parse().unwrap(), 130.0);
+            close(winding[14].parse().unwrap(), 190.0);
+            let (node, rma, ntp) = if revision == 34 {
+                (26, 17, 21)
+            } else {
+                (17, 18, 22)
+            };
+            assert_eq!(winding[node], "0", "NOD at revision {revision}");
+            close(winding[rma].parse().unwrap(), 1.08);
+            assert_eq!(winding[ntp], "17", "NTP at revision {revision}");
+            let back = parse_psse(&emitted.text).unwrap();
+            assert_three_winding_ratings(&back);
+            close(
+                back.transformers_3w()[0].windings[0]
+                    .control
+                    .as_ref()
+                    .unwrap()
+                    .tap_max,
+                1.08,
+            );
+        }
+    }
+
+    #[test]
+    fn three_winding_status_and_ratings_survive_rawx() {
+        let net = parse_psse(&three_winding_status_case()).unwrap();
+        let emitted = super::super::rawx::write_rawx(&net).unwrap();
+        let back =
+            super::super::rawx::parse_rawx_source(&emitted.text, None, &mut Diagnostics::new())
+                .unwrap();
+        assert_eq!(three_winding_statuses(&back), THREE_WINDING_STATUS);
+        assert_three_winding_ratings(&back);
+    }
+
+    #[test]
+    fn three_winding_status_the_stat_codes_cannot_state_is_diagnosed() {
+        let raw =
+            three_winding_status_case().replacen("'T3W 1       ', 1,", "'T3W 1       ', 7,", 1);
+        let mut warnings = Diagnostics::new();
+        let net = parse_psse_source(&raw, None, &mut warnings).unwrap();
+        assert_eq!(three_winding_statuses(&net)[1], (true, [true; 3]));
+        assert!(
+            warnings.lines().iter().any(|line| {
+                line.contains("READ.PSSE.VALUE_SUBSTITUTED") && line.contains("STAT 7")
+            }),
+            "{warnings:?}"
+        );
+
+        // Two windings out leaves no STAT code but 0, which the writer reports.
+        let mut net = net;
+        net.transformers_3w_mut()[1].set_winding_in_service([true, false, false]);
+        let emitted = write_psse_rev(&net, 35);
+        let back = parse_psse(&emitted.text).unwrap();
+        assert!(!back.transformers_3w()[1].in_service);
+        assert!(
+            emitted.render_diagnostics().iter().any(|line| {
+                line.contains("EMIT.PSSE.VALUE_COLLAPSED") && line.contains("STAT 0")
+            }),
+            "{:?}",
+            emitted.render_diagnostics()
+        );
+    }
+
+    #[test]
+    fn three_winding_detail_other_writers_cannot_state_is_diagnosed() {
+        let net = parse_psse(&three_winding_status_case()).unwrap();
+        // XIIDM states each winding's status as its terminal's connection
+        // and its further rating sets as unselected limit groups.
+        let xiidm = crate::format::emit_value_text(&net, crate::TargetFormat::Xiidm).unwrap();
+        let diagnostics = xiidm.render_diagnostics();
+        assert!(
+            diagnostics.iter().all(
+                |line| !line.contains("three winding transformer winding(s)")
+                    && !line.contains("RATING_SET_DROPPED")
+            ),
+            "{diagnostics:?}"
+        );
+        let back =
+            super::super::xiidm::parse_xiidm_source(&xiidm.text, &mut Diagnostics::new()).unwrap();
+        assert_eq!(three_winding_statuses(&back), three_winding_statuses(&net));
+        for (actual, expected) in back.transformers_3w().iter().zip(net.transformers_3w()) {
+            for winding in 0..3 {
+                let sorted = |transformer| {
+                    let mut sets = rating_sets(transformer, winding);
+                    sets.sort_by(|a, b| a.0.cmp(&b.0));
+                    sets
+                };
+                assert_eq!(sorted(actual), sorted(expected));
+            }
+        }
+
+        // PSLF declares both entries through its dropped extras line.
+        let pslf = crate::format::emit_value_text(&net, crate::TargetFormat::Pslf).unwrap();
+        assert!(
+            pslf.render_diagnostics().iter().any(|line| {
+                line.contains("EXTRAS_DROPPED")
+                    && line.contains("winding_in_service")
+                    && line.contains("winding_rating_sets")
+            }),
+            "{:?}",
+            pslf.render_diagnostics()
+        );
+    }
+
+    /// Two shunt FACTS devices and a series one in a revision 35 case. The
+    /// first regulates its own bus; the second is out of service, regulates
+    /// bus 2, and states fields away from their defaults.
+    const FACTS_RECORDS: [&str; 3] = [
+        "'STATCOM A', 2, 0, 1, 0.0, 0.0, 1.02, 100.0, 9999.0, 0.9, 1.1, 1.0, 0.0, 0.05, 100.0, 1, 0.0, 0.0, 0, 0, 0, ''",
+        "'STATCOM B', 3, 0, 0, 0.0, 0.0, 0.98, 50.0, 9999.0, 0.95, 1.05, 1.1, 0.0, 0.1, 60.0, 2, 0.0, 0.0, 1, 2, 0, 'UNIT 1'",
+        "'SERIES 1', 2, 3, 1, 50.0, 10.0, 1.0, 9999.0, 9999.0, 0.9, 1.1, 1.0, 0.0, 0.05, 100.0, 1, 0.0, 0.0, 0, 0, 0, ''",
+    ];
+
+    fn facts_case(records: &[&str]) -> String {
+        format!(
+            "0, 100.00, 35, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+3,'B3          ', 115.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN SYSTEM SWITCHING DEVICE DATA
+0 / END OF SYSTEM SWITCHING DEVICE DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
+0 / END OF VSC DC LINE DATA, BEGIN IMPEDANCE CORRECTION DATA
+0 / END OF IMPEDANCE CORRECTION DATA, BEGIN MULTI-TERMINAL DC DATA
+0 / END OF MULTI-TERMINAL DC DATA, BEGIN MULTI-SECTION LINE DATA
+0 / END OF MULTI-SECTION LINE DATA, BEGIN ZONE DATA
+0 / END OF ZONE DATA, BEGIN INTER-AREA TRANSFER DATA
+0 / END OF INTER-AREA TRANSFER DATA, BEGIN OWNER DATA
+0 / END OF OWNER DATA, BEGIN FACTS DEVICE DATA
+{}
+0 / END OF FACTS DEVICE DATA, BEGIN SWITCHED SHUNT DATA
+0 / END OF SWITCHED SHUNT DATA, BEGIN GNE DEVICE DATA
+Q
+",
+            records.join("\n")
+        )
+    }
+
+    /// The FACTS device records in `text`, each as its name and its numbers.
+    fn facts_records(text: &str) -> Vec<(String, Vec<f64>, String)> {
+        let start = text.find("BEGIN FACTS DEVICE DATA").unwrap();
+        text[start..]
+            .lines()
+            .skip(1)
+            .take_while(|line| !line.starts_with("0 /"))
+            .map(|line| {
+                let f = fields(line);
+                let numbers = f[1..f.len() - 1]
+                    .iter()
+                    .map(|field| field.parse::<f64>().unwrap())
+                    .collect();
+                (f[0].to_string(), numbers, f[f.len() - 1].to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn shunt_facts_devices_read_as_static_var_compensators() {
+        let raw = facts_case(&FACTS_RECORDS);
+        let mut warnings = Diagnostics::new();
+        let net = parse_psse_source(&raw, None, &mut warnings).unwrap();
+        let svcs = net.static_var_compensators();
+        assert_eq!(svcs.len(), 2, "the series device is not a compensator");
+        let [a, b] = [&svcs[0], &svcs[1]];
+        assert_eq!((a.bus, b.bus), (BusId(2), BusId(3)));
+        // SHMX MVA at unity voltage on the bus base: ±100 / 230² S.
+        close(a.b_max_siemens, 100.0 / (230.0 * 230.0));
+        close(a.b_min_siemens, -100.0 / (230.0 * 230.0));
+        close(a.voltage_setpoint_kv, 1.02 * 230.0);
+        assert!(a.in_service && a.regulating);
+        assert_eq!(
+            a.regulation_mode,
+            StaticVarCompensatorRegulationMode::Voltage
+        );
+        assert_eq!(a.regulating_terminal, None);
+        assert_eq!(a.extras["psse_name"], Value::from("STATCOM A"));
+        assert_eq!(a.extras.len(), 1, "{:?}", a.extras);
+        close(b.b_max_siemens, 50.0 / (115.0 * 115.0));
+        close(b.voltage_setpoint_kv, 0.98 * 230.0);
+        assert!(!b.in_service);
+        for (key, value) in [
+            ("psse_fcreg", Value::from(2)),
+            ("psse_owner", Value::from(2)),
+            ("psse_vsref", Value::from(1)),
+            ("psse_mname", Value::from("UNIT 1")),
+        ] {
+            assert_eq!(b.extras[key], value, "{key}");
+        }
+        close(b.extras["psse_rmpct"].as_f64().unwrap(), 60.0);
+        let lines = warnings.lines();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("READ.PSSE.FIELD_DROPPED")
+                    && line.contains("regulates bus 2")),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("READ.PSSE.SECTION_UNSUPPORTED")
+                    && line.contains("1 series device record(s)")),
+            "{lines:?}"
+        );
+
+        // Revisions 35 and 33 (REMOT, no NREG) restate the shunt records
+        // field for field; the series device has no element to write from.
+        let stated = facts_records(&raw)[..2].to_vec();
+        for revision in [33, 35] {
+            let emitted = write_psse_rev(&net, revision);
+            // Revision 33 has no NREG, the 20th number.
+            let expected = stated
+                .iter()
+                .cloned()
+                .map(|(name, mut numbers, mname)| {
+                    if revision == 33 {
+                        numbers.remove(19);
+                    }
+                    (name, numbers, mname)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                facts_records(&emitted.text),
+                expected,
+                "revision {revision}"
+            );
+            let back = parse_psse(&emitted.text).unwrap();
+            assert_eq!(
+                back.static_var_compensators(),
+                net.static_var_compensators()
+            );
+        }
+
+        let rawx = super::super::rawx::write_rawx(&net).unwrap();
+        let mut back =
+            super::super::rawx::parse_rawx_source(&rawx.text, None, &mut Diagnostics::new())
+                .unwrap();
+        for svc in back.static_var_compensators_mut() {
+            svc.uid = None;
+        }
+        assert_eq!(
+            back.static_var_compensators(),
+            net.static_var_compensators(),
+            "RAWX"
+        );
+    }
+
+    #[test]
+    fn static_var_compensators_from_other_sources_write_as_shunt_facts() {
+        let mut net = parse_psse(&facts_case(&[])).unwrap();
+        let mut svc = StaticVarCompensator::new(BusId(2), -0.001, 0.002);
+        svc.voltage_setpoint_kv = 234.6;
+        svc.regulation_mode = StaticVarCompensatorRegulationMode::ReactivePower;
+        svc.q = -12.0;
+        net.static_var_compensators_mut().push(svc);
+        let emitted = write_psse_rev(&net, 35);
+        let [(name, numbers, _)] = facts_records(&emitted.text).try_into().unwrap();
+        assert_eq!(name, "SVC1");
+        // J 0, MODE 1, VSET 234.6 / 230, SHMX the larger limit at 230 kV.
+        assert_eq!(numbers[1..3], [0.0, 1.0]);
+        close(numbers[5], 1.02);
+        close(numbers[6], 0.002 * 230.0 * 230.0);
+        let lines = emitted.render_diagnostics();
+        for expected in [
+            "unequal capacitive and inductive limits",
+            "state terminal power",
+            "do not regulate voltage",
+        ] {
+            assert!(
+                lines.iter().any(|line| line.contains(expected)),
+                "{expected}: {lines:?}"
+            );
+        }
+    }
+
     #[test]
     fn three_winding_cross_format_warns_and_survives_normalization() {
         // Same 3-winding record plus a slack generator so to_normalized has a
@@ -8383,5 +12361,963 @@ Q
             text.contains("bus field I") && text.contains("outside the id range"),
             "an out-of-range bus id should be refused: {err}"
         );
+    }
+    fn impedance_winding_line(
+        windv: f64,
+        nomv: f64,
+        ang: f64,
+        cod: i32,
+        cont: u32,
+        tab: u32,
+    ) -> String {
+        let limits = if cod.abs() == 3 {
+            "30.0, -30.0, 100.0, -100.0"
+        } else {
+            "1.1, 0.9, 1.1, 0.9"
+        };
+        format!(
+            "{windv}, {nomv}, {ang}, 100.0, 90.0, 80.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, {cod}, {cont}, 0, {limits}, 33, {tab}, 0.0, 0.0, 0.0"
+        )
+    }
+
+    /// A revision 35 case whose transformers name impedance correction tables:
+    /// A (1-2) controls active power flow at -20 degrees and B (2-4) states a
+    /// fixed 30 degree shift, both on angle table 1; C (2-3) controls voltage
+    /// at ratio 1.05 on ratio table 2; D (1-4) states its ratio in kV (CW 2)
+    /// on table 4, which still states per-unit ratios; E (3-4) names table 9, which the case does
+    /// not state; the three winding transformer names table 2 on winding 3 at
+    /// ratio 0.95. Table 1 spans two lines and has a point at 0 degrees, and
+    /// table 3 is named by no transformer.
+    fn impedance_correction_case() -> String {
+        let main = |i: u32, j: u32, k: u32, cw: u32, name: &str| {
+            format!(
+                "{i}, {j}, {k}, '1', {cw}, 1, 1, 0.0, 0.0, 2, '{name:<12}', 1, 1, 1.0, 0, 1.0, 0, 1.0, 0, 1.0, '            ', 0"
+            )
+        };
+        let w = impedance_winding_line;
+        let transformers = [
+            main(1, 2, 0, 1, "A"),
+            "0.01, 0.1, 100.0".to_owned(),
+            w(1.0, 0.0, -20.0, 3, 0, 1),
+            "1.0, 0.0".to_owned(),
+            main(2, 4, 0, 1, "B"),
+            "0.01, 0.1, 100.0".to_owned(),
+            w(1.0, 0.0, 30.0, 0, 0, 1),
+            "1.0, 0.0".to_owned(),
+            main(2, 3, 0, 1, "C"),
+            "0.02, 0.2, 100.0".to_owned(),
+            w(1.05, 0.0, 0.0, 1, 3, 2),
+            "1.0, 0.0".to_owned(),
+            main(1, 4, 0, 2, "D"),
+            "0.02, 0.2, 100.0".to_owned(),
+            w(241.5, 230.0, 0.0, 0, 0, 4),
+            "230.0, 230.0".to_owned(),
+            main(3, 4, 0, 1, "E"),
+            "0.02, 0.2, 100.0".to_owned(),
+            w(1.0, 0.0, 0.0, 0, 0, 9),
+            "1.0, 0.0".to_owned(),
+            main(1, 3, 5, 1, "T3W"),
+            "0.01, 0.1, 100.0, 0.02, 0.2, 100.0, 0.03, 0.3, 100.0, 1.0, 0.0".to_owned(),
+            w(1.0, 0.0, 0.0, 0, 0, 0),
+            w(1.0, 0.0, 0.0, 0, 0, 0),
+            w(0.95, 0.0, 0.0, 0, 0, 2),
+        ]
+        .join("\n");
+        format!(
+            "0, 100.00, 35, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+3,'B3          ', 115.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+4,'B4          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+5,'B5          ', 13.8,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN SYSTEM SWITCHING DEVICE DATA
+0 / END OF SYSTEM SWITCHING DEVICE DATA, BEGIN TRANSFORMER DATA
+{transformers}
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
+0 / END OF VSC DC LINE DATA, BEGIN IMPEDANCE CORRECTION DATA
+1, -60.0, 1.5, 0.1, -30.0, 1.2, 0.0, 0.0, 1.0, 0.0
+   30.0, 1.2, 0.0, 60.0, 1.5, -0.1, 0.0, 0.0, 0.0
+2, 0.9, 1.1, 0.0, 1.0, 1.0, 0.0, 1.1, 1.05, 0.0, 0.0, 0.0, 0.0
+3, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0
+4, 0.9, 1.1, 0.0, 1.0, 1.0, 0.0, 1.1, 1.05, 0.0, 0.0, 0.0, 0.0
+0 / END OF IMPEDANCE CORRECTION DATA, BEGIN MULTI-TERMINAL DC DATA
+Q
+"
+        )
+    }
+
+    fn correction_values(correction: &ImpedanceCorrection) -> Vec<(f64, f64, f64)> {
+        correction
+            .points
+            .iter()
+            .map(|point| (point.value, point.factor_re, point.factor_im))
+            .collect()
+    }
+
+    fn transformer_corrections(net: &BalancedNetwork) -> Vec<Option<ImpedanceCorrection>> {
+        net.branches()
+            .iter()
+            .map(Branch::impedance_correction)
+            .chain(
+                (0..3)
+                    .map(|winding| net.transformers_3w()[0].winding_impedance_correction(winding)),
+            )
+            .collect()
+    }
+
+    #[test]
+    fn impedance_correction_tables_attach_to_the_windings_that_name_them() {
+        let mut warnings = Diagnostics::new();
+        let net = parse_psse_source(&impedance_correction_case(), None, &mut warnings).unwrap();
+        let angle = [
+            (-60.0, 1.5, 0.1),
+            (-30.0, 1.2, 0.0),
+            (0.0, 1.0, 0.0),
+            (30.0, 1.2, 0.0),
+            (60.0, 1.5, -0.1),
+        ];
+        let ratio = [(0.9, 1.1, 0.0), (1.0, 1.0, 0.0), (1.1, 1.05, 0.0)];
+        let corrections = transformer_corrections(&net);
+        let [
+            shifter,
+            fixed,
+            voltage,
+            kv,
+            dangling,
+            winding1,
+            winding2,
+            winding3,
+        ] = corrections.as_slice()
+        else {
+            panic!("five transformers and three windings");
+        };
+        for (correction, table, variable, points) in [
+            (shifter, 1, ImpedanceCorrectionVariable::Angle, &angle[..]),
+            (fixed, 1, ImpedanceCorrectionVariable::Angle, &angle[..]),
+            (voltage, 2, ImpedanceCorrectionVariable::Ratio, &ratio[..]),
+            (winding3, 2, ImpedanceCorrectionVariable::Ratio, &ratio[..]),
+        ] {
+            let correction = correction.as_ref().unwrap();
+            assert_eq!(correction.table, table);
+            assert_eq!(correction.variable, variable);
+            assert_eq!(correction_values(correction), points);
+        }
+        // Table 4 already states per-unit ratios, independently of D's CW=2.
+        let kv = kv.as_ref().unwrap();
+        assert_eq!(kv.variable, ImpedanceCorrectionVariable::Ratio);
+        for (point, expected) in kv.points.iter().zip([0.9, 1.0, 1.1]) {
+            close(point.value, expected);
+        }
+        assert_eq!((dangling, winding1, winding2), (&None, &None, &None));
+        let lines = warnings.lines();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("READ.PSSE.REFERENCE_DROPPED")
+                    && line.contains("table(s) 9")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line
+                .contains("1 PSS/E impedance correction table(s) that no transformer names")),
+            "{lines:?}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("IMPEDANCE CORRECTION section")),
+            "the section is read: {lines:?}"
+        );
+
+        // Revision 34 and 35 restate the tables the windings name, complex
+        // factors and all, and the windings read back the same tables.
+        for revision in [34, 35] {
+            let emitted = write_psse_rev(&net, revision);
+            let back = parse_psse(&emitted.text).unwrap();
+            assert_eq!(
+                transformer_corrections(&back),
+                corrections,
+                "revision {revision}"
+            );
+        }
+
+        // Revision 33 states real factors on one line per table.
+        let rev33 = write_psse_rev(&net, 33);
+        assert!(
+            rev33.render_diagnostics().iter().any(|line| {
+                line.contains("EMIT.PSSE.VALUE_COLLAPSED") && line.contains("table 1")
+            }),
+            "{:?}",
+            rev33.render_diagnostics()
+        );
+        let back = parse_psse(&rev33.text).unwrap();
+        let back_a = back.branches()[0].impedance_correction().unwrap();
+        assert_eq!(
+            correction_values(&back_a),
+            angle.map(|(value, re, _)| (value, re, 0.0))
+        );
+    }
+
+    #[test]
+    fn impedance_correction_applies_at_the_winding_position_once() {
+        let mut net = parse_psse(&impedance_correction_case()).unwrap();
+        assert_eq!(net.apply_impedance_correction(), 5);
+        let branch =
+            |net: &BalancedNetwork, row: usize| (net.branches()[row].r, net.branches()[row].x);
+        // A at -20 degrees: a third of the way from 1.2 at -30 to 1.0 at 0.
+        let (r, x) = branch(&net, 0);
+        close(r, 0.01 * (1.2 - 0.2 / 3.0));
+        close(x, 0.1 * (1.2 - 0.2 / 3.0));
+        // B at 30 degrees, C at ratio 1.05, and D at its per unit ratio 1.05.
+        close(branch(&net, 1).1, 0.1 * 1.2);
+        close(branch(&net, 2).1, 0.2 * 1.025);
+        close(branch(&net, 3).1, 0.2 * 1.025);
+        // E names no stated table.
+        close(branch(&net, 4).1, 0.2);
+        // Winding 3's star impedance (0.02 + j0.2) scales by 1.05 at ratio
+        // 0.95; the pairs that include it follow.
+        let z = net.transformers_3w()[0].z;
+        close(z[0].x, 0.1);
+        close(z[1].x, 0.0 + 0.2 * 1.05);
+        close(z[2].x, 0.2 * 1.05 + 0.1);
+        close(z[2].r, 0.02 * 1.05 + 0.01);
+
+        let corrected = net.clone();
+        assert_eq!(net.apply_impedance_correction(), 5);
+        assert_eq!(
+            net.branches(),
+            corrected.branches(),
+            "a second call changes nothing"
+        );
+        assert_eq!(net.transformers_3w(), corrected.transformers_3w());
+
+        // The writer states the nominal impedance beside the table, so a
+        // reader that applies the table again reaches the same impedance.
+        let text = write_psse_rev(&net, 35).text;
+        let mut back = parse_psse(&text).unwrap();
+        close(back.branches()[0].x, 0.1);
+        close(back.transformers_3w()[0].z[1].x, 0.2);
+        back.apply_impedance_correction();
+        for (row, (before, after)) in net.branches().iter().zip(back.branches()).enumerate() {
+            close(after.r, before.r);
+            assert!((after.x - before.x).abs() < 1e-12, "transformer {row}");
+        }
+
+        // A tap move evaluates the table at the new position.
+        net.branches_mut()[2].tap = 1.1;
+        net.apply_impedance_correction();
+        close(net.branches()[2].x, 0.2 * 1.05);
+    }
+
+    /// A ratio table is tabulated against winding 1's ratio `t1`, while the
+    /// branch tap is `t1 / t2` and the reader refers the impedance across
+    /// `t2` by `t2²`. The factor PSS/E takes at `t1` multiplies the impedance
+    /// it states; a complex factor commutes with the referral, so the
+    /// corrected branch is `t2² · F(t1) · Z`. A write states winding 2 at one
+    /// and reads back to the same tables, nominal impedance, and correction.
+    #[test]
+    #[allow(clippy::float_cmp)] // the round trip is exact, not approximate
+    fn impedance_correction_tables_follow_a_winding_2_ratio_off_one() {
+        let raw = format!(
+            "0, 100.00, 35, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN SYSTEM SWITCHING DEVICE DATA
+0 / END OF SYSTEM SWITCHING DEVICE DATA, BEGIN TRANSFORMER DATA
+1, 2, 0, '1', 1, 1, 1, 0.0, 0.0, 2, 'T           ', 1, 1, 1.0, 0, 1.0, 0, 1.0, 0, 1.0, '            ', 0
+0.02, 0.2, 100.0
+{}
+0.98, 0.0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
+0 / END OF VSC DC LINE DATA, BEGIN IMPEDANCE CORRECTION DATA
+2, 0.9, 1.1, 0.0, 1.0, 1.0, 0.0, 1.1, 1.05, 0.0, 0.0, 0.0, 0.0
+0 / END OF IMPEDANCE CORRECTION DATA, BEGIN MULTI-TERMINAL DC DATA
+Q
+",
+            impedance_winding_line(1.05, 0.0, 0.0, 1, 2, 2)
+        );
+        let mut net = parse_psse(&raw).unwrap();
+        let t2: f64 = 0.98;
+        close(net.branches()[0].tap, 1.05 / t2);
+        let correction = net.branches()[0].impedance_correction().unwrap();
+        for (point, t1) in correction.points.iter().zip([0.9, 1.0, 1.1]) {
+            close(point.value, t1 / t2);
+        }
+        let read = net.clone();
+        net.apply_impedance_correction();
+        // F(t1 = 1.05) is halfway from 1.0 at 1.0 to 1.05 at 1.1.
+        close(net.branches()[0].r, t2 * t2 * 1.025 * 0.02);
+        close(net.branches()[0].x, t2 * t2 * 1.025 * 0.2);
+
+        let text = write_psse_rev(&net, 35).text;
+        let mut back = parse_psse(&text).unwrap();
+        assert_eq!(
+            back.branches()[0].impedance_correction(),
+            read.branches()[0].impedance_correction()
+        );
+        assert_eq!(back.branches()[0].r, read.branches()[0].r);
+        assert_eq!(back.branches()[0].x, read.branches()[0].x);
+        back.apply_impedance_correction();
+        assert_eq!(back.branches()[0].r, net.branches()[0].r);
+        assert_eq!(back.branches()[0].x, net.branches()[0].x);
+    }
+
+    #[test]
+    fn revision_33_impedance_correction_tables_are_one_line_of_real_pairs() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1, 2, 0, '1', 1, 1, 1, 0.0, 0.0, 2, 'PS          ', 1, 1, 1, 0, 1, 0, 1, 0, 1, '            '
+0.01, 0.10, 100.0
+1.0, 0.0, 15.0, 100.0, 90.0, 80.0, 3, 0, 30.0, -30.0, 100.0, -100.0, 33, 7, 0, 0, 0
+1.0, 0.0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
+0 / END OF VSC DC LINE DATA, BEGIN IMPEDANCE CORRECTION DATA
+7, -30.0, 1.2, 0.0, 1.0, 30.0, 1.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+0 / END OF IMPEDANCE CORRECTION DATA, BEGIN MULTI-TERMINAL DC DATA
+Q
+";
+        let mut net = parse_psse(raw).unwrap();
+        let correction = net.branches()[0].impedance_correction().unwrap();
+        assert_eq!(correction.table, 7);
+        assert_eq!(correction.variable, ImpedanceCorrectionVariable::Angle);
+        assert_eq!(
+            correction_values(&correction),
+            [(-30.0, 1.2, 0.0), (0.0, 1.0, 0.0), (30.0, 1.2, 0.0)]
+        );
+        assert_eq!(net.apply_impedance_correction(), 1);
+        close(net.branches()[0].x, 0.1 * 1.1);
+
+        let text = write_psse_rev(&net, 33).text;
+        let record = text
+            .lines()
+            .find(|line| line.starts_with("7, "))
+            .expect("table 7 is written");
+        assert_eq!(fields(record).len(), 23, "{record}");
+        assert_eq!(
+            parse_psse(&text).unwrap().branches()[0].impedance_correction(),
+            Some(correction)
+        );
+    }
+    // All fixtures below are synthetic and keep RAW's own per-unit table
+    // coordinates, even when WINDV is expressed in kV or on NOMV.
+    fn correction_case_edit_transformer(
+        raw: &str,
+        name: &str,
+        edit: impl FnOnce(&mut [String]),
+    ) -> String {
+        let mut lines: Vec<_> = raw.lines().map(str::to_owned).collect();
+        let row = lines
+            .iter()
+            .position(|line| line.contains(&format!("'{name:<12}'")))
+            .unwrap();
+        edit(&mut lines[row..]);
+        lines.join("\n")
+    }
+
+    fn correction_set_field(line: &mut String, index: usize, value: impl ToString + Copy) {
+        let mut fields: Vec<_> = line.split(',').map(str::trim).map(str::to_owned).collect();
+        fields[index] = value.to_string();
+        *line = fields.join(", ");
+    }
+
+    #[test]
+    fn impedance_correction_ratio_tables_use_bus_base_units_for_every_cw() {
+        for (cw, windv1, windv2) in [
+            (1, 1.05, 0.98),
+            (2, 241.5, 225.4),
+            (3, 241.5 / 220.0, 225.4 / 200.0),
+        ] {
+            let raw =
+                correction_case_edit_transformer(&impedance_correction_case(), "D", |lines| {
+                    correction_set_field(&mut lines[0], 4, cw);
+                    lines[2] = impedance_winding_line(windv1, 220.0, 0.0, 0, 0, 4);
+                    lines[3] = format!("{windv2}, 200.0");
+                });
+            let mut net = parse_psse(&raw).unwrap();
+            let branch = &net.branches()[3];
+            close(branch.tap, 1.05 / 0.98);
+            let correction = branch.impedance_correction().unwrap();
+            assert_eq!(correction.variable, ImpedanceCorrectionVariable::Ratio);
+            for (point, ratio) in correction.points.iter().zip([0.9, 1.0, 1.1]) {
+                close(point.value, ratio / 0.98);
+            }
+            net.apply_impedance_correction();
+            close(net.branches()[3].r, 0.02 * 0.98_f64.powi(2) * 1.025);
+            for revision in [33, 34, 35] {
+                let mut back = parse_psse(&write_psse_rev(&net, revision).text).unwrap();
+                back.apply_impedance_correction();
+                close(back.branches()[3].r, net.branches()[3].r);
+                close(back.branches()[3].tap, net.branches()[3].tap);
+            }
+        }
+    }
+
+    #[test]
+    fn impedance_correction_variable_follows_table_range_not_current_control() {
+        for shift in [0.0, 30.0] {
+            for (table, variable, factor) in [
+                (
+                    1,
+                    ImpedanceCorrectionVariable::Angle,
+                    if shift == 0.0 { 1.0 } else { 1.2 },
+                ),
+                (2, ImpedanceCorrectionVariable::Ratio, 1.0),
+            ] {
+                let raw =
+                    correction_case_edit_transformer(&impedance_correction_case(), "B", |lines| {
+                        lines[2] = impedance_winding_line(1.0, 0.0, shift, 0, 0, table);
+                    });
+                let mut net = parse_psse(&raw).unwrap();
+                assert_eq!(
+                    net.branches()[1].impedance_correction().unwrap().variable,
+                    variable
+                );
+                net.apply_impedance_correction();
+                close(net.branches()[1].r, 0.01 * factor);
+                let mut back = parse_psse(&write_psse_rev(&net, 35).text).unwrap();
+                assert_eq!(
+                    back.branches()[1].impedance_correction().unwrap().variable,
+                    variable
+                );
+                back.apply_impedance_correction();
+                close(back.branches()[1].r, net.branches()[1].r);
+            }
+        }
+    }
+
+    #[test]
+    fn impedance_correction_writer_keeps_all_eleven_angle_points_when_they_fit() {
+        let mut net = parse_psse(&impedance_correction_case()).unwrap();
+        let correction = ImpedanceCorrection::new(
+            8,
+            ImpedanceCorrectionVariable::Angle,
+            (0..11)
+                .map(|i| {
+                    ImpedanceCorrectionPoint::new(
+                        0.6 + f64::from(i) * 0.1,
+                        1.0 + f64::from(i) * 0.02,
+                        0.0,
+                    )
+                })
+                .collect(),
+        );
+        net.branches_mut()[1].set_impedance_correction(Some(correction.clone()));
+        let written = write_psse_rev(&net, 33);
+        assert!(
+            !written
+                .render_diagnostics()
+                .iter()
+                .any(|message| message.contains("table 8"))
+        );
+        let back = parse_psse(&written.text).unwrap();
+        assert_eq!(back.branches()[1].impedance_correction(), Some(correction));
+    }
+
+    #[test]
+    fn impedance_correction_table_zero_is_renumbered_not_written_as_a_terminator() {
+        let mut net = parse_psse(&impedance_correction_case()).unwrap();
+        let correction = ImpedanceCorrection::new(
+            0,
+            ImpedanceCorrectionVariable::Ratio,
+            vec![
+                ImpedanceCorrectionPoint::new(0.9, 1.1, 0.0),
+                ImpedanceCorrectionPoint::new(1.1, 0.9, 0.0),
+            ],
+        );
+        net.branches_mut()[1].set_impedance_correction(Some(correction.clone()));
+        let written = write_psse_rev(&net, 35);
+        assert!(
+            written
+                .render_diagnostics()
+                .iter()
+                .any(|message| message.contains("table 0"))
+        );
+        let back = parse_psse(&written.text).unwrap();
+        let read = back.branches()[1].impedance_correction().unwrap();
+        assert_ne!(read.table, 0);
+        assert_eq!(read.points, correction.points);
+        // Every other transformer's table survives the renumbering.
+        assert_eq!(
+            back.branches()
+                .iter()
+                .filter(|b| b.impedance_correction().is_some())
+                .count(),
+            net.branches()
+                .iter()
+                .filter(|b| b.impedance_correction().is_some())
+                .count()
+        );
+    }
+
+    #[test]
+    fn impedance_correction_writer_preserves_explicit_narrow_angle_tables() {
+        let mut net = parse_psse(&impedance_correction_case()).unwrap();
+        net.branches_mut()[1].shift = 0.8;
+        net.branches_mut()[1].set_impedance_correction(Some(ImpedanceCorrection::new(
+            8,
+            ImpedanceCorrectionVariable::Angle,
+            vec![
+                ImpedanceCorrectionPoint::new(0.6, 1.0, 0.0),
+                ImpedanceCorrectionPoint::new(1.0, 1.2, 0.0),
+            ],
+        )));
+        net.apply_impedance_correction();
+        for revision in [33, 34, 35] {
+            let mut back = parse_psse(&write_psse_rev(&net, revision).text).unwrap();
+            assert_eq!(
+                back.branches()[1].impedance_correction().unwrap().variable,
+                ImpedanceCorrectionVariable::Angle
+            );
+            back.apply_impedance_correction();
+            close(back.branches()[1].r, 0.011);
+            for shift in [-10.0, 0.0, 0.7, 0.9, 10.0] {
+                let mut moved = net.clone();
+                moved.branches_mut()[1].shift = shift;
+                back.branches_mut()[1].shift = shift;
+                moved.apply_impedance_correction();
+                back.apply_impedance_correction();
+                close(back.branches()[1].r, moved.branches()[1].r);
+            }
+        }
+    }
+
+    #[test]
+    fn impedance_correction_writer_preserves_ratio_classification_and_referral() {
+        // Winding 2 moves branch-coordinate table points above the angle
+        // classification threshold. Canonical WINDV2=1 would change meaning.
+        let raw = correction_case_edit_transformer(&impedance_correction_case(), "C", |lines| {
+            lines[3] = "0.5, 0.0".to_owned();
+            correction_set_field(&mut lines[0], 7, 0.012);
+            correction_set_field(&mut lines[0], 8, -0.023);
+        });
+        let mut net = parse_psse(&raw).unwrap();
+        net.apply_impedance_correction();
+        for revision in [33, 34, 35] {
+            let mut back = parse_psse(&write_psse_rev(&net, revision).text).unwrap();
+            let a = &net.branches()[2];
+            let b = &back.branches()[2];
+            assert_eq!(
+                b.impedance_correction().unwrap().variable,
+                ImpedanceCorrectionVariable::Ratio
+            );
+            close(b.tap, a.tap);
+            close(
+                b.calc_terminal_charging().calc_total_g(),
+                a.calc_terminal_charging().calc_total_g(),
+            );
+            close(
+                b.control.as_ref().unwrap().tap_min,
+                a.control.as_ref().unwrap().tap_min,
+            );
+            close(
+                b.control.as_ref().unwrap().tap_max,
+                a.control.as_ref().unwrap().tap_max,
+            );
+            back.apply_impedance_correction();
+            close(back.branches()[2].r, a.r);
+            close(back.branches()[2].x, a.x);
+            // Moving the neutral tap must still evaluate the same function.
+            for tap in [1.7, 1.9, 2.0, 2.2, 2.4] {
+                let mut moved = net.clone();
+                moved.branches_mut()[2].tap = tap;
+                back.branches_mut()[2].tap = tap;
+                moved.apply_impedance_correction();
+                back.apply_impedance_correction();
+                close(back.branches()[2].r, moved.branches()[2].r);
+            }
+        }
+    }
+
+    fn pairwise_correction_case(cw: u32, controlling: usize) -> String {
+        correction_case_edit_transformer(&impedance_correction_case(), "T3W", |lines| {
+            correction_set_field(&mut lines[0], 4, cw);
+            correction_set_field(&mut lines[0], 11, 2); // winding 2 out, not whole transformer
+            correction_set_field(&mut lines[0], 21, 1);
+            for (w, (base, nominal)) in [(230.0, 220.0), (115.0, 110.0), (13.8, 13.0)]
+                .into_iter()
+                .enumerate()
+            {
+                let ratio = if w == controlling { 0.95 } else { 1.02 };
+                let windv = match cw {
+                    2 => ratio * base,
+                    3 => ratio * base / nominal,
+                    _ => ratio,
+                };
+                lines[2 + w] = impedance_winding_line(
+                    windv,
+                    nominal,
+                    0.0,
+                    if w == controlling { -1 } else { 0 },
+                    1,
+                    if w == 2 { 2 } else { 0 },
+                );
+                correction_set_field(&mut lines[2 + w], 14, 190.0); // RATE12
+            }
+        })
+    }
+
+    #[test]
+    fn impedance_correction_zcod_one_uses_adjustable_winding_and_pairwise_impedances() {
+        for cw in [1, 2, 3] {
+            for controlling in 0..3 {
+                let raw = pairwise_correction_case(cw, controlling);
+                let mut net = parse_psse(&raw).unwrap();
+                let nominal = net.transformers_3w()[0].z;
+                assert_eq!(net.apply_impedance_correction(), 5);
+                let corrected = net.transformers_3w()[0].clone();
+                for (pair, (actual, nominal)) in corrected.z.iter().zip(nominal).enumerate() {
+                    let factor = if pair == 2 { 1.05 } else { 1.0 };
+                    close(actual.r, nominal.r * factor);
+                    close(actual.x, nominal.x * factor);
+                }
+                net.apply_impedance_correction();
+                assert_eq!(net.transformers_3w()[0], corrected);
+                for revision in [33, 34, 35] {
+                    let emission = write_psse_rev(&net, revision);
+                    if revision < 35 {
+                        assert!(
+                            emission
+                                .render_diagnostics()
+                                .iter()
+                                .any(|message| message
+                                    .contains("ZCOD=1 impedance correction frozen"))
+                        );
+                    }
+                    let mut back = parse_psse(&emission.text).unwrap();
+                    back.apply_impedance_correction();
+                    let t = &back.transformers_3w()[0];
+                    assert_eq!(t.winding_in_service(), [true, false, true]);
+                    for pair in 0..3 {
+                        close(t.z[pair].r, corrected.z[pair].r);
+                        close(t.z[pair].x, corrected.z[pair].x);
+                        if revision >= 34 {
+                            assert_eq!(
+                                t.winding_rating_sets(pair),
+                                corrected.winding_rating_sets(pair)
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn impedance_correction_zcod_one_uses_the_adjustable_winding_angle() {
+        let raw =
+            correction_case_edit_transformer(&pairwise_correction_case(1, 0), "T3W", |lines| {
+                correction_set_field(&mut lines[2], 15, -3);
+                correction_set_field(&mut lines[2], 2, -45.0);
+                correction_set_field(&mut lines[4], 23, 1); // TAB3 is an angle table
+            });
+        let mut net = parse_psse(&raw).unwrap();
+        net.apply_impedance_correction();
+        let t = &net.transformers_3w()[0];
+        // F(-45 degrees) = 1.35 + j0.05, applied to Z31 only.
+        close(t.z[0].x, 0.1);
+        close(t.z[1].x, 0.2);
+        close(t.z[2].r, 0.03 * 1.35 - 0.3 * 0.05);
+        close(t.z[2].x, 0.3 * 1.35 + 0.03 * 0.05);
+        let mut back = parse_psse(&write_psse_rev(&net, 35).text).unwrap();
+        back.apply_impedance_correction();
+        close(back.transformers_3w()[0].z[2].r, t.z[2].r);
+        close(back.transformers_3w()[0].z[2].x, t.z[2].x);
+    }
+
+    #[test]
+    fn impedance_correction_zcod_one_skips_ambiguous_edited_controls() {
+        let mut net = parse_psse(&pairwise_correction_case(1, 0)).unwrap();
+        net.branches_mut().clear();
+        net.transformers_3w_mut()[0].windings[0].control = None;
+        let before = net.transformers_3w()[0].clone();
+        assert_eq!(net.apply_impedance_correction(), 0);
+        assert_eq!(net.transformers_3w()[0], before);
+        net.transformers_3w_mut()[0].windings[0].control =
+            Some(TransformerControl::new(TransformerControlMode::Voltage));
+        net.transformers_3w_mut()[0].windings[1].control =
+            Some(TransformerControl::new(TransformerControlMode::Voltage));
+        let before = net.transformers_3w()[0].clone();
+        assert_eq!(net.apply_impedance_correction(), 0);
+        assert_eq!(net.transformers_3w()[0], before);
+    }
+
+    fn has_diagnostic(emission: &TextEmission, text: &str) -> bool {
+        emission
+            .render_diagnostics()
+            .iter()
+            .any(|line| line.contains(text))
+    }
+
+    #[test]
+    fn impedance_correction_edit_after_apply_is_the_new_nominal() {
+        let mut net = parse_psse(&impedance_correction_case()).unwrap();
+        net.apply_impedance_correction();
+        assert!(!has_diagnostic(&write_psse_rev(&net, 35), "edited after"));
+        // Edit A (1-2, table 1 at -20 degrees) and the three winding
+        // transformer's Z12 after the correction scaled them.
+        (net.branches_mut()[0].r, net.branches_mut()[0].x) = (0.05, 0.5);
+        net.transformers_3w_mut()[0].z[0].x = 0.4;
+        let emission = write_psse_rev(&net, 35);
+        assert!(has_diagnostic(
+            &emission,
+            "transformer 1-2 impedance was edited after its impedance correction was applied"
+        ));
+        assert!(has_diagnostic(
+            &emission,
+            "three winding transformer 1-3-5 impedance was edited after"
+        ));
+        // The edited values, not the nominal recorded before the edit, are
+        // written beside the tables.
+        let mut back = parse_psse(&emission.text).unwrap();
+        close(back.branches()[0].r, 0.05);
+        close(back.branches()[0].x, 0.5);
+        close(back.transformers_3w()[0].z[0].x, 0.4);
+        assert_eq!(
+            back.branches()[0].impedance_correction().map(|c| c.table),
+            Some(1)
+        );
+        // A second apply also takes the edit as the nominal impedance.
+        net.apply_impedance_correction();
+        close(net.branches()[0].x, 0.5 * (1.2 - 0.2 / 3.0));
+        back.apply_impedance_correction();
+        for (written, read) in net.branches().iter().zip(back.branches()) {
+            close(read.r, written.r);
+            close(read.x, written.x);
+        }
+        for (written, read) in net.transformers_3w()[0]
+            .z
+            .iter()
+            .zip(back.transformers_3w()[0].z)
+        {
+            close(read.r, written.r);
+            close(read.x, written.x);
+        }
+        assert!(!has_diagnostic(&write_psse_rev(&net, 35), "edited after"));
+    }
+
+    #[test]
+    fn impedance_correction_zcod_one_without_a_control_winding_writes_a_readable_record() {
+        let mut net = parse_psse(&pairwise_correction_case(1, 0)).unwrap();
+        net.apply_impedance_correction();
+        net.transformers_3w_mut()[0].windings[0].control = None;
+        let present = net.transformers_3w()[0].z;
+        let emission = write_psse_rev(&net, 35);
+        assert!(has_diagnostic(
+            &emission,
+            "ZCOD=1 impedance correction frozen at its present impedances with TAB = 0"
+        ));
+        let back = parse_psse(&emission.text).unwrap();
+        let t = &back.transformers_3w()[0];
+        assert_eq!(
+            (0..3)
+                .map(|w| t.winding_impedance_correction(w))
+                .collect::<Vec<_>>(),
+            [None, None, None]
+        );
+        for (read, written) in t.z.iter().zip(present) {
+            close(read.r, written.r);
+            close(read.x, written.x);
+        }
+    }
+
+    #[test]
+    fn impedance_correction_cleared_tables_write_no_tab() {
+        let mut net = parse_psse(&impedance_correction_case()).unwrap();
+        net.branches_mut()[0].set_impedance_correction(None);
+        net.transformers_3w_mut()[0].set_winding_impedance_correction(2, None);
+        let emission = write_psse_rev(&net, 35);
+        // A's table 1 and the third winding's table 2 were cleared; E names
+        // table 9, which the case never stated.
+        assert!(has_diagnostic(
+            &emission,
+            "3 impedance correction table reference(s) written as TAB = 0"
+        ));
+        let mut warnings = Diagnostics::new();
+        let back = parse_psse_source(&emission.text, None, &mut warnings).unwrap();
+        assert!(
+            !warnings
+                .lines()
+                .iter()
+                .any(|line| line.contains("REFERENCE_DROPPED")),
+            "{:?}",
+            warnings.lines()
+        );
+        assert_eq!(back.branches()[0].extras.get("psse_tab"), None);
+        assert_eq!(back.branches()[0].impedance_correction(), None);
+        assert_eq!(back.transformers_3w()[0].extras.get("psse_tab3"), None);
+        assert_eq!(
+            back.branches()[1].impedance_correction().map(|c| c.table),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn rawx_writes_impedance_correction_tables_as_impcor() {
+        let net = parse_psse(&impedance_correction_case()).unwrap();
+        let emission = super::super::rawx::write_rawx(&net).unwrap();
+        assert!(
+            !has_diagnostic(&emission, "frozen"),
+            "{:?}",
+            emission.render_diagnostics()
+        );
+        let root: serde_json::Value = serde_json::from_str(&emission.text).unwrap();
+        let impcor = &root["network"]["impcor"];
+        assert_eq!(
+            impcor["fields"],
+            serde_json::json!(["itable", "tap", "refact", "imfact"])
+        );
+        // One row per point: table 1's five angle points, then table 2's
+        // three ratio points, then table 4's.
+        let rows = impcor["data"].as_array().unwrap();
+        assert_eq!(rows.len(), 11, "{rows:?}");
+        assert_eq!(rows[0], serde_json::json!([1, -60.0, 1.5, 0.1]));
+        assert_eq!(rows[4], serde_json::json!([1, 60.0, 1.5, -0.1]));
+        assert_eq!(rows[5], serde_json::json!([2, 0.9, 1.1, 0.0]));
+        let mut warnings = Diagnostics::new();
+        let back =
+            super::super::rawx::parse_rawx_source(&emission.text, None, &mut warnings).unwrap();
+        assert_eq!(
+            transformer_corrections(&back),
+            transformer_corrections(&net)
+        );
+        let lines = warnings.lines();
+        assert!(
+            !lines.iter().any(|line| line.contains("impcor")),
+            "{lines:?}"
+        );
+        // Applying the tables read back gives the impedance the RAW case
+        // gives.
+        let (mut applied, mut back) = (net.clone(), back);
+        applied.apply_impedance_correction();
+        back.apply_impedance_correction();
+        for (read, written) in back.branches().iter().zip(applied.branches()) {
+            close(read.r, written.r);
+            close(read.x, written.x);
+        }
+        for (read, written) in back.transformers_3w()[0]
+            .z
+            .iter()
+            .zip(applied.transformers_3w()[0].z)
+        {
+            close(read.r, written.r);
+            close(read.x, written.x);
+        }
+    }
+
+    #[test]
+    fn impedance_correction_zcod_one_refuses_ambiguous_controlling_windings() {
+        for codes in [[0, 0, 0], [1, 1, 0]] {
+            let raw =
+                correction_case_edit_transformer(&pairwise_correction_case(1, 0), "T3W", |lines| {
+                    for (w, cod) in codes.into_iter().enumerate() {
+                        correction_set_field(&mut lines[2 + w], 15, cod);
+                    }
+                });
+            assert!(
+                parse_psse(&raw)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("exactly one nonzero winding COD")
+            );
+        }
+    }
+
+    #[test]
+    fn impedance_correction_continuation_can_start_with_zero() {
+        // The leading zero completes the previous line's first point; it is
+        // not a section terminator while the table record is still open.
+        let first = fields("7, 0.5, 1.1");
+        let mut lines = RawLines::new(concat!(
+            "0, 1.0, 1.05, 0.0, 0.0, 0.0\n",
+            "0 / END OF IMPEDANCE CORRECTION DATA\n",
+            "Q\n"
+        ));
+        let mut warnings = Diagnostics::new();
+        let (table, points) =
+            read_impedance_correction(&first, 35, &mut lines, &mut warnings).unwrap();
+
+        assert_eq!(table, 7);
+        assert_eq!(points.len(), 2);
+        assert_eq!(points[0].value, 0.5);
+        assert_eq!(points[0].factor_re, 1.1);
+        assert_eq!(points[0].factor_im, 0.0);
+        assert_eq!(points[1].value, 1.0);
+        assert_eq!(points[1].factor_re, 1.05);
+        assert_eq!(points[1].factor_im, 0.0);
+    }
+
+    #[test]
+    fn impedance_correction_non_ascending_points_warn_and_sort() {
+        let first = fields("7, 30, 1.1, 0.0, -30, 1.2, 0.0, 0.0, 0.0, 0.0");
+        let mut lines = RawLines::new("Q\n");
+        let mut warnings = Diagnostics::new();
+        let (table, points) =
+            read_impedance_correction(&first, 35, &mut lines, &mut warnings).unwrap();
+
+        assert_eq!(table, 7);
+        assert_eq!(points.len(), 2);
+        assert_eq!(points[0].value, -30.0);
+        assert_eq!(points[1].value, 30.0);
+        assert!(
+            warnings
+                .lines()
+                .iter()
+                .any(|line| line.contains("non-ascending T values"))
+        );
+        assert_eq!(
+            impedance_table_variable(&points),
+            ImpedanceCorrectionVariable::Angle
+        );
+    }
+
+    #[test]
+    fn impedance_correction_point_can_straddle_raw_continuation_lines() {
+        // The first line ends after T and FRE; FIM starts the continuation.
+        // The final all-zero triple is the table terminator, not a data point.
+        let first = fields("7, 0.5, 1.1");
+        let mut lines = RawLines::new("1.2, 1.0, 0.0, 1.5, 1.2, 0.0, 0.0, 0.0, 0.0\nQ\n");
+        let mut warnings = Diagnostics::new();
+        let (table, points) =
+            read_impedance_correction(&first, 35, &mut lines, &mut warnings).unwrap();
+
+        assert_eq!(table, 7);
+        assert_eq!(points.len(), 3);
+        assert_eq!(points[0].value, 0.5);
+        assert_eq!(points[0].factor_re, 1.1);
+        assert_eq!(points[0].factor_im, 1.2);
+        assert_eq!(points[1].value, 1.0);
+        assert_eq!(points[1].factor_re, 0.0);
+        assert_eq!(points[1].factor_im, 1.5);
+        assert_eq!(points[2].value, 1.2);
+        assert_eq!(points[2].factor_re, 0.0);
+        assert_eq!(points[2].factor_im, 0.0);
     }
 }

@@ -1,0 +1,177 @@
+{
+  "schema": "pio-ir",
+  "version": 2,
+  "producer": {
+    "name": "powerio",
+    "version": "0.11.6"
+  },
+  "value": {
+    "type": "powerio.AcPfInstance",
+    "data": {
+      "network": {
+        "name": "hvdc2",
+        "base_mva": 100.0,
+        "base_frequency": 60.0,
+        "case_metadata": {},
+        "generated_uids": [
+          "1",
+          "1-2",
+          "1-2-2",
+          "2",
+          "bus-1",
+          "bus-2"
+        ],
+        "buses": [
+          {
+            "id": 1,
+            "kind": "REF",
+            "vm": 1.01,
+            "va": 0.0,
+            "base_kv": 230.0,
+            "vmax": 1.1,
+            "vmin": 0.9,
+            "evhi": null,
+            "evlo": null,
+            "area": 1,
+            "zone": 1,
+            "name": null,
+            "uid": "1",
+            "extras": {}
+          },
+          {
+            "id": 2,
+            "kind": "PQ",
+            "vm": 1.0,
+            "va": 0.0,
+            "base_kv": 230.0,
+            "vmax": 1.1,
+            "vmin": 0.9,
+            "evhi": null,
+            "evlo": null,
+            "area": 1,
+            "zone": 1,
+            "name": null,
+            "uid": "2",
+            "extras": {}
+          }
+        ],
+        "loads": [
+          {
+            "bus": 2,
+            "p": 40.0,
+            "q": 10.0,
+            "voltage_model": null,
+            "in_service": true,
+            "uid": "bus-2",
+            "extras": {}
+          }
+        ],
+        "shunts": [],
+        "static_var_compensators": [],
+        "branches": [
+          {
+            "from": 1,
+            "to": 2,
+            "r": 0.01,
+            "x": 0.1,
+            "b": 0.0,
+            "charging": null,
+            "rate_a": 0.0,
+            "rate_b": 0.0,
+            "rate_c": 0.0,
+            "rating_sets": [],
+            "current_ratings": null,
+            "tap": 0.0,
+            "shift": 0.0,
+            "in_service": true,
+            "angmin": -360.0,
+            "angmax": 360.0,
+            "control": null,
+            "solution": null,
+            "uid": "1-2",
+            "extras": {}
+          }
+        ],
+        "switches": [],
+        "generators": [
+          {
+            "bus": 1,
+            "energy_source": "other",
+            "pg": 42.0,
+            "qg": 0.0,
+            "pmax": 100.0,
+            "pmin": 0.0,
+            "qmax": 100.0,
+            "qmin": -100.0,
+            "vg": 1.01,
+            "mbase": 100.0,
+            "in_service": true,
+            "cost": null,
+            "caps": {},
+            "voltage_regulation_on": true,
+            "regulated_bus": null,
+            "uid": "bus-1"
+          }
+        ],
+        "storage": [],
+        "hvdc": [
+          {
+            "from": 1,
+            "to": 2,
+            "in_service": true,
+            "pf": 10.0,
+            "pt": 9.5,
+            "qf": 0.0,
+            "qt": 0.0,
+            "vf": 1.01,
+            "vt": 1.0,
+            "pmin": 0.0,
+            "pmax": 20.0,
+            "qminf": -50.0,
+            "qmaxf": 50.0,
+            "qmint": -50.0,
+            "qmaxt": 50.0,
+            "loss0": 0.5,
+            "loss1": 0.0,
+            "cost": null,
+            "uid": "1-2-2",
+            "extras": {}
+          }
+        ],
+        "transformers_3w": [],
+        "areas": [],
+        "solver": null,
+        "source_format": "matpower"
+      },
+      "specifications": [
+        {
+          "kind": "reference",
+          "vm": 1.01,
+          "va": 0.0
+        },
+        {
+          "kind": "pq",
+          "p": -40.0,
+          "q": -10.0
+        }
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "/input",
+      "name": "hvdc2.m",
+      "byte_length": 322,
+      "format": "matpower"
+    }
+  ],
+  "history": [
+    {
+      "id": "to_ac_pf_instance",
+      "kind": "transform",
+      "name": "to_ac_pf_instance",
+      "input_type": "powerio.BalancedNetwork",
+      "output_type": "powerio.AcPfInstance"
+    }
+  ]
+}

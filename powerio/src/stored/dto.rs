@@ -287,7 +287,7 @@ fn bounded_history<'de, D: Deserializer<'de>>(
     )
 }
 
-const MAX_STORED_COLLECTION_ENTRIES: usize = 65_536;
+pub(super) const MAX_STORED_COLLECTION_ENTRIES: usize = 65_536;
 const MAX_STORED_OPERATING_POINT_QUANTITIES: usize = 64;
 
 /// Entries one stored operating point or solution vector may carry, values
@@ -327,6 +327,36 @@ fn bounded_operating_point_values<'de, D: Deserializer<'de>>(
     limits::bounded_vec(
         deserializer,
         "operating point values",
+        MAX_STORED_OPERATING_POINT_VALUES,
+    )
+}
+
+fn bounded_branch_statuses<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<bool>, D::Error> {
+    limits::bounded_vec(
+        deserializer,
+        "branch statuses",
+        MAX_STORED_OPERATING_POINT_VALUES,
+    )
+}
+
+fn bounded_switching_costs<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<BranchSwitchingCost>, D::Error> {
+    limits::bounded_vec(
+        deserializer,
+        "switching costs",
+        MAX_STORED_OPERATING_POINT_VALUES,
+    )
+}
+
+fn bounded_current_limits<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<BranchCurrentLimit>, D::Error> {
+    limits::bounded_vec(
+        deserializer,
+        "current limits",
         MAX_STORED_OPERATING_POINT_VALUES,
     )
 }
@@ -578,9 +608,11 @@ pub struct StoredOperatingPointScenarioSet<N> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(rename_all = "snake_case", tag = "term", deny_unknown_fields)]
+#[allow(clippy::enum_variant_names)] // the variants spell the stored term names
 pub enum ObjectiveTerm {
     NetworkGeneratorCost,
     ActivePowerDispatchCost,
+    BranchSwitchingCost,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -609,6 +641,11 @@ pub struct DcPfInstance {
     pub approximation: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_point: Option<StoredOperatingPointAssignment>,
+    /// How the bus specifications treat the network's HVDC lines. Absent
+    /// means `ignore`, the treatment of every document written before the
+    /// field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hvdc_treatment: Option<powerio_tx::HvdcTreatment>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -619,6 +656,11 @@ pub struct AcPfInstance {
     pub specifications: Vec<powerio_prob::AcBusSpecification>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_point: Option<StoredOperatingPointAssignment>,
+    /// How a replacement network's specifications treat its HVDC lines.
+    /// Absent means `ignore`, the treatment of every document written before
+    /// the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hvdc_treatment: Option<powerio_tx::HvdcTreatment>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -897,6 +939,110 @@ pub struct AcOpfSolution {
         skip_serializing_if = "Option::is_none"
     )]
     pub branch_to_limit_multiplier: Option<Vec<StoredF64>>,
+}
+
+/// Which physical branches an AC optimal transmission switching instance may
+/// switch, by branch identity.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(
+    rename_all = "snake_case",
+    tag = "select",
+    content = "identities",
+    deny_unknown_fields
+)]
+pub enum BranchSelection {
+    All,
+    None,
+    Only(#[serde(deserialize_with = "bounded_operating_point_identities")] Vec<StoredIdentity>),
+}
+
+/// The opening and closing cost of one branch.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct BranchSwitchingCost {
+    pub id: StoredIdentity,
+    pub open_cost: StoredF64,
+    pub close_cost: StoredF64,
+}
+
+/// Explicit per unit current limits at a branch's two terminals; an absent
+/// side is unbounded.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct BranchCurrentLimit {
+    pub id: StoredIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_pu: Option<StoredF64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_pu: Option<StoredF64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum IslandingPolicy {
+    Forbidden,
+    Allowed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum CurrentLimitPolicy {
+    Skip,
+    Stated,
+    DeriveFromRateA,
+}
+
+/// The switching options of an AC optimal transmission switching instance.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AcOtsOptions {
+    pub switchable: BranchSelection,
+    #[serde(
+        default,
+        deserialize_with = "bounded_switching_costs",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub switching_costs: Vec<BranchSwitchingCost>,
+    pub islanding: IslandingPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_open: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_switched: Option<u64>,
+    pub current_limits: CurrentLimitPolicy,
+    #[serde(
+        default,
+        deserialize_with = "bounded_current_limits",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub stated_current_limits: Vec<BranchCurrentLimit>,
+}
+
+/// An AC optimal power flow base, whose network holds the initial branch
+/// statuses, plus the switching options.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AcOtsInstance {
+    pub base: AcOpfInstance,
+    pub options: AcOtsOptions,
+}
+
+/// The final branch statuses and the AC optimal power flow solution of the
+/// fixed-topology problem they derive.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AcOtsSolution {
+    pub instance: AcOtsInstance,
+    #[serde(deserialize_with = "bounded_branch_statuses")]
+    pub branch_closed: Vec<bool>,
+    pub ac_solution: AcOpfSolution,
 }
 
 /// Primal values of a serialized SOCWR relaxation result.
@@ -1216,6 +1362,8 @@ pub enum StoredValue {
     DcOpfInstance(DcOpfInstance),
     #[serde(rename = "powerio.AcOpfInstance")]
     AcOpfInstance(AcOpfInstance),
+    #[serde(rename = "powerio.AcOtsInstance")]
+    AcOtsInstance(Box<AcOtsInstance>),
     #[serde(rename = "powerio.McAcPfInstance")]
     McAcPfInstance(McAcPfInstance),
     #[serde(rename = "powerio.McAcOpfInstance")]
@@ -1234,6 +1382,8 @@ pub enum StoredValue {
     DcOpfSolution(Box<DcOpfSolution>),
     #[serde(rename = "powerio.AcOpfSolution")]
     AcOpfSolution(Box<AcOpfSolution>),
+    #[serde(rename = "powerio.AcOtsSolution")]
+    AcOtsSolution(Box<AcOtsSolution>),
     #[serde(rename = "powerio.SocwrOpfSolution")]
     SocwrOpfSolution(Box<SocwrOpfSolution>),
     #[serde(rename = "powerio.McAcPfSolution")]
@@ -1860,8 +2010,16 @@ fn validate_subsystem_set(set: &powerio_tx::SubsystemSet) -> Result<(), String> 
 /// `.sub` file states or by a finite base kV level.
 fn validate_monitor_scope(index: usize, scope: &powerio_tx::MonitorScope) -> Result<(), String> {
     match scope {
-        powerio_tx::MonitorScope::Subsystem { name } if name.trim().is_empty() => Err(format!(
-            "monitor statement {index} states a scope that names no subsystem"
+        powerio_tx::MonitorScope::Subsystem { name }
+        | powerio_tx::MonitorScope::SubsystemKv { name, .. }
+            if name.trim().is_empty() =>
+        {
+            Err(format!(
+                "monitor statement {index} states a scope that names no subsystem"
+            ))
+        }
+        powerio_tx::MonitorScope::SubsystemKv { kv, .. } if !kv.is_finite() => Err(format!(
+            "monitor statement {index} states a subsystem scope whose base kV is not finite"
         )),
         powerio_tx::MonitorScope::Kv { kv } if !kv.is_finite() => Err(format!(
             "monitor statement {index} states a scope whose base kV is not finite"
@@ -1884,10 +2042,22 @@ fn validate_monitored_set(set: &powerio_tx::MonitoredSet) -> Result<(), String> 
             validate_retained(&format!("monitor statement {index}"), retained)?;
         }
         match statement {
-            powerio_tx::MonitorStatement::VoltageRange { scope, vmin, vmax } => {
+            powerio_tx::MonitorStatement::VoltageRange { scope, vmin, vmax }
+            | powerio_tx::MonitorStatement::VoltageRangeWithPre {
+                scope, vmin, vmax, ..
+            } => {
                 if !(vmin.is_finite() && vmax.is_finite() && vmin <= vmax) {
                     return Err(format!(
                         "monitor statement {index} states a voltage range that does not run low to high"
+                    ));
+                }
+                if let powerio_tx::MonitorStatement::VoltageRangeWithPre {
+                    pre_min, pre_max, ..
+                } = statement
+                    && !(pre_min.is_finite() && pre_max.is_finite() && pre_min <= pre_max)
+                {
+                    return Err(format!(
+                        "monitor statement {index} states a pre-contingency voltage range that does not run low to high"
                     ));
                 }
                 validate_monitor_scope(index, scope)?;
@@ -1904,6 +2074,25 @@ fn validate_monitored_set(set: &powerio_tx::MonitoredSet) -> Result<(), String> 
             | powerio_tx::MonitorStatement::TiesFromSubsystem { subsystem } => {
                 if subsystem.trim().is_empty() {
                     return Err(format!("monitor statement {index} names no subsystem"));
+                }
+            }
+            powerio_tx::MonitorStatement::BranchesInSubsystemKvRange {
+                subsystem,
+                kv_range,
+                ..
+            }
+            | powerio_tx::MonitorStatement::TiesFromSubsystemKvRange {
+                subsystem,
+                kv_range,
+            } => {
+                if subsystem.trim().is_empty() {
+                    return Err(format!("monitor statement {index} names no subsystem"));
+                }
+                let (lo, hi) = kv_range;
+                if !(lo.is_finite() && hi.is_finite() && lo <= hi) {
+                    return Err(format!(
+                        "monitor statement {index} states a kV range that does not run low to high on finite ends"
+                    ));
                 }
             }
             powerio_tx::MonitorStatement::Interface {
@@ -1981,6 +2170,9 @@ fn validate_value(value: &StoredValue) -> Result<(), String> {
         StoredValue::AcOpfInstance(instance) => {
             validate_stored_assignment(instance.initial_point.as_ref())
         }
+        StoredValue::AcOtsInstance(instance) => {
+            validate_stored_assignment(instance.base.initial_point.as_ref())
+        }
         StoredValue::McAcPfInstance(instance) => {
             validate_stored_assignment(instance.initial_point.as_ref())
         }
@@ -2004,6 +2196,10 @@ fn validate_value(value: &StoredValue) -> Result<(), String> {
         }
         StoredValue::AcOpfSolution(solution) => {
             validate_stored_assignment(solution.instance.initial_point.as_ref())
+        }
+        StoredValue::AcOtsSolution(solution) => {
+            validate_stored_assignment(solution.instance.base.initial_point.as_ref())?;
+            validate_stored_assignment(solution.ac_solution.instance.initial_point.as_ref())
         }
         StoredValue::SocwrOpfSolution(solution) => {
             validate_stored_assignment(solution.instance.initial_point.as_ref())
@@ -2151,5 +2347,41 @@ mod decode_bound_tests {
             error.to_string().contains("more than 64 quantities"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn monitored_kv_scopes_and_ranges_reject_nonfinite_or_reversed_values() {
+        let invalid_scope = powerio_tx::MonitoredSet {
+            statements: vec![powerio_tx::MonitorStatement::VoltageRange {
+                scope: powerio_tx::MonitorScope::SubsystemKv {
+                    name: "A1".to_owned(),
+                    kv: f64::NAN,
+                },
+                vmin: 0.9,
+                vmax: 1.1,
+            }],
+            ..Default::default()
+        };
+        assert!(
+            validate_monitored_set(&invalid_scope)
+                .unwrap_err()
+                .contains("base kV is not finite")
+        );
+
+        for kv_range in [(f64::NAN, 240.0), (240.0, f64::INFINITY), (240.0, 200.0)] {
+            let invalid_range = powerio_tx::MonitoredSet {
+                statements: vec![powerio_tx::MonitorStatement::BranchesInSubsystemKvRange {
+                    subsystem: "A1".to_owned(),
+                    low_voltage_3w: false,
+                    kv_range,
+                }],
+                ..Default::default()
+            };
+            assert!(
+                validate_monitored_set(&invalid_range)
+                    .unwrap_err()
+                    .contains("kV range that does not run low to high on finite ends")
+            );
+        }
     }
 }

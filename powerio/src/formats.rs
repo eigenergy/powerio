@@ -7,6 +7,114 @@
 
 use powerio_tx::format::routing::TransmissionFormat;
 
+/// Electrical model family accepted by a grid format.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum NetworkFamily {
+    Transmission,
+    Distribution,
+}
+
+/// A discoverable grid format with its reader and writer capabilities.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+#[non_exhaustive]
+pub struct GridFormatInfo {
+    pub format: FormatInfo,
+    pub label: &'static str,
+    pub family: NetworkFamily,
+    pub can_read: bool,
+}
+
+/// Enumerate supported grid exchange formats, including explicit output profiles.
+///
+/// PowerIO IR and geographic documents are separate operations. A format
+/// behind a cargo feature, GridFM and the two SINCAL profiles, is listed only
+/// when its implementation is compiled in.
+///
+/// # Panics
+///
+/// Panics if a catalog token has no matching format descriptor.
+pub fn grid_formats() -> impl Iterator<Item = GridFormatInfo> {
+    use NetworkFamily::{Distribution, Transmission};
+    const FORMATS: &[(&str, &str, NetworkFamily, bool)] = &[
+        ("matpower", "MATPOWER", Transmission, true),
+        ("psse", "PSS/E RAW 33", Transmission, true),
+        ("psse34", "PSS/E RAW 34", Transmission, true),
+        ("psse35", "PSS/E RAW 35", Transmission, true),
+        ("psse-rawx", "PSS/E RAWX", Transmission, true),
+        ("powermodels-json", "PowerModels JSON", Transmission, true),
+        ("pandapower-json", "pandapower JSON", Transmission, true),
+        ("pypsa-csv", "PyPSA CSV folder", Transmission, true),
+        ("egret-json", "Egret JSON", Transmission, true),
+        ("powerworld", "PowerWorld AUX", Transmission, true),
+        ("pslf", "PSLF EPC", Transmission, true),
+        ("xiidm", "PowSybl XIIDM", Transmission, true),
+        ("jiidm", "PowSybl JIIDM", Transmission, true),
+        ("cgmes", "CIM CGMES", Transmission, true),
+        ("ucte", "UCTE-DEF", Transmission, true),
+        ("surge-json", "Surge JSON", Transmission, true),
+        ("ieee-cdf", "IEEE CDF (read only)", Transmission, true),
+        ("pwb", "PowerWorld PWB (read only)", Transmission, true),
+        (
+            "opfdata-json",
+            "DeepMind OPFData (read only)",
+            Transmission,
+            true,
+        ),
+        ("goc3-json", "GO Challenge 3", Transmission, true),
+        #[cfg(feature = "sincal")]
+        ("sincal-balanced", "SINCAL balanced", Transmission, true),
+        #[cfg(feature = "sincal")]
+        (
+            "sincal-multiconductor",
+            "SINCAL multiconductor",
+            Distribution,
+            true,
+        ),
+        ("dss", "OpenDSS", Distribution, true),
+        ("gridlabd", "GridLAB-D (PNNL GLM)", Distribution, true),
+        (
+            "gridlabd-arras",
+            "GridLAB-D (Arras GLM)",
+            Distribution,
+            true,
+        ),
+        // The CIM release and application profile the reader and writer
+        // implement: see `docs/src/distribution.md#distribution-cim`.
+        (
+            "cim-dist",
+            "CIM distribution (CIM100 cim17v40, GridAPPS-D profile)",
+            Distribution,
+            true,
+        ),
+        ("pmd-json", "PMD JSON", Distribution, true),
+        (
+            "bmopf-json",
+            "BMOPF JSON (detect version)",
+            Distribution,
+            true,
+        ),
+        ("bmopf-json@0.1.0", "BMOPF 0.1.0", Distribution, false),
+        (
+            "bmopf-json@0.2.0",
+            "BMOPF 0.2.0 proposal",
+            Distribution,
+            false,
+        ),
+        #[cfg(feature = "gridfm")]
+        ("gridfm", "GridFM Parquet", Transmission, true),
+    ];
+    FORMATS
+        .iter()
+        .map(|&(token, label, family, can_read)| GridFormatInfo {
+            format: resolve_format(token).expect("catalog token has format metadata"),
+            label,
+            family,
+            can_read,
+        })
+}
+
 /// The canonical identity and destination shape of a PowerIO format.
 ///
 /// `extension` is the conventional filename suffix without a leading dot; it
@@ -53,6 +161,14 @@ const fn info(
 ///
 #[must_use]
 pub fn resolve_format(name: &str) -> Option<FormatInfo> {
+    if name.eq_ignore_ascii_case("sincal") {
+        return Some(info("sincal", Some("sinx"), false, false));
+    }
+    if powerio_tx::format::routing::parse_distribution_format(name)
+        == Some(powerio_tx::format::routing::DistributionFormat::SincalMulticonductor)
+    {
+        return Some(info("sincal-multiconductor", Some("sinx"), false, false));
+    }
     match name {
         "bmopf-json@0.1.0" => return Some(info("bmopf-json@0.1.0", Some("json"), false, true)),
         "bmopf-json@0.2.0" => return Some(info("bmopf-json@0.2.0", Some("json"), false, true)),
@@ -86,13 +202,19 @@ pub fn resolve_format(name: &str) -> Option<FormatInfo> {
     if let Some(format) = powerio_dist::parse_dist_target_format(name) {
         return Some(match format.name() {
             "dss" => info("dss", Some("dss"), true, true),
+            "gridlabd" => info("gridlabd", Some("glm"), true, true),
+            "gridlabd-arras" => info("gridlabd-arras", Some("glm"), true, true),
             "pmd-json" => info("pmd-json", Some("json"), false, true),
             "bmopf-json" => info("bmopf-json", Some("json"), false, true),
+            "cim-dist" => info("cim-dist", Some("xml"), false, true),
             _ => return None,
         });
     }
 
     match powerio_tx::format::routing::parse_transmission_format(name) {
+        Some(TransmissionFormat::SincalBalanced) => {
+            Some(info("sincal-balanced", Some("sinx"), false, false))
+        }
         Some(TransmissionFormat::PypsaCsv) => Some(info("pypsa-csv", None, true, true)),
         Some(TransmissionFormat::Pwb) => Some(info("pwb", Some("pwb"), false, false)),
         Some(TransmissionFormat::Gridfm) => Some(info("gridfm", None, true, true)),
@@ -145,6 +267,42 @@ mod tests {
         assert!(!cdf.is_directory);
         assert!(!cdf.can_emit);
         assert_eq!(cdf.extension, Some("txt"));
+    }
+
+    #[test]
+    fn catalog_lists_every_distribution_token_the_resolver_accepts() {
+        // The distribution writers are the closed set the resolver maps by
+        // name; each canonical token must be discoverable and round trip.
+        for token in [
+            "dss",
+            "gridlabd",
+            "gridlabd-arras",
+            "pmd-json",
+            "bmopf-json",
+            "cim-dist",
+        ] {
+            let resolved = resolve_format(token).expect(token);
+            let entry = grid_formats()
+                .find(|entry| entry.format.token == token)
+                .unwrap_or_else(|| panic!("{token} resolves but is not in the catalog"));
+            assert_eq!(entry.format, resolved, "{token}");
+            assert_eq!(entry.family, NetworkFamily::Distribution, "{token}");
+            assert!(entry.can_read, "{token}");
+        }
+        // Aliases land on the canonical catalog entry.
+        assert_eq!(resolve_format("glm").unwrap().token, "gridlabd");
+        assert_eq!(resolve_format("gridlabd-pnnl").unwrap().token, "gridlabd");
+    }
+
+    #[test]
+    fn distribution_cim_names_its_cim_release_and_profile() {
+        let entry = grid_formats()
+            .find(|entry| entry.format.token == "cim-dist")
+            .unwrap();
+        assert_eq!(
+            entry.label,
+            "CIM distribution (CIM100 cim17v40, GridAPPS-D profile)"
+        );
     }
 
     #[test]

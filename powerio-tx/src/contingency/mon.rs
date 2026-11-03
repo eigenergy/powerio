@@ -98,6 +98,25 @@ pub enum MonitorStatement {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         up: Option<f64>,
     },
+    /// Every branch with both terminals in a subsystem and an inclusive kV band.
+    BranchesInSubsystemKvRange {
+        subsystem: String,
+        low_voltage_3w: bool,
+        kv_range: (f64, f64),
+    },
+    /// Every tie from a subsystem where the inside terminal is within an inclusive kV band.
+    TiesFromSubsystemKvRange {
+        subsystem: String,
+        kv_range: (f64, f64),
+    },
+    /// A four-value voltage range with distinct pre-contingency limits.
+    VoltageRangeWithPre {
+        scope: MonitorScope,
+        vmin: f64,
+        vmax: f64,
+        pre_min: f64,
+        pre_max: f64,
+    },
 }
 
 /// One branch named by its terminal buses and circuit id.
@@ -134,6 +153,11 @@ pub enum MonitorScope {
     },
     /// Every bus at this base kV.
     Kv {
+        kv: f64,
+    },
+    /// Subsystem buses filtered to a single base-kV level.
+    SubsystemKv {
+        name: String,
         kv: f64,
     },
 }
@@ -241,6 +265,8 @@ struct Reader {
     seen_statement: bool,
     ended: bool,
     noted_text_after_end: bool,
+    /// The line of the first four-value voltage range, once its remark is recorded.
+    band_order_noted_at: Option<usize>,
 }
 
 impl Reader {
@@ -254,6 +280,7 @@ impl Reader {
             seen_statement: false,
             ended: false,
             noted_text_after_end: false,
+            band_order_noted_at: None,
         }
     }
 
@@ -392,13 +419,38 @@ impl Reader {
             && let Some(read) = self.read_monitor(line, upper, words)
         {
             match read {
-                Read::Statement(statement) => self.parsed.set.statements.push(statement),
+                Read::Statement(statement) => {
+                    if matches!(statement, MonitorStatement::VoltageRangeWithPre { .. }) {
+                        self.note_band_order(line.number);
+                    }
+                    self.parsed.set.statements.push(statement);
+                }
                 Read::OpenedBlock => {}
             }
             return;
         }
         self.parsed.unrecognized(line.number, line.trimmed());
         self.keep_statement(line, false);
+    }
+
+    /// Record, once per file, the band order a four-value
+    /// `MONITOR VOLTAGE RANGE` is read in. The PSS/E manual states two values
+    /// (low, then an optional high), and no public source labels the two
+    /// pairs of the four-value form, so the order is an assumption the
+    /// caller should see. See `FORMAT.md`.
+    fn note_band_order(&mut self, number: usize) {
+        if self.band_order_noted_at.is_some() {
+            return;
+        }
+        self.band_order_noted_at = Some(number);
+        self.parsed.note(
+            &codes::READ_MON_VOLTAGE_BAND_ORDER_ASSUMED,
+            format!(
+                "line {number}: MONITOR VOLTAGE RANGE states four values; every four-value range \
+                 in this file is read as the post-contingency low and high, then the \
+                 pre-contingency low and high, an order no public PSS/E or TARA source states"
+            ),
+        );
     }
 
     /// One `MONITOR` statement, or `None` when the tail is outside the
@@ -420,16 +472,27 @@ impl Reader {
                     });
                     return Some(Read::OpenedBlock);
                 }
-                let (subsystem, low_voltage_3w) = parse_in_subsystem(upper, words, 2)?;
-                Some(Read::Statement(MonitorStatement::BranchesInSubsystem {
-                    subsystem,
-                    low_voltage_3w,
+                let (subsystem, low_voltage_3w, kv_range) = parse_in_subsystem_kv(upper, words, 2)?;
+                Some(Read::Statement(match kv_range {
+                    Some(kv_range) => MonitorStatement::BranchesInSubsystemKvRange {
+                        subsystem,
+                        low_voltage_3w,
+                        kv_range,
+                    },
+                    None => MonitorStatement::BranchesInSubsystem {
+                        subsystem,
+                        low_voltage_3w,
+                    },
                 }))
             }
             "TIES" => {
-                let (subsystem, low_voltage_3w) = parse_in_subsystem(upper, words, 2)?;
-                (!low_voltage_3w).then_some(Read::Statement(MonitorStatement::TiesFromSubsystem {
-                    subsystem,
+                let (subsystem, low_voltage_3w, kv_range) = parse_in_subsystem_kv(upper, words, 2)?;
+                (!low_voltage_3w).then_some(Read::Statement(match kv_range {
+                    Some(kv_range) => MonitorStatement::TiesFromSubsystemKvRange {
+                        subsystem,
+                        kv_range,
+                    },
+                    None => MonitorStatement::TiesFromSubsystem { subsystem },
                 }))
             }
             "INTERFACE" => {
@@ -448,7 +511,7 @@ impl Reader {
                 Some(Read::OpenedBlock)
             }
             "VOLTAGE" => parse_voltage(upper, words).map(Read::Statement),
-            // One branch on its own line: the one-branch list a block states.
+            // Preserve the contingency spelling already merged through #587.
             "BRANCH" | "LINE" => parse_branch_ref(&words[1..]).map(|branch| {
                 Read::Statement(MonitorStatement::Branches {
                     branches: vec![branch],
@@ -477,21 +540,43 @@ fn is_end(line: &LexedLine<'_>) -> bool {
 // Statement grammar
 // ---------------------------------------------------------------------------
 
+/// Parsed subsystem monitor head plus its optional base-kV range.
+type SubsystemMonitorSpec = (String, bool, Option<(f64, f64)>);
+
 /// `IN|FROM SUBSYSTEM name [3WLOWVOLTAGE]` at `at`.
-fn parse_in_subsystem(upper: &[String], words: &[&str], at: usize) -> Option<(String, bool)> {
-    if !matches!(upper.get(at)?.as_str(), "IN" | "FROM") {
-        return None;
-    }
-    if upper.get(at + 1)? != "SUBSYSTEM" {
-        return None;
-    }
+fn parse_in_subsystem_kv(
+    upper: &[String],
+    words: &[&str],
+    at: usize,
+) -> Option<SubsystemMonitorSpec> {
     let subsystem = words.get(at + 2)?.trim().to_owned();
+    if !matches!(upper.get(at)?.as_str(), "IN" | "FROM") || upper.get(at + 1)? != "SUBSYSTEM" {
+        return None;
+    }
     let mut next = at + 3;
     let low_voltage_3w = upper.get(next).is_some_and(|word| word == "3WLOWVOLTAGE");
     if low_voltage_3w {
         next += 1;
     }
-    (next == upper.len()).then_some((subsystem, low_voltage_3w))
+    // PSS/E 35.2 spells the filter `IN KVRANGE lo hi`; TARA drops the `IN`.
+    // Both read the same, and the writer states the bare TARA form.
+    if upper.get(next).is_some_and(|word| word == "IN")
+        && upper.get(next + 1).is_some_and(|word| word == "KVRANGE")
+    {
+        next += 1;
+    }
+    let kv_range = if upper.get(next).is_some_and(|word| word == "KVRANGE") {
+        let lo = upper.get(next + 1)?.parse::<f64>().ok()?;
+        let hi = upper.get(next + 2)?.parse::<f64>().ok()?;
+        if !lo.is_finite() || !hi.is_finite() || lo > hi {
+            return None;
+        }
+        next += 3;
+        Some((lo, hi))
+    } else {
+        None
+    };
+    (next == upper.len()).then_some((subsystem, low_voltage_3w, kv_range))
 }
 
 /// What the tail after an interface name states.
@@ -552,6 +637,15 @@ fn parse_voltage(upper: &[String], words: &[&str]) -> Option<MonitorStatement> {
             vmin: *vmin,
             vmax: *vmax,
         }),
+        (false, [vmin, vmax, pre_min, pre_max]) => {
+            (vmin <= vmax && pre_min <= pre_max).then_some(MonitorStatement::VoltageRangeWithPre {
+                scope,
+                vmin: *vmin,
+                vmax: *vmax,
+                pre_min: *pre_min,
+                pre_max: *pre_max,
+            })
+        }
         (true, [down]) => Some(MonitorStatement::VoltageDeviation {
             scope,
             down: *down,
@@ -573,12 +667,21 @@ fn parse_scope(upper: &[String], words: &[&str], at: usize) -> Option<(MonitorSc
         "ALL" if upper.get(at + 1).is_some_and(|word| word == "BUSES") => {
             Some((MonitorScope::AllBuses, at + 2))
         }
-        "SUBSYSTEM" => Some((
-            MonitorScope::Subsystem {
-                name: words.get(at + 1)?.trim().to_owned(),
-            },
-            at + 2,
-        )),
+        "SUBSYSTEM" => {
+            let name = words.get(at + 1)?.trim().to_owned();
+            let mut next = at + 2;
+            let scope = if upper.get(next).is_some_and(|word| word == "KV") {
+                let value = upper.get(next + 1)?.parse::<f64>().ok()?;
+                if !value.is_finite() {
+                    return None;
+                }
+                next += 2;
+                MonitorScope::SubsystemKv { name, kv: value }
+            } else {
+                MonitorScope::Subsystem { name }
+            };
+            Some((scope, next))
+        }
         "BUS" => Some((
             MonitorScope::Bus {
                 bus: BusId(integer(1)?),
@@ -647,6 +750,7 @@ fn write_scope(scope: &MonitorScope) -> String {
     match scope {
         MonitorScope::AllBuses => "ALL BUSES".to_owned(),
         MonitorScope::Subsystem { name } => format!("SUBSYSTEM '{name}'"),
+        MonitorScope::SubsystemKv { name, kv } => format!("SUBSYSTEM '{name}' KV {}", decimal(*kv)),
         MonitorScope::Bus { bus } => format!("BUS {}", bus.0),
         MonitorScope::Area { area } => format!("AREA {area}"),
         MonitorScope::Zone { zone } => format!("ZONE {zone}"),
@@ -686,11 +790,33 @@ fn write_statement(statement: &MonitorStatement) -> String {
             subsystem,
             low_voltage_3w,
         } => {
-            let tail = if *low_voltage_3w { " 3WLOWVOLTAGE" } else { "" };
-            format!("MONITOR BRANCHES IN SUBSYSTEM '{subsystem}'{tail}\n")
+            let low = if *low_voltage_3w { " 3WLOWVOLTAGE" } else { "" };
+            format!("MONITOR BRANCHES IN SUBSYSTEM '{subsystem}'{low}\n")
+        }
+        MonitorStatement::BranchesInSubsystemKvRange {
+            subsystem,
+            low_voltage_3w,
+            kv_range: (lo, hi),
+        } => {
+            let low = if *low_voltage_3w { " 3WLOWVOLTAGE" } else { "" };
+            format!(
+                "MONITOR BRANCHES IN SUBSYSTEM '{subsystem}'{low} KVRANGE {} {}\n",
+                decimal(*lo),
+                decimal(*hi)
+            )
         }
         MonitorStatement::TiesFromSubsystem { subsystem } => {
             format!("MONITOR TIES FROM SUBSYSTEM '{subsystem}'\n")
+        }
+        MonitorStatement::TiesFromSubsystemKvRange {
+            subsystem,
+            kv_range: (lo, hi),
+        } => {
+            format!(
+                "MONITOR TIES FROM SUBSYSTEM '{subsystem}' KVRANGE {} {}\n",
+                decimal(*lo),
+                decimal(*hi)
+            )
         }
         MonitorStatement::Branches { branches, retained } => {
             write_branch_block("MONITOR BRANCHES", branches, retained)
@@ -714,6 +840,20 @@ fn write_statement(statement: &MonitorStatement) -> String {
             write_scope(scope),
             decimal(*vmin),
             decimal(*vmax)
+        ),
+        MonitorStatement::VoltageRangeWithPre {
+            scope,
+            vmin,
+            vmax,
+            pre_min,
+            pre_max,
+        } => format!(
+            "MONITOR VOLTAGE RANGE {} {} {} {} {}\n",
+            write_scope(scope),
+            decimal(*vmin),
+            decimal(*vmax),
+            decimal(*pre_min),
+            decimal(*pre_max)
         ),
         MonitorStatement::VoltageDeviation { scope, down, up } => {
             let tail = match up {
@@ -746,6 +886,8 @@ pub struct MonitoredResolution {
     pub tie_rows: BTreeSet<usize>,
     pub interfaces: Vec<ResolvedInterface>,
     pub voltage_ranges: Vec<ResolvedVoltageScope>,
+    /// Four-value statements carrying separate pre-contingency voltage bands.
+    pub voltage_ranges_with_pre: Vec<(ResolvedVoltageScope, (f64, f64))>,
     pub voltage_deviations: Vec<ResolvedVoltageScope>,
     /// The statements, or the branches inside them, that named nothing.
     pub unresolved: Vec<UnresolvedMonitor>,
@@ -832,12 +974,16 @@ impl MonitoredResolution {
 fn describe(statement: &MonitorStatement, reason: &UnresolvedMonitorReason) -> String {
     let what = match statement {
         MonitorStatement::BranchesInSubsystem { subsystem, .. }
-        | MonitorStatement::TiesFromSubsystem { subsystem } => {
+        | MonitorStatement::BranchesInSubsystemKvRange { subsystem, .. }
+        | MonitorStatement::TiesFromSubsystem { subsystem }
+        | MonitorStatement::TiesFromSubsystemKvRange { subsystem, .. } => {
             format!("monitored subsystem '{subsystem}'")
         }
         MonitorStatement::Branches { .. } => "monitored branches".to_owned(),
         MonitorStatement::Interface { name, .. } => format!("monitored interface '{name}'"),
-        MonitorStatement::VoltageRange { .. } => "monitored voltage range".to_owned(),
+        MonitorStatement::VoltageRange { .. } | MonitorStatement::VoltageRangeWithPre { .. } => {
+            "monitored voltage range".to_owned()
+        }
         MonitorStatement::VoltageDeviation { .. } => "monitored voltage deviation".to_owned(),
     };
     match reason {
@@ -892,6 +1038,7 @@ impl MonitoredSet {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn resolve_statement(
     statement: &MonitorStatement,
     net: &BalancedNetwork,
@@ -903,34 +1050,46 @@ fn resolve_statement(
         MonitorStatement::BranchesInSubsystem {
             subsystem,
             low_voltage_3w,
-        } => {
-            let Some(buses) = select(subsystems, subsystem, net) else {
-                unresolved_subsystem(statement, out);
-                return;
-            };
-            for (row, branch) in net.branches().iter().enumerate() {
-                if buses.contains(&branch.from) && buses.contains(&branch.to) {
-                    out.branch_rows.insert(row);
-                }
-            }
-            if *low_voltage_3w {
-                for (row, transformer) in net.transformers_3w().iter().enumerate() {
-                    if buses.contains(&low_voltage_bus(net, index, transformer)) {
-                        out.transformer_3w_rows.insert(row);
-                    }
-                }
-            }
-        }
+        } => resolve_branches_in_subsystem(
+            statement,
+            subsystem,
+            *low_voltage_3w,
+            None,
+            net,
+            subsystems,
+            index,
+            out,
+        ),
+        MonitorStatement::BranchesInSubsystemKvRange {
+            subsystem,
+            low_voltage_3w,
+            kv_range,
+        } => resolve_branches_in_subsystem(
+            statement,
+            subsystem,
+            *low_voltage_3w,
+            Some(*kv_range),
+            net,
+            subsystems,
+            index,
+            out,
+        ),
         MonitorStatement::TiesFromSubsystem { subsystem } => {
-            let Some(buses) = select(subsystems, subsystem, net) else {
-                unresolved_subsystem(statement, out);
-                return;
-            };
-            for (row, branch) in net.branches().iter().enumerate() {
-                if buses.contains(&branch.from) != buses.contains(&branch.to) {
-                    out.tie_rows.insert(row);
-                }
-            }
+            resolve_ties_from_subsystem(statement, subsystem, None, net, subsystems, index, out);
+        }
+        MonitorStatement::TiesFromSubsystemKvRange {
+            subsystem,
+            kv_range,
+        } => {
+            resolve_ties_from_subsystem(
+                statement,
+                subsystem,
+                Some(*kv_range),
+                net,
+                subsystems,
+                index,
+                out,
+            );
         }
         MonitorStatement::Branches { branches, .. } => {
             for branch in branches {
@@ -978,6 +1137,26 @@ fn resolve_statement(
                 high: Some(*vmax),
             });
         }
+        MonitorStatement::VoltageRangeWithPre {
+            scope,
+            vmin,
+            vmax,
+            pre_min,
+            pre_max,
+        } => {
+            let Some(bus_rows) = scope_rows(scope, net, subsystems, index) else {
+                unresolved_subsystem(statement, out);
+                return;
+            };
+            out.voltage_ranges_with_pre.push((
+                ResolvedVoltageScope {
+                    bus_rows,
+                    low: *vmin,
+                    high: Some(*vmax),
+                },
+                (*pre_min, *pre_max),
+            ));
+        }
         MonitorStatement::VoltageDeviation { scope, down, up } => {
             let Some(bus_rows) = scope_rows(scope, net, subsystems, index) else {
                 unresolved_subsystem(statement, out);
@@ -992,6 +1171,72 @@ fn resolve_statement(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn resolve_branches_in_subsystem(
+    statement: &MonitorStatement,
+    subsystem: &str,
+    low_voltage_3w: bool,
+    kv_range: Option<(f64, f64)>,
+    net: &BalancedNetwork,
+    subsystems: &SubsystemSet,
+    index: &PsseEquipmentIndex,
+    out: &mut MonitoredResolution,
+) {
+    let Some(buses) = select(subsystems, subsystem, net) else {
+        unresolved_subsystem(statement, out);
+        return;
+    };
+    for (row, branch) in net.branches().iter().enumerate() {
+        if buses.contains(&branch.from)
+            && buses.contains(&branch.to)
+            && kv_range.is_none_or(|(lo, hi)| {
+                bus_in_kv_range(index, branch.from, lo, hi)
+                    && bus_in_kv_range(index, branch.to, lo, hi)
+            })
+        {
+            out.branch_rows.insert(row);
+        }
+    }
+    if low_voltage_3w {
+        for (row, transformer) in net.transformers_3w().iter().enumerate() {
+            let low_bus = low_voltage_bus(net, index, transformer);
+            if buses.contains(&low_bus)
+                && kv_range.is_none_or(|(lo, hi)| bus_in_kv_range(index, low_bus, lo, hi))
+            {
+                out.transformer_3w_rows.insert(row);
+            }
+        }
+    }
+}
+
+fn resolve_ties_from_subsystem(
+    statement: &MonitorStatement,
+    subsystem: &str,
+    kv_range: Option<(f64, f64)>,
+    net: &BalancedNetwork,
+    subsystems: &SubsystemSet,
+    index: &PsseEquipmentIndex,
+    out: &mut MonitoredResolution,
+) {
+    let Some(buses) = select(subsystems, subsystem, net) else {
+        unresolved_subsystem(statement, out);
+        return;
+    };
+    for (row, branch) in net.branches().iter().enumerate() {
+        let from_inside = buses.contains(&branch.from);
+        let to_inside = buses.contains(&branch.to);
+        let in_scope = match (from_inside, to_inside, kv_range) {
+            (true, false, Some((lo, hi))) => bus_in_kv_range(index, branch.from, lo, hi),
+            (false, true, Some((lo, hi))) => bus_in_kv_range(index, branch.to, lo, hi),
+            (true, false, None) | (false, true, None) => true,
+            _ => false,
+        };
+        if from_inside != to_inside && in_scope {
+            out.tie_rows.insert(row);
+        }
+    }
+}
+
 fn unresolved_subsystem(statement: &MonitorStatement, out: &mut MonitoredResolution) {
     out.unresolved.push(UnresolvedMonitor {
         statement: statement.clone(),
@@ -1001,6 +1246,13 @@ fn unresolved_subsystem(statement: &MonitorStatement, out: &mut MonitoredResolut
 
 fn select(subsystems: &SubsystemSet, name: &str, net: &BalancedNetwork) -> Option<BTreeSet<BusId>> {
     Some(subsystems.get(name)?.select_buses(net))
+}
+
+fn bus_in_kv_range(index: &PsseEquipmentIndex<'_>, bus: BusId, lo: f64, hi: f64) -> bool {
+    index.bus_row(bus).is_some_and(|row| {
+        let kv = index.network().buses()[row].base_kv;
+        kv >= lo - KV_TOLERANCE && kv <= hi + KV_TOLERANCE
+    })
 }
 
 /// One bound branch with its orientation against the stored row. A statement
@@ -1056,6 +1308,11 @@ fn scope_rows(
     Some(match scope {
         MonitorScope::AllBuses => (0..net.buses().len()).collect(),
         MonitorScope::Subsystem { name } => rows_of(&select(subsystems, name, net)?),
+        MonitorScope::SubsystemKv { name, kv } => select(subsystems, name, net)?
+            .into_iter()
+            .filter(|bus| bus_in_kv_range(index, *bus, *kv, *kv))
+            .filter_map(|bus| index.bus_row(bus))
+            .collect(),
         MonitorScope::Bus { bus } => index.bus_row(*bus).into_iter().collect(),
         MonitorScope::Area { area } => matching(&|bus| bus.area == *area),
         MonitorScope::Zone { zone } => matching(&|bus| bus.zone == *zone),

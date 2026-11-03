@@ -241,6 +241,64 @@ fn json_format_leaves_only_the_diagnostics_array_on_stderr() {
 }
 
 #[test]
+fn dcopf_writes_the_angle_difference_bounds_it_was_asked_for() {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let case = repo_file("tests/data/case9.m");
+    let bounds = |choice: Option<&str>| {
+        let output = std::env::temp_dir().join(format!(
+            "powerio-cli-angle-{stamp}-{}",
+            choice.unwrap_or("default")
+        ));
+        let mut args = vec![
+            "dcopf",
+            case.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+        ];
+        if let Some(choice) = choice {
+            args.extend(["--angle-difference-bounds", choice]);
+        }
+        assert_success(&run(&args));
+        let bundle = output.join("case9_dcopf");
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(bundle.join("dcopf_meta.json")).unwrap())
+                .unwrap();
+        let angle_max: Vec<f64> = std::fs::read_to_string(bundle.join("angle_max.mtx"))
+            .unwrap()
+            .lines()
+            .filter(|line| !line.starts_with('%'))
+            .skip(1)
+            .map(|line| line.trim().parse().unwrap())
+            .collect();
+        let _ = std::fs::remove_dir_all(&output);
+        (
+            manifest["build_options"]["angle_difference_bounds"].clone(),
+            angle_max,
+        )
+    };
+
+    // case9 states ±360 degrees on every branch, which PowerModels' pad, the
+    // default, replaces with ±60 degrees.
+    let pad = powerio_tx::POWER_MODELS_ANGLE_BOUND_PAD;
+    let (padded, padded_max) = bounds(None);
+    assert_eq!(padded, "power_models_pad");
+    assert!(padded_max.iter().all(|&max| (max - pad).abs() < 1e-12));
+    let (stated, stated_max) = bounds(Some("stated"));
+    assert_eq!(stated, "stated");
+    assert!(stated_max.iter().all(|&max| max == f64::INFINITY));
+    // No case9 branch shifts phase, so the centered pad is the same window.
+    let (centered, centered_max) = bounds(Some("shift-centered-pad"));
+    assert_eq!(centered, "shift_centered_pad");
+    assert_eq!(centered_max, padded_max);
+    let (none, none_max) = bounds(Some("none"));
+    assert_eq!(none, "none");
+    assert!(none_max.iter().all(|&max| max == f64::INFINITY));
+}
+
+#[test]
 fn a_malformed_case_exits_with_the_parse_status() {
     let out = run_with_stdin(
         &[
@@ -623,7 +681,8 @@ fn summary_routes_json_inputs_through_the_classifier() {
     assert_success(&out);
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(value["domain"], "distribution");
-    assert_eq!(value["elements"]["buses"], 2);
+    // Canonical output keeps the finite source impedance behind an EMF bus.
+    assert_eq!(value["elements"]["buses"], 3);
 
     let _ = std::fs::remove_file(dist_json);
 }
@@ -966,8 +1025,8 @@ fn batch_scan_where_nothing_loads_fails() {
 
 #[test]
 fn convert_exits_nonzero_on_a_refused_include() {
-    // #275: the parse continues past a refused include and the output is
-    // still written, but the run must not exit 0.
+    // A refused include invalidates the static snapshot. Surface its
+    // diagnostic and do not publish a partial electrical output.
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     let case_dir = dir.join("case");
@@ -1000,12 +1059,12 @@ fn convert_exits_nonzero_on_a_refused_include() {
         "stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("the output is incomplete"),
+        stderr.contains("READ.DSS.LINE_UNRESOLVED"),
         "stderr:\n{stderr}"
     );
     assert!(
-        out_path.is_file(),
-        "the output must still be written for inspection"
+        !out_path.exists(),
+        "an invalid snapshot must not be emitted"
     );
 }
 
@@ -1051,16 +1110,19 @@ fn convert_exits_nonzero_on_an_include_refused_through_a_symbolic_link() {
         "the refusal must name the route:\n{stderr}"
     );
     assert!(
-        stderr.contains("references unknown linecode"),
-        "the linked file must stay unread:\n{stderr}"
+        stderr.contains("READ.DSS.LINE_UNRESOLVED"),
+        "the linked definition must stay unavailable:\n{stderr}"
+    );
+    assert!(
+        !out_path.exists(),
+        "an invalid snapshot must not be emitted"
     );
 }
 
 #[test]
 fn serialize_exits_nonzero_on_a_refused_include() {
-    // PowerIO IR carries the same `Error` finding convert fails on,
-    // so the module subcommand has to fail with it too — otherwise a script
-    // gating on the exit code accepts IR built from a truncated network.
+    // Serialization must retain the read failure on stderr and produce
+    // no IR value from an invalid electrical snapshot.
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     let case_dir = dir.join("case");
@@ -1091,8 +1153,8 @@ fn serialize_exits_nonzero_on_a_refused_include() {
         "stderr:\n{stderr}"
     );
     assert!(
-        out_path.is_file(),
-        "the PowerIO IR must still be serialized for inspection"
+        !out_path.exists(),
+        "an invalid snapshot must not be serialized"
     );
 }
 
@@ -1181,6 +1243,63 @@ fn convert_writes_a_deserialized_distribution_module_through_the_writer() {
     std::fs::remove_file(ir).unwrap();
 }
 
+/// `verify --stated-state` refuses an unmerged zero-impedance branch with its
+/// code, and balances the case after `--merge-buses exact`.
+#[test]
+fn verify_stated_state_refuses_then_merges_a_zero_impedance_branch() {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let case = std::env::temp_dir().join(format!("powerio-cli-stated-state-{stamp}.m"));
+    // Bus 2's load is served across a zero impedance branch at equal
+    // voltages, so the merged case balances exactly.
+    std::fs::write(
+        &case,
+        "function mpc = stated\n\
+         mpc.version = '2';\n\
+         mpc.baseMVA = 100;\n\
+         mpc.bus = [\n\
+         1 3 0 0 0 0 1 1 0 230 1 1.1 0.9;\n\
+         2 1 10 5 0 0 1 1 0 230 1 1.1 0.9;\n\
+         ];\n\
+         mpc.gen = [\n\
+         1 10 5 100 -100 1 100 1 100 0 0 0 0 0 0 0 0 0 0 0 0;\n\
+         ];\n\
+         mpc.branch = [\n\
+         1 2 0 0 0 100 100 100 0 0 1 -360 360;\n\
+         ];\n",
+    )
+    .unwrap();
+    let path = case.to_str().unwrap();
+    let refused = run(&[
+        "--diagnostics-format",
+        "json",
+        "verify",
+        path,
+        "--stated-state",
+    ]);
+    assert_eq!(refused.status.code(), Some(5));
+    let records = json_diagnostics(&refused);
+    assert_eq!(
+        records[0]["code"], "BUILD.BRANCH.ZERO_IMPEDANCE",
+        "{records:?}"
+    );
+
+    let merged = run(&["verify", path, "--stated-state", "--merge-buses", "exact"]);
+    assert!(
+        merged.status.success(),
+        "{}",
+        String::from_utf8_lossy(&merged.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&merged.stdout);
+    assert!(stdout.contains("1 buses in 1 islands"), "{stdout}");
+    assert!(stdout.contains("max |dS| = 0.000 MVA"), "{stdout}");
+    assert!(stdout.contains("merged_group"), "{stdout}");
+
+    std::fs::remove_file(case).unwrap();
+}
+
 /// A failure raised by a typed library error inside a matrix command exits
 /// with that error's category and names its code, not the unclassified one.
 #[test]
@@ -1227,4 +1346,359 @@ fn a_typed_library_failure_exits_with_its_category_and_code() {
     assert!(code.contains("ZERO_IMPEDANCE"), "{records:?}");
 
     std::fs::remove_file(case).unwrap();
+}
+
+#[test]
+fn sincal_balanced_cli_parses_converts_and_echoes_without_inference() {
+    let path = repo_file("tests/data/sincal/1-LV-rural1--0-sw.sinx");
+    let path = path.to_str().unwrap();
+    let refused = run(&["--diagnostics-format", "json", "summary", path]);
+    assert_failure(&refused);
+    assert!(
+        json_diagnostics(&refused)
+            .iter()
+            .any(|d| d["code"] == "REQUEST.SINCAL.PROFILE_REQUIRED")
+    );
+    let summary = run(&["summary", path, "--from", "sincal-balanced"]);
+    assert_success(&summary);
+    let summary: serde_json::Value = serde_json::from_slice(&summary.stdout).unwrap();
+    assert_eq!(summary["elements"]["buses"], 15);
+    assert_eq!(summary["elements"]["branches"], 14);
+    let converted = run(&[
+        "--diagnostics-format",
+        "json",
+        "convert",
+        path,
+        "--from",
+        "sincal-balanced",
+        "--to",
+        "matpower",
+    ]);
+    assert_success(&converted);
+    assert!(String::from_utf8_lossy(&converted.stdout).contains("mpc.bus"));
+    assert!(
+        json_diagnostics(&converted)
+            .iter()
+            .any(|d| d["code"] == "EMIT.SINCAL.RETAINED_SOURCE_OMITTED")
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let copy = tmp.path().join("copy.sinx");
+    let output = run(&[
+        "convert",
+        path,
+        "--from",
+        "sincal-balanced",
+        "--to",
+        "sincal-balanced",
+        "-o",
+        copy.to_str().unwrap(),
+    ]);
+    assert_success(&output);
+    assert_eq!(std::fs::read(copy).unwrap(), std::fs::read(path).unwrap());
+    let native = std::fs::read(path).unwrap();
+    let stdin = run_with_stdin(&["summary", "-", "--from", "sincal-balanced"], &native);
+    assert_success(&stdin);
+}
+
+#[test]
+fn sincal_multiconductor_cli_preserves_family_and_binary_echo() {
+    let tmp = tempfile::tempdir().unwrap();
+    let case = tmp.path().join("case.db");
+    let connection = rusqlite::Connection::open(&case).unwrap();
+    connection
+        .execute_batch(include_str!(
+            "../../tests/data/sincal/synthetic-multiconductor.sql"
+        ))
+        .unwrap();
+    drop(connection);
+    let path = case.to_str().unwrap();
+    let summary = run(&["summary", path, "--from", "sincal-multiconductor"]);
+    assert_success(&summary);
+    let converted = run(&[
+        "convert",
+        path,
+        "--from",
+        "sincal-multiconductor",
+        "--to",
+        "pmd-json",
+    ]);
+    assert_success(&converted);
+    let json: serde_json::Value = serde_json::from_slice(&converted.stdout).unwrap();
+    assert_eq!(json["data_model"], "ENGINEERING");
+    let copy = tmp.path().join("copy.db");
+    let echo = run(&[
+        "convert",
+        path,
+        "--from",
+        "sincal-multiconductor",
+        "--to",
+        "sincal-multiconductor",
+        "-o",
+        copy.to_str().unwrap(),
+    ]);
+    assert_success(&echo);
+    assert_eq!(std::fs::read(copy).unwrap(), std::fs::read(&case).unwrap());
+    assert_failure(&run(&[
+        "convert",
+        path,
+        "--from",
+        "sincal-multiconductor",
+        "--to",
+        "sincal-balanced",
+    ]));
+}
+
+#[test]
+fn sincal_cli_selection_reaches_the_reader_and_requires_its_profile() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("case.db");
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch(include_str!(
+        "../../tests/data/sincal/synthetic-multiconductor.sql"
+    ))
+    .unwrap();
+    drop(db);
+    for command in ["summary", "serialize", "convert"] {
+        let mut args = vec![
+            command,
+            path.to_str().unwrap(),
+            "--from",
+            "sincal-multiconductor",
+            "--sincal-variant",
+            "1",
+            "--sincal-snapshot-hours",
+            "6",
+        ];
+        if command == "convert" {
+            args.extend(["--to", "pmd-json"]);
+        }
+        assert_success(&run(&args));
+        let position = args.iter().position(|arg| *arg == "1").unwrap();
+        args[position] = "999";
+        assert_failure(&run(&args));
+    }
+    for from in ["matpower", "dss"] {
+        let output = run(&[
+            "--diagnostics-format",
+            "json",
+            "summary",
+            path.to_str().unwrap(),
+            "--from",
+            from,
+            "--sincal-snapshot-hours",
+            "6",
+        ]);
+        assert_failure(&output);
+        assert!(
+            json_diagnostics(&output)
+                .iter()
+                .any(|d| d["code"] == "REQUEST.CLI.OPTION_INVALID")
+        );
+    }
+    for hours in ["NaN", "inf", "-1"] {
+        assert_failure(&run(&[
+            "summary",
+            path.to_str().unwrap(),
+            "--from",
+            "sincal-multiconductor",
+            "--sincal-snapshot-hours",
+            hours,
+        ]));
+    }
+    assert_failure(&run(&[
+        "summary",
+        path.to_str().unwrap(),
+        "--from",
+        "sincal-multiconductor",
+        "--sincal-acquired-tables",
+        "missing.json",
+    ]));
+}
+
+#[test]
+fn balanced_sincal_cli_selections_reach_the_balanced_reader() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../tests/data/sincal/1-LV-rural1--0-sw.sinx");
+    for command in ["summary", "serialize", "convert"] {
+        let mut args = vec![
+            command,
+            path.to_str().unwrap(),
+            "--from",
+            "sincal-balanced",
+            "--sincal-variant",
+            "1",
+        ];
+        if command == "convert" {
+            args.extend(["--to", "matpower"]);
+        }
+        assert_success(&run(&args));
+        args[5] = "999";
+        assert_failure(&run(&args));
+    }
+    // A declared balanced profile reaches the balanced reader. It must not
+    // reject all selections at the CLI boundary or retry another family.
+    let output = run(&[
+        "--diagnostics-format",
+        "json",
+        "summary",
+        path.to_str().unwrap(),
+        "--from",
+        "sincal-balanced",
+        "--sincal-snapshot-hours",
+        "6",
+    ]);
+    assert_failure(&output);
+    assert!(
+        json_diagnostics(&output)
+            .iter()
+            .any(|d| d["code"] == "PARSE.SINCAL.MALFORMED")
+    );
+}
+
+#[test]
+fn merge_buses_applies_the_psse_rule_before_summary_convert_and_verify() {
+    let case = repo_file("tests/data/psse/merge_v35.raw");
+    let case = case.to_str().unwrap();
+
+    let out = run(&["summary", case, "--merge-buses", "psse"]);
+    assert_success(&out);
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["elements"]["buses"], 2);
+    let merge = &value["bus_merge"];
+    assert_eq!(merge["merged_buses"], 3);
+    assert_eq!(merge["removed_branches"]["zero_impedance"], 2);
+    assert_eq!(merge["removed_switches"], 1);
+    let warnings = value["warnings"].as_array().unwrap();
+    assert!(warnings.iter().any(|w| {
+        w.as_str()
+            .unwrap()
+            .starts_with("CANONICALIZE.MERGE.CLOSED_SWITCH")
+    }));
+
+    // Without the flag the summary is unchanged.
+    let out = run(&["summary", case]);
+    assert_success(&out);
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["elements"]["buses"], 5);
+    assert!(value.get("bus_merge").is_none());
+
+    let out = run(&[
+        "convert",
+        case,
+        "--merge-buses",
+        "psse=1e-4",
+        "--to",
+        "matpower",
+        "-o",
+        "-",
+    ]);
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let bus_rows = stdout
+        .split("mpc.bus = [")
+        .nth(1)
+        .unwrap()
+        .split("];")
+        .next()
+        .unwrap()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count();
+    assert_eq!(bus_rows, 2, "{stdout}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("CANONICALIZE.MERGE.ZERO_IMPEDANCE"),
+        "{stderr}"
+    );
+
+    let out = run(&["verify", case, "--merge-buses", "exact"]);
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("n=4"),
+        "exact merges only the switch: {stdout}"
+    );
+}
+
+#[test]
+fn merge_buses_refuses_an_unknown_rule_and_a_missing_threshold() {
+    let case = repo_file("tests/data/psse/merge_v35.raw");
+    let out = run(&[
+        "--diagnostics-format",
+        "json",
+        "summary",
+        case.to_str().unwrap(),
+        "--merge-buses",
+        "nearby",
+    ]);
+    assert_eq!(out.status.code(), Some(2), "a request failure");
+    assert_eq!(
+        json_diagnostics(&out)[0]["code"],
+        "REQUEST.CLI.OPTION_INVALID"
+    );
+
+    // MATPOWER states no THRSHZ, so `psse` needs an explicit threshold.
+    let case = repo_file("tests/data/case9.m");
+    let out = run(&[
+        "--diagnostics-format",
+        "json",
+        "summary",
+        case.to_str().unwrap(),
+        "--merge-buses",
+        "psse",
+    ]);
+    assert_eq!(out.status.code(), Some(5), "a data failure");
+    assert_eq!(
+        json_diagnostics(&out)[0]["code"],
+        "CANONICALIZE.MERGE.INVALID_RULE"
+    );
+}
+
+/// Three islands: one with the reference bus, one with generation only, and
+/// one with load only.
+const THREE_ISLANDS: &str = "function mpc = islands
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t1\t50\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t3\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t4\t1\t30\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t5\t1\t20\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t6\t1\t10\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t50\t0\t100\t-100\t1\t100\t1\t200\t0;
+\t3\t30\t0\t100\t-100\t1\t100\t1\t150\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t3\t4\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t5\t6\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+mpc.dcline = [
+\t1\t5\t1\t10\t9.5\t0\t0\t1\t1\t0\t20\t-10\t10\t-10\t10\t0\t0;
+];
+";
+
+#[test]
+fn summary_lists_the_islands() {
+    let out = run_with_stdin(
+        &["summary", "-", "--from", "matpower"],
+        THREE_ISLANDS.as_bytes(),
+    );
+    assert_success(&out);
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let islands = &value["topology"]["islands"];
+    assert_eq!(islands["count"], 3);
+    assert_eq!(islands["unsupplied"], 1);
+    assert_eq!(islands["unsupplied_hvdc_fed"], 1);
+    assert_eq!(islands["without_reference"], 2);
+    assert_eq!(
+        islands["islands"][0]["reference_buses"],
+        serde_json::json!([1])
+    );
+    assert_eq!(islands["islands"][2]["generators"], 0);
+    assert_eq!(islands["islands"][2]["hvdc_ties"], 1);
+    assert_eq!(islands["islands"][1]["hvdc_ties"], 0);
 }

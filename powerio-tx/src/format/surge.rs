@@ -25,6 +25,16 @@ const FORMAT_VALUE: &str = "surge-json";
 const SCHEMA_VERSION: &str = "0.1.0";
 const EPS: f64 = 1e-12;
 
+fn three_winding_transformer_identity(
+    name: Option<&str>,
+    uid: Option<&str>,
+    ordinal: usize,
+) -> String {
+    name.filter(|value| !value.is_empty())
+        .or_else(|| uid.filter(|value| !value.is_empty()))
+        .map_or_else(|| format!("transformer {ordinal}"), str::to_owned)
+}
+
 #[must_use]
 pub fn write_surge_json(net: &BalancedNetwork) -> TextEmission {
     let mut warnings = Diagnostics::new();
@@ -50,6 +60,38 @@ pub fn write_surge_json(net: &BalancedNetwork) -> TextEmission {
         "branches".into(),
         Value::Array(net.branches().iter().enumerate().map(branch_obj).collect()),
     );
+
+    // Surge's network profile has no three-winding transformer record. Report
+    // the specific equipment that cannot cross this format boundary rather
+    // than silently losing it (or emitting only an aggregate count).
+    if !net.transformers_3w().is_empty() {
+        let dropped = net
+            .transformers_3w()
+            .iter()
+            .enumerate()
+            .map(|(index, transformer)| {
+                let identity = three_winding_transformer_identity(
+                    transformer.name.as_deref(),
+                    transformer.uid.as_deref(),
+                    index + 1,
+                );
+                format!(
+                    "{identity} (buses {}, {}, {})",
+                    transformer.windings[0].bus,
+                    transformer.windings[1].bus,
+                    transformer.windings[2].bus
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        warnings.push(
+            &F.record_dropped,
+            format!(
+                "{} 3-winding transformer(s) dropped: Surge JSON has no 3-winding transformer record; {dropped}",
+                net.transformers_3w().len()
+            ),
+        );
+    }
 
     let mut gen_counts: BTreeMap<BusId, usize> = BTreeMap::new();
     let mut generators = Vec::new();
@@ -1641,6 +1683,44 @@ mod tests {
         assert!((charging.b_fr - 0.2).abs() < EPS);
         assert!((charging.g_to - 0.3).abs() < EPS);
         assert!((charging.b_to - 0.4).abs() < EPS);
+    }
+
+    #[test]
+    fn three_winding_transformer_identity_skips_empty_name_and_uid() {
+        assert_eq!(
+            three_winding_transformer_identity(Some(""), Some(""), 1),
+            "transformer 1"
+        );
+        assert_eq!(
+            three_winding_transformer_identity(None, Some(""), 2),
+            "transformer 2"
+        );
+        assert_eq!(
+            three_winding_transformer_identity(Some(""), Some("UID-3W"), 3),
+            "UID-3W"
+        );
+    }
+
+    #[test]
+    fn reports_each_dropped_three_winding_transformer() {
+        let source = powerio_core::Source::from_memory(
+            "case3_3w_v33.raw",
+            include_bytes!("../../../tests/data/psse/case3_3w_v33.raw").to_vec(),
+        )
+        .unwrap();
+        let module = super::super::parse(source).unwrap();
+        assert_eq!(module.value().transformers_3w().len(), 1);
+
+        let emitted = write_surge_json(module.value());
+        let diagnostics = emitted.render_diagnostics();
+        assert!(
+            diagnostics.iter().any(|line| {
+                line.contains("EMIT.SURGE.RECORD_DROPPED")
+                    && line.contains("T3W")
+                    && line.contains("buses 1, 2, 3")
+            }),
+            "expected a record-loss diagnostic naming the dropped transformer, got {diagnostics:?}"
+        );
     }
 
     #[test]

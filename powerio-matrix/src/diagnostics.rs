@@ -25,8 +25,12 @@ pub mod codes {
             "a nodal quadratic projection cannot carry the prepared generator cost", category = Request;
         BUILD_AC_PF_SPECIFICATION_UNSUPPORTED = "BUILD.AC_PF.SPECIFICATION_UNSUPPORTED", Error,
             "the AC power flow preparation does not support a bus specification", category = Data;
+        BUILD_MC_OPF_INVALID = "BUILD.MULTI.OPF_INVALID", Error,
+            "invalid multiconductor OPF coefficients, mappings or topology", category = Data;
         BUILD_MULTI_PHYSICS_UNSUPPORTED = "BUILD.MULTI.PHYSICS_UNSUPPORTED", Error,
             "the requested multiconductor calculation requires unsupported equipment equations", category = Data;
+        BUILD_MC_OPF_LOAD_LAW_PROJECTED = "BUILD.MULTI.LOAD_LAW_PROJECTED", Warning,
+            "a voltage-bounded load law was projected to its nominal law at the caller's request";
         BUILD_MULTI_UNSUPPORTED_STAMP = "BUILD.MULTI.UNSUPPORTED_STAMP", Warning,
             "an element has no exact multiconductor admittance or ideal stamp and was omitted loudly";
         BUILD_LINDIST3FLOW_COEFFICIENT_INVALID = "BUILD.MULTI.LINDIST3FLOW_COEFFICIENT_INVALID", Error,
@@ -35,6 +39,8 @@ pub mod codes {
             "the reference grounded Laplacian is singular", category = Data;
         BUILD_SENSITIVITY_INVALID_OPTION = "BUILD.SENSITIVITY.INVALID_OPTION", Error,
             "a DC sensitivity option is outside the range it is defined on", category = Data;
+        BUILD_STATED_STATE_LCC_MODEL_UNAVAILABLE = "BUILD.STATED_STATE.LCC_MODEL_UNAVAILABLE", Warning,
+            "an LCC converter record reaches no bridge operating point at the stored voltages; the line's stated reactive powers were kept";
         /// Retired in 0.11.0: the conjugate gradient solver this reported on
         /// was replaced by a sparse direct factorization, which either
         /// succeeds or reports singularity.

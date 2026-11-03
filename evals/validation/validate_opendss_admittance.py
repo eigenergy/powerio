@@ -5,7 +5,8 @@ authoritative per element matrix OpenDSS itself stamps from.
 Only the passive classes PowerIO stamps into G + jB are assembled here: Line
 (non switch), Capacitor and Reactor. The helper explicitly removes transformers
 from its local copy before building this passive projection. Transformer buses,
-voltage-source buses and every other active or controlled element's buses are
+voltage-source buses (including PowerIO's private ideal-EMF boundary nodes)
+and every other active or controlled element's buses are
 excluded on both sides. This comparison does not establish transformer physics
 support. The separate core-shunt comparison checks the proposed winding-local
 admittances against OpenDSS. PowerIO's node resolution folds closed switch merges
@@ -120,7 +121,7 @@ def pio(deck: Path):
     for r, c, re, im in d["entries"]:
         Y[r, c] += complex(re, im)
     resolution = {k.upper(): v for k, v in d["resolution"]}
-    return d["nodes"], Y, resolution, d["diagnostics"]
+    return d["nodes"], Y, resolution, d["diagnostics"], set(d["source_nodes"])
 
 
 def yprim() -> np.ndarray:
@@ -188,8 +189,9 @@ def compare_deck(deck: Path) -> tuple[str, list[str]]:
     """Returns (mark, failures): mark is 'ok', 'FAIL', or 'n/a' (nothing
     comparable after exclusion, which asserts nothing either way)."""
     print(f"\n===== {deck.name}")
-    nodes, P, res, diags = pio(deck)
+    nodes, P, res, diags, source_nodes = pio(deck)
     D, tainted, switches = assemble(deck, res, len(nodes))
+    tainted.update(source_nodes)
     keep = [i for i in range(len(nodes)) if i not in tainted]
     print(
         f"  nodes={len(nodes)}  compared={len(keep)}  excluded(non-passive)={len(tainted)}"
@@ -226,7 +228,7 @@ def systemy_smoke() -> list[str]:
     Only Line.l1 reaches the sourcebus-loadbus off diagonal block."""
     if not SYSTEMY_SMOKE_DECK.exists():
         return [f"{SYSTEMY_SMOKE_DECK} is missing"]
-    nodes, P, res, _diags = pio(SYSTEMY_SMOKE_DECK)
+    nodes, P, res, _diags, _source_nodes = pio(SYSTEMY_SMOKE_DECK)
     dss.Text.Command(f'Compile "{SYSTEMY_SMOKE_DECK}"')
     order = [s.upper() for s in dss.Circuit.YNodeOrder()]
     data, indices, indptr = dss.YMatrix.getYsparse()

@@ -723,7 +723,8 @@ fn check_device_shapes(instance: &McAcOpfInstance, diagnostics: &mut Vec<Diagnos
 
     for (row, source) in network.sources().iter().enumerate() {
         let channels = source.terminal_map.len();
-        let valid = channels != 0
+        let valid = source.reference_terminal.is_none()
+            && channels != 0
             && source.v_magnitude.len() == channels
             && source.v_angle.len() == channels
             && source

@@ -57,11 +57,26 @@ fn dss_parse_agrees_with_the_pmd_parse() {
     let bus_set = |n: &MulticonductorNetwork| -> BTreeSet<String> {
         n.buses().iter().map(|b| b.id.to_lowercase()).collect()
     };
-    assert_eq!(bus_set(&ours), bus_set(&pmd));
+    let mut expected_buses = bus_set(&pmd);
+    let source = &ours.sources()[0];
+    assert!(expected_buses.insert(source.bus.to_lowercase()));
+    assert_eq!(bus_set(&ours), expected_buses);
+    let source_branch = ours
+        .lines()
+        .iter()
+        .find(|l| l.bus_from == source.bus)
+        .unwrap();
+    assert!(
+        source_branch
+            .bus_to
+            .eq_ignore_ascii_case(&pmd.sources()[0].bus)
+    );
+    assert_eq!(source_branch.terminal_map_from, source.terminal_map);
+    assert_eq!(source_branch.terminal_map_to, ["1", "2", "3"]);
 
-    // Terminals and grounding agree bus by bus.
-    for b in ours.buses() {
-        let other = pmd.bus(&b.id).unwrap();
+    // Every original physical bus retains its terminals and grounding.
+    for other in pmd.buses() {
+        let b = ours.bus(&other.id).unwrap();
         assert_eq!(b.terminals, other.terminals, "bus {}", b.id);
         assert_eq!(b.grounded, other.grounded, "bus {}", b.id);
     }
@@ -70,7 +85,8 @@ fn dss_parse_agrees_with_the_pmd_parse() {
     // PMD converts with 1609.3 m per mile, the engine with the exact
     // 1609.344, a 2.7e-5 relative difference carried into every per meter
     // value. powerio-dist uses the engine's factor.
-    let a = ours.linecode("mtx601").unwrap();
+    let line = ours.lines().iter().find(|l| l.name == "650632").unwrap();
+    let a = ours.linecode(&line.linecode).unwrap();
     let b = pmd.linecode("mtx601").unwrap();
     let close = |x: f64, y: f64| (x - y).abs() <= 5e-5 * x.abs().max(y.abs()).max(1e-30);
     for i in 0..3 {
@@ -80,7 +96,7 @@ fn dss_parse_agrees_with_the_pmd_parse() {
             assert!(close(a.b_from[i][j], b.b_from[i][j]));
         }
     }
-    assert_eq!(a.i_max, b.i_max);
+    assert_eq!(line.i_max, b.i_max);
 
     // Loads agree in power, configuration, and connection.
     for l in ours.loads() {
@@ -95,9 +111,13 @@ fn dss_parse_agrees_with_the_pmd_parse() {
         assert_eq!(l.terminal_map, other.terminal_map, "load {}", l.name);
     }
 
-    // The switch state and ampacity agree.
-    assert_eq!(ours.switches()[0].open, pmd.switches()[0].open);
-    assert_eq!(ours.switches()[0].i_max, pmd.switches()[0].i_max);
+    // OpenDSS switch=yes is a finite closed line in this static case.
+    let switch_line = ours.lines().iter().find(|l| l.name == "671692").unwrap();
+    assert_eq!(ours.switches().as_slice(), []);
+    assert!(!pmd.switches()[0].open);
+    assert_eq!(switch_line.i_max, pmd.switches()[0].i_max);
+    assert_eq!(switch_line.bus_from, pmd.switches()[0].bus_from);
+    assert_eq!(switch_line.bus_to, pmd.switches()[0].bus_to);
 
     // Source magnitude and angles agree.
     let (vs_a, vs_b) = (&ours.sources()[0], &pmd.sources()[0]);
@@ -113,7 +133,8 @@ fn dss_parse_agrees_with_the_pmd_parse() {
 fn four_wire_reference_agrees() {
     let ours = parse_dss_file(fixture("micro/fourwire_linecode.dss")).unwrap();
     let pmd = parse_pmd_file(fixture("pmd/fourwire_linecode.json")).unwrap();
-    let a = ours.linecode("lc4").unwrap();
+    let line = ours.lines().iter().find(|l| l.name == "l1").unwrap();
+    let a = ours.linecode(&line.linecode).unwrap();
     let b = pmd.linecode("lc4").unwrap();
     assert_eq!(a.n_conductors, b.n_conductors);
     for i in 0..4 {
@@ -215,25 +236,40 @@ fn dss_to_pmd_reproduces_the_reference_essentials() {
         assert_eq!(ours["configuration"], load["configuration"], "load {id}");
         assert_eq!(ours["connections"], load["connections"], "load {id}");
     }
-    // The switch reproduces PMD's tiny series resistance convention.
-    assert_eq!(
-        emitted["switch"]["671692"]["rs"],
-        reference["switch"]["671692"]["rs"]
-    );
-    assert_eq!(
-        emitted["switch"]["671692"]["state"],
-        reference["switch"]["671692"]["state"]
-    );
-    // The voltage source Thevenin matrices match the engine's computation.
-    let ours_rs = emitted["voltage_source"]["source"]["rs"]
-        .as_array()
+    // The same finite switch impedance is now explicit line physics.
+    let switch = &emitted["line"]["671692"];
+    assert_eq!(switch["status"], "ENABLED");
+    assert_eq!(reference["switch"]["671692"]["state"], "CLOSED");
+    let code = &emitted["linecode"][switch["linecode"].as_str().unwrap()];
+    let length = switch["length"].as_f64().unwrap();
+    for key in ["rs", "xs"] {
+        for i in 0..3 {
+            for j in 0..3 {
+                let actual = code[key][i][j].as_f64().unwrap() * length;
+                let expected = reference["switch"]["671692"][key][i][j].as_f64().unwrap();
+                assert!((actual - expected).abs() < 1e-15, "switch {key}[{i}][{j}]");
+            }
+        }
+    }
+    // The ideal EMF plus its typed series branch reproduce the reference
+    // Thevenin source without adding another default source impedance.
+    let vs = &emitted["voltage_source"]["source"];
+    let branch = net
+        .lines()
+        .iter()
+        .find(|l| l.bus_from == net.sources()[0].bus)
         .unwrap();
-    let ref_rs = reference["voltage_source"]["source"]["rs"]
-        .as_array()
-        .unwrap();
-    for (a, b) in ours_rs.iter().zip(ref_rs) {
-        for (x, y) in a.as_array().unwrap().iter().zip(b.as_array().unwrap()) {
-            assert!((x.as_f64().unwrap() - y.as_f64().unwrap()).abs() < 1e-9);
+    let code = &emitted["linecode"][branch.linecode.to_lowercase()];
+    for key in ["rs", "xs"] {
+        for i in 0..3 {
+            for j in 0..3 {
+                assert_eq!(vs[key][i][j], serde_json::json!(0.0));
+                let actual = code[key][i][j].as_f64().unwrap() * branch.length;
+                let expected = reference["voltage_source"]["source"][key][i][j]
+                    .as_f64()
+                    .unwrap();
+                assert!((actual - expected).abs() < 1e-9, "source {key}[{i}][{j}]");
+            }
         }
     }
     // Transformer per unit impedances and taps match (sub: delta primary).
@@ -459,6 +495,28 @@ fn inline_line_impedance_round_trips() {
     assert!(line.get("linecode").is_none());
     // The materialized linecode does not leak into the linecode section.
     assert!(out.get("linecode").is_none());
+
+    // Sharing a code, including ASCII case aliases, must retain the named
+    // code if any reference is not inline. Unreferenced codes also remain.
+    let mut net = net;
+    let mut second = net.lines()[0].clone();
+    second.name = "ln2".into();
+    second.linecode = "LN1_Z".into();
+    net.lines_mut().push(second);
+    let mut unused = net.line_codes()[0].clone();
+    unused.name = "unused".into();
+    net.line_codes_mut().push(unused);
+    let all_inline: serde_json::Value = serde_json::from_str(&emit_pmd_json(&net).text).unwrap();
+    assert!(all_inline["linecode"].get("ln1_z").is_none());
+    assert!(all_inline["linecode"].get("unused").is_some());
+    assert!(all_inline["line"]["ln2"].get("rs").is_some());
+
+    net.lines_mut()[1].extras.remove("pmd_inline");
+    let mixed: serde_json::Value = serde_json::from_str(&emit_pmd_json(&net).text).unwrap();
+    assert!(mixed["linecode"].get("ln1_z").is_some());
+    assert!(mixed["linecode"].get("unused").is_some());
+    assert_eq!(mixed["line"]["ln2"]["linecode"], "ln1_z");
+    assert!(mixed["line"]["ln1"].get("linecode").is_none());
 }
 
 /// A line that references a linecode and carries its own per-conductor
@@ -548,8 +606,12 @@ fn dss_settings_match_the_reference() {
             .unwrap();
     // IEEE13 sets pu=1.0001; the vbase must not fold it in.
     assert_eq!(
-        out["settings"]["vbases_default"],
-        reference["settings"]["vbases_default"]
+        out["settings"]["vbases_default"].as_object().unwrap().len(),
+        1
+    );
+    assert_eq!(
+        out["settings"]["vbases_default"][net.sources()[0].bus.to_lowercase()],
+        reference["settings"]["vbases_default"]["sourcebus"]
     );
     assert_eq!(
         out["settings"]["sbase_default"],
@@ -994,7 +1056,14 @@ fn a_two_megabyte_dss_case_writes_pmd_json_within_a_time_budget() {
         dss.len()
     );
     let net = parse_dss_str(&dss);
-    assert_eq!(net.lines().len(), n);
+    assert_eq!(net.lines().len(), n + 1);
+    assert_eq!(
+        net.lines()
+            .iter()
+            .filter(|l| l.bus_from == net.sources()[0].bus)
+            .count(),
+        1
+    );
     assert_eq!(net.loads().len(), n);
 
     let start = std::time::Instant::now();
@@ -1201,4 +1270,299 @@ fn a_two_terminal_delta_capacitor_keeps_its_full_rating() {
     let bs01 = shunt["bs"][0][1].as_f64().unwrap();
     assert!((bs00 - b).abs() < 1e-9 * b, "bs00 {bs00} want {b}");
     assert!((bs01 + b).abs() < 1e-9 * b, "bs01 {bs01} want {}", -b);
+}
+
+/// The source impedance is already a typed branch. PMD export must not
+/// introduce a second impedance at its ideal EMF bus.
+#[test]
+fn dss_source_impedance_is_applied_once_through_pmd() {
+    use num_complex::Complex64;
+    let net = parse_dss_str(
+        "New Circuit.c phases=1 bus1=feed.1 basekv=0.24 r1=3 x1=4 r0=3 x0=4\n\
+         New Load.ld phases=1 bus1=feed.1.0 kv=0.24 kw=2.4 kvar=0 model=2\n",
+    );
+    let output = emit_pmd_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+    let source = &doc["voltage_source"]["source"];
+    assert_eq!(source["rs"], serde_json::json!([[0.0]]));
+    assert_eq!(source["xs"], serde_json::json!([[0.0]]));
+    let again = parse_pmd_str(&output.text).unwrap();
+    assert_eq!(again.sources().len(), 1);
+    assert_eq!(again.lines().len(), 1);
+    let vs = &again.sources()[0];
+    let line = &again.lines()[0];
+    assert_eq!(line.bus_from, vs.bus);
+    assert_eq!(line.terminal_map_from, vs.terminal_map);
+    assert_eq!(line.bus_to, "feed");
+    assert_eq!(line.terminal_map_to, ["1"]);
+    let code = again.linecode(&line.linecode).unwrap();
+    let z = Complex64::new(code.r_series[0][0], code.x_series[0][0]) * line.length;
+    assert!((z - Complex64::new(3.0, 4.0)).norm() < 1e-12);
+    let emf = Complex64::from_polar(vs.v_magnitude[0], vs.v_angle[0]);
+    // The 240 V / 2.4 kW impedance load is 24 ohms. Check the loaded
+    // voltage, including any impedance attached to the PMD source itself.
+    let source_z = Complex64::new(
+        source["rs"][0][0].as_f64().unwrap(),
+        source["xs"][0][0].as_f64().unwrap(),
+    );
+    let actual = emf * 24.0 / (24.0 + z + source_z);
+    let expected =
+        Complex64::from_polar(240.0, 360.0 / 57.295_779_51) * 24.0 / Complex64::new(27.0, 4.0);
+    assert!((actual - expected).norm() < 1e-10);
+}
+
+#[test]
+fn typed_ideal_source_stays_ideal_in_pmd() {
+    let mut net = MulticonductorNetwork::default();
+    net.buses_mut().push(DistBus::new("b", vec!["1".into()]));
+    net.sources_mut().push(powerio_dist::VoltageSource::new(
+        "s",
+        "b",
+        vec!["1".into()],
+        vec![240.0],
+        vec![0.0],
+    ));
+    let output = emit_pmd_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+    assert_eq!(doc["voltage_source"]["s"]["rs"], serde_json::json!([[0.0]]));
+    assert_eq!(doc["voltage_source"]["s"]["xs"], serde_json::json!([[0.0]]));
+    assert!(
+        !output
+            .diagnostics
+            .iter()
+            .any(|d| d.code() == "EMIT.PMD.VALUE_DEFAULTED")
+    );
+}
+
+#[test]
+fn dss_nominal_bases_are_independent_of_emf_and_phase_count() {
+    for phases in 1..=4 {
+        for pu in [0.0, 1.1] {
+            let net = parse_dss_str(&format!(
+                "New Circuit.c phases={phases} basekv=12 pu={pu} basemva=25 bus2=return.0.0.0.0\n"
+            ));
+            let output = emit_pmd_json(&net);
+            let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+            let actual = doc["settings"]["vbases_default"][net.sources()[0].bus.to_lowercase()]
+                .as_f64()
+                .unwrap();
+            let expected = if phases == 1 {
+                12.0
+            } else {
+                12.0 / (2.0 * (std::f64::consts::PI / f64::from(phases)).sin())
+            };
+            assert!((actual - expected).abs() < 1e-12);
+            assert_eq!(
+                doc["settings"]["sbase_default"],
+                serde_json::json!(25_000.0)
+            );
+        }
+    }
+}
+
+/// Asserts `a` and `b` are the same JSON document up to float rounding in the
+/// last place, naming the first path where they differ.
+fn assert_same_json(a: &serde_json::Value, b: &serde_json::Value, path: &str) {
+    use serde_json::Value;
+    match (a, b) {
+        (Value::Object(x), Value::Object(y)) => {
+            let xk: Vec<_> = x.keys().collect();
+            let yk: Vec<_> = y.keys().collect();
+            assert_eq!(xk, yk, "keys differ at {path}");
+            for (k, v) in x {
+                assert_same_json(v, &y[k], &format!("{path}/{k}"));
+            }
+        }
+        (Value::Array(x), Value::Array(y)) => {
+            assert_eq!(x.len(), y.len(), "lengths differ at {path}");
+            for (i, (u, v)) in x.iter().zip(y).enumerate() {
+                assert_same_json(u, v, &format!("{path}[{i}]"));
+            }
+        }
+        (Value::Number(x), Value::Number(y)) => {
+            let (x, y) = (x.as_f64().unwrap(), y.as_f64().unwrap());
+            assert!(
+                (x - y).abs() <= 1e-12 * x.abs().max(1.0),
+                "{x} != {y} at {path}"
+            );
+        }
+        _ => assert_eq!(a, b, "values differ at {path}"),
+    }
+}
+
+/// #646: PMD's stock `case3_balanced`, parsed by PowerModelsDistribution and
+/// written with its `print_file`, imports every component the file states,
+/// and nothing is lost without a finding.
+#[test]
+#[allow(clippy::float_cmp)]
+fn pmd_case3_balanced_imports_every_component() {
+    let path = fixture("pmd/case3_balanced.json");
+    let file: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let count = |section: &str| file[section].as_object().map_or(0, serde_json::Map::len);
+    let net = parse_pmd_file(&path).unwrap();
+
+    assert_eq!(net.name().as_deref(), Some("3bus_example"));
+    assert_eq!(net.base_frequency(), 50.0);
+    assert_eq!(net.buses().len(), count("bus"));
+    assert_eq!(net.buses().len(), 3);
+    assert_eq!(net.line_codes().len(), count("linecode"));
+    assert_eq!(net.line_codes().len(), 2);
+    assert_eq!(net.lines().len(), count("line"));
+    assert_eq!(net.lines().len(), 2);
+    assert_eq!(net.loads().len(), count("load"));
+    assert_eq!(net.loads().len(), 3);
+    assert_eq!(net.sources().len(), count("voltage_source"));
+    assert_eq!(net.sources().len(), 1);
+    assert_eq!(net.transformers().len(), count("transformer"));
+    assert_eq!(net.generators().len(), count("generator"));
+    assert_eq!(net.shunts().len(), count("shunt"));
+    assert_eq!(net.switches().len(), count("switch"));
+    // The load shape has no typed home: it is kept, and reported.
+    let untyped: Vec<_> = net
+        .untyped_objects()
+        .iter()
+        .map(|u| (u.class.as_str(), u.name.as_str()))
+        .collect();
+    assert_eq!(untyped, [("time_series", "ls1")]);
+    let codes: Vec<_> = net
+        .diagnostics
+        .iter()
+        .map(powerio_dist::Diagnostic::code)
+        .collect();
+    assert_eq!(
+        codes,
+        ["READ.PMD.RETAINED_SOURCE_ONLY"],
+        "{:?}",
+        net.warnings
+    );
+
+    // Lines resolve their linecode references; loads keep kW scale.
+    for line in net.lines() {
+        assert!(net.linecode(&line.linecode).is_some(), "{}", line.linecode);
+    }
+    let l1 = net.loads().iter().find(|l| l.name == "l1").unwrap();
+    assert_eq!(l1.p_nom, [6000.0]);
+    assert_eq!(l1.q_nom, [3000.0]);
+    assert_eq!(l1.terminal_map, ["1", "4"]);
+}
+
+/// The PMD writer reproduces the whole document, the load shape and the
+/// loads' references to it included, and PMD reads its output back to the
+/// same network.
+#[test]
+fn pmd_case3_balanced_round_trips_through_the_writer() {
+    let text = std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap();
+    let net = parse_pmd_str(&text).unwrap();
+    let out = emit_pmd_json(&net);
+    assert_eq!(out.warnings, Vec::<String>::new());
+    let input: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let output: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_same_json(&input, &output, "");
+
+    let again = parse_pmd_str(&out.text).unwrap();
+    assert_eq!(again.buses(), net.buses());
+    assert_eq!(again.lines(), net.lines());
+    assert_eq!(again.line_codes(), net.line_codes());
+    assert_eq!(again.loads(), net.loads());
+    assert_eq!(again.sources(), net.sources());
+    assert_eq!(again.untyped_objects(), net.untyped_objects());
+    assert_eq!(emit_pmd_json(&again).text, out.text);
+}
+
+/// A component's time series reference is written only when the output
+/// carries the series it names; otherwise it is reported, not left dangling.
+#[test]
+fn a_dangling_pmd_time_series_reference_is_reported() {
+    let text = std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap();
+    let mut net = parse_pmd_str(&text).unwrap();
+    net.untyped_objects_mut().clear();
+    let out = emit_pmd_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(doc.get("time_series"), None);
+    assert_eq!(doc["load"]["l1"].get("time_series"), None);
+    let dropped = out
+        .warnings
+        .iter()
+        .filter(|w| w.starts_with("EMIT.PMD.FIELD_DROPPED: load") && w.contains("time_series"))
+        .count();
+    assert_eq!(dropped, 3, "{:?}", out.warnings);
+}
+
+/// A top level value the reader does not type survives a PMD rewrite and is
+/// reported on the way in.
+#[test]
+fn an_untyped_pmd_top_level_value_is_kept() {
+    let text = r#"{"data_model": "ENGINEERING", "time_elapsed": 0.25,
+        "bus": {"b": {"terminals": [1], "grounded": [], "rg": [], "xg": [], "status": "ENABLED"}}}"#;
+    let net = parse_pmd_str(text).unwrap();
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("top level `time_elapsed`")),
+        "{:?}",
+        net.warnings
+    );
+    let out = rewrite(text);
+    assert_eq!(out["time_elapsed"], serde_json::json!(0.25));
+}
+
+/// #646: PMD's `make_multinetwork` output holds one network per time step
+/// under `nw`. The single network reader refuses it with a message naming the
+/// time series reader instead of returning an empty network, and the time
+/// series reader imports every component of every step.
+#[test]
+#[allow(clippy::float_cmp)]
+fn pmd_multinetwork_reads_as_a_time_series() {
+    let path = fixture("pmd/case3_balanced_multinetwork.json");
+    let err = parse_pmd_file(&path).unwrap_err();
+    assert!(err.to_string().contains("multinetwork"), "got: {err}");
+
+    let file: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let source = powerio_core::Source::open(&path).unwrap();
+    assert!(powerio_dist::pmd::is_multinetwork(&source));
+    let module = powerio_dist::pmd::parse_multinetwork(source).unwrap();
+    let series = module.value();
+    let labels: Vec<_> = series
+        .time_points()
+        .iter()
+        .map(powerio_core::TimePoint::label)
+        .collect();
+    assert_eq!(labels, ["1", "2"]);
+    for point in series.time_points() {
+        assert_eq!(point.duration(), Some(std::time::Duration::from_secs(3600)));
+    }
+    for (point, net) in series.iter() {
+        let step = &file["nw"][point.label()];
+        let count = |section: &str| step[section].as_object().map_or(0, serde_json::Map::len);
+        assert_eq!(net.name().as_deref(), Some("3bus_example"));
+        assert_eq!(net.base_frequency(), 50.0);
+        assert_eq!(net.buses().len(), count("bus"));
+        assert_eq!(net.buses().len(), 3);
+        assert_eq!(net.line_codes().len(), count("linecode"));
+        assert_eq!(net.lines().len(), count("line"));
+        assert_eq!(net.lines().len(), 2);
+        assert_eq!(net.loads().len(), count("load"));
+        assert_eq!(net.loads().len(), 3);
+        assert_eq!(net.sources().len(), count("voltage_source"));
+        assert_eq!(net.sources().len(), 1);
+    }
+    // The load shape scales each step's demand: 6 kW times 0.005, then 0.01.
+    let demand: Vec<f64> = series
+        .values()
+        .iter()
+        .map(|net| net.loads().iter().find(|l| l.name == "l1").unwrap().p_nom[0])
+        .collect();
+    assert_eq!(demand, [30.0, 60.0]);
+    // Each step repeats the untyped load shape finding; it is reported once.
+    let codes: Vec<_> = module
+        .diagnostics()
+        .iter()
+        .map(powerio_dist::Diagnostic::code)
+        .collect();
+    assert_eq!(codes, ["READ.PMD.RETAINED_SOURCE_ONLY"]);
+
+    let single = powerio_core::Source::open(fixture("pmd/case3_balanced.json")).unwrap();
+    assert!(!powerio_dist::pmd::is_multinetwork(&single));
 }

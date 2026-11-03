@@ -53,7 +53,8 @@ fn universal_parse_normalizes_rawx_metadata_and_echoes_exactly() {
         panic!("RAWX did not produce a balanced network");
     };
     assert!((network.loads()[0].p - 24.0).abs() < f64::EPSILON);
-    assert!((network.loads()[0].q - 11.0).abs() < f64::EPSILON);
+    // YQ 4 is capacitive: Q = QL + IQ - YQ.
+    assert!((network.loads()[0].q - 3.0).abs() < f64::EPSILON);
 
     let error = emit(&module, "rawx", Destination::memory("same.rawx").unwrap()).unwrap_err();
     assert_eq!(

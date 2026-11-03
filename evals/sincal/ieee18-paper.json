@@ -1,0 +1,36 @@
+{
+  "case": "IEEE18",
+  "profile": "balanced",
+  "source_sha256": "9978078e4c956cf6d2e740bf2411fd5076111c17bfbc564925b3f205e797e8e5",
+  "paper_doi": "10.7251/IJEEC1801011M",
+  "paper_url": "https://doisrpska.nub.rs/index.php/IJEEC/article/download/5630/5453",
+  "paper_sha256": "5a7f8b5aae3b1bd6d2674a43c8ed90dc6189e298eccb2f0e82e1a3f2950f68f0",
+  "reference": "Table A.I, section IV.A, Figure 8; printed pages 13-15 and 18",
+  "input_alignment": {
+    "lines": 18,
+    "loads": 15,
+    "shunts": 10,
+    "max_line_parameter_error_on_10_mva_base": 2.4352603809375817e-14,
+    "max_bus_load_error_mva": 4.440892098500626e-16,
+    "max_bus_shunt_error_mvar": 2.220446049250313e-16
+  },
+  "branch_loss_groups_checked": 17,
+  "max_plot_loss_difference_kw": 0.00155597804815244,
+  "plot_tolerance_kw": 0.15,
+  "computed_total_fundamental_line_loss_kw": 260.18795284768487,
+  "nodal_iterations": 13,
+  "nodal_power_mismatch_pu": 3.4038639585433957e-13,
+  "negative_control_10_percent_load_change_max_error_kw": 8.426375233260494,
+  "numpy_version": "2.5.3",
+  "pdfplumber_version": "0.11.9",
+  "status": "passed at figure precision",
+  "stored_native_result_tables_used": false,
+  "native_sincal_executed": false,
+  "new_unbalanced_case": false,
+  "limitations": [
+    "Independent of native result dumps; solves the actual typed balanced reader output.",
+    "Digitized vector bars are approximate published graphical results, not exact numeric oracles.",
+    "No harmonic validation; the paper total including harmonics is not the quantity compared.",
+    "Neither native model nor PDF nor extracted input table/plot is redistributed."
+  ]
+}

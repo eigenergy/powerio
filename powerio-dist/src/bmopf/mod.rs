@@ -100,6 +100,7 @@
 //! terminals; carried across a rename it sorts names no bus has any more, and
 //! nothing else in the document contradicts it.
 
+mod capacitor;
 mod geo;
 mod profile;
 pub(crate) mod read;

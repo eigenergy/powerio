@@ -79,7 +79,7 @@ COMMENT
 0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
 0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
 1, 2, 3, '1', 1, 1, 1, 0.0, 0.0, 2, 'T3W         ', 1, 1, 1, 0, 1, 0, 1, 0, 1, '            '
-0.01, 0.10, 100.0, 0.02, 0.20, 100.0, 0.03, 0.30, 100.0, 0.98, -1.5
+0.01, 0.10, 100.0, 0.02, 0.25, 100.0, 0.03, 0.30, 100.0, 0.98, -1.5
 1.0, 230.0, 0.0, 100.0, 90.0, 80.0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0
 1.025, 138.0, 0.0, 110.0, 0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0
 0.95, 13.8, 30.0, 50.0, 0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0
@@ -928,4 +928,230 @@ fn self_loop_with_zero_reactance_drops_unconditionally() {
 fn coo_builder_rejects_out_of_bounds_column() {
     let mut coo = CooBuilder::new_rect(2, 2);
     coo.add(0, 2, 1.0);
+}
+
+#[test]
+fn per_island_ptdf_returns_local_matrices_and_source_index_mappings() {
+    let net = BalancedNetwork::in_memory(
+        "two-grounded-islands",
+        100.0,
+        vec![
+            bus(10, BusType::Ref),
+            bus(20, BusType::Pq),
+            bus(30, BusType::Ref),
+            bus(40, BusType::Pq),
+        ],
+        vec![
+            br(10, 20, 0.0, 0.1, 0.0),
+            {
+                let mut inactive = br(10, 20, 0.0, 0.15, 0.0);
+                inactive.in_service = false;
+                inactive
+            },
+            br(10, 10, 0.0, 0.05, 0.0),
+            br(30, 40, 0.0, 0.2, 0.0),
+        ],
+    );
+    let view = IndexedNetwork::new(&net);
+    let formula = BranchSusceptanceFormula::ReactanceOnly;
+    let global = crate::matrix::calc_ptdf(&view, formula).unwrap();
+
+    for solver in [
+        crate::matrix::SensitivitySolver::Dense,
+        crate::matrix::SensitivitySolver::Sparse,
+    ] {
+        let islands = crate::matrix::calc_ptdf_by_island(
+            &view,
+            &crate::matrix::SensitivityOptions {
+                formula,
+                solver,
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|err| panic!("{solver:?}: {err}"));
+
+        assert_eq!(islands.len(), 2);
+        assert_eq!(islands[0].island_label, 0);
+        assert_eq!(islands[0].bus_indices, vec![0, 1]);
+        assert_eq!(islands[0].branch_indices, vec![0]);
+        assert_eq!(islands[0].ptdf.shape(), (1, 2));
+        assert_eq!(islands[1].island_label, 2);
+        assert_eq!(islands[1].bus_indices, vec![2, 3]);
+        assert_eq!(islands[1].branch_indices, vec![3]);
+        assert_eq!(islands[1].ptdf.shape(), (1, 2));
+
+        // Local rows/columns are the corresponding global entries, while the
+        // disconnected island's buses never appear as columns in this matrix.
+        for island in &islands {
+            for (local_row, &source_branch) in island.branch_indices.iter().enumerate() {
+                for (local_col, &source_bus) in island.bus_indices.iter().enumerate() {
+                    let local = island
+                        .ptdf
+                        .get(local_row, local_col)
+                        .copied()
+                        .unwrap_or(0.0);
+                    // The global PTDF's rows are compacted by the incidence
+                    // builder, whereas source_branch is an index into the original
+                    // network. The inactive branch and self-loop above are filtered.
+                    let global_row = match source_branch {
+                        0 => 0,
+                        3 => 1,
+                        other => panic!("unexpected source branch index {other}"),
+                    };
+                    let global_value = global.get(global_row, source_bus).copied().unwrap_or(0.0);
+                    assert_relative_eq!(local, global_value, epsilon = 1e-12);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn per_island_ptdf_refuses_unmerged_closed_switches() {
+    use crate::network::Switch;
+
+    let mut net = BalancedNetwork::in_memory(
+        "closed-switch-per-island-ptdf",
+        100.0,
+        vec![
+            bus(1, BusType::Ref),
+            bus(2, BusType::Pq),
+            bus(3, BusType::Pq),
+        ],
+        vec![br(1, 2, 0.0, 0.1, 0.0), br(2, 3, 0.0, 0.2, 0.0)],
+    );
+    net.switches_mut().push(Switch::new(
+        crate::network::BusId(1),
+        crate::network::BusId(2),
+        true,
+    ));
+    let view = IndexedNetwork::new(&net);
+
+    let error =
+        crate::matrix::calc_ptdf_by_island(&view, &crate::matrix::SensitivityOptions::default())
+            .expect_err("unmerged closed switches must be rejected");
+    assert_eq!(error.code().code, "BUILD.SWITCH.CLOSED");
+}
+
+#[test]
+fn per_island_ptdf_preserves_empty_and_fully_grounded_network_behavior() {
+    use crate::network::BalancedNetwork;
+
+    let empty = BalancedNetwork::in_memory("empty-ptdf-island", 100.0, vec![], vec![]);
+    let empty_view = IndexedNetwork::new(&empty);
+    let empty_result = crate::matrix::calc_ptdf_by_island(
+        &empty_view,
+        &crate::matrix::SensitivityOptions::default(),
+    );
+    assert!(
+        empty_result.is_ok(),
+        "empty network behavior changed: {empty_result:?}"
+    );
+
+    let grounded = BalancedNetwork::in_memory(
+        "fully-grounded-ptdf-islands",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Ref)],
+        vec![],
+    );
+    let grounded_view = IndexedNetwork::new(&grounded);
+    let grounded_result = crate::matrix::calc_ptdf_by_island(
+        &grounded_view,
+        &crate::matrix::SensitivityOptions::default(),
+    );
+    assert!(
+        grounded_result.is_ok(),
+        "fully grounded network behavior changed: {grounded_result:?}"
+    );
+    assert_eq!(grounded_result.unwrap().len(), 2);
+}
+
+#[test]
+fn per_island_ptdf_maps_star_lowered_three_winding_transformer_axes() {
+    let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 138.0,1,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+3,'B3          ', 13.8,1,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1, 2, 3, '1', 1, 1, 1, 0.0, 0.0, 2, 'T3W         ', 1, 1, 1, 0, 1, 0, 1, 0, 1, '            '
+0.01, 0.10, 100.0, 0.02, 0.25, 100.0, 0.03, 0.30, 100.0, 0.98, -1.5
+1.0, 230.0, 0.0, 100.0, 90.0, 80.0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0
+1.025, 138.0, 0.0, 110.0, 0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0
+0.95, 13.8, 30.0, 50.0, 0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+    let net = parse_psse(raw).unwrap();
+    let view = IndexedNetwork::new(&net);
+    assert_eq!(view.n(), 4, "three buses plus the synthetic star point");
+
+    let islands =
+        crate::matrix::calc_ptdf_by_island(&view, &crate::matrix::SensitivityOptions::default())
+            .expect("star-lowered transformer network should build");
+    assert_eq!(islands.len(), 1);
+    assert_eq!(islands[0].bus_indices, vec![0, 1, 2, 3]);
+    assert_eq!(islands[0].branch_indices.len(), 3);
+    assert_eq!(islands[0].ptdf.shape(), (3, 4));
+    for (local_row, &source_branch) in islands[0].branch_indices.iter().enumerate() {
+        assert!(source_branch < view.branches().len());
+        for (local_col, &source_bus) in islands[0].bus_indices.iter().enumerate() {
+            assert!(source_bus < view.n());
+            let value = islands[0]
+                .ptdf
+                .get(local_row, local_col)
+                .copied()
+                .unwrap_or(0.0);
+            assert!(value.is_finite());
+        }
+    }
+}
+
+#[test]
+fn per_island_ptdf_keeps_open_and_self_switches_compatible() {
+    use crate::network::{BusId, Switch};
+
+    let base = BalancedNetwork::in_memory(
+        "switch-free-ptdf-island",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![br(1, 2, 0.0, 0.1, 0.0)],
+    );
+    let mut switched = base.clone();
+    switched
+        .switches_mut()
+        .push(Switch::new(BusId(1), BusId(2), false));
+    switched
+        .switches_mut()
+        .push(Switch::new(BusId(1), BusId(1), true));
+
+    let base_view = IndexedNetwork::new(&base);
+    let switched_view = IndexedNetwork::new(&switched);
+    let options = crate::matrix::SensitivityOptions::default();
+    let expected = crate::matrix::calc_ptdf_by_island(&base_view, &options)
+        .expect("base network should build");
+    let actual = crate::matrix::calc_ptdf_by_island(&switched_view, &options)
+        .expect("open and self switches must not change the DC branch model");
+
+    assert_eq!(actual.len(), expected.len());
+    for (actual_island, expected_island) in actual.iter().zip(&expected) {
+        assert_eq!(actual_island.island_label, expected_island.island_label);
+        assert_eq!(actual_island.bus_indices, expected_island.bus_indices);
+        assert_eq!(actual_island.branch_indices, expected_island.branch_indices);
+        assert_eq!(actual_island.ptdf.shape(), expected_island.ptdf.shape());
+        for row in 0..actual_island.ptdf.rows() {
+            for col in 0..actual_island.ptdf.cols() {
+                assert_relative_eq!(
+                    actual_island.ptdf.get(row, col).copied().unwrap_or(0.0),
+                    expected_island.ptdf.get(row, col).copied().unwrap_or(0.0),
+                    epsilon = 1e-12
+                );
+            }
+        }
+    }
 }

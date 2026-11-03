@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use powerio_tx::network::BalancedNetwork;
 use powerio_tx::{
     BranchRef, BusId, InterfaceMember, JoinName, MonitorScope, MonitorStatement, MonitoredParsed,
-    MonitoredSet, PsseEquipmentIndex, RetainedStatement, SubsystemParsed, SubsystemSelector,
-    SubsystemSet, UnresolvedMonitorReason,
+    MonitoredSet, PsseEquipmentIndex, RetainedStatement, SharedPsseEquipmentIndex, SubsystemParsed,
+    SubsystemSelector, SubsystemSet, UnresolvedMonitorReason,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -1109,6 +1109,30 @@ fn an_index_built_once_binds_the_same_set() {
 }
 
 #[test]
+fn a_shared_index_binds_and_expands_like_the_borrowed_one() {
+    let net = select_network();
+    let subsystems = parse_sub("selectors.sub").set;
+    let shared = SharedPsseEquipmentIndex::new(std::sync::Arc::new(net.clone()));
+    for name in ["generated.mon", "blocks.mon"] {
+        let set = parse_mon(name).set;
+        assert_eq!(
+            set.resolve_with(&shared.index(), &subsystems),
+            set.resolve(&net, &subsystems),
+            "{name}"
+        );
+    }
+    for name in ["expand.con", "automatic_skip.con"] {
+        let set = powerio_tx::ContingencySet::parse(&read(name))
+            .expect("parse contingency fixture")
+            .set;
+        let ours = set.expand_with(&shared.index(), &subsystems);
+        let theirs = set.expand(&net, &subsystems);
+        assert_eq!(ours.set, theirs.set, "{name}");
+        assert_eq!(ours.diagnostics, theirs.diagnostics, "{name}");
+    }
+}
+
+#[test]
 fn a_terminal_pair_naming_two_branches_binds_to_neither() {
     let mut net = select_network();
     // A second branch stored the other way round takes circuit '1' too,
@@ -1293,4 +1317,328 @@ fn a_block_line_may_repeat_the_monitor_keyword() {
         "{:?}",
         resolution.unresolved
     );
+}
+
+#[test]
+fn monitored_kv_qualified_forms_parse_and_round_trip() {
+    let parsed = MonitoredSet::parse(
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' KVRANGE 200 240\n\
+MONITOR TIES FROM SUBSYSTEM 'A1' KVRANGE 200 240\n\
+MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' KV 230 0.95 1.05\n\
+END\n",
+    )
+    .expect("parse kV-qualified monitors");
+    assert!(parsed.diagnostics.is_empty(), "{:?}", mon_codes(&parsed));
+    assert_eq!(
+        parsed.set.statements,
+        vec![
+            MonitorStatement::BranchesInSubsystemKvRange {
+                subsystem: "A1".into(),
+                low_voltage_3w: false,
+                kv_range: (200.0, 240.0),
+            },
+            MonitorStatement::TiesFromSubsystemKvRange {
+                subsystem: "A1".into(),
+                kv_range: (200.0, 240.0),
+            },
+            MonitorStatement::VoltageRange {
+                scope: MonitorScope::SubsystemKv {
+                    name: "A1".into(),
+                    kv: 230.0,
+                },
+                vmin: 0.95,
+                vmax: 1.05,
+            },
+        ]
+    );
+
+    let written = check_mon_fixed_point(&parsed);
+    assert!(written.contains("MONITOR BRANCHES IN SUBSYSTEM 'A1' KVRANGE 200.0 240.0\n"));
+    assert!(written.contains("MONITOR TIES FROM SUBSYSTEM 'A1' KVRANGE 200.0 240.0\n"));
+    assert!(written.contains("MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' KV 230.0 0.95 1.05\n"));
+}
+
+#[test]
+fn monitored_kv_range_filters_low_voltage_three_winding_selection() {
+    let net = select_network();
+    let subsystems = parse_sub("selectors.sub").set;
+
+    let high_voltage = MonitoredSet::parse(
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' 3WLOWVOLTAGE KVRANGE 200 240\nEND\n",
+    )
+    .expect("parse high-voltage filter");
+    let high_resolution = high_voltage.set.resolve(&net, &subsystems);
+    assert_eq!(rows(&high_resolution.branch_rows), [0, 1]);
+    assert!(high_resolution.transformer_3w_rows.is_empty());
+
+    let low_voltage = MonitoredSet::parse(
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' 3WLOWVOLTAGE KVRANGE 100 150\nEND\n",
+    )
+    .expect("parse low-voltage filter");
+    let low_resolution = low_voltage.set.resolve(&net, &subsystems);
+    assert!(low_resolution.branch_rows.is_empty());
+    assert_eq!(rows(&low_resolution.transformer_3w_rows), [0]);
+}
+
+#[test]
+fn monitored_kv_qualified_forms_filter_resolution() {
+    let parsed = MonitoredSet::parse(
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' KVRANGE 200 240\n\
+MONITOR TIES FROM SUBSYSTEM 'A1' KVRANGE 200 240\n\
+MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' KV 230 0.95 1.05\n\
+END\n",
+    )
+    .expect("parse kV-qualified monitors");
+    let net = select_network();
+    let subsystems = parse_sub("selectors.sub").set;
+    let resolution = parsed.set.resolve(&net, &subsystems);
+
+    assert_eq!(rows(&resolution.branch_rows), [0, 1]);
+    assert_eq!(rows(&resolution.tie_rows), [5]);
+    assert_eq!(
+        resolution.voltage_ranges[0].bus_rows,
+        [0, 1].into_iter().collect()
+    );
+}
+
+/// The PSS(R)E 35.2.0 release notes spell the branch and tie filter
+/// `IN KVRANGE r1 r2` ("For all MONITOR BRANCHES or BREAKERS or SWITCHES or
+/// SWDS or TIES ... the subsystem specification may include an additional
+/// optional clause as follows: IN KVRANGE r1 r2",
+/// <https://pdfcoffee.com/psse-35-release-notes-pdf-free.html>). It reads as
+/// the TARA `KVRANGE lo hi` tail does, and the writer states the TARA form.
+fn assert_in_kvrange_alias(psse: &str, tara: &str, written_line: &str) {
+    let net = select_network();
+    let subsystems = parse_sub("selectors.sub").set;
+    let alias = MonitoredSet::parse(&format!("{psse}\nEND\n")).expect("parse IN KVRANGE");
+    let bare = MonitoredSet::parse(&format!("{tara}\nEND\n")).expect("parse KVRANGE");
+    assert_eq!(mon_codes(&alias), Vec::<&str>::new());
+    assert_eq!(alias.set.retained, []);
+    assert_eq!(
+        mon_without_line_numbers(&alias.set),
+        mon_without_line_numbers(&bare.set)
+    );
+    let resolved = alias.set.resolve(&net, &subsystems);
+    let expected = bare.set.resolve(&net, &subsystems);
+    assert_eq!(rows(&resolved.branch_rows), rows(&expected.branch_rows));
+    assert_eq!(rows(&resolved.tie_rows), rows(&expected.tie_rows));
+    let written = check_mon_fixed_point(&alias);
+    assert!(written.contains(written_line), "{written}");
+}
+
+#[test]
+fn monitored_branches_read_the_psse_in_kvrange_spelling() {
+    assert_in_kvrange_alias(
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' IN KVRANGE 200 240",
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' KVRANGE 200 240",
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' KVRANGE 200.0 240.0\n",
+    );
+    assert_in_kvrange_alias(
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' 3WLOWVOLTAGE IN KVRANGE 200 240",
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' 3WLOWVOLTAGE KVRANGE 200 240",
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' 3WLOWVOLTAGE KVRANGE 200.0 240.0\n",
+    );
+}
+
+#[test]
+fn monitored_ties_read_the_psse_in_kvrange_spelling() {
+    assert_in_kvrange_alias(
+        "MONITOR TIES FROM SUBSYSTEM 'A1' IN KVRANGE 200 240",
+        "MONITOR TIES FROM SUBSYSTEM 'A1' KVRANGE 200 240",
+        "MONITOR TIES FROM SUBSYSTEM 'A1' KVRANGE 200.0 240.0\n",
+    );
+    // `IN` with no range after it is outside the grammar.
+    let dangling = MonitoredSet::parse("MONITOR TIES FROM SUBSYSTEM 'A1' IN\nEND\n")
+        .expect("parse dangling IN");
+    assert_eq!(
+        mon_codes(&dangling),
+        vec!["READ.MON.STATEMENT_UNRECOGNIZED"]
+    );
+}
+
+#[test]
+fn monitored_kv_qualified_forms_keep_invalid_ranges_as_text() {
+    let reversed = MonitoredSet::parse("MONITOR BRANCHES IN SUBSYSTEM 'A1' KVRANGE 240 200\nEND\n")
+        .expect("parse reversed kV range");
+    assert_eq!(
+        mon_codes(&reversed),
+        vec!["READ.MON.STATEMENT_UNRECOGNIZED"]
+    );
+    assert_eq!(
+        reversed.set.retained[0].text,
+        "MONITOR BRANCHES IN SUBSYSTEM 'A1' KVRANGE 240 200"
+    );
+
+    let nonfinite =
+        MonitoredSet::parse("MONITOR TIES FROM SUBSYSTEM 'A1' KVRANGE Infinity 240\nEND\n")
+            .expect("parse non-finite kV range");
+    assert_eq!(
+        mon_codes(&nonfinite),
+        vec!["READ.MON.STATEMENT_UNRECOGNIZED"]
+    );
+}
+
+#[test]
+fn monitored_subsystem_kv_scope_uses_kv_tolerance() {
+    let net = select_network();
+    let subsystems = parse_sub("selectors.sub").set;
+    let exact =
+        MonitoredSet::parse("MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' KV 230.0000005 0.95 1.05\nEND\n")
+            .expect("parse tolerant kV scope");
+    let resolution = exact.set.resolve(&net, &subsystems);
+    assert_eq!(
+        resolution.voltage_ranges[0].bus_rows,
+        [0, 1].into_iter().collect()
+    );
+}
+
+#[test]
+fn monitored_four_value_voltage_range_round_trips_and_resolves() {
+    let parsed = MonitoredSet::parse(
+        "MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' KV 230 0.9000 1.0500 0.9500 1.0500\nEND\n",
+    )
+    .expect("parse four-value voltage range");
+    assert_eq!(
+        mon_codes(&parsed),
+        vec!["READ.MON.VOLTAGE_BAND_ORDER_ASSUMED"]
+    );
+    assert_eq!(
+        parsed.set.statements,
+        vec![MonitorStatement::VoltageRangeWithPre {
+            scope: MonitorScope::SubsystemKv {
+                name: "A1".into(),
+                kv: 230.0,
+            },
+            vmin: 0.9,
+            vmax: 1.05,
+            pre_min: 0.95,
+            pre_max: 1.05,
+        }]
+    );
+
+    let written = check_mon_fixed_point(&parsed);
+    assert!(written.contains("MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' KV 230.0 0.9 1.05 0.95 1.05\n"));
+
+    let net = select_network();
+    let subsystems = parse_sub("selectors.sub").set;
+    let resolution = parsed.set.resolve(&net, &subsystems);
+    assert_eq!(resolution.voltage_ranges.len(), 0);
+    assert_eq!(resolution.voltage_ranges_with_pre.len(), 1);
+    assert_eq!(
+        resolution.voltage_ranges_with_pre[0].0.bus_rows,
+        [0, 1].into_iter().collect()
+    );
+    assert!((resolution.voltage_ranges_with_pre[0].0.low - 0.9).abs() < 1e-12);
+    assert_eq!(resolution.voltage_ranges_with_pre[0].0.high, Some(1.05));
+    assert_eq!(resolution.voltage_ranges_with_pre[0].1, (0.95, 1.05));
+}
+
+/// The order of the two pairs on a four-value `MONITOR VOLTAGE RANGE` is not
+/// documented in any public source (issue #554), so the reader states the
+/// order it assumes once per file instead of choosing silently.
+///
+/// - The PSS(R)E 34.2 Program Operation Manual, section 8.1.3, "Voltage
+///   Monitoring Records", states `[MONITOR] VOLTAGE RANGE scope r [r]`: "the
+///   first r value is the lower bound of the per unit voltage band and the
+///   optional second r value is the upper bound". PSS/E states no four-value
+///   form. <https://pdfcoffee.com/program-operation-manual-del-pss-pdf-free.html>
+/// - The PSS(R)E 35.2.0 release notes add `KV r1` and `KVRANGE r1 r2` to the
+///   subsystem of voltage monitoring records and `IN KVRANGE r1 r2` to
+///   branch and tie records, and no further voltage values.
+///   <https://pdfcoffee.com/psse-35-release-notes-pdf-free.html>
+/// - PowerGEM's TARA `.mon` grammar accepts two optional values after the
+///   band without naming either pair (`voltage-range` in
+///   <https://github.com/PowerGem/VSCodeExtension/blob/master/syntaxes/mon.tmLanguage.json>).
+/// - Every public `.mon` file found states two values (PSS/E `savnw.mon`,
+///   GO Competition `All.mon`, INL `WOA.mon`, and others in the fixture README).
+///
+/// The assumed order, post-contingency first, follows the TARA study files
+/// the issue was written from, where the first pair (0.90 to 1.05) is the
+/// wider one, as post-contingency limits usually are.
+#[test]
+fn monitored_four_value_voltage_range_states_its_assumed_band_order() {
+    let parsed = MonitoredSet::parse(
+        "MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' 0.95 1.05\n\
+MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' KV 138 0.9000 1.0500 0.9500 1.0500\n\
+MONITOR VOLTAGE RANGE SUBSYSTEM 'A1' KV 230 0.9000 1.0500 0.9500 1.0500\n\
+END\n",
+    )
+    .expect("parse four-value voltage ranges");
+    assert_eq!(
+        mon_codes(&parsed),
+        vec!["READ.MON.VOLTAGE_BAND_ORDER_ASSUMED"]
+    );
+    let note = &parsed.diagnostics[0];
+    assert_eq!(note.severity(), powerio_core::DiagnosticSeverity::Remark);
+    assert!(note.message().starts_with("line 2: "), "{}", note.message());
+    assert!(
+        note.message()
+            .contains("post-contingency low and high, then the pre-contingency low and high"),
+        "{}",
+        note.message()
+    );
+    let MonitorStatement::VoltageRangeWithPre {
+        vmin,
+        vmax,
+        pre_min,
+        pre_max,
+        ..
+    } = &parsed.set.statements[2]
+    else {
+        panic!("{:?}", parsed.set.statements[2]);
+    };
+    assert_eq!((*vmin, *vmax, *pre_min, *pre_max), (0.9, 1.05, 0.95, 1.05));
+
+    let two_value = MonitoredSet::parse("MONITOR VOLTAGE RANGE ALL BUSES 0.95 1.05\nEND\n")
+        .expect("parse two-value voltage range");
+    assert_eq!(mon_codes(&two_value), Vec::<&str>::new());
+}
+
+#[test]
+fn monitored_four_value_voltage_range_rejects_invalid_bands() {
+    for line in [
+        "MONITOR VOLTAGE RANGE ALL BUSES 1.05 0.95 0.95 1.05\nEND\n",
+        "MONITOR VOLTAGE RANGE ALL BUSES 0.95 1.05 1.05 0.95\nEND\n",
+    ] {
+        let parsed = MonitoredSet::parse(line).expect("parse invalid range");
+        assert_eq!(mon_codes(&parsed), vec!["READ.MON.STATEMENT_UNRECOGNIZED"]);
+        assert_eq!(parsed.set.retained.len(), 1);
+    }
+}
+
+/// Manual scaling probe for indexed kV resolution. Run with
+/// `cargo test -p powerio-tx --test contingency_sub_mon kv_scope_scaling_probe -- --nocapture`.
+/// Timings are reported for inspection, not asserted, so CI is not machine-speed dependent.
+#[test]
+fn kv_scope_scaling_probe() {
+    use powerio_tx::network::{Bus, BusType};
+    use std::time::Instant;
+
+    for size in [5_000usize, 10_000, 20_000] {
+        let buses = (1..=size)
+            .map(|id| Bus::new(BusId(id), BusType::Ref, 230.0))
+            .collect();
+        let net = BalancedNetwork::in_memory("kv-scaling", 100.0, buses, Vec::new());
+        let subsystems = SubsystemSet::parse("SUBSYSTEM 'ALL'\nAREA 1\nEND\n")
+            .expect("parse synthetic subsystem")
+            .set;
+        let monitored = MonitoredSet {
+            statements: vec![MonitorStatement::VoltageRange {
+                scope: MonitorScope::SubsystemKv {
+                    name: "ALL".to_owned(),
+                    kv: 230.0,
+                },
+                vmin: 0.9,
+                vmax: 1.1,
+            }],
+            ..Default::default()
+        };
+        let started = Instant::now();
+        let resolved = monitored.resolve(&net, &subsystems);
+        let elapsed = started.elapsed();
+        assert_eq!(resolved.voltage_ranges.len(), 1);
+        assert_eq!(resolved.voltage_ranges[0].bus_rows.len(), size);
+        // Keep this as a manual scaling probe: no wall-clock threshold is used.
+        eprintln!("subsystem-kV resolution: buses={size}, elapsed={elapsed:?}");
+    }
 }

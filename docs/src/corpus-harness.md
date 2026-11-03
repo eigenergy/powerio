@@ -91,7 +91,9 @@ whoever reads the report:
    the report as open and does not go into a commit.
 4. Fix under the existing decision order: carry the data, stop retaining
    restatements, warn only on losses. Then run the full gate, including the
-   conversion matrix with rederived baselines.
+   conversion matrix. If a cell changes on purpose, regenerate
+   `powerio-cli/tests/conversion_matrix.baseline` with
+   `POWERIO_MATRIX_BLESS=1` and check each changed line.
 5. Commit one property per commit, and describe the property rather than the
    run that found it. Rerun the tool to confirm the finding class closed and
    no other bucket regressed.

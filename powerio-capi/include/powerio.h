@@ -39,6 +39,8 @@ typedef struct PioActivePower PioActivePower;
 typedef struct PioAcOpfPreparation PioAcOpfPreparation;
 typedef struct PioDcOpfPreparation PioDcOpfPreparation;
 typedef struct PioDcOperators PioDcOperators;
+typedef struct PioIslands PioIslands;
+typedef struct PioSensitivities PioSensitivities;
 typedef struct PioApparentPower PioApparentPower;
 typedef struct PioBalancedNetwork PioBalancedNetwork;
 typedef struct PioCalculationUpdate PioCalculationUpdate;
@@ -96,6 +98,23 @@ typedef struct {
 } PioDiagnosticSpanView;
 
 /**
+ * Borrowed binary bytes.
+ */
+typedef struct {
+    const uint8_t *data;
+    size_t len;
+} PioByteView;
+
+/**
+ * One caller-owned companion for an in-memory source. Both views are copied
+ * during source construction; no filesystem acquisition is permitted.
+ */
+typedef struct {
+    PioStringView name;
+    PioByteView bytes;
+} PioNamedBufferView;
+
+/**
  * Borrowed stable component identity.
  */
 typedef struct {
@@ -116,6 +135,57 @@ typedef struct {
     size_t row;
     bool in_service;
 } PioContingencyComponentView;
+
+/**
+ * Explicit conductor-resolved SINCAL reader selection. Zero initialization
+ * means no selected variant, no snapshot, and no acquired-table companion.
+ * The presence flags distinguish omission from an explicit zero.
+ */
+typedef struct {
+    bool has_variant;
+    int64_t variant;
+    bool has_snapshot_hours;
+    double snapshot_hours;
+    /**
+     * Relative companion name. NULL/0 omits it; non-NULL empty text is invalid.
+     */
+    PioStringView acquired_tables;
+    /**
+     * Experimental schema-11.5 NULL source controls as inactive; default false.
+     */
+    bool assume_inactive_source_controls;
+} PioSincalReadOptions;
+
+/**
+ * Explicit balanced SINCAL reader selection; presence flags preserve zero.
+ */
+typedef struct {
+    bool has_variant;
+    int64_t variant;
+    bool has_snapshot_hours;
+    double snapshot_hours;
+    PioStringView acquired_tables;
+} PioSincalBalancedReadOptions;
+
+/**
+ * Borrowed parsing options. Zero initialization preserves pio_parse behavior.
+ * All nested pointers need remain valid only during the call. These layouts
+ * are fixed; a future incompatible layout requires a new ABI or input type.
+ */
+typedef struct {
+    /**
+     * Optional explicit file acquisition root (NULL/0 means default).
+     */
+    PioStringView acquisition_root;
+    /**
+     * NULL omits SINCAL selection. Otherwise requires sincal-multiconductor.
+     */
+    const PioSincalReadOptions *sincal_multiconductor;
+    /**
+     * NULL omits balanced selection. Otherwise requires sincal-balanced.
+     */
+    const PioSincalBalancedReadOptions *sincal_balanced;
+} PioParseOptions;
 
 /**
  * Program identity recorded with one module.
@@ -491,6 +561,44 @@ typedef struct {
     size_t terminal_count;
     PioStringView voltage_model;
 } PioPrescribedTerminalPowerView;
+
+/**
+ * Complete borrowed load voltage law, including piecewise transitions.
+ * Presence flags distinguish absent transition parameters from zero.
+ */
+typedef struct {
+    PioStringView model;
+    PioF64View nominal_voltage_v;
+    PioF64View active_power_constant_impedance;
+    PioF64View active_power_constant_current;
+    PioF64View active_power_constant_power;
+    PioF64View reactive_power_constant_impedance;
+    PioF64View reactive_power_constant_current;
+    PioF64View reactive_power_constant_power;
+    PioF64View active_power_exponent;
+    PioF64View reactive_power_exponent;
+    double voltage_low_pu;
+    bool has_voltage_low;
+    double voltage_min_pu;
+    bool has_voltage_min;
+    double voltage_max_pu;
+    bool has_voltage_max;
+    double cutoff_pu;
+    bool has_cutoff;
+    double current_limit_pu;
+    bool has_current_limit;
+} PioDistLoadVoltageModelView;
+
+/**
+ * Prescribed terminal powers and the full borrowed voltage law of one PF load.
+ */
+typedef struct {
+    PioStringView load;
+    size_t terminal_count;
+    PioF64View active_power_w;
+    PioF64View reactive_power_var;
+    PioDistLoadVoltageModelView voltage_model;
+} PioPrescribedLoadDetailsView;
 
 /**
  * One terminal of a prescribed multiconductor load.
@@ -2031,6 +2139,20 @@ typedef struct {
 } PioMulticonductorLoadView;
 
 /**
+ * One multiconductor load with its complete voltage law. Existing load views
+ * retain their ABI layout and continue to reject laws they cannot describe.
+ */
+typedef struct {
+    PioStringView name;
+    PioStringView bus;
+    size_t terminal_map_count;
+    PioStringView configuration;
+    PioF64View active_power_nominal_w;
+    PioF64View reactive_power_nominal_var;
+    PioDistLoadVoltageModelView voltage_model;
+} PioMulticonductorLoadDetailsView;
+
+/**
  * One multiconductor generator.
  */
 typedef struct {
@@ -2181,12 +2303,133 @@ typedef struct {
 } PioMulticonductorCommandView;
 
 /**
- * Borrowed binary bytes.
+ * One AC island of a balanced network, read from a `PioIslands` handle.
+ * Every view is borrowed from the handle. Bus indices are zero based
+ * positions in the network's bus table; bus ids are the source's own.
+ * `generator_rows` and `hvdc_rows` are zero based positions in the generator
+ * and HVDC tables: the in service generators on the island's buses and the in
+ * service HVDC lines that tie it to another island. `supplied` is true when an
+ * in service generator can supply the island.
  */
 typedef struct {
-    const uint8_t *data;
-    size_t len;
-} PioByteView;
+    PioSizeView bus_indices;
+    PioSizeView bus_ids;
+    PioSizeView reference_bus_indices;
+    PioSizeView reference_bus_ids;
+    PioSizeView generator_rows;
+    PioSizeView hvdc_rows;
+    bool supplied;
+} PioIslandView;
+
+/**
+ * Complete source boundary without changing the legacy source-view layout.
+ * Source phasors specify V(terminal) - V(reference). A named reference is
+ * on source.bus and does not imply grounding; an absent reference means
+ * earth. Borrowed data lives with the owner.
+ */
+typedef struct {
+    PioVoltageSourceView source;
+    PioStringView reference_terminal;
+    bool has_reference_terminal;
+} PioVoltageSourceBoundaryView;
+
+/**
+ * One branch's opening and closing cost in objective units, by branch
+ * identity. Only a change against the initial topology costs anything.
+ */
+typedef struct {
+    PioStringView id;
+    double open_cost;
+    double close_cost;
+} PioBranchSwitchingCost;
+
+/**
+ * Explicit current magnitude limits at a branch's two terminals, per unit
+ * on the system MVA base and each terminal bus's nominal voltage. A side
+ * whose `has_` flag is false is unbounded.
+ */
+typedef struct {
+    PioStringView id;
+    double from_pu;
+    double to_pu;
+    bool has_from_pu;
+    bool has_to_pu;
+} PioBranchCurrentLimit;
+
+/**
+ * AC optimal transmission switching options. `switchable` is `all`,
+ * `none`, or `only` (then `identities` names the switchable branches);
+ * `islanding` is `forbidden` or `allowed`; `current_limits` is `skip`,
+ * `stated`, or `derive_from_rate_a`. Arrays carry their element counts and
+ * are read during the call only.
+ */
+typedef struct {
+    PioStringView switchable;
+    const PioStringView *identities;
+    size_t identities_len;
+    const PioBranchSwitchingCost *switching_costs;
+    size_t switching_costs_len;
+    PioStringView islanding;
+    size_t max_open;
+    bool has_max_open;
+    size_t max_switched;
+    bool has_max_switched;
+    PioStringView current_limits;
+    const PioBranchCurrentLimit *stated_current_limits;
+    size_t stated_current_limits_len;
+} PioAcOtsOptions;
+
+/**
+ * The stated switching options of one AC optimal transmission switching
+ * instance, and its branch count. Per-branch settings are read with
+ * `pio_ac_ots_instance_branch_at`. The strings are static.
+ */
+typedef struct {
+    PioStringView switchable;
+    PioStringView islanding;
+    PioStringView current_limits;
+    size_t branch_count;
+    size_t max_open;
+    bool has_max_open;
+    size_t max_switched;
+    bool has_max_switched;
+} PioAcOtsOptionsView;
+
+/**
+ * One physical branch as an AC optimal transmission switching instance
+ * sees it: its identity, initial status, whether it may switch, its
+ * switching costs, its stated current limits, and the current limits that
+ * apply under the instance's policy. Borrowed data lives with the owner.
+ */
+typedef struct {
+    PioStringView id;
+    bool initial_closed;
+    bool switchable;
+    bool has_switching_cost;
+    double open_cost;
+    double close_cost;
+    double stated_from_pu;
+    double stated_to_pu;
+    bool has_stated_from_pu;
+    bool has_stated_to_pu;
+    double current_from_pu;
+    double current_to_pu;
+    bool has_current_from_pu;
+    bool has_current_to_pu;
+} PioAcOtsBranchView;
+
+/**
+ * The totals of one AC optimal transmission switching solution. The
+ * objective includes the switching cost when the instance's objective
+ * states the switching cost term.
+ */
+typedef struct {
+    size_t branch_count;
+    size_t branches_open;
+    size_t branches_switched;
+    double switching_cost;
+    double objective;
+} PioAcOtsSolutionView;
 
 #ifdef __cplusplus
 extern "C" {
@@ -2401,6 +2644,23 @@ PioSource *pio_source_from_memory(const char *name,
                                   const uint8_t *data,
                                   size_t data_len,
                                   PioError **error);
+
+/**
+ * Construct a memory source with explicitly supplied relative companions.
+ * Copies the primary and companion bytes before returning an owned handle.
+ * This source never reads referenced files from the filesystem.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * buffers addresses buffers_len readable views; NULL is valid only at zero length.
+ */
+PioSource *pio_source_from_memory_with_buffers(const char *name,
+                                               size_t name_len,
+                                               const uint8_t *data,
+                                               size_t data_len,
+                                               const PioNamedBufferView *buffers,
+                                               size_t buffers_len,
+                                               PioError **error);
 
 /**
  *
@@ -2771,8 +3031,9 @@ size_t pio_contingency_resolution_case_unresolved_count(const PioContingencyReso
  * Read why one action of one case bound to nothing, as a fixed snake case
  * name: `no_such_bus`, `no_such_branch`, `ambiguous_branch`,
  * `ambiguous_transformer_3w`, `no_such_machine`, `no_such_shunt`,
- * `no_such_load`, `no_such_transformer_3w`, or `unrecognized`. Python reports
- * the same names.
+ * `no_such_load`, `no_such_transformer_3w`, `unrecognized`,
+ * `no_such_bus_name`, `ambiguous_bus_name`, `no_such_branch_name`, or
+ * `ambiguous_branch_name`. Python reports the same names.
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.
@@ -2822,6 +3083,22 @@ PioModule *pio_parse(const PioSource *source,
                      const char *format,
                      size_t format_len,
                      PioError **error);
+
+/**
+ * Parse with optional typed reader and acquisition selections. NULL options
+ * is identical to pio_parse. Explicit SINCAL options require the matching
+ * format token and never select or balance a network family implicitly.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * Non-NULL options and nested selections must be readable for their declared
+ * types, with all borrowed strings valid through the call.
+ */
+PioModule *pio_parse_with_options(const PioSource *source,
+                                  const char *format,
+                                  size_t format_len,
+                                  const PioParseOptions *selections,
+                                  PioError **error);
 
 /**
  * Deserialize one PowerIO IR source.
@@ -3818,6 +4095,29 @@ bool pio_mc_ac_pf_instance_load_at(const PioCalculationInstance *instance,
                                    PioError **error);
 
 /**
+ * Borrow prescribed powers and their full voltage law from a PF instance.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_mc_ac_pf_instance_load_details_at(const PioCalculationInstance *instance,
+                                           size_t index,
+                                           PioPrescribedLoadDetailsView *output,
+                                           PioError **error);
+
+/**
+ * Borrow one prescribed load terminal name, including for bounded laws.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_mc_ac_pf_instance_load_terminal_name_at(const PioCalculationInstance *instance,
+                                                 size_t load_index,
+                                                 size_t terminal_index,
+                                                 PioStringView *output,
+                                                 PioError **error);
+
+/**
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.
@@ -3836,6 +4136,8 @@ bool pio_mc_ac_pf_instance_load_terminal_at(const PioCalculationInstance *instan
 size_t pio_mc_ac_pf_instance_source_count(const PioCalculationInstance *instance);
 
 /**
+ * Legacy source parameters. Referenced sources fail with a type mismatch;
+ * use pio_mc_ac_pf_instance_source_boundary_at for both voltage endpoints.
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.
@@ -3846,6 +4148,8 @@ bool pio_mc_ac_pf_instance_source_at(const PioCalculationInstance *instance,
                                      PioError **error);
 
 /**
+ * Legacy earth-referenced terminal voltage. Referenced sources fail with a
+ * type mismatch; use pio_mc_ac_pf_instance_source_boundary_at instead.
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.
@@ -5702,6 +6006,17 @@ bool pio_multiconductor_network_load_at(const PioMulticonductorNetwork *network,
                                         PioError **error);
 
 /**
+ * Borrow a load and its complete voltage law, without cloning or serializing its network.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_multiconductor_network_load_details_at(const PioMulticonductorNetwork *network,
+                                                size_t index,
+                                                PioMulticonductorLoadDetailsView *output,
+                                                PioError **error);
+
+/**
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.
@@ -6660,6 +6975,211 @@ PioDcOperators *pio_dc_operators_retain(const PioDcOperators *operators);
 void pio_dc_operators_release(PioDcOperators *operators);
 
 /**
+ * Partition a balanced network into AC islands, as the Rust
+ * `BalancedNetwork::calc_islands` does. Two buses share an island when a path
+ * of in service branches, closed switches, and in service three winding
+ * transformer windings joins them; HVDC lines do not join islands. Buses
+ * typed isolated belong to no island and are listed by
+ * `pio_islands_isolated_bus_ids`. Islands come largest first, ties in
+ * ascending order of their smallest bus id; buses within an island in
+ * ascending id order. Release with `pio_islands_release`.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioIslands *pio_balanced_network_islands(const PioBalancedNetwork *network, PioError **error);
+
+/**
+ * The number of islands. A NULL handle has none.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+size_t pio_islands_count(const PioIslands *islands);
+
+/**
+ * Read island `index`, zero based in the order `pio_balanced_network_islands`
+ * documents. The views stay valid while the handle is alive.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_islands_at(const PioIslands *islands,
+                    size_t index,
+                    PioIslandView *output,
+                    PioError **error);
+
+/**
+ * Zero based bus table positions of the buses typed isolated, in ascending
+ * bus id order. Borrowed from the handle.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioSizeView pio_islands_isolated_bus_indices(const PioIslands *islands);
+
+/**
+ * Source bus ids of the buses typed isolated, in ascending order. Borrowed
+ * from the handle.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioSizeView pio_islands_isolated_bus_ids(const PioIslands *islands);
+
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
+PioIslands *pio_islands_retain(const PioIslands *islands);
+
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
+void pio_islands_release(PioIslands *islands);
+
+/**
+ * DC power transfer and line outage distribution factors of a balanced
+ * network, through the same Rust routine the Python binding calls
+ * (`calc_ptdf_lodf_with_options`). `formula` selects the branch susceptance
+ * as in `pio_calc_incidence_matrix`; NULL means `series_susceptance`.
+ * `solver` is `auto`, `dense`, or `sparse`; NULL means `auto`, which takes the
+ * dense factorization on small cases and the sparse one on large cases.
+ *
+ * The DC bus susceptance matrix is grounded at every reference bus, one row
+ * and column each, so a network needs one reference per island; a network
+ * that leaves an island without one fails with the matrix crate's finding.
+ * Every reference bus column of the PTDF is zero. The bus axis is the bus
+ * table in order, followed by one star bus per in service three winding
+ * transformer; the branch axis is every in service, non self loop branch in
+ * table order, followed by the three winding transformer windings. Entries
+ * at or below `1e-12` in magnitude read as zero. Release with
+ * `pio_sensitivities_release`.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioSensitivities *pio_calc_sensitivities(const PioBalancedNetwork *network,
+                                         const char *formula,
+                                         size_t formula_len,
+                                         const char *solver,
+                                         size_t solver_len,
+                                         PioError **error);
+
+/**
+ * The length of the bus axis: the PTDF column count.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+size_t pio_sensitivities_n_buses(const PioSensitivities *sensitivities);
+
+/**
+ * The length of the branch axis: the PTDF row count and the LODF order.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+size_t pio_sensitivities_n_branches(const PioSensitivities *sensitivities);
+
+/**
+ * Bus axis position to source bus id. Borrowed from the handle.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioSizeView pio_sensitivities_bus_ids(const PioSensitivities *sensitivities);
+
+/**
+ * Branch axis position to the branch table row it represents, with three
+ * winding transformer windings after the branches. Borrowed from the handle.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioSizeView pio_sensitivities_branch_rows(const PioSensitivities *sensitivities);
+
+/**
+ * The stable identity of branch axis position `index`: the source uid when
+ * one exists, else `branches:<row>`. An index past the branch axis returns an
+ * empty view. Borrowed from the handle.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioStringView pio_sensitivities_branch_identity(const PioSensitivities *sensitivities,
+                                                size_t index);
+
+/**
+ * Bus axis positions of the reference buses the build grounded, in ascending
+ * order: every reference bus of the network. Borrowed from the handle.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioSizeView pio_sensitivities_reference_bus_indices(const PioSensitivities *sensitivities);
+
+/**
+ * The PTDF, branches by buses, row major: entry `(l, k)` sits at
+ * `l * n_buses + k` and is the flow on branch `l` per unit injected at bus `k`
+ * and withdrawn at the reference bus of its island. Borrowed from the handle.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioF64View pio_sensitivities_ptdf(const PioSensitivities *sensitivities);
+
+/**
+ * The LODF, branches by branches, row major: entry `(l, k)` sits at
+ * `l * n_branches + k` and is the share of branch `k`'s pre-outage flow that
+ * moves onto branch `l` when `k` goes out. The diagonal is `-1`; a branch
+ * whose outage splits an island has a zero column. Borrowed from the handle.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioF64View pio_sensitivities_lodf(const PioSensitivities *sensitivities);
+
+/**
+ * The factorization the build used: `dense_cholesky`, `dense_inverse`,
+ * `sparse_cholesky`, `sparse_ldlt`, `sparse_lu`, or `sparse_empty`.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioStringView pio_sensitivities_solver_path(const PioSensitivities *sensitivities);
+
+/**
+ * The order of the grounded system the build factored: the bus count less
+ * the reference count.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+size_t pio_sensitivities_reduced_dimension(const PioSensitivities *sensitivities);
+
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * The input handle must remain live and immutable throughout this call.
+ */
+PioSensitivities *pio_sensitivities_retain(const PioSensitivities *sensitivities);
+
+/**
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * A non-null handle must be owned and unused by concurrent calls.
+ */
+void pio_sensitivities_release(PioSensitivities *sensitivities);
+
+/**
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.
@@ -6847,6 +7367,187 @@ PioString *pio_string_retain(const PioString *string);
  * A non-null handle must be owned and unused by concurrent calls.
  */
 void pio_string_release(PioString *string);
+
+/**
+ * Read all source parameters and the explicit voltage reference. None is
+ * indicated by has_reference_terminal=false. Terminal names use the existing
+ * network voltage-source terminal accessor at the same source index.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_multiconductor_network_voltage_source_boundary_at(const PioMulticonductorNetwork *network,
+                                                           size_t index,
+                                                           PioVoltageSourceBoundaryView *output,
+                                                           PioError **error);
+
+/**
+ * Read a complete prescribed PF source boundary. The source index and
+ * terminal order match the instance's network; use its voltage-source
+ * terminal accessor to read terminal names. Borrowed arrays and strings
+ * remain valid while their calculation-instance owner is retained.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_mc_ac_pf_instance_source_boundary_at(const PioCalculationInstance *instance,
+                                              size_t index,
+                                              PioVoltageSourceBoundaryView *output,
+                                              PioError **error);
+
+/**
+ * Return an owner-rooted AC optimal transmission switching instance view.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioCalculationInstance *pio_value_ac_ots_instance(const PioValueHandle *value, PioError **error);
+
+/**
+ * Return an owner-rooted AC optimal transmission switching solution view.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioCalculationSolution *pio_value_ac_ots_solution(const PioValueHandle *value, PioError **error);
+
+/**
+ * Construct an AC optimal transmission switching calculation module with
+ * the default options from a balanced network or AC OPF module: every
+ * initially in-service branch may switch, at zero cost, and the objective
+ * gains the switching cost term. An AC OTS module comes back unchanged.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioModule *pio_module_to_ac_ots_instance(const PioModule *module, PioError **error);
+
+/**
+ * Construct an AC optimal transmission switching calculation module with
+ * explicit options from a balanced network, AC OPF, or AC OTS module. An
+ * AC OTS module keeps its base problem and objective and takes the new
+ * options; the objective gains the switching cost term once. NULL options
+ * give exactly what `pio_module_to_ac_ots_instance` gives: only the
+ * initially in-service branches may switch, and an AC OTS module comes back
+ * unchanged.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioModule *pio_module_to_ac_ots_instance_with_options(const PioModule *module,
+                                                      const PioAcOtsOptions *options,
+                                                      PioError **error);
+
+/**
+ * Combine an AC OPF instance with explicit switching options, keeping its
+ * objective exactly, as a new module that carries the base module's
+ * records. NULL options are the defaults: every branch may switch.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioModule *pio_ac_ots_instance_create(const PioCalculationInstance *base,
+                                      const PioAcOtsOptions *options,
+                                      PioError **error);
+
+/**
+ * Read an AC optimal transmission switching instance's stated options and
+ * branch count.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_ac_ots_instance_options(const PioCalculationInstance *instance,
+                                 PioAcOtsOptionsView *output,
+                                 PioError **error);
+
+/**
+ * Read one physical branch of an AC optimal transmission switching
+ * instance by zero based branch table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_ac_ots_instance_branch_at(const PioCalculationInstance *instance_handle,
+                                   size_t index,
+                                   PioAcOtsBranchView *output,
+                                   PioError **error);
+
+/**
+ * Check a complete final branch status vector (one byte per branch in
+ * table order, 0 open and 1 closed) against the fixed branches, the
+ * budgets, and the islanding policy, and write its switching cost. This
+ * does not certify AC feasibility.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_ac_ots_instance_validate_topology(const PioCalculationInstance *instance,
+                                           const uint8_t *branch_closed,
+                                           size_t branch_count,
+                                           double *switching_cost,
+                                           PioError **error);
+
+/**
+ * The AC OPF calculation module over a validated final topology: every
+ * branch row with its final status, and the switching data the AC OPF
+ * cannot carry reported as module diagnostics.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioModule *pio_ac_ots_instance_fix_topology(const PioCalculationInstance *instance,
+                                            const uint8_t *branch_closed,
+                                            size_t branch_count,
+                                            PioError **error);
+
+/**
+ * Attach the AC OPF solution computed on the instance's fixed topology for
+ * `branch_closed`, as a new AC OTS solution module that carries the
+ * instance module's records. Construction checks the topology, the exact
+ * fixed-problem correspondence, finite values, and zero flow on open
+ * branches; it does not check residuals or optimality.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioModule *pio_ac_ots_solution_create(const PioCalculationInstance *instance,
+                                      const uint8_t *branch_closed,
+                                      size_t branch_count,
+                                      const PioCalculationSolution *ac_solution,
+                                      PioError **error);
+
+/**
+ * Read an AC optimal transmission switching solution's totals.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_ac_ots_solution_summary(const PioCalculationSolution *solution,
+                                 PioAcOtsSolutionView *output,
+                                 PioError **error);
+
+/**
+ * Read one final branch status by zero based branch table position.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_ac_ots_solution_branch_closed_at(const PioCalculationSolution *solution,
+                                          size_t index,
+                                          bool *output,
+                                          PioError **error);
+
+/**
+ * The balanced network module an AC optimal transmission switching
+ * solution states: final branch statuses with the solved bus voltages,
+ * generator dispatch, and branch flows applied, ready for `pio_emit`.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioModule *pio_ac_ots_solution_materialize(const PioCalculationSolution *solution,
+                                           PioError **error);
 
 #ifdef __cplusplus
 }  // extern "C"

@@ -474,11 +474,11 @@ mod tests {
 
     #[test]
     fn a_pipeline_run_never_replaces_an_existing_entry() {
-        let spec = crate::synth::SynthSpec {
+        let spec = powerio_synth::SynthSpec {
             n: 8,
             ..Default::default()
         };
-        let net = crate::synth::generate(&spec);
+        let net = powerio_synth::generate(&spec);
         let pipeline = Pipeline::default();
 
         // A fresh target commits the complete inventory.

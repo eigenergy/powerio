@@ -1,0 +1,24 @@
+{
+  "collection": "https://doi.org/10.4225/08/5631B1DF6F1A0",
+  "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
+  "license": "CC-BY-4.0",
+  "case": 9,
+  "source_sha256": "d2c41fae2f6fc3b9cdea75c1bcbc50f083b104440148a25274ee6ed7da57a14b",
+  "record_sha256": "fa661a3947bd171683d1b73a4e15c0d073c19c0df473f649fb32d4e8a2068592",
+  "export_sha256": "6b4501ecc79d88e497537637dcdcb93366ca20361b05af480b27cc49fb0569eb",
+  "scope": "Ideal-connection components and graph only; not a complete feeder.",
+  "connection_count": 144,
+  "closed_count": 140,
+  "open_elements": [
+    "2736",
+    "2737",
+    "2740",
+    "2741"
+  ],
+  "phase_constraint_count": 420,
+  "conductor_component_count": 1443,
+  "scipy": "1.18.1",
+  "native_execution": false,
+  "historical_results_used": false,
+  "passed": true
+}

@@ -668,6 +668,44 @@ pub fn render_diagnostics(diagnostics: &[Diagnostic]) -> Vec<String> {
     diagnostics.iter().map(render_diagnostic).collect()
 }
 
+/// Add a parse-time retention inventory to an existing cross-format loss
+/// diagnostic.
+///
+/// A reader that keeps native data only in the retained source reports each
+/// such table or field as a diagnostic whose `retention` detail is
+/// `original_source_only` or `original_mdb_only`. When a later emission
+/// reports that loss under `loss_code`, this copies those details onto the
+/// loss diagnostic as `source_inventory`, so the inventory survives IR and
+/// cross-format output without the source bytes. The function is model
+/// neutral: it reads details only and never reconstructs source bytes.
+///
+/// # Errors
+/// A diagnostic record exceeds the shared record limits.
+pub fn attach_retention_details(
+    read: &[Diagnostic],
+    emitted: &mut [Diagnostic],
+    loss_code: &str,
+) -> Result<(), Error> {
+    let inventory: Vec<Value> = read
+        .iter()
+        .filter(|d| {
+            matches!(
+                d.details().get("retention").and_then(Value::as_str),
+                Some("original_source_only" | "original_mdb_only")
+            )
+        })
+        .map(|d| Value::Object(d.details().clone()))
+        .collect();
+    for diagnostic in emitted.iter_mut().filter(|d| d.code() == loss_code) {
+        diagnostic.insert_detail("source_inventory", Value::Array(inventory.clone()))?;
+        diagnostic.insert_detail(
+            "inventory_scope",
+            Value::String("parse_time_tables_and_enumerated_fields".to_owned()),
+        )?;
+    }
+    Ok(())
+}
+
 fn bounded_identifier(value: &str) -> String {
     const LIMIT: usize = 160;
     if value.len() <= LIMIT {

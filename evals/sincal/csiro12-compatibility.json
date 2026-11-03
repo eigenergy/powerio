@@ -1,0 +1,329 @@
+{
+  "case": "CSIRO12",
+  "status": "passed with explicit compatibility assumptions",
+  "source_sha256": "7339548baf8bfcf5b891b9d3dbb6b616d9234b8f3df298d959904e150b8cfe91",
+  "record_sha256": "9861c2618515d42a972141097d8d177fa6364349e38a49a44af25d17af4f9f4e",
+  "reader_sha256": "42e4093ef13c4b54156d583b6b2cac37beff395335e7cd574e533381063d86c3",
+  "native_element_count": 215,
+  "native_electrical_node_count": 188,
+  "unused_node_ids_preserved_in_extras": [
+    "35",
+    "153",
+    "173"
+  ],
+  "original_source_echo_and_ir_verified": true,
+  "native_sincal_executed": false,
+  "native_null_control_semantics_verified": false,
+  "native_loads_are_symmetric": true,
+  "synthetic_stress_is_not_a_published_unbalanced_case": true,
+  "assumed_inactive_source_fields": [
+    "Flag_LfLimit",
+    "Flag_LfCtrl",
+    "Flag_Qctrl",
+    "Flag_Macro",
+    "Kr"
+  ],
+  "tolerances": {
+    "voltage_v": 0.001,
+    "matched_source_voltage_v": 0.0001,
+    "line_terminal_current_a": 0.0001,
+    "line_terminal_power_va": 2,
+    "load_power_va": 1e-07
+  },
+  "opendss_source_r1_x1_ohm": 1e-06,
+  "engine": "DSS C-API Library version 0.14.5 revision 87d85c2622c8281b92255335bc7c09b11191b21d based on OpenDSS SVN 3723 [FPC 3.2.2] (64-bit build) MVMULT INCREMENTAL_Y CONTEXT_API PM 20240329033829; License Status: Open \nDSS-Python version: 0.15.7\nOpenDSSDirect.py version: 0.9.4",
+  "numpy": "2.5.3",
+  "attribution": "Berry, Collins, Oliver and Perfumo (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
+  "license": "CC BY 4.0; external source models are not vendored",
+  "cases": [
+    {
+      "hours": 0,
+      "synthetic_unequal_delta_branch_stress": false,
+      "native_nodes_compared": 188,
+      "complex_voltages_compared": 564,
+      "line_terminal_currents_and_powers_compared": 918,
+      "maximum_voltage_error_v": 0.0001239901563732084,
+      "matched_source_voltage_error_v": 1.6102785171118426e-05,
+      "maximum_line_terminal_current_error_a": 5.0993011942500395e-08,
+      "maximum_line_terminal_power_error_va": 0.0014235942140888359,
+      "maximum_load_power_error_va": 5.820766091346741e-11,
+      "typed_kcl_residual_a": 1.6654824048734328e-08,
+      "matched_kcl_residual_a": 1.7254620151267295e-08,
+      "typed_iterations": 7,
+      "deck_sha256": "1b621b6ac2a4e5319a139d74f205eb77e0338929403307820b13c69f736124c6"
+    },
+    {
+      "hours": 0,
+      "synthetic_unequal_delta_branch_stress": true,
+      "native_nodes_compared": 188,
+      "complex_voltages_compared": 564,
+      "line_terminal_currents_and_powers_compared": 918,
+      "maximum_voltage_error_v": 0.00019576640904857046,
+      "matched_source_voltage_error_v": 1.5728210752566683e-05,
+      "maximum_line_terminal_current_error_a": 7.13644744327455e-08,
+      "maximum_line_terminal_power_error_va": 0.0020146142321021097,
+      "maximum_load_power_error_va": 2.9103830456733704e-11,
+      "typed_kcl_residual_a": 1.9579935857680287e-08,
+      "matched_kcl_residual_a": 2.3579204270936853e-08,
+      "typed_iterations": 6,
+      "deck_sha256": "502cd6078c3ec5ae613ddd93efc1ab1250f60af6355541eea023804ea60938fe"
+    },
+    {
+      "hours": 0.25,
+      "synthetic_unequal_delta_branch_stress": false,
+      "native_nodes_compared": 188,
+      "complex_voltages_compared": 564,
+      "line_terminal_currents_and_powers_compared": 918,
+      "maximum_voltage_error_v": 0.0001242621634327466,
+      "matched_source_voltage_error_v": 1.546702974303541e-05,
+      "maximum_line_terminal_current_error_a": 7.327565526689039e-08,
+      "maximum_line_terminal_power_error_va": 0.0020771781697733285,
+      "maximum_load_power_error_va": 5.820766091346741e-11,
+      "typed_kcl_residual_a": 1.578395246221894e-08,
+      "matched_kcl_residual_a": 2.214123121535807e-08,
+      "typed_iterations": 6,
+      "deck_sha256": "9a0ee18e2281eb567beaba349962824c33cc34879a76b11dbea77baa7448b575"
+    },
+    {
+      "hours": 0.25,
+      "synthetic_unequal_delta_branch_stress": true,
+      "native_nodes_compared": 188,
+      "complex_voltages_compared": 564,
+      "line_terminal_currents_and_powers_compared": 918,
+      "maximum_voltage_error_v": 0.00019722288847572644,
+      "matched_source_voltage_error_v": 1.607161323306641e-05,
+      "maximum_line_terminal_current_error_a": 5.6071001998857e-08,
+      "maximum_line_terminal_power_error_va": 0.0018674319890275744,
+      "maximum_load_power_error_va": 1.1641532182693481e-10,
+      "typed_kcl_residual_a": 1.7172739761495756e-08,
+      "matched_kcl_residual_a": 1.899532792565519e-08,
+      "typed_iterations": 6,
+      "deck_sha256": "1714ab651f09acdeea1197601b8227188f86bcd2be9f0bdbbb54ad7e5be2614d"
+    },
+    {
+      "hours": 12,
+      "synthetic_unequal_delta_branch_stress": false,
+      "native_nodes_compared": 188,
+      "complex_voltages_compared": 564,
+      "line_terminal_currents_and_powers_compared": 918,
+      "maximum_voltage_error_v": 0.00023450250637681048,
+      "matched_source_voltage_error_v": 1.5781223121512555e-05,
+      "maximum_line_terminal_current_error_a": 8.126957653642231e-08,
+      "maximum_line_terminal_power_error_va": 0.002700796814880289,
+      "maximum_load_power_error_va": 2.9103830456733704e-11,
+      "typed_kcl_residual_a": 1.837445391057884e-08,
+      "matched_kcl_residual_a": 1.6950326713920847e-08,
+      "typed_iterations": 9,
+      "deck_sha256": "17d9fda79e1ee2265fb7b337384396dd5951674c34fbde10e7bf5683a74235dc"
+    },
+    {
+      "hours": 12,
+      "synthetic_unequal_delta_branch_stress": true,
+      "native_nodes_compared": 188,
+      "complex_voltages_compared": 564,
+      "line_terminal_currents_and_powers_compared": 918,
+      "maximum_voltage_error_v": 0.00036909913551596055,
+      "matched_source_voltage_error_v": 1.5504361236558315e-05,
+      "maximum_line_terminal_current_error_a": 7.694085604338024e-08,
+      "maximum_line_terminal_power_error_va": 0.0030882931122795374,
+      "maximum_load_power_error_va": 1.1641532182693481e-10,
+      "typed_kcl_residual_a": 1.754117712043521e-08,
+      "matched_kcl_residual_a": 1.4093467919548559e-08,
+      "typed_iterations": 7,
+      "deck_sha256": "3c0b7f392cc7158d2b11987134122488fd59cf825e947c1344769a47b1c7e238"
+    },
+    {
+      "hours": 23.75,
+      "synthetic_unequal_delta_branch_stress": false,
+      "native_nodes_compared": 188,
+      "complex_voltages_compared": 564,
+      "line_terminal_currents_and_powers_compared": 918,
+      "maximum_voltage_error_v": 0.00013088919963169995,
+      "matched_source_voltage_error_v": 1.5453730790070737e-05,
+      "maximum_line_terminal_current_error_a": 8.262099974232335e-08,
+      "maximum_line_terminal_power_error_va": 0.0021414152417623448,
+      "maximum_load_power_error_va": 5.820766091346741e-11,
+      "typed_kcl_residual_a": 2.075816330055905e-08,
+      "matched_kcl_residual_a": 1.6298145055770874e-08,
+      "typed_iterations": 6,
+      "deck_sha256": "f39bb80dc8087519431fd2d788deead14282964a7c4871a54e8c8d2e9c105963"
+    },
+    {
+      "hours": 23.75,
+      "synthetic_unequal_delta_branch_stress": true,
+      "native_nodes_compared": 188,
+      "complex_voltages_compared": 564,
+      "line_terminal_currents_and_powers_compared": 918,
+      "maximum_voltage_error_v": 0.0002075171572934587,
+      "matched_source_voltage_error_v": 1.5853327234247412e-05,
+      "maximum_line_terminal_current_error_a": 6.468291494639195e-08,
+      "maximum_line_terminal_power_error_va": 0.001910099373521515,
+      "maximum_load_power_error_va": 1.1641532182693481e-10,
+      "typed_kcl_residual_a": 2.0051229433244527e-08,
+      "matched_kcl_residual_a": 1.3504177331924438e-08,
+      "typed_iterations": 6,
+      "deck_sha256": "34e10473ac6ba12c51dd2b86c4cae7a0596e2b7c6dd0e77965fe7b11aeceefcc"
+    },
+    {
+      "hours": 24,
+      "synthetic_unequal_delta_branch_stress": false,
+      "native_nodes_compared": 188,
+      "complex_voltages_compared": 564,
+      "line_terminal_currents_and_powers_compared": 918,
+      "maximum_voltage_error_v": 0.0001239901563732084,
+      "matched_source_voltage_error_v": 1.6102785171118426e-05,
+      "maximum_line_terminal_current_error_a": 5.0993011942500395e-08,
+      "maximum_line_terminal_power_error_va": 0.0014235942140888359,
+      "maximum_load_power_error_va": 5.820766091346741e-11,
+      "typed_kcl_residual_a": 1.6654824048734328e-08,
+      "matched_kcl_residual_a": 1.7254620151267295e-08,
+      "typed_iterations": 7,
+      "deck_sha256": "1b621b6ac2a4e5319a139d74f205eb77e0338929403307820b13c69f736124c6"
+    },
+    {
+      "hours": 24,
+      "synthetic_unequal_delta_branch_stress": true,
+      "native_nodes_compared": 188,
+      "complex_voltages_compared": 564,
+      "line_terminal_currents_and_powers_compared": 918,
+      "maximum_voltage_error_v": 0.00019576640904857046,
+      "matched_source_voltage_error_v": 1.5728210752566683e-05,
+      "maximum_line_terminal_current_error_a": 7.13644744327455e-08,
+      "maximum_line_terminal_power_error_va": 0.0020146142321021097,
+      "maximum_load_power_error_va": 2.9103830456733704e-11,
+      "typed_kcl_residual_a": 1.9579935857680287e-08,
+      "matched_kcl_residual_a": 2.3579204270936853e-08,
+      "typed_iterations": 6,
+      "deck_sha256": "502cd6078c3ec5ae613ddd93efc1ab1250f60af6355541eea023804ea60938fe"
+    }
+  ],
+  "generic_consumers": [
+    {
+      "hours": 0,
+      "generic_matrix_diagnostics": 0,
+      "power_flow_instance": {
+        "constructed": true
+      },
+      "reader_diagnostics": [
+        {
+          "code": "READ.DIST.SINCAL_RETAINED_SOURCE_ONLY",
+          "message": "Only the selected conductor-resolved load-flow profile is typed. Fault, dynamic, protection, diagram, result and other native project data remain in retained source. An acquired-table companion is caller-supplied input, not a native export or independent attestation."
+        },
+        {
+          "code": "READ.DIST.SINCAL_UNCONNECTED_NODES",
+          "message": "3 native nodes have no declared equipment conductors; preserved as sincal_unconnected_nodes in extras, without inventing electrical terminals"
+        },
+        {
+          "code": "READ.DIST.SINCAL_ASSUMED_INACTIVE_SOURCE_CONTROLS",
+          "message": "Experimental compatibility: Infeeder.181 NULL fields Flag_LfLimit, Flag_LfCtrl, Flag_Qctrl, Flag_Macro, Kr assumed zero/inactive; native SINCAL behavior is unverified"
+        }
+      ]
+    },
+    {
+      "hours": 0.25,
+      "generic_matrix_diagnostics": 0,
+      "power_flow_instance": {
+        "constructed": true
+      },
+      "reader_diagnostics": [
+        {
+          "code": "READ.DIST.SINCAL_RETAINED_SOURCE_ONLY",
+          "message": "Only the selected conductor-resolved load-flow profile is typed. Fault, dynamic, protection, diagram, result and other native project data remain in retained source. An acquired-table companion is caller-supplied input, not a native export or independent attestation."
+        },
+        {
+          "code": "READ.DIST.SINCAL_UNCONNECTED_NODES",
+          "message": "3 native nodes have no declared equipment conductors; preserved as sincal_unconnected_nodes in extras, without inventing electrical terminals"
+        },
+        {
+          "code": "READ.DIST.SINCAL_ASSUMED_INACTIVE_SOURCE_CONTROLS",
+          "message": "Experimental compatibility: Infeeder.181 NULL fields Flag_LfLimit, Flag_LfCtrl, Flag_Qctrl, Flag_Macro, Kr assumed zero/inactive; native SINCAL behavior is unverified"
+        }
+      ]
+    },
+    {
+      "hours": 12,
+      "generic_matrix_diagnostics": 0,
+      "power_flow_instance": {
+        "constructed": true
+      },
+      "reader_diagnostics": [
+        {
+          "code": "READ.DIST.SINCAL_RETAINED_SOURCE_ONLY",
+          "message": "Only the selected conductor-resolved load-flow profile is typed. Fault, dynamic, protection, diagram, result and other native project data remain in retained source. An acquired-table companion is caller-supplied input, not a native export or independent attestation."
+        },
+        {
+          "code": "READ.DIST.SINCAL_UNCONNECTED_NODES",
+          "message": "3 native nodes have no declared equipment conductors; preserved as sincal_unconnected_nodes in extras, without inventing electrical terminals"
+        },
+        {
+          "code": "READ.DIST.SINCAL_ASSUMED_INACTIVE_SOURCE_CONTROLS",
+          "message": "Experimental compatibility: Infeeder.181 NULL fields Flag_LfLimit, Flag_LfCtrl, Flag_Qctrl, Flag_Macro, Kr assumed zero/inactive; native SINCAL behavior is unverified"
+        }
+      ]
+    },
+    {
+      "hours": 23.75,
+      "generic_matrix_diagnostics": 0,
+      "power_flow_instance": {
+        "constructed": true
+      },
+      "reader_diagnostics": [
+        {
+          "code": "READ.DIST.SINCAL_RETAINED_SOURCE_ONLY",
+          "message": "Only the selected conductor-resolved load-flow profile is typed. Fault, dynamic, protection, diagram, result and other native project data remain in retained source. An acquired-table companion is caller-supplied input, not a native export or independent attestation."
+        },
+        {
+          "code": "READ.DIST.SINCAL_UNCONNECTED_NODES",
+          "message": "3 native nodes have no declared equipment conductors; preserved as sincal_unconnected_nodes in extras, without inventing electrical terminals"
+        },
+        {
+          "code": "READ.DIST.SINCAL_ASSUMED_INACTIVE_SOURCE_CONTROLS",
+          "message": "Experimental compatibility: Infeeder.181 NULL fields Flag_LfLimit, Flag_LfCtrl, Flag_Qctrl, Flag_Macro, Kr assumed zero/inactive; native SINCAL behavior is unverified"
+        }
+      ]
+    },
+    {
+      "hours": 24,
+      "generic_matrix_diagnostics": 0,
+      "power_flow_instance": {
+        "constructed": true
+      },
+      "reader_diagnostics": [
+        {
+          "code": "READ.DIST.SINCAL_RETAINED_SOURCE_ONLY",
+          "message": "Only the selected conductor-resolved load-flow profile is typed. Fault, dynamic, protection, diagram, result and other native project data remain in retained source. An acquired-table companion is caller-supplied input, not a native export or independent attestation."
+        },
+        {
+          "code": "READ.DIST.SINCAL_UNCONNECTED_NODES",
+          "message": "3 native nodes have no declared equipment conductors; preserved as sincal_unconnected_nodes in extras, without inventing electrical terminals"
+        },
+        {
+          "code": "READ.DIST.SINCAL_ASSUMED_INACTIVE_SOURCE_CONTROLS",
+          "message": "Experimental compatibility: Infeeder.181 NULL fields Flag_LfLimit, Flag_LfCtrl, Flag_Qctrl, Flag_Macro, Kr assumed zero/inactive; native SINCAL behavior is unverified"
+        }
+      ]
+    }
+  ],
+  "negative_controls": [
+    {
+      "mutation": "missing-load",
+      "rejected": true,
+      "reason": "native load identity coverage differs"
+    },
+    {
+      "mutation": "missing-capacitor",
+      "rejected": true,
+      "reason": "native capacitor identity coverage differs"
+    },
+    {
+      "mutation": "missing-mutual-impedance",
+      "rejected": true,
+      "reason": "comparison failed: volts=106.30508652742475, matched=106.3053091366425, loadVA=2.9103830456733704e-11, amps=1.1027166419044447, terminalVA=14324.731518719751"
+    },
+    {
+      "mutation": "wrong-profile-factor",
+      "rejected": true,
+      "reason": "comparison failed: volts=10.674765808567518, matched=10.674579421839008, loadVA=79031.14690000005, amps=15.113952116643096, terminalVA=196336.2811672976"
+    }
+  ]
+}

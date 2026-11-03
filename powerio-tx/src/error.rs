@@ -95,6 +95,34 @@ pub enum Error {
     )]
     UngroundedComponent { components: usize },
 
+    /// Closed switches join buses that a calculation which models no
+    /// switches would leave apart: raised by
+    /// [`IndexedNetwork::check_closed_switches`](crate::IndexedNetwork::check_closed_switches)
+    /// and by normalization under
+    /// [`ClosedSwitchPolicy::Refuse`](crate::ClosedSwitchPolicy::Refuse) or
+    /// when its requested merge leaves an eligible closed switch in place.
+    #[error(
+        "{closed} closed switch(es) join distinct buses (the first, switch row {row}, joins buses {from} and {to}), and this calculation does not model switches; merge their buses first: to_normalized under the default ClosedSwitchPolicy::Merge or BusMergeRule::closed_switches() with merge_buses in Rust, to_normalized(closed_switches=\"merge\") or merge_buses(closed_switches=True) in Python, or --merge-buses switches on the command line"
+    )]
+    ClosedSwitch {
+        row: usize,
+        from: BusId,
+        to: BusId,
+        closed: usize,
+    },
+
+    /// A [`BusMergeRule`](crate::BusMergeRule) that cannot be applied.
+    #[error("invalid bus merge rule: {message}")]
+    BusMergeRule { message: String },
+
+    /// A merged network solution whose shape does not match the merge.
+    #[error("merged flow input `{what}` has {got} entries; the merge needs {expected}")]
+    MergedFlowShape {
+        what: &'static str,
+        expected: usize,
+        got: usize,
+    },
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
@@ -148,6 +176,9 @@ impl Error {
             | Error::BadFloat { .. }
             | Error::BadId { .. }
             | Error::UnbalancedBrackets(_) => &codes::PARSE_MATPOWER_MALFORMED,
+            Error::FormatRead {
+                format: "sincal", ..
+            } => &codes::PARSE_SINCAL_MALFORMED,
             Error::FormatRead { .. } => &codes::PARSE_SOURCE_MALFORMED,
             Error::Emit { .. } => &codes::EMIT_FORMAT_REQUIRED_VALUE_MISSING,
             Error::Io(_) => &codes::READ_IO_FAILED,
@@ -165,6 +196,9 @@ impl Error {
             Error::InvalidBaseMva { .. } => &codes::CANONICALIZE_NORMALIZE_INVALID_BASE_MVA,
             Error::InvalidNormalizeOption { .. } => &codes::CANONICALIZE_NORMALIZE_INVALID_OPTION,
             Error::UngroundedComponent { .. } => &codes::BUILD_INDEX_UNGROUNDED_COMPONENT,
+            Error::ClosedSwitch { .. } => &codes::BUILD_SWITCH_CLOSED,
+            Error::BusMergeRule { .. } => &codes::CANONICALIZE_MERGE_INVALID_RULE,
+            Error::MergedFlowShape { .. } => &codes::CANONICALIZE_MERGE_FLOW_SHAPE_MISMATCH,
             Error::UnlocatedElements { .. } => &codes::BUILD_GEO_UNLOCATED_ELEMENTS,
             Error::UnknownFormat(_) => &codes::REQUEST_FORMAT_UNKNOWN,
             Error::WriteUnsupported { .. } => &codes::REQUEST_FORMAT_WRITE_UNSUPPORTED,
@@ -209,6 +243,9 @@ impl Error {
             | Error::InvalidBaseMva { .. }
             | Error::InvalidNormalizeOption { .. }
             | Error::UngroundedComponent { .. }
+            | Error::ClosedSwitch { .. }
+            | Error::BusMergeRule { .. }
+            | Error::MergedFlowShape { .. }
             | Error::UnlocatedElements { .. } => C::Data,
         }
     }
@@ -283,6 +320,20 @@ mod tests {
                 value: 0.0,
             },
             Error::UngroundedComponent { components: 1 },
+            Error::ClosedSwitch {
+                row: 0,
+                from: BusId(1),
+                to: BusId(2),
+                closed: 1,
+            },
+            Error::BusMergeRule {
+                message: "threshold".into(),
+            },
+            Error::MergedFlowShape {
+                what: "branch_p_from",
+                expected: 2,
+                got: 1,
+            },
             Error::UnlocatedElements {
                 buses: 1,
                 branches: 0,

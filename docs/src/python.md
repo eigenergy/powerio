@@ -140,10 +140,7 @@ in a `.sub` file through bus, area, zone, owner and kV range selectors; a
 `.con` automatic specification and a `.mon` statement refer to a subsystem by
 name, and selecting a subsystem's buses evaluates its selectors against a
 network. A monitored set is the content of a `.mon` file: the elements whose
-loading and voltage a study reports. A geo layer is a coordinate document kept
-beside a case: points for buses and routes for branches in one coordinate
-space, keyed by element identity, read from five text forms and written as a
-GeoJSON FeatureCollection carrying a `powerio_geo` member.
+loading and voltage a study reports.
 
 A `.con`, `.sub`, or `.mon` file parses to `ContingencySet`, `SubsystemSet`,
 or `MonitoredSet`. Each has a `text` property holding the file. A contingency
@@ -276,6 +273,57 @@ network alone: net bus injection quantities have no balanced network field, so
 they are dropped and the property reports nothing. `emit` states that same
 omission as `EMIT.OPERATING_POINT.DATA_OMITTED`, so emit the collection when
 you need the diagnostic.
+
+## AC optimal transmission switching
+
+`module.to_ac_ots_instance()` builds an `AcOtsInstance` from a balanced
+network, AC OPF, or AC OTS module. With no argument every initially in-service
+branch may switch, at zero cost, islanding is forbidden, and there is no
+budget and no current limit. Any keyword argument makes the options explicit,
+as the C ABI's `PioAcOtsOptions` and PowerIO.jl's `AcOtsOptions` do; then an
+option not given takes its explicit default, and `switchable` defaults to
+`"all"`, which includes the initially open branches.
+
+```python
+inst = module.to_ac_ots_instance(
+    switchable=["branches:0", "branches:1"],   # or "all", "none"
+    switching_costs={"branches:0": (4.0, 7.0)},  # (open_cost, close_cost)
+    islanding="forbidden",                     # or "allowed"
+    max_open=None,
+    max_switched=1,
+    current_limits="stated",                   # or "skip", "derive_from_rate_a"
+    stated_current_limits={"branches:1": (1.25, None)},  # per unit; None is unbounded
+).value
+
+inst.options     # the options above, as keyword arguments
+inst.branches    # one dict per branch: id, initial_closed, switchable,
+                 # switching_cost, stated_current, current
+
+closed = [True] * len(inst.branches)
+closed[0] = False
+cost = inst.validate_topology(closed)          # 4.0
+fixed, diagnostics = inst.fix_topology(closed)  # an AcOpfInstance, and what it drops
+
+solution = powerio.AcOtsSolution.from_ac_opf_solution(inst, closed, ac_solution)
+solution.branch_closed, solution.switching_cost
+solution.branches_open, solution.branches_switched, solution.objective
+solved = solution.solved_network()  # a BalancedNetwork module with the final statuses
+```
+
+`inst.options` spells the options as the keyword arguments, so
+`module.to_ac_ots_instance(**inst.options)` rebuilds the same switching
+options. `validate_topology` checks a final status vector, one boolean per
+branch in table order, against the branches that cannot switch, the budgets,
+and the islanding policy, and returns the switching cost; it does not check AC
+feasibility. A refused topology raises `PowerIOError` with code
+`BUILD.INSTANCE.TOPOLOGY_INVALID`, and refused options raise one with
+`BUILD.INSTANCE.SWITCHING_OPTIONS_INVALID`. `fix_topology` returns the AC OPF
+to solve over that topology and the diagnostics that report the switching
+data it drops; the instance's module carries them as well.
+`AcOtsSolution.from_ac_opf_solution` attaches an `AcOpfSolution` of that
+problem, after checking that it solves exactly the fixed problem and that open
+branches carry no flow. A solution's own `network` keeps the initial statuses;
+emit `solved_network()` to write the solved case.
 
 ## Other functions
 

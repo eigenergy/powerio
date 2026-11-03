@@ -839,21 +839,21 @@ fn multiconductor_connectivity(
         }
     }
     for transformer in network.transformers() {
-        for left in 0..transformer.windings.len() {
-            for right in (left + 1)..transformer.windings.len() {
-                if let (Some(from), Some(to)) = (
-                    row(&transformer.windings[left].bus),
-                    row(&transformer.windings[right].bus),
-                ) {
-                    edges.push((from, to));
-                }
-            }
+        // A star and a complete graph have the same connectivity partition.
+        // Avoid quadratic work now that instance construction also uses this
+        // check. Skip unresolved IDs consistently with the other edge types;
+        // callers needing validation run electrical readiness separately.
+        let mut windings = transformer.windings.iter().filter_map(|w| row(&w.bus));
+        if let Some(first) = windings.next() {
+            edges.extend(windings.map(|other| (first, other)));
         }
     }
     connectivity_partition(network.buses().len(), edges)
 }
 
-fn multiconductor_network_connectivity(network: &MulticonductorNetwork) -> Vec<usize> {
+/// Necessary bus-level connectivity, not conductor energization or rank.
+/// Reused by instance construction after electrical readiness validates IDs.
+pub(crate) fn multiconductor_network_connectivity(network: &MulticonductorNetwork) -> Vec<usize> {
     multiconductor_connectivity(network, |row| !network.switches()[row].open)
 }
 
@@ -2234,6 +2234,32 @@ mod tests {
 
     use super::*;
     use crate::BalancedOperatingPointBuilder;
+
+    #[test]
+    fn winding_connectivity_keeps_all_resolved_buses_in_one_partition() {
+        use powerio_dist::{DistTransformer, DistWinding, DistWindingConn};
+        let mut network = MulticonductorNetwork::new();
+        let count = 1024;
+        network
+            .buses_mut()
+            .extend((0..=count).map(|i| DistBus::new(i.to_string(), vec!["1".into()])));
+        let winding = |bus: String| {
+            DistWinding::new(bus, vec!["1".into()], DistWindingConn::Wye, 230.0, 1000.0)
+        };
+        let mut windings = vec![winding("unresolved".into())];
+        windings.extend((0..count).rev().map(|i| winding(i.to_string())));
+        network.transformers_mut().push(DistTransformer::new(
+            "many-windings",
+            windings,
+            Vec::new(),
+            1,
+        ));
+        // This is a topology-only test. Validation of the deliberately absent
+        // winding bus and electrical parameters belongs to readiness.
+        let partition = multiconductor_network_connectivity(&network);
+        assert!(partition[..count].iter().all(|root| *root == partition[0]));
+        assert_ne!(partition[count], partition[0]);
+    }
 
     fn component(component_type: &str, local_id: &str) -> ComponentId {
         ComponentId::new(component_type, local_id).unwrap()

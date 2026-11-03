@@ -64,6 +64,11 @@ pub enum DistTargetFormat {
     Dss,
     BmopfJson,
     PmdJson,
+    /// Distribution CIM: one CIM100 RDF/XML document, or a directory of them
+    /// on input.
+    CimDist,
+    Gridlabd,
+    GridlabdArras,
 }
 
 /// Format specific policies for distribution network emission.
@@ -79,7 +84,10 @@ impl EmitOptions {
         match format {
             DistTargetFormat::Dss => self.dss == crate::dss::DssEmitOptions::default(),
             DistTargetFormat::BmopfJson => self.bmopf == crate::bmopf::BmopfEmitOptions::default(),
-            DistTargetFormat::PmdJson => true,
+            DistTargetFormat::PmdJson
+            | DistTargetFormat::CimDist
+            | DistTargetFormat::Gridlabd
+            | DistTargetFormat::GridlabdArras => true,
         }
     }
 }
@@ -89,8 +97,11 @@ pub fn parse_dist_target_format(name: &str) -> Option<DistTargetFormat> {
     let key = canonical_key(name);
     match key.as_str() {
         "dss" | "opendss" => Some(DistTargetFormat::Dss),
+        "glm" | "gridlabd" | "gridlabdpnnl" => Some(DistTargetFormat::Gridlabd),
+        "gridlabdarras" => Some(DistTargetFormat::GridlabdArras),
         "pmd" | "pmdjson" | "engineering" => Some(DistTargetFormat::PmdJson),
         "bmopf" | "bmopfjson" => Some(DistTargetFormat::BmopfJson),
+        "cimdist" => Some(DistTargetFormat::CimDist),
         _ => None,
     }
 }
@@ -106,13 +117,16 @@ impl std::str::FromStr for DistTargetFormat {
 }
 
 impl DistTargetFormat {
-    /// The canonical format name (`dss`, `pmd-json`, `bmopf-json`), accepted
+    /// The canonical format name, accepted
     /// back by [`parse_dist_target_format`].
     pub fn name(self) -> &'static str {
         match self {
             DistTargetFormat::Dss => "dss",
+            DistTargetFormat::Gridlabd => "gridlabd",
+            DistTargetFormat::GridlabdArras => "gridlabd-arras",
             DistTargetFormat::PmdJson => "pmd-json",
             DistTargetFormat::BmopfJson => "bmopf-json",
+            DistTargetFormat::CimDist => "cim-dist",
         }
     }
 }
@@ -338,8 +352,12 @@ pub fn classify_distribution_json(text: &str) -> crate::Result<DistTargetFormat>
 /// a same format emission echoes the input bytes exactly.
 ///
 /// The format comes from the source's declared format when one was selected,
-/// the `.dss` extension otherwise, and for `.json` from
-/// [`classify_distribution_json`].
+/// the `.dss` or `.glm` extension otherwise, and for `.json` from
+/// [`classify_distribution_json`]. GridLAB-D defaults to the PNNL 5.3 profile
+/// (`gridlabd`, aliases `glm` and `gridlabd-pnnl`); `gridlabd-arras` selects
+/// the Arras 4.3 profile explicitly. See [`crate::glm::parse`] for explicit
+/// preprocessing inputs and the supported electrical profile.
+/// XML documents and directories use distribution CIM detection.
 ///
 /// # Errors
 /// The operation failure carries the reader's findings up to the failure and
@@ -348,18 +366,58 @@ pub fn classify_distribution_json(text: &str) -> crate::Result<DistTargetFormat>
 pub fn parse(
     source: powerio_core::Source,
 ) -> std::result::Result<powerio_core::PioModule<MulticonductorNetwork>, powerio_core::Error> {
+    if source
+        .format()
+        .is_some_and(|f| is_sincal_multiconductor_token(f.as_str()))
+    {
+        return Err(sincal_feature_disabled(&source));
+    }
+    let selected = source
+        .format()
+        .and_then(|id| parse_dist_target_format(id.as_str()));
+    if matches!(
+        selected,
+        Some(DistTargetFormat::Gridlabd | DistTargetFormat::GridlabdArras)
+    ) || (source.format().is_none()
+        && std::path::Path::new(source.name())
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("glm")))
+    {
+        let dialect = if selected == Some(DistTargetFormat::GridlabdArras) {
+            crate::glm::GlmDialect::Arras4_3
+        } else {
+            crate::glm::GlmDialect::Pnnl5_3
+        };
+        return crate::glm::parse(
+            source,
+            crate::glm::PreprocessOptions {
+                dialect,
+                ..Default::default()
+            },
+        );
+    }
     let mut warnings = crate::collect::Diagnostics::new();
-    match parse_to_network(&source, &mut warnings) {
-        Ok(network) => {
-            let format = *network.source_format();
+    let mut dss_replay = None;
+    match parse_to_network(&source, &mut warnings, &mut dss_replay) {
+        Ok((network, format)) => {
             // Record the detected format before the common constructor builds
             // descriptors and the coarse `/value` source map.
-            let source =
-                match format.and_then(|format| powerio_core::FormatId::new(format.name()).ok()) {
-                    Some(format) => source.with_format(format),
-                    None => source,
-                };
-            powerio_core::PioModule::parsed(network, source, warnings.into_records())
+            let source = match powerio_core::FormatId::new(format.name()) {
+                Ok(format) => source.with_format(format),
+                Err(_) => source,
+            };
+            let mut module =
+                powerio_core::PioModule::parsed(network, source, warnings.into_records())?;
+            if let Some(replay) = dss_replay {
+                module.insert_extension(
+                    "org.powerio.opendss",
+                    serde_json::json!({
+                        "version": 1, "absolute_dependency": replay.absolute_dependency,
+                        "dependencies": replay.dependencies.iter().map(powerio_core::SourceId::as_str).collect::<Vec<_>>(),
+                    }),
+                )?;
+            }
+            Ok(module)
         }
         Err(error) => {
             let core = powerio_core::Error::new(error.code(), error.to_string());
@@ -371,17 +429,13 @@ pub fn parse(
     }
 }
 
-/// The format dispatch behind [`parse`].
+/// The format dispatch behind [`parse`]: the network and the format it was
+/// read as.
 fn parse_to_network(
     source: &powerio_core::Source,
     warnings: &mut crate::collect::Diagnostics,
-) -> crate::Result<MulticonductorNetwork> {
-    if source.is_directory() {
-        return Err(crate::Error::UnknownFormat(format!(
-            "{} is a directory, and no distribution case format is a directory; pass a case file",
-            source.name()
-        )));
-    }
+    dss_replay: &mut Option<crate::dss::read::ReplayContext>,
+) -> crate::Result<(MulticonductorNetwork, DistTargetFormat)> {
     let declared = source
         .format()
         .map(powerio_core::FormatId::as_str)
@@ -390,8 +444,23 @@ fn parse_to_network(
                 .ok_or_else(|| crate::Error::UnknownFormat(name.to_string()))
         })
         .transpose()?;
+    if source.is_directory() {
+        let cim = declared.map_or_else(
+            || crate::cim::source_looks_like_cim_dist(source),
+            |format| format == DistTargetFormat::CimDist,
+        );
+        if !cim {
+            return Err(crate::Error::UnknownFormat(format!(
+                "{} is a directory, and the only distribution format read from a directory is \
+                 a cim-dist document set; pass a case file",
+                source.name()
+            )));
+        }
+    }
     let format = if let Some(format) = declared {
         format
+    } else if source.is_directory() {
+        DistTargetFormat::CimDist
     } else {
         let ext = std::path::Path::new(source.name())
             .extension()
@@ -404,11 +473,19 @@ fn parse_to_network(
                 let buffer = primary(source)?;
                 classify_distribution_json(source_text(&buffer)?)?
             }
+            "xml" if crate::cim::looks_like_cim_dist(primary(source)?.content_bytes()) => {
+                DistTargetFormat::CimDist
+            }
             other => return Err(crate::Error::UnknownFormat(other.to_string())),
         }
     };
-    match format {
-        DistTargetFormat::Dss => crate::dss::read::parse_dss_collecting(source, warnings),
+    let network = match format {
+        DistTargetFormat::Gridlabd | DistTargetFormat::GridlabdArras => Err(
+            crate::Error::UnknownFormat("GLM project requires the project parser".into()),
+        ),
+        DistTargetFormat::Dss => {
+            crate::dss::read::parse_dss_collecting(source, warnings, dss_replay)
+        }
         DistTargetFormat::BmopfJson => {
             let buffer = primary(source)?;
             crate::bmopf::read::parse_bmopf_collecting(source_text(&buffer)?, warnings)
@@ -417,11 +494,13 @@ fn parse_to_network(
             let buffer = primary(source)?;
             crate::pmd::read::parse_pmd_collecting(source_text(&buffer)?, warnings)
         }
-    }
+        DistTargetFormat::CimDist => crate::cim::parse_cim_collecting(source, warnings),
+    }?;
+    Ok((network, format))
 }
 
 /// The retained primary buffer of a file or in-memory source.
-fn primary(source: &powerio_core::Source) -> crate::Result<powerio_core::SourceBuffer> {
+pub(crate) fn primary(source: &powerio_core::Source) -> crate::Result<powerio_core::SourceBuffer> {
     source
         .primary_buffer()
         .map_err(|error| crate::Error::FormatRead {
@@ -433,7 +512,7 @@ fn primary(source: &powerio_core::Source) -> crate::Result<powerio_core::SourceB
 /// The buffer's decode slice as UTF-8 text: the retained bytes with a leading
 /// byte order mark skipped, so the mark survives for the echo and never
 /// reaches a reader.
-fn source_text(buffer: &powerio_core::SourceBuffer) -> crate::Result<&str> {
+pub(crate) fn source_text(buffer: &powerio_core::SourceBuffer) -> crate::Result<&str> {
     std::str::from_utf8(buffer.content_bytes()).map_err(|e| crate::Error::FormatRead {
         format: "case text",
         message: format!("not valid UTF-8: {e}"),
@@ -450,8 +529,26 @@ impl DistTargetFormat {
                     Some(DistSourceFormat::BmopfJson)
                 )
                 | (DistTargetFormat::PmdJson, Some(DistSourceFormat::PmdJson))
+                | (DistTargetFormat::CimDist, Some(DistSourceFormat::CimDist))
         )
     }
+}
+
+/// Whether `name` spells the explicit conductor-resolved SINCAL profile.
+pub(crate) fn is_sincal_multiconductor_token(name: &str) -> bool {
+    name.chars()
+        .filter(|c| !matches!(c, '-' | '_' | ' '))
+        .collect::<String>()
+        .eq_ignore_ascii_case("sincalmulticonductor")
+}
+
+/// The refusal a SINCAL source meets in a build without the `sincal` feature.
+fn sincal_feature_disabled(source: &powerio_core::Source) -> powerio_core::Error {
+    powerio_core::Error::new(
+        &crate::diagnostics::codes::REQUEST_SINCAL_MULTICONDUCTOR_FEATURE_DISABLED,
+        "SINCAL adapters live in powerio-tnd; use powerio with its `sincal` feature or powerio_tnd::formats::sincal",
+    )
+    .with_source(source.clone())
 }
 
 /// Prepare exact retained-source text or validated canonical output.
@@ -460,14 +557,27 @@ pub(crate) fn emit_text_with_options(
     format: DistTargetFormat,
     options: &EmitOptions,
 ) -> Result<TextEmission, powerio_core::Error> {
-    let output = if options.is_default_for(format)
+    let mut output = if matches!(
+        format,
+        DistTargetFormat::Gridlabd | DistTargetFormat::GridlabdArras
+    ) {
+        crate::glm::emit_glm_text(module.value())?
+    } else if options.is_default_for(format)
         && let Some(text) = echo_text(module, format)
     {
         TextEmission::faithful(text)
     } else {
         crate::readiness::require_resolved_geometry(module.value())?;
-        emit_value_text_with_options(module.value(), format, options)
+        if format != DistTargetFormat::Dss {
+            crate::readiness::require_earth_referenced_sources(module.value())?;
+        }
+        emit_value_text_with_options(module.value(), format, options)?
     };
+    powerio_core::attach_retention_details(
+        module.diagnostics(),
+        &mut output.diagnostics,
+        "EMIT.DIST.SINCAL_RETAINED_SOURCE_OMITTED",
+    )?;
     Ok(output)
 }
 
@@ -498,14 +608,33 @@ pub(crate) fn emit_value_text_with_options(
     net: &MulticonductorNetwork,
     format: DistTargetFormat,
     options: &EmitOptions,
-) -> TextEmission {
+) -> Result<TextEmission, powerio_core::Error> {
+    net.validate_component_locations()?;
     let mut conv = match format {
-        DistTargetFormat::Dss => crate::dss::emit_dss_text_with_options(net, &options.dss),
+        DistTargetFormat::Gridlabd | DistTargetFormat::GridlabdArras => {
+            return crate::glm::emit_glm_text(net);
+        }
+        DistTargetFormat::Dss => {
+            crate::dss::validate_emission(net)?;
+            crate::dss::emit_dss_text_with_options(net, &options.dss)
+        }
         DistTargetFormat::BmopfJson => {
             crate::bmopf::emit_bmopf_json_text_with_options(net, options.bmopf)
         }
         DistTargetFormat::PmdJson => crate::pmd::emit_pmd_json_text(net),
+        DistTargetFormat::CimDist => crate::cim::emit_cim_dist_text(net),
     };
+    if !net.component_locations().is_empty() {
+        conv.push(&crate::diagnostics::codes::EMIT_DIST_COMPONENT_COORDINATES_DROPPED,
+            format!("{} component point(s) dropped: {} cannot carry their attachment, partial-axis and datum semantics",
+                net.component_locations().len(), format.name()));
+    }
+    if *net.source_format() == Some(DistSourceFormat::Sincal) {
+        conv.push(
+            &crate::diagnostics::codes::EMIT_SINCAL_MULTICONDUCTOR_RETAINED_SOURCE_OMITTED,
+            "Native SINCAL source-only data are omitted from the typed electrical conversion.",
+        );
+    }
     // No distribution format carries line routes; report the loss the
     // way bus locations already do (`.pio.json` keeps them).
     let routed = net
@@ -522,7 +651,7 @@ pub(crate) fn emit_value_text_with_options(
             ),
         );
     }
-    conv
+    Ok(conv)
 }
 
 #[cfg(test)]
@@ -531,19 +660,32 @@ pub(crate) fn emit_value_text(
     format: DistTargetFormat,
 ) -> TextEmission {
     emit_value_text_with_options(net, format, &EmitOptions::default())
+        .expect("test network is emittable")
 }
 
 /// Emit a parsed module to `format` through a destination.
 ///
-/// The JSON targets commit a single artifact — a path destination names the
+/// The JSON and CIM targets commit a single artifact — a path destination names the
 /// exact file, a memory destination names the artifact. The dss target is a
 /// directory inventory: the destination names the output root, the case text
 /// commits as `case.dss`, and every companion file the emitter produced
 /// (OpenDSS `Buscoords` CSV) commits beside it, so nothing the case text
 /// refers to is missing from the output.
+/// GridLAB-D targets also write directory inventories. Unchanged modules
+/// replay every acquired buffer under its original relative path, preserving
+/// the entrypoint location and includes. Absolute includes cannot be relocated
+/// byte exactly and are refused. Fresh, edited, IR-restored and cross-profile
+/// modules write canonical `case.glm`; [`crate::glm::emit_canonical`] directly
+/// writes a single file from a network value.
+/// An unchanged multi-file DSS project retains the paths and bytes of every
+/// acquired file, dependencies and companions alike, beneath `source/`;
+/// `case.dss` redirects to its entry file. A remark
+/// (`EMIT.DSS.PROJECT_COMPANION_KEPT`) names the companions, the supplied
+/// files the deck never read.
 ///
 /// # Errors
-/// The destination's own collision and staging failures.
+/// Unsupported electrical features, nonportable retained projects, or the
+/// destination's own collision and staging failures.
 ///
 /// # Panics
 /// Never on external input: the fixed artifact names are valid by
@@ -570,8 +712,35 @@ pub fn emit_with_options(
     options: &EmitOptions,
     destination: powerio_core::Destination,
 ) -> std::result::Result<powerio_core::EmitResult, powerio_core::Error> {
+    if matches!(
+        format,
+        DistTargetFormat::Gridlabd | DistTargetFormat::GridlabdArras
+    ) && let Some(project) = crate::glm::retained_project(module, format)?
+    {
+        return destination.__commit_artifacts(
+            true,
+            powerio_core::Fidelity::ExactSameFormat,
+            project.artifacts,
+            project.diagnostics,
+        );
+    }
     let conv = emit_text_with_options(module, format, options)?;
+    if format == DistTargetFormat::Dss
+        && options.is_default_for(format)
+        && let Some(project) = crate::dss::retained_project(module)?
+    {
+        let mut diagnostics = conv.diagnostics;
+        diagnostics.extend(project.diagnostics);
+        return destination.__commit_artifacts(true, conv.fidelity, project.artifacts, diagnostics);
+    }
     match format {
+        DistTargetFormat::Gridlabd | DistTargetFormat::GridlabdArras => {
+            let artifact = powerio_core::MemoryArtifact::new(
+                powerio_core::ArtifactPath::new("case.glm")?,
+                conv.text.into_bytes(),
+            );
+            destination.__commit_artifacts(true, conv.fidelity, vec![artifact], conv.diagnostics)
+        }
         DistTargetFormat::Dss => {
             let mut artifacts = vec![powerio_core::MemoryArtifact::new(
                 powerio_core::ArtifactPath::new("case.dss")
@@ -586,7 +755,7 @@ pub fn emit_with_options(
             }
             destination.__commit_artifacts(true, conv.fidelity, artifacts, conv.diagnostics)
         }
-        DistTargetFormat::BmopfJson | DistTargetFormat::PmdJson => {
+        DistTargetFormat::BmopfJson | DistTargetFormat::PmdJson | DistTargetFormat::CimDist => {
             let artifact = powerio_core::MemoryArtifact::new(
                 powerio_core::ArtifactPath::new("case")
                     .expect("static name is a valid artifact path"),

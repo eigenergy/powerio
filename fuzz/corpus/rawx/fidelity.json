@@ -1,0 +1,19 @@
+{
+  "network": {
+    "caseid": {"fields":["rev","sbase","basfrq","title1"],"data":[35,100,60,"rawx-fidelity"]},
+    "bus": {"fields":["ibus","name","baskv","ide","area","zone","owner","vm","va"],"data":[[1,"Slack",230,3,1,1,1,1,0]]},
+    "generator": {
+      "fields":["ibus","machid","pg","qg","qt","qb","vs","ireg","nreg","mbase","zr","zx","rt","xt","gtap","stat","rmpct","pt","pb","baslod","o1","f1","o2","f2","o3","f3","o4","f4","wmod","wpf"],
+      "data":[[1,"A",20,5,50,-50,1,0,0,100,0.0019,0.29,0.02,0.31,1.03,1,87.5,80,0,3,2,0.75,3,0.25,0,1,0,1,1,0.97]]
+    },
+    "swshunt": {
+      "fields":["ibus","shntid","modsw","adjm","stat","vswhi","vswlo","swreg","nreg","rmpct","rmidnt","binit","s1","n1","b1"],
+      "data":[[1,"S1",2,1,1,1.05,0.95,0,0,100,"",0,1,1,10]]
+    },
+    "sub": {"fields":["isub","name","lati","long","srg"],"data":[[1,"SUB",null,null,null]]},
+    "subnode": {
+      "fields":["isub","inode","name","ibus","stat","vm","va"],
+      "data":[[1,1,"UNSET",1,1,null,null],[1,2,"ASSIGNED",1,1,0.98,-1.5]]
+    }
+  }
+}

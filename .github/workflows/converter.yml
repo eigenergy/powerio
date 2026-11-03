@@ -1,0 +1,114 @@
+name: Converter
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: converter-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # The Playwright browser suite runs on every push to main and every manual
+  # run, but on a pull request only when the pull request changes the
+  # converter app, its WebAssembly crate, or the workflows that run it. The
+  # engine job below always runs: it tests the WebAssembly crate and builds
+  # the site that the Docs workflow deploys.
+  changes:
+    name: Converter changes
+    runs-on: ubuntu-latest
+    outputs:
+      browser: ${{ steps.diff.outputs.browser }}
+    steps:
+      - uses: actions/checkout@v6
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 2
+      - name: Decide whether to run the browser suite
+        id: diff
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "browser=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A pull request checks out its merge commit, whose first parent is
+          # the base branch, so this diff is exactly the pull request's change.
+          changed="$(git diff --name-only HEAD^1 HEAD)"
+          if grep -qE '^(apps/converter/|powerio-wasm/|\.github/workflows/(converter|docs)\.yml$)' <<<"$changed"; then
+            echo "browser=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "browser=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  engine:
+    name: Browser conversion engine
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked -p powerio-wasm
+      - run: cargo clippy --locked -p powerio-wasm --all-targets -- -D warnings
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/converter/package-lock.json
+      - run: cargo install wasm-pack --version 0.15.0 --locked
+      - run: npm ci
+        working-directory: apps/converter
+      - run: npm run wasm
+        working-directory: apps/converter
+      - run: npm test
+        working-directory: apps/converter
+      - run: npm run check
+        working-directory: apps/converter
+      - run: npm run build:ui
+        working-directory: apps/converter
+      - uses: actions/upload-artifact@v7
+        with:
+          name: powerio-converter-site
+          path: apps/converter/dist
+          retention-days: 7
+
+  browser:
+    name: Converter (${{ matrix.browser }})
+    needs: [ changes, engine ]
+    if: needs.changes.outputs.browser == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/converter/package-lock.json
+      - run: npm ci
+        working-directory: apps/converter
+      - uses: actions/download-artifact@v8
+        with:
+          name: powerio-converter-site
+          path: apps/converter/dist
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
+        working-directory: apps/converter
+      - run: npm run test:browser -- --project=${{ matrix.browser }}
+        working-directory: apps/converter
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: converter-failures-${{ matrix.browser }}
+          path: apps/converter/test-results
+          retention-days: 7

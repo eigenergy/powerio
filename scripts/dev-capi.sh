@@ -7,9 +7,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# --features arrow so the sibling PowerIO.jl build gets pio_to_arrow. The
-# default features already include the dist and package surfaces.
-cargo build -p powerio-capi --release --features arrow >&2
+# ABI 7 exposes the typed C surface without optional features. The retired
+# Arrow export is not part of this API; only gridfm adds optional format support.
+cargo build -p powerio-capi --release >&2
 
 case "$(uname -s)" in
   Darwin) ext=dylib ;;

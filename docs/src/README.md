@@ -40,7 +40,7 @@ bytes themselves. Which value you get depends on what the source declares:
 | Source | Value |
 |---|---|
 | MATPOWER, PSS/E, XIIDM, CGMES, UCTE-DEF, and the other balanced formats | `BalancedNetwork` |
-| OpenDSS, PowerModelsDistribution JSON, BMOPF JSON | `MulticonductorNetwork` |
+| OpenDSS, PowerModelsDistribution JSON, BMOPF JSON, distribution CIM | `MulticonductorNetwork` |
 | a PyPSA directory whose inputs vary by snapshot | `TimeSeries<BalancedNetwork>` |
 | a GridFM Parquet dataset | `ScenarioSet<BalancedNetwork>` |
 | a DOE GO Challenge 3 problem file | `AcScucInstance` |

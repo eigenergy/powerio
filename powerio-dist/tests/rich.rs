@@ -171,12 +171,53 @@ fn rich_opendss_load_models_and_switches_round_trip() {
         New Load.cp3 bus1=b2.1.2.3 phases=3 conn=wye kv=12.47 kw=90 kvar=45 model=3\n\
         New Load.zip bus1=b2.1.2.3 phases=3 conn=wye kv=12.47 kw=90 kvar=45 model=8 zipv=[0.2,0.3,0.5,0.1,0.4,0.5,0.8]\n";
     let net = parse_dss_str(dss);
-    assert_eq!(net.switches().len(), 1);
-    assert!(net.switches()[0].open);
+    assert_eq!(net.switches().as_slice(), []);
+    assert!(
+        net.diagnostics
+            .iter()
+            .any(|d| d.code() == "READ.DSS.RETAINED_SOURCE_ONLY")
+    );
+    let switch_line = net.lines().iter().find(|l| l.name == "sw").unwrap();
+    let switch_code = net.linecode(&switch_line.linecode).unwrap();
+    assert_eq!(switch_line.bus_from, "sourcebus");
+    assert_eq!(switch_line.bus_to, "b2");
+    // With active controls excluded, Action=open does not execute. The
+    // native switch=yes defaults leave a closed 0.001 + j0.001 ohm line.
+    for i in 0..3 {
+        for j in 0..3 {
+            let expected = if i == j { 0.001 } else { 0.0 };
+            assert!((switch_code.r_series[i][j] * switch_line.length - expected).abs() < 1e-15);
+            assert!((switch_code.x_series[i][j] * switch_line.length - expected).abs() < 1e-15);
+        }
+    }
+    let assert_switch_impedance = |other: &powerio_dist::MulticonductorNetwork| {
+        let line = other.lines().iter().find(|l| l.name == "sw").unwrap();
+        let code = other.linecode(&line.linecode).unwrap();
+        assert_eq!(line.bus_from, switch_line.bus_from);
+        assert_eq!(line.bus_to, switch_line.bus_to);
+        assert_eq!(line.terminal_map_from, switch_line.terminal_map_from);
+        assert_eq!(line.terminal_map_to, switch_line.terminal_map_to);
+        for i in 0..3 {
+            for j in 0..3 {
+                assert!(
+                    (code.r_series[i][j] * line.length
+                        - switch_code.r_series[i][j] * switch_line.length)
+                        .abs()
+                        < 1e-15
+                );
+                assert!(
+                    (code.x_series[i][j] * line.length
+                        - switch_code.x_series[i][j] * switch_line.length)
+                        .abs()
+                        < 1e-15
+                );
+            }
+        }
+    };
     let dss_v_nom = 12_470.0 / 3f64.sqrt();
     assert!(matches!(
         load_model(&net, "ci"),
-        DistLoadVoltageModel::ConstantCurrent { v_nom } if all_close(v_nom, dss_v_nom)
+        DistLoadVoltageModel::BoundedZip { v_nom, alpha_i, .. } if all_close(v_nom, dss_v_nom) && alpha_i == &vec![1.0; 3]
     ));
     assert!(matches!(
         load_model(&net, "cz"),
@@ -184,7 +225,7 @@ fn rich_opendss_load_models_and_switches_round_trip() {
     ));
     assert!(matches!(
         load_model(&net, "zip"),
-        DistLoadVoltageModel::Zip { alpha_z, beta_i, .. }
+        DistLoadVoltageModel::BoundedZip { alpha_z, beta_i, .. }
             if alpha_z == &vec![0.2, 0.2, 0.2] && beta_i == &vec![0.4, 0.4, 0.4]
     ));
     let dss_direct = emit_dss(&net);
@@ -195,13 +236,23 @@ fn rich_opendss_load_models_and_switches_round_trip() {
         "{}",
         dss_direct.text
     );
-    assert!(
-        dss_direct.text.contains("New Load.cp3") && dss_direct.text.contains("model=3"),
-        "{}",
-        dss_direct.text
-    );
+    let canonical = parse_dss_str(&dss_direct.text);
+    assert_eq!(load_model(&canonical, "cp3"), load_model(&net, "cp3"));
+    assert!(matches!(load_model(&canonical, "cp3"),
+        DistLoadVoltageModel::BoundedExponential { gamma_p, gamma_q, .. }
+        if all_close(gamma_p, 0.0) && all_close(gamma_q, 2.0)
+    ));
 
-    let bmopf = emit_bmopf_json(&net);
+    assert_nominal_json_projection(&net, dss_v_nom, assert_switch_impedance);
+}
+
+#[allow(clippy::float_cmp)] // The nominal coefficients and input voltage are identical.
+fn assert_nominal_json_projection(
+    net: &powerio_dist::MulticonductorNetwork,
+    dss_v_nom: f64,
+    assert_switch_impedance: impl Fn(&powerio_dist::MulticonductorNetwork),
+) {
+    let bmopf = emit_bmopf_json(net);
     let bmopf_doc: serde_json::Value = serde_json::from_str(&bmopf.text).unwrap();
     assert_eq!(bmopf_doc["load"]["ci"]["model"], "CONSTANT_CURRENT");
     assert_eq!(bmopf_doc["load"]["cz"]["model"], "CONSTANT_IMPEDANCE");
@@ -210,15 +261,58 @@ fn rich_opendss_load_models_and_switches_round_trip() {
         bmopf_doc["load"]["zip"]["alpha_z"],
         serde_json::json!([0.2, 0.2, 0.2])
     );
-    assert_eq!(bmopf_doc["switch"]["sw"]["open_switch"], true);
+    assert!(bmopf_doc["line"].get("sw").is_some());
     let from_bmopf = parse_bmopf_str(&bmopf.text).unwrap();
-    assert_eq!(from_bmopf.switches()[0].open, net.switches()[0].open);
-    assert_eq!(load_model(&from_bmopf, "zip"), load_model(&net, "zip"));
+    assert_switch_impedance(&from_bmopf);
+    assert!(matches!(
+        load_model(&from_bmopf, "zip"),
+        DistLoadVoltageModel::Zip { .. }
+    ));
+    assert_eq!(bmopf_doc["load"]["cp3"]["model"], "EXPONENTIAL");
+    assert_eq!(
+        bmopf_doc["load"]["cp3"]["gamma_p"],
+        serde_json::json!([0., 0., 0.])
+    );
+    assert_eq!(
+        bmopf_doc["load"]["cp3"]["gamma_q"],
+        serde_json::json!([2., 2., 2.])
+    );
+    for name in ["ci", "zip", "cp3"] {
+        assert!(bmopf.warnings.iter().any(
+            |w| w.contains(&format!("load {name}:")) && w.contains("voltage-band transitions")
+        ));
+        assert_eq!(
+            load_model(&from_bmopf, name)
+                .power_scale(0, dss_v_nom)
+                .unwrap(),
+            load_model(net, name).power_scale(0, dss_v_nom).unwrap()
+        );
+    }
 
     let dss_back = emit_dss(&from_bmopf);
+    assert!(
+        dss_back
+            .warnings
+            .iter()
+            .any(|w| w.contains("load cp3:") && w.contains("exponential voltage model"))
+    );
     let reparsed = parse_dss_str(&dss_back.text);
-    assert_eq!(reparsed.switches()[0].open, net.switches()[0].open);
-    assert_eq!(load_model(&reparsed, "ci"), load_model(&net, "ci"));
-    assert_eq!(load_model(&reparsed, "cz"), load_model(&net, "cz"));
-    assert_eq!(load_model(&reparsed, "zip"), load_model(&net, "zip"));
+    assert_switch_impedance(&reparsed);
+    // JSON retains the nominal law, not the original voltage window. The
+    // canonical DSS writer supplies its documented default window.
+    assert!(matches!(
+        load_model(&reparsed, "ci"),
+        DistLoadVoltageModel::BoundedZip {
+            v_min_pu: 0.0,
+            v_max_pu: 2.0,
+            ..
+        }
+    ));
+    assert_eq!(load_model(&reparsed, "cz"), load_model(net, "cz"));
+    assert_eq!(
+        load_model(&reparsed, "zip")
+            .power_scale(0, dss_v_nom)
+            .unwrap(),
+        load_model(net, "zip").power_scale(0, dss_v_nom).unwrap()
+    );
 }

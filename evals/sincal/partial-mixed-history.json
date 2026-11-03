@@ -1,0 +1,157 @@
+{
+  "scope": "Audit CSIRO06 partial YNd1 transformers against their stored terminal results.\n\nThis deliberately evaluates an UNACCEPTED independent-coil hypothesis: one\nsingle-phase transformer per installed coil, rated at Sn/3, with SINCAL's nominal\npi excitation split between its ends. It does not encode the distinct native\nzero-sequence impedance. It must not be promoted to reader support merely\nbecause OpenDSS can represent the circuit. Stored results do not attest that\ncurrent inputs were used to calculate them. No fitting, repair or native run.\n",
+  "source_sha256": "6c6eb3caaaa517fcb424965d5e15819edaa7bd20da15a32d85a02b4ddef4eff8",
+  "record_sha256": "082bb93d85781682d7f34c01d5ce3c0ff9ee68682383a015320d82bbb393cf17",
+  "collection": "https://doi.org/10.4225/08/5631B1DF6F1A0",
+  "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
+  "license": "CC-BY-4.0",
+  "engine": "DSS C-API Library version 0.14.5 revision 87d85c2622c8281b92255335bc7c09b11191b21d based on OpenDSS SVN 3723 [FPC 3.2.2] (64-bit build) MVMULT INCREMENTAL_Y CONTEXT_API PM 20240329033829; License Status: Open \nDSS-Python version: 0.15.7\nOpenDSSDirect.py version: 0.9.4",
+  "numpy": "2.5.3",
+  "comparisons": [
+    {
+      "element": 258,
+      "snapshots": 1,
+      "active_windings": [
+        1
+      ],
+      "native_zero_sequence_ohm": [
+        1.32,
+        3.33615
+      ],
+      "maximum_terminal_power_error_va": 4737.24539548056,
+      "maximum_terminal_current_magnitude_error_a": 9.53259777867724,
+      "minimum_stored_terminal_current_a": 0.32503785175912964,
+      "candidate_matches_stored_results": false
+    },
+    {
+      "element": 261,
+      "snapshots": 1,
+      "active_windings": [
+        2
+      ],
+      "native_zero_sequence_ohm": [
+        1.32,
+        3.33615
+      ],
+      "maximum_terminal_power_error_va": 4606.512323484709,
+      "maximum_terminal_current_magnitude_error_a": 9.469071495386846,
+      "minimum_stored_terminal_current_a": 0.3191293441948522,
+      "candidate_matches_stored_results": false
+    },
+    {
+      "element": 273,
+      "snapshots": 1,
+      "active_windings": [
+        1
+      ],
+      "native_zero_sequence_ohm": [
+        1.32,
+        3.33615
+      ],
+      "maximum_terminal_power_error_va": 4252.717144348118,
+      "maximum_terminal_current_magnitude_error_a": 9.031951076729186,
+      "minimum_stored_terminal_current_a": 0.30796704563999633,
+      "candidate_matches_stored_results": false
+    },
+    {
+      "element": 274,
+      "snapshots": 1,
+      "active_windings": [
+        2
+      ],
+      "native_zero_sequence_ohm": [
+        1.626346,
+        1.477533
+      ],
+      "maximum_terminal_power_error_va": 1949.2808136389788,
+      "maximum_terminal_current_magnitude_error_a": 4.191394170233205,
+      "minimum_stored_terminal_current_a": 0.1410433780848012,
+      "candidate_matches_stored_results": false
+    },
+    {
+      "element": 283,
+      "snapshots": 1,
+      "active_windings": [
+        3
+      ],
+      "native_zero_sequence_ohm": [
+        1.32,
+        3.33615
+      ],
+      "maximum_terminal_power_error_va": 4525.91170446845,
+      "maximum_terminal_current_magnitude_error_a": 9.385865264207542,
+      "minimum_stored_terminal_current_a": 0.3163251040957019,
+      "candidate_matches_stored_results": false
+    },
+    {
+      "element": 284,
+      "snapshots": 1,
+      "active_windings": [
+        3
+      ],
+      "native_zero_sequence_ohm": [
+        1.32,
+        3.33615
+      ],
+      "maximum_terminal_power_error_va": 4525.42055789951,
+      "maximum_terminal_current_magnitude_error_a": 9.385355978908699,
+      "minimum_stored_terminal_current_a": 0.3163079400175273,
+      "candidate_matches_stored_results": false
+    },
+    {
+      "element": 287,
+      "snapshots": 1,
+      "active_windings": [
+        2
+      ],
+      "native_zero_sequence_ohm": [
+        1.626346,
+        1.477533
+      ],
+      "maximum_terminal_power_error_va": 2090.3159965487207,
+      "maximum_terminal_current_magnitude_error_a": 4.340375196296225,
+      "minimum_stored_terminal_current_a": 0.1460566949748494,
+      "candidate_matches_stored_results": false
+    },
+    {
+      "element": 288,
+      "snapshots": 1,
+      "active_windings": [
+        1
+      ],
+      "native_zero_sequence_ohm": [
+        1.626346,
+        1.477533
+      ],
+      "maximum_terminal_power_error_va": 2128.7317900513617,
+      "maximum_terminal_current_magnitude_error_a": 4.33348744014304,
+      "minimum_stored_terminal_current_a": 0.1483349556254666,
+      "candidate_matches_stored_results": false
+    },
+    {
+      "element": 296,
+      "snapshots": 1,
+      "active_windings": [
+        3
+      ],
+      "native_zero_sequence_ohm": [
+        1.32,
+        3.33615
+      ],
+      "maximum_terminal_power_error_va": 4753.267134821073,
+      "maximum_terminal_current_magnitude_error_a": 9.618722338133715,
+      "minimum_stored_terminal_current_a": 0.32417291951555244,
+      "candidate_matches_stored_results": false
+    }
+  ],
+  "compared_components": 9,
+  "compared_snapshots": 9,
+  "candidate_accepted": false,
+  "production_mapping_added": false,
+  "disposition": "Independent-coil hypothesis does not establish native partial mixed-winding semantics; retain rejection and resolve distinct zero-sequence/core/rating treatment.",
+  "native_execution": false,
+  "parameters_fitted": false,
+  "source_data_changed": false,
+  "stored_results_attest_current_inputs": false,
+  "audit_complete": true
+}

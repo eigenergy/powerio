@@ -208,3 +208,18 @@ pub(crate) fn constraint_mask(
         .map(|identity| selection.selects(identity))
         .collect())
 }
+
+// Keep prepared angle infinities round-trippable without changing finite JSON
+// numbers or the binary representation. Use the shared PowerIO spelling.
+pub(crate) mod angle_bounds_serde {
+    use powerio_core::__implementation::nonfinite::{NonFiniteDe, NonFiniteSer};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(values: &[f64], serializer: S) -> Result<S::Ok, S::Error> {
+        values.serialize(NonFiniteSer(serializer))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<f64>, D::Error> {
+        Vec::<f64>::deserialize(NonFiniteDe(deserializer))
+    }
+}

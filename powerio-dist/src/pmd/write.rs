@@ -5,9 +5,9 @@
 //! status, `source_id`, the materialized grounded neutral with zero
 //! `rg`/`xg`, linecode `cm_ub` from the emergency rating, transformer
 //! `tm_*` tap fields, the delta wye barrel roll with `polarity` -1 on the
-//! lagging wye winding, and the voltage source Thevenin matrices computed
-//! from the short circuit data when the source format carried it. The
-//! reader's `pmd_*` stashes (status, settings, files, grounding and switch
+//! lagging wye winding, and explicit voltage source Thevenin matrices
+//! retained from PMD input. Typed ideal sources emit zero impedance; DSS
+//! source impedance is carried by a separate typed line. The reader's `pmd_*` stashes (status, settings, files, grounding and switch
 //! impedance, tap arrays, polarity, inline line impedance) win over the
 //! recomputed defaults, so PMD in, PMD out does not alter fields.
 
@@ -30,9 +30,15 @@ use crate::model::{
 /// Never in practice: the document is maps, strings, finite numbers, and
 /// nulls, which always serialize.
 pub(crate) fn emit_pmd_json_text(net: &MulticonductorNetwork) -> TextEmission {
+    let retained = retained_sections(net);
     let mut w = Writer {
         warnings: crate::diagnostics::Diagnostics::new(),
         renamed_terminals: renamed_terminals(net),
+        time_series: retained
+            .get("time_series")
+            .map(|items| items.keys().cloned().collect())
+            .unwrap_or_default(),
+        retained,
     };
     for source in net
         .sources()
@@ -68,6 +74,35 @@ struct Writer {
     warnings: crate::diagnostics::Diagnostics,
     /// One id per terminal name that is not numeric, for the whole network.
     renamed_terminals: BTreeMap<String, i64>,
+    /// ENGINEERING sections the PMD reader kept untyped (`time_series`, say),
+    /// by section and then by name, as the source stated them.
+    retained: BTreeMap<String, Map<String, Value>>,
+    /// The names of the time series the output carries, so a component's
+    /// `time_series` references are emitted only when they resolve.
+    time_series: BTreeSet<String>,
+}
+
+/// The sections the PMD reader kept untyped, decoded back to JSON. Only a
+/// network read from PMD JSON carries them: there an untyped object is one
+/// ENGINEERING component whose single unnamed property is the component's
+/// JSON text. Untyped objects from other formats (an OpenDSS `loadshape`)
+/// have no ENGINEERING form and stay out.
+fn retained_sections(net: &MulticonductorNetwork) -> BTreeMap<String, Map<String, Value>> {
+    let mut sections: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
+    if *net.source_format() != Some(crate::model::DistSourceFormat::PmdJson) {
+        return sections;
+    }
+    for u in net.untyped_objects() {
+        if let [(None, text)] = u.props.as_slice()
+            && let Ok(value) = serde_json::from_str::<Value>(text)
+        {
+            sections
+                .entry(u.class.clone())
+                .or_default()
+                .insert(u.name.clone(), value);
+        }
+    }
+    sections
 }
 
 /// One id for each terminal name in the network that PMD cannot spell.
@@ -297,13 +332,43 @@ impl Writer {
     /// BMOPF subtype marker pass silently.
     fn extras_dropped(&mut self, extras: &crate::model::Extras, consumed: &[&str], what: &str) {
         for key in extras.keys() {
-            if consumed.contains(&key.as_str()) || key.starts_with("pmd_") || key == "bmopf_subtype"
+            // `time_series` is reported by `time_series_refs`.
+            if consumed.contains(&key.as_str())
+                || key.starts_with("pmd_")
+                || key == "bmopf_subtype"
+                || key == "time_series"
             {
                 continue;
             }
             self.warn(
                 &C::EMIT_PMD_FIELD_DROPPED,
                 format!("{what}: `{key}` has no ENGINEERING field; dropped from the output"),
+            );
+        }
+    }
+
+    /// A component's ENGINEERING `time_series` field, which maps a component
+    /// field to the name of a document level time series. It is emitted when
+    /// every name it references is a time series the output carries, and
+    /// reported as dropped otherwise, since PMD rejects a dangling reference.
+    fn time_series_refs(&mut self, extras: &Extras, o: &mut Map<String, Value>, what: &str) {
+        let Some(refs) = extras.get("time_series") else {
+            return;
+        };
+        let resolves = refs.as_object().is_some_and(|fields| {
+            fields
+                .values()
+                .all(|name| name.as_str().is_some_and(|n| self.time_series.contains(n)))
+        });
+        if resolves {
+            o.insert("time_series".into(), refs.clone());
+        } else {
+            self.warn(
+                &C::EMIT_PMD_FIELD_DROPPED,
+                format!(
+                    "{what}: `time_series` references a time series the output does not \
+                     carry; dropped from the output"
+                ),
             );
         }
     }
@@ -502,13 +567,60 @@ impl Writer {
         self.transformers(net, &mut doc);
 
         for u in net.untyped_objects() {
-            self.warn(
-                &C::EMIT_PMD_RECORD_DROPPED,
-                format!(
-                    "{} {}: class is not converted to ENGINEERING; dropped from the output",
-                    u.class, u.name
-                ),
-            );
+            let retained = self
+                .retained
+                .get(&u.class)
+                .is_some_and(|items| items.contains_key(&u.name));
+            if !retained {
+                self.warn(
+                    &C::EMIT_PMD_RECORD_DROPPED,
+                    format!(
+                        "{} {}: class is not converted to ENGINEERING; dropped from the output",
+                        u.class, u.name
+                    ),
+                );
+            }
+        }
+        for (class, items) in std::mem::take(&mut self.retained) {
+            match doc.get_mut(&class) {
+                None => {
+                    doc.insert(class, Value::Object(items));
+                }
+                Some(Value::Object(section)) => {
+                    for (name, value) in items {
+                        if section.contains_key(&name) {
+                            self.warn(
+                                &C::EMIT_PMD_RECORD_DROPPED,
+                                format!(
+                                    "{class} {name}: the typed component of the same name \
+                                     takes its place; the retained one is dropped"
+                                ),
+                            );
+                        } else {
+                            section.insert(name, value);
+                        }
+                    }
+                }
+                Some(_) => {
+                    for name in items.keys() {
+                        self.warn(
+                            &C::EMIT_PMD_RECORD_DROPPED,
+                            format!(
+                                "{class} {name}: `{class}` is not a component section in the \
+                                 output; dropped"
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+        // Top level values the reader kept (PMD's `time_elapsed`, say).
+        if let Some(Value::Object(top_level)) = net.extras().get("pmd_top_level") {
+            for (key, value) in top_level {
+                if !doc.contains_key(key) {
+                    doc.insert(key.clone(), value.clone());
+                }
+            }
         }
         Value::Object(doc)
     }
@@ -610,6 +722,7 @@ impl Writer {
                     "source_id".into(),
                     json!(format!("line.{}", l.name.to_lowercase())),
                 );
+                self.time_series_refs(&l.extras, &mut o, &what);
                 self.extras_dropped(&l.extras, &["units"], &what);
                 lines.insert(l.name.to_lowercase(), Value::Object(o));
             }
@@ -667,6 +780,7 @@ impl Writer {
                     "source_id".into(),
                     json!(format!("line.{}", s.name.to_lowercase())),
                 );
+                self.time_series_refs(&s.extras, &mut o, &what);
                 self.extras_dropped(&s.extras, &[], &what);
                 switches.insert(s.name.to_lowercase(), Value::Object(o));
             }
@@ -725,7 +839,21 @@ impl Writer {
                         o.insert("vm_nom".into(), json!(kv));
                     }
                 };
-                let model = match &l.voltage_model {
+                let nominal_model = l.voltage_model.without_voltage_bounds();
+                if matches!(
+                    l.voltage_model,
+                    DistLoadVoltageModel::BoundedZip { .. }
+                        | DistLoadVoltageModel::BoundedExponential { .. }
+                        | DistLoadVoltageModel::BoundedConstantPower { .. }
+                ) {
+                    self.warn(&C::EMIT_PMD_VALUE_SUBSTITUTED, format!("{what}: voltage-band transitions, current limits and dropout have no PMD load-law field; emitted the nominal law"));
+                }
+                let model = match &nominal_model {
+                    DistLoadVoltageModel::BoundedZip { .. }
+                    | DistLoadVoltageModel::BoundedExponential { .. }
+                    | DistLoadVoltageModel::BoundedConstantPower { .. } => {
+                        unreachable!("bounds handled above")
+                    }
                     DistLoadVoltageModel::ConstantImpedance { v_nom } => {
                         insert_vm_nom(v_nom);
                         "IMPEDANCE"
@@ -757,6 +885,7 @@ impl Writer {
                     "source_id".into(),
                     json!(format!("load.{}", l.name.to_lowercase())),
                 );
+                self.time_series_refs(&l.extras, &mut o, &what);
                 self.extras_dropped(&l.extras, &["kv", "model", "pf"], &what);
                 loads.insert(l.name.to_lowercase(), Value::Object(o));
             }
@@ -821,6 +950,7 @@ impl Writer {
                     "source_id".into(),
                     json!(format!("generator.{}", g.name.to_lowercase())),
                 );
+                self.time_series_refs(&g.extras, &mut o, &what);
                 self.extras_dropped(&g.extras, &["kv"], &what);
                 gens.insert(g.name.to_lowercase(), Value::Object(o));
             }
@@ -863,6 +993,7 @@ impl Writer {
                         "source_id".into(),
                         json!(format!("capacitor.{}", c.name.to_lowercase())),
                     );
+                    self.time_series_refs(&c.extras, &mut o, &what);
                     self.extras_dropped(&c.extras, &[], &what);
                     capacitor_shunts.insert(c.name.to_lowercase(), Value::Object(o));
                 }
@@ -902,6 +1033,7 @@ impl Writer {
                     "source_id".into(),
                     json!(format!("capacitor.{}", s.name.to_lowercase())),
                 );
+                self.time_series_refs(&s.extras, &mut o, &what);
                 self.extras_dropped(&s.extras, &["kv", "kvar", "conn"], &what);
                 shunts.insert(s.name.to_lowercase(), Value::Object(o));
             }
@@ -936,45 +1068,33 @@ impl Writer {
                     .collect::<Vec<_>>()
             ),
         );
-        // The Thevenin matrices: verbatim when the source carried them
-        // (an ENGINEERING round trip), recomputed with the engine's
-        // formulas from short circuit data otherwise.
+        // Retain explicit PMD source matrices for same-format fidelity.
+        // A typed ideal source has no implicit short-circuit impedance: a
+        // DSS import already carries its full impedance in a separate line.
         if let (Some(rs), Some(xs)) = (vs.extras.get("rs"), vs.extras.get("xs")) {
             o.insert("rs".into(), rs.clone());
             o.insert("xs".into(), xs.clone());
         } else {
-            let (rs, xs) = thevenin(vs, n);
-            if rs.iter().flatten().all(|&v| v == 0.0) {
-                self.warn(
-                    &C::EMIT_PMD_VALUE_DEFAULTED,
-                    format!("{what}: no short circuit data; emitted an ideal source (zero rs/xs)"),
-                );
-            }
-            o.insert("rs".into(), matrix(&rs));
-            o.insert("xs".into(), matrix(&xs));
+            o.insert("rs".into(), matrix(&zero_matrix(n)));
+            o.insert("xs".into(), matrix(&zero_matrix(n)));
         }
         o.insert("status".into(), Self::status(&vs.extras));
         o.insert(
             "source_id".into(),
             json!(format!("vsource.{}", vs.name.to_lowercase())),
         );
-        // The short circuit form (basekv/pu/angle/MVAsc/X-R ratios) is
-        // represented by vm/va and the Thevenin matrices.
+        // Nominal voltage and power bases are used by synthesized_settings.
+        // Short-circuit hints cannot override the typed ideal constraint.
+        self.time_series_refs(&vs.extras, &mut o, &what);
         self.extras_dropped(
             &vs.extras,
             &[
                 "basekv",
+                "nominal_phase_kv",
                 "basemva",
                 "pu",
-                "angle",
-                "mvasc1",
-                "mvasc3",
-                "x1r1",
-                "x0r0",
                 "rs",
                 "xs",
-                "isc1",
-                "isc3",
                 "configuration",
             ],
             &what,
@@ -1115,6 +1235,7 @@ impl Writer {
         if explicit_shunt.is_some() {
             allowed.push("no_load_shunt");
         }
+        self.time_series_refs(&t.extras, o, what);
         self.extras_dropped(&t.extras, &allowed, what);
     }
 }
@@ -1172,13 +1293,15 @@ fn synthesized_settings(net: &MulticonductorNetwork) -> Value {
     let mut vbases = Map::new();
     for vs in net.sources() {
         let phases = count_phases(vs).max(1) as f64;
-        let vln_kv = Writer::extras_f64(&vs.extras, "basekv").map_or_else(
-            || {
-                let pu = Writer::extras_f64(&vs.extras, "pu").unwrap_or(1.0);
-                vs.v_magnitude.first().copied().unwrap_or(0.0) / 1e3 / pu
-            },
-            |kv| kv / phases.sqrt(),
-        );
+        let vln_kv = Writer::extras_f64(&vs.extras, "nominal_phase_kv").unwrap_or_else(|| {
+            Writer::extras_f64(&vs.extras, "basekv").map_or_else(
+                || {
+                    let pu = Writer::extras_f64(&vs.extras, "pu").unwrap_or(1.0);
+                    vs.v_magnitude.first().copied().unwrap_or(0.0) / 1e3 / pu
+                },
+                |kv| kv / phases.sqrt(),
+            )
+        });
         vbases.insert(vs.bus.to_lowercase(), json!(vln_kv));
     }
     settings.insert("vbases_default".into(), Value::Object(vbases));
@@ -1211,20 +1334,19 @@ pub(super) fn lag_polarity(windings: &[DistWinding]) -> Vec<i64> {
 /// Names (lowercased) of linecodes that re-inline on their lines: every
 /// referencing line carries the reader's `pmd_inline` marker.
 fn inlined_codes(net: &MulticonductorNetwork) -> BTreeSet<String> {
-    let mut inlined = BTreeSet::new();
-    for c in net.line_codes() {
-        let mut refs = net
-            .lines()
-            .iter()
-            .filter(|l| l.linecode.eq_ignore_ascii_case(&c.name))
-            .peekable();
-        if refs.peek().is_some()
-            && refs.all(|l| l.extras.get("pmd_inline").and_then(Value::as_bool) == Some(true))
-        {
-            inlined.insert(c.name.to_lowercase());
-        }
+    let mut all_inline = BTreeMap::new();
+    for line in net.lines() {
+        let inline = line.extras.get("pmd_inline").and_then(Value::as_bool) == Some(true);
+        all_inline
+            .entry(line.linecode.to_ascii_lowercase())
+            .and_modify(|value| *value &= inline)
+            .or_insert(inline);
     }
-    inlined
+    net.line_codes()
+        .iter()
+        .filter(|code| all_inline.get(&code.name.to_ascii_lowercase()) == Some(&true))
+        .map(|code| code.name.to_lowercase())
+        .collect()
 }
 
 /// The six ENGINEERING impedance matrices of a linecode, emitted onto a
@@ -1245,50 +1367,6 @@ fn insert_impedance_matrices(o: &mut Map<String, Value>, c: &DistLineCode, base_
         o.insert("b_fr".into(), matrix(&scale(&c.b_from, to_nf)));
         o.insert("b_to".into(), matrix(&scale(&c.b_to, to_nf)));
     }
-}
-
-/// The engine's Thevenin computation from MVAsc3/MVAsc1 and the X/R ratios
-/// (the same math the reference dss2eng inherits): sequence impedances from
-/// the short circuit levels, then self/mutual phase values filled over all
-/// conductors including the neutral.
-fn thevenin(vs: &VoltageSource, n_cond: usize) -> (ConductorMatrix, ConductorMatrix) {
-    let get = |key: &str| Writer::extras_f64(&vs.extras, key);
-    let basekv = get("basekv").unwrap_or_else(|| {
-        // Reconstruct from the magnitude when basekv was defaulted.
-        vs.v_magnitude.first().copied().unwrap_or(0.0) / 1e3 * (count_phases(vs) as f64).sqrt()
-    });
-    let phases = count_phases(vs);
-    if basekv <= 0.0 || phases == 0 {
-        return (zero_matrix(n_cond), zero_matrix(n_cond));
-    }
-    let mvasc3 = get("mvasc3").unwrap_or(2000.0);
-    let mvasc1 = get("mvasc1").unwrap_or(2100.0);
-    let x1r1 = get("x1r1").unwrap_or(4.0);
-    let x0r0 = get("x0r0").unwrap_or(3.0);
-    let factor = if phases == 1 { 1.0 } else { 3f64.sqrt() };
-
-    let isc1 = mvasc1 * 1e3 / (basekv * factor);
-    let x1 = basekv * basekv / mvasc3 / (1.0 + 1.0 / (x1r1 * x1r1)).sqrt();
-    let r1 = x1 / x1r1;
-    let a = 1.0 + x0r0 * x0r0;
-    let b = 4.0 * (r1 + x1 * x0r0);
-    let c = 4.0 * (r1 * r1 + x1 * x1) - (3.0 * basekv * 1000.0 / factor / isc1).powi(2);
-    let disc = (b * b - 4.0 * a * c).max(0.0).sqrt();
-    let r0 = ((-b + disc) / (2.0 * a)).max((-b - disc) / (2.0 * a));
-    let x0 = r0 * x0r0;
-
-    let r_self = (2.0 * r1 + r0) / 3.0;
-    let x_self = (2.0 * x1 + x0) / 3.0;
-    let r_mutual = (r0 - r1) / 3.0;
-    let x_mutual = (x0 - x1) / 3.0;
-
-    let mut r_mat = vec![vec![r_mutual; n_cond]; n_cond];
-    let mut x_mat = vec![vec![x_mutual; n_cond]; n_cond];
-    for i in 0..n_cond {
-        r_mat[i][i] = r_self;
-        x_mat[i][i] = x_self;
-    }
-    (r_mat, x_mat)
 }
 
 fn count_phases(vs: &VoltageSource) -> usize {

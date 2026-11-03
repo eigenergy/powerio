@@ -1,11 +1,11 @@
 //! The canonical (no-source-document) writer path, exercised through a synth
-//! case. Lives in powerio-matrix because it needs the `synth` generators.
+//! case. Lives in powerio-matrix to cover canonical emission of a standalone synth case.
 mod helpers;
 #[allow(unused_imports)]
 use helpers::*;
 
 use powerio_core::{Destination, EmittedOutput, PioModule};
-use powerio_matrix::synth::{SynthSpec, Topology, generate};
+use powerio_synth::{SynthSpec, Topology, generate};
 use powerio_tx::{BalancedNetwork, TargetFormat};
 
 fn emit_matpower(network: &BalancedNetwork) -> String {

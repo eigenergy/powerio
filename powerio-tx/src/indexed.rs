@@ -9,7 +9,8 @@
 //! Keeping this off `BalancedNetwork` is what stops `BalancedNetwork` from turning into a god
 //! type: data on one side, derived analysis on the other.
 //!
-//! The derived core is one `HashMap` and four `Vec<f64>`. One-shot callers use
+//! The derived core is one `HashMap`, six `Vec<f64>`, and the HVDC injection
+//! record. One-shot callers use
 //! [`IndexedNetwork::new`], which builds and owns a throwaway core. A long-lived
 //! handle (the Python and C ABI wrappers) builds an [`IndexCore`] once at parse
 //! time and rebinds a borrowing view per query with
@@ -21,7 +22,8 @@ use std::collections::HashMap;
 
 use petgraph::graph::UnGraph;
 
-use crate::network::{BalancedNetwork, Branch, BusId, BusType, Generator};
+use crate::hvdc::HvdcInjections;
+use crate::network::{BalancedNetwork, Branch, BusId, BusType, Generator, Switch};
 use crate::{Error, Result};
 
 /// The owned, network-independent derivation behind [`IndexedNetwork`]: the
@@ -40,6 +42,12 @@ pub struct IndexCore {
     gs: Vec<f64>,
     /// Shunt susceptance summed per bus (MVAr at V = 1 p.u.).
     bs: Vec<f64>,
+    /// Fixed HVDC active injection summed per bus (MW).
+    p_hvdc: Vec<f64>,
+    /// Fixed HVDC reactive injection summed per bus (MVAr).
+    q_hvdc: Vec<f64>,
+    /// The per line record behind `p_hvdc` and `q_hvdc`.
+    hvdc: HvdcInjections,
 }
 
 impl IndexCore {
@@ -47,7 +55,9 @@ impl IndexCore {
     /// load and shunt onto its bus. An out-of-service load or shunt draws
     /// nothing, so it is left out of `pd/qd/gs/bs` and of every matrix built
     /// from them, the same rule the power flow instances apply to loads and
-    /// generators.
+    /// generators. Each in service HVDC line folds its fixed terminal
+    /// injections into `p_hvdc/q_hvdc` by the rule
+    /// [`BalancedNetwork::calc_hvdc_injections`] states.
     ///
     /// # Correctness
     /// Bus ids must be unique; a duplicate collapses two buses onto one dense
@@ -86,12 +96,24 @@ impl IndexCore {
                 bs[idx] += s.b;
             }
         }
+        let hvdc = net.calc_hvdc_injections();
+        let mut p_hvdc = vec![0.0; n];
+        let mut q_hvdc = vec![0.0; n];
+        for terminal in &hvdc.terminals {
+            if let Some(&idx) = bus_id_to_idx.get(&terminal.bus) {
+                p_hvdc[idx] += terminal.p;
+                q_hvdc[idx] += terminal.q;
+            }
+        }
         Self {
             bus_id_to_idx,
             pd,
             qd,
             gs,
             bs,
+            p_hvdc,
+            q_hvdc,
+            hvdc,
         }
     }
 }
@@ -251,6 +273,31 @@ impl<'n> IndexedNetwork<'n> {
         &self.core.bs
     }
 
+    /// Nodal fixed HVDC active injection, length `n`: `-pf` at each in
+    /// service line's from bus and `+pt` at its to bus, summed per bus, in
+    /// the unit of [`pd`](Self::pd). A calculation under
+    /// [`HvdcTreatment::FixedInjection`](crate::HvdcTreatment) adds it to the
+    /// net injection beside generation minus demand.
+    #[inline]
+    pub fn p_hvdc(&self) -> &[f64] {
+        &self.core.p_hvdc
+    }
+
+    /// Nodal fixed HVDC reactive injection, length `n`: `+qf` at each in
+    /// service line's from bus and `+qt` at its to bus, summed per bus, in
+    /// the unit of [`qd`](Self::qd).
+    #[inline]
+    pub fn q_hvdc(&self) -> &[f64] {
+        &self.core.q_hvdc
+    }
+
+    /// The per line record behind [`p_hvdc`](Self::p_hvdc) and
+    /// [`q_hvdc`](Self::q_hvdc), including the lines that inject nothing.
+    #[inline]
+    pub fn hvdc_injections(&self) -> &HvdcInjections {
+        &self.core.hvdc
+    }
+
     /// In-service branches with their index into [`branches`](Self::branches).
     pub fn in_service_branches(&self) -> impl Iterator<Item = (usize, &Branch)> {
         self.net
@@ -307,20 +354,63 @@ impl<'n> IndexedNetwork<'n> {
         g
     }
 
-    /// Number of connected components in the in-service topology.
+    /// In-service switches that are closed and join two distinct buses, with
+    /// their index into the network's switch table. A closed switch is an
+    /// ideal connection: its two buses are one electrical node.
+    pub fn closed_switches(&self) -> impl Iterator<Item = (usize, &Switch)> {
+        self.net
+            .switches()
+            .iter()
+            .enumerate()
+            .filter(|(_, switch)| switch.closed && switch.from != switch.to)
+    }
+
+    /// Error if a closed switch joins two buses.
+    ///
+    /// The matrix builders and solver preparations stamp branches only, so on
+    /// a network that still carries a closed switch they leave its two buses
+    /// apart. Normalization merges closed switches by default
+    /// ([`ClosedSwitchPolicy::Merge`](crate::ClosedSwitchPolicy::Merge)), and
+    /// [`merge_buses`](BalancedNetwork::merge_buses) merges them under a rule
+    /// that selects them; call this before building to refuse a network that
+    /// skipped both.
+    ///
+    /// # Errors
+    /// [`Error::ClosedSwitch`] naming the first closed switch and the count,
+    /// with the calls that merge them.
+    pub fn check_closed_switches(&self) -> Result<()> {
+        match self.closed_switches().next() {
+            Some((row, switch)) => Err(Error::ClosedSwitch {
+                row,
+                from: switch.from,
+                to: switch.to,
+                closed: self.closed_switches().count(),
+            }),
+            None => Ok(()),
+        }
+    }
+
+    /// Number of connected components in the in-service topology: buses
+    /// joined by in-service branches or closed switches.
     pub fn calc_island_count(&self) -> usize {
-        petgraph::algo::connected_components(&self.to_petgraph())
+        let labels = self.calc_island_labels();
+        (0..labels.len()).filter(|&i| labels[i] == i).count()
     }
 
     /// Connected-component label per dense bus index (in-service topology): two
-    /// buses share a label iff an in-service branch path joins them, and an
-    /// isolated bus is its own component. Labels are representative indices in
-    /// `[0, n)`, not a dense `[0, k)` range — use them for equality grouping
-    /// (e.g. checking every island carries a reference bus to ground).
+    /// buses share a label iff a path of in-service branches and closed
+    /// switches joins them, and an isolated bus is its own component. Labels
+    /// are representative indices in `[0, n)`, not a dense `[0, k)` range — use
+    /// them for equality grouping (e.g. checking every island carries a
+    /// reference bus to ground).
     pub fn calc_island_labels(&self) -> Vec<usize> {
         let mut uf = petgraph::unionfind::UnionFind::new(self.n());
-        for (_, br) in self.in_service_branches() {
-            if let (Some(i), Some(j)) = (self.bus_index(br.from), self.bus_index(br.to)) {
+        let edges = self
+            .in_service_branches()
+            .map(|(_, br)| (br.from, br.to))
+            .chain(self.closed_switches().map(|(_, sw)| (sw.from, sw.to)));
+        for (from, to) in edges {
+            if let (Some(i), Some(j)) = (self.bus_index(from), self.bus_index(to)) {
                 uf.union(i, j);
             }
         }
@@ -333,6 +423,8 @@ impl<'n> IndexedNetwork<'n> {
     /// null vector in the system, so the reference-grounded Laplacian stays
     /// singular. With one reference in a single island it reduces to the
     /// single slack requirement. Reports the count of ungrounded components.
+    /// Closed switches join their buses here as they do in
+    /// [`calc_island_labels`](Self::calc_island_labels).
     pub fn check_reference_coverage(&self) -> Result<()> {
         let labels = self.calc_island_labels();
         // Mark each component (by its representative index in `[0, n)`) that holds
@@ -355,27 +447,32 @@ impl<'n> IndexedNetwork<'n> {
         Ok(())
     }
 
-    /// True iff the in-service topology is a forest (`|E| = |V| - components`).
+    /// True iff the in-service topology, branches and closed switches alike,
+    /// is a forest (`|E| = |V| - components`).
     pub fn is_radial(&self) -> bool {
-        let g = self.to_petgraph();
-        let n_components = petgraph::algo::connected_components(&g);
-        g.edge_count() == g.node_count().saturating_sub(n_components)
+        let edges = self.in_service_branches().count() + self.closed_switches().count();
+        edges == self.n().saturating_sub(self.calc_island_count())
     }
 
-    /// Calculate a one-shot topological diagnostic.
+    /// Calculate a one-shot topological diagnostic. Closed switches join their
+    /// buses as they do in [`calc_island_labels`](Self::calc_island_labels).
     pub fn calc_connectivity_report(&self) -> ConnectivityReport {
-        let g = self.to_petgraph();
-        let n_components = petgraph::algo::connected_components(&g);
-        let isolated: Vec<usize> = g
-            .node_indices()
-            .filter(|n| g.neighbors(*n).next().is_none())
-            .map(|n| g[n])
-            .collect();
+        let mut connected = vec![false; self.n()];
+        let edges = self
+            .in_service_branches()
+            .map(|(_, br)| (br.from, br.to))
+            .chain(self.closed_switches().map(|(_, sw)| (sw.from, sw.to)));
+        for (from, to) in edges {
+            if let (Some(i), Some(j)) = (self.bus_index(from), self.bus_index(to)) {
+                connected[i] = true;
+                connected[j] = true;
+            }
+        }
         ConnectivityReport {
             n_buses: self.n(),
             n_branches_in_service: self.net.branches().iter().filter(|b| b.in_service).count(),
-            n_components,
-            isolated_buses: isolated,
+            n_components: self.calc_island_count(),
+            isolated_buses: (0..self.n()).filter(|&i| !connected[i]).collect(),
         }
     }
 }
@@ -388,7 +485,8 @@ pub struct ConnectivityReport {
     pub n_buses: usize,
     pub n_branches_in_service: usize,
     pub n_components: usize,
-    /// Dense bus indices with no incident in-service branch.
+    /// Dense bus indices with no incident in-service branch or closed switch
+    /// to another bus.
     pub isolated_buses: Vec<usize>,
 }
 
@@ -403,7 +501,7 @@ impl ConnectivityReport {
 mod tests {
     use super::{IndexCore, IndexedNetwork};
     use crate::network::{
-        BalancedNetwork, Bus, BusId, BusType, Extras, Impedance, Load, Shunt, Transformer3W,
+        BalancedNetwork, Bus, BusId, BusType, Extras, Hvdc, Impedance, Load, Shunt, Transformer3W,
         Winding,
     };
 
@@ -617,10 +715,87 @@ mod tests {
     }
 
     #[test]
+    fn a_bus_reached_only_through_a_closed_switch_is_not_islanded() {
+        // Bus 1 (reference) - bus 2 by a line; bus 3 hangs off bus 2 by a
+        // closed switch and bus 4 by an open one.
+        let mut net = BalancedNetwork::in_memory(
+            "switches",
+            100.0,
+            vec![
+                bus(1, BusType::Ref),
+                bus(2, BusType::Pq),
+                bus(3, BusType::Pq),
+                bus(4, BusType::Pq),
+            ],
+            vec![crate::network::Branch::new(BusId(1), BusId(2), 0.0, 0.1)],
+        );
+        net.switches_mut().extend([
+            crate::network::Switch::new(BusId(2), BusId(3), true),
+            crate::network::Switch::new(BusId(2), BusId(4), false),
+        ]);
+        let view = IndexedNetwork::new(&net);
+        let labels = view.calc_island_labels();
+        assert_eq!(labels[0], labels[2], "the closed switch joins bus 3");
+        assert_ne!(labels[0], labels[3], "the open switch does not join bus 4");
+        assert_eq!(view.calc_island_count(), 2);
+        let report = view.calc_connectivity_report();
+        assert_eq!(report.n_components, 2);
+        assert_eq!(report.isolated_buses, vec![3]);
+        assert!(view.is_radial());
+        let error = view.check_reference_coverage().unwrap_err();
+        assert!(matches!(
+            error,
+            crate::Error::UngroundedComponent { components: 1 }
+        ));
+
+        // The matrix builders model no switches; the strict check refuses
+        // the closed one rather than leaving bus 3 apart.
+        let error = view.check_closed_switches().unwrap_err();
+        assert_eq!(error.code().code, "BUILD.SWITCH.CLOSED");
+        assert!(error.to_string().contains("merge_buses"));
+        net.switches_mut()[0].closed = false;
+        IndexedNetwork::new(&net).check_closed_switches().unwrap();
+    }
+
+    #[test]
     fn with_core_matches_one_shot_view() {
         // A view over a cached core sees the same aggregates as a fresh one.
         let net = agg_net();
         let core = IndexCore::build(&net);
         assert_aggregates(&IndexedNetwork::with_core(&net, &core));
+    }
+
+    #[test]
+    fn hvdc_lines_fold_into_fixed_injections_per_bus() {
+        // Two lines leave bus 1 for bus 2; the out of service one is left
+        // out. The from end withdraws pf and injects qf, the to end injects
+        // pt and qt.
+        let mut net = agg_net();
+        let mut line = Hvdc::new(BusId(1), BusId(2));
+        line.pf = 100.0;
+        line.pt = 97.0;
+        line.qf = -40.0;
+        line.qt = -35.0;
+        let mut second = line.clone();
+        second.pf = 20.0;
+        second.pt = 19.0;
+        second.qf = 0.0;
+        second.qt = 0.0;
+        let mut off = line.clone();
+        off.in_service = false;
+        net.hvdc_mut().extend([line, second, off]);
+        let view = IndexedNetwork::new(&net);
+        let (i, j) = (
+            view.bus_index(BusId(1)).unwrap(),
+            view.bus_index(BusId(2)).unwrap(),
+        );
+        assert!((view.p_hvdc()[i] + 120.0).abs() < 1e-12);
+        assert!((view.p_hvdc()[j] - 116.0).abs() < 1e-12);
+        assert!((view.q_hvdc()[i] + 40.0).abs() < 1e-12);
+        assert!((view.q_hvdc()[j] + 35.0).abs() < 1e-12);
+        assert_eq!(view.hvdc_injections().n_injecting(), 2);
+        assert_eq!(view.hvdc_injections().out_of_service, vec![2]);
+        // Loads and shunts are untouched by the HVDC fold.
+        assert_aggregates(&view);
     }
 }

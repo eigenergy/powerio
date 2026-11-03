@@ -1,0 +1,36 @@
+{
+  "status": "partial output-data reconstruction; neither load flow reproduced",
+  "native_model_parsed": false,
+  "arif2013": {
+    "doi": "10.4236/sgre.2013.42029",
+    "url": "https://file.scirp.org/Html/14-6401233_32197.htm",
+    "reference": "Figure 4 and Table 5; printed pp.239,246",
+    "results": [
+      {
+        "scenario": "load",
+        "angle_closure_error_degrees": 0,
+        "derived_vuf_percent_not_reported_in_paper": 8.048990377023528e-15
+      },
+      {
+        "scenario": "load_pv",
+        "angle_closure_error_degrees": -0.0009999999999763531,
+        "derived_vuf_percent_not_reported_in_paper": 1.0793701782518434
+      },
+      {
+        "scenario": "load_pv_storage",
+        "angle_closure_error_degrees": -0.0020000000000095497,
+        "derived_vuf_percent_not_reported_in_paper": 1.4440198337418535
+      }
+    ],
+    "missing_inputs": "Line/neutral impedances and a complete transformer equivalent circuit are not specified. Rounded output phasors cannot validate a reader without matching network inputs."
+  },
+  "vinayagam2015": {
+    "doi": "10.2991/seee-15.2015.20",
+    "url": "https://www.atlantis-press.com/article/25841476.pdf",
+    "reference": "Figure 12 and Table V",
+    "reported_vuf_percent_approx": 1.48,
+    "assuming_phase_magnitudes_and_exact_120_degree_spacing_percent": 0.9954314986028039,
+    "assuming_closed_line_line_magnitudes_percent": 1.991282457978788,
+    "conclusion": "Neither simple interpretation reproduces 1.48%. Phase angles and the precise voltage basis/state are needed; this is not evidence that the paper is incorrect."
+  }
+}

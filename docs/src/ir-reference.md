@@ -3,7 +3,7 @@
 This page lists every structural value type in the PowerIO IR, field by
 field: each field's type, unit, and sign convention, the invariant the
 deserializer or the constructors enforce, and what a reader uses when the
-field is absent. The generated schema at `docs/schema/pio-ir/2/0.11.5/schema.json`
+field is absent. The generated schema at `docs/schema/pio-ir/2/0.11.7/schema.json`
 is the machine form of the same definitions. To keep the two from drifting
 apart, `powerio/tests/ir_reference.rs` reads this page and checks in both
 directions that each table lists the same fields the schema defines for its
@@ -71,6 +71,7 @@ schema definition beside it.
 | `powerio.AcPfInstance` | `AcPfInstance` |
 | `powerio.DcOpfInstance` | `DcOpfInstance` |
 | `powerio.AcOpfInstance` | `AcOpfInstance` |
+| `powerio.AcOtsInstance` | `AcOtsInstance` |
 | `powerio.McAcPfInstance` | `McAcPfInstance` |
 | `powerio.McAcOpfInstance` | `McAcOpfInstance` |
 | `powerio.LinDist3FlowPfInstance` | `LinDist3FlowPfInstance` |
@@ -80,6 +81,7 @@ schema definition beside it.
 | `powerio.AcPfSolution` | `AcPfSolution` |
 | `powerio.DcOpfSolution` | `DcOpfSolution` |
 | `powerio.AcOpfSolution` | `AcOpfSolution` |
+| `powerio.AcOtsSolution` | `AcOtsSolution` |
 | `powerio.SocwrOpfSolution` | `SocwrOpfSolution` |
 | `powerio.McAcPfSolution` | `McAcPfSolution` |
 | `powerio.McAcOpfSolution` | `McAcOpfSolution` |
@@ -100,7 +102,7 @@ Schema definition: `BalancedNetwork`.
 | `name` | string | | | | required |
 | `base_mva` | float | MVA | | finite and positive | required |
 | `base_frequency` | float | Hz | | positive | 60 |
-| `source_format` | token | | | one of the format tokens (`matpower`, `psse`, `psse-rawx`, `powermodels-json`, `egret-json`, `powerworld`, `powerworld-pwb`, `pslf`, `pandapower-json`, `pypsa-csv`, `gridfm`, `goc3-json`, `surge-json`, `opfdata-json`, `xiidm`, `cgmes`, `in-memory`, `normalized`) | required |
+| `source_format` | token | | | one of the format tokens (`matpower`, `psse`, `psse-rawx`, `powermodels-json`, `egret-json`, `powerworld`, `powerworld-pwb`, `pslf`, `pandapower-json`, `pypsa-csv`, `gridfm`, `goc3-json`, `surge-json`, `opfdata-json`, `xiidm`, `jiidm`, `cgmes`, `ucte`, `ieee-cdf`, `sincal`, `in-memory`, `normalized`) | required |
 | `buses` | array of `Bus` | | | `id` unique | required |
 | `loads` | array of `Load` | | | `bus` names a bus | required |
 | `shunts` | array of `Shunt` | | | `bus` names a bus | required |
@@ -225,6 +227,22 @@ Schema definition: `Branch`.
 | `uid` | string or null | | | unique within `branches` | assigned at serialization |
 | `route` | array of `Location` or null | network coordinate space | | | null |
 | `extras` | object | | | | required |
+
+A transformer's impedance correction table rides in `extras`.
+`impedance_correction` holds `{table, variable, points}`. `variable` is
+`ratio` or `angle` (degrees), and each point is `{value, factor_re,
+factor_im}`, the complex factor that multiplies the nominal series impedance
+at that ratio or angle. A three winding transformer keeps three such entries,
+one per winding or `null`, and its factor scales that winding's star
+impedance. With `psse_zcod = 1`, entries 0/1/2 instead scale Z12/Z23/Z31,
+using the sole winding whose control mode is not fixed (regulation may be
+disabled). Ratio coordinates on a branch are in its effective t1/t2 tap
+units; three-winding ratio coordinates are bus-base per-unit winding taps. `impedance_correction_nominal` holds the nominal impedance once
+`apply_impedance_correction` has scaled it: `[r, x]` on a branch and the three
+pairwise `[r, x]` on a three winding transformer. `impedance_correction_applied`
+holds the corrected impedance that call wrote, in the same layout; a present
+impedance that differs from it was edited afterward and is the nominal value
+from then on.
 
 Schema definition: `BranchCharging`.
 
@@ -354,7 +372,16 @@ Schema definition: `Storage`.
 ### Hvdc
 
 A two terminal HVDC line in the MATPOWER `dcline` convention, whatever the
-source format.
+source format. The stored `pf`, `pt`, `qf`, and `qt` keep these signs
+throughout 0.11.x: `pf` is positive from the from bus into the line, and
+`pt`, `qf`, and `qt` are positive from the line into their bus. The
+calculations read them through the bus-to-device terminal view
+(`Hvdc::calc_bus_to_device_powers` in Rust), positive from each AC bus into
+the HVDC system: `p_from = pf`, `q_from = -qf`, `p_to = -pt`, `q_to = -qt`,
+with `p_from + p_to` the active power lost. A balanced calculation carries an
+in service line whose two terminal buses are energized as fixed bus
+injections, the negatives of its terminal powers: `-pf` and `+qf` at the from
+bus, `+pt` and `+qt` at the to bus.
 
 Schema definition: `Hvdc`.
 
@@ -423,9 +450,11 @@ Schema definition: `Switch`.
 ### Transformer3W
 
 Three windings joined at a star point; the indexed view star-lowers the
-record for matrix calculations.
+record for matrix calculations. Default per-winding service states use this
+body directly. Nondefault states use the tagged record described below, whose
+nested body has the same physical fields.
 
-Schema definition: `Transformer3W`.
+Schema definitions: `Transformer3W/anyOf/0`, `PartialTransformer3WFields`.
 
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
@@ -439,6 +468,32 @@ Schema definition: `Transformer3W`.
 | `in_service` | boolean | | | | required |
 | `uid` | string or null | | | unique within `transformers_3w` | assigned at serialization |
 | `extras` | object | | | | required |
+
+Two `extras` entries carry per winding data, in winding order. Each is present
+only when it differs from its default. `winding_in_service` holds three
+booleans; a winding that is out leaves the other two coupled through the star
+point, and an absent entry means every winding is in service.
+`winding_rating_sets` holds three arrays of `{name, rate_mva}` objects with the
+MVA ratings beyond `rate_a`, `rate_b`, and `rate_c`, named as in
+`Branch.rating_sets`.
+
+### PartialTransformer3W
+
+A nondefault winding state uses structural identity
+`"powerio.PartialTransformer3W"`, including when the whole transformer is off.
+The nested body requires `extras.winding_in_service` to contain exactly three
+booleans, not all true. An explicit all-false state is therefore also tagged.
+Older IR 2 readers reject this record because its required physical transformer
+fields are absent at the root. The body preserves all winding rows, identifiers,
+units, and extension data; no winding is dropped or assigned a fake impedance.
+Bare nondefault states and malformed tagged records are rejected.
+
+Schema definition: `PartialTransformer3WWire/oneOf/0`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `type` | string | | | exactly `"powerio.PartialTransformer3W"` | required |
+| `value` | object | | | complete transformer body above with nondefault winding flags | required |
 
 Schema definition: `Winding`.
 
@@ -606,13 +661,17 @@ terminal names are the source's own strings; for OpenDSS the terminal names
 are its node numbers. An element's `terminal_map` lists, in conductor order,
 the terminals of the named bus it connects to.
 
-Schema definition: `MulticonductorNetwork`.
+Without component geography, this is the original network body. The additive
+located-network alternative below carries typed points without changing these
+fields or their meanings.
+
+Schema definitions: `MulticonductorNetwork/anyOf/0`, `MulticonductorNetworkBody`.
 
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
 | `name` | string or null | | | | null |
 | `base_frequency` | float | Hz | | positive | required |
-| `source_format` | token `dss`, `bmopf-json`, `pmd-json`, or null | | | | null |
+| `source_format` | token `dss`, `bmopf-json`, `pmd-json`, `cim-dist`, `sincal`, or null | | | | null |
 | `buses` | array of `DistBus` | | | `id` unique | required |
 | `linecodes` | array of `DistLineCode` | | | `name` unique | required |
 | `lines` | array of `DistLine` | | | `bus_from`, `bus_to` name buses; `linecode` names a line code | required |
@@ -630,6 +689,45 @@ Schema definition: `MulticonductorNetwork`.
 | `options` | array of `[name, value]` string pairs | | | source order | required |
 | `extras` | object | | | | required |
 | `geo` | `DistGeoMeta` or null | | | | null |
+
+### LocatedMulticonductorNetwork
+
+The `powerio.MulticonductorNetwork` value can instead contain a nested
+`"powerio.LocatedMulticonductorNetwork"` record. It remains the same runtime
+network family. An older reader rejects the wrapper because its required
+electrical fields are absent at the root. This representation works wherever
+the network is stored, including calculation and collection values.
+
+Schema definition: `LocatedNetworkWire`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `type` | string | | | exactly `"powerio.LocatedMulticonductorNetwork"` | required |
+| `value` | `LocatedNetworkFields` | | | | required |
+
+Schema definition: `LocatedNetworkFields`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `network` | `MulticonductorNetworkBody` | | | original electrical network layout above | required |
+| `locations` | array of `DistComponentLocation` | | | at most 1,048,576; one point per exact component identity | required |
+
+Schema definition: `DistComponentLocation`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `target` | `bus`, `line`, `line_code`, `switch`, `transformer`, `load`, `generator`, `ibr`, `shunt`, `capacitor`, `source` | | | names the component table | required |
+| `name` | string | | | exact existing component id/name; case sensitive | required |
+| `point` | `DistGeographicPoint` | | | independent of drawing positions, routes and electrical length | required |
+| `kind` | `source`, `synthetic`, `manual`, `derived`, or null | | | point origin | null |
+
+Schema definition: `DistGeographicPoint`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `latitude` | float or null | decimal degrees | north positive | finite, in [-90, 90]; at least one axis present | null |
+| `longitude` | float or null | decimal degrees | east positive | finite, in [-180, 180]; zero is a stated coordinate | null |
+| `datum` | string or null | | | nonempty when stated; null means unknown, never implied WGS84 | null |
 
 ### DistBus
 
@@ -868,7 +966,11 @@ Schema definition: `PowerFactorControl`.
 
 ### VoltageSource
 
-Schema definition: `VoltageSource`.
+An earth-referenced source retains the original record below. A source with
+an explicit reference terminal uses the separately tagged record described
+after it; it must not add a bare reference field to this legacy record.
+
+Schema definition: `VoltageSource/anyOf/0` (the earth-referenced branch).
 
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
@@ -879,6 +981,38 @@ Schema definition: `VoltageSource`.
 | `v_angle` | array of float | radians per terminal | | same length as `terminal_map` | required |
 | `energy_cost_rate` | optional array of float | $/kWh | positive injection supplies the network | one entry per phase in terminal-map order; excludes neutral terminals | no stated source-price term |
 | `extras` | object | | | | required |
+
+### ReferencedVoltageSource
+
+The second source-record alternative has structural identity
+`"powerio.ReferencedVoltageSource"`. Older IR 2 readers reject this wrapper
+because the legacy source fields are absent at its root. Existing records
+remain unchanged. The source can occur anywhere a multiconductor network
+is stored, including collections and calculation instances.
+
+Schema definition: `ReferencedSourceWire/oneOf/0`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `type` | string | | | exactly `"powerio.ReferencedVoltageSource"` | required |
+| `value` | object | | | referenced source body below | required |
+
+Schema definition: `ReferencedSourceFields`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `name` | string | | | unique within `sources` | required |
+| `bus` | string | | | names a bus | required |
+| `terminal_map` | array of string | | | distinct declared terminals of `bus`; excludes the reference | required |
+| `v_magnitude` | array of float | volts per terminal-to-reference difference | | same length as `terminal_map`; a grounded phase can have a nonzero difference | required |
+| `v_angle` | array of float | radians per terminal-to-reference difference | | same length as `terminal_map` | required |
+| `reference_terminal` | string | | | another declared terminal on `bus`; does not imply grounding | required |
+| `energy_cost_rate` | optional array of float | $/kWh | positive injection supplies the network | per phase in terminal-map order | no stated source-price term |
+| `extras` | object | | | | required |
+
+The voltage constraint is `V(terminal) - V(reference) = magnitude * exp(i*angle)`.
+Every phase-source current has an equal opposite contribution at the reference.
+Neither an external neutral connection nor an earth path is inferred.
 
 ### UntypedObject
 
@@ -1300,10 +1434,17 @@ Schema definition: `DcPfInstance`.
 | `network` | `BalancedNetwork` | | | at least one `REF` bus | required |
 | `approximation` | token `series_susceptance`, `tap_adjusted_reactance`, `reactance_only` | | | the DC branch susceptance formula | required |
 | `initial_point` | `StoredOperatingPointAssignment` or null | | | | null |
+| `hvdc_treatment` | token `fixed_injection`, `ignore` | | | how the specifications treat HVDC lines; written only when not `ignore` | `ignore` |
 
 The bus specifications are derived from the network: a `REF` bus contributes
 its stated angle, an `ISOLATED` bus no equation, and every other bus its net
-active injection over in service generators and loads.
+active injection over in service generators and loads. Under
+`fixed_injection` each in service HVDC line whose terminal buses are energized
+adds a fixed injection of `-pf` at its from bus and `+pt` at its to bus; under
+`ignore` HVDC lines add nothing. A document without `hvdc_treatment` reads as
+`ignore`: a document written before the field existed, when the instance left
+HVDC lines out, denotes the calculation it did when written, and an `ignore`
+instance is written without the field.
 
 ### powerio.AcPfInstance
 
@@ -1314,6 +1455,7 @@ Schema definition: `AcPfInstance`.
 | `network` | `BalancedNetwork` | | | at least one `REF` bus | required |
 | `specifications` | array of `AcBusSpecification` | | | one per bus, in bus table order | required |
 | `initial_point` | `StoredOperatingPointAssignment` or null | | | | null |
+| `hvdc_treatment` | token `fixed_injection`, `ignore` | | | how specifications derived for a replacement network treat HVDC lines; written only when not `ignore` | `ignore` |
 
 `AcBusSpecification` is tagged by `kind`. `pq` gives `p` (MW) and `q`
 (MVAr), the prescribed net injection; `pv` gives `p` and `vm` (p.u.);
@@ -1351,7 +1493,8 @@ Schema definition: `Objective`.
 
 `ObjectiveTerm` is tagged by `term`: `network_generator_cost` sums the
 network's generator cost curves; `active_power_dispatch_cost` prices active
-dispatch.
+dispatch; `branch_switching_cost` adds the opening and closing costs of an AC
+optimal transmission switching instance's status changes.
 
 Schema definition: `ActiveConstraints`.
 
@@ -1366,6 +1509,51 @@ Schema definition: `ActiveConstraints`.
 stated limit), `none` (the family is relaxed), or `only` with `identities`,
 the list of element identities (`uid` values, or bus ids) the family applies
 to.
+
+### powerio.AcOtsInstance
+
+An AC optimal power flow problem whose branch statuses are decisions. The
+base network keeps every physical branch, and its `in_service` bits are the
+initial topology.
+
+Schema definition: `AcOtsInstance`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `base` | `AcOpfInstance` | | | the network, objective, constraint selections, and initial point | required |
+| `options` | `AcOtsOptions` | | | | required |
+
+Schema definition: `AcOtsOptions`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `switchable` | `BranchSelection` | | | an `only` identity names one branch, once | required |
+| `switching_costs` | array of `BranchSwitchingCost` | | | one record per branch at most | `[]`: switching costs nothing |
+| `islanding` | token | | | `forbidden` (no AC island of the initial topology may split; islands that are separate initially stay valid, and closing a branch may join islands) or `allowed` (islands may split, and each final island gets one reference bus). Under either policy a final topology that leaves buses a generator supplied initially in an island with no in-service generator is refused; no load is shed | required |
+| `max_open` | integer or null | branches | | at most the branch count, at least the open branches that cannot switch; counts every open branch | null: no budget |
+| `max_switched` | integer or null | branches | | at most the switchable count; counts changes against the initial status | null: no budget |
+| `current_limits` | token | | | `skip`, `stated` (the records below), or `derive_from_rate_a` (PowerModels' `calc_current_limits!`) | required |
+| `stated_current_limits` | array of `BranchCurrentLimit` | | | one record per branch at most | `[]` |
+
+`BranchSelection` is tagged by `select`: `all` (every physical branch,
+including initially open ones), `none`, or `only` with `identities`, the
+branch identities (`uid` values) that may switch.
+
+Schema definition: `BranchSwitchingCost`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `id` | string | | | a branch identity | required |
+| `open_cost` | float | objective units | | finite and nonnegative; charged when an initially closed branch opens | required |
+| `close_cost` | float | objective units | | finite and nonnegative; charged when an initially open branch closes | required |
+
+Schema definition: `BranchCurrentLimit`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `id` | string | | | a branch identity | required |
+| `from_pu` | float or null | p.u. on `base_mva` and the from bus `base_kv` | | finite and positive | null: unbounded |
+| `to_pu` | float or null | p.u. on `base_mva` and the to bus `base_kv` | | finite and positive | null: unbounded |
 
 ### powerio.McAcPfInstance
 
@@ -1777,6 +1965,27 @@ Schema definition: `AcOpfSolution`.
 | `bus_reactive_power_marginal` | array of float or null | objective units per MVAr | | one per bus | null |
 | `branch_from_limit_multiplier` | array of float or null | objective units per MVA | | one per branch; finite and nonnegative | null |
 | `branch_to_limit_multiplier` | array of float or null | objective units per MVA | | one per branch; finite and nonnegative | null |
+
+### powerio.AcOtsSolution
+
+The final branch statuses of an AC optimal transmission switching instance
+and the AC optimal power flow solution of the fixed-topology problem they
+derive. Reading the document checks the topology against the instance and
+requires `ac_solution.instance` to state exactly that fixed problem and every
+open branch to carry zero flow. A `NaN` flow on an open branch records no
+flow. Other values follow the AC optimal power flow solution's own rules,
+which accept `NaN` for an out-of-service generator or a non-converged
+objective. The objective
+is the AC objective plus the switching cost when the instance's objective
+states `branch_switching_cost`.
+
+Schema definition: `AcOtsSolution`.
+
+| field | type | unit | sign | invariant | if absent |
+|---|---|---|---|---|---|
+| `instance` | `AcOtsInstance` | | | | required |
+| `branch_closed` | array of boolean | | | one per branch; fixed branches unchanged; within the budgets and islanding policy | required |
+| `ac_solution` | `AcOpfSolution` | | | solves the fixed-topology problem; open branches carry zero flow | required |
 
 ### powerio.SocwrOpfSolution
 

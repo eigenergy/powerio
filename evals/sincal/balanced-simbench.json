@@ -1,0 +1,30 @@
+{
+  "case": "1-LV-rural1--0-sw",
+  "source_sha256": "019f52397b4bc5673abed79a5fe1ed0d484d9674ffca04d4102806cd29ccc659",
+  "profile": "balanced",
+  "schema": 14.8,
+  "variant": 1,
+  "mapped_nodes": 15,
+  "mapped_elements": 32,
+  "paired_csv_parameters": "passed",
+  "pandapower_version": "3.2.2",
+  "numpy_version": "2.5.3",
+  "fresh_voltage_complex_error_pu": 6.284960677263214e-14,
+  "tolerance_pu": 2e-08,
+  "current_injection_iterations": 7,
+  "power_mismatch_pu": 2.1641614947772113e-15,
+  "historical_rounded_csv_voltage_magnitude_error_pu": 4.390482218896707e-06,
+  "native_sincal_execution": false,
+  "derived_fixed_tap_checks": [
+    {
+      "side": "hv",
+      "position": 2,
+      "fresh_voltage_complex_error_pu": 4.4657420074782305e-11
+    },
+    {
+      "side": "lv",
+      "position": 2,
+      "fresh_voltage_complex_error_pu": 5.072499415173141e-11
+    }
+  ]
+}

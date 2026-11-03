@@ -51,3 +51,6 @@ private/
 /dist-validate/
 /dist-mcp/
 *.whl
+
+# Generated from the workspace version for both analytics contexts.
+/apps/converter/public/analytics-policy.js

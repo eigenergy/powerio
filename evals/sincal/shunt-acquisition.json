@@ -1,0 +1,113 @@
+{
+  "scope": "Acquire supported shunt tables alongside the unchanged base CSIRO records.",
+  "cases": [
+    {
+      "case": 3,
+      "source_sha256": "9eaf7c785fe0962af4e9ea5e6a5efb56477ed7427b660481c5cc66f9460bd759",
+      "record_sha256": "a658a49d68a1832ec0a50e78d4fe714e0b7e063b924eb8468ab78f39873e2369",
+      "source_bytes": 76427264,
+      "record_bytes": 3047770,
+      "added_tables": [
+        "ShuntReactor",
+        "ShuntCondensator"
+      ],
+      "base_tables_unchanged": true,
+      "context_error": null,
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 1 (Load): PSS SINCAL read error: unsupported load model 4\" }",
+      "component_count": 1084,
+      "mapped": 776
+    },
+    {
+      "case": 8,
+      "source_sha256": "7534155ddb30c122719bd742af91ff87f8bca09256942c1839ca9843fba5473e",
+      "record_sha256": "9929472ce974c5602a3416779de30b57c9ef8fe62bb2386e5b789f77597d809f",
+      "source_bytes": 18518016,
+      "record_bytes": 637408,
+      "added_tables": [
+        "ShuntReactor",
+        "ShuntCondensator"
+      ],
+      "base_tables_unchanged": true,
+      "context_error": null,
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 264 (SynchronousMachine): PSS SINCAL read error: unmapped element type SynchronousMachine\" }",
+      "component_count": 309,
+      "mapped": 265
+    },
+    {
+      "case": 11,
+      "source_sha256": "4ad08f2eaf1bab4863aa0a6c2b72c6bdea9a7d0027626c49f224b960e6c667d7",
+      "record_sha256": "4b260f6c1e592f510995b9e3a0cc7b902497a3c9097caa3fd9a5ce08750885e1",
+      "source_bytes": 53116928,
+      "record_bytes": 861917,
+      "added_tables": [
+        "ShuntReactor",
+        "ShuntCondensator"
+      ],
+      "base_tables_unchanged": true,
+      "context_error": null,
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 88 (Infeeder): PSS SINCAL read error: Invalid column type Null at index: 73, name: Flag_LfLimit\" }",
+      "component_count": 104,
+      "mapped": 87
+    },
+    {
+      "case": 12,
+      "source_sha256": "7339548baf8bfcf5b891b9d3dbb6b616d9234b8f3df298d959904e150b8cfe91",
+      "record_sha256": "9861c2618515d42a972141097d8d177fa6364349e38a49a44af25d17af4f9f4e",
+      "source_bytes": 29548544,
+      "record_bytes": 447859,
+      "added_tables": [
+        "ShuntReactor",
+        "ShuntCondensator"
+      ],
+      "base_tables_unchanged": true,
+      "context_error": null,
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 181 (Infeeder): PSS SINCAL read error: Invalid column type Null at index: 73, name: Flag_LfLimit\" }",
+      "component_count": 215,
+      "mapped": 214
+    },
+    {
+      "case": 16,
+      "source_sha256": "d1b6ce0906accfbfb6f84901ad90fca7e27d83f4f78578675fceca0e026d791c",
+      "record_sha256": "03dda9a86a417db54f31449ce8edaecfaf09a334dcfc77d981e9223a90957aac",
+      "source_bytes": 7385088,
+      "record_bytes": 222314,
+      "added_tables": [
+        "ShuntReactor",
+        "ShuntCondensator"
+      ],
+      "base_tables_unchanged": true,
+      "context_error": null,
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 90 (Load): PSS SINCAL read error: Invalid column type Null at index: 39, name: Ireg\" }",
+      "component_count": 103,
+      "mapped": 90
+    },
+    {
+      "case": 17,
+      "source_sha256": "a80ce8ec7643e1103c65dc4a79cc6f06f5a1eae8f62fc7e03b952c25d2b2d5d7",
+      "record_sha256": "d0e79bbec9cacc96a6e0563956b87b09438c5d80d959b01b846fc65cc8054bfd",
+      "source_bytes": 14192640,
+      "record_bytes": 253108,
+      "added_tables": [
+        "ShuntReactor",
+        "ShuntCondensator"
+      ],
+      "base_tables_unchanged": true,
+      "context_error": null,
+      "complete_parse": false,
+      "parse_error": "FormatRead { format: \"PSS SINCAL\", message: \"Element 130 (Load): PSS SINCAL read error: load requires zero-sequence circuit resolution\" }",
+      "component_count": 142,
+      "mapped": 130
+    }
+  ],
+  "reader_sha256": "09e96b75d31c5dec73118fba6075d405bd2bda83c278ad8a6af7fd3e8d3fe0ee",
+  "collection": "https://doi.org/10.4225/08/5631B1DF6F1A0",
+  "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
+  "license": "CC-BY-4.0",
+  "native_execution": false,
+  "whole_feeder_validation": false
+}

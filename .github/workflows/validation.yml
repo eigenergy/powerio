@@ -12,9 +12,12 @@ name: Validation
 on:
   pull_request:
     paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
       - "powerio/**"
       - "powerio-tx/**"
       - "powerio-core/**"
+      - "powerio-tnd/**"
       - "powerio-dist/**"
       - "powerio-matrix/**"
       - "powerio-capi/**"
@@ -57,10 +60,10 @@ jobs:
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
     - name: Build powerio-capi
       run: cargo build --release -p powerio-capi
-    - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+    - uses: julia-actions/setup-julia@da908477b5db94c10ffce8cfea9f2b3b9d5db687 # v3.0.3
       with:
         version: '1'
-    - uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8 # v3.3.0
+    - uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
     - name: Instantiate the Julia oracle env
       run: julia --project=evals/validation -e 'using Pkg; Pkg.instantiate()'
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -88,9 +91,18 @@ jobs:
     # setup step.
     - name: Verify the oracle stack imports
       run: .venv/bin/python -c "import egret, jsonschema, opendssdirect, pandapower, pypsa"
+    - name: Fetch phase-shift-sign validation fixture
+      run: |
+        mkdir -p tests/data/large
+        curl --fail --location --retry 3 --retry-all-errors https://raw.githubusercontent.com/MATPOWER/matpower/80b6e16f760f58721ad31221c7287c28259cd4ad/data/case13659pegase.m --output tests/data/large/case13659pegase.m
+        test -s tests/data/large/case13659pegase.m
+    - name: Test snapshot schema validation
+      run: .venv/bin/python -m unittest discover -s evals/validation -p test_validate_bmopf_schema.py
     - name: Run the validation matrix
       run: bash evals/validation/run_validation.sh
     - name: Compare explicit BMOPF core admittances with OpenDSS
       run: |
         cargo build --release -p powerio-cli
         .venv/bin/python evals/validation/validate_bmopf_core_shunts.py --powerio "$PWD/target/release/powerio"
+    - name: Compare CIM tanks with native OpenDSS
+      run: .venv/bin/python evals/validation/validate_cim_tanks.py --powerio "$PWD/target/release/powerio"

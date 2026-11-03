@@ -27,6 +27,7 @@ fn every_canonical_format_reports_its_artifact_shape() {
         ("dss", Some("dss"), true, true),
         ("pmd-json", Some("json"), false, true),
         ("bmopf-json", Some("json"), false, true),
+        ("cim-dist", Some("xml"), false, true),
         ("psse-con", Some("con"), false, true),
         ("psse-sub", Some("sub"), false, true),
         ("psse-mon", Some("mon"), false, true),
@@ -54,6 +55,8 @@ fn common_aliases_resolve_without_exposing_component_enums() {
         ("opendss", "dss"),
         ("engineering", "pmd-json"),
         ("bmopf", "bmopf-json"),
+        ("CIM_DIST", "cim-dist"),
+        ("cimdist", "cim-dist"),
         ("gridopt", "opfdata-json"),
         ("uct", "ucte"),
         ("cdf", "ieee-cdf"),
@@ -75,7 +78,7 @@ fn common_aliases_resolve_without_exposing_component_enums() {
         assert_eq!(resolve_format(alias).map(|info| info.token), Some(token));
     }
 
-    for name in ["", "json", "rawx", "iidm", "not-a-format"] {
+    for name in ["", "json", "rawx", "iidm", "xml", "cim", "not-a-format"] {
         assert_eq!(resolve_format(name), None, "{name}");
     }
 }

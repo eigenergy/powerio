@@ -1,0 +1,150 @@
+{
+  "date": "2026-10-08",
+  "scope": "Additional candidate screening; zero new qualifying larger native unbalanced cases, no production mapping change or electrical acceptance claim.",
+  "native_fixtures_added": false,
+  "contacts_sent": false,
+  "loadflow": {
+    "repository": "https://github.com/benediktibk/loadflow",
+    "revision": "2d95494327123de7eaa9c6fe0bc09990038ee364",
+    "reader": "Jackcess 5.1.7 read-only",
+    "disposition": "All three inspected sources retain source and transformer Flag_Input=3 with global Flag_LFZ0=1; no ULF results. No supported conductor-resolved complete case established. Model-specific redistribution rights unresolved.",
+    "models": [
+      {
+        "name": "dorfnetz",
+        "bytes": 7077888,
+        "sha256": "bdabf5fb722ab714698a580b7cf16fd328aa064be4c1747b97f3b8836d7eeaea",
+        "table_counts": {
+          "Node": 116,
+          "Element": 230,
+          "Terminal": 345,
+          "CalcParameter": 1,
+          "ULFNodeResult": 0,
+          "LFNodeResult": 80,
+          "Load": 114
+        },
+        "element_types": {
+          "Line                                              ": 114,
+          "TwoWindingTransformer                             ": 1,
+          "Infeeder                                          ": 1,
+          "Load                                              ": 114
+        },
+        "input_flags": {
+          "7": 114,
+          "3": 116
+        },
+        "terminal_flags": {
+          "7": 345
+        },
+        "global_zero_sequence_modes": [
+          1
+        ]
+      },
+      {
+        "name": "vorstadt_konvergenzgrenze",
+        "bytes": 8912896,
+        "sha256": "77b32f7193023fbdc2d5cbedbd4bda1f048094761b17eebac36e837e9a8e789e",
+        "table_counts": {
+          "Node": 294,
+          "Element": 586,
+          "Terminal": 879,
+          "CalcParameter": 1,
+          "ULFNodeResult": 0,
+          "LFNodeResult": 294,
+          "Load": 292
+        },
+        "element_types": {
+          "TwoWindingTransformer                             ": 1,
+          "Infeeder                                          ": 1,
+          "Line                                              ": 292,
+          "Load                                              ": 292
+        },
+        "input_flags": {
+          "3": 294,
+          "7": 292
+        },
+        "terminal_flags": {
+          "7": 879
+        },
+        "global_zero_sequence_modes": [
+          1
+        ]
+      },
+      {
+        "name": "vorstadt_konvergenzgrenze_version2",
+        "bytes": 8912896,
+        "sha256": "6686bc1e208ed71857bc0b93215c87a7b1f324893220850c579db4ff30ac28d6",
+        "table_counts": {
+          "Node": 294,
+          "Element": 586,
+          "Terminal": 879,
+          "CalcParameter": 1,
+          "ULFNodeResult": 0,
+          "LFNodeResult": 294,
+          "Load": 292
+        },
+        "element_types": {
+          "TwoWindingTransformer                             ": 1,
+          "Infeeder                                          ": 1,
+          "Line                                              ": 292,
+          "Load                                              ": 292
+        },
+        "input_flags": {
+          "3": 294,
+          "7": 292
+        },
+        "terminal_flags": {
+          "7": 879
+        },
+        "global_zero_sequence_modes": [
+          1
+        ]
+      }
+    ]
+  },
+  "danussi": {
+    "repository": "https://github.com/DaNussi/CPE-KS",
+    "revision": "28169e96105a04d5f3b8542a6ea1c5fb7f668649",
+    "path": "Simulation_files/database.db",
+    "bytes": 2351104,
+    "sha256": "324443500e555ce9161db8dbedabe89f5bc4246496c698645404f3638ab6794d",
+    "schema": 16.0,
+    "nodes": 3,
+    "elements": 6,
+    "license": "Repository MIT; no fixture added",
+    "disposition": "Tiny machine example, not larger feeder; input categories3, global input-only zero sequence, no ULF rows."
+  },
+  "tuwien": {
+    "url": "https://data.mendeley.com/datasets/hgh8c99tnx/1",
+    "doi": "10.17632/hgh8c99tnx.1",
+    "license": "CC BY 4.0",
+    "files": [
+      {
+        "name": "TUWien_LV_TestGrid_175Urban.xlsx",
+        "bytes": 263601,
+        "sha256": "9801931ce17104872b346a79cbfa1bdd5ac4cb905ced1a81d18c9163a7c385ad"
+      },
+      {
+        "name": "TUWien_LV_TestGrid_20Cable.xlsx",
+        "bytes": 88781,
+        "sha256": "c03fa75c9c15162f7a58ac25a403315979a06996f956d17d8cd44a8ab3a4e8eb"
+      },
+      {
+        "name": "TUWien_LV_TestGrid_20OverheadLine.xlsx",
+        "bytes": 88262,
+        "sha256": "a8ff3ce0df0214dadee85c2e34553908b076248df15f13ec9c3b49277cb5be4f"
+      },
+      {
+        "name": "TUWien_LV_TestGrid_61Rural.xlsx",
+        "bytes": 123019,
+        "sha256": "4d930cbc9a36d3a66a3894877b8e7e14cd190376191e63a6f70cfefab632fa93"
+      }
+    ],
+    "disposition": "Public root file manifest contains four XLSX workbooks; publisher description specifies positive-sequence parameters and solved load flow. No native SINCAL file identified."
+  },
+  "paper_lead": {
+    "doi": "10.17780/ksujes.1898213",
+    "url": "https://jes.ksu.edu.tr/tr/pub/article/1898213",
+    "title": "Investigation of the Effects of Single-Phase Electric Vehicle On-Board Chargers on Low Voltage Grid",
+    "disposition": "2026 paper explicitly uses SINCAL European LV model and phase-unbalance calculations; no native download found. Indexed publisher page available; live fetch failed certificate validation. Native-model availability and licensing unverified; no author contact."
+  }
+}

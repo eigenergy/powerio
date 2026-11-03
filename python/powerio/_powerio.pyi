@@ -66,13 +66,15 @@ class PanicException(BaseException):
     """A Rust panic pyo3 caught at the boundary; the wrapper converts it."""
 
 class PowerIOError(ValueError):
-    """Base error from the powerio parser, emitter, or matrix calculations.
+    """Base error from parsing, emission, or matrix calculations.
 
-    Failures mapped from the Rust core carry the diagnostic code string as
-    ``code``; it is set at raise time, so it is instance-only.
+    Rust core failures carry a diagnostic code and typed Diagnostic records.
+    Refused conversion passes retain their existing dictionary findings.
+    These attributes are populated when the exception is raised.
     """
 
     code: str
+    diagnostics: list[Diagnostic] | list[dict[str, Any]]
 
 class PowerIOParseError(PowerIOError):
     """A case file is malformed or unparseable."""
@@ -80,13 +82,40 @@ class PowerIOParseError(PowerIOError):
 class PowerIODataError(PowerIOError):
     """A well-formed case cannot satisfy a requested operation.
 
-    A refused pass (e.g. ``_PioModule.lower_to_balanced``) additionally sets
-    ``diagnostics``: the pass's structured findings, each a dict with
-    ``code``, ``severity``, ``message``, and ``target``. Absent on a
-    ``PowerIODataError`` raised elsewhere.
+    Core errors carry typed Diagnostic records. Refused conversion passes
+    retain dictionary findings with code, severity, message, and target.
     """
 
-    diagnostics: List[Dict[str, Any]]
+class _BusMerge:
+    @property
+    def network(self) -> _BalancedNetwork: ...
+    @property
+    def rule(self) -> str: ...
+    @property
+    def merged_buses(self) -> dict[int, int]: ...
+    @property
+    def groups(self) -> list[dict[str, Any]]: ...
+    @property
+    def removed_branches(self) -> list[dict[str, Any]]: ...
+    @property
+    def removed_switches(self) -> list[dict[str, Any]]: ...
+    @property
+    def branch_rows(self) -> list[Optional[int]]: ...
+    @property
+    def switch_rows(self) -> list[Optional[int]]: ...
+    @property
+    def charging_shunts(self) -> list[int]: ...
+    @property
+    def diagnostics(self) -> list[Diagnostic]: ...
+    def survivor(self, bus: int) -> int: ...
+    def calc_removed_flows(
+        self,
+        branch_p_from: list[float],
+        branch_p_to: list[float],
+        *,
+        generator_p: Optional[list[float]] = ...,
+        transformer_3w_p: Optional[list[tuple[float, float, float]]] = ...,
+    ) -> dict[str, Any]: ...
 
 class _BalancedNetwork:
     def component_counts(self) -> dict[str, int]: ...
@@ -179,6 +208,16 @@ class _BalancedNetwork:
     def reference_bus_index(self) -> int: ...
     def reference_bus_indices(self) -> list[int]: ...
     def calc_connectivity_report(self) -> dict: ...
+    def calc_stated_state_mismatch(
+        self,
+        *,
+        top_k: int = ...,
+        hvdc: str = ...,
+        low_impedance_threshold: float = ...,
+        merge_zero_impedance: bool = ...,
+        lcc_reactive_power: str = ...,
+    ) -> dict[str, Any]: ...
+    def calc_stated_branch_flows(self) -> dict[str, Any]: ...
     def to_normalized(self) -> _BalancedNetwork: ...
     def to_geo_layer_json(self) -> str: ...
     def apply_geo_layer(
@@ -194,7 +233,17 @@ class _BalancedNetwork:
         *,
         clamp_angle_bounds: bool = ...,
         angle_bound_pad: Optional[float] = ...,
+        closed_switches: str = ...,
+        island_references: str = ...,
     ) -> _BalancedNetwork: ...
+    def merge_buses(
+        self,
+        *,
+        closed_switches: bool = ...,
+        zero_impedance: Optional[str] = ...,
+        threshold: Optional[float] = ...,
+        charging: str = ...,
+    ) -> _BusMerge: ...
     # Matrix builders return COO triplets `(data, row, col, (nrows, ncols))` as
     # plain Python lists, except `incidence`/`ybus_parts` which nest them.
     def bprime(
@@ -837,10 +886,18 @@ class _PioModule:
         network: _MulticonductorNetwork,
     ) -> "_PioModule": ...
     @staticmethod
-    def _parse_path(path: str, format: Optional[str] = ...) -> "_PioModule": ...
+    def _parse_path(
+        path: str, format: Optional[str] = ...,
+        sincal: Optional[Tuple[Optional[int], Optional[float], Optional[str], bool]] = ...,
+        acquisition_root: Optional[str] = ...,
+        sincal_balanced: Optional[Tuple[Optional[int], Optional[float], Optional[str]]] = ...,
+    ) -> "_PioModule": ...
     @staticmethod
     def _parse_memory(
-        data: bytes, name: str, format: Optional[str] = ...
+        data: bytes, name: str, format: Optional[str] = ...,
+        sincal: Optional[Tuple[Optional[int], Optional[float], Optional[str], bool]] = ...,
+        named_buffers: Optional[List[Tuple[str, bytes]]] = ...,
+        sincal_balanced: Optional[Tuple[Optional[int], Optional[float], Optional[str]]] = ...,
     ) -> "_PioModule": ...
     @staticmethod
     def _deserialize_path(path: str) -> "_PioModule": ...
@@ -854,6 +911,30 @@ class _PioModule:
     def _to_ac_pf_instance(self) -> "_PioModule": ...
     def _to_dc_opf_instance(self) -> "_PioModule": ...
     def _to_ac_opf_instance(self) -> "_PioModule": ...
+    def _to_ac_ots_instance(self) -> "_PioModule": ...
+    def _to_ac_ots_instance_with_options(
+        self,
+        switchable: str,
+        identities: List[str],
+        switching_costs: List[Tuple[str, float, float]],
+        islanding: str,
+        max_open: Optional[int],
+        max_switched: Optional[int],
+        current_limits: str,
+        stated_current_limits: List[Tuple[str, Optional[float], Optional[float]]],
+    ) -> "_PioModule": ...
+    def _ac_ots_options(self) -> Dict[str, Any]: ...
+    def _ac_ots_branches(self) -> List[Dict[str, Any]]: ...
+    def _ac_ots_validate_topology(self, branch_closed: List[bool]) -> float: ...
+    def _ac_ots_fix_topology(
+        self, branch_closed: List[bool]
+    ) -> Tuple["_PioModule", List[Diagnostic]]: ...
+    def _ac_ots_solution(
+        self, branch_closed: List[bool], ac_solution: "_PioModule"
+    ) -> "_PioModule": ...
+    def _ac_ots_solution_branch_closed(self) -> List[bool]: ...
+    def _ac_ots_solution_summary(self) -> Tuple[float, int, int, float]: ...
+    def _ac_ots_solved_network(self) -> "_PioModule": ...
     def _to_mc_ac_pf_instance(self) -> "_PioModule": ...
     def _to_mc_ac_opf_instance(self) -> "_PioModule": ...
     def _to_lindist3flow_opf_instance(self) -> "_PioModule": ...

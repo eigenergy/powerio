@@ -1,0 +1,2 @@
+id;node;calc_type;dspf;pExtNet;qExtNet;pWardShunt;qWardShunt;rXWard;xXWard;vmXWard;subnet;voltLvl
+MV1.101 grid at LV1.101;MV1.101 Bus 4;vavm;1;NULL;NULL;NULL;NULL;NULL;NULL;NULL;LV1.101_MV1.101_eq;5

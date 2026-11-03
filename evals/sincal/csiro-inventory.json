@@ -1,0 +1,598 @@
+{
+  "collection": "https://doi.org/10.4225/08/5631B1DF6F1A0",
+  "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
+  "license": "CC-BY-4.0",
+  "license_url": "https://creativecommons.org/licenses/by/4.0/",
+  "inspection_date": "2026-10-07",
+  "decoder": "MDB Tools 1.0.1 mdb-export",
+  "scope": "Research inventory of all stored rows, not selected-variant network counts or native acceptance. No database payloads included.",
+  "databases": [
+    {
+      "representative": 1,
+      "source_path": "DataRelease/FeederModels/Sincal/Representative 01_files/database.mdb",
+      "bytes": 60686336,
+      "sha256": "eb1fb68ba654f70f5dfb0a39dcd04831b3f1db42aa0448c29824da2997e42b40",
+      "version": "11.5",
+      "calculation_type": "1",
+      "stored_row_counts": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 795,
+        "Element": 1033,
+        "Terminal": 1818,
+        "Line": 533,
+        "LineSeg": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "Load": 247,
+        "Infeeder": 1,
+        "TwoWindingTransformer": 252,
+        "ThreeWindingTransformer": 0,
+        "ULFNodeResult": 38220,
+        "LFNodeResult": 0
+      },
+      "terminal_flag_histogram": {
+        "7": 224,
+        "6": 75,
+        "4": 83,
+        "2": 435,
+        "5": 80,
+        "3": 405,
+        "1": 516
+      }
+    },
+    {
+      "representative": 2,
+      "source_path": "DataRelease/FeederModels/Sincal/Representative 02_files/database.mdb",
+      "bytes": 136704000,
+      "sha256": "3e792c54b81c135b63bf9dbd5cbea2aa4057a9818edd7d608acb607bd49694b6",
+      "version": "11.5",
+      "calculation_type": "1",
+      "stored_row_counts": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 1749,
+        "Element": 2329,
+        "Terminal": 4083,
+        "Line": 1179,
+        "LineSeg": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "Load": 574,
+        "Infeeder": 1,
+        "TwoWindingTransformer": 575,
+        "ThreeWindingTransformer": 0,
+        "ULFNodeResult": 85701,
+        "LFNodeResult": 0
+      },
+      "terminal_flag_histogram": {
+        "7": 1111,
+        "6": 424,
+        "5": 478,
+        "4": 714,
+        "2": 218,
+        "3": 754,
+        "1": 384
+      }
+    },
+    {
+      "representative": 3,
+      "source_path": "DataRelease/FeederModels/Sincal/Representative 03_files/database.mdb",
+      "bytes": 76427264,
+      "sha256": "9eaf7c785fe0962af4e9ea5e6a5efb56477ed7427b660481c5cc66f9460bd759",
+      "version": "11.5",
+      "calculation_type": "1",
+      "stored_row_counts": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 785,
+        "Element": 1084,
+        "Terminal": 1869,
+        "Line": 774,
+        "LineSeg": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "Load": 297,
+        "Infeeder": 1,
+        "TwoWindingTransformer": 11,
+        "ThreeWindingTransformer": 0,
+        "ULFNodeResult": 38465,
+        "LFNodeResult": 0
+      },
+      "terminal_flag_histogram": {
+        "7": 1041,
+        "3": 479,
+        "1": 196,
+        "2": 153
+      }
+    },
+    {
+      "representative": 4,
+      "source_path": "DataRelease/FeederModels/Sincal/Representative 04_files/database.mdb",
+      "bytes": 118075392,
+      "sha256": "19da5cd451e00e30a598fff58661172a964df36f7b8ac70767c4cc49068017dc",
+      "version": "11.5",
+      "calculation_type": "1",
+      "stored_row_counts": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 625,
+        "Element": 861,
+        "Terminal": 1486,
+        "Line": 390,
+        "LineSeg": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "Load": 235,
+        "Infeeder": 1,
+        "TwoWindingTransformer": 235,
+        "ThreeWindingTransformer": 0,
+        "ULFNodeResult": 30625,
+        "LFNodeResult": 0
+      },
+      "terminal_flag_histogram": {
+        "7": 704,
+        "6": 112,
+        "4": 107,
+        "5": 207,
+        "3": 108,
+        "1": 106,
+        "2": 142
+      }
+    },
+    {
+      "representative": 5,
+      "source_path": "DataRelease/FeederModels/Sincal/Representative 05_files/database.mdb",
+      "bytes": 88170496,
+      "sha256": "26dfb51d491e0333c45613e7eafa35d9c4c3ad07e1170d8c644e80584bafdaf8",
+      "version": "11.5",
+      "calculation_type": "1",
+      "stored_row_counts": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 922,
+        "Element": 1378,
+        "Terminal": 2297,
+        "Line": 912,
+        "LineSeg": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "Load": 458,
+        "Infeeder": 1,
+        "TwoWindingTransformer": 7,
+        "ThreeWindingTransformer": 0,
+        "ULFNodeResult": 42630,
+        "LFNodeResult": 0
+      },
+      "terminal_flag_histogram": {
+        "1": 336,
+        "7": 1872,
+        "4": 89
+      }
+    },
+    {
+      "representative": 6,
+      "source_path": "DataRelease/FeederModels/Sincal/Representative 06_files/database.mdb",
+      "bytes": 4820992,
+      "sha256": "6c6eb3caaaa517fcb424965d5e15819edaa7bd20da15a32d85a02b4ddef4eff8",
+      "version": "11.5",
+      "calculation_type": "1",
+      "stored_row_counts": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 167,
+        "Element": 218,
+        "Terminal": 382,
+        "Line": 113,
+        "LineSeg": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "Load": 53,
+        "Infeeder": 1,
+        "TwoWindingTransformer": 51,
+        "ThreeWindingTransformer": 0,
+        "ULFNodeResult": 164,
+        "LFNodeResult": 0
+      },
+      "terminal_flag_histogram": {
+        "7": 310,
+        "4": 9,
+        "5": 6,
+        "6": 3,
+        "1": 24,
+        "2": 18,
+        "3": 12
+      }
+    },
+    {
+      "representative": 7,
+      "source_path": "DataRelease/FeederModels/Sincal/Representative 07_files/database.mdb",
+      "bytes": 55185408,
+      "sha256": "fc9d41945e1bc935ea762e15d9d44e418fa6c116a9e115397df2260c5c1e8b58",
+      "version": "11.5",
+      "calculation_type": "1",
+      "stored_row_counts": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 343,
+        "Element": 456,
+        "Terminal": 799,
+        "Line": 232,
+        "LineSeg": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "Load": 112,
+        "Infeeder": 1,
+        "TwoWindingTransformer": 111,
+        "ThreeWindingTransformer": 0,
+        "ULFNodeResult": 16562,
+        "LFNodeResult": 0
+      },
+      "terminal_flag_histogram": {
+        "7": 335,
+        "6": 99,
+        "4": 133,
+        "3": 56,
+        "2": 44,
+        "1": 62,
+        "5": 70
+      }
+    },
+    {
+      "representative": 8,
+      "source_path": "DataRelease/FeederModels/Sincal/Representative 08_files/database.mdb",
+      "bytes": 18518016,
+      "sha256": "7534155ddb30c122719bd742af91ff87f8bca09256942c1839ca9843fba5473e",
+      "version": "11.5",
+      "calculation_type": "1",
+      "stored_row_counts": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 263,
+        "Element": 309,
+        "Terminal": 575,
+        "Line": 263,
+        "LineSeg": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "Load": 39,
+        "Infeeder": 1,
+        "TwoWindingTransformer": 3,
+        "ThreeWindingTransformer": 0,
+        "ULFNodeResult": 0,
+        "LFNodeResult": 12446
+      },
+      "terminal_flag_histogram": {
+        "7": 575
+      }
+    },
+    {
+      "representative": 9,
+      "source_path": "DataRelease/FeederModels/Sincal/Representative 09_files/database.mdb",
+      "bytes": 69181440,
+      "sha256": "d2c41fae2f6fc3b9cdea75c1bcbc50f083b104440148a25274ee6ed7da57a14b",
+      "version": "11.5",
+      "calculation_type": "1",
+      "stored_row_counts": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 621,
+        "Element": 688,
+        "Terminal": 1308,
+        "Line": 620,
+        "LineSeg": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "Load": 67,
+        "Infeeder": 1,
+        "TwoWindingTransformer": 0,
+        "ThreeWindingTransformer": 0,
+        "ULFNodeResult": 0,
+        "LFNodeResult": 30233
+      },
+      "terminal_flag_histogram": {
+        "7": 1308
+      }
+    },
+    {
+      "representative": 10,
+      "source_path": "DataRelease/FeederModels/Sincal/Representative 10_files/database.mdb",
+      "bytes": 62193664,
+      "sha256": "09098007af02fea6215b2c2d0fc993ba49920a35815b110f68f0f3bb5a6fd9d6",
+      "version": "11.5",
+      "calculation_type": "1",
+      "stored_row_counts": {
+        "Version": 1,
+        "Variant": 14,
+        "Node": 200,
+        "Element": 124,
+        "Terminal": 223,
+        "Line": 99,
+        "LineSeg": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "Load": 322,
+        "Infeeder": 1,
+        "TwoWindingTransformer": 0,
+        "ThreeWindingTransformer": 0,
+        "ULFNodeResult": 0,
+        "LFNodeResult": 61054
+      },
+      "terminal_flag_histogram": {
+        "7": 223
+      }
+    },
+    {
+      "representative": 11,
+      "source_path": "DataRelease/FeederModels/Sincal/Representative 11_files/database.mdb",
+      "bytes": 53116928,
+      "sha256": "4ad08f2eaf1bab4863aa0a6c2b72c6bdea9a7d0027626c49f224b960e6c667d7",
+      "version": "11.5",
+      "calculation_type": "1",
+      "stored_row_counts": {
+        "Version": 1,
+        "Variant": 14,
+        "Node": 164,
+        "Element": 104,
+        "Terminal": 189,
+        "Line": 85,
+        "LineSeg": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "Load": 210,
+        "Infeeder": 1,
+        "TwoWindingTransformer": 0,
+        "ThreeWindingTransformer": 0,
+        "ULFNodeResult": 0,
+        "LFNodeResult": 48706
+      },
+      "terminal_flag_histogram": {
+        "7": 189
+      }
+    },
+    {
+      "representative": 12,
+      "source_path": "DataRelease/FeederModels/Sincal/Representative 12_files/database.mdb",
+      "bytes": 29548544,
+      "sha256": "7339548baf8bfcf5b891b9d3dbb6b616d9234b8f3df298d959904e150b8cfe91",
+      "version": "11.5",
+      "calculation_type": "1",
+      "stored_row_counts": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 191,
+        "Element": 215,
+        "Terminal": 402,
+        "Line": 187,
+        "LineSeg": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "Load": 26,
+        "Infeeder": 1,
+        "TwoWindingTransformer": 0,
+        "ThreeWindingTransformer": 0,
+        "ULFNodeResult": 0,
+        "LFNodeResult": 188
+      },
+      "terminal_flag_histogram": {
+        "7": 402
+      }
+    },
+    {
+      "representative": 13,
+      "source_path": "DataRelease/FeederModels/Sincal/Representative 13_files/database.mdb",
+      "bytes": 19111936,
+      "sha256": "a0f2b5c1ca1c944c959033f3dc1cdeb623ad643ab830b877dac7b47f65d8aa7f",
+      "version": "11.5",
+      "calculation_type": "1",
+      "stored_row_counts": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 1769,
+        "Element": 1954,
+        "Terminal": 3717,
+        "Line": 1763,
+        "LineSeg": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "Load": 190,
+        "Infeeder": 1,
+        "TwoWindingTransformer": 0,
+        "ThreeWindingTransformer": 0,
+        "ULFNodeResult": 0,
+        "LFNodeResult": 6125
+      },
+      "terminal_flag_histogram": {
+        "": 3666,
+        "7": 51
+      }
+    },
+    {
+      "representative": 14,
+      "source_path": "DataRelease/FeederModels/Sincal/Representative 14_files/database.mdb",
+      "bytes": 39718912,
+      "sha256": "024921716247315468611028d09f6dff6ff438e5399ae2773cd9ed004d05f7b6",
+      "version": "11.5",
+      "calculation_type": "1",
+      "stored_row_counts": {
+        "Version": 1,
+        "Variant": 16,
+        "Node": 57,
+        "Element": 65,
+        "Terminal": 122,
+        "Line": 55,
+        "LineSeg": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "Load": 112,
+        "Infeeder": 1,
+        "TwoWindingTransformer": 2,
+        "ThreeWindingTransformer": 0,
+        "ULFNodeResult": 0,
+        "LFNodeResult": 39200
+      },
+      "terminal_flag_histogram": {
+        "7": 122
+      }
+    },
+    {
+      "representative": 15,
+      "source_path": "DataRelease/FeederModels/Sincal/Representative 15_files/database.mdb",
+      "bytes": 6701056,
+      "sha256": "ed665a4e4e6fbd2c37509705e13be0a5c23d2ed321dcb5798a13aed9080dbb94",
+      "version": "11.5",
+      "calculation_type": "1",
+      "stored_row_counts": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 90,
+        "Element": 102,
+        "Terminal": 192,
+        "Line": 89,
+        "LineSeg": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "Load": 11,
+        "Infeeder": 1,
+        "TwoWindingTransformer": 1,
+        "ThreeWindingTransformer": 0,
+        "ULFNodeResult": 0,
+        "LFNodeResult": 4214
+      },
+      "terminal_flag_histogram": {
+        "7": 192
+      }
+    },
+    {
+      "representative": 16,
+      "source_path": "DataRelease/FeederModels/Sincal/Representative 16_files/database.mdb",
+      "bytes": 7385088,
+      "sha256": "d1b6ce0906accfbfb6f84901ad90fca7e27d83f4f78578675fceca0e026d791c",
+      "version": "11.5",
+      "calculation_type": "1",
+      "stored_row_counts": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 87,
+        "Element": 103,
+        "Terminal": 191,
+        "Line": 88,
+        "LineSeg": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "Load": 11,
+        "Infeeder": 1,
+        "TwoWindingTransformer": 0,
+        "ThreeWindingTransformer": 0,
+        "ULFNodeResult": 0,
+        "LFNodeResult": 78
+      },
+      "terminal_flag_histogram": {
+        "7": 191
+      }
+    },
+    {
+      "representative": 17,
+      "source_path": "DataRelease/FeederModels/Sincal/Representative 17_files/database.mdb",
+      "bytes": 14192640,
+      "sha256": "a80ce8ec7643e1103c65dc4a79cc6f06f5a1eae8f62fc7e03b952c25d2b2d5d7",
+      "version": "11.5",
+      "calculation_type": "1",
+      "stored_row_counts": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 126,
+        "Element": 142,
+        "Terminal": 271,
+        "Line": 129,
+        "LineSeg": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "Load": 10,
+        "Infeeder": 1,
+        "TwoWindingTransformer": 0,
+        "ThreeWindingTransformer": 0,
+        "ULFNodeResult": 0,
+        "LFNodeResult": 108
+      },
+      "terminal_flag_histogram": {
+        "7": 271
+      }
+    },
+    {
+      "representative": 18,
+      "source_path": "DataRelease/FeederModels/Sincal/Representative 18_files/database.mdb",
+      "bytes": 6488064,
+      "sha256": "e37c1979cf37913fee5f2dbe7498eb05108b8efa835f3e54777d9f6f18cde262",
+      "version": "11.5",
+      "calculation_type": "1",
+      "stored_row_counts": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 251,
+        "Element": 295,
+        "Terminal": 575,
+        "Line": 242,
+        "LineSeg": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "Load": 13,
+        "Infeeder": 0,
+        "TwoWindingTransformer": 38,
+        "ThreeWindingTransformer": 0,
+        "ULFNodeResult": 0,
+        "LFNodeResult": 235
+      },
+      "terminal_flag_histogram": {
+        "7": 575
+      }
+    },
+    {
+      "representative": 19,
+      "source_path": "DataRelease/FeederModels/Sincal/Representative 19_files/database.mdb",
+      "bytes": 4476928,
+      "sha256": "5540e956effe9a8e6e691f834e79f62c86d96924fdd38092e5fd5c6fa84789c4",
+      "version": "11.5",
+      "calculation_type": "1",
+      "stored_row_counts": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 26,
+        "Element": 33,
+        "Terminal": 58,
+        "Line": 25,
+        "LineSeg": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "Load": 7,
+        "Infeeder": 1,
+        "TwoWindingTransformer": 0,
+        "ThreeWindingTransformer": 0,
+        "ULFNodeResult": 0,
+        "LFNodeResult": 26
+      },
+      "terminal_flag_histogram": {
+        "7": 58
+      }
+    }
+  ]
+}

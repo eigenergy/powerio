@@ -34,8 +34,42 @@ if [ -z "$baseline" ]; then
 fi
 
 echo "comparing the publishable crates at $version against $baseline"
-# powerio-py and powerio-capi are publish = false; name them anyway so the
-# crate set reads the same as the msrv and archive jobs.
+# cargo-semver-checks runs cargo update in synthetic consumers generated from
+# the current checkout as well as the baseline. Since ZIP 8.6.0 was yanked,
+# those consumers cannot resolve the current workspace's ^8.6 dependency.
+# Apply the same narrow compatibility adjustment to temporary source archives
+# on both sides of the comparison; neither the real checkout nor the published
+# API is changed by this workaround.
+# Compare the new crate once the selected release baseline contains it.
+excluded=(--exclude powerio-py --exclude powerio-capi)
+if [ -f powerio-tnd/Cargo.toml ] \
+    && ! git cat-file -e "$baseline:powerio-tnd/Cargo.toml" 2>/dev/null; then
+    echo "powerio-tnd is new since $baseline; no previous API to compare"
+    excluded+=(--exclude powerio-tnd)
+fi
+if [ -f powerio-synth/Cargo.toml ] \
+    && ! git cat-file -e "$baseline:powerio-synth/Cargo.toml" 2>/dev/null; then
+    echo "powerio-synth is new since $baseline; no previous API to compare"
+    excluded+=(--exclude powerio-synth)
+fi
+baseline_root=$(mktemp -d)
+current_root=$(mktemp -d)
+trap 'rm -rf "$baseline_root" "$current_root"' EXIT
+git archive "$baseline" | tar -x -C "$baseline_root"
+git archive HEAD | tar -x -C "$current_root"
+# Exercise the old-baseline/new-current dependency combination explicitly, then
+# apply the same preparation to the isolated source archives.
+python3 scripts/semver_zip_compat.py --self-test
+python3 scripts/semver_zip_compat.py "$baseline_root" "$current_root"
+# Rustdoc JSON cannot follow foreign re-exports. In the isolated archives,
+# expose the moved implementation locally while retaining the actual export
+# lists, so the full API checks still cover every moved item.
+python3 scripts/semver_tnd_compat.py --self-test
+python3 scripts/semver_tnd_compat.py "$baseline_root" "$current_root"
+# Run SemVer against the isolated current checkout. cargo-semver-checks creates
+# synthetic consumer packages from this workspace, so running it against the
+# original checkout would still attempt to resolve the yanked ^8.6 dependency.
+cd "$current_root"
 cargo semver-checks check-release --workspace \
-    --exclude powerio-py --exclude powerio-capi \
-    --baseline-rev "$baseline" "$@"
+    "${excluded[@]}" \
+    --baseline-root "$baseline_root" "$@"

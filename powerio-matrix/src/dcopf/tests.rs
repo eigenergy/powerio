@@ -6,7 +6,7 @@ use super::prep::{DcOpfOptions, preparation_from_view};
 use crate::Error;
 use powerio_tx::{
     BalancedNetwork, Branch, BranchSusceptanceFormula, Bus, BusId, BusType, GenCost, Generator,
-    IndexedNetwork,
+    HvdcTreatment, IndexedNetwork,
 };
 
 fn parse_matpower_file(
@@ -263,14 +263,18 @@ fn angle_difference_correction_matches_powermodels_and_can_be_disabled() {
     let exact = preparation_from_view(
         &raw,
         DcOpfOptions {
-            correct_angle_difference_bounds: false,
+            angle_difference_bounds: powerio_tx::AngleDifferenceBounds::Stated,
             ..DcOpfOptions::default()
         },
     )
     .unwrap();
     assert!(!exact.correct_angle_difference_bounds);
-    assert_close(exact.branches.angle_min[0], -2.0 * std::f64::consts::PI);
-    assert_close(exact.branches.angle_max[0], 2.0 * std::f64::consts::PI);
+    assert!(
+        exact.branches.angle_min[0].is_infinite() && exact.branches.angle_min[0].is_sign_negative()
+    );
+    assert!(
+        exact.branches.angle_max[0].is_infinite() && exact.branches.angle_max[0].is_sign_positive()
+    );
 
     let normalized = network.to_normalized().unwrap();
     let normalized = IndexedNetwork::new(&normalized);
@@ -295,6 +299,120 @@ fn angle_difference_correction_matches_powermodels_and_can_be_disabled() {
     assert_eq!(
         correct_angle_difference_bounds(80.0_f64.to_radians(), 100.0_f64.to_radians()),
         (-POWER_MODELS_ANGLE_BOUND_PAD, POWER_MODELS_ANGLE_BOUND_PAD)
+    );
+}
+
+#[test]
+fn angle_difference_bounds_select_a_pad_the_stated_bounds_or_none() {
+    use powerio_tx::{
+        AngleDifferenceBounds, POWER_MODELS_ANGLE_BOUND_PAD, correct_angle_difference_bounds,
+        stated_angle_difference_bounds,
+    };
+    let full = std::f64::consts::TAU;
+    let pad = POWER_MODELS_ANGLE_BOUND_PAD;
+
+    // The legacy flag selects the zero centered pad or the stated bounds.
+    let network = small_network();
+    let raw = IndexedNetwork::new(&network);
+    let default = preparation_from_view(&raw, DcOpfOptions::default()).unwrap();
+    assert_eq!(
+        default.angle_difference_bounds,
+        Some(AngleDifferenceBounds::PowerModelsPad)
+    );
+    assert_eq!(
+        AngleDifferenceBounds::from_correct_flag(true),
+        AngleDifferenceBounds::PowerModelsPad
+    );
+    assert_eq!(
+        AngleDifferenceBounds::from_correct_flag(false),
+        AngleDifferenceBounds::Stated
+    );
+    let stated = preparation_from_view(
+        &raw,
+        DcOpfOptions {
+            angle_difference_bounds: AngleDifferenceBounds::Stated,
+            ..DcOpfOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(!stated.correct_angle_difference_bounds);
+    assert!(
+        stated.branches.angle_min[0].is_infinite()
+            && stated.branches.angle_min[0].is_sign_negative()
+    );
+    assert!(
+        stated.branches.angle_max[0].is_infinite()
+            && stated.branches.angle_max[0].is_sign_positive()
+    );
+
+    let mut bounded = network.clone();
+    bounded.branches_mut()[0].angmin = -30.0;
+    bounded.branches_mut()[0].angmax = 30.0;
+    let unbounded = preparation_from_view(
+        &IndexedNetwork::new(&bounded),
+        DcOpfOptions {
+            angle_difference_bounds: AngleDifferenceBounds::None,
+            ..DcOpfOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(!unbounded.correct_angle_difference_bounds);
+    assert!(
+        unbounded.branches.angle_min[0].is_infinite()
+            && unbounded.branches.angle_min[0].is_sign_negative()
+    );
+    assert!(
+        unbounded.branches.angle_max[0].is_infinite()
+            && unbounded.branches.angle_max[0].is_sign_positive()
+    );
+
+    // The MATPOWER 0/0 spelling states no constraint, which the stated form
+    // reads as the widest window and PowerModels pads.
+    assert_eq!(
+        stated_angle_difference_bounds(0.0, 0.0),
+        (f64::NEG_INFINITY, f64::INFINITY)
+    );
+    assert_eq!(
+        stated_angle_difference_bounds(-45.0_f64.to_radians(), 30.0_f64.to_radians()),
+        (-45.0_f64.to_radians(), 30.0_f64.to_radians())
+    );
+    assert_eq!(
+        stated_angle_difference_bounds(-3.0 * full, 2.0 * full),
+        (f64::NEG_INFINITY, f64::INFINITY)
+    );
+
+    // PowerModelsPad ignores the phase shift, as PowerModels does; the
+    // shift centered pad follows it, and agrees on an unshifted branch.
+    let shift = 150.0_f64.to_radians();
+    assert_eq!(
+        AngleDifferenceBounds::PowerModelsPad.calc_bounds(0.0, 0.0, shift),
+        correct_angle_difference_bounds(0.0, 0.0)
+    );
+    let centered = AngleDifferenceBounds::ShiftCenteredPad;
+    assert_eq!(
+        centered.calc_bounds(0.0, 0.0, 0.0),
+        correct_angle_difference_bounds(0.0, 0.0)
+    );
+    assert_eq!(
+        centered.calc_bounds(0.0, 0.0, shift),
+        (shift - pad, shift + pad)
+    );
+    assert_eq!(
+        centered.calc_bounds(-full, full, shift),
+        (shift - pad, shift + pad)
+    );
+    // A usable stated side is kept.
+    assert_eq!(
+        centered.calc_bounds(-full, 30.0_f64.to_radians(), 0.0),
+        (-pad, 30.0_f64.to_radians())
+    );
+    assert_eq!(
+        AngleDifferenceBounds::None.calc_bounds(-0.1, 0.1, shift),
+        (f64::NEG_INFINITY, f64::INFINITY)
+    );
+    assert_eq!(
+        AngleDifferenceBounds::Stated.calc_bounds(0.0, 0.0, shift),
+        (f64::NEG_INFINITY, f64::INFINITY)
     );
 }
 
@@ -329,6 +447,84 @@ fn a_network_of_two_islands_grounds_a_bus_in_each() {
     )
     .expect("build");
     assert_eq!(one_island.reference_buses.single().expect("one bus"), 0);
+}
+
+/// [`two_island_network`] with load at bus 30 and 70 and one HVDC line from
+/// bus 30 to bus 70 that sends 100 MW and delivers 97 MW, plus an out of
+/// service line on the same path.
+fn islands_joined_by_hvdc() -> BalancedNetwork {
+    let mut network = two_island_network();
+    for (bus, p) in [(30, 50.0), (70, 97.0)] {
+        network
+            .loads_mut()
+            .push(powerio_tx::Load::new(BusId(bus), p, 0.0));
+    }
+    let mut line = powerio_tx::Hvdc::new(BusId(30), BusId(70));
+    line.pf = 100.0;
+    line.pt = 97.0;
+    let mut off = line.clone();
+    off.pf = 40.0;
+    off.pt = 40.0;
+    off.in_service = false;
+    network.hvdc_mut().extend([line, off]);
+    network
+}
+
+#[test]
+fn an_hvdc_transfer_enters_the_fixed_withdrawal_of_both_islands() {
+    let net = islands_joined_by_hvdc();
+    let view = IndexedNetwork::new(&net);
+    let problem = preparation_from_view(&view, DcOpfOptions::default()).expect("build");
+    assert_eq!(problem.hvdc_treatment, HvdcTreatment::FixedInjection);
+    // Dense order is 10, 30, 50, 70; per unit on 100 MVA.
+    assert_eq!(problem.p_hvdc, vec![0.0, -1.0, 0.0, 0.97]);
+    let withdrawal = problem.calc_fixed_nodal_withdrawal();
+    // Island 10-30 carries its own 0.5 load plus the 1.0 the line sends.
+    assert_close(withdrawal[0] + withdrawal[1], 1.5);
+    // Island 50-70's load is met by the delivered 0.97: nothing to balance.
+    assert_close(withdrawal[2] + withdrawal[3], 0.0);
+
+    let ignored = preparation_from_view(
+        &view,
+        DcOpfOptions {
+            hvdc_treatment: HvdcTreatment::Ignore,
+            ..DcOpfOptions::default()
+        },
+    )
+    .expect("build");
+    assert_eq!(ignored.p_hvdc, vec![0.0; 4]);
+    let withdrawal = ignored.calc_fixed_nodal_withdrawal();
+    assert_close(withdrawal[2] + withdrawal[3], 0.97);
+
+    // Native units keep MW.
+    let native = preparation_from_view(
+        &view,
+        DcOpfOptions {
+            units: Units::Native,
+            ..DcOpfOptions::default()
+        },
+    )
+    .expect("build");
+    assert_eq!(native.p_hvdc, vec![0.0, -100.0, 0.0, 97.0]);
+}
+
+#[test]
+fn a_preparation_written_before_the_hvdc_field_reads_as_no_injection() {
+    let problem = preparation_from_view(
+        &IndexedNetwork::new(&small_network()),
+        DcOpfOptions::default(),
+    )
+    .expect("build");
+    let mut json = serde_json::to_value(&problem).expect("serialize");
+    let object = json.as_object_mut().expect("object");
+    object.remove("p_hvdc");
+    object.remove("hvdc_treatment");
+    let older: super::DcOpfPreparation = serde_json::from_value(json).expect("deserialize");
+    assert_eq!(older.p_hvdc, Vec::<f64>::new());
+    assert_eq!(
+        older.calc_fixed_nodal_withdrawal(),
+        problem.calc_fixed_nodal_withdrawal()
+    );
 }
 
 #[test]
@@ -999,6 +1195,10 @@ mod matrix_tests {
         assert_eq!(manifest["cost_policy"]["mode"], "require");
         assert_eq!(manifest["build_options"]["skip_zero_impedance"], true);
         assert_eq!(manifest["build_options"]["synthesize_unrated_limits"], true);
+        assert_eq!(
+            manifest["build_options"]["angle_difference_bounds"],
+            "power_models_pad"
+        );
 
         let emitted_files: Vec<_> = manifest["files"]
             .as_array()
@@ -1025,6 +1225,39 @@ mod matrix_tests {
             "duplicate operator metadata"
         );
         assert_eq!(operator_set, emitted_set);
+    }
+
+    #[test]
+    fn the_bundle_writes_the_hvdc_injection_and_records_the_treatment() {
+        let instance = DcOpfInstance::from_network(islands_joined_by_hvdc()).expect("instance");
+        for (treatment, name, expected) in [
+            (
+                HvdcTreatment::FixedInjection,
+                "fixed_injection",
+                vec![0.0, -1.0, 0.0, 0.97],
+            ),
+            (HvdcTreatment::Ignore, "ignore", vec![0.0; 4]),
+        ] {
+            let assembly = DcOpfAssemblyOptions::default().with_hvdc_treatment(treatment);
+            let problem =
+                crate::dcopf::build_dc_opf_preparation(&instance, &assembly).expect("prepare");
+            let output = tempfile::tempdir().expect("tempdir");
+            let options = DcOpfBundleOptions {
+                assembly,
+                ..DcOpfBundleOptions::default()
+            };
+            let bundle = emit_dcopf_bundle(&instance, output.path(), &options).expect("bundle");
+            let p_hvdc = crate::io::read_vector_mtx(bundle.dir.join("p_hvdc.mtx")).expect("p_hvdc");
+            assert_eq!(p_hvdc, expected);
+            let withdrawal =
+                crate::io::read_vector_mtx(bundle.dir.join("fixed_withdrawal.mtx")).expect("fixed");
+            assert_eq!(withdrawal, problem.calc_fixed_nodal_withdrawal());
+            let manifest: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(bundle.dir.join("dcopf_meta.json")).expect("manifest"),
+            )
+            .expect("manifest json");
+            assert_eq!(manifest["build_options"]["hvdc_treatment"], name);
+        }
     }
 
     #[test]

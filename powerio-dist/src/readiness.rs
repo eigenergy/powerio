@@ -2,8 +2,8 @@
 //!
 //! Parsing and electrical readiness are deliberately separate. A source can be
 //! syntactically valid while the resulting typed network is not safe to hand
-//! to a solver or semantic writer. In particular, OpenDSS line geometry is
-//! still deferred: until Carson/geometry lowering exists, a geometry-defined
+//! to a solver or semantic writer. Unresolved OpenDSS geometry metadata
+//! must remain blocked: a geometry-defined
 //! line must not be treated as electrically complete merely because the
 //! parser has a placeholder linecode.
 
@@ -13,6 +13,17 @@ use crate::model::{DistLineCode, MulticonductorNetwork};
 
 pub(crate) const DEFERRED_GEOMETRY_KEYS: [&str; 5] =
     ["geometry", "spacing", "wires", "cncables", "tscables"];
+
+/// The line extra the CIM reader sets on a segment whose source states no
+/// impedance it can read. The segment's line code is a zero placeholder.
+pub(crate) const UNRESOLVED_IMPEDANCE_KEY: &str = "cim_impedance_unresolved";
+
+/// Blocker codes that stop canonical conversion: the line exists, but its
+/// impedance is not in the canonical matrices.
+const CONVERSION_BLOCKERS: [&str; 2] = [
+    "READINESS.DSS.GEOMETRY_DEFERRED",
+    "READINESS.CIM_DIST.IMPEDANCE_UNRESOLVED",
+];
 
 /// Reject incomplete electrical data before numerical use.
 pub fn require_electrical_readiness(
@@ -28,14 +39,39 @@ pub fn require_electrical_readiness(
     Ok(())
 }
 
-/// Reject source-only electrical equipment that a canonical writer cannot reconstruct.
+/// Refuse a projection that has not implemented terminal-referenced sources.
+/// Consumers that support them must instead retain both voltage endpoints.
+pub fn require_earth_referenced_sources(
+    net: &MulticonductorNetwork,
+) -> Result<(), powerio_core::Error> {
+    if let Some(source) = net.sources().iter().find(|s| {
+        s.reference_terminal.as_ref().is_some_and(|reference| {
+            !net.buses()
+                .iter()
+                .any(|bus| bus.id.eq_ignore_ascii_case(&s.bus) && bus.grounded.contains(reference))
+        })
+    }) {
+        return Err(powerio_core::Error::new(
+            &crate::diagnostics::codes::BUILD_DIST_ELECTRICAL_INCOMPLETE,
+            format!(
+                "source `{}`: this projection does not support reference-terminal voltage constraints",
+                source.name
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Reject source-only electrical equipment that a canonical writer cannot
+/// reconstruct: OpenDSS geometry lines, and CIM segments whose impedance the
+/// reader could not read.
 pub(crate) fn require_resolved_geometry(
     net: &MulticonductorNetwork,
 ) -> Result<(), powerio_core::Error> {
     let report = audit_electrical_readiness(net);
     if let Some(finding) = report
         .blockers()
-        .find(|finding| finding.code == "READINESS.DSS.GEOMETRY_DEFERRED")
+        .find(|finding| CONVERSION_BLOCKERS.contains(&finding.code))
     {
         return Err(powerio_core::Error::new(
             &crate::diagnostics::codes::BUILD_DIST_ELECTRICAL_INCOMPLETE,
@@ -121,10 +157,10 @@ impl ElectricalReadiness {
 /// topology, invent conductor counts, or replace missing electrical data with
 /// source-format defaults. OpenDSS `geometry=`, `spacing=`, `wires=`,
 /// `cncables=`, and `tscables=` metadata are treated as a hard blocker because
-/// the geometry family is not yet lowered into the canonical impedance
-/// matrices. The audit therefore provides an explicit fail-closed boundary
-/// for applications that need to decide whether a parsed network is safe to
-/// analyse.
+/// those retained references have not been lowered into canonical impedance
+/// matrices. Resolved geometry carries explicit matrices instead. A CIM segment
+/// whose source states no readable impedance is a hard blocker for the same
+/// reason. The audit provides a fail-closed boundary for numerical consumers.
 #[must_use]
 pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalReadiness {
     let mut report = ElectricalReadiness::default();
@@ -147,20 +183,21 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
             value.to_owned()
         }
     };
-    for object in net.untyped_objects() {
-        if object.class.eq_ignore_ascii_case("line")
-            && object.props.iter().any(|(key, _)| {
-                key.as_ref().is_some_and(|key| {
-                    DEFERRED_GEOMETRY_KEYS
-                        .iter()
-                        .any(|candidate| key.eq_ignore_ascii_case(candidate))
-                })
-            })
-        {
-            report.block("READINESS.DSS.GEOMETRY_DEFERRED", &object.name,
-                "source line geometry has no calculated conductor impedances or resolved terminal map");
+    audit_untyped(net, &mut report);
+    audit_load_voltage(net, &mut report);
+
+    for generator in net.generators() {
+        let model = generator.extras.get("model").and_then(|value| {
+            value
+                .as_f64()
+                .or_else(|| value.as_str().and_then(|s| s.parse::<f64>().ok()))
+        });
+        if model.is_some_and(|value| value.round() as i64 == 6) {
+            report.block("READINESS.DSS.GENERATOR_USER_MODEL_UNRESOLVED", &generator.name,
+                "generator model 6 has no typed voltage/current law; retained user-library settings and nominal P/Q do not establish an electrical equivalent");
         }
     }
+
     for (element, fields) in net.defaulted() {
         report.warn(
             "READINESS.SOURCE.DEFAULTED",
@@ -201,7 +238,127 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
 
     audit_lines(net, &buses, &linecodes, identity, &mut report);
 
+    for source in net.sources() {
+        let Some(reference) = &source.reference_terminal else {
+            continue;
+        };
+        let declared = buses.get(&identity(&source.bus)).is_some_and(|bus| {
+            bus.terminals.contains(reference)
+                && source
+                    .terminal_map
+                    .iter()
+                    .all(|t| bus.terminals.contains(t))
+        });
+        let n = source.terminal_map.len();
+        if !declared
+            || n == 0
+            || source.terminal_map.contains(reference)
+            || source.terminal_map.iter().collect::<BTreeSet<_>>().len() != n
+            || source.v_magnitude.len() != n
+            || source.v_angle.len() != n
+            || source
+                .v_magnitude
+                .iter()
+                .any(|v| !v.is_finite() || *v < 0.0)
+            || source.v_angle.iter().any(|v| !v.is_finite())
+        {
+            report.block("READINESS.SOURCE.REFERENCE_INVALID", &source.name,
+                "referenced source needs distinct declared terminals and complete finite voltage differences");
+        }
+    }
+
     report
+}
+
+fn audit_untyped(net: &MulticonductorNetwork, report: &mut ElectricalReadiness) {
+    let autotrans_state_command = net.commands().iter().any(|(verb, args)| {
+        matches!(verb.as_str(), "enable" | "disable" | "open" | "close")
+            && crate::dss::lex::Scanner::new(args, None)
+                .next_param()
+                .is_some_and(|p| p.value.text.to_ascii_lowercase().starts_with("autotrans."))
+    });
+    let reactor_state_command = net.commands().iter().any(|(verb, args)| {
+        matches!(verb.as_str(), "enable" | "disable" | "open" | "close")
+            && crate::dss::lex::Scanner::new(args, None)
+                .next_param()
+                .is_some_and(|p| p.value.text.to_ascii_lowercase().starts_with("reactor."))
+    });
+    let capacitor_state_command = net.commands().iter().any(|(verb, args)| {
+        matches!(verb.as_str(), "enable" | "disable" | "open" | "close")
+            && crate::dss::lex::Scanner::new(args, None)
+                .next_param()
+                .is_some_and(|p| p.value.text.to_ascii_lowercase().starts_with("capacitor."))
+    });
+    let storage_state_command = net.commands().iter().any(|(verb, args)| {
+        matches!(verb.as_str(), "enable" | "disable" | "open" | "close")
+            && crate::dss::lex::Scanner::new(args, None)
+                .next_param()
+                .is_some_and(|p| p.value.text.to_ascii_lowercase().starts_with("storage."))
+    });
+    for object in net.untyped_objects() {
+        let explicitly_disabled = object
+            .props
+            .iter()
+            .rev()
+            .find(|(key, _)| {
+                key.as_ref()
+                    .is_some_and(|key| key.eq_ignore_ascii_case("enabled"))
+            })
+            .is_some_and(|(_, value)| {
+                value.eq_ignore_ascii_case("no") || value.eq_ignore_ascii_case("false")
+            });
+        if object.class.eq_ignore_ascii_case("autotrans")
+            && (!explicitly_disabled || autotrans_state_command)
+        {
+            report.block("READINESS.DSS.AUTOTRANS_UNRESOLVED", &object.name,
+                "untyped autotransformer has unresolved winding behavior; omitting it can disconnect the feeder");
+        }
+        if object.class.eq_ignore_ascii_case("reactor")
+            && (!explicitly_disabled || reactor_state_command)
+        {
+            report.block("READINESS.DSS.REACTOR_UNRESOLVED", &object.name,
+                "untyped reactor has unresolved electrical behavior; omitting a series reactor can disconnect the feeder");
+        }
+        if object.class.eq_ignore_ascii_case("capacitor")
+            && (!explicitly_disabled || capacitor_state_command)
+        {
+            report.block("READINESS.DSS.CAPACITOR_UNRESOLVED", &object.name,
+                "untyped capacitor has unresolved electrical behavior; omitting it changes the feeder");
+        }
+        if object.class.eq_ignore_ascii_case("storage")
+            && (!explicitly_disabled || storage_state_command)
+        {
+            report.block(
+                "READINESS.DSS.STORAGE_UNRESOLVED",
+                &object.name,
+                "untyped storage has unresolved static power exchange, including idling losses",
+            );
+        }
+        if object.class.eq_ignore_ascii_case("fault") && !explicitly_disabled {
+            report.block("READINESS.DSS.FAULT_UNRESOLVED", &object.name,
+                "enabled fault has unresolved static admittance and switching state; omitting it changes the circuit");
+        }
+        if object.class.eq_ignore_ascii_case("vsource") && !explicitly_disabled {
+            report.block("READINESS.DSS.SOURCE_UNRESOLVED", &object.name,
+                "untyped voltage source must remain explicitly disabled; enabling it requires electrical source conversion");
+        }
+        if object.class.eq_ignore_ascii_case("line")
+            && !explicitly_disabled
+            && object.props.iter().any(|(key, _)| {
+                key.as_ref().is_some_and(|key| {
+                    DEFERRED_GEOMETRY_KEYS
+                        .iter()
+                        .any(|candidate| key.eq_ignore_ascii_case(candidate))
+                })
+            })
+        {
+            report.block("READINESS.DSS.GEOMETRY_DEFERRED", &object.name,
+                "source line geometry has no calculated conductor impedances or resolved terminal map");
+        } else if object.class.eq_ignore_ascii_case("line") && !explicitly_disabled {
+            report.block("READINESS.DSS.LINE_UNRESOLVED", &object.name,
+                "untyped line must remain explicitly disabled; enabling it requires electrical line conversion");
+        }
+    }
 }
 
 fn audit_lines(
@@ -263,6 +420,18 @@ fn audit_lines(
         }
 
         audit_deferred_geometry(line, report);
+        if line
+            .extras
+            .get(UNRESOLVED_IMPEDANCE_KEY)
+            .is_some_and(|v| v.as_bool() == Some(true))
+        {
+            report.block(
+                "READINESS.CIM_DIST.IMPEDANCE_UNRESOLVED",
+                &line.name,
+                "the CIM source states no impedance the reader can use; its zero placeholder \
+                 impedance would be a short circuit",
+            );
+        }
 
         let Some(code) = linecodes.get(&identity(&line.linecode)) else {
             report.block(
@@ -373,10 +542,124 @@ fn audit_square_matrix(
     }
 }
 
+fn audit_load_voltage(net: &MulticonductorNetwork, report: &mut ElectricalReadiness) {
+    for load in net.loads() {
+        if matches!(
+            load.voltage_model,
+            crate::DistLoadVoltageModel::BoundedZip { .. }
+                | crate::DistLoadVoltageModel::BoundedExponential { .. }
+                | crate::DistLoadVoltageModel::BoundedConstantPower { .. }
+        ) {
+            let n = load.p_nom.len().max(load.q_nom.len());
+            if n == 0 || load.voltage_model.v_nom().len() != n {
+                report.block(
+                    "READINESS.LOAD.VOLTAGE_LAW",
+                    &load.name,
+                    "bounded load law must align with nominal power branches",
+                );
+            }
+            for phase in 0..n {
+                let v = load
+                    .voltage_model
+                    .v_nom()
+                    .get(phase)
+                    .copied()
+                    .unwrap_or(f64::NAN);
+                if let Err(error) = load.voltage_model.power_scale(phase, v) {
+                    report.block("READINESS.LOAD.VOLTAGE_LAW", &load.name, error);
+                    break;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{DistBus, DistLine, DistLineCode, Extras, MulticonductorNetwork};
+
+    #[test]
+    fn unresolved_series_reactor_is_a_blocker_unless_disabled() {
+        let mut net = MulticonductorNetwork::new();
+        net.untyped_objects_mut()
+            .push(crate::model::UntypedObject::new(
+                "reactor",
+                "feed",
+                vec![
+                    (Some("bus1".into()), "source".into()),
+                    (Some("bus2".into()), "feeder".into()),
+                    (Some("x".into()), "15".into()),
+                ],
+            ));
+        let report = audit_electrical_readiness(&net);
+        assert!(
+            report
+                .blockers()
+                .any(|f| f.code == "READINESS.DSS.REACTOR_UNRESOLVED")
+        );
+        assert!(require_electrical_readiness(&net).is_err());
+        net.untyped_objects_mut()[0]
+            .props
+            .push((Some("enabled".into()), "no".into()));
+        assert!(audit_electrical_readiness(&net).is_ready());
+    }
+
+    #[test]
+    fn inactive_source_metadata_cannot_be_reenabled_without_electrical_conversion() {
+        let mut net = MulticonductorNetwork::new();
+        net.untyped_objects_mut()
+            .push(crate::model::UntypedObject::new(
+                "vsource",
+                "off",
+                vec![(Some("enabled".into()), "no".into())],
+            ));
+        assert!(audit_electrical_readiness(&net).is_ready());
+        net.untyped_objects_mut()[0]
+            .props
+            .push((Some("enabled".into()), "yes".into()));
+        assert!(!audit_electrical_readiness(&net).is_ready());
+        net.untyped_objects_mut()[0].props.clear();
+        assert!(!audit_electrical_readiness(&net).is_ready());
+    }
+
+    #[test]
+    fn grounded_voltage_reference_is_earth_but_a_floating_reference_is_not() {
+        let mut net = MulticonductorNetwork::new();
+        let mut bus = DistBus::new("feed", vec!["1".into(), "4".into()]);
+        bus.grounded.push("4".into());
+        net.buses_mut().push(bus);
+        let mut source =
+            crate::VoltageSource::new("s", "feed", vec!["1".into()], vec![240.0], vec![0.0]);
+        source.reference_terminal = Some("4".into());
+        net.sources_mut().push(source);
+        assert!(require_earth_referenced_sources(&net).is_ok());
+        net.buses_mut()[0].grounded.clear();
+        assert!(require_earth_referenced_sources(&net).is_err());
+    }
+
+    #[test]
+    fn inactive_line_metadata_cannot_be_reenabled_without_electrical_conversion() {
+        let mut net = MulticonductorNetwork::new();
+        net.untyped_objects_mut()
+            .push(crate::model::UntypedObject::new(
+                "line",
+                "off",
+                vec![(Some("enabled".into()), "no".into())],
+            ));
+        assert!(audit_electrical_readiness(&net).is_ready());
+        net.untyped_objects_mut()[0]
+            .props
+            .push((Some("enabled".into()), "yes".into()));
+        let report = audit_electrical_readiness(&net);
+        assert!(
+            report
+                .blockers()
+                .any(|f| f.code == "READINESS.DSS.LINE_UNRESOLVED")
+        );
+        net.untyped_objects_mut()[0].props.clear();
+        assert!(!audit_electrical_readiness(&net).is_ready());
+    }
 
     fn network_with_line(extras: Extras) -> MulticonductorNetwork {
         let mut net = MulticonductorNetwork::new();
@@ -454,6 +737,20 @@ mod tests {
                 .blockers()
                 .any(|finding| finding.code == "READINESS.DSS.GEOMETRY_DEFERRED")
         );
+    }
+
+    #[test]
+    fn unresolved_cim_impedance_blocks_conversion() {
+        let mut extras = Extras::new();
+        extras.insert(UNRESOLVED_IMPEDANCE_KEY.into(), serde_json::json!(true));
+        let net = network_with_line(extras);
+        let report = audit_electrical_readiness(&net);
+        assert!(
+            report
+                .blockers()
+                .any(|finding| finding.code == "READINESS.CIM_DIST.IMPEDANCE_UNRESOLVED")
+        );
+        assert!(require_resolved_geometry(&net).is_err());
     }
 
     #[test]

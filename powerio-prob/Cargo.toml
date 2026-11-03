@@ -25,8 +25,11 @@ path = "src/lib.rs"
 
 [dependencies]
 powerio-core = { workspace = true }
-powerio-dist.workspace = true
-powerio-tx.workspace = true
+# default-features = false: this crate needs no optional network-crate
+# feature. SINCAL lives in powerio-tnd, which this crate does not use; a
+# consumer that wants it enables the `sincal` feature on powerio.
+powerio-dist = { workspace = true, default-features = false }
+powerio-tx = { workspace = true, default-features = false }
 thiserror = "2"
 schemars = { workspace = true, optional = true }
 serde.workspace = true

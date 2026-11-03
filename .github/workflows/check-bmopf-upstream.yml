@@ -1,4 +1,10 @@
 name: Review BMOPF upstream
+# Compares the upstream BMOPF schema review PRs and schema bytes with
+# .github/bmopf-upstream.json. When they differ, it pushes the new observation
+# to maintenance/bmopf-upstream-review and opens a draft PR. It authenticates
+# as the eigenergy-powerio-releases App (variable POWERIO_RELEASE_APP_ID,
+# secret POWERIO_RELEASE_APP_PRIVATE_KEY), which needs Contents and Pull
+# requests write on this repository.
 on:
   schedule:
     - cron: '19 6 * * 1'
@@ -10,7 +16,6 @@ concurrency:
   cancel-in-progress: false
 jobs:
   review:
-    if: vars.PAIRED_RELEASES == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

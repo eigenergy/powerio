@@ -15,7 +15,9 @@
 //! `BUILD.CON.CASE_UNRESOLVED`; the actions of that case that did bind stay
 //! listed, so a caller can see how far a case got.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use powerio_core::ComponentId;
 
@@ -35,6 +37,7 @@ const LOAD: &str = "load";
 const SHUNT: &str = "shunt";
 const GENERATOR: &str = "generator";
 const BRANCH: &str = "branch";
+const SWITCH: &str = "switch";
 const TRANSFORMER_3W: &str = "transformer_3w";
 
 /// The PSS/E id every element of a network would carry in a RAW file written
@@ -49,17 +52,33 @@ const TRANSFORMER_3W: &str = "transformer_3w";
 /// Building the index walks every table once. Resolving many sets against one
 /// network builds it once and calls [`ContingencySet::resolve_with`]. The index
 /// borrows the network it was built from, so a row it states is always a row of
-/// that network.
+/// that network. A caller that must keep the index beside the network, for
+/// example in a `OnceLock` next to an `Arc<BalancedNetwork>`, builds a
+/// [`SharedPsseEquipmentIndex`] and reads this index from it with
+/// [`SharedPsseEquipmentIndex::index`].
 #[derive(Debug, Clone)]
 pub struct PsseEquipmentIndex<'n> {
     net: &'n BalancedNetwork,
+    /// Owned when built by [`PsseEquipmentIndex::new`], borrowed when read
+    /// from a [`SharedPsseEquipmentIndex`].
+    tables: Cow<'n, EquipmentTables>,
+}
+
+/// The ids and rows of a [`PsseEquipmentIndex`]. They hold no reference to the
+/// network, so a [`SharedPsseEquipmentIndex`] can own them beside it.
+#[derive(Debug, Clone)]
+struct EquipmentTables {
     machine_ids: Vec<String>,
     circuit_ids: Vec<String>,
+    switch_ids: Vec<String>,
     transformer_3w_ids: Vec<String>,
     bus_rows: BTreeMap<BusId, usize>,
     /// Keyed on the stored terminal order, as the writer keys it. A lookup
     /// reads both orientations.
     branch_rows: BranchRows,
+    /// System switching device rows keyed on the stored terminal pair and
+    /// the circuit id. A lookup reads both orientations.
+    switch_rows: SwitchRows,
     machine_rows: MachineRows,
     fixed_shunt_rows: DeviceRows,
     switched_shunt_rows: BTreeMap<BusId, Vec<usize>>,
@@ -67,6 +86,8 @@ pub struct PsseEquipmentIndex<'n> {
     /// Keyed on the three bus ids in ascending order, so a statement naming
     /// them in any order finds the transformer.
     transformer_3w_rows: Transformer3wRows,
+    /// Buses and branches by name, for the statements TARA states by name.
+    names: super::tara::NameIndex,
 }
 
 fn sorted_triple(buses: [BusId; 3]) -> [BusId; 3] {
@@ -93,6 +114,10 @@ type BranchRows = BTreeMap<(BusId, BusId, bool, String), Vec<usize>>;
 
 /// Rows of the generators, keyed by bus and machine id.
 type MachineRows = BTreeMap<(BusId, String), usize>;
+
+/// Switch rows keyed by the stored terminal pair and the circuit id. The RAW
+/// writer allocates switching device ids in a namespace of their own.
+type SwitchRows = BTreeMap<(BusId, BusId, String), Vec<usize>>;
 
 /// Three winding transformer rows keyed by their three buses in ascending
 /// order, each with the id the RAW writer would state.
@@ -162,6 +187,28 @@ fn branch_index(net: &BalancedNetwork, sanitized: &mut usize) -> (Vec<String>, B
     (ids, rows)
 }
 
+/// The circuit id of every switch, aligned with `net.switches()`, and the rows
+/// each `(from, to, circuit)` key names. The RAW writer states a switching
+/// device's retained circuit id (`@1`, `*2`, ...) when it is free on its
+/// terminal pair, as it does for a line.
+fn switch_index(net: &BalancedNetwork, sanitized: &mut usize) -> (Vec<String>, SwitchRows) {
+    let mut ids = Vec::with_capacity(net.switches().len());
+    let mut rows: SwitchRows = BTreeMap::new();
+    let mut used = BTreeMap::new();
+    for (row, switch) in net.switches().iter().enumerate() {
+        let preferred = switch
+            .extras
+            .get("psse_ckt")
+            .and_then(serde_json::Value::as_str);
+        let id = quoted_circuit_id(preferred, (switch.from, switch.to), &mut used, sanitized);
+        rows.entry((switch.from, switch.to, id.trim().to_owned()))
+            .or_default()
+            .push(row);
+        ids.push(id);
+    }
+    (ids, rows)
+}
+
 /// The rows of `net.loads()` per bus, with the id each load would carry.
 fn load_index(net: &BalancedNetwork, sanitized: &mut usize) -> DeviceRows {
     let mut rows: DeviceRows = BTreeMap::new();
@@ -225,21 +272,20 @@ fn transformer_3w_index(
     (ids, rows)
 }
 
-impl<'n> PsseEquipmentIndex<'n> {
-    /// Recompute every PSS/E id in `net` and index the rows by it.
-    #[must_use]
-    pub fn new(net: &'n BalancedNetwork) -> Self {
+impl EquipmentTables {
+    fn new(net: &BalancedNetwork) -> Self {
         // The writer counts the ids sanitation changed so it can warn about
         // them; the index states the same ids and discards the count.
         let mut sanitized = 0usize;
         let (machine_ids, machine_rows) = machine_index(net, &mut sanitized);
         let (circuit_ids, branch_rows) = branch_index(net, &mut sanitized);
+        let (switch_ids, switch_rows) = switch_index(net, &mut sanitized);
         let (fixed_shunt_rows, switched_shunt_rows) = shunt_index(net, &mut sanitized);
         let (transformer_3w_ids, transformer_3w_rows) = transformer_3w_index(net, &mut sanitized);
         Self {
-            net,
             machine_ids,
             circuit_ids,
+            switch_ids,
             transformer_3w_ids,
             bus_rows: net
                 .buses()
@@ -248,11 +294,24 @@ impl<'n> PsseEquipmentIndex<'n> {
                 .map(|(row, bus)| (bus.id, row))
                 .collect(),
             branch_rows,
+            switch_rows,
             machine_rows,
             fixed_shunt_rows,
             switched_shunt_rows,
             load_rows: load_index(net, &mut sanitized),
             transformer_3w_rows,
+            names: super::tara::NameIndex::new(net),
+        }
+    }
+}
+
+impl<'n> PsseEquipmentIndex<'n> {
+    /// Recompute every PSS/E id in `net` and index the rows by it.
+    #[must_use]
+    pub fn new(net: &'n BalancedNetwork) -> Self {
+        Self {
+            net,
+            tables: Cow::Owned(EquipmentTables::new(net)),
         }
     }
 
@@ -266,26 +325,32 @@ impl<'n> PsseEquipmentIndex<'n> {
     /// The machine id of every generator, aligned with `net.generators()`.
     #[must_use]
     pub fn machine_ids(&self) -> &[String] {
-        &self.machine_ids
+        &self.tables.machine_ids
     }
 
     /// The circuit id of every branch, aligned with `net.branches()`.
     #[must_use]
     pub fn circuit_ids(&self) -> &[String] {
-        &self.circuit_ids
+        &self.tables.circuit_ids
+    }
+
+    /// The circuit id of every switch, aligned with `net.switches()`.
+    #[must_use]
+    pub fn switch_ids(&self) -> &[String] {
+        &self.tables.switch_ids
     }
 
     /// The circuit id of every three winding transformer, aligned with
     /// `net.transformers_3w()`.
     #[must_use]
     pub fn transformer_3w_ids(&self) -> &[String] {
-        &self.transformer_3w_ids
+        &self.tables.transformer_3w_ids
     }
 
     /// The row of `bus` in `net.buses()`.
     #[must_use]
     pub fn bus_row(&self, bus: BusId) -> Option<usize> {
-        self.bus_rows.get(&bus).copied()
+        self.tables.bus_rows.get(&bus).copied()
     }
 
     /// The rows of `net.branches()` joining `from` and `to` on `circuit`, in
@@ -306,20 +371,42 @@ impl<'n> PsseEquipmentIndex<'n> {
         }
     }
 
+    /// The rows of `net.switches()` joining `from` and `to` on `circuit`, in
+    /// either orientation. A `.con` file opens a system switching device with
+    /// the branch statement, `OPEN BRANCH FROM BUS i TO BUS j CIRCUIT '@1'`,
+    /// so a statement that names no line or two winding transformer is read
+    /// against the switches.
+    #[must_use]
+    pub fn switch_rows(&self, from: BusId, to: BusId, circuit: &str) -> Vec<usize> {
+        let circuit = circuit.trim();
+        let mut rows = Vec::new();
+        if let Some(forward) = self.tables.switch_rows.get(&(from, to, circuit.to_owned())) {
+            rows.extend_from_slice(forward);
+        }
+        if from != to
+            && let Some(reverse) = self.tables.switch_rows.get(&(to, from, circuit.to_owned()))
+        {
+            rows.extend_from_slice(reverse);
+        }
+        rows
+    }
+
     /// The rows of one branch family joining `from` and `to` on `circuit`, in
     /// either orientation.
     fn family_rows(&self, from: BusId, to: BusId, circuit: &str, transformer: bool) -> Vec<usize> {
         let circuit = circuit.trim();
         let mut rows = Vec::new();
-        if let Some(forward) = self
-            .branch_rows
-            .get(&(from, to, transformer, circuit.to_owned()))
+        if let Some(forward) =
+            self.tables
+                .branch_rows
+                .get(&(from, to, transformer, circuit.to_owned()))
         {
             rows.extend_from_slice(forward);
         }
         if from != to
             && let Some(reverse) =
-                self.branch_rows
+                self.tables
+                    .branch_rows
                     .get(&(to, from, transformer, circuit.to_owned()))
         {
             rows.extend_from_slice(reverse);
@@ -333,14 +420,17 @@ impl<'n> PsseEquipmentIndex<'n> {
     /// trimmed id the writer allocates.
     #[must_use]
     pub fn machine_row(&self, bus: BusId, id: &str) -> Option<usize> {
-        self.machine_rows.get(&(bus, id.trim().to_owned())).copied()
+        self.tables
+            .machine_rows
+            .get(&(bus, id.trim().to_owned()))
+            .copied()
     }
 
     /// The rows of `net.shunts()` holding a fixed shunt at `bus`: the one with
     /// this id, or every fixed shunt there when no id is stated.
     #[must_use]
     pub fn fixed_shunt_rows(&self, bus: BusId, id: Option<&str>) -> Vec<usize> {
-        select_rows(self.fixed_shunt_rows.get(&bus), id)
+        select_rows(self.tables.fixed_shunt_rows.get(&bus), id)
     }
 
     /// The rows of `net.shunts()` holding a switched shunt at `bus`, every one
@@ -349,7 +439,8 @@ impl<'n> PsseEquipmentIndex<'n> {
     /// statement addresses every switched shunt at the bus.
     #[must_use]
     pub fn switched_shunt_rows(&self, bus: BusId) -> Vec<usize> {
-        self.switched_shunt_rows
+        self.tables
+            .switched_shunt_rows
             .get(&bus)
             .cloned()
             .unwrap_or_default()
@@ -359,7 +450,7 @@ impl<'n> PsseEquipmentIndex<'n> {
     /// there when no id is stated.
     #[must_use]
     pub fn load_rows(&self, bus: BusId, id: Option<&str>) -> Vec<usize> {
-        select_rows(self.load_rows.get(&bus), id)
+        select_rows(self.tables.load_rows.get(&bus), id)
     }
 
     /// The row of `net.transformers_3w()` on these three buses and circuit id.
@@ -380,13 +471,59 @@ impl<'n> PsseEquipmentIndex<'n> {
     #[must_use]
     pub fn transformer_3w_rows(&self, buses: [BusId; 3], circuit: &str) -> Vec<usize> {
         let circuit = circuit.trim();
-        self.transformer_3w_rows
+        self.tables
+            .transformer_3w_rows
             .get(&sorted_triple(buses))
             .into_iter()
             .flatten()
             .filter(|(id, _)| id == circuit)
             .map(|(_, row)| *row)
             .collect()
+    }
+}
+
+/// A [`PsseEquipmentIndex`] that owns its network through an [`Arc`], so it
+/// can be built once and kept: in a struct beside the network, in a
+/// `OnceLock`, or across threads.
+///
+/// [`SharedPsseEquipmentIndex::index`] hands out the borrowed index without
+/// rebuilding anything, and every entry point that takes a
+/// [`PsseEquipmentIndex`] ([`ContingencySet::resolve_with`],
+/// [`ContingencySet::expand_with`](super::ContingencySet::expand_with),
+/// [`MonitoredSet::resolve_with`](super::MonitoredSet::resolve_with))
+/// takes it, with the same result as an index built by
+/// [`PsseEquipmentIndex::new`] on the same network.
+#[derive(Debug, Clone)]
+pub struct SharedPsseEquipmentIndex {
+    net: Arc<BalancedNetwork>,
+    tables: EquipmentTables,
+}
+
+impl SharedPsseEquipmentIndex {
+    /// Recompute every PSS/E id in `net` and index the rows by it, keeping the
+    /// network. Takes an `Arc<BalancedNetwork>` to share a network the caller
+    /// already holds, or a `BalancedNetwork` to own it.
+    #[must_use]
+    pub fn new(net: impl Into<Arc<BalancedNetwork>>) -> Self {
+        let net = net.into();
+        let tables = EquipmentTables::new(&net);
+        Self { net, tables }
+    }
+
+    /// The network the index was built from.
+    #[must_use]
+    pub fn network(&self) -> &Arc<BalancedNetwork> {
+        &self.net
+    }
+
+    /// The index as a [`PsseEquipmentIndex`], borrowing the network and the
+    /// tables held here. Nothing is recomputed or copied.
+    #[must_use]
+    pub fn index(&self) -> PsseEquipmentIndex<'_> {
+        PsseEquipmentIndex {
+            net: &self.net,
+            tables: Cow::Borrowed(&self.tables),
+        }
     }
 }
 
@@ -482,8 +619,8 @@ impl ResolvedCase {
 #[non_exhaustive]
 pub struct ResolvedComponent {
     /// The component type naming the table `row` indexes: `bus`, `load`,
-    /// `shunt`, `generator`, `branch`, or `transformer_3w`. Every component
-    /// states it, including one the network states no identity for.
+    /// `shunt`, `generator`, `branch`, `switch`, or `transformer_3w`. Every
+    /// component states it, including one the network states no identity for.
     pub component_type: &'static str,
     /// The element's identity, when the network states one for the row: its
     /// `uid`, under `component_type`. A row carrying no `uid`, or one
@@ -495,7 +632,7 @@ pub struct ResolvedComponent {
     pub row: usize,
     /// The element's own in service flag as the network states it now, before
     /// the case is applied. For a bus it is whether the bus type is anything
-    /// other than isolated.
+    /// other than isolated; for a switch, whether it is closed.
     pub in_service: bool,
 }
 
@@ -529,6 +666,19 @@ pub enum UnresolvedReason {
     NoSuchTransformer3w,
     /// The reader kept this statement as text, so it names no element.
     Unrecognized,
+    /// A quoted bus name and base kV that names no bus.
+    NoSuchBusName,
+    /// A quoted bus name that names more than one bus, exactly or without
+    /// regard to case and whitespace.
+    AmbiguousBusName {
+        matches: usize,
+    },
+    /// A quoted branch name that names no branch.
+    NoSuchBranchName,
+    /// A quoted branch name that names more than one branch.
+    AmbiguousBranchName {
+        matches: usize,
+    },
 }
 
 impl UnresolvedReason {
@@ -545,6 +695,10 @@ impl UnresolvedReason {
             Self::NoSuchLoad => "no_such_load",
             Self::NoSuchTransformer3w => "no_such_transformer_3w",
             Self::Unrecognized => "unrecognized",
+            Self::NoSuchBusName => "no_such_bus_name",
+            Self::AmbiguousBusName { .. } => "ambiguous_bus_name",
+            Self::NoSuchBranchName => "no_such_branch_name",
+            Self::AmbiguousBranchName { .. } => "ambiguous_branch_name",
         }
     }
 }
@@ -586,6 +740,22 @@ fn describe(action: &ContingencyAction, reason: UnresolvedReason) -> String {
             Some(id) => format!("no load {id} at bus {bus}"),
             None => format!("no load at bus {bus}"),
         },
+        (ContingencyAction::Unrecognized { text }, UnresolvedReason::NoSuchBusName) => {
+            format!("a bus name names no bus: {text}")
+        }
+        (
+            ContingencyAction::Unrecognized { text },
+            UnresolvedReason::AmbiguousBusName { matches },
+        ) => {
+            format!("a bus name names {matches} buses: {text}")
+        }
+        (ContingencyAction::Unrecognized { text }, UnresolvedReason::NoSuchBranchName) => {
+            format!("the branch name names no branch: {text}")
+        }
+        (
+            ContingencyAction::Unrecognized { text },
+            UnresolvedReason::AmbiguousBranchName { matches },
+        ) => format!("the branch name names {matches} branches: {text}"),
         (ContingencyAction::Unrecognized { text }, _) => {
             format!("statement kept as text: {text}")
         }
@@ -669,9 +839,15 @@ fn bind(
     match action {
         ContingencyAction::OpenBranch { from, to, circuit } => {
             let rows = index.branch_rows(*from, *to, circuit);
+            let (rows, component): (_, fn(&BalancedNetwork, usize) -> ResolvedComponent) =
+                if rows.is_empty() {
+                    (index.switch_rows(*from, *to, circuit), switch_component)
+                } else {
+                    (rows, branch_component)
+                };
             match rows.as_slice() {
                 [] => Err(UnresolvedReason::NoSuchBranch),
-                [row] => Ok(vec![branch_component(net, *row)]),
+                [row] => Ok(vec![component(net, *row)]),
                 many => Err(UnresolvedReason::AmbiguousBranch {
                     matches: many.len(),
                 }),
@@ -722,7 +898,18 @@ fn bind(
             .bus_row(*bus)
             .map(|row| vec![bus_component(net, row)])
             .ok_or(UnresolvedReason::NoSuchBus),
-        ContingencyAction::Unrecognized { .. } => Err(UnresolvedReason::Unrecognized),
+        // A TARA form the reader kept as text: buses or a branch named by
+        // name, or the action ahead of a dispatch block.
+        ContingencyAction::Unrecognized { text } => {
+            match super::tara::read_text_action(&index.tables.names, text) {
+                None => Err(UnresolvedReason::Unrecognized),
+                Some(Err(reason)) => Err(reason),
+                Some(Ok(super::tara::TextAction::Action(action))) => bind(index, &action),
+                Some(Ok(super::tara::TextAction::Branch(row))) => {
+                    Ok(vec![branch_component(net, row)])
+                }
+            }
+        }
     }
 }
 
@@ -792,6 +979,16 @@ fn branch_component(net: &BalancedNetwork, row: usize) -> ResolvedComponent {
         id: component_id(BRANCH, branch.uid.as_deref()),
         row,
         in_service: branch.in_service,
+    }
+}
+
+fn switch_component(net: &BalancedNetwork, row: usize) -> ResolvedComponent {
+    let switch = &net.switches()[row];
+    ResolvedComponent {
+        component_type: SWITCH,
+        id: component_id(SWITCH, switch.uid.as_deref()),
+        row,
+        in_service: switch.closed,
     }
 }
 

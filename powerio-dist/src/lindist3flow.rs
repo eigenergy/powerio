@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::DistLocationTarget;
+use crate::geo::ComponentLocationEdits;
 use crate::{
     Configuration, DistCapacitor, DistGenerator, DistIbr, DistLine, DistLineCode,
     DistLoadVoltageModel, DistShunt, Error, IbrPrimeMover, IbrTopology, MulticonductorNetwork,
@@ -297,6 +299,7 @@ fn lower_switches(
     network: &mut MulticonductorNetwork,
     report: &mut LinDist3FlowPreparationReport,
 ) -> Result<()> {
+    let mut locations = ComponentLocationEdits::new(network);
     let switches = std::mem::take(network.switches_mut());
     let mut line_names = network
         .lines()
@@ -311,11 +314,18 @@ fn lower_switches(
     for switch in switches {
         let source = format!("switch.{}", switch.name);
         if switch.open {
-            report.actions.push(LinDist3FlowPreparationAction::new(
+            let mut action = LinDist3FlowPreparationAction::new(
                 LinDist3FlowPreparationActionKind::OpenSwitchOmitted,
                 source,
                 None,
-            ));
+            );
+            locations.rewrite(
+                DistLocationTarget::Switch,
+                &switch.name,
+                None,
+                &mut action.details,
+            );
+            report.actions.push(action);
             continue;
         }
         let n = switch.terminal_map_from.len();
@@ -365,8 +375,15 @@ fn lower_switches(
             "flow_identity".to_owned(),
             json!("independent_contact_flow"),
         );
+        locations.rewrite(
+            DistLocationTarget::Switch,
+            &switch.name,
+            Some((DistLocationTarget::Line, &line_name)),
+            &mut action.details,
+        );
         report.actions.push(action);
     }
+    locations.apply(network);
     Ok(())
 }
 
@@ -428,6 +445,7 @@ fn lower_capacitors(
     network: &mut MulticonductorNetwork,
     report: &mut LinDist3FlowPreparationReport,
 ) -> Result<()> {
+    let mut locations = ComponentLocationEdits::new(network);
     let capacitors = std::mem::take(network.capacitors_mut());
     let mut names = network
         .shunts()
@@ -444,13 +462,73 @@ fn lower_capacitors(
             zero_matrix(matrix.len()),
             matrix,
         ));
-        report.actions.push(LinDist3FlowPreparationAction::new(
+        let mut action = LinDist3FlowPreparationAction::new(
             LinDist3FlowPreparationActionKind::CapacitorLowered,
             format!("capacitor.{}", capacitor.name),
             Some(format!("shunt.{name}")),
-        ));
+        );
+        locations.rewrite(
+            DistLocationTarget::Capacitor,
+            &capacitor.name,
+            Some((DistLocationTarget::Shunt, &name)),
+            &mut action.details,
+        );
+        report.actions.push(action);
     }
+    locations.apply(network);
     Ok(())
+}
+
+// Select only a smooth nominal branch. The existing nominal-law projection
+// handles the coefficients; the source law and bounds remain in the audit.
+fn nominal_bounded_load(load: &crate::DistLoad) -> Result<Option<DistLoadVoltageModel>> {
+    let model = &load.voltage_model;
+    let (low, min, max) = match model {
+        DistLoadVoltageModel::BoundedZip {
+            v_low_pu,
+            v_min_pu,
+            v_max_pu,
+            cutoff_pu,
+            ..
+        } if cutoff_pu.is_finite() && (0.0..1.0).contains(cutoff_pu) => {
+            (*v_low_pu, *v_min_pu, *v_max_pu)
+        }
+        DistLoadVoltageModel::BoundedExponential {
+            v_low_pu,
+            v_min_pu,
+            v_max_pu,
+            ..
+        } => (*v_low_pu, *v_min_pu, *v_max_pu),
+        DistLoadVoltageModel::BoundedConstantPower {
+            v_min_pu,
+            v_max_pu,
+            current_limit_pu,
+            ..
+        } if current_limit_pu.is_none_or(|limit| limit.is_finite() && limit > 1.0) => {
+            (0.0, *v_min_pu, *v_max_pu)
+        }
+        _ => return Ok(None),
+    };
+    if ![low, min, max].iter().all(|value| value.is_finite())
+        || !(0.0..1.0).contains(&low)
+        || min >= 1.0
+        || max <= 1.0
+    {
+        return Ok(None);
+    }
+    let n = load.p_nom.len();
+    if n == 0 || load.q_nom.len() != n || model.v_nom().len() != n {
+        return Err(fail(format!(
+            "load `{}` bounded law has invalid channel dimensions",
+            load.name
+        )));
+    }
+    for (channel, &voltage) in model.v_nom().iter().enumerate() {
+        model
+            .power_scale(channel, voltage)
+            .map_err(|error| fail(format!("load `{}`: {error}", load.name)))?;
+    }
+    Ok(Some(model.without_voltage_bounds()))
 }
 
 fn approximate_loads(
@@ -467,7 +545,9 @@ fn approximate_loads(
         }
     };
     for load in network.loads_mut() {
-        let approximation = match &load.voltage_model {
+        let nominal = nominal_bounded_load(load)?;
+        let model = nominal.as_ref().unwrap_or(&load.voltage_model);
+        let approximation = match model {
             DistLoadVoltageModel::ConstantCurrent { v_nom } => Some(DistLoadVoltageModel::Zip {
                 v_nom: v_nom.clone(),
                 alpha_z: vec![0.5; load.p_nom.len()],
@@ -531,8 +611,10 @@ fn approximate_loads(
                 })
             }
             _ => None,
-        };
+        }
+        .or(nominal);
         if let Some(approximation) = approximation {
+            let source_model = json!(&load.voltage_model);
             load.voltage_model = approximation;
             let mut action = LinDist3FlowPreparationAction::new(
                 LinDist3FlowPreparationActionKind::LoadApproximated,
@@ -543,6 +625,9 @@ fn approximate_loads(
                 "method".to_owned(),
                 json!("first_order_squared_voltage_at_nominal"),
             );
+            action
+                .details
+                .insert("source_voltage_model".into(), source_model);
             report.actions.push(action);
         }
     }
@@ -569,6 +654,7 @@ fn approximate_ibrs(
     network: &mut MulticonductorNetwork,
     report: &mut LinDist3FlowPreparationReport,
 ) -> Result<()> {
+    let mut locations = ComponentLocationEdits::new(network);
     let ibrs = std::mem::take(network.ibrs_mut());
     let mut names = network
         .generators()
@@ -642,6 +728,12 @@ fn approximate_ibrs(
         action
             .details
             .insert("control_profile".to_owned(), json!(&ibr.control_profile));
+        locations.rewrite(
+            DistLocationTarget::Ibr,
+            &ibr.name,
+            Some((DistLocationTarget::Generator, &name)),
+            &mut action.details,
+        );
         report.actions.push(action);
         if let Some(profile) = &ibr.control_profile {
             report.actions.push(LinDist3FlowPreparationAction::new(
@@ -651,6 +743,7 @@ fn approximate_ibrs(
             ));
         }
     }
+    locations.apply(network);
     Ok(())
 }
 
@@ -703,9 +796,13 @@ fn omit_controls_and_untyped(
 /// The input remains unchanged. Static switch contacts become independent
 /// zero-impedance line-flow variables, avoiding any aggregation of parallel
 /// contact ratings. Line charging and capacitors become explicit terminal
-/// shunts. Current and exponential load behavior is linearized in squared
-/// voltage at nominal voltage. IBRs become static generators; their dynamic
+/// shunts. Supported current and exponential load behavior, including smooth
+/// nominal branches of bounded laws, is linearized in squared voltage at
+/// nominal voltage. The report retains the original load law. IBRs become
+/// static generators; their dynamic
 /// controls and storage state are not represented.
+/// Component points follow replacement devices. Omitted devices' points remain
+/// in the corresponding audit action's `details.source_location`.
 ///
 /// # Errors
 /// A selected transformation cannot preserve or explicitly approximate the
@@ -714,6 +811,9 @@ pub fn prepare_lindist3flow_network(
     network: &MulticonductorNetwork,
     policy: LinDist3FlowPreparationPolicy,
 ) -> Result<LinDist3FlowPreparedNetwork> {
+    network
+        .validate_component_locations()
+        .map_err(|error| fail(error.to_string()))?;
     let mut prepared = network.clone();
     let mut report = LinDist3FlowPreparationReport {
         policy,
@@ -746,13 +846,18 @@ pub fn prepare_lindist3flow_network(
         approximate_ibrs(&mut prepared, &mut report)?;
     }
     omit_controls_and_untyped(&mut prepared, policy, &mut report);
-    prepared.extras_mut().insert(
-        "powerio_lindist3flow_preparation".to_owned(),
+    prepared
+        .validate_component_locations()
+        .map_err(|error| fail(error.to_string()))?;
+    crate::transform_audit::store(
+        &mut prepared,
+        "powerio_lindist3flow_preparation",
         json!({
             "policy": report.policy,
             "actions": report.actions,
         }),
-    );
+    )
+    .map_err(fail)?;
     Ok(LinDist3FlowPreparedNetwork {
         network: prepared,
         report,

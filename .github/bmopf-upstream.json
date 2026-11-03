@@ -6,7 +6,7 @@
       "observed_sha256": "221cfd98cdea69636ba236a5a5e39a75b482736aeb7579045387eb5e5f2a5567",
       "review_url": "https://github.com/distribution-system-opt/dsopt-schema/pull/3",
       "schema_status": "unchanged",
-      "status": "open",
+      "status": "merged",
       "version": "0.1.0"
     },
     {

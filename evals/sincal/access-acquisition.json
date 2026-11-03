@@ -1,0 +1,790 @@
+{
+  "collection": "https://doi.org/10.4225/08/5631B1DF6F1A0",
+  "attribution": "Berry, Adam; Collins, Lyle; Oliver, Erin; Perfumo, Cristian (2015), Representative Australian Electricity Feeders with load and solar generation profiles, v1, CSIRO.",
+  "license": "CC-BY-4.0",
+  "license_url": "https://creativecommons.org/licenses/by/4.0/",
+  "scope": "Tool-assisted Access acquisition and Rust base-variant structural checks only; no electrical mapping or native SQLite export.",
+  "cases": [
+    {
+      "case": 1,
+      "source_sha256": "eb1fb68ba654f70f5dfb0a39dcd04831b3f1db42aa0448c29824da2997e42b40",
+      "source_bytes": 60686336,
+      "record_sha256": "34ba7815a6d87096db9880d0771b5617b6f9b5c17259b888d716fddddb798eaf",
+      "record_bytes": 2660923,
+      "acquired_rows": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 795,
+        "Element": 1033,
+        "Terminal": 1818,
+        "VoltageLevel": 15,
+        "CalcParameter": 1,
+        "Line": 533,
+        "LineSeg": 0,
+        "Load": 247,
+        "Infeeder": 1,
+        "DCInfeeder": 0,
+        "TwoWindingTransformer": 252,
+        "ThreeWindingTransformer": 0,
+        "ShuntImpedance": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "OpSer": 741,
+        "OpSerVal": 35568,
+        "TransformerTap": 0
+      },
+      "selected_variant": 1,
+      "structural_counts": {
+        "nodes": 795,
+        "elements": 1033,
+        "terminals": 1818
+      },
+      "tools": {
+        "mdb-tables": "mdbtools v1.0.1",
+        "mdb-schema": "mdbtools v1.0.1",
+        "mdb-json": "mdbtools v1.0.1"
+      }
+    },
+    {
+      "case": 2,
+      "source_sha256": "3e792c54b81c135b63bf9dbd5cbea2aa4057a9818edd7d608acb607bd49694b6",
+      "source_bytes": 136704000,
+      "record_sha256": "8de1486a6467fc5972d0c8a7a62bb86f936057d18a98cafebae91d9cac2d0df8",
+      "record_bytes": 6002113,
+      "acquired_rows": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 1749,
+        "Element": 2329,
+        "Terminal": 4083,
+        "VoltageLevel": 18,
+        "CalcParameter": 1,
+        "Line": 1179,
+        "LineSeg": 0,
+        "Load": 574,
+        "Infeeder": 1,
+        "DCInfeeder": 0,
+        "TwoWindingTransformer": 575,
+        "ThreeWindingTransformer": 0,
+        "ShuntImpedance": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "OpSer": 1641,
+        "OpSerVal": 78768,
+        "TransformerTap": 0
+      },
+      "selected_variant": 1,
+      "structural_counts": {
+        "nodes": 1749,
+        "elements": 2329,
+        "terminals": 4083
+      },
+      "tools": {
+        "mdb-tables": "mdbtools v1.0.1",
+        "mdb-schema": "mdbtools v1.0.1",
+        "mdb-json": "mdbtools v1.0.1"
+      }
+    },
+    {
+      "case": 3,
+      "source_sha256": "9eaf7c785fe0962af4e9ea5e6a5efb56477ed7427b660481c5cc66f9460bd759",
+      "source_bytes": 76427264,
+      "record_sha256": "6fad8c0246e8582367ea26dc712369c25edd9256ca5e31b8e97dc9c2fb086438",
+      "record_bytes": 3044601,
+      "acquired_rows": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 785,
+        "Element": 1084,
+        "Terminal": 1869,
+        "VoltageLevel": 7,
+        "CalcParameter": 1,
+        "Line": 774,
+        "LineSeg": 0,
+        "Load": 297,
+        "Infeeder": 1,
+        "DCInfeeder": 0,
+        "TwoWindingTransformer": 11,
+        "ThreeWindingTransformer": 0,
+        "ShuntImpedance": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "OpSer": 807,
+        "OpSerVal": 38740,
+        "TransformerTap": 0
+      },
+      "selected_variant": 1,
+      "structural_counts": {
+        "nodes": 785,
+        "elements": 1084,
+        "terminals": 1869
+      },
+      "tools": {
+        "mdb-tables": "mdbtools v1.0.1",
+        "mdb-schema": "mdbtools v1.0.1",
+        "mdb-json": "mdbtools v1.0.1"
+      }
+    },
+    {
+      "case": 4,
+      "source_sha256": "19da5cd451e00e30a598fff58661172a964df36f7b8ac70767c4cc49068017dc",
+      "source_bytes": 118075392,
+      "record_sha256": "d3b9b20ee495aba0df56e4a059008d9368e419e63a5a4b5e4561234553abcb4f",
+      "record_bytes": 2366670,
+      "acquired_rows": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 625,
+        "Element": 861,
+        "Terminal": 1486,
+        "VoltageLevel": 14,
+        "CalcParameter": 1,
+        "Line": 390,
+        "LineSeg": 0,
+        "Load": 235,
+        "Infeeder": 1,
+        "DCInfeeder": 0,
+        "TwoWindingTransformer": 235,
+        "ThreeWindingTransformer": 0,
+        "ShuntImpedance": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "OpSer": 673,
+        "OpSerVal": 32307,
+        "TransformerTap": 0
+      },
+      "selected_variant": 1,
+      "structural_counts": {
+        "nodes": 625,
+        "elements": 861,
+        "terminals": 1486
+      },
+      "tools": {
+        "mdb-tables": "mdbtools v1.0.1",
+        "mdb-schema": "mdbtools v1.0.1",
+        "mdb-json": "mdbtools v1.0.1"
+      }
+    },
+    {
+      "case": 5,
+      "source_sha256": "26dfb51d491e0333c45613e7eafa35d9c4c3ad07e1170d8c644e80584bafdaf8",
+      "source_bytes": 88170496,
+      "record_sha256": "f7bf5f04a24e192b02a731816bcef3d82f2850f90d22a86e840afd131e16cd5b",
+      "record_bytes": 4673175,
+      "acquired_rows": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 922,
+        "Element": 1378,
+        "Terminal": 2297,
+        "VoltageLevel": 4,
+        "CalcParameter": 1,
+        "Line": 912,
+        "LineSeg": 0,
+        "Load": 458,
+        "Infeeder": 1,
+        "DCInfeeder": 0,
+        "TwoWindingTransformer": 7,
+        "ThreeWindingTransformer": 0,
+        "ShuntImpedance": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "OpSer": 1374,
+        "OpSerVal": 65957,
+        "TransformerTap": 0
+      },
+      "selected_variant": 1,
+      "structural_counts": {
+        "nodes": 922,
+        "elements": 1378,
+        "terminals": 2297
+      },
+      "tools": {
+        "mdb-tables": "mdbtools v1.0.1",
+        "mdb-schema": "mdbtools v1.0.1",
+        "mdb-json": "mdbtools v1.0.1"
+      }
+    },
+    {
+      "case": 6,
+      "source_sha256": "6c6eb3caaaa517fcb424965d5e15819edaa7bd20da15a32d85a02b4ddef4eff8",
+      "source_bytes": 4820992,
+      "record_sha256": "082bb93d85781682d7f34c01d5ce3c0ff9ee68682383a015320d82bbb393cf17",
+      "record_bytes": 219247,
+      "acquired_rows": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 167,
+        "Element": 218,
+        "Terminal": 382,
+        "VoltageLevel": 14,
+        "CalcParameter": 1,
+        "Line": 113,
+        "LineSeg": 0,
+        "Load": 53,
+        "Infeeder": 1,
+        "DCInfeeder": 0,
+        "TwoWindingTransformer": 51,
+        "ThreeWindingTransformer": 0,
+        "ShuntImpedance": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "OpSer": 0,
+        "OpSerVal": 0,
+        "TransformerTap": 0
+      },
+      "selected_variant": 1,
+      "structural_counts": {
+        "nodes": 167,
+        "elements": 218,
+        "terminals": 382
+      },
+      "tools": {
+        "mdb-tables": "mdbtools v1.0.1",
+        "mdb-schema": "mdbtools v1.0.1",
+        "mdb-json": "mdbtools v1.0.1"
+      }
+    },
+    {
+      "case": 7,
+      "source_sha256": "fc9d41945e1bc935ea762e15d9d44e418fa6c116a9e115397df2260c5c1e8b58",
+      "source_bytes": 55185408,
+      "record_sha256": "f398fb1ab79f442595927cdb8cc9694c71acec91a275ec016eb9b4487ea91736",
+      "record_bytes": 1203944,
+      "acquired_rows": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 343,
+        "Element": 456,
+        "Terminal": 799,
+        "VoltageLevel": 15,
+        "CalcParameter": 1,
+        "Line": 232,
+        "LineSeg": 0,
+        "Load": 112,
+        "Infeeder": 1,
+        "DCInfeeder": 0,
+        "TwoWindingTransformer": 111,
+        "ThreeWindingTransformer": 0,
+        "ShuntImpedance": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "OpSer": 330,
+        "OpSerVal": 15840,
+        "TransformerTap": 0
+      },
+      "selected_variant": 1,
+      "structural_counts": {
+        "nodes": 343,
+        "elements": 456,
+        "terminals": 799
+      },
+      "tools": {
+        "mdb-tables": "mdbtools v1.0.1",
+        "mdb-schema": "mdbtools v1.0.1",
+        "mdb-json": "mdbtools v1.0.1"
+      }
+    },
+    {
+      "case": 8,
+      "source_sha256": "7534155ddb30c122719bd742af91ff87f8bca09256942c1839ca9843fba5473e",
+      "source_bytes": 18518016,
+      "record_sha256": "cf62b483876d50127136d508f4001361154cd407e325d53c5c331bb7ff2045ab",
+      "record_bytes": 634121,
+      "acquired_rows": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 263,
+        "Element": 309,
+        "Terminal": 575,
+        "VoltageLevel": 2,
+        "CalcParameter": 1,
+        "Line": 263,
+        "LineSeg": 0,
+        "Load": 39,
+        "Infeeder": 1,
+        "DCInfeeder": 0,
+        "TwoWindingTransformer": 3,
+        "ThreeWindingTransformer": 0,
+        "ShuntImpedance": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "OpSer": 117,
+        "OpSerVal": 5616,
+        "TransformerTap": 0
+      },
+      "selected_variant": 1,
+      "structural_counts": {
+        "nodes": 263,
+        "elements": 309,
+        "terminals": 575
+      },
+      "tools": {
+        "mdb-tables": "mdbtools v1.0.1",
+        "mdb-schema": "mdbtools v1.0.1",
+        "mdb-json": "mdbtools v1.0.1"
+      }
+    },
+    {
+      "case": 9,
+      "source_sha256": "d2c41fae2f6fc3b9cdea75c1bcbc50f083b104440148a25274ee6ed7da57a14b",
+      "source_bytes": 69181440,
+      "record_sha256": "fa661a3947bd171683d1b73a4e15c0d073c19c0df473f649fb32d4e8a2068592",
+      "record_bytes": 1075444,
+      "acquired_rows": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 621,
+        "Element": 688,
+        "Terminal": 1308,
+        "VoltageLevel": 6,
+        "CalcParameter": 1,
+        "Line": 620,
+        "LineSeg": 0,
+        "Load": 67,
+        "Infeeder": 1,
+        "DCInfeeder": 0,
+        "TwoWindingTransformer": 0,
+        "ThreeWindingTransformer": 0,
+        "ShuntImpedance": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "OpSer": 198,
+        "OpSerVal": 9504,
+        "TransformerTap": 0
+      },
+      "selected_variant": 1,
+      "structural_counts": {
+        "nodes": 621,
+        "elements": 688,
+        "terminals": 1308
+      },
+      "tools": {
+        "mdb-tables": "mdbtools v1.0.1",
+        "mdb-schema": "mdbtools v1.0.1",
+        "mdb-json": "mdbtools v1.0.1"
+      }
+    },
+    {
+      "case": 10,
+      "source_sha256": "09098007af02fea6215b2c2d0fc993ba49920a35815b110f68f0f3bb5a6fd9d6",
+      "source_bytes": 62193664,
+      "record_sha256": "a8b7ff3c4a8c01fce8b3e24f4701e741a268b076f9949fcfe34cdb5b4b671229",
+      "record_bytes": 1241891,
+      "acquired_rows": {
+        "Version": 1,
+        "Variant": 14,
+        "Node": 200,
+        "Element": 124,
+        "Terminal": 223,
+        "VoltageLevel": 1,
+        "CalcParameter": 14,
+        "Line": 99,
+        "LineSeg": 0,
+        "Load": 322,
+        "Infeeder": 1,
+        "DCInfeeder": 0,
+        "TwoWindingTransformer": 0,
+        "ThreeWindingTransformer": 0,
+        "ShuntImpedance": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "OpSer": 352,
+        "OpSerVal": 16610,
+        "TransformerTap": 0
+      },
+      "selected_variant": 1,
+      "structural_counts": {
+        "nodes": 100,
+        "elements": 124,
+        "terminals": 223
+      },
+      "tools": {
+        "mdb-tables": "mdbtools v1.0.1",
+        "mdb-schema": "mdbtools v1.0.1",
+        "mdb-json": "mdbtools v1.0.1"
+      }
+    },
+    {
+      "case": 11,
+      "source_sha256": "4ad08f2eaf1bab4863aa0a6c2b72c6bdea9a7d0027626c49f224b960e6c667d7",
+      "source_bytes": 53116928,
+      "record_sha256": "5d266c3905b5e7a049f118052a90fc8da91511913acb26369210ac20eda93552",
+      "record_bytes": 858576,
+      "acquired_rows": {
+        "Version": 1,
+        "Variant": 14,
+        "Node": 164,
+        "Element": 104,
+        "Terminal": 189,
+        "VoltageLevel": 1,
+        "CalcParameter": 14,
+        "Line": 85,
+        "LineSeg": 0,
+        "Load": 210,
+        "Infeeder": 1,
+        "DCInfeeder": 0,
+        "TwoWindingTransformer": 0,
+        "ThreeWindingTransformer": 0,
+        "ShuntImpedance": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "OpSer": 240,
+        "OpSerVal": 11325,
+        "TransformerTap": 0
+      },
+      "selected_variant": 1,
+      "structural_counts": {
+        "nodes": 82,
+        "elements": 104,
+        "terminals": 189
+      },
+      "tools": {
+        "mdb-tables": "mdbtools v1.0.1",
+        "mdb-schema": "mdbtools v1.0.1",
+        "mdb-json": "mdbtools v1.0.1"
+      }
+    },
+    {
+      "case": 12,
+      "source_sha256": "7339548baf8bfcf5b891b9d3dbb6b616d9234b8f3df298d959904e150b8cfe91",
+      "source_bytes": 29548544,
+      "record_sha256": "163c6bc083e11a46e2de443b49ef07c4848f45757c6f104596bd4850a8f22c30",
+      "record_bytes": 444670,
+      "acquired_rows": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 191,
+        "Element": 215,
+        "Terminal": 402,
+        "VoltageLevel": 4,
+        "CalcParameter": 1,
+        "Line": 187,
+        "LineSeg": 0,
+        "Load": 26,
+        "Infeeder": 1,
+        "DCInfeeder": 0,
+        "TwoWindingTransformer": 0,
+        "ThreeWindingTransformer": 0,
+        "ShuntImpedance": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "OpSer": 78,
+        "OpSerVal": 3744,
+        "TransformerTap": 0
+      },
+      "selected_variant": 1,
+      "structural_counts": {
+        "nodes": 191,
+        "elements": 215,
+        "terminals": 402
+      },
+      "tools": {
+        "mdb-tables": "mdbtools v1.0.1",
+        "mdb-schema": "mdbtools v1.0.1",
+        "mdb-json": "mdbtools v1.0.1"
+      }
+    },
+    {
+      "case": 13,
+      "source_sha256": "a0f2b5c1ca1c944c959033f3dc1cdeb623ad643ab830b877dac7b47f65d8aa7f",
+      "source_bytes": 19111936,
+      "record_sha256": "4991ce3babc2818a0dac3ca6c3b3860229e5fe8e07ba00f274ba6e51fc9779f6",
+      "record_bytes": 1952784,
+      "acquired_rows": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 1769,
+        "Element": 1954,
+        "Terminal": 3717,
+        "VoltageLevel": 2,
+        "CalcParameter": 1,
+        "Line": 1763,
+        "LineSeg": 0,
+        "Load": 190,
+        "Infeeder": 1,
+        "DCInfeeder": 0,
+        "TwoWindingTransformer": 0,
+        "ThreeWindingTransformer": 0,
+        "ShuntImpedance": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "OpSer": 45,
+        "OpSerVal": 2160,
+        "TransformerTap": 0
+      },
+      "selected_variant": 1,
+      "structural_counts": {
+        "nodes": 1769,
+        "elements": 1954,
+        "terminals": 3717
+      },
+      "tools": {
+        "mdb-tables": "mdbtools v1.0.1",
+        "mdb-schema": "mdbtools v1.0.1",
+        "mdb-json": "mdbtools v1.0.1"
+      }
+    },
+    {
+      "case": 14,
+      "source_sha256": "024921716247315468611028d09f6dff6ff438e5399ae2773cd9ed004d05f7b6",
+      "source_bytes": 39718912,
+      "record_sha256": "aee7c3c7600edd3f131c4d86a98309ca0a8328ff1633363221160759c10bc3e6",
+      "record_bytes": 456672,
+      "acquired_rows": {
+        "Version": 1,
+        "Variant": 16,
+        "Node": 57,
+        "Element": 65,
+        "Terminal": 122,
+        "VoltageLevel": 2,
+        "CalcParameter": 5,
+        "Line": 55,
+        "LineSeg": 0,
+        "Load": 112,
+        "Infeeder": 1,
+        "DCInfeeder": 0,
+        "TwoWindingTransformer": 2,
+        "ThreeWindingTransformer": 0,
+        "ShuntImpedance": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "OpSer": 126,
+        "OpSerVal": 5943,
+        "TransformerTap": 0
+      },
+      "selected_variant": 1,
+      "structural_counts": {
+        "nodes": 57,
+        "elements": 65,
+        "terminals": 122
+      },
+      "tools": {
+        "mdb-tables": "mdbtools v1.0.1",
+        "mdb-schema": "mdbtools v1.0.1",
+        "mdb-json": "mdbtools v1.0.1"
+      }
+    },
+    {
+      "case": 15,
+      "source_sha256": "ed665a4e4e6fbd2c37509705e13be0a5c23d2ed321dcb5798a13aed9080dbb94",
+      "source_bytes": 6701056,
+      "record_sha256": "83148d6a5713184bf64951da16be4131d1ac78c9b5d6b323bc2bda60f67cd425",
+      "record_bytes": 229012,
+      "acquired_rows": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 90,
+        "Element": 102,
+        "Terminal": 192,
+        "VoltageLevel": 2,
+        "CalcParameter": 1,
+        "Line": 89,
+        "LineSeg": 0,
+        "Load": 11,
+        "Infeeder": 1,
+        "DCInfeeder": 0,
+        "TwoWindingTransformer": 1,
+        "ThreeWindingTransformer": 0,
+        "ShuntImpedance": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "OpSer": 33,
+        "OpSerVal": 1584,
+        "TransformerTap": 0
+      },
+      "selected_variant": 1,
+      "structural_counts": {
+        "nodes": 90,
+        "elements": 102,
+        "terminals": 192
+      },
+      "tools": {
+        "mdb-tables": "mdbtools v1.0.1",
+        "mdb-schema": "mdbtools v1.0.1",
+        "mdb-json": "mdbtools v1.0.1"
+      }
+    },
+    {
+      "case": 16,
+      "source_sha256": "d1b6ce0906accfbfb6f84901ad90fca7e27d83f4f78578675fceca0e026d791c",
+      "source_bytes": 7385088,
+      "record_sha256": "e7cb229f62809a66cc4fe8a479654f0339746a6bbb7626b612c6057853ae0488",
+      "record_bytes": 218973,
+      "acquired_rows": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 87,
+        "Element": 103,
+        "Terminal": 191,
+        "VoltageLevel": 1,
+        "CalcParameter": 1,
+        "Line": 88,
+        "LineSeg": 0,
+        "Load": 11,
+        "Infeeder": 1,
+        "DCInfeeder": 0,
+        "TwoWindingTransformer": 0,
+        "ThreeWindingTransformer": 0,
+        "ShuntImpedance": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "OpSer": 30,
+        "OpSerVal": 1440,
+        "TransformerTap": 0
+      },
+      "selected_variant": 1,
+      "structural_counts": {
+        "nodes": 87,
+        "elements": 103,
+        "terminals": 191
+      },
+      "tools": {
+        "mdb-tables": "mdbtools v1.0.1",
+        "mdb-schema": "mdbtools v1.0.1",
+        "mdb-json": "mdbtools v1.0.1"
+      }
+    },
+    {
+      "case": 17,
+      "source_sha256": "a80ce8ec7643e1103c65dc4a79cc6f06f5a1eae8f62fc7e03b952c25d2b2d5d7",
+      "source_bytes": 14192640,
+      "record_sha256": "36d6a7eb71206544dd681ed53442cb81f9fc08bb6f5eeffe8579ba23119b2178",
+      "record_bytes": 249911,
+      "acquired_rows": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 126,
+        "Element": 142,
+        "Terminal": 271,
+        "VoltageLevel": 1,
+        "CalcParameter": 1,
+        "Line": 129,
+        "LineSeg": 0,
+        "Load": 10,
+        "Infeeder": 1,
+        "DCInfeeder": 0,
+        "TwoWindingTransformer": 0,
+        "ThreeWindingTransformer": 0,
+        "ShuntImpedance": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "OpSer": 27,
+        "OpSerVal": 1296,
+        "TransformerTap": 0
+      },
+      "selected_variant": 1,
+      "structural_counts": {
+        "nodes": 126,
+        "elements": 142,
+        "terminals": 271
+      },
+      "tools": {
+        "mdb-tables": "mdbtools v1.0.1",
+        "mdb-schema": "mdbtools v1.0.1",
+        "mdb-json": "mdbtools v1.0.1"
+      }
+    },
+    {
+      "case": 18,
+      "source_sha256": "e37c1979cf37913fee5f2dbe7498eb05108b8efa835f3e54777d9f6f18cde262",
+      "source_bytes": 6488064,
+      "record_sha256": "e613579be64a387d871efdc95bc327438ca5e31b39b64dc497a8f6c9df842da3",
+      "record_bytes": 338302,
+      "acquired_rows": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 251,
+        "Element": 295,
+        "Terminal": 575,
+        "VoltageLevel": 6,
+        "CalcParameter": 1,
+        "Line": 242,
+        "LineSeg": 0,
+        "Load": 13,
+        "Infeeder": 0,
+        "DCInfeeder": 0,
+        "TwoWindingTransformer": 38,
+        "ThreeWindingTransformer": 0,
+        "ShuntImpedance": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "OpSer": 39,
+        "OpSerVal": 936,
+        "TransformerTap": 0
+      },
+      "selected_variant": 1,
+      "structural_counts": {
+        "nodes": 251,
+        "elements": 295,
+        "terminals": 575
+      },
+      "tools": {
+        "mdb-tables": "mdbtools v1.0.1",
+        "mdb-schema": "mdbtools v1.0.1",
+        "mdb-json": "mdbtools v1.0.1"
+      }
+    },
+    {
+      "case": 19,
+      "source_sha256": "5540e956effe9a8e6e691f834e79f62c86d96924fdd38092e5fd5c6fa84789c4",
+      "source_bytes": 4476928,
+      "record_sha256": "414074919e4a2c33704b2fed6cb9df62bf2d74f6229d3ebde79f86a56fef238a",
+      "record_bytes": 127144,
+      "acquired_rows": {
+        "Version": 1,
+        "Variant": 1,
+        "Node": 26,
+        "Element": 33,
+        "Terminal": 58,
+        "VoltageLevel": 1,
+        "CalcParameter": 1,
+        "Line": 25,
+        "LineSeg": 0,
+        "Load": 7,
+        "Infeeder": 1,
+        "DCInfeeder": 0,
+        "TwoWindingTransformer": 0,
+        "ThreeWindingTransformer": 0,
+        "ShuntImpedance": 0,
+        "CouplingData": 0,
+        "CoupledLine": 0,
+        "NeutralPointImp": 0,
+        "OpSer": 21,
+        "OpSerVal": 1008,
+        "TransformerTap": 0
+      },
+      "selected_variant": 1,
+      "structural_counts": {
+        "nodes": 26,
+        "elements": 33,
+        "terminals": 58
+      },
+      "tools": {
+        "mdb-tables": "mdbtools v1.0.1",
+        "mdb-schema": "mdbtools v1.0.1",
+        "mdb-json": "mdbtools v1.0.1"
+      }
+    }
+  ],
+  "verification_date": "2026-10-07",
+  "verification_environment": "macOS; MDB Tools 1.0.1; Python adapter plus Rust inspect_records; all selected variants are base variant 1"
+}

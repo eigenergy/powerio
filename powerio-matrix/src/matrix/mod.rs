@@ -33,14 +33,15 @@ pub use laplacian::{
 };
 pub use powerio_tx::BranchSusceptanceFormula;
 pub use sensitivity::{
-    SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata, SensitivityOptions,
-    SensitivitySolver, SensitivitySolverPath, calc_lodf, calc_ptdf, calc_ptdf_lodf,
-    calc_ptdf_lodf_with_options,
+    IslandPtdf, SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata,
+    SensitivityOptions, SensitivitySolver, SensitivitySolverPath, calc_lodf, calc_lodf_columns,
+    calc_ptdf, calc_ptdf_by_island, calc_ptdf_columns, calc_ptdf_lodf, calc_ptdf_lodf_with_options,
+    calc_ptdf_rows,
 };
 pub use ybus::{YbusParts, calc_admittance_matrix};
-// Crate-internal: the gridfm columnar export reuses the per-branch admittance and
-// flow kernels so its branch table and Y_bus agree with `calc_admittance_matrix` by construction.
-#[cfg(feature = "gridfm")]
+// Crate-internal: the gridfm columnar export and the stated-state balance reuse
+// the per-branch admittance and flow kernels so their branch powers and Y_bus
+// agree with `calc_admittance_matrix` by construction.
 pub(crate) use ybus::{YbusFlags, branch_admittance, branch_flows};
 
 use sprs::CsMat;

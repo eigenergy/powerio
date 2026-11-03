@@ -170,7 +170,9 @@ fn mismatched_winding_ratings_convert_the_resistance_base() {
     let branch = network
         .branches()
         .iter()
-        .find(|branch| branch.x > 0.0)
+        .find(|branch| {
+            branch.extras.get("multiconductor_transformer") == Some(&serde_json::json!("t1"))
+        })
         .expect("the transformer lowers to a branch");
     // kvas=(500, 300), %Rs=(0.5, 0.5): r_pu on the transformer base is
     // (0.005 + 0.005 * 500/300), scaled by base_mva/S_high = 100/0.5 and the

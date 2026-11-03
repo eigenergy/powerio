@@ -153,6 +153,7 @@ fn regulator_allowed_extras() -> Vec<&'static str> {
         .iter()
         .chain(REGULATOR_EXTENSION_EXTRAS.iter())
         .chain(REGULATOR_STATED_OHMS.iter())
+        .chain(["bmopf_open_delta"].iter())
         .copied()
         .collect()
 }
@@ -714,7 +715,13 @@ impl Writer {
             // `transformer` table, not under `extras`. Name the slot the
             // object really went to, so a warning points at the part of the
             // document a reader must look at.
-            let top_level = subtype.is_none() && self.raw_table_at_top_level(&u.class);
+            let top_level = subtype.is_none() && self.raw_object_at_top_level(net, u);
+            if u.class == "time_series" && !top_level {
+                self.warn(
+                    &C::EMIT_BMOPF_RETAINED_SOURCE_ONLY,
+                    format!("time_series {}: profile has no compatible schema slot; retained verbatim under extras.time_series without asserting multiplicative semantics", u.name),
+                );
+            }
             let slot_path = match subtype {
                 Some(sub) => format!("transformer.{sub}"),
                 None if top_level => u.class.clone(),
@@ -772,6 +779,29 @@ impl Writer {
         self.options.schema_version == BmopfSchemaVersion::Bmopf020 && class != "capacitor"
     }
 
+    /// Foreign profile controls (for example PMD replacement and offset rules)
+    /// are not BMOPF multiplicative profiles. Preserve the complete record in
+    /// extras instead of silently assigning it BMOPF semantics. A PMD profile
+    /// never qualifies: PMD's `replace` defaults to true, so even a bare
+    /// `values`/`time` record replaces rather than multiplies.
+    fn raw_object_at_top_level(
+        &self,
+        net: &MulticonductorNetwork,
+        object: &crate::model::UntypedObject,
+    ) -> bool {
+        self.raw_table_at_top_level(&object.class)
+            && (object.class != "time_series"
+                || (*net.source_format() != Some(crate::model::DistSourceFormat::PmdJson)
+                    && raw_bmopf_value(object, &mut Vec::new())
+                        .and_then(|value| value.as_object().cloned())
+                        .is_some_and(|fields| {
+                            fields.contains_key("values")
+                                && fields.keys().all(|key| {
+                                    matches!(key.as_str(), "values" | "time" | "description")
+                                })
+                        })))
+    }
+
     /// `extras` is seeded from the source document's own `extras` object, so
     /// a value under one of the relocated table names is input, not something
     /// this writer built. A value that is not a table has no slot for a named
@@ -785,9 +815,9 @@ impl Writer {
         let classes: BTreeSet<&str> = net
             .untyped_objects()
             .iter()
+            .filter(|u| RAW_BMOPF_EXTRAS_TABLES.contains(&u.class.as_str()))
+            .filter(|u| !self.raw_object_at_top_level(net, u))
             .map(|u| u.class.as_str())
-            .filter(|class| RAW_BMOPF_EXTRAS_TABLES.contains(class))
-            .filter(|class| !self.raw_table_at_top_level(class))
             .collect();
         for class in classes {
             if extras.get(class).is_some_and(|v| !v.is_object()) {
@@ -1142,6 +1172,13 @@ impl Writer {
         what: &str,
     ) {
         match model {
+            DistLoadVoltageModel::BoundedZip { .. }
+            | DistLoadVoltageModel::BoundedExponential { .. }
+            | DistLoadVoltageModel::BoundedConstantPower { .. } => {
+                self.warn(&C::EMIT_BMOPF_VALUE_SUBSTITUTED, format!("{what}: voltage-band transitions, current limits and dropout have no BMOPF load-law field; emitted the nominal law"));
+                self.load_voltage_model(o, &model.without_voltage_bounds(), what);
+            }
+
             DistLoadVoltageModel::ConstantPower { v_nom } => {
                 o.insert("model".into(), json!("CONSTANT_POWER"));
                 if !v_nom.is_empty() {
@@ -1543,14 +1580,47 @@ impl Writer {
         }
         for legs in groups.into_values() {
             let [a, b] = legs[..] else { continue };
-            let pair = |t: &DistTransformer| winding_phase_pair(&t.windings[0]);
+            let pair = |t: &DistTransformer| {
+                if let Some(meta) = t.extras.get("bmopf_open_delta") {
+                    let pairs = match meta["connection"].as_str()? {
+                        "ABBC" => [(1, 2), (2, 3)],
+                        "BCAC" => [(2, 3), (1, 3)],
+                        "CABA" => [(3, 1), (2, 1)],
+                        _ => return None,
+                    };
+                    let pair = *pairs.get(usize::try_from(meta["leg"].as_u64()?).ok()?)?;
+                    for (winding, key) in t.windings.iter().zip(["from", "to"]) {
+                        let map = meta[key].as_array()?;
+                        let expected = [
+                            map.get(pair.0 - 1)?.as_str()?,
+                            map.get(pair.1 - 1)?.as_str()?,
+                        ];
+                        if winding.terminal_map.iter().map(String::as_str).ne(expected) {
+                            return None;
+                        }
+                    }
+                    Some((u8::try_from(pair.0).ok()?, u8::try_from(pair.1).ok()?))
+                } else {
+                    winding_phase_pair(&t.windings[0])
+                }
+            };
             let (Some(pa), Some(pb)) = (pair(a), pair(b)) else {
                 continue;
             };
             let Some((connection, swapped)) = open_delta_connection(pa, pb) else {
                 continue;
             };
-            if !open_delta_pairable(a, b) {
+            let metadata_agrees = match (
+                a.extras.get("bmopf_open_delta"),
+                b.extras.get("bmopf_open_delta"),
+            ) {
+                (Some(a), Some(b)) => ["from", "to", "connection"]
+                    .iter()
+                    .all(|key| a[*key] == b[*key]),
+                (None, None) => true,
+                _ => false,
+            };
+            if !metadata_agrees || !open_delta_pairable(a, b) {
                 continue;
             }
             let (first, second) = if swapped { (b, a) } else { (a, b) };
@@ -1620,8 +1690,19 @@ impl Writer {
         let mut o = self.regulator_fields(first, from, to);
         // The pairing check pins the legs to phases {1, 2, 3}; the object
         // spans the whole phase set on both sides.
-        o.insert("terminal_map_from".into(), json!(["1", "2", "3"]));
-        o.insert("terminal_map_to".into(), json!(["1", "2", "3"]));
+        let meta = first.extras.get("bmopf_open_delta");
+        o.insert(
+            "terminal_map_from".into(),
+            meta.and_then(|v| v.get("from"))
+                .cloned()
+                .unwrap_or_else(|| json!(["1", "2", "3"])),
+        );
+        o.insert(
+            "terminal_map_to".into(),
+            meta.and_then(|v| v.get("to"))
+                .cloned()
+                .unwrap_or_else(|| json!(["1", "2", "3"])),
+        );
         o.insert("connection".into(), json!(connection));
         let a1 = self.regulator_tap_ratio(first, from, to);
         let a2 = self.regulator_tap_ratio(second, &second.windings[0], &second.windings[1]);

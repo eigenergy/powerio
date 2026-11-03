@@ -172,6 +172,8 @@ fn one_shared_linecode_is_cloned_for_different_neutral_positions() {
         "four-wire",
         1.0,
     ));
+    let point = component_location(powerio_dist::DistLocationTarget::LineCode, "four-wire", 0.0);
+    network.component_locations_mut().push(point.clone());
 
     let reduction = neutral_kron_reduce(&network, &NeutralKronOptions::default()).unwrap();
     assert_ne!(
@@ -180,6 +182,127 @@ fn one_shared_linecode_is_cloned_for_different_neutral_positions() {
     );
     assert_eq!(reduction.report().recoveries.len(), 2);
     assert_eq!(reduction.network().line_codes().len(), 3);
+    let locations = reduction.network().component_locations();
+    assert_eq!(locations.len(), 3);
+    assert_eq!(locations[0], point);
+    for recovery in &reduction.report().recoveries {
+        let derived = locations
+            .iter()
+            .find(|p| p.name == recovery.linecode)
+            .unwrap();
+        assert_eq!(derived.point, point.point);
+        assert_eq!(derived.kind, point.kind);
+        assert_eq!(derived.target, point.target);
+    }
+    assert_eq!(
+        reduction
+            .report()
+            .actions
+            .iter()
+            .filter(|a| a.action == "copied_linecode_location")
+            .count(),
+        2
+    );
+    reduction.network().validate_component_locations().unwrap();
+    let stored = serde_json::to_value(reduction.network()).unwrap();
+    let restored: MulticonductorNetwork = serde_json::from_value(stored.clone()).unwrap();
+    assert_eq!(serde_json::to_value(restored).unwrap(), stored);
+    assert_eq!(network.component_locations(), &[point]);
+}
+
+fn component_location(
+    target: powerio_dist::DistLocationTarget,
+    name: &str,
+    latitude: f64,
+) -> powerio_dist::DistComponentLocation {
+    let mut location = powerio_dist::DistComponentLocation::new(
+        target,
+        name,
+        powerio_dist::DistGeographicPoint::new(Some(latitude), None),
+    );
+    location.kind = Some(powerio_dist::DistCoordsKind::Source);
+    location
+}
+
+#[test]
+fn neutral_only_component_points_remain_in_the_reduction_audit() {
+    use powerio_dist::{DistLocationTarget as Target, DistShunt, DistSwitch};
+    let mut network = basic_network(true);
+    network.switches_mut().push(DistSwitch::new(
+        "bond./N",
+        "source",
+        "load",
+        vec!["4".into()],
+        vec!["4".into()],
+        false,
+    ));
+    network.shunts_mut().push(DistShunt::new(
+        "ground./N",
+        "load",
+        vec!["4".into()],
+        vec![vec![1.0]],
+        vec![vec![0.0]],
+    ));
+    let bare = neutral_kron_reduce(&network, &NeutralKronOptions::default()).unwrap();
+    for (target, name, latitude) in [
+        (Target::Switch, "bond./N", 10.0),
+        (Target::Shunt, "ground./N", 20.0),
+        (Target::Bus, "load", 0.0),
+        (Target::LineCode, "four-wire", 30.0),
+    ] {
+        network
+            .component_locations_mut()
+            .push(component_location(target, name, latitude));
+    }
+    let original = serde_json::to_value(&network).unwrap();
+    let reduction = neutral_kron_reduce(&network, &NeutralKronOptions::default()).unwrap();
+    assert_eq!(
+        reduction.network().component_locations(),
+        &network.component_locations()[2..]
+    );
+    for (index, action) in [
+        (0, "removed_neutral_only_switch"),
+        (1, "removed_neutral_only_shunt"),
+    ] {
+        let action = reduction
+            .report()
+            .actions
+            .iter()
+            .find(|a| a.action == action)
+            .unwrap();
+        assert_eq!(
+            action.details["source_location"],
+            serde_json::to_value(&network.component_locations()[index]).unwrap()
+        );
+    }
+    let stored = serde_json::to_value(reduction.network()).unwrap();
+    let restored: MulticonductorNetwork = serde_json::from_value(stored.clone()).unwrap();
+    assert_eq!(serde_json::to_value(restored).unwrap(), stored);
+    assert_eq!(serde_json::to_value(&network).unwrap(), original);
+    let mut reduced = reduction.network().clone();
+    let mut bare = bare.network().clone();
+    reduced.component_locations_mut().clear();
+    reduced.extras_mut().clear();
+    bare.extras_mut().clear();
+    assert_eq!(
+        serde_json::to_value(reduced).unwrap(),
+        serde_json::to_value(bare).unwrap()
+    );
+}
+
+#[test]
+fn invalid_points_are_rejected_before_the_no_neutral_fast_path() {
+    let mut network = MulticonductorNetwork::new();
+    network
+        .buses_mut()
+        .push(DistBus::new("bus", vec!["1".into()]));
+    network.component_locations_mut().push(component_location(
+        powerio_dist::DistLocationTarget::Bus,
+        "bus",
+        91.0,
+    ));
+    let error = neutral_kron_reduce(&network, &NeutralKronOptions::default()).unwrap_err();
+    assert!(error.to_string().contains("invalid latitude"));
 }
 
 #[test]
