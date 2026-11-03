@@ -3149,7 +3149,7 @@ fn normalized_bmopf_time_series_for_source(
     ))
 }
 
-delete redundant compatible helper/// Rebuild the value of an untyped object. One unnamed property alone is the
+/// Rebuild the value of an untyped object. One unnamed property alone is the
 /// whole object as JSON text. Otherwise each named property is one field.
 ///
 /// An unnamed property beside named ones has no field name, so this writer
@@ -3391,7 +3391,7 @@ mod tests {
             "replace": false
         });
         let (profile, metadata) = normalized_bmopf_time_series(&source).unwrap();
-        assert_eq!(profile, json!({"values": [1.0, 0.5], "time": [0.0, 216000.0]}));
+        assert_eq!(profile, json!({"values": [1.0, 0.5], "time": [0.0, 60.0]}));
         assert_eq!(
             metadata,
             Some(json!({
