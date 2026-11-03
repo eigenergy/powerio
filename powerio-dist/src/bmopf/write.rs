@@ -3456,35 +3456,9 @@ mod tests {
             .is_none(),
             "PMD replace=true cannot be represented by BMOPF multiplicative profiles"
         );
-        assert_eq!(
-            normalized_bmopf_time_series_for_source(
-                &json!({"values": [0.5, 1.0], "time": [0.0, 1.0], "replace": false}),
-                true,
-            )
-            .unwrap()
-            .0["time"],
-            json!([0.0, 3600.0]),
-            "PMD hours must be converted to BMOPF seconds"
-        );
-        assert!(
-            normalized_bmopf_time_series_for_source(
-                &json!({"values": [0.5, 1.0], "time": ["2026-01-01T00:00:00Z"], "replace": false}),
-                true,
-            )
-            .is_none(),
-            "string PMD axes must remain source-only"
-        );
         assert!(
             normalized_bmopf_time_series(&json!({"time": [0.0, 1.0]})).is_none(),
             "BMOPF requires the schema-mandated values property"
-        );
-        assert!(
-            normalized_bmopf_time_series(&json!({
-                "values": [1.0],
-                "time": ["2026-01-01T00:00:00Z"]
-            }))
-            .is_none(),
-            "BMOPF time axes must be numeric even for non-PMD sources"
         );
         assert!(
             normalized_bmopf_time_series(&json!({
@@ -3493,6 +3467,31 @@ mod tests {
             }))
             .is_none(),
             "unknown profile properties must not leak into strict BMOPF JSON"
+        );
+    }
+
+    #[test]
+    fn pmd_time_axes_are_normalized_to_bmopf_numeric_seconds() {
+        let numeric = json!({
+            "values": [0.5, 1.0],
+            "time": [0.0, 1.0],
+            "replace": false
+        });
+        let normalized = normalized_bmopf_time_series_for_source(&numeric, true).unwrap();
+        assert_eq!(normalized.0["time"], json!([0.0, 3600.0]));
+
+        let timestamps = json!({
+            "values": [0.5, 1.0],
+            "time": ["2026-01-01T00:00:00Z"],
+            "replace": false
+        });
+        assert!(
+            normalized_bmopf_time_series_for_source(&timestamps, true).is_none(),
+            "string PMD axes must remain source-only"
+        );
+        assert!(
+            normalized_bmopf_time_series(&timestamps).is_none(),
+            "BMOPF time axes must be numeric for non-PMD sources too"
         );
     }
 
