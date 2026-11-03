@@ -345,7 +345,7 @@ fn pmd_loadshape_maps_to_bmopf_profile() {
     );
     assert_eq!(
         doc["time_series"]["ls1"]["time"],
-        serde_json::json!([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0])
+        serde_json::json!([0.0, 3600.0, 7200.0, 10800.0, 14400.0, 18000.0, 21600.0, 25200.0, 28800.0, 32400.0])
     );
     assert_eq!(
         doc["load"]["l1"]["time_series"],
@@ -363,6 +363,36 @@ fn pmd_loadshape_maps_to_bmopf_profile() {
         doc["extras"]["pmd_time_series_metadata"]["ls1"]["replace"],
         false
     );
+}
+
+#[test]
+fn pmd_string_time_axis_is_retained_without_active_bmopf_reference() {
+    let mut source: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap())
+            .unwrap();
+    let profile = source["time_series"]["ls1"].as_object_mut().unwrap();
+    profile.insert(
+        "time".into(),
+        serde_json::json!(["2026-01-01T00:00:00Z", "2026-01-01T01:00:00Z"]),
+    );
+    profile.insert("replace".into(), serde_json::json!(false));
+    let expected = source["time_series"]["ls1"].clone();
+
+    let net = parse_pmd_str(&source.to_string()).unwrap();
+    let output = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+
+    assert!(doc.get("time_series").is_none(), "{doc}");
+    assert!(doc["load"]["l1"].get("time_series").is_none(), "{doc}");
+    assert_eq!(doc["extras"]["time_series"]["ls1"], expected);
+    assert!(
+        schema_validator().is_valid(&doc),
+        "{:?}",
+        errors(&schema_validator(), &output.text)
+    );
+    assert!(output.warnings.iter().any(|warning| {
+        warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("ls1")
+    }));
 }
 
 /// A reference to a bus that does not exist warns instead of parsing
