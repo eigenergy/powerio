@@ -3518,6 +3518,7 @@ mod tests {
             &std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap(),
         )
         .unwrap();
+        source["time_series"]["ls1"]["values"] = json!([0.5, 1.0, 0.75]);
         source["time_series"]["ls1"]["time"] = json!([0, 1, 2]);
         let net = parse_pmd_str(&source.to_string()).unwrap();
         let output = emit_bmopf_json(&net);
