@@ -177,7 +177,7 @@ DOCS_WORKFLOW = (ROOT / ".github/workflows/docs.yml").read_text()
 
 def docs_job(name: str) -> str:
     match = re.search(
-        rf"^  {re.escape(name)}:\\n(.*?)(?=^  [A-Za-z0-9_-]+:\\n|\\Z)",
+        rf"^  {re.escape(name)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
         DOCS_WORKFLOW,
         re.M | re.S,
     )
@@ -198,8 +198,9 @@ assert "paired_release.py" not in WORKFLOW
 assert "scripts/paired_release.py" not in RELEASE_WORKFLOW
 
 # No placeholder publish/upload jobs may report a green PR check by echoing.
-assert re.search(r"^  (upload|publish-[\\w-]+):", WORKFLOW, re.M) is None
+assert re.search(r"^  (upload|publish-[\w-]+):", WORKFLOW, re.M) is None
 assert "echo success" not in WORKFLOW.lower()
-assert "echo \\"success\\"" not in WORKFLOW.lower()
+assert 'echo "success"' not in WORKFLOW.lower()
+assert "echo 'success'" not in WORKFLOW.lower()
 
 print("Python and release workflow checks passed")
