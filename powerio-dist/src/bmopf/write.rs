@@ -3098,28 +3098,13 @@ fn normalized_bmopf_time_series_for_source(
             None => source_id.is_none() && offset.is_none(),
         }
     };
-    // PMD time axes are expressed in hours, while BMOPF 0.2.0
-    // numeric offsets are seconds. Convert only a fully numeric PMD axis;
-    // timestamp/string axes have no equivalent in this BMOPF representation.
-    // Native BMOPF axes are already seconds and must remain unchanged.
-    if let Some(time) = profile.get("time") {
-        let values = time.as_array()?;
-        // BMOPF only accepts numeric offsets. Validate the native axis too,
-        // but leave its seconds and original JSON representation unchanged.
-        for value in values {
-            let offset = value.as_f64()?;
-            if !offset.is_finite() || (is_pmd && !(offset * 3600.0).is_finite()) {
-                return None;
-            }
-        }
-    }
-    if let (true, Some(time)) = (is_pmd, profile.get_mut("time")) {
-        let values = time.as_array()?;
-        let seconds = values
-            .iter()
-            .map(|value| json!(value.as_f64().expect("validated numeric PMD time") * 3600.0))
-            .collect();
-        *time = Value::Array(seconds);
+    // BMOPF accepts numeric offsets in seconds. PMD numeric axes are
+    // expressed in hours; timestamp/string axes cannot be represented and
+    // therefore make the complete profile source-only. Keep integer axes
+    // exact where possible instead of routing them through f64.
+    if let Some(time) = profile.get("time").cloned() {
+        let normalized = normalize_bmopf_time_axis(&time, is_pmd)?;
+        profile.insert("time".into(), normalized);
     }
     let allowed = ["values", "time", "description"];
     if !offset_is_default
@@ -3143,6 +3128,39 @@ fn normalized_bmopf_time_series_for_source(
         Value::Object(profile),
         (!metadata.is_empty()).then_some(Value::Object(metadata)),
     ))
+}
+
+/// Convert a profile time axis to the numeric-seconds representation used
+/// by BMOPF. The time axis is optional; when present it must be a numeric array.
+/// PMD axes are in hours, while native BMOPF axes are already in seconds.
+fn normalize_bmopf_time_axis(time: &Value, from_pmd: bool) -> Option<Value> {
+    let values = time.as_array()?;
+    let mut normalized = Vec::with_capacity(values.len());
+    for value in values {
+        let number = value.as_number()?;
+        let seconds = if from_pmd {
+            if let Some(hours) = number.as_i64() {
+                serde_json::Number::from(hours.checked_mul(3_600)?)
+            } else if let Some(hours) = number.as_u64() {
+                serde_json::Number::from(hours.checked_mul(3_600)?)
+            } else {
+                let seconds = number.as_f64()? * 3_600.0;
+                serde_json::Number::from_f64(seconds)?
+            }
+        } else {
+            // Validate native BMOPF seconds without changing their JSON
+            // representation or introducing a floating-point round trip.
+            if !number.as_f64()?.is_finite() {
+                return None;
+            }
+            number.clone()
+        };
+        if !seconds.as_f64()?.is_finite() {
+            return None;
+        }
+        normalized.push(Value::Number(seconds));
+    }
+    Some(Value::Array(normalized))
 }
 
 /// Rebuild the value of an untyped object. One unnamed property alone is the
@@ -3468,6 +3486,56 @@ mod tests {
             .is_none(),
             "unknown profile properties must not leak into strict BMOPF JSON"
         );
+    }
+
+    #[test]
+    fn pmd_time_axis_normalization_is_exact_and_rejects_overflow() {
+        assert_eq!(
+            normalize_bmopf_time_axis(&json!([0, 1, 24]), true),
+            Some(json!([0, 3600, 86400]))
+        );
+        assert_eq!(
+            normalize_bmopf_time_axis(&json!([0.5, 1.25]), true),
+            Some(json!([1800.0, 4500.0]))
+        );
+        assert_eq!(
+            normalize_bmopf_time_axis(&json!([0, 3600]), false),
+            Some(json!([0, 3600]))
+        );
+        assert!(
+            normalize_bmopf_time_axis(&json!([u64::MAX]), true).is_none(),
+            "overflowing hour-to-second conversion must remain source-only"
+        );
+        assert!(
+            normalize_bmopf_time_axis(&json!(["2026-01-01T00:00:00Z"]), true).is_none(),
+            "timestamp axes have no numeric BMOPF representation"
+        );
+    }
+
+    #[test]
+    fn pmd_time_axis_conversion_and_source_only_fallback_use_writer_path() {
+        let mut source: Value = serde_json::from_str(
+            &std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap(),
+        )
+        .unwrap();
+        source["time_series"]["ls1"]["time"] = json!([0, 1, 2]);
+        let net = parse_pmd_str(&source.to_string()).unwrap();
+        let output = emit_bmopf_json(&net);
+        let doc: Value = serde_json::from_str(&output.text).unwrap();
+        assert_eq!(doc["time_series"]["ls1"]["time"], json!([0, 3600, 7200]));
+        assert_eq!(doc["load"]["l1"]["time_series"]["p_nom"], "ls1");
+
+        source["time_series"]["ls1"]["time"] =
+            json!(["2026-01-01T00:00:00Z", "2026-01-01T01:00:00Z"]);
+        let net = parse_pmd_str(&source.to_string()).unwrap();
+        let output = emit_bmopf_json(&net);
+        let doc: Value = serde_json::from_str(&output.text).unwrap();
+        assert!(doc.get("time_series").is_none(), "{doc}");
+        assert!(doc["load"]["l1"].get("time_series").is_none(), "{doc}");
+        assert_eq!(doc["extras"]["time_series"]["ls1"], source["time_series"]["ls1"]);
+        assert!(output.warnings.iter().any(|warning| {
+            warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("ls1")
+        }));
     }
 
     #[test]
