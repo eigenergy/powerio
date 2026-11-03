@@ -3527,6 +3527,7 @@ mod tests {
         assert_eq!(doc["load"]["l1"]["time_series"]["p_nom"], "ls1");
         assert!(schema_validator().is_valid(&doc), "{doc}");
 
+        source["time_series"]["ls1"]["values"] = json!([0.5, 1.0]);
         source["time_series"]["ls1"]["time"] =
             json!(["2026-01-01T00:00:00Z", "2026-01-01T01:00:00Z"]);
         let net = parse_pmd_str(&source.to_string()).unwrap();
