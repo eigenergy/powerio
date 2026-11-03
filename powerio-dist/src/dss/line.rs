@@ -127,7 +127,7 @@ fn replay(
                     charge(budget, code.n * code.n * 3)?;
                     entry.insert(code);
                 }
-                state.fetch_code(&codes[&point]);
+                state.fetch_code(point, &codes[&point]);
             } else {
                 state.apply(&props[property], raw)?;
             }
