@@ -4042,6 +4042,39 @@ fn convert_transformer_impedance(
     }
 }
 
+/// CZ 2 and 3 state impedance on the winding's nominal voltage base. The
+/// preceding conversion changes MVA base only; refer voltage to winding 1's
+/// bus base before moving winding 2's ratio into the branch impedance.
+fn two_winding_impedance_voltage_scale(
+    nominal_kv: f64,
+    bus_kv: f64,
+    cz: i64,
+    sbase: f64,
+    label: &str,
+    warnings: &mut Diagnostics,
+) -> f64 {
+    if !matches!(cz, 2 | 3) || !sbase.is_finite() || sbase <= 0.0 {
+        return 1.0;
+    }
+    // NOMV1 = 0 explicitly means the bus voltage base, including under CW 1.
+    if nominal_kv == 0.0 {
+        return 1.0;
+    }
+    if nominal_kv.is_finite() && nominal_kv > 0.0 && bus_kv.is_finite() && bus_kv > 0.0 {
+        let scale = (nominal_kv / bus_kv).powi(2);
+        if scale.is_finite() && scale > 0.0 {
+            return scale;
+        }
+    }
+    warnings.push(
+        &codes::READ_PSSE_VALUE_SUBSTITUTED,
+        format!(
+            "PSS/E transformer {label}: invalid nominal/bus voltage bases {nominal_kv}/{bus_kv}; omitted impedance voltage-base conversion"
+        ),
+    );
+    1.0
+}
+
 /// The factor that carries a two winding transformer's magnetizing admittance
 /// between PSS/E and the neutral branch.
 ///
@@ -5805,9 +5838,18 @@ fn read_transformer(
         warnings,
     );
     let (tap, ratio2) = two_winding_tap(l1, l3, l4, from, to, cw, bus_base_kv, warnings)?;
+    let impedance_scale = two_winding_impedance_voltage_scale(
+        num_at(l3, 1, 0.0)?,
+        bus_base_kv.get(&from).copied().unwrap_or(0.0),
+        cz,
+        sbase,
+        &label,
+        warnings,
+    ) * ratio2
+        * ratio2;
     // The impedance sits between the two winding ratios; the branch states it
     // behind its one tap, on the winding 2 side of that ratio.
-    let (r, x) = (r * ratio2 * ratio2, x * ratio2 * ratio2);
+    let (r, x) = (r * impedance_scale, x * impedance_scale);
     let modern = raw_rev >= 34;
     let (mut control, control_node) = read_transformer_control(
         l3,
