@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Activate PMD load-shape profiles in BMOPF 0.2.0 only when their semantics
+  are representable: convert numeric time axes from hours to seconds, preserve
+  unsupported timestamp axes and options verbatim under extras, and reuse a
+  per-emission compatibility index. Keep schema 0.1.0 references inactive
+  (#771).
+
 - Fix the nominal-to-bus voltage-base conversion for PSS/E CZ=2/3 two-winding
   transformer impedances, including RAWX (#772).
 
