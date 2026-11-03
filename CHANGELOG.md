@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fix the nominal-to-bus voltage-base conversion for PSS/E CZ=2/3 two-winding
+  transformer impedances, including RAWX (#772).
+
 ## 0.11.8
 
 **OpenDSS, PMD, and BMOPF output**
