@@ -210,8 +210,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - python: "3.9"
-            os: ubuntu-24.04
+          - python: "3.11"
+            os: ubuntu-latest
           - python: "3.12"
             os: ubuntu-latest
     steps:
@@ -231,9 +231,8 @@ jobs:
         run: sed -i 's/features = \["extension-module", "gridfm"\]/features = ["extension-module"]/' pyproject.toml
       # `pip install .[all,mcp]` builds the extension via the maturin backend and
       # pulls scipy/numpy/networkx and Polars (matrix + graph tests) plus the MCP
-      # SDK. The `mcp` extra carries a `python_version >= '3.10'` marker, so it
-      # installs the SDK on 3.12 (test_mcp runs) and resolves to nothing on 3.9
-      # (test_mcp skips). Quote the extras so the shell doesn't glob `[all,mcp]`.
+      # SDK, so test_mcp runs on every leg. Quote the extras so the shell
+      # doesn't glob `[all,mcp]`.
       - name: Install powerio + test deps
         run: pip install '.[all,mcp]' pytest
       - name: Check installed schema archive
@@ -451,7 +450,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.x"
-      # abi3-py39 → one wheel per platform covers Python 3.9+.
+      # abi3-py311 → one wheel per platform covers Python 3.11+.
       - name: Build powerio wheels
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -490,13 +489,24 @@ jobs:
         with:
           name: wheels-${{ matrix.platform.runner }}-${{ matrix.platform.target }}
           path: dist
+      - name: Install Rosetta
+        if: matrix.platform.runner == 'macos-15' && matrix.platform.target == 'x86_64'
+        run: /usr/sbin/softwareupdate --install-rosetta --agree-to-license
+      # The x86_64 leg takes an x64 interpreter that runs under Rosetta. The
+      # runner's /usr/bin/python3 is 3.9, below the wheel's cp311-abi3 floor.
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+          architecture: ${{ (matrix.platform.runner == 'macos-15' && matrix.platform.target == 'x86_64') && 'x64' || '' }}
       - name: Smoke the x86_64 wheel under Rosetta
         if: matrix.platform.runner == 'macos-15' && matrix.platform.target == 'x86_64'
         run: |
-          arch -x86_64 /usr/bin/python3 -m venv smoke-venv
+          arch -x86_64 python -m venv smoke-venv
+          machine="$(arch -x86_64 smoke-venv/bin/python -c 'import platform; print(platform.machine())')"
+          if [ "$machine" != x86_64 ]; then
+            echo "the smoke interpreter is $machine, not x86_64" >&2
+            exit 1
+          fi
           arch -x86_64 smoke-venv/bin/python -m pip install --quiet "$(ls dist/*.whl)[all]"
           arch -x86_64 smoke-venv/bin/python scripts/wheel-smoke.py
       - name: Smoke the wheel natively

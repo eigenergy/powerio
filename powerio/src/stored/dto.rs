@@ -1710,9 +1710,9 @@ fn validate_records<'a, V: Serialize>(
     };
     let value_data = stored_value.as_ref();
 
-    // Borrow source identifiers from the already-owned descriptors. Cloning
-    // every identifier here is needlessly expensive for large provenance
-    // inventories and does not improve lookup or duplicate detection.
+    // Borrow source identifiers from the owned descriptors instead of cloning
+    // every key into the lookup map. This keeps validation allocation-light for
+    // large provenance inventories without changing duplicate or span checks.
     let mut sources: HashMap<&str, u64> = HashMap::with_capacity(module_sources.len());
     for source in module_sources {
         nonempty("source id", &source.id.0)?;
