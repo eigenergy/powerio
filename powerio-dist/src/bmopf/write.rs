@@ -3113,15 +3113,13 @@ fn normalized_bmopf_time_series_for_source(
             }
         }
     }
-    if is_pmd {
-        if let Some(time) = profile.get_mut("time") {
-            let values = time.as_array()?;
-            let seconds = values
-                .iter()
-                .map(|value| json!(value.as_f64().expect("validated numeric PMD time") * 3600.0))
-                .collect();
-            *time = Value::Array(seconds);
-        }
+    if let (true, Some(time)) = (is_pmd, profile.get_mut("time")) {
+        let values = time.as_array()?;
+        let seconds = values
+            .iter()
+            .map(|value| json!(value.as_f64().expect("validated numeric PMD time") * 3600.0))
+            .collect();
+        *time = Value::Array(seconds);
     }
     let allowed = ["values", "time", "description"];
     if !offset_is_default
