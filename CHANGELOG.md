@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Preserve cached OpenDSS line impedances after base-frequency or earth
+  resistivity edits instead of replacing them with shared LineCode values.
+
 - OpenDSS lines that keep an assigned LineCode unchanged share one per meter
   linecode named after it instead of one copy per line, so the BMOPF JSON of a
   50,353 line city model falls from 171 MB to 73 MB.

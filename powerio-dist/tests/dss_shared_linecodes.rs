@@ -214,3 +214,65 @@ Edit Line.target like=a
         target.x_series
     );
 }
+
+const SOLVED_AT_ANOTHER_BASE_FREQUENCY: &str = "New Circuit.c
+New LineCode.ca nphases=1 rmatrix=[1] xmatrix=[2] cmatrix=[0] units=m basefreq=60 rg=0 xg=0
+New Line.a bus1=sourcebus.1 bus2=a.1 linecode=ca length=1 units=m
+New Line.target bus1=sourcebus.1 bus2=t.1 linecode=ca basefreq=40 length=1 units=m
+Solve
+";
+
+#[test]
+fn restoring_base_frequency_keeps_the_cached_primitive() {
+    let net = parse_dss_str(&format!(
+        "{SOLVED_AT_ANOTHER_BASE_FREQUENCY}Edit Line.target basefreq=60\n"
+    ));
+    // At circuit frequency 60 Hz, target solved with 1+j(2*60/40) ohm.
+    // Restoring basefreq changes the fields but does not invalidate YPrim.
+    let target = code(&net, "target");
+    assert_eq!(target.r_series[0][0].to_bits(), 1.0_f64.to_bits());
+    assert_eq!(target.x_series[0][0].to_bits(), 3.0_f64.to_bits());
+    assert!(target.name.starts_with("_pio_line_"), "{}", target.name);
+    assert_eq!(code(&net, "a").name, "ca");
+}
+
+#[test]
+fn fetching_after_base_frequency_edits_restores_sharing() {
+    let net = parse_dss_str(&format!(
+        "{SOLVED_AT_ANOTHER_BASE_FREQUENCY}Edit Line.target basefreq=60 linecode=ca\n"
+    ));
+    // Unlike basefreq, an explicit LineCode fetch invalidates the primitive.
+    let target = code(&net, "target");
+    assert_eq!(target.name, "ca");
+    assert_eq!(target.r_series[0][0].to_bits(), 1.0_f64.to_bits());
+    assert_eq!(target.x_series[0][0].to_bits(), 2.0_f64.to_bits());
+    assert_eq!(code(&net, "a").name, "ca");
+}
+
+#[test]
+fn restoring_earth_resistivity_keeps_the_cached_primitive() {
+    let net = parse_dss_str(
+        "New Circuit.c basefreq=60
+New LineCode.ca nphases=1 rmatrix=[1] xmatrix=[2] cmatrix=[0] units=m basefreq=50 rg=0 xg=0.155 rho=100
+New Line.a bus1=sourcebus.1 bus2=a.1 linecode=ca length=1 units=m
+New Line.control bus1=sourcebus.1 bus2=c.1 linecode=ca rho=200 length=1 units=m
+New Line.target bus1=sourcebus.1 bus2=t.1 linecode=ca rho=200 length=1 units=m
+Solve
+Edit Line.target rho=100
+",
+    );
+    // Both edited lines solved with rho=200. Restoring rho changes Kxg but
+    // leaves that primitive cached, just like restoring the base frequency.
+    let reference = code(&net, "a");
+    let control = code(&net, "control");
+    let target = code(&net, "target");
+    assert_ne!(
+        reference.x_series[0][0].to_bits(),
+        control.x_series[0][0].to_bits()
+    );
+    assert_eq!(
+        target.x_series[0][0].to_bits(),
+        control.x_series[0][0].to_bits()
+    );
+    assert!(target.name.starts_with("_pio_line_"), "{}", target.name);
+}
