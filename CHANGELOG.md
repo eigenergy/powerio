@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Keep non-Kron PMD MATHEMATICAL transformer loss branches on the internal
+  phase terminals, including external phase-B and phase-C windings.
+- Convert MG-RAVENS line-to-line voltage limits to phase-to-ground bounds
+  and back, and keep balanced bus voltage anchors ahead of line base-voltage
+  hints. Preserve coupled Thevenin impedance when splitting an unbalanced
+  source by emitting one shared impedance branch.
+- Compare physical circuits and source constraints for every distribution
+  RAVENS corpus conversion, with explicit diagnostics for supported projections.
+
 - PMD MATHEMATICAL emission retains purely resistive or reactive source
   impedance. MG-RAVENS emission respects line ampacity overrides, including
   distinct limits on segments sharing a linecode.

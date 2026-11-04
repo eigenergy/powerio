@@ -42,12 +42,19 @@ const TYPE_I_EMERG: &str = "absoluteValueType_86400.0s";
 /// field the schema (as exercised by the upstream converters' conventions)
 /// cannot carry.
 ///
+/// # Errors
+/// A split source has malformed or asymmetric impedance that the symmetric
+/// RAVENS line matrix cannot preserve.
+///
 /// # Panics
 ///
 /// Never in practice: the document is maps, strings, and finite numbers (the
 /// non-finite guard in `Writer::num` substitutes 0), which always serialize.
-#[must_use]
-pub(crate) fn emit_ravens_json_text(net: &MulticonductorNetwork) -> TextEmission {
+pub(crate) fn emit_ravens_json_text(
+    net: &MulticonductorNetwork,
+) -> Result<TextEmission, powerio_core::Error> {
+    let prepared = super::source::prepare(net)?;
+    let net = prepared.as_ref();
     let mut w = Writer {
         warnings: crate::diagnostics::Diagnostics::new(),
         limit_sets: BTreeMap::new(),
@@ -58,11 +65,11 @@ pub(crate) fn emit_ravens_json_text(net: &MulticonductorNetwork) -> TextEmission
         equipment_bases: BTreeMap::new(),
     };
     let doc = w.document(net);
-    TextEmission::new(
+    Ok(TextEmission::new(
         serde_json::to_string_pretty(&doc).expect("maps and finite numbers") + "\n",
         Vec::new(),
         w.warnings,
-    )
+    ))
 }
 
 /// Iterate the read→write cycle to its fixed point so a reparse reproduces
@@ -1757,29 +1764,22 @@ impl Writer {
             // One magnitude and angle represent the source; warn when the
             // per-terminal values do not follow the positive-sequence n-gon
             // the reader will regenerate.
-            let uneven = hot.windows(2).any(|pair| {
-                terminal_phase(&source.terminal_map[pair[0]])
-                    >= terminal_phase(&source.terminal_map[pair[1]])
-            }) || hot.iter().enumerate().any(|(i, &k)| {
-                let mag_dev = source.v_magnitude.get(k).map_or(0.0, |m| (m - v_ln).abs());
-                let expected = wrap_angle(angle - std::f64::consts::TAU / n * i as f64);
-                let ang_dev = source.v_angle.get(k).map_or(0.0, |a| (a - expected).abs());
-                mag_dev > 1e-9 * v_ln.abs().max(1.0) || ang_dev > 1e-9
-            });
+            let uneven = super::source::is_unbalanced(source);
             if uneven && hot.len() > 1 {
                 // One magnitude and one angle is all an `EnergySource`
                 // states. The per terminal phasors keep their values as one
                 // single phase EnergySource per phase conductor at the same
                 // node, the way the dss writer states an unbalanced source
-                // as one ideal source per conductor; the neutral, the
-                // Thevenin impedance, and the other extras ride on the first.
+                // as one ideal source per conductor. Preparation has already
+                // moved any coupled Thevenin impedance into one shared line.
                 self.warn(
                     &C::EMIT_RAVENS_DIST_SOURCE_SPLIT,
                     format!(
                         "{what}: the per terminal magnitudes or angles are not one balanced \
                          positive sequence set, and an MG-RAVENS EnergySource states one \
                          magnitude and one angle; written as {} single phase EnergySources \
-                         `{}_<phase>` with the same terminal phasors",
+                         `{}_<phase>` with the same terminal phasors; any Thevenin impedance \
+                         is carried by one shared explicit branch",
                         hot.len(),
                         source.name
                     ),
@@ -2158,7 +2158,10 @@ impl Writer {
             return None;
         }
         let normal = self.base_of(bus);
-        Some(self.voltage_limit_set(b.v_min, b.v_max, normal))
+        // The upstream converter uses line-to-line voltage limits even on
+        // a single-phase bus. Keep canonical multiply/divide cycles stable.
+        let scale = |v: f64| stable_fixed(v * 3f64.sqrt(), |x| x / 3f64.sqrt() * 3f64.sqrt());
+        Some(self.voltage_limit_set(b.v_min.map(scale), b.v_max.map(scale), normal))
     }
 
     #[allow(clippy::too_many_lines)] // one node writes in one pass: limits, ground, location
@@ -2171,9 +2174,7 @@ impl Writer {
         let mut grounds = Map::new();
         for bus in net.buses() {
             let mut obj = identified("ConnectivityNode", &bus.id, imported_mrid(&bus.extras));
-            if bus.v_min.is_some() || bus.v_max.is_some() {
-                let normal = self.base_of(&bus.id);
-                let set = self.voltage_limit_set(bus.v_min, bus.v_max, normal);
+            if let Some(set) = self.bus_voltage_limit(net, &bus.id) {
                 obj.insert(
                     "ConnectivityNode.OperationalLimitSet".into(),
                     pointer("OperationalLimitSet", &set),

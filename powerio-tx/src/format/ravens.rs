@@ -1783,35 +1783,42 @@ fn read_buses(
             .collect()
     };
 
-    // Base kV votes: every piece of equipment that carries both a BaseVoltage
-    // pointer and a terminal ties its nominal voltage to that node. Loads,
-    // machines, shunts, and lines carry `ConductingEquipment.BaseVoltage`;
-    // transformer ends carry `TransformerEnd.BaseVoltage` (an end changes
-    // base, so only its own terminal is tied).
+    // Equipment and transformer ends anchor a bus's base independently of
+    // a line's other endpoint. A line states only one BaseVoltage, so use
+    // its vote solely for buses that have no other anchor.
     let mut kv_votes: BTreeMap<BusId, f64> = BTreeMap::new();
-    for obj in &doc.objects {
-        let Some(bv) = obj
-            .props
-            .get("ConductingEquipment.BaseVoltage")
-            .or_else(|| obj.props.get("TransformerEnd.BaseVoltage"))
-            .and_then(|p| doc.resolve(p))
-        else {
-            continue;
-        };
-        let Some(kv) = fprop(bv, "BaseVoltage.nominalVoltage").map(|v| v / VOLT) else {
-            continue;
-        };
-        for cn in terminals(obj) {
-            if let Some(&id) = ids.get(&cn) {
-                let vote = kv_votes.entry(id).or_insert(kv);
-                if (*vote - kv).abs() > 1e-9 {
-                    warnings.push(
-                        &codes::READ_RAVENS_VALUE_SUBSTITUTED,
-                        format!(
-                            "bus {id}: conflicting BaseVoltage values ({vote} kV vs \
-                         {kv} kV); keeping the first"
-                        ),
-                    );
+    for lines in [false, true] {
+        let anchored: BTreeSet<_> = kv_votes.keys().copied().collect();
+        for obj in &doc.objects {
+            if (obj.kind == "ACLineSegment") != lines {
+                continue;
+            }
+            let Some(bv) = obj
+                .props
+                .get("ConductingEquipment.BaseVoltage")
+                .or_else(|| obj.props.get("TransformerEnd.BaseVoltage"))
+                .and_then(|p| doc.resolve(p))
+            else {
+                continue;
+            };
+            let Some(kv) = fprop(bv, "BaseVoltage.nominalVoltage").map(|v| v / VOLT) else {
+                continue;
+            };
+            for cn in terminals(obj) {
+                if let Some(&id) = ids.get(&cn) {
+                    if lines && anchored.contains(&id) {
+                        continue;
+                    }
+                    let vote = kv_votes.entry(id).or_insert(kv);
+                    if (*vote - kv).abs() > 1e-9 {
+                        warnings.push(
+                            &codes::READ_RAVENS_VALUE_SUBSTITUTED,
+                            format!(
+                                "bus {id}: conflicting BaseVoltage values ({vote} kV vs \
+                                 {kv} kV); keeping the first"
+                            ),
+                        );
+                    }
                 }
             }
         }

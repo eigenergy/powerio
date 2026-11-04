@@ -39,6 +39,7 @@
 //! `s1`/`s2`→`1`/`2`.
 
 pub(crate) mod read;
+mod source;
 mod write;
 
 pub(crate) use write::emit_ravens_json_text;

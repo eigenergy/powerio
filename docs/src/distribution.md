@@ -183,6 +183,19 @@ is refused.
 | `EnergySource` | voltage sources; a source whose phasors are not one balanced set is written as one single phase `EnergySource` per conductor with the same phasors |
 | `RotatingMachine`, `PowerElectronicsConnection` | generators and inverter based resources |
 
+Line import currently supports impedance stated through
+`PerLengthPhaseImpedance`. Segments whose impedance comes only from wire or
+cable assets (`WireSpacingInfo`, `OverheadWireInfo`,
+`ConcentricNeutralCableInfo`, or `TapeShieldCableInfo`) have no typed line
+projection yet; their source records are retained and the omission is diagnosed.
+
+Voltage limits follow the upstream converter's line-to-line base, including
+single-phase equipment. PowerIO converts them to phase-to-ground bounds in the
+typed network. When an unbalanced source has a coupled Thevenin impedance,
+emission writes one shared impedance branch ahead of the per-phase ideal
+sources. Malformed or asymmetric source matrices are refused rather than
+projected onto a different circuit.
+
 Everything the schema cannot name is reported: a conductor outside the four
 CIM phase identities (the fifth wire of a five wire code) has no
 `ACLineSegmentPhase`, so such a segment is dropped with a finding, and a

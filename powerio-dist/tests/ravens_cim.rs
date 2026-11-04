@@ -29,38 +29,11 @@ fn has(out: &Conv, code: &str, prefix: &str) -> bool {
 /// pairs beyond the first of a three winding tank, and regulator taps.
 /// Each one must carry its own finding; nothing else is waived.
 fn ravens_expected(net: &MulticonductorNetwork, out: &Conv) -> MulticonductorNetwork {
-    let (mut expected, problems) = electrical_projection::ravens_projection(net, &out.diagnostics);
+    let (expected, problems) = electrical_projection::ravens_projection(net, &out.diagnostics);
     assert!(problems.is_empty(), "{}", problems.join("; "));
-    for transformer in expected.transformers_mut() {
-        if transformer.xsc_pct.len() > 1 && transformer.xsc_pct[1..].iter().any(|x| *x != 0.0) {
-            let prefix = format!(
-                "transformer {}: only the first winding pair's short-circuit reactance",
-                transformer.name
-            );
-            assert!(
-                has(out, "EMIT.RAVENS_DIST.VALUE_COLLAPSED", &prefix),
-                "{prefix}: no finding; {:?}",
-                out.warnings
-            );
-            transformer.xsc_pct[1..].fill(0.0);
-        }
-        let name = transformer.name.clone();
-        for (index, winding) in transformer.windings.iter_mut().enumerate() {
-            if winding.tap.total_cmp(&1.0).is_ne() {
-                let prefix = format!(
-                    "transformer {name}: winding {} tap {} is dropped",
-                    index + 1,
-                    winding.tap
-                );
-                assert!(
-                    has(out, "EMIT.RAVENS_DIST.FIELD_DROPPED", &prefix),
-                    "{prefix}: no finding; {:?}",
-                    out.warnings
-                );
-                winding.tap = 1.0;
-            }
-        }
-    }
+    let (expected, problems) =
+        electrical_projection::ravens_transformer_projection(&expected, &out.diagnostics);
+    assert!(problems.is_empty(), "{}", problems.join("; "));
     expected
 }
 

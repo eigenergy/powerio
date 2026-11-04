@@ -8,8 +8,9 @@ The format and fidelity chapters describe the supported behavior.
 
 MG-RAVENS can describe a balanced network or list individual phase and neutral
 conductors. PowerIO reads the data produced by the upstream MATPOWER converter
-into `BalancedNetwork`; it reads the data produced by the upstream OpenDSS
-converter into `MulticonductorNetwork`. Both use the format name
+into `BalancedNetwork`; it reads the upstream OpenDSS converter's linecode-based
+profile into `MulticonductorNetwork`. Wire/cable asset impedance remains
+unsupported and diagnosed. Both use the format name
 `ravens-json`. The code calls these choices `Profile::Balanced` and
 `Profile::Multiconductor`; callers do not choose a separate format or flag.
 
@@ -188,3 +189,35 @@ Keep the PR ready for review and request Fred's re-review if it is not already
 requested. Do not dismiss his review or merge/release without an explicit
 instruction. All necessary source, regression tests and handoff context are
 on GitHub; no files from the previous session are required.
+
+## Electrical follow-up, 2026-11-04
+
+The two boundary fixes and CIM interoperability fixes from `ba0bfca3` and
+`c331ddbc` are included. The refresh retains main's per-snapshot BMOPF
+validation, verbatim foreign-profile retention, and deletion of the obsolete
+Julia companion pin.
+
+The next electrical corrections cover non-Kron transformer loss-branch
+terminal identities, the line-to-line/phase voltage-limit conversion, balanced
+bus voltage anchors, and coupled Thevenin impedance on split sources. The new
+regressions in `review_electrical.rs` and `ravens_voltage_bases.rs` failed before
+the corrections. Split sources now use one shared explicit impedance branch;
+malformed/asymmetric matrices are refused, and generated identities avoid
+case-insensitive collisions with existing model records.
+
+The distribution corpus always checks the physical circuit and source
+constraints. Its expected transformer projections require each affected
+field's own diagnostic; the archived BMOPF IEEE13 `xfm2` exception remains
+limited to that ambiguous component. These checks do not waive other model
+differences or settle the remaining items in Mohamed Numair's review. In
+particular, wire/cable asset impedance is still outside the supported import
+profile. Consult CI on the exact pushed head before approving any merge.
+
+Local validation passed the full distribution suite, the balanced RAVENS
+regressions, all seven Clippy profiles, and the 14 conversion-report tests
+without a baseline change. Native PMD 0.16.0 lowered independent phase-B/C
+DSS cases to the same transformer loss-branch terminal maps and R/X/G/B
+matrices. The pinned upstream RAVENS schema gate checked 36 cases with no
+failures; additional fresh split-source output passed the unmodified schema
+after crossing PowerIO IR. Native comparisons and schema acceptance cover
+these cases, rather than asserting general solver equivalence.

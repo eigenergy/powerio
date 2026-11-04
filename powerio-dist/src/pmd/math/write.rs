@@ -985,7 +985,14 @@ impl Writer {
                 }
             }
         }
-        let hot: Vec<i64> = connections.iter().take(nphases).copied().collect();
+        // Non-Kron internal buses use their own 1..=nphases phase IDs,
+        // followed by a grounded return. External phase B/C IDs must not
+        // select that return (or a nonexistent terminal) in the loss model.
+        let hot: Vec<i64> = if self.kron_reduced {
+            connections.iter().take(nphases).copied().collect()
+        } else {
+            (1..=i64::try_from(nphases).unwrap_or(i64::MAX)).collect()
+        };
         let mut bus_ids: BTreeMap<usize, usize> = BTreeMap::new();
         for &bus in &buses {
             let index = self.buses.len() + 1;

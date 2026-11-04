@@ -905,12 +905,9 @@ fn canonical_writers_preserve_electrical_equivalents() {
     }
 }
 
-/// Every fixture converts to MG-RAVENS and the canonical write is byte
-/// idempotent (write, parse, write). RAVENS is not in the strict
-/// projection grid above: its transformer-tank and per-phase restatement
-/// makes the structural comparison a separate concern (see `tests/ravens.rs`
-/// for the projection round trips), but byte idempotence is the writer's
-/// core guarantee and holds across the whole corpus.
+/// Every fixture checks the surviving physical circuit and canonical stability.
+/// Named unsupported fields have explicit expected projections and diagnostics;
+/// an unrelated metadata warning never suppresses the electrical comparison.
 #[test]
 fn ravens_writer_idempotent_across_fixtures() {
     for case in CASES {
@@ -933,19 +930,39 @@ fn ravens_writer_idempotent_across_fixtures() {
         });
         // Unsupported-conductor cases still check the surviving circuit and
         // canonical stability; a diagnostic is not a reason to skip a case.
-        if expected.lines().len() != net.lines().len()
-            || expected.loads().len() != net.loads().len()
-        {
-            let before = source_equivalents::contract_source_pairs(&expected);
-            let after = source_equivalents::contract_source_pairs(&reparsed);
-            let differences = electrical_projection::differences(&before, &after);
-            assert!(
-                differences.is_empty(),
-                "{}: {}",
-                case.label,
-                differences.join("; ")
-            );
+        let (expected, projection_problems) =
+            electrical_projection::ravens_transformer_projection(&expected, &first.diagnostics);
+        assert!(
+            projection_problems.is_empty(),
+            "{}",
+            projection_problems.join("; ")
+        );
+        let mut before = source_equivalents::contract_source_pairs(&expected);
+        let mut after = source_equivalents::contract_source_pairs(&reparsed);
+        // The archived BMOPF IEEE13 xfm2 names three unidentified terminals
+        // for a one-phase winding. Its branch identity is unverified; the
+        // same named exception is documented by the CLI conversion report.
+        if case.rel == "bmopf/example_ieee13.json" {
+            let ambiguous = net
+                .transformers()
+                .iter()
+                .find(|t| t.name == "xfm2")
+                .unwrap();
+            assert_eq!(ambiguous.phases, 1);
+            assert!(ambiguous.windings.iter().all(|w| w.terminal_map.len() == 3));
+            before.transformers_mut().retain(|t| t.name != "xfm2");
+            after
+                .transformers_mut()
+                .retain(|t| !["xfm2", "xfm2_1", "xfm2_2", "xfm2_3"].contains(&t.name.as_str()));
         }
+        source_equivalents::assert_source_constraints(&before, &after, case.label);
+        let differences = electrical_projection::differences(&before, &after);
+        assert!(
+            differences.is_empty(),
+            "{}: {}",
+            case.label,
+            differences.join("; ")
+        );
         let second = helpers::emit_value(&reparsed, Fmt::Ravens.target());
         if first.text != second.text {
             let (a, b): (Vec<&str>, Vec<&str>) =

@@ -98,6 +98,53 @@ pub fn ravens_projection(
     (held, problems)
 }
 
+/// The two documented RAVENS transformer projections. A particular field
+/// changes in the expected circuit only when its own finding names it;
+/// all other winding ports, ratios, resistances and leakage values stay checked.
+#[allow(dead_code)] // Used by the distribution corpus and CIM interoperability suites.
+pub fn ravens_transformer_projection(
+    network: &MulticonductorNetwork,
+    diagnostics: &[powerio_core::Diagnostic],
+) -> (MulticonductorNetwork, Vec<String>) {
+    let mut expected = network.clone();
+    let mut problems = Vec::new();
+    let mut require = |code: &str, prefix: &str| {
+        if !diagnostics
+            .iter()
+            .any(|d| d.code() == code && d.message().starts_with(prefix))
+        {
+            problems.push(format!("{prefix}: missing {code} finding"));
+        }
+    };
+    for transformer in expected.transformers_mut() {
+        if transformer.xsc_pct.len() > 1 && transformer.xsc_pct[1..].iter().any(|x| *x != 0.0) {
+            require(
+                "EMIT.RAVENS_DIST.VALUE_COLLAPSED",
+                &format!(
+                    "transformer {}: only the first winding pair's short-circuit reactance",
+                    transformer.name
+                ),
+            );
+            transformer.xsc_pct[1..].fill(0.0);
+        }
+        for (index, winding) in transformer.windings.iter_mut().enumerate() {
+            if winding.tap.total_cmp(&1.0).is_ne() {
+                require(
+                    "EMIT.RAVENS_DIST.FIELD_DROPPED",
+                    &format!(
+                        "transformer {}: winding {} tap {} is dropped",
+                        transformer.name,
+                        index + 1,
+                        winding.tap
+                    ),
+                );
+                winding.tap = 1.0;
+            }
+        }
+    }
+    (expected, problems)
+}
+
 fn close(a: f64, b: f64) -> bool {
     a.is_finite() && b.is_finite() && (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1e-12)
 }

@@ -708,7 +708,12 @@ has no supported slot for is reported and dropped: passthrough extras,
 generation costs in the multiconductor profile, a
 segment with a conductor outside the CIM phase identities, and a bus whose
 grounded terminals have no phase letter. An unbalanced source becomes one
-single phase `EnergySource` per conductor, reported as `SOURCE_SPLIT`.
+single phase `EnergySource` per conductor, reported as `SOURCE_SPLIT`; one
+shared explicit branch preserves its coupled Thevenin impedance. A split
+source whose matrix is malformed or asymmetric is refused. Voltage limits
+are converted between the upstream line-to-line convention and the typed
+phase-to-ground bounds. Wire/cable asset impedance import remains unsupported
+and diagnosed; linecode-based segments have a typed projection.
 
 The external schema gate uses the pinned upstream schema unchanged for the
 distribution profile. The balanced converter profile adds strict definitions

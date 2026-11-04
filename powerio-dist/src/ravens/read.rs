@@ -2214,8 +2214,11 @@ impl Mapper<'_> {
                 .and_then(pointer_name)
             {
                 let limits = limit_set(self.doc, set);
-                bus.v_min = limits.v_low;
-                bus.v_max = limits.v_high;
+                // opendss2xml states these limits on sqrt(3) * Bus.kVBase,
+                // including single-phase equipment. Typed scalar bounds are
+                // phase-to-ground volts, like PMD's vm_lb/vm_ub.
+                bus.v_min = limits.v_low.map(|v| v / 3f64.sqrt());
+                bus.v_max = limits.v_high.map(|v| v / 3f64.sqrt());
             }
             bus.location = locations.remove(&obj.name);
             bus.extras = extras_with_mrid(obj);

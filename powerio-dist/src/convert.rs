@@ -684,7 +684,7 @@ pub(crate) fn emit_value_text_with_options(
             crate::pmd::math::write::emit_pmd_math_json_text(net, &options.pmd_math)
         }
         DistTargetFormat::CimDist => crate::cim::emit_cim_dist_text(net),
-        DistTargetFormat::RavensJson => crate::ravens::emit_ravens_json_text(net),
+        DistTargetFormat::RavensJson => crate::ravens::emit_ravens_json_text(net)?,
     };
     if !net.component_locations().is_empty() {
         conv.push(&crate::diagnostics::codes::EMIT_DIST_COMPONENT_COORDINATES_DROPPED,
