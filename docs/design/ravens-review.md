@@ -301,3 +301,58 @@ regressions pass; the first six reproductions failed before the fixes.
 The native/schema checks above ran on fresh emissions without retained-source
 echo. Consult GitHub checks for the pushed head; local success does not clear
 the separate Julia companion expectations or authorize merging.
+
+
+## Final-review corrections, 2026-11-04
+
+The final review of `3defe1b9` was performed after all 13 workflows cleared.
+The Julia companion's two linecode assertions now expect the retained `lc3`
+identity at `ca7c80d`; the binding rerun checked that commit and passed all
+3,838 assertions. No merge was performed.
+
+Four remaining reproductions are addressed by this follow-up:
+
+- A balanced RAVENS `baseMVA` that is explicitly zero, negative, null or
+  nonnumeric is refused before calculating per-unit impedances. An absent
+  setting keeps the documented 100 MVA default and its finding.
+- Balanced equipment with missing or malformed terminals receives its own
+  named `READ.RAVENS.RECORD_DROPPED` diagnostic. This covers loads, shunts,
+  synchronous/asynchronous machines, sources, lines and transformer ends;
+  unknown-node pointers keep the existing reference-loss diagnostic.
+- Nonzero RAVENS transformer impedance requires positive finite winding
+  voltage and power bases. When these are undefined, emission fails with
+  `BUILD.DIST.ELECTRICAL_INCOMPLETE` naming the transformer and winding.
+  It neither invents a computational rating nor silently writes an ideal
+  equivalent. An already ideal unit needs no impedance base.
+- PMD MATHEMATICAL delta loads on a reduced three-conductor basis append the
+  unused conductor and zero-fill its other branch powers. The stated pair
+  remains first, including BC, CA and reversed pairs. Each ZIP component
+  follows the same projection, and bus conductor arrays grow consistently.
+  Networks without a suitable basis keep their explicit conductors and report
+  that Kron reduction was skipped. An already reduced pure-delta document
+  retains its state when no explicit neutral needs restoring.
+
+`powerio-tx/tests/review_final.rs` and `powerio-dist/tests/review_final.rs`
+exercise fresh emission, invalid-value controls, all six pair orders, ZIP
+parts, partial bus terminals, canonical fixed points and the non-Kron policy.
+No new fixture files are needed.
+
+
+Validation passed 942 distribution tests (18 ignored) and 1,321 transmission
+tests (one ignored), including the seven new regression tests. The conversion
+matrix's only baseline change is the center-tap fixture on the MATHEMATICAL
+self-conversion: its two-conductor delta basis now retains the explicit model,
+adding one skipped-Kron finding and removing three neutral-elimination
+findings. Physical-circuit comparisons still pass.
+
+Native PMD 0.16.0 constructed 18 models from fresh fixed output: all six pair
+orders in ACR and SOC for constant-power loads, and all six in ACR for ZIP
+loads. Its SOC ZIP path has an upstream `constraint_pqw` method error; a
+separate native OpenDSS-to-PMD control reproduces the same error. The six ZIP
+SOC cases are recorded as matching that limitation, not as successful model
+constructions. These are construction checks, not power-flow solves.
+
+All seven Clippy configurations, formatting and whitespace checks passed on
+the final code. The Rust changes are split into balanced-reader validation and
+distribution-emission commits on the existing PR branch. CI must clear on the
+new head before any merge is considered.

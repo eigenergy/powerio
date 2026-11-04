@@ -53,6 +53,7 @@ const TYPE_I_EMERG: &str = "absoluteValueType_86400.0s";
 pub(crate) fn emit_ravens_json_text(
     net: &MulticonductorNetwork,
 ) -> Result<TextEmission, powerio_core::Error> {
+    validate_transformer_bases(net)?;
     let returns = super::neutral::prepare(net)?;
     let prepared = super::source::prepare(returns.as_ref())?;
     let net = prepared.as_ref();
@@ -71,6 +72,38 @@ pub(crate) fn emit_ravens_json_text(
         Vec::new(),
         w.warnings,
     ))
+}
+
+/// Percent impedances need an actual positive finite winding base. Choosing
+/// an arbitrary rating here would change their physical ohms.
+fn validate_transformer_bases(net: &MulticonductorNetwork) -> Result<(), powerio_core::Error> {
+    for transformer in net.transformers() {
+        let needs_base = transformer.windings.iter().any(|w| w.r_pct != 0.0)
+            || transformer.xsc_pct.iter().any(|x| *x != 0.0)
+            || ["%noloadloss", "%imag"]
+                .iter()
+                .any(|key| xf64(&transformer.extras, key).is_some_and(|v| v != 0.0));
+        if !needs_base {
+            continue;
+        }
+        for (index, winding) in transformer.windings.iter().enumerate() {
+            if !crate::model::n_winding_impedance_base(1, winding.v_ref, winding.s_rating)
+                .is_some_and(|base| base.is_finite() && base > 0.0)
+            {
+                return Err(powerio_core::Error::new(
+                    &C::BUILD_DIST_ELECTRICAL_INCOMPLETE,
+                    format!(
+                        "transformer {}: winding {} cannot preserve impedance without a positive finite voltage and power rating (ratedU={}, ratedS={})",
+                        transformer.name,
+                        index + 1,
+                        winding.v_ref,
+                        winding.s_rating
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Iterate the read→write cycle to its fixed point so a reparse reproduces

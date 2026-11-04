@@ -149,6 +149,54 @@ pub(crate) fn validate_emission(net: &MulticonductorNetwork) -> Result<(), power
     Ok(())
 }
 
+fn delta_projection_supported(net: &MulticonductorNetwork) -> bool {
+    let buses: BTreeMap<_, _> = net
+        .buses()
+        .iter()
+        .map(|b| (b.id.to_ascii_lowercase(), b))
+        .collect();
+    let pairs: Vec<_> = net
+        .loads()
+        .iter()
+        .filter(|load| {
+            load.terminal_map.len() == 2
+                && (load.configuration == Configuration::Delta
+                    || load.configuration == Configuration::SinglePhase
+                        && buses
+                            .get(&load.bus.to_ascii_lowercase())
+                            .is_some_and(|bus| {
+                                load.terminal_map.iter().all(|t| {
+                                    !bus.grounded.contains(t)
+                                        && !matches!(t.as_str(), "4" | "n" | "N")
+                                })
+                            }))
+        })
+        .collect();
+    if pairs.is_empty() {
+        return true;
+    }
+    let renamed = renamed_terminals(net);
+    let phases: BTreeSet<i64> = net
+        .buses()
+        .iter()
+        .flat_map(|b| &b.terminals)
+        .filter_map(|t| t.parse().ok().or_else(|| renamed.get(t).copied()))
+        .collect();
+    phases.len() == 3
+        && pairs.iter().all(|load| {
+            let ids: Vec<_> = load
+                .terminal_map
+                .iter()
+                .filter_map(|t| t.parse().ok().or_else(|| renamed.get(t).copied()))
+                .collect();
+            ids.len() == 2
+                && ids[0] != ids[1]
+                && ids.iter().all(|id| phases.contains(id))
+                && load.p_nom.len() <= 1
+                && load.q_nom.len() <= 1
+        })
+}
+
 /// Emit the MATHEMATICAL document.
 ///
 /// # Errors
@@ -162,6 +210,11 @@ pub(crate) fn emit_pmd_math_json_text(
     let mut reduced;
     let (net, kron_reduced) = if options.kron_reduce && has_grounded_neutral(net) {
         match crate::kron::neutral_kron_reduce(net, &crate::kron::NeutralKronOptions::default()) {
+            Ok(reduction) if !delta_projection_supported(reduction.network()) => {
+                diagnostics.push(&C::EMIT_PMD_MATH_VALUE_SUBSTITUTED,
+                    "Kron reduction skipped: delta loads require a three-conductor phase basis; every conductor is retained (is_kron_reduced false)");
+                (net, false)
+            }
             Ok(reduction) => {
                 diagnostics.absorb(reduction.report().diagnostics.iter().cloned());
                 let did_reduce = !reduction.report().buses.is_empty();
@@ -198,7 +251,22 @@ pub(crate) fn emit_pmd_math_json_text(
             }
         }
     } else {
-        (net, false)
+        // A pure delta MATHEMATICAL read may have no wye equipment on
+        // which to restore a neutral. Its already-reduced state survives.
+        let retained = options.kron_reduce
+            && net
+                .extras()
+                .get("pmd_math_top_level")
+                .and_then(|v| v.get("is_kron_reduced"))
+                .and_then(Value::as_bool)
+                == Some(true)
+            && net.buses().iter().all(|b| {
+                b.terminals
+                    .iter()
+                    .all(|t| !matches!(t.as_str(), "4" | "n" | "N"))
+            })
+            && delta_projection_supported(net);
+        (net, retained)
     };
     let settings = Settings::of(net);
     // A winding's rated voltage reaches the document only as the ideal
@@ -456,6 +524,7 @@ fn kw(watts: f64, settings: &Settings) -> f64 {
 struct Writer {
     settings: Settings,
     kron_reduced: bool,
+    delta_projected: bool,
     diagnostics: crate::diagnostics::Diagnostics,
     renamed: BTreeMap<String, i64>,
     /// Lowercased bus id to its MATHEMATICAL index.
@@ -499,6 +568,7 @@ impl Writer {
         let mut w = Writer {
             settings,
             kron_reduced,
+            delta_projected: false,
             diagnostics,
             renamed: renamed_terminals(net),
             bus_index: BTreeMap::new(),
@@ -521,6 +591,7 @@ impl Writer {
         w.switches(net);
         w.shunts(net);
         w.loads(net);
+        w.project_delta_loads(net);
         w.generators(net);
         w.ibrs(net);
         w.sources(net);
@@ -1267,6 +1338,72 @@ impl Writer {
             };
             self.map
                 .push(json!({"from": s.name, "to": to, "unmap_function": "_map_math2eng_switch!"}));
+        }
+    }
+
+    /// PMD applies delta phase projection after Kron reduction. Keep the
+    /// stated pair first (including reversed/BC/CA pairs) and append the unused
+    /// phase, so its original P/Q remain on that same physical branch.
+    fn project_delta_loads(&mut self, net: &MulticonductorNetwork) {
+        if !self.kron_reduced {
+            return;
+        }
+        let phases: Vec<i64> = net
+            .buses()
+            .iter()
+            .flat_map(|b| &b.terminals)
+            .filter_map(|t| t.parse().ok().or_else(|| self.renamed.get(t).copied()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let mut additions: BTreeMap<usize, BTreeSet<i64>> = BTreeMap::new();
+        for load in &mut self.loads {
+            if load.fields.get("configuration").and_then(Value::as_str) != Some("DELTA") {
+                continue;
+            }
+            self.delta_projected = true;
+            let mut connections = load.connections("connections");
+            if connections.len() != 2 {
+                continue;
+            }
+            let added: Vec<_> = phases
+                .iter()
+                .copied()
+                .filter(|p| !connections.contains(p))
+                .collect();
+            connections.extend(&added);
+            load.set("connections", ints(&connections));
+            for key in ["pd", "qd"] {
+                if let Some(Value::Array(values)) = load.fields.get_mut(key) {
+                    values.resize(3, num(0.0));
+                }
+            }
+            if let Some(bus) = load.usize("load_bus") {
+                additions.entry(bus).or_default().extend(added);
+            }
+        }
+        for (index, phases) in additions {
+            let bus = &mut self.buses[index - 1];
+            let mut terminals = bus.connections("terminals");
+            for phase in phases {
+                if terminals.contains(&phase) {
+                    continue;
+                }
+                terminals.push(phase);
+                // PMD fixes an added, otherwise unused bus coordinate to zero.
+                for (key, default) in [
+                    ("grounded", Value::Bool(false)),
+                    ("vmin", num(0.0)),
+                    ("vmax", num(0.0)),
+                    ("vm", num(0.0)),
+                    ("va", num(0.0)),
+                ] {
+                    if let Some(Value::Array(values)) = bus.fields.get_mut(key) {
+                        values.push(default);
+                    }
+                }
+            }
+            bus.set("terminals", ints(&terminals));
         }
     }
 
@@ -2150,7 +2287,7 @@ impl Writer {
             json!(net.name().clone().unwrap_or_default().to_lowercase()),
         );
         doc.insert("per_unit".into(), json!(true));
-        doc.insert("is_projected".into(), json!(false));
+        doc.insert("is_projected".into(), json!(self.delta_projected));
         doc.insert("is_kron_reduced".into(), json!(self.kron_reduced));
         doc.insert("settings".into(), Value::Object(settings));
         doc.insert("time_elapsed".into(), json!(1.0));

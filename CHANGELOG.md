@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Reject an explicitly invalid balanced RAVENS `baseMVA` before per-unit
+  conversion, and diagnose skipped loads, shunts, generators, sources, lines
+  and transformer windings that lack usable terminals.
+- Project Kron-reduced PMD delta loads onto three phase coordinates, preserving
+  each conductor pair and ZIP part. Keep the explicit-conductor model when a
+  three-phase basis is unavailable. Refuse RAVENS transformer impedance
+  emission when a nonpositive or nonfinite winding rating makes its base
+  undefined.
+
 - Keep ideal switches at zero impedance in PMD ENGINEERING and preserve the
   exact OpenDSS switch equivalent when only identity metadata is retained.
 - Apply the complex neutral Schur complement to switch impedances, including
