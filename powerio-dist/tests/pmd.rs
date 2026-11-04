@@ -38,6 +38,7 @@ fn cross_model_metadata_loss_is_reported() {
     }
 }
 
+
 #[test]
 #[allow(clippy::float_cmp)]
 fn parse_the_reference_engineering_json() {
@@ -114,7 +115,11 @@ fn dss_parse_agrees_with_the_pmd_parse() {
             assert!(close(a.b_from[i][j], b.b_from[i][j]));
         }
     }
-    assert_eq!(line.i_max, b.i_max);
+    // OpenDSS leaves mtx601 emergency ampacity at its constructor default;
+    // unlike PMD's materialized reference, this is not a declared thermal
+    // rating and must not become a typed BMOPF current limit.
+    assert_eq!(line.i_max, None);
+    assert_eq!(b.i_max, Some(vec![600.0; 3]));
 
     // Loads agree in power, configuration, and connection.
     for l in ours.loads() {
