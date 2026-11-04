@@ -216,9 +216,9 @@ and statements for kV qualifiers and pre/post voltage bands, and
 `pio-ir/2/0.11.7/schema.json` adds the AC optimal transmission switching
 instance and solution types, the `branch_switching_cost` objective term, and
 the optional `hvdc_treatment` field of `DcPfInstance` and `AcPfInstance`.
-The current `pio-ir/2/0.11.8/schema.json` adds `ravens-json` and `pmd-math-json`
-source-format names for the next release, leaving the published 0.11.7 bytes
-unchanged. The catalog advance does not change IR version 2 or the C ABI.
+The current `pio-ir/2/0.11.8/schema.json` adds the `ravens-json` and
+`pmd-math-json` source-format names and leaves the 0.11.7 file unchanged. The
+IR version stays 2, and the C ABI is unchanged.
 Existing source, monitor, and power flow instance representations remain
 accepted; published snapshots stay frozen.
 The release in that path identifies the snapshot, not another
