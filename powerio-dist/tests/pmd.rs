@@ -38,7 +38,6 @@ fn cross_model_metadata_loss_is_reported() {
     }
 }
 
-
 #[test]
 #[allow(clippy::float_cmp)]
 fn parse_the_reference_engineering_json() {
