@@ -38,6 +38,7 @@
 //! `A`→`1`, `B`→`2`, `C`→`3`, `N`→`4`, and the split-phase secondary codes
 //! `s1`/`s2`→`1`/`2`.
 
+mod neutral;
 pub(crate) mod read;
 mod source;
 mod write;
@@ -85,6 +86,22 @@ pub(crate) fn natural_key(name: &str) -> (String, u64, String) {
 // convention (`a`, `b`, `c`, `n`) and one named by an OpenDSS node number
 // write the same letters, and the cim-dist writer agrees.
 pub(crate) use powerio_core::cim::{expand_phase_code, phase_terminal, terminal_phase};
+
+/// Concrete switch classes accepted from CIM-derived RAVENS documents.
+pub(crate) const SWITCH_CLASSES: &[&str] = &[
+    "Switch",
+    "ProtectedSwitch",
+    "LoadBreakSwitch",
+    "Breaker",
+    "Recloser",
+    "Cut",
+    "Fuse",
+    "Disconnector",
+    "GroundDisconnector",
+    "Sectionaliser",
+    "Jumper",
+];
+pub(crate) const SWITCH_CLASS_KEY: &str = "ravens_switch_class";
 
 #[cfg(test)]
 mod tests {

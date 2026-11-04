@@ -783,6 +783,7 @@ impl<'a> Reader<'a> {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // one bus maps identity, grounding, units and bound families together
     fn buses(&mut self) {
         // The virtual buses of transformers, switches, and sources are read
         // by their groups; the rest are the network's buses.
@@ -852,6 +853,10 @@ impl<'a> Reader<'a> {
                     .is_some_and(|a| !a.is_empty())
                 {
                     extras.insert(format!("pmd_{key}"), bus.fields[key].clone());
+                    extras.insert(
+                        "pmd_pair_voltage_scale".into(),
+                        json!(self.volts(&bus.key, 1.0)),
+                    );
                     self.warn(
                         &C::READ_PMD_MATH_RETAINED_SOURCE_ONLY,
                         format!(

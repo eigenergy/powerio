@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Keep ideal switches at zero impedance in PMD ENGINEERING and preserve the
+  exact OpenDSS switch equivalent when only identity metadata is retained.
+- Apply the complex neutral Schur complement to switch impedances, including
+  shared linecodes, before declaring PMD MATHEMATICAL output Kron reduced.
+- Restore implicit wye earth returns in RAVENS output while keeping existing
+  floating neutrals separate. Preserve switch subclasses supported by the
+  upstream schema and both conductor orders in split-phase codes.
+- Preserve PMD pairwise voltage bounds during fresh MATHEMATICAL emission and
+  rebasing; report their loss in ENGINEERING and RAVENS output. Keep nonuniform
+  per-phase ZIP coefficients in ENGINEERING by emitting separate phase loads.
+
 - Keep non-Kron PMD MATHEMATICAL transformer loss branches on the internal
   phase terminals, including external phase-B and phase-C windings.
 - Convert MG-RAVENS line-to-line voltage limits to phase-to-ground bounds

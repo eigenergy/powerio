@@ -62,9 +62,13 @@ pub fn expand_phase_code(code: &str) -> Vec<String> {
             's' => {
                 if let Some(d) = chars.next() {
                     out.push(format!("s{d}"));
-                    if d == '1' && chars.peek() == Some(&'2') {
-                        chars.next();
-                        out.push("s2".to_owned());
+                    if matches!(d, '1' | '2')
+                        && chars
+                            .peek()
+                            .is_some_and(|next| matches!(next, '1' | '2') && *next != d)
+                        && let Some(next) = chars.next()
+                    {
+                        out.push(format!("s{next}"));
                     }
                 }
             }
@@ -95,7 +99,7 @@ pub mod ravens {
 
     /// Classes only the multiconductor profile uses: per-phase equipment,
     /// transformer tanks, per-length impedance matrices, and wire catalogs.
-    pub const MULTICONDUCTOR_MARKERS: [&str; 9] = [
+    pub const MULTICONDUCTOR_MARKERS: [&str; 20] = [
         "ACLineSegmentPhase",
         "EnergyConsumerPhase",
         "PowerElectronicsConnectionPhase",
@@ -105,6 +109,17 @@ pub mod ravens {
         "PerLengthPhaseImpedance",
         "PerLengthLineParameter",
         "WireSpacingInfo",
+        "Switch",
+        "ProtectedSwitch",
+        "LoadBreakSwitch",
+        "Breaker",
+        "Recloser",
+        "Cut",
+        "Fuse",
+        "Disconnector",
+        "GroundDisconnector",
+        "Sectionaliser",
+        "Jumper",
     ];
 
     /// The profile a document's classes select.

@@ -871,14 +871,9 @@ impl Mapper<'_> {
     // ----- switches -------------------------------------------------------
 
     fn map_switches(&mut self) {
-        self.claim(&[
-            "Switch",
-            "LoadBreakSwitch",
-            "Breaker",
-            "Recloser",
-            "SwitchPhase",
-        ]);
-        let mut switches: Vec<&Obj> = ["Switch", "LoadBreakSwitch", "Breaker", "Recloser"]
+        self.claim(super::SWITCH_CLASSES);
+        self.claim(&["SwitchPhase"]);
+        let mut switches: Vec<&Obj> = super::SWITCH_CLASSES
             .iter()
             .flat_map(|k| self.doc.of_kind(k))
             .collect();
@@ -936,6 +931,9 @@ impl Mapper<'_> {
 
             let open = fbool(obj, "Switch.open").unwrap_or(false);
             let mut extras = extras_with_mrid(obj);
+            if obj.kind != "Switch" {
+                extras.insert(super::SWITCH_CLASS_KEY.into(), obj.kind.clone().into());
+            }
             if let Some(normal) = fbool(obj, "Switch.normalOpen")
                 && normal != open
             {

@@ -53,7 +53,8 @@ const TYPE_I_EMERG: &str = "absoluteValueType_86400.0s";
 pub(crate) fn emit_ravens_json_text(
     net: &MulticonductorNetwork,
 ) -> Result<TextEmission, powerio_core::Error> {
-    let prepared = super::source::prepare(net)?;
+    let returns = super::neutral::prepare(net)?;
+    let prepared = super::source::prepare(returns.as_ref())?;
     let net = prepared.as_ref();
     let mut w = Writer {
         warnings: crate::diagnostics::Diagnostics::new(),
@@ -287,6 +288,40 @@ struct Writer {
     bases: BTreeMap<String, f64>,
     /// Equipment reference voltages may differ from the voltage of their bus.
     equipment_bases: BTreeMap<String, f64>,
+}
+
+// An ideal earth-referenced source already fixes these exact phase voltages.
+// Omitting duplicate bounds is lossless, including libm-scale differences
+// between phase magnitudes; no approximate comparison or global tolerance.
+fn source_fixes_phase_bounds(net: &MulticonductorNetwork, bus: &crate::DistBus) -> bool {
+    let phases = bus.phase_indices(net.extras().get("bmopf_terminal_conventions"));
+    let fixed = |index: usize| {
+        net.sources().iter().find_map(|source| {
+            if !source.bus.eq_ignore_ascii_case(&bus.id)
+                || source.reference_terminal.is_some()
+                || ["rs", "xs", "r1", "x1", "r0", "x0"]
+                    .iter()
+                    .any(|key| source.extras.contains_key(*key))
+            {
+                return None;
+            }
+            let at = source
+                .terminal_map
+                .iter()
+                .position(|t| t == &bus.terminals[index])?;
+            source.v_magnitude.get(at).copied()
+        })
+    };
+    !phases.is_empty()
+        && [bus.v_min_phase.as_ref(), bus.v_max_phase.as_ref()]
+            .iter()
+            .flatten()
+            .all(|bounds| {
+                bounds.len() == phases.len()
+                    && bounds.iter().zip(&phases).all(|(bound, &phase)| {
+                        fixed(phase).is_some_and(|v| bound.to_bits() == v.to_bits())
+                    })
+            })
 }
 
 impl Writer {
@@ -851,7 +886,22 @@ impl Writer {
             {
                 continue;
             }
-            let mut obj = identified("Switch", &s.name, imported_mrid(&s.extras));
+            let requested = s
+                .extras
+                .get(super::SWITCH_CLASS_KEY)
+                .and_then(Value::as_str)
+                .unwrap_or("Switch");
+            // The pinned schema omits Disconnector itself but carries its
+            // GroundDisconnector subclass. Preserve the topology and diagnose
+            // the unsupported class identity rather than invent that subtype.
+            let kind = if requested == "Disconnector" || !super::SWITCH_CLASSES.contains(&requested)
+            {
+                self.warn(&C::EMIT_RAVENS_DIST_FIELD_DROPPED,format!("{what}: switch class {requested} has no upstream schema slot; emitted Switch"));
+                "Switch"
+            } else {
+                requested
+            };
+            let mut obj = identified(kind, &s.name, imported_mrid(&s.extras));
             obj.insert("Equipment.inService".into(), Value::Bool(true));
             obj.insert("Switch.open".into(), Value::Bool(s.open));
             let normal = s
@@ -2182,8 +2232,18 @@ impl Writer {
             }
             for (field, value) in [
                 (
+                    "pairwise",
+                    ["pmd_vm_pair_lb", "pmd_vm_pair_ub"].iter().any(|key| {
+                        bus.extras
+                            .get(*key)
+                            .and_then(Value::as_array)
+                            .is_some_and(|rows| !rows.is_empty())
+                    }),
+                ),
+                (
                     "per-phase",
-                    bus.v_min_phase.is_some() || bus.v_max_phase.is_some(),
+                    (bus.v_min_phase.is_some() || bus.v_max_phase.is_some())
+                        && !source_fixes_phase_bounds(net, bus),
                 ),
                 ("vpn", bus.vpn_min.is_some() || bus.vpn_max.is_some()),
                 ("vpp", bus.vpp_min.is_some() || bus.vpp_max.is_some()),

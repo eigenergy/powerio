@@ -77,10 +77,252 @@ fn grounded(net: &MulticonductorNetwork, port: &Node) -> bool {
     net.bus(&port.0).unwrap().grounded.contains(&port.1)
 }
 
+fn has_voltage_constraints(bus: &powerio_dist::DistBus) -> bool {
+    [
+        bus.v_min.is_some(),
+        bus.v_max.is_some(),
+        bus.v_min_phase.is_some(),
+        bus.v_max_phase.is_some(),
+        bus.vpn_min.is_some(),
+        bus.vpn_max.is_some(),
+        bus.vpp_min.is_some(),
+        bus.vpp_max.is_some(),
+        bus.vpos_min.is_some(),
+        bus.vpos_max.is_some(),
+        bus.vneg_max.is_some(),
+        bus.vzero_max.is_some(),
+        bus.vn_max.is_some(),
+    ]
+    .iter()
+    .any(|present| *present)
+        || ["pmd_vm_pair_lb", "pmd_vm_pair_ub"]
+            .iter()
+            .any(|key| bus.extras.contains_key(*key))
+}
+
+/// Recover the exact ideal contact encoded by two opposite series primitives.
+/// The internal nodes must be exclusive, ungrounded, shunt-free and unlocated.
+fn contract_switch_pairs(network: &MulticonductorNetwork) -> MulticonductorNetwork {
+    let mut net = network.clone();
+    loop {
+        let usage = uses(&net);
+        let candidate = net.lines().iter().enumerate().find_map(|(i, a)| {
+            let middle = net.bus(&a.bus_to)?;
+            let n = a.terminal_map_to.len();
+            if a.extras.get("dss_switch") != Some(&serde_json::Value::Bool(true))
+                || n == 0
+                || a.terminal_map_from.len() != n
+                || middle.location.is_some()
+                || has_voltage_constraints(middle)
+                || !middle.grounded.is_empty()
+                || middle.terminals != a.terminal_map_to
+                || a.terminal_map_to
+                    .iter()
+                    .any(|t| usage.get(&node(&a.bus_to, t)) != Some(&2))
+            {
+                return None;
+            }
+            let ca = net.linecode(&a.linecode)?;
+            net.lines().iter().enumerate().find_map(|(j, b)| {
+                if i == j
+                    || !b.bus_from.eq_ignore_ascii_case(&a.bus_to)
+                    || b.terminal_map_from != a.terminal_map_to
+                    || b.terminal_map_to.len() != n
+                    || a.bus_from.eq_ignore_ascii_case(&b.bus_to)
+                {
+                    return None;
+                }
+                let cb = net.linecode(&b.linecode)?;
+                if ca.n_conductors != n
+                    || cb.n_conductors != n
+                    || [
+                        &ca.g_from, &ca.g_to, &ca.b_from, &ca.b_to, &cb.g_from, &cb.g_to,
+                        &cb.b_from, &cb.b_to,
+                    ]
+                    .iter()
+                    .any(|m| m.iter().flatten().any(|v| *v != 0.0))
+                {
+                    return None;
+                }
+                for (ma, mb) in [(&ca.r_series, &cb.r_series), (&ca.x_series, &cb.x_series)] {
+                    for row in 0..n {
+                        for col in 0..n {
+                            let (x, y) = (ma[row][col] * a.length, mb[row][col] * b.length);
+                            if !x.is_finite() || !y.is_finite() || x + y != 0.0 {
+                                return None;
+                            }
+                        }
+                    }
+                }
+                if ca.r_series.iter().flatten().all(|v| *v == 0.0)
+                    && ca.x_series.iter().flatten().all(|v| *v == 0.0)
+                {
+                    return None;
+                }
+                Some((i, j, a.clone(), b.clone()))
+            })
+        });
+        let Some((i, j, a, b)) = candidate else {
+            break;
+        };
+        net.lines_mut().remove(i.max(j));
+        net.lines_mut().remove(i.min(j));
+        net.switches_mut().push(powerio_dist::DistSwitch::new(
+            a.name,
+            a.bus_from,
+            b.bus_to,
+            a.terminal_map_from,
+            b.terminal_map_to,
+            false,
+        ));
+        net.buses_mut()
+            .retain(|bus| !bus.id.eq_ignore_ascii_case(&a.bus_to));
+    }
+    net
+}
+
+/// Eliminate an unrated ideal phase switch to a private grounded return.
+/// No generated name is trusted: every unmapped terminal must be ground,
+/// no voltage bounds or location may be lost, and no impedance extras apply.
+#[allow(clippy::too_many_lines)] // one electrical proof and exhaustive owner rewrite
+fn contract_ground_returns(network: &MulticonductorNetwork) -> MulticonductorNetwork {
+    let mut net = network.clone();
+    loop {
+        let candidate = net.switches().iter().enumerate().find_map(|(index, s)| {
+            if s.open
+                || s.i_max.is_some()
+                || s.bus_from.eq_ignore_ascii_case(&s.bus_to)
+                || s.extras.iter().any(|(key, value)| match key.as_str() {
+                    "ravens_mrid" => false,
+                    "pmd_length" => !value.as_f64().is_some_and(|v| v.is_finite() && v > 0.0),
+                    "pmd_rs" | "pmd_xs" | "pmd_g_fr" | "pmd_g_to" | "pmd_b_fr" | "pmd_b_to" => {
+                        !value.as_array().is_some_and(|rows| {
+                            rows.iter().all(|r| {
+                                r.as_array()
+                                    .is_some_and(|row| row.iter().all(|v| v.as_f64() == Some(0.0)))
+                            })
+                        })
+                    }
+                    _ => true,
+                })
+            {
+                return None;
+            }
+            let bus = net.bus(&s.bus_from)?;
+            if bus.location.is_some()
+                || has_voltage_constraints(bus)
+                || bus
+                    .extras
+                    .keys()
+                    .any(|key| !matches!(key.as_str(), "ravens_mrid" | "pmd_vbase"))
+                || net.lines().iter().any(|l| {
+                    l.bus_from.eq_ignore_ascii_case(&bus.id)
+                        || l.bus_to.eq_ignore_ascii_case(&bus.id)
+                })
+                || net.switches().iter().enumerate().any(|(i, other)| {
+                    i != index
+                        && (other.bus_from.eq_ignore_ascii_case(&bus.id)
+                            || other.bus_to.eq_ignore_ascii_case(&bus.id))
+                })
+            {
+                return None;
+            }
+            if !bus
+                .grounded
+                .iter()
+                .any(|t| !s.terminal_map_from.contains(t))
+                || !bus
+                    .terminals
+                    .iter()
+                    .all(|t| s.terminal_map_from.contains(t) || bus.grounded.contains(t))
+                || s.terminal_map_from.len() != s.terminal_map_to.len()
+            {
+                return None;
+            }
+            Some((index, s.clone(), bus.grounded.clone()))
+        });
+        let Some((index, s, grounded)) = candidate else {
+            break;
+        };
+        let rewrite = |bus: &mut String, map: &mut Vec<String>| {
+            if !bus.eq_ignore_ascii_case(&s.bus_from) {
+                return;
+            }
+            bus.clone_from(&s.bus_to);
+            for terminal in map {
+                if let Some(i) = s.terminal_map_from.iter().position(|t| t == terminal) {
+                    terminal.clone_from(&s.terminal_map_to[i]);
+                } else if grounded.contains(terminal) {
+                    *terminal = "0".into();
+                }
+            }
+        };
+        let target = net
+            .buses_mut()
+            .iter_mut()
+            .find(|b| b.id.eq_ignore_ascii_case(&s.bus_to))
+            .unwrap();
+        if !target.terminals.contains(&"0".to_string()) {
+            target.terminals.push("0".into());
+        }
+        target.grounded.push("0".into());
+        for t in &grounded {
+            if let Some(i) = s.terminal_map_from.iter().position(|v| v == t)
+                && !target.grounded.contains(&s.terminal_map_to[i])
+            {
+                target.grounded.push(s.terminal_map_to[i].clone());
+            }
+        }
+        net.switches_mut().remove(index);
+        for line in net.lines_mut() {
+            rewrite(&mut line.bus_from, &mut line.terminal_map_from);
+            rewrite(&mut line.bus_to, &mut line.terminal_map_to);
+        }
+        for switch in net.switches_mut() {
+            rewrite(&mut switch.bus_from, &mut switch.terminal_map_from);
+            rewrite(&mut switch.bus_to, &mut switch.terminal_map_to);
+        }
+        for l in net.loads_mut() {
+            rewrite(&mut l.bus, &mut l.terminal_map);
+        }
+        for g in net.generators_mut() {
+            rewrite(&mut g.bus, &mut g.terminal_map);
+        }
+        for sh in net.shunts_mut() {
+            rewrite(&mut sh.bus, &mut sh.terminal_map);
+        }
+        for c in net.capacitors_mut() {
+            rewrite(&mut c.bus, &mut c.terminal_map);
+        }
+        for i in net.ibrs_mut() {
+            rewrite(&mut i.bus, &mut i.terminal_map);
+        }
+        for v in net.sources_mut() {
+            let was = v.bus.eq_ignore_ascii_case(&s.bus_from);
+            rewrite(&mut v.bus, &mut v.terminal_map);
+            if was && let Some(t) = v.reference_terminal.as_mut() {
+                if let Some(i) = s.terminal_map_from.iter().position(|x| x == t) {
+                    t.clone_from(&s.terminal_map_to[i]);
+                } else if grounded.contains(t) {
+                    *t = "0".into();
+                }
+            }
+        }
+        for t in net.transformers_mut() {
+            for w in &mut t.windings {
+                rewrite(&mut w.bus, &mut w.terminal_map);
+            }
+        }
+        net.buses_mut()
+            .retain(|b| !b.id.eq_ignore_ascii_case(&s.bus_from));
+    }
+    net
+}
+
 /// Eliminate only series pairs whose KCL and KVL prove an ideal constraint
 /// at the far terminal. An additional device connection prevents elimination.
 pub fn contract_source_pairs(network: &MulticonductorNetwork) -> MulticonductorNetwork {
-    let mut net = network.clone();
+    let mut net = contract_ground_returns(&contract_switch_pairs(network));
     loop {
         let before = net.lines().len();
         for index in 0..net.sources().len() {

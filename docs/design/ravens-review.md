@@ -221,3 +221,83 @@ matrices. The pinned upstream RAVENS schema gate checked 36 cases with no
 failures; additional fresh split-source output passed the unmodified schema
 after crossing PowerIO IR. Native comparisons and schema acceptance cover
 these cases, rather than asserting general solver equivalence.
+
+
+## Neutral, bounds and load-law follow-up, 2026-11-04
+
+`review_round_two.rs` covers the next requested corrections. Switch neutral
+elimination now uses the complex series Schur complement, reading shared
+linecodes before those codes change. Ratings and conductor maps follow the
+retained phases; the report includes the eliminated position and recovery
+coefficients. A zero, uncoupled neutral remains an ideal return rather than
+triggering a singular inverse.
+
+Fresh RAVENS output restores earth returns for implicit wye loads, generators
+and transformer windings. When a bus already has a floating neutral, implicit
+earth-return devices use a private grounded node joined through an ideal
+closed phase switch. The floating neutral stays separate. Corpus comparison
+contracts such a switch only after checking its electrical conditions; open,
+rated or impedance-bearing switches are negative controls.
+
+PMD pairwise bounds retain terminal IDs and their original voltage scale.
+Fresh MATHEMATICAL output rebases only the bound value. Constraints referring
+to the neutral prevent Kron reduction rather than disappearing. ENGINEERING
+and RAVENS emission report unsupported pairwise bounds. Nonuniform ZIP laws
+use separate ENGINEERING phase loads with collision-safe names, preserving
+reactive coefficients, delta pairs and retained cutoff voltage. The split is
+reported; it changes record identity rather than the nominal phase laws.
+
+The phase decoder accepts both `s12` and `s21`, and switch-only documents
+select the multiconductor route. The reader accepts the CIM switch subclasses
+listed by the adapter. Emission keeps each class accepted by the pinned
+upstream schema. That schema has no `Disconnector` slot: this class emits as
+`Switch` with an explicit class-loss diagnostic; it is not relabeled as
+`GroundDisconnector`.
+
+Independent checks validated 13 fresh documents against the unmodified pinned
+upstream schema, including restored earth returns, mixed floating/ground
+returns, and every supported switch class. Coupled switch R/X matrices and
+terminal maps match native PMD 0.16.0 on a proportional R/X example; its complex
+series-reduction helper also confirms the purely resistive example. PMD's
+older `apply_kron_reduction!` path reduces R and X separately and produces
+nonfinite X for an all-zero X matrix, so that case uses its complex helper.
+These checks establish the stated examples, not universal solver equivalence.
+
+
+The expanded conversion matrix also exposed two ideal-switch paths:
+ENGINEERING emission supplied a tiny default resistance, and identity extras
+prevented OpenDSS's exact cancelled-series equivalent. Ideal contacts now stay
+ideal in both writers. Test-only contraction requires opposite finite matrices,
+exclusive internal nodes, no shunts and no lost voltage constraints; changing
+one resistance prevents contraction. This is an electrical-circuit comparison,
+not a waiver of metadata or current-limit diagnostics.
+
+The previous Linux conversion failure was a per-phase voltage-bound diagnostic
+on an ideal source bus: platform libm rounding made its equal phase magnitudes
+differ by one ULP. RAVENS now omits that loss finding only when an ideal
+Earth-referenced source fixes every stated phase bound exactly. Actual unequal
+or unfixed bounds still report their loss; no numeric tolerance was widened.
+
+The existing Julia companion at `e5c714d` has two stale assertions in
+`test/test_dist.jl` expecting the synthesized `_pio_line_feeder` linecode name.
+The corrected reader retains the declared `lc3` identity. All other 3,836 Julia
+assertions passed on the previous Rust head; those two companion expectations
+need updating before this PR's binding gate can clear. No companion changes or
+merge are part of this follow-up.
+
+
+Two conversion baseline rows change for the IEEE13 private ground-return node:
+RAVENS to OpenDSS adds the exact-switch equivalent, identity/terminal diagnostics
+and two retained generated-line property records; RAVENS to ENGINEERING adds
+the private bus's unsupported-name finding. All physical-circuit checks pass
+before accepting those diagnostic-count changes. No new test-data files were
+vendored.
+
+
+Local validation of this round passed 939 distribution tests (18 ignored),
+all 14 conversion-matrix tests, all seven CI Clippy configurations, facade
+routing/format checks, formatting and whitespace checks. The 13 new focused
+regressions pass; the first six reproductions failed before the fixes.
+The native/schema checks above ran on fresh emissions without retained-source
+echo. Consult GitHub checks for the pushed head; local success does not clear
+the separate Julia companion expectations or authorize merging.

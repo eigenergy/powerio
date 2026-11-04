@@ -28,6 +28,44 @@ use crate::pmd::write::{capacitor_susceptance, matrix, renamed_terminals};
 /// `Inf`, which the JSON writer turns into `null` the way PMD's does.
 const INF: f64 = f64::INFINITY;
 
+fn validate_pair_bounds(net: &MulticonductorNetwork) -> Result<(), powerio_core::Error> {
+    for bus in net.buses() {
+        if bus.extras.get("pmd_pair_voltage_scale").is_some_and(|v| {
+            !v.as_f64()
+                .is_some_and(|scale| scale.is_finite() && scale > 0.0)
+        }) {
+            return Err(powerio_core::Error::new(
+                &C::BUILD_DIST_ELECTRICAL_INCOMPLETE,
+                format!("bus {}: invalid retained pairwise voltage scale", bus.id),
+            ));
+        }
+        for key in ["pmd_vm_pair_lb", "pmd_vm_pair_ub"] {
+            if let Some(value) = bus.extras.get(key) {
+                let valid = value.as_array().is_some_and(|rows| {
+                    rows.iter().all(|row| {
+                        row.as_array().is_some_and(|r| {
+                            r.len() == 3
+                                && r[..2].iter().all(|id| {
+                                    id.as_i64().is_some_and(|i| {
+                                        bus.terminals.iter().any(|t| t == &i.to_string())
+                                    })
+                                })
+                                && (r[2].is_null() || r[2].as_f64().is_some_and(f64::is_finite))
+                        })
+                    })
+                });
+                if !valid {
+                    return Err(powerio_core::Error::new(
+                        &C::BUILD_DIST_ELECTRICAL_INCOMPLETE,
+                        format!("bus {}: invalid {key} terminal pairs or bounds", bus.id),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_emission(net: &MulticonductorNetwork) -> Result<(), powerio_core::Error> {
     let count = |name: &str, n: usize| {
         if n > super::read::MAX_MATRIX_DIM {
@@ -57,6 +95,7 @@ pub(crate) fn validate_emission(net: &MulticonductorNetwork) -> Result<(), power
         }
         Ok(())
     };
+    validate_pair_bounds(net)?;
     for code in net.line_codes() {
         count(&format!("linecode {}", code.name), code.n_conductors)?;
     }
@@ -567,6 +606,19 @@ impl Writer {
                 .set("vmax", nums(&vmax))
                 .set("vm_pair_lb", json!([]))
                 .set("vm_pair_ub", json!([]));
+            for key in ["vm_pair_lb", "vm_pair_ub"] {
+                if let Some(value) = bus.extras.get(&format!("pmd_{key}")) {
+                    obj.set(key, value.clone());
+                }
+            }
+            obj.set(
+                "_pio_pair_voltage_scale",
+                num(bus
+                    .extras
+                    .get("pmd_pair_voltage_scale")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(1.0)),
+            );
             for (key, present) in [
                 ("vpn", bus.vpn_min.is_some() || bus.vpn_max.is_some()),
                 ("vpp", bus.vpp_min.is_some() || bus.vpp_max.is_some()),
@@ -1845,6 +1897,27 @@ impl Writer {
             let base = vbase[k];
             for key in ["vm", "vmin", "vmax"] {
                 bus.scale(key, |kv| kv / base, voltage(base));
+            }
+            let scale = bus
+                .fields
+                .remove("_pio_pair_voltage_scale")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0);
+            for key in ["vm_pair_lb", "vm_pair_ub"] {
+                if let Some(Value::Array(rows)) = bus.fields.get_mut(key) {
+                    for row in rows {
+                        if let Some(bound) = row.as_array_mut().and_then(|r| r.get_mut(2))
+                            && let Some(value) = bound.as_f64()
+                        {
+                            let next_scale = base * vsf;
+                            // Preserve the stated number on an unchanged base.
+                            // A changed base rescales only the bound, not IDs.
+                            if scale.to_bits() != next_scale.to_bits() {
+                                *bound = num(value * scale / next_scale);
+                            }
+                        }
+                    }
+                }
             }
             bus.map_numbers("va", f64::to_radians, angle);
             // Grounding impedance rebases on the bus impedance base.

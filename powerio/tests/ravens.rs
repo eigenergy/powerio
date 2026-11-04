@@ -209,3 +209,23 @@ fn genuine_mixed_profiles_and_excessive_nesting_are_refused() {
     let text = format!(r#"{{"ConnectivityNode":{{}},"nested":{nested}}}"#);
     assert!(parse(declared("case.json", &text, "ravens-json")).is_err());
 }
+
+#[test]
+fn a_switch_only_ravens_document_selects_distribution() {
+    for class in [
+        "Switch",
+        "Breaker",
+        "Fuse",
+        "Disconnector",
+        "GroundDisconnector",
+        "Sectionaliser",
+        "Jumper",
+    ] {
+        let doc = serde_json::json!({"ConnectivityNode":{"a":{"Ravens.cimObjectType":"ConnectivityNode"},"b":{"Ravens.cimObjectType":"ConnectivityNode"}},"Switch":{"s":{"Ravens.cimObjectType":class,"Switch.open":false,"ConductingEquipment.Terminals":[{"Ravens.cimObjectType":"Terminal","Terminal.ConnectivityNode":"ConnectivityNode::'a'","Terminal.phases":"PhaseCode.ABC"},{"Ravens.cimObjectType":"Terminal","Terminal.ConnectivityNode":"ConnectivityNode::'b'","Terminal.phases":"PhaseCode.ABC"}]}}});
+        let module = parse(declared("switch.json", &doc.to_string(), "ravens-json")).unwrap();
+        let PioValue::MulticonductorNetwork(net) = module.value() else {
+            panic!("{class}: wrong profile");
+        };
+        assert_eq!(net.switches().len(), 1, "{class}");
+    }
+}

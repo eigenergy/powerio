@@ -11,6 +11,7 @@
 //! impedance, tap arrays, polarity, inline line impedance) win over the
 //! recomputed defaults, so PMD in, PMD out does not alter fields.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value, json};
@@ -19,8 +20,9 @@ use crate::convert::TextEmission;
 use crate::diagnostics::codes as C;
 use crate::geo::CoordinateSpace;
 use crate::model::{
-    ConductorMatrix, Configuration, DistBus, DistLine, DistLineCode, DistLoadVoltageModel,
-    DistTransformer, DistWinding, DistWindingConn, Extras, MulticonductorNetwork, VoltageSource,
+    ConductorMatrix, Configuration, DistBus, DistLine, DistLineCode, DistLoad,
+    DistLoadVoltageModel, DistTransformer, DistWinding, DistWindingConn, Extras,
+    MulticonductorNetwork, VoltageSource,
 };
 
 /// Emits the ENGINEERING document.
@@ -46,6 +48,18 @@ pub(crate) fn emit_pmd_json_text(net: &MulticonductorNetwork) -> TextEmission {
                 &C::EMIT_PMD_FIELD_DROPPED,
                 format!("network: retained `{key}` metadata is not emitted to ENGINEERING"),
             );
+        }
+    }
+    for bus in net.buses() {
+        for key in ["pmd_vm_pair_lb", "pmd_vm_pair_ub"] {
+            if bus
+                .extras
+                .get(key)
+                .and_then(Value::as_array)
+                .is_some_and(|rows| !rows.is_empty())
+            {
+                w.warn(&C::EMIT_PMD_FIELD_DROPPED,format!("bus {}: retained pairwise voltage bounds {key} have no ENGINEERING slot; dropped",bus.id));
+            }
         }
     }
     for source in net
@@ -77,6 +91,137 @@ pub(crate) fn emit_pmd_json_text(net: &MulticonductorNetwork) -> TextEmission {
 /// otherwise demand O(n²) memory here. No physical element comes near this
 /// bound.
 const MAX_DIM: usize = 64;
+
+fn zip_phase_parts<'a>(load: &'a DistLoad, names: &mut BTreeSet<String>) -> Vec<Cow<'a, DistLoad>> {
+    let nominal = load.voltage_model.without_voltage_bounds();
+    let DistLoadVoltageModel::Zip {
+        alpha_z,
+        alpha_i,
+        alpha_p,
+        beta_z,
+        beta_i,
+        beta_p,
+        ..
+    } = &nominal
+    else {
+        return vec![Cow::Borrowed(load)];
+    };
+    let n = load.p_nom.len().max(load.q_nom.len());
+    if n <= 1 {
+        return vec![Cow::Borrowed(load)];
+    }
+    let coefficient = |values: &[f64], index: usize| {
+        values
+            .get(index)
+            .or_else(|| values.first())
+            .copied()
+            .unwrap_or(0.0)
+    };
+    let varies = |values: &[f64], powers: &[f64]| {
+        let active: Vec<_> = powers
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| **p != 0.0)
+            .map(|(i, _)| coefficient(values, i))
+            .collect();
+        active.windows(2).any(|w| w[0].total_cmp(&w[1]).is_ne())
+    };
+    if ![alpha_z, alpha_i, alpha_p]
+        .iter()
+        .any(|v| varies(v, &load.p_nom))
+        && ![beta_z, beta_i, beta_p]
+            .iter()
+            .any(|v| varies(v, &load.q_nom))
+    {
+        return vec![Cow::Borrowed(load)];
+    }
+    if load.terminal_map.len() < n {
+        return vec![Cow::Borrowed(load)];
+    }
+    (0..n)
+        .map(|index| Cow::Owned(zip_phase_part(load, index, n, names)))
+        .collect()
+}
+
+fn zip_phase_part(
+    load: &DistLoad,
+    index: usize,
+    n: usize,
+    names: &mut BTreeSet<String>,
+) -> DistLoad {
+    let coefficient = |values: &[f64], index: usize| {
+        values
+            .get(index)
+            .or_else(|| values.first())
+            .copied()
+            .unwrap_or(0.0)
+    };
+    let mut part = load.clone();
+    let stem = format!("{}_phase{}", load.name, index + 1);
+    let mut name = stem.clone();
+    let mut suffix = 1;
+    while !names.insert(name.to_lowercase()) {
+        name = format!("{stem}_{suffix}");
+        suffix += 1;
+    }
+    part.name = name;
+    part.terminal_map = if load.configuration == Configuration::Delta {
+        vec![
+            load.terminal_map[index].clone(),
+            load.terminal_map[(index + 1) % n].clone(),
+        ]
+    } else {
+        let mut map = vec![load.terminal_map[index].clone()];
+        if load.terminal_map.len() > n {
+            map.push(load.terminal_map[n].clone());
+        }
+        map
+    };
+    if load.configuration == Configuration::Delta {
+        part.configuration = Configuration::SinglePhase;
+    }
+    part.p_nom = vec![load.p_nom.get(index).copied().unwrap_or(0.0)];
+    part.q_nom = vec![load.q_nom.get(index).copied().unwrap_or(0.0)];
+    match &mut part.voltage_model {
+        DistLoadVoltageModel::Zip {
+            v_nom,
+            alpha_z,
+            alpha_i,
+            alpha_p,
+            beta_z,
+            beta_i,
+            beta_p,
+        }
+        | DistLoadVoltageModel::BoundedZip {
+            v_nom,
+            alpha_z,
+            alpha_i,
+            alpha_p,
+            beta_z,
+            beta_i,
+            beta_p,
+            ..
+        } => {
+            for values in [v_nom, alpha_z, alpha_i, alpha_p, beta_z, beta_i, beta_p] {
+                if !values.is_empty() {
+                    *values = vec![coefficient(values, index)];
+                }
+            }
+        }
+        _ => {}
+    }
+    if let Some(mut zipv) = load.extras.get("zipv").cloned()
+        && let Some(values) = zipv.as_array_mut()
+        && values.len() >= 7
+    {
+        let cutoff = values[6].clone();
+        *values = vec![json!(0.0); 6];
+        values.push(cutoff);
+        part.extras.insert("zipv".into(), zipv);
+    }
+    part.extras.remove("kv");
+    part
+}
 
 struct Writer {
     warnings: crate::diagnostics::Diagnostics,
@@ -758,17 +903,13 @@ impl Writer {
                     "t_connections".into(),
                     json!(self.conns(&s.terminal_map_to, &what)),
                 );
-                // The reader's stash carries the source's series matrices;
-                // otherwise PMD models a dss switch as a tiny series
-                // resistance, 1e-4 ohm/m over the forced 0.001 m length
-                // (the product form keeps the value bit identical).
-                let rs = s.extras.get("pmd_rs").cloned().unwrap_or_else(|| {
-                    let mut rs = zero_matrix(n);
-                    for (i, row) in rs.iter_mut().enumerate() {
-                        row[i] = 1e-4 * 0.001;
-                    }
-                    matrix(&rs)
-                });
+                // Retained physical matrices win. A typed ideal contact has
+                // zero impedance; OpenDSS dummy values belong to its parser.
+                let rs = s
+                    .extras
+                    .get("pmd_rs")
+                    .cloned()
+                    .unwrap_or_else(|| matrix(&zero_matrix(n)));
                 o.insert("rs".into(), rs);
                 let xs = s
                     .extras
@@ -814,7 +955,18 @@ impl Writer {
         if !net.loads().is_empty() {
             let mut loads = Map::new();
             let buses_by_id = buses_by_id(net);
-            for l in net.loads() {
+            let mut names: BTreeSet<_> =
+                net.loads().iter().map(|l| l.name.to_lowercase()).collect();
+            let mut prepared = Vec::new();
+            for original in net.loads() {
+                let parts = zip_phase_parts(original, &mut names);
+                if parts.len() > 1 {
+                    self.warn(&C::EMIT_PMD_VALUE_SUBSTITUTED,format!("load {}: per-phase ZIP laws are written as {} single-phase loads without collapsing coefficients",original.name,parts.len()));
+                }
+                prepared.extend(parts);
+            }
+            for part in &prepared {
+                let l = part.as_ref();
                 let mut o = Map::new();
                 let what = format!("load {}", l.name);
                 let connections = self.conns(&l.terminal_map, &what);
@@ -896,25 +1048,36 @@ impl Writer {
                         insert_vm_nom(v_nom);
                         // PMD spells the law `ZIP` and states the coefficients
                         // as `zipv`: Z, I, P for active power, Z, I, P for
-                        // reactive power, then the cutoff voltage. The stash
-                        // wins when the source carried one.
+                        // reactive power, then the cutoff voltage. Typed phase
+                        // coefficients win; only the cutoff stays in the stash.
                         let typed = [alpha_z, alpha_i, alpha_p, beta_z, beta_i, beta_p];
-                        if let Some(zipv) = l.extras.get("zipv") {
-                            o.insert("zipv".into(), zipv.clone());
-                        } else if typed.iter().all(|v| !v.is_empty()) {
-                            let first = |v: &[f64]| v.first().copied().unwrap_or(0.0);
+                        if typed.iter().all(|v| !v.is_empty()) {
+                            let p = l.p_nom.iter().position(|v| *v != 0.0).unwrap_or(0);
+                            let q = l.q_nom.iter().position(|v| *v != 0.0).unwrap_or(0);
+                            let value = |v: &[f64], index: usize| {
+                                v.get(index).or_else(|| v.first()).copied().unwrap_or(0.0)
+                            };
+                            let cutoff = l
+                                .extras
+                                .get("zipv")
+                                .and_then(Value::as_array)
+                                .and_then(|v| v.get(6))
+                                .and_then(Value::as_f64)
+                                .unwrap_or(0.0);
                             o.insert(
                                 "zipv".into(),
                                 json!([
-                                    first(alpha_z),
-                                    first(alpha_i),
-                                    first(alpha_p),
-                                    first(beta_z),
-                                    first(beta_i),
-                                    first(beta_p),
-                                    0.0
+                                    value(alpha_z, p),
+                                    value(alpha_i, p),
+                                    value(alpha_p, p),
+                                    value(beta_z, q),
+                                    value(beta_i, q),
+                                    value(beta_p, q),
+                                    cutoff
                                 ]),
                             );
+                        } else if let Some(zipv) = l.extras.get("zipv") {
+                            o.insert("zipv".into(), zipv.clone());
                         }
                         "ZIP"
                     }
