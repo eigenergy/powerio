@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Activate PMD load-shape profiles in BMOPF 0.2.0 only when their semantics
+  are representable: convert numeric time axes from hours to seconds, preserve
+  unsupported axes and options verbatim under extras, require aligned finite
+  steps across active profiles, and reuse a per-emission compatibility index. Keep schema 0.1.0 references inactive
+  (#771).
+
 - Preserve explicit system frequency through the PowerIO PowerModels JSON
   metadata extension and dictionary construction (#773).
 

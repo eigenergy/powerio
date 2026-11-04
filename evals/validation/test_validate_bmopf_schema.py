@@ -49,6 +49,28 @@ class SnapshotValidationTests(unittest.TestCase):
         self.assertTrue(errors)
         self.assertTrue(all(error.startswith("snapshot[1]:") for error in errors))
 
+    def test_snapshot_writer_exception_keeps_snapshot_index(self):
+        emit = validation.powerio.emit
+        calls = 0
+
+        def fail_second(module, format):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise RuntimeError("injected writer failure")
+            return emit(module, format)
+
+        with patch.object(validation.powerio, "emit", side_effect=fail_second):
+            errors = validation.validate_case(self.validators, self.schema_ids, self.case)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("snapshot[1]:"))
+        self.assertIn("injected writer failure", errors[0])
+
+    def test_whole_time_series_is_not_emitted_as_one_network(self):
+        module = validation.powerio.parse(self.case)
+        with self.assertRaisesRegex(Exception, "REQUEST.EMIT.UNSUPPORTED_VALUE_TYPE"):
+            validation.powerio.emit(module, "bmopf-json")
+
 
 if __name__ == "__main__":
     unittest.main()
