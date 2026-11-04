@@ -137,6 +137,8 @@ pub fn write_powermodels_json(net: &BalancedNetwork) -> TextEmission {
     let mut root = Map::new();
     root.insert("name".into(), Value::String(net.name().clone()));
     root.insert("baseMVA".into(), jnum(net.base_mva()));
+    // PowerIO metadata extension: PowerModels ignores unknown top-level keys.
+    root.insert("base_frequency".into(), jnum(net.base_frequency()));
     root.insert("per_unit".into(), Value::Bool(true));
     root.insert("source_type".into(), Value::String("matpower".into()));
     root.insert("source_version".into(), Value::String("2".into()));
@@ -472,6 +474,13 @@ pub(crate) fn parse_powermodels_json_source(
             message: "missing, nonpositive, or non-finite numeric `baseMVA`".into(),
         })?;
     let per_unit = document.per_unit.unwrap_or(false);
+    let base_frequency = document.base_frequency;
+    if !base_frequency.is_finite() || base_frequency <= 0.0 {
+        return Err(Error::FormatRead {
+            format: FMT,
+            message: "nonpositive or non-finite `base_frequency`".into(),
+        });
+    }
     if document.multinetwork.unwrap_or(false) {
         warnings.push(
             &codes::READ_POWERMODELS_RECORD_DROPPED,
@@ -490,7 +499,7 @@ pub(crate) fn parse_powermodels_json_source(
     let net = BalancedNetwork::from_tables(BalancedNetworkTables {
         name,
         base_mva,
-        base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
+        base_frequency,
         geo: None,
         case_metadata: crate::network::CaseMetadata::default(),
         detailed_connectivity: None,
@@ -541,6 +550,10 @@ pub(crate) fn parse_powermodels_json_source(
     Ok(net)
 }
 
+fn default_base_frequency() -> f64 {
+    crate::network::DEFAULT_BASE_FREQUENCY
+}
+
 /// The typed document. Unknown top-level sections are ignored, as the tree
 /// walk before it ignored them; unknown element fields land in each row's
 /// flattened extras.
@@ -548,6 +561,10 @@ pub(crate) fn parse_powermodels_json_source(
 struct Document {
     #[serde(rename = "baseMVA", default, deserialize_with = "lenient_f64")]
     base_mva: Option<f64>,
+    // Optional PowerIO metadata, in Hz. Strict numeric decoding prevents an
+    // invalid stated value from silently becoming the 60 Hz default.
+    #[serde(default = "default_base_frequency")]
+    base_frequency: f64,
     #[serde(default, deserialize_with = "lenient_bool")]
     per_unit: Option<bool>,
     #[serde(default, deserialize_with = "lenient_bool")]

@@ -384,3 +384,26 @@ conversion-matrix checks without a baseline change, the eight facade RAVENS
 tests and all seven CI Clippy configurations on Rust 1.99.0. Formatting and
 whitespace checks pass. The companion refresh is `4e67c67`; consult the checks
 on the new Rust head for the paired binding result before approving a merge.
+
+## Main refresh after #771, 2026-11-04
+
+The refresh onto `baadf749` retains #783's frequency metadata fix and #771's
+supported PMD-to-BMOPF profile activation. The changelog keeps every entry.
+The BMOPF writer uses #771's per-emission profile index, with #746's retained
+PMD provenance checks applied while preparing that index: clearing the source
+format hint must neither reinterpret PMD hours as native BMOPF seconds nor
+activate an omitted PMD `replace` default. Supported ENGINEERING profiles still
+activate in schema 0.2.0; schema 0.1.0, MATHEMATICAL and unknown PMD profiles
+remain source-only with diagnostics.
+
+The regression checks cover source-format reset, explicit and omitted
+`replace`, both schema versions, foreign PMD markers and a second canonical
+BMOPF read/write without multiplying seconds by 3,600 again. No fixtures or
+schema snapshots are added. The Julia companion remains `4e67c67`.
+
+Local validation of the merged tree passed 960 distribution tests (18
+ignored), all 14 conversion checks with no additional baseline edit, the 14
+focused transmission frequency/RAVENS tests and all seven Clippy
+configurations on Rust 1.99.0. Formatting and whitespace checks passed.
+Consult CI on the pushed refresh, including its paired Julia binding gate,
+before approving any merge.

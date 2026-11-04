@@ -36,6 +36,13 @@ egret's own MATPOWER parser uses the same reductions (bus type as
 map, piecewise to `[[mw, cost], ...]`, impedances left per unit), which is why a
 MATPOWER case taken through powerio to egret JSON matches egret's direct import.
 
+The PowerIO PowerModels JSON profile accepts an optional top-level
+`base_frequency` in Hz as a PowerIO metadata extension, not a standard
+PowerModels field. Its value must be a positive finite JSON number; omission
+defaults to 60 Hz, while `null`, strings and invalid numbers are rejected. Fresh
+PowerIO output includes the field. Formats without frequency support, including
+MATPOWER, still report the loss of a non-default frequency.
+
 ## Validation
 
 The harness script `evals/validation/run_validation.sh` checks powerio against
