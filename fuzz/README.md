@@ -14,6 +14,7 @@ structured `Err`, with no panic and no undefined behavior.
 | `rawx` | PSS/E RAWX 35 JSON tables; accepted inputs must survive IR serialization/deserialization, and successful fresh RAWX output must parse again |
 | `psse_dyr` | bounded PSS/E DYR dynamic-model record parsing with exact-source preservation |
 | `dss`, `pmd_json` | the distribution readers, which also write the parsed network back and project its graph, so a count cap that a consumer sizes an allocation from is exercised on both sides |
+| `ravens_pmd_math` | both RAVENS profiles and PMD MATHEMATICAL, selected explicitly; accepted modules exercise fresh RAVENS and MATHEMATICAL emission |
 | `dist_classify` | the distribution `.json` classifier, which runs before any reader cap applies, and the reader and writers it names |
 | `dss_includes`, `dss_includes_fs` | OpenDSS include resolution over in-memory buffers and over a real filesystem tree with an escaping symbolic link |
 

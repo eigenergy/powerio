@@ -902,6 +902,114 @@ mod tests {
     }
 
     #[test]
+    fn changed_bus_mrids_are_diagnosed_and_stable_after_readback() {
+        let network = network();
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        let expected =
+            powerio_core::cim::deterministic_mrid("https://powerio.dev/cgmes", "bus", "bus-1");
+        assert!(output.warnings.iter().any(|d| d.info.code
+            == codes::EMIT_CGMES.value_substituted.code
+            && d.contains(&format!(
+                "uid `bus-1` is replaced by CGMES TopologicalNode mRID `{expected}`"
+            ))));
+        let restored = read::read_cgmes_documents(output.files, Some("identifiers"))
+            .unwrap()
+            .network;
+        assert_eq!(restored.buses()[0].uid.as_deref(), Some(expected.as_str()));
+        let next = write::write_cgmes(&restored, CgmesVersion::V3_0).unwrap();
+        assert!(
+            !next
+                .warnings
+                .iter()
+                .any(|d| d.contains("is replaced by CGMES TopologicalNode mRID"))
+        );
+    }
+
+    #[test]
+    fn one_sided_voltage_limit_does_not_create_contradictory_default_bounds() {
+        let mut network = network();
+        network.buses_mut()[0].vmin = 1.2;
+        network.buses_mut()[0].vmax = 1.3;
+        let mut output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        for (_, xml) in &mut output.files {
+            *xml = xml
+                .lines()
+                .filter(|line| !line.contains("VoltageLevel.highVoltageLimit"))
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+        let restored = read::read_cgmes_documents(output.files, Some("one-sided-limit")).unwrap();
+        assert!(
+            restored
+                .warnings
+                .iter()
+                .any(|d| d.info.code == codes::READ_CGMES_VALUE_APPROXIMATED.code
+                    && d.contains("one-sided voltage limit"))
+        );
+        assert!(restored.network.buses()[0].vmin <= restored.network.buses()[0].vmax);
+        let levels = &restored
+            .network
+            .detailed_connectivity()
+            .as_ref()
+            .unwrap()
+            .voltage_levels;
+        assert!(levels.iter().any(|level| {
+            level
+                .low_voltage_limit_kv
+                .is_some_and(|v| (v - 276.0).abs() < 1e-12)
+                && level.high_voltage_limit_kv.is_none()
+        }));
+    }
+
+    #[test]
+    fn flat_voltage_limits_populate_calculation_buses() {
+        let mut network = network();
+        network.buses_mut()[0].vmin = 0.94;
+        network.buses_mut()[0].vmax = 1.06;
+        network.buses_mut()[1].vmin = 0.96;
+        network.buses_mut()[1].vmax = 1.04;
+        for version in [CgmesVersion::V2_4_15, CgmesVersion::V3_0] {
+            let output = write::write_cgmes(&network, version).unwrap();
+            let restored = read::read_cgmes_documents(output.files, Some("voltage-limits"))
+                .unwrap()
+                .network;
+            for (before, after) in network.buses().iter().zip(restored.buses()) {
+                assert!((before.vmin - after.vmin).abs() < 1e-12);
+                assert!((before.vmax - after.vmax).abs() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn bus_area_loss_is_reported_without_area_records() {
+        let mut network = network();
+        let default = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        assert!(
+            !default
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("bus area assignment(s)"))
+        );
+        network.buses_mut()[0].area = 0;
+        network.buses_mut()[1].area = 2;
+        let output = write::write_cgmes(&network, CgmesVersion::V3_0).unwrap();
+        assert!(output.warnings.iter().any(|warning| warning.info.code
+            == codes::EMIT_CGMES.field_dropped.code
+            && warning.contains("2 bus area assignment(s)")));
+        let restored = read::read_cgmes_documents(output.files, Some("bus-areas"))
+            .unwrap()
+            .network;
+        assert_eq!(
+            restored
+                .buses()
+                .iter()
+                .map(|bus| bus.area)
+                .collect::<Vec<_>>(),
+            vec![1, 1]
+        );
+    }
+
+    #[test]
     fn derived_cgmes_limits_report_separate_current_ratings() {
         let mut network = network();
         network.branches_mut()[0].rate_a = 100.0;

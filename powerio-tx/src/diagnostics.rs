@@ -178,6 +178,7 @@ pub mod codes {
     emit_family!(EMIT_POWERMODELS, "POWERMODELS", "PowerModels JSON");
     emit_family!(EMIT_EGRET, "EGRET", "egret JSON");
     emit_family!(EMIT_SURGE, "SURGE", "Surge JSON");
+    emit_family!(EMIT_RAVENS, "RAVENS", "MG-RAVENS JSON");
     emit_family!(EMIT_XIIDM, "XIIDM", "XIIDM 1.17 XML");
     emit_family!(EMIT_JIIDM, "JIIDM", "JIIDM 1.17 JSON");
     emit_family!(EMIT_CGMES, "CGMES", "CGMES 3.0");
@@ -326,6 +327,20 @@ pub mod codes {
 
         READ_SURGE_RETAINED_SOURCE_ONLY = "READ.SURGE.RETAINED_SOURCE_ONLY", Warning,
             "a Surge section survives in the retained source only";
+
+        // READ.RAVENS: the balanced MG-RAVENS profile.
+        READ_RAVENS_VALUE_DEFAULTED = "READ.RAVENS.VALUE_DEFAULTED", Warning,
+            "a value the balanced model needs is absent from the MG-RAVENS document and was defaulted";
+        READ_RAVENS_VALUE_SUBSTITUTED = "READ.RAVENS.VALUE_SUBSTITUTED", Warning,
+            "an MG-RAVENS value could not be used as stated and was replaced";
+        READ_RAVENS_VALUE_COLLAPSED = "READ.RAVENS.VALUE_COLLAPSED", Warning,
+            "an MG-RAVENS object was reduced to what one balanced element can carry";
+        READ_RAVENS_RECORD_DROPPED = "READ.RAVENS.RECORD_DROPPED", Warning,
+            "an MG-RAVENS equipment record could not be mapped and was dropped";
+        READ_RAVENS_REFERENCE_DROPPED = "READ.RAVENS.REFERENCE_DROPPED", Warning,
+            "an MG-RAVENS pointer names a connectivity node the document does not declare";
+        READ_RAVENS_RETAINED_SOURCE_ONLY = "READ.RAVENS.RETAINED_SOURCE_ONLY", Warning,
+            "MG-RAVENS objects of a class the balanced mapping does not read stay only in the retained source";
 
         READ_UCTE_VALUE_DEFAULTED = "READ.UCTE.VALUE_DEFAULTED", Warning,
             "a UCTE-DEF value the model needs was not in the record and was defaulted";
@@ -537,7 +552,7 @@ pub mod codes {
 
     /// Every write target's family, in the order [`super::registry`] reports
     /// them.
-    pub const EMIT_FAMILIES: [&EmitFamily; 14] = [
+    pub const EMIT_FAMILIES: [&EmitFamily; 15] = [
         &EMIT_MATPOWER,
         &EMIT_PSSE,
         &EMIT_PSLF,
@@ -547,6 +562,7 @@ pub mod codes {
         &EMIT_POWERMODELS,
         &EMIT_EGRET,
         &EMIT_SURGE,
+        &EMIT_RAVENS,
         &EMIT_XIIDM,
         &EMIT_JIIDM,
         &EMIT_CGMES,
@@ -578,6 +594,7 @@ impl TargetFormat {
             TargetFormat::PowerModelsJson => &codes::EMIT_POWERMODELS,
             TargetFormat::EgretJson => &codes::EMIT_EGRET,
             TargetFormat::SurgeJson => &codes::EMIT_SURGE,
+            TargetFormat::RavensJson => &codes::EMIT_RAVENS,
             TargetFormat::Xiidm => &codes::EMIT_XIIDM,
             TargetFormat::Jiidm => &codes::EMIT_JIIDM,
             TargetFormat::Cgmes => &codes::EMIT_CGMES,

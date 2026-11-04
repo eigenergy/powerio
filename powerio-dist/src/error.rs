@@ -27,7 +27,9 @@ pub enum Error {
         message: String,
     },
 
-    #[error("unknown distribution format `{0}` (expected dss, pmd, bmopf, or cim-dist)")]
+    #[error(
+        "unknown distribution format `{0}` (expected dss, pmd, pmd-math, bmopf, cim-dist, gridlabd, or ravens-json)"
+    )]
     UnknownFormat(String),
 
     #[error("neutral Kron reduction failed: {message}")]

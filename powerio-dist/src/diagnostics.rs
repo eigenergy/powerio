@@ -366,6 +366,68 @@ pub mod codes {
         READ_CIM_DIST_IMPEDANCE_UNRESOLVED = "READ.CIM_DIST.IMPEDANCE_UNRESOLVED", Error,
             "a line segment states no impedance the reader can carry";
 
+        // READ.PMD_MATH: the MATHEMATICAL model decoded, but not representable
+        // as stated.
+        READ_PMD_MATH_VALUE_DEFAULTED = "READ.PMD_MATH.VALUE_DEFAULTED", Warning,
+            "a value the model needs is absent from the MATHEMATICAL document and was defaulted";
+        READ_PMD_MATH_VALUE_SUBSTITUTED = "READ.PMD_MATH.VALUE_SUBSTITUTED", Warning,
+            "a MATHEMATICAL value was restated on a base or form the model carries";
+        READ_PMD_MATH_VALUE_COLLAPSED = "READ.PMD_MATH.VALUE_COLLAPSED", Warning,
+            "MATHEMATICAL structure was reduced to what one model field can carry";
+        READ_PMD_MATH_RECORD_DROPPED = "READ.PMD_MATH.RECORD_DROPPED", Warning,
+            "a MATHEMATICAL object could not be mapped and was dropped";
+        READ_PMD_MATH_RETAINED_SOURCE_ONLY = "READ.PMD_MATH.RETAINED_SOURCE_ONLY", Warning,
+            "a MATHEMATICAL object or field survives untyped or in extras rather than in a typed field";
+        READ_PMD_MATH_SOURCE_MALFORMED = "READ.PMD_MATH.SOURCE_MALFORMED", Warning,
+            "a MATHEMATICAL value is not the shape its key declares";
+        READ_PMD_MATH_REFERENCE_DROPPED = "READ.PMD_MATH.REFERENCE_DROPPED", Warning,
+            "a MATHEMATICAL object names a bus or map target the document does not define";
+
+        // EMIT.PMD_MATH: what the MATHEMATICAL writer cannot state.
+        EMIT_PMD_MATH_FIELD_DROPPED = "EMIT.PMD_MATH.FIELD_DROPPED", Warning,
+            "a field the MATHEMATICAL model has no key for was dropped";
+        EMIT_PMD_MATH_RECORD_DROPPED = "EMIT.PMD_MATH.RECORD_DROPPED", Warning,
+            "an element the MATHEMATICAL writer does not lower was dropped";
+        EMIT_PMD_MATH_VALUE_DEFAULTED = "EMIT.PMD_MATH.VALUE_DEFAULTED", Warning,
+            "a value the MATHEMATICAL model requires was synthesized";
+        EMIT_PMD_MATH_VALUE_SUBSTITUTED = "EMIT.PMD_MATH.VALUE_SUBSTITUTED", Warning,
+            "a stated value was replaced by one the MATHEMATICAL model can hold";
+
+        // READ.RAVENS: the multiconductor MG-RAVENS profile decoded, but
+        // not representable in the model as stated.
+        READ_RAVENS_DIST_CLASS_UNMAPPED = "READ.RAVENS_DIST.CLASS_UNMAPPED", Warning,
+            "MG-RAVENS objects of a class the distribution mapping does not read were kept untyped";
+        READ_RAVENS_DIST_FIELD_UNMAPPED = "READ.RAVENS_DIST.FIELD_UNMAPPED", Warning,
+            "a property of a mapped MG-RAVENS object has no model field and was not carried";
+        READ_RAVENS_DIST_RECORD_DROPPED = "READ.RAVENS_DIST.RECORD_DROPPED", Warning,
+            "an MG-RAVENS equipment record could not be mapped and was kept untyped";
+        READ_RAVENS_DIST_VALUE_DEFAULTED = "READ.RAVENS_DIST.VALUE_DEFAULTED", Warning,
+            "a value the model needs is absent from the MG-RAVENS document and was defaulted";
+        READ_RAVENS_DIST_VALUE_SUBSTITUTED = "READ.RAVENS_DIST.VALUE_SUBSTITUTED", Warning,
+            "an MG-RAVENS value outside the mapped set was read as the nearest one";
+        READ_RAVENS_DIST_VALUE_COLLAPSED = "READ.RAVENS_DIST.VALUE_COLLAPSED", Warning,
+            "MG-RAVENS structure was reduced to what one model field can carry";
+        READ_RAVENS_DIST_VALUE_CONFLICT = "READ.RAVENS_DIST.VALUE_CONFLICT", Warning,
+            "two MG-RAVENS statements of one value disagree and the first was kept";
+        READ_RAVENS_DIST_RETAINED_SOURCE_ONLY = "READ.RAVENS_DIST.RETAINED_SOURCE_ONLY", Warning,
+            "an MG-RAVENS object survives untyped: it round-trips to MG-RAVENS and is dropped elsewhere";
+
+        // EMIT.RAVENS: what the multiconductor MG-RAVENS writer cannot state.
+        EMIT_RAVENS_DIST_FIELD_DROPPED = "EMIT.RAVENS_DIST.FIELD_DROPPED", Warning,
+            "a field MG-RAVENS has no property for was dropped";
+        EMIT_RAVENS_DIST_RECORD_DROPPED = "EMIT.RAVENS_DIST.RECORD_DROPPED", Warning,
+            "an element the MG-RAVENS writer does not emit was dropped";
+        EMIT_RAVENS_DIST_EXTRAS_DROPPED = "EMIT.RAVENS_DIST.EXTRAS_DROPPED", Warning,
+            "a passthrough extra with no MG-RAVENS property was dropped";
+        EMIT_RAVENS_DIST_VALUE_COLLAPSED = "EMIT.RAVENS_DIST.VALUE_COLLAPSED", Warning,
+            "structure was reduced to what one MG-RAVENS property can carry";
+        EMIT_RAVENS_DIST_VALUE_SUBSTITUTED = "EMIT.RAVENS_DIST.VALUE_SUBSTITUTED", Warning,
+            "a stated value was replaced by one MG-RAVENS can hold";
+        EMIT_RAVENS_DIST_NOT_A_NUMBER = "EMIT.RAVENS_DIST.NOT_A_NUMBER", Warning,
+            "a non-finite value was written as 0, because JSON has no Inf or NaN";
+        EMIT_RAVENS_DIST_SOURCE_SPLIT = "EMIT.RAVENS_DIST.SOURCE_SPLIT", Warning,
+            "an unbalanced source is written as one single phase EnergySource per phase conductor, with the same terminal phasors";
+
         // EMIT.CIM_DIST: what the distribution CIM writer cannot state.
         EMIT_CIM_DIST_FIELD_DROPPED = "EMIT.CIM_DIST.FIELD_DROPPED", Warning,
             "a field distribution CIM has no property for was dropped";

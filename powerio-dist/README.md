@@ -8,7 +8,21 @@ IEEE PES Task Force on Benchmarking Multiconductor OPF published at
 CIM. It reads BMOPF schema 0.1.0 and 0.2.0 and writes 0.2.0. Distribution CIM
 (`cim-dist`) is CIM100 RDF/XML, the iec61970cim17v40 and iec61968cim13v13
 release that GridAPPS-D and CIMHub exchange, read from one document or a
-directory and written as one document.
+directory and written as one document. PMD's MATHEMATICAL model
+(`pmd-math-json`), the per unit, index keyed form PMD builds its JuMP models
+from, is written as `transform_data_model` writes it (loss model
+transformers, voltage base flood, per unit rebasing, Kron reduction) and read
+back through its `map`. MG-RAVENS JSON (`ravens-json`), the LANL CIM-derived
+microgrid schema at <https://github.com/lanl-ansi/MG-RAVENS>, nests per-phase
+equipment (`ACLineSegmentPhase`, `EnergyConsumerPhase`,
+`PerLengthPhaseImpedance` matrices, `TransformerTank` ends with catalog
+`TransformerEndInfo` records, `Ground` at grounded nodes) under the CIM class
+hierarchy; the reader lands it in the same wire-coordinate model, so a RAVENS
+feeder converts to every other distribution format and back. It is the
+multiconductor profile of a format whose balanced profile lives in
+`powerio-tx` under the same token; `powerio_tnd::formats::ravens` picks the
+reader from the document, and each reader refuses the other's profile and
+points at it.
 
 SINCAL profiles are provided by `powerio-tnd` and the `powerio` facade.
 This crate owns the multiconductor model and its distribution formats.

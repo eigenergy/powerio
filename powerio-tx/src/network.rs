@@ -1434,6 +1434,10 @@ pub enum SourceFormat {
     /// A SINCAL project read using the explicitly selected balanced profile.
     #[serde(rename = "sincal")]
     Sincal,
+    /// Read from an MG-RAVENS JSON document (the LANL CIM-derived interchange
+    /// schema), balanced subset.
+    #[serde(rename = "ravens-json")]
+    RavensJson,
 }
 
 impl SourceFormat {
@@ -1460,6 +1464,7 @@ impl SourceFormat {
             SourceFormat::PypsaCsv => "pypsa-csv",
             SourceFormat::Goc3Json => "goc3-json",
             SourceFormat::SurgeJson => "surge-json",
+            SourceFormat::RavensJson => "ravens-json",
             SourceFormat::DeepMindOpfDataJson => "opfdata-json",
             SourceFormat::Xiidm => "xiidm",
             SourceFormat::Jiidm => "jiidm",
@@ -6011,6 +6016,7 @@ mod tests {
             SourceFormat::PypsaCsv,
             SourceFormat::Goc3Json,
             SourceFormat::SurgeJson,
+            SourceFormat::RavensJson,
             SourceFormat::DeepMindOpfDataJson,
             SourceFormat::Xiidm,
             SourceFormat::Jiidm,
@@ -6035,6 +6041,7 @@ mod tests {
                 | SourceFormat::PypsaCsv
                 | SourceFormat::Goc3Json
                 | SourceFormat::SurgeJson
+                | SourceFormat::RavensJson
                 | SourceFormat::DeepMindOpfDataJson
                 | SourceFormat::Xiidm
                 | SourceFormat::Jiidm

@@ -1,5 +1,9 @@
 //! Diagnostics owned by integrated modeling and cross-model transforms.
 powerio_core::diagnostic_codes! {
+    // PARSE.RAVENS: the MG-RAVENS adapter that spans both models.
+    PARSE_RAVENS_MIXED_PROFILE = "PARSE.RAVENS.MIXED_PROFILE", Error,
+        "an MG-RAVENS document carries both the balanced and the multiconductor profile's classes",
+        category = Parse;
     // LOWER: the multiconductor to balanced pass.
     TRANSFORM_MULTI_TO_BALANCED_COMPONENT_COORDINATES_DROPPED =
         "TRANSFORM.MULTI_TO_BALANCED.COMPONENT_COORDINATES_DROPPED", Warning,

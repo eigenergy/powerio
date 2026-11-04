@@ -18,6 +18,7 @@ implemented by a release and keep their published bytes and identifiers.
 | 2 | v0.11.5 | `pio-ir`, version `2` | `pio-ir/2/0.11.5/schema.json` | yes |
 | 2 | v0.11.6 | `pio-ir`, version `2` | `pio-ir/2/0.11.6/schema.json` | yes |
 | 2 | v0.11.7 | `pio-ir`, version `2` | `pio-ir/2/0.11.7/schema.json` | yes |
+| 2 | next release (0.11.8 catalog) | `pio-ir`, version `2` | `pio-ir/2/0.11.8/schema.json` | known source-format names only |
 
 The current document begins:
 
@@ -80,6 +81,13 @@ The 0.11.7 snapshot adds the optional `hvdc_treatment` field to
 `DcPfInstance` and `AcPfInstance` and its `HvdcTreatment` definition
 (`fixed_injection` or `ignore`).
 
+The current 0.11.8 catalog adds `ravens-json` to both source-format lists and
+`pmd-math-json` to the distribution list. The published 0.11.7 snapshot remains
+byte exact. This advances the catalog identifier only: IR stays at version 2,
+the C ABI stays at 7, and package release versions change at release time.
+An older reader rejects a document naming a new source format rather than
+silently reinterpret it; documents using the earlier names remain compatible.
+
 The release name in the snapshot path does not create a new IR version.
 A later release without catalog changes can reuse that snapshot (0.11.2
 reused 0.11.1). CI preserves existing definitions and document rules, with
@@ -109,9 +117,10 @@ historical identifiers are `pio-package/0.1`, `pio-package/0.2`,
 `pio-package/0.9/schema.json`, `pio-module/1/schema.json`,
 `pio-ir/2/schema.json`, `pio-ir/2/0.11.1/schema.json`,
 `pio-ir/2/0.11.3/schema.json`, `pio-ir/2/0.11.4/schema.json`,
-`pio-ir/2/0.11.5/schema.json`, and `pio-ir/2/0.11.6/schema.json` beneath
+`pio-ir/2/0.11.5/schema.json`, `pio-ir/2/0.11.6/schema.json`, and
+`pio-ir/2/0.11.7/schema.json` beneath
 `https://powerio.dev/schema/`. The current schema uses
-`pio-ir/2/0.11.7/schema.json` under that same root.
+`pio-ir/2/0.11.8/schema.json` under that same root.
 The documentation site serves the archive paths and published identifiers.
 
 ## Regenerating the current catalog
@@ -121,5 +130,5 @@ cargo run -p powerio --example generate_schemas --features schema -- docs/schema
 ```
 
 The generator writes the path named by `powerio::IR_SCHEMA_ID`, currently
-`pio-ir/2/0.11.7/schema.json`. It leaves earlier snapshots untouched. CI fails
+`pio-ir/2/0.11.8/schema.json`. It leaves earlier snapshots untouched. CI fails
 if the generated catalog differs from the committed file.

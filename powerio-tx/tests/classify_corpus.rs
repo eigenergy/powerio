@@ -51,6 +51,61 @@ const EXPECTED: &[(&str, &str, Option<&str>)] = &[
         Some("pmd-json"),
     ),
     ("dist/pmd/ieee13.json", "distribution", Some("pmd-json")),
+    // PMD exports of the ENGINEERING and MATHEMATICAL models of one case:
+    // the `data_model` value tells the two apart.
+    (
+        "dist/pmd/math/case3_balanced_cap_eng.json",
+        "distribution",
+        Some("pmd-json"),
+    ),
+    (
+        "dist/pmd/math/case3_balanced_cap_math.json",
+        "distribution",
+        Some("pmd-math-json"),
+    ),
+    (
+        "dist/pmd/math/case3_balanced_math.json",
+        "distribution",
+        Some("pmd-math-json"),
+    ),
+    (
+        "dist/pmd/math/case3_unbalanced_switch_eng.json",
+        "distribution",
+        Some("pmd-json"),
+    ),
+    (
+        "dist/pmd/math/case3_unbalanced_switch_math.json",
+        "distribution",
+        Some("pmd-math-json"),
+    ),
+    (
+        "dist/pmd/math/case3_unbalanced_ZIPloads_eng.json",
+        "distribution",
+        Some("pmd-json"),
+    ),
+    (
+        "dist/pmd/math/case3_unbalanced_ZIPloads_math.json",
+        "distribution",
+        Some("pmd-math-json"),
+    ),
+    (
+        "dist/pmd/math/ut_trans_2w_yy_eng.json",
+        "distribution",
+        Some("pmd-json"),
+    ),
+    (
+        "dist/pmd/math/ut_trans_2w_yy_math.json",
+        "distribution",
+        Some("pmd-math-json"),
+    ),
+    // The multiconductor MG-RAVENS profile: its top level tables name
+    // ConnectivityNode and PerLengthLineParameter, which the balanced
+    // profile does not.
+    (
+        "dist/ravens/case3_balanced.json",
+        "distribution",
+        Some("ravens-json"),
+    ),
     ("egret/case14.json", "transmission", Some("egret-json")),
     ("egret/case30.json", "transmission", Some("egret-json")),
     ("egret/case9.json", "transmission", Some("egret-json")),

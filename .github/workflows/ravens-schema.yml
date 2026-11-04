@@ -1,0 +1,61 @@
+name: RAVENS schema
+
+on:
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'powerio*/**'
+      - 'tests/data/**'
+      - 'evals/validation/ravens/**'
+      - '.github/workflows/ravens-schema.yml'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  profiles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out the MG-RAVENS oracle
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lanl-ansi/MG-RAVENS
+          ref: 094ad1163cb111df676884635aa03faa0538b688
+          path: mg-ravens-oracle
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Build the current CLI
+        run: cargo build --locked -p powerio-cli
+      - name: Install the native oracle
+        run: |
+          python -m venv .venv-ravens
+          .venv-ravens/bin/python -m pip install ./mg-ravens-oracle -r evals/validation/ravens/requirements.txt
+      - name: Generate the unmodified upstream schema
+        run: .venv-ravens/bin/python evals/validation/ravens/generate_schema.py mg-ravens-oracle target/ravens-upstream-schema.json
+      - name: Check both profiles through PowerIO IR
+        run: |
+          .venv-ravens/bin/python evals/validation/ravens/check.py \
+            --powerio target/debug/powerio --upstream mg-ravens-oracle \
+            --schema target/ravens-upstream-schema.json --report target/ravens-schema-report.md
+      - name: Upload schema evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ravens-schema-evidence
+          path: |
+            target/ravens-schema-report.md
+            target/ravens-upstream-schema.json
+          if-no-files-found: ignore

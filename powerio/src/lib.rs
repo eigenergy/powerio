@@ -116,7 +116,7 @@ pub const IR_MIN_VERSION: u64 = 2;
 
 /// The `$id` of the schema snapshot describing this build's structural types.
 /// The release in the path identifies the catalog, not a new IR version.
-pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/2/0.11.7/schema.json";
+pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/2/0.11.8/schema.json";
 
 /// Loss-preserving PSS/E transient-stability parsing and explicit study pairing.
 pub use powerio_tx::dynamic::{
@@ -605,6 +605,17 @@ pub fn parse_with_options(
         RoutedFamily::Contingency(kind) => parse_contingency_file(source, kind),
         RoutedFamily::Balanced(json_class) => format::parse_with_json_class(source, json_class)
             .map(|module| module.map_value(PioValue::from)),
+        // The two MG-RAVENS profiles share one token and one top level
+        // shape; the adapter that spans both models reads the profile from
+        // the document and hands the source to the crate that owns it.
+        RoutedFamily::Ravens => match powerio_tnd::formats::ravens::parse(source)? {
+            powerio_tnd::formats::ravens::RavensModule::Balanced(module) => {
+                Ok(module.map_value(PioValue::from))
+            }
+            powerio_tnd::formats::ravens::RavensModule::Multiconductor(module) => {
+                Ok(module.map_value(PioValue::from))
+            }
+        },
     }
 }
 
@@ -880,6 +891,10 @@ fn parse_egret(
 enum RoutedFamily {
     Balanced(Option<format::routing::JsonClass>),
     Distribution(Option<format::routing::DistributionFormat>),
+    /// An MG-RAVENS document, by token or by content. The profile, and so
+    /// the family, follows the document; `powerio_tnd::formats::ravens`
+    /// decides.
+    Ravens,
     Goc3,
     OpfData,
     PypsaDirectory,
@@ -1156,6 +1171,13 @@ fn json_family(
         JsonClass::Case(Detection::Known(SourceFormat::Transmission(
             TransmissionFormat::EgretJson,
         ))) => Ok(RoutedFamily::Egret),
+        // Either MG-RAVENS classification: the header classifier sees only
+        // the top level tables, and the adapter spanning both models reads
+        // the profile from the whole document.
+        JsonClass::Case(Detection::Known(
+            SourceFormat::Transmission(TransmissionFormat::RavensJson)
+            | SourceFormat::Distribution(format::routing::DistributionFormat::RavensJson),
+        )) => Ok(RoutedFamily::Ravens),
         JsonClass::Case(Detection::Known(SourceFormat::Distribution(format))) => {
             Ok(RoutedFamily::Distribution(Some(format)))
         }
@@ -1184,6 +1206,11 @@ fn family_of_token(token: &str) -> RoutedFamily {
         return RoutedFamily::Contingency(kind);
     }
 
+    if format::routing::parse_distribution_format(token)
+        == Some(format::routing::DistributionFormat::RavensJson)
+    {
+        return RoutedFamily::Ravens;
+    }
     if let Some(format) = format::routing::parse_distribution_format(token) {
         return RoutedFamily::Distribution(Some(format));
     }

@@ -21,6 +21,24 @@ fn fixture(rel: &str) -> PathBuf {
 }
 
 #[test]
+fn cross_model_metadata_loss_is_reported() {
+    let mut net = MulticonductorNetwork::new();
+    for key in ["bmopf_meta", "pmd_math_top_level"] {
+        net.extras_mut().insert(
+            key.into(),
+            serde_json::json!({"producer_note": "metadata-sentinel"}),
+        );
+    }
+    let emitted = emit_pmd_json(&net);
+    assert!(!emitted.text.contains("metadata-sentinel"));
+    for key in ["bmopf_meta", "pmd_math_top_level"] {
+        assert!(emitted.warnings.iter().any(|warning| {
+            warning.contains("EMIT.PMD.FIELD_DROPPED") && warning.contains(key)
+        }));
+    }
+}
+
+#[test]
 #[allow(clippy::float_cmp)]
 fn parse_the_reference_engineering_json() {
     let net = parse_pmd_file(fixture("pmd/ieee13.json")).unwrap();

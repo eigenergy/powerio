@@ -246,11 +246,23 @@ struct Writer {
 
 impl Writer {
     fn prepare_time_series_profiles(&mut self, net: &MulticonductorNetwork) {
-        let is_pmd = *net.source_format() == Some(crate::model::DistSourceFormat::PmdJson);
+        // Retained PMD provenance also survives canonical values whose source
+        // format hint was cleared. MATHEMATICAL/unknown PMD profiles have no
+        // supported ENGINEERING hour-axis interpretation here.
+        let engineering_marker = net
+            .extras()
+            .get("pmd_data_model")
+            .and_then(Value::as_str)
+            .is_some_and(|model| model.eq_ignore_ascii_case("ENGINEERING"));
+        let is_pmd = *net.source_format() == Some(crate::model::DistSourceFormat::PmdJson)
+            || engineering_marker;
+        let foreign_pmd = *net.source_format() == Some(crate::model::DistSourceFormat::PmdMathJson)
+            || net.extras().contains_key("pmd_math_top_level")
+            || net.extras().contains_key("pmd_data_model") && !is_pmd;
         self.time_series_profiles = net
             .untyped_objects()
             .iter()
-            .filter(|object| object.class == "time_series")
+            .filter(|object| object.class == "time_series" && !foreign_pmd)
             .filter_map(|object| {
                 let mut unplaced = Vec::new();
                 raw_bmopf_value(object, &mut unplaced)
@@ -854,7 +866,7 @@ impl Writer {
         self.clear_non_table_extras_slots(net, extras);
         for u in net.untyped_objects() {
             let subtype = u.class.strip_prefix("transformer.");
-            if subtype.is_none() && !RAW_BMOPF_EXTRAS_TABLES.contains(&u.class.as_str()) {
+            if !Self::is_emitted_untyped(u) {
                 continue;
             }
             let mut unplaced = Vec::new();
@@ -3062,7 +3074,19 @@ fn classify(t: &DistTransformer) -> Kind {
                 DistWindingConn::Wye,
                 DistWindingConn::Wye,
             ],
-        ) => Kind::CenterTap,
+        ) => {
+            // The compact center-tap subtype has one shared secondary
+            // leakage arm, so its two primary-to-secondary tests must
+            // agree. Keep unequal tests (including explicit zero) in the
+            // general pair table instead of silently symmetrizing them.
+            let xhl = t.xsc_pct.first().copied().unwrap_or(0.0);
+            let xht = t.xsc_pct.get(1).copied().unwrap_or(xhl);
+            if (xhl - xht).abs() > 0.0 {
+                Kind::NWinding
+            } else {
+                Kind::CenterTap
+            }
+        }
         (3, [DistWindingConn::Wye, DistWindingConn::Delta]) => Kind::WyeDelta,
         (3, [DistWindingConn::Delta, DistWindingConn::Wye]) => Kind::DeltaWye,
         // The decomposition indexes terminal_map[phase] and takes the last

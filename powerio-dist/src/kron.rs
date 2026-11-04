@@ -633,6 +633,162 @@ fn reduce_linecodes(
     Ok(())
 }
 
+fn reduced_switch_shunts<'a>(
+    switch: &crate::DistSwitch,
+    code: Option<&crate::DistLineCode>,
+    n: usize,
+    keep: &[usize],
+    frequency: f64,
+) -> Result<Vec<(&'a str, ConductorMatrix)>> {
+    let read = |key: &str| -> Result<Option<ConductorMatrix>> {
+        switch
+            .extras
+            .get(key)
+            .map(|value| {
+                let matrix: Option<ConductorMatrix> = value.as_array().and_then(|rows| {
+                    rows.iter()
+                        .map(|row| row.as_array()?.iter().map(Value::as_f64).collect())
+                        .collect()
+                });
+                let matrix = matrix
+                    .ok_or_else(|| fail(format!("switch {}: malformed {key}", switch.name)))?;
+                validate_square(&matrix, n, &format!("switch {} {key}", switch.name))?;
+                Ok(matrix)
+            })
+            .transpose()
+    };
+    let mut shunts = Vec::new();
+    for (key, fallback) in [
+        ("pmd_g_fr", code.map(|c| &c.g_from)),
+        ("pmd_g_to", code.map(|c| &c.g_to)),
+        ("pmd_b_fr", code.map(|c| &c.b_from)),
+        ("pmd_b_to", code.map(|c| &c.b_to)),
+    ] {
+        let matrix = read(key)?.or_else(|| {
+            fallback.map(|m| {
+                m.iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(|v| v * 1e9 / (2.0 * std::f64::consts::PI * frequency))
+                            .collect()
+                    })
+                    .collect()
+            })
+        });
+        if let Some(m) = matrix {
+            validate_square(&m, n, &format!("switch {} {key}", switch.name))?;
+            shunts.push((key, submatrix(&m, keep)));
+        }
+    }
+    Ok(shunts)
+}
+
+/// Capture each switch's effective primitive before shared linecodes change.
+fn reduce_switch_impedances(
+    network: &mut MulticonductorNetwork,
+    original: &MulticonductorNetwork,
+    report: &mut NeutralKronReport,
+) -> Result<()> {
+    for switch in network.switches_mut() {
+        let position = |bus: &str, map: &[String]| -> Result<Option<usize>> {
+            neutral_for_bus(&report.buses, bus)
+                .map(|n| {
+                    terminal_position(map, &n.neutral_terminal, &format!("switch {}", switch.name))
+                })
+                .transpose()
+                .map(Option::flatten)
+        };
+        let (Some(from), Some(to)) = (
+            position(&switch.bus_from, &switch.terminal_map_from)?,
+            position(&switch.bus_to, &switch.terminal_map_to)?,
+        ) else {
+            continue;
+        };
+        if from != to || switch.terminal_map_from.len() != switch.terminal_map_to.len() {
+            return Err(fail(format!(
+                "switch {} has inconsistent neutral conductor positions",
+                switch.name
+            )));
+        }
+        let n = switch.terminal_map_from.len();
+        if n == 1 {
+            continue;
+        }
+        let code = switch
+            .extras
+            .get("linecode")
+            .and_then(Value::as_str)
+            .and_then(|name| original.linecode(name));
+        let read = |key: &str| -> Result<Option<ConductorMatrix>> {
+            let Some(value) = switch.extras.get(key) else {
+                return Ok(None);
+            };
+            let matrix: Option<ConductorMatrix> = value.as_array().and_then(|rows| {
+                rows.iter()
+                    .map(|row| row.as_array()?.iter().map(Value::as_f64).collect())
+                    .collect()
+            });
+            let matrix =
+                matrix.ok_or_else(|| fail(format!("switch {}: malformed {key}", switch.name)))?;
+            validate_square(&matrix, n, &format!("switch {} {key}", switch.name))?;
+            Ok(Some(matrix))
+        };
+        let r = read("pmd_rs")?.or_else(|| code.map(|c| c.r_series.clone()));
+        let x = read("pmd_xs")?.or_else(|| code.map(|c| c.x_series.clone()));
+        if r.is_none() && x.is_none() {
+            continue;
+        }
+        for m in [&r, &x].into_iter().flatten() {
+            validate_square(m, n, &format!("switch {} impedance", switch.name))?;
+        }
+        let r = r.unwrap_or_else(|| vec![vec![0.0; n]; n]);
+        let x = x.unwrap_or_else(|| vec![vec![0.0; n]; n]);
+        let keep = retained_positions(n, from);
+        let uncoupled = (0..n).all(|k| {
+            r[from][k] == 0.0 && x[from][k] == 0.0 && r[k][from] == 0.0 && x[k][from] == 0.0
+        });
+        let (r, x, keep, recovery) = if uncoupled {
+            (
+                submatrix(&r, &keep),
+                submatrix(&x, &keep),
+                keep.clone(),
+                vec![Complex64::default(); keep.len()],
+            )
+        } else {
+            reduce_series(&r, &x, from, &format!("switch {}", switch.name))?
+        };
+        let shunts = reduced_switch_shunts(switch, code, n, &keep, original.base_frequency())?;
+        switch.extras.insert("pmd_rs".into(), json!(r));
+        switch.extras.insert("pmd_xs".into(), json!(x));
+        for (key, m) in shunts {
+            switch.extras.insert(key.into(), json!(m));
+        }
+        if switch.i_max.is_none() {
+            switch.i_max = code.and_then(|c| c.i_max.clone());
+        }
+        let mut record = action(
+            format!("switch/{}", switch.name),
+            "reduced_switch_impedance",
+        );
+        record
+            .details
+            .insert("eliminated_position".into(), json!(from));
+        record
+            .details
+            .insert("retained_positions".into(), json!(keep));
+        record.details.insert(
+            "k_re".into(),
+            json!(recovery.iter().map(|v| v.re).collect::<Vec<_>>()),
+        );
+        record.details.insert(
+            "k_im".into(),
+            json!(recovery.iter().map(|v| v.im).collect::<Vec<_>>()),
+        );
+        report.actions.push(record);
+    }
+    Ok(())
+}
+
 fn reduce_buses(network: &mut MulticonductorNetwork, report: &mut NeutralKronReport) -> Result<()> {
     for bus_reduction in &report.buses {
         let bus = network
@@ -640,6 +796,29 @@ fn reduce_buses(network: &mut MulticonductorNetwork, report: &mut NeutralKronRep
             .iter_mut()
             .find(|bus| bus.id.eq_ignore_ascii_case(&bus_reduction.bus))
             .expect("identified bus remains present");
+        for key in ["pmd_vm_pair_lb", "pmd_vm_pair_ub"] {
+            if bus
+                .extras
+                .get(key)
+                .and_then(Value::as_array)
+                .is_some_and(|rows| {
+                    rows.iter().any(|row| {
+                        row.as_array().is_some_and(|r| {
+                            r.iter().take(2).any(|id| {
+                                id.as_i64().is_some_and(|i| {
+                                    i.to_string() == bus_reduction.neutral_terminal
+                                })
+                            })
+                        })
+                    })
+                })
+            {
+                return Err(fail(format!(
+                    "bus {}: retained pairwise voltage bounds reference the neutral being eliminated",
+                    bus.id
+                )));
+            }
+        }
         let terminal_count = bus.terminals.len();
         reduce_phase_bound(
             &mut bus.v_min_phase,
@@ -1024,6 +1203,7 @@ pub fn neutral_kron_reduce(
     let uses = collect_line_uses(network, &report.buses)?;
     let mut reduced = network.clone();
     let mut locations = ComponentLocationEdits::new(network);
+    reduce_switch_impedances(&mut reduced, network, &mut report)?;
     reduce_linecodes(&mut reduced, &uses, &mut report)?;
     copy_linecode_locations(&mut locations, &mut report)?;
     reduce_terminal_maps(&mut reduced, &mut report, &mut locations)?;
