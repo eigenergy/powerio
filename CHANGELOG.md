@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reject pandapower split-table rows whose cell count does not match the declared columns, rather than silently defaulting missing electrical values.
+
 - Validate PowerModels bus IDs and equipment references before converting them into canonical bus identifiers, rejecting missing or out-of-range IDs instead of silently casting defaults.
 
 - Fix the nominal-to-bus voltage-base conversion for PSS/E CZ=2/3 two-winding
