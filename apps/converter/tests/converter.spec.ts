@@ -239,26 +239,52 @@ test('every applicable transmission writer runs in browser WASM', async ({ page 
   await expect(page.getByText("Couldn't convert", { exact: true })).toHaveCount(0);
 });
 
-test('distribution outputs have explicit BMOPF profiles', async ({ page }) => {
+test('all seven distribution outputs download and re-import with explicit BMOPF profiles', async ({ page }) => {
+  const outputs = [
+    { label: 'OpenDSS' },
+    { label: 'CIM distribution (CIM100 cim17v40, GridAPPS-D profile)' },
+    { label: 'PMD JSON', dataModel: 'ENGINEERING' },
+    { label: 'PMD MATHEMATICAL JSON', dataModel: 'MATHEMATICAL' },
+    { label: 'MG-RAVENS JSON (balanced and multiconductor profiles)' },
+    { label: 'BMOPF 0.1.0', schemaVersion: '0.1.0' },
+    { label: 'BMOPF 0.2.0 proposal', schemaVersion: '0.2.0' },
+  ];
   await ready(page);
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'feeder.dss', mimeType: 'text/plain', buffer: feeder });
   await expect(page.getByRole('button', { name: 'Convert', exact: true })).toBeEnabled();
   const settings = page.getByRole('complementary', { name: 'Convert to' });
-  for (const checkbox of await settings.getByRole('checkbox').all()) await checkbox.check();
+  await expect(settings.getByRole('checkbox')).toHaveCount(outputs.length);
+  for (const { label } of outputs) await settings.getByRole('checkbox', { name: label, exact: true }).check();
   await page.getByRole('button', { name: 'Convert', exact: true }).click();
   await expect(page.getByText('Conversion finished. Review any warnings, then download your files.', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: /^Download feeder.dss as / })).toHaveCount(5);
+  await expect(page.getByRole('button', { name: /^Download feeder.dss as / })).toHaveCount(outputs.length);
   await expect(page.getByRole('link', { name: /BMOPF task force/ }).first()).toHaveAttribute('href', 'https://github.com/distribution-system-opt');
-  for (const button of await page.getByRole('button', { name: /^Download feeder.dss as / }).all()) {
-    const completed = page.waitForEvent('download');
-    await button.click();
-    const output = await completed;
-    const bytes = await downloadBytes(output);
-    const newPage = await page.context().newPage();
-    await ready(newPage);
-    await newPage.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: output.suggestedFilename(), mimeType: 'application/octet-stream', buffer: bytes });
-    await expect(newPage.getByText('Ready to convert', { exact: true })).toHaveCount(1);
-    await newPage.close();
+  for (const { label, dataModel, schemaVersion } of outputs) {
+    await test.step(`${label}: download and re-import`, async () => {
+      const completed = page.waitForEvent('download');
+      await page.getByRole('button', { name: `Download feeder.dss as ${label}`, exact: true }).click();
+      const output = await completed;
+      const bytes = await downloadBytes(output);
+      expect(bytes.length).toBeGreaterThan(0);
+      if (dataModel) expect(JSON.parse(bytes.toString()).data_model).toBe(dataModel);
+      if (schemaVersion) {
+        const meta = JSON.parse(bytes.toString()).meta;
+        expect(meta.$schema).toContain(`/bmopf/${schemaVersion}/bmopf.schema.json`);
+        // The 0.1.0 schema forbids a separate schema_version field.
+        expect(meta.schema_version).toBe(schemaVersion === '0.1.0' ? undefined : schemaVersion);
+      }
+      const newPage = await page.context().newPage();
+      try {
+        await ready(newPage);
+        await newPage.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: output.suggestedFilename(), mimeType: 'application/octet-stream', buffer: bytes });
+        await expect(newPage.getByRole('article')).toHaveCount(1);
+        await expect(newPage.getByText('Ready to convert', { exact: true })).toHaveCount(1);
+        await expect(newPage.getByRole('complementary', { name: 'Convert to' }).getByRole('checkbox', { name: 'PMD JSON', exact: true })).toBeEnabled();
+        await expect(newPage.getByText("Couldn't convert", { exact: true })).toHaveCount(0);
+      } finally {
+        await newPage.close();
+      }
+    });
   }
 });
 
