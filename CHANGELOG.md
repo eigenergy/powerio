@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add regression coverage proving that preserving a reference bus does not mark an island supplied when no in-service balancing generator exists.
+
 - Reject pandapower split-table rows whose cell count does not match the declared columns, rather than silently defaulting missing electrical values.
 
 - Validate PowerModels bus IDs and equipment references before converting them into canonical bus identifiers, rejecting missing or out-of-range IDs instead of silently casting defaults.
