@@ -356,3 +356,31 @@ All seven Clippy configurations, formatting and whitespace checks passed on
 the final code. The Rust changes are split into balanced-reader validation and
 distribution-emission commits on the existing PR branch. CI must clear on the
 new head before any merge is considered.
+
+## Transformer input-base correction, 2026-11-04
+
+Final review of `e0d842d6` found the corresponding reader boundary still open:
+nonzero catalog winding resistance and short-circuit leakage with zero
+`ratedS` / `basePower` parsed as zero R/X. Fresh RAVENS output then removed
+those fields without an impedance-loss diagnostic. The earlier writer guard
+could not catch a value already made ideal by parsing.
+
+The active-tank mapper now refuses nonzero impedance without positive finite
+winding voltage and power bases, including bases that overflow or underflow
+when calculated. Nonzero short-circuit and no-load loss tests also require
+usable test bases. A missing short-circuit `basePower` keeps the existing
+`ratedS` fallback; an explicitly invalid value is refused. Errors identify
+the tank, end and affected field. Ideal equipment needs no fabricated rating,
+and inactive native equipment remains retained outside the typed equations.
+
+The new `review_final.rs` regressions cover the original reproduction,
+independent resistance and test-base failures, each winding, malformed and
+missing bases, valid controls and inactive equipment. No fixtures are added.
+The Julia companion is refreshed against main, retaining main's compatible
+shared-linecode assertions and the RAVENS tests. Neither PR is merged.
+
+Local validation passed 944 distribution tests (18 ignored), all 14
+conversion-matrix checks without a baseline change, the eight facade RAVENS
+tests and all seven CI Clippy configurations on Rust 1.99.0. Formatting and
+whitespace checks pass. The companion refresh is `4e67c67`; consult the checks
+on the new Rust head for the paired binding result before approving a merge.

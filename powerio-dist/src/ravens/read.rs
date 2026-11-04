@@ -67,7 +67,7 @@ pub(crate) fn parse_ravens_collecting(
         "MG-RAVENS carries no system frequency; base_frequency assumes the OpenDSS default \
          (60 Hz)",
     );
-    mapper.run();
+    mapper.run()?;
 
     let net = mapper.net;
     diags.absorb(mapper.diagnostics);
@@ -493,6 +493,88 @@ fn reject_balanced(doc: &Doc) -> Result<()> {
     })
 }
 
+/// Raw ohms and loss tests cannot become percentages without their stated
+/// bases. Refuse the active transformer before constructing an ideal value.
+fn validate_transformer_bases(name: &str, ends: &BTreeMap<u64, &Map<String, Value>>) -> Result<()> {
+    let nonzero = |record: &Map<String, Value>, field: &str| {
+        record
+            .get(field)
+            .and_then(Value::as_f64)
+            .is_some_and(|value| value != 0.0)
+    };
+    let mut needs_winding_base = false;
+    for (num, end) in ends {
+        needs_winding_base |= nonzero(end, "TransformerEndInfo.r");
+        for (tests, field) in [
+            (
+                "TransformerEndInfo.EnergisedEndShortCircuitTests",
+                "ShortCircuitTest.leakageImpedance",
+            ),
+            (
+                "TransformerEndInfo.EnergisedEndNoLoadTests",
+                "NoLoadTest.loss",
+            ),
+        ] {
+            for test in end
+                .get(tests)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_object)
+            {
+                needs_winding_base |=
+                    nonzero(test, field) || nonzero(test, "NoLoadTest.excitingCurrent");
+                if !nonzero(test, field) {
+                    continue;
+                }
+                let power = match test.get("TransformerTest.basePower") {
+                    Some(value) => value.as_f64(),
+                    None if field == "ShortCircuitTest.leakageImpedance" => {
+                        end.get("TransformerEndInfo.ratedS").and_then(Value::as_f64)
+                    }
+                    None => None,
+                };
+                let usable = power.is_some_and(|power| {
+                    power.is_finite()
+                        && power > 0.0
+                        && (field != "ShortCircuitTest.leakageImpedance"
+                            || end
+                                .get("TransformerEndInfo.ratedU")
+                                .and_then(Value::as_f64)
+                                .and_then(|v| crate::model::n_winding_impedance_base(1, v, power))
+                                .is_some_and(|base| base.is_finite() && base > 0.0))
+                });
+                if !usable {
+                    return Err(Error::FormatRead {
+                        format: FMT,
+                        message: format!(
+                            "transformer tank {name}: end {num} cannot preserve {field} without a positive finite TransformerTest.basePower and usable impedance base"
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    if needs_winding_base {
+        for (num, end) in ends {
+            let voltage = end.get("TransformerEndInfo.ratedU").and_then(Value::as_f64);
+            let power = end.get("TransformerEndInfo.ratedS").and_then(Value::as_f64);
+            let base = voltage
+                .zip(power)
+                .and_then(|(v, s)| crate::model::n_winding_impedance_base(1, v, s));
+            if !base.is_some_and(|base| base.is_finite() && base > 0.0) {
+                return Err(Error::FormatRead {
+                    format: FMT,
+                    message: format!(
+                        "transformer tank {name}: end {num} cannot preserve transformer impedance (TransformerEndInfo.r, leakage or no-load test) without positive finite TransformerEndInfo.ratedU and TransformerEndInfo.ratedS"
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Mapper
 // ---------------------------------------------------------------------------
@@ -639,7 +721,7 @@ impl Mapper<'_> {
         fnum(self.doc.resolve(base)?, "BaseVoltage.nominalVoltage")
     }
 
-    fn run(&mut self) {
+    fn run(&mut self) -> Result<()> {
         self.claim(&[
             "IEC61970CIMVersion",
             "RavensVersion",
@@ -659,10 +741,11 @@ impl Mapper<'_> {
         self.map_machines();
         self.map_power_electronics();
         self.map_sources();
-        self.map_transformers();
+        self.map_transformers()?;
         self.map_grounds();
         self.finish_buses();
         self.preserve_unclaimed();
+        Ok(())
     }
 
     // ----- per-length impedance ------------------------------------------
@@ -1696,7 +1779,7 @@ impl Mapper<'_> {
     // ----- transformers -----------------------------------------------------
 
     #[allow(clippy::too_many_lines)] // one tank maps in one pass: ends, catalog, tests, taps
-    fn map_transformers(&mut self) {
+    fn map_transformers(&mut self) -> Result<()> {
         self.claim(&[
             "PowerTransformer",
             "TransformerTank",
@@ -1809,6 +1892,8 @@ impl Mapper<'_> {
                 self.keep_untyped(tank, "fewer than two ends");
                 continue;
             }
+
+            validate_transformer_bases(&name, &end_infos)?;
 
             // Upstream documents also state the terminals once, on the
             // enclosing `PowerTransformer` (the IEEE 13 example's regulator
@@ -2106,6 +2191,7 @@ impl Mapper<'_> {
             transformer.extras = extras;
             self.net.transformers_mut().push(transformer);
         }
+        Ok(())
     }
 
     /// A `TransformerEnd.RatioTapChanger` pointer names the tap changer and

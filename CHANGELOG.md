@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reject nonzero RAVENS transformer impedance or no-load loss when its input
+  voltage, rating or test power base is unusable, instead of reading it as an
+  ideal transformer. Name the affected tank, winding and field in the error.
 - Reject an explicitly invalid balanced RAVENS `baseMVA` before per-unit
   conversion, and diagnose skipped loads, shunts, generators, sources, lines
   and transformer windings that lack usable terminals.

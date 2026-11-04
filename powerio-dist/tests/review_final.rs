@@ -42,6 +42,164 @@ fn invalid_transformer_bases_cannot_silently_remove_impedance() {
     let back = helpers::parse_str(&out.text, "ravens-json").unwrap();
     assert_eq!(back.transformers()[0].xsc_pct, vec![0.0]);
 }
+
+fn visit_kind(
+    value: &mut Value,
+    kind: &str,
+    f: &mut impl FnMut(&mut serde_json::Map<String, Value>),
+) {
+    match value {
+        Value::Object(object) => {
+            if object.get("Ravens.cimObjectType").and_then(Value::as_str) == Some(kind) {
+                f(object);
+            }
+            for child in object.values_mut() {
+                visit_kind(child, kind, f);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                visit_kind(child, kind, f);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn transformer_document() -> Value {
+    serde_json::from_str(&helpers::emit_value(&transformer(), DistTargetFormat::RavensJson).text)
+        .unwrap()
+}
+
+#[test]
+fn ravens_reader_refuses_nonzero_impedance_without_winding_bases() {
+    // Isolate winding resistance from short-circuit test bases.
+    let mut input = transformer_document();
+    visit_kind(&mut input, "TransformerEndInfo", &mut |end| {
+        end.remove("TransformerEndInfo.EnergisedEndShortCircuitTests");
+    });
+    for field in ["TransformerEndInfo.ratedU", "TransformerEndInfo.ratedS"] {
+        for end_number in [1, 2] {
+            for invalid in [json!(0), json!(-1), json!(null), json!("bad")] {
+                let mut document = input.clone();
+                visit_kind(&mut document, "TransformerEndInfo", &mut |end| {
+                    if end["TransformerEndInfo.endNumber"] == end_number {
+                        end.insert(field.into(), invalid.clone());
+                    }
+                });
+                let error = helpers::parse_str(&document.to_string(), "ravens-json")
+                    .expect_err("nonzero ohms must not become an ideal winding");
+                let message = error.to_string();
+                assert!(
+                    message.contains(&format!("transformer tank t: end {end_number}")),
+                    "{message}"
+                );
+                assert!(
+                    message.contains(field) && message.contains("impedance"),
+                    "{message}"
+                );
+            }
+        }
+    }
+    // Positive finite inputs can still produce an unusable ohmic base.
+    for voltage in [1e-200, 1e200] {
+        let mut document = input.clone();
+        visit_kind(&mut document, "TransformerEndInfo", &mut |end| {
+            end.insert("TransformerEndInfo.ratedU".into(), json!(voltage));
+        });
+        assert!(helpers::parse_str(&document.to_string(), "ravens-json").is_err());
+    }
+}
+
+#[test]
+fn ravens_reader_validates_test_bases_before_losing_impedance_or_losses() {
+    for (kind, test_field, value_field) in [
+        (
+            "ShortCircuitTest",
+            "TransformerEndInfo.EnergisedEndShortCircuitTests",
+            "ShortCircuitTest.leakageImpedance",
+        ),
+        (
+            "NoLoadTest",
+            "TransformerEndInfo.EnergisedEndNoLoadTests",
+            "NoLoadTest.loss",
+        ),
+    ] {
+        let mut input = transformer_document();
+        visit_kind(&mut input, "TransformerEndInfo", &mut |end| {
+            end.insert("TransformerEndInfo.r".into(), json!(0));
+            end.remove("TransformerEndInfo.EnergisedEndShortCircuitTests");
+            end.insert(
+                test_field.into(),
+                json!([{
+                    "Ravens.cimObjectType":kind,
+                    value_field:5.0,
+                    "TransformerTest.basePower":100_000.0
+                }]),
+            );
+        });
+        let control = helpers::parse_str(&input.to_string(), "ravens-json").unwrap();
+        if kind == "ShortCircuitTest" {
+            assert!(control.transformers()[0].xsc_pct[0] > 0.0);
+            let mut overflow = input.clone();
+            visit_kind(&mut overflow, kind, &mut |test| {
+                test.insert("TransformerTest.basePower".into(), json!(1e-308));
+            });
+            assert!(helpers::parse_str(&overflow.to_string(), "ravens-json").is_err());
+        } else {
+            assert_eq!(
+                control.transformers()[0].extras["%noloadloss"],
+                json!(0.005)
+            );
+        }
+        for invalid in [json!(0), json!(-1), json!(null), json!("bad")] {
+            let mut document = input.clone();
+            visit_kind(&mut document, kind, &mut |test| {
+                test.insert("TransformerTest.basePower".into(), invalid.clone());
+            });
+            let error = helpers::parse_str(&document.to_string(), "ravens-json")
+                .expect_err("a stated nonzero test needs its power base");
+            let message = error.to_string();
+            assert!(message.contains("transformer tank t: end 1"), "{message}");
+            assert!(
+                message.contains(value_field) && message.contains("TransformerTest.basePower"),
+                "{message}"
+            );
+        }
+        // A missing short-circuit base uses ratedS; no-load loss has no fallback.
+        visit_kind(&mut input, kind, &mut |test| {
+            test.remove("TransformerTest.basePower");
+        });
+        let parsed = helpers::parse_str(&input.to_string(), "ravens-json");
+        if kind == "ShortCircuitTest" {
+            assert!(parsed.unwrap().transformers()[0].xsc_pct[0] > 0.0);
+        } else {
+            assert!(parsed.is_err());
+        }
+    }
+    // The original reproduction has invalid catalog and test bases together.
+    let mut document = transformer_document();
+    visit_kind(&mut document, "TransformerEndInfo", &mut |end| {
+        end.insert("TransformerEndInfo.ratedS".into(), json!(0));
+    });
+    visit_kind(&mut document, "ShortCircuitTest", &mut |test| {
+        test.insert("TransformerTest.basePower".into(), json!(0));
+    });
+    assert!(helpers::parse_str(&document.to_string(), "ravens-json").is_err());
+    // Inactive native equipment stays retained rather than entering typed equations.
+    visit_kind(&mut document, "PowerTransformer", &mut |parent| {
+        parent.insert("Equipment.inService".into(), json!(false));
+    });
+    let parsed = helpers::parse_str(&document.to_string(), "ravens-json").unwrap();
+    assert_eq!(parsed.transformers().as_slice(), []);
+    assert!(
+        parsed
+            .untyped_objects()
+            .iter()
+            .any(|object| object.class == "PowerTransformer")
+    );
+}
+
 fn delta_network(pair: [i64; 2], zip: bool, partial_bus: bool) -> MulticonductorNetwork {
     let mut input = json!({"data_model":"ENGINEERING","settings":{"vbases_default":{"b":0.23}},"bus":{"b":{"terminals":[1,2,3,4],"grounded":[4]}},"load":{"l":{"bus":"b","configuration":"DELTA","connections":pair,"pd_nom":[10],"qd_nom":[2],"vm_nom":0.4}}});
     if partial_bus {
