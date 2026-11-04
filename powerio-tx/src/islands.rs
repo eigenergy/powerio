@@ -839,6 +839,37 @@ mod tests {
     }
 
     #[test]
+    fn a_reference_without_a_generator_is_not_a_supplied_slack_source() {
+        let buses = vec![
+            Bus::new(BusId(1), BusType::Ref, 230.0),
+            Bus::new(BusId(2), BusType::Pq, 230.0),
+        ];
+        let line = Branch::new(BusId(1), BusId(2), 0.01, 0.1);
+        let mut net = BalancedNetwork::in_memory("reference-only", 100.0, buses, vec![line]);
+        net.loads_mut().push(Load::new(BusId(2), 10.0, 0.0));
+
+        let partition = net.calc_islands();
+        assert_eq!(partition.islands[0].references, [BusId(1)]);
+        assert!(!partition.islands[0].is_supplied());
+
+        // Stated preserves the source's angle-reference designation.
+        let stated = net.assign_island_references(IslandReferencePolicy::Stated);
+        assert_eq!(stated.diagnostics.as_slice(), []);
+        assert_eq!(kind(&net, 1), BusType::Ref);
+        assert!(
+            !net.calc_islands().islands[0].is_supplied(),
+            "preserving a reference must not imply that the island has a balancing source"
+        );
+
+        // PerIsland is a solver-readiness policy: without an in-service
+        // generator, the island is de-energized rather than treated as solved.
+        let report = net.assign_island_references(IslandReferencePolicy::PerIsland);
+        assert_eq!(report.de_energized, [BusId(1), BusId(2)]);
+        assert_eq!(kind(&net, 1), BusType::Isolated);
+        assert_eq!(kind(&net, 2), BusType::Isolated);
+    }
+
+    #[test]
     fn of_two_references_in_one_island_the_larger_source_stays() {
         let mut net = three_references();
         let report = net.assign_island_references(IslandReferencePolicy::PerIsland);
