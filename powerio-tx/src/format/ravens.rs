@@ -1434,6 +1434,29 @@ fn terminals(obj: &Obj) -> Vec<String> {
     with_seq.into_iter().map(|(_, cn)| cn).collect()
 }
 
+/// Require enough usable terminals before mapping a balanced equipment record.
+fn required_terminals(
+    obj: &Obj,
+    count: usize,
+    family: &str,
+    warnings: &mut Diagnostics,
+) -> Option<Vec<String>> {
+    let terminals = terminals(obj);
+    if terminals.len() < count {
+        warnings.push(
+            &codes::READ_RAVENS_RECORD_DROPPED,
+            format!(
+                "{family} {}: requires {count} usable terminal(s), found {}; record skipped",
+                obj.name,
+                terminals.len()
+            ),
+        );
+        None
+    } else {
+        Some(terminals)
+    }
+}
+
 /// Transformer-end terminals live on the ends, not the transformer.
 fn end_terminal(end: &Map<String, Value>) -> Option<String> {
     let items = end.get("ConductingEquipment.Terminals")?.as_array()?;
@@ -1463,7 +1486,7 @@ pub(crate) fn parse_ravens_source(
     let doc = Doc::collect(root);
     reject_multiconductor(&doc, root)?;
 
-    let base_mva = base_mva(&doc).unwrap_or_else(|| {
+    let base_mva = base_mva(&doc)?.unwrap_or_else(|| {
         warnings.push(
             &codes::READ_RAVENS_VALUE_DEFAULTED,
             "no AlgorithmSettings baseMVA record; the per-unit conversion \
@@ -1489,7 +1512,10 @@ pub(crate) fn parse_ravens_source(
 
     let mut loads = Vec::new();
     for obj in doc.sorted_of_kind("EnergyConsumer") {
-        let Some(bus) = terminals(obj)
+        let Some(ends) = required_terminals(obj, 1, "load", warnings) else {
+            continue;
+        };
+        let Some(bus) = ends
             .first()
             .and_then(|cn| bus_id(cn, &format!("load {}", obj.name), warnings))
         else {
@@ -1508,7 +1534,10 @@ pub(crate) fn parse_ravens_source(
 
     let mut shunts = Vec::new();
     for obj in doc.sorted_of_kind("LinearShuntCompensator") {
-        let Some(bus) = terminals(obj)
+        let Some(ends) = required_terminals(obj, 1, "shunt", warnings) else {
+            continue;
+        };
+        let Some(bus) = ends
             .first()
             .and_then(|cn| bus_id(cn, &format!("shunt {}", obj.name), warnings))
         else {
@@ -1541,7 +1570,10 @@ pub(crate) fn parse_ravens_source(
         .collect();
     machines.sort_by_key(|o| natural_key(&o.name));
     for obj in machines {
-        let Some(bus) = terminals(obj)
+        let Some(ends) = required_terminals(obj, 1, "generator", warnings) else {
+            continue;
+        };
+        let Some(bus) = ends
             .first()
             .and_then(|cn| bus_id(cn, &format!("generator {}", obj.name), warnings))
         else {
@@ -1591,7 +1623,10 @@ pub(crate) fn parse_ravens_source(
         generators.push(generator);
     }
     for obj in doc.sorted_of_kind("EnergySource") {
-        let Some(bus) = terminals(obj)
+        let Some(ends) = required_terminals(obj, 1, "source", warnings) else {
+            continue;
+        };
+        let Some(bus) = ends
             .first()
             .and_then(|cn| bus_id(cn, &format!("source {}", obj.name), warnings))
         else {
@@ -1640,7 +1675,9 @@ pub(crate) fn parse_ravens_source(
             }
             continue;
         }
-        let ends = terminals(obj);
+        let Some(ends) = required_terminals(obj, 2, "line", warnings) else {
+            continue;
+        };
         let (Some(from), Some(to)) = (
             ends.first()
                 .and_then(|cn| bus_id(cn, &format!("line {}", obj.name), warnings)),
@@ -1724,7 +1761,7 @@ fn reject_multiconductor(doc: &Doc, root: &Map<String, Value>) -> Result<()> {
     })
 }
 
-fn base_mva(doc: &Doc) -> Option<f64> {
+fn base_mva(doc: &Doc) -> Result<Option<f64>> {
     for obj in doc.of_kind("AlgorithmSettings") {
         if let Some(Value::Array(settings)) = obj.props.get("ApplicationSettings.Settings") {
             for setting in settings {
@@ -1732,12 +1769,23 @@ fn base_mva(doc: &Doc) -> Option<f64> {
                     continue;
                 };
                 if setting.get("name").and_then(Value::as_str) == Some("baseMVA") {
-                    return setting.get("value").and_then(Value::as_f64);
+                    let value = setting
+                        .get("value")
+                        .and_then(Value::as_f64)
+                        .filter(|value| value.is_finite() && *value > 0.0)
+                        .ok_or_else(|| Error::FormatRead {
+                            format: FMT,
+                            message: format!(
+                                "AlgorithmSettings {}: baseMVA must be a positive finite number",
+                                obj.name
+                            ),
+                        })?;
+                    return Ok(Some(value));
                 }
             }
         }
     }
-    None
+    Ok(None)
 }
 
 type BusTables = (Vec<Bus>, BTreeMap<String, BusId>, BTreeMap<BusId, f64>);
@@ -2000,8 +2048,16 @@ fn read_transformer(
             .and_then(Value::as_u64)
             .unwrap_or(1)
     });
-    let cn_from = end_terminal(ends[0])?;
-    let cn_to = end_terminal(ends[1])?;
+    let (Some(cn_from), Some(cn_to)) = (end_terminal(ends[0]), end_terminal(ends[1])) else {
+        warnings.push(
+            &codes::READ_RAVENS_RECORD_DROPPED,
+            format!(
+                "transformer {}: a winding has no usable terminal; record skipped",
+                obj.name
+            ),
+        );
+        return None;
+    };
     let (Some(&from), Some(&to)) = (bus_ids.get(&cn_from), bus_ids.get(&cn_to)) else {
         warnings.push(
             &codes::READ_RAVENS_REFERENCE_DROPPED,
