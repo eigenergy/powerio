@@ -29,7 +29,7 @@ class MultinetworkValidation(unittest.TestCase):
         self.assertEqual(failures, [])
         self.assertEqual(observed.call_count, 2)
 
-    def test_later_snapshot_failure_is_reported_with_its_label(self):
+    def test_later_snapshot_failure_is_reported_with_its_index(self):
         emit = harness.powerio.emit
         calls = 0
 
@@ -47,7 +47,7 @@ class MultinetworkValidation(unittest.TestCase):
             failures = harness.validate_case(self.validators, self.schema_ids, self.case)
         self.assertEqual(calls, 2)
         self.assertTrue(failures)
-        self.assertTrue(all(failure.startswith("2 ") for failure in failures), failures)
+        self.assertTrue(all(failure.startswith("snapshot[1]:") for failure in failures), failures)
         self.assertTrue(any("bus" in failure for failure in failures), failures)
 
 

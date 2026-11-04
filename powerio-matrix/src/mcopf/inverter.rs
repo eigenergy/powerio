@@ -48,7 +48,11 @@ pub(super) fn prepare(
         let qmin = bounds(&inv.name, inv.q_min.as_ref(), n, sb)?;
         let qmax = bounds(&inv.name, inv.q_max.as_ref(), n, sb)?;
         let cost = inverter_cost(inv, n, sb)?;
-        let (profile, slope) = control_profile(ctx, inv, config)?;
+        let (profile, pf) = control_profile(ctx, inv, config)?;
+        let power_factor_coefficients = pf.map(|v| [((1.0 - v.abs()) * (1.0 + v.abs())).sqrt(), v]);
+        let slope = power_factor_coefficients
+            .map(|[a, b]| -a / b)
+            .filter(|v| v.is_finite());
         let vv = profile.and_then(|p| p.volt_var.as_ref());
         let vw = profile.and_then(|p| p.volt_watt.as_ref());
         let context = CurveContext {
@@ -71,6 +75,7 @@ pub(super) fn prepare(
                 prescribed: None,
                 load_law: None,
                 reactive_slope: slope,
+                power_factor_coefficients,
                 volt_var,
                 volt_watt,
                 p_min: pmin[k],
@@ -280,7 +285,6 @@ fn control_profile<'a>(
             "power factor must satisfy 0 < |pf| <= 1",
         ));
     }
-    let slope = pf.map(|v| -v.signum() * v.abs().acos().tan());
     let vv = profile.and_then(|p| p.volt_var.as_ref());
     let vw = profile.and_then(|p| p.volt_watt.as_ref());
     if (vv.is_some() || vw.is_some()) && (pf.is_some() || config == Configuration::Delta) {
@@ -289,7 +293,7 @@ fn control_profile<'a>(
             "conflicting PF/droop or THREE_LEG droop controls",
         ));
     }
-    Ok((profile, slope))
+    Ok((profile, pf))
 }
 
 fn inverter_cost(inv: &DistIbr, n: usize, sb: f64) -> Result<Vec<Option<f64>>> {

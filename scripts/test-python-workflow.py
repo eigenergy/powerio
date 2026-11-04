@@ -78,8 +78,8 @@ linux = {"runner": "ubuntu-latest", "target": "x86_64"}
 release_platforms = [
     linux,
     {"runner": "ubuntu-24.04-arm", "target": "aarch64"},
-    {"runner": "macos-14", "target": "x86_64"},
-    {"runner": "macos-14", "target": "aarch64"},
+    {"runner": "macos-15", "target": "x86_64"},
+    {"runner": "macos-15", "target": "aarch64"},
     {"runner": "windows-latest", "target": "x64"},
 ]
 with tempfile.TemporaryDirectory() as tmp:
@@ -127,6 +127,17 @@ for platforms, wheels, sdists, expected in [
         done = subprocess.run(["bash", "-euo", "pipefail", "-c", count], env=env, cwd=tmp, capture_output=True, text=True)
         assert (done.returncode == 0) == expected, (len(platforms), wheels, sdists, done.stderr)
 
+# The distribution validator is one narrowly scoped aggregate: it must
+# reject failed prerequisites, verify the complete expected artifact set, and
+# only then inspect package metadata. Keep this check separate from the
+# release-wide test/publish gates.
+assert len(re.findall(r"^  validate-distributions:$", WORKFLOW, re.M)) == 1
+required_step = gate.index("Require every distribution prerequisite to succeed")
+count_step = gate.index("Count the built distributions")
+metadata_step = gate.index("Check distribution metadata")
+assert required_step < count_step < metadata_step
+assert "twine check dist/*" in gate
+
 # Nothing but the release-only publish job may upload to PyPI.
 assert WORKFLOW.count("pypa/gh-action-pypi-publish") == 1
 assert "pypa/gh-action-pypi-publish" in job("publish")
@@ -134,4 +145,62 @@ assert "environment: pypi" in job("publish")
 assert "always()" not in condition("publish")
 assert "pull_request" not in condition("publish")
 assert re.search(r"^  (upload|publish-[\w-]+):", WORKFLOW, re.M) is None
-print("python.yml distribution gate checks passed")
+
+# The C ABI release workflow has separate macOS matrices for building the
+# libraries and testing the packaged Julia artifacts. It is release-triggered,
+# so PR CI never executes it; inspect both matrices here to catch retired
+# runners before a release is attempted.
+RELEASE_WORKFLOW = (ROOT / ".github/workflows/release-binaries.yml").read_text()
+
+
+def release_job(name: str) -> str:
+    match = re.search(
+        rf"^  {re.escape(name)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+        RELEASE_WORKFLOW,
+        re.M | re.S,
+    )
+    assert match, f"release job {name} is missing"
+    return match.group(1)
+
+
+for name in ("build", "julia-tarballs"):
+    macos_runners = re.findall(
+        r"^[ \t]*- runner: (macos-[A-Za-z0-9.-]+)$",
+        release_job(name),
+        re.M,
+    )
+    assert macos_runners == ["macos-15", "macos-15"], (name, macos_runners)
+
+# Docs are built on pull requests but publication is strictly non-PR.
+DOCS_WORKFLOW = (ROOT / ".github/workflows/docs.yml").read_text()
+
+
+def docs_job(name: str) -> str:
+    match = re.search(
+        rf"^  {re.escape(name)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+        DOCS_WORKFLOW,
+        re.M | re.S,
+    )
+    assert match, f"Docs job {name} is missing"
+    return match.group(1)
+
+
+docs_build = docs_job("build")
+docs_deploy = docs_job("deploy")
+assert "actions/deploy-pages@" not in docs_build
+assert "actions/deploy-pages@" in docs_deploy
+assert re.search(r"^    if: github.event_name != 'pull_request'$", docs_deploy, re.M)
+assert "-p powerio-tnd" in docs_build, "retain the current main rustdoc package set"
+
+# Keep the release workflow independent of the retired paired-release hook.
+assert "PAIRED_RELEASES" not in WORKFLOW
+assert "paired_release.py" not in WORKFLOW
+assert "scripts/paired_release.py" not in RELEASE_WORKFLOW
+
+# No placeholder publish/upload jobs may report a green PR check by echoing.
+assert re.search(r"^  (upload|publish-[\w-]+):", WORKFLOW, re.M) is None
+assert "echo success" not in WORKFLOW.lower()
+assert 'echo "success"' not in WORKFLOW.lower()
+assert "echo 'success'" not in WORKFLOW.lower()
+
+print("Python and release workflow checks passed")

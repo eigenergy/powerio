@@ -54,7 +54,9 @@ are reported as uninterpreted, and survive a same format write byte for byte.
 OpenDSS imports represent source impedances as coupled branches with ideal
 voltage constraints, and each ordinary line carries its effective matrices at
 the snapshot frequency. LineCode assignment and later edits follow script
-order. Native `switch=yes` lines retain their finite impedance. Unknown length
+order. Lines that keep an assigned LineCode unchanged share one per meter
+linecode named after it; a LineCode edited between assignments, or a line
+that changes what it fetched, gets its own. Native `switch=yes` lines retain their finite impedance. Unknown length
 units are reported; electrical equivalents do not invent a physical distance.
 Canonical DSS output uses the typed frequency, snapshot mode and disabled
 controls. It preserves unequal phase voltages, zero EMFs and floating source

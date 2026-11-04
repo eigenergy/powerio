@@ -238,7 +238,7 @@ fn mrids_survive_between_cim_and_ravens() {
     let original = ids(&net, "ravens_mrid");
     let (_, back) = to_cim(&net);
     let carried: Vec<_> = original.iter().filter(|(_, id)| id.is_some()).collect();
-    assert!(!carried.is_empty());
+    assert_ne!(carried, Vec::<&(String, Option<String>)>::new());
     let after = ids(&back, "cim_mrid");
     for (what, id) in carried {
         assert!(

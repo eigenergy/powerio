@@ -25,3 +25,13 @@ assert_eq!(network.buses().len(), 32);
 
 The former `powerio_matrix::synth` API remains available as a compatibility
 facade. New code can use `powerio-synth` directly.
+
+## Geographic grids
+
+These generators make buses and branches only, with no loads, generators,
+voltage levels or coordinates. For a transmission grid of a real map region,
+with sited demand and generation, routed corridors, OpenStreetMap ingestion
+and a DC OPF and AC power flow check, use
+[`tellegen-synth`](https://github.com/eigenergy/tellegen/tree/main/crates/tellegen-synth),
+which writes PowerIO networks. [MapToGrid](https://maptogrid.com) runs it in
+the browser.

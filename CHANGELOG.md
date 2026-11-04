@@ -94,6 +94,79 @@
   The released 0.11.7 snapshot stays byte exact; IR version 2 and C ABI 7
   remain unchanged.
 
+- Add regression coverage proving that preserving a reference bus does not mark an island supplied when no in-service balancing generator exists.
+
+- Reject pandapower split-table rows whose cell count does not match the declared columns, rather than silently defaulting missing electrical values.
+
+- Validate PowerModels bus IDs and equipment references before converting them into canonical bus identifiers, rejecting missing or out-of-range IDs instead of silently casting defaults.
+
+- Fix the nominal-to-bus voltage-base conversion for PSS/E CZ=2/3 two-winding
+  transformer impedances, including RAWX (#772).
+
+## 0.11.8
+
+**OpenDSS, PMD, and BMOPF output**
+
+- OpenDSS lines that keep an assigned LineCode unchanged share one per meter
+  linecode named after it instead of one copy per line, so the BMOPF JSON of a
+  50,353 line city model falls from 171 MB to 73 MB (#785).
+- Preserve cached OpenDSS line impedances after base-frequency or earth
+  resistivity edits instead of replacing them with shared LineCode values
+  (#787).
+- Keep PMD time-series profiles verbatim under BMOPF extras instead of
+  asserting multiplicative-profile semantics (PMD's `replace` defaults to
+  true). Validate every snapshot of PMD multinetwork fixtures (#744).
+
+**Multiconductor OPF preparation**
+
+- Add bounded fixed-PF coefficients to MC IVR preparation, avoiding the loss
+  of tiny signed PF values in `tan(acos(abs(pf)))`. Keep the legacy Q/P ratio
+  only when finite; consumers should assemble from the bounded coefficients
+  (#743).
+- Reject neutral and earth endpoints during MC IVR DELTA coil preparation,
+  including THREE_LEG inverters and DELTA transformer windings. Explicit
+  terminal conventions are honored; valid phase-to-phase coil order is unchanged
+  (#742).
+
+**PSS/E**
+
+- Preserve apostrophes in PSS/E RAWX `caseid.title1`; normalize embedded line
+  terminators only (#745).
+
+**Geographic layers**
+
+- Write `GeoLayer::to_geojson` straight from the typed features instead of
+  building a `serde_json::Value` per coordinate. The text is unchanged, and a
+  city-scale distribution layer writes three to five times faster (#784).
+
+**Python**
+
+- Require Python 3.11 or newer: 3.9 and 3.10 are past end of life. Wheels
+  are `cp311-abi3`, and the `bench`, `pandas` and `mcp` extras drop their
+  Python version markers (#786).
+
+**CI**
+
+- The x86_64 macOS wheel smoke test runs under an x64 Python 3.12 instead of
+  the runner's system Python 3.9, which the `cp311-abi3` wheel does not
+  support (#788).
+- The macOS jobs of the Python and release binary workflows move from macOS 14
+  to macOS 15 (#779).
+- The GridFM tests run the release CLI with the pinned CPU PyTorch and GridFM
+  GraphKit stack, and Miri runs the C ABI ownership regression (#780).
+- Remove the obsolete Julia companion pin now that the required bindings have
+  merged upstream (#744).
+- `actions/upload-artifact` moves to 7, `actions/download-artifact` to 8, and
+  `actions/setup-node` to 7 (#756, #758, #759).
+
+**Documentation**
+
+- Clarify that `BusType::Ref` follows the source format's reference/slack
+  convention; angle reference and balancing-source semantics are not universal
+  invariants (#712).
+- The `powerio-synth` README points to `tellegen-synth` for synthetic grids of
+  real map regions (#764).
+
 ## 0.11.7
 
 **AC optimal transmission switching**
