@@ -4385,3 +4385,148 @@ fn profiles_without_values_stay_in_extras() {
     );
     assert!(schema_validator().is_valid(&doc));
 }
+
+#[test]
+fn pmd_time_axis_conversion_and_source_only_fallback_use_writer_path() {
+    use serde_json::{Value, json};
+
+    let mut source: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap())
+            .unwrap();
+    source["time_series"]["ls1"]["values"] = json!([0.5, 1.0, 0.75]);
+    source["time_series"]["ls1"]["time"] = json!([0, 1, 2]);
+    let net = parse_pmd_str(&source.to_string()).unwrap();
+    let output = emit_bmopf_json(&net);
+    let doc: Value = serde_json::from_str(&output.text).unwrap();
+    assert_eq!(doc["time_series"]["ls1"]["time"], json!([0, 3600, 7200]));
+    assert_eq!(doc["load"]["l1"]["time_series"]["p_nom"], "ls1");
+    assert!(schema_validator().is_valid(&doc), "{doc}");
+
+    source["time_series"]["ls1"]["values"] = json!([0.5, 1.0]);
+    source["time_series"]["ls1"]["time"] = json!(["2026-01-01T00:00:00Z", "2026-01-01T01:00:00Z"]);
+    let net = parse_pmd_str(&source.to_string()).unwrap();
+    let output = emit_bmopf_json(&net);
+    let doc: Value = serde_json::from_str(&output.text).unwrap();
+    assert!(doc.get("time_series").is_none(), "{doc}");
+    assert!(doc["load"]["l1"].get("time_series").is_none(), "{doc}");
+    assert_eq!(
+        doc["extras"]["time_series"]["ls1"],
+        source["time_series"]["ls1"]
+    );
+    assert!(schema_validator().is_valid(&doc), "{doc}");
+    assert!(output.warnings.iter().any(|warning| {
+        warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("ls1")
+    }));
+}
+
+#[test]
+fn unrepresentable_pmd_profile_steps_stay_verbatim_and_inactive() {
+    use serde_json::{Value, json};
+
+    let original: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap())
+            .unwrap();
+    for (time, values) in [
+        (json!([0, 0]), json!([0.5, 1.0])),
+        (json!([1, 0]), json!([0.5, 1.0])),
+        (json!([]), json!([])),
+        (json!([0]), json!([0.5, 1.0])),
+        (json!([0, 1]), json!([null, 1.0])),
+        (json!([0, 1]), json!(["unknown", 1.0])),
+        (json!([0, 1e308]), json!([0.5, 1.0])),
+        (
+            json!([1.200_000_000_000_000_4, 1.200_000_000_000_000_6]),
+            json!([0.5, 1.0]),
+        ),
+    ] {
+        let mut source = original.clone();
+        source["time_series"]["ls1"]["time"] = time;
+        source["time_series"]["ls1"]["values"] = values;
+        let net = parse_pmd_str(&source.to_string()).unwrap();
+        let output = emit_bmopf_json(&net);
+        let doc: Value = serde_json::from_str(&output.text).unwrap();
+        assert!(doc.get("time_series").is_none(), "{doc}");
+        for load in doc["load"].as_object().unwrap().values() {
+            assert!(load.get("time_series").is_none(), "{load}");
+        }
+        assert_eq!(
+            doc["extras"]["time_series"]["ls1"],
+            source["time_series"]["ls1"]
+        );
+        assert!(schema_validator().is_valid(&doc), "{doc}");
+        assert!(output.warnings.iter().any(|warning| {
+            warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("ls1")
+        }));
+    }
+}
+
+#[test]
+fn profile_cache_is_rebuilt_after_profile_edits() {
+    use serde_json::{Value, json};
+
+    let mut source: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap())
+            .unwrap();
+    source["time_series"]["ls1"]["time"] = json!([0, 1]);
+    source["time_series"]["ls1"]["values"] = json!([0.5, 1.0]);
+    let mut net = parse_pmd_str(&source.to_string()).unwrap();
+    let first: Value = serde_json::from_str(&emit_bmopf_json(&net).text).unwrap();
+    assert_eq!(first["time_series"]["ls1"]["time"], json!([0, 3600]));
+
+    for (replace, expected_time) in [(true, None), (false, Some(json!([7200, 10800])))] {
+        let mut profile = source["time_series"]["ls1"].clone();
+        profile["replace"] = json!(replace);
+        profile["time"] = json!([2, 3]);
+        net.untyped_objects_mut()
+            .iter_mut()
+            .find(|object| object.class == "time_series" && object.name == "ls1")
+            .unwrap()
+            .props = vec![(None, profile.to_string())];
+        let output = emit_bmopf_json(&net);
+        let doc: Value = serde_json::from_str(&output.text).unwrap();
+        if let Some(time) = expected_time {
+            assert_eq!(doc["time_series"]["ls1"]["time"], time);
+            assert_eq!(doc["load"]["l1"]["time_series"]["p_nom"], "ls1");
+        } else {
+            assert!(doc.get("time_series").is_none(), "{doc}");
+            assert!(doc["load"]["l1"].get("time_series").is_none(), "{doc}");
+            assert_eq!(doc["extras"]["time_series"]["ls1"], profile);
+        }
+        assert!(schema_validator().is_valid(&doc), "{doc}");
+    }
+}
+
+#[test]
+fn referenced_profiles_must_share_one_bmopf_time_axis() {
+    use serde_json::{Value, json};
+
+    let mut source: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap())
+            .unwrap();
+    source["time_series"]["ls1"]["time"] = json!([0, 1]);
+    source["time_series"]["ls1"]["values"] = json!([0.5, 1.0]);
+    source["time_series"]["ls2"] = source["time_series"]["ls1"].clone();
+    source["load"]["l2"]["time_series"] = json!({"pd_nom":"ls2", "qd_nom":"ls2"});
+    // Numerically identical integer and floating-point axes agree.
+    source["time_series"]["ls2"]["time"] = json!([0.0, 1.0]);
+    let net = parse_pmd_str(&source.to_string()).unwrap();
+    let doc: Value = serde_json::from_str(&emit_bmopf_json(&net).text).unwrap();
+    assert_eq!(doc["load"]["l1"]["time_series"]["p_nom"], "ls1");
+    assert_eq!(doc["load"]["l2"]["time_series"]["p_nom"], "ls2");
+
+    // BMOPF has no interpolation or resampling between different step axes.
+    for time in [json!([0, 2]), json!([0, 1, 2])] {
+        source["time_series"]["ls2"]["values"] =
+            Value::Array(vec![json!(1.0); time.as_array().unwrap().len()]);
+        source["time_series"]["ls2"]["time"] = time;
+        let net = parse_pmd_str(&source.to_string()).unwrap();
+        let output = emit_bmopf_json(&net);
+        let doc: Value = serde_json::from_str(&output.text).unwrap();
+        assert!(doc.get("time_series").is_none(), "{doc}");
+        for load in doc["load"].as_object().unwrap().values() {
+            assert!(load.get("time_series").is_none(), "{load}");
+        }
+        assert_eq!(doc["extras"]["time_series"], source["time_series"]);
+        assert!(schema_validator().is_valid(&doc), "{doc}");
+    }
+}

@@ -4,8 +4,8 @@
 
 - Activate PMD load-shape profiles in BMOPF 0.2.0 only when their semantics
   are representable: convert numeric time axes from hours to seconds, preserve
-  unsupported timestamp axes and options verbatim under extras, and reuse a
-  per-emission compatibility index. Keep schema 0.1.0 references inactive
+  unsupported axes and options verbatim under extras, require aligned finite
+  steps across active profiles, and reuse a per-emission compatibility index. Keep schema 0.1.0 references inactive
   (#771).
 
 - Reject pandapower split-table rows whose cell count does not match the declared columns, rather than silently defaulting missing electrical values.

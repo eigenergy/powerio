@@ -259,6 +259,35 @@ impl Writer {
                     .map(|normalized| (object.name.clone(), normalized))
             })
             .collect();
+
+        // Only load p/q references are activated by this writer. Compare each
+        // referenced profile once; BMOPF cannot resample different step axes.
+        let referenced: BTreeSet<&str> = net
+            .loads()
+            .iter()
+            .filter_map(|load| load.extras.get("time_series").and_then(Value::as_object))
+            .flat_map(|refs| refs.iter())
+            .filter(|(field, _)| matches!(field.as_str(), "pd_nom" | "p_nom" | "qd_nom" | "q_nom"))
+            .filter_map(|(_, value)| value.as_str())
+            .filter(|name| self.time_series_profiles.contains_key(*name))
+            .collect();
+        let incompatible_steps = {
+            let mut profiles = referenced
+                .iter()
+                .filter_map(|name| self.time_series_profiles.get(*name));
+            profiles.next().is_some_and(|(first, _)| {
+                profiles.any(|(other, _)| !bmopf_profiles_share_steps(first, other))
+            })
+        };
+        if incompatible_steps {
+            self.warn(
+                &C::EMIT_BMOPF_RETAINED_SOURCE_ONLY,
+                "referenced time_series profiles have different step counts or time axes; \
+                 retained under extras.time_series with inactive load references",
+            );
+            self.time_series_profiles
+                .retain(|name, _| !referenced.contains(name.as_str()));
+        }
     }
 
     fn warn(&mut self, info: &'static DiagnosticInfo, msg: impl Into<String>) {
@@ -3058,12 +3087,6 @@ fn classify(t: &DistTransformer) -> Kind {
     }
 }
 
-/// The re-emitted form of an untyped object.
-///
-/// A BMOPF sourced object rides as one unkeyed blob, which is the JSON the
-/// document declared. A dss sourced object rides as key/value property
-/// pairs, which rebuild into an object; without that arm every dss sourced
-/// untyped object failed the JSON parse and dropped.
 /// Normalize a raw profile into BMOPF's multiplicative time-series shape.
 /// PMD's source ID is provenance, while nonzero offset and `replace=true`
 /// change profile semantics and cannot be represented by BMOPF.
@@ -3077,10 +3100,20 @@ fn normalized_bmopf_time_series_for_source(
     is_pmd: bool,
 ) -> Option<(Value, Option<Value>)> {
     let mut profile = value.as_object()?.clone();
-    // BMOPF requires values. A time-only record must remain source-only.
-    if !profile.contains_key("values") {
+    // Only complete, finite factors can become active BMOPF profiles.
+    // Invalid or unsupported records remain verbatim in extras.
+    let values = profile.get("values")?.as_array()?;
+    if values.is_empty()
+        || values
+            .iter()
+            .any(|value| value.as_f64().is_none_or(|value| !value.is_finite()))
+        || profile
+            .get("description")
+            .is_some_and(|value| !value.is_string())
+    {
         return None;
     }
+    let steps = values.len();
     let source_id = profile.remove("source_id");
     let offset = profile.remove("offset");
     let replace = profile.remove("replace");
@@ -3104,6 +3137,9 @@ fn normalized_bmopf_time_series_for_source(
     // exact where possible instead of routing them through f64.
     if let Some(time) = profile.get("time").cloned() {
         let normalized = normalize_bmopf_time_axis(&time, is_pmd)?;
+        if normalized.as_array()?.len() != steps {
+            return None;
+        }
         profile.insert("time".into(), normalized);
     }
     let allowed = ["values", "time", "description"];
@@ -3135,13 +3171,16 @@ fn normalized_bmopf_time_series_for_source(
 /// PMD axes are in hours, while native BMOPF axes are already in seconds.
 fn normalize_bmopf_time_axis(time: &Value, from_pmd: bool) -> Option<Value> {
     let values = time.as_array()?;
+    if values.is_empty() {
+        return None;
+    }
     let mut normalized = Vec::with_capacity(values.len());
     for value in values {
         let number = value.as_number()?;
         let seconds = if from_pmd {
-            if let Some(hours) = number.as_i64() {
+            if let Some(hours) = number.as_u64() {
                 serde_json::Number::from(hours.checked_mul(3_600)?)
-            } else if let Some(hours) = number.as_u64() {
+            } else if let Some(hours) = number.as_i64() {
                 serde_json::Number::from(hours.checked_mul(3_600)?)
             } else {
                 let seconds = number.as_f64()? * 3_600.0;
@@ -3160,7 +3199,84 @@ fn normalize_bmopf_time_axis(time: &Value, from_pmd: bool) -> Option<Value> {
         }
         normalized.push(Value::Number(seconds));
     }
-    Some(Value::Array(normalized))
+    // Conversion can collapse adjacent floating-point steps. Check the
+    // emitted axis, keeping integer comparisons exact above f64's ceiling.
+    let increasing = normalized
+        .windows(2)
+        .all(|pair| compare_time_steps(&pair[0], &pair[1]) == Some(std::cmp::Ordering::Less));
+    increasing.then_some(Value::Array(normalized))
+}
+
+fn bmopf_profiles_share_steps(left: &Value, right: &Value) -> bool {
+    let count = |profile: &Value| {
+        profile
+            .get("values")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+    };
+    count(left) == count(right)
+        && match (left.get("time"), right.get("time")) {
+            (None, None) => true,
+            (Some(Value::Array(left)), Some(Value::Array(right))) => {
+                left.len() == right.len()
+                    && left
+                        .iter()
+                        .zip(right)
+                        .all(|(left, right)| same_time_step(left, right))
+            }
+            _ => false,
+        }
+}
+
+// Time steps are identities, so use exact numeric comparisons, never a tolerance.
+fn same_time_step(left: &Value, right: &Value) -> bool {
+    compare_time_steps(left, right) == Some(std::cmp::Ordering::Equal)
+}
+
+fn compare_time_steps(left: &Value, right: &Value) -> Option<std::cmp::Ordering> {
+    if let (Some(left), Some(right)) = (left.as_i64(), right.as_i64()) {
+        return Some(left.cmp(&right));
+    }
+    if let (Some(left), Some(right)) = (left.as_u64(), right.as_u64()) {
+        return Some(left.cmp(&right));
+    }
+    let left_real = left.as_f64().filter(|value| value.is_finite())?;
+    let right_real = right.as_f64().filter(|value| value.is_finite())?;
+    let signed_real = |integer: i64, real: f64| {
+        if integer < 0 {
+            compare_unsigned_integer_real(integer.unsigned_abs(), -real).reverse()
+        } else {
+            compare_unsigned_integer_real(integer as u64, real)
+        }
+    };
+    if let Some(left) = left.as_i64() {
+        Some(signed_real(left, right_real))
+    } else if let Some(left) = left.as_u64() {
+        Some(compare_unsigned_integer_real(left, right_real))
+    } else if let Some(right) = right.as_i64() {
+        Some(signed_real(right, left_real).reverse())
+    } else if let Some(right) = right.as_u64() {
+        Some(compare_unsigned_integer_real(right, left_real).reverse())
+    } else {
+        left_real.partial_cmp(&right_real)
+    }
+}
+
+fn compare_unsigned_integer_real(integer: u64, real: f64) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+
+    if real < 0.0 {
+        return Ordering::Greater;
+    }
+    // u64::MAX rounds to the exclusive upper bound 2^64 as f64. Check
+    // before casting so a saturating conversion cannot make them equal.
+    if real >= u64::MAX as f64 {
+        return Ordering::Less;
+    }
+    match integer.cmp(&(real as u64)) {
+        Ordering::Equal if real.fract() > 0.0 => Ordering::Less,
+        order => order,
+    }
 }
 
 /// Rebuild the value of an untyped object. One unnamed property alone is the
@@ -3502,6 +3618,23 @@ mod tests {
             normalize_bmopf_time_axis(&json!([0, 3600]), false),
             Some(json!([0, 3600]))
         );
+        // Preserve exact integer seconds beyond f64's integer precision and
+        // beyond i64::MAX when the converted result still fits in u64.
+        let hours = 3_000_000_000_000_001_u64;
+        assert_eq!(
+            normalize_bmopf_time_axis(&json!([0, hours]), true),
+            Some(json!([0, hours * 3_600]))
+        );
+        let native = json!([9_007_199_254_740_992_u64, 9_007_199_254_740_993_u64]);
+        assert_eq!(normalize_bmopf_time_axis(&native, false), Some(native));
+        let mixed = json!([9_007_199_254_740_992.0, 9_007_199_254_740_993_u64]);
+        assert_eq!(normalize_bmopf_time_axis(&mixed, false), Some(mixed));
+        assert_eq!(
+            normalize_bmopf_time_axis(&json!([-1, 0, 1]), true),
+            Some(json!([-3600, 0, 3600]))
+        );
+        assert!(normalize_bmopf_time_axis(&json!([i64::MIN]), true).is_none());
+        assert!(normalize_bmopf_time_axis(&json!([1e308]), true).is_none());
         assert!(
             normalize_bmopf_time_axis(&json!([u64::MAX]), true).is_none(),
             "overflowing hour-to-second conversion must remain source-only"
@@ -3510,39 +3643,6 @@ mod tests {
             normalize_bmopf_time_axis(&json!(["2026-01-01T00:00:00Z"]), true).is_none(),
             "timestamp axes have no numeric BMOPF representation"
         );
-    }
-
-    #[test]
-    fn pmd_time_axis_conversion_and_source_only_fallback_use_writer_path() {
-        let mut source: Value = serde_json::from_str(
-            &std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap(),
-        )
-        .unwrap();
-        source["time_series"]["ls1"]["values"] = json!([0.5, 1.0, 0.75]);
-        source["time_series"]["ls1"]["time"] = json!([0, 1, 2]);
-        let net = parse_pmd_str(&source.to_string()).unwrap();
-        let output = emit_bmopf_json(&net);
-        let doc: Value = serde_json::from_str(&output.text).unwrap();
-        assert_eq!(doc["time_series"]["ls1"]["time"], json!([0, 3600, 7200]));
-        assert_eq!(doc["load"]["l1"]["time_series"]["p_nom"], "ls1");
-        assert!(schema_validator().is_valid(&doc), "{doc}");
-
-        source["time_series"]["ls1"]["values"] = json!([0.5, 1.0]);
-        source["time_series"]["ls1"]["time"] =
-            json!(["2026-01-01T00:00:00Z", "2026-01-01T01:00:00Z"]);
-        let net = parse_pmd_str(&source.to_string()).unwrap();
-        let output = emit_bmopf_json(&net);
-        let doc: Value = serde_json::from_str(&output.text).unwrap();
-        assert!(doc.get("time_series").is_none(), "{doc}");
-        assert!(doc["load"]["l1"].get("time_series").is_none(), "{doc}");
-        assert_eq!(
-            doc["extras"]["time_series"]["ls1"],
-            source["time_series"]["ls1"]
-        );
-        assert!(schema_validator().is_valid(&doc), "{doc}");
-        assert!(output.warnings.iter().any(|warning| {
-            warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("ls1")
-        }));
     }
 
     #[test]
@@ -3568,6 +3668,38 @@ mod tests {
             normalized_bmopf_time_series(&timestamps).is_none(),
             "BMOPF time axes must be numeric for non-PMD sources too"
         );
+    }
+
+    #[test]
+    fn profile_step_comparison_keeps_exact_integer_identity() {
+        for (left, right) in [
+            (json!(0), json!(0.0)),
+            (json!(3600), json!(3600.0)),
+            (
+                json!(9_007_199_254_740_992_u64),
+                json!(9_007_199_254_740_992.0),
+            ),
+            (json!(i64::MIN), json!(i64::MIN as f64)),
+        ] {
+            assert!(same_time_step(&left, &right), "{left} != {right}");
+            assert!(same_time_step(&right, &left), "{right} != {left}");
+        }
+        for (left, right) in [
+            (json!(0), json!(0.5)),
+            (
+                json!(9_007_199_254_740_992_u64),
+                json!(9_007_199_254_740_993_u64),
+            ),
+            (
+                json!(9_007_199_254_740_993_u64),
+                json!(9_007_199_254_740_992.0),
+            ),
+            (json!(i64::MAX), json!(i64::MAX as f64)),
+            (json!(u64::MAX), json!(u64::MAX as f64)),
+        ] {
+            assert!(!same_time_step(&left, &right), "{left} == {right}");
+            assert!(!same_time_step(&right, &left), "{right} == {left}");
+        }
     }
 
     /// A dropped field's diagnostic code must never claim the field was
