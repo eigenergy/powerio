@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Preserve explicit system frequency through the PowerIO PowerModels JSON
+  metadata extension and dictionary construction (#773).
+
 - Add regression coverage proving that preserving a reference bus does not mark an island supplied when no in-service balancing generator exists.
 
 - Reject pandapower split-table rows whose cell count does not match the declared columns, rather than silently defaulting missing electrical values.

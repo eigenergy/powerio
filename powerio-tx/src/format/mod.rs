@@ -1494,13 +1494,17 @@ fn warn_psse_downgrade(
 }
 
 /// Warn when a non-default system frequency is emitted to a format with no frequency
-/// field. PSS/E (`BASFRQ`) and pandapower (`f_hz`) carry it; MATPOWER,
-/// PowerModels, egret, and PowerWorld have nowhere to put it, so a 50 Hz case
+/// field. PSS/E (`BASFRQ`), pandapower (`f_hz`) and the PowerIO PowerModels
+/// extension (`base_frequency`) carry it; MATPOWER, egret and PowerWorld do not,
+/// so a 50 Hz case
 /// would parse again as the 60 Hz default. Report the loss instead.
 fn warn_dropped_frequency(net: &BalancedNetwork, format: TargetFormat, conv: &mut TextEmission) {
     let carries_frequency = matches!(
         format,
-        TargetFormat::Psse { .. } | TargetFormat::PsseRawx | TargetFormat::PandapowerJson
+        TargetFormat::Psse { .. }
+            | TargetFormat::PsseRawx
+            | TargetFormat::PandapowerJson
+            | TargetFormat::PowerModelsJson
     );
     if carries_frequency {
         return;
