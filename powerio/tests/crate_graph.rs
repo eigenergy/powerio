@@ -54,6 +54,12 @@ fn the_dependency_graph_matches_the_settled_layout() {
     // The foundation depends on no workspace crate.
     assert_eq!(workspace_deps_of(&graph, "powerio-core"), BTreeSet::new());
 
+    // Archive transport shares core infrastructure without electrical models.
+    assert_eq!(
+        workspace_deps_of(&graph, "powerio-archive"),
+        BTreeSet::from(["powerio-core"])
+    );
+
     // Integration composes both model crates above the foundation.
     assert_eq!(
         workspace_deps_of(&graph, "powerio-tnd"),

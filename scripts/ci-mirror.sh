@@ -60,7 +60,7 @@ fi
 # is not installed (rustup target add wasm32-unknown-unknown).
 if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then
   run cargo check --target wasm32-unknown-unknown -p powerio -p powerio-tx -p powerio-dist \
-      -p powerio-core -p powerio-prob -p powerio-matrix
+      -p powerio-core -p powerio-archive -p powerio-prob -p powerio-matrix
   run cargo check --target wasm32-unknown-unknown -p powerio --features matrix
   # Without the default-on sincal feature the facade must build with no C
   # compiler, so SQLite may not appear in that dependency graph. Package names
@@ -89,7 +89,7 @@ else
   echo "=== skipped: cargo-semver-checks not installed ==="
 fi
 
-run cargo test -p powerio -p powerio-tx -p powerio-core -p powerio-synth -p powerio-matrix -p powerio-prob -p powerio-cli \
+run cargo test -p powerio -p powerio-tx -p powerio-core -p powerio-archive -p powerio-synth -p powerio-matrix -p powerio-prob -p powerio-cli \
     -p powerio-capi -p powerio-dist -p powerio-tnd
 run cargo test -p powerio --features matrix
 run cargo test -p powerio --features gridfm
