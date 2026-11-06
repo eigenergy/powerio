@@ -1,7 +1,34 @@
 import { describe, expect, it, test, vi } from 'vitest';
-import { BlobReader, BlobWriter, ZipWriter } from '@zip.js/zip.js';
+import { BlobReader, BlobWriter, Uint8ArrayReader, Uint8ArrayWriter, ZipWriter } from '@zip.js/zip.js';
 import { groupInputs, safeName, unpack } from './inputs';
 const entry = (path: string, content = '') => ({ path, file: new File([content], path.split('/').at(-1)!) });
+
+test('XML-only ZIPs containing independent networks are expanded', async () => {
+  const zip = new ZipWriter(new BlobWriter(), { useWebWorkers: false });
+  for (const name of ['one.xml', 'two.xml']) await zip.add(name, new BlobReader(new Blob(['<?xml version="1.0"?><!-- not <rdf:RDF> --><network xmlns="http://www.powsybl.org/schema/iidm/1_0"/>'])));
+  const result = await unpack({ path: 'networks.zip', file: new File([await zip.close()], 'networks.zip') });
+  expect(result.map(f => f.path)).toEqual(['networks/one.xml', 'networks/two.xml']);
+});
+
+test('directory local headers are validated even though their payload is empty', async () => {
+  const zip = new ZipWriter(new Uint8ArrayWriter(), { useWebWorkers: false });
+  await zip.add('folder/', undefined, { directory: true });
+  await zip.add('case.m', new Uint8ArrayReader(new Uint8Array([1])));
+  const bytes = await zip.close();
+  bytes[30] = 'x'.charCodeAt(0); // Local directory name disagrees with its index.
+  await expect(unpack({ path: 'bad.zip', file: new File([bytes], 'bad.zip') })).rejects.toThrow();
+});
+
+test('valid directories and native RDF archives retain exact source ZIP bytes in their scope', async () => {
+  const zip = new ZipWriter(new BlobWriter(), { useWebWorkers: false });
+  await zip.add('profiles/', undefined, { directory: true });
+  await zip.add('profiles/EQ.xml', new BlobReader(new Blob(['<?xml version="1.0"?><!--', 'description '.repeat(500), '--><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/>'])));
+  const file = new File([await zip.close()], 'network.zip');
+  const [result] = await unpack({ path: 'network.zip', file }, () => false, 'unique');
+  expect(result.file).toBe(file);
+  expect(result.path).toBe('unique/network.zip');
+  expect(result.collectionRoot).toBe('unique');
+});
 const sized = (path: string, size: number, content = '') => {
   const result = entry(path, content);
   Object.defineProperty(result.file, 'size', { value: size });

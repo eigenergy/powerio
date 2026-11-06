@@ -1,4 +1,4 @@
-import { BlobReader, BlobWriter, ZipReader, type FileEntry } from '@zip.js/zip.js';
+import { BlobReader, BlobWriter, ZipReader, type Entry, type FileEntry } from '@zip.js/zip.js';
 import type { BrowserFile, CollectionCandidate, CollectionSelection } from './types';
 import { available, type InputEntry } from './acquisition';
 import { dssProjects } from './dss-projects';
@@ -22,12 +22,26 @@ function safePath(path: string) {
   return path;
 }
 
-export async function unpack(entry: BrowserFile, cancelled: () => boolean = () => false): Promise<BrowserFile[]> {
+function hasRdfRoot(text: string): boolean {
+  // The payload is already bounded. Skip leading declarations/comments so a
+  // long comment does not hide RDF, or make an XIIDM network look like RDF.
+  for (;;) {
+    text = text.trimStart();
+    const end = text.startsWith('<!--') ? '-->' : text.startsWith('<?') ? '?>' : undefined;
+    if (!end) return /^<(?:[\w.-]+:)?RDF(?=[\s/>])/.test(text);
+    const at = text.indexOf(end);
+    if (at < 0) return false;
+    text = text.slice(at + end.length);
+  }
+}
+
+export async function unpack(entry: BrowserFile, cancelled: () => boolean = () => false, root = stem(entry.path)): Promise<BrowserFile[]> {
   const limit = inputLimit([entry]);
   if (limit) throw new Error(limit.message);
   const reader = new ZipReader(new BlobReader(entry.file), { useWebWorkers: false, checkCrc32: true, checkOverlappingEntry: true, strictness: 'strict' });
   try {
     const files: FileEntry[] = [];
+    const directories: Entry[] = [];
     let total = 0, count = 0;
     const names = new Map<string, { id: number; spelling: string; directory: boolean; explicit: boolean }>();
     for await (const member of reader.getEntriesGenerator()) {
@@ -53,25 +67,35 @@ export async function unpack(entry: BrowserFile, cancelled: () => boolean = () =
       }
       if (member.encrypted) throw new Error('This ZIP is encrypted. Extract it locally and choose the folder.');
       if (![0, 8].includes(member.compressionMethod) || !Number.isSafeInteger(member.uncompressedSize) || !Number.isSafeInteger(member.compressedSize) || member.uncompressedSize < 0 || member.compressedSize < 0) throw new Error('Unsupported ZIP member metadata.');
-      if (member.directory) continue;
+      if (member.directory) { directories.push(member); continue; }
       total += member.uncompressedSize;
       if (files.length >= MAX_INPUT_FILES || total > MAX_INPUT_BYTES || member.uncompressedSize > Math.max(1, member.compressedSize) * 200) {
         throw new Error('This archive exceeds the project limit: 4096 files, 64 MiB expanded, or a compression ratio of 200. Choose smaller projects or use PowerIO in the terminal.');
       }
-      if (files.some(file => file.filename === member.filename)) throw new Error('The ZIP contains duplicate paths. Choose a folder with unique paths.');
       files.push(member);
     }
-    // CGMES acquires its archive as one source and can preserve the exact ZIP bytes.
-    if (files.length && files.every(file => /\.xml$/i.test(file.filename))) return [entry];
+    const checkCancelled = () => { if (cancelled()) throw new Error('Archive acquisition cancelled.'); };
+    // zip.js 2.14 attaches getData to directories as well, although its type
+    // declarations expose it only on FileEntry. Verify their headers and EOF.
+    for (const member of directories) {
+      checkCancelled();
+      const blob = await (member as Entry & Pick<FileEntry, 'getData'>).getData(new BlobWriter(), { onprogress: checkCancelled });
+      if (blob.size !== 0) throw new Error('Invalid ZIP directory payload.');
+    }
+    let nativeCgmes = files.length > 0 && files.every(file => /\.xml$/i.test(file.filename));
     const expanded: BrowserFile[] = [];
     for (const member of files) {
-      if (cancelled()) throw new Error('Archive acquisition cancelled.');
+      checkCancelled();
       if (/\.zip$/i.test(member.filename)) throw new Error('This ZIP contains another archive. Extract it locally and choose the project folder.');
-      const blob = await member.getData!(new BlobWriter());
+      const blob = await member.getData(new BlobWriter(), { onprogress: checkCancelled });
       if (blob.size !== member.uncompressedSize) throw new Error('An archive entry has an unexpected size.');
-      expanded.push({ collectionRoot: stem(entry.path), path: `${stem(entry.path)}/${member.filename}`, file: new File([blob], basename(member.filename)) });
+      if (nativeCgmes && !hasRdfRoot(await blob.text())) nativeCgmes = false;
+      expanded.push({ collectionRoot: root, path: `${root}/${member.filename}`, file: new File([blob], basename(member.filename)) });
     }
-    return expanded;
+    checkCancelled();
+    // Keep native RDF profile archives byte exact; XML suffixes alone do not
+    // imply CGMES (a transport ZIP can hold several independent XIIDM cases).
+    return nativeCgmes ? [{ ...entry, collectionRoot: root, path: `${root}/${basename(entry.path)}` }] : expanded;
   } finally { await reader.close(); }
 }
 

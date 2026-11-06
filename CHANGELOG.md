@@ -9,6 +9,8 @@
 
 - The converter uses shared collection selections for overlapping masters and
   mixed cases, defers parsing until requested, and reuses bounded worker input.
+  ZIP upload scopes remain independent when display names collide, XML-only
+  network batches stay selectable, and empty directory records are verified.
 
 - `powerio collection inspect/parse` lists ZIP/folder inputs and processes
   explicit entries, dataset roots, or document groups with independent results.
