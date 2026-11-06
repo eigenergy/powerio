@@ -3791,8 +3791,11 @@ impl Transformer3W {
 
     /// The sole adjustable winding for PSS/E bus-to-bus correction. The
     /// sign of COD enables regulation but does not change which winding the
-    /// tables describe: a disabled nonzero control remains adjustable.
-    pub(crate) fn impedance_correction_control_winding(&self) -> Option<usize> {
+    /// tables describe: a disabled nonzero control remains adjustable. A
+    /// consumer that moves this winding's tap rereads the `psse_zcod = 1`
+    /// tables at its new position.
+    #[must_use]
+    pub fn impedance_correction_control_winding(&self) -> Option<usize> {
         let mut adjustable = self
             .windings
             .iter()

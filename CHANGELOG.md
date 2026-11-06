@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+**PSS/E**
+
+- A two winding transformer with a nonzero magnetizing admittance records
+  the factor its reader applied (the square of the tap) as
+  `psse_magnetizing_referral` in its extras. The writer divides by the
+  recorded factor, so a tap moved after reading no longer restates
+  `MAG1`/`MAG2`, and a consumer that moves the tap can keep the admittance
+  at bus I.
+- A two winding transformer whose winding 2 ratio on its bus base is not one
+  records it as `psse_winding2_ratio`. The branch `tap` is winding 1 over
+  winding 2 and `r + jx` includes winding 2's squared referral; the ratio
+  lets a consumer separate them.
+- `Transformer3W::impedance_correction_control_winding` is public, so a
+  consumer that moves the controlling winding of a `ZCOD = 1` transformer
+  can find it.
+
 ## 0.11.8
 
 **MG-RAVENS and PMD MATHEMATICAL JSON**
