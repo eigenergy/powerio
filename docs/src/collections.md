@@ -51,3 +51,14 @@ Dataset discovery recognizes `network.csv` (PyPSA) and `bus_data.parquet`
 Nested datasets remain separate, including during retained-source replay.
 GridFM candidates remain visible with `unsupported-build` when the feature is
 disabled. Missing required companion tables produce an `incomplete` candidate.
+
+Use `CollectionSelection::group(format, members)` for `cgmes`, `cim-dist`,
+or `goc3-json`. Members are relative to the selected root and only those
+members reach the adapter. GO problem/solution roles are validated by the
+existing reader; discovery never pairs them automatically. CIM members must be
+top-level XML files under their selected root. CGMES also accepts explicitly
+selected profile ZIPs, with its existing validation and echo behavior.
+
+Select a `.sinx` primary with `sincal-balanced` or `sincal-multiconductor` and
+pass the native options through `ParseOptions`. The container reaches SINCAL
+intact; outer collection members cannot satisfy its internal references.
