@@ -2,12 +2,41 @@
 
 ## Unreleased
 
+**BMOPF**
 - BMOPF reading no longer checks free-form `meta.provenance` entries as schema
   fields, so a provenance key such as `length` raises no
   `READ.BMOPF.FIELD_NOT_A_NUMBER` finding. The finding's pointer into the
   BMOPF document moves from `target`, which points into the IR network, to the
   `source_pointer` detail, so a module carrying it serializes to PowerIO IR
   (#763).
+
+**PSS/E**
+
+- A two winding transformer with a nonzero magnetizing admittance records
+  the factor its reader applied (the square of the tap) as
+  `psse_magnetizing_referral` in its extras. The writer divides by the
+  recorded factor, so a tap moved after reading no longer restates
+  `MAG1`/`MAG2`, and a consumer that moves the tap can keep the admittance
+  at bus I (#799).
+- A two winding transformer whose winding 2 ratio on its bus base is not one
+  records it as `psse_winding2_ratio`. The branch `tap` is winding 1 over
+  winding 2 and `r + jx` includes winding 2's squared referral; the ratio
+  lets a consumer separate them (#799).
+- `Transformer3W::impedance_correction_control_winding` is public, so a
+  consumer that moves the controlling winding of a `ZCOD = 1` transformer
+  can find it (#799).
+- `Transformer3W::to_star_expansion` (and so `expand_transformers_3w`) gives
+  each star leg its winding's own impedance correction table and, once the
+  transformer is corrected, its nominal star impedance. Correcting the
+  expanded network then scales each leg as the native transformer's
+  correction scales it; before, the expanded legs carried no tables. `ZCOD =
+  1` tables, which scale the pairwise impedances together, stay on the native
+  transformer (#801).
+
+**CI and dependencies**
+
+- `jsonschema` moves to 0.60 (#750), and `actions/checkout` to 7 along with
+  the minor and patch action updates (#755, #757).
 
 ## 0.11.8
 

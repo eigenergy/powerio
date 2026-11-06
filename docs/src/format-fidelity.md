@@ -362,11 +362,19 @@ inside the tap. The reader therefore stores the admittance times the square of
 the tap, so bus I sees exactly the stated admittance, and the writer divides
 the square of the tap back out as the shortest decimal that reads back to
 the same charging, so the admittance survives a round trip through
-`MAG1`/`MAG2`. The indexed view still places a three winding transformer's
+`MAG1`/`MAG2`. A transformer with a nonzero admittance records that factor
+as `psse_magnetizing_referral` in its extras. The writer divides by the
+recorded factor, so a tap moved after reading leaves `MAG1`/`MAG2` as the
+source stated them, and a consumer that moves the tap keeps bus I's
+admittance at the charging divided by this factor. The indexed view still places a three winding transformer's
 magnetizing admittance at its star bus. The reader converts `CW` 1/2/3, `CZ`
 1/2/3, and `CM` 1/2 into the neutral tap ratio, system base impedance, and
 magnetizing admittance, and fresh output uses the electrically equivalent
-canonical `CW = CZ = CM = 1` representation. Fresh two-winding output
+canonical `CW = CZ = CM = 1` representation. A two winding transformer whose
+winding 2 ratio on its bus base is not one records that ratio as
+`psse_winding2_ratio`: the branch `tap` is winding 1 divided by it and
+`r + jx` already includes its squared referral, so a consumer can separate the
+two again. Fresh two-winding output
 usually puts winding 2 at one; if that would change a retained correction
 table from ratio to angle, it writes equivalent nonunit winding ratios and
 impedance instead. A two
