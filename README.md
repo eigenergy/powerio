@@ -141,7 +141,7 @@ After deserialization, `emit` writes fresh output from the stored value.
 | PowerModelsDistribution ENGINEERING JSON | `pmd-json` | yes | yes |
 | PowerModelsDistribution MATHEMATICAL JSON | `pmd-math-json` | yes | yes |
 | BMOPF JSON | `bmopf-json`, `bmopf-json@0.1.0`, `bmopf-json@0.2.0` | 0.1.0, 0.2.0 | 0.1.0, 0.2.0 (default) |
-| Distribution CIM, CIM100 RDF/XML | `cim-dist` | cim17v40, one document or a directory | cim17v40, one document |
+| Distribution CIM, CIM100 RDF/XML | `cim-dist` | cim17v40 and CIM16 ADMS LV exports, one document or a directory | cim17v40, one document |
 | PSS SINCAL project, `sincal` feature | `sincal-balanced`, `sincal-multiconductor` | yes, with an explicit profile | an unchanged source byte for byte; an experimental fresh writer in Rust |
 | Geographic layer `.geo.json` | `geo-json` | yes | yes |
 

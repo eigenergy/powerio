@@ -97,8 +97,9 @@ pub(crate) fn is_cim_namespace(uri: &str) -> bool {
 
 /// A property/class name with its namespace collapsed to the conventional
 /// prefix: bare for `cim`, `rdf:`/`md:` for those, `entsoe:`/`eu:` for the
-/// extension namespaces (matched on their URI, not the file's chosen prefix
-/// letters), `<last-uri-segment>:` for anything else (vendor extensions).
+/// extension namespaces and `sedms:` for the Schneider Electric ADMS one
+/// (matched on their URI, not the file's chosen prefix letters),
+/// `<last-uri-segment>:` for anything else (vendor extensions).
 fn prefixed_name(
     resolve: &ResolveResult,
     local: &[u8],
@@ -119,6 +120,8 @@ fn prefixed_name(
                 format!("entsoe:{local}")
             } else if uri.contains("CIM100-European") {
                 format!("eu:{local}")
+            } else if uri.contains("schneider-electric-dms.com") {
+                format!("sedms:{local}")
             } else if uri == RDF_NS {
                 format!("rdf:{local}")
             } else {
