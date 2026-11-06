@@ -14,6 +14,7 @@ use zip::{
 };
 
 pub mod end_records;
+pub mod session;
 pub mod stream;
 
 mod local;
@@ -282,6 +283,17 @@ impl Archive {
     /// Apply an additional per-read byte cap, including on cached members.
     /// A refusal does not populate the cache. Zero permits only empty members.
     pub fn read_with_limit(&mut self, path: &ArtifactPath, max_bytes: u64) -> Result<Arc<[u8]>> {
+        self.read_cancellable(path, max_bytes, &session::Cancellation::default())
+    }
+
+    /// Read with cooperative cancellation between decompressor reads.
+    pub fn read_cancellable(
+        &mut self,
+        path: &ArtifactPath,
+        max_bytes: u64,
+        cancel: &session::Cancellation,
+    ) -> Result<Arc<[u8]>> {
+        cancel.check()?;
         let entry = self.entries.get(path).ok_or_else(|| {
             Error::new(
                 &codes::UNKNOWN_ENTRY,
@@ -298,10 +310,13 @@ impl Archive {
             .zip
             .by_index(entry.index)
             .map_err(|e| malformed(format!("cannot open ZIP member `{path}`: {e}")))?;
-        let content =
-            stream::read_declared_size(&mut file, &[], entry.size).map_err(|failure| {
-                malformed(format!("cannot verify ZIP member `{path}`: {failure:?}"))
-            })?;
+        let content = stream::read_declared_size(
+            &mut session::CancellableReader(&mut file, cancel),
+            &[],
+            entry.size,
+        )
+        .map_err(|failure| malformed(format!("cannot verify ZIP member `{path}`: {failure:?}")))?;
+        cancel.check()?;
         let content: Arc<[u8]> = content.into();
         self.cache.insert(path.clone(), Arc::clone(&content));
         Ok(content)

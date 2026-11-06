@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add explicit nested collection ZIP inspection with isolated namespaces, shared cumulative entry/expansion/work budgets, native ZIP layer accounting, and cooperative cancellation.
+
 - Add owned C collection handles, bounded folder/ZIP/memory acquisition, metadata inspection, and selected parsing into typed modules, with a matching Julia companion.
 
 - Python `Collection` inspects bounded ZIP/folder/memory inventories and parses

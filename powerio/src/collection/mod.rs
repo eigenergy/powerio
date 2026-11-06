@@ -11,6 +11,9 @@ use crate::{
     SourceTreeLimits,
 };
 pub use powerio_archive::ArchiveLimits;
+pub use powerio_archive::session::Cancellation;
+mod nested;
+use nested::Session;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -39,6 +42,10 @@ pub struct CollectionLimits {
     pub probe_bytes: u64,
     /// Maximum bytes examined by all classification probes together.
     pub inspection_bytes: u64,
+    /// Maximum ZIP decoding layers, including native CGMES/SINCAL archives.
+    pub max_zip_layers: u32,
+    /// Conservative input/decompression work charged across repeated operations.
+    pub work_bytes: u64,
 }
 impl Default for CollectionLimits {
     fn default() -> Self {
@@ -47,6 +54,8 @@ impl Default for CollectionLimits {
             archive: ArchiveLimits::default(),
             probe_bytes: 1 << 20,
             inspection_bytes: 8 << 20,
+            max_zip_layers: 2,
+            work_bytes: 256 << 20,
         }
     }
 }
@@ -162,6 +171,10 @@ pub struct Collection {
     limits: CollectionLimits,
     name: String,
     original: Option<Arc<[u8]>>,
+    session: Session,
+    zip_layers: u32,
+    cancel: Cancellation,
+    containers: Vec<String>,
 }
 impl Collection {
     /// Admit a named memory tree. Does not execute a parser or read the host.
@@ -170,10 +183,15 @@ impl Collection {
         files: impl IntoIterator<Item = (ArtifactPath, Arc<[u8]>)>,
         limits: CollectionLimits,
     ) -> Result<Self> {
+        if limits.max_zip_layers == 0 || limits.work_bytes == 0 {
+            return Err(selection_error(
+                "collection session limits must be positive",
+            ));
+        }
         let name = name.into();
         let tree = SourceTree::new(&name, files, limits.tree)?;
         let source = tree.source(None, None, limits.tree)?;
-        let inventory = source
+        let inventory: Arc<[CollectionEntry]> = source
             .entry_names()?
             .into_iter()
             .map(|path| {
@@ -185,7 +203,12 @@ impl Collection {
             })
             .collect::<Result<Vec<_>>>()?
             .into();
+        let session = Session::new(&inventory);
         Ok(Self {
+            session,
+            zip_layers: 0,
+            cancel: Cancellation::default(),
+            containers: Vec::new(),
             tree,
             inventory,
             limits,
@@ -201,7 +224,24 @@ impl Collection {
         bytes: Arc<[u8]>,
         limits: CollectionLimits,
     ) -> Result<Self> {
+        Self::from_zip_cancellable(name, bytes, limits, Cancellation::default())
+    }
+
+    /// Acquire a ZIP with a caller-owned cancellation signal.
+    pub fn from_zip_cancellable(
+        name: impl Into<String>,
+        bytes: Arc<[u8]>,
+        limits: CollectionLimits,
+        cancel: Cancellation,
+    ) -> Result<Self> {
+        cancel.check()?;
         let mut archive = powerio_archive::Archive::open(Arc::clone(&bytes), limits.archive)?;
+        let archive_entries = archive.entries().len();
+        let directories: Vec<_> = archive
+            .entries()
+            .filter(|e| e.is_directory())
+            .map(|e| e.path().clone())
+            .collect();
         let entries = archive
             .entries()
             .filter(|e| !e.is_directory())
@@ -218,11 +258,32 @@ impl Collection {
                 "ZIP exceeds collection tree limits",
             ));
         }
+        let expanded: u64 = entries.iter().map(|(_, size)| size).sum();
+        if (bytes.len() as u64).saturating_add(expanded) > limits.work_bytes {
+            return Err(Error::new(
+                &codes::LIMIT,
+                "ZIP exceeds collection work limit",
+            ));
+        }
+        for path in directories {
+            archive.read_cancellable(&path, 0, &cancel)?;
+        }
         let files = entries
             .into_iter()
-            .map(|(path, _)| archive.read(&path).map(|bytes| (path, bytes)))
+            .map(|(path, _)| {
+                archive
+                    .read_cancellable(&path, limits.tree.max_bytes(), &cancel)
+                    .map(|bytes| (path, bytes))
+            })
             .collect::<Result<Vec<_>>>()?;
         let mut collection = Self::from_files(name, files, limits)?;
+        collection.zip_layers = 1;
+        collection.cancel = cancel;
+        collection.session.initialize_archive(
+            archive_entries,
+            bytes.len() as u64,
+            limits.work_bytes,
+        )?;
         collection.original = Some(bytes);
         Ok(collection)
     }
@@ -266,10 +327,16 @@ impl Collection {
     /// Bounded suggestions, without electrical parsing or filename precedence.
     /// Every inventory file remains explicitly selectable even if omitted here.
     pub fn inspect(&self) -> Result<Vec<CollectionCandidate>> {
+        self.cancel.check()?;
+        self.session.charge(
+            self.entries().iter().map(|e| e.path.len() as u64 + 1).sum(),
+            self.limits.work_bytes,
+        )?;
         let source = self.tree.source(None, None, self.limits.tree)?;
         let mut remaining = self.limits.inspection_bytes;
         let mut candidates = Vec::new();
         for entry in self.entries() {
+            self.cancel.check()?;
             let extension = entry
                 .path
                 .rsplit('.')
@@ -298,6 +365,7 @@ impl Collection {
                         status = CandidateStatus::ProbeLimit;
                         None
                     } else {
+                        self.session.charge(entry.bytes, self.limits.work_bytes)?;
                         remaining -= entry.bytes;
                         let bytes = source.root_buffer(&entry.path)?;
                         match classify_json_bytes(bytes.content_bytes()) {
@@ -390,6 +458,8 @@ impl Collection {
                 "set the format on the collection selection",
             ));
         }
+        self.cancel.check()?;
+        self.charge_selection(selection)?;
         let source = self.source(selection)?;
         let module = match selection.operation {
             CollectionOperation::Parse => crate::parse_with_options(&source, options)?,
