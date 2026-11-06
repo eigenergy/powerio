@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Python `Collection` inspects bounded ZIP/folder/memory inventories and parses
+  independent selections with typed modules, dependencies and explicit lifetime.
+
 - The converter uses shared collection selections for overlapping masters and
   mixed cases, defers parsing until requested, and reuses bounded worker input.
 

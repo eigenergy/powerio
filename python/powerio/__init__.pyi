@@ -1398,3 +1398,6 @@ def diagnostic_record(diagnostic: Diagnostic) -> Dict[str, Any]: ...
 def diagnostic_records(
     diagnostics: Iterable[Diagnostic],
 ) -> List[Dict[str, Any]]: ...
+
+from .collection import Collection as Collection
+from .collection import CollectionResult as CollectionResult
