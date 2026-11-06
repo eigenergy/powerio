@@ -6,6 +6,9 @@
 
 **OpenDSS**
 
+- Preserve the last winding selected by native DSS array setters, so later
+  scalar winding properties apply to the intended winding.
+
 - OpenDSS written from a network whose source cannot be a native `Vsource`,
   such as a distribution CIM or MG-RAVENS feeder, now reduces in
   PowerModelsDistribution. The per-conductor source helpers and the ideal
