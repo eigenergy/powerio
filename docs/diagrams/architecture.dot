@@ -38,6 +38,8 @@ digraph powerio_architecture {
 
     "powerio-archive" [label = "powerio-archive\nbounded ZIP transport"];
     "powerio-archive" -> "powerio-core";
+"powerio-tx" -> "powerio-archive";
+"powerio-tnd" -> "powerio-archive" [style=dashed];
     "powerio-synth" -> "powerio-tx";
     "powerio-tx" -> "powerio-core";
     "powerio-tnd" -> "powerio-tx";

@@ -13,6 +13,9 @@ use zip::{
     read::{ArchiveOffset, Config},
 };
 
+pub mod end_records;
+pub mod stream;
+
 mod local;
 mod preflight;
 
@@ -278,24 +281,10 @@ impl Archive {
             .zip
             .by_index(entry.index)
             .map_err(|e| malformed(format!("cannot open ZIP member `{path}`: {e}")))?;
-        let mut content = Vec::new();
-        content
-            .try_reserve_exact(
-                usize::try_from(entry.size)
-                    .map_err(|_| limit("member length exceeds this platform"))?,
-            )
-            .map_err(|_| limit("cannot reserve ZIP member bytes"))?;
-        content.resize(entry.size as usize, 0);
-        file.read_exact(&mut content)
-            .map_err(|e| malformed(format!("cannot verify ZIP member `{path}`: {e}")))?;
-        // Force EOF even for zero-length members, so CRC validation runs.
-        if file
-            .read(&mut [0u8; 1])
-            .map_err(|e| malformed(e.to_string()))?
-            != 0
-        {
-            return Err(malformed("ZIP member inflates beyond its declared size"));
-        }
+        let content =
+            stream::read_declared_size(&mut file, &[], entry.size).map_err(|failure| {
+                malformed(format!("cannot verify ZIP member `{path}`: {failure:?}"))
+            })?;
         let content: Arc<[u8]> = content.into();
         self.cache.insert(path.clone(), Arc::clone(&content));
         Ok(content)

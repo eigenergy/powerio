@@ -63,13 +63,18 @@ fn the_dependency_graph_matches_the_settled_layout() {
     // Integration composes both model crates above the foundation.
     assert_eq!(
         workspace_deps_of(&graph, "powerio-tnd"),
-        BTreeSet::from(["powerio-core", "powerio-tx", "powerio-dist"])
+        BTreeSet::from([
+            "powerio-core",
+            "powerio-tx",
+            "powerio-dist",
+            "powerio-archive"
+        ])
     );
 
     // The two model crates are independent siblings over the foundation.
     assert_eq!(
         workspace_deps_of(&graph, "powerio-tx"),
-        BTreeSet::from(["powerio-core"])
+        BTreeSet::from(["powerio-core", "powerio-archive"])
     );
     assert_eq!(
         workspace_deps_of(&graph, "powerio-dist"),
