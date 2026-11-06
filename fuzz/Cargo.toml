@@ -11,6 +11,7 @@ cargo-fuzz = true
 tempfile = "3"
 libfuzzer-sys = "0.4"
 powerio = { path = "../powerio" }
+powerio-archive = { path = "../powerio-archive" }
 powerio-core = { path = "../powerio-core" }
 powerio-dist = { path = "../powerio-dist" }
 powerio-tx = { path = "../powerio-tx" }
@@ -155,5 +156,11 @@ bench = false
 [[bin]]
 name = "glm_objects"
 path = "fuzz_targets/glm_objects.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "collection_archive"
+path = "fuzz_targets/collection_archive.rs"
 test = false
 bench = false

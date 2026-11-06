@@ -12,7 +12,12 @@ use crate::{
 };
 pub use powerio_archive::ArchiveLimits;
 pub use powerio_archive::session::Cancellation;
+mod manifest;
 mod nested;
+pub use manifest::{
+    CollectionCase, CollectionManifest, CollectionOrigin, CollectionReaderOptions, SelectionOrigin,
+    SourceBundle, SourceBundleScope,
+};
 use nested::Session;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -175,6 +180,7 @@ pub struct Collection {
     zip_layers: u32,
     cancel: Cancellation,
     containers: Vec<String>,
+    origin_name: String,
 }
 impl Collection {
     /// Admit a named memory tree. Does not execute a parser or read the host.
@@ -205,6 +211,7 @@ impl Collection {
             .into();
         let session = Session::new(&inventory);
         Ok(Self {
+            origin_name: name.clone(),
             session,
             zip_layers: 0,
             cancel: Cancellation::default(),

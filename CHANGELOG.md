@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add bounded collection manifests, explicit source-bundle scopes, deterministic rebuilt ZIP packaging, and structured collection/selection origins separate from electrical values.
+
 - Add explicit nested collection ZIP inspection with isolated namespaces, shared cumulative entry/expansion/work budgets, native ZIP layer accounting, and cooperative cancellation.
 
 - Add owned C collection handles, bounded folder/ZIP/memory acquisition, metadata inspection, and selected parsing into typed modules, with a matching Julia companion.

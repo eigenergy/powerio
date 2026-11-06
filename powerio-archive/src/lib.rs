@@ -14,6 +14,7 @@ use zip::{
 };
 
 pub mod end_records;
+pub mod package;
 pub mod session;
 pub mod stream;
 

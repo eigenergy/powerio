@@ -135,3 +135,53 @@ Already returned modules remain valid. Synchronous electrical parsing retains
 its existing bounds; browser callers can terminate the worker to interrupt it.
 The initial Python/C/Julia APIs retain their bounded defaults; nested inspection
 is exposed first through the Rust collection API.
+
+## Manifests and source export
+
+A version 1 manifest records explicit selections without becoming an electrical
+`PioValue`. For example:
+
+```json
+{
+  "schema": "powerio-collection",
+  "version": 1,
+  "cases": [{
+    "id": "weekday",
+    "selection": {"primary": "masters/day.dss", "format": "dss"},
+    "attachments": ["notes.txt"]
+  }]
+}
+```
+
+`read_manifest` accepts at most 1 MiB and the host inspection budget. It rejects
+unknown fields, duplicate IDs, escaping paths, unsupported identity/version, and
+excessive case/member lists. It checks ordinary selected sources and attachment
+existence without electrical parsing. A case can name a `containers` array of
+explicit child ZIP members; those children are acquired only by
+`parse_manifest_case(manifest, id)`, under the same session limits. Optional
+`reader_options` records SINCAL variant, snapshot, acquired-table name, and the
+multiconductor inactive-control assumption. It cannot choose a host acquisition
+root or raise resource limits. Attachment associations remain metadata.
+
+`source_bundle(selection, scope)` requires an explicit export policy:
+
+- `SelectedMembers` exports only the primary or named document group. It makes
+  no claim that a DSS primary alone is a complete editable project.
+- `Project` exports every file inside the selection's permitted root, including
+  unused companions and other cases in that root. Choose a narrower root when
+  the project has one; parent-relative references must still fit that scope.
+- `ExplicitMembers(names)` exports exactly the listed root-relative files.
+  Observed dependency names can inform this list, but do not certify completeness.
+
+A bundle shares exact leaf bytes and owns them independently of the collection.
+`deterministic_zip(ArchiveLimits)` produces a **new** archive with sorted names,
+fixed metadata and stored payloads, bounded including ZIP overhead. It does not
+rewrite references or claim original-container fidelity. `original_zip()` is
+still the distinct exact-byte download of the acquired archive, if retained.
+The writer also accepts explicit named output files for converted-case packaging.
+
+`origin()` and `selection_origin()` separate the original collection name,
+container-member chain, and selected root/primary/group into structured fields.
+They never parse punctuation in a display name. These metadata are held outside
+network values; PowerIO IR still omits retained source payloads. Reproducible
+selection metadata alone is not a source-preserving IR document.
