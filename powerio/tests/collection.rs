@@ -227,3 +227,16 @@ fn aliases_and_uppercase_extensions_preserve_companions() {
         assert!(net.lines().iter().any(|line| line.name == "l"));
     }
 }
+
+#[test]
+fn corrupt_empty_directory_crc_is_not_certified_as_verified() {
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    writer
+        .add_directory("empty/", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    let mut bytes = writer.finish().unwrap().into_inner();
+    let central = bytes.windows(4).position(|s| s == b"PK\x01\x02").unwrap();
+    bytes[14..18].copy_from_slice(&1u32.to_le_bytes());
+    bytes[central + 16..central + 20].copy_from_slice(&1u32.to_le_bytes());
+    assert!(Collection::from_zip("bad", bytes.into(), CollectionLimits::default()).is_err());
+}
