@@ -45,3 +45,9 @@ and errors when processing several inputs.
 the existing adapter's replay scope: OpenDSS retains companions, including unused
 ones within the selected root. It is not a minimal project exporter. IR omits
 retained source bytes as before.
+
+Dataset discovery recognizes `network.csv` (PyPSA) and `bus_data.parquet`
+(GridFM). Select the candidate's root with no primary and its explicit format.
+Nested datasets remain separate, including during retained-source replay.
+GridFM candidates remain visible with `unsupported-build` when the feature is
+disabled. Missing required companion tables produce an `incomplete` candidate.

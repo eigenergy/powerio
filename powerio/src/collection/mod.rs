@@ -118,6 +118,8 @@ pub enum CandidateStatus {
     NeedsOptions,
     NeedsFormat,
     ProbeLimit,
+    UnsupportedBuild,
+    Incomplete,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct CollectionCandidate {
@@ -315,6 +317,7 @@ impl Collection {
             .map(str::to_owned);
             candidates.push(CollectionCandidate { selection, status });
         }
+        candidates.extend(self.dataset_candidates());
         Ok(candidates)
     }
 
@@ -326,6 +329,9 @@ impl Collection {
             .as_deref()
             .map(ArtifactPath::new)
             .transpose()?;
+        if selection.primary.is_none() {
+            return self.dataset_source(selection, root.as_ref());
+        }
         let primary = selection
             .primary
             .as_deref()
@@ -405,5 +411,100 @@ impl Collection {
                 .collect(),
             incomplete,
         })
+    }
+}
+
+impl Collection {
+    fn dataset_candidates(&self) -> Vec<CollectionCandidate> {
+        let names: std::collections::BTreeSet<_> =
+            self.entries().iter().map(|e| e.path.as_str()).collect();
+        self.entries()
+            .iter()
+            .filter_map(|entry| {
+                let (root, leaf) = entry
+                    .path
+                    .rsplit_once('/')
+                    .map_or((None, entry.path.as_str()), |(r, l)| {
+                        (Some(r.to_owned()), l)
+                    });
+                let format = match leaf {
+                    "network.csv" => "pypsa-csv",
+                    "bus_data.parquet" => "gridfm",
+                    _ => return None,
+                };
+                let prefix = root.as_ref().map_or_else(String::new, |r| format!("{r}/"));
+                let required: &[&str] = if format == "gridfm" {
+                    &["gen_data.parquet", "branch_data.parquet"]
+                } else {
+                    &["buses.csv"]
+                };
+                let status = if format == "gridfm" && !cfg!(feature = "gridfm") {
+                    CandidateStatus::UnsupportedBuild
+                } else if required
+                    .iter()
+                    .any(|leaf| !names.contains(format!("{prefix}{leaf}").as_str()))
+                {
+                    CandidateStatus::Incomplete
+                } else {
+                    CandidateStatus::Selectable
+                };
+                Some(CollectionCandidate {
+                    selection: CollectionSelection {
+                        root,
+                        primary: None,
+                        format: Some(format.into()),
+                        operation: CollectionOperation::Parse,
+                    },
+                    status,
+                })
+            })
+            .collect()
+    }
+
+    fn dataset_source(
+        &self,
+        selection: &CollectionSelection,
+        root: Option<&ArtifactPath>,
+    ) -> Result<Source> {
+        if selection.operation != CollectionOperation::Parse {
+            return Err(selection_error("deserialize requires a primary file"));
+        }
+        let format = selection.format_token().ok_or_else(|| {
+            selection_error("a directory selection requires an explicit dataset format")
+        })?;
+        let marker = match format {
+            "pypsa-csv" => "network.csv",
+            "gridfm" if cfg!(feature = "gridfm") => "bus_data.parquet",
+            "gridfm" => return Err(selection_error("GridFM support is disabled in this build")),
+            _ => {
+                return Err(selection_error(
+                    "select an explicit primary or a PyPSA/GridFM dataset root",
+                ));
+            }
+        };
+        let source = self.tree.source(root, None, self.limits.tree)?;
+        source.root_buffer(marker)?;
+        // A nested dataset is another selectable input, not a retained part of
+        // this dataset. Keep all other companions, including source-only data.
+        let nested: Vec<_> = source
+            .entry_names()?
+            .into_iter()
+            .filter_map(|p| {
+                let (parent, leaf) = p.as_str().rsplit_once('/')?;
+                matches!(leaf, "network.csv" | "bus_data.parquet").then(|| format!("{parent}/"))
+            })
+            .collect();
+        if nested.is_empty() {
+            return Ok(source.with_format(FormatId::new(format)?));
+        }
+        let files = source
+            .entry_names()?
+            .into_iter()
+            .filter(|p| !nested.iter().any(|prefix| p.as_str().starts_with(prefix)))
+            .map(|p| source.buffer(&p).map(|b| (p, b.shared_bytes())))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(SourceTree::new(&self.name, files, self.limits.tree)?
+            .source(None, None, self.limits.tree)?
+            .with_format(FormatId::new(format)?))
     }
 }
