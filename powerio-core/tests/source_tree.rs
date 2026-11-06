@@ -55,14 +55,14 @@ fn selections_share_bytes_and_keep_observations_independent() {
         a_primary.directory_segments().collect::<Vec<_>>(),
         ["masters"]
     );
-    assert!(dependencies(&a).is_empty());
-    assert!(dependencies(&b).is_empty());
+    assert_eq!(dependencies(&a).len(), 0);
+    assert_eq!(dependencies(&b).len(), 0);
     let a_shared = a
         .referenced_buffer(&a_primary, "../shared/topology.inc")
         .unwrap();
     assert!(Arc::ptr_eq(&a_shared.shared_bytes(), &shared));
     assert_eq!(dependencies(&a), ["shared/topology.inc"]);
-    assert!(dependencies(&b).is_empty());
+    assert_eq!(dependencies(&b).len(), 0);
     let b_shared = b.root_buffer("shared/topology.inc").unwrap();
     assert!(Arc::ptr_eq(
         &a_shared.shared_bytes(),
@@ -91,7 +91,7 @@ fn directory_views_rebase_names_references_and_retained_companions() {
         [path("network.csv"), path("sub/loads.csv")]
     );
     assert_eq!(source.acquired_buffers().len(), 2);
-    assert!(dependencies(&source).is_empty());
+    assert_eq!(dependencies(&source).len(), 0);
     let loads = source.buffer(&path("sub/loads.csv")).unwrap();
     let network = source.referenced_buffer(&loads, "../network.csv").unwrap();
     assert_eq!(network.name(), "network.csv");
@@ -143,7 +143,7 @@ fn refused_reads_do_not_observe_dependencies_even_after_a_success() {
             .is_err()
     );
     assert!(source.referenced_buffer(&primary, "missing").is_err());
-    assert!(dependencies(&source).is_empty());
+    assert_eq!(dependencies(&source).len(), 0);
     let data = source
         .referenced_buffer_with_limit(&primary, "data.bin", 4)
         .unwrap();
@@ -171,7 +171,7 @@ fn cloned_sources_share_observations_but_foreign_referrers_are_refused() {
             .referenced_buffer(&source.primary_buffer().unwrap(), "data")
             .is_err()
     );
-    assert!(dependencies(&other).is_empty());
+    assert_eq!(dependencies(&other).len(), 0);
 }
 
 #[test]
@@ -274,7 +274,7 @@ fn retained_inventory_is_complete_and_does_not_count_as_reads() {
     );
     source.entry_names().unwrap();
     source.root_buffer("main.dss").unwrap();
-    assert!(dependencies(&source).is_empty());
+    assert_eq!(dependencies(&source).len(), 0);
 }
 
 #[test]
@@ -284,7 +284,7 @@ fn legacy_memory_sources_distinguish_retained_from_read_companions() {
         .with_named_buffer("data", b"data".as_slice())
         .unwrap();
     assert_eq!(source.acquired_buffers().len(), 2);
-    assert!(dependencies(&source).is_empty());
+    assert_eq!(dependencies(&source).len(), 0);
     source
         .referenced_buffer(&source.primary_buffer().unwrap(), "data")
         .unwrap();
