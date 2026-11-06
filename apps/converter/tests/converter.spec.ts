@@ -38,6 +38,7 @@ test('mixed batch converts locally and downloads original bytes and distribution
     { name: 'private-client-case.m', mimeType: 'text/plain', buffer: case9 },
     { name: 'private-feeder.dss', mimeType: 'text/plain', buffer: feeder },
   ]);
+  await inspectQueued(page);
   await expect(page.getByRole('button', { name: 'Convert', exact: true })).toBeEnabled();
   const reconnect = await disconnect(context, browserName);
   await page.getByRole('button', { name: 'Convert', exact: true }).click();
@@ -60,6 +61,7 @@ test('valid cases survive a malformed neighbor and issue reports omit filenames 
     { name: 'valid.m', mimeType: 'text/plain', buffer: case9 },
     { name: 'private-utility-secret.json', mimeType: 'application/json', buffer: Buffer.from('{"privateBus": "secret-identifier", broken') },
   ]);
+  await inspectQueued(page);
   await expect(page.getByText("Couldn't convert", { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Convert', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Download all', exact: false })).toBeEnabled();
@@ -72,6 +74,16 @@ test('valid cases survive a malformed neighbor and issue reports omit filenames 
 
 test('a discovery read failure is retryable and does not prevent an independent case from converting', async ({ page }) => {
   await page.addInitScript(() => {
+    const post = Worker.prototype.postMessage;
+    let failDiscovery = true;
+    Worker.prototype.postMessage = function(data: any, options?: any) {
+      if (data.type === 'discover' && failDiscovery) {
+        failDiscovery = false;
+        queueMicrotask(() => this.dispatchEvent(new MessageEvent('message', { data: { id: data.id, error: 'Temporary discovery read failure' } })));
+        return;
+      }
+      return post.call(this, data, options);
+    };
     const read = File.prototype.text;
     let failed = false;
     File.prototype.text = function () {
@@ -87,6 +99,7 @@ test('a discovery read failure is retryable and does not prevent an independent 
     { name: 'unreadable.dss', mimeType: 'text/plain', buffer: feeder },
     { name: 'working.m', mimeType: 'text/plain', buffer: case9 },
   ]);
+  await inspectQueued(page);
   const broken = page.getByRole('article').filter({ hasText: 'unreadable.dss' });
   const working = page.getByRole('article').filter({ hasText: 'working.m' });
   await expect(page.getByRole('article')).toHaveCount(2);
@@ -125,6 +138,7 @@ test('an oversized loose DSS file is rejected before discovery while a valid nei
     { name: 'oversized.dss', mimeType: 'text/plain', buffer: feeder },
     { name: 'working.m', mimeType: 'text/plain', buffer: case9 },
   ]);
+  await inspectQueued(page);
   const large = page.getByRole('article').filter({ hasText: 'oversized.dss' });
   const working = page.getByRole('article').filter({ hasText: 'working.m' });
   await expect(large.getByText("Couldn't convert", { exact: true })).toBeVisible();
@@ -186,6 +200,7 @@ for (const mode of ['file', 'nested-file', 'nested-directory'] as const) {
     await expect(broken.getByRole('button', { name: /^Download / })).toHaveCount(0);
     await broken.getByRole('button', { name: /^Remove / }).click();
     await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'reselected.dss', mimeType: 'text/plain', buffer: feeder });
+  await inspectQueued(page);
     await expect(page.getByRole('article', { name: 'reselected.dss', exact: true }).getByText('Ready to convert', { exact: true })).toBeVisible();
     await expect(working.getByRole('button', { name: /^Download working.m as MATPOWER/ })).toBeEnabled();
   });
@@ -203,6 +218,7 @@ test('cancel during initial drop acquisition stops stale cases before a new sele
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await page.evaluate(() => (window as any).finishAcquisition());
   await page.getByRole('button', { name: 'Transmission', exact: true }).click();
+  await inspectQueued(page);
   await expect(page.getByRole('article', { name: 'case9.m', exact: true }).getByText('Ready to convert', { exact: true })).toBeVisible();
   await expect(page.getByRole('article')).toHaveCount(1);
 });
@@ -217,6 +233,7 @@ test('privacy disclosure links to the committed analytics template', async ({ pa
 test('every applicable transmission writer runs in browser WASM', async ({ page }) => {
   await ready(page);
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'case9.m', mimeType: 'text/plain', buffer: case9 });
+  await inspectQueued(page);
   await expect(page.getByRole('button', { name: 'Convert', exact: true })).toBeEnabled();
   const settings = page.getByRole('complementary', { name: 'Convert to' });
   const checkboxes = settings.getByRole('checkbox');
@@ -234,6 +251,7 @@ test('every applicable transmission writer runs in browser WASM', async ({ page 
   for (const [path, bytes] of Object.entries(archive)) if (path !== 'conversion-report.json') await zip.add(path, new Uint8ArrayReader(bytes));
   await page.getByRole('button', { name: 'Clear all', exact: true }).click();
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'converted.zip', mimeType: 'application/zip', buffer: Buffer.from(await zip.close()) });
+  await inspectQueued(page);
   await expect(page.getByRole('article')).toHaveCount(16);
   await expect(page.getByText('Ready to convert', { exact: true })).toHaveCount(16);
   await expect(page.getByText("Couldn't convert", { exact: true })).toHaveCount(0);
@@ -251,6 +269,7 @@ test('all seven distribution outputs download and re-import with explicit BMOPF 
   ];
   await ready(page);
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'feeder.dss', mimeType: 'text/plain', buffer: feeder });
+  await inspectQueued(page);
   await expect(page.getByRole('button', { name: 'Convert', exact: true })).toBeEnabled();
   const settings = page.getByRole('complementary', { name: 'Convert to' });
   await expect(settings.getByRole('checkbox')).toHaveCount(outputs.length);
@@ -277,6 +296,7 @@ test('all seven distribution outputs download and re-import with explicit BMOPF 
       try {
         await ready(newPage);
         await newPage.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: output.suggestedFilename(), mimeType: 'application/octet-stream', buffer: bytes });
+  await inspectQueued(newPage);
         await expect(newPage.getByRole('article')).toHaveCount(1);
         await expect(newPage.getByText('Ready to convert', { exact: true })).toHaveCount(1);
         await expect(newPage.getByRole('complementary', { name: 'Convert to' }).getByRole('checkbox', { name: 'PMD JSON', exact: true })).toBeEnabled();
@@ -285,6 +305,7 @@ test('all seven distribution outputs download and re-import with explicit BMOPF 
         await newPage.close();
       }
     });
+
   }
 });
 
@@ -294,20 +315,22 @@ test('ZIP projects preserve nested OpenDSS references', async ({ page }) => {
   await zip.add('model/Master.dss', new Uint8ArrayReader(Buffer.from('Clear\nNew Circuit.c basekv=12.47 bus1=source\nRedirect ../load.dss\n')));
   await zip.add('load.dss', new Uint8ArrayReader(Buffer.from('New Load.l bus1=source phases=3 kv=12.47 kw=10 kvar=2\n')));
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'project.zip', mimeType: 'application/zip', buffer: Buffer.from(await zip.close()) });
+  await inspectQueued(page);
   await expect(page.getByRole('button', { name: 'Convert', exact: true })).toBeEnabled();
   await page.getByRole('complementary', { name: 'Convert to' }).getByRole('checkbox', { name: 'OpenDSS', exact: true }).check();
   await page.getByRole('button', { name: 'Convert', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Download all', exact: false })).toBeEnabled();
   const completed = page.waitForEvent('download');
-  await page.getByRole('button', { name: /Download project as OpenDSS/ }).click();
+  await page.getByRole('button', { name: /Download Master.dss as OpenDSS/ }).click();
   const output = await completed;
   const bytes = await downloadBytes(output);
   const files = await entries(bytes);
-  expect(Object.keys(files).some(path => path.endsWith('/source/load.dss'))).toBe(true);
+  expect(Object.keys(files).some(path => path.endsWith('/load.dss'))).toBe(true);
   const next = await page.context().newPage();
   await ready(next);
   await next.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: output.suggestedFilename(), mimeType: 'application/zip', buffer: bytes });
-  await expect(next.getByText('Ready to convert', { exact: true })).toHaveCount(1);
+  await inspectQueued(next);
+  await expect(next.getByRole('article').filter({ hasText: 'Master.dss' }).first().getByText('Ready to convert', { exact: true })).toBeVisible();
   await next.close();
 });
 
@@ -316,6 +339,7 @@ test('landing pages select their target and mobile layout fits the viewport', as
   await page.goto('./matpower-to-pandapower/');
   await expect(page.getByRole('button', { name: 'Choose files', exact: false })).toBeEnabled();
   await page.getByRole('button', { name: 'Transmission', exact: true }).click();
+  await inspectQueued(page);
   await expect(page.getByRole('complementary', { name: 'Convert to' }).getByRole('checkbox', { name: 'pandapower JSON' })).toBeChecked();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await expect(page.getByRole('link', { name: 'PowerIO home' })).toBeVisible();
@@ -327,6 +351,7 @@ test('read-only and problem readers identify their native types', async ({ page 
   const paths = ['ieee-cdf/ieee14cdf.txt', 'powerworld/ACTIVSg200.pwb', 'opfdataset/example_0.json', 'goc3/goc3_small.json'];
   for (const path of paths) {
     await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: path.split('/').at(-1)!, mimeType: 'application/octet-stream', buffer: await readFile(`${root}tests/data/${path}`) });
+  await inspectQueued(page);
   }
   await expect(page.getByRole('article')).toHaveCount(4);
   await expect(page.getByText('Ready to convert', { exact: true })).toHaveCount(4);
@@ -336,9 +361,11 @@ test('read-only and problem readers identify their native types', async ({ page 
 test('missing dependencies can be added, and changing a format removes stale downloads', async ({ page }) => {
   await ready(page);
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'Master.dss', mimeType: 'text/plain', buffer: Buffer.from('Clear\nNew Circuit.c basekv=12.47 bus1=source\nRedirect load.dss\n') });
+  await inspectQueued(page);
   await expect(page.getByText('Needs files', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Add missing files', exact: true }).click();
   await page.getByLabel('Add missing project files', { exact: true }).setInputFiles({ name: 'load.dss', mimeType: 'text/plain', buffer: Buffer.from('New Load.l bus1=source phases=3 kv=12.47 kw=10 kvar=2\n') });
+  await inspectQueued(page);
   await expect(page.getByText('Ready to convert', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Convert', exact: true }).click();
   await expect(page.getByRole('button', { name: /^Download Master.dss as / })).toBeVisible();
@@ -355,6 +382,7 @@ test('settings links contain only allowed output preferences', async ({ page }) 
   });
   await ready(page);
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'private-network-name.m', mimeType: 'text/plain', buffer: case9 });
+  await inspectQueued(page);
   await expect(page.getByRole('button', { name: 'Convert', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: /Share.*settings/ }).click();
   const shared = await page.evaluate(() => (window as any).copiedSettings);
@@ -376,6 +404,7 @@ test('cancelled work restarts offline and retains completed outputs', async ({ p
   });
   await ready(page);
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'case9.m', mimeType: 'text/plain', buffer: case9 });
+  await inspectQueued(page);
   await expect(page.getByRole('button', { name: 'Convert', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: 'Convert', exact: true }).click();
   await expect(page.getByRole('button', { name: /^Download case9.m as / })).toHaveCount(1);
@@ -399,6 +428,7 @@ test('cancelled work restarts offline and retains completed outputs', async ({ p
 test('unchanged CGMES archives download as the original ZIP', async ({ page }) => {
   await ready(page);
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'case9.m', mimeType: 'text/plain', buffer: case9 });
+  await inspectQueued(page);
   await expect(page.getByRole('button', { name: 'Convert', exact: true })).toBeEnabled();
   const targets = page.getByRole('complementary', { name: 'Convert to' });
   await targets.getByRole('checkbox', { name: 'MATPOWER', exact: true }).uncheck();
@@ -409,6 +439,7 @@ test('unchanged CGMES archives download as the original ZIP', async ({ page }) =
   const archive = await downloadBytes(await first);
   await page.getByRole('button', { name: 'Clear all', exact: true }).click();
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'network.zip', mimeType: 'application/zip', buffer: archive });
+  await inspectQueued(page);
   await expect(page.getByText('Ready to convert', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Convert', exact: true }).click();
   const second = page.waitForEvent('download');
@@ -423,6 +454,7 @@ test('CIM distribution and explicit SINCAL profiles reach ready jobs', async ({ 
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({
     name: 'feeder.xml', mimeType: 'application/xml', buffer: await readFile(`${root}tests/data/dist/cim/micro_feeder.xml`),
   });
+  await inspectQueued(page);
   await page.getByText('Case settings', { exact: true }).click();
   await page.getByRole('combobox', { name: 'Input format' }).selectOption('cim-dist');
   await expect(page.getByText('Ready to convert', { exact: true })).toHaveCount(1);
@@ -430,6 +462,7 @@ test('CIM distribution and explicit SINCAL profiles reach ready jobs', async ({ 
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({
     name: 'case.sinx', mimeType: 'application/octet-stream', buffer: await readFile(`${root}tests/data/sincal/1-LV-rural1--0-sw.sinx`),
   });
+  await inspectQueued(page);
   await page.getByText('Case settings', { exact: true }).click();
   await page.getByRole('combobox', { name: 'Input format' }).selectOption('sincal-balanced');
   await expect(page.getByText('Ready to convert', { exact: true })).toHaveCount(1);
@@ -445,6 +478,7 @@ test('two DSS projects keep their contents and companions after batch download a
   }
   await ready(page);
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'projects.zip', mimeType: 'application/zip', buffer: Buffer.from(await source.close()) });
+  await inspectQueued(page);
   await expect(page.getByText('Ready to convert', { exact: true })).toHaveCount(2);
   const targets = page.getByRole('complementary', { name: 'Convert to' });
   for (const checkbox of await targets.getByRole('checkbox').all()) if (await checkbox.isEnabled()) await checkbox.uncheck();
@@ -465,8 +499,10 @@ test('two DSS projects keep their contents and companions after batch download a
   for (const [path, bytes] of Object.entries(archive)) if (path !== 'conversion-report.json') await grids.add(path, new Uint8ArrayReader(bytes));
   await page.getByRole('button', { name: 'Clear all', exact: true }).click();
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'batch.zip', mimeType: 'application/zip', buffer: Buffer.from(await grids.close()) });
-  await expect(page.getByRole('article')).toHaveCount(2);
-  await expect(page.getByText('Ready to convert', { exact: true })).toHaveCount(2);
+  await inspectQueued(page);
+  // Wrapper masters and retained source masters are independently selectable.
+  await expect(page.getByRole('article')).toHaveCount(6);
+  await expect(page.getByText('Ready to convert', { exact: true })).toHaveCount(6);
 });
 
 
@@ -475,6 +511,7 @@ test('indexed MATLAB mutations stay visible through conversion, report and exact
   const source = Buffer.concat([case9, Buffer.from(`\nx = [1 2].';\n${mutation}\n`)]);
   await ready(page);
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'mutated.m', mimeType: 'text/plain', buffer: source });
+  await inspectQueued(page);
   await expect(page.getByRole('button', { name: 'Convert', exact: true })).toBeEnabled();
   const job = page.getByRole('article');
   await job.locator('details.diagnostics > summary').click();
@@ -508,6 +545,7 @@ for (const unsupported of [false, true]) {
     const source = unsupported ? Buffer.concat([original, Buffer.from(mutation)]) : original;
     await ready(page);
     await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'case33bw.m', mimeType: 'text/plain', buffer: source });
+  await inspectQueued(page);
     await expect(page.getByRole('button', { name: 'Convert', exact: true })).toBeEnabled();
     const job = page.getByRole('article');
     if (unsupported) {
@@ -552,3 +590,69 @@ for (const unsupported of [false, true]) {
     }
   });
 }
+
+async function inspectQueued(page: import('@playwright/test').Page) {
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+  await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Choose files', exact: false })).toBeEnabled();
+  while (await page.getByRole('button', { name: 'Inspect case', exact: true }).count()) {
+    await page.getByRole('button', { name: 'Inspect case', exact: true }).first().click();
+    await expect(page.getByRole('button', { name: 'Choose files', exact: false })).toBeEnabled();
+  }
+  await expect(page.getByRole('button', { name: 'Choose files', exact: false })).toBeEnabled();
+}
+
+test('shared masters and a mixed case stay unparsed until conversion', async ({ page }) => {
+  const zip = new ZipWriter(new Uint8ArrayWriter(), { useWebWorkers: false });
+  for (const [name, kw] of [['day', 10], ['night', 20]] as const) {
+    await zip.add(`masters/${name}.dss`, new Uint8ArrayReader(Buffer.from(`New Circuit.${name} basekv=12.47 bus1=source\nRedirect ../shared/line.inc\nNew Load.${name} bus1=load phases=3 kv=12.47 kw=${kw} kvar=2\n`)));
+  }
+  await zip.add('shared/line.inc', new Uint8ArrayReader(Buffer.from('New Line.l bus1=source bus2=load phases=3 r1=0.1 x1=0.2 r0=0.3 x0=0.4 length=1\n')));
+  await zip.add('comparison.m', new Uint8ArrayReader(case9));
+  await ready(page);
+  await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'study.zip', mimeType: 'application/zip', buffer: Buffer.from(await zip.close()) });
+  await expect(page.getByText('Not inspected', { exact: true })).toHaveCount(3);
+  await expect(page.getByText('Ready to convert', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Convert', exact: true }).click();
+  await expect(page.getByRole('button', { name: /^Download .* as / })).toHaveCount(3);
+  const downloaded = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download all', exact: false }).click();
+  const archive = await entries(await downloadBytes(await downloaded));
+  const networks = Object.entries(archive).filter(([path]) => path.startsWith('pmd-json/') && path.endsWith('.json'));
+  expect(networks).toHaveLength(2);
+  expect(Buffer.from(networks[0][1]).equals(Buffer.from(networks[1][1]))).toBe(false);
+  expect(Buffer.from(Object.entries(archive).find(([path]) => path.endsWith('.m'))![1])).toEqual(case9);
+});
+
+
+test('ZIP masters cannot acquire a missing include from another upload', async ({ page }) => {
+  const zip = new ZipWriter(new Uint8ArrayWriter(), { useWebWorkers: false });
+  await zip.add('master.dss', new Uint8ArrayReader(Buffer.from('New Circuit.isolated basekv=12.47\nRedirect ../outside.inc\n')));
+  await ready(page);
+  await page.getByLabel('Choose power system files', { exact: true }).setInputFiles([
+    { name: 'isolated.zip', mimeType: 'application/zip', buffer: Buffer.from(await zip.close()) },
+    { name: 'outside.inc', mimeType: 'text/plain', buffer: feeder },
+    { name: 'valid.m', mimeType: 'text/plain', buffer: case9 },
+  ]);
+  await inspectQueued(page);
+  const broken = page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'master.dss', exact: true }) });
+  await expect(broken.getByText("Couldn't convert", { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Convert', exact: true }).click();
+  await expect(page.getByRole('button', { name: /^Download valid.m as / })).toBeEnabled();
+  await expect(broken.getByRole('button', { name: /^Download .* as / })).toHaveCount(0);
+});
+
+
+test('overlapping inventories render only when their settings are opened', async ({ page }) => {
+  const zip = new ZipWriter(new Uint8ArrayWriter(), { useWebWorkers: false });
+  for (let i = 0; i < 64; i++) await zip.add(`master-${i}.dss`, new Uint8ArrayReader(feeder));
+  await ready(page);
+  await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'many.zip', mimeType: 'application/zip', buffer: Buffer.from(await zip.close()) });
+  await expect(page.getByRole('article')).toHaveCount(64);
+  await expect(page.locator('.case-settings select')).toHaveCount(0);
+  await expect(page.locator('.source-files li')).toHaveCount(0);
+  await page.locator('.case-settings > summary').first().click();
+  await expect(page.locator('.source-files li')).toHaveCount(64);
+  await page.locator('.case-settings > summary').first().click();
+  await expect(page.locator('.source-files li')).toHaveCount(0);
+});
