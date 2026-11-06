@@ -16,6 +16,7 @@ on:
       - "Cargo.lock"
       - "powerio/**"
       - "powerio-tx/**"
+      - "powerio-archive/**"
       - "powerio-core/**"
       - "powerio-tnd/**"
       - "powerio-dist/**"

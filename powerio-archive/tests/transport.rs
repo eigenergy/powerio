@@ -44,7 +44,10 @@ fn refused(bytes: Vec<u8>, code: &'static DiagnosticInfo) {
 
 #[test]
 fn reads_preserve_bytes_order_and_shared_ownership() {
-    assert!(powerio_core::check_registry(codes::ALL.iter().copied()).is_empty());
+    assert_eq!(
+        powerio_core::check_registry(codes::ALL.iter().copied()),
+        Vec::<String>::new()
+    );
     for method in [CompressionMethod::Stored, CompressionMethod::Deflated] {
         let nested = zip(&[("uninterpreted.bin", b"opaque")], method);
         let bytes: Arc<[u8]> = zip(
@@ -450,4 +453,12 @@ fn streaming_descriptors_are_verified_in_both_widths() {
         let mut archive = open(unsigned).unwrap();
         assert_eq!(&*archive.read(&path("a")).unwrap(), b"stream");
     }
+}
+
+#[test]
+fn impossible_entry_count_is_refused_before_index_reservation() {
+    let mut bytes = zip(&[], CompressionMethod::Stored);
+    put16(&mut bytes, 8, 4096);
+    put16(&mut bytes, 10, 4096);
+    refused(bytes, &codes::MALFORMED);
 }
