@@ -15,6 +15,7 @@ categories = ["compression", "parsing"]
 [dependencies]
 powerio-core.workspace = true
 zip.workspace = true
+memchr = "2"
 
 [lints]
 workspace = true
