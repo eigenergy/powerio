@@ -73,6 +73,9 @@ pub enum CollectionOperation {
 pub struct CollectionSelection {
     pub root: Option<String>,
     pub primary: Option<String>,
+    /// Explicit members relative to root, for a document or role group.
+    #[serde(default)]
+    pub members: Option<Vec<String>>,
     pub format: Option<String>,
     #[serde(default)]
     pub operation: CollectionOperation,
@@ -329,6 +332,9 @@ impl Collection {
             .as_deref()
             .map(ArtifactPath::new)
             .transpose()?;
+        if selection.members.is_some() {
+            return self.group_source(selection, root.as_ref());
+        }
         if selection.primary.is_none() {
             return self.dataset_source(selection, root.as_ref());
         }
@@ -351,11 +357,7 @@ impl Collection {
             scoped
         } else {
             let bytes = scoped.primary_buffer()?.shared_bytes();
-            SourceTree::new(&self.name, [(primary.clone(), bytes)], self.limits.tree)?.source(
-                None,
-                Some(&primary),
-                self.limits.tree,
-            )?
+            Source::from_memory(primary.as_str(), bytes)?
         };
         if let Some(format) = format {
             source = source.with_format(FormatId::new(format)?);
@@ -452,6 +454,7 @@ impl Collection {
                     selection: CollectionSelection {
                         root,
                         primary: None,
+                        members: None,
                         format: Some(format.into()),
                         operation: CollectionOperation::Parse,
                     },
@@ -503,6 +506,72 @@ impl Collection {
             .filter(|p| !nested.iter().any(|prefix| p.as_str().starts_with(prefix)))
             .map(|p| source.buffer(&p).map(|b| (p, b.shared_bytes())))
             .collect::<Result<Vec<_>>>()?;
+        Ok(SourceTree::new(&self.name, files, self.limits.tree)?
+            .source(None, None, self.limits.tree)?
+            .with_format(FormatId::new(format)?))
+    }
+}
+
+impl CollectionSelection {
+    /// Select only the named documents, with roles interpreted by the adapter.
+    #[must_use]
+    pub fn group(format: impl Into<String>, members: Vec<String>) -> Self {
+        Self {
+            format: Some(format.into()),
+            members: Some(members),
+            ..Self::default()
+        }
+    }
+}
+impl Collection {
+    fn group_source(
+        &self,
+        selection: &CollectionSelection,
+        root: Option<&ArtifactPath>,
+    ) -> Result<Source> {
+        if selection.primary.is_some() || selection.operation != CollectionOperation::Parse {
+            return Err(selection_error(
+                "document groups require parse and no primary",
+            ));
+        }
+        let format = selection
+            .format_token()
+            .ok_or_else(|| selection_error("document groups require an explicit format"))?;
+        if !matches!(format, "cgmes" | "cim-dist" | "goc3-json") {
+            return Err(selection_error(
+                "document groups support cgmes, cim-dist, or goc3-json",
+            ));
+        }
+        let members = selection.members.as_ref().expect("checked group");
+        if members.is_empty() || members.len() > self.limits.tree.max_files() {
+            return Err(selection_error(
+                "document group must have a bounded nonempty member list",
+            ));
+        }
+        let scope = self.tree.source(root, None, self.limits.tree)?;
+        let mut files = Vec::new();
+        for name in members {
+            let path = ArtifactPath::new(name)?;
+            if format == "cim-dist" && name.contains('/') {
+                return Err(selection_error(
+                    "CIM group members must be top-level XML files relative to the selected root",
+                ));
+            }
+            let extension = name.rsplit('.').next().unwrap_or_default();
+            if !match format {
+                "cgmes" => {
+                    extension.eq_ignore_ascii_case("xml") || extension.eq_ignore_ascii_case("zip")
+                }
+                "cim-dist" => extension.eq_ignore_ascii_case("xml"),
+                _ => extension.eq_ignore_ascii_case("json"),
+            } {
+                return Err(selection_error(
+                    "group member suffix does not match the explicit format",
+                ));
+            }
+            let bytes = scope.root_buffer(name)?.shared_bytes();
+            files.push((path, bytes));
+        }
         Ok(SourceTree::new(&self.name, files, self.limits.tree)?
             .source(None, None, self.limits.tree)?
             .with_format(FormatId::new(format)?))

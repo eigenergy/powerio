@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Collection selections can explicitly group CIM/CGMES documents and GO
+  problem/solution roles without merging unrelated inputs.
+
 - Collection inspection discovers separate PyPSA and GridFM dataset roots;
   explicit directory selections preserve internal time/scenario values.
 
