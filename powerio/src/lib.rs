@@ -158,8 +158,8 @@ pub use powerio_core::{
     DiagnosticInfo, DiagnosticSeverity, DiagnosticStage, Digest, DigestAlgorithm, EmitResult,
     EmittedOutput, Fidelity, FormatId, HistoryEntry, HistoryId, HistoryKind, MemoryArtifact,
     OutputLayout, PioModule, Producer, Scenario, ScenarioId, ScenarioSet, Source, SourceBuffer,
-    SourceDescriptor, SourceId, SourceMapEntry, SourceRelation, SourceSpan, StagedEdit, TimePoint,
-    TimeSeries,
+    SourceDescriptor, SourceId, SourceMapEntry, SourceRelation, SourceSpan, SourceTree,
+    SourceTreeLimits, StagedEdit, TimePoint, TimeSeries,
 };
 
 /// The facade error covers source acquisition, routing, stored modules, and
