@@ -91,3 +91,21 @@ module = result.module  # still valid after closing the collection
 `from_zip(bytes)` and `from_files({path: bytes})` use the same inventory and
 selection behavior. `max_bytes` and `max_files` bound admission before copying
 input payloads. Native SINCAL options can be passed to `parse`.
+
+## C and Julia
+
+C callers own a `PioCollection` from `pio_collection_open`,
+`pio_collection_from_zip`, or `pio_collection_from_files`, with explicit byte
+and file limits. `pio_collection_inspect` returns metadata JSON. Pass a selection
+JSON object to `pio_collection_parse` to obtain the usual typed `PioModule`;
+its optional report contains observed dependencies and the incomplete flag.
+Release returned strings and handles with their matching functions. Closing the
+collection does not invalidate parsed modules. Existing typed parser options
+remain available, but collection parsing refuses host acquisition roots.
+
+The companion Julia API uses `InputCollection(path)`, `InputCollection(bytes)`
+for ZIP bytes, or `InputCollection(Dict(path => bytes))`. `inspect_collection`
+returns metadata; `parse(collection, selection)` returns `CollectionResult`
+with a typed `PioModule{T}`. `close(collection)` releases its handle and `copy`
+retains an independent handle. These additions do not change ABI 7 or serialize
+electrical values to provide typed access.

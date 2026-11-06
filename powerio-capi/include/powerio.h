@@ -34,6 +34,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+typedef struct PioCollection PioCollection;
 typedef struct PioArtifact PioArtifact;
 typedef struct PioActivePower PioActivePower;
 typedef struct PioAcOpfPreparation PioAcOpfPreparation;
@@ -7548,6 +7549,85 @@ bool pio_ac_ots_solution_branch_closed_at(const PioCalculationSolution *solution
  */
 PioModule *pio_ac_ots_solution_materialize(const PioCalculationSolution *solution,
                                            PioError **error);
+
+/**
+ * Acquire a folder or ZIP with explicit total byte and file limits.
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioCollection *pio_collection_open(const char *path,
+                                   size_t path_len,
+                                   uint64_t max_bytes,
+                                   size_t max_files,
+                                   PioError **error);
+
+/**
+ * Copy and verify a ZIP, bounding compressed input before copying.
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioCollection *pio_collection_from_zip(const char *name,
+                                       size_t name_len,
+                                       const uint8_t *data,
+                                       size_t data_len,
+                                       uint64_t max_bytes,
+                                       size_t max_files,
+                                       PioError **error);
+
+/**
+ * Copy named buffers once into a shared immutable inventory. Checks count and
+ * cumulative bytes before copying payloads. No host fallback is possible.
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * buffers addresses buffers_len views; NULL is valid only at zero length.
+ */
+PioCollection *pio_collection_from_files(const char *name,
+                                         size_t name_len,
+                                         const PioNamedBufferView *buffers,
+                                         size_t buffers_len,
+                                         uint64_t max_bytes,
+                                         size_t max_files,
+                                         PioError **error);
+
+/**
+ * Inspect metadata and suggested selections as JSON, without electrical parsing.
+ * Release the returned owned string with pio_string_release.
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioString *pio_collection_inspect(const PioCollection *raw, PioError **error);
+
+/**
+ * Parse one JSON selection (at most 1 MiB) into an owned typed module. Optional
+ * options have the same semantics as pio_parse_with_options, but cannot acquire
+ * host files. If report is non-NULL, success also returns an owned JSON string
+ * containing observed dependencies and the incomplete flag. Release it with
+ * pio_string_release. False incomplete is not a completeness certificate.
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ * Non-NULL options and report must be valid for their declared types. Report
+ * is cleared before work; its prior value must already have been released.
+ */
+PioModule *pio_collection_parse(const PioCollection *raw,
+                                const char *selection,
+                                size_t selection_len,
+                                const PioParseOptions *options,
+                                PioString **report,
+                                PioError **error);
+
+/**
+ * Retain an independently releasable collection handle.
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioCollection *pio_collection_retain(const PioCollection *raw);
+
+/**
+ * Release one owned collection handle. Parsed modules retain their own source.
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+void pio_collection_release(PioCollection *raw);
 
 #ifdef __cplusplus
 }  // extern "C"
