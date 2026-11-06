@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `powerio collection inspect/parse` lists ZIP/folder inputs and processes
+  explicit entries, dataset roots, or document groups with independent results.
+
 - Collection selections can explicitly group CIM/CGMES documents and GO
   problem/solution roles without merging unrelated inputs.
 

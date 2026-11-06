@@ -62,3 +62,18 @@ selected profile ZIPs, with its existing validation and echo behavior.
 Select a `.sinx` primary with `sincal-balanced` or `sincal-multiconductor` and
 pass the native options through `ParseOptions`. The container reaches SINCAL
 intact; outer collection members cannot satisfy its internal references.
+
+## Command line
+
+```sh
+powerio collection inspect study.zip
+powerio collection parse study.zip --entry masters/day.dss --entry masters/night.dss --from dss -o modules
+powerio collection parse datasets --root day --from pypsa-csv
+powerio collection parse study.zip --root go --member problem.json --member solution.json --from goc3-json
+```
+
+Inspection and parse reports are JSON. Batch results use stable positional IDs
+(`case-0001`, etc.) in the requested entry order. Every entry is attempted;
+errors and incomplete dependencies produce a nonzero exit after the full report.
+`--output` serializes successful modules to those IDs with `.pio.json` suffixes.
+Native SINCAL selection flags are accepted with the explicit native profile.
