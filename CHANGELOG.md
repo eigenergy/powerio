@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The converter uses shared collection selections for overlapping masters and
+  mixed cases, defers parsing until requested, and reuses bounded worker input.
+
 - `powerio collection inspect/parse` lists ZIP/folder inputs and processes
   explicit entries, dataset roots, or document groups with independent results.
 

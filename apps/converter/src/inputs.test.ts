@@ -185,3 +185,40 @@ test('retains parent-relative references without absorbing another project', asy
   expect(one.entries.map(file => file.path)).toEqual(['one/Master.dss', 'one/note.asset', 'shared/loads.inc']);
   expect(projects.find(project => project.primary === 'Master.dss')!.entries).toHaveLength(2);
 });
+
+
+test('shared discovery keeps overlapping masters and mixed inputs without consuming companions', async () => {
+  const { groupCollectionInputs } = await import('./inputs');
+  const files = ['masters/day.dss', 'masters/night.dss', 'shared/topology.inc', 'case.m'].map(path => ({ path, file: new File(['content'], path.split('/').at(-1)!) }));
+  const discover = async () => ({ ok: true, candidates: ['masters/day.dss', 'masters/night.dss', 'case.m'].map(primary => ({ status: 'selectable', selection: { primary, root: null, format: primary.endsWith('.m') ? 'matpower' : 'dss', operation: 'parse' as const } })) });
+  const cases = await groupCollectionInputs(files, discover, 'shared', () => false);
+  expect(cases).toHaveLength(3);
+  expect(cases[0].entries).toBe(cases[1].entries);
+  expect(cases.map(c => c.primary)).toEqual(['masters/day.dss', 'masters/night.dss', 'case.m']);
+  expect(cases.every(c => c.collectionKey === 'shared')).toBe(true);
+});
+
+
+test('ZIP selections cannot resolve into a sibling upload', async () => {
+  const { groupCollectionInputs } = await import('./inputs');
+  const files = [{ ...entry('first/master.dss'), collectionRoot: 'first' }, { ...entry('second/shared.inc'), collectionRoot: 'second' }];
+  const discover = async () => ({ ok: true, candidates: [{ status: 'selectable', selection: { primary: 'first/master.dss', root: null, format: 'dss', operation: 'parse' as const } }] });
+  const [selected] = await groupCollectionInputs(files, discover, 'key', () => false);
+  expect(selected.selection).toMatchObject({ root: 'first', primary: 'master.dss' });
+  expect(selected.paths).toEqual(['master.dss']);
+  expect(selected.entries).toHaveLength(2);
+});
+
+test.each([['a/file.dss', 'A/other.dss'], ['file', 'file/child'], ['nul.txt'], ['bad./x']])('rejects nonportable ZIP namespace %j', async (...paths: string[]) => {
+  const zip = new ZipWriter(new BlobWriter(), { useWebWorkers: false });
+  for (const path of paths) await zip.add(path, new BlobReader(new Blob(['data'])));
+  await expect(unpack({ path: 'bad.zip', file: new File([await zip.close()], 'bad.zip') })).rejects.toThrow();
+});
+
+test('rejects ZIP symlinks and observes cancellation before payload reads', async () => {
+  const zip = new ZipWriter(new BlobWriter(), { useWebWorkers: false });
+  await zip.add('link.dss', new BlobReader(new Blob(['target'])), { unixMode: 0o120777 });
+  const archive = { path: 'bad.zip', file: new File([await zip.close()], 'bad.zip') };
+  await expect(unpack(archive)).rejects.toThrow(/links|special/);
+  await expect(unpack(archive, () => true)).rejects.toThrow(/cancelled/);
+});
