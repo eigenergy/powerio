@@ -88,7 +88,7 @@ pub(crate) fn inspect(bytes: &[u8], limits: ArchiveLimits) -> Result<Directory> 
         return Err(limit("ZIP entry-count limit exceeded"));
     }
     let start = usize_at(offset)?;
-    if offset.checked_add(size) != Some(footer as u64) || start > footer {
+    if offset.checked_add(size) != Some(footer as u64) || start > footer || count > size / 46 {
         return Err(malformed("central directory does not meet its end records"));
     }
     // The index reader below masks member data, so embedded ZIP signatures in
