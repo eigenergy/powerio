@@ -1385,7 +1385,8 @@ impl<'a> Mapper<'a> {
 
     /// The ampacity of a segment's conductors, amps: the `ratedCurrent` of
     /// the wire or cable catalog entry its `PowerSystemResource.AssetDatasheet`
-    /// names.
+    /// names. A stated value that is no ampacity gets a finding, once per
+    /// catalog entry, and reads as absent.
     fn wire_rating(&mut self, line: &str) -> Option<f64> {
         let info = self.target("ACLineSegment", line, "PowerSystemResource.AssetDatasheet")?;
         let class = self.store.class_of(&info)?.to_owned();
@@ -1403,10 +1404,27 @@ impl<'a> Mapper<'a> {
             );
             return None;
         }
-        self.consumed.insert(info.clone());
-        self.store
-            .f(&info, "WireInfo.ratedCurrent")
-            .filter(|rated| *rated > 0.0)
+        let first_read = self.consumed.insert(info.clone());
+        let store = self.store;
+        let stated = store.text(&info, "WireInfo.ratedCurrent")?;
+        let rated = stated
+            .trim()
+            .parse()
+            .ok()
+            .filter(|rated: &f64| rated.is_finite() && *rated > 0.0);
+        if rated.is_none() && first_read {
+            let label = self.label(&info);
+            self.note(
+                &C::READ_CIM_DIST_VALUE_UNSUPPORTED,
+                &class,
+                &info,
+                format!(
+                    "{class} {label}: WireInfo.ratedCurrent {stated:?} is not a positive finite \
+                     current; no ampacity is read"
+                ),
+            );
+        }
+        rated
     }
 
     /// A line code name no earlier line code holds.

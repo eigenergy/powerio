@@ -2078,6 +2078,37 @@ fn a_cim16_feeder_converts_to_every_distribution_format() {
 }
 
 #[test]
+fn an_invalid_wire_ampacity_is_reported_not_silently_dropped() {
+    let stated = |value: &str| {
+        let text = cim16_feeder().replace(
+            "<cim:WireInfo.ratedCurrent>140.0</cim:WireInfo.ratedCurrent>",
+            value,
+        );
+        parse_str(&text, "cim-dist").unwrap()
+    };
+    let invalid = |warnings: &[String]| {
+        warnings
+            .iter()
+            .filter(|w| {
+                w.starts_with("READ.CIM_DIST.VALUE_UNSUPPORTED")
+                    && w.contains("WireInfo.ratedCurrent")
+            })
+            .count()
+    };
+    for value in ["-140", "0", "NaN", "inf", "not a number"] {
+        let net = stated(&format!(
+            "<cim:WireInfo.ratedCurrent>{value}</cim:WireInfo.ratedCurrent>"
+        ));
+        assert_eq!(net.lines()[0].i_max, None, "{value}");
+        assert_eq!(invalid(&net.warnings), 1, "{value}: {:#?}", net.warnings);
+    }
+    // An absent rating is optional and draws no finding.
+    let net = stated("");
+    assert_eq!(net.lines()[0].i_max, None);
+    assert_eq!(invalid(&net.warnings), 0, "{:#?}", net.warnings);
+}
+
+#[test]
 fn a_named_geographic_crs_reads_as_longitude_and_latitude() {
     use powerio_dist::CoordinateSpace;
 
