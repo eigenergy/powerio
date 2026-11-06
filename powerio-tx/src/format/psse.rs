@@ -13077,6 +13077,44 @@ Q
         }
     }
 
+    /// A three winding transformer's own correction tables follow its star
+    /// legs, and once it is corrected its nominal follows too: correcting the
+    /// expanded network at any controlling tap gives the native transformer's
+    /// star impedances. `ZCOD = 1` tables scale the pairwise impedances
+    /// together, so its legs carry none.
+    #[test]
+    fn impedance_correction_follows_the_star_expansion() {
+        use crate::network::IMPEDANCE_CORRECTION_NOMINAL_EXTRA as NOMINAL;
+        let mut native = parse_psse(&impedance_correction_case()).unwrap();
+        native.branches_mut().clear();
+        let uncorrected = native.expand_transformers_3w();
+        assert!(uncorrected.branches()[2].impedance_correction().is_some());
+        assert!(!uncorrected.branches()[2].extras.contains_key(NOMINAL));
+        native.apply_impedance_correction();
+        let mut lowered = native.expand_transformers_3w().into_owned();
+        assert!(lowered.branches()[2].extras.contains_key(NOMINAL));
+        for tap in [0.95, 1.0, 1.05, 1.2] {
+            native.transformers_3w_mut()[0].windings[2].tap = tap;
+            lowered.branches_mut()[2].tap = tap;
+            native.apply_impedance_correction();
+            lowered.apply_impedance_correction();
+            for (branch, (r, x)) in lowered
+                .branches()
+                .iter()
+                .zip(native.transformers_3w()[0].calc_star_impedances())
+            {
+                close(branch.r, r);
+                close(branch.x, x);
+            }
+        }
+        let mut coupled = parse_psse(&pairwise_correction_case(1, 0)).unwrap();
+        coupled.apply_impedance_correction();
+        let (_, branches) = coupled.transformers_3w()[0].to_star_expansion(BusId(99));
+        assert!(branches.iter().all(|branch| {
+            branch.impedance_correction().is_none() && !branch.extras.contains_key(NOMINAL)
+        }));
+    }
+
     fn pairwise_correction_case(cw: u32, controlling: usize) -> String {
         correction_case_edit_transformer(&impedance_correction_case(), "T3W", |lines| {
             correction_set_field(&mut lines[0], 4, cw);
