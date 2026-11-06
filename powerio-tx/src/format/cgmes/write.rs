@@ -4144,6 +4144,20 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         plain_bus_mrids = network_bus_mrids(net);
         &plain_bus_mrids
     };
+    for bus in net.buses() {
+        if let Some(uid) = bus.uid.as_deref()
+            && let Some(emitted) = bus_mrids.get(&bus.id)
+            && uid != emitted
+        {
+            w.warnings.push_as(
+                &codes::EMIT_CGMES.value_substituted,
+                format!(
+                    "bus {} uid `{uid}` is replaced by CGMES TopologicalNode mRID `{emitted}`",
+                    bus.id
+                ),
+            );
+        }
+    }
     let retained_metadata = retained_identified_metadata(detailed, &mut w.warnings);
     if let Some(detailed) = detailed {
         warn_unemitted_detailed_fields(net, detailed, version, &mut w.warnings);
@@ -7342,6 +7356,12 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             .map_or_else(|| format!("row {}", index + 1), str::to_owned);
         w.warnings.push(format!(
             "HVDC line `{id}` is a two terminal calculation record, not a physical CGMES DC network, and was not emitted. It has no DCConverterUnit operating mode and containment, DC node and terminal polarity identities, or ground or metallic return topology; its optional resistance, nominal voltage, converter technology, setpoints, and loss factors are insufficient to construct those standard records without inventing data. Use the source neutral detailed DC equipment records for CGMES emission"
+        ));
+    }
+    let area_assignments = net.buses().iter().filter(|bus| bus.area != 1).count();
+    if area_assignments > 0 {
+        w.warnings.push_as(&codes::EMIT_CGMES.field_dropped, format!(
+            "{area_assignments} bus area assignment(s) are omitted: this writer does not encode node membership in control areas; the calculation view reads the default area 1"
         ));
     }
     for (what, count, reason) in [

@@ -1522,8 +1522,12 @@ fn write_psse_rev_inner(
         // charging sits inside the tap and PSS/E's admittance at bus I outside
         // it, so the total is divided by the referral the reader applies
         // (see `unrefer_magnetizing`).
+        // A branch read from PSS/E records the referral its reader applied, so
+        // a tap moved after reading does not restate `MAG1`/`MAG2`.
         let charging = br.calc_terminal_charging();
-        let referral = magnetizing_referral(br.calc_effective_tap());
+        let referral = extra_f64(&br.extras, "psse_magnetizing_referral")
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .unwrap_or_else(|| magnetizing_referral(br.calc_effective_tap()));
         let raw_name = br.name.as_deref().unwrap_or("");
         let name = sanitize_quoted(raw_name, NAME_FORBIDDEN, ' ');
         if matches!(name, std::borrow::Cow::Owned(_)) {
@@ -5768,6 +5772,27 @@ fn retain_transformer_winding_extras(
     Ok(())
 }
 
+/// Record what a two winding transformer's reader folded into the branch, so
+/// a consumer that moves the tap can undo it: the referral of a nonzero
+/// magnetizing admittance (it stays at bus I when the tap moves, and the
+/// writer divides by the recorded factor), and winding 2's bus-base ratio
+/// when it is not one (`tap` is winding 1 over it, and `r + jx` carries its
+/// squared referral).
+fn referral_extras(
+    mut extras: Extras,
+    (mag_g, mag_b): (f64, f64),
+    referral: f64,
+    ratio2: f64,
+) -> Extras {
+    if mag_g != 0.0 || mag_b != 0.0 {
+        extras.insert("psse_magnetizing_referral".into(), Value::from(referral));
+    }
+    if (ratio2 - 1.0).abs() > 0.0 {
+        extras.insert("psse_winding2_ratio".into(), Value::from(ratio2));
+    }
+    extras
+}
+
 #[expect(clippy::too_many_arguments)]
 fn read_transformer(
     l1: &[Cow<'_, str>],
@@ -5806,7 +5831,9 @@ fn read_transformer(
     );
     let (tap, ratio2) = two_winding_tap(l1, l3, l4, from, to, cw, bus_base_kv, warnings)?;
     // The impedance sits between the two winding ratios; the branch states it
-    // behind its one tap, on the winding 2 side of that ratio.
+    // behind its one tap, on the winding 2 side of that ratio. PSS/E states
+    // it on the winding voltage base, which is the bus base whatever CZ says:
+    // NOMV1 enters only CW 2 and 3 ratios and CM 2 magnetizing data.
     let (r, x) = (r * ratio2 * ratio2, x * ratio2 * ratio2);
     let modern = raw_rev >= 34;
     let (mut control, control_node) = read_transformer_control(
@@ -5845,7 +5872,7 @@ fn read_transformer(
     );
     let referral = magnetizing_referral(tap);
     let (mag_g, mag_b) = (mag_g * referral, mag_b * referral);
-    let mut extras = device_extras(l1, 3);
+    let mut extras = referral_extras(device_extras(l1, 3), (mag_g, mag_b), referral, ratio2);
     retain_transformer_main_extras(&mut extras, l1, raw_rev)?;
     retain_transformer_winding_extras(&mut extras, l3, raw_rev, "")?;
     Ok((
@@ -8316,6 +8343,10 @@ Q
                 );
             }
             assert!((br.tap - t1 / t2).abs() < 1e-12, "CW {cw}");
+            // Winding 2's bus-base ratio separates `tap` and the impedance
+            // referral again.
+            let ratio2 = br.extras["psse_winding2_ratio"].as_f64().unwrap();
+            assert!((ratio2 - t2).abs() < 1e-12, "CW {cw}: {ratio2}");
             // The winding 1 tap range reads in branch tap terms too.
             let control = br.control.as_ref().unwrap();
             // RMA and RMI take the winding's own units: kV under CW 2.
@@ -8349,6 +8380,10 @@ Q
                 .unwrap();
             assert!(winding2.starts_with("1.0, "), "CW {cw}: {winding2}");
             let back = parse_psse(&written).unwrap().branches()[0].clone();
+            assert!(
+                !back.extras.contains_key("psse_winding2_ratio"),
+                "CW {cw}: a winding 2 at one records no ratio"
+            );
             let again = parse_psse(&write_psse(&parse_psse(&written).unwrap()).text)
                 .unwrap()
                 .branches()[0]
@@ -9707,6 +9742,12 @@ Q
         assert!((0.0019 * tap_squared / tap_squared - 0.0019).abs() > 0.0);
         let net = parse_psse(raw).unwrap();
         let charging = net.branches()[0].calc_terminal_charging();
+        close(
+            net.branches()[0].extras["psse_magnetizing_referral"]
+                .as_f64()
+                .unwrap(),
+            tap_squared,
+        );
         for rev in [33, 34, 35] {
             let written = write_psse_rev(&net, rev).text;
             let main = &section_records(&written, "TRANSFORMER")[0];
@@ -9716,6 +9757,12 @@ Q
                 back.branches()[0].calc_terminal_charging(),
                 charging,
                 "revision {rev} reads back the same charging"
+            );
+            close(
+                back.branches()[0].extras["psse_magnetizing_referral"]
+                    .as_f64()
+                    .unwrap(),
+                tap_squared,
             );
         }
         let rawx: Value =
@@ -9727,6 +9774,40 @@ Q
             table["data"][0][index].as_f64().unwrap()
         };
         assert_eq!((column("mag1"), column("mag2")), (0.0019, -0.0151));
+
+        // Moving the tap after reading keeps the stated MAG1/MAG2: the writer
+        // divides by the referral the reader applied, not the new tap's.
+        let mut moved = net.clone();
+        moved.branches_mut()[0].tap = 1.1;
+        let main = &section_records(&write_psse(&moved).text, "TRANSFORMER")[0];
+        assert_eq!(main[7..9], ["0.0019", "-0.0151"]);
+    }
+
+    #[test]
+    fn magnetizing_referral_is_recorded_only_with_an_admittance() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 138.0,1,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1, 2, 0, '1', 1, 1, 1, 0.0, 0.0, 2, 'XF          ', 1, 1, 1, 0, 1, 0, 1, 0, 1, '            '
+0.01, 0.10, 100.0
+1.025, 0, 0.0, 100.0, 90.0, 80.0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0
+1.0, 0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+        assert!(
+            !net.branches()[0]
+                .extras
+                .contains_key("psse_magnetizing_referral")
+        );
     }
 
     #[test]
@@ -12954,6 +13035,44 @@ Q
                 close(back.branches()[2].r, moved.branches()[2].r);
             }
         }
+    }
+
+    /// A three winding transformer's own correction tables follow its star
+    /// legs, and once it is corrected its nominal follows too: correcting the
+    /// expanded network at any controlling tap gives the native transformer's
+    /// star impedances. `ZCOD = 1` tables scale the pairwise impedances
+    /// together, so its legs carry none.
+    #[test]
+    fn impedance_correction_follows_the_star_expansion() {
+        use crate::network::IMPEDANCE_CORRECTION_NOMINAL_EXTRA as NOMINAL;
+        let mut native = parse_psse(&impedance_correction_case()).unwrap();
+        native.branches_mut().clear();
+        let uncorrected = native.expand_transformers_3w();
+        assert!(uncorrected.branches()[2].impedance_correction().is_some());
+        assert!(!uncorrected.branches()[2].extras.contains_key(NOMINAL));
+        native.apply_impedance_correction();
+        let mut lowered = native.expand_transformers_3w().into_owned();
+        assert!(lowered.branches()[2].extras.contains_key(NOMINAL));
+        for tap in [0.95, 1.0, 1.05, 1.2] {
+            native.transformers_3w_mut()[0].windings[2].tap = tap;
+            lowered.branches_mut()[2].tap = tap;
+            native.apply_impedance_correction();
+            lowered.apply_impedance_correction();
+            for (branch, (r, x)) in lowered
+                .branches()
+                .iter()
+                .zip(native.transformers_3w()[0].calc_star_impedances())
+            {
+                close(branch.r, r);
+                close(branch.x, x);
+            }
+        }
+        let mut coupled = parse_psse(&pairwise_correction_case(1, 0)).unwrap();
+        coupled.apply_impedance_correction();
+        let (_, branches) = coupled.transformers_3w()[0].to_star_expansion(BusId(99));
+        assert!(branches.iter().all(|branch| {
+            branch.impedance_correction().is_none() && !branch.extras.contains_key(NOMINAL)
+        }));
     }
 
     fn pairwise_correction_case(cw: u32, controlling: usize) -> String {

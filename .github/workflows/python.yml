@@ -88,8 +88,8 @@ jobs:
           [
             { "runner": "ubuntu-latest",    "target": "x86_64"  },
             { "runner": "ubuntu-24.04-arm", "target": "aarch64" },
-            { "runner": "macos-14",         "target": "x86_64"  },
-            { "runner": "macos-14",         "target": "aarch64" },
+            { "runner": "macos-15",         "target": "x86_64"  },
+            { "runner": "macos-15",         "target": "aarch64" },
             { "runner": "windows-latest",   "target": "x64"     }
           ]
           JSON
@@ -147,7 +147,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_REF }}
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.x"
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -170,7 +170,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_REF }}
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.x"
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -204,16 +204,21 @@ jobs:
             --allowlist "$GITHUB_WORKSPACE/python/stubtest_allowlist.txt"
 
   test:
-    runs-on: ubuntu-latest
+    name: test (Python ${{ matrix.python }} on ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python: [ "3.9", "3.12" ]
+        include:
+          - python: "3.11"
+            os: ubuntu-latest
+          - python: "3.12"
+            os: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_REF }}
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python }}
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -226,15 +231,14 @@ jobs:
         run: sed -i 's/features = \["extension-module", "gridfm"\]/features = ["extension-module"]/' pyproject.toml
       # `pip install .[all,mcp]` builds the extension via the maturin backend and
       # pulls scipy/numpy/networkx and Polars (matrix + graph tests) plus the MCP
-      # SDK. The `mcp` extra carries a `python_version >= '3.10'` marker, so it
-      # installs the SDK on 3.12 (test_mcp runs) and resolves to nothing on 3.9
-      # (test_mcp skips). Quote the extras so the shell doesn't glob `[all,mcp]`.
+      # SDK, so test_mcp runs on every leg. Quote the extras so the shell
+      # doesn't glob `[all,mcp]`.
       - name: Install powerio + test deps
         run: pip install '.[all,mcp]' pytest
       - name: Check installed schema archive
         run: python -c 'from importlib.resources import files; import json; p = files("powerio").joinpath("schemas/bmopf/manifest.json"); assert len(json.loads(p.read_text())["schemas"]) == 2'
       - name: Run tests
-        run: pytest python/tests -q
+        run: pytest python/tests -q -rs
       # The core import path: parse/emit import nothing but the
       # interpreter. Without the gridfm feature, emitting the gridfm token
       # must fail with a PowerIOError that names the missing feature, not an
@@ -265,12 +269,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, windows-latest]
+        os: [macos-15, windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_REF }}
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -304,7 +308,7 @@ jobs:
           repository: lanl-ansi/GOC3Benchmark.jl
           ref: 588f3566ab29df240622a9a98c758af1bfc66bb1
           path: external/goc3-benchmark
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -371,7 +375,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_REF }}
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -387,9 +391,38 @@ jobs:
         run: |
           wheel=$(ls dist/*.whl)
           pip install "${wheel}[all,gridfm,pandas]" pytest
-      # `_has_gridfm` is now true, so the @gridfm_only tests run instead of skipping.
+      # Exercise the optional downstream graph consumer rather than letting
+      # pytest.importorskip silently leave its integration test unexecuted.
+      # Match GridFM's published CPU stack and its PyG wheel index.
+      - name: Install GridFM GraphKit CPU integration dependencies
+        run: |
+          pip install "torch==2.12.0+cpu" "gridfm-graphkit==0.9.0.3" \
+            --extra-index-url https://download.pytorch.org/whl/cpu \
+            --find-links https://data.pyg.org/whl/torch-2.12.0+cpu.html
+      - name: Require GraphKit integration dependencies
+        run: |
+          python - <<'PY'
+          import torch
+          from gridfm_graphkit.datasets import powergrid_hetero_dataset
+          print(f"PyTorch {torch.__version__}; GraphKit module {powergrid_hetero_dataset.__file__}")
+          PY
+      # The Python tests exercise the CLI's on-disk Parquet writer as well as
+      # the extension surface. Build the actual binary; the test module skips
+      # its CLI cases when target/release/powerio is absent.
+      - name: Build GridFM CLI
+        run: cargo build -p powerio-cli --release
+      - name: Require GridFM CLI
+        run: test -x target/release/powerio
+      # Report optional skips explicitly; the four CLI writer checks must run.
       - name: Run gridfm tests
-        run: pytest python/tests -q -k gridfm
+        env:
+          POWERIO_BIN: target/release/powerio
+        run: pytest python/tests/test_gridfm.py -q -rs
+      # The core Python matrix intentionally compiles GridFM out. Run its
+      # feature-enabled extension-surface regression here so that test is
+      # exercised rather than reported as a skip in the core matrix.
+      - name: Run GridFM extension-surface regression
+        run: pytest python/tests/test_powerio.py -q -rs -k gridfm_public_surface
 
   wheels:
     name: wheels (${{ matrix.platform.target }} on ${{ matrix.platform.runner }})
@@ -414,10 +447,10 @@ jobs:
             echo "checked out $actual_sha, but release preflight verified $EXPECTED_SHA" >&2
             exit 1
           fi
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.x"
-      # abi3-py39 → one wheel per platform covers Python 3.9+.
+      # abi3-py311 → one wheel per platform covers Python 3.11+.
       - name: Build powerio wheels
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -456,17 +489,28 @@ jobs:
         with:
           name: wheels-${{ matrix.platform.runner }}-${{ matrix.platform.target }}
           path: dist
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - name: Install Rosetta
+        if: matrix.platform.runner == 'macos-15' && matrix.platform.target == 'x86_64'
+        run: /usr/sbin/softwareupdate --install-rosetta --agree-to-license
+      # The x86_64 leg takes an x64 interpreter that runs under Rosetta. The
+      # runner's /usr/bin/python3 is 3.9, below the wheel's cp311-abi3 floor.
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
+          architecture: ${{ (matrix.platform.runner == 'macos-15' && matrix.platform.target == 'x86_64') && 'x64' || '' }}
       - name: Smoke the x86_64 wheel under Rosetta
-        if: matrix.platform.runner == 'macos-14' && matrix.platform.target == 'x86_64'
+        if: matrix.platform.runner == 'macos-15' && matrix.platform.target == 'x86_64'
         run: |
-          arch -x86_64 /usr/bin/python3 -m venv smoke-venv
+          arch -x86_64 python -m venv smoke-venv
+          machine="$(arch -x86_64 smoke-venv/bin/python -c 'import platform; print(platform.machine())')"
+          if [ "$machine" != x86_64 ]; then
+            echo "the smoke interpreter is $machine, not x86_64" >&2
+            exit 1
+          fi
           arch -x86_64 smoke-venv/bin/python -m pip install --quiet "$(ls dist/*.whl)[all]"
           arch -x86_64 smoke-venv/bin/python scripts/wheel-smoke.py
       - name: Smoke the wheel natively
-        if: ${{ !(matrix.platform.runner == 'macos-14' && matrix.platform.target == 'x86_64') }}
+        if: ${{ !(matrix.platform.runner == 'macos-15' && matrix.platform.target == 'x86_64') }}
         shell: bash
         run: |
           python -m venv smoke-venv
@@ -536,7 +580,7 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.x"
       # One wheel per chosen platform and one sdist, so no run passes the gate
@@ -577,14 +621,14 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.x"
       - name: Check distributions
         run: |
           python -m pip install twine
           python -m twine check dist/*
-      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           packages-dir: dist
           # A partially failed upload (e.g. wheels in, sdist rejected) is

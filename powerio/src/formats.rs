@@ -22,8 +22,26 @@ pub enum NetworkFamily {
 pub struct GridFormatInfo {
     pub format: FormatInfo,
     pub label: &'static str,
+    /// The primary catalog grouping. Use [`Self::supports_family`] when
+    /// selecting formats for a network: one token may support both families.
     pub family: NetworkFamily,
     pub can_read: bool,
+}
+
+impl GridFormatInfo {
+    /// Whether a format profile accepts this electrical network family.
+    /// MG-RAVENS accepts both families under one token; its parsed value's
+    /// family follows the document's classes. Other catalog entries accept
+    /// their primary [`Self::family`].
+    #[must_use]
+    pub fn supports_family(&self, family: NetworkFamily) -> bool {
+        self.family == family
+            || (self.format.token == "ravens-json"
+                && matches!(
+                    family,
+                    NetworkFamily::Transmission | NetworkFamily::Distribution
+                ))
+    }
 }
 
 /// Enumerate supported grid exchange formats, including explicit output profiles.
@@ -89,6 +107,16 @@ pub fn grid_formats() -> impl Iterator<Item = GridFormatInfo> {
             true,
         ),
         ("pmd-json", "PMD JSON", Distribution, true),
+        ("pmd-math-json", "PMD MATHEMATICAL JSON", Distribution, true),
+        // One token for both MG-RAVENS profiles: a balanced document parses
+        // to a BalancedNetwork and a multiconductor one to a
+        // MulticonductorNetwork, by content.
+        (
+            "ravens-json",
+            "MG-RAVENS JSON (balanced and multiconductor profiles)",
+            Distribution,
+            true,
+        ),
         (
             "bmopf-json",
             "BMOPF JSON (detect version)",
@@ -205,6 +233,7 @@ pub fn resolve_format(name: &str) -> Option<FormatInfo> {
             "gridlabd" => info("gridlabd", Some("glm"), true, true),
             "gridlabd-arras" => info("gridlabd-arras", Some("glm"), true, true),
             "pmd-json" => info("pmd-json", Some("json"), false, true),
+            "pmd-math-json" => info("pmd-math-json", Some("json"), false, true),
             "bmopf-json" => info("bmopf-json", Some("json"), false, true),
             "cim-dist" => info("cim-dist", Some("xml"), false, true),
             _ => return None,
@@ -303,6 +332,33 @@ mod tests {
             entry.label,
             "CIM distribution (CIM100 cim17v40, GridAPPS-D profile)"
         );
+    }
+
+    #[test]
+    fn catalog_family_capability_includes_both_ravens_profiles() {
+        for entry in grid_formats() {
+            assert!(
+                entry.supports_family(entry.family),
+                "{}",
+                entry.format.token
+            );
+            let other = match entry.family {
+                NetworkFamily::Transmission => NetworkFamily::Distribution,
+                NetworkFamily::Distribution => NetworkFamily::Transmission,
+            };
+            assert_eq!(
+                entry.supports_family(other),
+                entry.format.token == "ravens-json",
+                "{}",
+                entry.format.token
+            );
+        }
+        let balanced: Vec<_> = grid_formats()
+            .filter(|entry| entry.supports_family(NetworkFamily::Transmission))
+            .map(|entry| entry.format.token)
+            .collect();
+        assert!(balanced.contains(&"ravens-json"));
+        assert!(!balanced.contains(&"pmd-math-json"));
     }
 
     #[test]

@@ -2,12 +2,27 @@
 
 #[cfg(test)]
 use super::sources;
+use super::sources::unique_name;
 use super::{
     BTreeSet, BusSpec, C, DistLine, DistLineCode, RawDss, Reader, UntypedObject, Value, scale_mat,
 };
-use crate::dss::line;
+use crate::dss::{line, line_history::Snapshot, linecode};
+use std::collections::HashMap;
 
 type LineResult<T> = std::result::Result<T, String>;
+
+/// Per-meter linecodes shared by Lines that still carry exactly what they
+/// fetched from one OpenDSS LineCode prefix.
+#[derive(Default)]
+struct SharedCodes {
+    // A Line that fetched the prefix and nothing else; None if it no longer
+    // resolves on its own, which leaves its Lines on per-Line codes.
+    references: HashMap<Snapshot, Option<line::State>>,
+    // (prefix, meters per declared length unit) -> typed linecode name.
+    names: HashMap<(Snapshot, u64), String>,
+    // LineCode names already given to a shared code, lowercase.
+    claimed: BTreeSet<String>,
+}
 
 // Divide once: a separately rounded reciprocal introduces another rounding
 // before the total impedance is reconstructed from density and length.
@@ -47,7 +62,7 @@ impl Reader<'_> {
                 .untyped_objects_mut()
                 .push(UntypedObject::from(object));
             self.warn(&C::READ_DSS_RETAINED_SOURCE_ONLY, format!(
-                "LineCode.{} is retained as a source definition; line-specific effective matrices carry the electrical snapshot", object.name,
+                "LineCode.{} is retained as a source definition; per-meter linecodes carry the electrical snapshots Lines fetched from it", object.name,
             ));
         }
     }
@@ -145,27 +160,30 @@ impl Reader<'_> {
                 );
             }
         }
+        let mut shared = SharedCodes::default();
         for (object, state, matrices, from, to) in resolved {
             self.line_defaults(object);
-            let base = format!("_pio_line_{}", object.name);
-            let mut name = base.clone();
-            let mut suffix = 0;
-            while !used.insert(name.to_ascii_lowercase()) {
-                suffix += 1;
-                name = format!("{base}_{suffix}");
-            }
             let length = state.physical_length().unwrap_or(1.0);
             if !length.is_finite() || length <= 0.0 {
                 return Err(format!("Line.{} has invalid physical length", object.name));
             }
-            let mut code = DistLineCode::new(
-                &name,
-                per_meter(&matrices.r, length),
-                per_meter(&matrices.x, length),
-            );
-            code.b_from = scale_mat(&matrices.b, 0.5 / length);
-            code.b_to.clone_from(&code.b_from);
-            code.source = Some(format!("OpenDSS Line.{} effective snapshot", object.name));
+            let name = if let Some(name) =
+                self.shared_line_code(raw, &state, &object.name, &mut shared, &mut used)?
+            {
+                name
+            } else {
+                let name = unique_name(&format!("_pio_line_{}", object.name), &mut used);
+                let mut code = DistLineCode::new(
+                    &name,
+                    per_meter(&matrices.r, length),
+                    per_meter(&matrices.x, length),
+                );
+                code.b_from = scale_mat(&matrices.b, 0.5 / length);
+                code.b_to.clone_from(&code.b_from);
+                code.source = Some(format!("OpenDSS Line.{} effective snapshot", object.name));
+                self.net.line_codes_mut().push(code);
+                name
+            };
             let n = state.n;
             let terminal_from = self.terminals(&from, n, n, n);
             let terminal_to = self.terminals(&to, n, n, n);
@@ -202,13 +220,76 @@ impl Reader<'_> {
                 ));
             }
             if state.closed.iter().flatten().any(|closed| !closed) {
+                let code = self
+                    .net
+                    .line_codes()
+                    .iter()
+                    .rev()
+                    .find(|c| c.name == line.linecode)
+                    .cloned()
+                    .ok_or("missing Line linecode")?;
                 self.open_line(raw, &line, &code, &state.closed)?;
             } else {
                 self.net.lines_mut().push(line);
             }
-            self.net.line_codes_mut().push(code);
         }
         Ok(())
+    }
+
+    /// The shared per-meter linecode of a Line whose primitive still follows
+    /// from exactly what it fetched from an OpenDSS LineCode, created on
+    /// first use; `None` keeps the Line on its own effective snapshot. The
+    /// first shared code of a LineCode takes its name, so a written and
+    /// reread case keeps it; a later prefix, or the same prefix over another
+    /// length unit, takes the next free `_N` suffix.
+    fn shared_line_code(
+        &mut self,
+        raw: &RawDss,
+        state: &line::State,
+        line: &str,
+        shared: &mut SharedCodes,
+        used: &mut BTreeSet<String>,
+    ) -> LineResult<Option<String>> {
+        let Some(point) = state.code() else {
+            return Ok(None);
+        };
+        let Some(reference) = shared
+            .references
+            .entry(point)
+            .or_insert_with(|| {
+                linecode::resolve(raw, point)
+                    .ok()
+                    .map(|code| line::State::fetched(point, &code))
+            })
+            .as_ref()
+        else {
+            return Ok(None);
+        };
+        let Some(meters) = state.fetched_meters(reference) else {
+            return Ok(None);
+        };
+        let key = (point, meters.to_bits());
+        if let Some(name) = shared.names.get(&key) {
+            return Ok(Some(name.clone()));
+        }
+        let source = &raw.objects[point.object].name;
+        let name = if shared.claimed.insert(source.to_ascii_lowercase()) {
+            source.clone()
+        } else {
+            unique_name(source, used)
+        };
+        let matrices = reference
+            .per_meter(self.net.base_frequency(), meters)
+            .map_err(|e| format!("Line.{line}: {e}"))?;
+        let mut code = DistLineCode::new(&name, matrices.r, matrices.x);
+        code.b_from = scale_mat(&matrices.b, 0.5);
+        code.b_to.clone_from(&code.b_from);
+        code.source = Some(format!(
+            "OpenDSS LineCode.{source} effective snapshot, first fetched by Line.{line}"
+        ));
+        self.net.line_codes_mut().push(code);
+        shared.names.insert(key, name.clone());
+        Ok(Some(name))
     }
 }
 
@@ -264,26 +345,47 @@ fn invalid_line_never_returns_a_partial_typed_network() {
 #[test]
 fn short_line_retains_native_total_impedance_after_normalization() {
     let raw = crate::dss::raw::__parse_raw_with(
-        "new circuit.c\nnew linecode.busbar nphases=3 r1=1e-4 x1=1e-4 r0=1e-4 x0=1e-4 c1=0 c0=0 units=km\nnew line.short bus1=sourcebus bus2=end length=.001 linecode=busbar units=m\n",
+        "new circuit.c\nnew linecode.busbar nphases=3 r1=1e-4 x1=1e-4 r0=1e-4 x0=1e-4 c1=0 c0=0 units=km\nnew line.short bus1=sourcebus bus2=end length=.001 linecode=busbar units=m\nnew line.own bus1=sourcebus bus2=end2 r1=1e-4 x1=1e-4 r0=1e-4 x0=1e-4 c1=0 c0=0 units=km length=1e-6\n",
         "test.dss",
         &mut |_: &std::path::Path| Err(std::io::Error::other("no includes")),
     );
     let net = sources::staged_from_raw(&raw).unwrap();
-    let line = net.lines().iter().find(|l| l.name == "short").unwrap();
-    let code = net
-        .line_codes()
-        .iter()
-        .find(|c| c.name == line.linecode)
-        .unwrap();
-    // Pinned native total series impedance is 1e-10 + j1e-10 ohm.
-    // Reciprocal multiplication introduces an extra ulp before reinversion.
-    for matrix in [&code.r_series, &code.x_series] {
+    // Pinned native total series impedance is 1e-10 + j1e-10 ohm for both.
+    let code = |name: &str| {
+        let line = net.lines().iter().find(|l| l.name == name).unwrap();
+        let code = net
+            .line_codes()
+            .iter()
+            .find(|c| c.name == line.linecode)
+            .unwrap();
+        (line.length, code)
+    };
+    // A Line's own snapshot divides its native total once: a separately
+    // rounded reciprocal would add an ulp before reinversion.
+    let (length, own) = code("own");
+    for matrix in [&own.r_series, &own.x_series] {
         for (i, row) in matrix.iter().enumerate() {
             for (j, value) in row.iter().enumerate() {
                 assert_eq!(
-                    (value * line.length).to_bits(),
+                    (value * length).to_bits(),
                     (if i == j { 1e-10_f64 } else { 0.0 }).to_bits()
                 );
+            }
+        }
+    }
+    // A shared LineCode holds the per-km value over 1000 m, rounded once; its
+    // product with a Line length is then within an ulp of the native total.
+    let (length, shared) = code("short");
+    assert_eq!(shared.name, "busbar");
+    for matrix in [&shared.r_series, &shared.x_series] {
+        for (i, row) in matrix.iter().enumerate() {
+            for (j, value) in row.iter().enumerate() {
+                let native = if i == j { 1e-10_f64 } else { 0.0 };
+                assert_eq!(
+                    value.to_bits(),
+                    (if i == j { 1e-4_f64 / 1000.0 } else { 0.0 }).to_bits()
+                );
+                assert!((value * length - native).abs() <= f64::EPSILON * native);
             }
         }
     }

@@ -66,6 +66,7 @@ pub mod kron;
 pub mod lindist3flow;
 pub mod model;
 pub mod pmd;
+pub mod ravens;
 pub mod readiness;
 #[cfg(test)]
 pub(crate) mod testkit;

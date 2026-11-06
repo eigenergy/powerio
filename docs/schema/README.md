@@ -5,7 +5,7 @@ changes to existing record layouts or meanings. A release can add structural
 types without changing the IR version. Schema snapshots list the types
 implemented by a release and keep their published bytes and identifiers.
 
-| IR version | First release | Document identity | Schema snapshot | Read by 0.11.7 |
+| IR version | First release | Document identity | Schema snapshot | Read by 0.11.9 |
 |---|---|---|---|---|
 | none | v0.6.1 | `pio-package` lineage `0.1` | `pio-ir/0.1/schema.json` | no |
 | none | v0.8.0 | `pio-package` lineage `0.2` | `pio-ir/0.2/schema.json` | no |
@@ -18,6 +18,7 @@ implemented by a release and keep their published bytes and identifiers.
 | 2 | v0.11.5 | `pio-ir`, version `2` | `pio-ir/2/0.11.5/schema.json` | yes |
 | 2 | v0.11.6 | `pio-ir`, version `2` | `pio-ir/2/0.11.6/schema.json` | yes |
 | 2 | v0.11.7 | `pio-ir`, version `2` | `pio-ir/2/0.11.7/schema.json` | yes |
+| 2 | v0.11.8 | `pio-ir`, version `2` | `pio-ir/2/0.11.8/schema.json` | yes |
 
 The current document begins:
 
@@ -25,13 +26,13 @@ The current document begins:
 {
   "schema": "pio-ir",
   "version": 2,
-  "producer": { "name": "powerio", "version": "0.11.7" }
+  "producer": { "name": "powerio", "version": "0.11.9" }
 }
 ```
 
 ## Compatibility
 
-PowerIO 0.11.7 keeps IR version 2 and every existing record layout. The
+PowerIO 0.11.9 keeps IR version 2 and every existing record layout. The
 LinDist3Flow OPF instance and solution types added in 0.11.1, the three PSS/E
 contingency analysis files added in 0.11.3, the fixed-dispatch LinDist3Flow
 instance and solution types added in 0.11.4, and the AC optimal transmission
@@ -56,7 +57,7 @@ and an earlier reader rejects a `fixed_injection` document as an unknown field
 rather than read it under a different HVDC treatment.
 
 `powerio::IR_VERSION` is the IR version a build writes and
-`powerio::IR_MIN_VERSION` the oldest it reads. Both remain 2 in 0.11.7.
+`powerio::IR_MIN_VERSION` the oldest it reads. Both remain 2 in 0.11.9.
 `producer.version` records the producing release for diagnostics; it does not
 determine whether a document can be read. The C ABI remains independently
 versioned at 7. [The PowerIO IR chapter](../src/pio-json-schema.md) sets this
@@ -79,6 +80,13 @@ their option definitions, and the `branch_switching_cost` objective term.
 The 0.11.7 snapshot adds the optional `hvdc_treatment` field to
 `DcPfInstance` and `AcPfInstance` and its `HvdcTreatment` definition
 (`fixed_injection` or `ignore`).
+
+The current 0.11.8 catalog adds `ravens-json` to both source-format lists and
+`pmd-math-json` to the distribution list. The published 0.11.7 snapshot remains
+byte exact. This advances the catalog identifier only: IR stays at version 2,
+the C ABI stays at 7, and package release versions change at release time.
+An older reader rejects a document naming a new source format rather than
+silently reinterpret it; documents using the earlier names remain compatible.
 
 The release name in the snapshot path does not create a new IR version.
 A later release without catalog changes can reuse that snapshot (0.11.2
@@ -109,9 +117,10 @@ historical identifiers are `pio-package/0.1`, `pio-package/0.2`,
 `pio-package/0.9/schema.json`, `pio-module/1/schema.json`,
 `pio-ir/2/schema.json`, `pio-ir/2/0.11.1/schema.json`,
 `pio-ir/2/0.11.3/schema.json`, `pio-ir/2/0.11.4/schema.json`,
-`pio-ir/2/0.11.5/schema.json`, and `pio-ir/2/0.11.6/schema.json` beneath
+`pio-ir/2/0.11.5/schema.json`, `pio-ir/2/0.11.6/schema.json`, and
+`pio-ir/2/0.11.7/schema.json` beneath
 `https://powerio.dev/schema/`. The current schema uses
-`pio-ir/2/0.11.7/schema.json` under that same root.
+`pio-ir/2/0.11.8/schema.json` under that same root.
 The documentation site serves the archive paths and published identifiers.
 
 ## Regenerating the current catalog
@@ -121,5 +130,5 @@ cargo run -p powerio --example generate_schemas --features schema -- docs/schema
 ```
 
 The generator writes the path named by `powerio::IR_SCHEMA_ID`, currently
-`pio-ir/2/0.11.7/schema.json`. It leaves earlier snapshots untouched. CI fails
+`pio-ir/2/0.11.8/schema.json`. It leaves earlier snapshots untouched. CI fails
 if the generated catalog differs from the committed file.

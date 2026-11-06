@@ -217,6 +217,7 @@ pub(crate) fn emit_bmopf_json_text_with_options(
         warnings: crate::diagnostics::Diagnostics::new(),
         transformer_overflow: Map::new(),
         dropped_extras: BTreeMap::new(),
+        time_series_profiles: BTreeMap::new(),
     };
     let doc = w.document(net);
     w.flush_dropped_extras();
@@ -239,9 +240,68 @@ struct Writer {
     /// field: on a real feeder one warning per field per element buried
     /// every finding a consumer would act on (#377).
     dropped_extras: BTreeMap<String, Vec<String>>,
+    /// Normalized, schema-compatible profiles prepared once for this emission.
+    time_series_profiles: BTreeMap<String, (Value, Option<Value>)>,
 }
 
 impl Writer {
+    fn prepare_time_series_profiles(&mut self, net: &MulticonductorNetwork) {
+        // Retained PMD provenance also survives canonical values whose source
+        // format hint was cleared. MATHEMATICAL/unknown PMD profiles have no
+        // supported ENGINEERING hour-axis interpretation here.
+        let engineering_marker = net
+            .extras()
+            .get("pmd_data_model")
+            .and_then(Value::as_str)
+            .is_some_and(|model| model.eq_ignore_ascii_case("ENGINEERING"));
+        let is_pmd = *net.source_format() == Some(crate::model::DistSourceFormat::PmdJson)
+            || engineering_marker;
+        let foreign_pmd = *net.source_format() == Some(crate::model::DistSourceFormat::PmdMathJson)
+            || net.extras().contains_key("pmd_math_top_level")
+            || net.extras().contains_key("pmd_data_model") && !is_pmd;
+        self.time_series_profiles = net
+            .untyped_objects()
+            .iter()
+            .filter(|object| object.class == "time_series" && !foreign_pmd)
+            .filter_map(|object| {
+                let mut unplaced = Vec::new();
+                raw_bmopf_value(object, &mut unplaced)
+                    .filter(|_| unplaced.is_empty())
+                    .and_then(|value| normalized_bmopf_time_series_for_source(&value, is_pmd))
+                    .map(|normalized| (object.name.clone(), normalized))
+            })
+            .collect();
+
+        // Only load p/q references are activated by this writer. Compare each
+        // referenced profile once; BMOPF cannot resample different step axes.
+        let referenced: BTreeSet<&str> = net
+            .loads()
+            .iter()
+            .filter_map(|load| load.extras.get("time_series").and_then(Value::as_object))
+            .flat_map(|refs| refs.iter())
+            .filter(|(field, _)| matches!(field.as_str(), "pd_nom" | "p_nom" | "qd_nom" | "q_nom"))
+            .filter_map(|(_, value)| value.as_str())
+            .filter(|name| self.time_series_profiles.contains_key(*name))
+            .collect();
+        let incompatible_steps = {
+            let mut profiles = referenced
+                .iter()
+                .filter_map(|name| self.time_series_profiles.get(*name));
+            profiles.next().is_some_and(|(first, _)| {
+                profiles.any(|(other, _)| !bmopf_profiles_share_steps(first, other))
+            })
+        };
+        if incompatible_steps {
+            self.warn(
+                &C::EMIT_BMOPF_RETAINED_SOURCE_ONLY,
+                "referenced time_series profiles have different step counts or time axes; \
+                 retained under extras.time_series with inactive load references",
+            );
+            self.time_series_profiles
+                .retain(|name, _| !referenced.contains(name.as_str()));
+        }
+    }
+
     fn warn(&mut self, info: &'static DiagnosticInfo, msg: impl Into<String>) {
         self.warnings.push(info, msg);
     }
@@ -417,6 +477,7 @@ impl Writer {
     }
 
     fn document(&mut self, net: &MulticonductorNetwork) -> Value {
+        self.prepare_time_series_profiles(net);
         let mut doc = Map::new();
         if let Some(name) = &net.name() {
             doc.insert("name".into(), json!(name));
@@ -672,6 +733,127 @@ impl Writer {
         RAW_BMOPF_EXTRAS_TABLES.contains(&u.class.as_str()) || u.class.starts_with("transformer.")
     }
 
+    /// Map PMD load-shape references onto BMOPF's numeric load fields.
+    /// Only profiles whose PMD-only options are at their neutral defaults can
+    /// be represented by BMOPF's multiplicative profile semantics.
+    fn load_time_series_refs(
+        &mut self,
+        extras: &crate::model::Extras,
+        out: &mut Map<String, Value>,
+        what: &str,
+    ) {
+        let Some(value) = extras.get("time_series") else {
+            return;
+        };
+        if self.options.schema_version != BmopfSchemaVersion::Bmopf020 {
+            self.warn(
+                &C::EMIT_BMOPF_FIELD_DROPPED,
+                format!(
+                    "{what}: BMOPF schema 0.1.0 has no load.time_series reference slot; references omitted"
+                ),
+            );
+            return;
+        }
+        let Some(refs) = value.as_object() else {
+            self.warn(
+                &C::EMIT_BMOPF_FIELD_DROPPED,
+                format!("{what}: malformed `time_series` references have no BMOPF mapping"),
+            );
+            return;
+        };
+        let mut mapped = Map::new();
+        for (field, value) in refs {
+            let target = match field.as_str() {
+                "pd_nom" | "p_nom" => "p_nom",
+                "qd_nom" | "q_nom" => "q_nom",
+                _ => {
+                    self.warn(
+                        &C::EMIT_BMOPF_FIELD_DROPPED,
+                        format!("{what}: time-series field `{field}` has no BMOPF mapping"),
+                    );
+                    continue;
+                }
+            };
+            let Some(name) = value.as_str() else {
+                self.warn(
+                    &C::EMIT_BMOPF_FIELD_DROPPED,
+                    format!("{what}: time-series reference `{field}` is not a profile name"),
+                );
+                continue;
+            };
+            if !self.time_series_profiles.contains_key(name) {
+                self.warn(
+                    &C::EMIT_BMOPF_FIELD_DROPPED,
+                    format!(
+                        "{what}: time-series profile `{name}` cannot be represented by BMOPF; `{field}` reference dropped"
+                    ),
+                );
+                continue;
+            }
+            mapped.insert(target.to_string(), Value::String(name.to_owned()));
+        }
+        if !mapped.is_empty() {
+            out.insert("time_series".into(), Value::Object(mapped));
+        }
+    }
+
+    fn stash_named_extra(
+        &mut self,
+        extras: &mut Map<String, Value>,
+        table_name: &str,
+        name: &str,
+        value: Value,
+    ) {
+        if extras.get(table_name).is_some_and(|v| !v.is_object()) {
+            self.warn(
+                &C::EMIT_BMOPF_VALUE_SUBSTITUTED,
+                format!(
+                    "extras.`{table_name}` is not a table; replaced to retain time-series metadata"
+                ),
+            );
+            extras.insert(table_name.to_string(), Value::Object(Map::new()));
+        }
+        let collision = extras
+            .get(table_name)
+            .and_then(Value::as_object)
+            .is_some_and(|table| table.contains_key(name));
+        if collision {
+            self.warn(
+                &C::EMIT_BMOPF_VALUE_SUBSTITUTED,
+                format!(
+                    "extras.`{table_name}.{name}` was replaced by retained time-series metadata"
+                ),
+            );
+        }
+        extras
+            .entry(table_name.to_string())
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+            .expect("the writer creates a table for retained time-series metadata")
+            .insert(name.to_string(), value);
+    }
+
+    fn normalize_time_series_for_emit(
+        &mut self,
+        name: &str,
+        value: Value,
+        extras: &mut Map<String, Value>,
+    ) -> Value {
+        let Some((profile, metadata)) = self.time_series_profiles.get(name).cloned() else {
+            self.warn(
+                &C::EMIT_BMOPF_RETAINED_SOURCE_ONLY,
+                format!(
+                    "time_series {name}: profile is not representable by BMOPF; retained verbatim under extras.time_series"
+                ),
+            );
+            return value;
+        };
+        if let Some(metadata) = metadata {
+            self.stash_named_extra(extras, "pmd_time_series_metadata", name, metadata);
+        }
+        profile
+    }
+
     /// Untyped BMOPF ecosystem objects, one pass: the tables that lost
     /// their top-level slots in schema 0.1.0 re-emit under `extras`, while
     /// untyped transformer subtypes keep their place under `transformer`.
@@ -684,7 +866,7 @@ impl Writer {
         self.clear_non_table_extras_slots(net, extras);
         for u in net.untyped_objects() {
             let subtype = u.class.strip_prefix("transformer.");
-            if subtype.is_none() && !RAW_BMOPF_EXTRAS_TABLES.contains(&u.class.as_str()) {
+            if !Self::is_emitted_untyped(u) {
                 continue;
             }
             let mut unplaced = Vec::new();
@@ -711,11 +893,28 @@ impl Writer {
                     Map::new(),
                 );
             }
+            // A profile only gets an active BMOPF slot when its complete
+            // semantics are representable in the selected schema. Otherwise
+            // preserve the original profile under extras.time_series.
+            let top_level = subtype.is_none() && self.raw_object_at_top_level(u);
+            let value = if u.class == "time_series" && top_level {
+                self.normalize_time_series_for_emit(&u.name, value, extras)
+            } else {
+                if u.class == "time_series" {
+                    self.warn(
+                        &C::EMIT_BMOPF_RETAINED_SOURCE_ONLY,
+                        format!(
+                            "time_series {}: profile is not representable in the selected BMOPF schema; retained verbatim under extras.time_series",
+                            u.name
+                        ),
+                    );
+                }
+                value
+            };
             // An untyped transformer subtype lands in the top-level
             // `transformer` table, not under `extras`. Name the slot the
             // object really went to, so a warning points at the part of the
             // document a reader must look at.
-            let top_level = subtype.is_none() && self.raw_table_at_top_level(&u.class);
             let slot_path = match subtype {
                 Some(sub) => format!("transformer.{sub}"),
                 None if top_level => u.class.clone(),
@@ -773,6 +972,19 @@ impl Writer {
         self.options.schema_version == BmopfSchemaVersion::Bmopf020 && class != "capacitor"
     }
 
+    /// A raw object is top-level only when the selected schema declares its
+    /// table and, for time series, the profile has BMOPF multiplicative
+    /// semantics and satisfies the schema's required-values constraint.
+    fn raw_object_at_top_level(&self, object: &crate::model::UntypedObject) -> bool {
+        if !self.raw_table_at_top_level(&object.class) {
+            return false;
+        }
+        if object.class != "time_series" {
+            return true;
+        }
+        self.time_series_profiles.contains_key(&object.name)
+    }
+
     /// `extras` is seeded from the source document's own `extras` object, so
     /// a value under one of the relocated table names is input, not something
     /// this writer built. A value that is not a table has no slot for a named
@@ -786,9 +998,9 @@ impl Writer {
         let classes: BTreeSet<&str> = net
             .untyped_objects()
             .iter()
+            .filter(|u| RAW_BMOPF_EXTRAS_TABLES.contains(&u.class.as_str()))
+            .filter(|u| !self.raw_object_at_top_level(u))
             .map(|u| u.class.as_str())
-            .filter(|class| RAW_BMOPF_EXTRAS_TABLES.contains(class))
-            .filter(|class| !self.raw_table_at_top_level(class))
             .collect();
         for class in classes {
             if extras.get(class).is_some_and(|v| !v.is_object()) {
@@ -883,8 +1095,12 @@ impl Writer {
             o.insert("q_nom".into(), self.nums(&l.q_nom, "load q_nom"));
             o.insert("bus".into(), json!(l.bus));
             o.insert("terminal_map".into(), json!(l.terminal_map));
-            self.load_voltage_model(&mut o, &l.voltage_model, &format!("load {}", l.name));
-            self.extras_dropped(&l.extras, &format!("load {}", l.name));
+            let what = format!("load {}", l.name);
+            self.load_time_series_refs(&l.extras, &mut o, &what);
+            self.load_voltage_model(&mut o, &l.voltage_model, &what);
+            let mut extras = l.extras.clone();
+            extras.remove("time_series");
+            self.extras_dropped(&extras, &what);
             loads.insert(l.name.clone(), Value::Object(o));
         }
         let mut gens = Map::new();
@@ -2858,7 +3074,19 @@ fn classify(t: &DistTransformer) -> Kind {
                 DistWindingConn::Wye,
                 DistWindingConn::Wye,
             ],
-        ) => Kind::CenterTap,
+        ) => {
+            // The compact center-tap subtype has one shared secondary
+            // leakage arm, so its two primary-to-secondary tests must
+            // agree. Keep unequal tests (including explicit zero) in the
+            // general pair table instead of silently symmetrizing them.
+            let xhl = t.xsc_pct.first().copied().unwrap_or(0.0);
+            let xht = t.xsc_pct.get(1).copied().unwrap_or(xhl);
+            if (xhl - xht).abs() > 0.0 {
+                Kind::NWinding
+            } else {
+                Kind::CenterTap
+            }
+        }
         (3, [DistWindingConn::Wye, DistWindingConn::Delta]) => Kind::WyeDelta,
         (3, [DistWindingConn::Delta, DistWindingConn::Wye]) => Kind::DeltaWye,
         // The decomposition indexes terminal_map[phase] and takes the last
@@ -2883,12 +3111,198 @@ fn classify(t: &DistTransformer) -> Kind {
     }
 }
 
-/// The re-emitted form of an untyped object.
-///
-/// A BMOPF sourced object rides as one unkeyed blob, which is the JSON the
-/// document declared. A dss sourced object rides as key/value property
-/// pairs, which rebuild into an object; without that arm every dss sourced
-/// untyped object failed the JSON parse and dropped.
+/// Normalize a raw profile into BMOPF's multiplicative time-series shape.
+/// PMD's source ID is provenance, while nonzero offset and `replace=true`
+/// change profile semantics and cannot be represented by BMOPF.
+#[cfg(test)]
+fn normalized_bmopf_time_series(value: &Value) -> Option<(Value, Option<Value>)> {
+    normalized_bmopf_time_series_for_source(value, false)
+}
+
+fn normalized_bmopf_time_series_for_source(
+    value: &Value,
+    is_pmd: bool,
+) -> Option<(Value, Option<Value>)> {
+    let mut profile = value.as_object()?.clone();
+    // Only complete, finite factors can become active BMOPF profiles.
+    // Invalid or unsupported records remain verbatim in extras.
+    let values = profile.get("values")?.as_array()?;
+    if values.is_empty()
+        || values
+            .iter()
+            .any(|value| value.as_f64().is_none_or(|value| !value.is_finite()))
+        || profile
+            .get("description")
+            .is_some_and(|value| !value.is_string())
+    {
+        return None;
+    }
+    let steps = values.len();
+    let source_id = profile.remove("source_id");
+    let offset = profile.remove("offset");
+    let replace = profile.remove("replace");
+
+    let offset_is_default = offset
+        .as_ref()
+        .is_none_or(|value| value.as_f64() == Some(0.0));
+    // PMD defines replace=true when omitted, even if source_id and offset
+    // are absent. Require an explicit false for every PMD-origin profile.
+    let replace_is_default = if is_pmd {
+        replace.as_ref().and_then(Value::as_bool) == Some(false)
+    } else {
+        match replace.as_ref() {
+            Some(value) => value.as_bool() == Some(false),
+            None => source_id.is_none() && offset.is_none(),
+        }
+    };
+    // BMOPF accepts numeric offsets in seconds. PMD numeric axes are
+    // expressed in hours; timestamp/string axes cannot be represented and
+    // therefore make the complete profile source-only. Keep integer axes
+    // exact where possible instead of routing them through f64.
+    if let Some(time) = profile.get("time").cloned() {
+        let normalized = normalize_bmopf_time_axis(&time, is_pmd)?;
+        if normalized.as_array()?.len() != steps {
+            return None;
+        }
+        profile.insert("time".into(), normalized);
+    }
+    let allowed = ["values", "time", "description"];
+    if !offset_is_default
+        || !replace_is_default
+        || profile.keys().any(|key| !allowed.contains(&key.as_str()))
+    {
+        return None;
+    }
+
+    let mut metadata = Map::new();
+    if let Some(value) = source_id {
+        metadata.insert("source_id".into(), value);
+    }
+    if let Some(value) = offset {
+        metadata.insert("offset".into(), value);
+    }
+    if let Some(value) = replace {
+        metadata.insert("replace".into(), value);
+    }
+    Some((
+        Value::Object(profile),
+        (!metadata.is_empty()).then_some(Value::Object(metadata)),
+    ))
+}
+
+/// Convert a profile time axis to the numeric-seconds representation used
+/// by BMOPF. The time axis is optional; when present it must be a numeric array.
+/// PMD axes are in hours, while native BMOPF axes are already in seconds.
+fn normalize_bmopf_time_axis(time: &Value, from_pmd: bool) -> Option<Value> {
+    let values = time.as_array()?;
+    if values.is_empty() {
+        return None;
+    }
+    let mut normalized = Vec::with_capacity(values.len());
+    for value in values {
+        let number = value.as_number()?;
+        let seconds = if from_pmd {
+            if let Some(hours) = number.as_u64() {
+                serde_json::Number::from(hours.checked_mul(3_600)?)
+            } else if let Some(hours) = number.as_i64() {
+                serde_json::Number::from(hours.checked_mul(3_600)?)
+            } else {
+                let seconds = number.as_f64()? * 3_600.0;
+                serde_json::Number::from_f64(seconds)?
+            }
+        } else {
+            // Validate native BMOPF seconds without changing their JSON
+            // representation or introducing a floating-point round trip.
+            if !number.as_f64()?.is_finite() {
+                return None;
+            }
+            number.clone()
+        };
+        if !seconds.as_f64()?.is_finite() {
+            return None;
+        }
+        normalized.push(Value::Number(seconds));
+    }
+    // Conversion can collapse adjacent floating-point steps. Check the
+    // emitted axis, keeping integer comparisons exact above f64's ceiling.
+    let increasing = normalized
+        .windows(2)
+        .all(|pair| compare_time_steps(&pair[0], &pair[1]) == Some(std::cmp::Ordering::Less));
+    increasing.then_some(Value::Array(normalized))
+}
+
+fn bmopf_profiles_share_steps(left: &Value, right: &Value) -> bool {
+    let count = |profile: &Value| {
+        profile
+            .get("values")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+    };
+    count(left) == count(right)
+        && match (left.get("time"), right.get("time")) {
+            (None, None) => true,
+            (Some(Value::Array(left)), Some(Value::Array(right))) => {
+                left.len() == right.len()
+                    && left
+                        .iter()
+                        .zip(right)
+                        .all(|(left, right)| same_time_step(left, right))
+            }
+            _ => false,
+        }
+}
+
+// Time steps are identities, so use exact numeric comparisons, never a tolerance.
+fn same_time_step(left: &Value, right: &Value) -> bool {
+    compare_time_steps(left, right) == Some(std::cmp::Ordering::Equal)
+}
+
+fn compare_time_steps(left: &Value, right: &Value) -> Option<std::cmp::Ordering> {
+    if let (Some(left), Some(right)) = (left.as_i64(), right.as_i64()) {
+        return Some(left.cmp(&right));
+    }
+    if let (Some(left), Some(right)) = (left.as_u64(), right.as_u64()) {
+        return Some(left.cmp(&right));
+    }
+    let left_real = left.as_f64().filter(|value| value.is_finite())?;
+    let right_real = right.as_f64().filter(|value| value.is_finite())?;
+    let signed_real = |integer: i64, real: f64| {
+        if integer < 0 {
+            compare_unsigned_integer_real(integer.unsigned_abs(), -real).reverse()
+        } else {
+            compare_unsigned_integer_real(integer as u64, real)
+        }
+    };
+    if let Some(left) = left.as_i64() {
+        Some(signed_real(left, right_real))
+    } else if let Some(left) = left.as_u64() {
+        Some(compare_unsigned_integer_real(left, right_real))
+    } else if let Some(right) = right.as_i64() {
+        Some(signed_real(right, left_real).reverse())
+    } else if let Some(right) = right.as_u64() {
+        Some(compare_unsigned_integer_real(right, left_real).reverse())
+    } else {
+        left_real.partial_cmp(&right_real)
+    }
+}
+
+fn compare_unsigned_integer_real(integer: u64, real: f64) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+
+    if real < 0.0 {
+        return Ordering::Greater;
+    }
+    // u64::MAX rounds to the exclusive upper bound 2^64 as f64. Check
+    // before casting so a saturating conversion cannot make them equal.
+    if real >= u64::MAX as f64 {
+        return Ordering::Less;
+    }
+    match integer.cmp(&(real as u64)) {
+        Ordering::Equal if real.fract() > 0.0 => Ordering::Less,
+        order => order,
+    }
+}
+
 /// Rebuild the value of an untyped object. One unnamed property alone is the
 /// whole object as JSON text. Otherwise each named property is one field.
 ///
@@ -3121,6 +3535,197 @@ mod tests {
     use crate::model::{DistLoadVoltageModel, IbrPrimeMover, IbrTopology};
     use crate::testkit::parse_bmopf_str;
 
+    #[test]
+    fn pmd_time_series_normalization_requires_neutral_options() {
+        let source = json!({
+            "values": [1.0, 0.5],
+            "time": [0.0, 60.0],
+            "source_id": "loadshape.ls1",
+            "offset": 0.0,
+            "replace": false
+        });
+        let (profile, metadata) = normalized_bmopf_time_series(&source).unwrap();
+        assert_eq!(profile, json!({"values": [1.0, 0.5], "time": [0.0, 60.0]}));
+        assert_eq!(
+            metadata,
+            Some(json!({
+                "source_id": "loadshape.ls1",
+                "offset": 0.0,
+                "replace": false
+            }))
+        );
+
+        assert!(
+            normalized_bmopf_time_series(&json!({
+                "values": [1.0],
+                "offset": 0.25
+            }))
+            .is_none(),
+            "a nonzero offset changes profile semantics"
+        );
+        assert!(
+            normalized_bmopf_time_series(&json!({
+                "values": [1.0],
+                "replace": true
+            }))
+            .is_none(),
+            "replace=true cannot be represented by a multiplicative profile"
+        );
+
+        assert!(
+            normalized_bmopf_time_series(&json!({
+                "source_id": "loadshape.ls1",
+                "values": [1.0],
+                "time": [0.0],
+                "offset": 0.0
+            }))
+            .is_none(),
+            "an omitted replace on a PMD loadshape inherits PMD's true default"
+        );
+        assert!(
+            normalized_bmopf_time_series(&json!({
+                "values": [1.0],
+                "time": [0.0]
+            }))
+            .is_some(),
+            "a native BMOPF profile without PMD-only options remains multiplicative"
+        );
+        assert!(
+            normalized_bmopf_time_series_for_source(
+                &json!({"values": [0.5, 1.0], "time": [0.0, 1.0]}),
+                true,
+            )
+            .is_none(),
+            "PMD defaults replace to true even when optional metadata is absent"
+        );
+        assert!(
+            normalized_bmopf_time_series_for_source(
+                &json!({"values": [0.5, 1.0], "time": [0.0, 1.0], "replace": false}),
+                true,
+            )
+            .is_some(),
+            "PMD profiles activate only with explicit replace=false"
+        );
+        assert!(
+            normalized_bmopf_time_series_for_source(
+                &json!({"values": [0.5, 1.0], "time": [0.0, 1.0], "replace": true}),
+                true,
+            )
+            .is_none(),
+            "PMD replace=true cannot be represented by BMOPF multiplicative profiles"
+        );
+        assert!(
+            normalized_bmopf_time_series(&json!({"time": [0.0, 1.0]})).is_none(),
+            "BMOPF requires the schema-mandated values property"
+        );
+        assert!(
+            normalized_bmopf_time_series(&json!({
+                "values": [1.0],
+                "unrecognized": "field"
+            }))
+            .is_none(),
+            "unknown profile properties must not leak into strict BMOPF JSON"
+        );
+    }
+
+    #[test]
+    fn pmd_time_axis_normalization_is_exact_and_rejects_overflow() {
+        assert_eq!(
+            normalize_bmopf_time_axis(&json!([0, 1, 24]), true),
+            Some(json!([0, 3600, 86400]))
+        );
+        assert_eq!(
+            normalize_bmopf_time_axis(&json!([0.5, 1.25]), true),
+            Some(json!([1800.0, 4500.0]))
+        );
+        assert_eq!(
+            normalize_bmopf_time_axis(&json!([0, 3600]), false),
+            Some(json!([0, 3600]))
+        );
+        // Preserve exact integer seconds beyond f64's integer precision and
+        // beyond i64::MAX when the converted result still fits in u64.
+        let hours = 3_000_000_000_000_001_u64;
+        assert_eq!(
+            normalize_bmopf_time_axis(&json!([0, hours]), true),
+            Some(json!([0, hours * 3_600]))
+        );
+        let native = json!([9_007_199_254_740_992_u64, 9_007_199_254_740_993_u64]);
+        assert_eq!(normalize_bmopf_time_axis(&native, false), Some(native));
+        let mixed = json!([9_007_199_254_740_992.0, 9_007_199_254_740_993_u64]);
+        assert_eq!(normalize_bmopf_time_axis(&mixed, false), Some(mixed));
+        assert_eq!(
+            normalize_bmopf_time_axis(&json!([-1, 0, 1]), true),
+            Some(json!([-3600, 0, 3600]))
+        );
+        assert!(normalize_bmopf_time_axis(&json!([i64::MIN]), true).is_none());
+        assert!(normalize_bmopf_time_axis(&json!([1e308]), true).is_none());
+        assert!(
+            normalize_bmopf_time_axis(&json!([u64::MAX]), true).is_none(),
+            "overflowing hour-to-second conversion must remain source-only"
+        );
+        assert!(
+            normalize_bmopf_time_axis(&json!(["2026-01-01T00:00:00Z"]), true).is_none(),
+            "timestamp axes have no numeric BMOPF representation"
+        );
+    }
+
+    #[test]
+    fn pmd_time_axes_are_normalized_to_bmopf_numeric_seconds() {
+        let numeric = json!({
+            "values": [0.5, 1.0],
+            "time": [0.0, 1.0],
+            "replace": false
+        });
+        let normalized = normalized_bmopf_time_series_for_source(&numeric, true).unwrap();
+        assert_eq!(normalized.0["time"], json!([0.0, 3600.0]));
+
+        let timestamps = json!({
+            "values": [0.5, 1.0],
+            "time": ["2026-01-01T00:00:00Z"],
+            "replace": false
+        });
+        assert!(
+            normalized_bmopf_time_series_for_source(&timestamps, true).is_none(),
+            "string PMD axes must remain source-only"
+        );
+        assert!(
+            normalized_bmopf_time_series(&timestamps).is_none(),
+            "BMOPF time axes must be numeric for non-PMD sources too"
+        );
+    }
+
+    #[test]
+    fn profile_step_comparison_keeps_exact_integer_identity() {
+        for (left, right) in [
+            (json!(0), json!(0.0)),
+            (json!(3600), json!(3600.0)),
+            (
+                json!(9_007_199_254_740_992_u64),
+                json!(9_007_199_254_740_992.0),
+            ),
+            (json!(i64::MIN), json!(i64::MIN as f64)),
+        ] {
+            assert!(same_time_step(&left, &right), "{left} != {right}");
+            assert!(same_time_step(&right, &left), "{right} != {left}");
+        }
+        for (left, right) in [
+            (json!(0), json!(0.5)),
+            (
+                json!(9_007_199_254_740_992_u64),
+                json!(9_007_199_254_740_993_u64),
+            ),
+            (
+                json!(9_007_199_254_740_993_u64),
+                json!(9_007_199_254_740_992.0),
+            ),
+            (json!(i64::MAX), json!(i64::MAX as f64)),
+            (json!(u64::MAX), json!(u64::MAX as f64)),
+        ] {
+            assert!(!same_time_step(&left, &right), "{left} == {right}");
+            assert!(!same_time_step(&right, &left), "{right} == {left}");
+        }
+    }
+
     /// A dropped field's diagnostic code must never claim the field was
     /// kept, and a kept-under-extras diagnostic must never claim the field
     /// was dropped. Exercises the writer's own field-dropped and
@@ -3138,6 +3743,7 @@ mod tests {
             warnings: crate::diagnostics::Diagnostics::new(),
             transformer_overflow: Map::new(),
             dropped_extras: BTreeMap::new(),
+            time_series_profiles: BTreeMap::new(),
         };
 
         // A non-object control_profile extra and an ibr extra outside the

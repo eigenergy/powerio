@@ -4,9 +4,9 @@
 # Correctness families only: pycodestyle errors, pyflakes, bugbear, import
 # order, and the ruff-native checks that keep `__all__` and `# noqa` honest.
 # Style-modernization families (UP, PYI cosmetics) are deliberately absent:
-# the wheel targets Python 3.9, and annotation spelling is not a defect.
+# the wheel targets Python 3.11, and annotation spelling is not a defect.
 include = ["python/**/*.py", "python/**/*.pyi"]
-target-version = "py39"
+target-version = "py311"
 
 [lint]
 select = ["E4", "E7", "E9", "F", "B", "I", "PLE", "PLW", "RUF022", "RUF100"]

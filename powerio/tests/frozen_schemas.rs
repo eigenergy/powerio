@@ -4,7 +4,7 @@
 use std::path::Path;
 
 const SCHEMA_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/schema");
-const CURRENT_SCHEMA: &str = "pio-ir/2/0.11.7/schema.json";
+const CURRENT_SCHEMA: &str = "pio-ir/2/0.11.8/schema.json";
 
 fn monitor_discriminator(value: &serde_json::Value) -> Option<(&str, &str)> {
     if value["type"] != "object" {
@@ -195,6 +195,7 @@ fn the_schema_directory_contains_the_documented_powerio_ir_history() {
             "pio-ir/2/0.11.4/schema.json",
             "pio-ir/2/0.11.5/schema.json",
             "pio-ir/2/0.11.6/schema.json",
+            "pio-ir/2/0.11.7/schema.json",
             CURRENT_SCHEMA,
             "pio-ir/2/schema.json",
         ]
@@ -244,6 +245,10 @@ fn historical_schemas_preserve_their_original_identifiers() {
         (
             "pio-ir/2/0.11.6/schema.json",
             "https://powerio.dev/schema/pio-ir/2/0.11.6/schema.json",
+        ),
+        (
+            "pio-ir/2/0.11.7/schema.json",
+            "https://powerio.dev/schema/pio-ir/2/0.11.7/schema.json",
         ),
     ] {
         let schema: serde_json::Value = serde_json::from_str(&read_schema_file(path)).unwrap();
@@ -432,6 +437,7 @@ fn assert_tagged_union_only_adds(
 #[allow(clippy::too_many_lines)]
 fn ir_version_2_schemas_only_add() {
     for earlier in [
+        "pio-ir/2/0.11.7/schema.json",
         "pio-ir/2/0.11.6/schema.json",
         "pio-ir/2/0.11.5/schema.json",
         "pio-ir/2/0.11.4/schema.json",
@@ -473,8 +479,6 @@ fn ir_version_2_schemas_only_add() {
                 assert_additive_load_laws(earlier, definition, &current_defs[name]);
             } else if name == "MulticonductorNetwork" {
                 assert_located_network_schema_preserved(earlier, definition, &current_defs);
-            } else if name == "SourceFormat" {
-                assert_source_format_schema_preserved(earlier, definition, &current_defs[name]);
             } else if name == "VoltageSource" {
                 // IR 2 also admits a distinctly tagged nested source type.
                 // Keep the legacy branch byte-for-byte equivalent as JSON;
@@ -828,32 +832,6 @@ fn assert_located_network_schema_preserved(
     );
 }
 
-fn assert_source_format_schema_preserved(
-    earlier: &str,
-    definition: &serde_json::Value,
-    current: &serde_json::Value,
-) {
-    // The public format enum is nonexhaustive. Adding one new
-    // format must leave every existing spelling and schema rule
-    // intact; this is not permission to change arbitrary records.
-    let mut without_sincal = current.clone();
-    let alternatives = without_sincal["oneOf"].as_array_mut().unwrap();
-    let before = alternatives.len();
-    alternatives.retain(|v| v["const"] != "sincal");
-    assert_eq!(before, alternatives.len() + 1);
-    assert_eq!(
-        &without_sincal, definition,
-        "{earlier}: existing format changed"
-    );
-    let sincal = current["oneOf"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|v| v["const"] == "sincal")
-        .unwrap();
-    assert_eq!(sincal["type"], "string");
-}
-
 fn objective_term_alternative(term: &str) -> serde_json::Value {
     serde_json::json!({
         "additionalProperties": false,
@@ -861,6 +839,43 @@ fn objective_term_alternative(term: &str) -> serde_json::Value {
         "required": ["term"],
         "type": "object"
     })
+}
+
+#[test]
+fn source_format_union_only_gains_disjoint_spellings() {
+    let published = serde_json::json!({"oneOf": [
+        {"type": "string", "enum": ["matpower", "psse"]},
+        {"type": "string", "const": "sincal", "description": "existing"}
+    ]});
+    let mut grown = published.clone();
+    grown["oneOf"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "type": "string", "const": "ravens-json", "description": "new"
+        }));
+    assert_tagged_union_only_adds(&published, &grown, "SourceFormat");
+    for addition in [
+        serde_json::json!({"type": "string", "const": "psse"}),
+        serde_json::json!({"type": "string", "enum": ["sincal", "ravens-json"]}),
+        serde_json::json!({"type": "string"}),
+    ] {
+        let mut invalid = published.clone();
+        invalid["oneOf"].as_array_mut().unwrap().push(addition);
+        assert!(
+            std::panic::catch_unwind(|| {
+                assert_tagged_union_only_adds(&published, &invalid, "SourceFormat");
+            })
+            .is_err()
+        );
+    }
+    grown["oneOf"][1]["description"] = serde_json::json!("changed");
+    assert!(
+        std::panic::catch_unwind(|| {
+            assert_tagged_union_only_adds(&published, &grown, "SourceFormat");
+        })
+        .is_err()
+    );
 }
 
 #[test]

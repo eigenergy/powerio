@@ -28,6 +28,7 @@ use super::{
     LEAKAGE_READING, no_load_test_pct, sequence_to_phase, short_circuit_test_pct, tank_phase_clock,
     wrap_angle, z_base,
 };
+use crate::ravens::MRID_KEY as RAVENS_MRID_KEY;
 
 const CIM_NS: &str = "http://iec.ch/TC57/CIM100#";
 const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -187,7 +188,15 @@ impl Doc {
     /// The imported mRID (the `cim_mrid` extra) when it can stand as an
     /// `rdf:ID`, else a deterministic one.
     fn mrid_of(&mut self, extras: &Extras, kind: &str, name: &str) -> String {
-        match extras.get("cim_mrid").and_then(serde_json::Value::as_str) {
+        let imported = extras.get("cim_mrid").or_else(|| {
+            // An MG-RAVENS read keeps the same `IdentifiedObject.mRID` under
+            // its own key. A RAVENS transformer's id is its enclosing
+            // PowerTransformer's, not a tank's, so it is not reused here.
+            (kind != "xf" && kind != "xftank")
+                .then(|| extras.get(RAVENS_MRID_KEY))
+                .flatten()
+        });
+        match imported.and_then(serde_json::Value::as_str) {
             Some(id) if plain_id(id) => id.to_owned(),
             Some(id) => {
                 let derived = det_mrid(kind, name);
@@ -210,6 +219,11 @@ impl Doc {
             .keys()
             .map(String::as_str)
             .filter(|k| !used.contains(k))
+            // The RAVENS mRID is the CIM one wherever this writer reads the
+            // `cim_mrid` (see `mrid_of`); a transformer still reports it.
+            .filter(|k| {
+                !(*k == RAVENS_MRID_KEY && used.contains(&"cim_mrid") && kind != "transformer")
+            })
             .collect();
         if !keys.is_empty() {
             self.warn(

@@ -2,9 +2,9 @@
 //! reported as a fidelity loss by the ones that don't.
 //!
 //! `BalancedNetwork::base_frequency` (50 or 60 Hz, default 60) threads through PSS/E
-//! `BASFRQ` and pandapower `f_hz`. MATPOWER, PowerModels, egret, and PowerWorld
-//! have no frequency field, so a non-default value writes with a warning rather
-//! than silently reading back as 60 Hz.
+//! `BASFRQ`, pandapower `f_hz`, and the PowerIO PowerModels JSON frequency
+//! extension. MATPOWER, egret, and PowerWorld have no frequency field, so a
+//! non-default value writes with a warning rather than silently reading as 60 Hz.
 
 // Frequencies are exact decimal values parsed from the fixtures (50.0, 60.0); bit
 // equality is the intended assertion.
@@ -85,7 +85,6 @@ fn dropped_frequency_warns_for_formats_without_a_field() {
 
     for target in [
         TargetFormat::Matpower,
-        TargetFormat::PowerModelsJson,
         TargetFormat::EgretJson,
         TargetFormat::PowerWorld,
     ] {
@@ -98,8 +97,12 @@ fn dropped_frequency_warns_for_formats_without_a_field() {
             conv.render_diagnostics()
         );
     }
-    // PSS/E and pandapower carry it, so no frequency warning there.
-    for target in [TargetFormat::Psse { rev: 33 }, TargetFormat::PandapowerJson] {
+    // These profiles carry frequency, so no frequency warning there.
+    for target in [
+        TargetFormat::Psse { rev: 33 },
+        TargetFormat::PandapowerJson,
+        TargetFormat::PowerModelsJson,
+    ] {
         let conv = emit_value(&net, target).unwrap();
         assert!(
             !conv

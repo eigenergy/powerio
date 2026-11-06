@@ -8,7 +8,7 @@ history, and extensions. A current document begins like this:
 {
   "schema": "pio-ir",
   "version": 2,
-  "producer": { "name": "powerio", "version": "0.11.7" },
+  "producer": { "name": "powerio", "version": "0.11.9" },
   "value": {
     "type": "powerio.BalancedNetwork",
     "data": {}
@@ -26,8 +26,8 @@ both sides consume PowerIO values, including calculation instances, solutions,
 time series, and scenario sets.
 
 The generated JSON Schema is checked in at
-`docs/schema/pio-ir/2/0.11.7/schema.json` and served from
-`https://powerio.dev/schema/pio-ir/2/0.11.7/schema.json`. That schema, the
+`docs/schema/pio-ir/2/0.11.8/schema.json` and served from
+`https://powerio.dev/schema/pio-ir/2/0.11.8/schema.json`. That schema, the
 serializer, and the deserializer are all tested from the same Rust types.
 `docs/schema/README.md` lists the earlier `pio-package` and
 `powerio.module` documents as one history under `pio-ir`.
@@ -189,7 +189,7 @@ only when an existing representation changes incompatibly. `producer.version` re
 that wrote the document; the reader reports it and ignores it when deciding
 compatibility.
 
-PowerIO 0.11.7 keeps IR version 2. `powerio::IR_VERSION` and
+PowerIO 0.11.9 keeps IR version 2. `powerio::IR_VERSION` and
 `powerio::IR_MIN_VERSION` are both `2`. Additive structural types do not change
 the IR version: older readers continue to accept existing types and reject
 types they do not implement. A list of allowed names, or a union of
@@ -216,6 +216,9 @@ and statements for kV qualifiers and pre/post voltage bands, and
 `pio-ir/2/0.11.7/schema.json` adds the AC optimal transmission switching
 instance and solution types, the `branch_switching_cost` objective term, and
 the optional `hvdc_treatment` field of `DcPfInstance` and `AcPfInstance`.
+The current `pio-ir/2/0.11.8/schema.json` adds the `ravens-json` and
+`pmd-math-json` source-format names and leaves the 0.11.7 file unchanged. The
+IR version stays 2, and the C ABI is unchanged.
 Existing source, monitor, and power flow instance representations remain
 accepted; published snapshots stay frozen.
 The release in that path identifies the snapshot, not another

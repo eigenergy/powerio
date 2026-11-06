@@ -13,12 +13,24 @@ impl DssWriter {
         // Retained impedance declarations (including PMD matrices) follow
         // the existing source-aware path. Open contacts need no cancellation.
         if sw.open
-            || !sw.extras.is_empty()
+            || sw.extras.keys().any(|key| {
+                !matches!(
+                    key.as_str(),
+                    "ravens_mrid"
+                        | "cim_mrid"
+                        | "ravens_switch_class"
+                        | "cim_class"
+                        | "ravens_normal_open"
+                )
+            })
             || sw.terminal_map_from.is_empty()
             || sw.terminal_map_from.len() != sw.terminal_map_to.len()
         {
             return false;
         }
+        // Identity and normal-open metadata do not add electrical impedance.
+        // Report their omission just as the ordinary line path does.
+        let _ = self.extras_tail("line", &sw.name, &sw.extras);
         let mut name = format!("_pio_switch_{}", sw.name);
         while !used.insert(name.to_ascii_lowercase()) {
             name.push('_');

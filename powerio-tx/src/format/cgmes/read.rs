@@ -2103,6 +2103,7 @@ fn build(
 
     warn_regenerated_subordinate_identities(store, mapper.warnings);
     let detailed = build_detailed_connectivity(&mut mapper, version, equipment_reactive_limits)?;
+    apply_bus_voltage_limits(&mut buses, &detailed.voltage_levels, mapper.warnings)?;
 
     let base_frequency = store
         .of_class("BaseFrequency")
@@ -2139,6 +2140,66 @@ fn build(
     net.check_references(FMT)?;
     warn_unmapped(store, mapper.warnings);
     Ok(net)
+}
+
+/// VoltageLevel limits constrain each member calculation bus too. Keeping the
+/// kV limits only in detailed connectivity silently resets flat exports and
+/// optimization consumers to Bus::new's 0.9/1.1 defaults.
+fn apply_bus_voltage_limits(
+    buses: &mut [Bus],
+    levels: &[VoltageLevel],
+    warnings: &mut CgmesDiagnostics,
+) -> Result<()> {
+    let mut limits = BTreeMap::<BusId, (Option<f64>, Option<f64>)>::new();
+    for level in levels {
+        for id in &level.buses {
+            let bounds = limits.entry(*id).or_default();
+            if let Some(low) = level.low_voltage_limit_kv {
+                bounds.0 = Some(bounds.0.map_or(low, |old| old.max(low)));
+            }
+            if let Some(high) = level.high_voltage_limit_kv {
+                bounds.1 = Some(bounds.1.map_or(high, |old| old.min(high)));
+            }
+        }
+    }
+    for bus in buses {
+        let Some((low, high)) = limits.get(&bus.id) else {
+            continue;
+        };
+        if !bus.base_kv.is_finite() || bus.base_kv <= 0.0 {
+            return Err(Error::FormatRead {
+                format: FMT,
+                message: format!(
+                    "bus {} has invalid nominal voltage {} kV for voltage limits",
+                    bus.id, bus.base_kv
+                ),
+            });
+        }
+        let next_low = low.map_or(bus.vmin, |value| value / bus.base_kv);
+        let next_high = high.map_or(bus.vmax, |value| value / bus.base_kv);
+        if (low.is_none() || high.is_none()) && next_low > next_high {
+            warnings.push_as(&codes::READ_CGMES_VALUE_APPROXIMATED, format!("bus {} has a one-sided voltage limit incompatible with the calculation view's default opposite bound; the exact kV limit remains in detailed connectivity and the calculation view retains [{}, {}] pu", bus.id, bus.vmin, bus.vmax));
+            continue;
+        }
+        if let (Some(low), Some(high)) = (low, high)
+            && low > high
+        {
+            return Err(Error::FormatRead {
+                format: FMT,
+                message: format!(
+                    "bus {} belongs to voltage levels with incompatible limits [{low}, {high}] kV",
+                    bus.id
+                ),
+            });
+        }
+        if let Some(low) = low {
+            bus.vmin = low / bus.base_kv;
+        }
+        if let Some(high) = high {
+            bus.vmax = high / bus.base_kv;
+        }
+    }
+    Ok(())
 }
 
 fn component_id(kind: &str, id: &str) -> Result<ComponentId> {

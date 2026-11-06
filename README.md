@@ -111,11 +111,6 @@ complete module for another PowerIO consumer to read back. It preserves the
 typed data and its history; retained source bytes stay in the running process.
 After deserialization, `emit` writes fresh output from the stored value.
 
-Upgrading from 0.10? Start with the
-[migration guide](https://eigenergy.github.io/powerio/guide/migration-0.11.html).
-PowerIO 0.11.7 keeps PowerIO IR version 2 and C ABI 7; these version numbers
-describe separate interfaces.
-
 ## Formats
 
 | Format | Token | Read | Write |
@@ -130,7 +125,7 @@ describe separate interfaces.
 | ENTSO-E UCTE-DEF `.uct` | `ucte` | 2003.09.01, 2007.05.01 | 2007.05.01 |
 | PowerWorld `.aux` | `powerworld` | yes | yes |
 | PowerWorld `.pwb` | `pwb` | yes | no |
-| PowerWorld `.pwd` display | `powerworld-pwd` | as a geographic layer | no |
+| PowerWorld `.pwd` display | `powerworld-pwd` | yes | no |
 | GE PSLF `.epc` | `pslf` | yes | yes |
 | IEEE Common Data Format | `ieee-cdf` | yes | no |
 | PowerModels JSON | `powermodels-json` | yes | yes |
@@ -138,11 +133,13 @@ describe separate interfaces.
 | pandapower JSON | `pandapower-json` | yes | yes |
 | PyPSA CSV directory | `pypsa-csv` | yes | yes |
 | Surge JSON | `surge-json` | yes | yes |
+| MG-RAVENS JSON, balanced and multiconductor profiles | `ravens-json` | yes | yes |
 | GridFM Parquet directory, `gridfm` feature | `gridfm` | yes | yes |
 | DOE GO Challenge 3 JSON | `goc3-json` | problem, or problem with solution | a complete solution |
 | DeepMind OPFData JSON | `opfdata-json` | yes | no |
 | OpenDSS `.dss` | `dss` | yes | yes |
-| PowerModelsDistribution engineering JSON | `pmd-json` | yes | yes |
+| PowerModelsDistribution ENGINEERING JSON | `pmd-json` | yes | yes |
+| PowerModelsDistribution MATHEMATICAL JSON | `pmd-math-json` | yes | yes |
 | BMOPF JSON | `bmopf-json`, `bmopf-json@0.1.0`, `bmopf-json@0.2.0` | 0.1.0, 0.2.0 | 0.1.0, 0.2.0 (default) |
 | Distribution CIM, CIM100 RDF/XML | `cim-dist` | cim17v40, one document or a directory | cim17v40, one document |
 | PSS SINCAL project, `sincal` feature | `sincal-balanced`, `sincal-multiconductor` | yes, with an explicit profile | an unchanged source byte for byte; an experimental fresh writer in Rust |
@@ -202,6 +199,7 @@ backend, and `default-features = false` leaves it out.
 - [Formats and fidelity](https://eigenergy.github.io/powerio/guide/format-fidelity.html)
 - [Matrices and graphs](https://eigenergy.github.io/powerio/guide/matrices.html)
 - [Rust, Python, Julia, and C](https://eigenergy.github.io/powerio/guide/languages.html)
+- [Migrating from 0.10](https://eigenergy.github.io/powerio/guide/migration-0.11.html)
 - [Rust API reference](https://eigenergy.github.io/powerio/powerio/)
 - [PowerIO.jl](https://eigenergy.github.io/PowerIO.jl)
 - [Contributing](https://github.com/eigenergy/powerio/blob/main/CONTRIBUTING.md)

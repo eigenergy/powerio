@@ -23,7 +23,7 @@ jobs:
     outputs:
       browser: ${{ steps.diff.outputs.browser }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         if: github.event_name == 'pull_request'
         with:
           fetch-depth: 2
@@ -50,7 +50,7 @@ jobs:
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -58,7 +58,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked -p powerio-wasm
       - run: cargo clippy --locked -p powerio-wasm --all-targets -- -D warnings
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -74,7 +74,7 @@ jobs:
         working-directory: apps/converter
       - run: npm run build:ui
         working-directory: apps/converter
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: powerio-converter-site
           path: apps/converter/dist
@@ -90,15 +90,15 @@ jobs:
       matrix:
         browser: [chromium, firefox, webkit]
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: apps/converter/package-lock.json
       - run: npm ci
         working-directory: apps/converter
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: powerio-converter-site
           path: apps/converter/dist
@@ -106,7 +106,7 @@ jobs:
         working-directory: apps/converter
       - run: npm run test:browser -- --project=${{ matrix.browser }}
         working-directory: apps/converter
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: converter-failures-${{ matrix.browser }}

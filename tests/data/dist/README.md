@@ -120,13 +120,59 @@ into the local Julia depot, is replaced with the package relative
 `test/data/opendss/case3_balanced.dss`. `case3_balanced.json` is 509 lines,
 8,283 bytes; `case3_balanced_multinetwork.json` is 994 lines, 20,121 bytes.
 
+### pmd/math/
+
+PMD MATHEMATICAL model exports beside the ENGINEERING documents they were
+transformed from, the oracle for the `pmd-math-json` reader and writer. All
+nine files are PowerModelsDistribution v0.16.0 `print_file` output (JSON.jl
+0.21.4, Julia 1.13.1) from the `.dss` cases of the same name in the PMD
+package's `test/data/opendss/`, read with PMD's defaults, so the MATHEMATICAL
+documents are Kron reduced:
+
+```julia
+using PowerModelsDistribution
+eng = parse_file(dss; data_model=ENGINEERING)
+print_file("<case>_eng.json", eng)
+print_file("<case>_math.json", transform_data_model(eng))
+```
+
+`case3_balanced_eng.json` is not repeated here: `../case3_balanced.json`
+above is that export. The one edit after `print_file` replaces each `files`
+entry, an absolute path into the local Julia depot, with the package relative
+`test/data/opendss/<case>.dss`.
+
+| File | Lines | Bytes |
+|---|---|---|
+| `case3_balanced_math.json` | 803 | 13,815 |
+| `case3_balanced_cap_eng.json` | 515 | 8,349 |
+| `case3_balanced_cap_math.json` | 857 | 14,657 |
+| `case3_unbalanced_switch_eng.json` | 723 | 11,770 |
+| `case3_unbalanced_switch_math.json` | 1,292 | 22,125 |
+| `case3_unbalanced_ZIPloads_eng.json` | 526 | 8,450 |
+| `case3_unbalanced_ZIPloads_math.json` | 1,031 | 18,089 |
+| `ut_trans_2w_yy_eng.json` | 651 | 10,940 |
+| `ut_trans_2w_yy_math.json` | 1,601 | 26,993 |
+
+## ravens/
+
+MG-RAVENS multiconductor JSON example from the schema project, vendored
+unchanged as the reader/writer round-trip fixture.
+
+- Source: <https://github.com/lanl-ansi/MG-RAVENS>, commit
+  `094ad1163cb111df676884635aa03faa0538b688`, file
+  `examples/case3_balanced.json` (a three-bus, two-line,
+  three-single-phase-load feeder with a Thevenin `EnergySource`).
+- `case3_balanced.json` sha256
+  `4a66f801aa2506562b8611215314d36d000055d4ac9a1bec7ee84693e0b9e6e7`
+
 ## Licensing
 
 Each directory carries its own license file next to the data it covers:
 `bmopf/License.md`, `opendss/License.txt` (the BSD 3 clause notice retained
 from the upstream distribution), `micro/License.md` (CC BY 4.0),
-`cim/License.md` (MIT OR Apache-2.0), and `pmd/License.md` (derivatives carry
-their sources' licenses). The repository
+`cim/License.md` (MIT OR Apache-2.0), `pmd/License.md` (derivatives carry
+their sources' licenses), and `ravens/License.md` (the MG-RAVENS Apache-2.0
+notice, Copyright 2020 Triad National Security, LLC). The repository
 code license does not apply to vendored data.
 
 The two BMOPF examples carry different licenses, so `bmopf/License.md` states

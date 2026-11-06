@@ -265,7 +265,11 @@ impl DssWriter {
                     name.push('_');
                 }
                 let head = if count == 0 {
-                    let circuit = net.name().as_deref().unwrap_or("converted");
+                    let circuit = net
+                        .name()
+                        .as_deref()
+                        .filter(|n| !n.trim().is_empty())
+                        .unwrap_or("converted");
                     self.check_name("circuit", circuit);
                     format!("New Circuit.{circuit}")
                 } else {
@@ -303,7 +307,11 @@ impl DssWriter {
         if count == 0 {
             // A DSS circuit always constructs Vsource.source. Explicitly
             // disable it when the typed network states no voltage constraint.
-            let circuit = net.name().as_deref().unwrap_or("converted");
+            let circuit = net
+                .name()
+                .as_deref()
+                .filter(|n| !n.trim().is_empty())
+                .unwrap_or("converted");
             self.line_out(&format!("New Circuit.{circuit} enabled=no"));
         }
         self.out.push('\n');
