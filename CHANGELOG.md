@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- OpenDSS Transformer and XfmrCode winding arrays now leave the last winding
+  selected, matching native scalar-property replay and preserving the intended
+  winding resistance and neutral grounding (#813).
+
 - Add bounded collection manifests, explicit source-bundle scopes, deterministic rebuilt ZIP packaging, and structured collection/selection origins separate from electrical values.
 
 - Add explicit nested collection ZIP inspection with isolated namespaces, shared cumulative entry/expansion/work budgets, native ZIP layer accounting, and cooperative cancellation.

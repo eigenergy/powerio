@@ -154,6 +154,7 @@ impl State {
             for (w, v) in self.windings.iter_mut().zip(values) {
                 set_number(w, scalar, v);
             }
+            self.active = self.windings.len() - 1;
             if key == "kvas" {
                 self.ratings();
             }
@@ -211,6 +212,7 @@ impl State {
                 for (w, v) in self.windings.iter_mut().zip(items) {
                     w.delta = connection(&v)?;
                 }
+                self.active = self.windings.len() - 1;
             }
             "kvs" | "kvas" | "taps" | "%rs" | "xscarray" => self.apply_array(key, p, raw)?,
             "xhl" | "xht" | "xlt" | "x12" | "x13" | "x23" => {
