@@ -35,6 +35,29 @@ vi.mock('./artifacts', () => ({ download: vi.fn(), ArtifactStore: class {
   dispose() {}
 } }));
 import { ConverterController } from './controller';
+import { BlobReader, BlobWriter, ZipWriter } from '@zip.js/zip.js';
+
+async function archive(name: string, path: string) {
+  const zip = new ZipWriter(new BlobWriter(), { useWebWorkers: false });
+  await zip.add(path, new BlobReader(new Blob(['content'])));
+  return new File([await zip.close()], name);
+}
+
+test('ZIP roots stay distinct after display-name normalization and beside loose folders', async () => {
+  fake.discovery = true;
+  const controller = new ConverterController();
+  await controller.addEntries([
+    { path: 'study one.zip', file: await archive('study one.zip', 'master.dss') },
+    { path: 'study_one.zip', file: await archive('study_one.zip', 'shared.inc') },
+    { path: 'study_one/outside.inc', file: file('outside.inc') },
+  ]);
+  const master = controller.state.jobs.find(j => j.primary === 'master.dss')!;
+  const sibling = controller.state.jobs.find(j => j.primary === 'shared.inc')!;
+  expect(master.selection?.root).not.toBe(sibling.selection?.root);
+  expect(master.files).toEqual(['master.dss']);
+  expect(sibling.files).toEqual(['shared.inc']);
+  controller.dispose();
+});
 
 beforeEach(() => {
   fake.discovery = false;
