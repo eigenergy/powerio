@@ -181,7 +181,7 @@ customer classes (`ServiceLocation`, `UsagePoint`) and no CGMES
 | `NoLoadTest`, `TransformerCoreAdmittance` | the `%noloadloss` and `%imag` extras |
 | `EnergySource` | voltage sources, with the series impedance in `rs`/`xs` extras |
 | `WireInfo.ratedCurrent` of a segment's `PowerSystemResource.AssetDatasheet` | the segment's ampacity, `i_max` on each conductor |
-| `Diagram` with its `DiagramObject`s and `DiagramObjectPoint`s | coordinates: a segment's points, in `sequenceNumber` order, are its route, the first at terminal 1. A connectivity node has no diagram object, so its bus takes the end of the first segment there, else the point of other equipment at it or of the composite switch that holds a switch; bus locations are marked derived |
+| `Diagram` with its `DiagramObject`s and `DiagramObjectPoint`s | coordinates: a segment's points, in `sequenceNumber` order, are its route, the first at terminal 1. A connectivity node takes its own drawing, else that of a terminal there: one point is a stated bus location, and the centroid of several is derived. Without either, its bus takes the end of the first segment there, else the point of other equipment at it or of the composite switch that holds a switch; these are derived. A drawing that places nothing is reported unmapped with its points |
 
 `SinglePhaseKind` A, B, C, and N map to terminals 1, 2, 3, and 4, and the
 split phase s1 and s2 to 1 and 2. A conductor beyond those four has no CIM
@@ -190,11 +190,14 @@ phase, so the writer reports it. An enumeration written as text
 state it, reads like the reference form.
 
 One `Diagram` gives the coordinates: the first whose name or description
-names an `EPSG:` code, else the first. A named code makes them projected
-coordinates in that CRS (geographic for EPSG:4326), and a diagram without
-one is a drawing. PowerIO does not reproject: the network's `geo` metadata
-names the CRS, and a geographic layer applied with `apply_geo_layer`
-replaces the coordinates with reprojected ones.
+names an `EPSG:` code, else the first. A code known to be geographic
+(EPSG:4326, EPSG:4258, and other widely used ones) reads as x = longitude and
+y = latitude. Any other code is projected when a coordinate lies outside the
+range of degrees. Otherwise the coordinates fit either reading, so the space
+stays undeclared with a `READ.CIM_DIST.VALUE_UNSUPPORTED` finding naming the
+code. A diagram without a code is a drawing. PowerIO does not reproject: the
+network's `geo` metadata names the CRS, and a geographic layer applied with
+`apply_geo_layer` replaces the coordinates with reprojected ones.
 
 Without a `BaseFrequency`, a CIM16 document set reads at 50 Hz, the ENTSO-E
 default the CGMES reader also assumes, while CIM100 keeps 60 Hz. Either

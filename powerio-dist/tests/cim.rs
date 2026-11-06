@@ -1887,6 +1887,11 @@ fn cim16_layout() -> String {
     text
 }
 
+/// [`cim16_feeder`] with more drawings in its diagram.
+fn cim16_feeder_with(drawings: &str) -> String {
+    cim16_feeder().replace("</rdf:RDF>", &format!("{drawings}</rdf:RDF>"))
+}
+
 /// A source at the head, a cable to a cabinet, three single phase fuses in a
 /// composite switch to a house, one fuse on phase B to a flat, a consumer at
 /// each, and the customer classes for the house.
@@ -2070,6 +2075,164 @@ fn a_cim16_feeder_converts_to_every_distribution_format() {
         emit_value(&back, DistTargetFormat::CimDist).text,
         first.text
     );
+}
+
+#[test]
+fn a_named_geographic_crs_reads_as_longitude_and_latitude() {
+    use powerio_dist::CoordinateSpace;
+
+    let net = parse_str(
+        &cim16_feeder().replace("EPSG:3857", "EPSG:4258"),
+        "cim-dist",
+    )
+    .unwrap();
+    assert_eq!(
+        net.geo().clone().unwrap().space,
+        CoordinateSpace::Geographic {
+            crs: Some("EPSG:4258".into())
+        }
+    );
+    let pmd: serde_json::Value =
+        serde_json::from_str(&emit_value(&net, DistTargetFormat::PmdJson).text).unwrap();
+    assert!(
+        pmd["bus"]
+            .as_object()
+            .unwrap()
+            .values()
+            .any(|bus| bus.get("lon").is_some()),
+        "PMD carries the coordinates: {pmd:#}"
+    );
+}
+
+#[test]
+fn an_unrecognized_crs_is_not_assumed_to_be_projected() {
+    use powerio_dist::CoordinateSpace;
+
+    // Metres cannot be degrees, so an unknown code with them is planar.
+    let planar = parse_str(
+        &cim16_feeder().replace("EPSG:3857", "EPSG:99999"),
+        "cim-dist",
+    )
+    .unwrap();
+    assert_eq!(
+        planar.geo().clone().unwrap().space,
+        CoordinateSpace::Projected {
+            crs: Some("EPSG:99999".into())
+        }
+    );
+
+    // Coordinates that fit degrees leave an unknown code undecided.
+    let mut text = cim16_feeder().replace("EPSG:3857", "EPSG:99999");
+    for (metres, degrees) in [
+        (">1000<", ">14.1<"),
+        (">1010<", ">14.2<"),
+        (">1020<", ">14.3<"),
+        (">1021<", ">14.4<"),
+        (">1022<", ">14.5<"),
+        (">2000<", ">45.1<"),
+        (">2005<", ">45.2<"),
+        (">2000.5<", ">45.3<"),
+        (">1999<", ">45.4<"),
+    ] {
+        text = text.replace(metres, degrees);
+    }
+    let net = parse_str(&text, "cim-dist").unwrap();
+    assert_eq!(net.geo().clone().unwrap().space, CoordinateSpace::Unknown);
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.starts_with("READ.CIM_DIST.VALUE_UNSUPPORTED") && w.contains("EPSG:99999")),
+        "{:#?}",
+        net.warnings
+    );
+}
+
+#[test]
+#[allow(clippy::float_cmp)] // the source coordinates are the assertion
+fn node_and_terminal_drawings_state_bus_locations() {
+    use powerio_dist::DistCoordsKind;
+
+    // The cabinet node's own drawing outranks the segment end there. The
+    // house takes the drawing of a terminal there, and the flat a node
+    // drawing of several points, whose centroid is derived.
+    let mut drawings = cim16_drawing("CN_CABINET", &[(1, 1_500.0, 2_500.0)]);
+    drawings.push_str(&cim16_drawing("FU1_t2", &[(1, 1_600.0, 2_600.0)]));
+    drawings.push_str(&cim16_drawing(
+        "CN_FLAT",
+        &[(1, 1_700.0, 2_700.0), (2, 1_710.0, 2_710.0)],
+    ));
+    let net = parse_str(&cim16_feeder_with(&drawings), "cim-dist").unwrap();
+    let at = |id: &str| {
+        let bus = net.buses().iter().find(|b| b.id == id).unwrap();
+        let location = bus.location.unwrap();
+        (location.x, location.y, location.kind)
+    };
+    assert_eq!(
+        at("CN_CABINET"),
+        (1_500.0, 2_500.0, Some(DistCoordsKind::Source))
+    );
+    assert_eq!(
+        at("CN_HOUSE"),
+        (1_600.0, 2_600.0, Some(DistCoordsKind::Source))
+    );
+    assert_eq!(
+        at("CN_FLAT"),
+        (1_705.0, 2_705.0, Some(DistCoordsKind::Derived))
+    );
+    assert!(
+        !net.warnings
+            .iter()
+            .any(|w| w.starts_with("READ.CIM_DIST.CLASS_UNMAPPED") && w.contains(" DiagramObject")),
+        "{:#?}",
+        net.warnings
+    );
+}
+
+#[test]
+fn a_drawing_that_places_nothing_is_reported() {
+    // A drawing of the circuit and a second object for the segment reach no
+    // coordinate of the network.
+    let mut drawings = cim16_drawing("FEEDER_1", &[(1, 1_500.0, 2_500.0)]);
+    drawings.push_str(
+        &cim16_drawing("AC1", &[(1, 1_600.0, 2_600.0), (2, 1_610.0, 2_610.0)])
+            .replace("_DO_AC1", "_DO_AC1_AGAIN")
+            .replace("_DOP_AC1", "_DOP_AC1_AGAIN"),
+    );
+    let net = parse_str(&cim16_feeder_with(&drawings), "cim-dist").unwrap();
+    let unmapped = |class: &str, count: usize| {
+        net.warnings.iter().any(|w| {
+            w.starts_with("READ.CIM_DIST.CLASS_UNMAPPED")
+                && w.contains(&format!("{count} {class} object"))
+        })
+    };
+    assert!(unmapped("DiagramObject", 2), "{:#?}", net.warnings);
+    assert!(unmapped("DiagramObjectPoint", 3), "{:#?}", net.warnings);
+}
+
+#[test]
+fn a_layout_that_places_nothing_leaves_no_coordinates() {
+    let text = cim16_feeder();
+    let start = text.find(r#"  <cim:Diagram rdf:ID="_GIS">"#).unwrap();
+    let end = text.find("</rdf:RDF>").unwrap();
+    let layout = format!(
+        "{}{}",
+        r#"  <cim:Diagram rdf:ID="_GIS"><cim:IdentifiedObject.name>EPSG:3857</cim:IdentifiedObject.name></cim:Diagram>
+"#,
+        cim16_drawing("FEEDER_1", &[(1, 1_500.0, 2_500.0)])
+    );
+    let text = format!("{}{layout}{}", &text[..start], &text[end..]);
+    let net = parse_str(&text, "cim-dist").unwrap();
+    assert!(net.geo().is_none());
+    for class in ["Diagram", "DiagramObject", "DiagramObjectPoint"] {
+        assert!(
+            net.warnings.iter().any(|w| {
+                w.starts_with("READ.CIM_DIST.CLASS_UNMAPPED")
+                    && w.contains(&format!("1 {class} object"))
+            }),
+            "{class}: {:#?}",
+            net.warnings
+        );
+    }
 }
 
 #[test]

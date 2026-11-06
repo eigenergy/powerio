@@ -10,7 +10,9 @@
   a single phase fuse is no longer read as a three phase switch. A segment
   takes its ampacity from the `WireInfo.ratedCurrent` its `AssetDatasheet`
   names, and the Diagram Layout gives segment routes and bus locations in
-  the coordinate reference system the diagram names. A CIM16 document set
+  the coordinate reference system the diagram names, taking a node's or
+  terminal's own drawing first and reporting a drawing that places nothing.
+  A CIM16 document set
   without a `BaseFrequency` reads at 50 Hz. `Circuit`, `CompositeSwitch`,
   and `PSRType` are reported as context.
 
