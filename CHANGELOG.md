@@ -6,6 +6,13 @@
 
 **PSS/E**
 
+- CZ=2 and CZ=3 two winding impedances are read on the bus voltage base
+  again, converting only the MVA base. PSS/E states R1-2 and X1-2 on the
+  winding voltage base under every CZ, the same base CZ=1 uses, and uses
+  NOMV1 only for CW 2/3 ratios and CM 2 magnetizing data, so the
+  `(NOMV1 / bus base kV)²` factor 0.11.8 applied (#782) described another
+  circuit, a near short circuit where NOMV1 states the other winding's
+  voltage. The circuit tests #782 added stay, pinned to this reading.
 - A two winding transformer with a nonzero magnetizing admittance records
   the factor its reader applied (the square of the tap) as
   `psse_magnetizing_referral` in its extras. The writer divides by the
