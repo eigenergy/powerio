@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add owned C collection handles, bounded folder/ZIP/memory acquisition, metadata inspection, and selected parsing into typed modules, with a matching Julia companion.
+
 - Python `Collection` inspects bounded ZIP/folder/memory inventories and parses
   independent selections with typed modules, dependencies and explicit lifetime.
 

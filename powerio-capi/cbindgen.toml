@@ -36,6 +36,7 @@ header = """
  */"""
 
 after_includes = """
+typedef struct PioCollection PioCollection;
 typedef struct PioArtifact PioArtifact;
 typedef struct PioActivePower PioActivePower;
 typedef struct PioAcOpfPreparation PioAcOpfPreparation;
