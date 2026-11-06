@@ -720,9 +720,19 @@ impl Source {
     /// hands over the resolved result. An in-memory source consults the
     /// buffers the caller supplied.
     pub fn root_buffer(&self, name: &str) -> Result<SourceBuffer, Error> {
+        self.root_buffer_with_limit(name, u64::MAX)
+    }
+
+    /// Acquire a root-relative buffer under an additional per-read byte limit.
+    /// The limit applies before allocation and to already cached buffers.
+    pub fn root_buffer_with_limit(
+        &self,
+        name: &str,
+        max_bytes: u64,
+    ) -> Result<SourceBuffer, Error> {
         match &*self.provider {
             SourceProvider::Tree(view) => view
-                .buffer(name, u64::MAX)
+                .buffer(name, max_bytes)
                 .map_err(|error| error.with_source(self.clone())),
             SourceProvider::Memory { named, .. } => {
                 let segments = resolve_segments(&[], name)?;
@@ -741,11 +751,16 @@ impl Source {
             | SourceProvider::Directory { acquisition } => {
                 let segments = resolve_segments(&[], name)?;
                 acquisition
-                    .acquire(&segments)
+                    .acquire_with_limit(&segments, max_bytes)
                     .map_err(|error| error.with_source(self.clone()))
             }
         }
-        .map(|buffer| self.observe_dependency(buffer))
+        .and_then(|buffer| {
+            if buffer.bytes().len() as u64 > max_bytes {
+                return Err(ReadBudget::ReferencedBuffer(max_bytes).exceeded(name));
+            }
+            Ok(self.observe_dependency(buffer))
+        })
     }
 
     /// The canonical root selected with [`Source::with_acquisition_root`],

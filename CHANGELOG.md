@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Inspect bounded ZIP/folder collections and explicitly select independent
+  standalone inputs or OpenDSS masters over shared immutable companions.
+
 - Add shared `SourceTree` file and directory views with explicit admission limits
   and independent successful-read dependency tracking for each selection (#774).
 - CGMES and SINCAL share bounded ZIP acquisition primitives while preserving
