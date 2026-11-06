@@ -4,6 +4,9 @@
 
 - Add shared `SourceTree` file and directory views with explicit admission limits
   and independent successful-read dependency tracking for each selection (#774).
+- CGMES and SINCAL share bounded ZIP acquisition primitives while preserving
+  their format-specific namespace, diagnostic, and source replay policies.
+
 - Add `powerio-archive`: bounded ZIP indexing and verified member reads with
   explicit limits and namespace checks, as shared infrastructure for #774.
 
