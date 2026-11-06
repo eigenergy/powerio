@@ -1005,7 +1005,7 @@ dependencies = [
 
 [[package]]
 name = "facade-only"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "powerio",
 ]
@@ -2412,7 +2412,7 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
 name = "powerio"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "arrow",
  "bytes",
@@ -2434,7 +2434,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-capi"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "powerio",
  "powerio-core",
@@ -2451,7 +2451,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-cli"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "anyhow",
  "clap",
@@ -2478,7 +2478,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-core"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "errno",
  "libc",
@@ -2490,7 +2490,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-dist"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "jsonschema",
  "libc",
@@ -2511,7 +2511,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-matrix"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "approx",
  "arrow",
@@ -2537,7 +2537,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-prob"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "powerio-core",
  "powerio-dist",
@@ -2550,7 +2550,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-py"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "mimalloc",
  "powerio",
@@ -2568,7 +2568,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-synth"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "powerio-tx",
  "rand 0.10.3",
@@ -2578,7 +2578,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-tnd"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "num-complex",
  "powerio-core",
@@ -2595,7 +2595,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-tx"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "criterion",
  "lexical-core",
@@ -2614,7 +2614,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-wasm"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "powerio",
  "rusqlite",
