@@ -109,3 +109,29 @@ returns metadata; `parse(collection, selection)` returns `CollectionResult`
 with a typed `PioModule{T}`. `close(collection)` releases its handle and `copy`
 retains an independent handle. These additions do not change ABI 7 or serialize
 electrical values to provide typed access.
+
+## Explicit nested ZIPs and session budgets
+
+`collection.open_nested("child.zip")` opens exactly one child. Discovery never
+recurses automatically. The child has its own file namespace, so it cannot find
+a missing dependency in its parent or a sibling. The default is two ZIP decoding
+layers, including a native `.sinx` or CGMES ZIP decoded by its adapter. A memory
+folder starts at zero layers; opening the outer transport ZIP consumes one.
+Native interpretation stays with the existing adapter, with a bounded payload
+verification pass before delegation.
+
+Cloned handles and all descendants share monotonic entry, expansion, and work
+counters. Reopening a child and reparsing a native container consume budget
+again. The byte/file caps cover the complete acquisition session, including
+opaque native members, rather than resetting in each child. `work_bytes`
+(default 256 MiB) conservatively charges scoped parser inputs and decompression;
+it is not a measure of model/Arrow memory or a replacement for parser limits.
+A failed operation can consume work. Start a new explicitly bounded collection
+for a new session, or set higher Rust `CollectionLimits` before acquisition.
+
+`Cancellation` can be supplied to `from_zip_cancellable` and obtained through
+`cancellation()`. It is checked during discovery and between decompressor reads.
+Already returned modules remain valid. Synchronous electrical parsing retains
+its existing bounds; browser callers can terminate the worker to interrupt it.
+The initial Python/C/Julia APIs retain their bounded defaults; nested inspection
+is exposed first through the Rust collection API.
