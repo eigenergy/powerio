@@ -2418,6 +2418,7 @@ dependencies = [
  "bytes",
  "num-complex",
  "parquet",
+ "powerio-archive",
  "powerio-core",
  "powerio-dist",
  "powerio-matrix",
