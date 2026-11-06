@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Preserve absent OpenDSS line ampacity instead of materializing the engine's 600 A default as a typed BMOPF `i_max`; retain explicitly declared and inherited emergency ratings (#762).
+- Preserve absent OpenDSS line ampacity instead of materializing the engine's 600 A default as a typed BMOPF `i_max` or PMD `cm_ub`; retain explicitly declared and inherited emergency ratings (#762). PowerIO intentionally treats these engine defaults as void, which differs from PowerModelsDistribution's parser behaviour.
 
 - Reject nonzero RAVENS transformer impedance or no-load loss when its input
   voltage, rating or test power base is unusable, instead of reading it as an
