@@ -438,12 +438,17 @@ test('unchanged CGMES archives download as the original ZIP', async ({ page }) =
   await page.getByRole('button', { name: /Download case9.m as CIM CGMES/ }).click();
   const archive = await downloadBytes(await first);
   await page.getByRole('button', { name: 'Clear all', exact: true }).click();
-  await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'network.zip', mimeType: 'application/zip', buffer: archive });
+  await page.getByLabel('Choose power system files', { exact: true }).setInputFiles([
+    { name: 'network.zip', mimeType: 'application/zip', buffer: archive },
+    { name: 'network.zip', mimeType: 'application/zip', buffer: archive },
+  ]);
   await inspectQueued(page);
-  await expect(page.getByText('Ready to convert', { exact: true })).toBeVisible();
+  await expect(page.getByText('Ready to convert', { exact: true })).toHaveCount(2);
   await page.getByRole('button', { name: 'Convert', exact: true }).click();
   const second = page.waitForEvent('download');
-  await page.getByRole('button', { name: /Download network.zip as CIM CGMES/ }).click();
+  const downloads = page.getByRole('button', { name: /Download network.zip as CIM CGMES/ });
+  await expect(downloads).toHaveCount(2);
+  await downloads.first().click();
   const echoed = await second;
   expect(echoed.suggestedFilename()).toBe('network.zip');
   expect(await downloadBytes(echoed)).toEqual(archive);
@@ -640,6 +645,37 @@ test('ZIP masters cannot acquire a missing include from another upload', async (
   await page.getByRole('button', { name: 'Convert', exact: true }).click();
   await expect(page.getByRole('button', { name: /^Download valid.m as / })).toBeEnabled();
   await expect(broken.getByRole('button', { name: /^Download .* as / })).toHaveCount(0);
+});
+
+test('ZIPs with colliding display names keep their companions isolated', async ({ page }) => {
+  const first = new ZipWriter(new Uint8ArrayWriter(), { useWebWorkers: false });
+  await first.add('master.dss', new Uint8ArrayReader(Buffer.from('New Circuit.isolated basekv=12.47\nRedirect shared.inc\n')));
+  const second = new ZipWriter(new Uint8ArrayWriter(), { useWebWorkers: false });
+  await second.add('shared.inc', new Uint8ArrayReader(Buffer.from('New Load.l bus1=sourcebus phases=3 kv=12.47 kw=10 kvar=2\n')));
+  await second.add('valid.m', new Uint8ArrayReader(case9));
+  await ready(page);
+  await page.getByLabel('Choose power system files', { exact: true }).setInputFiles([
+    { name: 'study one.zip', mimeType: 'application/zip', buffer: Buffer.from(await first.close()) },
+    { name: 'study_one.zip', mimeType: 'application/zip', buffer: Buffer.from(await second.close()) },
+  ]);
+  await inspectQueued(page);
+  const broken = page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'master.dss', exact: true }) });
+  await expect(broken.getByText('Needs files', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Convert', exact: true }).click();
+  await expect(page.getByRole('button', { name: /^Download valid.m as / })).toBeEnabled();
+  await expect(broken.getByRole('button', { name: /^Download .* as / })).toHaveCount(0);
+});
+
+test('an XML-only transport ZIP loads independent XIIDM cases', async ({ page }) => {
+  const network = await readFile(`${root}tests/data/xiidm/powsybl/V1_17/eurostag-tutorial1-lf.xml`);
+  const zip = new ZipWriter(new Uint8ArrayWriter(), { useWebWorkers: false });
+  for (const name of ['one.xml', 'two.xml']) await zip.add(name, new Uint8ArrayReader(network));
+  await ready(page);
+  await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'networks.zip', mimeType: 'application/zip', buffer: Buffer.from(await zip.close()) });
+  await inspectQueued(page);
+  await expect(page.getByText('Ready to convert', { exact: true })).toHaveCount(2);
+  await page.getByRole('button', { name: 'Convert', exact: true }).click();
+  for (const name of ['one.xml', 'two.xml']) await expect(page.getByRole('button', { name: new RegExp(`^Download ${name} as `) })).toBeEnabled();
 });
 
 
