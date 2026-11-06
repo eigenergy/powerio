@@ -230,6 +230,8 @@ pub use powerio_matrix as matrix;
 #[path = "gridfm.rs"]
 pub mod __gridfm;
 pub mod codes;
+pub mod collection;
+pub use collection::{Collection, CollectionLimits, CollectionSelection};
 mod formats;
 pub use formats::{FormatInfo, GridFormatInfo, NetworkFamily, grid_formats, resolve_format};
 #[cfg(feature = "gridfm")]

@@ -1,0 +1,409 @@
+//! Bounded collections with independent, explicitly selected parser inputs.
+//!
+//! Inspection classifies files without parsing electrical values. Candidates
+//! may overlap: a companion is never removed from the independent inventory.
+//! Acquisition verifies every ZIP payload once; it does not recursively open
+//! transport ZIPs. Parser state and dependency observations are per selection.
+
+use crate::format::routing::{Detection, JsonClass, classify_json_bytes};
+use crate::{
+    ArtifactPath, Error, FormatId, ParseOptions, PioModule, PioValue, Result, Source, SourceTree,
+    SourceTreeLimits,
+};
+pub use powerio_archive::ArchiveLimits;
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+use std::sync::Arc;
+
+/// Stable collection failures, independent of electrical parser findings.
+pub mod codes {
+    powerio_core::diagnostic_codes! {
+        SELECTION = "REQUEST.COLLECTION.SELECTION", Error,
+            "the collection selection is invalid or incomplete", category = Request;
+        LIMIT = "READ.COLLECTION.LIMIT", Error,
+            "collection acquisition or inspection exceeds its budget", category = Data;
+    }
+}
+fn selection_error(message: impl Into<String>) -> Error {
+    Error::new(&codes::SELECTION, message)
+}
+
+/// Explicit host limits. Parser/model limits remain independently active.
+#[derive(Clone, Copy, Debug)]
+pub struct CollectionLimits {
+    pub tree: SourceTreeLimits,
+    pub archive: ArchiveLimits,
+    /// Maximum bytes examined per classification probe.
+    pub probe_bytes: u64,
+    /// Maximum bytes examined by all classification probes together.
+    pub inspection_bytes: u64,
+}
+impl Default for CollectionLimits {
+    fn default() -> Self {
+        Self {
+            tree: SourceTreeLimits::new(4096, 64 << 20, 64).expect("valid defaults"),
+            archive: ArchiveLimits::default(),
+            probe_bytes: 1 << 20,
+            inspection_bytes: 8 << 20,
+        }
+    }
+}
+
+/// One file, including unrecognized assets retained for explicit selection.
+#[derive(Clone, Debug, Serialize)]
+pub struct CollectionEntry {
+    pub path: String,
+    pub bytes: u64,
+}
+
+/// The operation to perform; stored PowerIO IR is never grid-format parsing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CollectionOperation {
+    #[default]
+    Parse,
+    Deserialize,
+}
+
+/// An explicit primary relative to a permitted root. `None` means collection
+/// root. Nonstandard file names work with an explicit format. DSS/GLM can read
+/// companions throughout the root; standalone formats receive only the primary.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CollectionSelection {
+    pub root: Option<String>,
+    pub primary: Option<String>,
+    pub format: Option<String>,
+    #[serde(default)]
+    pub operation: CollectionOperation,
+}
+impl CollectionSelection {
+    #[must_use]
+    pub fn file(primary: impl Into<String>) -> Self {
+        Self {
+            primary: Some(primary.into()),
+            ..Self::default()
+        }
+    }
+    pub(super) fn format_token(&self) -> Option<&str> {
+        self.format
+            .as_deref()
+            .map(|name| crate::resolve_format(name).map_or(name, |format| format.token))
+    }
+
+    pub(super) fn has_companions(&self) -> bool {
+        match self.format_token() {
+            Some("dss" | "gridlabd" | "gridlabd-arras") => true,
+            Some(_) => false,
+            None => self.primary.as_deref().is_some_and(|name| {
+                name.rsplit_once('.').is_some_and(|(_, ext)| {
+                    ext.eq_ignore_ascii_case("dss") || ext.eq_ignore_ascii_case("glm")
+                })
+            }),
+        }
+    }
+
+    #[must_use]
+    pub fn format(mut self, format: impl Into<String>) -> Self {
+        self.format = Some(format.into());
+        self
+    }
+}
+
+/// Discovery readiness is not dependency completeness or solver suitability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CandidateStatus {
+    Selectable,
+    NeedsOptions,
+    NeedsFormat,
+    ProbeLimit,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct CollectionCandidate {
+    pub selection: CollectionSelection,
+    pub status: CandidateStatus,
+}
+
+/// Parsed selections remain independent modules, including their parser-defined
+/// time/scenario structure. A successful parse does not certify study completeness.
+#[derive(Debug)]
+pub struct CollectionResult {
+    pub module: PioModule<PioValue>,
+    pub dependencies: Vec<String>,
+    /// Missing references reported as warnings by an adapter.
+    pub incomplete: bool,
+}
+
+/// Shared immutable collection bytes. Cloning shares payload allocations.
+///
+/// ```no_run
+/// use powerio::{Collection, CollectionLimits, CollectionSelection, ParseOptions};
+/// let collection = Collection::from_directory("study", CollectionLimits::default())?;
+/// for candidate in collection.inspect()? {
+///     println!("{:?}", candidate);
+/// }
+/// let selection = CollectionSelection::file("masters/weekday.dss").format("dss");
+/// let result = collection.parse(&selection, &ParseOptions::default())?;
+/// println!("observed dependencies: {:?}", result.dependencies);
+/// # Ok::<(), powerio::Error>(())
+/// ```
+#[derive(Clone, Debug)]
+pub struct Collection {
+    tree: SourceTree,
+    inventory: Arc<[CollectionEntry]>,
+    limits: CollectionLimits,
+    name: String,
+    original: Option<Arc<[u8]>>,
+}
+impl Collection {
+    /// Admit a named memory tree. Does not execute a parser or read the host.
+    pub fn from_files(
+        name: impl Into<String>,
+        files: impl IntoIterator<Item = (ArtifactPath, Arc<[u8]>)>,
+        limits: CollectionLimits,
+    ) -> Result<Self> {
+        let name = name.into();
+        let tree = SourceTree::new(&name, files, limits.tree)?;
+        let source = tree.source(None, None, limits.tree)?;
+        let inventory = source
+            .entry_names()?
+            .into_iter()
+            .map(|path| {
+                let bytes = source.buffer(&path)?.bytes().len() as u64;
+                Ok(CollectionEntry {
+                    path: path.to_string(),
+                    bytes,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into();
+        Ok(Self {
+            tree,
+            inventory,
+            limits,
+            name,
+            original: None,
+        })
+    }
+
+    /// Fully verify a bounded ZIP once. Original container and member bytes are
+    /// retained separately. Nested containers remain ordinary opaque members.
+    pub fn from_zip(
+        name: impl Into<String>,
+        bytes: Arc<[u8]>,
+        limits: CollectionLimits,
+    ) -> Result<Self> {
+        let mut archive = powerio_archive::Archive::open(Arc::clone(&bytes), limits.archive)?;
+        let entries = archive
+            .entries()
+            .filter(|e| !e.is_directory())
+            .map(|e| (e.path().clone(), e.size()))
+            .collect::<Vec<_>>();
+        if entries.len() > limits.tree.max_files()
+            || entries
+                .iter()
+                .try_fold(0u64, |n, (_, size)| n.checked_add(*size))
+                .is_none_or(|n| n > limits.tree.max_bytes())
+        {
+            return Err(Error::new(
+                &codes::LIMIT,
+                "ZIP exceeds collection tree limits",
+            ));
+        }
+        let files = entries
+            .into_iter()
+            .map(|(path, _)| archive.read(&path).map(|bytes| (path, bytes)))
+            .collect::<Result<Vec<_>>>()?;
+        let mut collection = Self::from_files(name, files, limits)?;
+        collection.original = Some(bytes);
+        Ok(collection)
+    }
+
+    /// Acquire a folder through core's confined source reader. Once acquired,
+    /// selections cannot fall back to disk or see later filesystem changes.
+    pub fn from_directory(path: impl AsRef<Path>, limits: CollectionLimits) -> Result<Self> {
+        let source = Source::open(path.as_ref())?;
+        if !source.is_directory() {
+            return Err(selection_error("a collection folder must be a directory"));
+        }
+        let names = source.entry_names()?;
+        if names.len() > limits.tree.max_files() {
+            return Err(Error::new(&codes::LIMIT, "collection file count exceeded"));
+        }
+        let mut remaining = limits.tree.max_bytes();
+        let mut files = Vec::new();
+        for name in names {
+            if name.as_str().split('/').count() > limits.tree.max_depth() {
+                return Err(Error::new(&codes::LIMIT, "collection path depth exceeded"));
+            }
+            let buffer = source.root_buffer_with_limit(name.as_str(), remaining)?;
+            remaining -= buffer.bytes().len() as u64;
+            files.push((name, buffer.shared_bytes()));
+        }
+        Self::from_files(source.name(), files, limits)
+    }
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    #[must_use]
+    pub fn entries(&self) -> &[CollectionEntry] {
+        &self.inventory
+    }
+    #[must_use]
+    pub fn original_zip(&self) -> Option<Arc<[u8]>> {
+        self.original.clone()
+    }
+
+    /// Bounded suggestions, without electrical parsing or filename precedence.
+    /// Every inventory file remains explicitly selectable even if omitted here.
+    pub fn inspect(&self) -> Result<Vec<CollectionCandidate>> {
+        let source = self.tree.source(None, None, self.limits.tree)?;
+        let mut remaining = self.limits.inspection_bytes;
+        let mut candidates = Vec::new();
+        for entry in self.entries() {
+            let extension = entry
+                .path
+                .rsplit('.')
+                .next()
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let mut selection = CollectionSelection::file(&entry.path);
+            let mut status = CandidateStatus::Selectable;
+            selection.format = match extension.as_str() {
+                "dss" => Some("dss"),
+                "glm" => Some("gridlabd"),
+                "m" => Some("matpower"),
+                "raw" => Some("psse"),
+                "rawx" => Some("psse-rawx"),
+                "aux" => Some("powerworld"),
+                "epc" => Some("pslf"),
+                "uct" | "ucte" => Some("ucte"),
+                "cdf" => Some("ieee-cdf"),
+                "pwb" => Some("pwb"),
+                "xiidm" => Some("xiidm"),
+                "con" => Some("psse-con"),
+                "sub" => Some("psse-sub"),
+                "mon" => Some("psse-mon"),
+                "json" | "jiidm" => {
+                    if entry.bytes > self.limits.probe_bytes || entry.bytes > remaining {
+                        status = CandidateStatus::ProbeLimit;
+                        None
+                    } else {
+                        remaining -= entry.bytes;
+                        let bytes = source.root_buffer(&entry.path)?;
+                        match classify_json_bytes(bytes.content_bytes()) {
+                            JsonClass::Module => {
+                                selection.operation = CollectionOperation::Deserialize;
+                                None
+                            }
+                            JsonClass::Case(Detection::Known(format)) => Some(format.name()),
+                            JsonClass::Case(_) => {
+                                status = CandidateStatus::NeedsFormat;
+                                None
+                            }
+                        }
+                    }
+                }
+                "xml" | "sinx" | "zip" => {
+                    status = CandidateStatus::NeedsOptions;
+                    None
+                }
+                _ => continue,
+            }
+            .map(str::to_owned);
+            candidates.push(CollectionCandidate { selection, status });
+        }
+        Ok(candidates)
+    }
+
+    /// Build one confined source. Each call starts fresh observations; retained
+    /// companions share bytes. Generic ZIP traversal requires another operation.
+    pub fn source(&self, selection: &CollectionSelection) -> Result<Source> {
+        let root = selection
+            .root
+            .as_deref()
+            .map(ArtifactPath::new)
+            .transpose()?;
+        let primary = selection
+            .primary
+            .as_deref()
+            .map(ArtifactPath::new)
+            .transpose()?
+            .ok_or_else(|| selection_error("select an explicit primary file"))?;
+        let scoped = self
+            .tree
+            .source(root.as_ref(), Some(&primary), self.limits.tree)?;
+        let format = selection.format_token();
+        if primary.as_str().to_ascii_lowercase().ends_with(".zip") && format != Some("cgmes") {
+            return Err(selection_error(
+                "transport ZIP members require explicit nested inspection; CGMES ZIPs require format cgmes",
+            ));
+        }
+        let mut source = if selection.has_companions() {
+            scoped
+        } else {
+            let bytes = scoped.primary_buffer()?.shared_bytes();
+            SourceTree::new(&self.name, [(primary.clone(), bytes)], self.limits.tree)?.source(
+                None,
+                Some(&primary),
+                self.limits.tree,
+            )?
+        };
+        if let Some(format) = format {
+            source = source.with_format(FormatId::new(format)?);
+        }
+        Ok(source)
+    }
+
+    /// Parse or deserialize one explicit selection. Call independently for each
+    /// selected case; one error never prevents processing another selection.
+    pub fn parse(
+        &self,
+        selection: &CollectionSelection,
+        options: &ParseOptions,
+    ) -> Result<CollectionResult> {
+        if options.acquisition_root.is_some() {
+            return Err(selection_error(
+                "collection sources cannot acquire host files",
+            ));
+        }
+        if options.format.is_some()
+            && options
+                .format
+                .as_ref()
+                .map(|f| crate::resolve_format(f.as_str()).map_or(f.as_str(), |f| f.token))
+                != selection.format_token()
+        {
+            return Err(selection_error(
+                "set the format on the collection selection",
+            ));
+        }
+        let source = self.source(selection)?;
+        let module = match selection.operation {
+            CollectionOperation::Parse => crate::parse_with_options(&source, options)?,
+            CollectionOperation::Deserialize => {
+                if selection.format.is_some() {
+                    return Err(selection_error("deserialize does not accept a grid format"));
+                }
+                crate::deserialize(&source)?
+            }
+        };
+        let incomplete = module.diagnostics().iter().any(|d| {
+            matches!(
+                d.code(),
+                "READ.DSS.INCLUDE_LOAD_FAILED" | "READ.DSS.INCLUDE_DEPTH_LIMIT"
+            )
+        });
+        Ok(CollectionResult {
+            module,
+            dependencies: source
+                .dependencies()
+                .iter()
+                .map(|b| b.name().to_owned())
+                .collect(),
+            incomplete,
+        })
+    }
+}
