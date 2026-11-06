@@ -84,6 +84,7 @@ from ._powerio import (
     __version__,
 )
 from ._sincal import SincalBalancedReadOptions
+from .collection import Collection, CollectionResult
 
 __all__ = [
     "AcOpfInstance",
@@ -100,6 +101,8 @@ __all__ = [
     "BalancedNetwork",
     "BusMerge",
     "CalculationUpdate",
+    "Collection",
+    "CollectionResult",
     "ComponentId",
     "ContingencySet",
     "DcOpfInstance",

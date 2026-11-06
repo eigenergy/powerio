@@ -77,3 +77,17 @@ Inspection and parse reports are JSON. Batch results use stable positional IDs
 errors and incomplete dependencies produce a nonzero exit after the full report.
 `--output` serializes successful modules to those IDs with `.pio.json` suffixes.
 Native SINCAL selection flags are accepted with the explicit native profile.
+
+## Python
+
+```python
+from powerio import Collection
+with Collection.open("study.zip") as collection:
+    candidates = collection.inspect()["candidates"]
+    result = collection.parse(candidates[0]["selection"])
+module = result.module  # still valid after closing the collection
+```
+
+`from_zip(bytes)` and `from_files({path: bytes})` use the same inventory and
+selection behavior. `max_bytes` and `max_files` bound admission before copying
+input payloads. Native SINCAL options can be passed to `parse`.
