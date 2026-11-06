@@ -73,6 +73,23 @@ impl Default for ArchiveLimits {
     }
 }
 impl ArchiveLimits {
+    /// Maximum compressed input length.
+    pub const fn max_input_bytes(self) -> u64 {
+        self.input
+    }
+    /// Maximum entries in one admitted archive.
+    pub const fn max_entries(self) -> usize {
+        self.entries
+    }
+    /// Maximum sum of declared expanded lengths.
+    pub const fn max_expanded_bytes(self) -> u64 {
+        self.expanded
+    }
+    /// Maximum expanded to compressed member ratio.
+    pub const fn max_ratio(self) -> u64 {
+        self.ratio
+    }
+
     /// Set positive limits. Byte counts and the index capacity must fit this
     /// platform. Paths additionally have fixed 4096-byte/64-segment bounds.
     pub fn new(input: u64, entries: usize, expanded: u64, ratio: u64) -> Result<Self> {

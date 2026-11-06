@@ -20,6 +20,8 @@ pub mod codes {
     powerio_core::diagnostic_codes! {
         SELECTION = "REQUEST.COLLECTION.SELECTION", Error,
             "the collection selection is invalid or incomplete", category = Request;
+        IO = "READ.COLLECTION.IO", Error,
+            "collection input could not be read", category = Data;
         LIMIT = "READ.COLLECTION.LIMIT", Error,
             "collection acquisition or inspection exceeds its budget", category = Data;
     }
@@ -575,5 +577,23 @@ impl Collection {
         Ok(SourceTree::new(&self.name, files, self.limits.tree)?
             .source(None, None, self.limits.tree)?
             .with_format(FormatId::new(format)?))
+    }
+}
+
+impl Collection {
+    /// Open a folder or transport ZIP. The compressed input read is bounded
+    /// before retention; member acquisition then enforces expansion limits.
+    pub fn open(path: impl AsRef<Path>, limits: CollectionLimits) -> Result<Self> {
+        use std::io::Read;
+        let path = path.as_ref();
+        if path.is_dir() {
+            return Self::from_directory(path, limits);
+        }
+        let file = std::fs::File::open(path).map_err(|e| Error::new(&codes::IO, e.to_string()))?;
+        let mut bytes = Vec::new();
+        file.take(limits.archive.max_input_bytes().saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|e| Error::new(&codes::IO, e.to_string()))?;
+        Self::from_zip(path.to_string_lossy(), bytes.into(), limits)
     }
 }
