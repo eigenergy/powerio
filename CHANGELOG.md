@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Collection inspection discovers separate PyPSA and GridFM dataset roots;
+  explicit directory selections preserve internal time/scenario values.
+
 - Inspect bounded ZIP/folder collections and explicitly select independent
   standalone inputs or OpenDSS masters over shared immutable companions.
 
