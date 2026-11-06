@@ -3861,6 +3861,14 @@ impl Transformer3W {
     /// bus carries the stored star voltage and the magnetizing shunt is left to the
     /// caller; each branch takes its winding's tap, phase shift, ratings, and
     /// status, so a winding out of service gives an out of service branch.
+    /// A winding's own impedance correction table follows its branch, so
+    /// [`BalancedNetwork::apply_impedance_correction`] on the expanded network
+    /// scales each star impedance as it scales the native transformer's. Once
+    /// the native transformer is corrected, its nominal follows too, split
+    /// into star impedances. PSS/E `ZCOD = 1` tables scale the pairwise
+    /// impedances together, which no single branch can carry: correct the
+    /// native transformer before expanding it, and expand it again after
+    /// moving its controlling winding.
     #[must_use]
     pub fn to_star_expansion(&self, star_id: BusId) -> (Bus, [Branch; 3]) {
         let star = Bus {
@@ -3911,9 +3919,31 @@ impl Transformer3W {
             branch(&self.windings[2], zs[2]),
         ];
         let windings_in_service = self.winding_in_service();
+        let independent = self.extras.get("psse_zcod").and_then(Value::as_i64) != Some(1);
+        let pairwise = self.z.map(|z| [z.r, z.x]);
+        let nominal = current_correction_nominal::<[[f64; 2]; 3]>(&self.extras, &pairwise);
         for (k, branch) in branches.iter_mut().enumerate() {
             branch.in_service &= windings_in_service[k];
             branch.rating_sets = self.winding_rating_sets(k);
+            let Some(correction) = self.winding_impedance_correction(k).filter(|_| independent)
+            else {
+                continue;
+            };
+            branch.set_impedance_correction(Some(correction));
+            if let Some(z) = nominal {
+                // Star leg k from the pairwise nominal: (Z_ka + Z_kb - Z_ab) / 2.
+                let (a, b, c) = [(0, 2, 1), (0, 1, 2), (1, 2, 0)][k];
+                let leg: [f64; 2] =
+                    std::array::from_fn(|part| (z[a][part] + z[b][part] - z[c][part]) / 2.0);
+                branch.extras.insert(
+                    IMPEDANCE_CORRECTION_NOMINAL_EXTRA.into(),
+                    serde_json::json!(leg),
+                );
+                branch.extras.insert(
+                    IMPEDANCE_CORRECTION_APPLIED_EXTRA.into(),
+                    serde_json::json!([branch.r, branch.x]),
+                );
+            }
         }
         (star, branches)
     }
