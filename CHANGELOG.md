@@ -17,6 +17,13 @@
 - `Transformer3W::impedance_correction_control_winding` is public, so a
   consumer that moves the controlling winding of a `ZCOD = 1` transformer
   can find it.
+- `Transformer3W::to_star_expansion` (and so `expand_transformers_3w`) gives
+  each star leg its winding's own impedance correction table and, once the
+  transformer is corrected, its nominal star impedance. Correcting the
+  expanded network then scales each leg as the native transformer's
+  correction scales it; before, the expanded legs carried no tables. `ZCOD =
+  1` tables, which scale the pairwise impedances together, stay on the native
+  transformer.
 
 ## 0.11.8
 
