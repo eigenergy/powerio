@@ -93,6 +93,9 @@ export class ConverterController {
     this.state.phase = 'inspecting'; this.publish();
     const expanded: InputEntry[] = [];
     const rejected: InputCase[] = [];
+    // Archive names are display labels, not namespace identities. Reserve loose
+    // input roots too, so an extracted archive cannot acquire their companions.
+    const roots = new Set(entries.map(entry => entry.path.split('/')[0].toLowerCase()));
     for (const entry of entries) {
       if (epoch !== this.epoch) return;
       if (!available(entry)) { expanded.push(entry); continue; }
@@ -102,7 +105,13 @@ export class ConverterController {
         rejected.push({ name: entry.file.name, entries: [entry], error: limit });
         continue;
       }
-      try { expanded.push(...(archive ? await unpack(entry, () => epoch !== this.epoch) : [entry])); }
+      let root = stem(entry.path);
+      if (archive) {
+        let suffix = 2;
+        while (roots.has(root.toLowerCase())) root = `${stem(entry.path)}-${suffix++}`;
+        roots.add(root.toLowerCase());
+      }
+      try { expanded.push(...(archive ? await unpack(entry, () => epoch !== this.epoch, root) : [entry])); }
       catch (error) {
         rejected.push({ name: entry.file.name, entries: [entry], error: { code: 'WEB.INPUT.ARCHIVE', message: message(error) } });
       }
