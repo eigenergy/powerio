@@ -15,7 +15,7 @@
 //! extension namespace; every value it fills in is a `READ.CIM_DIST.*`
 //! finding.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use super::super::xml::CimDocument;
 use super::{
@@ -527,26 +527,29 @@ impl Mapper<'_> {
     }
 
     /// Place a node the equipment layout left unplaced at the point of a
-    /// service location served from it.
-    pub(super) fn place_service_locations(
+    /// service location served from it. A drawing that reaches a node counts
+    /// as carried.
+    pub(super) fn place_service_locations<'s>(
         &self,
-        shape_of: &Shapes,
+        shape_of: &'s Shapes,
         at_node: &mut HashMap<String, DistLocation>,
+        carried: &mut HashSet<&'s str>,
     ) {
         for location in self.store.ids_of("ServiceLocation") {
             let node = self
                 .store
                 .refv(&location, "sedms:ServiceLocation.Terminal")
                 .and_then(|terminal| self.wiring.node_of.get(terminal));
-            if let (Some(&(x, y)), Some(node)) = (
-                shape_of.get(&location).and_then(|shape| shape.first()),
-                node,
-            ) {
+            let drawn = shape_of
+                .get_key_value(&location)
+                .and_then(|(id, drawing)| drawing.path.first().map(|&point| (id.as_str(), point)));
+            if let (Some((id, (x, y))), Some(node)) = (drawn, node) {
                 at_node.entry(node.clone()).or_insert(DistLocation {
                     x,
                     y,
                     kind: Some(DistCoordsKind::Derived),
                 });
+                carried.insert(id);
             }
         }
     }

@@ -20,10 +20,272 @@
   (`<cim:Terminal.phases>A</cim:Terminal.phases>`) read like references, so
   a single phase fuse is no longer read as a three phase switch. A segment
   takes its ampacity from the `WireInfo.ratedCurrent` its `AssetDatasheet`
-  names, and the Diagram Layout gives segment routes and bus locations in
-  the coordinate reference system the diagram names. A CIM16 document set
-  without a `BaseFrequency` reads at 50 Hz. `Circuit`, `CompositeSwitch`,
+  names, with a finding for a stated value that is no positive current. The
+  Diagram Layout gives segment routes and bus locations in the coordinate
+  reference system the diagram names, taking a node's or terminal's own
+  drawing first and reporting a drawing that places nothing. A CIM16 document
+  set without a `BaseFrequency` reads at 50 Hz. `Circuit`, `CompositeSwitch`,
   and `PSRType` are reported as context.
+
+## 0.11.9
+
+**PSS/E**
+
+- CZ=2 and CZ=3 two winding impedances are read on the bus voltage base
+  again, converting only the MVA base. PSS/E states R1-2 and X1-2 on the
+  winding voltage base under every CZ, the same base CZ=1 uses, and uses
+  NOMV1 only for CW 2/3 ratios and CM 2 magnetizing data, so the
+  `(NOMV1 / bus base kV)²` factor 0.11.8 applied (#782) described another
+  circuit, a near short circuit where NOMV1 states the other winding's
+  voltage. The circuit tests #782 added stay, pinned to this reading.
+- A two winding transformer with a nonzero magnetizing admittance records
+  the factor its reader applied (the square of the tap) as
+  `psse_magnetizing_referral` in its extras. The writer divides by the
+  recorded factor, so a tap moved after reading no longer restates
+  `MAG1`/`MAG2`, and a consumer that moves the tap can keep the admittance
+  at bus I (#799).
+- A two winding transformer whose winding 2 ratio on its bus base is not one
+  records it as `psse_winding2_ratio`. The branch `tap` is winding 1 over
+  winding 2 and `r + jx` includes winding 2's squared referral; the ratio
+  lets a consumer separate them (#799).
+- `Transformer3W::impedance_correction_control_winding` is public, so a
+  consumer that moves the controlling winding of a `ZCOD = 1` transformer
+  can find it (#799).
+- `Transformer3W::to_star_expansion` (and so `expand_transformers_3w`) gives
+  each star leg its winding's own impedance correction table and, once the
+  transformer is corrected, its nominal star impedance. Correcting the
+  expanded network then scales each leg as the native transformer's
+  correction scales it; before, the expanded legs carried no tables. `ZCOD =
+  1` tables, which scale the pairwise impedances together, stay on the native
+  transformer (#801).
+
+**CI and dependencies**
+
+- `jsonschema` moves to 0.60 (#750), and `actions/checkout` to 7 along with
+  the minor and patch action updates (#755, #757).
+
+## 0.11.8
+
+**MG-RAVENS and PMD MATHEMATICAL JSON**
+
+- MG-RAVENS JSON (`ravens-json`) parses and writes
+  ([#27](https://github.com/eigenergy/powerio/issues/27)). MG-RAVENS is
+  LANL's CIM derived microgrid interchange schema
+  (lanl-ansi/MG-RAVENS, Apache-2.0); its two profiles share one token and the
+  document's classes pick the reader. The balanced profile is a `powerio-tx`
+  format following the upstream MATPOWER converter's conventions and maps to
+  `BalancedNetwork`; the multiconductor profile is a `powerio-dist` format
+  following `opendss2xml` and maps to `MulticonductorNetwork` (per phase
+  segments and loads, `PerLengthPhaseImpedance` matrices, tanks with catalog
+  end records and tests, `EnergySource`, machines and power electronics,
+  shunt banks, switches). `powerio_tnd::formats::ravens` reads a document
+  into whichever network its profile states and refuses a mixed one; the
+  facade, the CLI, and `.json` detection route through it. Both writers use
+  deterministic mRIDs and are byte stable across write, read, write. The
+  multiconductor profile states a grounded terminal as a CIM `Ground`, a
+  wye load's return on the neutral and whether it is grounded, a four wire
+  segment's neutral conductor, each segment end's own phase code (so a
+  lateral landing on another phase keeps both ends), `Yn` for a bank whose
+  neutral is grounded, and an unbalanced source as one single phase
+  `EnergySource` per conductor (`EMIT.RAVENS_DIST.SOURCE_SPLIT`); a segment with
+  a conductor outside the CIM phase identities is dropped with a finding.
+  Mohamed Numair wrote both readers and writers; this release ports them
+  onto the shared `powerio-dist` and `powerio-tx` hubs (#746).
+- PowerModelsDistribution MATHEMATICAL JSON (`pmd-math-json`) parses and
+  writes ([#645](https://github.com/eigenergy/powerio/issues/645), proposed
+  by Robert Ferrando). The writer follows `transform_data_model`: PMD's
+  transformer loss model, sources as generators behind their Thevenin
+  impedance, `calc_voltage_bases`, `make_per_unit!`, and Kron reduction of
+  grounded neutrals (`PmdMathEmitOptions::kron_reduce`), with the `map` PMD
+  writes. The reader folds through the map, restores the neutral a Kron
+  reduced wye load returns on as a grounded bus terminal, and restates
+  winding impedances on the emergency rating, which it reports since the
+  MATHEMATICAL model carries no winding power rating. A load without a
+  nominal voltage takes the bus base and an island no stated base reaches
+  takes a load's nominal voltage, each with a finding. The tests compare the
+  writer field by field against PMD v0.16 exports of five PMD cases, vendored
+  under `tests/data/dist/pmd/math/` (BSD-3), and hold write, read, write to
+  byte identity. The ENGINEERING reader points a MATHEMATICAL document at the
+  new token (#746).
+- `powerio_core::cim`: the vocabulary the CIM derived formats share, namely
+  deterministic UUIDv5 mRIDs, the phase letter and terminal conversions
+  (`1` to `4` and `a` to `n` both read), `PhaseCode` expansion, and MG-RAVENS
+  profile detection. The distribution CIM and CGMES formats keep their own
+  helpers for now.
+- The `.json` classifier sends a document with PMD's `data_model` marker to
+  the PMD readers even when its tables are shaped like PowerModels'. RAVENS
+  profile detection reads decoded class identities and class containers;
+  object names and descriptive text do not select a profile.
+- MG-RAVENS and distribution CIM keep each element's `IdentifiedObject.mRID`
+  when a feeder converts between them (transformers excepted: RAVENS keys
+  them by the enclosing PowerTransformer, CIM by the tank). The multiconductor
+  RAVENS reader counts an open delta tank's phase to phase end as one phase,
+  reads transformer terminals stated once on the `PowerTransformer` and the
+  `TransformerEnd.RatioTapChanger` end pointer (the layout of the upstream
+  IEEE 13 example), and both RAVENS directions state
+  `ShortCircuitTest.leakageImpedance` as `opendss2xml` writes it and
+  PowerModelsDistribution's RAVENS reader inverts it: the pair's percent
+  impedance magnitude, resistance included, times the end's base ohms.
+- RAVENS preserves disabled voltage regulators, isolated bus voltage bases,
+  distribution source impedance, finite transformer neutral impedance,
+  conductor order, and load voltage references. Unsupported representations
+  produce specific findings. PMD MATHEMATICAL restores eliminated transformer
+  neutrals, keeps degree/radian and shunt-unit conventions, and preserves
+  leakage impedance and unbounded ratings when recovering transformers.
+  Malformed allocation dimensions are rejected before matrix construction.
+- Reject nonzero RAVENS transformer impedance or no-load loss when its input
+  voltage, rating or test power base is unusable, instead of reading it as an
+  ideal transformer. Name the affected tank, winding and field in the error.
+- Reject an explicitly invalid balanced RAVENS `baseMVA` before per-unit
+  conversion, and diagnose skipped loads, shunts, generators, sources, lines
+  and transformer windings that lack usable terminals.
+- Project Kron-reduced PMD delta loads onto three phase coordinates, preserving
+  each conductor pair and ZIP part. Keep the explicit-conductor model when a
+  three-phase basis is unavailable. Refuse RAVENS transformer impedance
+  emission when a nonpositive or nonfinite winding rating makes its base
+  undefined.
+- Apply the complex neutral Schur complement to switch impedances, including
+  shared linecodes, before declaring PMD MATHEMATICAL output Kron reduced.
+- Restore implicit wye earth returns in RAVENS output while keeping existing
+  floating neutrals separate. Preserve switch subclasses supported by the
+  upstream schema and both conductor orders in split-phase codes.
+- Preserve PMD pairwise voltage bounds during fresh MATHEMATICAL emission and
+  rebasing; report their loss in ENGINEERING and RAVENS output.
+- Keep non-Kron PMD MATHEMATICAL transformer loss branches on the internal
+  phase terminals, including external phase-B and phase-C windings.
+- Convert MG-RAVENS line-to-line voltage limits to phase-to-ground bounds
+  and back, and keep balanced bus voltage anchors ahead of line base-voltage
+  hints. Preserve coupled Thevenin impedance when splitting an unbalanced
+  source by emitting one shared impedance branch.
+- PMD MATHEMATICAL emission retains purely resistive or reactive source
+  impedance. MG-RAVENS emission respects line ampacity overrides, including
+  distinct limits on segments sharing a linecode.
+- MG-RAVENS reading keeps a segment's ampacity on the segment, so an unrated
+  segment sharing its linecode stays unrated. PMD MATHEMATICAL emission takes
+  the grounding flags of a source's virtual bus from the parent bus terminals
+  the source connects to, so a phase restricted source writes consistent
+  `terminals` and `grounded` arrays.
+- PowerIO IR documents can record the two new formats: the schema
+  `pio-ir/2/0.11.8/schema.json` adds `ravens-json` and `pmd-math-json` to the
+  source format names. The IR version stays 2, C ABI 7 is unchanged, and the
+  0.11.7 schema file is unchanged.
+
+**OpenDSS, PMD, and BMOPF output**
+
+- OpenDSS lines that keep an assigned LineCode unchanged share one per meter
+  linecode named after it instead of one copy per line, so the BMOPF JSON of a
+  50,353 line city model falls from 171 MB to 73 MB (#785).
+- Preserve cached OpenDSS line impedances after base-frequency or earth
+  resistivity edits instead of replacing them with shared LineCode values
+  (#787).
+- PMD time-series profiles keep PMD's meaning in BMOPF output. PMD's
+  `replace` defaults to true, so a bare `values`/`time` profile replaces a
+  load's power rather than multiplying it. In BMOPF 0.2.0 output, a PMD load
+  shape that states `replace: false`, has no nonzero offset, and has no time
+  axis or a numeric one becomes an active BMOPF profile on the loads that
+  reference it, with its time axis converted from hours to seconds; the active
+  profiles must share aligned finite steps. Any other PMD profile, and every
+  profile in BMOPF 0.1.0 output, stays verbatim under `extras.time_series`
+  with an `EMIT.BMOPF.RETAINED_SOURCE_ONLY` diagnostic. Every snapshot of a
+  PMD multinetwork fixture is validated (#744, #771).
+- PMD ENGINEERING JSON: a ZIP load is written as PMD spells it (`ZIP`, with
+  `zipv` only when the coefficients are known) and read under both `ZIP` and
+  `ZIPV`; a switch keeps its linecode's rating and impedance fields; an empty
+  `name` is a network without a name.
+- Keep ideal switches at zero impedance in PMD ENGINEERING and preserve the
+  exact OpenDSS switch equivalent when only identity metadata is retained.
+- Keep nonuniform per-phase ZIP coefficients in PMD ENGINEERING output by
+  emitting separate phase loads.
+- OpenDSS writer: a network whose name is empty writes `Circuit.converted`,
+  as a nameless one does, instead of `New Circuit.`.
+
+**Multiconductor OPF preparation**
+
+- Add bounded fixed-PF coefficients to MC IVR preparation, avoiding the loss
+  of tiny signed PF values in `tan(acos(abs(pf)))`. Keep the legacy Q/P ratio
+  only when finite; consumers should assemble from the bounded coefficients
+  (#743).
+- Reject neutral and earth endpoints during MC IVR DELTA coil preparation,
+  including THREE_LEG inverters and DELTA transformer windings. Explicit
+  terminal conventions are honored; valid phase-to-phase coil order is unchanged
+  (#742).
+
+**PSS/E**
+
+- Preserve apostrophes in PSS/E RAWX `caseid.title1`; normalize embedded line
+  terminators only (#745).
+- Rescale PSS/E CZ=2 and CZ=3 two-winding transformer impedances by
+  `(NOMV1 / bus base kV)²` before referring them to the bus base, including
+  RAWX. A transformer whose NOMV1 differs from its bus base kV now reads the
+  impedance the case states; CZ=1, zero NOMV1 defaults and three-winding
+  transformers are unchanged (#772, #782).
+
+**PowerModels**
+
+- PowerModels JSON reads and writes an optional `base_frequency` (Hz), a
+  PowerIO metadata extension, so a stated 50 Hz network keeps its frequency
+  through parsing, dictionary construction and fresh PSS/E RAW output. Without
+  it the default stays 60 Hz; an invalid value is refused (#773, #783).
+- Validate PowerModels bus IDs and equipment references before converting
+  them into canonical bus identifiers, rejecting missing or out-of-range IDs
+  instead of silently casting defaults (#767).
+
+**pandapower**
+
+- Reject pandapower split-table rows whose cell count does not match the
+  declared columns, rather than silently defaulting missing electrical values
+  (#766).
+
+**Geographic layers**
+
+- Write `GeoLayer::to_geojson` straight from the typed features instead of
+  building a `serde_json::Value` per coordinate. The text is unchanged, and a
+  city-scale distribution layer writes three to five times faster (#784).
+
+**Python**
+
+- Require Python 3.11 or newer: 3.9 and 3.10 are past end of life. Wheels
+  are `cp311-abi3`, and the `bench`, `pandas` and `mcp` extras drop their
+  Python version markers (#786).
+
+**CI and tests**
+
+- The x86_64 macOS wheel smoke test runs under an x64 Python 3.12 instead of
+  the runner's system Python 3.9, which the `cp311-abi3` wheel does not
+  support (#788).
+- The macOS jobs of the Python and release binary workflows move from macOS 14
+  to macOS 15 (#779).
+- The GridFM tests run the release CLI with the pinned CPU PyTorch and GridFM
+  GraphKit stack, and Miri runs the C ABI ownership regression (#780).
+- Remove the obsolete Julia companion pin now that the required bindings have
+  merged upstream (#744).
+- `actions/upload-artifact` moves to 7, `actions/download-artifact` to 8, and
+  `actions/setup-node` to 7 (#756, #758, #759).
+- Pull request CI checks the distribution validation aggregate and the Docs
+  workflow's build and deploy conditions (#620). The browser converter tests
+  download and reimport all seven distribution outputs (#794).
+- The conversion matrix gains the MG-RAVENS profiles and PMD MATHEMATICAL
+  JSON as formats and the MG-RAVENS example and a PMD two winding case as
+  cases; an OpenDSS readback in the matrix now loads the bus coordinate
+  sidecar, and the report names the codes of any error severity finding.
+- Compare physical circuits and source constraints for every distribution
+  RAVENS corpus conversion, with explicit diagnostics for supported projections.
+- Independent validation now checks fresh RAVENS output through PowerIO IR
+  against the pinned native schema and converter profile, and compares
+  RAVENS-mediated PSS/E and PowSybl imports with direct native imports.
+  The conversion matrix retains fixture-labelled field differences and tests
+  electrical changes independently of unrelated metadata warnings.
+- Add regression coverage proving that preserving a reference bus does not
+  mark an island supplied when no in-service balancing generator exists
+  (#714).
+
+**Documentation**
+
+- Clarify that `BusType::Ref` follows the source format's reference/slack
+  convention; angle reference and balancing-source semantics are not universal
+  invariants (#712).
+- The `powerio-synth` README points to `tellegen-synth` for synthetic grids of
+  real map regions (#764).
 
 ## 0.11.7
 

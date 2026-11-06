@@ -9,8 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 use serde_json::{Map, Value};
 
 use super::{
-    TextEmission, bus_kv, finish, jnum, nonzero_differs, set_bus_kind,
-    warn_extra_branch_rating_sets, zbase,
+    TextEmission, bus_kv, finish, jnum, set_bus_kind, warn_extra_branch_rating_sets, zbase,
 };
 use crate::diagnostics::codes::EMIT_PANDAPOWER as F;
 use crate::diagnostics::{Diagnostics, codes};
@@ -763,7 +762,7 @@ pub(crate) fn parse_pandapower_source(
         if !looks_like_frame {
             continue;
         }
-        if let Ok(Some(frame)) = read_frame(obj, key)
+        if let Some(frame) = read_frame(obj, key)?
             && !frame.data.is_empty()
         {
             warnings.push(
@@ -936,6 +935,19 @@ pub fn write_pandapower_json(net: &BalancedNetwork) -> TextEmission {
 }
 
 fn warn_pandapower_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
+    let voltage_states = net
+        .buses()
+        .iter()
+        .filter(|bus| (bus.vm - 1.0).abs() > 1e-12 || bus.va.abs() > 1e-12)
+        .count();
+    if voltage_states > 0 {
+        warnings.push(
+            &F.field_dropped,
+            format!(
+                "{voltage_states} bus voltage state(s) (vm/va) dropped: this writer emits no bus result table, so a reparse starts at vm = 1 and va = 0"
+            ),
+        );
+    }
     if !net.transformers_3w().is_empty() {
         warnings.push(&F.record_dropped, format!(
             "{} 3-winding transformer(s) dropped: the pandapower JSON writer emits no trafo3w table",
@@ -994,7 +1006,9 @@ fn warn_pandapower_branch_losses(net: &BalancedNetwork, warnings: &mut Diagnosti
     let rate_bc = net
         .branches()
         .iter()
-        .filter(|b| nonzero_differs(b.rate_b, b.rate_a) || nonzero_differs(b.rate_c, b.rate_a))
+        // These fields read back as zero even when their source values equal
+        // rate_a, so equal ratings still lose their separate assignments.
+        .filter(|b| b.rate_b != 0.0 || b.rate_c != 0.0)
         .count();
     if rate_bc > 0 {
         warnings.push(&F.field_dropped, format!(
@@ -1430,6 +1444,10 @@ fn branch_frames(
             let sn = if br.rate_a > 0.0 {
                 br.rate_a
             } else {
+                warnings.push(&F.value_substituted, format!(
+                    "transformer branch {}-{} rate_a = {} replaced by sn_mva = {}: this writer uses the system base for an unrated transformer, so its unlimited rating is not preserved",
+                    br.from, br.to, br.rate_a, net.base_mva()
+                ));
                 net.base_mva()
             };
             let z = (br.r * br.r + br.x * br.x).sqrt();
@@ -2103,7 +2121,16 @@ fn read_frame(root: &Map<String, Value>, name: &str) -> Result<Option<DataFrame>
     let mut data = Vec::with_capacity(raw_data.len());
     for (i, row) in raw_data.into_iter().enumerate() {
         match row {
-            Value::Array(cells) => data.push(cells),
+            Value::Array(cells) => {
+                if cells.len() != columns.len() {
+                    return Err(bad(format!(
+                        "`{name}` table: row {i} has {} cells for {} columns",
+                        cells.len(),
+                        columns.len()
+                    )));
+                }
+                data.push(cells);
+            }
             _ => return Err(bad(format!("`{name}` table: row {i} is not an array"))),
         }
     }
@@ -2808,6 +2835,40 @@ mod tests {
         let frame = pp_frame(&["vn_kv"], json!([0]), json!([42]));
         let msg = err(&pp_net(vec![("bus", frame)]));
         assert!(msg.contains("`bus` table: row 0 is not an array"), "{msg}");
+    }
+
+    #[test]
+    fn read_frame_rejects_row_column_length_mismatch() {
+        // Reject malformed row shape before field decoding: otherwise reader defaults such as
+        // a zero-MW load when the row simply omitted its declared p/q cells.
+        let frame = pp_frame(&["bus", "p_mw", "q_mvar"], json!([0]), json!([[0, 10.0]]));
+        let msg = err(&pp_net(vec![bus_table(json!([0])), ("load", frame)]));
+        assert!(
+            msg.contains("`load` table: row 0 has 2 cells for 3 columns"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn read_frame_rejects_overlong_row() {
+        let frame = pp_frame(&["bus", "p_mw"], json!([0]), json!([[0, 10.0, 2.0]]));
+        let msg = err(&pp_net(vec![bus_table(json!([0])), ("load", frame)]));
+        assert!(
+            msg.contains("`load` table: row 0 has 3 cells for 2 columns"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn malformed_unmapped_table_is_not_silently_ignored() {
+        // Unknown DataFrames are still parsed before a warning is emitted.
+        // A malformed row must not disappear merely because its table is unmapped.
+        let frame = pp_frame(&["bus", "x_l_ohm"], json!([0]), json!([[0]]));
+        let msg = err(&pp_net(vec![bus_table(json!([0])), ("svc", frame)]));
+        assert!(
+            msg.contains("`svc` table: row 0 has 1 cells for 2 columns"),
+            "{msg}"
+        );
     }
 
     #[test]
@@ -3698,6 +3759,8 @@ mod tests {
     #[test]
     fn writer_zip_load_columns_round_trip() {
         let mut net = test_net(vec![test_bus(1, BusType::Ref)]);
+        net.buses_mut()[0].vm = 1.0;
+        net.buses_mut()[0].va = 0.0;
         net.generators_mut().push(test_gen(1, None));
         net.loads_mut().push(Load {
             bus: BusId(1),
@@ -3824,6 +3887,61 @@ mod tests {
         assert!((b.r - 0.01).abs() < 1e-12);
         assert!((b.x - 0.1).abs() < 1e-12);
         assert!((b.rate_a - 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn writer_reports_voltage_states_and_unrated_transformer_substitution() {
+        let mut net = test_net(vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)]);
+        net.buses_mut()[0].vm = 1.06;
+        net.buses_mut()[1].va = -5.0;
+        net.branches_mut().push(test_branch(1, 2, 1.05));
+        let emitted = write_pandapower_json(&net);
+        for (code, message) in [
+            (
+                F.field_dropped.code,
+                "2 bus voltage state(s) (vm/va) dropped",
+            ),
+            (
+                F.value_substituted.code,
+                "rate_a = 0 replaced by sn_mva = 100",
+            ),
+        ] {
+            assert!(
+                emitted.diagnostics.iter().any(|finding| {
+                    finding.code() == code && finding.message().contains(message)
+                }),
+                "{:?}",
+                emitted.render_diagnostics()
+            );
+        }
+        let restored = parse_pandapower_json(&emitted.text).unwrap();
+        for bus in restored.network.buses() {
+            assert!((bus.vm - 1.0).abs() < 1e-12 && bus.va.abs() < 1e-12);
+        }
+        assert!((restored.network.branches()[0].rate_a - 100.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn writer_reports_secondary_ratings_even_when_equal_to_rate_a() {
+        let mut net = test_net(vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)]);
+        let mut branch = test_branch(1, 2, 0.0);
+        branch.rate_a = 250.0;
+        branch.rate_b = 250.0;
+        branch.rate_c = 250.0;
+        net.branches_mut().push(branch);
+        let emitted = write_pandapower_json(&net);
+        assert!(
+            emitted.diagnostics.iter().any(|finding| {
+                finding.code() == F.field_dropped.code
+                    && finding.message().contains("rate_b/rate_c")
+            }),
+            "{:?}",
+            emitted.render_diagnostics()
+        );
+        let restored = parse_pandapower_json(&emitted.text).unwrap();
+        let branch = &restored.network.branches()[0];
+        assert!((branch.rate_a - 250.0).abs() < 1e-9);
+        assert!(branch.rate_b.abs() < 1e-12 && branch.rate_c.abs() < 1e-12);
     }
 
     #[test]

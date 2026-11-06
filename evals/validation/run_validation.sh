@@ -157,6 +157,8 @@ echo "=== LinDist3Flow vs OpenDSS voltage oracle ==="
 "$PY" evals/validation/validate_lindist3flow_opendss.py || true
 
 # 4f. External schema validation of emitted BMOPF JSON.
+run "BMOPF validator regression checks" \
+    "$PY" evals/validation/test_bmopf_schema.py
 echo "=== BMOPF schema validation ==="
 "$PY" evals/validation/validate_bmopf_schema.py || true
 

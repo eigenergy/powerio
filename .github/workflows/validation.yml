@@ -66,7 +66,7 @@ jobs:
     - uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
     - name: Instantiate the Julia oracle env
       run: julia --project=evals/validation -e 'using Pkg; Pkg.instantiate()'
-    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
       with:
         python-version: '3.12'
     # Cache the pip wheels (pandapower + scipy/numpy, egret + pyomo, matpowercaseframes);
@@ -91,6 +91,13 @@ jobs:
     # setup step.
     - name: Verify the oracle stack imports
       run: .venv/bin/python -c "import egret, jsonschema, opendssdirect, pandapower, pypsa"
+    - name: Fetch phase-shift-sign validation fixture
+      run: |
+        mkdir -p tests/data/large
+        curl --fail --location --retry 3 --retry-all-errors https://raw.githubusercontent.com/MATPOWER/matpower/80b6e16f760f58721ad31221c7287c28259cd4ad/data/case13659pegase.m --output tests/data/large/case13659pegase.m
+        test -s tests/data/large/case13659pegase.m
+    - name: Test snapshot schema validation
+      run: .venv/bin/python -m unittest discover -s evals/validation -p test_validate_bmopf_schema.py
     - name: Run the validation matrix
       run: bash evals/validation/run_validation.sh
     - name: Compare explicit BMOPF core admittances with OpenDSS

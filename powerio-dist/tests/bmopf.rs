@@ -308,6 +308,7 @@ fn every_dist_fixture_emits_valid_bmopf() {
         "micro/onephase_zip_load.dss",
         "pmd/ieee13.json",
         "pmd/fourwire_linecode.json",
+        "pmd/case3_balanced.json",
         "bmopf/example_ieee13.json",
         "bmopf/example_enwl_n1_f2.json",
     ] {
@@ -323,6 +324,77 @@ fn every_dist_fixture_emits_valid_bmopf() {
         );
         assert_eq!(out.text, twice.text, "{case} is not idempotent");
     }
+}
+
+#[test]
+fn pmd_loadshape_maps_to_bmopf_profile() {
+    let net = helpers::parse_file(fixture("pmd/case3_balanced.json"), None).unwrap();
+    let out = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+
+    assert!(
+        schema_validator().is_valid(&doc),
+        "BMOPF output does not validate: {}",
+        out.text
+    );
+    assert_eq!(
+        doc["time_series"]["ls1"]["values"],
+        serde_json::json!([
+            0.005, 0.01, 0.015, 0.02, 0.025, 0.03, 0.035, 0.04, 0.045, 0.05
+        ])
+    );
+    assert_eq!(
+        doc["time_series"]["ls1"]["time"],
+        serde_json::json!([
+            0.0, 3600.0, 7200.0, 10800.0, 14400.0, 18000.0, 21600.0, 25200.0, 28800.0, 32400.0
+        ])
+    );
+    assert_eq!(
+        doc["load"]["l1"]["time_series"],
+        serde_json::json!({"p_nom": "ls1", "q_nom": "ls1"})
+    );
+    assert_eq!(
+        doc["extras"]["pmd_time_series_metadata"]["ls1"]["source_id"],
+        "loadshape.ls1"
+    );
+    assert_eq!(
+        doc["extras"]["pmd_time_series_metadata"]["ls1"]["offset"],
+        0.0
+    );
+    assert_eq!(
+        doc["extras"]["pmd_time_series_metadata"]["ls1"]["replace"],
+        false
+    );
+}
+
+#[test]
+fn pmd_string_time_axis_is_retained_without_active_bmopf_reference() {
+    let mut source: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap())
+            .unwrap();
+    let profile = source["time_series"]["ls1"].as_object_mut().unwrap();
+    profile.insert(
+        "time".into(),
+        serde_json::json!(["2026-01-01T00:00:00Z", "2026-01-01T01:00:00Z"]),
+    );
+    profile.insert("replace".into(), serde_json::json!(false));
+    let expected = source["time_series"]["ls1"].clone();
+
+    let net = parse_pmd_str(&source.to_string()).unwrap();
+    let output = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+
+    assert!(doc.get("time_series").is_none(), "{doc}");
+    assert!(doc["load"]["l1"].get("time_series").is_none(), "{doc}");
+    assert_eq!(doc["extras"]["time_series"]["ls1"], expected);
+    assert!(
+        schema_validator().is_valid(&doc),
+        "{:?}",
+        errors(&schema_validator(), &output.text)
+    );
+    assert!(output.warnings.iter().any(|warning| {
+        warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("ls1")
+    }));
 }
 
 /// A reference to a bus that does not exist warns instead of parsing
@@ -2097,6 +2169,46 @@ fn center_tap_emits_bmopf_convention_and_star_leakage() {
 }
 
 #[test]
+fn unequal_center_tap_pair_leakages_keep_explicit_zeros() {
+    for xsc in [[2.04, 0.0, 0.0], [0.0, 2.04, 0.0], [2.0, 10.0, 2.0]] {
+        let mut net = parse_dss_file(fixture("micro/xfmr_center_tap.dss")).unwrap();
+        net.transformers_mut()[0].xsc_pct = xsc.to_vec();
+        let original = &net.transformers()[0];
+        let base = original.windings[0].v_ref.powi(2) / original.windings[0].s_rating;
+        for profile in [BmopfSchemaVersion::Bmopf020, BmopfSchemaVersion::Bmopf010] {
+            let output = emit_bmopf_json_with_options(
+                &net,
+                BmopfEmitOptions::default().with_schema_version(profile),
+            );
+            let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+            assert!(schema_validator_for(profile).is_valid(&doc), "{doc}");
+            let encoded = if profile == BmopfSchemaVersion::Bmopf020 {
+                &doc["transformer"]["n_winding"]["t1"]
+            } else {
+                &doc["extras"]["transformer"]["n_winding"]["t1"]
+            };
+            for (pair, expected) in ["1_2", "1_3", "2_3"].into_iter().zip(xsc) {
+                let actual = encoded["x_sc"][pair].as_f64().unwrap();
+                assert!((actual - expected / 100.0 * base).abs() < 1e-12);
+            }
+            let back = parse_bmopf_str(&output.text).unwrap();
+            let transformer = &back.transformers()[0];
+            for (actual, expected) in transformer.xsc_pct.iter().zip(xsc) {
+                assert!((actual - expected).abs() < 1e-12);
+            }
+            for (actual, expected) in transformer.windings.iter().zip(&original.windings) {
+                assert_eq!(actual.bus, expected.bus);
+                assert_eq!(actual.terminal_map, expected.terminal_map);
+                assert_eq!(actual.conn, expected.conn);
+                assert!((actual.v_ref - expected.v_ref).abs() < 1e-12);
+                assert!((actual.s_rating - expected.s_rating).abs() < 1e-12);
+                assert!((actual.r_pct - expected.r_pct).abs() < 1e-12);
+            }
+        }
+    }
+}
+
+#[test]
 fn bmopf_center_tap_canonical_order_rebuilds_dss_grounded_center() {
     let text = r#"{
         "bus": {
@@ -2342,7 +2454,7 @@ fn center_tap_negative_star_arm_warns_and_falls_back_schema_valid() {
         "Clear\n\
          New Circuit.ct basekv=7.2 pu=1.0 phases=1 bus1=src.1\n\
          New Transformer.t1 phases=1 windings=3 buses=(src.1.0, lv.1.0, lv.0.2) \
-         kvs=(7.2 0.12 0.12) kvas=(25 25 25) %Rs=(1 2 2) xhl=2 xht=10 xlt=2\n",
+         kvs=(7.2 0.12 0.12) kvas=(25 25 25) %Rs=(1 2 2) xhl=2 xht=2 xlt=6\n",
     );
     let out = emit_bmopf_json(&net);
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
@@ -2353,7 +2465,7 @@ fn center_tap_negative_star_arm_warns_and_falls_back_schema_valid() {
     );
     assert_eq!(
         diag.details()["xsc_pct"],
-        serde_json::json!([2.0, 10.0, 2.0])
+        serde_json::json!([2.0, 2.0, 6.0])
     );
     assert_eq!(
         diag.details()["emitted_percentages"],
@@ -4095,4 +4207,441 @@ fn bmopf_geometry_without_element_identity_is_reported() {
             .iter()
             .any(|warning| warning.contains("missing kind or id"))
     );
+}
+
+#[test]
+fn pmd_profile_without_replace_is_retained_even_without_source_id() {
+    let mut source: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap())
+            .unwrap();
+    let profile = source["time_series"]["ls1"].as_object_mut().unwrap();
+    profile.remove("source_id");
+    profile.remove("offset");
+    profile.remove("replace");
+
+    let net = parse_pmd_str(&source.to_string()).unwrap();
+    let output = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+
+    assert!(doc.get("time_series").is_none(), "{doc}");
+    assert!(doc["load"]["l1"].get("time_series").is_none(), "{doc}");
+    assert_eq!(
+        doc["extras"]["time_series"]["ls1"],
+        source["time_series"]["ls1"]
+    );
+    assert!(
+        schema_validator().is_valid(&doc),
+        "{:?}",
+        errors(&schema_validator(), &output.text)
+    );
+    assert!(output.warnings.iter().any(|warning| {
+        warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("ls1")
+    }));
+}
+
+#[test]
+fn pmd_loadshape_references_are_not_active_in_schema_010() {
+    let source = std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap();
+    let net = parse_pmd_str(&source).unwrap();
+    let output = emit_bmopf_json_with_options(
+        &net,
+        BmopfEmitOptions::default().with_schema_version(BmopfSchemaVersion::Bmopf010),
+    );
+    let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+
+    assert!(doc.get("time_series").is_none(), "{doc}");
+    assert!(doc["load"]["l1"].get("time_series").is_none(), "{doc}");
+    assert!(doc["extras"]["time_series"]["ls1"].is_object(), "{doc}");
+    assert!(
+        schema_validator_for(BmopfSchemaVersion::Bmopf010).is_valid(&doc),
+        "{:?}",
+        errors(
+            &schema_validator_for(BmopfSchemaVersion::Bmopf010),
+            &output.text
+        )
+    );
+    assert!(
+        output
+            .warnings
+            .iter()
+            .any(|warning| { warning.contains("schema 0.1.0") && warning.contains("time_series") })
+    );
+}
+
+#[test]
+fn unsupported_pmd_profile_semantics_are_retained_verbatim() {
+    let mut source: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap())
+            .unwrap();
+    let profile = source["time_series"]["ls1"].as_object_mut().unwrap();
+    profile.insert("offset".into(), serde_json::json!(2.0));
+    profile.insert("replace".into(), serde_json::json!(false));
+    let expected = source["time_series"]["ls1"].clone();
+
+    let net = parse_pmd_str(&source.to_string()).unwrap();
+    let output = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+
+    assert!(doc.get("time_series").is_none(), "{doc}");
+    assert!(doc["load"]["l1"].get("time_series").is_none(), "{doc}");
+    assert_eq!(doc["extras"]["time_series"]["ls1"], expected);
+    assert!(
+        schema_validator().is_valid(&doc),
+        "{:?}",
+        errors(&schema_validator(), &output.text)
+    );
+    assert!(output.warnings.iter().any(|warning| {
+        warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("ls1")
+    }));
+}
+
+#[test]
+fn pmd_profile_with_replace_true_is_retained_verbatim() {
+    let mut source: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap())
+            .unwrap();
+    let profile = source["time_series"]["ls1"].as_object_mut().unwrap();
+    profile.insert("offset".into(), serde_json::json!(0.0));
+    profile.insert("replace".into(), serde_json::json!(true));
+    let expected = source["time_series"]["ls1"].clone();
+
+    let net = parse_pmd_str(&source.to_string()).unwrap();
+    let output = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+
+    assert!(doc.get("time_series").is_none(), "{doc}");
+    assert!(doc["load"]["l1"].get("time_series").is_none(), "{doc}");
+    assert_eq!(doc["extras"]["time_series"]["ls1"], expected);
+    assert!(
+        schema_validator().is_valid(&doc),
+        "{:?}",
+        errors(&schema_validator(), &output.text)
+    );
+    assert!(output.warnings.iter().any(|warning| {
+        warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("ls1")
+    }));
+}
+
+#[test]
+fn profiles_without_values_stay_in_extras_for_both_schema_versions() {
+    let parsed =
+        parse_bmopf_str(r#"{"bus":{},"voltage_source":{},"time_series":{"shape":{"time":[0,1]}}}"#)
+            .unwrap();
+
+    for version in [BmopfSchemaVersion::Bmopf010, BmopfSchemaVersion::Bmopf020] {
+        let output = emit_bmopf_json_with_options(
+            &parsed,
+            BmopfEmitOptions::default().with_schema_version(version),
+        );
+        let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+        assert!(doc.get("time_series").is_none(), "{doc}");
+        assert_eq!(
+            doc["extras"]["time_series"]["shape"]["time"],
+            serde_json::json!([0, 1])
+        );
+        assert!(schema_validator_for(version).is_valid(&doc), "{doc}");
+        assert!(output.warnings.iter().any(|warning| {
+            warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("shape")
+        }));
+    }
+}
+
+#[test]
+fn pmd_profile_provenance_survives_canonical_source_reset() {
+    use serde_json::{Value, json};
+
+    let mut source: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap())
+            .unwrap();
+    source["time_series"]["ls1"]["time"] = json!([0, 1]);
+    source["time_series"]["ls1"]["values"] = json!([0.5, 1.0]);
+    for replace in [Some(false), None] {
+        let profile = source["time_series"]["ls1"].as_object_mut().unwrap();
+        if let Some(replace) = replace {
+            profile.insert("replace".into(), json!(replace));
+        } else {
+            for key in ["replace", "source_id", "offset"] {
+                profile.remove(key);
+            }
+        }
+        let mut parsed = parse_pmd_str(&source.to_string()).unwrap();
+        *parsed.source_format_mut() = None;
+        assert_eq!(parsed.extras()["pmd_data_model"], "ENGINEERING");
+        for version in [BmopfSchemaVersion::Bmopf010, BmopfSchemaVersion::Bmopf020] {
+            let output = emit_bmopf_json_with_options(
+                &parsed,
+                BmopfEmitOptions::default().with_schema_version(version),
+            );
+            let doc: Value = serde_json::from_str(&output.text).unwrap();
+            assert!(schema_validator_for(version).is_valid(&doc), "{doc}");
+            if replace == Some(false) && version == BmopfSchemaVersion::Bmopf020 {
+                assert_eq!(doc["time_series"]["ls1"]["time"], json!([0, 3600]));
+                assert_eq!(doc["load"]["l1"]["time_series"]["p_nom"], "ls1");
+                let mut native = parse_bmopf_str(&output.text).unwrap();
+                *native.source_format_mut() = None;
+                let again: Value = serde_json::from_str(&emit_bmopf_json(&native).text).unwrap();
+                assert_eq!(again["time_series"]["ls1"]["time"], json!([0, 3600]));
+            } else {
+                assert!(doc.get("time_series").is_none(), "{doc}");
+                assert!(doc["load"]["l1"].get("time_series").is_none(), "{doc}");
+                assert_eq!(
+                    doc["extras"]["time_series"]["ls1"],
+                    source["time_series"]["ls1"]
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn foreign_pmd_profile_markers_never_activate_native_bmopf_semantics() {
+    use serde_json::{Value, json};
+
+    let input = r#"{"data_model":"ENGINEERING","bus":{},"time_series":{"shape":{"values":[0.5,1.0],"time":[0,1]}}}"#;
+    for marker in [json!("MATHEMATICAL"), json!("unsupported"), Value::Null] {
+        let mut parsed = parse_pmd_str(input).unwrap();
+        *parsed.source_format_mut() = None;
+        parsed.extras_mut().insert("pmd_data_model".into(), marker);
+        let output = emit_bmopf_json(&parsed);
+        let doc: Value = serde_json::from_str(&output.text).unwrap();
+        assert!(doc.get("time_series").is_none(), "{doc}");
+        assert_eq!(doc["extras"]["time_series"]["shape"]["time"], json!([0, 1]));
+        assert!(schema_validator().is_valid(&doc));
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|w| w.contains("RETAINED_SOURCE_ONLY") && w.contains("shape"))
+        );
+    }
+    let mut parsed = parse_pmd_str(input).unwrap();
+    *parsed.source_format_mut() = Some(powerio_dist::DistSourceFormat::PmdMathJson);
+    let output = emit_bmopf_json(&parsed);
+    let doc: Value = serde_json::from_str(&output.text).unwrap();
+    assert!(doc.get("time_series").is_none(), "{doc}");
+}
+
+#[test]
+fn foreign_profile_controls_are_retained_without_claiming_bmopf_semantics() {
+    let input = r#"{"data_model":"ENGINEERING","bus":{},"time_series":{"shape":{"values":[0.5,1.0],"time":[0,1],"replace":true,"offset":2.0,"source_id":"loadshape.shape"}}}"#;
+    let parsed = parse_pmd_str(input).unwrap();
+    let expected: serde_json::Value = serde_json::from_str(input).unwrap();
+    for profile in [BmopfSchemaVersion::Bmopf010, BmopfSchemaVersion::Bmopf020] {
+        let output = emit_bmopf_json_with_options(
+            &parsed,
+            BmopfEmitOptions::default().with_schema_version(profile),
+        );
+        let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+        assert!(doc.get("time_series").is_none());
+        assert_eq!(
+            doc["extras"]["time_series"]["shape"],
+            expected["time_series"]["shape"]
+        );
+        assert!(schema_validator_for(profile).is_valid(&doc));
+        assert!(output.warnings.iter().any(|warning| {
+            warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("shape")
+        }));
+        let reparsed = parse_bmopf_str(&output.text).unwrap();
+        let again = emit_bmopf_json_with_options(
+            &reparsed,
+            BmopfEmitOptions::default().with_schema_version(profile),
+        );
+        let again: serde_json::Value = serde_json::from_str(&again.text).unwrap();
+        assert_eq!(
+            again["extras"]["time_series"]["shape"],
+            expected["time_series"]["shape"]
+        );
+        assert!(again.get("time_series").is_none());
+    }
+}
+
+#[test]
+fn native_multiplicative_profiles_stay_in_the_bmopf_schema_table() {
+    let parsed = parse_bmopf_str(r#"{"bus":{},"voltage_source":{},"time_series":{"shape":{"values":[0.5,1.0],"time":[0,1],"description":"native"}}}"#).unwrap();
+    let output = emit_bmopf_json(&parsed);
+    let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+    assert_eq!(
+        doc["time_series"]["shape"]["values"],
+        serde_json::json!([0.5, 1.0])
+    );
+    assert!(schema_validator().is_valid(&doc));
+}
+
+/// PMD's `replace` defaults to true, so a bare profile is not multiplicative.
+#[test]
+fn pmd_profiles_without_explicit_controls_are_not_multiplicative() {
+    let input = r#"{"data_model":"ENGINEERING","bus":{},"time_series":{"shape":{"values":[0.5,1.0],"time":[0,1]}}}"#;
+    let parsed = parse_pmd_str(input).unwrap();
+    let output = emit_bmopf_json(&parsed);
+    let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+    assert!(doc.get("time_series").is_none());
+    assert_eq!(
+        doc["extras"]["time_series"]["shape"]["values"],
+        serde_json::json!([0.5, 1.0])
+    );
+    assert!(schema_validator().is_valid(&doc));
+    assert!(output.warnings.iter().any(|warning| {
+        warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("shape")
+    }));
+}
+
+/// The schema requires `values`; a profile without it has no top-level slot.
+#[test]
+fn profiles_without_values_stay_in_extras() {
+    let parsed =
+        parse_bmopf_str(r#"{"bus":{},"voltage_source":{},"time_series":{"shape":{"time":[0,1]}}}"#)
+            .unwrap();
+    let output = emit_bmopf_json(&parsed);
+    let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+    assert!(doc.get("time_series").is_none());
+    assert_eq!(
+        doc["extras"]["time_series"]["shape"]["time"],
+        serde_json::json!([0, 1])
+    );
+    assert!(schema_validator().is_valid(&doc));
+}
+
+#[test]
+fn pmd_time_axis_conversion_and_source_only_fallback_use_writer_path() {
+    use serde_json::{Value, json};
+
+    let mut source: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap())
+            .unwrap();
+    source["time_series"]["ls1"]["values"] = json!([0.5, 1.0, 0.75]);
+    source["time_series"]["ls1"]["time"] = json!([0, 1, 2]);
+    let net = parse_pmd_str(&source.to_string()).unwrap();
+    let output = emit_bmopf_json(&net);
+    let doc: Value = serde_json::from_str(&output.text).unwrap();
+    assert_eq!(doc["time_series"]["ls1"]["time"], json!([0, 3600, 7200]));
+    assert_eq!(doc["load"]["l1"]["time_series"]["p_nom"], "ls1");
+    assert!(schema_validator().is_valid(&doc), "{doc}");
+
+    source["time_series"]["ls1"]["values"] = json!([0.5, 1.0]);
+    source["time_series"]["ls1"]["time"] = json!(["2026-01-01T00:00:00Z", "2026-01-01T01:00:00Z"]);
+    let net = parse_pmd_str(&source.to_string()).unwrap();
+    let output = emit_bmopf_json(&net);
+    let doc: Value = serde_json::from_str(&output.text).unwrap();
+    assert!(doc.get("time_series").is_none(), "{doc}");
+    assert!(doc["load"]["l1"].get("time_series").is_none(), "{doc}");
+    assert_eq!(
+        doc["extras"]["time_series"]["ls1"],
+        source["time_series"]["ls1"]
+    );
+    assert!(schema_validator().is_valid(&doc), "{doc}");
+    assert!(output.warnings.iter().any(|warning| {
+        warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("ls1")
+    }));
+}
+
+#[test]
+fn unrepresentable_pmd_profile_steps_stay_verbatim_and_inactive() {
+    use serde_json::{Value, json};
+
+    let original: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap())
+            .unwrap();
+    for (time, values) in [
+        (json!([0, 0]), json!([0.5, 1.0])),
+        (json!([1, 0]), json!([0.5, 1.0])),
+        (json!([]), json!([])),
+        (json!([0]), json!([0.5, 1.0])),
+        (json!([0, 1]), json!([null, 1.0])),
+        (json!([0, 1]), json!(["unknown", 1.0])),
+        (json!([0, 1e308]), json!([0.5, 1.0])),
+        (
+            json!([1.200_000_000_000_000_4, 1.200_000_000_000_000_6]),
+            json!([0.5, 1.0]),
+        ),
+    ] {
+        let mut source = original.clone();
+        source["time_series"]["ls1"]["time"] = time;
+        source["time_series"]["ls1"]["values"] = values;
+        let net = parse_pmd_str(&source.to_string()).unwrap();
+        let output = emit_bmopf_json(&net);
+        let doc: Value = serde_json::from_str(&output.text).unwrap();
+        assert!(doc.get("time_series").is_none(), "{doc}");
+        for load in doc["load"].as_object().unwrap().values() {
+            assert!(load.get("time_series").is_none(), "{load}");
+        }
+        assert_eq!(
+            doc["extras"]["time_series"]["ls1"],
+            source["time_series"]["ls1"]
+        );
+        assert!(schema_validator().is_valid(&doc), "{doc}");
+        assert!(output.warnings.iter().any(|warning| {
+            warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("ls1")
+        }));
+    }
+}
+
+#[test]
+fn profile_cache_is_rebuilt_after_profile_edits() {
+    use serde_json::{Value, json};
+
+    let mut source: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap())
+            .unwrap();
+    source["time_series"]["ls1"]["time"] = json!([0, 1]);
+    source["time_series"]["ls1"]["values"] = json!([0.5, 1.0]);
+    let mut net = parse_pmd_str(&source.to_string()).unwrap();
+    let first: Value = serde_json::from_str(&emit_bmopf_json(&net).text).unwrap();
+    assert_eq!(first["time_series"]["ls1"]["time"], json!([0, 3600]));
+
+    for (replace, expected_time) in [(true, None), (false, Some(json!([7200, 10800])))] {
+        let mut profile = source["time_series"]["ls1"].clone();
+        profile["replace"] = json!(replace);
+        profile["time"] = json!([2, 3]);
+        net.untyped_objects_mut()
+            .iter_mut()
+            .find(|object| object.class == "time_series" && object.name == "ls1")
+            .unwrap()
+            .props = vec![(None, profile.to_string())];
+        let output = emit_bmopf_json(&net);
+        let doc: Value = serde_json::from_str(&output.text).unwrap();
+        if let Some(time) = expected_time {
+            assert_eq!(doc["time_series"]["ls1"]["time"], time);
+            assert_eq!(doc["load"]["l1"]["time_series"]["p_nom"], "ls1");
+        } else {
+            assert!(doc.get("time_series").is_none(), "{doc}");
+            assert!(doc["load"]["l1"].get("time_series").is_none(), "{doc}");
+            assert_eq!(doc["extras"]["time_series"]["ls1"], profile);
+        }
+        assert!(schema_validator().is_valid(&doc), "{doc}");
+    }
+}
+
+#[test]
+fn referenced_profiles_must_share_one_bmopf_time_axis() {
+    use serde_json::{Value, json};
+
+    let mut source: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap())
+            .unwrap();
+    source["time_series"]["ls1"]["time"] = json!([0, 1]);
+    source["time_series"]["ls1"]["values"] = json!([0.5, 1.0]);
+    source["time_series"]["ls2"] = source["time_series"]["ls1"].clone();
+    source["load"]["l2"]["time_series"] = json!({"pd_nom":"ls2", "qd_nom":"ls2"});
+    // Numerically identical integer and floating-point axes agree.
+    source["time_series"]["ls2"]["time"] = json!([0.0, 1.0]);
+    let net = parse_pmd_str(&source.to_string()).unwrap();
+    let doc: Value = serde_json::from_str(&emit_bmopf_json(&net).text).unwrap();
+    assert_eq!(doc["load"]["l1"]["time_series"]["p_nom"], "ls1");
+    assert_eq!(doc["load"]["l2"]["time_series"]["p_nom"], "ls2");
+
+    // BMOPF has no interpolation or resampling between different step axes.
+    for time in [json!([0, 2]), json!([0, 1, 2])] {
+        source["time_series"]["ls2"]["values"] =
+            Value::Array(vec![json!(1.0); time.as_array().unwrap().len()]);
+        source["time_series"]["ls2"]["time"] = time;
+        let net = parse_pmd_str(&source.to_string()).unwrap();
+        let output = emit_bmopf_json(&net);
+        let doc: Value = serde_json::from_str(&output.text).unwrap();
+        assert!(doc.get("time_series").is_none(), "{doc}");
+        for load in doc["load"].as_object().unwrap().values() {
+            assert!(load.get("time_series").is_none(), "{load}");
+        }
+        assert_eq!(doc["extras"]["time_series"], source["time_series"]);
+        assert!(schema_validator().is_valid(&doc), "{doc}");
+    }
 }

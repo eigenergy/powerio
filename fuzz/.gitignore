@@ -1,5 +1,8 @@
 target/
-corpus/
+corpus/*
+!corpus/ravens_pmd_math/
+corpus/ravens_pmd_math/*
+!corpus/ravens_pmd_math/*.json
 artifacts/
 coverage/
 Cargo.lock

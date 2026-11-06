@@ -79,16 +79,35 @@ def declared_schema_version(doc: dict, schema_ids: dict[str, str]) -> str:
 
 def validate_case(validators_by_version, schema_ids: dict[str, str], case: Path) -> list[str]:
     module = powerio.parse(case)
+    value = module.value
+    if isinstance(value, powerio.TimeSeries):
+        if not value:
+            return ["time series contains no snapshots"]
+        failures = []
+        for index, snapshot in enumerate(value):
+            try:
+                snapshot_errors = validate_module(
+                    validators_by_version, schema_ids, powerio.PioModule.from_value(snapshot)
+                )
+            except Exception as err:  # noqa: BLE001
+                failures.append(f"snapshot[{index}]: {err}")
+            else:
+                failures.extend(
+                    f"snapshot[{index}]: {error}" for error in snapshot_errors
+                )
+        return failures
+    return validate_module(validators_by_version, schema_ids, module)
+
+
+def validate_module(validators_by_version, schema_ids, module) -> list[str]:
     out = powerio.emit(module, "bmopf-json")
     if not out.text.strip():
         return ["writer returned an empty document"]
-
     doc = json.loads(out.text)
     version = declared_schema_version(doc, schema_ids)
-    validator = validators_by_version[version]
     errors = sorted(
-        validator.iter_errors(doc),
-        key=lambda err: (tuple(err.absolute_path), err.message),
+        validators_by_version[version].iter_errors(doc),
+        key=lambda err: (tuple(str(part) for part in err.absolute_path), err.message),
     )
     return [f"{error_path(err)}: {err.message}" for err in errors]
 

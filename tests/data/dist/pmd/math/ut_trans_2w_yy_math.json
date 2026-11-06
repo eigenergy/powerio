@@ -1,0 +1,1601 @@
+{
+  "storage": {},
+  "transformer": {
+    "1": {
+      "tm_fix": [
+        true,
+        true,
+        true
+      ],
+      "sm_ub": 750.0,
+      "cm_ub": null,
+      "name": "_virtual_transformer.tx1.1",
+      "source_id": "_virtual_transformer.transformer.tx1.1",
+      "t_vbase": 0.5773502691896258,
+      "polarity": 1,
+      "tm_lb": [
+        0.9,
+        0.9,
+        0.9
+      ],
+      "t_connections": [
+        1,
+        2,
+        3
+      ],
+      "index": 1,
+      "tm_ub": [
+        1.1,
+        1.1,
+        1.1
+      ],
+      "f_bus": 3,
+      "tm_nom": 1.0000000000000002,
+      "tm_set": [
+        1.02,
+        1.02,
+        1.02
+      ],
+      "f_connections": [
+        1,
+        2,
+        3
+      ],
+      "status": 1,
+      "tm_step": [
+        0.03125,
+        0.03125,
+        0.03125
+      ],
+      "configuration": "WYE",
+      "f_vbase": 6.3508529610858835,
+      "t_bus": 7
+    },
+    "2": {
+      "tm_fix": [
+        true,
+        true,
+        true
+      ],
+      "sm_ub": 750.0,
+      "cm_ub": null,
+      "name": "_virtual_transformer.tx1.2",
+      "source_id": "_virtual_transformer.transformer.tx1.2",
+      "t_vbase": 0.5773502691896258,
+      "polarity": 1,
+      "tm_lb": [
+        0.9,
+        0.9,
+        0.9
+      ],
+      "t_connections": [
+        1,
+        2,
+        3
+      ],
+      "index": 2,
+      "tm_ub": [
+        1.1,
+        1.1,
+        1.1
+      ],
+      "f_bus": 4,
+      "tm_nom": 1.0,
+      "tm_set": [
+        0.97,
+        0.97,
+        0.97
+      ],
+      "f_connections": [
+        1,
+        2,
+        3
+      ],
+      "status": 1,
+      "tm_step": [
+        0.03125,
+        0.03125,
+        0.03125
+      ],
+      "configuration": "WYE",
+      "f_vbase": 2.3094010767585034,
+      "t_bus": 6
+    }
+  },
+  "name": "ut_trans",
+  "is_projected": true,
+  "bus_lookup": {
+    "3": 1,
+    "sourcebus": 2,
+    "1": 3,
+    "2": 4
+  },
+  "switch": {},
+  "data_model": "MATHEMATICAL",
+  "bus": {
+    "3": {
+      "name": "1",
+      "vbase": 6.3508529610858835,
+      "index": 3,
+      "grounded": [
+        false,
+        false,
+        false
+      ],
+      "bus_type": 1,
+      "vm_pair_ub": [],
+      "bus_i": 3,
+      "source_id": "bus.1",
+      "vmax": [
+        null,
+        null,
+        null
+      ],
+      "terminals": [
+        1,
+        2,
+        3
+      ],
+      "vmin": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "vm_pair_lb": []
+    },
+    "4": {
+      "name": "2",
+      "vbase": 2.3094010767585034,
+      "index": 4,
+      "grounded": [
+        false,
+        false,
+        false
+      ],
+      "bus_type": 1,
+      "vm_pair_ub": [],
+      "bus_i": 4,
+      "source_id": "bus.2",
+      "vmax": [
+        null,
+        null,
+        null
+      ],
+      "terminals": [
+        1,
+        2,
+        3
+      ],
+      "vmin": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "vm_pair_lb": []
+    },
+    "9": {
+      "bus_type": 3,
+      "va": [
+        0.0,
+        -2.0943951023931953,
+        2.0943951023931957
+      ],
+      "vm_pair_ub": [],
+      "bus_i": 9,
+      "name": "_virtual_bus.voltage_source.source",
+      "vm": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "source_id": "voltage_source.source",
+      "vmax": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "vbase": 6.3508529610858835,
+      "terminals": [
+        1,
+        2,
+        3
+      ],
+      "index": 9,
+      "grounded": [
+        false,
+        false,
+        false
+      ],
+      "vmin": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "vm_pair_lb": []
+    },
+    "1": {
+      "name": "3",
+      "vbase": 2.3094010767585034,
+      "index": 1,
+      "grounded": [
+        false,
+        false,
+        false
+      ],
+      "bus_type": 1,
+      "vm_pair_ub": [],
+      "bus_i": 1,
+      "source_id": "bus.3",
+      "vmax": [
+        null,
+        null,
+        null
+      ],
+      "terminals": [
+        1,
+        2,
+        3
+      ],
+      "vmin": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "vm_pair_lb": []
+    },
+    "2": {
+      "name": "sourcebus",
+      "vbase": 6.3508529610858835,
+      "index": 2,
+      "grounded": [
+        false,
+        false,
+        false
+      ],
+      "bus_type": 1,
+      "vm_pair_ub": [],
+      "bus_i": 2,
+      "source_id": "bus.sourcebus",
+      "vmax": [
+        null,
+        null,
+        null
+      ],
+      "terminals": [
+        1,
+        2,
+        3
+      ],
+      "vmin": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "vm_pair_lb": []
+    },
+    "5": {
+      "vm_pair_ub": [],
+      "bus_type": 1,
+      "name": "_virtual_bus.transformer.tx1_3",
+      "bus_i": 5,
+      "source_id": "transformer.tx1",
+      "vmax": [
+        null,
+        null,
+        null
+      ],
+      "base_kv": 1.0,
+      "terminals": [
+        1,
+        2,
+        3
+      ],
+      "vbase": 0.5773502691896258,
+      "grounded": [
+        false,
+        false,
+        false
+      ],
+      "index": 5,
+      "vmin": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "vm_pair_lb": []
+    },
+    "7": {
+      "vm_pair_ub": [],
+      "bus_type": 1,
+      "name": "_virtual_bus.transformer.tx1_1",
+      "bus_i": 7,
+      "source_id": "transformer.tx1",
+      "vmax": [
+        null,
+        null,
+        null
+      ],
+      "base_kv": 1.0,
+      "terminals": [
+        1,
+        2,
+        3
+      ],
+      "vbase": 0.5773502691896258,
+      "grounded": [
+        false,
+        false,
+        false
+      ],
+      "index": 7,
+      "vmin": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "vm_pair_lb": []
+    },
+    "6": {
+      "vm_pair_ub": [],
+      "bus_type": 1,
+      "name": "_virtual_bus.transformer.tx1_2",
+      "bus_i": 6,
+      "source_id": "transformer.tx1",
+      "vmax": [
+        null,
+        null,
+        null
+      ],
+      "base_kv": 1.0,
+      "terminals": [
+        1,
+        2,
+        3
+      ],
+      "vbase": 0.5773502691896258,
+      "grounded": [
+        false,
+        false,
+        false
+      ],
+      "index": 6,
+      "vmin": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "vm_pair_lb": []
+    },
+    "8": {
+      "vm_pair_ub": [],
+      "bus_type": 1,
+      "name": "_virtual_bus.transformer.tx1_4",
+      "bus_i": 8,
+      "source_id": "transformer.tx1",
+      "vmax": [
+        null,
+        null,
+        null
+      ],
+      "base_kv": 1.0,
+      "terminals": [
+        1,
+        2,
+        3
+      ],
+      "vbase": 0.5773502691896258,
+      "grounded": [
+        false,
+        false,
+        false
+      ],
+      "index": 8,
+      "vmin": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "vm_pair_lb": []
+    }
+  },
+  "shunt": {},
+  "per_unit": true,
+  "time_elapsed": 1.0,
+  "gen": {
+    "1": {
+      "gen_bus": 9,
+      "name": "_virtual_gen.voltage_source.source",
+      "vbase": 6.3508529610858835,
+      "gen_status": 1,
+      "index": 1,
+      "pmin": [
+        null,
+        null,
+        null
+      ],
+      "configuration": "WYE",
+      "shutdown": 0.0,
+      "source_id": "voltage_source.source",
+      "qmax": [
+        null,
+        null,
+        null
+      ],
+      "qmin": [
+        null,
+        null,
+        null
+      ],
+      "control_mode": 1,
+      "startup": 0.0,
+      "connections": [
+        1,
+        2,
+        3
+      ],
+      "pmax": [
+        null,
+        null,
+        null
+      ],
+      "model": 2,
+      "qg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "pg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "cost": [
+        0.001,
+        0.0
+      ],
+      "vg": [
+        0.001,
+        0.001,
+        0.001
+      ],
+      "ncost": 2
+    }
+  },
+  "is_kron_reduced": true,
+  "map": [
+    {
+      "unmap_function": "_map_math2eng_root!"
+    },
+    {
+      "from": "3",
+      "unmap_function": "_map_math2eng_bus!",
+      "to": "bus.1"
+    },
+    {
+      "from": "sourcebus",
+      "unmap_function": "_map_math2eng_bus!",
+      "to": "bus.2"
+    },
+    {
+      "from": "1",
+      "unmap_function": "_map_math2eng_bus!",
+      "to": "bus.3"
+    },
+    {
+      "from": "2",
+      "unmap_function": "_map_math2eng_bus!",
+      "to": "bus.4"
+    },
+    {
+      "from": "line2",
+      "unmap_function": "_map_math2eng_line!",
+      "to": "branch.1"
+    },
+    {
+      "from": "line1",
+      "unmap_function": "_map_math2eng_line!",
+      "to": "branch.2"
+    },
+    {
+      "from": "tx1",
+      "unmap_function": "_map_math2eng_transformer!",
+      "to": [
+        "bus.5",
+        "bus.6",
+        "bus.7",
+        "bus.8",
+        "branch.3",
+        "branch.4",
+        "branch.5",
+        "transformer.1",
+        "transformer.2"
+      ]
+    },
+    {
+      "from": "load4",
+      "unmap_function": "_map_math2eng_load!",
+      "to": "load.1"
+    },
+    {
+      "from": "load2",
+      "unmap_function": "_map_math2eng_load!",
+      "to": "load.2"
+    },
+    {
+      "from": "load3",
+      "unmap_function": "_map_math2eng_load!",
+      "to": "load.3"
+    },
+    {
+      "from": "load6",
+      "unmap_function": "_map_math2eng_load!",
+      "to": "load.4"
+    },
+    {
+      "from": "load1",
+      "unmap_function": "_map_math2eng_load!",
+      "to": "load.5"
+    },
+    {
+      "from": "load5",
+      "unmap_function": "_map_math2eng_load!",
+      "to": "load.6"
+    },
+    {
+      "from": "source",
+      "unmap_function": "_map_math2eng_voltage_source!",
+      "to": [
+        "gen.1",
+        "bus.9",
+        "branch.6"
+      ]
+    }
+  ],
+  "load": {
+    "3": {
+      "name": "load3",
+      "pd": [
+        61.0
+      ],
+      "vbase": 6.3508529610858835,
+      "index": 3,
+      "load_bus": 3,
+      "dispatchable": 0,
+      "configuration": "WYE",
+      "qd": [
+        94.0
+      ],
+      "source_id": "load.load3",
+      "vnom_kv": 1.0283658022029398,
+      "connections": [
+        3
+      ],
+      "model": "POWER",
+      "status": 1
+    },
+    "4": {
+      "name": "load6",
+      "pd": [
+        96.0
+      ],
+      "vbase": 2.3094010767585034,
+      "index": 4,
+      "load_bus": 1,
+      "dispatchable": 0,
+      "configuration": "WYE",
+      "qd": [
+        63.0
+      ],
+      "source_id": "load.load6",
+      "vnom_kv": 0.9959292143521041,
+      "connections": [
+        3
+      ],
+      "model": "POWER",
+      "status": 1
+    },
+    "1": {
+      "name": "load4",
+      "pd": [
+        74.0
+      ],
+      "vbase": 2.3094010767585034,
+      "index": 1,
+      "load_bus": 1,
+      "dispatchable": 0,
+      "configuration": "WYE",
+      "qd": [
+        41.0
+      ],
+      "source_id": "load.load4",
+      "vnom_kv": 0.9959292143521041,
+      "connections": [
+        1
+      ],
+      "model": "POWER",
+      "status": 1
+    },
+    "2": {
+      "name": "load2",
+      "pd": [
+        52.0
+      ],
+      "vbase": 6.3508529610858835,
+      "index": 2,
+      "load_bus": 3,
+      "dispatchable": 0,
+      "configuration": "WYE",
+      "qd": [
+        85.0
+      ],
+      "source_id": "load.load2",
+      "vnom_kv": 1.0283658022029398,
+      "connections": [
+        2
+      ],
+      "model": "POWER",
+      "status": 1
+    },
+    "5": {
+      "name": "load1",
+      "pd": [
+        43.0
+      ],
+      "vbase": 6.3508529610858835,
+      "index": 5,
+      "load_bus": 3,
+      "dispatchable": 0,
+      "configuration": "WYE",
+      "qd": [
+        76.0
+      ],
+      "source_id": "load.load1",
+      "vnom_kv": 1.0283658022029398,
+      "connections": [
+        1
+      ],
+      "model": "POWER",
+      "status": 1
+    },
+    "6": {
+      "name": "load5",
+      "pd": [
+        85.0
+      ],
+      "vbase": 2.3094010767585034,
+      "index": 6,
+      "load_bus": 1,
+      "dispatchable": 0,
+      "configuration": "WYE",
+      "qd": [
+        52.0
+      ],
+      "source_id": "load.load5",
+      "vnom_kv": 0.9959292143521041,
+      "connections": [
+        2
+      ],
+      "model": "POWER",
+      "status": 1
+    }
+  },
+  "settings": {
+    "sbase": 1.0,
+    "voltage_scale_factor": 1000.0,
+    "sbase_default": 1.0,
+    "power_scale_factor": 1000.0,
+    "base_frequency": 60.0,
+    "vbases_default": {
+      "2": 6.3508529610858835
+    }
+  },
+  "branch": {
+    "3": {
+      "vbase": 0.5773502691896258,
+      "t_connections": [
+        1,
+        2,
+        3
+      ],
+      "g_fr": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "f_connections": [
+        1,
+        2,
+        3
+      ],
+      "br_x": [
+        [
+          0.0002999999999999999,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0002999999999999999,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0002999999999999999
+        ]
+      ],
+      "br_r": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "t_bus": 8,
+      "source_id": "_virtual_branch.transformer.tx1_3",
+      "angmax": [
+        0.17453292519943295,
+        0.17453292519943295,
+        0.17453292519943295
+      ],
+      "tap": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "angmin": [
+        -0.17453292519943295,
+        -0.17453292519943295,
+        -0.17453292519943295
+      ],
+      "transformer": false,
+      "name": "_virtual_branch.transformer.tx1_3",
+      "switch": false,
+      "index": 3,
+      "b_to": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "br_status": 1,
+      "f_bus": 5,
+      "g_to": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "shift": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "b_fr": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "c_rating_a": [
+        null,
+        null,
+        null
+      ]
+    },
+    "4": {
+      "vbase": 0.5773502691896258,
+      "t_connections": [
+        1,
+        2,
+        3
+      ],
+      "g_fr": [
+        [
+          8.333333333333336,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          8.333333333333336,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          8.333333333333336
+        ]
+      ],
+      "f_connections": [
+        1,
+        2,
+        3
+      ],
+      "br_x": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "br_r": [
+        [
+          0.00011999999999999998,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.00011999999999999998,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.00011999999999999998
+        ]
+      ],
+      "t_bus": 8,
+      "source_id": "_virtual_branch.transformer.tx1_2",
+      "angmax": [
+        0.17453292519943295,
+        0.17453292519943295,
+        0.17453292519943295
+      ],
+      "tap": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "angmin": [
+        -0.17453292519943295,
+        -0.17453292519943295,
+        -0.17453292519943295
+      ],
+      "transformer": false,
+      "name": "_virtual_branch.transformer.tx1_2",
+      "switch": false,
+      "index": 4,
+      "b_to": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "br_status": 1,
+      "f_bus": 6,
+      "g_to": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "shift": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "b_fr": [
+        [
+          -18.33333333333334,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          -18.33333333333334,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          -18.33333333333334
+        ]
+      ],
+      "c_rating_a": [
+        null,
+        null,
+        null
+      ]
+    },
+    "1": {
+      "rate_b": [
+        null,
+        null,
+        null
+      ],
+      "name": "line2",
+      "vbase": 2.3094010767585034,
+      "t_connections": [
+        1,
+        2,
+        3
+      ],
+      "index": 1,
+      "b_to": [
+        [
+          0.002814867017616455,
+          -0.0006031857894892406,
+          -0.0006031857894892406
+        ],
+        [
+          -0.0006031857894892406,
+          0.002814867017616455,
+          -0.0006031857894892406
+        ],
+        [
+          -0.0006031857894892406,
+          -0.0006031857894892406,
+          0.002814867017616455
+        ]
+      ],
+      "g_fr": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "f_connections": [
+        1,
+        2,
+        3
+      ],
+      "br_x": [
+        [
+          6.279374999999998e-5,
+          6.54375e-6,
+          6.54375e-6
+        ],
+        [
+          6.54375e-6,
+          6.279374999999998e-5,
+          6.54375e-6
+        ],
+        [
+          6.54375e-6,
+          6.54375e-6,
+          6.279374999999998e-5
+        ]
+      ],
+      "br_r": [
+        [
+          8.614999999999998e-5,
+          -2.634999999999999e-5,
+          -2.634999999999999e-5
+        ],
+        [
+          -2.634999999999999e-5,
+          8.614999999999998e-5,
+          -2.634999999999999e-5
+        ],
+        [
+          -2.634999999999999e-5,
+          -2.634999999999999e-5,
+          8.614999999999998e-5
+        ]
+      ],
+      "t_bus": 1,
+      "rate_a": [
+        null,
+        null,
+        null
+      ],
+      "source_id": "line.line2",
+      "angmax": [
+        1.0471975511965976,
+        1.0471975511965976,
+        1.0471975511965976
+      ],
+      "c_rating_b": [
+        null,
+        null,
+        null
+      ],
+      "f_bus": 4,
+      "g_to": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "rate_c": [
+        null,
+        null,
+        null
+      ],
+      "br_status": 1,
+      "angmin": [
+        -1.0471975511965976,
+        -1.0471975511965976,
+        -1.0471975511965976
+      ],
+      "c_rating_c": [
+        null,
+        null,
+        null
+      ],
+      "b_fr": [
+        [
+          0.002814867017616455,
+          -0.0006031857894892406,
+          -0.0006031857894892406
+        ],
+        [
+          -0.0006031857894892406,
+          0.002814867017616455,
+          -0.0006031857894892406
+        ],
+        [
+          -0.0006031857894892406,
+          -0.0006031857894892406,
+          0.002814867017616455
+        ]
+      ],
+      "c_rating_a": [
+        1385.640646055102,
+        1385.640646055102,
+        1385.640646055102
+      ]
+    },
+    "2": {
+      "rate_b": [
+        null,
+        null,
+        null
+      ],
+      "name": "line1",
+      "vbase": 6.3508529610858835,
+      "t_connections": [
+        1,
+        2,
+        3
+      ],
+      "index": 2,
+      "b_to": [
+        [
+          0.02128743182072444,
+          -0.0045615925330123805,
+          -0.0045615925330123805
+        ],
+        [
+          -0.0045615925330123805,
+          0.02128743182072444,
+          -0.0045615925330123805
+        ],
+        [
+          -0.0045615925330123805,
+          -0.0045615925330123805,
+          0.02128743182072444
+        ]
+      ],
+      "g_fr": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "f_connections": [
+        1,
+        2,
+        3
+      ],
+      "br_x": [
+        [
+          5.293140495867769e-5,
+          -2.1448760330578512e-5,
+          -2.1448760330578512e-5
+        ],
+        [
+          -2.1448760330578512e-5,
+          5.293140495867769e-5,
+          -2.1448760330578512e-5
+        ],
+        [
+          -2.1448760330578512e-5,
+          -2.1448760330578512e-5,
+          5.293140495867769e-5
+        ]
+      ],
+      "br_r": [
+        [
+          0.0001006479338842975,
+          -4.8112396694214874e-5,
+          -4.8112396694214874e-5
+        ],
+        [
+          -4.8112396694214874e-5,
+          0.0001006479338842975,
+          -4.8112396694214874e-5
+        ],
+        [
+          -4.8112396694214874e-5,
+          -4.8112396694214874e-5,
+          0.0001006479338842975
+        ]
+      ],
+      "t_bus": 3,
+      "rate_a": [
+        null,
+        null,
+        null
+      ],
+      "source_id": "line.line1",
+      "angmax": [
+        1.0471975511965976,
+        1.0471975511965976,
+        1.0471975511965976
+      ],
+      "c_rating_b": [
+        null,
+        null,
+        null
+      ],
+      "f_bus": 2,
+      "g_to": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "rate_c": [
+        null,
+        null,
+        null
+      ],
+      "br_status": 1,
+      "angmin": [
+        -1.0471975511965976,
+        -1.0471975511965976,
+        -1.0471975511965976
+      ],
+      "c_rating_c": [
+        null,
+        null,
+        null
+      ],
+      "b_fr": [
+        [
+          0.02128743182072444,
+          -0.0045615925330123805,
+          -0.0045615925330123805
+        ],
+        [
+          -0.0045615925330123805,
+          0.02128743182072444,
+          -0.0045615925330123805
+        ],
+        [
+          -0.0045615925330123805,
+          -0.0045615925330123805,
+          0.02128743182072444
+        ]
+      ],
+      "c_rating_a": [
+        3810.5117766515295,
+        3810.5117766515295,
+        3810.5117766515295
+      ]
+    },
+    "5": {
+      "vbase": 0.5773502691896258,
+      "t_connections": [
+        1,
+        2,
+        3
+      ],
+      "g_fr": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "f_connections": [
+        1,
+        2,
+        3
+      ],
+      "br_x": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "br_r": [
+        [
+          5.999999999999999e-5,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          5.999999999999999e-5,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          5.999999999999999e-5
+        ]
+      ],
+      "t_bus": 5,
+      "source_id": "_virtual_branch.transformer.tx1_1",
+      "angmax": [
+        0.17453292519943295,
+        0.17453292519943295,
+        0.17453292519943295
+      ],
+      "tap": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "angmin": [
+        -0.17453292519943295,
+        -0.17453292519943295,
+        -0.17453292519943295
+      ],
+      "transformer": false,
+      "name": "_virtual_branch.transformer.tx1_1",
+      "switch": false,
+      "index": 5,
+      "b_to": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "br_status": 1,
+      "f_bus": 7,
+      "g_to": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "shift": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "b_fr": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "c_rating_a": [
+        null,
+        null,
+        null
+      ]
+    },
+    "6": {
+      "name": "_virtual_branch.voltage_source.source",
+      "source_id": "voltage_source.source",
+      "angmax": [
+        0.17453292519943295,
+        0.17453292519943295,
+        0.17453292519943295
+      ],
+      "vbase": 6.3508529610858835,
+      "t_connections": [
+        1,
+        2,
+        3
+      ],
+      "index": 6,
+      "b_to": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "f_bus": 9,
+      "br_status": 1,
+      "g_to": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "g_fr": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "angmin": [
+        -0.17453292519943295,
+        -0.17453292519943295,
+        -0.17453292519943295
+      ],
+      "f_connections": [
+        1,
+        2,
+        3
+      ],
+      "br_x": [
+        [
+          1.517294488227184e-11,
+          -1.0283785410675521e-13,
+          -1.0283785410675521e-13
+        ],
+        [
+          -1.0283785410675521e-13,
+          1.517294488227184e-11,
+          -1.0283785410675521e-13
+        ],
+        [
+          -1.0283785410675521e-13,
+          -1.0283785410675521e-13,
+          1.517294488227184e-11
+        ]
+      ],
+      "b_fr": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "br_r": [
+        [
+          4.208993697625136e-12,
+          3.900480135304871e-13,
+          3.900480135304871e-13
+        ],
+        [
+          3.900480135304871e-13,
+          4.208993697625136e-12,
+          3.900480135304871e-13
+        ],
+        [
+          3.900480135304871e-13,
+          3.900480135304871e-13,
+          4.208993697625136e-12
+        ]
+      ],
+      "c_rating_a": [
+        null,
+        null,
+        null
+      ],
+      "t_bus": 2
+    }
+  },
+  "conductor_ids": [
+    1,
+    2,
+    3
+  ]
+}

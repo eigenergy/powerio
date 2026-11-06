@@ -62,6 +62,8 @@ pub enum TransmissionFormat {
     IeeeCdf,
     /// Explicit positive-sequence profile of the two-family SINCAL container.
     SincalBalanced,
+    /// MG-RAVENS JSON, the LANL CIM-derived interchange schema, balanced profile.
+    RavensJson,
 }
 
 impl TransmissionFormat {
@@ -83,6 +85,7 @@ impl TransmissionFormat {
             Self::Gridfm => "gridfm",
             Self::Goc3Json => "goc3-json",
             Self::SurgeJson => "surge-json",
+            Self::RavensJson => "ravens-json",
             Self::DeepMindOpfDataJson => "opfdata-json",
             Self::Xiidm => "xiidm",
             Self::Jiidm => "jiidm",
@@ -104,6 +107,10 @@ pub enum DistributionFormat {
     SincalMulticonductor,
     Gridlabd,
     GridlabdArras,
+    /// MG-RAVENS JSON, the multiconductor (distribution) profile.
+    RavensJson,
+    /// PowerModelsDistribution MATHEMATICAL model JSON.
+    PmdMathJson,
 }
 
 impl DistributionFormat {
@@ -116,6 +123,8 @@ impl DistributionFormat {
             Self::PmdJson => "pmd-json",
             Self::BmopfJson => "bmopf-json",
             Self::CimDist => "cim-dist",
+            Self::RavensJson => "ravens-json",
+            Self::PmdMathJson => "pmd-math-json",
         }
     }
 }
@@ -178,6 +187,9 @@ pub fn parse_transmission_format(name: &str) -> Option<TransmissionFormat> {
         "gridfm" => Some(TransmissionFormat::Gridfm),
         "goc3" | "goc3json" | "go3" | "gochallenge3" | "c3" => Some(TransmissionFormat::Goc3Json),
         "surge" | "surgejson" => Some(TransmissionFormat::SurgeJson),
+        "ravens" | "ravensjson" | "mgravens" | "mgravensjson" => {
+            Some(TransmissionFormat::RavensJson)
+        }
         "xiidm" | "iidm" => Some(TransmissionFormat::Xiidm),
         "jiidm" => Some(TransmissionFormat::Jiidm),
         "cgmes" => Some(TransmissionFormat::Cgmes),
@@ -201,8 +213,12 @@ pub fn parse_distribution_format(name: &str) -> Option<DistributionFormat> {
         "glm" | "gridlabd" | "gridlabdpnnl" => Some(DistributionFormat::Gridlabd),
         "gridlabdarras" => Some(DistributionFormat::GridlabdArras),
         "pmd" | "pmdjson" | "engineering" => Some(DistributionFormat::PmdJson),
+        "pmdmath" | "pmdmathjson" | "mathematical" => Some(DistributionFormat::PmdMathJson),
         "bmopf" | "bmopfjson" => Some(DistributionFormat::BmopfJson),
         "cimdist" => Some(DistributionFormat::CimDist),
+        "ravens" | "ravensjson" | "mgravens" | "mgravensjson" => {
+            Some(DistributionFormat::RavensJson)
+        }
         _ => None,
     }
 }
@@ -326,6 +342,21 @@ where
     Ok(serde_json::Value::deserialize(deserializer)?
         .as_str()
         .map(str::to_owned))
+}
+
+/// The key's string value, or an empty string for a present key of any
+/// other type, so presence survives a `null` marker: `Some("")` is present
+/// with no usable value and `None` is absent.
+fn present_str<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(
+        serde_json::Value::deserialize(deserializer)?
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+    ))
 }
 
 /// `Some(header)` when the key's value is a JSON object, `None` for a
@@ -457,8 +488,8 @@ struct JsonHeader {
     r#gen: bool,
     #[serde(default, deserialize_with = "present")]
     gencost: bool,
-    #[serde(default, deserialize_with = "present")]
-    data_model: bool,
+    #[serde(default, deserialize_with = "present_str")]
+    data_model: Option<String>,
     #[serde(default, deserialize_with = "present")]
     line: bool,
     #[serde(default, deserialize_with = "present")]
@@ -477,6 +508,24 @@ struct JsonHeader {
     shunt: bool,
     #[serde(default, deserialize_with = "present")]
     switch: bool,
+    // MG-RAVENS documents nest everything under CIM hash tables; the
+    // top-level `ConnectivityNode` / `PowerSystemResource` pair appears in
+    // no other supported dialect.
+    #[serde(default, deserialize_with = "present", rename = "ConnectivityNode")]
+    connectivity_node: bool,
+    #[serde(default, deserialize_with = "present", rename = "PowerSystemResource")]
+    power_system_resource: bool,
+    // The multiconductor MG-RAVENS profile states line impedances in a
+    // `PerLengthLineParameter` table and catalog data under `AssetInfo`;
+    // the balanced profile has neither.
+    #[serde(
+        default,
+        deserialize_with = "present",
+        rename = "PerLengthLineParameter"
+    )]
+    per_length_line_parameter: bool,
+    #[serde(default, deserialize_with = "present", rename = "AssetInfo")]
+    asset_info: bool,
 }
 
 impl JsonHeader {
@@ -504,19 +553,35 @@ impl JsonHeader {
                 .metadata
                 .as_ref()
                 .is_some_and(|metadata| metadata.objective);
-        let is_power_models = self.base_mva_camel || self.branch || self.r#gen || self.gencost;
+        let is_ravens = self.connectivity_node || self.power_system_resource;
+        // A multiconductor table at the top level selects the distribution
+        // profile here; a per-phase class nested deeper is caught by the
+        // facade's content check before the balanced reader sees it.
+        let is_ravens_multiconductor =
+            is_ravens && (self.per_length_line_parameter || self.asset_info);
+        // PMD's `data_model` marker is its own: a MATHEMATICAL document
+        // carries `branch` and `gen` tables shaped like PowerModels', and the
+        // marker says which reader they belong to.
+        let is_pmd = self.data_model.is_some();
+        let is_power_models =
+            (self.base_mva_camel || self.branch || self.r#gen || self.gencost) && !is_pmd;
         let transmission = is_pandapower
             || is_egret
             || is_goc3
             || is_rawx
             || is_surge
+            || (is_ravens && !is_ravens_multiconductor)
             || is_opfdata
             || is_power_models;
 
-        let is_pmd = self.data_model;
+        let is_pmd_math = self
+            .data_model
+            .as_deref()
+            .is_some_and(|m| m.eq_ignore_ascii_case("MATHEMATICAL"));
         let strong_bmopf = self.line || self.linecode || self.transformer || self.voltage_source;
         let weak_bmopf = self.bus || self.load || self.generator || self.shunt || self.switch;
-        let distribution = is_pmd || strong_bmopf || (weak_bmopf && !transmission);
+        let distribution =
+            is_ravens_multiconductor || is_pmd || strong_bmopf || (weak_bmopf && !transmission);
 
         match (transmission, distribution) {
             (true, true) => JsonClass::Case(Detection::Ambiguous),
@@ -531,19 +596,25 @@ impl JsonHeader {
                     TransmissionFormat::Goc3Json
                 } else if is_surge {
                     TransmissionFormat::SurgeJson
+                } else if is_ravens {
+                    TransmissionFormat::RavensJson
                 } else if is_opfdata {
                     TransmissionFormat::DeepMindOpfDataJson
                 } else {
                     TransmissionFormat::PowerModelsJson
                 },
             ))),
-            (false, true) => {
-                JsonClass::Case(Detection::Known(SourceFormat::Distribution(if is_pmd {
+            (false, true) => JsonClass::Case(Detection::Known(SourceFormat::Distribution(
+                if is_ravens_multiconductor {
+                    DistributionFormat::RavensJson
+                } else if is_pmd_math {
+                    DistributionFormat::PmdMathJson
+                } else if is_pmd {
                     DistributionFormat::PmdJson
                 } else {
                     DistributionFormat::BmopfJson
-                })))
-            }
+                },
+            ))),
             (false, false) => JsonClass::Case(Detection::Unknown),
         }
     }
@@ -589,9 +660,59 @@ mod tests {
     }
 
     #[test]
+    fn classifies_ravens_profiles_by_their_top_level_tables() {
+        // The CIM hash tables alone read as the balanced profile.
+        assert_eq!(
+            classify_json_text(r#"{"Versions":{},"ConnectivityNode":{},"PowerSystemResource":{}}"#),
+            JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+                TransmissionFormat::RavensJson
+            )))
+        );
+        // A per-length impedance or asset catalog table marks the
+        // multiconductor profile.
+        for table in ["PerLengthLineParameter", "AssetInfo"] {
+            assert_eq!(
+                classify_json_text(&format!(
+                    r#"{{"ConnectivityNode":{{}},"PowerSystemResource":{{}},"{table}":{{}}}}"#
+                )),
+                JsonClass::Case(Detection::Known(SourceFormat::Distribution(
+                    DistributionFormat::RavensJson
+                ))),
+                "{table}"
+            );
+        }
+        for alias in ["ravens", "ravens-json", "mg-ravens", "MG_RAVENS_JSON"] {
+            assert_eq!(
+                super::parse_transmission_format(alias),
+                Some(TransmissionFormat::RavensJson),
+                "{alias}"
+            );
+            assert_eq!(
+                super::parse_distribution_format(alias),
+                Some(DistributionFormat::RavensJson),
+                "{alias}"
+            );
+        }
+    }
+
+    #[test]
     fn classifies_pmd_json() {
         assert_eq!(
             classify_json_text(r#"{"data_model":"ENGINEERING","bus":{}}"#),
+            JsonClass::Case(Detection::Known(SourceFormat::Distribution(
+                DistributionFormat::PmdJson
+            )))
+        );
+        // The marker's value picks the PMD model.
+        assert_eq!(
+            classify_json_text(r#"{"data_model":"MATHEMATICAL","bus":{},"per_unit":true}"#),
+            JsonClass::Case(Detection::Known(SourceFormat::Distribution(
+                DistributionFormat::PmdMathJson
+            )))
+        );
+        // A marker with a non-string value still names PMD, as before.
+        assert_eq!(
+            classify_json_text(r#"{"data_model":null,"bus":{}}"#),
             JsonClass::Case(Detection::Known(SourceFormat::Distribution(
                 DistributionFormat::PmdJson
             )))

@@ -1,0 +1,1 @@
+{"data_model":"ENGINEERING","bus":{"a":{"terminals":[1]},"b":{"terminals":[1]}},"switch":{"s":{"f_bus":"a","t_bus":"b","f_connections":[1],"t_connections":[1],"rs":[[1]],"xs":[[1]]}}}
