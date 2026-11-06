@@ -3377,13 +3377,59 @@ fn a_non_numeric_bmopf_field_is_refused_rather_than_read_as_nan() {
         assert_eq!(found.len(), 1, "{spelling}: {:?}", net.diagnostics);
         assert_eq!(found[0].severity(), DiagnosticSeverity::Error, "{spelling}");
         assert_eq!(found[0].stage(), Some(DiagnosticStage::Read), "{spelling}");
-        assert_eq!(found[0].target(), Some("/linecode/lc/i_max"), "{spelling}");
+        // The pointer locates the field in the BMOPF document, not in the
+        // IR network a `target` points into (#763).
+        assert_eq!(found[0].target(), None, "{spelling}");
+        assert_eq!(
+            found[0].details().get("source_pointer"),
+            Some(&serde_json::json!("/linecode/lc/i_max")),
+            "{spelling}"
+        );
         assert!(
             found[0].message().contains(what),
             "{spelling}: {}",
             found[0].message()
         );
     }
+}
+
+#[test]
+fn free_form_provenance_keys_are_not_schema_fields() {
+    // #763: BMOPFTools records a conversion ledger under `meta.provenance`;
+    // an entry named `length` describes a source field, not a length.
+    let provenance = r#"{
+        "meta": {"provenance": {"powerio_source_mapping": {"by_field": {
+            "length": {"status": "unmapped", "target": "unmapped"},
+            "cost": "unmapped", "R_series_1_1": null
+        }}}},
+        "terminal_conventions": {"phase": ["a"], "neutral": ["n"], "earth": []},
+        "bus": {"b": {"terminal_names": ["a", "n"], "perfectly_grounded_terminals": ["n"]}},
+        "voltage_source": {"s": {"bus": "b", "terminal_map": ["a", "n"],
+            "v_magnitude": [230.0, 0.0], "v_angle": [0.0, 0.0]}}
+    }"#;
+    let net = parse_bmopf_str(provenance).unwrap();
+    assert!(
+        !net.diagnostics
+            .iter()
+            .any(|d| d.code() == "READ.BMOPF.FIELD_NOT_A_NUMBER"),
+        "{:?}",
+        net.diagnostics
+    );
+
+    // `meta.frequency` is a schema field beside the free-form provenance, so
+    // a malformed one is still reported.
+    let frequency = provenance.replace(r#""meta": {"#, r#""meta": {"frequency": "x", "#);
+    let net = parse_bmopf_str(&frequency).unwrap();
+    let found: Vec<_> = net
+        .diagnostics
+        .iter()
+        .filter(|d| d.code() == "READ.BMOPF.FIELD_NOT_A_NUMBER")
+        .collect();
+    assert_eq!(found.len(), 1, "{:?}", net.diagnostics);
+    assert_eq!(
+        found[0].details().get("source_pointer"),
+        Some(&serde_json::json!("/meta/frequency"))
+    );
 }
 
 #[test]
