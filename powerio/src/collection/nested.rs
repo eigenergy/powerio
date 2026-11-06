@@ -89,6 +89,7 @@ impl Collection {
         child.session = self.session.clone();
         child.limits = self.limits;
         child.zip_layers = self.zip_layers + 1;
+        child.origin_name.clone_from(&self.origin_name);
         child.containers.clone_from(&self.containers);
         child.containers.push(member.to_owned());
         Ok(child)
