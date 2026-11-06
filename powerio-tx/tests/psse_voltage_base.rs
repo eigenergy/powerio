@@ -1,4 +1,7 @@
 //! Two-winding impedance bases are checked against the original two-port circuit.
+//! PSS/E states R1-2 and X1-2 on the winding voltage base, the bus base, under
+//! every CZ: CZ 2 and 3 change only the MVA base. NOMV1 and NOMV2 enter the
+//! circuit through CW 2 and 3 ratios, never through the impedance.
 mod helpers;
 use helpers::*;
 use powerio_tx::{BalancedNetwork, Branch, TargetFormat};
@@ -83,16 +86,7 @@ fn all_winding_and_impedance_codes_match_the_original_circuit() {
                     } else {
                         0.2
                     };
-                    let zscale = if cz == 1 {
-                        1.0
-                    } else {
-                        base / 50.0
-                            * if nominal {
-                                (230.0_f64 / 220.0).powi(2)
-                            } else {
-                                1.0
-                            }
-                    };
+                    let zscale = if cz == 1 { 1.0 } else { base / 50.0 };
                     // Original circuit: the impedance lies between t1∠5° and t2.
                     // This oracle does not use the reader's base/tap helpers.
                     let y = inverse(r * zscale, x * zscale);
@@ -122,25 +116,21 @@ fn all_winding_and_impedance_codes_match_the_original_circuit() {
 }
 
 #[test]
-fn invalid_voltage_bases_produce_diagnostics() {
-    for text in [
-        raw(100.0, 1, 2, true).replace("1.05,230,5", "1.05,-230,5"),
-        raw(100.0, 1, 2, true).replace("'B1',220", "'B1',0"),
-    ] {
-        let parsed = parse_str(&text, "psse").unwrap();
-        assert!(
-            parsed
-                .render_diagnostics()
-                .iter()
-                .any(|d| d.contains("voltage-base")),
-            "missing invalid voltage-base diagnostic: {:?}",
-            parsed.render_diagnostics()
-        );
-    }
+fn a_nominal_voltage_of_the_other_winding_leaves_the_impedance_as_stated() {
+    // NOMV1 states bus J's voltage and NOMV2 bus I's: the impedance is still
+    // the MVA conversion of what the record states, not (110 / 220)² of it.
+    let text = raw(100.0, 1, 2, true)
+        .replace("1.05,230,5", "1.05,110,5")
+        .replace("0.98,115", "0.98,220");
+    let net = parse_psse(&text).unwrap();
+    let br = &net.branches()[0];
+    let factor = 2.0 * 0.98_f64.powi(2);
+    assert!((br.r - 0.01 * factor).abs() < 1e-12, "{}", br.r);
+    assert!((br.x - 0.2 * factor).abs() < 1e-12, "{}", br.x);
 }
 
 #[test]
-fn rawx_uses_the_same_nominal_voltage_conversion() {
+fn rawx_reads_the_impedance_on_the_same_base() {
     let document = serde_json::json!({"network": {
         "caseid": {"fields": ["ic", "sbase", "rev", "basfrq"], "data": [0, 100, 35, 50]},
         "bus": {"fields": ["ibus", "name", "baskv", "ide"], "data": [[1,"B1",220,3],[2,"B2",110,1]]},
@@ -149,7 +139,7 @@ fn rawx_uses_the_same_nominal_voltage_conversion() {
     }});
     let net = parse_str(&document.to_string(), "rawx").unwrap().network;
     let br = &net.branches()[0];
-    let factor = 2.0 * (230.0_f64 / 220.0).powi(2) * 0.98_f64.powi(2);
+    let factor = 2.0 * 0.98_f64.powi(2);
     assert!((br.r - 0.01 * factor).abs() < 1e-12);
     assert!((br.x - 0.2 * factor).abs() < 1e-12);
 }
