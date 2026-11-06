@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- The `cim-dist` reader reads CIM16 LV feeders stated with sequence
+  impedances and no per phase class. A header-less CIM document with the
+  IEC 61968 customer classes (`ServiceLocation`, `UsagePoint`) now routes to
+  `cim-dist` instead of failing as CGMES. Enumerations written as text
+  (`<cim:Terminal.phases>A</cim:Terminal.phases>`) read like references, so
+  a single phase fuse is no longer read as a three phase switch. A segment
+  takes its ampacity from the `WireInfo.ratedCurrent` its `AssetDatasheet`
+  names, with a finding for a stated value that is no positive current. The
+  Diagram Layout gives segment routes and bus locations in the coordinate
+  reference system the diagram names, taking a node's or terminal's own
+  drawing first and reporting a drawing that places nothing. A CIM16 document
+  set without a `BaseFrequency` reads at 50 Hz. `Circuit`, `CompositeSwitch`,
+  and `PSRType` are reported as context.
+
 ## 0.11.9
 
 **PSS/E**
