@@ -22,8 +22,13 @@ mpc.branch = [1 2 0.01 0.1 0 250 250 250 0 0 1 -30 30; 2 3 0.02 0.2 0 250 250 25
 
 
 def release(version: str) -> tuple:
-    """MAJOR.MINOR.PATCH: three numbers without leading zeros or a suffix."""
-    match = re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version)
+    """The core MAJOR.MINOR.PATCH of a release: three numbers without leading
+    zeros, and a prerelease suffix (1.0.0-rc.1 or 1.0.0rc1) is a candidate of
+    that core release."""
+    match = re.fullmatch(
+        r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-?(?:a|b|rc|alpha|beta)\.?[0-9]+)?",
+        version,
+    )
     assert match is not None, version
     return tuple(int(part) for part in match.groups())
 
