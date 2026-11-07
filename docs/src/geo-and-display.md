@@ -26,8 +26,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-If you need the raw display record, `PwdDisplay` is still available; it has the
-canvas, the save stamp, and the symbol table in diagram coordinates.
+Rust callers that need the raw display record can still lift a `PwdDisplay`
+into a layer with `to_geo_layer_from_pwd`; it has the canvas, the save stamp,
+and the symbol table in diagram coordinates.
 
 ## Coordinate fields
 
@@ -165,11 +166,9 @@ $ powerio geo convert buscoords.csv -o case.geo.json
 The `.pwd` reader returns a drawing `GeoLayer` with decoded bus positions,
 branch paths, and substation positions. Coordinates remain in drawing units.
 Unsupported or unmatched bus and branch records produce diagnostics. Read a
-display with `parse`. Python's `parse_display`, which returns
-`DisplayData(kind="powerworld", data=PwdDisplay(...))` with the canvas
-dimensions, the save stamp, and the substation symbols, remains only for 0.11
-compatibility, reads the whole file without the input byte limits, and will be
-removed in 0.12.
+display with `parse`, under the same input byte limits as every other source.
+PowerIO 1.0 removed Python's `parse_display`, which returned the raw display
+record and read the file without those limits.
 
 The facade helpers connect it to the geo model. `to_geo_layer_from_pwd` lifts
 the substation symbols into a diagram space `GeoLayer`, which is also what

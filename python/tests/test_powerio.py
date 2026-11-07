@@ -839,26 +839,15 @@ def test_goc3_solution_requires_the_matching_problem():
         )
 
 
-def test_parse_powerworld_display_file():
+def test_parse_reads_a_powerworld_display_to_a_geo_layer():
     path = DATA / "powerworld" / "ACTIVSg200.pwd"
-    parsed = powerio.parse_display(path)
+    layer = powerio.parse(path).value
 
-    assert not hasattr(powerio, "parse_display_file")
-    assert not hasattr(powerio, "parse_display_bytes")
-    assert not hasattr(powerio, "parse_display_text")
-    assert parsed.kind == "powerworld"
-    assert isinstance(parsed.data, powerio.PwdDisplay)
-    assert parsed.data.canvas_width == 200
-    assert parsed.data.canvas_height == 200
-    assert parsed.data.stamp == 43068
-    assert len(parsed.data.substations) == 111
-
-    first = parsed.data.substations[0]
-    assert isinstance(first, powerio.PwdSubstation)
-    assert first.number == 50
-    assert first.name == "CHAMPAIGN 3"
-    assert first.x == pytest.approx(-47299.112519818635)
-    assert first.y == pytest.approx(23498.080802557866)
+    # 1.0 removed parse_display and its raw record (#612); parse is the one
+    # way to read a display.
+    for removed in ("parse_display", "DisplayData", "PwdDisplay", "PwdSubstation"):
+        assert not hasattr(powerio, removed), removed
+    assert isinstance(layer, powerio.GeoLayer)
 
 
 def test_case_tables(case9):

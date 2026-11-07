@@ -46,7 +46,6 @@ def test_tool_surface_uses_powerio_operations_and_types():
         "diagnostics",
         "to_normalized",
         "calc_matrix",
-        "display",
         "to_balanced_report",
         "to_balanced",
         "about",
@@ -57,6 +56,7 @@ def test_tool_surface_uses_powerio_operations_and_types():
         "inspect_state",
         "export_state",
         "materialize_network",
+        "display",
     ):
         assert removed not in tools
 
@@ -242,13 +242,6 @@ def test_to_balanced_report_and_conversion_use_module_methods():
     assert report["ready"] is True
     module = powerio.deserialize(io.StringIO(converted["powerio_ir"]))
     assert isinstance(module.value, powerio.BalancedNetwork)
-
-
-def test_display_decodes_powerworld_pwd():
-    result = server.display(str(PWD))
-    assert result["format"] == "powerworld-pwd"
-    assert result["canvas"]["width"] > 0
-    assert result["substations"]
 
 
 def test_about_reports_exact_tool_list():
@@ -590,32 +583,6 @@ def test_inline_size_counts_utf8_bytes(monkeypatch):
     monkeypatch.setattr(server, "_UTF8_COUNT_CHUNK", None)
     monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", "44")
     server._check_inline_size("content", value)
-
-
-def test_display_requires_a_regular_file_within_the_primary_limit(
-    monkeypatch, tmp_path
-):
-    size = PWD.stat().st_size
-    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", str(size))
-    assert server.display(str(PWD))["format"] == "powerworld-pwd"
-
-    def refuse(*args, **kwargs):
-        raise AssertionError("the display reader ran")
-
-    monkeypatch.setattr(powerio, "parse_display", refuse)
-    monkeypatch.setenv("POWERIO_MAX_PRIMARY_BYTES", str(size - 1))
-    with pytest.raises(
-        ValueError, match=rf"exceeds the {size - 1} byte .*POWERIO_MAX_PRIMARY_BYTES"
-    ):
-        server.display(str(PWD))
-    with pytest.raises(ValueError, match="regular file"):
-        server.display(str(tmp_path))
-    if os.name != "nt":
-        # A named pipe is refused from its metadata, without opening it.
-        fifo = tmp_path / "display.pwd"
-        os.mkfifo(fifo)
-        with pytest.raises(ValueError, match="regular file"):
-            server.display(str(fifo))
 
 
 def test_coded_error_encodes_typed_and_legacy_diagnostics():
