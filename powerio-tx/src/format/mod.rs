@@ -1516,6 +1516,7 @@ fn warn_dropped_frequency(net: &BalancedNetwork, format: TargetFormat, conv: &mu
             | TargetFormat::PsseRawx
             | TargetFormat::PandapowerJson
             | TargetFormat::PowerModelsJson
+            | TargetFormat::EgretJson
     );
     if carries_frequency {
         return;
@@ -1633,9 +1634,10 @@ fn warn_dropped_exchange_context(
         TargetFormat::RavensJson => {
             exchange_context_loss_with_identity_policy(net, format.label(), true, false)
         }
-        // PowerModels JSON rows carry a source identity as `uid`, and the
-        // document carries the case metadata, as keys PowerModels ignores.
-        TargetFormat::PowerModelsJson => {
+        // PowerModels JSON and egret JSON rows carry a source identity as
+        // `uid`, and the document carries the case metadata, as keys those
+        // tools leave alone.
+        TargetFormat::PowerModelsJson | TargetFormat::EgretJson => {
             exchange_context_loss_with_identity_policy(net, format.label(), true, true)
         }
         _ => exchange_context_loss(net, format.label()),
