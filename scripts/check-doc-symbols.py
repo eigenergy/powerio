@@ -21,7 +21,7 @@ DOCS = ROOT / "docs" / "src"
 # `parse` extends `Base.parse` and is deliberately not exported, and the
 # argument types are Base types.
 JULIA_BASE = {"parse", "IO", "AbstractVector", "length", "keys", "haskey"}
-HISTORY_PAGES = {"migration-0.11.md", "migration-1.0.md"}
+HISTORY_PAGES = {"migration-0.11.md", "migration-0.12.md"}
 
 def fail(page: Path, message: str) -> None:
     print(f"{page.relative_to(ROOT)}: {message}", file=sys.stderr)

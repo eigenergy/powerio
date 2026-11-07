@@ -22,7 +22,7 @@ version (`powerio_ir` with `schema` and `version`), the BMOPF schema
 version, the compiled features, and the diagnostic namespaces and error
 categories.
 
-The Arrow C export was removed in 0.11.0, and PowerIO 1.0 removed the inert
+The Arrow C export was removed in 0.11.0, and PowerIO 0.12 removed the inert
 `arrow` build flag that 0.11 kept for source-build compatibility: a command
 with `--features arrow` no longer resolves, so drop the flag (for example
 `cargo build -p powerio-capi --release --features matrix,gridfm,dist,prob`).
@@ -34,14 +34,15 @@ The header states the PowerIO release it was generated from as
 `PIO_VERSION_MAJOR`, `PIO_VERSION_MINOR`, and `PIO_VERSION_PATCH`, and
 `pio_version_numbers()` returns the release of the loaded library as a
 `PioVersionView`. `pio_version()` returns the same release as text. A
-prerelease such as `1.0.0-rc.1` states its core release, `1.0.0`, in the
+prerelease such as `0.12.0-rc.1` states its core release, `0.12.0`, in the
 numbers and the whole version in `pio_version()`.
 
 A program compiled against the header of release X.Y.Z works with any
 library that
 
-- is in the same release series, as Cargo defines it: the same major number
-  (1.x), and
+- is in the same release series, as Cargo defines it: the same major and
+  minor numbers before 1.0 (0.12.x), the same major number from 1.0 on (1.x),
+  and
 - is release X.Y.Z or newer.
 
 Within a release series the C ABI only gains symbols: no symbol is removed,
@@ -73,8 +74,8 @@ before the version moves carries the `semver-major` label, and once the
 workspace version starts a new release series the check lists the differences
 without failing.
 
-Before 1.0 the header carried a separate ABI number; PowerIO 1.0 replaced it
-with the release. See [From 0.11 to 1.0](migration-1.0.md).
+Before 0.12 the header carried a separate ABI number; PowerIO 0.12 replaced
+it with the release. See [From 0.11 to 0.12](migration-0.12.md).
 
 ## Parse and inspect a module
 

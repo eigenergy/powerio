@@ -94,12 +94,12 @@ typedef struct PioVector PioVector;
  * one. Compare the three numbers with `pio_version_numbers` before you use
  * the library.
  */
-#define PIO_VERSION_MAJOR 1
+#define PIO_VERSION_MAJOR 0
 
 /**
  * Minor number of the PowerIO release this header was generated from.
  */
-#define PIO_VERSION_MINOR 0
+#define PIO_VERSION_MINOR 12
 
 /**
  * Patch number of the PowerIO release this header was generated from.
@@ -115,7 +115,7 @@ typedef struct {
 } PioStringView;
 
 /**
- * The three numbers of a PowerIO release, such as 1.0.0.
+ * The three numbers of a PowerIO release, such as 0.12.0.
  */
 typedef struct {
     uint32_t major;

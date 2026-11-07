@@ -2,21 +2,24 @@
 
 ## Unreleased
 
-## 1.0.0-rc.1
+## 0.12.0-rc.1
 
-The first release candidate for PowerIO 1.0, which starts the 1.x release
-series. See [From 0.11 to 1.0](docs/src/migration-1.0.md) for every change
-that needs action.
+The release candidate for PowerIO 0.12, which starts the 0.12.x release
+series. PowerIO stays below 1.0 while its public Rust API exposes crates
+that are themselves before 1.0 (`sprs` in `powerio-matrix`, `petgraph` in
+`IndexedNetwork::to_petgraph`). See
+[From 0.11 to 0.12](docs/src/migration-0.12.md) for every change that needs
+action.
 
 **Breaking changes**
 
 - PowerIO IR documents state the release whose schema they follow: the
-  header's `"version"` is now `"1.0.0"` instead of the integer `2`.
+  header's `"version"` is now `"0.12.0"` instead of the integer `2`.
   `powerio::IR_VERSION` becomes that release as a string, `IR_MIN_VERSION` is
-  removed, and `IR_SCHEMA_ID` names `pio-ir/1.0.0/schema.json`. A reader
-  accepts documents from its own release series (any 1.y.z) and the
+  removed, and `IR_SCHEMA_ID` names `pio-ir/0.12.0/schema.json`. A reader
+  accepts documents from its own release series (any 0.12.z) and the
   `"version": 2` documents every 0.11 release wrote, with their meaning;
-  0.11 readers refuse 1.0 documents. Every release now publishes its own
+  0.11 readers refuse 0.12 documents. Every release now publishes its own
   `docs/schema/pio-ir/<release>/schema.json`, and the files under `pio-ir/2/`
   keep their bytes. `powerio.versions()["powerio_ir"]["version"]` and the
   `powerio_ir.version` that `pio_schema_report` returns are now the release
@@ -26,8 +29,8 @@ that needs action.
   with no alias. The header states the release it was generated from as
   `PIO_VERSION_MAJOR`, `PIO_VERSION_MINOR`, and `PIO_VERSION_PATCH`, and
   `pio_version_numbers()` returns the release of the loaded library. A
-  program compiled against the header of release X.Y.Z works with any 1.x
-  library at X.Y.Z or newer; within a release series the C ABI only gains
+  program compiled against the header of release 0.12.Z works with any
+  0.12.x library at 0.12.Z or newer; within a release series the C ABI only gains
   symbols, which `scripts/check-capi-header.py` checks against the latest
   release header. `scripts/check-capi-v7.sh` is now `scripts/check-capi.sh`.
 - `Transformer3W` gains `magnetizing_connection` (`StarPoint` or
