@@ -41,6 +41,13 @@
   explicit limits and namespace checks, as shared infrastructure for #774.
 
 ## 0.11.9
+**BMOPF**
+- BMOPF reading no longer checks free-form `meta.provenance` entries as schema
+  fields, so a provenance key such as `length` raises no
+  `READ.BMOPF.FIELD_NOT_A_NUMBER` finding. The finding's pointer into the
+  BMOPF document moves from `target`, which points into the IR network, to the
+  `source_pointer` detail, so a module carrying it serializes to PowerIO IR
+  (#763).
 
 **PSS/E**
 
