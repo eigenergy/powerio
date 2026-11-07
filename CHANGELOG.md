@@ -6,8 +6,8 @@
 
 The release candidate for PowerIO 0.12, which starts the 0.12.x release
 series. PowerIO stays below 1.0 while its public Rust API exposes crates
-that are themselves before 1.0 (`sprs` in `powerio-matrix`, `petgraph` in
-`IndexedNetwork::to_petgraph`). See
+that are themselves before 1.0 (`sprs` in `powerio-matrix`, `num-complex` in
+the LinDist3Flow coefficients and the GridLAB-D quantities). See
 [From 0.11 to 0.12](docs/src/migration-0.12.md) for every change that needs
 action.
 
@@ -53,6 +53,11 @@ action.
   remain.
 - Remove the inert `arrow` Cargo feature of `powerio-capi`; a build command
   that names it no longer resolves (#673).
+- Remove `IndexedNetwork::to_petgraph`, and with it `powerio-tx`'s petgraph
+  dependency, so no pre-1.0 graph crate type is in the public API.
+  `IndexedNetwork::branch_edges()` yields `(branch, from, to)` for each
+  in-service branch over dense bus indices; build a graph with any library
+  from it.
 - The Rust MSRV is 1.89.
 
 **Collections**

@@ -150,6 +150,22 @@ unit with an off-nominal winding 1 ratio the difference reached `|Ym|` in
 - `to_balanced` and `to_balanced_report` are also exported at the facade
   root, beside the other transformations; `powerio::transform` keeps them.
 
+## Graph data
+
+`IndexedNetwork::to_petgraph` is removed, and `powerio-tx` no longer depends
+on petgraph, a crate before its own 1.0 whose type was in PowerIO's public
+API. `IndexedNetwork::branch_edges()` yields the same topology, one
+`(branch, from, to)` per in-service branch over dense bus indices. To keep a
+petgraph graph, add `view.n()` nodes and one edge per item:
+
+```rust
+let mut graph = petgraph::graph::UnGraph::<usize, usize>::with_capacity(view.n(), 0);
+let nodes: Vec<_> = (0..view.n()).map(|bus| graph.add_node(bus)).collect();
+for (branch, from, to) in view.branch_edges() {
+    graph.add_edge(nodes[from], nodes[to], branch);
+}
+```
+
 ## Removed compatibility shims
 
 PowerIO 0.11 kept these only so that 0.11.x code kept working; 0.12 removes

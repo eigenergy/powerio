@@ -103,8 +103,8 @@ Matrix outputs (`powerio-matrix`):
 - DC matrix data follows PowerModels: incidence `A` is branches by buses with
   `+1` at the from bus and `-1` at the to bus, `B = A' * Diagonal(b) * A`,
   and `Bf = Diagonal(b) * A`. Phase shift injection stays separate.
-- petgraph `UnGraph<bus_idx, branch_idx>` data plus connectivity and radial
-  diagnostics.
+- Graph data as `IndexedNetwork::branch_edges()` (branch, from, to) over dense
+  bus indices, plus connectivity and radial diagnostics.
 - GridFM Parquet directory writing through `gridfm-datakit` compatible
   tables; GridFM parsing reuses one balanced network identity set across
   scenarios rather than cloning one network per scenario.
@@ -384,9 +384,10 @@ docs/                         the mdBook guide, the schema archive, release note
   deduplicates its `(i, j)` entry in O(1) amortized time.
 - **The TUI lives in the CLI crate** under `powerio-cli/src/tui/` and is
   testable through `ratatui::backend::TestBackend`.
-- **petgraph data.** `IndexedNetwork::to_petgraph()` returns
-  `UnGraph<usize, usize>` with the dense bus index as node weight and the
-  branch index as edge weight.
+- **Graph data.** `IndexedNetwork::branch_edges()` yields `(branch, from, to)`
+  for each in-service branch over dense bus indices, so a caller builds a graph
+  with any library. No graph crate type is in the public API: a pre-1.0
+  dependency in a public signature would hold PowerIO below 1.0.
 - **Format validation needs Julia and Python oracles.** The harnesses under
   `evals/validation/` and `evals/powsybl/` check the readers and writers
   against PowerModels.jl, PowSybl, and the Python tools; they do not run in

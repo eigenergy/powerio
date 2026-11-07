@@ -24,7 +24,6 @@ use quick_xml::name::ResolveResult;
 
 use crate::diagnostics::{Diagnostics, codes};
 use crate::format::TextEmission;
-use crate::format::union_find::UnionFind;
 use crate::network::{
     AcDcConverterControlMode, ActivePowerControl, Area, BalancedNetwork, BoundaryLine,
     BoundaryLineGeneration, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet,
@@ -43,6 +42,7 @@ use crate::network::{
     TopologyEndpoint, TopologyKind, TopologySwitch, Transformer3W, TransformerControlMode,
     VoltageLevel, VoltageSourceConverter, Winding,
 };
+use crate::union_find::UnionFind;
 use crate::{Error, Generator, Result};
 
 const FORMAT: &str = "XIIDM XML";

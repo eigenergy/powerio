@@ -212,7 +212,7 @@ impl BalancedNetwork {
             .filter(|(_, bus)| bus.kind != BusType::Isolated)
             .map(|(index, bus)| (bus.id, index))
             .collect();
-        let mut sets = petgraph::unionfind::UnionFind::new(buses.len());
+        let mut sets = crate::union_find::UnionFind::new(buses.len());
         let mut join = |a: BusId, b: BusId| {
             if let (Some(&i), Some(&j)) = (index_of.get(&a), index_of.get(&b)) {
                 sets.union(i, j);
