@@ -168,6 +168,24 @@ repeated, or whose header decodes but places nothing, with
 file. The display's save stamp, an undocumented header number the reader uses
 to recognize drawing records, is not part of the `GeoLayer`.
 
+## Conversion output
+
+No action is needed unless a consumer compares output byte for byte or
+validates it against a closed schema.
+
+- PowerModels JSON and egret JSON documents carry more PowerIO keys, which
+  both tools ignore: areas, case metadata, the detailed connectivity
+  hierarchy, the coordinate reference, element identities and rating sets,
+  and typed fields such as transformer and switched shunt controls.
+  [Format fidelity](format-fidelity.md) lists them. A consumer that rejects
+  unknown keys has to allow them.
+- A MATPOWER branch matrix with the solved flow columns `PF`, `QF`, `PT`,
+  and `QT` reads them as the branch solution, and the MATPOWER writer states
+  them when every branch has a solution, so such a branch matrix has 17
+  columns instead of 13.
+- The PMD ENGINEERING writer writes a generator `control_mode` the source
+  stated.
+
 ## Toolchain
 
 The Rust MSRV is 1.89 (it was 1.88), because rusqlite 0.41 and uuid 1.27
