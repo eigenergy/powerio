@@ -47,13 +47,14 @@
 - `serialize_diagnostics` returns the JSON text of a diagnostics array, where
   `serialize` returns an `EmitResult`: a diagnostics array is not a module
   document and has no artifacts or findings of its own.
-- Public `powerio-matrix` signatures return `sprs::CsMat`, and
-  `IndexedNetwork::to_petgraph` returns a `petgraph::graph::UnGraph`. Both
-  crates are before their own 1.0, which is why PowerIO is too: a crate whose
-  public API exposes a pre-1.0 dependency cannot promise 1.0 stability, so
-  moving either to an incompatible release starts a new PowerIO release
-  series. PowerIO 1.0 waits until the public API depends only on stable
-  crates, for example an owned sparse matrix type in `powerio-matrix`.
+- Public `powerio-matrix` signatures return `sprs::CsMat`, and the
+  LinDist3Flow coefficient types and `powerio_dist::glm::GlmQuantity` hold
+  `num_complex::Complex64`. Both crates are before their own 1.0, which is why
+  PowerIO is too: a crate whose public API exposes a pre-1.0 dependency cannot
+  promise 1.0 stability, so moving either to an incompatible release starts a
+  new PowerIO release series. PowerIO 1.0 waits until the public API depends
+  only on stable crates, for example an owned sparse matrix type in
+  `powerio-matrix`.
 
 ## Versions
 
