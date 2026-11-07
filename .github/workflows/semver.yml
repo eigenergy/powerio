@@ -2,16 +2,16 @@ name: Semver
 
 # The public Rust API of every crate crates.io publishes, compared with
 # cargo-semver-checks against the newest stable release tag at or below the
-# workspace version (scripts/check-semver.sh). A release line takes compatible
-# fixes, performance work, and additive change, and a break goes into the next
-# minor release (docs/src/scope-0.11.md), so a pull request that breaks the API
-# without moving the workspace version to that minor fails here.
+# workspace version (scripts/check-semver.sh). A release series takes
+# compatible fixes, performance work, and additive change, and a break goes
+# into the next major release (docs/src/known-limits.md), so a pull request that
+# breaks the API without moving the workspace version to that major fails here.
 #
 # The C header gets the same comparison against the header of that tag
 # (scripts/check-capi-header.py): within a release series the C ABI only
 # gains symbols.
 #
-# A break that is meant for the next minor before the version moves carries
+# A break that is meant for the next major before the version moves carries
 # the `semver-major` label: each check still runs and lists every break, as a
 # warning. Adding or removing the label runs the checks again.
 on:

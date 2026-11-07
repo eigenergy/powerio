@@ -70,7 +70,7 @@ Python keeps the `n_*` counts because a table property builds one dict per row.
 A Python element is a dict keyed by the Rust field names, while a Julia element
 is an immutable struct whose field names are the C ABI names, which spell out
 the quantity and unit (`vm_pu`, `active_power_mw`). Unifying those two sets of
-field names is listed under [Known limits](scope-0.11.md).
+field names is listed under [Known limits](known-limits.md).
 
 ## Collections
 

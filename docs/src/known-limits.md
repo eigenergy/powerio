@@ -8,9 +8,10 @@
   parse. Egret support is the scalar network profile with time series, with
   unit commitment fields outside it. OpenDSS support is the static circuit;
   load shapes and solve instructions are retained and reported. Distribution
-  CIM support is the CIM100 node breaker profile with per phase equipment;
-  controls, distributed energy resources, wire geometry, and limits are
-  reported rather than mapped, and a ZIP archive does not parse.
+  CIM support is the CIM100 node breaker profile with per phase equipment and
+  the CIM16 LV feeder profile; controls, distributed energy resources, wire
+  geometry, and limits are reported rather than mapped. A ZIP archive or a
+  folder of related files is read through an [input collection](collections.md).
 - DOE GO Challenge 3 problem data, DeepMind OPFData, PowerWorld PWB, and the
   IEEE Common Data Format are parse only, though a complete `AcScucSolution`
   does emit the official GO Challenge 3 solution file.
@@ -22,7 +23,7 @@
   PowerWorld AUX dynamics views remain future work. See [Dynamics and DYR](dynamics.md).
 - Balanced to multiconductor construction, load linearized multiconductor
   admittance from an operating point, and a general multi period planning
-  instance are waiting on a later release.
+  instance are not part of 1.0.
 - The multiconductor to balanced transformation is Rust and Python only.
   Multiconductor admittance assembly,
   `powerio_matrix::calc_multiconductor_admittance_matrix`, is Rust only.
@@ -36,48 +37,40 @@
   strings. PyPSA CSV, PSLF, and OpenDSS tokenize through owned strings, and
   the Egret, GO Challenge 3, OPFData, and pandapower readers decode through a
   generic JSON value tree first.
-- Two sets of field names coexist. Rust records and Python dict rows use the
-  MATPOWER derived names (`vm`, `pg`, `rate_a`, `tap`); the C ABI and Julia
-  spell out the quantity and unit (`vm_pu`, `active_power_mw`, `rate_a_mva`,
-  `tap_ratio`). Settling on one set of names for all four languages is a 1.0
-  decision, and it is separate from the PowerIO IR keys, which change only
-  with a version bump.
+- Two sets of field names coexist, one per kind of binding. Rust records,
+  Python dict rows, and PowerIO IR use the data model's names, derived from
+  MATPOWER (`vm`, `pg`, `rate_a`, `tap`); the C ABI and Julia spell out the
+  quantity and unit (`vm_pu`, `active_power_mw`, `rate_a_mva`, `tap_ratio`).
+  Both are stable through 1.x.
 - Python tables return dict rows; typed element views like Julia's are not
   offered yet.
-- `to_balanced` and `to_balanced_report` live in `powerio::transform` rather
-  than the facade root, and `serialize_diagnostics` returns a `String` where
-  `serialize` returns an `EmitResult`.
-- `SocwrOpfSolution` calls its branch flows `branch_from_active_power` where
-  the other solutions say `branch_from_active_flow`, and its `bus_order` and
-  `branch_order` are iterators rather than vectors. PowerIO IR has the
-  same split in its keys.
+- `serialize_diagnostics` returns the JSON text of a diagnostics array, where
+  `serialize` returns an `EmitResult`: a diagnostics array is not a module
+  document and has no artifacts or findings of its own.
+- Public `powerio-matrix` signatures return `sprs::CsMat`, and
+  `IndexedNetwork::to_petgraph` returns a `petgraph::graph::UnGraph`. Both
+  crates are before their own 1.0, so moving either to an incompatible
+  release is a breaking PowerIO change, made only in a new major release.
 
 ## Versions
 
 One PowerIO release version covers the Rust crates, the Python distribution,
 and PowerIO.jl. The boundaries checked independently are:
 
-| Boundary | Value in 0.11 | Checked where | Moves when |
+| Boundary | Value in 1.x | Checked where | Moves when |
 |---|---|---|---|
-| PowerIO release | 0.11.x | the manifests, `powerio::VERSION`, `powerio.versions()`, `pio_version` | every release |
-| C ABI | 7 | the ABI number the binding compares at load; 0.12 compares the release series instead | an existing C signature or documented behavior changes |
-| PowerIO IR version | 2, unchanged | the document header | an existing representation changes incompatibly |
-| Rust toolchain | 1.88 | `rust-version` in the workspace manifest, checked by CI | a dependency in the locked graph requires a newer compiler |
-| Python | 3.9 or later; the `mcp` extra needs 3.10, the `bench` extra 3.11 | `pyproject.toml` | a dependency drops a version |
+| PowerIO release | 1.y.z | the manifests, `powerio::VERSION`, `powerio.versions()`, `pio_version` | every release |
+| C ABI | the release series, 1.x | `pio_version_numbers` against the header's `PIO_VERSION_*` at load | a release removes or changes a C symbol, which starts a new series |
+| PowerIO IR | the release whose schema a document follows, `"1.0.0"` | the document header, `powerio::IR_VERSION` | every release that changes the schema; a reader accepts its own series and 0.11's `2` |
+| Rust toolchain | 1.89 | `rust-version` in the workspace manifest, checked by CI | a dependency in the locked graph requires a newer compiler |
+| Python | 3.11 or later | `pyproject.toml` | a dependency drops a version |
 
-The release version is what you install. ABI 7 is what a compiled consumer
-has to match in 0.11; from 0.12 a compiled C consumer needs a library from
-its header's release series, at that release or a newer one. The integer 2
-identified every 0.11 PowerIO IR document; from 0.12 the header names the
-release whose schema the document follows, as
-[PowerIO IR](pio-json-schema.md) describes. The MCP server passes PowerIO IR
-documents through and defines no electrical data shape of its own.
-
-The 0.11.x line is for compatible fixes, performance work, and additive
-change; a break in the public Rust API that cannot be avoided goes into 0.12.
-CI checks the publishable crates against the latest 0.11 release tag with
-cargo-semver-checks (`scripts/check-semver.sh`) and the C header against
-that tag's header (`scripts/check-capi-header.py`); a pull request that
-carries a 0.12 break is labeled `semver-major`.
-The Rust API stays pre-1.0 as long as public signatures expose types from the
-pre-1.0 `sprs` and `petgraph` crates.
+Within the 1.x series, releases are compatible: the public Rust, Python,
+and Julia APIs only gain items, the C ABI only gains symbols, and a release
+reads every PowerIO IR document the series wrote. A break waits for 2.0.
+CI checks the publishable crates against the latest release tag with
+cargo-semver-checks (`scripts/check-semver.sh`), and the C header against the
+latest release header (`scripts/check-capi-header.py`); a pull request that
+carries a break is labeled `semver-major`. See [PowerIO IR](pio-json-schema.md)
+for the document rule and [From 0.11 to 1.0](migration-1.0.md) for what
+changed.

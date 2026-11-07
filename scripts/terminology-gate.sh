@@ -94,7 +94,7 @@ current_docs=(
   docs/src/cli-mcp.md
   docs/src/corpus-harness.md
   docs/src/pio-json-schema.md
-  docs/src/scope-0.11.md
+  docs/src/known-limits.md
   docs/release-notes/0.11.0-draft.md
   powerio/README.md
   powerio-core/README.md
