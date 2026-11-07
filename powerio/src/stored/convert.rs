@@ -1752,10 +1752,10 @@ fn encode_socwr_opf_solution(
             )?,
             generator_active_power: stored_values(&values.generator_active_power)?,
             generator_reactive_power: stored_values(&values.generator_reactive_power)?,
-            branch_from_active_power: stored_values(&values.branch_from_active_power)?,
-            branch_from_reactive_power: stored_values(&values.branch_from_reactive_power)?,
-            branch_to_active_power: stored_values(&values.branch_to_active_power)?,
-            branch_to_reactive_power: stored_values(&values.branch_to_reactive_power)?,
+            branch_from_active_flow: stored_values(&values.branch_from_active_flow)?,
+            branch_from_reactive_flow: stored_values(&values.branch_from_reactive_flow)?,
+            branch_to_active_flow: stored_values(&values.branch_to_active_flow)?,
+            branch_to_reactive_flow: stored_values(&values.branch_to_reactive_flow)?,
             three_winding_transformer_terminal_powers:
                 encode_three_winding_transformer_terminal_powers(
                     &values.three_winding_transformer_terminal_powers,
@@ -2243,10 +2243,10 @@ fn decode_socwr_opf_solution(
         plain_row(&stored.values.branch_voltage_product_imaginary);
     values.generator_active_power = plain_row(&stored.values.generator_active_power);
     values.generator_reactive_power = plain_row(&stored.values.generator_reactive_power);
-    values.branch_from_active_power = plain_row(&stored.values.branch_from_active_power);
-    values.branch_from_reactive_power = plain_row(&stored.values.branch_from_reactive_power);
-    values.branch_to_active_power = plain_row(&stored.values.branch_to_active_power);
-    values.branch_to_reactive_power = plain_row(&stored.values.branch_to_reactive_power);
+    values.branch_from_active_flow = plain_row(&stored.values.branch_from_active_flow);
+    values.branch_from_reactive_flow = plain_row(&stored.values.branch_from_reactive_flow);
+    values.branch_to_active_flow = plain_row(&stored.values.branch_to_active_flow);
+    values.branch_to_reactive_flow = plain_row(&stored.values.branch_to_reactive_flow);
     values.three_winding_transformer_terminal_powers =
         decode_three_winding_transformer_terminal_powers(
             &stored.values.three_winding_transformer_terminal_powers,
@@ -3417,10 +3417,10 @@ mod collection_ir_tests {
         values.branch_voltage_product_imaginary = vec![0.01; branches];
         values.generator_active_power = vec![10.0; generators];
         values.generator_reactive_power = vec![2.0; generators];
-        values.branch_from_active_power = vec![3.0; branches];
-        values.branch_from_reactive_power = vec![0.5; branches];
-        values.branch_to_active_power = vec![-2.9; branches];
-        values.branch_to_reactive_power = vec![-0.4; branches];
+        values.branch_from_active_flow = vec![3.0; branches];
+        values.branch_from_reactive_flow = vec![0.5; branches];
+        values.branch_to_active_flow = vec![-2.9; branches];
+        values.branch_to_reactive_flow = vec![-0.4; branches];
         let solution = powerio_prob::solution::SocwrOpfSolution::new(
             instance,
             powerio_prob::Termination::Converged,

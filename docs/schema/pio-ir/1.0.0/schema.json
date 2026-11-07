@@ -9825,6 +9825,21 @@
       ],
       "type": "object"
     },
+    "MagnetizingConnection": {
+      "description": "Where the magnetizing admittance of a [`Transformer3W`] connects.\n\nPSS/E connects `MAG1 + jMAG2` from winding 1's bus to ground, outside that\nwinding's ratio. IIDM and CGMES state each leg's shunt admittance at the\nstar point. The two are different circuits: no single admittance at one\nplace reproduces the other, so a writer whose format has only the other\nplacement reports an approximation.",
+      "oneOf": [
+        {
+          "const": "star_point",
+          "description": "Between the star point and ground.",
+          "type": "string"
+        },
+        {
+          "const": "winding1_terminal",
+          "description": "Between winding 1's terminal bus and ground, outside winding 1's ratio.",
+          "type": "string"
+        }
+      ]
+    },
     "McAcOpfInstance": {
       "additionalProperties": false,
       "properties": {
@@ -11288,7 +11303,11 @@
               "type": "string"
             }
           ],
-          "description": "Magnetizing shunt referred to the star point (p.u. on the system base)."
+          "description": "Magnetizing shunt conductance and susceptance (p.u. on the system\nbase), connected where `magnetizing_connection` says."
+        },
+        "magnetizing_connection": {
+          "$ref": "#/$defs/MagnetizingConnection",
+          "description": "Where `mag_g` and `mag_b` connect. Absent means the star point, the\nmeaning every 0.11 document has."
         },
         "name": {
           "type": [
@@ -14061,25 +14080,25 @@
       "additionalProperties": false,
       "description": "Primal values of a serialized SOCWR relaxation result.",
       "properties": {
-        "branch_from_active_power": {
+        "branch_from_active_flow": {
           "items": {
             "$ref": "#/$defs/StoredF64"
           },
           "type": "array"
         },
-        "branch_from_reactive_power": {
+        "branch_from_reactive_flow": {
           "items": {
             "$ref": "#/$defs/StoredF64"
           },
           "type": "array"
         },
-        "branch_to_active_power": {
+        "branch_to_active_flow": {
           "items": {
             "$ref": "#/$defs/StoredF64"
           },
           "type": "array"
         },
-        "branch_to_reactive_power": {
+        "branch_to_reactive_flow": {
           "items": {
             "$ref": "#/$defs/StoredF64"
           },
@@ -14128,10 +14147,10 @@
         "branch_voltage_product_imaginary",
         "generator_active_power",
         "generator_reactive_power",
-        "branch_from_active_power",
-        "branch_from_reactive_power",
-        "branch_to_active_power",
-        "branch_to_reactive_power",
+        "branch_from_active_flow",
+        "branch_from_reactive_flow",
+        "branch_to_active_flow",
+        "branch_to_reactive_flow",
         "three_winding_transformer_terminal_powers"
       ],
       "type": "object"
@@ -17454,7 +17473,11 @@
                   "type": "string"
                 }
               ],
-              "description": "Magnetizing shunt referred to the star point (p.u. on the system base)."
+              "description": "Magnetizing shunt conductance and susceptance (p.u. on the system\nbase), connected where `magnetizing_connection` says."
+            },
+            "magnetizing_connection": {
+              "$ref": "#/$defs/MagnetizingConnection",
+              "description": "Where `mag_g` and `mag_b` connect. Absent means the star point, the\nmeaning every 0.11 document has."
             },
             "name": {
               "type": [

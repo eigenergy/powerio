@@ -950,6 +950,7 @@ mod tests {
             star_va: 0.0,
             mag_g: 0.0,
             mag_b: 0.0,
+            magnetizing_connection: crate::network::MagnetizingConnection::StarPoint,
             in_service: true,
             name: None,
             uid: None,

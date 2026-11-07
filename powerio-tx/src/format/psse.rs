@@ -1742,6 +1742,17 @@ fn write_psse_rev_inner(
             );
             0
         });
+        if t.magnetizing_connection != crate::network::MagnetizingConnection::Winding1Terminal
+            && (t.mag_g != 0.0 || t.mag_b != 0.0)
+        {
+            warnings.push(
+                &F.value_substituted,
+                format!(
+                    "PSS/E three winding transformer {}-{}-{} magnetizing admittance stated at the star point was written as MAG1/MAG2, which PSS/E connects from winding 1's bus to ground: the two placements are different circuits",
+                    t.windings[0].bus, t.windings[1].bus, t.windings[2].bus
+                ),
+            );
+        }
         let mut main = vec![
             t.windings[0].bus.to_string(),
             t.windings[1].bus.to_string(),
@@ -6178,6 +6189,7 @@ fn read_transformer_3w(
         star_va: num_at(l2, 10, 0.0)?,
         mag_g,
         mag_b,
+        magnetizing_connection: crate::network::MagnetizingConnection::Winding1Terminal,
         in_service,
         name: l1
             .get(10)

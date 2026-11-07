@@ -95,7 +95,7 @@ impl PioStringView {
     }
 }
 
-/// The three numbers of a PowerIO release, such as 0.12.0.
+/// The three numbers of a PowerIO release, such as 1.0.0.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct PioVersionView {
@@ -749,6 +749,10 @@ pub struct PioBalancedThreeWindingTransformerView {
     pub magnetizing_conductance_pu: f64,
     pub magnetizing_susceptance_pu: f64,
     pub in_service: bool,
+    /// Where the magnetizing admittance connects: `star_point` (between the
+    /// star point and ground) or `winding1_terminal` (between winding 1's bus
+    /// and ground, outside its ratio, as PSS/E states it).
+    pub magnetizing_connection: PioStringView,
 }
 
 /// One balanced control area.
@@ -14600,9 +14604,20 @@ pub unsafe extern "C" fn pio_balanced_network_three_winding_transformer_at(
                 magnetizing_conductance_pu: transformer.mag_g,
                 magnetizing_susceptance_pu: transformer.mag_b,
                 in_service: transformer.in_service,
+                magnetizing_connection: PioStringView::new(magnetizing_connection_name(
+                    transformer.magnetizing_connection,
+                )),
             };
             Ok(true)
         })
+    }
+}
+
+/// The stable name of a three winding transformer's magnetizing connection.
+fn magnetizing_connection_name(connection: powerio::MagnetizingConnection) -> &'static str {
+    match connection {
+        powerio::MagnetizingConnection::Winding1Terminal => "winding1_terminal",
+        _ => "star_point",
     }
 }
 
@@ -18745,10 +18760,10 @@ fn collect_solution_values(solution: &PioValue, quantity: &str) -> Result<Vec<f6
                 }
                 "generator_active_power" => values.generator_active_power.clone(),
                 "generator_reactive_power" => values.generator_reactive_power.clone(),
-                "branch_from_active_power" => values.branch_from_active_power.clone(),
-                "branch_from_reactive_power" => values.branch_from_reactive_power.clone(),
-                "branch_to_active_power" => values.branch_to_active_power.clone(),
-                "branch_to_reactive_power" => values.branch_to_reactive_power.clone(),
+                "branch_from_active_flow" => values.branch_from_active_flow.clone(),
+                "branch_from_reactive_flow" => values.branch_from_reactive_flow.clone(),
+                "branch_to_active_flow" => values.branch_to_active_flow.clone(),
+                "branch_to_reactive_flow" => values.branch_to_reactive_flow.clone(),
                 _ => return Err(unknown()),
             }
         }
@@ -22618,10 +22633,10 @@ mod tests {
             socwr_values.branch_voltage_product_imaginary = vec![0.0; branches];
             socwr_values.generator_active_power = vec![0.0; generators];
             socwr_values.generator_reactive_power = vec![0.0; generators];
-            socwr_values.branch_from_active_power = vec![0.0; branches];
-            socwr_values.branch_from_reactive_power = vec![0.0; branches];
-            socwr_values.branch_to_active_power = vec![0.0; branches];
-            socwr_values.branch_to_reactive_power = vec![0.0; branches];
+            socwr_values.branch_from_active_flow = vec![0.0; branches];
+            socwr_values.branch_from_reactive_flow = vec![0.0; branches];
+            socwr_values.branch_to_active_flow = vec![0.0; branches];
+            socwr_values.branch_to_reactive_flow = vec![0.0; branches];
             socwr_values.three_winding_transformer_terminal_powers =
                 vec![Default::default(); three_winding];
             let socwr = powerio_prob::solution::SocwrOpfSolution::new(
