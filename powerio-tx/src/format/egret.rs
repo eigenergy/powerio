@@ -108,14 +108,35 @@ pub fn write_egret_json(net: &BalancedNetwork) -> TextEmission {
         elements.insert("area".into(), Value::Object(areas));
     }
 
+    let system = system_section(net, &mut warnings);
+
+    let mut root = Map::new();
+    root.insert("elements".into(), Value::Object(elements));
+    root.insert("system".into(), Value::Object(system));
+
+    finish(&F, root, warnings)
+}
+
+/// egret's `system` section, with the PowerIO extensions egret leaves alone.
+fn system_section(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Map<String, Value> {
     let mut system = Map::new();
     system.insert("baseMVA".into(), jnum(net.base_mva()));
-    // egret states no frequency or case metadata; PowerIO keeps both here.
+    // egret states no frequency, case metadata, or substation hierarchy;
+    // PowerIO keeps them here.
     system.insert("base_frequency".into(), jnum(net.base_frequency()));
     if *net.case_metadata() != crate::network::CaseMetadata::default() {
         system.insert(
             "case_metadata".into(),
             serde_json::to_value(net.case_metadata()).expect("case metadata is plain data"),
+        );
+    }
+    if let Some(detailed) = super::carried_detailed_connectivity(net) {
+        system.insert("detailed_connectivity".into(), detailed);
+    }
+    if let Some(geo) = net.geo() {
+        system.insert(
+            "geo".into(),
+            serde_json::to_value(geo).expect("geographic metadata is plain data"),
         );
     }
     match reference_bus(net) {
@@ -128,12 +149,7 @@ pub fn write_egret_json(net: &BalancedNetwork) -> TextEmission {
             "no single reference bus (BusType::Ref); system.reference_bus omitted",
         ),
     }
-
-    let mut root = Map::new();
-    root.insert("elements".into(), Value::Object(elements));
-    root.insert("system".into(), Value::Object(system));
-
-    finish(&F, root, warnings)
+    system
 }
 
 fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
@@ -287,6 +303,7 @@ fn bus_obj(b: &Bus) -> Value {
     if let Some(name) = &b.name {
         m.insert("name".into(), Value::String(name.clone()));
     }
+    super::json_extension::write_bus(b, &mut m);
     Value::Object(m)
 }
 
@@ -305,6 +322,7 @@ fn shunt_obj(s: &Shunt) -> Value {
     m.insert("shunt_type".into(), Value::String("fixed".into()));
     m.insert("gs".into(), jnum(s.g));
     m.insert("bs".into(), jnum(s.b));
+    super::json_extension::write_shunt(s, &mut m);
     Value::Object(m)
 }
 
@@ -355,6 +373,7 @@ fn branch_obj(br: &Branch) -> Value {
             .collect();
         m.insert("rating_sets".into(), Value::Array(sets));
     }
+    super::json_extension::write_branch(br, &mut m);
     Value::Object(m)
 }
 
@@ -396,6 +415,7 @@ fn gen_obj(g: &Generator, warnings: &mut Diagnostics) -> Value {
             ));
         }
     }
+    super::json_extension::write_generator(g, &mut m);
     Value::Object(m)
 }
 
@@ -444,6 +464,7 @@ fn dc_branch_obj(dc: &Hvdc, warnings: &mut Diagnostics) -> Value {
     m.insert("qmaxt".into(), jnum(dc.qmaxt));
     m.insert("loss0".into(), jnum(dc.loss0));
     m.insert("loss_factor".into(), jnum(dc.loss1));
+    super::json_extension::write_hvdc(dc, &mut m);
     Value::Object(m)
 }
 
@@ -525,6 +546,13 @@ struct SystemSection {
     /// The case metadata PowerIO wrote from a grid exchange format.
     #[serde(default)]
     case_metadata: Option<crate::network::CaseMetadata>,
+    /// The substation, voltage level, and node hierarchy PowerIO wrote from
+    /// a grid exchange format.
+    #[serde(default)]
+    detailed_connectivity: Option<crate::network::DetailedConnectivity>,
+    /// The coordinate reference of the bus locations and branch routes.
+    #[serde(default)]
+    geo: Option<crate::geo::GeoMeta>,
     #[serde(default)]
     time_keys: Option<Value>,
 }
@@ -611,6 +639,8 @@ fn build_from_document(document: Document, name_hint: Option<&str>) -> Result<Ba
         return Err(bad("system.base_frequency is not a positive frequency"));
     }
     let case_metadata = system.case_metadata.unwrap_or_default();
+    let detailed_connectivity = system.detailed_connectivity.map(std::sync::Arc::new);
+    let geo = system.geo;
     let elements = document
         .elements
         .ok_or_else(|| bad("missing `elements` object"))?;
@@ -655,9 +685,9 @@ fn build_from_document(document: Document, name_hint: Option<&str>) -> Result<Ba
         name,
         base_mva,
         base_frequency,
-        geo: None,
+        geo,
         case_metadata,
-        detailed_connectivity: None,
+        detailed_connectivity,
         generated_uids: std::sync::Arc::default(),
         buses: buses.into(),
         loads: loads.into(),
@@ -1086,7 +1116,7 @@ fn read_bus(key: &str, row: BusRow) -> Result<Bus> {
         .trim()
         .parse::<usize>()
         .map_err(|_| bad(format!("bus key is not a numeric id: {key:?}")))?;
-    Ok(Bus {
+    let mut bus = Bus {
         id: BusId(id),
         kind: bustype_from_str(
             row.matpower_bustype
@@ -1111,7 +1141,9 @@ fn read_bus(key: &str, row: BusRow) -> Result<Bus> {
         uid: uid_cell(row.uid.as_ref())?,
         location: None,
         extras: row.extras,
-    })
+    };
+    super::json_extension::read_bus(&mut bus);
+    Ok(bus)
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -1164,7 +1196,7 @@ struct ShuntRow {
 }
 
 fn read_shunt(row: ShuntRow) -> Result<Shunt> {
-    Ok(Shunt {
+    let mut shunt = Shunt {
         bus: id_cell(row.bus.as_ref(), "bus")?,
         g: num_cell(row.gs.as_ref(), "gs", 0.0)?,
         b: num_cell(row.bs.as_ref(), "bs", 0.0)?,
@@ -1173,7 +1205,9 @@ fn read_shunt(row: ShuntRow) -> Result<Shunt> {
         control: None,
         uid: uid_cell(row.uid.as_ref())?,
         extras: row.extras,
-    })
+    };
+    super::json_extension::read_shunt(&mut shunt);
+    Ok(shunt)
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -1233,7 +1267,7 @@ fn read_branch(row: BranchRow) -> Result<Branch> {
             .collect::<Result<Vec<_>>>()?,
     };
     let is_xf = row.branch_type.as_ref().and_then(Value::as_str) == Some("transformer");
-    Ok(Branch {
+    let mut branch = Branch {
         name: None,
         from: id_cell(row.from_bus.as_ref(), "from_bus")?,
         to: id_cell(row.to_bus.as_ref(), "to_bus")?,
@@ -1272,7 +1306,9 @@ fn read_branch(row: BranchRow) -> Result<Branch> {
         uid: uid_cell(row.uid.as_ref())?,
         route: None,
         extras,
-    })
+    };
+    super::json_extension::read_branch(&mut branch);
+    Ok(branch)
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -1333,7 +1369,7 @@ fn read_gen(row: &GenRow) -> Result<Generator> {
             bad("`p_cost` is present but has an unrecognized or malformed cost_curve")
         })?),
     };
-    Ok(Generator {
+    let mut generator = Generator {
         bus: id_cell(row.bus.as_ref(), "bus")?,
         energy_source: GeneratorEnergySource::default(),
         pg: num_cell(row.pg.as_ref(), "pg", 0.0)?,
@@ -1352,7 +1388,9 @@ fn read_gen(row: &GenRow) -> Result<Generator> {
         regulated_bus: None,
         active_power_control: None,
         uid: uid_cell(row.uid.as_ref())?,
-    })
+    };
+    super::json_extension::read_generator(&mut generator, &row.other);
+    Ok(generator)
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -1415,7 +1453,7 @@ fn read_dc_branch(row: DcBranchRow) -> Result<Hvdc> {
             })?)
         }
     };
-    Ok(Hvdc {
+    let mut hvdc = Hvdc {
         from: id_cell(row.from_bus.as_ref(), "from_bus")?,
         to: id_cell(row.to_bus.as_ref(), "to_bus")?,
         in_service: bool_cell(row.in_service.as_ref(), "in_service", true)?,
@@ -1441,7 +1479,9 @@ fn read_dc_branch(row: DcBranchRow) -> Result<Hvdc> {
         cost,
         uid: uid_cell(row.uid.as_ref())?,
         extras,
-    })
+    };
+    super::json_extension::read_hvdc(&mut hvdc);
+    Ok(hvdc)
 }
 
 fn read_cost(p_cost: &Value, startup: f64, shutdown: f64) -> Option<GenCost> {

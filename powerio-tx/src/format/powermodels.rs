@@ -120,6 +120,15 @@ pub fn write_powermodels_json(net: &BalancedNetwork) -> TextEmission {
             serde_json::to_value(net.case_metadata()).expect("case metadata is plain data"),
         );
     }
+    if let Some(detailed) = super::carried_detailed_connectivity(net) {
+        root.insert("detailed_connectivity".into(), detailed);
+    }
+    if let Some(geo) = net.geo() {
+        root.insert(
+            "geo".into(),
+            serde_json::to_value(geo).expect("geographic metadata is plain data"),
+        );
+    }
 
     finish(&F, root, warnings)
 }
@@ -253,6 +262,7 @@ fn bus_obj(b: &Bus, a: f64) -> Value {
         m.insert("name".into(), Value::String(name.clone()));
     }
     m.insert("source_id".into(), source_id("bus", b.id.0));
+    super::json_extension::write_bus(b, &mut m);
     Value::Object(m)
 }
 
@@ -319,6 +329,7 @@ fn branch_obj(br: &Branch, idx: usize, p: f64, a: f64) -> Value {
         m.insert("qt".into(), jnum(solution.qt * p));
     }
     m.insert("source_id".into(), source_id("branch", idx));
+    super::json_extension::write_branch(br, &mut m);
     Value::Object(m)
 }
 
@@ -368,6 +379,7 @@ fn gen_obj(g: &Generator, idx: usize, p: f64, base: f64) -> Value {
         m.insert("cost".into(), Value::Array(coeffs));
     }
     m.insert("source_id".into(), source_id("gen", idx));
+    super::json_extension::write_generator(g, &mut m);
     Value::Object(m)
 }
 
@@ -390,6 +402,7 @@ fn shunt_obj(s: &Shunt, idx: usize, p: f64) -> Value {
     m.insert("bs".into(), jnum(s.b * p));
     m.insert("status".into(), status_int(s.in_service));
     m.insert("source_id".into(), source_id("bus", s.bus.0));
+    super::json_extension::write_shunt(s, &mut m);
     Value::Object(m)
 }
 
@@ -448,6 +461,7 @@ fn dcline_obj(dc: &Hvdc, idx: usize, p: f64) -> Value {
         m.insert("cost".into(), Value::Array(coeffs));
     }
     m.insert("source_id".into(), source_id("dcline", idx));
+    super::json_extension::write_hvdc(dc, &mut m);
     Value::Object(m)
 }
 
@@ -493,6 +507,7 @@ fn storage_obj(st: &Storage, idx: usize, p: f64) -> Value {
     m.insert("q_loss".into(), jnum(st.q_loss * p));
     m.insert("status".into(), status_int(st.in_service));
     m.insert("source_id".into(), source_id("storage", idx));
+    super::json_extension::write_storage(st, &mut m);
     Value::Object(m)
 }
 
@@ -589,9 +604,9 @@ pub(crate) fn parse_powermodels_json_source(
         name,
         base_mva,
         base_frequency,
-        geo: None,
+        geo: document.geo,
         case_metadata: document.case_metadata.unwrap_or_default(),
-        detailed_connectivity: None,
+        detailed_connectivity: document.detailed_connectivity.map(std::sync::Arc::new),
         generated_uids: std::sync::Arc::default(),
         buses: sorted_rows(document.bus, |row| row.index)
             .into_iter()
@@ -686,6 +701,13 @@ struct Document {
     /// The case metadata PowerIO wrote from a grid exchange format.
     #[serde(default)]
     case_metadata: Option<crate::network::CaseMetadata>,
+    /// The substation, voltage level, and node hierarchy PowerIO wrote from
+    /// a grid exchange format.
+    #[serde(default)]
+    detailed_connectivity: Option<crate::network::DetailedConnectivity>,
+    /// The coordinate reference of the bus locations and branch routes.
+    #[serde(default)]
+    geo: Option<crate::geo::GeoMeta>,
 }
 
 /// One row of PowerIO's `areas` table: MATPOWER's `area_i` and
@@ -812,7 +834,7 @@ fn read_bus(row: BusRow, ascale: f64) -> Result<Bus> {
             message: "bus record missing integer `bus_i`".into(),
         })?;
     let id = read_bus_id(Some(id), "bus_i")?;
-    Ok(Bus {
+    let mut bus = Bus {
         id,
         kind: bustype(row.bus_type.unwrap_or(1)),
         vm: row.vm.unwrap_or(1.0),
@@ -828,7 +850,9 @@ fn read_bus(row: BusRow, ascale: f64) -> Result<Bus> {
         uid: row.uid,
         location: None,
         extras: row.extras,
-    })
+    };
+    super::json_extension::read_bus(&mut bus);
+    Ok(bus)
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -886,7 +910,7 @@ struct ShuntRow {
 }
 
 fn read_shunt(row: ShuntRow, pscale: f64) -> Result<Shunt> {
-    Ok(Shunt {
+    let mut shunt = Shunt {
         bus: read_bus_id(row.shunt_bus, "shunt_bus")?,
         g: row.gs.unwrap_or(0.0) * pscale,
         b: row.bs.unwrap_or(0.0) * pscale,
@@ -895,7 +919,9 @@ fn read_shunt(row: ShuntRow, pscale: f64) -> Result<Shunt> {
         control: None,
         uid: row.uid,
         extras: row.extras,
-    })
+    };
+    super::json_extension::read_shunt(&mut shunt);
+    Ok(shunt)
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -1037,7 +1063,7 @@ fn read_branch(
     };
     let b_fr = row.b_fr.unwrap_or(0.0);
     let b_to = row.b_to.unwrap_or(0.0);
-    Ok(Branch {
+    let mut branch = Branch {
         name: None,
         from: read_bus_id(row.f_bus, "f_bus")?,
         to: read_bus_id(row.t_bus, "t_bus")?,
@@ -1085,7 +1111,9 @@ fn read_branch(
         uid: row.uid,
         route: None,
         extras: row.extras,
-    })
+    };
+    super::json_extension::read_branch(&mut branch);
+    Ok(branch)
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -1184,7 +1212,7 @@ fn read_gen(row: &GenRow, pscale: f64, base_mva: f64, per_unit: bool) -> Result<
         }
     }
     let cost = row.cost.read(base_mva, per_unit);
-    Ok(Generator {
+    let mut generator = Generator {
         bus: read_bus_id(row.gen_bus, "gen_bus")?,
         energy_source: GeneratorEnergySource::default(),
         pg: row.pg.unwrap_or(0.0) * pscale,
@@ -1205,7 +1233,9 @@ fn read_gen(row: &GenRow, pscale: f64, base_mva: f64, per_unit: bool) -> Result<
         regulated_bus: None,
         active_power_control: None,
         uid: row.uid.clone(),
-    })
+    };
+    super::json_extension::read_generator(&mut generator, &row.extras);
+    Ok(generator)
 }
 
 /// The MATPOWER cost columns generators and dclines share. `model`'s
@@ -1355,7 +1385,7 @@ fn read_hvdc(row: DclineRow, pscale: f64, base_mva: f64, per_unit: bool) -> Resu
         .mp_pmax
         .unwrap_or_else(|| row.pmaxf.unwrap_or(0.0) * pscale);
     let cost = row.cost.read(base_mva, per_unit);
-    Ok(Hvdc {
+    let mut hvdc = Hvdc {
         from: read_bus_id(row.f_bus, "f_bus")?,
         to: read_bus_id(row.t_bus, "t_bus")?,
         in_service: row.br_status.unwrap_or(true),
@@ -1383,7 +1413,9 @@ fn read_hvdc(row: DclineRow, pscale: f64, base_mva: f64, per_unit: bool) -> Resu
         cost,
         uid: row.uid,
         extras: row.extras,
-    })
+    };
+    super::json_extension::read_hvdc(&mut hvdc);
+    Ok(hvdc)
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -1436,7 +1468,7 @@ struct StorageRow {
 }
 
 fn read_storage(row: StorageRow, pscale: f64) -> Result<Storage> {
-    Ok(Storage {
+    let mut storage = Storage {
         bus: read_bus_id(row.storage_bus, "storage_bus")?,
         ps: row.ps.unwrap_or(0.0),
         qs: row.qs.unwrap_or(0.0),
@@ -1459,7 +1491,9 @@ fn read_storage(row: StorageRow, pscale: f64) -> Result<Storage> {
         active_power_control: None,
         uid: row.uid,
         extras: row.extras,
-    })
+    };
+    super::json_extension::read_storage(&mut storage);
+    Ok(storage)
 }
 
 #[cfg(test)]

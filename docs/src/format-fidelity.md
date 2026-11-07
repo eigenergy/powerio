@@ -57,10 +57,21 @@ there, and reads them back, for data the standard fields cannot hold:
 | fields no typed slot holds (`extras`) | the element row's own keys | the element entry's own keys |
 | MATPOWER generator capability and ramp columns | standard PowerModels fields | the MATPOWER column names |
 | a dcline cost | standard PowerModels fields | `p_cost`, as a generator states it |
+| detailed connectivity (substations, voltage levels, node breaker topology) | top-level `detailed_connectivity` | `system.detailed_connectivity` |
+| the coordinate reference of locations and routes | top-level `geo` | `system.geo` |
+| bus location; branch name, route, and transformer `control`; switched shunt `section_count` and `control` | the element row, under the PowerIO IR name | the element entry, under the PowerIO IR name |
+| generator `energy_source`, `voltage_regulation_on`, `regulating_terminal`, `regulated_bus`, `active_power_control` | the generator row | the generator entry |
+| HVDC `resistance_ohm`, `nominal_voltage_kv`, `converters_mode`, `converter1`, `converter2` | the dcline row | the `dc_branch` entry |
+| storage `active_power_control` | the storage row | egret states no storage |
 
-A standard field always wins a key collision with an extra. Detailed
-connectivity (substations, voltage levels, node breaker topology) has no place
-in either and is reported as dropped.
+The typed values use the PowerIO IR's field names and units, as the
+[PowerIO IR reference](ir-reference.md) gives them, and leave out an absent
+optional field. A standard field always wins a key collision with an extra. A
+key whose value does not have the PowerIO shape is kept as an extra, so a
+document another tool wrote with a key of the same name still reads.
+PowerModels and egret compute with their own fields only: a transformer or
+switched shunt control, a remote regulated bus, and an HVDC converter's detail
+ride along for PowerIO and do not change what either tool solves.
 
 ## Validation
 
