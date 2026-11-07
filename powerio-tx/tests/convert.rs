@@ -193,10 +193,14 @@ fn rich_writer_warnings_cover_simple_formats() {
         &matpower.render_diagnostics(),
         "branch 1 (1 to 2) rating set RATE4=125"
     ));
-    assert!(has_warning(
+    // Every branch states a solution, so the branch matrix takes MATPOWER's
+    // solved flow columns.
+    assert!(!has_warning(
         &matpower.render_diagnostics(),
         "branch solution value"
     ));
+    let back = parse_str(&matpower.text, "matpower").unwrap().network;
+    assert_eq!(back.branches()[0].solution, net.branches()[0].solution);
     assert!(has_warning(
         &matpower.render_diagnostics(),
         "voltage dependent load model"
