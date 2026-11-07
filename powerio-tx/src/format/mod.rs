@@ -1627,12 +1627,18 @@ fn warn_dropped_exchange_context(
     ) {
         return;
     }
-    let message = if format == TargetFormat::RavensJson {
+    let message = match format {
         // MG-RAVENS carries stable component identities as mRIDs, but not
         // the source-neutral topology hierarchy or case/solver metadata.
-        exchange_context_loss_with_identity_policy(net, format.label(), true)
-    } else {
-        exchange_context_loss(net, format.label())
+        TargetFormat::RavensJson => {
+            exchange_context_loss_with_identity_policy(net, format.label(), true, false)
+        }
+        // PowerModels JSON rows carry a source identity as `uid`, and the
+        // document carries the case metadata, as keys PowerModels ignores.
+        TargetFormat::PowerModelsJson => {
+            exchange_context_loss_with_identity_policy(net, format.label(), true, true)
+        }
+        _ => exchange_context_loss(net, format.label()),
     };
     if let Some(message) = message {
         conv.push(&format.emit_family().field_dropped, message);
@@ -1643,7 +1649,7 @@ fn warn_dropped_exchange_context(
 /// One diagnostic represents one format boundary even when the detailed model
 /// contains many CIM or IIDM objects.
 pub(super) fn exchange_context_loss(net: &BalancedNetwork, target: &str) -> Option<String> {
-    exchange_context_loss_with_identity_policy(net, target, false)
+    exchange_context_loss_with_identity_policy(net, target, false, false)
 }
 
 #[allow(clippy::too_many_lines)] // one inventory counts every exchange-context family
@@ -1651,9 +1657,15 @@ fn exchange_context_loss_with_identity_policy(
     net: &BalancedNetwork,
     target: &str,
     preserves_identities: bool,
+    preserves_case_metadata: bool,
 ) -> Option<String> {
     let mut dropped = Vec::new();
-    let metadata = net.case_metadata();
+    let default_metadata = crate::network::CaseMetadata::default();
+    let metadata = if preserves_case_metadata {
+        &default_metadata
+    } else {
+        net.case_metadata()
+    };
     let mut metadata_fields = Vec::new();
     if metadata.case_date.is_some() {
         metadata_fields.push("case_date");
@@ -2554,10 +2566,20 @@ mpc.branch = [
             })
             .collect::<Vec<_>>();
         assert_eq!(context.len(), 1, "{:?}", emitted.render_diagnostics());
+        // PowerModels JSON carries the case metadata and a source identity as
+        // keys PowerModels ignores; only the hierarchy is lost.
         let message = context[0].message();
-        assert!(message.contains("case_date"), "{message}");
+        assert!(!message.contains("case_date"), "{message}");
         assert!(message.contains("detailed_connectivity"), "{message}");
-        assert!(message.contains("1 source-assigned"), "{message}");
+        assert!(!message.contains("source-assigned"), "{message}");
+        let reparsed = parse_str(&emitted.text, "powermodels-json")
+            .unwrap()
+            .network;
+        assert_eq!(
+            reparsed.case_metadata().case_date.as_deref(),
+            Some("2025-01-02T03:04:05Z")
+        );
+        assert_eq!(reparsed.buses()[0].uid.as_deref(), Some("source-bus"));
 
         let ravens = emit_value_text(&net, TargetFormat::RavensJson).unwrap();
         let context = ravens
