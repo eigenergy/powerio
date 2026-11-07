@@ -23,6 +23,7 @@ pub(in crate::dss) struct Definition {
     pub reduce: bool,
     pub normamps: f64,
     pub emergamps: f64,
+    pub emergamps_available: bool,
     pub cable_allocations: usize,
     cn_choices: Vec<bool>,
     active: usize,
@@ -37,6 +38,7 @@ impl Default for Definition {
             reduce: false,
             normamps: 0.0,
             emergamps: 0.0,
+            emergamps_available: false,
             cable_allocations: 0,
             cn_choices: Vec::new(),
             active: 0,
@@ -72,6 +74,7 @@ impl Definition {
         self.reduce = source.reduce;
         self.normamps = source.normamps;
         self.emergamps = source.emergamps;
+        self.emergamps_available = source.emergamps_available;
     }
 
     fn bind(
@@ -94,6 +97,7 @@ impl Definition {
             }
             if self.emergamps == 0.0 && source.emergamps > 0.0 {
                 self.emergamps = source.emergamps;
+                self.emergamps_available = true;
             }
         }
         Ok(())
@@ -236,7 +240,10 @@ impl Definition {
                 // Spacing changes neither the geometry's phase count nor its selector.
             }
             "normamps" => self.normamps = number()?,
-            "emergamps" => self.emergamps = number()?,
+            "emergamps" => {
+                self.emergamps = number()?;
+                self.emergamps_available = true;
+            }
             "reduce" => self.reduce = prop.value.text.starts_with(['y', 'Y', 't', 'T']),
             // These are retained metadata, not inputs to static impedance.
             "seasons" | "ratings" | "linetype" => {}
