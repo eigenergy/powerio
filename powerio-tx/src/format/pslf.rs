@@ -633,6 +633,7 @@ fn read_transformer(rec: &Record, base_mva: f64) -> Result<TransformerRecord> {
             star_va: 0.0,
             mag_g: 0.0,
             mag_b: 0.0,
+            magnetizing_connection: crate::network::MagnetizingConnection::StarPoint,
             in_service,
             name,
             uid: None,

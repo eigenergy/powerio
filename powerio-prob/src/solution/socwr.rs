@@ -60,13 +60,13 @@ pub struct SocwrOpfValues {
     /// Reactive generator dispatch, MVAr.
     pub generator_reactive_power: Vec<f64>,
     /// Active power into each branch at its from terminal, MW.
-    pub branch_from_active_power: Vec<f64>,
+    pub branch_from_active_flow: Vec<f64>,
     /// Reactive power into each branch at its from terminal, MVAr.
-    pub branch_from_reactive_power: Vec<f64>,
+    pub branch_from_reactive_flow: Vec<f64>,
     /// Active power into each branch at its to terminal, MW.
-    pub branch_to_active_power: Vec<f64>,
+    pub branch_to_active_flow: Vec<f64>,
     /// Reactive power into each branch at its to terminal, MVAr.
-    pub branch_to_reactive_power: Vec<f64>,
+    pub branch_to_reactive_flow: Vec<f64>,
     /// Terminal powers for each three winding transformer, in transformer
     /// table order.
     pub three_winding_transformer_terminal_powers: Vec<ThreeWindingTransformerTerminalPower>,
@@ -195,22 +195,22 @@ impl SocwrOpfSolution {
         )?;
         check_length(
             "branch from terminal active power",
-            values.branch_from_active_power.len(),
+            values.branch_from_active_flow.len(),
             branches,
         )?;
         check_length(
             "branch from terminal reactive power",
-            values.branch_from_reactive_power.len(),
+            values.branch_from_reactive_flow.len(),
             branches,
         )?;
         check_length(
             "branch to terminal active power",
-            values.branch_to_active_power.len(),
+            values.branch_to_active_flow.len(),
             branches,
         )?;
         check_length(
             "branch to terminal reactive power",
-            values.branch_to_reactive_power.len(),
+            values.branch_to_reactive_flow.len(),
             branches,
         )?;
         check_length(
@@ -327,16 +327,21 @@ impl SocwrOpfSolution {
         Ok(self)
     }
 
-    pub fn bus_order(&self) -> impl ExactSizeIterator<Item = BusId> + '_ {
-        self.network().buses().iter().map(|bus| bus.id)
+    /// Bus ids in the order the bus value rows follow.
+    #[must_use]
+    pub fn bus_order(&self) -> Vec<BusId> {
+        self.network().buses().iter().map(|bus| bus.id).collect()
     }
 
-    pub fn branch_order(&self) -> impl ExactSizeIterator<Item = String> + '_ {
+    /// Branch identities in the order the branch value rows follow.
+    #[must_use]
+    pub fn branch_order(&self) -> Vec<String> {
         self.network()
             .branches()
             .iter()
             .enumerate()
             .map(|(position, branch)| row_identity(branch.uid.as_deref(), "branches", position))
+            .collect()
     }
 
     pub fn generator_order(&self) -> impl ExactSizeIterator<Item = String> + '_ {
@@ -375,23 +380,23 @@ impl SocwrOpfSolution {
     }
 
     #[must_use]
-    pub fn branch_from_active_power(&self, branch: &str) -> Option<f64> {
-        Some(self.values.branch_from_active_power[*self.index.branches.get(branch)?])
+    pub fn branch_from_active_flow(&self, branch: &str) -> Option<f64> {
+        Some(self.values.branch_from_active_flow[*self.index.branches.get(branch)?])
     }
 
     #[must_use]
-    pub fn branch_from_reactive_power(&self, branch: &str) -> Option<f64> {
-        Some(self.values.branch_from_reactive_power[*self.index.branches.get(branch)?])
+    pub fn branch_from_reactive_flow(&self, branch: &str) -> Option<f64> {
+        Some(self.values.branch_from_reactive_flow[*self.index.branches.get(branch)?])
     }
 
     #[must_use]
-    pub fn branch_to_active_power(&self, branch: &str) -> Option<f64> {
-        Some(self.values.branch_to_active_power[*self.index.branches.get(branch)?])
+    pub fn branch_to_active_flow(&self, branch: &str) -> Option<f64> {
+        Some(self.values.branch_to_active_flow[*self.index.branches.get(branch)?])
     }
 
     #[must_use]
-    pub fn branch_to_reactive_power(&self, branch: &str) -> Option<f64> {
-        Some(self.values.branch_to_reactive_power[*self.index.branches.get(branch)?])
+    pub fn branch_to_reactive_flow(&self, branch: &str) -> Option<f64> {
+        Some(self.values.branch_to_reactive_flow[*self.index.branches.get(branch)?])
     }
 }
 
@@ -418,10 +423,10 @@ mod tests {
             branch_voltage_product_imaginary: vec![0.01; branches],
             generator_active_power: vec![10.0; generators],
             generator_reactive_power: vec![2.0; generators],
-            branch_from_active_power: vec![3.0; branches],
-            branch_from_reactive_power: vec![0.5; branches],
-            branch_to_active_power: vec![-2.9; branches],
-            branch_to_reactive_power: vec![-0.4; branches],
+            branch_from_active_flow: vec![3.0; branches],
+            branch_from_reactive_flow: vec![0.5; branches],
+            branch_to_active_flow: vec![-2.9; branches],
+            branch_to_reactive_flow: vec![-0.4; branches],
             three_winding_transformer_terminal_powers: Vec::new(),
         }
     }
@@ -443,7 +448,7 @@ mod tests {
         assert!(
             (solution.bus_voltage_magnitude_squared(BusId(1)).unwrap() - 1.0).abs() < f64::EPSILON
         );
-        let branch = solution.branch_order().next().unwrap();
+        let branch = solution.branch_order().into_iter().next().unwrap();
         assert!(
             (solution.branch_voltage_product_real(&branch).unwrap() - 0.99).abs() < f64::EPSILON
         );
