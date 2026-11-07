@@ -38,6 +38,14 @@
   BMOPF document moves to the `source_pointer` detail, so a module carrying it
   serializes to PowerIO IR (#763).
 
+**Conversion fidelity**
+
+- Backport PowerModels and Egret retention of areas, metadata, source identities,
+  rating sets, extras, detailed connectivity, locations/routes, controls and
+  generator/HVDC detail. These extension fields are retained data; they do not
+  imply that the native tools solve every retained feature.
+- Preserve a stated PMD generator control mode during emission.
+
 **CI and dependencies**
 
 - `rusqlite` moves to 0.41 (#752, #754), which carries `libsqlite3-sys` 0.39
