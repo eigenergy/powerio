@@ -2,7 +2,7 @@
 
 A PowerIO IR document names, in its header, the release whose schema it
 follows. Compatibility follows the release series as Cargo defines it: one
-minor release before 1.0 (0.12.x), then one major release (1.x, 2.x). Within
+major release from 1.0 on (1.x, 2.x). Within
 a release series, any release reads the documents written by any other
 release in it. A reader refuses a structural type it does not implement, one
 type at a time, and keeps reading the types it does. A change that the
@@ -15,8 +15,8 @@ A document begins:
 ```json
 {
   "schema": "pio-ir",
-  "version": "0.12.0",
-  "producer": { "name": "powerio", "version": "0.12.0" }
+  "version": "1.0.0",
+  "producer": { "name": "powerio", "version": "1.0.0" }
 }
 ```
 
@@ -29,19 +29,19 @@ A document begins:
   PowerIO. A refusal reports it; it does not decide whether a document is
   read.
 
-PowerIO 0.12.x reads a document whose `version` is any 0.12.z release,
-including a later one than its own, and the integer `version` 2 that every
-0.11 release wrote. It refuses every other version and names the version it
+PowerIO 1.x reads a document whose `version` is any 1.y.z release, including
+a later one than its own, and the integer `version` 2 that every 0.11 release
+wrote. It refuses every other version and names the version it
 found, the producer, and the remedy: a later release series needs a newer
 PowerIO, and anything older has to be regenerated from its source data.
 
 ## The schema files
 
-From 0.12.0 on, every release publishes `pio-ir/<release>/schema.json`, and
+From 1.0.0 on, every release publishes `pio-ir/<release>/schema.json`, and
 no release reuses an earlier file. Every file already published keeps its
 exact bytes, archive path, and `$id`.
 
-| Schema file | First release | Document header | Read by 0.12.x |
+| Schema file | First release | Document header | Read by 1.x |
 |---|---|---|---|
 | `pio-ir/0.1/schema.json` | v0.6.1 | `pio-package` lineage `0.1` | no |
 | `pio-ir/0.2/schema.json` | v0.8.0 | `pio-package` lineage `0.2` | no |
@@ -53,18 +53,21 @@ exact bytes, archive path, and `$id`.
 | `pio-ir/2/0.11.4/schema.json` | v0.11.4 | `pio-ir`, version `2` | yes |
 | `pio-ir/2/0.11.5/schema.json` | v0.11.5 | `pio-ir`, version `2` | yes |
 | `pio-ir/2/0.11.6/schema.json` | v0.11.6 | `pio-ir`, version `2` | yes |
-| `pio-ir/0.12.0/schema.json` | v0.12.0 | `pio-ir`, version `"0.12.0"` | yes |
+| `pio-ir/2/0.11.7/schema.json` | v0.11.7 | `pio-ir`, version `2` | yes |
+| `pio-ir/2/0.11.8/schema.json` | v0.11.8 | `pio-ir`, version `2` | yes |
+| `pio-ir/1.0.0/schema.json` | v1.0.0 | `pio-ir`, version `"1.0.0"` | yes |
 
 The 0.11 releases wrote the integer 2 in every document and published their
-schema files beneath `pio-ir/2/`; 0.11.2 reused the 0.11.1 file. A 0.11
+schema files beneath `pio-ir/2/`; 0.11.2 reused the 0.11.1 file, and 0.11.9
+reused the 0.11.8 file. A 0.11
 document states which release wrote it only in `producer`.
 
 ## Compatibility
 
-PowerIO 0.12.0 keeps every record layout 0.11.6 had. Its schema describes the
-same structural types with the same definitions; only the header's
-`version` changes, from the integer 2 to the release string. That is why it
-reads 0.11 documents.
+PowerIO 1.0.0 keeps every record layout 0.11.8 had. Its schema describes the
+same structural types with the same definitions, plus the types 1.0 adds;
+only the header's `version` changes, from the integer 2 to the release
+string. That is why it reads 0.11 documents.
 
 Within a release series a release can add structural types, add names to a
 list of allowed values, and add a distinctly tagged alternative to a record.
@@ -83,7 +86,13 @@ republished the 0.11.4 definitions under its own `$id`; and 0.11.6 added
 the distinctly tagged `powerio.ReferencedVoltageSource` nested record, and
 kV-qualified selection and pre/post voltage bands in monitor scopes and
 statements. Ordinary voltage sources and previously accepted monitor records
-keep their original representation.
+keep their original representation. 0.11.7 added `powerio.AcOtsInstance`,
+`powerio.AcOtsSolution`, their option definitions, the
+`branch_switching_cost` objective term, and the optional `hvdc_treatment`
+field of `DcPfInstance` and `AcPfInstance` (`fixed_injection` or `ignore`); a
+document without the field reads with HVDC lines left out, as earlier
+releases read it. 0.11.8 added `ravens-json` to both source-format lists and
+`pmd-math-json` to the distribution list.
 
 Three-winding transformers with any nondefault per-winding status use the
 nested `powerio.PartialTransformer3W` record. Its `value` holds the complete
@@ -111,7 +120,7 @@ nondefault winding flags is rejected with a diagnostic requiring the new type.
 - CI regenerates the current schema and fails if it differs from the
   committed file.
 - `scripts/check-ir-compatibility.py` writes documents with the published
-  0.11.0 and 0.11.6 Python packages and reads them with the current build.
+  0.11.0 and 0.11.9 Python packages and reads them with the current build.
 
 ## Served identifiers
 
@@ -120,8 +129,9 @@ historical identifiers are `pio-package/0.1`, `pio-package/0.2`,
 `pio-package/0.9/schema.json`, `pio-module/1/schema.json`,
 `pio-ir/2/schema.json`, `pio-ir/2/0.11.1/schema.json`,
 `pio-ir/2/0.11.3/schema.json`, `pio-ir/2/0.11.4/schema.json`,
-`pio-ir/2/0.11.5/schema.json`, and `pio-ir/2/0.11.6/schema.json` beneath
-`https://powerio.dev/schema/`. From 0.12.0 on, a release's file is served at
+`pio-ir/2/0.11.5/schema.json`, `pio-ir/2/0.11.6/schema.json`,
+`pio-ir/2/0.11.7/schema.json`, and `pio-ir/2/0.11.8/schema.json` beneath
+`https://powerio.dev/schema/`. From 1.0.0 on, a release's file is served at
 `pio-ir/<release>/schema.json` under that same root. The documentation site
 serves the archive paths and published identifiers.
 
@@ -132,7 +142,7 @@ cargo run -p powerio --example generate_schemas --features schema -- docs/schema
 ```
 
 The generator writes the path named by `powerio::IR_SCHEMA_ID`,
-`pio-ir/<IR_VERSION>/schema.json`, currently `pio-ir/0.12.0/schema.json`. It
+`pio-ir/<IR_VERSION>/schema.json`, currently `pio-ir/1.0.0/schema.json`. It
 leaves every other file untouched.
 
 `IR_VERSION` runs ahead of the workspace version between releases, and a
