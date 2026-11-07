@@ -46,7 +46,7 @@ pub use pwb::{parse_pwb as __parse_pwb, parse_pwb_with_warnings as __parse_pwb_w
 #[doc(hidden)]
 pub use pwd::{
     parse_pwd as __parse_pwd, parse_pwd_display as __parse_pwd_display,
-    parse_pwd_file as __parse_pwd_file, parse_pwd_layer as __parse_pwd_layer,
+    parse_pwd_layer as __parse_pwd_layer,
 };
 
 use crate::network::Extras;

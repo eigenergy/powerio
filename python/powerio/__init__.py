@@ -110,7 +110,6 @@ __all__ = [
     "DcPfInstance",
     "DcPfSolution",
     "Diagnostic",
-    "DisplayData",
     "EmitResult",
     "FormatInfo",
     "GeoLayer",
@@ -131,8 +130,6 @@ __all__ = [
     "PowerIODataError",
     "PowerIOError",
     "PowerIOParseError",
-    "PwdDisplay",
-    "PwdSubstation",
     "ReactivePower",
     "Residuals",
     "Scenario",
@@ -177,7 +174,6 @@ __all__ = [
     "features",
     "from_ppc",
     "parse",
-    "parse_display",
     "parse_geo",
     "resolve_format",
     "serialize",
@@ -232,22 +228,6 @@ format. It is not a promise for every concrete module value or a feature probe. 
 false value neither promises nor forbids a same format retained source echo.
 """
 
-DisplayData = namedtuple("DisplayData", ["kind", "data"])
-DisplayData.__doc__ = """Output of :func:`parse_display`.
-
-``kind`` names the display format. For PowerWorld PWD data,
-``kind == "powerworld"`` and
-``data`` is a :class:`PwdDisplay`.
-"""
-
-PwdDisplay = namedtuple(
-    "PwdDisplay", ["canvas_width", "canvas_height", "stamp", "substations"]
-)
-PwdDisplay.__doc__ = """Decoded PowerWorld ``.pwd`` display metadata."""
-
-PwdSubstation = namedtuple("PwdSubstation", ["number", "name", "x", "y"])
-PwdSubstation.__doc__ = """One decoded PowerWorld display substation."""
-
 def _require(module: str, extra: str):
     """Import ``module`` or raise a clear ImportError naming the extra to install."""
     try:
@@ -279,27 +259,6 @@ def _dc_angles(n_buses: int, voltage_angles):
             f"voltage_angles must be a one dimensional array of length {n_buses}"
         )
     return np, angles
-
-
-def _wrap_display(raw) -> DisplayData:
-    kind, payload = raw
-    if kind == "powerworld":
-        substations = [
-            PwdSubstation(
-                row["number"],
-                row["name"],
-                row["x"],
-                row["y"],
-            )
-            for row in payload["substations"]
-        ]
-        payload = PwdDisplay(
-            payload["canvas_width"],
-            payload["canvas_height"],
-            payload["stamp"],
-            substations,
-        )
-    return DisplayData(kind, payload)
 
 
 _BALANCED_DELEGATED_NAMES = frozenset(
@@ -1068,12 +1027,6 @@ class BalancedNetwork:
                     b=br["b"],
                 )
         return g
-
-
-@_guard
-def parse_display(path: Any, format: Optional[str] = None) -> DisplayData:
-    """Parse a display artifact such as a PowerWorld ``.pwd`` file."""
-    return _wrap_display(_powerio.parse_display(str(path), format))
 
 
 @_guard

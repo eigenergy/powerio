@@ -27,7 +27,7 @@ use sprs::CsMat;
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use powerio::{BalancedNetwork, BranchSusceptanceFormula, PwdDisplay};
+use powerio::{BalancedNetwork, BranchSusceptanceFormula};
 use powerio_matrix::matrix::{
     BuildOptions, Scheme, SensitivityOptions, SensitivitySolver, calc_adjacency_matrix,
     calc_admittance_matrix, calc_bdoubleprime_matrix, calc_bprime_matrix, calc_lacpf_matrix,
@@ -491,24 +491,6 @@ fn case_from_parts(
         let _ = module.add_diagnostic(diagnostic);
     }
     case_from_module(module)
-}
-
-fn pwd_display_to_dict<'py>(py: Python<'py>, display: &PwdDisplay) -> PyResult<Bound<'py, PyDict>> {
-    let d = PyDict::new(py);
-    d.set_item("canvas_width", display.canvas_width)?;
-    d.set_item("canvas_height", display.canvas_height)?;
-    d.set_item("stamp", display.stamp)?;
-    let mut rows = Vec::with_capacity(display.substations.len());
-    for substation in &display.substations {
-        let row = PyDict::new(py);
-        row.set_item("number", substation.number)?;
-        row.set_item("name", &substation.name)?;
-        row.set_item("x", substation.x)?;
-        row.set_item("y", substation.y)?;
-        rows.push(row);
-    }
-    d.set_item("substations", PyList::new(py, rows)?)?;
-    Ok(d)
 }
 
 fn active_power_control_to_py<'py>(
@@ -1610,31 +1592,6 @@ impl PyBalancedNetwork {
             self.inner().generators().len()
         )
     }
-}
-
-/// Parse a display file from a path, inferring the format from the extension
-/// unless `from_` is given. Returns `(kind, payload)`.
-#[pyfunction]
-#[pyo3(signature = (path, from_=None))]
-fn parse_display<'py>(
-    py: Python<'py>,
-    path: &str,
-    from_: Option<&str>,
-) -> PyResult<Bound<'py, PyAny>> {
-    if let Some(from_) = from_
-        && !matches!(
-            from_.to_ascii_lowercase().replace(['-', '_'], "").as_str(),
-            "pwd" | "powerworldpwd" | "powerworlddisplay"
-        )
-    {
-        return Err(PowerIOError::new_err(format!(
-            "unsupported display format: {from_}"
-        )));
-    }
-    let display = powerio_tx::format::powerworld::__parse_pwd_file(std::path::Path::new(path))
-        .map_err(core_pyerr)?;
-    let payload = pwd_display_to_dict(py, &display)?;
-    Ok(("powerworld", payload).into_pyobject(py)?.into_any())
 }
 
 /// Low-level handle around a parsed multiconductor distribution network in
@@ -5389,7 +5346,6 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("PANIC_CODE", codes::BIND_PY_PANIC.code)?;
     m.add_class::<PyBalancedNetwork>()?;
     m.add_class::<PyBusMerge>()?;
-    m.add_function(wrap_pyfunction!(parse_display, m)?)?;
     m.add_class::<PyMulticonductorNetwork>()?;
     m.add_class::<PyPioModule>()?;
     m.add_class::<collection::PyCollection>()?;
