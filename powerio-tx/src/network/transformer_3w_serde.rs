@@ -159,6 +159,7 @@ enum Field {
 }
 
 impl<'de> Deserialize<'de> for Transformer3W {
+    #[allow(clippy::too_many_lines)] // one flat visitor arm per record field
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct TransformerVisitor;
         impl<'de> Visitor<'de> for TransformerVisitor {
