@@ -139,10 +139,14 @@ that needs action.
   detailed connectivity hierarchy, bus locations and branch routes with their
   coordinate reference, transformer and switched shunt controls, generator
   regulation and active power control, IIDM HVDC line detail, and for egret
-  MATPOWER's generator capability columns and the dcline cost. The
-  conversion matrix gains twenty-three lossless cells and no cell gets worse.
+  MATPOWER's generator capability columns and the dcline cost.
+- The MATPOWER reader reads a solved case's branch flow columns `PF`, `QF`,
+  `PT`, and `QT`, which it used to discard, and the writer states them when
+  every branch has a solution.
 - The PMD ENGINEERING writer writes back a generator control mode the source
   stated instead of always writing `FREQUENCYDROOP`.
+- With these and the format fixes above, the conversion matrix has 25 more
+  lossless cells than 0.11, 26 fewer dropped ones, and no cell is worse.
 
 **Dependencies**
 

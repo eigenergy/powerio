@@ -518,6 +518,12 @@ sections stay in the retained source text and produce diagnostics.
 
 ### MATPOWER
 
+A solved case's branch matrix states the flows `PF`, `QF`, `PT`, and `QT`
+(MW and MVAr, columns 14 to 17 of `idx_brch`) after `ANGMAX`. The reader reads
+them as the branch solution, and the writer states them when every branch
+has one; a matrix states the columns for every row or none, so a partial set
+is dropped and reported.
+
 The reader applies a bounded, straight-line unit-conversion profile after the
 numeric literals. This covers MATPOWER's `case33bw.m`: demand columns `PD`/`QD`
 are divided by 1000, and branch `BR_R`/`BR_X` by `Vbase^2 / Sbase`. Its interpreted
