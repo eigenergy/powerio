@@ -40,6 +40,9 @@
 
 **Conversion fidelity**
 
+- Read and write complete native MATPOWER solved branch flow columns. Partial
+  flow sets still produce an explicit loss diagnostic.
+
 - Backport PowerModels and Egret retention of areas, metadata, source identities,
   rating sets, extras, detailed connectivity, locations/routes, controls and
   generator/HVDC detail. These extension fields are retained data; they do not

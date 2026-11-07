@@ -176,9 +176,10 @@ fn canonical_warnings(net: &BalancedNetwork) -> Diagnostics {
         .iter()
         .filter(|b| b.solution.is_some())
         .count();
-    if branch_solutions > 0 {
+    if branch_solutions > 0 && branch_solutions < net.branches().len() {
         warnings.push(&F.field_dropped, format!(
-            "{branch_solutions} branch solution value set(s) dropped: MATPOWER branch rows do not carry solved flow columns"
+            "{branch_solutions} of {} branch solution value set(s) dropped: a MATPOWER branch matrix states the solved flow columns PF, QF, PT, QT for every row or none",
+            net.branches().len()
         ));
     }
     let voltage_loads = net
@@ -299,11 +300,13 @@ fn canonical(net: &BalancedNetwork) -> String {
         let _ = writeln!(s, "}};");
     }
 
+    // A solved case states PF, QF, PT, QT after ANGMAX, for every row or none.
+    let solved = branches_solved(net);
     let _ = writeln!(s, "mpc.branch = [");
     for br in net.branches() {
-        let _ = writeln!(
+        let _ = write!(
             s,
-            "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{};",
+            "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             br.from,
             br.to,
             br.r,
@@ -318,6 +321,10 @@ fn canonical(net: &BalancedNetwork) -> String {
             br.angmin,
             br.angmax
         );
+        if let Some(flow) = br.solution.as_ref().filter(|_| solved) {
+            let _ = write!(s, "\t{}\t{}\t{}\t{}", flow.pf, flow.qf, flow.pt, flow.qt);
+        }
+        let _ = writeln!(s, ";");
     }
     let _ = writeln!(s, "];");
 
@@ -503,4 +510,10 @@ fn matlab_ident(name: &str) -> String {
         ident.insert(0, 'c');
     }
     ident
+}
+
+/// Whether every branch states a solution, so the branch matrix takes the
+/// solved case's flow columns.
+fn branches_solved(net: &BalancedNetwork) -> bool {
+    !net.branches().is_empty() && net.branches().iter().all(|b| b.solution.is_some())
 }
