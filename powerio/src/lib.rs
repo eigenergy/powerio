@@ -94,8 +94,8 @@ pub const IR_SCHEMA_NAME: &str = "pio-ir";
 /// The release whose PowerIO IR schema this build writes, stated as the
 /// `version` of every document it serializes.
 ///
-/// Compatibility follows the release series as Cargo defines it: one major
-/// release from 1.0 on (1.x). A reader accepts a document from any release in its own series,
+/// Compatibility follows the release series as Cargo defines it: one minor
+/// release before 1.0 (0.12.x) and one major release from 1.0 on. A reader accepts a document from any release in its own series,
 /// including a later one, and refuses a structural type it does not
 /// implement, one type at a time. A change that existing readers cannot read
 /// starts a new series. This build also reads the integer version `2` that
@@ -104,11 +104,11 @@ pub const IR_SCHEMA_NAME: &str = "pio-ir";
 /// The constant names a release at or after the workspace version, and
 /// equals it in a published release. `producer.version` names the software
 /// that wrote a document, which need not be PowerIO.
-pub const IR_VERSION: &str = "1.0.0";
+pub const IR_VERSION: &str = "0.12.0";
 
 /// The `$id` of the schema describing this build's document:
 /// `pio-ir/<IR_VERSION>/schema.json` beneath `https://powerio.dev/schema/`.
-pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/1.0.0/schema.json";
+pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/0.12.0/schema.json";
 
 /// Loss-preserving PSS/E transient-stability parsing and explicit study pairing.
 pub use powerio_tx::dynamic::{

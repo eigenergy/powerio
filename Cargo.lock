@@ -1005,7 +1005,7 @@ dependencies = [
 
 [[package]]
 name = "facade-only"
-version = "1.0.0-rc.1"
+version = "0.12.0-rc.1"
 dependencies = [
  "powerio",
 ]
@@ -2414,7 +2414,7 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
 name = "powerio"
-version = "1.0.0-rc.1"
+version = "0.12.0-rc.1"
 dependencies = [
  "arrow",
  "bytes",
@@ -2437,7 +2437,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-archive"
-version = "1.0.0-rc.1"
+version = "0.12.0-rc.1"
 dependencies = [
  "memchr",
  "powerio-core",
@@ -2446,7 +2446,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-capi"
-version = "1.0.0-rc.1"
+version = "0.12.0-rc.1"
 dependencies = [
  "powerio",
  "powerio-core",
@@ -2463,7 +2463,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-cli"
-version = "1.0.0-rc.1"
+version = "0.12.0-rc.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2490,7 +2490,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-core"
-version = "1.0.0-rc.1"
+version = "0.12.0-rc.1"
 dependencies = [
  "errno",
  "libc",
@@ -2502,7 +2502,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-dist"
-version = "1.0.0-rc.1"
+version = "0.12.0-rc.1"
 dependencies = [
  "jsonschema",
  "libc",
@@ -2523,7 +2523,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-matrix"
-version = "1.0.0-rc.1"
+version = "0.12.0-rc.1"
 dependencies = [
  "approx",
  "arrow",
@@ -2549,7 +2549,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-prob"
-version = "1.0.0-rc.1"
+version = "0.12.0-rc.1"
 dependencies = [
  "powerio-core",
  "powerio-dist",
@@ -2562,7 +2562,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-py"
-version = "1.0.0-rc.1"
+version = "0.12.0-rc.1"
 dependencies = [
  "mimalloc",
  "powerio",
@@ -2580,7 +2580,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-synth"
-version = "1.0.0-rc.1"
+version = "0.12.0-rc.1"
 dependencies = [
  "powerio-tx",
  "rand 0.10.3",
@@ -2590,7 +2590,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-tnd"
-version = "1.0.0-rc.1"
+version = "0.12.0-rc.1"
 dependencies = [
  "num-complex",
  "powerio-archive",
@@ -2608,7 +2608,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-tx"
-version = "1.0.0-rc.1"
+version = "0.12.0-rc.1"
 dependencies = [
  "criterion",
  "lexical-core",
@@ -2628,7 +2628,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-wasm"
-version = "1.0.0-rc.1"
+version = "0.12.0-rc.1"
 dependencies = [
  "powerio",
  "rusqlite",

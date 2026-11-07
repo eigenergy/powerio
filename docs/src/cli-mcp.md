@@ -124,7 +124,7 @@ records.
 Its tools are `parse`, `emit`, `summarize`, `diagnostics`, `to_normalized`,
 `calc_matrix`, `to_balanced_report`, `to_balanced`, and `about`.
 `parse` reads a PowerWorld `.pwd` display to a `GeoLayer`; the `display` tool,
-which returned the raw display record, was removed in 1.0.
+which returned the raw display record, was removed in 0.12.
 `parse` returns serialized PowerIO IR, and the tools that accept `powerio_ir`
 deserialize that same IR rather than defining a network, collection,
 calculation, update, or solution representation of their own.

@@ -202,7 +202,7 @@ backend, and `default-features = false` leaves it out.
 - [Formats and fidelity](https://eigenergy.github.io/powerio/guide/format-fidelity.html)
 - [Matrices and graphs](https://eigenergy.github.io/powerio/guide/matrices.html)
 - [Rust, Python, Julia, and C](https://eigenergy.github.io/powerio/guide/languages.html)
-- [Migrating from 0.11](https://eigenergy.github.io/powerio/guide/migration-1.0.html)
+- [Migrating from 0.11](https://eigenergy.github.io/powerio/guide/migration-0.12.html)
 - [Known limits and versions](https://eigenergy.github.io/powerio/guide/known-limits.html)
 - [Rust API reference](https://eigenergy.github.io/powerio/powerio/)
 - [PowerIO.jl](https://eigenergy.github.io/PowerIO.jl)

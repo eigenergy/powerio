@@ -3498,17 +3498,17 @@ mod version_tests {
         );
     }
 
-    /// Reading the integer version 0.11 wrote is a choice the 1.x series
+    /// Reading the integer version 0.11 wrote is a choice the 0.12.x series
     /// made. The next series has to make its own choice rather than inherit
     /// this one unnoticed.
     #[test]
-    fn only_the_1_x_series_reads_0_11_documents() {
+    fn only_the_0_12_series_reads_0_11_documents() {
         let reads_0_11 = is_readable(
             crate::IR_SCHEMA_NAME,
             &dto::StoredVersion::Integer(VERSION_0_11),
         );
         assert!(
-            !reads_0_11 || Release::current().series() == (1, 0),
+            !reads_0_11 || Release::current().series() == (0, 12),
             "IR_VERSION {} starts a new release series. Decide which earlier series it reads, \
              then update `VERSION_0_11` and `is_readable` here, `SCHEMAS_0_11` in \
              powerio/tests/frozen_schemas.rs, and the docs that state the rule.",

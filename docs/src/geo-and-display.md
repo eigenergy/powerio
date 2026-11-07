@@ -167,7 +167,7 @@ The `.pwd` reader returns a drawing `GeoLayer` with decoded bus positions,
 branch paths, and substation positions. Coordinates remain in drawing units.
 Unsupported or unmatched bus and branch records produce diagnostics. Read a
 display with `parse`, under the same input byte limits as every other source.
-PowerIO 1.0 removed Python's `parse_display`, which returned the raw display
+PowerIO 0.12 removed Python's `parse_display`, which returned the raw display
 record and read the file without those limits.
 
 The facade helpers connect it to the geo model. `to_geo_layer_from_pwd` lifts

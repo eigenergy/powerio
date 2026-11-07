@@ -23,7 +23,7 @@
   PowerWorld AUX dynamics views remain future work. See [Dynamics and DYR](dynamics.md).
 - Balanced to multiconductor construction, load linearized multiconductor
   admittance from an operating point, and a general multi period planning
-  instance are not part of 1.0.
+  instance are not part of 0.12.
 - The multiconductor to balanced transformation is Rust and Python only.
   Multiconductor admittance assembly,
   `powerio_matrix::calc_multiconductor_admittance_matrix`, is Rust only.
@@ -41,7 +41,7 @@
   Python dict rows, and PowerIO IR use the data model's names, derived from
   MATPOWER (`vm`, `pg`, `rate_a`, `tap`); the C ABI and Julia spell out the
   quantity and unit (`vm_pu`, `active_power_mw`, `rate_a_mva`, `tap_ratio`).
-  Both are stable through 1.x.
+  Both are stable through 0.12.x.
 - Python tables return dict rows; typed element views like Julia's are not
   offered yet.
 - `serialize_diagnostics` returns the JSON text of a diagnostics array, where
@@ -49,28 +49,32 @@
   document and has no artifacts or findings of its own.
 - Public `powerio-matrix` signatures return `sprs::CsMat`, and
   `IndexedNetwork::to_petgraph` returns a `petgraph::graph::UnGraph`. Both
-  crates are before their own 1.0, so moving either to an incompatible
-  release is a breaking PowerIO change, made only in a new major release.
+  crates are before their own 1.0, which is why PowerIO is too: a crate whose
+  public API exposes a pre-1.0 dependency cannot promise 1.0 stability, so
+  moving either to an incompatible release starts a new PowerIO release
+  series. PowerIO 1.0 waits until the public API depends only on stable
+  crates, for example an owned sparse matrix type in `powerio-matrix`.
 
 ## Versions
 
 One PowerIO release version covers the Rust crates, the Python distribution,
 and PowerIO.jl. The boundaries checked independently are:
 
-| Boundary | Value in 1.x | Checked where | Moves when |
+| Boundary | Value in 0.12.x | Checked where | Moves when |
 |---|---|---|---|
-| PowerIO release | 1.y.z | the manifests, `powerio::VERSION`, `powerio.versions()`, `pio_version` | every release |
-| C ABI | the release series, 1.x | `pio_version_numbers` against the header's `PIO_VERSION_*` at load | a release removes or changes a C symbol, which starts a new series |
-| PowerIO IR | the release whose schema a document follows, `"1.0.0"` | the document header, `powerio::IR_VERSION` | every release that changes the schema; a reader accepts its own series and 0.11's `2` |
+| PowerIO release | 0.12.z | the manifests, `powerio::VERSION`, `powerio.versions()`, `pio_version` | every release |
+| C ABI | the release series, 0.12.x | `pio_version_numbers` against the header's `PIO_VERSION_*` at load | a release removes or changes a C symbol, which starts a new series |
+| PowerIO IR | the release whose schema a document follows, `"0.12.0"` | the document header, `powerio::IR_VERSION` | every release that changes the schema; a reader accepts its own series and 0.11's `2` |
 | Rust toolchain | 1.89 | `rust-version` in the workspace manifest, checked by CI | a dependency in the locked graph requires a newer compiler |
 | Python | 3.11 or later | `pyproject.toml` | a dependency drops a version |
 
-Within the 1.x series, releases are compatible: the public Rust, Python,
+Within the 0.12.x series, releases are compatible: the public Rust, Python,
 and Julia APIs only gain items, the C ABI only gains symbols, and a release
-reads every PowerIO IR document the series wrote. A break waits for 2.0.
+reads every PowerIO IR document the series wrote. A break waits for the next
+series. Before 1.0 a series is one minor release, as Cargo defines it.
 CI checks the publishable crates against the latest release tag with
 cargo-semver-checks (`scripts/check-semver.sh`), and the C header against the
 latest release header (`scripts/check-capi-header.py`); a pull request that
 carries a break is labeled `semver-major`. See [PowerIO IR](pio-json-schema.md)
-for the document rule and [From 0.11 to 1.0](migration-1.0.md) for what
+for the document rule and [From 0.11 to 0.12](migration-0.12.md) for what
 changed.
