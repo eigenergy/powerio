@@ -130,6 +130,17 @@ that needs action.
   BMOPF document moves to the `source_pointer` detail, so a module carrying it
   serializes to PowerIO IR (#763).
 
+**Conversion fidelity**
+
+- PowerModels JSON and egret JSON carry, as keys those tools leave alone and
+  PowerIO reads back, what their standard fields cannot: area records, case
+  metadata, system frequency (egret), source element identities, branch
+  rating sets beyond the three ratings, each element's untyped fields, and
+  for egret MATPOWER's generator capability columns and the dcline cost. The
+  conversion matrix gains fifteen lossless cells and no cell gets worse.
+- The PMD ENGINEERING writer writes back a generator control mode the source
+  stated instead of always writing `FREQUENCYDROOP`.
+
 **Dependencies**
 
 - Bump arrow and parquet to 60.1, zip to 9.4, uuid to 1.29, rusqlite to
