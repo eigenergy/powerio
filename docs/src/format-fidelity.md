@@ -43,6 +43,25 @@ defaults to 60 Hz, while `null`, strings and invalid numbers are rejected. Fresh
 PowerIO output includes the field. Formats without frequency support, including
 MATPOWER, still report the loss of a non-default frequency.
 
+PowerModels JSON and egret JSON documents are open dictionaries: PowerModels.jl
+and egret keep keys they do not know. PowerIO writes these extension keys
+there, and reads them back, for data the standard fields cannot hold:
+
+| Data | PowerModels JSON | egret JSON |
+|---|---|---|
+| area records | top-level `areas` table: `area_i`, `price_ref_bus`, and `name`, `net_interchange_mw`, `tolerance_mw`, `area_type`, `uid` | one `elements.area` entry per area number: `slack_bus`, `net_interchange_mw`, `tolerance_mw`, `name`, `area_type`, `uid` |
+| case metadata from a grid exchange format | top-level `case_metadata` | `system.case_metadata` |
+| system frequency | top-level `base_frequency` | `system.base_frequency` |
+| a source-assigned element identity | `uid` in the element row | `uid` in the element entry |
+| branch rating sets beyond the three ratings | `rating_sets` (`name`, `rate_mva`) | `rating_sets` (`name`, `rate_mva`) |
+| fields no typed slot holds (`extras`) | the element row's own keys | the element entry's own keys |
+| MATPOWER generator capability and ramp columns | standard PowerModels fields | the MATPOWER column names |
+| a dcline cost | standard PowerModels fields | `p_cost`, as a generator states it |
+
+A standard field always wins a key collision with an extra. Detailed
+connectivity (substations, voltage levels, node breaker topology) has no place
+in either and is reported as dropped.
+
 ## Validation
 
 The harness script `evals/validation/run_validation.sh` checks powerio against
@@ -530,8 +549,8 @@ Storage is written as an `mpc.storage` block.
 ### egret
 
 egret output writes HVDC as `dc_branch`, the element its reader already reads,
-so the power, voltage, and loss fields survive a round trip; a dcline cost
-curve and storage are the only things dropped. The reader takes the power flow
+so the power, voltage, and loss fields survive a round trip, and a dcline cost
+travels as the `p_cost` extension above; storage is dropped. The reader takes the power flow
 ModelData subset (numeric bus ids, scalar values). A document whose
 `system.time_keys` vary the scalar profile parses to
 `TimeSeries<BalancedNetwork>` through `powerio::parse`, whereas the component
