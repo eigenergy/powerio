@@ -107,11 +107,11 @@ fn export_synthetic_public_database() {
 
 #[test]
 fn public_access_acquisition_is_explicit_bounded_and_retains_original_primary() {
-    use sha2::{Digest, Sha256};
     let native = b"\0\x01\0\0Standard Jet DB\0synthetic header-shaped source, not an actual MDB";
     let mut records = super::legacy_tests::acquired_records("", 11.5);
     records["source"]["bytes"] = serde_json::json!(native.len());
-    records["source"]["sha256"] = serde_json::json!(format!("{:x}", Sha256::digest(native)));
+    records["source"]["sha256"] =
+        serde_json::json!(crate::formats::sincal::storage::sha256_hex(native));
     let make_source = |records: &serde_json::Value| {
         Source::from_memory("synthetic.mdb", native.to_vec())
             .unwrap()
@@ -210,12 +210,12 @@ fn modern_zero_sequence_policy_preserves_family_source_and_default_provenance() 
 
 #[test]
 fn legacy_null_source_controls_require_explicit_tracked_assumptions() {
-    use sha2::{Digest, Sha256};
     let native = b"\0\x01\0\0Standard Jet DB\0synthetic acquisition identity";
     let source = |edit: &str, version: f64| {
         let mut records = super::legacy_tests::acquired_records(edit, version);
         records["source"]["bytes"] = serde_json::json!(native.len());
-        records["source"]["sha256"] = serde_json::json!(format!("{:x}", Sha256::digest(native)));
+        records["source"]["sha256"] =
+            serde_json::json!(crate::formats::sincal::storage::sha256_hex(native));
         Source::from_memory("legacy.mdb", native.to_vec())
             .unwrap()
             .with_named_buffer("records.json", serde_json::to_vec(&records).unwrap())
