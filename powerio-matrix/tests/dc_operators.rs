@@ -809,3 +809,135 @@ fn update_rejects_changed_three_winding_source_row_mapping_without_mutation() {
     assert_eq!(operators.analysis_sources(), sources_before);
     assert_eq!(operators.calc_branch_susceptances(), susceptances_before);
 }
+
+#[test]
+fn three_winding_tap_is_applied_once_by_the_selected_dc_formula() {
+    let mut net = BalancedNetwork::in_memory(
+        "tap",
+        100.0,
+        vec![
+            Bus::new(BusId(1), BusType::Ref, 230.0),
+            Bus::new(BusId(2), BusType::Pq, 230.0),
+            Bus::new(BusId(3), BusType::Pq, 230.0),
+        ],
+        Vec::new(),
+    );
+    net.generators_mut()
+        .push(powerio_tx::Generator::new(BusId(1)));
+    let mut windings = [1, 2, 3].map(|i| Winding::new(BusId(i)));
+    windings[0].tap = 1.2;
+    windings[0].shift = 5.0;
+    net.transformers_3w_mut().push(Transformer3W::new(
+        windings,
+        [Impedance::new(0.02, 0.2, 100.0); 3],
+    ));
+    let legacy = DcOperators::build(&DcPfInstance::from_network(net.clone()).unwrap()).unwrap();
+    for f in [
+        BranchSusceptanceFormula::TapAdjustedSeriesSusceptance,
+        BranchSusceptanceFormula::SeriesSusceptanceNoPhaseShift,
+    ] {
+        let build = |net| {
+            DcOperators::build(
+                &DcPfInstance::from_network(net)
+                    .unwrap()
+                    .with_branch_susceptance_formula(f),
+            )
+            .unwrap()
+        };
+        let raw = build(net.clone());
+        let normalized = build(net.to_normalized().unwrap());
+        let ratio = if f.reads_tap() { 1.2 } else { 1.0 };
+        assert!(
+            (raw.calc_branch_susceptances()[0] * ratio - legacy.calc_branch_susceptances()[0])
+                .abs()
+                < 1e-12
+        );
+        for (a, b) in raw
+            .calc_branch_susceptances()
+            .iter()
+            .zip(normalized.calc_branch_susceptances())
+        {
+            assert!((a - b).abs() < 1e-12);
+        }
+        for (a, b) in raw
+            .calc_bus_phase_shift_injection()
+            .iter()
+            .zip(normalized.calc_bus_phase_shift_injection())
+        {
+            assert!((a - b).abs() < 1e-12);
+        }
+    }
+}
+
+#[test]
+fn tap_adjusted_series_matches_the_complex_ac_flat_angle_slope() {
+    use num_complex::Complex64;
+    for (r, x, tap, shift) in [
+        (0.03, 0.1, 1.2, 0.2),
+        (0.0, 0.2, 0.8, -0.1),
+        (0.1, 0.1, 1.0, 0.0),
+    ] {
+        let y = Complex64::new(r, x).inv();
+        let t = Complex64::from_polar(tap, shift);
+        let power = |delta| {
+            let vf = Complex64::from_polar(1.0, delta);
+            let current = (y + Complex64::new(0.0, 0.01)) / t.norm_sqr() * vf - y / t.conj();
+            (vf * current.conj()).re
+        };
+        let eps = 1e-6;
+        let derivative = (power(shift + eps) - power(shift - eps)) / (2.0 * eps);
+        let coefficient = BranchSusceptanceFormula::TapAdjustedSeriesSusceptance
+            .calc_solver_edge_weight(r, x, tap);
+        assert!((derivative - coefficient).abs() < 1e-7);
+    }
+}
+
+#[test]
+fn source_zero_tap_is_unity_for_every_dc_variant() {
+    let mut network = BalancedNetwork::in_memory(
+        "zero tap",
+        100.0,
+        vec![
+            Bus::new(BusId(1), BusType::Ref, 230.0),
+            Bus::new(BusId(2), BusType::Pq, 230.0),
+        ],
+        vec![Branch::new(BusId(1), BusId(2), 0.03, 0.1)],
+    );
+    network
+        .generators_mut()
+        .push(powerio_tx::Generator::new(BusId(1)));
+    network.branches_mut()[0].shift = 5.0;
+    for formula in [
+        BranchSusceptanceFormula::SeriesSusceptance,
+        BranchSusceptanceFormula::SeriesSusceptanceNoPhaseShift,
+        BranchSusceptanceFormula::TapAdjustedReactance,
+        BranchSusceptanceFormula::TapAdjustedSeriesSusceptance,
+        BranchSusceptanceFormula::ReactanceOnly,
+    ] {
+        let mut build = |tap| {
+            network.branches_mut()[0].tap = tap;
+            DcOperators::build(
+                &DcPfInstance::from_network(network.clone())
+                    .unwrap()
+                    .with_branch_susceptance_formula(formula),
+            )
+            .unwrap()
+        };
+        let zero = build(0.0);
+        let unity = build(1.0);
+        for (a, b) in zero
+            .calc_branch_susceptances()
+            .iter()
+            .zip(unity.calc_branch_susceptances())
+        {
+            assert!((a - b).abs() < 1e-12);
+        }
+        for (a, b) in zero
+            .calc_bus_phase_shift_injection()
+            .iter()
+            .zip(unity.calc_bus_phase_shift_injection())
+        {
+            assert!((a - b).abs() < 1e-12);
+        }
+    }
+}

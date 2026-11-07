@@ -33,7 +33,10 @@
 //! magnitudes and phase shifts. Branch
 //! terminal admittance is stored per unit. The default public DC formula is
 //! `b = -x/(r² + x²)`. [`BranchSusceptanceFormula::TapAdjustedReactance`] uses
-//! `b = -1/(x·τ)`; both carry phase shift injection. The full reference is in
+//! `b = -1/(x·τ)`; both carry phase shift injection.
+//! [`BranchSusceptanceFormula::TapAdjustedSeriesSusceptance`] divides the series
+//! coefficient by the tap; [`BranchSusceptanceFormula::SeriesSusceptanceNoPhaseShift`]
+//! ignores taps and shifts to match PowerModels DCP. The full reference is in
 //! [the matrix guide](https://eigenergy.github.io/powerio/guide/matrices.html).
 
 // Re-export the balanced model types used by matrix signatures. Parsing,

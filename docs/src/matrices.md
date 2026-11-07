@@ -242,6 +242,14 @@ between produces none of these findings.
   injection vector `p_shift`. A tap does not scale it. It reduces to
   \\(b = -1/x\\) when the branch has no resistance.
 
+  `SeriesSusceptanceNoPhaseShift` uses the same series coefficient but drops
+  phase shifts as well as taps, matching PowerModels DCP. The unchanged default
+  is therefore not identical to DCP on phase-shifting branches.
+
+  `TapAdjustedSeriesSusceptance` divides that series coefficient by the effective
+  transformer tap and includes phase shifts. It is the ignore-conductance
+  convention; see [the formula table](instances.md#explicit-dc-conventions).
+
   `TapAdjustedReactance` reproduces MATPOWER's `makeBdc`:
   \\(b = -1/(x\tau)\\) for a transformer with tap ratio \\(\tau\\), plus `p_shift`.
 
@@ -256,7 +264,7 @@ matrix is stored as its lower triangle with the `symmetric` header and 1-based
 indices (`io::mtx::emit_mtx`). The `sensitivities` command writes
 `<case>_ptdf.mtx`, `<case>_lodf.mtx`, and `<case>_sensitivity_meta.json`. Pick
 the branch susceptance formula with
-`--formula series-susceptance|tap-adjusted-reactance|reactance-only`, the
+`--formula series-susceptance|tap-adjusted-reactance|reactance-only|tap-adjusted-series-susceptance|series-susceptance-no-phase-shift`, the
 PTDF/LODF solve path with `--solver dense|sparse|auto`, and drop entries whose
 absolute value is at or below a threshold with `--drop-tolerance <value>`. On
 the sparse path the CLI writes the retained Matrix Market coordinates through

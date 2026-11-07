@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add explicit tap-adjusted series-susceptance and PowerModels DCP conventions
+  across DC matrices, instances and bindings; preserve the existing default.
+
 ## 0.11.9
 
 **PSS/E**
