@@ -594,29 +594,34 @@ struct AreaRow {
     area_type: Option<Value>,
 }
 
-fn read_area(key: &str, row: &AreaRow) -> Result<crate::network::Area> {
-    let number = key
-        .trim()
-        .parse::<usize>()
-        .map_err(|_| bad(format!("area key `{key}` is not an area number")))?;
-    let text = |value: Option<&Value>, field: &str| -> Result<Option<String>> {
-        match value {
-            None | Some(Value::Null) => Ok(None),
-            Some(Value::String(text)) => Ok(Some(text.clone())),
-            Some(_) => Err(bad(format!("area `{field}` is not a string"))),
-        }
-    };
+/// One area PowerIO wrote, keyed by its number, or `None` for an entry keyed
+/// otherwise. egret's own `area` elements are keyed by name and carry reserve
+/// requirements, which this reader does not model and skips, as it did before
+/// PowerIO wrote areas. An attribute of the wrong type is left unset rather
+/// than refusing the document.
+fn read_area(key: &str, row: &AreaRow) -> Option<crate::network::Area> {
+    let number = key.trim().parse::<usize>().ok()?;
+    let text = |value: Option<&Value>| value.and_then(Value::as_str).map(str::to_owned);
     let mut area = crate::network::Area::new(number);
-    area.slack_bus = match row.slack_bus.as_ref().filter(|value| !value.is_null()) {
-        None => None,
-        Some(bus) => Some(id_cell(Some(bus), "slack_bus")?),
-    };
-    area.net_interchange = num_cell(row.net_interchange_mw.as_ref(), "net_interchange_mw", 0.0)?;
-    area.tolerance = num_cell(row.tolerance_mw.as_ref(), "tolerance_mw", 0.0)?;
-    area.name = text(row.name.as_ref(), "name")?;
-    area.uid = text(row.uid.as_ref(), "uid")?;
-    area.area_type = text(row.area_type.as_ref(), "area_type")?;
-    Ok(area)
+    area.slack_bus = row
+        .slack_bus
+        .as_ref()
+        .filter(|value| !value.is_null())
+        .and_then(|bus| id_cell(Some(bus), "slack_bus").ok());
+    area.net_interchange = row
+        .net_interchange_mw
+        .as_ref()
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    area.tolerance = row
+        .tolerance_mw
+        .as_ref()
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    area.name = text(row.name.as_ref());
+    area.uid = text(row.uid.as_ref());
+    area.area_type = text(row.area_type.as_ref());
+    Some(area)
 }
 
 /// The shared build both entries use: the typed document, decoded from text
@@ -678,8 +683,8 @@ fn build_from_document(document: Document, name_hint: Option<&str>) -> Result<Ba
         .collect::<Result<Vec<_>>>()?;
     let areas = sorted_table(elements.area)
         .iter()
-        .map(|(key, row)| read_area(key, row))
-        .collect::<Result<Vec<_>>>()?;
+        .filter_map(|(key, row)| read_area(key, row))
+        .collect::<Vec<_>>();
 
     let net = BalancedNetwork::from_tables(BalancedNetworkTables {
         name,
@@ -1678,6 +1683,23 @@ mod tests {
     /// The keys PowerIO adds to an egret document carry what egret's fields
     /// cannot: areas, frequency, case metadata, identities, rating sets beyond
     /// the three, MATPOWER's generator columns, and the dcline cost.
+    #[test]
+    fn egret_area_elements_keyed_by_name_are_skipped_not_refused() {
+        // egret's own areas are keyed by name and carry reserve requirements;
+        // the reader skips them, as it did before PowerIO wrote areas. A
+        // mistyped attribute of a numbered area is left unset.
+        let doc = r#"{"elements":{
+            "bus":{"1":{"matpower_bustype":"ref","vm":1.0,"area":"1"}},
+            "area":{"North":{"spinning_reserve_requirement":5.0},
+                    "1":{"name":3,"slack_bus":"1"}}},
+            "system":{"baseMVA":100.0,"reference_bus":"1"}}"#;
+        let net = parse_egret_json(doc).unwrap();
+        assert_eq!(net.areas().len(), 1);
+        assert_eq!(net.areas()[0].number, 1);
+        assert_eq!(net.areas()[0].name, None);
+        assert_eq!(net.areas()[0].slack_bus, Some(BusId(1)));
+    }
+
     #[test]
     fn powerio_extensions_round_trip_through_the_document() {
         let doc = r#"{"elements":{
