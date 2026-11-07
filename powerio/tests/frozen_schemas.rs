@@ -552,6 +552,7 @@ fn the_current_schema_reads_every_earlier_document_in_its_series() {
 /// apart from the header's `version`, stay byte for byte the same, so a
 /// document the earlier release wrote still reads with the same meaning.
 /// Renaming or reshaping an existing type fails here.
+#[allow(clippy::too_many_lines)] // one rule per definition family that may change
 fn assert_reads_documents_of(earlier: &str) {
     let mut published: serde_json::Value =
         serde_json::from_str(&read_schema_file(earlier)).unwrap();
