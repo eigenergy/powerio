@@ -41,8 +41,6 @@ use crate::{Error, Result};
 
 #[must_use]
 pub fn write_powermodels_json(net: &BalancedNetwork) -> TextEmission {
-    let mut warnings = Diagnostics::new();
-
     // Per-unit write factors, the exact inverse of the reader's pscale/ascale:
     // powers ÷ baseMVA, angles degrees → radians. Cost rescale needs the base.
     let base = net.base_mva();
@@ -57,114 +55,36 @@ pub fn write_powermodels_json(net: &BalancedNetwork) -> TextEmission {
         );
     }
 
-    let mut branch = Map::new();
-    for (i, br) in net.branches().iter().enumerate() {
-        let idx = i + 1;
-        branch.insert(
-            idx.to_string(),
-            carry_row(
-                branch_obj(br, idx, p, a),
-                br.uid.as_deref(),
-                &br.extras,
-                net,
-            ),
-        );
-    }
-
-    let mut gen_map = Map::new();
-    for (i, g) in net.generators().iter().enumerate() {
-        let idx = i + 1;
-        gen_map.insert(
-            idx.to_string(),
-            carry_row(
-                gen_obj(g, idx, p, base),
-                g.uid.as_deref(),
-                &crate::network::Extras::new(),
-                net,
-            ),
-        );
-    }
-
-    let mut load = Map::new();
-    for (i, l) in net.loads().iter().enumerate() {
-        let idx = i + 1;
-        load.insert(
-            idx.to_string(),
-            carry_row(load_obj(l, idx, p), l.uid.as_deref(), &l.extras, net),
-        );
-    }
-    let mut shunt = Map::new();
-    for (i, s) in net.shunts().iter().enumerate() {
-        let idx = i + 1;
-        shunt.insert(
-            idx.to_string(),
-            carry_row(shunt_obj(s, idx, p), s.uid.as_deref(), &s.extras, net),
-        );
-    }
-
-    let mut dcline = Map::new();
-    for (i, dc) in net.hvdc().iter().enumerate() {
-        let idx = i + 1;
-        dcline.insert(
-            idx.to_string(),
-            carry_row(dcline_obj(dc, idx, p), dc.uid.as_deref(), &dc.extras, net),
-        );
-    }
-    let mut storage = Map::new();
-    for (i, st) in net.storage().iter().enumerate() {
-        let idx = i + 1;
-        storage.insert(
-            idx.to_string(),
-            carry_row(storage_obj(st, idx, p), st.uid.as_deref(), &st.extras, net),
-        );
-    }
-    let mut switch = Map::new();
-    for (i, sw) in net.switches().iter().enumerate() {
-        let idx = i + 1;
-        switch.insert(
-            idx.to_string(),
-            carry_row(switch_obj(sw, idx, p), sw.uid.as_deref(), &sw.extras, net),
-        );
-    }
-    if !storage.is_empty() {
-        warnings.push(
-            &F.value_collapsed,
-            format!(
-                "{} storage unit(s) mapped with warnings to the PowerModels storage schema",
-                storage.len()
-            ),
-        );
-    }
-    if !net.transformers_3w().is_empty() {
-        warnings.push(&F.record_dropped, format!(
-            "{} 3-winding transformer(s) dropped: the PowerModels JSON writer emits no 3-winding record",
-            net.transformers_3w().len()
-        ));
-    }
-    let voltage_loads = net
-        .loads()
-        .iter()
-        .filter(|l| {
-            l.voltage_model
-                .as_ref()
-                .is_some_and(LoadVoltageModel::has_non_matpower_fields)
-        })
-        .count();
-    if voltage_loads > 0 {
-        warnings.push(&F.field_dropped, format!(
-            "{voltage_loads} voltage dependent load model(s) dropped: PowerModels load records carry static pd/qd only"
-        ));
-    }
-    if net
-        .buses()
-        .iter()
-        .any(|b| b.evhi.is_some() || b.evlo.is_some())
-    {
-        warnings.push(
-            &F.field_dropped,
-            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band",
-        );
-    }
+    let branch = indexed(net.branches(), |br, idx| {
+        carry_row(
+            branch_obj(br, idx, p, a),
+            br.uid.as_deref(),
+            &br.extras,
+            net,
+        )
+    });
+    // A generator has no free-form extras: `gen_obj` writes its typed
+    // `GEN_EXTRA_KEYS` columns.
+    let no_extras = crate::network::Extras::new();
+    let gen_map = indexed(net.generators(), |g, idx| {
+        carry_row(gen_obj(g, idx, p, base), g.uid.as_deref(), &no_extras, net)
+    });
+    let load = indexed(net.loads(), |l, idx| {
+        carry_row(load_obj(l, idx, p), l.uid.as_deref(), &l.extras, net)
+    });
+    let shunt = indexed(net.shunts(), |s, idx| {
+        carry_row(shunt_obj(s, idx, p), s.uid.as_deref(), &s.extras, net)
+    });
+    let dcline = indexed(net.hvdc(), |dc, idx| {
+        carry_row(dcline_obj(dc, idx, p), dc.uid.as_deref(), &dc.extras, net)
+    });
+    let storage = indexed(net.storage(), |st, idx| {
+        carry_row(storage_obj(st, idx, p), st.uid.as_deref(), &st.extras, net)
+    });
+    let switch = indexed(net.switches(), |sw, idx| {
+        carry_row(switch_obj(sw, idx, p), sw.uid.as_deref(), &sw.extras, net)
+    });
+    let warnings = unwritten_warnings(net);
 
     let mut root = Map::new();
     root.insert("name".into(), Value::String(net.name().clone()));
@@ -202,6 +122,60 @@ pub fn write_powermodels_json(net: &BalancedNetwork) -> TextEmission {
     }
 
     finish(&F, root, warnings)
+}
+
+/// What the PowerModels document cannot state, or states only approximately.
+fn unwritten_warnings(net: &BalancedNetwork) -> Diagnostics {
+    let mut warnings = Diagnostics::new();
+    if !net.storage().is_empty() {
+        warnings.push(
+            &F.value_collapsed,
+            format!(
+                "{} storage unit(s) mapped with warnings to the PowerModels storage schema",
+                net.storage().len()
+            ),
+        );
+    }
+    if !net.transformers_3w().is_empty() {
+        warnings.push(&F.record_dropped, format!(
+            "{} 3-winding transformer(s) dropped: the PowerModels JSON writer emits no 3-winding record",
+            net.transformers_3w().len()
+        ));
+    }
+    let voltage_loads = net
+        .loads()
+        .iter()
+        .filter(|l| {
+            l.voltage_model
+                .as_ref()
+                .is_some_and(LoadVoltageModel::has_non_matpower_fields)
+        })
+        .count();
+    if voltage_loads > 0 {
+        warnings.push(&F.field_dropped, format!(
+            "{voltage_loads} voltage dependent load model(s) dropped: PowerModels load records carry static pd/qd only"
+        ));
+    }
+    if net
+        .buses()
+        .iter()
+        .any(|b| b.evhi.is_some() || b.evlo.is_some())
+    {
+        warnings.push(
+            &F.field_dropped,
+            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band",
+        );
+    }
+    warnings
+}
+
+/// One PowerModels table: each record keyed by its 1-based index.
+fn indexed<T>(items: &[T], row: impl Fn(&T, usize) -> Value) -> Map<String, Value> {
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| ((i + 1).to_string(), row(item, i + 1)))
+        .collect()
 }
 
 /// PowerModels back-reference `["bus"|"branch"|…, index]`.
