@@ -135,9 +135,12 @@ that needs action.
 - PowerModels JSON and egret JSON carry, as keys those tools leave alone and
   PowerIO reads back, what their standard fields cannot: area records, case
   metadata, system frequency (egret), source element identities, branch
-  rating sets beyond the three ratings, each element's untyped fields, and
-  for egret MATPOWER's generator capability columns and the dcline cost. The
-  conversion matrix gains fifteen lossless cells and no cell gets worse.
+  rating sets beyond the three ratings, each element's untyped fields, the
+  detailed connectivity hierarchy, bus locations and branch routes with their
+  coordinate reference, transformer and switched shunt controls, generator
+  regulation and active power control, IIDM HVDC line detail, and for egret
+  MATPOWER's generator capability columns and the dcline cost. The
+  conversion matrix gains twenty-three lossless cells and no cell gets worse.
 - The PMD ENGINEERING writer writes back a generator control mode the source
   stated instead of always writing `FREQUENCYDROOP`.
 
