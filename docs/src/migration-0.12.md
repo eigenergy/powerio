@@ -156,9 +156,11 @@ unit with an off-nominal winding 1 ratio the difference reached `|Ym|` in
 on petgraph, a crate before its own 1.0 whose type was in PowerIO's public
 API. `IndexedNetwork::branch_edges()` yields the same topology, one
 `(branch, from, to)` per in-service branch over dense bus indices. To keep a
-petgraph graph, add `view.n()` nodes and one edge per item:
+petgraph graph, add `petgraph` to your application's dependencies. With an
+existing `IndexedNetwork` named `view`, add `view.n()` nodes and one edge per
+item:
 
-```rust
+```rust,ignore
 let mut graph = petgraph::graph::UnGraph::<usize, usize>::with_capacity(view.n(), 0);
 let nodes: Vec<_> = (0..view.n()).map(|bus| graph.add_node(bus)).collect();
 for (branch, from, to) in view.branch_edges() {
