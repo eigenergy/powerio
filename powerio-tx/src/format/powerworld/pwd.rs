@@ -10,7 +10,6 @@
 //! such as a case file or an AUX file with geographic fields.
 
 use std::collections::{BTreeMap, HashSet};
-use std::path::Path;
 
 use crate::{Error, Result};
 
@@ -73,16 +72,6 @@ pub struct PwdDisplay {
     pub canvas_height: u16,
     pub stamp: u32,
     pub substations: Vec<PwdSubstation>,
-}
-
-/// Read and parse a `.pwd` display file.
-///
-/// # Errors
-/// [`Error::Io`] when the file cannot be read, or [`Error::FormatRead`] when
-/// the display bytes are not a supported PowerWorld `.pwd` shape.
-pub fn parse_pwd_file(path: impl AsRef<Path>) -> Result<PwdDisplay> {
-    let bytes = std::fs::read(path)?;
-    parse_pwd_display(&bytes)
 }
 
 /// Parse a `.pwd` display file, returning metadata and decoded substations.
