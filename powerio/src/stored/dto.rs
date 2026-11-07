@@ -1060,14 +1060,30 @@ pub struct SocwrOpfValues {
     pub generator_active_power: Vec<StoredF64>,
     #[serde(deserialize_with = "bounded_operating_point_values")]
     pub generator_reactive_power: Vec<StoredF64>,
-    #[serde(deserialize_with = "bounded_operating_point_values")]
-    pub branch_from_active_power: Vec<StoredF64>,
-    #[serde(deserialize_with = "bounded_operating_point_values")]
-    pub branch_from_reactive_power: Vec<StoredF64>,
-    #[serde(deserialize_with = "bounded_operating_point_values")]
-    pub branch_to_active_power: Vec<StoredF64>,
-    #[serde(deserialize_with = "bounded_operating_point_values")]
-    pub branch_to_reactive_power: Vec<StoredF64>,
+    // 0.11 documents state `branch_from_active_power`.
+    #[serde(
+        alias = "branch_from_active_power",
+        deserialize_with = "bounded_operating_point_values"
+    )]
+    pub branch_from_active_flow: Vec<StoredF64>,
+    // 0.11 documents state `branch_from_reactive_power`.
+    #[serde(
+        alias = "branch_from_reactive_power",
+        deserialize_with = "bounded_operating_point_values"
+    )]
+    pub branch_from_reactive_flow: Vec<StoredF64>,
+    // 0.11 documents state `branch_to_active_power`.
+    #[serde(
+        alias = "branch_to_active_power",
+        deserialize_with = "bounded_operating_point_values"
+    )]
+    pub branch_to_active_flow: Vec<StoredF64>,
+    // 0.11 documents state `branch_to_reactive_power`.
+    #[serde(
+        alias = "branch_to_reactive_power",
+        deserialize_with = "bounded_operating_point_values"
+    )]
+    pub branch_to_reactive_flow: Vec<StoredF64>,
     #[serde(deserialize_with = "bounded_three_winding_transformer_terminal_powers")]
     pub three_winding_transformer_terminal_powers: Vec<ThreeWindingTransformerTerminalPower>,
 }

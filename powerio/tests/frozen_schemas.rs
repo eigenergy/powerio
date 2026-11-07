@@ -395,11 +395,25 @@ fn assert_partial_transformer_schema_preserved(
     earlier: &str,
 ) {
     // Nondefault winding states have their own tagged nested record;
-    // the complete historical transformer body stays unchanged.
+    // the complete historical transformer body stays unchanged, apart from
+    // the optional `magnetizing_connection` 1.0 adds.
     let branches = current_defs["Transformer3W"]["anyOf"].as_array().unwrap();
     assert_eq!(branches.len(), 2);
+    // From 0.11.6 the published definition is already the two-branch union.
+    let published_body = match definition["anyOf"].as_array() {
+        Some(published) => {
+            assert_eq!(published.len(), 2, "{earlier}: transformer union");
+            assert_eq!(
+                published[1], branches[1],
+                "{earlier}: partial branch changed"
+            );
+            &published[0]
+        }
+        None => definition,
+    };
     assert_eq!(
-        &branches[0], definition,
+        &without_magnetizing_connection(&branches[0], current_defs, earlier),
+        &without_magnetizing_connection(published_body, current_defs, earlier),
         "{earlier}: legacy transformer changed"
     );
     assert_eq!(branches[1]["$ref"], "#/$defs/PartialTransformer3WWire");
@@ -428,7 +442,80 @@ fn assert_partial_transformer_schema_preserved(
                 "items": {"type": "boolean"}, "not": {"const": [true, true, true]}}
         }))
     );
-    assert_eq!(&partial_body, definition);
+    assert_eq!(
+        without_magnetizing_connection(&partial_body, current_defs, earlier),
+        without_magnetizing_connection(published_body, current_defs, earlier),
+        "{earlier}: partial transformer body changed"
+    );
+}
+
+/// The 1.0 SOCWR values definition with its branch flow keys spelled as 0.11
+/// spelled them.
+fn with_0_11_socwr_flow_names(current: &serde_json::Value) -> serde_json::Value {
+    const RENAMED: [(&str, &str); 4] = [
+        ("branch_from_active_flow", "branch_from_active_power"),
+        ("branch_from_reactive_flow", "branch_from_reactive_power"),
+        ("branch_to_active_flow", "branch_to_active_power"),
+        ("branch_to_reactive_flow", "branch_to_reactive_power"),
+    ];
+    let mut definition = current.clone();
+    let properties = definition["properties"].as_object_mut().unwrap();
+    let mut renamed = serde_json::Map::new();
+    for (key, value) in std::mem::take(properties) {
+        let key = RENAMED
+            .iter()
+            .find(|(new, _)| *new == key)
+            .map_or(key.clone(), |(_, old)| (*old).to_owned());
+        renamed.insert(key, value);
+    }
+    *properties = renamed;
+    for field in definition["required"].as_array_mut().unwrap() {
+        if let Some((_, old)) = RENAMED.iter().find(|(new, _)| field == new) {
+            *field = serde_json::Value::from(*old);
+        }
+    }
+    definition
+}
+
+/// A transformer body without the one field 1.0 adds to it. `magnetizing_connection`
+/// is optional, and a document without it states the star point, the meaning
+/// `mag_g` and `mag_b` have in every 0.11 document; 1.0 rewords those two
+/// fields' description to point at it. Nothing else may differ.
+fn without_magnetizing_connection(
+    body: &serde_json::Value,
+    current_defs: &serde_json::Value,
+    earlier: &str,
+) -> serde_json::Value {
+    let mut body = body.clone();
+    let Some(properties) = body["properties"].as_object_mut() else {
+        return body;
+    };
+    if let Some(connection) = properties.remove("magnetizing_connection") {
+        assert_eq!(
+            connection["$ref"], "#/$defs/MagnetizingConnection",
+            "{earlier}: magnetizing_connection"
+        );
+        let names: Vec<_> = current_defs["MagnetizingConnection"]["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|alternative| alternative["const"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["star_point", "winding1_terminal"], "{earlier}");
+    }
+    properties
+        .get_mut("mag_g")
+        .and_then(serde_json::Value::as_object_mut)
+        .map(|mag_g| mag_g.remove("description"));
+    assert!(
+        !body["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field == "magnetizing_connection"),
+        "{earlier}: magnetizing_connection became required"
+    );
+    body
 }
 
 /// Every 0.11 schema file is checked against the current one, because this
@@ -524,6 +611,21 @@ fn assert_reads_documents_of(earlier: &str) {
             assert_eq!(new_source["required"], serde_json::json!(["type", "value"]));
         } else if name == "Transformer3W" {
             assert_partial_transformer_schema_preserved(definition, &current_defs, earlier);
+        } else if name == "SocwrOpfValues" {
+            // 1.0 names the SOCWR branch flows as every other solution does
+            // (`branch_from_active_flow`); the reader still accepts the 0.11
+            // keys, so a 0.11 document reads with the same values.
+            assert_eq!(
+                with_0_11_socwr_flow_names(&current_defs[name]),
+                *definition,
+                "{earlier}: definition {name} changed beyond the flow renames"
+            );
+        } else if name == "PartialTransformer3WFields" {
+            assert_eq!(
+                without_magnetizing_connection(&current_defs[name], &current_defs, earlier),
+                without_magnetizing_connection(definition, &current_defs, earlier),
+                "{earlier}: definition {name} changed"
+            );
         } else if name == "DcPfInstance" || name == "AcPfInstance" {
             assert_only_optional_property_added(
                 definition,

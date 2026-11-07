@@ -3770,30 +3770,36 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
             EquipmentKind::Battery => {
                 let mut item = Storage::new(bus1);
                 item.uid = Some(equipment.id.clone());
-                item.ps = assigned_power_or_zero(
+                // An IIDM battery states its targets and reactive limits as
+                // generation, positive into the network; PowerIO storage
+                // states power withdrawn from the network, positive when
+                // charging (#700).
+                let target_p = assigned_power_or_zero(
                     parsed,
                     equipment,
                     "targetP",
                     &missing_assignments,
                     diagnostics,
                 )?;
-                item.qs = assigned_power_or_zero(
+                let target_q = assigned_power_or_zero(
                     parsed,
                     equipment,
                     "targetQ",
                     &missing_assignments,
                     diagnostics,
                 )?;
+                item.ps = -target_p;
+                item.qs = -target_q;
                 item.charge_rating = (-required_f64(&equipment.attrs, "minP")?).max(0.0);
                 item.discharge_rating = required_f64(&equipment.attrs, "maxP")?.max(0.0);
                 if let Some(limits) = &equipment.reactive_limits {
-                    let (qmin, qmax) = reactive_limits_at_active_power(
+                    let (min_q, max_q) = reactive_limits_at_active_power(
                         &format!("battery `{}`", equipment.id),
                         limits,
-                        item.ps,
+                        target_p,
                     )?;
-                    item.qmin = qmin;
-                    item.qmax = qmax;
+                    item.qmin = -max_q;
+                    item.qmax = -min_q;
                 }
                 item.in_service = connected1;
                 item.active_power_control
@@ -6239,6 +6245,7 @@ fn read_three_winding_transformer(
         star_va: 0.0,
         mag_g: star_g.iter().sum::<f64>() * zbase,
         mag_b: star_b.iter().sum::<f64>() * zbase,
+        magnetizing_connection: crate::network::MagnetizingConnection::StarPoint,
         in_service: connected >= 2,
         name: equipment.attrs.get("name").cloned(),
         uid: Some(equipment.id.clone()),
@@ -6344,8 +6351,12 @@ fn read_hvdc_line(
             }),
         )
     };
+    // `Hvdc::qf` and `qt` are injected into the bus. A terminal `q` is the
+    // flow from the bus into the station, and a `reactivePowerSetpoint` is
+    // already an injection (#700).
     let converter_q = |equipment: &RawEquipment| -> Result<(f64, f64, f64)> {
         let q = optional_f64(&equipment.attrs, "q")?
+            .map(|terminal| -terminal)
             .or(optional_f64(&equipment.attrs, "reactivePowerSetpoint")?)
             .unwrap_or(0.0);
         let (qmin, qmax) = equipment
@@ -11986,19 +11997,21 @@ fn write_storage(
     let component = component_id("storage", id).expect("valid stored identity");
     let terminal = terminal_attributes(index, &component, 1, false, storage.in_service);
     let metadata = index.metadata(&component);
+    // The battery targets and reactive limits are generation, the negated
+    // storage withdrawal (#700).
     let target_active_power = assignment_attribute(
         index,
         &component,
         OmittedFieldName::ActivePower,
         "targetP",
-        storage.ps,
+        -storage.ps,
     );
     let target_reactive_power = assignment_attribute(
         index,
         &component,
         OmittedFieldName::ReactivePower,
         "targetQ",
-        storage.qs,
+        -storage.qs,
     );
     output.push_str(&format!(
         "      <iidm:battery id=\"{}\"{}{target_active_power}{target_reactive_power} minP=\"{}\" maxP=\"{}\"{terminal}>\n",
@@ -12011,8 +12024,8 @@ fn write_storage(
     } else {
         output.push_str(&format!(
             "        <iidm:minMaxReactiveLimits minQ=\"{}\" maxQ=\"{}\"/>\n",
-            number(storage.qmin),
-            number(storage.qmax),
+            number(-storage.qmax),
+            number(-storage.qmin),
         ));
     }
     output.push_str("      </iidm:battery>\n");
@@ -12372,6 +12385,18 @@ fn write_three_winding_transformer(
     diagnostics: &mut Diagnostics,
 ) {
     let id = transformer.uid.as_deref().unwrap_or("transformer");
+    if transformer.magnetizing_connection != crate::network::MagnetizingConnection::StarPoint
+        && (transformer.mag_g != 0.0 || transformer.mag_b != 0.0)
+    {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.value_substituted,
+            format!(
+                "three winding transformer `{id}` magnetizing admittance stated at winding 1's \
+                 bus was written as leg 1's g1/b1, which IIDM connects at the star bus: the \
+                 two placements are different circuits"
+            ),
+        );
+    }
     let component = component_id("transformer_3w", id).expect("valid stored identity");
     let buses: [&Bus; 3] = std::array::from_fn(|side| {
         let winding = &transformer.windings[side];
@@ -12666,6 +12691,8 @@ fn write_hvdc_converter_stations(
         }
         let metadata = index.metadata(&component);
         let loss_factor = converter.loss_factor_percent;
+        // The terminal p and q are flows from the bus into the station: `pf`
+        // already is one, while `pt`, `qf`, and `qt` are injections (#700).
         let p = if is_from { line.pf } else { -line.pt };
         let (q, qmin, qmax) = if is_from {
             (line.qf, line.qminf, line.qmaxf)
@@ -12681,7 +12708,7 @@ fn write_hvdc_converter_stations(
             {
                 String::new()
             } else {
-                injection_solution_attributes(index, &component, p, q)
+                injection_solution_attributes(index, &component, p, -q)
             };
             output.push_str(&format!(
                     "      <iidm:lccConverterStation id=\"{}\"{} lossFactor=\"{}\" powerFactor=\"{}\"{terminal}{solution}/>\n",
@@ -12705,7 +12732,7 @@ fn write_hvdc_converter_stations(
             {
                 String::new()
             } else {
-                injection_solution_attributes(index, &component, p, q)
+                injection_solution_attributes(index, &component, p, -q)
             };
             // A station that stated a reactive capability curve keeps it: the
             // curve states a reactive minimum and maximum per active power
@@ -14028,6 +14055,53 @@ mod tests {
         assert_eq!(reparsed.generators()[0].regulated_bus, Some(BusId(2)));
         assert!(!reparsed.generators()[0].voltage_regulation_on);
         assert_f64_close(reparsed.generators()[0].vg, generator.vg);
+    }
+
+    /// #700: an IIDM battery states generation, positive into the network;
+    /// PowerIO storage states withdrawal, positive when charging. A
+    /// discharging battery is a negative `ps` and `qs`, and its reactive
+    /// limits mirror.
+    #[test]
+    fn a_battery_target_is_generation_and_storage_power_is_withdrawal() {
+        let source = POWSYBL_ACTIVE_POWER_CONTROL.replace(
+            r#"<iidm:minMaxReactiveLimits minQ="-50" maxQ="50"/>"#,
+            r#"<iidm:minMaxReactiveLimits minQ="-4" maxQ="6"/>"#,
+        );
+        let mut diagnostics = Diagnostics::new();
+        let network = parse_xiidm_source(&source, &mut diagnostics).unwrap();
+        let storage = &network.storage()[0];
+        assert_f64_close(storage.ps, -100.0);
+        assert_f64_close(storage.qs, -20.0);
+        assert_f64_close(storage.qmin, -6.0);
+        assert_f64_close(storage.qmax, 4.0);
+        let written = write_xiidm(&network).unwrap().text;
+        let battery = written
+            .lines()
+            .find(|line| line.contains("<iidm:battery "))
+            .unwrap();
+        assert!(battery.contains(r#"targetP="100""#), "{battery}");
+        assert!(battery.contains(r#"targetQ="20""#), "{battery}");
+        let reread = parse_xiidm_source(&written, &mut Diagnostics::new()).unwrap();
+        assert_f64_close(reread.storage()[0].ps, -100.0);
+        assert_f64_close(reread.storage()[0].qs, -20.0);
+        assert_f64_close(reread.storage()[0].qmin, storage.qmin);
+        assert_f64_close(reread.storage()[0].qmax, storage.qmax);
+    }
+
+    /// #700: a converter station's terminal `q` flows from the bus into the
+    /// station, its `reactivePowerSetpoint` is injected into the bus, and
+    /// `Hvdc::qf` and `qt` are injected into the bus.
+    #[test]
+    fn a_converter_terminal_q_is_the_negated_hvdc_injection() {
+        let mut diagnostics = Diagnostics::new();
+        let network = parse_xiidm_source(EQUIPMENT_COVERAGE, &mut diagnostics).unwrap();
+        let hvdc = &network.hvdc()[0];
+        assert_f64_close(hvdc.qf, -5.0);
+        assert_f64_close(hvdc.qt, 3.0);
+        let written = write_xiidm(&network).unwrap().text;
+        let reread = parse_xiidm_source(&written, &mut Diagnostics::new()).unwrap();
+        assert_f64_close(reread.hvdc()[0].qf, -5.0);
+        assert_f64_close(reread.hvdc()[0].qt, 3.0);
     }
 
     #[test]

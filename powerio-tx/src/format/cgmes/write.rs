@@ -6828,6 +6828,19 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
     for (i, transformer) in net.transformers_3w().iter().enumerate() {
         let fallback = format!("transformer3w-{i}");
         let local_id = transformer.uid.as_deref().unwrap_or(&fallback);
+        if transformer.magnetizing_connection != crate::network::MagnetizingConnection::StarPoint
+            && (transformer.mag_g != 0.0 || transformer.mag_b != 0.0)
+        {
+            w.warnings.push_as(
+                &codes::EMIT_CGMES.value_substituted,
+                format!(
+                    "three winding transformer `{local_id}` magnetizing admittance stated at \
+                     winding 1's bus was written as end 1's g and b, which a CGMES star \
+                     model connects at the star point: the two placements are different \
+                     circuits"
+                ),
+            );
+        }
         let id = mrid_or("transformer_3w", &fallback, transformer.uid.as_deref());
         eq.named(
             "PowerTransformer",

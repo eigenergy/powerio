@@ -125,16 +125,16 @@ pub use powerio_tx::{
     CoordsKind, DEFAULT_BASE_FREQUENCY, Detection, ElementKey, Expanded, Extras, GenCaps, GenCost,
     Generator, GeoApplyReport, GeoFeature, GeoGeometry, GeoLayer, GeoMeta, GeoParsed, GeoTarget,
     Hvdc, Impedance, IndexCore, IndexedNetwork, InterfaceMember, JSON_CLASSES, JoinName, JsonClass,
-    Load, LoadVoltageModel, Location, MonitorScope, MonitorStatement, MonitoredParsed,
-    MonitoredResolution, MonitoredSet, PsseEquipmentIndex, PwdDisplay, PwdSubstation, ResolvedCase,
-    ResolvedComponent, ResolvedInterface, ResolvedVoltageScope, RetainedStatement, Selector,
-    SelectorGroup, SharedPsseEquipmentIndex, Shunt, ShuntBlock, SkipRule, SolverParams,
-    SourceFormat, Storage, Subsystem, SubsystemParsed, SubsystemSelector, SubsystemSet, Switch,
-    SwitchedShuntControl, SwitchedShuntMode, Transformer3W, TransformerControl,
-    TransformerControlMode, UnresolvedAction, UnresolvedMonitor, UnresolvedMonitorReason,
-    UnresolvedReason, Winding, apply_substation_points, calc_series_admittance_of,
-    classify_json_bytes, classify_json_text, repair_values, to_geo_layer_from_pwd,
-    to_lonlat_from_pwd_mercator,
+    Load, LoadVoltageModel, Location, MagnetizingConnection, MonitorScope, MonitorStatement,
+    MonitoredParsed, MonitoredResolution, MonitoredSet, PsseEquipmentIndex, PwdDisplay,
+    PwdSubstation, ResolvedCase, ResolvedComponent, ResolvedInterface, ResolvedVoltageScope,
+    RetainedStatement, Selector, SelectorGroup, SharedPsseEquipmentIndex, Shunt, ShuntBlock,
+    SkipRule, SolverParams, SourceFormat, Storage, Subsystem, SubsystemParsed, SubsystemSelector,
+    SubsystemSet, Switch, SwitchedShuntControl, SwitchedShuntMode, Transformer3W,
+    TransformerControl, TransformerControlMode, UnresolvedAction, UnresolvedMonitor,
+    UnresolvedMonitorReason, UnresolvedReason, Winding, apply_substation_points,
+    calc_series_admittance_of, classify_json_bytes, classify_json_text, repair_values,
+    to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
 };
 /// Balanced network records and the public network and geographic submodules.
 /// Derived indexes, normalization data, solver tables, and component error
@@ -247,10 +247,10 @@ pub use transform::{
     ac_ots_instance_from_base, ac_ots_solution, apply_geo_layer, fix_ac_ots_topology,
     materialize_ac_ots_solution, network_with_operating_point, neutral_kron,
     neutral_kron_with_options, to_ac_opf_instance, to_ac_ots_instance,
-    to_ac_ots_instance_with_options, to_ac_pf_instance, to_dc_opf_instance, to_dc_pf_instance,
-    to_lindist3flow_opf_instance, to_lindist3flow_opf_instance_with_options,
-    to_lindist3flow_pf_instance, to_lindist3flow_pf_instance_with_options, to_mc_ac_opf_instance,
-    to_mc_ac_pf_instance,
+    to_ac_ots_instance_with_options, to_ac_pf_instance, to_balanced, to_balanced_report,
+    to_dc_opf_instance, to_dc_pf_instance, to_lindist3flow_opf_instance,
+    to_lindist3flow_opf_instance_with_options, to_lindist3flow_pf_instance,
+    to_lindist3flow_pf_instance_with_options, to_mc_ac_opf_instance, to_mc_ac_pf_instance,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -115,7 +115,7 @@ typedef struct {
 } PioStringView;
 
 /**
- * The three numbers of a PowerIO release, such as 0.12.0.
+ * The three numbers of a PowerIO release, such as 1.0.0.
  */
 typedef struct {
     uint32_t major;
@@ -1935,6 +1935,12 @@ typedef struct {
     double magnetizing_conductance_pu;
     double magnetizing_susceptance_pu;
     bool in_service;
+    /**
+     * Where the magnetizing admittance connects: `star_point` (between the
+     * star point and ground) or `winding1_terminal` (between winding 1's bus
+     * and ground, outside its ratio, as PSS/E states it).
+     */
+    PioStringView magnetizing_connection;
 } PioBalancedThreeWindingTransformerView;
 
 /**
