@@ -8,6 +8,10 @@ name: Fuzz smoke
 on:
   pull_request:
     paths:
+      - "powerio-archive/**"
+      - "powerio/src/collection/**"
+      - "powerio-core/src/source/**"
+      - "powerio-core/src/source.rs"
       - "powerio-tx/src/format/**"
       - "powerio-tx/src/dynamic.rs"
       - "powerio-tx/src/geo/**"
@@ -45,6 +49,7 @@ jobs:
         working-directory: fuzz
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then budget=300; else budget=20; fi
+          python3 seed_collections.py
           for target in $(cargo +nightly fuzz list); do
             echo "::group::$target"
             cargo +nightly fuzz run "$target" -- -max_total_time="$budget" -rss_limit_mb=4096

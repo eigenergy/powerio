@@ -3,6 +3,7 @@ members = [
     "powerio",
     "powerio-tx",
     "powerio-core",
+    "powerio-archive",
     "powerio-tnd",
     "powerio-matrix",
     "powerio-synth",
@@ -24,6 +25,7 @@ default-members = [
     "powerio",
     "powerio-tx",
     "powerio-core",
+    "powerio-archive",
     "powerio-tnd",
     "powerio-matrix",
     "powerio-synth",
@@ -60,6 +62,7 @@ powerio-synth = { path = "powerio-synth", version = "0.11.9" }
 powerio-prob = { path = "powerio-prob", version = "0.11.9" }
 powerio-dist = { path = "powerio-dist", version = "0.11.9", default-features = false }
 powerio-tnd = { path = "powerio-tnd", version = "0.11.9", default-features = false }
+powerio-archive = { path = "powerio-archive", version = "0.11.9" }
 # Cross-crate type identity: `CsMat<f64>` (sprs) and the Arrow types cross crate
 # boundaries, so every crate must build against the same major.
 sprs = { version = "0.11", default-features = false }

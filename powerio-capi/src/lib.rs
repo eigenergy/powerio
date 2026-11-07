@@ -2508,6 +2508,14 @@ macro_rules! opaque_handle {
     };
 }
 
+opaque_handle!(
+    /// Shared bounded file inventory; parsed modules own their selected source bytes.
+    PioCollection,
+    powerio::Collection
+);
+mod collection;
+pub use collection::*;
+
 // ---- errors and diagnostics ------------------------------------------------
 
 struct ErrorInner {
@@ -4877,48 +4885,57 @@ pub unsafe extern "C" fn pio_parse_with_options(
                     .format(format)
                     .map_err(|failure| error_from_core(&failure))?;
             }
-            if let Some(selections) = selections.as_ref() {
-                options.acquisition_root = optional_str(
-                    selections.acquisition_root.data,
-                    selections.acquisition_root.len,
-                    "acquisition_root",
-                )?
-                .map(PathBuf::from);
-                if let Some(sincal) = selections.sincal_multiconductor.as_ref() {
-                    let mut selection = powerio_tnd::formats::sincal::SincalReadOptions::default();
-                    selection.variant = sincal.has_variant.then_some(sincal.variant);
-                    selection.snapshot_hours =
-                        sincal.has_snapshot_hours.then_some(sincal.snapshot_hours);
-                    selection.acquired_tables = optional_str(
-                        sincal.acquired_tables.data,
-                        sincal.acquired_tables.len,
-                        "acquired_tables",
-                    )?
-                    .map(str::to_owned);
-                    selection.assume_inactive_source_controls =
-                        sincal.assume_inactive_source_controls;
-                    options.sincal_multiconductor = Some(selection);
-                }
-                if let Some(sincal) = selections.sincal_balanced.as_ref() {
-                    let mut selection =
-                        powerio_tnd::formats::sincal::SincalBalancedReadOptions::default();
-                    selection.variant = sincal.has_variant.then_some(sincal.variant);
-                    selection.snapshot_hours =
-                        sincal.has_snapshot_hours.then_some(sincal.snapshot_hours);
-                    selection.acquired_tables = optional_str(
-                        sincal.acquired_tables.data,
-                        sincal.acquired_tables.len,
-                        "acquired_tables",
-                    )?
-                    .map(str::to_owned);
-                    options.sincal_balanced = Some(selection);
-                }
-            }
+            apply_parse_selections(&mut options, selections)?;
             powerio::parse_with_options(source.clone(), &options)
                 .map(module_handle)
                 .map_err(|failure| error_from_core(&failure))
         })
     }
+}
+
+unsafe fn apply_parse_selections(
+    options: &mut powerio::ParseOptions,
+    selections: *const PioParseOptions,
+) -> Result<(), *mut PioError> {
+    unsafe {
+        if let Some(selections) = selections.as_ref() {
+            options.acquisition_root = optional_str(
+                selections.acquisition_root.data,
+                selections.acquisition_root.len,
+                "acquisition_root",
+            )?
+            .map(PathBuf::from);
+            if let Some(sincal) = selections.sincal_multiconductor.as_ref() {
+                let mut selection = powerio_tnd::formats::sincal::SincalReadOptions::default();
+                selection.variant = sincal.has_variant.then_some(sincal.variant);
+                selection.snapshot_hours =
+                    sincal.has_snapshot_hours.then_some(sincal.snapshot_hours);
+                selection.acquired_tables = optional_str(
+                    sincal.acquired_tables.data,
+                    sincal.acquired_tables.len,
+                    "acquired_tables",
+                )?
+                .map(str::to_owned);
+                selection.assume_inactive_source_controls = sincal.assume_inactive_source_controls;
+                options.sincal_multiconductor = Some(selection);
+            }
+            if let Some(sincal) = selections.sincal_balanced.as_ref() {
+                let mut selection =
+                    powerio_tnd::formats::sincal::SincalBalancedReadOptions::default();
+                selection.variant = sincal.has_variant.then_some(sincal.variant);
+                selection.snapshot_hours =
+                    sincal.has_snapshot_hours.then_some(sincal.snapshot_hours);
+                selection.acquired_tables = optional_str(
+                    sincal.acquired_tables.data,
+                    sincal.acquired_tables.len,
+                    "acquired_tables",
+                )?
+                .map(str::to_owned);
+                options.sincal_balanced = Some(selection);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Deserialize one PowerIO IR source.

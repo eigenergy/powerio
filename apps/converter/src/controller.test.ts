@@ -1,6 +1,7 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 
 const fake = vi.hoisted(() => ({
+  discovery: false,
   paths: [] as string[],
   crash: false, quota: false, closed: 0, removed: [] as string[], current: '',
   inspected: [] as string[],
@@ -14,6 +15,7 @@ vi.mock('./worker-client', () => ({ WorkerClient: class {
     { token: 'powermodels-json', family: 'transmission', canRead: true, canEmit: true, extension: 'json' },
   ] }; }
   async request(type: string, data: any) {
+    if (type === 'discover' && fake.discovery) return { ok: true, candidates: data.files.map((f: any) => ({ status: 'selectable', selection: { root: null, primary: f.path, format: 'matpower', operation: 'parse' } })) };
     if (type === 'inspect') { fake.current = data.name; fake.inspected.push(data.name); return { ok: true, format: 'matpower', family: 'transmission', valueType: 'powerio.BalancedNetwork', diagnostics: [] }; }
     if (type === 'emit') {
       if (fake.crash && fake.current === 'broken.m') throw new Error('WASM stopped');
@@ -33,8 +35,32 @@ vi.mock('./artifacts', () => ({ download: vi.fn(), ArtifactStore: class {
   dispose() {}
 } }));
 import { ConverterController } from './controller';
+import { BlobReader, BlobWriter, ZipWriter } from '@zip.js/zip.js';
+
+async function archive(name: string, path: string) {
+  const zip = new ZipWriter(new BlobWriter(), { useWebWorkers: false });
+  await zip.add(path, new BlobReader(new Blob(['content'])));
+  return new File([await zip.close()], name);
+}
+
+test('ZIP roots stay distinct after display-name normalization and beside loose folders', async () => {
+  fake.discovery = true;
+  const controller = new ConverterController();
+  await controller.addEntries([
+    { path: 'study one.zip', file: await archive('study one.zip', 'master.dss') },
+    { path: 'study_one.zip', file: await archive('study_one.zip', 'shared.inc') },
+    { path: 'study_one/outside.inc', file: file('outside.inc') },
+  ]);
+  const master = controller.state.jobs.find(j => j.primary === 'master.dss')!;
+  const sibling = controller.state.jobs.find(j => j.primary === 'shared.inc')!;
+  expect(master.selection?.root).not.toBe(sibling.selection?.root);
+  expect(master.files).toEqual(['master.dss']);
+  expect(sibling.files).toEqual(['shared.inc']);
+  controller.dispose();
+});
 
 beforeEach(() => {
+  fake.discovery = false;
   fake.paths = []; fake.crash = false; fake.quota = false; fake.pause = false; fake.closed = 0; fake.removed = []; fake.pending = undefined;
   fake.inspected = [];
   vi.stubGlobal('document', { documentElement: { dataset: {} } });
@@ -198,5 +224,19 @@ test('batch archive paths remain unique for duplicate and suffixed case names', 
   expect(fake.paths).toHaveLength(4);
   const directories = fake.paths.map(path => path.split('/')[1].toLowerCase());
   expect(new Set(directories).size).toBe(4);
+  controller.dispose();
+});
+
+
+test('shared candidates are parsed only when selected for inspection or conversion', async () => {
+  fake.discovery = true;
+  const controller = new ConverterController();
+  await controller.addFiles([file('first.m'), file('second.m')]);
+  expect(controller.state.jobs.map(j => j.status)).toEqual(['queued', 'queued']);
+  expect(fake.inspected).toEqual([]);
+  await controller.retry(controller.state.jobs[0].id);
+  expect(fake.inspected).toEqual(['first.m']);
+  await controller.convert();
+  expect(controller.state.jobs.every(j => j.outputs.length === 1)).toBe(true);
   controller.dispose();
 });

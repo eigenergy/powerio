@@ -12,6 +12,8 @@
 //! Indices narrow to `i32` to match SciPy's default index width.
 //! `coo_triplets` checks the bound before conversion.
 
+mod collection;
+
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
@@ -5390,6 +5392,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_display, m)?)?;
     m.add_class::<PyMulticonductorNetwork>()?;
     m.add_class::<PyPioModule>()?;
+    m.add_class::<collection::PyCollection>()?;
     m.add_class::<PyComponentId>()?;
     m.add_class::<PyScucStartupCostAdjustment>()?;
     m.add_class::<PyScucStartupLimit>()?;

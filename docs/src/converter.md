@@ -87,3 +87,17 @@ version, format names, and diagnostic codes. Review the report and add a
 small, shareable example if needed. The locally downloaded conversion
 report is more detailed and can contain private filenames and messages;
 review it before sharing.
+
+## Shared collection selections
+
+Folder and expanded ZIP inventories use the same collection discovery as the
+Rust facade. OpenDSS masters may overlap and mixed standalone cases stay
+independently selectable. Discovery does not parse electrical values: use
+**Inspect case** or request conversion. The worker keeps one bounded inventory
+for repeated selections and releases parsed results between cases. Cancelling
+terminates the worker and retains completed outputs.
+
+Existing XML/profile-ZIP grouping remains in place while explicit document-group
+controls are introduced. Unknown companions remain visible in the selected
+inventory. Candidate discovery does not certify complete dependencies or solver
+readiness.
