@@ -41,6 +41,14 @@ static int library_matches_header(PioVersionView library) {
     return library.patch >= PIO_VERSION_PATCH;
 }
 
+/* `view` states the release `core` (MAJOR.MINOR.PATCH), optionally with a
+ * prerelease suffix: 1.0.0-rc.1 is a candidate of 1.0.0. */
+static int view_states_release(PioStringView view, const char *core) {
+    size_t len = strlen(core);
+    return view.data != NULL && view.len >= len && memcmp(view.data, core, len) == 0 &&
+           (view.len == len || view.data[len] == '-');
+}
+
 static void report_error(const char *operation, PioError *error) {
     if (error == NULL) {
         fprintf(stderr, "%s failed without a PioError\n", operation);
@@ -70,7 +78,7 @@ int main(int argc, char **argv) {
     char release_text[32];
     snprintf(release_text, sizeof release_text, "%u.%u.%u", (unsigned)release.major,
              (unsigned)release.minor, (unsigned)release.patch);
-    CHECK(view_equals(pio_version(), release_text), "version string matches the numbers");
+    CHECK(view_states_release(pio_version(), release_text), "version string matches the numbers");
 
     PioError *error = NULL;
     PioSource *missing = pio_source_open("missing-case.m", 14, &error);

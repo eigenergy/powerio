@@ -23,7 +23,11 @@ int main(int argc, char **argv) {
     char header_version[32];
     snprintf(header_version, sizeof header_version, "%d.%d.%d", PIO_VERSION_MAJOR,
              PIO_VERSION_MINOR, PIO_VERSION_PATCH);
-    CHECK(strcmp(header_version, argv[1]) == 0, "packaged header states another release");
+    /* A prerelease such as 1.0.0-rc.1 states its core release in the header. */
+    size_t core_len = strlen(header_version);
+    CHECK(strncmp(header_version, argv[1], core_len) == 0 &&
+              (argv[1][core_len] == '\0' || argv[1][core_len] == '-'),
+          "packaged header states another release");
     PioVersionView release = pio_version_numbers();
     CHECK(release.major == PIO_VERSION_MAJOR && release.minor == PIO_VERSION_MINOR &&
               release.patch == PIO_VERSION_PATCH,
