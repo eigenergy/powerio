@@ -1,4 +1,7 @@
 //! Array setters leave the last winding active in native OpenDSS.
+// The asserted values are read verbatim from the script, so exact equality
+// is the property under test.
+#![allow(clippy::float_cmp)]
 use powerio_core::Source;
 use powerio_dist::{DistTransformer, DistWindingConn};
 
