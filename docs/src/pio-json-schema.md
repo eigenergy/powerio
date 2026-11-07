@@ -7,8 +7,8 @@ history, and extensions. A current document begins like this:
 ```json
 {
   "schema": "pio-ir",
-  "version": "0.12.0",
-  "producer": { "name": "powerio", "version": "0.12.0" },
+  "version": "1.0.0",
+  "producer": { "name": "powerio", "version": "1.0.0" },
   "value": {
     "type": "powerio.BalancedNetwork",
     "data": {}
@@ -26,8 +26,8 @@ both sides consume PowerIO values, including calculation instances, solutions,
 time series, and scenario sets.
 
 The generated JSON Schema is checked in at
-`docs/schema/pio-ir/0.12.0/schema.json` and served from
-`https://powerio.dev/schema/pio-ir/0.12.0/schema.json`. That schema, the
+`docs/schema/pio-ir/1.0.0/schema.json` and served from
+`https://powerio.dev/schema/pio-ir/1.0.0/schema.json`. That schema, the
 serializer, and the deserializer are all tested from the same Rust types.
 `docs/schema/README.md` lists the earlier `pio-package` and
 `powerio.module` documents as one history under `pio-ir`.
@@ -170,9 +170,6 @@ document holds at most 64 MiB, from a path or from memory. An OpenDSS case
 follows at most 4,096 includes and stops following them once they have loaded
 64 MiB of script text, counting a file again each time the case runs it.
 
-Python's `parse_display`, kept only for 0.11 compatibility, reads a display
-file whole without these limits; `parse` reads the same `.pwd` file under them.
-
 Apart from CGMES, XIIDM, and JIIDM, caller-owned memory has no whole-document limit; format and
 record limits still apply. Stored solutions embed their instance and network,
 so they can exceed the raw input's size. Consumers should check the actual
@@ -183,14 +180,14 @@ bound process memory.
 ## Versions and release series
 
 The header's `version` names the release whose schema the document follows:
-`"0.12.0"` for a document this build writes, described by
-`pio-ir/0.12.0/schema.json`. `powerio::IR_VERSION` is that release and
+`"1.0.0"` for a document this build writes, described by
+`pio-ir/1.0.0/schema.json`. `powerio::IR_VERSION` is that release and
 `powerio::IR_SCHEMA_ID` the `$id` of its schema file. `producer` names the
 software that wrote the document, which need not be PowerIO; the reader reports
 it and ignores it when deciding whether to read the document.
 
-Compatibility follows the release series as Cargo defines it: one minor
-release before 1.0 (0.12.x), then one major release (1.x, 2.x). Within a
+Compatibility follows the release series as Cargo defines it: one major
+release from 1.0 on (1.x, 2.x). Within a
 release series, any release reads PowerIO IR documents written by any other
 release in it, including a later one. A later release in the series can add
 structural types, add names to a list of allowed values, and add a distinctly
@@ -201,19 +198,19 @@ change that existing readers could not read, such as a new field on an
 existing record or a different meaning for an existing one, starts a new
 release series.
 
-PowerIO 0.12 also reads the documents every 0.11 release wrote. Those state
-the integer `"version": 2`, and 0.12.0 keeps every record layout they use, so
-they decode as they did in 0.11. A 0.11 reader refuses a 0.12 document by its
+PowerIO 1.x also reads the documents every 0.11 release wrote. Those state
+the integer `"version": 2`, and 1.0.0 keeps every record layout they use, so
+they decode as they did in 0.11. A 0.11 reader refuses a 1.0 document by its
 string version, whatever its value holds. Its message names the version and
-says to regenerate the document; upgrading the reader to 0.12 also works.
+says to regenerate the document; upgrading the reader to 1.0 also works.
 
 The reader refuses every other version and reports the schema name, version,
 and producer the document states, with the remedy: a string from a later
-release series (`"0.13.0"`, `"1.0.0"`) needs a newer PowerIO, and an earlier
+release series (`"2.0.0"`) needs a newer PowerIO, and an earlier
 release, the integer 1 of a 0.10 document, or a string that is not a
 `MAJOR.MINOR.PATCH` release has to be regenerated from its source data.
 
-Every release from 0.12.0 on publishes its own schema file at
+Every release from 1.0.0 on publishes its own schema file at
 `pio-ir/<release>/schema.json`, and no release reuses an earlier one. The 0.11
 files under `pio-ir/2/`, and every earlier file, keep their exact bytes and
 identifiers. A test compares the current schema with every 0.11 file and with

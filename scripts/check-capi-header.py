@@ -51,8 +51,10 @@ def series_name(version: tuple[int, int, int]) -> str:
 
 
 def workspace_version() -> str:
+    """The core release of the workspace version: a prerelease such as
+    1.0.0-rc.1 is a candidate of 1.0.0 and belongs to its series."""
     cargo = (ROOT / "Cargo.toml").read_text()
-    match = re.search(r'^version = "(\d+\.\d+\.\d+)"', cargo, re.M)
+    match = re.search(r'^version = "(\d+\.\d+\.\d+)(?:-[0-9A-Za-z.-]+)?"', cargo, re.M)
     if match is None:
         raise SystemExit("Cargo.toml states no workspace version")
     return match.group(1)

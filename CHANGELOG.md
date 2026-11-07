@@ -2,11 +2,88 @@
 
 ## Unreleased
 
+## 1.0.0-rc.1
+
+The first release candidate for PowerIO 1.0, which starts the 1.x release
+series. See [From 0.11 to 1.0](docs/src/migration-1.0.md) for every change
+that needs action.
+
+**Breaking changes**
+
+- PowerIO IR documents state the release whose schema they follow: the
+  header's `"version"` is now `"1.0.0"` instead of the integer `2`.
+  `powerio::IR_VERSION` becomes that release as a string, `IR_MIN_VERSION` is
+  removed, and `IR_SCHEMA_ID` names `pio-ir/1.0.0/schema.json`. A reader
+  accepts documents from its own release series (any 1.y.z) and the
+  `"version": 2` documents every 0.11 release wrote, with their meaning;
+  0.11 readers refuse 1.0 documents. Every release now publishes its own
+  `docs/schema/pio-ir/<release>/schema.json`, and the files under `pio-ir/2/`
+  keep their bytes. `powerio.versions()["powerio_ir"]["version"]` and the
+  `powerio_ir.version` that `pio_schema_report` returns are now the release
+  string (#701).
+- Replace the C ABI number with the PowerIO release (#701). `PIO_ABI_VERSION`,
+  `pio_abi_version()`, and the `abi` key of `pio_schema_report` are removed
+  with no alias. The header states the release it was generated from as
+  `PIO_VERSION_MAJOR`, `PIO_VERSION_MINOR`, and `PIO_VERSION_PATCH`, and
+  `pio_version_numbers()` returns the release of the loaded library. A
+  program compiled against the header of release X.Y.Z works with any 1.x
+  library at X.Y.Z or newer; within a release series the C ABI only gains
+  symbols, which `scripts/check-capi-header.py` checks against the latest
+  release header. `scripts/check-capi-v7.sh` is now `scripts/check-capi.sh`.
+- `Transformer3W` gains `magnetizing_connection` (`StarPoint` or
+  `Winding1Terminal`). The PSS/E readers state `Winding1Terminal`, and the
+  star lowering connects that admittance from winding 1's bus to ground
+  outside its ratio, where PSS/E connects `MAG1 + jMAG2`; 0.11 placed it at
+  the star point, off by about `|Ym|` in `Y_bus` for an off-nominal winding 1
+  (#741). The IR states the field only when it is not the star point, so 0.11
+  documents keep their meaning. Writers that cannot place it where the source
+  did report `VALUE_SUBSTITUTED`. The C view and Julia row end with the new
+  field.
+- XIIDM and JIIDM batteries read their generation-positive `targetP`,
+  `targetQ`, and reactive limits as negated storage withdrawal (`ps`, `qs`,
+  `qmin`, `qmax`), and a converter station's terminal `q` as the negated HVDC
+  injection `qf`/`qt`; the writers state the inverse (#700).
+- Remove the Python `parse_display`, `DisplayData`, `PwdDisplay`, and
+  `PwdSubstation` and the MCP server's `display` tool. `parse` reads a `.pwd`
+  display to a `GeoLayer` under the input byte limits (#612). The Rust
+  `parse_pwd_file` helper is gone; `PwdDisplay` and `to_geo_layer_from_pwd`
+  remain.
+- Remove the inert `arrow` Cargo feature of `powerio-capi`; a build command
+  that names it no longer resolves (#673).
+- The Rust MSRV is 1.89.
+
+**Collections**
+
+- Add bounded collection manifests, explicit source-bundle scopes, deterministic rebuilt ZIP packaging, and structured collection/selection origins separate from electrical values.
+- Add explicit nested collection ZIP inspection with isolated namespaces, shared cumulative entry/expansion/work budgets, native ZIP layer accounting, and cooperative cancellation.
+- Add owned C collection handles, bounded folder/ZIP/memory acquisition, metadata inspection, and selected parsing into typed modules, with a matching Julia companion.
+- Python `Collection` inspects bounded ZIP/folder/memory inventories and parses
+  independent selections with typed modules, dependencies and explicit lifetime.
+- The converter uses shared collection selections for overlapping masters and
+  mixed cases, defers parsing until requested, and reuses bounded worker input.
+  ZIP upload scopes remain independent when display names collide, XML-only
+  network batches stay selectable, and empty directory records are verified.
+- `powerio collection inspect/parse` lists ZIP/folder inputs and processes
+  explicit entries, dataset roots, or document groups with independent results.
+- Collection selections can explicitly group CIM/CGMES documents and GO
+  problem/solution roles without merging unrelated inputs.
+- Collection inspection discovers separate PyPSA and GridFM dataset roots;
+  explicit directory selections preserve internal time/scenario values.
+- Inspect bounded ZIP/folder collections and explicitly select independent
+  standalone inputs or OpenDSS masters over shared immutable companions.
+- Add shared `SourceTree` file and directory views with explicit admission limits
+  and independent successful-read dependency tracking for each selection (#774).
+- CGMES and SINCAL share bounded ZIP acquisition primitives while preserving
+  their format-specific namespace, diagnostic, and source replay policies.
+- Add `powerio-archive`: bounded ZIP indexing and verified member reads with
+  explicit limits and namespace checks, as shared infrastructure for #774.
+
+**Distribution**
+
 - OpenDSS Transformer and XfmrCode winding arrays now leave the last winding
   selected, matching native scalar-property replay and preserving the intended
   winding resistance and neutral grounding (#813).
 - Preserve absent OpenDSS line ampacity instead of materializing the engine's 600 A default as a typed BMOPF `i_max` or PMD `cm_ub`; retain explicitly declared and inherited emergency ratings (#762). PowerIO intentionally treats these engine defaults as void, which differs from PowerModelsDistribution's parser behaviour.
-
 - Reject nonzero RAVENS transformer impedance or no-load loss when its input
   voltage, rating or test power base is unusable, instead of reading it as an
   ideal transformer. Name the affected tank, winding and field in the error.
@@ -18,40 +95,6 @@
   three-phase basis is unavailable. Refuse RAVENS transformer impedance
   emission when a nonpositive or nonfinite winding rating makes its base
   undefined.
-
-- Add bounded collection manifests, explicit source-bundle scopes, deterministic rebuilt ZIP packaging, and structured collection/selection origins separate from electrical values.
-
-- Add explicit nested collection ZIP inspection with isolated namespaces, shared cumulative entry/expansion/work budgets, native ZIP layer accounting, and cooperative cancellation.
-
-- Add owned C collection handles, bounded folder/ZIP/memory acquisition, metadata inspection, and selected parsing into typed modules, with a matching Julia companion.
-
-- Python `Collection` inspects bounded ZIP/folder/memory inventories and parses
-  independent selections with typed modules, dependencies and explicit lifetime.
-
-- The converter uses shared collection selections for overlapping masters and
-  mixed cases, defers parsing until requested, and reuses bounded worker input.
-  ZIP upload scopes remain independent when display names collide, XML-only
-  network batches stay selectable, and empty directory records are verified.
-
-- `powerio collection inspect/parse` lists ZIP/folder inputs and processes
-  explicit entries, dataset roots, or document groups with independent results.
-
-- Collection selections can explicitly group CIM/CGMES documents and GO
-  problem/solution roles without merging unrelated inputs.
-
-- Collection inspection discovers separate PyPSA and GridFM dataset roots;
-  explicit directory selections preserve internal time/scenario values.
-
-- Inspect bounded ZIP/folder collections and explicitly select independent
-  standalone inputs or OpenDSS masters over shared immutable companions.
-
-- Add shared `SourceTree` file and directory views with explicit admission limits
-  and independent successful-read dependency tracking for each selection (#774).
-- CGMES and SINCAL share bounded ZIP acquisition primitives while preserving
-  their format-specific namespace, diagnostic, and source replay policies.
-
-- Add `powerio-archive`: bounded ZIP indexing and verified member reads with
-  explicit limits and namespace checks, as shared infrastructure for #774.
 - The `cim-dist` reader reads CIM16 LV feeders stated with sequence
   impedances and no per phase class. A header-less CIM document with the
   IEC 61968 customer classes (`ServiceLocation`, `UsagePoint`) now routes to
@@ -65,15 +108,35 @@
   drawing first and reporting a drawing that places nothing. A CIM16 document
   set without a `BaseFrequency` reads at 50 Hz. `Circuit`, `CompositeSwitch`,
   and `PSRType` are reported as context.
-
-## 0.11.9
-**BMOPF**
+- OpenDSS written from a network whose source cannot be a native `Vsource`,
+  such as a distribution CIM or MG-RAVENS feeder, now reduces in
+  PowerModelsDistribution. The per-conductor source helpers and the ideal
+  switch equivalent number their private bus after the nodes they join, so
+  every helper `Line` names the same nodes at both ends, as PMD's Kron
+  reduction requires. Phase B and C source helpers used to join node 1 to
+  node 2 or 3. The circuit is electrically unchanged (#765).
+- OpenDSS output replaces the characters OpenDSS cannot carry in a name
+  (whitespace, `,`, `=`, quotes, brackets, `!`, `//`, and a `.` in a bus
+  id) with `_` in element, line code, bus, and circuit names and in every
+  typed reference to them, and reports each replacement. A network with free
+  text names, such as one read from CIM, used to be refused when a bus id
+  held such a character and otherwise written verbatim into a deck that
+  did not parse back.
+  A generator and an IBR that both write as a dss `Generator` share one
+  rename scope, so a renamed IBR cannot take a generator's name.
 - BMOPF reading no longer checks free-form `meta.provenance` entries as schema
   fields, so a provenance key such as `length` raises no
-  `READ.BMOPF.FIELD_NOT_A_NUMBER` finding. The finding's pointer into the
-  BMOPF document moves from `target`, which points into the IR network, to the
-  `source_pointer` detail, so a module carrying it serializes to PowerIO IR
-  (#763).
+  `READ.BMOPF.FIELD_NOT_A_NUMBER` finding, and the finding's pointer into the
+  BMOPF document moves to the `source_pointer` detail, so a module carrying it
+  serializes to PowerIO IR (#763).
+
+**Dependencies**
+
+- Bump arrow and parquet to 60.1, zip to 9.4, uuid to 1.29, rusqlite to
+  0.41, sha2 to 0.11, and pyo3 to 0.30, and pandas to 3.1.0 in the PowSybl
+  harness (#749, #751, #752, #753, #754, #760, #793).
+
+## 0.11.9
 
 **PSS/E**
 
@@ -109,13 +172,6 @@
 
 - `jsonschema` moves to 0.60 (#750), and `actions/checkout` to 7 along with
   the minor and patch action updates (#755, #757).
-- OpenDSS written from a network whose source cannot be a native `Vsource`,
-  such as a distribution CIM or MG-RAVENS feeder, now reduces in
-  PowerModelsDistribution. The per-conductor source helpers and the ideal
-  switch equivalent number their private bus after the nodes they join, so
-  every helper `Line` names the same nodes at both ends, as PMD's Kron
-  reduction requires. Phase B and C source helpers used to join node 1 to
-  node 2 or 3. The circuit is electrically unchanged (#765).
 
 ## 0.11.8
 
@@ -339,13 +395,6 @@
   invariants (#712).
 - The `powerio-synth` README points to `tellegen-synth` for synthetic grids of
   real map regions (#764).
-- OpenDSS output replaces the characters OpenDSS cannot carry in a name
-  (whitespace, `,`, `=`, quotes, brackets, `!`, `//`, and a `.` in a bus
-  id) with `_` in element, line code, bus, and circuit names and in every
-  typed reference to them, and reports each replacement. A network with free
-  text names, such as one read from CIM, used to be refused when a bus id
-  held such a character and otherwise written verbatim into a deck that
-  did not parse back.
 
 ## 0.11.7
 
@@ -1032,34 +1081,6 @@
   author, and contributor credit. CONTRIBUTORS.md recognizes issue-derived
   contributions.
 - The BMOPF upstream review state is recorded.
-- PowerIO IR documents state the release whose schema they follow: the
-  header's `"version"` is now `"0.12.0"` instead of the integer `2`.
-  `powerio::IR_VERSION` becomes that release as a string, `IR_MIN_VERSION` is
-  removed, and `IR_SCHEMA_ID` names `pio-ir/0.12.0/schema.json`. A reader
-  accepts documents from its own release series (any 0.12.z) and the
-  `"version": 2` documents every 0.11 release wrote, whose record layouts are
-  unchanged; 0.11 readers refuse 0.12 documents. Every release now publishes
-  its own `docs/schema/pio-ir/<release>/schema.json`, and the files under
-  `pio-ir/2/` keep their bytes. `powerio.versions()["powerio_ir"]["version"]`
-  and the `powerio_ir.version` that the C function `pio_schema_report`
-  returns are now the release string. See the 0.12 migration guide (#701).
-- Replace the C ABI number with the PowerIO release (#701). `PIO_ABI_VERSION`,
-  `pio_abi_version()`, and the `abi` key of `pio_schema_report` are removed
-  with no alias. The header states the release it was generated from as
-  `PIO_VERSION_MAJOR`, `PIO_VERSION_MINOR`, and `PIO_VERSION_PATCH`, and the
-  new `pio_version_numbers()` returns the release of the loaded library as a
-  `PioVersionView`. A program compiled against the header of release X.Y.Z
-  works with any library from the same release series (the same major and
-  minor numbers before 1.0, the same major number from 1.0 on) at X.Y.Z or
-  newer; within a release series the C ABI only gains symbols. PowerIO.jl
-  checks the release series instead of the ABI number. See the
-  [0.12 migration guide](docs/src/migration-0.12.md).
-- CI compares `powerio.h` with the header of the latest release
-  (`scripts/check-capi-header.py`, in `semver.yml`) and fails when a function,
-  struct, opaque type, or `#define` of that header is missing or changed,
-  unless the pull request carries the `semver-major` label.
-  `scripts/check-capi-v7.sh` is now `scripts/check-capi.sh`, and also rejects
-  `pio_abi_version`.
 
 ## 0.11.6
 

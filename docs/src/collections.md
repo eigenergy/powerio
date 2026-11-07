@@ -107,7 +107,7 @@ The companion Julia API uses `InputCollection(path)`, `InputCollection(bytes)`
 for ZIP bytes, or `InputCollection(Dict(path => bytes))`. `inspect_collection`
 returns metadata; `parse(collection, selection)` returns `CollectionResult`
 with a typed `PioModule{T}`. `close(collection)` releases its handle and `copy`
-retains an independent handle. These additions do not change ABI 7 or serialize
+retains an independent handle. These additions change no existing C ABI layout and do not serialize
 electrical values to provide typed access.
 
 ## Explicit nested ZIPs and session budgets

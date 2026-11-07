@@ -3,11 +3,11 @@
 # newest stable release tag at or below the workspace version with
 # cargo-semver-checks.
 #
-# A release line takes compatible fixes, performance work, and additive change;
-# a break in the public Rust API goes into the next minor release
-# (docs/src/scope-0.11.md). cargo-semver-checks reads the release type off the
+# A release series takes compatible fixes, performance work, and additive
+# change; a break in the public Rust API goes into the next major release
+# (docs/src/known-limits.md). cargo-semver-checks reads the release type off the
 # version difference, so a branch that keeps the workspace version must keep
-# the API, and a branch that bumps it to the next minor may break it. Taking
+# the API, and a branch that bumps it to the next major may break it. Taking
 # the newest tag at or below the workspace version keeps a maintenance branch
 # on its own line after a later minor is tagged.
 #
@@ -21,7 +21,9 @@ if ! cargo semver-checks --version >/dev/null 2>&1; then
     exit 2
 fi
 
-version=$(grep -oE '^version = "[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+# The core release of the workspace version: a prerelease such as 1.0.0-rc.1
+# compares as a candidate of 1.0.0.
+version=$(grep -m1 -oE '^version = "[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?"' Cargo.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 baseline=
 for tag in $(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V); do
     if [ "$(printf '%s\n%s\n' "${tag#v}" "$version" | sort -V | tail -n1)" = "$version" ]; then

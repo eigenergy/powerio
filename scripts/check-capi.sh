@@ -14,7 +14,7 @@ declared() {
     grep -oE 'pio_[a-z0-9_]+ *\(' "$header" | grep -oE 'pio_[a-z0-9_]+' | sort -u
 }
 
-# The beta entry points 0.11 removed, and pio_abi_version, which 0.12 replaced
+# The beta entry points 0.11 removed, and pio_abi_version, which 1.0 replaced
 # with pio_version_numbers. None of them has an alias.
 removed='pio_abi_version
 pio_parse_file
