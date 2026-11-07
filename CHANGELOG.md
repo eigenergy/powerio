@@ -5,6 +5,19 @@
 - OpenDSS Transformer and XfmrCode winding arrays now leave the last winding
   selected, matching native scalar-property replay and preserving the intended
   winding resistance and neutral grounding (#813).
+- Preserve absent OpenDSS line ampacity instead of materializing the engine's 600 A default as a typed BMOPF `i_max` or PMD `cm_ub`; retain explicitly declared and inherited emergency ratings (#762). PowerIO intentionally treats these engine defaults as void, which differs from PowerModelsDistribution's parser behaviour.
+
+- Reject nonzero RAVENS transformer impedance or no-load loss when its input
+  voltage, rating or test power base is unusable, instead of reading it as an
+  ideal transformer. Name the affected tank, winding and field in the error.
+- Reject an explicitly invalid balanced RAVENS `baseMVA` before per-unit
+  conversion, and diagnose skipped loads, shunts, generators, sources, lines
+  and transformer windings that lack usable terminals.
+- Project Kron-reduced PMD delta loads onto three phase coordinates, preserving
+  each conductor pair and ZIP part. Keep the explicit-conductor model when a
+  three-phase basis is unavailable. Refuse RAVENS transformer impedance
+  emission when a nonpositive or nonfinite winding rating makes its base
+  undefined.
 
 - Add bounded collection manifests, explicit source-bundle scopes, deterministic rebuilt ZIP packaging, and structured collection/selection origins separate from electrical values.
 
