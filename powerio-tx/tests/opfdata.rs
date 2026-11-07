@@ -157,12 +157,25 @@ fn converts_to_classical_json_and_matpower_with_fidelity_warnings() {
     let matpower = parsed.emit(TargetFormat::Matpower).unwrap();
     assert!(matpower.text.contains("mpc.bus"));
     assert!(matpower.text.contains("mpc.gencost"));
+    // OPFData states a solved flow on every branch, so the MATPOWER branch
+    // matrix takes the solved case's PF, QF, PT, QT columns.
     assert!(
-        matpower
+        !matpower
             .render_diagnostics()
             .iter()
-            .any(|warning| warning.contains("branch solution value"))
+            .any(|warning| warning.contains("branch solution value")),
+        "{:?}",
+        matpower.render_diagnostics()
     );
+    let from_matpower = parse_str(&matpower.text, "matpower").unwrap().network;
+    for (a, b) in parsed
+        .network
+        .branches()
+        .iter()
+        .zip(from_matpower.branches())
+    {
+        assert_eq!(b.solution, a.solution);
+    }
 }
 
 #[test]
