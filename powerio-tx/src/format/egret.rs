@@ -14,12 +14,12 @@
 use serde_json::{Map, Value};
 
 use super::decode::lenient_table;
-use super::{TextEmission, finish, jnum, warn_extra_branch_rating_sets};
+use super::{TextEmission, finish, jnum};
 use crate::diagnostics::Diagnostics;
 use crate::diagnostics::codes::EMIT_EGRET as F;
 use crate::network::{
-    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, GenCost,
-    Generator, GeneratorEnergySource, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat,
+    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, GEN_EXTRA_KEYS,
+    GenCost, Generator, GeneratorEnergySource, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat,
 };
 use crate::{Error, Result};
 
@@ -31,39 +31,61 @@ pub fn write_egret_json(net: &BalancedNetwork) -> TextEmission {
 
     let mut bus = Map::new();
     for b in net.buses() {
-        bus.insert(b.id.to_string(), bus_obj(b));
+        bus.insert(
+            b.id.to_string(),
+            carry_row(bus_obj(b), b.uid.as_deref(), &b.extras, net),
+        );
     }
 
     // egret keys each load/shunt; use a global running suffix (load_1, load_2, …)
     // so several loads on one bus stay distinct.
     let mut load = Map::new();
     for (i, l) in net.loads().iter().enumerate() {
-        load.insert(format!("load_{}", i + 1), load_obj(l));
+        load.insert(
+            format!("load_{}", i + 1),
+            carry_row(load_obj(l), l.uid.as_deref(), &l.extras, net),
+        );
     }
     let mut shunt = Map::new();
     for (i, s) in net.shunts().iter().enumerate() {
-        shunt.insert(format!("shunt_{}", i + 1), shunt_obj(s));
+        shunt.insert(
+            format!("shunt_{}", i + 1),
+            carry_row(shunt_obj(s), s.uid.as_deref(), &s.extras, net),
+        );
     }
 
     let mut branch = Map::new();
     for (i, br) in net.branches().iter().enumerate() {
-        branch.insert((i + 1).to_string(), branch_obj(br));
+        branch.insert(
+            (i + 1).to_string(),
+            carry_row(branch_obj(br), br.uid.as_deref(), &br.extras, net),
+        );
     }
 
     let mut generator = Map::new();
     for (i, g) in net.generators().iter().enumerate() {
-        generator.insert((i + 1).to_string(), gen_obj(g, &mut warnings));
-    }
-    let with_caps = net.generators().iter().filter(|g| g.has_caps()).count();
-    if with_caps > 0 {
-        warnings.push(&F.field_dropped, format!(
-            "generator capability/ramp columns dropped for {with_caps} generator(s): an egret generator dictionary states no reactive capability curve point and no MATPOWER ramp column"
-        ));
+        generator.insert(
+            (i + 1).to_string(),
+            carry_row(
+                gen_obj(g, &mut warnings),
+                g.uid.as_deref(),
+                &Extras::new(),
+                net,
+            ),
+        );
     }
 
     let mut dc_branch = Map::new();
     for (i, dc) in net.hvdc().iter().enumerate() {
-        dc_branch.insert((i + 1).to_string(), dc_branch_obj(dc, &mut warnings));
+        dc_branch.insert(
+            (i + 1).to_string(),
+            carry_row(
+                dc_branch_obj(dc, &mut warnings),
+                dc.uid.as_deref(),
+                &dc.extras,
+                net,
+            ),
+        );
     }
 
     warn_egret_writer_losses(net, &mut warnings);
@@ -75,9 +97,27 @@ pub fn write_egret_json(net: &BalancedNetwork) -> TextEmission {
     elements.insert("branch".into(), Value::Object(branch));
     elements.insert("generator".into(), Value::Object(generator));
     elements.insert("dc_branch".into(), Value::Object(dc_branch));
+    // PowerIO extensions egret leaves alone and PowerIO reads back: one
+    // `area` element per area record, keyed by the number bus rows state.
+    if !net.areas().is_empty() {
+        let areas = net
+            .areas()
+            .iter()
+            .map(|area| (area.number.to_string(), area_obj(area)))
+            .collect();
+        elements.insert("area".into(), Value::Object(areas));
+    }
 
     let mut system = Map::new();
     system.insert("baseMVA".into(), jnum(net.base_mva()));
+    // egret states no frequency or case metadata; PowerIO keeps both here.
+    system.insert("base_frequency".into(), jnum(net.base_frequency()));
+    if *net.case_metadata() != crate::network::CaseMetadata::default() {
+        system.insert(
+            "case_metadata".into(),
+            serde_json::to_value(net.case_metadata()).expect("case metadata is plain data"),
+        );
+    }
     match reference_bus(net) {
         Some(r) => {
             system.insert("reference_bus".into(), Value::String(r.id.to_string()));
@@ -97,7 +137,6 @@ pub fn write_egret_json(net: &BalancedNetwork) -> TextEmission {
 }
 
 fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
-    super::warn_dropped_areas(&F, "egret JSON", true, net, warnings);
     if !net.transformers_3w().is_empty() {
         warnings.push(
             &F.record_dropped,
@@ -160,7 +199,6 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
             "{current_ratings} branch current rating record(s) dropped: an egret branch dictionary states its rating in MVA"
         ));
     }
-    warn_extra_branch_rating_sets(&F, "egret JSON", net, warnings);
     let branch_solutions = net
         .branches()
         .iter()
@@ -171,6 +209,47 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
             "{branch_solutions} branch solution value set(s) dropped: an egret branch dictionary states case data, and its flow fields belong to a solution the ModelData holds separately"
         ));
     }
+}
+
+/// Add a source-assigned identity as `uid` and the element's fields no typed
+/// slot holds to an egret element; the reader reads both back. An egret
+/// field always wins a key collision.
+fn carry_row(mut row: Value, uid: Option<&str>, extras: &Extras, net: &BalancedNetwork) -> Value {
+    if let Value::Object(map) = &mut row {
+        if let Some(uid) = uid.filter(|uid| !net.uid_is_generated(Some(uid))) {
+            map.entry("uid")
+                .or_insert_with(|| Value::String(uid.to_owned()));
+        }
+        for (key, value) in extras {
+            map.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+    }
+    row
+}
+
+/// One `area` element: the area record's attributes beyond its number, with
+/// interchange in MW.
+fn area_obj(area: &crate::network::Area) -> Value {
+    let mut m = Map::new();
+    if let Some(bus) = area.slack_bus {
+        m.insert("slack_bus".into(), Value::String(bus.to_string()));
+    }
+    if area.net_interchange != 0.0 {
+        m.insert("net_interchange_mw".into(), jnum(area.net_interchange));
+    }
+    if area.tolerance != 0.0 {
+        m.insert("tolerance_mw".into(), jnum(area.tolerance));
+    }
+    if let Some(name) = &area.name {
+        m.insert("name".into(), Value::String(name.clone()));
+    }
+    if let Some(uid) = &area.uid {
+        m.insert("uid".into(), Value::String(uid.clone()));
+    }
+    if let Some(area_type) = &area.area_type {
+        m.insert("area_type".into(), Value::String(area_type.clone()));
+    }
+    Value::Object(m)
 }
 
 fn reference_bus(net: &BalancedNetwork) -> Option<&Bus> {
@@ -262,6 +341,20 @@ fn branch_obj(br: &Branch) -> Value {
     if br.rate_c != 0.0 {
         m.insert("rating_emergency".into(), jnum(br.rate_c));
     }
+    // Rating sets beyond these three: a PowerIO extension, in MVA.
+    if !br.rating_sets.is_empty() {
+        let sets = br
+            .rating_sets
+            .iter()
+            .map(|set| {
+                let mut set_row = Map::new();
+                set_row.insert("name".into(), Value::String(set.name.clone()));
+                set_row.insert("rate_mva".into(), jnum(set.rate_mva));
+                Value::Object(set_row)
+            })
+            .collect();
+        m.insert("rating_sets".into(), Value::Array(sets));
+    }
     Value::Object(m)
 }
 
@@ -278,6 +371,13 @@ fn gen_obj(g: &Generator, warnings: &mut Diagnostics) -> Value {
     m.insert("p_max".into(), jnum(g.pmax));
     m.insert("q_min".into(), jnum(g.qmin));
     m.insert("q_max".into(), jnum(g.qmax));
+    // MATPOWER's capability and ramp columns, by their MATPOWER names: a
+    // PowerIO extension egret leaves alone.
+    for (key, value) in GEN_EXTRA_KEYS.iter().zip(g.caps) {
+        if let Some(value) = value {
+            m.insert((*key).into(), jnum(value));
+        }
+    }
     if let Some(cost) = &g.cost {
         if let Some(curve) = cost_curve(cost) {
             m.insert("p_cost".into(), curve);
@@ -304,16 +404,29 @@ fn gen_obj(g: &Generator, warnings: &mut Diagnostics) -> Value {
 /// `dcline` row does, so every one of them is named here; only the `dclinecost`
 /// curve has no egret counterpart.
 fn dc_branch_obj(dc: &Hvdc, warnings: &mut Diagnostics) -> Value {
-    if dc.cost.is_some() {
-        warnings.push(
-            &F.field_dropped,
-            format!(
-                "dcline {} -> {} cost curve dropped: egret dc_branch records carry no cost",
-                dc.from, dc.to
-            ),
-        );
-    }
     let mut m = Map::new();
+    // egret's dc_branch has no cost; PowerIO states MATPOWER's dclinecost as
+    // the cost curve a generator states.
+    if let Some(cost) = &dc.cost {
+        match cost_curve(cost) {
+            Some(curve) => {
+                m.insert("p_cost".into(), curve);
+                if cost.startup != 0.0 {
+                    m.insert("startup_cost".into(), jnum(cost.startup));
+                }
+                if cost.shutdown != 0.0 {
+                    m.insert("shutdown_cost".into(), jnum(cost.shutdown));
+                }
+            }
+            None => warnings.push(
+                &F.field_dropped,
+                format!(
+                    "dcline {} -> {} cost curve dropped: its cost model has no egret cost_curve",
+                    dc.from, dc.to
+                ),
+            ),
+        }
+    }
     m.insert("from_bus".into(), Value::String(dc.from.to_string()));
     m.insert("to_bus".into(), Value::String(dc.to.to_string()));
     m.insert("in_service".into(), Value::Bool(dc.in_service));
@@ -406,6 +519,12 @@ struct Document {
 struct SystemSection {
     #[serde(rename = "baseMVA", default)]
     base_mva: Option<Value>,
+    /// PowerIO's system frequency in Hz; egret states none.
+    #[serde(default)]
+    base_frequency: Option<Value>,
+    /// The case metadata PowerIO wrote from a grid exchange format.
+    #[serde(default)]
+    case_metadata: Option<crate::network::CaseMetadata>,
     #[serde(default)]
     time_keys: Option<Value>,
 }
@@ -424,6 +543,52 @@ struct Elements {
     generator: Vec<(String, GenRow)>,
     #[serde(default, deserialize_with = "lenient_table")]
     dc_branch: Vec<(String, DcBranchRow)>,
+    /// PowerIO's area records, keyed by the number bus rows state.
+    #[serde(default, deserialize_with = "lenient_table")]
+    area: Vec<(String, AreaRow)>,
+}
+
+/// One PowerIO `area` element: the attributes beyond the area number its key
+/// states, with interchange in MW.
+#[derive(Default, serde::Deserialize)]
+struct AreaRow {
+    #[serde(default)]
+    slack_bus: Option<Value>,
+    #[serde(default)]
+    net_interchange_mw: Option<Value>,
+    #[serde(default)]
+    tolerance_mw: Option<Value>,
+    #[serde(default)]
+    name: Option<Value>,
+    #[serde(default)]
+    uid: Option<Value>,
+    #[serde(default)]
+    area_type: Option<Value>,
+}
+
+fn read_area(key: &str, row: &AreaRow) -> Result<crate::network::Area> {
+    let number = key
+        .trim()
+        .parse::<usize>()
+        .map_err(|_| bad(format!("area key `{key}` is not an area number")))?;
+    let text = |value: Option<&Value>, field: &str| -> Result<Option<String>> {
+        match value {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(text)) => Ok(Some(text.clone())),
+            Some(_) => Err(bad(format!("area `{field}` is not a string"))),
+        }
+    };
+    let mut area = crate::network::Area::new(number);
+    area.slack_bus = match row.slack_bus.as_ref().filter(|value| !value.is_null()) {
+        None => None,
+        Some(bus) => Some(id_cell(Some(bus), "slack_bus")?),
+    };
+    area.net_interchange = num_cell(row.net_interchange_mw.as_ref(), "net_interchange_mw", 0.0)?;
+    area.tolerance = num_cell(row.tolerance_mw.as_ref(), "tolerance_mw", 0.0)?;
+    area.name = text(row.name.as_ref(), "name")?;
+    area.uid = text(row.uid.as_ref(), "uid")?;
+    area.area_type = text(row.area_type.as_ref(), "area_type")?;
+    Ok(area)
 }
 
 /// The shared build both entries use: the typed document, decoded from text
@@ -437,6 +602,15 @@ fn build_from_document(document: Document, name_hint: Option<&str>) -> Result<Ba
         .as_ref()
         .and_then(Value::as_f64)
         .ok_or_else(|| bad("missing numeric system.baseMVA"))?;
+    let base_frequency = num_cell(
+        system.base_frequency.as_ref(),
+        "base_frequency",
+        crate::network::DEFAULT_BASE_FREQUENCY,
+    )?;
+    if !base_frequency.is_finite() || base_frequency <= 0.0 {
+        return Err(bad("system.base_frequency is not a positive frequency"));
+    }
+    let case_metadata = system.case_metadata.unwrap_or_default();
     let elements = document
         .elements
         .ok_or_else(|| bad("missing `elements` object"))?;
@@ -472,13 +646,17 @@ fn build_from_document(document: Document, name_hint: Option<&str>) -> Result<Ba
         .into_iter()
         .map(|(_, row)| read_dc_branch(row))
         .collect::<Result<Vec<_>>>()?;
+    let areas = sorted_table(elements.area)
+        .iter()
+        .map(|(key, row)| read_area(key, row))
+        .collect::<Result<Vec<_>>>()?;
 
     let net = BalancedNetwork::from_tables(BalancedNetworkTables {
         name,
         base_mva,
-        base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
+        base_frequency,
         geo: None,
-        case_metadata: crate::network::CaseMetadata::default(),
+        case_metadata,
         detailed_connectivity: None,
         generated_uids: std::sync::Arc::default(),
         buses: buses.into(),
@@ -491,7 +669,7 @@ fn build_from_document(document: Document, name_hint: Option<&str>) -> Result<Ba
         storage: Vec::new().into(),
         hvdc: hvdc.into(),
         transformers_3w: Vec::new().into(),
-        areas: Vec::new().into(),
+        areas: areas.into(),
         solver: None,
         source_format: SourceFormat::EgretJson,
     });
@@ -896,6 +1074,9 @@ struct BusRow {
     zone: Option<Value>,
     #[serde(default)]
     name: Option<Value>,
+    /// A source-assigned identity PowerIO wrote; not an egret field.
+    #[serde(default)]
+    uid: Option<Value>,
     #[serde(flatten)]
     extras: Extras,
 }
@@ -927,7 +1108,7 @@ fn read_bus(key: &str, row: BusRow) -> Result<Bus> {
             .as_ref()
             .and_then(Value::as_str)
             .map(str::to_string),
-        uid: None,
+        uid: uid_cell(row.uid.as_ref())?,
         location: None,
         extras: row.extras,
     })
@@ -943,6 +1124,9 @@ struct LoadRow {
     q_load: Option<Value>,
     #[serde(default)]
     in_service: Option<Value>,
+    /// A source-assigned identity PowerIO wrote; not an egret field.
+    #[serde(default)]
+    uid: Option<Value>,
     #[serde(flatten)]
     extras: Extras,
 }
@@ -954,7 +1138,7 @@ fn read_load(row: LoadRow) -> Result<Load> {
         q: num_cell(row.q_load.as_ref(), "q_load", 0.0)?,
         voltage_model: None,
         in_service: bool_cell(row.in_service.as_ref(), "in_service", true)?,
-        uid: None,
+        uid: uid_cell(row.uid.as_ref())?,
         extras: row.extras,
     })
 }
@@ -972,6 +1156,9 @@ struct ShuntRow {
     /// Absorbed so it stays out of extras, as the exclude list always did.
     #[serde(rename = "shunt_type", default)]
     _shunt_type: Option<serde::de::IgnoredAny>,
+    /// A source-assigned identity PowerIO wrote; not an egret field.
+    #[serde(default)]
+    uid: Option<Value>,
     #[serde(flatten)]
     extras: Extras,
 }
@@ -984,7 +1171,7 @@ fn read_shunt(row: ShuntRow) -> Result<Shunt> {
         in_service: bool_cell(row.in_service.as_ref(), "in_service", true)?,
         section_count: None,
         control: None,
-        uid: None,
+        uid: uid_cell(row.uid.as_ref())?,
         extras: row.extras,
     })
 }
@@ -1019,11 +1206,32 @@ struct BranchRow {
     angle_diff_min: Option<Value>,
     #[serde(default)]
     angle_diff_max: Option<Value>,
+    /// A source-assigned identity PowerIO wrote; not an egret field.
+    #[serde(default)]
+    uid: Option<Value>,
     #[serde(flatten)]
     extras: Extras,
 }
 
 fn read_branch(row: BranchRow) -> Result<Branch> {
+    // PowerIO's rating sets beyond the three egret ratings, in MVA.
+    let mut extras = row.extras;
+    let rating_sets = match extras.remove("rating_sets") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(sets) => sets
+            .as_array()
+            .ok_or_else(|| bad("branch `rating_sets` is not an array"))?
+            .iter()
+            .map(|set| {
+                let name = set
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| bad("a branch rating set has no `name`"))?;
+                let rate = num_cell(set.get("rate_mva"), "rate_mva", f64::NAN)?;
+                Ok(crate::network::BranchRatingSet::new(name, rate))
+            })
+            .collect::<Result<Vec<_>>>()?,
+    };
     let is_xf = row.branch_type.as_ref().and_then(Value::as_str) == Some("transformer");
     Ok(Branch {
         name: None,
@@ -1040,7 +1248,7 @@ fn read_branch(row: BranchRow) -> Result<Branch> {
         rate_a: num_cell(row.rating_long_term.as_ref(), "rating_long_term", 0.0)?,
         rate_b: num_cell(row.rating_short_term.as_ref(), "rating_short_term", 0.0)?,
         rate_c: num_cell(row.rating_emergency.as_ref(), "rating_emergency", 0.0)?,
-        rating_sets: Vec::new(),
+        rating_sets,
         current_ratings: None,
         tap: if is_xf {
             num_cell(
@@ -1061,9 +1269,9 @@ fn read_branch(row: BranchRow) -> Result<Branch> {
         angmax: num_cell(row.angle_diff_max.as_ref(), "angle_diff_max", 360.0)?,
         control: None,
         solution: None,
-        uid: None,
+        uid: uid_cell(row.uid.as_ref())?,
         route: None,
-        extras: row.extras,
+        extras,
     })
 }
 
@@ -1095,6 +1303,22 @@ struct GenRow {
     shutdown_cost: Option<Value>,
     #[serde(default)]
     p_cost: Option<Value>,
+    /// A source-assigned identity PowerIO wrote; not an egret field.
+    #[serde(default)]
+    uid: Option<Value>,
+    /// The other keys, among them MATPOWER's capability and ramp columns,
+    /// which PowerIO writes by their MATPOWER names.
+    #[serde(flatten)]
+    other: Extras,
+}
+
+/// A row's `uid`, which PowerIO writes as a string.
+fn uid_cell(value: Option<&Value>) -> Result<Option<String>> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(uid)) => Ok(Some(uid.clone())),
+        Some(_) => Err(bad("`uid` is not a string")),
+    }
 }
 
 fn read_gen(row: &GenRow) -> Result<Generator> {
@@ -1122,12 +1346,12 @@ fn read_gen(row: &GenRow) -> Result<Generator> {
         mbase: num_cell(row.mbase.as_ref(), "mbase", 100.0)?,
         in_service: bool_cell(row.in_service.as_ref(), "in_service", true)?,
         cost,
-        caps: Default::default(),
+        caps: std::array::from_fn(|i| row.other.get(GEN_EXTRA_KEYS[i]).and_then(Value::as_f64)),
         voltage_regulation_on: true,
         regulating_terminal: None,
         regulated_bus: None,
         active_power_control: None,
-        uid: None,
+        uid: uid_cell(row.uid.as_ref())?,
     })
 }
 
@@ -1167,11 +1391,30 @@ struct DcBranchRow {
     loss0: Option<Value>,
     #[serde(default)]
     loss_factor: Option<Value>,
+    /// A source-assigned identity PowerIO wrote; not an egret field.
+    #[serde(default)]
+    uid: Option<Value>,
     #[serde(flatten)]
     extras: Extras,
 }
 
 fn read_dc_branch(row: DcBranchRow) -> Result<Hvdc> {
+    // PowerIO states a dcline's cost as the cost curve a generator states.
+    let mut extras = row.extras;
+    let cost = match extras.remove("p_cost").filter(|value| !value.is_null()) {
+        None => None,
+        Some(p_cost) => {
+            let mut amount = |key: &str| -> Result<f64> {
+                extras
+                    .remove(key)
+                    .map_or(Ok(0.0), |value| num_cell(Some(&value), key, 0.0))
+            };
+            let (startup, shutdown) = (amount("startup_cost")?, amount("shutdown_cost")?);
+            Some(read_cost(&p_cost, startup, shutdown).ok_or_else(|| {
+                bad("dc_branch `p_cost` is present but has an unrecognized or malformed cost_curve")
+            })?)
+        }
+    };
     Ok(Hvdc {
         from: id_cell(row.from_bus.as_ref(), "from_bus")?,
         to: id_cell(row.to_bus.as_ref(), "to_bus")?,
@@ -1195,9 +1438,9 @@ fn read_dc_branch(row: DcBranchRow) -> Result<Hvdc> {
         converters_mode: None,
         converter1: None,
         converter2: None,
-        cost: None,
-        uid: None,
-        extras: row.extras,
+        cost,
+        uid: uid_cell(row.uid.as_ref())?,
+        extras,
     })
 }
 
@@ -1390,6 +1633,64 @@ mod tests {
         assert_eq!((h.pmin, h.pmax), (-50.0, 60.0));
         assert_eq!((h.qminf, h.qmaxf, h.qmint, h.qmaxt), (-5.0, 5.0, -4.0, 4.5));
         assert_eq!((h.loss0, h.loss1), (0.2, 0.03));
+    }
+
+    /// The keys PowerIO adds to an egret document carry what egret's fields
+    /// cannot: areas, frequency, case metadata, identities, rating sets beyond
+    /// the three, MATPOWER's generator columns, and the dcline cost.
+    #[test]
+    fn powerio_extensions_round_trip_through_the_document() {
+        let doc = r#"{"elements":{
+            "bus":{"1":{"matpower_bustype":"ref","vm":1.0,"area":"1"},
+                   "2":{"matpower_bustype":"PQ","area":"1"}},
+            "branch":{"1":{"from_bus":"1","to_bus":"2","reactance":0.1,"rating_long_term":250.0}},
+            "generator":{"1":{"bus":"1","pg":10.0}},
+            "dc_branch":{"1":{"from_bus":"1","to_bus":"2","pmax":30.0}}},
+            "system":{"baseMVA":100.0,"reference_bus":"1"}}"#;
+        let mut net = parse_egret_json(doc).unwrap();
+        let mut area = crate::network::Area::new(1);
+        area.slack_bus = Some(BusId(1));
+        area.net_interchange = -7.5;
+        area.name = Some("West".into());
+        area.area_type = Some("ControlArea".into());
+        net.areas_mut().push(area);
+        *net.base_frequency_mut() = 50.0;
+        net.case_metadata_mut().case_date = Some("2026-02-03T04:05:06Z".into());
+        net.buses_mut()[1].uid = Some("bus-two".into());
+        net.branches_mut()[0]
+            .rating_sets
+            .push(crate::network::BranchRatingSet::new("winter", 300.0));
+        net.generators_mut()[0].caps[0] = Some(5.0);
+        net.hvdc_mut()[0].cost = Some(GenCost {
+            model: 2,
+            startup: 1.0,
+            shutdown: 0.0,
+            ncost: 2,
+            coeffs: vec![3.0, 4.0],
+        });
+
+        let written = write_egret_json(&net);
+        assert!(
+            written
+                .diagnostics
+                .iter()
+                .all(|d| d.code() != "EMIT.EGRET.AREAS_DROPPED"
+                    && d.code() != "EMIT.EGRET.RATING_SET_DROPPED"
+                    && d.code() != "EMIT.EGRET.FIELD_DROPPED"),
+            "{:?}",
+            written.render_diagnostics()
+        );
+        let back = parse_egret_json(&written.text).unwrap();
+        assert_eq!(back.areas(), net.areas());
+        assert_eq!(back.base_frequency(), 50.0);
+        assert_eq!(back.case_metadata(), net.case_metadata());
+        assert_eq!(back.buses()[1].uid.as_deref(), Some("bus-two"));
+        assert_eq!(
+            back.branches()[0].rating_sets,
+            net.branches()[0].rating_sets
+        );
+        assert_eq!(back.generators()[0].caps[0], Some(5.0));
+        assert_eq!(back.hvdc()[0].cost, net.hvdc()[0].cost);
     }
 
     #[test]
