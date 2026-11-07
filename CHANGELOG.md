@@ -1032,6 +1032,34 @@
   author, and contributor credit. CONTRIBUTORS.md recognizes issue-derived
   contributions.
 - The BMOPF upstream review state is recorded.
+- PowerIO IR documents state the release whose schema they follow: the
+  header's `"version"` is now `"0.12.0"` instead of the integer `2`.
+  `powerio::IR_VERSION` becomes that release as a string, `IR_MIN_VERSION` is
+  removed, and `IR_SCHEMA_ID` names `pio-ir/0.12.0/schema.json`. A reader
+  accepts documents from its own release series (any 0.12.z) and the
+  `"version": 2` documents every 0.11 release wrote, whose record layouts are
+  unchanged; 0.11 readers refuse 0.12 documents. Every release now publishes
+  its own `docs/schema/pio-ir/<release>/schema.json`, and the files under
+  `pio-ir/2/` keep their bytes. `powerio.versions()["powerio_ir"]["version"]`
+  and the `powerio_ir.version` that the C function `pio_schema_report`
+  returns are now the release string. See the 0.12 migration guide (#701).
+- Replace the C ABI number with the PowerIO release (#701). `PIO_ABI_VERSION`,
+  `pio_abi_version()`, and the `abi` key of `pio_schema_report` are removed
+  with no alias. The header states the release it was generated from as
+  `PIO_VERSION_MAJOR`, `PIO_VERSION_MINOR`, and `PIO_VERSION_PATCH`, and the
+  new `pio_version_numbers()` returns the release of the loaded library as a
+  `PioVersionView`. A program compiled against the header of release X.Y.Z
+  works with any library from the same release series (the same major and
+  minor numbers before 1.0, the same major number from 1.0 on) at X.Y.Z or
+  newer; within a release series the C ABI only gains symbols. PowerIO.jl
+  checks the release series instead of the ABI number. See the
+  [0.12 migration guide](docs/src/migration-0.12.md).
+- CI compares `powerio.h` with the header of the latest release
+  (`scripts/check-capi-header.py`, in `semver.yml`) and fails when a function,
+  struct, opaque type, or `#define` of that header is missing or changed,
+  unless the pull request carries the `semver-major` label.
+  `scripts/check-capi-v7.sh` is now `scripts/check-capi.sh`, and also rejects
+  `pio_abi_version`.
 
 ## 0.11.6
 

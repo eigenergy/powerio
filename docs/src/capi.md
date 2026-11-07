@@ -1,8 +1,8 @@
 # C ABI
 
-`powerio-capi` exports ABI 7 through `powerio-capi/include/powerio.h`. The
-header is generated from the Rust declarations and checked in. Regenerate it
-with:
+`powerio-capi` exports the C ABI through `powerio-capi/include/powerio.h`.
+The header is generated from the Rust declarations and checked in. Regenerate
+it with:
 
 ```sh
 cbindgen --config powerio-capi/cbindgen.toml --crate powerio-capi \
@@ -13,15 +13,11 @@ cbindgen --config powerio-capi/cbindgen.toml --crate powerio-capi \
 in every CI feature job, and `scripts/capi-header-regen.sh` regenerates the
 header with cbindgen and diffs it once. Do not edit the header by hand.
 
-ABI 7 is the only C API in PowerIO 0.11; symbols from ABI 4, 5, and 6 are
-not exported and have no aliases. Compare `pio_abi_version()` with
-`PIO_ABI_VERSION` before you use the library.
-
 The exported symbol set is fixed. The `gridfm` cargo feature adds GridFM
 Parquet parsing and emission behind the same entry points, and the `matrix`,
 `dist`, and `prob` feature names are still accepted by the build but
 gate nothing. `pio_schema_report` returns a JSON document with the release
-(`powerio_version`), the ABI (`abi`), the PowerIO IR schema name and
+(`powerio_version`), the PowerIO IR schema name and
 version (`powerio_ir` with `schema` and `version`), the BMOPF schema
 version, the compiled features, and the diagnostic namespaces and error
 categories.
@@ -31,6 +27,53 @@ deprecated but remains accepted for 0.11.x source-build compatibility; omit
 it from new commands. It enables no code. Its planned breaking removal is
 tracked in [#673](https://github.com/eigenergy/powerio/issues/673). This does
 not affect the Arrow record batches and Parquet support behind `gridfm`.
+
+## Versions and compatibility
+
+The header states the PowerIO release it was generated from as
+`PIO_VERSION_MAJOR`, `PIO_VERSION_MINOR`, and `PIO_VERSION_PATCH`, and
+`pio_version_numbers()` returns the release of the loaded library as a
+`PioVersionView`. `pio_version()` returns the same release as text.
+
+A program compiled against the header of release X.Y.Z works with any
+library that
+
+- is in the same release series, as Cargo defines it: the same major and
+  minor numbers before 1.0 (0.12.x), the same major number from 1.0 on (1.x),
+  and
+- is release X.Y.Z or newer.
+
+Within a release series the C ABI only gains symbols: no symbol is removed,
+and no signature or struct layout changes. A break starts a new release
+series. Check the library before you use it:
+
+```c
+static int library_matches_header(PioVersionView library) {
+    if (library.major != PIO_VERSION_MAJOR) {
+        return 0;
+    }
+    if (library.minor != PIO_VERSION_MINOR) {
+        return PIO_VERSION_MAJOR > 0 && library.minor > PIO_VERSION_MINOR;
+    }
+    return library.patch >= PIO_VERSION_PATCH;
+}
+
+if (!library_matches_header(pio_version_numbers())) {
+    /* the library is from another release series, or older than the header */
+}
+```
+
+`scripts/check-capi-header.py` holds the header to that rule in CI. It
+compares `powerio.h` with the header of the newest release tag at or below
+the workspace version and fails when a function, struct, opaque type, or
+`#define` of that header is missing or declared differently; comments and
+parameter names do not count. A pull request that is meant to break the C ABI
+before the version moves carries the `semver-major` label, and once the
+workspace version starts a new release series the check lists the differences
+without failing.
+
+Before 0.12 the header carried a separate ABI number; PowerIO 0.12 replaced
+it with the release. See [From 0.11 to 0.12](migration-0.12.md).
 
 ## Parse and inspect a module
 
@@ -120,11 +163,13 @@ pio_destination_release(destination);
 ```
 
 `pio_module_serialize` writes PowerIO IR and `pio_module_deserialize` reads
-it. PowerIO 0.11.1 writes `"schema": "pio-ir"` with integer `"version": 2`, and
-`pio_schema_report` reports both; the producer record names the PowerIO
-release separately. `pio_module_deserialize` refuses an unsupported schema
-name or version and reports what it found. The reader accepts IR version 2
-and the structural types implemented by the library. C ABI 7 has no module JSON aliases.
+it. The document header names the schema (`"schema": "pio-ir"`) and its
+version, and `pio_schema_report` reports both under `powerio_ir`; the producer
+record names the program that wrote the document. `pio_module_deserialize`
+refuses an unsupported schema name or version, or a structural type the
+library does not implement, and reports what it found.
+[PowerIO IR](pio-json-schema.md) states which documents a release reads. The
+C ABI has no module JSON aliases.
 
 ## PSS/E contingency analysis files
 

@@ -38,7 +38,7 @@ reference currents. IR 2 uses a distinct tagged source record, so older readers
 reject this new physics; ordinary earth-referenced records are unchanged.
 `McAcPfInstance::source_boundary` borrows both voltage endpoints and their
 phasor differences. The additive C `PioVoltageSourceBoundaryView` serves
-network and PF instance callers without changing the existing ABI 7 layouts.
+network and PF instance callers without changing the existing C ABI layouts.
 Legacy C source views reject references they cannot describe. The OpenDSS
 writer preserves referenced constraints through exact equivalent circuits.
 GridLAB-D and the JSON writers accept an already perfectly grounded reference;
@@ -1017,7 +1017,7 @@ and remaining limitations.
 
 PowerIO v0.11.0 supports **draft BMOPF 0.2**, subject to Task Force
 review. The schema version is separate from the PowerIO release and from
-PowerIO IR version 2. Producer provenance records the proposal revision and
+the release a PowerIO IR document names. Producer provenance records the proposal revision and
 schema digest. Previously emitted schema identifiers remain readable aliases.
 
 An unqualified `bmopf-json` emission preserves an unchanged source byte for
@@ -1037,7 +1037,7 @@ Legacy output relocates proposed-only equipment and transformer fields into
 assumed to calculate the same network. Proposal output uses the declared tables
 and preserves winding ratings, taps, neutral impedances and current-limit data.
 
-Unequal bus phase bounds remain individual values through parsing, IR version 2
+Unequal bus phase bounds remain individual values through parsing, PowerIO IR,
 and explicit BMOPF output. Uniform values use `v_min`/`v_max`; unequal values
 use `v_min_phase`/`v_max_phase` in the typed Rust model. A present scalar takes
 precedence over the corresponding vector. PMD voltage arrays instead follow
@@ -1083,7 +1083,7 @@ does not establish Task Force acceptance.
 
 Draft BMOPF 0.2 uses `energy_cost_rate` in $/kWh. Generator entries follow phase
 order, as do voltage-source entries. Neutral terminals have no price entry. PowerIO retains source prices in `VoltageSource.energy_cost_rate` and
-in IR version 2. C and Julia expose `energy_cost_rate_per_kwh`; Python's
+in PowerIO IR. C and Julia expose `energy_cost_rate_per_kwh`; Python's
 voltage-source records expose `energy_cost_rate`.
 
 The reader also accepts the deprecated per-phase `cost` spelling. Explicit
@@ -1144,7 +1144,7 @@ Transformer/regulator lowering and their thermal checks remain unsupported;
 the preparation report records any selected omission rather than presenting
 an incomplete report as comprehensive.
 
-C ABI 7 adds `pio_value_lindist3flow_opf_instance`,
+The C ABI adds `pio_value_lindist3flow_opf_instance`,
 `pio_value_lindist3flow_opf_solution`, and
 `pio_module_to_lindist3flow_opf_instance`. The generic calculation accessors
 read the instance, network, objective, constraints, termination, and solution
@@ -1152,12 +1152,12 @@ columns. `pio_lindist3flow_opf_instance_node_at` and
 `pio_lindist3flow_opf_instance_conductor_at` return borrowed typed axis views.
 Their strings stay valid while the instance handle remains alive.
 Sparse conic preparation and solver adapters remain Rust APIs.
-The fixed-dispatch types add no ABI 7 symbols; they remain available through
-Rust, Python, and IR version 2 until a future C ABI revision can add a
+The fixed-dispatch types add no C ABI symbols; they remain available through
+Rust, Python, and PowerIO IR until a future C ABI revision can add a
 fixed symbol set deliberately.
 
-PowerIO 0.11.1 writes the OPF pair in IR version 2, and 0.11.4 adds the
-fixed-dispatch pair under the same version. Readers without those structural types
+PowerIO 0.11.1 added the OPF pair to PowerIO IR, and 0.11.4 added the
+fixed-dispatch pair. Readers without those structural types
 reject them, while existing network and calculation records keep their
 representation.
 

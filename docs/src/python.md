@@ -126,10 +126,12 @@ powerio.serialize(module, "case.pio.json")
 same_module = powerio.deserialize(ir.artifacts[0].data)
 ```
 
-The IR header is `"schema": "pio-ir"` with the integer `"version": 2`, and
-`powerio.versions()["powerio_ir"]` reports both. The producer record gives
-`powerio.__version__` separately. `deserialize` refuses a document whose schema
-or version it does not support and reports what it found. PowerIO IR is not a
+The IR header is `"schema": "pio-ir"` with a `"version"` that names the
+release whose schema the document follows, such as `"0.12.0"`, and
+`powerio.versions()["powerio_ir"]` reports both. The producer record names the
+software that wrote the document separately. `deserialize` reads the documents
+of its own release series and the `"version": 2` documents 0.11 wrote; it
+refuses any other schema or version and reports what it found. PowerIO IR is not a
 grid exchange format, so it does not appear in format discovery.
 
 ## PSS/E contingency analysis files

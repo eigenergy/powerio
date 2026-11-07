@@ -16,7 +16,7 @@ into another semantic type. The nouns are stored values and fields: module,
 value, diagnostics, network, bus, branch, generator, load, operating point,
 time series, scenario set, instance, solution.
 
-| Meaning | Rust | Python | Julia | C ABI 7 |
+| Meaning | Rust | Python | Julia | C |
 |---|---|---|---|---|
 | name a file | pass the name to `parse` | pass a path to `parse` | pass a path string to `parse` | `pio_source_open` |
 | acquire memory | `Source::from_memory(name, bytes)` | pass a file or bytes-like object | pass `IO` or `AbstractVector{UInt8}` | `pio_source_from_memory` |
