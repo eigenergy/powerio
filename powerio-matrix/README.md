@@ -18,7 +18,7 @@ let bprime = calc_bprime_matrix(&view, &BuildOptions::default())?;
 ```
 
 Outputs include MATPOWER Bp/Bpp, Y_bus components, LACPF, signed incidence,
-weighted bus Laplacians, PTDF, LODF, adjacency, and a petgraph graph.
+weighted bus Laplacians, PTDF, LODF, and adjacency.
 `powerio-prob` builds the calculation instances, and this crate calculates
 the problem specific operators from them (`DcOperators::build`,
 `calc_power_flow_jacobian`, and `calc_multiconductor_admittance_matrix`). The

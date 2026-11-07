@@ -70,7 +70,6 @@ pub mod routing;
 mod surge;
 
 mod ucte;
-mod union_find;
 mod xiidm;
 mod xml;
 
