@@ -76,6 +76,13 @@
 
 - `jsonschema` moves to 0.60 (#750), and `actions/checkout` to 7 along with
   the minor and patch action updates (#755, #757).
+- OpenDSS written from a network whose source cannot be a native `Vsource`,
+  such as a distribution CIM or MG-RAVENS feeder, now reduces in
+  PowerModelsDistribution. The per-conductor source helpers and the ideal
+  switch equivalent number their private bus after the nodes they join, so
+  every helper `Line` names the same nodes at both ends, as PMD's Kron
+  reduction requires. Phase B and C source helpers used to join node 1 to
+  node 2 or 3. The circuit is electrically unchanged (#765).
 
 ## 0.11.8
 
