@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+- OpenDSS Transformer and XfmrCode winding arrays now leave the last winding
+  selected, matching native scalar-property replay and preserving the intended
+  winding resistance and neutral grounding (#813).
+
+- Add bounded collection manifests, explicit source-bundle scopes, deterministic rebuilt ZIP packaging, and structured collection/selection origins separate from electrical values.
+
+- Add explicit nested collection ZIP inspection with isolated namespaces, shared cumulative entry/expansion/work budgets, native ZIP layer accounting, and cooperative cancellation.
+
+- Add owned C collection handles, bounded folder/ZIP/memory acquisition, metadata inspection, and selected parsing into typed modules, with a matching Julia companion.
+
+- Python `Collection` inspects bounded ZIP/folder/memory inventories and parses
+  independent selections with typed modules, dependencies and explicit lifetime.
+
+- The converter uses shared collection selections for overlapping masters and
+  mixed cases, defers parsing until requested, and reuses bounded worker input.
+  ZIP upload scopes remain independent when display names collide, XML-only
+  network batches stay selectable, and empty directory records are verified.
+
+- `powerio collection inspect/parse` lists ZIP/folder inputs and processes
+  explicit entries, dataset roots, or document groups with independent results.
+
+- Collection selections can explicitly group CIM/CGMES documents and GO
+  problem/solution roles without merging unrelated inputs.
+
+- Collection inspection discovers separate PyPSA and GridFM dataset roots;
+  explicit directory selections preserve internal time/scenario values.
+
+- Inspect bounded ZIP/folder collections and explicitly select independent
+  standalone inputs or OpenDSS masters over shared immutable companions.
+
+- Add shared `SourceTree` file and directory views with explicit admission limits
+  and independent successful-read dependency tracking for each selection (#774).
+- CGMES and SINCAL share bounded ZIP acquisition primitives while preserving
+  their format-specific namespace, diagnostic, and source replay policies.
+
+- Add `powerio-archive`: bounded ZIP indexing and verified member reads with
+  explicit limits and namespace checks, as shared infrastructure for #774.
+
 ## 0.11.9
 
 **PSS/E**

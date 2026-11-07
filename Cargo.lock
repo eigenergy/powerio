@@ -2420,6 +2420,7 @@ dependencies = [
  "bytes",
  "num-complex",
  "parquet",
+ "powerio-archive",
  "powerio-core",
  "powerio-dist",
  "powerio-matrix",
@@ -2431,6 +2432,15 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "zip",
+]
+
+[[package]]
+name = "powerio-archive"
+version = "0.11.9"
+dependencies = [
+ "memchr",
+ "powerio-core",
  "zip",
 ]
 
@@ -2583,6 +2593,7 @@ name = "powerio-tnd"
 version = "0.11.9"
 dependencies = [
  "num-complex",
+ "powerio-archive",
  "powerio-core",
  "powerio-dist",
  "powerio-tx",
@@ -2603,6 +2614,7 @@ dependencies = [
  "lexical-core",
  "memchr",
  "petgraph",
+ "powerio-archive",
  "powerio-core",
  "quick-xml",
  "schemars",

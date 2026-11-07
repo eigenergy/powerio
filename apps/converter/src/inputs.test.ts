@@ -1,7 +1,34 @@
 import { describe, expect, it, test, vi } from 'vitest';
-import { BlobReader, BlobWriter, ZipWriter } from '@zip.js/zip.js';
+import { BlobReader, BlobWriter, Uint8ArrayReader, Uint8ArrayWriter, ZipWriter } from '@zip.js/zip.js';
 import { groupInputs, safeName, unpack } from './inputs';
 const entry = (path: string, content = '') => ({ path, file: new File([content], path.split('/').at(-1)!) });
+
+test('XML-only ZIPs containing independent networks are expanded', async () => {
+  const zip = new ZipWriter(new BlobWriter(), { useWebWorkers: false });
+  for (const name of ['one.xml', 'two.xml']) await zip.add(name, new BlobReader(new Blob(['<?xml version="1.0"?><!-- not <rdf:RDF> --><network xmlns="http://www.powsybl.org/schema/iidm/1_0"/>'])));
+  const result = await unpack({ path: 'networks.zip', file: new File([await zip.close()], 'networks.zip') });
+  expect(result.map(f => f.path)).toEqual(['networks/one.xml', 'networks/two.xml']);
+});
+
+test('directory local headers are validated even though their payload is empty', async () => {
+  const zip = new ZipWriter(new Uint8ArrayWriter(), { useWebWorkers: false });
+  await zip.add('folder/', undefined, { directory: true });
+  await zip.add('case.m', new Uint8ArrayReader(new Uint8Array([1])));
+  const bytes = await zip.close();
+  bytes[30] = 'x'.charCodeAt(0); // Local directory name disagrees with its index.
+  await expect(unpack({ path: 'bad.zip', file: new File([bytes], 'bad.zip') })).rejects.toThrow();
+});
+
+test('valid directories and native RDF archives retain exact source ZIP bytes in their scope', async () => {
+  const zip = new ZipWriter(new BlobWriter(), { useWebWorkers: false });
+  await zip.add('profiles/', undefined, { directory: true });
+  await zip.add('profiles/EQ.xml', new BlobReader(new Blob(['<?xml version="1.0"?><!--', 'description '.repeat(500), '--><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/>'])));
+  const file = new File([await zip.close()], 'network.zip');
+  const [result] = await unpack({ path: 'network.zip', file }, () => false, 'unique');
+  expect(result.file).toBe(file);
+  expect(result.path).toBe('unique/network.zip');
+  expect(result.collectionRoot).toBe('unique');
+});
 const sized = (path: string, size: number, content = '') => {
   const result = entry(path, content);
   Object.defineProperty(result.file, 'size', { value: size });
@@ -184,4 +211,41 @@ test('retains parent-relative references without absorbing another project', asy
   const one = projects.find(project => project.primary === 'one/Master.dss')!;
   expect(one.entries.map(file => file.path)).toEqual(['one/Master.dss', 'one/note.asset', 'shared/loads.inc']);
   expect(projects.find(project => project.primary === 'Master.dss')!.entries).toHaveLength(2);
+});
+
+
+test('shared discovery keeps overlapping masters and mixed inputs without consuming companions', async () => {
+  const { groupCollectionInputs } = await import('./inputs');
+  const files = ['masters/day.dss', 'masters/night.dss', 'shared/topology.inc', 'case.m'].map(path => ({ path, file: new File(['content'], path.split('/').at(-1)!) }));
+  const discover = async () => ({ ok: true, candidates: ['masters/day.dss', 'masters/night.dss', 'case.m'].map(primary => ({ status: 'selectable', selection: { primary, root: null, format: primary.endsWith('.m') ? 'matpower' : 'dss', operation: 'parse' as const } })) });
+  const cases = await groupCollectionInputs(files, discover, 'shared', () => false);
+  expect(cases).toHaveLength(3);
+  expect(cases[0].entries).toBe(cases[1].entries);
+  expect(cases.map(c => c.primary)).toEqual(['masters/day.dss', 'masters/night.dss', 'case.m']);
+  expect(cases.every(c => c.collectionKey === 'shared')).toBe(true);
+});
+
+
+test('ZIP selections cannot resolve into a sibling upload', async () => {
+  const { groupCollectionInputs } = await import('./inputs');
+  const files = [{ ...entry('first/master.dss'), collectionRoot: 'first' }, { ...entry('second/shared.inc'), collectionRoot: 'second' }];
+  const discover = async () => ({ ok: true, candidates: [{ status: 'selectable', selection: { primary: 'first/master.dss', root: null, format: 'dss', operation: 'parse' as const } }] });
+  const [selected] = await groupCollectionInputs(files, discover, 'key', () => false);
+  expect(selected.selection).toMatchObject({ root: 'first', primary: 'master.dss' });
+  expect(selected.paths).toEqual(['master.dss']);
+  expect(selected.entries).toHaveLength(2);
+});
+
+test.each([['a/file.dss', 'A/other.dss'], ['file', 'file/child'], ['nul.txt'], ['bad./x']])('rejects nonportable ZIP namespace %j', async (...paths: string[]) => {
+  const zip = new ZipWriter(new BlobWriter(), { useWebWorkers: false });
+  for (const path of paths) await zip.add(path, new BlobReader(new Blob(['data'])));
+  await expect(unpack({ path: 'bad.zip', file: new File([await zip.close()], 'bad.zip') })).rejects.toThrow();
+});
+
+test('rejects ZIP symlinks and observes cancellation before payload reads', async () => {
+  const zip = new ZipWriter(new BlobWriter(), { useWebWorkers: false });
+  await zip.add('link.dss', new BlobReader(new Blob(['target'])), { unixMode: 0o120777 });
+  const archive = { path: 'bad.zip', file: new File([await zip.close()], 'bad.zip') };
+  await expect(unpack(archive)).rejects.toThrow(/links|special/);
+  await expect(unpack(archive, () => true)).rejects.toThrow(/cancelled/);
 });

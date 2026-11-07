@@ -25,6 +25,7 @@ use powerio_tx::{AngleDifferenceBounds, EmitOptions, MissingGenCostPolicy};
 use serde_json::json;
 mod cases;
 mod codes;
+mod collection;
 mod module_io;
 mod tui;
 
@@ -134,6 +135,11 @@ enum DiagnosticsFormat {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Inspect and explicitly select inputs from a ZIP or folder collection.
+    Collection {
+        #[command(subcommand)]
+        command: collection::CollectionCommand,
+    },
     /// Launch the interactive TUI (default if no subcommand is given).
     Tui {
         /// Directory scanned recursively for case files (.m, .raw, .aux,
@@ -1071,6 +1077,7 @@ fn main() -> std::process::ExitCode {
     install_tracing(cli.diagnostics_format);
     let _ = DIAGNOSTICS_FORMAT.set(cli.diagnostics_format);
     let result: anyhow::Result<()> = match cli.command.unwrap_or_else(default_command) {
+        Command::Collection { command } => collection::run(command),
         Command::Tui { data_dir, out_dir } => tui::run(tui::TuiOptions { data_dir, out_dir }),
         Command::Batch {
             input,
