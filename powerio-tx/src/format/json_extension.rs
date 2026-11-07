@@ -11,7 +11,9 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
-use crate::network::{Branch, Bus, Extras, Generator, GeneratorEnergySource, Hvdc, Shunt, Storage};
+use crate::network::{
+    Branch, BranchRatingSet, Bus, Extras, Generator, GeneratorEnergySource, Hvdc, Shunt, Storage,
+};
 
 /// State `value` under `key`. A `None` inside it is left out rather than
 /// written as `null`, which the writers report as a non-finite number; a
@@ -48,6 +50,24 @@ fn take<T: DeserializeOwned>(extras: &mut Extras, key: &str) -> Option<T> {
     Some(value)
 }
 
+/// The source-assigned identity PowerIO writes as a row's `uid`. A `uid` of
+/// another type stays an extra.
+pub(super) fn read_uid(extras: &mut Extras) -> Option<String> {
+    take(extras, "uid")
+}
+
+/// A document-level PowerIO key: `None` when absent or null, and the decoding
+/// error when the value has another shape, which the reader reports or
+/// ignores rather than refusing the document.
+pub(super) fn read_document_key<T: DeserializeOwned>(
+    value: Option<Value>,
+) -> Result<Option<T>, serde_json::Error> {
+    value
+        .filter(|value| !value.is_null())
+        .map(T::deserialize)
+        .transpose()
+}
+
 pub(super) fn write_bus(bus: &Bus, row: &mut Map<String, Value>) {
     put(row, "location", bus.location.as_ref());
 }
@@ -68,6 +88,11 @@ pub(super) fn read_branch(branch: &mut Branch) {
     branch.name = take(&mut branch.extras, "name").or(branch.name.take());
     branch.control = take(&mut branch.extras, "control").or(branch.control.take());
     branch.route = take(&mut branch.extras, "route").or(branch.route.take());
+    // Rating sets beyond rate_a, rate_b, and rate_c, each `{name, rate_mva}`
+    // in MVA; a set without a rate keeps the whole value an extra.
+    if let Some(sets) = take::<Vec<BranchRatingSet>>(&mut branch.extras, "rating_sets") {
+        branch.rating_sets = sets;
+    }
 }
 
 pub(super) fn write_generator(generator: &Generator, row: &mut Map<String, Value>) {
@@ -92,6 +117,9 @@ pub(super) fn write_generator(generator: &Generator, row: &mut Map<String, Value
 
 /// A generator keeps no extras, so its row's extras are only read.
 pub(super) fn read_generator(generator: &mut Generator, extras: &Extras) {
+    if let Some(uid) = get(extras, "uid") {
+        generator.uid = Some(uid);
+    }
     if let Some(source) = get(extras, "energy_source") {
         generator.energy_source = source;
     }
