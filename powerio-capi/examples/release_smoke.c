@@ -1,4 +1,4 @@
-/* Runtime probe for packaged ABI 7 libraries. */
+/* Runtime probe for packaged C ABI libraries. */
 #include "powerio.h"
 
 #include <stdio.h>
@@ -20,8 +20,14 @@ static int view_equals(PioStringView view, const char *text) {
 int main(int argc, char **argv) {
     CHECK(argc == 2, "expected release version argument");
     CHECK(view_equals(pio_version(), argv[1]), "library version mismatch");
-    CHECK(pio_abi_version() == PIO_ABI_VERSION, "ABI mismatch");
-    CHECK(PIO_ABI_VERSION == 7, "release probe is not ABI 7");
+    char header_version[32];
+    snprintf(header_version, sizeof header_version, "%d.%d.%d", PIO_VERSION_MAJOR,
+             PIO_VERSION_MINOR, PIO_VERSION_PATCH);
+    CHECK(strcmp(header_version, argv[1]) == 0, "packaged header states another release");
+    PioVersionView release = pio_version_numbers();
+    CHECK(release.major == PIO_VERSION_MAJOR && release.minor == PIO_VERSION_MINOR &&
+              release.patch == PIO_VERSION_PATCH,
+          "library release numbers differ from the header");
 
     PioError *error = NULL;
     PioString *schema = pio_schema_report(&error);
@@ -44,7 +50,7 @@ int main(int argc, char **argv) {
     pio_value_release(value);
     pio_module_release(module);
 
-    printf("powerio %.*s; ABI %u\n", (int)pio_version().len, pio_version().data,
-           pio_abi_version());
+    printf("powerio %.*s; header %s\n", (int)pio_version().len, pio_version().data,
+           header_version);
     return 0;
 }
