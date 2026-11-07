@@ -49,7 +49,7 @@ there, and reads them back, for data the standard fields cannot hold:
 
 | Data | PowerModels JSON | egret JSON |
 |---|---|---|
-| area records | top-level `areas` table: `area_i`, `price_ref_bus`, and `name`, `net_interchange_mw`, `tolerance_mw`, `area_type`, `uid` | one `elements.area` entry per area number: `slack_bus`, `net_interchange_mw`, `tolerance_mw`, `name`, `area_type`, `uid` |
+| area records | top-level `areas` table: `area_i`, `price_ref_bus`, and `name`, `net_interchange_mw`, `tolerance_mw`, `area_type`, `uid`; the reader also takes the `col_1`/`col_2` rows PowerModels.jl writes for `mpc.areas` | one `elements.area` entry per area number: `slack_bus`, `net_interchange_mw`, `tolerance_mw`, `name`, `area_type`, `uid`; egret's own name-keyed areas are skipped |
 | case metadata from a grid exchange format | top-level `case_metadata` | `system.case_metadata` |
 | system frequency | top-level `base_frequency` | `system.base_frequency` |
 | a source-assigned element identity | `uid` in the element row | `uid` in the element entry |
