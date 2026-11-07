@@ -77,7 +77,7 @@ pub(crate) fn build_incidence(
         // rules bound the reactance, and the series formula bounds the whole
         // impedance magnitude.
         let degenerate = match formula {
-            BranchSusceptanceFormula::SeriesSusceptance => {
+            formula if formula.reads_resistance() => {
                 br.r.hypot(br.x) < crate::matrix::MIN_DIVISIBLE_MAGNITUDE
             }
             _ => br.x.abs() < crate::matrix::MIN_DIVISIBLE_MAGNITUDE,

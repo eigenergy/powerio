@@ -2004,6 +2004,8 @@ FORMULAS = [
     "series_susceptance",
     "tap_adjusted_reactance",
     "reactance_only",
+    "tap_adjusted_series_susceptance",
+    "series_susceptance_no_phase_shift",
 ]
 
 

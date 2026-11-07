@@ -6924,12 +6924,7 @@ pub unsafe extern "C" fn pio_calculation_instance_multiconductor_network(
 }
 
 fn branch_susceptance_formula_name(formula: BranchSusceptanceFormula) -> &'static str {
-    match formula {
-        BranchSusceptanceFormula::ReactanceOnly => "reactance_only",
-        BranchSusceptanceFormula::TapAdjustedReactance => "tap_adjusted_reactance",
-        BranchSusceptanceFormula::SeriesSusceptance => "series_susceptance",
-        _ => "unknown",
-    }
+    formula.formula_name()
 }
 
 unsafe fn require_calculation_instance<'a>(
@@ -18914,15 +18909,13 @@ pub unsafe extern "C" fn pio_ac_scuc_solution_get_values_at(
 }
 
 fn formula(name: Option<&str>) -> Result<BranchSusceptanceFormula, *mut PioError> {
-    match name.unwrap_or("series_susceptance") {
-        "series_susceptance" => Ok(BranchSusceptanceFormula::SeriesSusceptance),
-        "tap_adjusted_reactance" => Ok(BranchSusceptanceFormula::TapAdjustedReactance),
-        "reactance_only" => Ok(BranchSusceptanceFormula::ReactanceOnly),
-        other => Err(boundary_error(
+    let name = name.unwrap_or("series_susceptance");
+    BranchSusceptanceFormula::from_formula_name(name).ok_or_else(|| {
+        boundary_error(
             &codes::REQUEST_CAPI_UNKNOWN_FORMULA,
-            format!("unknown branch susceptance formula '{other}'"),
-        )),
-    }
+            format!("unknown branch susceptance formula '{name}'"),
+        )
+    })
 }
 
 unsafe fn dc_operators(
@@ -20818,6 +20811,20 @@ pub unsafe extern "C" fn pio_ac_ots_solution_materialize(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dc_formula_names_include_the_additive_variants() {
+        for name in [
+            "series_susceptance",
+            "tap_adjusted_reactance",
+            "reactance_only",
+            "tap_adjusted_series_susceptance",
+            "series_susceptance_no_phase_shift",
+        ] {
+            let parsed = super::formula(Some(name)).expect("stable formula");
+            assert_eq!(super::branch_susceptance_formula_name(parsed), name);
+        }
+    }
+
     use super::*;
 
     #[test]
