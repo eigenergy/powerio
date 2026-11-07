@@ -839,26 +839,15 @@ def test_goc3_solution_requires_the_matching_problem():
         )
 
 
-def test_parse_powerworld_display_file():
+def test_parse_reads_a_powerworld_display_to_a_geo_layer():
     path = DATA / "powerworld" / "ACTIVSg200.pwd"
-    parsed = powerio.parse_display(path)
+    layer = powerio.parse(path).value
 
-    assert not hasattr(powerio, "parse_display_file")
-    assert not hasattr(powerio, "parse_display_bytes")
-    assert not hasattr(powerio, "parse_display_text")
-    assert parsed.kind == "powerworld"
-    assert isinstance(parsed.data, powerio.PwdDisplay)
-    assert parsed.data.canvas_width == 200
-    assert parsed.data.canvas_height == 200
-    assert parsed.data.stamp == 43068
-    assert len(parsed.data.substations) == 111
-
-    first = parsed.data.substations[0]
-    assert isinstance(first, powerio.PwdSubstation)
-    assert first.number == 50
-    assert first.name == "CHAMPAIGN 3"
-    assert first.x == pytest.approx(-47299.112519818635)
-    assert first.y == pytest.approx(23498.080802557866)
+    # 0.12 removed parse_display and its raw record (#612); parse is the one
+    # way to read a display.
+    for removed in ("parse_display", "DisplayData", "PwdDisplay", "PwdSubstation"):
+        assert not hasattr(powerio, removed), removed
+    assert isinstance(layer, powerio.GeoLayer)
 
 
 def test_case_tables(case9):
@@ -1165,14 +1154,31 @@ def test_pio_module_emit_uses_dynamic_writer(tmp_path):
     assert json.loads(solved_text)["value"]["type"] == "powerio.AcOpfSolution"
 
 
-def test_deserialize_rejects_a_newer_powerio_ir_generation():
+def test_deserialize_reads_its_release_series_and_0_11_documents():
     document = json.loads(powerio.serialize(powerio.parse(DATA / "case9.m")).text)
-    document["version"] += 1
+    current = powerio.versions()["powerio_ir"]["version"]
+    assert document["version"] == current
+    major, minor, patch = (int(part) for part in current.split("."))
+    for version in (f"{major}.{minor}.{patch + 1}", 2):
+        document["version"] = version
+        module = powerio.deserialize(io.StringIO(json.dumps(document)))
+        assert isinstance(module.value, powerio.BalancedNetwork)
 
-    with pytest.raises(powerio.PowerIOError) as failure:
-        powerio.deserialize(io.StringIO(json.dumps(document)))
-
-    assert failure.value.code == "READ.MODULE.UNSUPPORTED"
+    # The first release of the next series: a minor release before 1.0, a
+    # major release after.
+    next_series = f"0.{minor + 1}.0" if major == 0 else f"{major + 1}.0.0"
+    for version, remedy in (
+        (next_series, "upgrade PowerIO"),
+        (f"{major + 1}.0.0", "upgrade PowerIO"),
+        ("0.11.0", "regenerate this document"),
+        (1, "regenerate this document"),
+        (f"{major}.{minor}", "regenerate this document"),
+    ):
+        document["version"] = version
+        with pytest.raises(powerio.PowerIOError) as failure:
+            powerio.deserialize(io.StringIO(json.dumps(document)))
+        assert failure.value.code == "READ.MODULE.UNSUPPORTED"
+        assert remedy in str(failure.value)
 
 
 def test_pio_module_emit_covers_memory_and_file_destinations(tmp_path):

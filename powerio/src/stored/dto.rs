@@ -1060,14 +1060,30 @@ pub struct SocwrOpfValues {
     pub generator_active_power: Vec<StoredF64>,
     #[serde(deserialize_with = "bounded_operating_point_values")]
     pub generator_reactive_power: Vec<StoredF64>,
-    #[serde(deserialize_with = "bounded_operating_point_values")]
-    pub branch_from_active_power: Vec<StoredF64>,
-    #[serde(deserialize_with = "bounded_operating_point_values")]
-    pub branch_from_reactive_power: Vec<StoredF64>,
-    #[serde(deserialize_with = "bounded_operating_point_values")]
-    pub branch_to_active_power: Vec<StoredF64>,
-    #[serde(deserialize_with = "bounded_operating_point_values")]
-    pub branch_to_reactive_power: Vec<StoredF64>,
+    // 0.11 documents state `branch_from_active_power`.
+    #[serde(
+        alias = "branch_from_active_power",
+        deserialize_with = "bounded_operating_point_values"
+    )]
+    pub branch_from_active_flow: Vec<StoredF64>,
+    // 0.11 documents state `branch_from_reactive_power`.
+    #[serde(
+        alias = "branch_from_reactive_power",
+        deserialize_with = "bounded_operating_point_values"
+    )]
+    pub branch_from_reactive_flow: Vec<StoredF64>,
+    // 0.11 documents state `branch_to_active_power`.
+    #[serde(
+        alias = "branch_to_active_power",
+        deserialize_with = "bounded_operating_point_values"
+    )]
+    pub branch_to_active_flow: Vec<StoredF64>,
+    // 0.11 documents state `branch_to_reactive_power`.
+    #[serde(
+        alias = "branch_to_reactive_power",
+        deserialize_with = "bounded_operating_point_values"
+    )]
+    pub branch_to_reactive_flow: Vec<StoredF64>,
     #[serde(deserialize_with = "bounded_three_winding_transformer_terminal_powers")]
     pub three_winding_transformer_terminal_powers: Vec<ThreeWindingTransformerTerminalPower>,
 }
@@ -1576,9 +1592,9 @@ pub struct StoredModule {
     pub schema: String,
     #[cfg_attr(
         feature = "schema",
-        schemars(extend("const" = crate::IR_VERSION))
+        schemars(with = "String", extend("const" = crate::IR_VERSION))
     )]
-    pub version: u64,
+    pub version: StoredVersion,
     pub producer: Producer,
     pub value: StoredValue,
     #[serde(
@@ -1630,27 +1646,22 @@ impl<'de> Deserialize<'de> for StoredModule {
     }
 }
 
-/// The `version` a document states, kept as written so a refusal can name it.
-#[derive(Debug, Deserialize)]
+/// The `version` a document states, kept as written so the reader can check
+/// it and a refusal can name it. A document from 1.0 on states a release
+/// such as `"1.0.0"`; every 0.11 release wrote the integer `2`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub(super) enum StoredVersion {
+pub enum StoredVersion {
     Integer(u64),
+    Text(String),
     Other(serde_json::Value),
-}
-
-impl StoredVersion {
-    pub(super) fn as_integer(&self) -> Option<u64> {
-        match self {
-            Self::Integer(version) => Some(*version),
-            Self::Other(_) => None,
-        }
-    }
 }
 
 impl fmt::Display for StoredVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Integer(version) => version.fmt(f),
+            Self::Text(text) => serde_json::Value::from(text.as_str()).fmt(f),
             Self::Other(value) => value.fmt(f),
         }
     }

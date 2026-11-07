@@ -16,7 +16,7 @@ into another semantic type. The nouns are stored values and fields: module,
 value, diagnostics, network, bus, branch, generator, load, operating point,
 time series, scenario set, instance, solution.
 
-| Meaning | Rust | Python | Julia | C ABI 7 |
+| Meaning | Rust | Python | Julia | C |
 |---|---|---|---|---|
 | name a file | pass the name to `parse` | pass a path to `parse` | pass a path string to `parse` | `pio_source_open` |
 | acquire memory | `Source::from_memory(name, bytes)` | pass a file or bytes-like object | pass `IO` or `AbstractVector{UInt8}` | `pio_source_from_memory` |
@@ -70,7 +70,7 @@ Python keeps the `n_*` counts because a table property builds one dict per row.
 A Python element is a dict keyed by the Rust field names, while a Julia element
 is an immutable struct whose field names are the C ABI names, which spell out
 the quantity and unit (`vm_pu`, `active_power_mw`). Unifying those two sets of
-field names is listed under [Known limits](scope-0.11.md).
+field names is listed under [Known limits](known-limits.md).
 
 ## Collections
 

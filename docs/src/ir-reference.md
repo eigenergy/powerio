@@ -3,7 +3,7 @@
 This page lists every structural value type in the PowerIO IR, field by
 field: each field's type, unit, and sign convention, the invariant the
 deserializer or the constructors enforce, and what a reader uses when the
-field is absent. The generated schema at `docs/schema/pio-ir/2/0.11.8/schema.json`
+field is absent. The generated schema at `docs/schema/pio-ir/0.12.0/schema.json`
 is the machine form of the same definitions. To keep the two from drifting
 apart, `powerio/tests/ir_reference.rs` reads this page and checks in both
 directions that each table lists the same fields the schema defines for its
@@ -461,13 +461,23 @@ Schema definitions: `Transformer3W/anyOf/0`, `PartialTransformer3WFields`.
 | `name` | string or null | | | | null |
 | `windings` | array of `Winding` | | | exactly three, in the order primary, secondary, tertiary | required |
 | `z` | array of `Impedance` | | | exactly three: `z12`, `z23`, `z31` | required |
-| `mag_g` | float | p.u. on the system base, at the star point | | | required |
-| `mag_b` | float | p.u. on the system base, at the star point | positive is capacitive | | required |
+| `mag_g` | float | p.u. on the system base | | connected where `magnetizing_connection` says | required |
+| `mag_b` | float | p.u. on the system base | positive is capacitive | connected where `magnetizing_connection` says | required |
+| `magnetizing_connection` | `"star_point"` or `"winding1_terminal"` | | | `winding1_terminal` connects the admittance from winding 1's bus to ground, outside its ratio | `"star_point"` |
 | `star_vm` | float | p.u. | | solved star point voltage | required |
 | `star_va` | float | degrees | | | required |
 | `in_service` | boolean | | | | required |
 | `uid` | string or null | | | unique within `transformers_3w` | assigned at serialization |
 | `extras` | object | | | | required |
+
+PSS/E connects `MAG1 + jMAG2` from winding 1's bus to ground, outside that
+winding's ratio, and its readers state `winding1_terminal`; IIDM and CGMES
+state each leg's admittance at the star point. The star lowering puts a
+`winding1_terminal` admittance on winding 1's branch as from side charging
+`Ym * tap1²`, which bus 1 sees as `Ym`, and a `star_point` one at the star
+bus. Every 0.11 document omits the field and states the star point. A writer
+whose format has only the other placement writes the value there and reports
+it with its `VALUE_SUBSTITUTED` code.
 
 Two `extras` entries carry per winding data, in winding order. Each is present
 only when it differs from its default. `winding_in_service` holds three
@@ -2014,11 +2024,16 @@ Schema definition: `SocwrOpfValues`.
 | `branch_voltage_product_imaginary` | array of float | p.u. squared | | `Im(V_from conj(V_to))`; one per branch | required |
 | `generator_active_power` | array of float | MW | positive is generation | one per generator | required |
 | `generator_reactive_power` | array of float | MVAr | positive is generation | one per generator | required |
-| `branch_from_active_power` | array of float | MW | positive into the branch at the from terminal | one per branch | required |
-| `branch_from_reactive_power` | array of float | MVAr | positive into the branch at the from terminal | one per branch | required |
-| `branch_to_active_power` | array of float | MW | positive into the branch at the to terminal | one per branch | required |
-| `branch_to_reactive_power` | array of float | MVAr | positive into the branch at the to terminal | one per branch | required |
+| `branch_from_active_flow` | array of float | MW | positive into the branch at the from terminal | one per branch | required |
+| `branch_from_reactive_flow` | array of float | MVAr | positive into the branch at the from terminal | one per branch | required |
+| `branch_to_active_flow` | array of float | MW | positive into the branch at the to terminal | one per branch | required |
+| `branch_to_reactive_flow` | array of float | MVAr | positive into the branch at the to terminal | one per branch | required |
 | `three_winding_transformer_terminal_powers` | array of `ThreeWindingTransformerTerminalPower` | | | one per three winding transformer | required |
+
+The four branch flow keys were `branch_from_active_power`,
+`branch_from_reactive_power`, `branch_to_active_power`, and
+`branch_to_reactive_power` in 0.11; the reader accepts those spellings in a
+0.11 document.
 
 Schema definition: `SocwrOpfDuals`.
 

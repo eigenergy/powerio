@@ -1159,14 +1159,29 @@ impl Writer {
                         );
                     }
                 }
-                o.insert("control_mode".into(), json!("FREQUENCYDROOP"));
+                // A control mode a PMD source stated (the enum's name or its
+                // integer) is written back; FREQUENCYDROOP is PMD's default.
+                let stated_mode = g
+                    .extras
+                    .get("control_mode")
+                    .filter(|mode| mode.is_string() || mode.is_i64())
+                    .cloned();
+                let consumed: &[&str] = if stated_mode.is_some() {
+                    &["kv", "control_mode"]
+                } else {
+                    &["kv"]
+                };
+                o.insert(
+                    "control_mode".into(),
+                    stated_mode.unwrap_or_else(|| json!("FREQUENCYDROOP")),
+                );
                 o.insert("status".into(), Self::status(&g.extras));
                 o.insert(
                     "source_id".into(),
                     json!(format!("generator.{}", g.name.to_lowercase())),
                 );
                 self.time_series_refs(&g.extras, &mut o, &what);
-                self.extras_dropped(&g.extras, &["kv"], &what);
+                self.extras_dropped(&g.extras, consumed, &what);
                 gens.insert(g.name.to_lowercase(), Value::Object(o));
             }
             doc.insert("generator".into(), Value::Object(gens));

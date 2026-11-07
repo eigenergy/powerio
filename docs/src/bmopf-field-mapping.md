@@ -309,7 +309,7 @@ imply that PowerIO's own matrix compiler implements it.
 ## Explicit terminal-coil no-load admittance
 
 `transformer.<subtype>.<id>.no_load_shunt` holds `{winding, g, b}` in transformer
-extras and IR version 2. The one-based winding index fixes its physical
+extras and in PowerIO IR. The one-based winding index fixes its physical
 location, and `g + j b` is siemens per coil at the terminal voltage. It cannot
 coexist with the existing from-side `g_no_load` and `b_no_load` fields.
 

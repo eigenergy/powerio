@@ -27,6 +27,8 @@ export interface Output {
   diagnostics: Diagnostic[];
 }
 export interface Job {
+  collectionKey?: string;
+  selection?: CollectionSelection;
   id: string;
   name: string;
   files: string[];
@@ -54,6 +56,11 @@ export interface ConverterState {
   analytics: boolean;
 }
 export interface BrowserFile {
+  /** Root of the transport ZIP that supplied this file. */
+  collectionRoot?: string;
   path: string;
   file: File;
 }
+
+export interface CollectionSelection { root: string | null; primary: string | null; members?: string[] | null; format: string | null; operation: 'parse' | 'deserialize' }
+export interface CollectionCandidate { selection: CollectionSelection; status: string }

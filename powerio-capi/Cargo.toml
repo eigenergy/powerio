@@ -16,11 +16,8 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 
 [features]
 default = []
-# Deprecated compatibility alias for 0.11.x source builds; enables no code.
-# Remove only in the planned breaking release: https://github.com/eigenergy/powerio/issues/673
-arrow = []
-# Retained build-feature names for release tooling. ABI 7 exposes one fixed
-# symbol set; none of these names gates a C function.
+# Retained build-feature names for release tooling. The C ABI exposes one
+# fixed symbol set; none of these names gates a C function.
 matrix = []
 dist = []
 prob = []
@@ -39,6 +36,6 @@ powerio-prob.workspace = true
 serde_json = { workspace = true }
 
 [dev-dependencies]
-sha2 = "0.10"
+sha2 = "0.11"
 rusqlite.workspace = true
 tempfile = "3"

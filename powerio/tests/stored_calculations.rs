@@ -1360,7 +1360,7 @@ fn every_multiconductor_quantity_round_trips() {
 }
 
 #[test]
-fn existing_and_additive_values_keep_generation_two() {
+fn existing_and_added_values_name_the_release() {
     for value in [
         PioValue::BalancedNetwork(network()),
         PioValue::McAcOpfInstance(McAcOpfInstance::from_network(mc_network()).unwrap()),
@@ -1374,7 +1374,7 @@ fn existing_and_additive_values_keep_generation_two() {
     ] {
         let text = serialize(&PioModule::new(value)).unwrap();
         let document: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(document["version"], 2);
+        assert_eq!(document["version"], powerio::IR_VERSION);
         assert!(deserialize(&document.to_string()).is_ok());
     }
 }

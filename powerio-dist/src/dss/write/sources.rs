@@ -275,17 +275,24 @@ impl DssWriter {
                 } else {
                     format!("New Vsource.{name}")
                 };
+                // The private bus takes the port's node number, so the
+                // helper line names one node at both ends, as PMD's Kron
+                // reduction requires (#765).
+                let node = super::ideal_switches::node_numbers(&port, &source.bus)
+                    .pop()
+                    .filter(|n| n != "0")
+                    .unwrap_or_else(|| "1".into());
                 // R + (-R) is exact: internal-node KCL eliminates both
                 // resistances and leaves V(port)-V(reference)=E. Neither is
                 // an epsilon, and each conductor retains its own phasor.
                 self.line_out(&format!(
-                    "{head} phases=1 bus1={name}.1 bus2={reference} basekv={} pu={} angle={} frequency={} basefreq={} r1=1 x1=0 r0=1 x0=0",
+                    "{head} phases=1 bus1={name}.{node} bus2={reference} basekv={} pu={} angle={} frequency={} basefreq={} r1=1 x1=0 r0=1 x0=0",
                     num(if magnitude == 0.0 { 0.001 } else { magnitude / 1000.0 }),
                     i32::from(magnitude != 0.0), num(angle * crate::dss::source::NATIVE_DEGREES_PER_RADIAN - 360.0),
                     num(net.base_frequency()), num(net.base_frequency()),
                 ));
                 self.line_out(&format!(
-                    "New Line.{name} phases=1 bus1={name}.1 bus2={port} length=1 r1=-1 x1=0 r0=-1 x0=0 c1=0 c0=0 basefreq={} units=m",
+                    "New Line.{name} phases=1 bus1={name}.{node} bus2={port} length=1 r1=-1 x1=0 r0=-1 x0=0 c1=0 c0=0 basefreq={} units=m",
                     num(net.base_frequency()),
                 ));
                 count += 1;

@@ -1687,7 +1687,7 @@ fn calculate_buses(
         .enumerate()
         .map(|(position, node)| (*node, position))
         .collect();
-    let mut union = crate::format::union_find::UnionFind::new(nodes.len());
+    let mut union = crate::union_find::UnionFind::new(nodes.len());
     let mut closed = 0usize;
     let mut open = 0usize;
     let mut out_of_service = 0usize;

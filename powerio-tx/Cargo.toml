@@ -22,12 +22,12 @@ default = []
 schema = ["dep:schemars", "powerio-core/schema"]
 
 [dependencies]
+powerio-archive.workspace = true
 powerio-core = { workspace = true }
 thiserror = "2"
 # Byte-slice float parsing for numeric matrix rows, avoiding UTF-8 allocation.
 lexical-core = "1"
 # A power network is a graph; connectivity/radial diagnostics live on Network.
-petgraph = "0.8"
 serde.workspace = true
 # Format converters (PowerModels / egret JSON) serialize the typed model.
 # float_roundtrip: the canonical JSON writers' idempotence tests need

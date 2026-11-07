@@ -1,7 +1,7 @@
 name: Release binaries
 
 # Build the powerio-capi cdylib with the release feature tuple. Only gridfm
-# enables code; ABI 7 exposes one fixed typed symbol set.
+# enables code; the C ABI exposes one fixed typed symbol set.
 # For the five platforms PowerIO.jl's Artifacts.toml covers, package
 # each as the artifact tarball that file references (lib/ or bin/ layout, Julia
 # platform triplet in the name), and attach them to the GitHub release on a
@@ -32,9 +32,10 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Release gate. PIO_ABI_VERSION does not cover document formats, so a
-  # release can break the Julia binding while both ABI integers stay the
-  # same. This job tests the tag against the default branch of PowerIO.jl.
+  # Release gate. The C ABI compatibility rule covers declarations, not
+  # document formats, so a release can break the Julia binding without
+  # changing a C declaration. This job tests the tag against the default
+  # branch of PowerIO.jl.
   # It gates `build`: a failure makes no tarballs and no draft release.
   # It also checks that PowerIO.jl binds or exempts every entry point the
   # tagged ABI declares, so a release never ships an entry point the binding
@@ -74,6 +75,11 @@ jobs:
         artifact-only tarballs without the gate."
         exit 1
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    # A release writes PowerIO IR documents that name the release itself, so
+    # the tag, the workspace version, and IR_VERSION must agree before
+    # anything builds.
+    - name: The tag, workspace version, and IR_VERSION agree
+      run: bash scripts/check-release-versions.sh --release
     - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
     - name: Build powerio-capi
@@ -93,7 +99,7 @@ jobs:
     # Every entry point this tag declares is bound by PowerIO.jl main or
     # listed in its gen/unbound_entry_points.txt with a reason.
     - name: Entry point coverage of PowerIO.jl main
-      run: POWERIO_JL=PowerIO.jl bash scripts/check-capi-v7.sh
+      run: POWERIO_JL=PowerIO.jl bash scripts/check-capi.sh
     - name: Test PowerIO.jl against this tag
       env:
         POWERIO_CAPI: ${{ github.workspace }}/target/release/libpowerio_capi.so
@@ -309,7 +315,7 @@ jobs:
         env:
           TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
         run: |
-          tag="${TAG:-v$(grep -oE '^version = "[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')}"
+          tag="${TAG:-v$(grep -m1 -oE '^version = "[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?"' Cargo.toml | cut -d'"' -f2)}"
           julia --project=PowerIO.jl scripts/check-julia-artifacts.jl pin PowerIO.jl release-assets "$tag"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

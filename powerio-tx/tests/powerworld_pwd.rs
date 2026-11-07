@@ -19,7 +19,7 @@ use std::path::Path;
 
 use powerio_tx::PwdSubstation;
 use powerio_tx::format::powerworld::{
-    __parse_aux, __parse_pwd, __parse_pwd_display, __parse_pwd_file, __parse_pwd_layer,
+    __parse_aux, __parse_pwd, __parse_pwd_display, __parse_pwd_layer,
 };
 
 /// (number, name, latitude, longitude) per aux Substation row. Handles both
@@ -111,21 +111,17 @@ fn activsg200_pwd_matches_its_aux_sibling() {
 }
 
 #[test]
-fn pwd_display_metadata_and_file_helper_match_byte_parser() {
+fn pwd_display_metadata_matches_the_substation_parser() {
     let path = common::powerworld_vendored("ACTIVSg200.pwd");
     let bytes = fs::read(&path).unwrap();
     let display = __parse_pwd_display(&bytes).unwrap();
-    let from_file = __parse_pwd_file(&path).unwrap();
     let legacy = __parse_pwd(&bytes).unwrap();
-    let by_file = __parse_pwd_file(&path).unwrap();
 
     assert_eq!(display.canvas_width, 200);
     assert_eq!(display.canvas_height, 200);
     assert_eq!(display.stamp, 43068);
     assert_eq!(display.substations.len(), 111);
-    assert_eq!(from_file, display);
     assert_eq!(legacy, display.substations);
-    assert_eq!(by_file, display);
 }
 
 /// The symbol table lifts into a diagram space layer with one feature per
@@ -133,7 +129,7 @@ fn pwd_display_metadata_and_file_helper_match_byte_parser() {
 #[test]
 fn a_display_file_lifts_into_a_diagram_layer() {
     let path = common::powerworld_vendored("ACTIVSg200.pwd");
-    let display = __parse_pwd_file(&path).unwrap();
+    let display = __parse_pwd_display(&fs::read(&path).unwrap()).unwrap();
     let layer = powerio_tx::geo::to_geo_layer_from_pwd(&display);
     assert_eq!(layer.features.len(), display.substations.len());
     let powerio_tx::geo::CoordinateSpace::Diagram { canvas } = &layer.space else {

@@ -176,6 +176,15 @@ impl Deref for NativeDatabase {
     }
 }
 
+// Tests serialize the query-only snapshot to prove a read left it unchanged,
+// and rusqlite's `serialize` takes the connection mutably.
+#[cfg(test)]
+impl std::ops::DerefMut for NativeDatabase {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.snapshot
+    }
+}
+
 pub(super) fn require_table(connection: &Connection, table: &str, required: &[&str]) -> Result<()> {
     crate::formats::sincal::storage::require_table(connection, table, required)
         .map_err(format_error)

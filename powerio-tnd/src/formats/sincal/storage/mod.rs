@@ -20,6 +20,8 @@ mod schema;
 mod schema_tests;
 mod tables;
 #[cfg(test)]
+pub(crate) use tables::sha256_hex;
+#[cfg(test)]
 mod tests;
 
 pub use acquisition::{MAX_BYTES, SQLITE_MAGIC, database_bytes};

@@ -9,7 +9,7 @@ cargo add powerio             # parsing, emission, PowerIO IR
 cargo add powerio -F matrix   # and sparse matrices, sensitivities, graph data
 ```
 
-Use Rust 1.88 or newer. Add the `gridfm` feature when your application reads
+Use Rust 1.89 or newer. Add the `gridfm` feature when your application reads
 or writes GridFM Parquet directories: `cargo add powerio -F gridfm`.
 
 Native SINCAL projects are the `sincal` feature, on by default. It compiles

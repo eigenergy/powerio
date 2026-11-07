@@ -6,7 +6,7 @@
 [![crates.io](https://img.shields.io/crates/v/powerio)](https://crates.io/crates/powerio)
 [![docs.rs](https://docs.rs/powerio/badge.svg)](https://docs.rs/powerio)
 [![PyPI](https://img.shields.io/pypi/v/powerio)](https://pypi.org/project/powerio/)
-[![MSRV 1.88](https://img.shields.io/badge/MSRV-1.88-blue.svg)](https://github.com/eigenergy/powerio/blob/main/Cargo.toml)
+[![MSRV 1.89](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://github.com/eigenergy/powerio/blob/main/Cargo.toml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/eigenergy/powerio/blob/main/LICENSE-MIT)
 
 <p align="center">
@@ -176,13 +176,16 @@ depend on just the layer they use.
 |---|---|
 | `powerio` | `PioValue`, `parse`, `emit`, `serialize`, `deserialize` |
 | `powerio-core` | `Source`, `PioModule`, diagnostics, collections, destinations |
+| `powerio-archive` | Bounded ZIP indexing and verified member reads |
 | `powerio-tx` | `BalancedNetwork` and balanced format readers and writers |
 | `powerio-dist` | `MulticonductorNetwork` and OpenDSS, PMD, BMOPF, CIM converters |
+| `powerio-tnd` | Integrated transmission/distribution models, cross-model transforms, SINCAL and MG-RAVENS dispatch |
 | `powerio-prob` | Operating points, updates, calculation instances and solutions |
 | `powerio-matrix` | Sparse matrices, sensitivities, DC OPF bundles and graph data |
+| `powerio-synth` | Synthetic network generators for tests and benchmarks |
 | `powerio-cli` | The `powerio` command and its terminal interface |
 | `powerio-py` | The native extension used by the Python package |
-| `powerio-capi` | C ABI 7, used by Julia and other FFI bindings |
+| `powerio-capi` | The C ABI, used by Julia and other FFI bindings |
 
 `powerio-tx` and `powerio-dist` share `powerio-core` and nothing else, so a
 distribution consumer pulls in no transmission code. `powerio-prob` is matrix
@@ -199,7 +202,8 @@ backend, and `default-features = false` leaves it out.
 - [Formats and fidelity](https://eigenergy.github.io/powerio/guide/format-fidelity.html)
 - [Matrices and graphs](https://eigenergy.github.io/powerio/guide/matrices.html)
 - [Rust, Python, Julia, and C](https://eigenergy.github.io/powerio/guide/languages.html)
-- [Migrating from 0.10](https://eigenergy.github.io/powerio/guide/migration-0.11.html)
+- [Migrating from 0.11](https://eigenergy.github.io/powerio/guide/migration-0.12.html)
+- [Known limits and versions](https://eigenergy.github.io/powerio/guide/known-limits.html)
 - [Rust API reference](https://eigenergy.github.io/powerio/powerio/)
 - [PowerIO.jl](https://eigenergy.github.io/PowerIO.jl)
 - [Contributing](https://github.com/eigenergy/powerio/blob/main/CONTRIBUTING.md)

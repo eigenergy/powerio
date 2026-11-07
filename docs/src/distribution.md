@@ -38,7 +38,7 @@ reference currents. IR 2 uses a distinct tagged source record, so older readers
 reject this new physics; ordinary earth-referenced records are unchanged.
 `McAcPfInstance::source_boundary` borrows both voltage endpoints and their
 phasor differences. The additive C `PioVoltageSourceBoundaryView` serves
-network and PF instance callers without changing the existing ABI 7 layouts.
+network and PF instance callers without changing the existing C ABI layouts.
 Legacy C source views reject references they cannot describe. The OpenDSS
 writer preserves referenced constraints through exact equivalent circuits.
 GridLAB-D and the JSON writers accept an already perfectly grounded reference;
@@ -63,6 +63,16 @@ controls. It preserves unequal phase voltages, zero EMFs and floating source
 returns using exact equivalent circuits. Reimport can introduce auxiliary
 components, so canonical output is electrically equivalent rather than a text
 fixed point. Unchanged source replay remains byte exact.
+
+Names from other formats can be free text (a CIM `IdentifiedObject.name`
+such as `Cable type A`), but OpenDSS splits a token on whitespace, `,`, `=`,
+quotes, and brackets, reads `!` and `//` as comment openers, and reads a `.`
+in a bus reference as the node separator. Canonical DSS output replaces each
+such character with `_` in the element, line code, bus, and circuit name and
+in every typed reference to it, adds a numeric suffix when the result is
+already taken in the same OpenDSS class, and reports each replacement
+(`EMIT.DSS.VALUE_SUBSTITUTED`). The written deck reads back with every
+element connected; the model keeps the original names.
 
 Direct `Open`/`Close` commands and explicit `SwtControl.State` on lines
 preserve their fixed terminal states through equivalent circuits. Other device
@@ -254,7 +264,8 @@ CIM16 and CIM100. Input is one document, or a directory whose top level `.xml`
 documents read as one case, with `rdf:about` records extending the ones
 another document defines. Files in subdirectories are not part of the case,
 and ZIP archives are not read yet. A `.xml` document, a nameless source, or a
-directory routes here when it carries per phase classes and no CGMES
+directory routes here when it carries per phase classes or the IEC 61968
+customer classes (`ServiceLocation`, `UsagePoint`) and no CGMES
 `md:FullModel` header.
 
 | CIM | Model |
@@ -271,10 +282,32 @@ directory routes here when it carries per phase classes and no CGMES
 | `ShortCircuitTest` | short circuit reactances between winding pairs, and winding resistances when no end info states one |
 | `NoLoadTest`, `TransformerCoreAdmittance` | the `%noloadloss` and `%imag` extras |
 | `EnergySource` | voltage sources, with the series impedance in `rs`/`xs` extras |
+| `WireInfo.ratedCurrent` of a segment's `PowerSystemResource.AssetDatasheet` | the segment's ampacity, `i_max` on each conductor |
+| `Diagram` with its `DiagramObject`s and `DiagramObjectPoint`s | coordinates: a segment's points, in `sequenceNumber` order, are its route, the first at terminal 1. A connectivity node takes its own drawing, else that of a terminal there: one point is a stated bus location, and the centroid of several is derived. Without either, its bus takes the end of the first segment there, else the point of other equipment at it or of the composite switch that holds a switch; these are derived. A drawing that places nothing is reported unmapped with its points |
 
 `SinglePhaseKind` A, B, C, and N map to terminals 1, 2, 3, and 4, and the
 split phase s1 and s2 to 1 and 2. A conductor beyond those four has no CIM
-phase, so the writer reports it.
+phase, so the writer reports it. An enumeration written as text
+(`<cim:Terminal.phases>A</cim:Terminal.phases>`), as some CIM16 exports
+state it, reads like the reference form.
+
+One `Diagram` gives the coordinates: the first whose name or description
+names an `EPSG:` code, else the first. A code known to be geographic
+(EPSG:4326, EPSG:4258, and other widely used ones) reads as x = longitude and
+y = latitude. Any other code is projected when a coordinate lies outside the
+range of degrees. Otherwise the coordinates fit either reading, so the space
+stays undeclared with a `READ.CIM_DIST.VALUE_UNSUPPORTED` finding naming the
+code. A diagram without a code is a drawing. PowerIO does not reproject: the
+network's `geo` metadata names the CRS, and a geographic layer applied with
+`apply_geo_layer` replaces the coordinates with reprojected ones.
+
+Without a `BaseFrequency`, a CIM16 document set reads at 50 Hz, the ENTSO-E
+default the CGMES reader also assumes, while CIM100 keeps 60 Hz. Either
+default is a `READ.CIM_DIST.VALUE_DEFAULTED` finding.
+`Circuit`, `CompositeSwitch`, and `PSRType` are context
+(`READ.CIM_DIST.CONTEXT_UNMAPPED`). The IEC 61968 customer classes route a
+document here but are not mapped yet, so `ServiceLocation` and `UsagePoint`
+are reported as unmapped classes.
 
 A tank end's terminals follow from its `TransformerTankEnd.phases`, in the
 form the dss reader gives the equivalent OpenDSS transformer: a line to
@@ -311,7 +344,8 @@ its `cim_power_transformer` extra names, with tanks of identical catalog data
 sharing one `TransformerTankInfo`; every other transformer, including those
 from other formats, takes the `PowerTransformerEnd` form.
 
-Regulator controls, distributed energy resources, machines, wire and cable geometry, operational limits,
+Regulator controls, distributed energy resources
+(`PowerElectronicsConnection`), machines, wire and cable geometry, operational limits,
 `LoadResponseCharacteristic`, and `TopologicalNode` only documents are not
 mapped yet, and the reader reports each of them: a class with no mapping is
 counted per class (`READ.CIM_DIST.CLASS_UNMAPPED`), a property no mapping reads
@@ -983,7 +1017,7 @@ and remaining limitations.
 
 PowerIO v0.11.0 supports **draft BMOPF 0.2**, subject to Task Force
 review. The schema version is separate from the PowerIO release and from
-PowerIO IR version 2. Producer provenance records the proposal revision and
+the release a PowerIO IR document names. Producer provenance records the proposal revision and
 schema digest. Previously emitted schema identifiers remain readable aliases.
 
 An unqualified `bmopf-json` emission preserves an unchanged source byte for
@@ -1003,7 +1037,7 @@ Legacy output relocates proposed-only equipment and transformer fields into
 assumed to calculate the same network. Proposal output uses the declared tables
 and preserves winding ratings, taps, neutral impedances and current-limit data.
 
-Unequal bus phase bounds remain individual values through parsing, IR version 2
+Unequal bus phase bounds remain individual values through parsing, PowerIO IR,
 and explicit BMOPF output. Uniform values use `v_min`/`v_max`; unequal values
 use `v_min_phase`/`v_max_phase` in the typed Rust model. A present scalar takes
 precedence over the corresponding vector. PMD voltage arrays instead follow
@@ -1049,7 +1083,7 @@ does not establish Task Force acceptance.
 
 Draft BMOPF 0.2 uses `energy_cost_rate` in $/kWh. Generator entries follow phase
 order, as do voltage-source entries. Neutral terminals have no price entry. PowerIO retains source prices in `VoltageSource.energy_cost_rate` and
-in IR version 2. C and Julia expose `energy_cost_rate_per_kwh`; Python's
+in PowerIO IR. C and Julia expose `energy_cost_rate_per_kwh`; Python's
 voltage-source records expose `energy_cost_rate`.
 
 The reader also accepts the deprecated per-phase `cost` spelling. Explicit
@@ -1110,7 +1144,7 @@ Transformer/regulator lowering and their thermal checks remain unsupported;
 the preparation report records any selected omission rather than presenting
 an incomplete report as comprehensive.
 
-C ABI 7 adds `pio_value_lindist3flow_opf_instance`,
+The C ABI adds `pio_value_lindist3flow_opf_instance`,
 `pio_value_lindist3flow_opf_solution`, and
 `pio_module_to_lindist3flow_opf_instance`. The generic calculation accessors
 read the instance, network, objective, constraints, termination, and solution
@@ -1118,12 +1152,12 @@ columns. `pio_lindist3flow_opf_instance_node_at` and
 `pio_lindist3flow_opf_instance_conductor_at` return borrowed typed axis views.
 Their strings stay valid while the instance handle remains alive.
 Sparse conic preparation and solver adapters remain Rust APIs.
-The fixed-dispatch types add no ABI 7 symbols; they remain available through
-Rust, Python, and IR version 2 until a future C ABI revision can add a
+The fixed-dispatch types add no C ABI symbols; they remain available through
+Rust, Python, and PowerIO IR until a future C ABI revision can add a
 fixed symbol set deliberately.
 
-PowerIO 0.11.1 writes the OPF pair in IR version 2, and 0.11.4 adds the
-fixed-dispatch pair under the same version. Readers without those structural types
+PowerIO 0.11.1 added the OPF pair to PowerIO IR, and 0.11.4 added the
+fixed-dispatch pair. Readers without those structural types
 reject them, while existing network and calculation records keep their
 representation.
 

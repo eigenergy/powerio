@@ -2304,11 +2304,11 @@ impl Shunt {
 
 /// How a switched shunt adjusts its susceptance. Maps to the PSS/E `MODSW` code.
 //
-// The IR 2 schema catalogs are published byte for byte, and
+// The 0.11 schema files are published byte for byte, and
 // `powerio/tests/frozen_schemas.rs` holds every record to its published text.
 // The schema descriptions of the two adjusting variants therefore keep their
-// 0.11 wording, which swaps `MODSW` 1 and 2, until a new catalog snapshot
-// takes the code mapping the rustdoc states.
+// 0.11 wording, which swaps `MODSW` 1 and 2, until a release series that no
+// longer reads 0.11 documents takes the code mapping the rustdoc states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -3657,6 +3657,25 @@ impl Winding {
     }
 }
 
+/// Where the magnetizing admittance of a [`Transformer3W`] connects.
+///
+/// PSS/E connects `MAG1 + jMAG2` from winding 1's bus to ground, outside that
+/// winding's ratio. IIDM and CGMES state each leg's shunt admittance at the
+/// star point. The two are different circuits: no single admittance at one
+/// place reproduces the other, so a writer whose format has only the other
+/// placement reports an approximation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum MagnetizingConnection {
+    /// Between the star point and ground.
+    #[default]
+    StarPoint,
+    /// Between winding 1's terminal bus and ground, outside winding 1's ratio.
+    Winding1Terminal,
+}
+
 /// A three winding transformer with three terminal buses joined at a star point.
 ///
 /// Series impedance is stored for winding pairs 1-2, 2-3, and 3-1. The record
@@ -3678,9 +3697,14 @@ pub struct Transformer3W {
     /// Star-point voltage magnitude (p.u.) and angle (degrees), as solved.
     pub star_vm: f64,
     pub star_va: f64,
-    /// Magnetizing shunt referred to the star point (p.u. on the system base).
+    /// Magnetizing shunt conductance and susceptance (p.u. on the system
+    /// base), connected where [`Self::magnetizing_connection`] says.
     pub mag_g: f64,
     pub mag_b: f64,
+    /// Where [`Self::mag_g`] and [`Self::mag_b`] connect: the star point
+    /// (the default, and the meaning every 0.11 document has) or winding 1's
+    /// terminal bus.
+    pub magnetizing_connection: MagnetizingConnection,
     pub in_service: bool,
     pub name: Option<String>,
     /// Stable row identity; see [`Bus::uid`].
@@ -3698,11 +3722,19 @@ impl Transformer3W {
             star_va: 0.0,
             mag_g: 0.0,
             mag_b: 0.0,
+            magnetizing_connection: MagnetizingConnection::StarPoint,
             in_service: true,
             name: None,
             uid: None,
             extras: Extras::new(),
         }
+    }
+
+    /// True when the lowering adds a magnetizing shunt at the star bus: a
+    /// nonzero admittance that connects at the star point.
+    pub(crate) fn has_star_magnetizing_shunt(&self) -> bool {
+        self.magnetizing_connection == MagnetizingConnection::StarPoint
+            && (self.mag_g != 0.0 || self.mag_b != 0.0)
     }
 
     /// The per-winding star impedances `(r, x)` — winding *k* to the star point —
@@ -3858,9 +3890,12 @@ impl Transformer3W {
     /// one per winding, for a consumer that works in the bus-branch model.
     /// [`IndexedNetwork`](crate::IndexedNetwork) calls this via
     /// `BalancedNetwork::expand_transformers_3w` when assembling matrix inputs. The star
-    /// bus carries the stored star voltage and the magnetizing shunt is left to the
-    /// caller; each branch takes its winding's tap, phase shift, ratings, and
-    /// status, so a winding out of service gives an out of service branch.
+    /// bus carries the stored star voltage. A magnetizing admittance at the star
+    /// point is left to the caller as a shunt at the star bus; one at winding 1's
+    /// terminal rides on winding 1's branch as from side charging
+    /// `Ym * tap1²`, which bus 1 sees as `Ym` through the branch ratio. Each
+    /// branch takes its winding's tap, phase shift, ratings, and status, so a
+    /// winding out of service gives an out of service branch.
     /// A winding's own impedance correction table follows its branch, so
     /// [`BalancedNetwork::apply_impedance_correction`] on the expanded network
     /// scales each star impedance as it scales the native transformer's. Once
@@ -3918,6 +3953,15 @@ impl Transformer3W {
             branch(&self.windings[1], zs[1]),
             branch(&self.windings[2], zs[2]),
         ];
+        if self.magnetizing_connection == MagnetizingConnection::Winding1Terminal
+            && (self.mag_g != 0.0 || self.mag_b != 0.0)
+        {
+            let tap = branches[0].calc_effective_tap();
+            let referral = tap * tap;
+            let (g, b) = (self.mag_g * referral, self.mag_b * referral);
+            branches[0].b = b;
+            branches[0].charging = Some(BranchCharging::new(g, b, 0.0, 0.0));
+        }
         let windings_in_service = self.winding_in_service();
         let independent = self.extras.get("psse_zcod").and_then(Value::as_i64) != Some(1);
         let pairwise = self.z.map(|z| [z.r, z.x]);
@@ -4279,7 +4323,7 @@ impl BalancedNetwork {
         for t in self.transformers_3w().iter().filter(|t| t.in_service) {
             lengths.buses += 1;
             lengths.branches += 3;
-            if t.mag_g != 0.0 || t.mag_b != 0.0 {
+            if t.has_star_magnetizing_shunt() {
                 lengths.shunts += 1;
             }
         }
@@ -4345,7 +4389,7 @@ impl BalancedNetwork {
             }
             net.buses_mut().push(star);
             net.branches_mut().extend(branches);
-            if t.mag_g != 0.0 || t.mag_b != 0.0 {
+            if t.has_star_magnetizing_shunt() {
                 net.shunts_mut().push(Shunt {
                     bus: star_id,
                     g: t.mag_g * scale,
@@ -6289,6 +6333,7 @@ mod tests {
             star_va: -1.5,
             mag_g: 0.0,
             mag_b: 0.0,
+            magnetizing_connection: crate::network::MagnetizingConnection::StarPoint,
             in_service: true,
             name: Some("T1".into()),
             uid: None,

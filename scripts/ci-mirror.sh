@@ -21,7 +21,7 @@ run ./scripts/ci-clippy.sh
 run bash scripts/terminology-gate.sh
 run bash scripts/deprecated-inventory.sh --assert-empty
 run ./scripts/capi-header-parity.sh
-POWERIO_JL_OPTIONAL=1 run bash scripts/check-capi-v7.sh
+POWERIO_JL_OPTIONAL=1 run bash scripts/check-capi.sh
 run bash scripts/check-value-types.sh
 run bash scripts/check-diagnostic-parity.sh
 run python3 scripts/capi-doc-integrity.py
@@ -60,7 +60,7 @@ fi
 # is not installed (rustup target add wasm32-unknown-unknown).
 if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then
   run cargo check --target wasm32-unknown-unknown -p powerio -p powerio-tx -p powerio-dist \
-      -p powerio-core -p powerio-prob -p powerio-matrix
+      -p powerio-core -p powerio-archive -p powerio-prob -p powerio-matrix
   run cargo check --target wasm32-unknown-unknown -p powerio --features matrix
   # Without the default-on sincal feature the facade must build with no C
   # compiler, so SQLite may not appear in that dependency graph. Package names
@@ -80,6 +80,21 @@ else
   echo "=== skipped: wasm32-unknown-unknown target not installed ==="
 fi
 
+# semver.yml compares the C header with the latest release header. A pull
+# request labeled semver-major may break it there; BREAK_ALLOWED=true stands
+# in for the label here. Status 2 (no baseline tag) always fails.
+run python3 scripts/check-capi-header.py --self-test
+echo "=== python3 scripts/check-capi-header.py ==="
+header_status=0
+python3 scripts/check-capi-header.py || header_status=$?
+if [ "$header_status" -ne 0 ]; then
+  if [ "$header_status" -eq 1 ] && [ "${BREAK_ALLOWED:-false}" = true ]; then
+    echo "the C ABI breaks above are accepted by BREAK_ALLOWED=true"
+  else
+    exit "$header_status"
+  fi
+fi
+
 # semver.yml compares the public Rust API with the latest release. Skipped
 # rather than failing when cargo-semver-checks is absent
 # (cargo install cargo-semver-checks --locked).
@@ -89,7 +104,7 @@ else
   echo "=== skipped: cargo-semver-checks not installed ==="
 fi
 
-run cargo test -p powerio -p powerio-tx -p powerio-core -p powerio-synth -p powerio-matrix -p powerio-prob -p powerio-cli \
+run cargo test -p powerio -p powerio-tx -p powerio-core -p powerio-archive -p powerio-synth -p powerio-matrix -p powerio-prob -p powerio-cli \
     -p powerio-capi -p powerio-dist -p powerio-tnd
 run cargo test -p powerio --features matrix
 run cargo test -p powerio --features gridfm
