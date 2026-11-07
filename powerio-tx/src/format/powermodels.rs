@@ -600,27 +600,21 @@ pub(crate) fn parse_powermodels_json_source(
         .unwrap_or("case")
         .to_string();
 
-    let area_rows = document.areas.len();
-    let areas = sorted_rows(document.areas, |row| row.index)
-        .into_iter()
-        .filter_map(|(_, row)| read_area(row))
-        .collect::<Vec<_>>();
-    if areas.len() < area_rows {
-        warnings.push(
-            &codes::READ_POWERMODELS_RECORD_DROPPED,
-            format!(
-                "{} of {area_rows} `areas` row(s) state no area number (`area_i` or PowerModels.jl's `col_1`) and were not read",
-                area_rows - areas.len()
-            ),
-        );
-    }
+    let areas = read_areas(document.areas, warnings);
+    let geo = document_key(document.geo, "geo", warnings);
+    let case_metadata = document_key(document.case_metadata, "case_metadata", warnings);
+    let detailed_connectivity = document_key(
+        document.detailed_connectivity,
+        "detailed_connectivity",
+        warnings,
+    );
     let net = BalancedNetwork::from_tables(BalancedNetworkTables {
         name,
         base_mva,
         base_frequency,
-        geo: document.geo,
-        case_metadata: document.case_metadata.unwrap_or_default(),
-        detailed_connectivity: document.detailed_connectivity.map(std::sync::Arc::new),
+        geo,
+        case_metadata: case_metadata.unwrap_or_default(),
+        detailed_connectivity: detailed_connectivity.map(std::sync::Arc::new),
         generated_uids: std::sync::Arc::default(),
         buses: sorted_rows(document.bus, |row| row.index)
             .into_iter()
@@ -668,6 +662,45 @@ pub(crate) fn parse_powermodels_json_source(
     Ok(net)
 }
 
+/// The `areas` table, skipping and reporting the rows that state no area
+/// number PowerIO can place.
+fn read_areas(
+    rows: Vec<(String, AreaRow)>,
+    warnings: &mut Diagnostics,
+) -> Vec<crate::network::Area> {
+    let area_rows = rows.len();
+    let areas = sorted_rows(rows, |row| row.index)
+        .into_iter()
+        .filter_map(|(_, row)| read_area(row))
+        .collect::<Vec<_>>();
+    if areas.len() < area_rows {
+        warnings.push(
+            &codes::READ_POWERMODELS_RECORD_DROPPED,
+            format!(
+                "{} of {area_rows} `areas` row(s) state no area number (`area_i` or PowerModels.jl's `col_1`) and were not read",
+                area_rows - areas.len()
+            ),
+        );
+    }
+    areas
+}
+
+/// A top-level key PowerIO writes. A value without PowerIO's shape, which
+/// another tool may state under the same name, is reported and not read.
+fn document_key<T: serde::de::DeserializeOwned>(
+    value: Option<Value>,
+    key: &str,
+    warnings: &mut Diagnostics,
+) -> Option<T> {
+    super::json_extension::read_document_key(value).unwrap_or_else(|error| {
+        warnings.push(
+            &codes::READ_POWERMODELS_FIELD_DROPPED,
+            format!("top-level `{key}` does not have the PowerIO shape and was not read: {error}"),
+        );
+        None
+    })
+}
+
 fn default_base_frequency() -> f64 {
     crate::network::DEFAULT_BASE_FREQUENCY
 }
@@ -708,16 +741,18 @@ struct Document {
     /// PowerIO's area table; PowerModels keeps only each bus's area number.
     #[serde(default, deserialize_with = "lenient_table")]
     areas: Vec<(String, AreaRow)>,
-    /// The case metadata PowerIO wrote from a grid exchange format.
+    /// The case metadata PowerIO wrote from a grid exchange format. This and
+    /// the next two keys decode in `document_key`, so another tool's value
+    /// under the same name is reported rather than refusing the document.
     #[serde(default)]
-    case_metadata: Option<crate::network::CaseMetadata>,
+    case_metadata: Option<Value>,
     /// The substation, voltage level, and node hierarchy PowerIO wrote from
     /// a grid exchange format.
     #[serde(default)]
-    detailed_connectivity: Option<crate::network::DetailedConnectivity>,
+    detailed_connectivity: Option<Value>,
     /// The coordinate reference of the bus locations and branch routes.
     #[serde(default)]
-    geo: Option<crate::geo::GeoMeta>,
+    geo: Option<Value>,
 }
 
 /// One row of PowerIO's `areas` table: MATPOWER's `area_i` and
@@ -768,14 +803,6 @@ fn read_area(row: AreaRow) -> Option<crate::network::Area> {
     Some(area)
 }
 
-/// One branch rating set beyond rate_a, rate_b, and rate_c, in MVA.
-#[derive(serde::Deserialize)]
-struct RatingSetRow {
-    name: String,
-    #[serde(deserialize_with = "lenient_f64")]
-    rate_mva: Option<f64>,
-}
-
 fn bustype(code: i64) -> BusType {
     match code {
         2 => BusType::Pv,
@@ -811,9 +838,6 @@ struct BusRow {
     name: Option<String>,
     #[serde(rename = "source_id", default)]
     _source_id: Option<serde::de::IgnoredAny>,
-    /// A source-assigned identity PowerIO wrote; not a PowerModels field.
-    #[serde(default, deserialize_with = "lenient_string")]
-    uid: Option<String>,
     #[serde(flatten)]
     extras: crate::network::Extras,
 }
@@ -838,7 +862,7 @@ fn read_bus_id(id: Option<u64>, field: &str) -> Result<BusId> {
     Ok(BusId(id))
 }
 
-fn read_bus(row: BusRow, ascale: f64) -> Result<Bus> {
+fn read_bus(mut row: BusRow, ascale: f64) -> Result<Bus> {
     let id = row
         .bus_i
         .or_else(|| row.index.and_then(|i| u64::try_from(i).ok()))
@@ -860,7 +884,7 @@ fn read_bus(row: BusRow, ascale: f64) -> Result<Bus> {
         area: row.area.unwrap_or(0) as usize,
         zone: row.zone.unwrap_or(0) as usize,
         name: row.name,
-        uid: row.uid,
+        uid: super::json_extension::read_uid(&mut row.extras),
         location: None,
         extras: row.extras,
     };
@@ -882,21 +906,18 @@ struct LoadRow {
     status: Option<bool>,
     #[serde(rename = "source_id", default)]
     _source_id: Option<serde::de::IgnoredAny>,
-    /// A source-assigned identity PowerIO wrote; not a PowerModels field.
-    #[serde(default, deserialize_with = "lenient_string")]
-    uid: Option<String>,
     #[serde(flatten)]
     extras: crate::network::Extras,
 }
 
-fn read_load(row: LoadRow, pscale: f64) -> Result<Load> {
+fn read_load(mut row: LoadRow, pscale: f64) -> Result<Load> {
     Ok(Load {
         bus: read_bus_id(row.load_bus, "load_bus")?,
         p: row.pd.unwrap_or(0.0) * pscale,
         q: row.qd.unwrap_or(0.0) * pscale,
         voltage_model: None,
         in_service: row.status.unwrap_or(true),
-        uid: row.uid,
+        uid: super::json_extension::read_uid(&mut row.extras),
         extras: row.extras,
     })
 }
@@ -915,14 +936,11 @@ struct ShuntRow {
     status: Option<bool>,
     #[serde(rename = "source_id", default)]
     _source_id: Option<serde::de::IgnoredAny>,
-    /// A source-assigned identity PowerIO wrote; not a PowerModels field.
-    #[serde(default, deserialize_with = "lenient_string")]
-    uid: Option<String>,
     #[serde(flatten)]
     extras: crate::network::Extras,
 }
 
-fn read_shunt(row: ShuntRow, pscale: f64) -> Result<Shunt> {
+fn read_shunt(mut row: ShuntRow, pscale: f64) -> Result<Shunt> {
     let mut shunt = Shunt {
         bus: read_bus_id(row.shunt_bus, "shunt_bus")?,
         g: row.gs.unwrap_or(0.0) * pscale,
@@ -930,7 +948,7 @@ fn read_shunt(row: ShuntRow, pscale: f64) -> Result<Shunt> {
         in_service: row.status.unwrap_or(true),
         section_count: None,
         control: None,
-        uid: row.uid,
+        uid: super::json_extension::read_uid(&mut row.extras),
         extras: row.extras,
     };
     super::json_extension::read_shunt(&mut shunt);
@@ -939,9 +957,6 @@ fn read_shunt(row: ShuntRow, pscale: f64) -> Result<Shunt> {
 
 #[derive(Default, serde::Deserialize)]
 struct BranchRow {
-    /// PowerIO's rating sets beyond rate_a, rate_b, and rate_c.
-    #[serde(default)]
-    rating_sets: Vec<RatingSetRow>,
     #[serde(default, deserialize_with = "lenient_u64")]
     f_bus: Option<u64>,
     #[serde(default, deserialize_with = "lenient_u64")]
@@ -994,9 +1009,6 @@ struct BranchRow {
     qt: Option<f64>,
     #[serde(rename = "source_id", default)]
     _source_id: Option<serde::de::IgnoredAny>,
-    /// A source-assigned identity PowerIO wrote; not a PowerModels field.
-    #[serde(default, deserialize_with = "lenient_string")]
-    uid: Option<String>,
     #[serde(flatten)]
     extras: crate::network::Extras,
 }
@@ -1046,7 +1058,7 @@ fn read_branches(
 // An epsilon compare would silence the warning for real near-unit taps.
 #[allow(clippy::float_cmp)]
 fn read_branch(
-    row: BranchRow,
+    mut row: BranchRow,
     pscale: f64,
     ascale: f64,
     key: &str,
@@ -1092,14 +1104,8 @@ fn read_branch(
         rate_a: row.rate_a.unwrap_or(0.0) * pscale,
         rate_b: row.rate_b.unwrap_or(0.0) * pscale,
         rate_c: row.rate_c.unwrap_or(0.0) * pscale,
-        rating_sets: row
-            .rating_sets
-            .into_iter()
-            .filter_map(|set| {
-                set.rate_mva
-                    .map(|rate| crate::network::BranchRatingSet::new(set.name, rate))
-            })
-            .collect(),
+        // `json_extension::read_branch` reads the rating sets PowerIO wrote.
+        rating_sets: Vec::new(),
         current_ratings: (row.c_rating_a.is_some()
             || row.c_rating_b.is_some()
             || row.c_rating_c.is_some())
@@ -1121,7 +1127,7 @@ fn read_branch(
                 pt: row.pt.unwrap_or(0.0) * pscale,
                 qt: row.qt.unwrap_or(0.0) * pscale,
             }),
-        uid: row.uid,
+        uid: super::json_extension::read_uid(&mut row.extras),
         route: None,
         extras: row.extras,
     };
@@ -1155,14 +1161,11 @@ struct SwitchRow {
     qt: Option<f64>,
     #[serde(rename = "source_id", default)]
     _source_id: Option<serde::de::IgnoredAny>,
-    /// A source-assigned identity PowerIO wrote; not a PowerModels field.
-    #[serde(default, deserialize_with = "lenient_string")]
-    uid: Option<String>,
     #[serde(flatten)]
     extras: crate::network::Extras,
 }
 
-fn read_switch(row: SwitchRow, pscale: f64) -> Result<Switch> {
+fn read_switch(mut row: SwitchRow, pscale: f64) -> Result<Switch> {
     let closed = row.state.or(row.status).unwrap_or(true);
     Ok(Switch {
         from: read_bus_id(row.f_bus, "f_bus")?,
@@ -1174,7 +1177,7 @@ fn read_switch(row: SwitchRow, pscale: f64) -> Result<Switch> {
         qf: row.qf.map(|x| x * pscale),
         pt: row.pt.map(|x| x * pscale),
         qt: row.qt.map(|x| x * pscale),
-        uid: row.uid,
+        uid: super::json_extension::read_uid(&mut row.extras),
         extras: row.extras,
     })
 }
@@ -1205,9 +1208,6 @@ struct GenRow {
     gen_status: Option<bool>,
     #[serde(flatten)]
     cost: CostFields,
-    /// A source-assigned identity PowerIO wrote; not a PowerModels field.
-    #[serde(default, deserialize_with = "lenient_string")]
-    uid: Option<String>,
     #[serde(flatten)]
     extras: crate::network::Extras,
 }
@@ -1245,7 +1245,8 @@ fn read_gen(row: &GenRow, pscale: f64, base_mva: f64, per_unit: bool) -> Result<
         regulating_terminal: None,
         regulated_bus: None,
         active_power_control: None,
-        uid: row.uid.clone(),
+        // `read_generator` reads the `uid` PowerIO wrote.
+        uid: None,
     };
     super::json_extension::read_generator(&mut generator, &row.extras);
     Ok(generator)
@@ -1381,14 +1382,11 @@ struct DclineRow {
     cost: CostFields,
     #[serde(rename = "source_id", default)]
     _source_id: Option<serde::de::IgnoredAny>,
-    /// A source-assigned identity PowerIO wrote; not a PowerModels field.
-    #[serde(default, deserialize_with = "lenient_string")]
-    uid: Option<String>,
     #[serde(flatten)]
     extras: crate::network::Extras,
 }
 
-fn read_hvdc(row: DclineRow, pscale: f64, base_mva: f64, per_unit: bool) -> Result<Hvdc> {
+fn read_hvdc(mut row: DclineRow, pscale: f64, base_mva: f64, per_unit: bool) -> Result<Hvdc> {
     // Aggregate bounds come from PowerModels' raw originals (mp_pmin/mp_pmax);
     // fall back to the from-end per-unit bounds for input that lacks them.
     let pmin = row
@@ -1424,7 +1422,7 @@ fn read_hvdc(row: DclineRow, pscale: f64, base_mva: f64, per_unit: bool) -> Resu
         converter1: None,
         converter2: None,
         cost,
-        uid: row.uid,
+        uid: super::json_extension::read_uid(&mut row.extras),
         extras: row.extras,
     };
     super::json_extension::read_hvdc(&mut hvdc);
@@ -1473,14 +1471,11 @@ struct StorageRow {
     status: Option<bool>,
     #[serde(rename = "source_id", default)]
     _source_id: Option<serde::de::IgnoredAny>,
-    /// A source-assigned identity PowerIO wrote; not a PowerModels field.
-    #[serde(default, deserialize_with = "lenient_string")]
-    uid: Option<String>,
     #[serde(flatten)]
     extras: crate::network::Extras,
 }
 
-fn read_storage(row: StorageRow, pscale: f64) -> Result<Storage> {
+fn read_storage(mut row: StorageRow, pscale: f64) -> Result<Storage> {
     let mut storage = Storage {
         bus: read_bus_id(row.storage_bus, "storage_bus")?,
         ps: row.ps.unwrap_or(0.0),
@@ -1502,7 +1497,7 @@ fn read_storage(row: StorageRow, pscale: f64) -> Result<Storage> {
         q_loss: row.q_loss.unwrap_or(0.0) * pscale,
         in_service: row.status.unwrap_or(true),
         active_power_control: None,
-        uid: row.uid,
+        uid: super::json_extension::read_uid(&mut row.extras),
         extras: row.extras,
     };
     super::json_extension::read_storage(&mut storage);
@@ -1593,6 +1588,76 @@ mod tests {
             back.branches()[0].rating_sets,
             net.branches()[0].rating_sets
         );
+    }
+
+    /// `rating_sets` is a PowerIO extension key another tool may spell its
+    /// own way: a value without PowerIO's shape stays an extra and the
+    /// document still reads.
+    #[test]
+    fn foreign_rating_sets_stay_extras() {
+        for rating_sets in [
+            "null",
+            "[250, 300]",
+            r#"[{"name": "winter"}]"#,
+            r#"{"winter": 300}"#,
+        ] {
+            let doc = format!(
+                r#"{{"baseMVA":100.0,"per_unit":true,
+                "bus":{{"1":{{"bus_i":1,"bus_type":3}},"2":{{"bus_i":2,"bus_type":1}}}},
+                "branch":{{"1":{{"f_bus":1,"t_bus":2,"br_r":0.01,"br_x":0.1,"rating_sets":{rating_sets}}}}}}}"#
+            );
+            let net = parse_powermodels_json(&doc).unwrap_or_else(|e| panic!("{rating_sets}: {e}"));
+            let branch = &net.branches()[0];
+            assert!(branch.rating_sets.is_empty(), "{rating_sets}");
+            let stated: Value = serde_json::from_str(rating_sets).unwrap();
+            assert_eq!(
+                branch.extras.get("rating_sets"),
+                Some(&stated),
+                "{rating_sets}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_uid_that_is_not_a_string_stays_an_extra() {
+        let doc = r#"{"baseMVA":100.0,"per_unit":true,
+            "bus":{"1":{"bus_i":1,"bus_type":3,"uid":17},
+                   "2":{"bus_i":2,"bus_type":1,"uid":"bus-two"}},
+            "gen":{"1":{"gen_bus":1,"uid":"gen-one"}}}"#;
+        let net = parse_powermodels_json(doc).unwrap();
+        assert_eq!(net.buses()[0].uid, None);
+        assert_eq!(net.buses()[0].extras.get("uid"), Some(&Value::from(17)));
+        // A string is the identity PowerIO wrote, and leaves the extras.
+        assert_eq!(net.buses()[1].uid.as_deref(), Some("bus-two"));
+        assert!(!net.buses()[1].extras.contains_key("uid"));
+        assert_eq!(net.generators()[0].uid.as_deref(), Some("gen-one"));
+    }
+
+    #[test]
+    fn foreign_document_level_keys_are_reported_not_refused() {
+        let doc = r#"{"baseMVA":100.0,"per_unit":true,
+            "geo":"EPSG:4326",
+            "case_metadata":"2026-01-01",
+            "detailed_connectivity":"none",
+            "bus":{"1":{"bus_i":1,"bus_type":3}}}"#;
+        let parsed = crate::parse_str(doc, "powermodels-json").unwrap();
+        assert!(parsed.network.geo().is_none());
+        assert_eq!(
+            *parsed.network.case_metadata(),
+            crate::network::CaseMetadata::default()
+        );
+        assert!(parsed.network.detailed_connectivity().is_none());
+        let dropped: Vec<_> = parsed
+            .render_diagnostics()
+            .into_iter()
+            .filter(|d| d.contains("READ.POWERMODELS.FIELD_DROPPED"))
+            .collect();
+        for key in ["geo", "case_metadata", "detailed_connectivity"] {
+            assert!(
+                dropped.iter().any(|d| d.contains(&format!("`{key}`"))),
+                "{key}: {dropped:?}"
+            );
+        }
     }
 
     #[test]
