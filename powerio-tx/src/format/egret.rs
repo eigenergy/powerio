@@ -543,16 +543,19 @@ struct SystemSection {
     /// PowerIO's system frequency in Hz; egret states none.
     #[serde(default)]
     base_frequency: Option<Value>,
-    /// The case metadata PowerIO wrote from a grid exchange format.
+    /// The case metadata PowerIO wrote from a grid exchange format. This and
+    /// the next two keys decode in `build_from_document`, so another tool's
+    /// value under the same name is ignored rather than refusing the
+    /// document.
     #[serde(default)]
-    case_metadata: Option<crate::network::CaseMetadata>,
+    case_metadata: Option<Value>,
     /// The substation, voltage level, and node hierarchy PowerIO wrote from
     /// a grid exchange format.
     #[serde(default)]
-    detailed_connectivity: Option<crate::network::DetailedConnectivity>,
+    detailed_connectivity: Option<Value>,
     /// The coordinate reference of the bus locations and branch routes.
     #[serde(default)]
-    geo: Option<crate::geo::GeoMeta>,
+    geo: Option<Value>,
     #[serde(default)]
     time_keys: Option<Value>,
 }
@@ -643,9 +646,20 @@ fn build_from_document(document: Document, name_hint: Option<&str>) -> Result<Ba
     if !base_frequency.is_finite() || base_frequency <= 0.0 {
         return Err(bad("system.base_frequency is not a positive frequency"));
     }
-    let case_metadata = system.case_metadata.unwrap_or_default();
-    let detailed_connectivity = system.detailed_connectivity.map(std::sync::Arc::new);
-    let geo = system.geo;
+    // The egret reader has no diagnostics channel, so a value without
+    // PowerIO's shape is ignored, as every other unknown `system` key is.
+    let case_metadata = super::json_extension::read_document_key(system.case_metadata)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let detailed_connectivity =
+        super::json_extension::read_document_key(system.detailed_connectivity)
+            .ok()
+            .flatten()
+            .map(std::sync::Arc::new);
+    let geo = super::json_extension::read_document_key(system.geo)
+        .ok()
+        .flatten();
     let elements = document
         .elements
         .ok_or_else(|| bad("missing `elements` object"))?;
@@ -1109,14 +1123,11 @@ struct BusRow {
     zone: Option<Value>,
     #[serde(default)]
     name: Option<Value>,
-    /// A source-assigned identity PowerIO wrote; not an egret field.
-    #[serde(default)]
-    uid: Option<Value>,
     #[serde(flatten)]
     extras: Extras,
 }
 
-fn read_bus(key: &str, row: BusRow) -> Result<Bus> {
+fn read_bus(key: &str, mut row: BusRow) -> Result<Bus> {
     let id = key
         .trim()
         .parse::<usize>()
@@ -1143,7 +1154,7 @@ fn read_bus(key: &str, row: BusRow) -> Result<Bus> {
             .as_ref()
             .and_then(Value::as_str)
             .map(str::to_string),
-        uid: uid_cell(row.uid.as_ref())?,
+        uid: super::json_extension::read_uid(&mut row.extras),
         location: None,
         extras: row.extras,
     };
@@ -1161,21 +1172,18 @@ struct LoadRow {
     q_load: Option<Value>,
     #[serde(default)]
     in_service: Option<Value>,
-    /// A source-assigned identity PowerIO wrote; not an egret field.
-    #[serde(default)]
-    uid: Option<Value>,
     #[serde(flatten)]
     extras: Extras,
 }
 
-fn read_load(row: LoadRow) -> Result<Load> {
+fn read_load(mut row: LoadRow) -> Result<Load> {
     Ok(Load {
         bus: id_cell(row.bus.as_ref(), "bus")?,
         p: num_cell(row.p_load.as_ref(), "p_load", 0.0)?,
         q: num_cell(row.q_load.as_ref(), "q_load", 0.0)?,
         voltage_model: None,
         in_service: bool_cell(row.in_service.as_ref(), "in_service", true)?,
-        uid: uid_cell(row.uid.as_ref())?,
+        uid: super::json_extension::read_uid(&mut row.extras),
         extras: row.extras,
     })
 }
@@ -1193,14 +1201,11 @@ struct ShuntRow {
     /// Absorbed so it stays out of extras, as the exclude list always did.
     #[serde(rename = "shunt_type", default)]
     _shunt_type: Option<serde::de::IgnoredAny>,
-    /// A source-assigned identity PowerIO wrote; not an egret field.
-    #[serde(default)]
-    uid: Option<Value>,
     #[serde(flatten)]
     extras: Extras,
 }
 
-fn read_shunt(row: ShuntRow) -> Result<Shunt> {
+fn read_shunt(mut row: ShuntRow) -> Result<Shunt> {
     let mut shunt = Shunt {
         bus: id_cell(row.bus.as_ref(), "bus")?,
         g: num_cell(row.gs.as_ref(), "gs", 0.0)?,
@@ -1208,7 +1213,7 @@ fn read_shunt(row: ShuntRow) -> Result<Shunt> {
         in_service: bool_cell(row.in_service.as_ref(), "in_service", true)?,
         section_count: None,
         control: None,
-        uid: uid_cell(row.uid.as_ref())?,
+        uid: super::json_extension::read_uid(&mut row.extras),
         extras: row.extras,
     };
     super::json_extension::read_shunt(&mut shunt);
@@ -1245,32 +1250,12 @@ struct BranchRow {
     angle_diff_min: Option<Value>,
     #[serde(default)]
     angle_diff_max: Option<Value>,
-    /// A source-assigned identity PowerIO wrote; not an egret field.
-    #[serde(default)]
-    uid: Option<Value>,
     #[serde(flatten)]
     extras: Extras,
 }
 
 fn read_branch(row: BranchRow) -> Result<Branch> {
-    // PowerIO's rating sets beyond the three egret ratings, in MVA.
     let mut extras = row.extras;
-    let rating_sets = match extras.remove("rating_sets") {
-        None | Some(Value::Null) => Vec::new(),
-        Some(sets) => sets
-            .as_array()
-            .ok_or_else(|| bad("branch `rating_sets` is not an array"))?
-            .iter()
-            .map(|set| {
-                let name = set
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| bad("a branch rating set has no `name`"))?;
-                let rate = num_cell(set.get("rate_mva"), "rate_mva", f64::NAN)?;
-                Ok(crate::network::BranchRatingSet::new(name, rate))
-            })
-            .collect::<Result<Vec<_>>>()?,
-    };
     let is_xf = row.branch_type.as_ref().and_then(Value::as_str) == Some("transformer");
     let mut branch = Branch {
         name: None,
@@ -1287,7 +1272,8 @@ fn read_branch(row: BranchRow) -> Result<Branch> {
         rate_a: num_cell(row.rating_long_term.as_ref(), "rating_long_term", 0.0)?,
         rate_b: num_cell(row.rating_short_term.as_ref(), "rating_short_term", 0.0)?,
         rate_c: num_cell(row.rating_emergency.as_ref(), "rating_emergency", 0.0)?,
-        rating_sets,
+        // `json_extension::read_branch` reads the rating sets PowerIO wrote.
+        rating_sets: Vec::new(),
         current_ratings: None,
         tap: if is_xf {
             num_cell(
@@ -1308,7 +1294,7 @@ fn read_branch(row: BranchRow) -> Result<Branch> {
         angmax: num_cell(row.angle_diff_max.as_ref(), "angle_diff_max", 360.0)?,
         control: None,
         solution: None,
-        uid: uid_cell(row.uid.as_ref())?,
+        uid: super::json_extension::read_uid(&mut extras),
         route: None,
         extras,
     };
@@ -1344,22 +1330,10 @@ struct GenRow {
     shutdown_cost: Option<Value>,
     #[serde(default)]
     p_cost: Option<Value>,
-    /// A source-assigned identity PowerIO wrote; not an egret field.
-    #[serde(default)]
-    uid: Option<Value>,
     /// The other keys, among them MATPOWER's capability and ramp columns,
     /// which PowerIO writes by their MATPOWER names.
     #[serde(flatten)]
     other: Extras,
-}
-
-/// A row's `uid`, which PowerIO writes as a string.
-fn uid_cell(value: Option<&Value>) -> Result<Option<String>> {
-    match value {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(uid)) => Ok(Some(uid.clone())),
-        Some(_) => Err(bad("`uid` is not a string")),
-    }
 }
 
 fn read_gen(row: &GenRow) -> Result<Generator> {
@@ -1392,7 +1366,8 @@ fn read_gen(row: &GenRow) -> Result<Generator> {
         regulating_terminal: None,
         regulated_bus: None,
         active_power_control: None,
-        uid: uid_cell(row.uid.as_ref())?,
+        // `read_generator` reads the `uid` PowerIO wrote.
+        uid: None,
     };
     super::json_extension::read_generator(&mut generator, &row.other);
     Ok(generator)
@@ -1434,9 +1409,6 @@ struct DcBranchRow {
     loss0: Option<Value>,
     #[serde(default)]
     loss_factor: Option<Value>,
-    /// A source-assigned identity PowerIO wrote; not an egret field.
-    #[serde(default)]
-    uid: Option<Value>,
     #[serde(flatten)]
     extras: Extras,
 }
@@ -1482,7 +1454,7 @@ fn read_dc_branch(row: DcBranchRow) -> Result<Hvdc> {
         converter1: None,
         converter2: None,
         cost,
-        uid: uid_cell(row.uid.as_ref())?,
+        uid: super::json_extension::read_uid(&mut extras),
         extras,
     };
     super::json_extension::read_hvdc(&mut hvdc);
@@ -1678,6 +1650,64 @@ mod tests {
         assert_eq!((h.pmin, h.pmax), (-50.0, 60.0));
         assert_eq!((h.qminf, h.qmaxf, h.qmint, h.qmaxt), (-5.0, 5.0, -4.0, 4.5));
         assert_eq!((h.loss0, h.loss1), (0.2, 0.03));
+    }
+
+    /// `rating_sets` is a PowerIO extension key another tool may spell its
+    /// own way: a value without PowerIO's shape stays an extra (a set with no
+    /// rate is not a NaN rating) and the document still reads.
+    #[test]
+    fn foreign_rating_sets_stay_extras() {
+        for rating_sets in [r#"[{"name": "winter"}]"#, r#"{"winter": 300}"#, "[250]"] {
+            let doc = format!(
+                r#"{{"elements":{{
+                "bus":{{"1":{{"matpower_bustype":"ref"}},"2":{{"matpower_bustype":"PQ"}}}},
+                "branch":{{"1":{{"from_bus":"1","to_bus":"2","reactance":0.1,"rating_sets":{rating_sets}}}}}}},
+                "system":{{"baseMVA":100.0,"reference_bus":"1"}}}}"#
+            );
+            let net = parse_egret_json(&doc).unwrap_or_else(|e| panic!("{rating_sets}: {e}"));
+            let branch = &net.branches()[0];
+            assert!(
+                branch.rating_sets.is_empty(),
+                "{rating_sets}: {:?}",
+                branch.rating_sets
+            );
+            let stated: Value = serde_json::from_str(rating_sets).unwrap();
+            assert_eq!(
+                branch.extras.get("rating_sets"),
+                Some(&stated),
+                "{rating_sets}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_uid_that_is_not_a_string_stays_an_extra() {
+        let doc = r#"{"elements":{
+            "bus":{"1":{"matpower_bustype":"ref","uid":17},
+                   "2":{"matpower_bustype":"PQ","uid":"bus-two"}},
+            "generator":{"1":{"bus":"1","uid":"gen-one"}}},
+            "system":{"baseMVA":100.0,"reference_bus":"1"}}"#;
+        let net = parse_egret_json(doc).unwrap();
+        assert_eq!(net.buses()[0].uid, None);
+        assert_eq!(net.buses()[0].extras.get("uid"), Some(&Value::from(17)));
+        // A string is the identity PowerIO wrote, and leaves the extras.
+        assert_eq!(net.buses()[1].uid.as_deref(), Some("bus-two"));
+        assert!(!net.buses()[1].extras.contains_key("uid"));
+        assert_eq!(net.generators()[0].uid.as_deref(), Some("gen-one"));
+    }
+
+    #[test]
+    fn foreign_system_keys_are_ignored_not_refused() {
+        let doc = r#"{"elements":{"bus":{"1":{"matpower_bustype":"ref"}}},
+            "system":{"baseMVA":100.0,"reference_bus":"1","geo":"EPSG:4326",
+                      "case_metadata":"2026-01-01","detailed_connectivity":"none"}}"#;
+        let net = parse_egret_json(doc).unwrap();
+        assert!(net.geo().is_none());
+        assert_eq!(
+            *net.case_metadata(),
+            crate::network::CaseMetadata::default()
+        );
+        assert!(net.detailed_connectivity().is_none());
     }
 
     /// The keys PowerIO adds to an egret document carry what egret's fields
