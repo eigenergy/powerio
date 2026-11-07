@@ -1,68 +1,67 @@
-# From 0.11 to 1.0
+# From 0.11 to 0.12
 
-PowerIO 1.0 starts the 1.x release series. From 1.0 on, the release series
-says what is compatible with what: within 1.x, any release reads the PowerIO
-IR documents any other 1.x release writes, the C ABI only gains symbols, and
-the public Rust, Python, and Julia APIs change only additively. This page
-lists what changes for code and data written against 0.11.
+PowerIO 0.12 starts a new release series. From 0.12 on, the release series
+says what is compatible with what: within 0.12.x, any release reads the
+PowerIO IR documents any other 0.12 release writes, and the C ABI only gains
+symbols. This page lists what changes for code and data written against 0.11.
 
 ## PowerIO IR documents
 
-The header's `version` was the integer `2` in every 0.11 document. From 1.0
+The header's `version` was the integer `2` in every 0.11 document. From 0.12
 it names the release whose schema the document follows, as a string:
 
 ```json
 {
   "schema": "pio-ir",
-  "version": "1.0.0",
-  "producer": { "name": "powerio", "version": "1.0.0" }
+  "version": "0.12.0",
+  "producer": { "name": "powerio", "version": "0.12.0" }
 }
 ```
 
 `producer` is unchanged. It names the software that wrote the document,
 which need not be PowerIO, and it does not decide whether a document is read.
 
-**Reading.** PowerIO 1.x reads:
+**Reading.** PowerIO 0.12.x reads:
 
-- a document whose `version` is any 1.x release, `"1.0.0"` through
-  `"1.y.z"`, including one later than the reader. A later release can add
+- a document whose `version` is any 0.12 release, `"0.12.0"` through
+  `"0.12.z"`, including one later than the reader. A later release can add
   structural types; a reader refuses a type it does not implement and keeps
   reading the others.
 - every 0.11 document, `"version": 2`, with the same meaning. Serializing it
-  again writes `"version": "1.0.0"`.
+  again writes `"version": "0.12.0"`.
 
 It refuses everything else with `READ.MODULE.UNSUPPORTED`, naming the version
-and producer the document states. A later release series (`"2.0.0"`) needs
-a newer PowerIO. An earlier release, the integer `1` of a
+and producer the document states. A later release series (`"0.13.0"`,
+`"1.0.0"`) needs a newer PowerIO. An earlier release, the integer `1` of a
 0.10 document, or a string that is not a `MAJOR.MINOR.PATCH` release has to be
 regenerated from its source data.
 
-**0.11 readers.** A 0.11 release refuses a 1.0 document. Its message names
-`version "1.0.0"` and says to regenerate the document; read it with PowerIO
-1.0 instead. A consumer that has to stay on 0.11 needs documents written by
+**0.11 readers.** A 0.11 release refuses a 0.12 document. Its message names
+`version "0.12.0"` and says to regenerate the document; read it with PowerIO
+0.12 instead. A consumer that has to stay on 0.11 needs documents written by
 0.11.
 
-**Rust.** `powerio::IR_VERSION` is now a `&str`, `"1.0.0"`, and
+**Rust.** `powerio::IR_VERSION` is now a `&str`, `"0.12.0"`, and
 `powerio::IR_MIN_VERSION` is gone. Code that compared the integer should
 compare the release series instead, or leave the decision to `deserialize`.
 `powerio::IR_SCHEMA_ID` is
-`https://powerio.dev/schema/pio-ir/1.0.0/schema.json`.
+`https://powerio.dev/schema/pio-ir/0.12.0/schema.json`.
 
 **Python.** `powerio.versions()["powerio_ir"]` is now
-`{"schema": "pio-ir", "version": "1.0.0"}`, with the version a string.
+`{"schema": "pio-ir", "version": "0.12.0"}`, with the version a string.
 
 **C.** The JSON that `pio_schema_report` returns states `powerio_ir.version`
-as the release string, `"1.0.0"`, instead of the integer `2`.
+as the release string, `"0.12.0"`, instead of the integer `2`.
 
 **Code that inspects documents.** To recognize PowerIO IR, check
 `"schema": "pio-ir"` and let `deserialize` decide whether it reads the
-version. A check for `"version": 2` no longer matches the documents 1.0
+version. A check for `"version": 2` no longer matches the documents 0.12
 writes.
 
 **Schema files.** Each release publishes its own schema at
 `docs/schema/pio-ir/<release>/schema.json`, served from
 `https://powerio.dev/schema/pio-ir/<release>/schema.json`, so a document's
-`version` names its schema file directly. Validate a 1.0 document against
+`version` names its schema file directly. Validate a 0.12 document against
 the file its `version` names. The 0.11 files under `pio-ir/2/` keep their
 bytes and identifiers, and still describe 0.11 documents. See
 [PowerIO IR](pio-json-schema.md) for the rule and `docs/schema/README.md`
@@ -72,7 +71,7 @@ for every file.
 
 PowerIO 0.11 gave the C ABI its own number, 7, which a program compared with
 the library at load. The number only ever changed when a new release series
-began, so PowerIO 1.0 removes it and states the release instead.
+began, so PowerIO 0.12 removes it and states the release instead.
 
 Removed, with no alias:
 
@@ -88,23 +87,24 @@ Added:
   a `PioVersionView` with `major`, `minor`, and `patch` fields.
 
 `pio_version()` still returns the release as text. A prerelease such as
-`1.0.0-rc.1` states its core release, `1.0.0`, in the numbers and the whole
+`0.12.0-rc.1` states its core release, `0.12.0`, in the numbers and the whole
 version in `pio_version()`.
 
 A program compiled against the header of release X.Y.Z works with any library
-that is in the same release series, as Cargo defines it (the same major
-number from 1.0 on), and is release X.Y.Z or newer. Within a release series the C ABI only gains symbols: no
+that is in the same release series, as Cargo defines it (the same major and
+minor numbers before 1.0, the same major number from 1.0 on), and is release
+X.Y.Z or newer. Within a release series the C ABI only gains symbols: no
 symbol is removed, and no signature or struct layout changes.
 
-| 0.11 | 1.0 |
+| 0.11 | 0.12 |
 |---|---|
 | `pio_abi_version() == PIO_ABI_VERSION` | `pio_version_numbers()` is in the header's release series, at the header's release or newer ([the check in C](capi.md#versions-and-compatibility)) |
-| `#if PIO_ABI_VERSION != 7` | `#if PIO_VERSION_MAJOR != 1` |
+| `#if PIO_ABI_VERSION != 7` | `#if PIO_VERSION_MAJOR != 0 \|\| PIO_VERSION_MINOR != 12` |
 | `"abi"` in the `pio_schema_report` document | `"powerio_version"` |
 
 A 0.11 library has no `pio_version_numbers`. A program that loads the library
 with `dlopen` or `LoadLibrary` can look the symbol up first and treat its
-absence as a library older than 1.0.
+absence as a library older than 0.12.
 
 PowerIO.jl applies the same rule. It removes `abi_version()` and keeps
 `library_version()`. Before its first call into a library, PowerIO.jl checks
@@ -152,10 +152,10 @@ unit with an off-nominal winding 1 ratio the difference reached `|Ym|` in
 
 ## Removed compatibility shims
 
-PowerIO 0.11 kept these only so that 0.11.x code kept working; 1.0 removes
+PowerIO 0.11 kept these only so that 0.11.x code kept working; 0.12 removes
 them with no alias.
 
-| 0.11 | 1.0 |
+| 0.11 | 0.12 |
 |---|---|
 | Python `powerio.parse_display(path)`, which returned `DisplayData(kind, PwdDisplay(...))` | `powerio.parse(path)`, which returns a `GeoLayer` with diagnostics and reads under the input byte limits |
 | Python `DisplayData`, `PwdDisplay`, `PwdSubstation` | the `GeoLayer` features; Rust keeps `PwdDisplay` and `to_geo_layer_from_pwd` |

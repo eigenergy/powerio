@@ -4,7 +4,7 @@
 use std::path::Path;
 
 const SCHEMA_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/schema");
-const CURRENT_SCHEMA: &str = "pio-ir/1.0.0/schema.json";
+const CURRENT_SCHEMA: &str = "pio-ir/0.12.0/schema.json";
 
 /// The schema files 0.11 releases published, all for documents stating the
 /// integer version 2. This build reads those documents.
@@ -21,7 +21,7 @@ const SCHEMAS_0_11: [&str; 8] = [
 
 /// The release a `pio-ir/<release>/schema.json` path names, as
 /// `(major, minor, patch)`: three decimal numbers without signs or leading
-/// zeros, as the reader accepts. From 1.0.0 on, every release has such a
+/// zeros, as the reader accepts. From 0.12.0 on, every release has such a
 /// file.
 fn release_of(path: &str) -> Option<(u64, u64, u64)> {
     fn number(part: &str) -> Option<u64> {
@@ -263,14 +263,14 @@ fn the_schema_directory_contains_the_documented_powerio_ir_history() {
             "pio-ir/2/schema.json",
         ]
     );
-    // From 1.0.0 on, each release adds `pio-ir/<release>/schema.json`, and
+    // From 0.12.0 on, each release adds `pio-ir/<release>/schema.json`, and
     // none is ahead of this build.
     assert!(releases.iter().any(|file| file == CURRENT_SCHEMA));
     for file in &releases {
         let release = release_of(file).unwrap();
         assert!(
-            (1, 0, 0) <= release && release <= release_of(CURRENT_SCHEMA).unwrap(),
-            "{file} is not a release from 1.0.0 through this build"
+            (0, 12, 0) <= release && release <= release_of(CURRENT_SCHEMA).unwrap(),
+            "{file} is not a release from 0.12.0 through this build"
         );
     }
 }
@@ -346,7 +346,7 @@ fn historical_schemas_preserve_their_original_identifiers() {
     }
 }
 
-/// From 1.0.0 on, a release's schema file is served at its own path and
+/// From 0.12.0 on, a release's schema file is served at its own path and
 /// describes documents whose `version` names that release.
 #[test]
 fn release_schemas_name_their_release() {
@@ -396,7 +396,7 @@ fn assert_partial_transformer_schema_preserved(
 ) {
     // Nondefault winding states have their own tagged nested record;
     // the complete historical transformer body stays unchanged, apart from
-    // the optional `magnetizing_connection` 1.0 adds.
+    // the optional `magnetizing_connection` 0.12 adds.
     let branches = current_defs["Transformer3W"]["anyOf"].as_array().unwrap();
     assert_eq!(branches.len(), 2);
     // From 0.11.6 the published definition is already the two-branch union.
@@ -449,7 +449,7 @@ fn assert_partial_transformer_schema_preserved(
     );
 }
 
-/// The 1.0 SOCWR values definition with its branch flow keys spelled as 0.11
+/// The 0.12 SOCWR values definition with its branch flow keys spelled as 0.11
 /// spelled them.
 fn with_0_11_socwr_flow_names(current: &serde_json::Value) -> serde_json::Value {
     const RENAMED: [(&str, &str); 4] = [
@@ -477,9 +477,9 @@ fn with_0_11_socwr_flow_names(current: &serde_json::Value) -> serde_json::Value 
     definition
 }
 
-/// A transformer body without the one field 1.0 adds to it. `magnetizing_connection`
+/// A transformer body without the one field 0.12 adds to it. `magnetizing_connection`
 /// is optional, and a document without it states the star point, the meaning
-/// `mag_g` and `mag_b` have in every 0.11 document; 1.0 rewords those two
+/// `mag_g` and `mag_b` have in every 0.11 document; 0.12 rewords those two
 /// fields' description to point at it. Nothing else may differ.
 fn without_magnetizing_connection(
     body: &serde_json::Value,
@@ -522,11 +522,11 @@ fn without_magnetizing_connection(
 /// build reads the documents 0.11 wrote. See [`assert_reads_documents_of`].
 #[test]
 fn the_current_schema_reads_every_0_11_document() {
-    // Reading 0.11 documents is a choice the 1.x series made; the next
+    // Reading 0.11 documents is a choice the 0.12.x series made; the next
     // series makes its own.
     assert_eq!(
         series(release_of(CURRENT_SCHEMA).unwrap()),
-        (1, 0),
+        (0, 12),
         "{CURRENT_SCHEMA} starts a new release series. Decide which earlier series it reads, \
          then update `SCHEMAS_0_11` here, the reader in powerio/src/stored/convert.rs, and \
          the docs that state the rule."
@@ -613,7 +613,7 @@ fn assert_reads_documents_of(earlier: &str) {
         } else if name == "Transformer3W" {
             assert_partial_transformer_schema_preserved(definition, &current_defs, earlier);
         } else if name == "SocwrOpfValues" {
-            // 1.0 names the SOCWR branch flows as every other solution does
+            // 0.12 names the SOCWR branch flows as every other solution does
             // (`branch_from_active_flow`); the reader still accepts the 0.11
             // keys, so a 0.11 document reads with the same values.
             assert_eq!(

@@ -18915,7 +18915,7 @@
       "type": "object"
     }
   },
-  "$id": "https://powerio.dev/schema/pio-ir/1.0.0/schema.json",
+  "$id": "https://powerio.dev/schema/pio-ir/0.12.0/schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -18958,7 +18958,7 @@
       "$ref": "#/$defs/StoredValue"
     },
     "version": {
-      "const": "1.0.0",
+      "const": "0.12.0",
       "type": "string"
     }
   },

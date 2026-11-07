@@ -63,10 +63,10 @@ mod parse_options_tests;
 /// before 1.0, the same major number from 1.0 on), at this release or a newer
 /// one. Compare the three numbers with `pio_version_numbers` before you use
 /// the library.
-pub const PIO_VERSION_MAJOR: u32 = 1;
+pub const PIO_VERSION_MAJOR: u32 = 0;
 
 /// Minor number of the PowerIO release this header was generated from.
-pub const PIO_VERSION_MINOR: u32 = 0;
+pub const PIO_VERSION_MINOR: u32 = 12;
 
 /// Patch number of the PowerIO release this header was generated from.
 pub const PIO_VERSION_PATCH: u32 = 0;
@@ -95,7 +95,7 @@ impl PioStringView {
     }
 }
 
-/// The three numbers of a PowerIO release, such as 1.0.0.
+/// The three numbers of a PowerIO release, such as 0.12.0.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct PioVersionView {
@@ -21282,7 +21282,7 @@ mod tests {
         );
         let version = pio_version_numbers();
         assert_eq!([version.major, version.minor, version.patch], numbers);
-        // A prerelease (1.0.0-rc.1) states its core release in the numbers
+        // A prerelease (0.12.0-rc.1) states its core release in the numbers
         // and the whole version in the string.
         let text = unsafe { view_text(pio_version()) };
         assert_eq!(text, powerio::VERSION);

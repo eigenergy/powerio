@@ -843,7 +843,7 @@ def test_parse_reads_a_powerworld_display_to_a_geo_layer():
     path = DATA / "powerworld" / "ACTIVSg200.pwd"
     layer = powerio.parse(path).value
 
-    # 1.0 removed parse_display and its raw record (#612); parse is the one
+    # 0.12 removed parse_display and its raw record (#612); parse is the one
     # way to read a display.
     for removed in ("parse_display", "DisplayData", "PwdDisplay", "PwdSubstation"):
         assert not hasattr(powerio, removed), removed

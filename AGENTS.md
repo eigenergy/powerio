@@ -306,18 +306,20 @@ docs/                         the mdBook guide, the schema archive, release note
   Retained source bytes are not serialized. The header is `"schema": "pio-ir"`
   with `"version"` naming the release whose schema the document follows;
   `IR_VERSION` in `powerio/src/lib.rs` is that release for this build. The
-  reader accepts its own release series (one major release from 1.0 on) and the integer version `2` every 0.11 release wrote. Within a
+  reader accepts its own release series (one minor release before 1.0, such as
+  0.12.x; one major release from 1.0 on) and the integer version `2` every
+  0.11 release wrote. Within a
   series, releases add structural types and existing type layouts and
   meanings stay unchanged; older readers reject types they do not implement.
   The DTOs in `powerio/src/stored/dto.rs` define the document layout.
   Regenerate the schema named by `IR_SCHEMA_ID`, currently
-  `docs/schema/pio-ir/1.0.0/schema.json`. Every release adds its own
+  `docs/schema/pio-ir/0.12.0/schema.json`. Every release adds its own
   `pio-ir/<release>/schema.json`; `IR_VERSION` is at or after the workspace
   version and equals it in a release. Published schema files, including all
   of `pio-ir/2/`, remain byte-exact.
 - **C ABI compatibility.** A program compiled against the header of release
   X.Y.Z works with any library from the same release series (the same major
-  number from 1.0 on) at X.Y.Z
+  and minor numbers before 1.0, the same major number from 1.0 on) at X.Y.Z
   or newer. Within a release series the C ABI only gains symbols: never
   remove a `pio_*` function, struct, or `#define`, and never change a
   signature or struct layout. `scripts/check-capi-header.py` (in
