@@ -891,3 +891,53 @@ fn tap_adjusted_series_matches_the_complex_ac_flat_angle_slope() {
         assert!((derivative - coefficient).abs() < 1e-7);
     }
 }
+
+#[test]
+fn source_zero_tap_is_unity_for_every_dc_variant() {
+    let mut network = BalancedNetwork::in_memory(
+        "zero tap",
+        100.0,
+        vec![
+            Bus::new(BusId(1), BusType::Ref, 230.0),
+            Bus::new(BusId(2), BusType::Pq, 230.0),
+        ],
+        vec![Branch::new(BusId(1), BusId(2), 0.03, 0.1)],
+    );
+    network
+        .generators_mut()
+        .push(powerio_tx::Generator::new(BusId(1)));
+    network.branches_mut()[0].shift = 5.0;
+    for formula in [
+        BranchSusceptanceFormula::SeriesSusceptance,
+        BranchSusceptanceFormula::SeriesSusceptanceNoPhaseShift,
+        BranchSusceptanceFormula::TapAdjustedReactance,
+        BranchSusceptanceFormula::TapAdjustedSeriesSusceptance,
+        BranchSusceptanceFormula::ReactanceOnly,
+    ] {
+        let mut build = |tap| {
+            network.branches_mut()[0].tap = tap;
+            DcOperators::build(
+                &DcPfInstance::from_network(network.clone())
+                    .unwrap()
+                    .with_branch_susceptance_formula(formula),
+            )
+            .unwrap()
+        };
+        let zero = build(0.0);
+        let unity = build(1.0);
+        for (a, b) in zero
+            .calc_branch_susceptances()
+            .iter()
+            .zip(unity.calc_branch_susceptances())
+        {
+            assert!((a - b).abs() < 1e-12);
+        }
+        for (a, b) in zero
+            .calc_bus_phase_shift_injection()
+            .iter()
+            .zip(unity.calc_bus_phase_shift_injection())
+        {
+            assert!((a - b).abs() < 1e-12);
+        }
+    }
+}
