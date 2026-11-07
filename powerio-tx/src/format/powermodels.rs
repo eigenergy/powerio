@@ -600,6 +600,20 @@ pub(crate) fn parse_powermodels_json_source(
         .unwrap_or("case")
         .to_string();
 
+    let area_rows = document.areas.len();
+    let areas = sorted_rows(document.areas, |row| row.index)
+        .into_iter()
+        .filter_map(|(_, row)| read_area(row))
+        .collect::<Vec<_>>();
+    if areas.len() < area_rows {
+        warnings.push(
+            &codes::READ_POWERMODELS_RECORD_DROPPED,
+            format!(
+                "{} of {area_rows} `areas` row(s) state no area number (`area_i` or PowerModels.jl's `col_1`) and were not read",
+                area_rows - areas.len()
+            ),
+        );
+    }
     let net = BalancedNetwork::from_tables(BalancedNetworkTables {
         name,
         base_mva,
@@ -646,11 +660,7 @@ pub(crate) fn parse_powermodels_json_source(
             .collect::<Result<Vec<_>>>()?
             .into(),
         transformers_3w: Vec::new().into(),
-        areas: sorted_rows(document.areas, |row| row.index)
-            .into_iter()
-            .map(|(_, row)| read_area(row))
-            .collect::<Result<Vec<_>>>()?
-            .into(),
+        areas: areas.into(),
         solver: None,
         source_format: SourceFormat::PowerModelsJson,
     });
@@ -720,6 +730,13 @@ struct AreaRow {
     area_i: Option<u64>,
     #[serde(default, deserialize_with = "lenient_u64")]
     price_ref_bus: Option<u64>,
+    /// PowerModels.jl keeps `mpc.areas` as a generic table without column
+    /// names, so its rows state the area and reference bus as `col_1` and
+    /// `col_2`.
+    #[serde(default, deserialize_with = "lenient_u64")]
+    col_1: Option<u64>,
+    #[serde(default, deserialize_with = "lenient_u64")]
+    col_2: Option<u64>,
     #[serde(default, deserialize_with = "lenient_f64")]
     net_interchange_mw: Option<f64>,
     #[serde(default, deserialize_with = "lenient_f64")]
@@ -732,27 +749,23 @@ struct AreaRow {
     area_type: Option<String>,
 }
 
-fn read_area(row: AreaRow) -> Result<crate::network::Area> {
-    let number = row.area_i.ok_or_else(|| Error::FormatRead {
-        format: FMT,
-        message: "area record missing integer `area_i`".into(),
-    })?;
-    let mut area =
-        crate::network::Area::new(usize::try_from(number).map_err(|_| Error::FormatRead {
-            format: FMT,
-            message: format!("`area_i` {number} exceeds the platform's range"),
-        })?);
+/// One area record, or `None` when the row states no area number PowerIO can
+/// place. The `areas` table is an extension other tools also write, so such
+/// a row is reported and skipped rather than refusing the document.
+fn read_area(row: AreaRow) -> Option<crate::network::Area> {
+    let number = usize::try_from(row.area_i.or(row.col_1)?).ok()?;
+    let mut area = crate::network::Area::new(number);
     area.slack_bus = row
         .price_ref_bus
+        .or(row.col_2)
         .filter(|bus| *bus != 0)
-        .map(|bus| read_bus_id(Some(bus), "price_ref_bus"))
-        .transpose()?;
+        .and_then(|bus| read_bus_id(Some(bus), "price_ref_bus").ok());
     area.net_interchange = row.net_interchange_mw.unwrap_or(0.0);
     area.tolerance = row.tolerance_mw.unwrap_or(0.0);
     area.name = row.name;
     area.uid = row.uid;
     area.area_type = row.area_type;
-    Ok(area)
+    Some(area)
 }
 
 /// One branch rating set beyond rate_a, rate_b, and rate_c, in MVA.
@@ -1513,6 +1526,30 @@ mod tests {
     /// ignores, carry what the PowerModels fields cannot: areas, case
     /// metadata, source identities, rating sets beyond rate_c, and the fields
     /// no typed slot holds.
+    #[test]
+    fn powermodels_jl_area_tables_read_and_unplaceable_rows_are_reported() {
+        // PowerModels.jl keeps `mpc.areas` as a generic table: `col_1` is the
+        // area and `col_2` its reference bus.
+        let doc = r#"{"baseMVA":100.0,"per_unit":true,
+            "bus":{"1":{"bus_i":1,"bus_type":3,"vm":1.0,"va":0.0,"base_kv":230.0,"area":1},
+                   "4":{"bus_i":4,"bus_type":1,"vm":1.0,"va":0.0,"base_kv":230.0,"area":1}},
+            "areas":{"1":{"col_1":1,"col_2":4,"index":1,"source_id":["areas",1]},
+                     "2":{"index":2,"note":"no area number"}}}"#;
+        let parsed = crate::parse_str(doc, "powermodels-json").unwrap();
+        let areas = parsed.network.areas();
+        assert_eq!(areas.len(), 1);
+        assert_eq!((areas[0].number, areas[0].slack_bus), (1, Some(BusId(4))));
+        assert!(
+            parsed
+                .render_diagnostics()
+                .iter()
+                .any(|d| d.contains("READ.POWERMODELS.RECORD_DROPPED")
+                    && d.contains("1 of 2 `areas`")),
+            "{:?}",
+            parsed.render_diagnostics()
+        );
+    }
+
     #[test]
     fn powerio_extensions_round_trip_through_the_document() {
         let doc = r#"{"baseMVA":100.0,"per_unit":true,
