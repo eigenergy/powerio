@@ -20,7 +20,7 @@ digraph powerio_architecture {
     }
 
     "powerio-cli" [label = "powerio-cli\nCLI + TUI"];
-    "powerio-capi" [label = "powerio-capi\nC ABI 7 (Julia, C, C++)"];
+    "powerio-capi" [label = "powerio-capi\nC ABI (Julia, C, C++)"];
     "powerio-py" [label = "powerio-py\nPython package + MCP"];
     "powerio-wasm" [label = "powerio-wasm\nbrowser conversion"];
 

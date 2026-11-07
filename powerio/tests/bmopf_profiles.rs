@@ -63,7 +63,7 @@ fn explicit_schema_version_reencodes_and_plain_format_echoes() {
 }
 
 #[test]
-fn generation_two_ir_preserves_phase_limits_without_source_bytes() {
+fn powerio_ir_preserves_phase_limits_without_source_bytes() {
     let module = powerio::parse(Source::from_memory("case.bmopf.json", case()).unwrap()).unwrap();
     let ir = powerio::serialize(&module, Destination::memory("case.pio.json").unwrap()).unwrap();
     let restored =

@@ -183,7 +183,7 @@ depend on just the layer they use.
 | `powerio-matrix` | Sparse matrices, sensitivities, DC OPF bundles and graph data |
 | `powerio-cli` | The `powerio` command and its terminal interface |
 | `powerio-py` | The native extension used by the Python package |
-| `powerio-capi` | C ABI 7, used by Julia and other FFI bindings |
+| `powerio-capi` | The C ABI, used by Julia and other FFI bindings |
 
 `powerio-tx` and `powerio-dist` share `powerio-core` and nothing else, so a
 distribution consumer pulls in no transmission code. `powerio-prob` is matrix
