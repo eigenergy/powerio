@@ -25,7 +25,7 @@ pub(super) fn network_database(edit: &str) -> Vec<u8> {
     let transformer = transformer_mapping_tests::native("");
     let path = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(path.path(), line_database("")).unwrap();
-    let conn = Connection::open(path.path()).unwrap();
+    let mut conn = Connection::open(path.path()).unwrap();
     for (db, name) in [
         (&source, "Infeeder"),
         (&load, "Load"),
@@ -544,7 +544,7 @@ fn delta_loads_do_not_create_earth_and_unused_node_records_remain_in_extras() {
 fn assembly_does_not_mix_equal_identities_from_different_variants() {
     let path = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(path.path(), network_database("")).unwrap();
-    let conn = Connection::open(path.path()).unwrap();
+    let mut conn = Connection::open(path.path()).unwrap();
     conn.execute_batch("INSERT INTO Variant VALUES (2,NULL,1)")
         .unwrap();
     // Both variants have the same identity sets, with different source and
@@ -564,9 +564,8 @@ fn assembly_does_not_mix_equal_identities_from_different_variants() {
         let statement = conn.prepare(&format!("SELECT * FROM {table}")).unwrap();
         let columns = statement
             .column_names()
-            .iter()
             .map(|name| {
-                if *name == "Variant_ID" {
+                if name == "Variant_ID" {
                     "2".to_owned()
                 } else {
                     format!("\"{name}\"")
