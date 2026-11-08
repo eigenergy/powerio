@@ -686,6 +686,8 @@ enum FormatArg {
     #[value(name = "surge-json", alias = "surge")]
     SurgeJson,
     /// SiennaSchemas SystemDocument (preserve source version, otherwise 0.4).
+    #[value(name = "powersystems-json", alias = "powersystems")]
+    PowerSystemsJson,
     #[value(name = "sienna-json", alias = "sienna")]
     SiennaJson,
     #[value(name = "sienna-0-1-json")]
@@ -772,6 +774,7 @@ impl FormatArg {
             FormatArg::Pslf => TargetFormat::Pslf,
             FormatArg::Goc3Json => TargetFormat::Goc3Json,
             FormatArg::SurgeJson => TargetFormat::SurgeJson,
+            FormatArg::PowerSystemsJson => TargetFormat::PowerSystemsJson,
             FormatArg::SiennaJson => TargetFormat::SiennaJson { version: 0 },
             FormatArg::Sienna01Json => TargetFormat::SiennaJson { version: 1 },
             FormatArg::Sienna02Json => TargetFormat::SiennaJson { version: 2 },
@@ -848,6 +851,7 @@ impl FormatArg {
             | FormatArg::Pslf
             | FormatArg::Goc3Json
             | FormatArg::SurgeJson
+            | FormatArg::PowerSystemsJson
             | FormatArg::SiennaJson
             | FormatArg::Sienna01Json
             | FormatArg::Sienna02Json
@@ -886,6 +890,7 @@ impl FormatArg {
             FormatArg::Pslf => "pslf",
             FormatArg::Goc3Json => "goc3-json",
             FormatArg::SurgeJson => "surge-json",
+            FormatArg::PowerSystemsJson => "powersystems-json",
             FormatArg::SiennaJson => "sienna-json",
             FormatArg::Sienna01Json => "sienna-0-1-json",
             FormatArg::Sienna02Json => "sienna-0-2-json",

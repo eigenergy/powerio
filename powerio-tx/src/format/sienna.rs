@@ -21,6 +21,8 @@ mod generators;
 mod hvdc;
 mod merge;
 mod metadata;
+pub(super) mod powersystems;
+mod powersystems_three_winding;
 mod three_winding;
 const BASE: f64 = 100.0;
 const FMT: &str = "SiennaSchemas JSON";
@@ -228,12 +230,12 @@ pub(super) fn read(
         let mut bus = Bus::new(BusId(n), kind, optional(row, "base_voltage", 0.0)?);
         bus.name = Some(string(row, "name")?.into());
         bus.uid = uid("ACBus", row)?;
-        if row.get("area").is_some() {
+        if row.get("area").is_some_and(|v| !v.is_null()) {
             bus.area = *area_numbers
                 .get(&integer(row, "area")?)
                 .ok_or_else(|| error("bus references missing Area"))?;
         }
-        if row.get("load_zone").is_some() {
+        if row.get("load_zone").is_some_and(|v| !v.is_null()) {
             bus.zone = *zone_numbers
                 .get(&integer(row, "load_zone")?)
                 .ok_or_else(|| error("bus references missing LoadZone"))?;
@@ -341,6 +343,9 @@ pub(super) fn read(
                 &mut branch,
                 &["uid", "name", "extras", "rating_sets"],
             )?;
+            if kind == "TransformerCircuit" {
+                metadata::restore(&root, row, &mut branch, &["angmin", "angmax"])?;
+            }
             metadata::restore_branch_solution(&root, row, &mut branch, warnings)?;
             branches.push(branch);
         }
@@ -473,7 +478,12 @@ pub(super) fn read(
         );
         sh.uid = uid("FixedAdmittance", row)?;
         sh.in_service = available(row)?;
-        metadata::restore(&root, row, &mut sh, &["uid"])?;
+        metadata::restore(
+            &root,
+            row,
+            &mut sh,
+            &["uid", "extras", "section_count", "control"],
+        )?;
         shunts.push(sh);
     }
     let mut generators = Vec::new();
@@ -728,11 +738,7 @@ fn cost_json(cost: Option<&GenCost>, warnings: &mut Diagnostics) -> Value {
     let mut function =
         json!({"function_type":"LINEAR","constant_term":0.0,"proportional_term":0.0});
     if let Some(c) = cost {
-        if c.model == 2 && c.coeffs.len() <= 3 && !c.coeffs.is_empty() {
-            let mut rev = c.coeffs.iter().rev();
-            let c0 = rev.next().copied().unwrap_or(0.0);
-            let c1 = rev.next().copied().unwrap_or(0.0);
-            let c2 = rev.next().copied().unwrap_or(0.0);
+        if let Some((c2, c1, c0)) = c.calc_quadratic_with_constant_tol(0.0) {
             function = json!({"function_type":"QUADRATIC","constant_term":c0,"proportional_term":c1,"quadratic_term":c2});
         } else if c.model == 1 && c.coeffs.len() % 2 == 0 {
             function = json!({"function_type":"PIECEWISE_LINEAR","points":c.coeffs.as_chunks::<2>().0.iter().map(|p|json!({"x":p[0],"y":p[1]})).collect::<Vec<_>>()});
@@ -836,6 +842,13 @@ pub(super) fn write(
             ids.reserved.insert(id);
         }
     }
+    if let Some(attributes) = original.and_then(|o| o["supplemental_attributes"].as_array()) {
+        for row in attributes {
+            if let Some(id) = row["id"].as_i64() {
+                ids.reserved.insert(id);
+            }
+        }
+    }
     if let Some(c) = original.and_then(|o| o["components"].as_object()) {
         for list in c.values() {
             if let Some(rows) = list.as_array() {
@@ -884,6 +897,10 @@ pub(super) fn write(
     for b in net.branches() {
         let id = ids.get(b.uid.as_deref());
         metadata::record(&mut doc, id, b, &["uid", "name", "extras", "rating_sets"])?;
+        if b.is_transformer() {
+            doc["ext"][id.to_string()]["org.eigenergy.powerio"]["angmin"] = json!(b.angmin);
+            doc["ext"][id.to_string()]["org.eigenergy.powerio"]["angmax"] = json!(b.angmax);
+        }
         metadata::record_branch_solution(&mut doc, id, b, &mut warnings);
         let arc = ids.related("arc", id);
         push(
@@ -894,7 +911,11 @@ pub(super) fn write(
         let ch = b
             .charging
             .unwrap_or_else(|| BranchCharging::from_total_b(b.b));
-        let mut row = json!({"id":id,"name":b.name.clone().unwrap_or_else(||format!("branch_{id}")),"available":b.in_service,"arc":arc,"r":b.r,"x":b.x,"base_power":net.base_mva(),"power_units":"NATURAL_UNITS","parameter_units":"COMPONENT_BASE","rating":b.rate_a,"rating_b":b.rate_b,"rating_c":b.rate_c,"active_power_flow":b.solution.as_ref().map_or(0.0,|s|s.pf),"reactive_power_flow":b.solution.as_ref().map_or(0.0,|s|s.qf)});
+        let mut row = json!({"id":id,"name":b.name.clone().unwrap_or_else(||format!("branch_{id}")),"available":b.in_service,"arc":arc,"r":b.r,"x":b.x,"base_power":net.base_mva(),"power_units":"NATURAL_UNITS","parameter_units":"COMPONENT_BASE","rating":b.rate_a,"rating_b":b.rate_b,"rating_c":b.rate_c});
+        if let Some(solution) = &b.solution {
+            row["active_power_flow"] = json!(solution.pf);
+            row["reactive_power_flow"] = json!(solution.qf);
+        }
         if b.is_transformer() {
             row.as_object_mut().expect("object").remove("name");
             row["tap"] = json!(b.calc_effective_tap());
@@ -985,7 +1006,12 @@ pub(super) fn write(
     }
     for s in net.shunts() {
         let id = ids.get(s.uid.as_deref());
-        metadata::record(&mut doc, id, s, &["uid"])?;
+        metadata::record(
+            &mut doc,
+            id,
+            s,
+            &["uid", "extras", "section_count", "control"],
+        )?;
         push(
             &mut doc,
             "FixedAdmittance",
@@ -1010,8 +1036,13 @@ pub(super) fn write(
         }
         let cost = cost_json(g.cost.as_ref(), &mut warnings);
         let mut row = json!({"id":id,"name":format!("generator_{id}"),"available":g.in_service,"status":if g.in_service {"ONLINE"}else{"OFFLINE"},"bus":bus_ids[&g.bus],"active_power":g.pg,"reactive_power":g.qg,"rating":g.mbase.max(g.pmax.abs()).max(g.pg.abs()),"active_power_limits":minmax(g.pmin,g.pmax),"reactive_power_limits":minmax(g.qmin,g.qmax),"base_power":if g.mbase>0.0 {g.mbase}else{net.base_mva()},"power_units":"NATURAL_UNITS","operation_cost":cost});
-        if g.qmin.is_nan() || g.qmax.is_nan() {
-            return Err(error("generator reactive bounds contain NaN"));
+        if g.qmin.is_nan()
+            || g.qmax.is_nan()
+            || g.qmin == f64::INFINITY
+            || g.qmax == f64::NEG_INFINITY
+            || g.qmin > g.qmax
+        {
+            return Err(error("invalid generator reactive bounds"));
         }
         if !g.qmin.is_finite() || !g.qmax.is_finite() {
             row.as_object_mut()
@@ -1112,14 +1143,21 @@ fn null_path(v: &Value, path: &str) -> Option<String> {
 pub(super) fn retain_document(
     module: &mut powerio_core::PioModule<BalancedNetwork>,
 ) -> std::result::Result<(), powerio_core::Error> {
-    if module.value().source_format() == SourceFormat::SiennaJson
-        && let Some(source) = module.source()
+    if matches!(
+        module.value().source_format(),
+        SourceFormat::SiennaJson | SourceFormat::PowerSystemsJson
+    ) && let Some(source) = module.source()
     {
         let buffer = super::primary(source).map_err(super::core_error)?;
         let text = super::source_text(&buffer).map_err(super::core_error)?;
         let document = serde_json::from_str::<Value>(text)
             .map_err(|e| super::core_error(error(e.to_string())))?;
-        module.insert_extension(EXTENSION, document)?;
+        let key = if module.value().source_format() == SourceFormat::PowerSystemsJson {
+            powersystems::EXTENSION
+        } else {
+            EXTENSION
+        };
+        module.insert_extension(key, document)?;
     }
     Ok(())
 }
@@ -1227,5 +1265,45 @@ mod tests {
         let out = write(&net, 0, Some(&doc)).unwrap();
         let reread = read(&out.text, None, 0, &mut Diagnostics::new()).unwrap();
         assert!((reread.branches()[0].x - 0.3).abs() < 1e-12);
+    }
+    #[test]
+    fn edited_document_rebases_retained_fields_and_prunes_deleted_references() {
+        let mut doc = document();
+        doc["components"]["Line"][0]["operational_flow_limit"] = json!({"min":-0.5,"max":1.5});
+        doc["components"]["ThermalStandard"] = json!([{
+            "id":12,"name":"unit","bus":91,"available":true,"status":"ONLINE",
+            "base_power":50.0,"power_units":"COMPONENT_BASE","active_power":0.5,"reactive_power":0.0,
+            "active_power_limits":{"min":0.0,"max":1.0},"ramp_limits":{"up":0.2,"down":0.1},
+            "operation_cost":{"cost_type":"THERMAL","fixed":3.0,"start_up":{"hot":2.0,"warm":3.0,"cold":4.0},"shut_down":1.0,
+            "variable_operation_cost":{"variable_cost_type":"COST","power_units":"NATURAL_UNITS","value_curve":{"curve_type":"INPUT_OUTPUT","function_data":{"function_type":"LINEAR","proportional_term":4.0,"constant_term":1.0}}}}
+        }]);
+        doc["service_associations"] = json!([{"component_id":12,"service_id":13}]);
+        doc["components"]["OnlineReserve"] = json!([{"id":13,"name":"reserve"}]);
+        let mut net = decode(&doc);
+        net.generators_mut()[0].pg = 30.0;
+        let output = write(&net, 4, Some(&doc)).unwrap();
+        let written: Value = serde_json::from_str(&output.text).unwrap();
+        assert_eq!(
+            written["components"]["ThermalStandard"][0]["operation_cost"],
+            doc["components"]["ThermalStandard"][0]["operation_cost"]
+        );
+        assert_eq!(
+            written["components"]["ThermalStandard"][0]["ramp_limits"]["up"],
+            10.0
+        );
+        assert_eq!(
+            written["components"]["Line"][0]["operational_flow_limit"]["max"],
+            75.0
+        );
+        net.generators_mut().clear();
+        let output = write(&net, 4, Some(&doc)).unwrap();
+        let written: Value = serde_json::from_str(&output.text).unwrap();
+        assert_eq!(written["service_associations"], json!([]));
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .any(|d| d.code().ends_with("RECORD_DROPPED"))
+        );
     }
 }

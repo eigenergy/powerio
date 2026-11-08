@@ -600,7 +600,7 @@ impl TargetFormat {
             TargetFormat::PowerModelsJson => &codes::EMIT_POWERMODELS,
             TargetFormat::EgretJson => &codes::EMIT_EGRET,
             TargetFormat::SurgeJson => &codes::EMIT_SURGE,
-            TargetFormat::SiennaJson { .. } => &codes::EMIT_SIENNA,
+            TargetFormat::SiennaJson { .. } | TargetFormat::PowerSystemsJson => &codes::EMIT_SIENNA,
             TargetFormat::RavensJson => &codes::EMIT_RAVENS,
             TargetFormat::Xiidm => &codes::EMIT_XIIDM,
             TargetFormat::Jiidm => &codes::EMIT_JIIDM,

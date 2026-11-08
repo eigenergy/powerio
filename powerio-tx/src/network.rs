@@ -1441,6 +1441,9 @@ pub enum SourceFormat {
     /// SiennaSchemas SystemDocument.
     #[serde(rename = "sienna-json")]
     SiennaJson,
+    /// Serialized PowerSystems.jl System.
+    #[serde(rename = "powersystems-json")]
+    PowerSystemsJson,
 }
 
 impl SourceFormat {
@@ -1468,6 +1471,7 @@ impl SourceFormat {
             SourceFormat::Goc3Json => "goc3-json",
             SourceFormat::SurgeJson => "surge-json",
             SourceFormat::SiennaJson => "sienna-json",
+            SourceFormat::PowerSystemsJson => "powersystems-json",
             SourceFormat::RavensJson => "ravens-json",
             SourceFormat::DeepMindOpfDataJson => "opfdata-json",
             SourceFormat::Xiidm => "xiidm",
@@ -6123,6 +6127,7 @@ mod tests {
                 | SourceFormat::Goc3Json
                 | SourceFormat::SurgeJson
                 | SourceFormat::SiennaJson
+                | SourceFormat::PowerSystemsJson
                 | SourceFormat::RavensJson
                 | SourceFormat::DeepMindOpfDataJson
                 | SourceFormat::Xiidm

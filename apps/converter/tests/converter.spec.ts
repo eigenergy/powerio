@@ -243,7 +243,7 @@ test('every applicable transmission writer runs in browser WASM', async ({ page 
   }
   await page.getByRole('button', { name: 'Convert', exact: true }).click();
   await expect(page.getByText('Conversion finished. Review any warnings, then download your files.', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: /^Download case9.m as / })).toHaveCount(21);
+  await expect(page.getByRole('button', { name: /^Download case9.m as / })).toHaveCount(22);
   const finished = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Download all', exact: false }).click();
   const archive = await entries(await downloadBytes(await finished));
@@ -252,8 +252,8 @@ test('every applicable transmission writer runs in browser WASM', async ({ page 
   await page.getByRole('button', { name: 'Clear all', exact: true }).click();
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'converted.zip', mimeType: 'application/zip', buffer: Buffer.from(await zip.close()) });
   await inspectQueued(page);
-  await expect(page.getByRole('article')).toHaveCount(21);
-  await expect(page.getByText('Ready to convert', { exact: true })).toHaveCount(21);
+  await expect(page.getByRole('article')).toHaveCount(22);
+  await expect(page.getByText('Ready to convert', { exact: true })).toHaveCount(22);
   await expect(page.getByText("Couldn't convert", { exact: true })).toHaveCount(0);
 });
 
@@ -421,7 +421,7 @@ test('cancelled work restarts offline and retains completed outputs', async ({ p
   await expect(page.getByRole('button', { name: 'Convert again', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: 'Convert again', exact: true }).click();
   await expect(page.getByText('Conversion finished. Review any warnings, then download your files.', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: /^Download case9.m as / })).toHaveCount(21);
+  await expect(page.getByRole('button', { name: /^Download case9.m as / })).toHaveCount(22);
   await reconnect();
 });
 

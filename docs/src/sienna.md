@@ -1,4 +1,4 @@
-# SiennaSchemas exchange
+# Sienna exchange
 
 A balanced `PioModule` can be emitted as a SiennaSchemas SystemDocument. Use
 `sienna-json` to retain an input document's version, or to select 0.4.0 for a
@@ -37,6 +37,25 @@ Time-series associations and dynamics records remain available in the retained
 document. The standalone electrical reader does not acquire a referenced HDF5
 companion. Keep the companion with the document when moving a bundle.
 
+## PowerSystems.jl serialized systems
+
+`powersystems-json` reads native PowerSystems data formats 4.0.0 and 5.0.0,
+and writes 5.0.0. This is the serialized Julia `System` layout, with UUID
+references and stored device bases. It is distinct from a SiennaSchemas
+SystemDocument. The format is detected from `data_format_version`.
+
+```python
+pio.emit(module, "powersystems-json", "system.json")
+```
+
+The generated file loads with `PowerSystems.System("system.json")`.
+Compatibility checks cover PowerSystems 4.6.2 inputs and 5.9.0/5.12.5 consumers.
+The native adapter shares the electrical mapping above, including explicit star
+circuits for three-winding equipment. Parallel devices share their native arc.
+PowerSystems companion time-series files and masked components remain outside
+this standalone electrical projection. Unknown native records stay in
+`org.eigenergy.powerio.powersystems` in a serialized PowerIO module.
+
 ## PyPSA binary files
 
 The optional `powerio[pypsa-files]` extra enables `pypsa-netcdf` and `pypsa-hdf5`
@@ -63,6 +82,11 @@ stages transformers and shunt impedances alongside the other component tables.
 `tables: sienna` selects the SiennaSchemas 0.2 tables. A Sienna source refuses
 component families that the pipeline's staging helper cannot handle.
 
-The sink currently requires a static destination state and a single-file target.
-Unconsumed temporal or extension sidecars must be emitted separately. PowerIO
-diagnostics are forwarded to the pipeline's recorder.
+The sink accepts PyPSA electrical time series and a single-file target. Sienna
+temporal staging still requires its JSON/HDF5 bundle source. A `pio-ir` sink
+retains pipeline extension records and their companion columns in the module's
+`org.eigenergy.powerio.transitionzero` extension, including timestamp units and
+timezones. They return to the pipeline when `powerio_source` reads that IR.
+These records do not add planning constraints to the electrical value. Other
+file targets require the pipeline's extension sidecar to be emitted separately.
+PowerIO diagnostics are forwarded to the pipeline's recorder.

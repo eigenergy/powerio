@@ -28,6 +28,7 @@ const REFERENCES: &[&str] = &[
     "tertiary_circuit",
     "dynamic_injector",
     "entity_id",
+    "owner_id",
     "component_id",
     "service_id",
     "plant_id",

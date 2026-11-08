@@ -14483,6 +14483,11 @@
           "const": "sienna-json",
           "description": "SiennaSchemas SystemDocument.",
           "type": "string"
+        },
+        {
+          "const": "powersystems-json",
+          "description": "Serialized PowerSystems.jl System.",
+          "type": "string"
         }
       ]
     },
