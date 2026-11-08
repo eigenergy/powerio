@@ -1,0 +1,1090 @@
+//! SiennaSchemas SystemDocument electrical exchange, versions 0.1 through 0.4.
+//!
+//! Component IDs and bus numbers are separate namespaces. All component-base
+//! parameters are converted to the network's 100 MVA base on input. The module
+//! extension retains source fields which have no electrical interpretation.
+
+use super::TextEmission;
+use crate::diagnostics::{Diagnostics, codes};
+use crate::network::{
+    BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, Bus, BusId, BusType, GenCost,
+    Generator, Load, LoadVoltageModel, Shunt, SourceFormat, Storage,
+};
+use crate::{Error, Result};
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
+
+pub(super) const EXTENSION: &str = "org.eigenergy.powerio.sienna";
+mod areas;
+mod hvdc;
+mod metadata;
+mod three_winding;
+const BASE: f64 = 100.0;
+const FMT: &str = "SiennaSchemas JSON";
+const ELECTRICAL_KINDS: &[&str] = &[
+    "ACBus",
+    "Area",
+    "LoadZone",
+    "Arc",
+    "Line",
+    "TransformerCircuit",
+    "TwoWindingTransformer",
+    "ThreeWindingTransformer",
+    "PowerLoad",
+    "StandardLoad",
+    "InterruptiblePowerLoad",
+    "InterruptibleStandardLoad",
+    "FixedAdmittance",
+    "ThermalStandard",
+    "ThermalMultiStart",
+    "RenewableDispatch",
+    "RenewableNonDispatch",
+    "HydroDispatch",
+    "Source",
+    "SynchronousCondenser",
+    "EnergyReservoirStorage",
+    "TwoTerminalGenericHVDCLine",
+];
+
+pub(super) fn token(version: u8) -> &'static str {
+    match version {
+        1 => "sienna-0-1-json",
+        2 => "sienna-0-2-json",
+        3 => "sienna-0-3-json",
+        4 => "sienna-0-4-json",
+        _ => "sienna-json",
+    }
+}
+pub(super) fn error(message: impl Into<String>) -> Error {
+    Error::FormatRead {
+        format: FMT,
+        message: message.into(),
+    }
+}
+fn version(root: &Value) -> Result<u8> {
+    match root.get("schema_version") {
+        None => Ok(1),
+        Some(Value::String(s)) => match s.as_str() {
+            "0.1.0" => Ok(1),
+            "0.2.0" => Ok(2),
+            "0.3.0" => Ok(3),
+            "0.4.0" => Ok(4),
+            _ => Err(error(format!(
+                "unsupported schema_version {s:?}; supported releases: 0.1.0, 0.2.0, 0.3.0, 0.4.0"
+            ))),
+        },
+        _ => Err(error("schema_version must be a string")),
+    }
+}
+pub(super) fn document_version(text: &str) -> Result<u8> {
+    version(&serde_json::from_str::<Value>(text).map_err(|e| error(e.to_string()))?)
+}
+fn integer(v: &Value, k: &str) -> Result<i64> {
+    v.get(k)
+        .and_then(Value::as_i64)
+        .ok_or_else(|| error(format!("{k} must be an integer in component {}", v["id"])))
+}
+fn number(v: &Value, k: &str) -> Result<f64> {
+    v.get(k)
+        .and_then(Value::as_f64)
+        .filter(|n| n.is_finite())
+        .ok_or_else(|| {
+            error(format!(
+                "{k} must be a finite number in component {}",
+                v["id"]
+            ))
+        })
+}
+fn optional(v: &Value, k: &str, default: f64) -> Result<f64> {
+    if v.get(k).is_some_and(|x| !x.is_null()) {
+        number(v, k)
+    } else {
+        Ok(default)
+    }
+}
+fn string<'a>(v: &'a Value, k: &str) -> Result<&'a str> {
+    v.get(k)
+        .and_then(Value::as_str)
+        .ok_or_else(|| error(format!("{k} must be a string in component {}", v["id"])))
+}
+fn available(v: &Value) -> Result<bool> {
+    v["available"].as_bool().ok_or_else(|| {
+        error(format!(
+            "available must be boolean in component {}",
+            v["id"]
+        ))
+    })
+}
+fn rows<'a>(root: &'a Value, kind: &str) -> Result<&'a [Value]> {
+    match root["components"].get(kind) {
+        None => Ok(&[]),
+        Some(Value::Array(a)) => Ok(a),
+        _ => Err(error(format!("components.{kind} must be an array"))),
+    }
+}
+fn uid(kind: &str, row: &Value) -> Result<Option<String>> {
+    Ok(Some(format!("sienna:{kind}:{}", integer(row, "id")?)))
+}
+fn positive(v: f64, what: &str) -> Result<f64> {
+    if v > 0.0 && v.is_finite() {
+        Ok(v)
+    } else {
+        Err(error(format!("{what} must be finite and positive")))
+    }
+}
+fn base(row: &Value) -> Result<f64> {
+    positive(optional(row, "base_power", BASE)?, "base_power")
+}
+fn power_scale(row: &Value) -> Result<f64> {
+    match string(row, "power_units")? {
+        "NATURAL_UNITS" => Ok(1.0),
+        "COMPONENT_BASE" => base(row),
+        other => Err(error(format!("unsupported power_units {other}"))),
+    }
+}
+fn parameter_scale(row: &Value, kv: f64) -> Result<f64> {
+    match row
+        .get("parameter_units")
+        .and_then(Value::as_str)
+        .unwrap_or("COMPONENT_BASE")
+    {
+        "COMPONENT_BASE" => Ok(BASE / base(row)?),
+        "NATURAL_UNITS" => Ok(BASE / positive(kv, "base_voltage")?.powi(2)),
+        other => Err(error(format!("unsupported parameter_units {other}"))),
+    }
+}
+fn limits(row: &Value, key: &str, default: (f64, f64)) -> Result<(f64, f64)> {
+    match row.get(key) {
+        None | Some(Value::Null) => Ok(default),
+        Some(v) => Ok((number(v, "min")?, number(v, "max")?)),
+    }
+}
+fn end(row: &Value, key: &str, side: &str) -> Result<f64> {
+    match row.get(key) {
+        None => Ok(0.0),
+        Some(v) => number(v, side),
+    }
+}
+fn bus_ref(row: &Value, field: &str, ids: &BTreeMap<i64, BusId>) -> Result<BusId> {
+    let id = integer(row, field)?;
+    ids.get(&id)
+        .copied()
+        .ok_or_else(|| error(format!("{field} references missing ACBus id {id}")))
+}
+fn retained(warnings: &mut Diagnostics, message: impl Into<String>) {
+    warnings.push(&codes::READ_SIENNA_RETAINED_SOURCE_ONLY, message);
+}
+
+#[allow(clippy::too_many_lines, clippy::float_cmp)] // Table mapping keeps exact source distinctions.
+pub(super) fn read(
+    text: &str,
+    name_hint: Option<&str>,
+    requested: u8,
+    warnings: &mut Diagnostics,
+) -> Result<BalancedNetwork> {
+    let root: Value = serde_json::from_str(text).map_err(|e| error(e.to_string()))?;
+    let actual = version(&root)?;
+    if requested != 0 && requested != actual {
+        return Err(error(format!(
+            "requested 0.{requested}.0, document is 0.{actual}.0"
+        )));
+    }
+    let components = root["components"]
+        .as_object()
+        .ok_or_else(|| error("components must be an object"))?;
+    let mut all_ids = BTreeSet::new();
+    for (kind, list) in components {
+        for row in list
+            .as_array()
+            .ok_or_else(|| error(format!("components.{kind} must be an array")))?
+        {
+            let id = integer(row, "id")?;
+            if !all_ids.insert(id) {
+                return Err(error(format!("duplicate component id {id}")));
+            }
+        }
+    }
+    let (areas, area_numbers, zone_numbers) = areas::read(&root)?;
+    let mut buses = Vec::new();
+    let mut ids = BTreeMap::new();
+    let mut numbers = BTreeSet::new();
+    for row in rows(&root, "ACBus")? {
+        let id = integer(row, "id")?;
+        let n = usize::try_from(integer(row, "number")?)
+            .map_err(|_| error("bus number must be nonnegative"))?;
+        if !numbers.insert(n) {
+            return Err(error(format!("duplicate bus number {n}")));
+        }
+        let kind = match row.get("bustype").and_then(Value::as_str).unwrap_or("PQ") {
+            "PQ" => BusType::Pq,
+            "PV" => BusType::Pv,
+            "REF" | "SLACK" => BusType::Ref,
+            "ISOLATED" => BusType::Isolated,
+            other => return Err(error(format!("unknown bustype {other}"))),
+        };
+        let mut bus = Bus::new(BusId(n), kind, optional(row, "base_voltage", 0.0)?);
+        bus.name = Some(string(row, "name")?.into());
+        bus.uid = uid("ACBus", row)?;
+        if row.get("area").is_some() {
+            bus.area = *area_numbers
+                .get(&integer(row, "area")?)
+                .ok_or_else(|| error("bus references missing Area"))?;
+        }
+        if row.get("load_zone").is_some() {
+            bus.zone = *zone_numbers
+                .get(&integer(row, "load_zone")?)
+                .ok_or_else(|| error("bus references missing LoadZone"))?;
+        }
+        bus.vm = optional(row, "magnitude", 1.0)?;
+        bus.va = optional(row, "angle", 0.0)?.to_degrees();
+        (bus.vmin, bus.vmax) = limits(row, "voltage_limits", (0.9, 1.1))?;
+        if !available(row)? {
+            bus.kind = BusType::Isolated;
+        }
+        for field in [
+            "bustype",
+            "base_voltage",
+            "magnitude",
+            "angle",
+            "voltage_limits",
+        ] {
+            if row.get(field).is_none() {
+                warnings.push(
+                    &codes::READ_SIENNA_VALUE_DEFAULTED,
+                    format!("ACBus {id}: {field} absent; using the electrical profile default"),
+                );
+            }
+        }
+        ids.insert(id, bus.id);
+        metadata::restore(&root, row, &mut bus, &["uid", "name"])?;
+        buses.push(bus);
+    }
+    let by_bus: BTreeMap<BusId, &Bus> = buses.iter().map(|b| (b.id, b)).collect();
+    let mut arcs = BTreeMap::new();
+    for row in rows(&root, "Arc")? {
+        arcs.insert(
+            integer(row, "id")?,
+            (bus_ref(row, "from_id", &ids)?, bus_ref(row, "to_id", &ids)?),
+        );
+    }
+    let mut branches = Vec::new();
+    for kind in ["Line", "TransformerCircuit"] {
+        for row in rows(&root, kind)? {
+            let (from, to) = *arcs
+                .get(&integer(row, "arc")?)
+                .ok_or_else(|| error("branch references missing Arc"))?;
+            let z = parameter_scale(row, by_bus[&from].base_kv)?;
+            let p = power_scale(row)?;
+            let mut branch = Branch::new(
+                from,
+                to,
+                optional(row, "r", 0.0)? * z,
+                optional(row, "x", 0.0)? * z,
+            );
+            branch.uid = uid(kind, row)?;
+            branch.name = row.get("name").and_then(Value::as_str).map(str::to_owned);
+            branch.in_service = available(row)?;
+            branch.rate_a = number(row, "rating")? * p;
+            branch.rate_b = optional(row, "rating_b", 0.0)? * p;
+            branch.rate_c = optional(row, "rating_c", 0.0)? * p;
+            if kind == "Line" {
+                let ch = BranchCharging::new(
+                    end(row, "g", "from")? / z,
+                    end(row, "b", "from")? / z,
+                    end(row, "g", "to")? / z,
+                    end(row, "b", "to")? / z,
+                );
+                branch.b = ch.b_fr + ch.b_to;
+                if ch.g_fr != 0.0 || ch.g_to != 0.0 || ch.b_fr != ch.b_to {
+                    branch.charging = Some(ch);
+                }
+                let (lo, hi) = limits(
+                    row,
+                    "angle_limits",
+                    (-std::f64::consts::TAU, std::f64::consts::TAU),
+                )?;
+                branch.angmin = lo.to_degrees();
+                branch.angmax = hi.to_degrees();
+            } else {
+                branch.tap = optional(row, "tap", 1.0)?;
+                positive(branch.tap, "tap")?;
+                branch.shift = optional(row, "alpha", 0.0)?.to_degrees();
+            }
+            metadata::restore(&root, row, &mut branch, &["uid", "name"])?;
+            branches.push(branch);
+        }
+    }
+    for row in rows(&root, "TwoWindingTransformer")? {
+        let id = integer(row, "circuit")?;
+        let offset = rows(&root, "Line")?.len();
+        let index = rows(&root, "TransformerCircuit")?
+            .iter()
+            .position(|r| r["id"].as_i64() == Some(id))
+            .ok_or_else(|| error("missing transformer circuit"))?;
+        let b = branches
+            .get_mut(offset + index)
+            .ok_or_else(|| error(format!("missing TransformerCircuit {id}")))?;
+        b.name = Some(string(row, "name")?.into());
+        let circuit = &rows(&root, "TransformerCircuit")?[index];
+        metadata::restore(&root, circuit, b, &["uid", "name"])?;
+        if let Some(y) = row.get("magnetizing_shunt") {
+            let circuit = rows(&root, "TransformerCircuit")?
+                .iter()
+                .find(|r| r["id"].as_i64() == Some(id))
+                .ok_or_else(|| error("missing transformer circuit"))?;
+            let scale = match row
+                .get("admittance_units")
+                .and_then(Value::as_str)
+                .unwrap_or("COMPONENT_BASE")
+            {
+                "COMPONENT_BASE" => base(circuit)? / BASE,
+                "COMPONENT_MVAR" => 1.0 / BASE,
+                "NATURAL_UNITS" => {
+                    positive(by_bus[&b.from].base_kv, "base_voltage")?.powi(2) / BASE
+                }
+                other => return Err(error(format!("unsupported admittance_units {other}"))),
+            };
+            let g = number(y, "real")? * scale;
+            let susceptance = number(y, "imag")? * scale;
+            let loc = row
+                .get("shunt_location")
+                .and_then(Value::as_str)
+                .unwrap_or("PRIMARY");
+            b.charging = Some(match loc {
+                "PRIMARY" => BranchCharging::new(g, susceptance, 0.0, 0.0),
+                "SECONDARY" => BranchCharging::new(0.0, 0.0, g, susceptance),
+                other => return Err(error(format!("unsupported shunt_location {other}"))),
+            });
+            b.b = susceptance;
+        }
+    }
+    let mut loads = Vec::new();
+    for kind in [
+        "PowerLoad",
+        "StandardLoad",
+        "InterruptiblePowerLoad",
+        "InterruptibleStandardLoad",
+    ] {
+        for row in rows(&root, kind)? {
+            let p = power_scale(row)?;
+            let bus = bus_ref(row, "bus", &ids)?;
+            let mut load = if kind.ends_with("StandardLoad") {
+                let pp = optional(row, "constant_active_power", 0.0)? * p;
+                let qp = optional(row, "constant_reactive_power", 0.0)? * p;
+                let pi = optional(row, "current_active_power", 0.0)? * p;
+                let qi = optional(row, "current_reactive_power", 0.0)? * p;
+                let pz = optional(row, "impedance_active_power", 0.0)? * p;
+                let qz = optional(row, "impedance_reactive_power", 0.0)? * p;
+                let mut l = Load::new(bus, pp + pi + pz, qp + qi + qz);
+                l.voltage_model = Some(LoadVoltageModel::Zip {
+                    p_constant_power: pp,
+                    q_constant_power: qp,
+                    p_constant_current: pi,
+                    q_constant_current: qi,
+                    p_constant_impedance: pz,
+                    q_constant_impedance: qz,
+                    v_nom: None,
+                    load_type: None,
+                    scaling: None,
+                });
+                l
+            } else {
+                Load::new(
+                    bus,
+                    number(row, "active_power")? * p,
+                    number(row, "reactive_power")? * p,
+                )
+            };
+            load.in_service = available(row)?;
+            load.uid = uid(kind, row)?;
+            metadata::restore(&root, row, &mut load, &["uid"])?;
+            loads.push(load);
+        }
+    }
+    let mut shunts = Vec::new();
+    for row in rows(&root, "FixedAdmittance")? {
+        let bus = bus_ref(row, "bus", &ids)?;
+        let scale = match row
+            .get("admittance_units")
+            .and_then(Value::as_str)
+            .unwrap_or("COMPONENT_MVAR")
+        {
+            "COMPONENT_MVAR" => 1.0,
+            "NATURAL_UNITS" => positive(by_bus[&bus].base_kv, "base_voltage")?.powi(2),
+            other => return Err(error(format!("unsupported shunt admittance_units {other}"))),
+        };
+        let mut sh = Shunt::new(
+            bus,
+            number(&row["Y"], "real")? * scale,
+            number(&row["Y"], "imag")? * scale,
+        );
+        sh.uid = uid("FixedAdmittance", row)?;
+        sh.in_service = available(row)?;
+        metadata::restore(&root, row, &mut sh, &["uid"])?;
+        shunts.push(sh);
+    }
+    let mut generators = Vec::new();
+    for kind in [
+        "ThermalStandard",
+        "ThermalMultiStart",
+        "RenewableDispatch",
+        "RenewableNonDispatch",
+        "HydroDispatch",
+        "Source",
+        "SynchronousCondenser",
+    ] {
+        for row in rows(&root, kind)? {
+            let p = power_scale(row)?;
+            let bus = bus_ref(row, "bus", &ids)?;
+            let mut g = Generator::new(bus);
+            g.uid = uid(kind, row)?;
+            g.pg = number(row, "active_power")? * p;
+            g.qg = number(row, "reactive_power")? * p;
+            let (lo, hi) = limits(
+                row,
+                "active_power_limits",
+                (0.0, optional(row, "rating", g.pg / p)?),
+            )?;
+            g.pmin = lo * p;
+            g.pmax = hi * p;
+            let (lo, hi) = limits(row, "reactive_power_limits", (0.0, 0.0))?;
+            g.qmin = lo * p;
+            g.qmax = hi * p;
+            g.mbase = base(row)?;
+            g.vg = by_bus[&bus].vm;
+            g.in_service = available(row)?
+                && row
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .is_none_or(|s| s == "ONLINE");
+            if let Some(c) = row.get("operation_cost") {
+                g.cost = read_cost(c, g.mbase, warnings)?;
+            }
+            metadata::restore(&root, row, &mut g, &["uid", "vg", "caps"])?;
+            generators.push(g);
+        }
+    }
+    let mut storage = Vec::new();
+    for row in rows(&root, "EnergyReservoirStorage")? {
+        let p = power_scale(row)?;
+        let mut s = Storage::new(bus_ref(row, "bus", &ids)?);
+        s.uid = uid("EnergyReservoirStorage", row)?;
+        let e = match row
+            .get("energy_units")
+            .and_then(Value::as_str)
+            .unwrap_or("MWH")
+        {
+            "MWH" => 1.0,
+            "MWMIN" => 1.0 / 60.0,
+            other => return Err(error(format!("unsupported energy_units {other}"))),
+        };
+        s.energy_rating = number(row, "storage_capacity")? * e;
+        s.energy = number(row, "initial_storage_capacity_level")? * s.energy_rating;
+        s.ps = -number(row, "active_power")? * p;
+        s.qs = -number(row, "reactive_power")? * p;
+        s.charge_rating = number(&row["input_active_power_limits"], "max")? * p;
+        s.discharge_rating = number(&row["output_active_power_limits"], "max")? * p;
+        s.charge_efficiency = number(&row["efficiency"], "in")?;
+        s.discharge_efficiency = number(&row["efficiency"], "out")?;
+        s.thermal_rating = number(row, "rating")? * p;
+        let (lo, hi) = limits(row, "reactive_power_limits", (0.0, 0.0))?;
+        s.qmin = -hi * p;
+        s.qmax = -lo * p;
+        s.in_service = available(row)?;
+        metadata::restore(&root, row, &mut s, &["uid"])?;
+        storage.push(s);
+    }
+    let hvdc = hvdc::read_hvdc(&root, &arcs, &by_bus, warnings)?;
+    for (kind, list) in components {
+        if !ELECTRICAL_KINDS.contains(&kind.as_str())
+            && list.as_array().is_some_and(|v| !v.is_empty())
+        {
+            retained(
+                warnings,
+                format!(
+                    "components.{kind} is retained in {EXTENSION}; excluded from the electrical value"
+                ),
+            );
+        }
+    }
+    for key in [
+        "time_series_associations",
+        "supplemental_attributes",
+        "service_associations",
+        "plant_associations",
+        "combined_cycle_associations",
+        "voltage_control_associations",
+    ] {
+        if root
+            .get(key)
+            .and_then(Value::as_array)
+            .is_some_and(|v| !v.is_empty())
+        {
+            retained(
+                warnings,
+                format!("{key} is retained in {EXTENSION}; excluded from the electrical value"),
+            );
+        }
+    }
+    if root
+        .get("time_series_storage_file")
+        .is_some_and(|v| !v.is_null())
+    {
+        retained(
+            warnings,
+            "time_series_storage_file requires the companion bundle; this electrical document does not decode its arrays",
+        );
+    }
+    let transformers_3w = three_winding::read(&root, &mut buses, &mut branches, &ids)?;
+    let frequency = optional(&root, "frequency", 60.0)?;
+    positive(frequency, "frequency")?;
+    let net = BalancedNetwork::from_tables(BalancedNetworkTables {
+        name: root
+            .get("name")
+            .and_then(Value::as_str)
+            .or(name_hint)
+            .unwrap_or("case")
+            .into(),
+        base_mva: BASE,
+        base_frequency: frequency,
+        geo: None,
+        case_metadata: crate::network::CaseMetadata::default(),
+        detailed_connectivity: None,
+        generated_uids: std::sync::Arc::default(),
+        buses: buses.into(),
+        loads: loads.into(),
+        shunts: shunts.into(),
+        static_var_compensators: Vec::new().into(),
+        branches: branches.into(),
+        switches: Vec::new().into(),
+        generators: generators.into(),
+        storage: storage.into(),
+        hvdc: hvdc.into(),
+        transformers_3w: transformers_3w.into(),
+        areas: areas.into(),
+        solver: None,
+        source_format: SourceFormat::SiennaJson,
+    });
+    net.check_references(FMT)?;
+    Ok(net)
+}
+
+fn read_cost(cost: &Value, base: f64, warnings: &mut Diagnostics) -> Result<Option<GenCost>> {
+    let c = &cost["variable_operation_cost"];
+    if c["variable_cost_type"] != "COST" || c["value_curve"]["curve_type"] != "INPUT_OUTPUT" {
+        retained(
+            warnings,
+            "operation_cost outside input-output CostCurve is retained without a typed generator cost",
+        );
+        return Ok(None);
+    }
+    let scale = match c["power_units"].as_str() {
+        Some("COMPONENT_BASE") => base,
+        Some("NATURAL_UNITS") => 1.0,
+        _ => return Err(error("invalid cost power_units")),
+    };
+    let f = &c["value_curve"]["function_data"];
+    let fixed = optional(cost, "fixed", 0.0)?;
+    let mut out = match string(f, "function_type")? {
+        "LINEAR" => GenCost::new(
+            2,
+            0.0,
+            0.0,
+            vec![
+                number(f, "proportional_term")? / scale,
+                number(f, "constant_term")? + fixed,
+            ],
+        ),
+        "QUADRATIC" => GenCost::new(
+            2,
+            0.0,
+            0.0,
+            vec![
+                number(f, "quadratic_term")? / scale.powi(2),
+                number(f, "proportional_term")? / scale,
+                number(f, "constant_term")? + fixed,
+            ],
+        ),
+        "PIECEWISE_LINEAR" => {
+            let mut coeffs = Vec::new();
+            for pt in f["points"]
+                .as_array()
+                .ok_or_else(|| error("cost points must be an array"))?
+            {
+                coeffs.extend([number(pt, "x")? * scale, number(pt, "y")? + fixed]);
+            }
+            GenCost::new(1, 0.0, 0.0, coeffs)
+        }
+        _ => {
+            retained(warnings, "unmapped cost function retained");
+            return Ok(None);
+        }
+    };
+    out.startup = optional(cost, "start_up", 0.0)?;
+    out.shutdown = optional(cost, "shut_down", 0.0)?;
+    if let Some(vom) = c.get("vom_cost")
+        && (vom["function_data"]["proportional_term"]
+            .as_f64()
+            .unwrap_or(0.0)
+            != 0.0
+            || vom["function_data"]["constant_term"]
+                .as_f64()
+                .unwrap_or(0.0)
+                != 0.0)
+    {
+        retained(
+            warnings,
+            "nonzero vom_cost is retained outside the typed generator cost",
+        );
+    }
+    Ok(Some(out))
+}
+
+fn cost_json(cost: Option<&GenCost>, warnings: &mut Diagnostics) -> Value {
+    let zero = json!({"curve_type":"INPUT_OUTPUT","function_data":{"function_type":"LINEAR","constant_term":0.0,"proportional_term":0.0}});
+    let mut function =
+        json!({"function_type":"LINEAR","constant_term":0.0,"proportional_term":0.0});
+    if let Some(c) = cost {
+        if c.model == 2 && c.coeffs.len() <= 3 && !c.coeffs.is_empty() {
+            let mut rev = c.coeffs.iter().rev();
+            let c0 = rev.next().copied().unwrap_or(0.0);
+            let c1 = rev.next().copied().unwrap_or(0.0);
+            let c2 = rev.next().copied().unwrap_or(0.0);
+            function = json!({"function_type":"QUADRATIC","constant_term":c0,"proportional_term":c1,"quadratic_term":c2});
+        } else if c.model == 1 && c.coeffs.len() % 2 == 0 {
+            function = json!({"function_type":"PIECEWISE_LINEAR","points":c.coeffs.as_chunks::<2>().0.iter().map(|p|json!({"x":p[0],"y":p[1]})).collect::<Vec<_>>()});
+        } else {
+            warnings.push(
+                &codes::EMIT_SIENNA.field_dropped,
+                "generator cost outside linear/quadratic/piecewise-linear curves is omitted",
+            );
+        }
+    }
+    json!({"cost_type":"THERMAL","fixed":0.0,"start_up":cost.map_or(0.0,|c|c.startup),"shut_down":cost.map_or(0.0,|c|c.shutdown),"variable_operation_cost":{"variable_cost_type":"COST","power_units":"NATURAL_UNITS","value_curve":{"curve_type":"INPUT_OUTPUT","function_data":function},"vom_cost":zero}})
+}
+
+#[derive(Default)]
+struct Ids {
+    used: BTreeSet<i64>,
+    reserved: BTreeSet<i64>,
+    next: i64,
+    original: BTreeMap<String, i64>,
+    related: BTreeMap<(String, i64), i64>,
+}
+impl Ids {
+    fn related(&mut self, field: &str, owner: i64) -> i64 {
+        let known = self
+            .related
+            .get(&(field.to_owned(), owner))
+            .map(|id| format!("sienna:{field}:{id}"));
+        self.get(known.as_deref())
+    }
+    fn get(&mut self, uid: Option<&str>) -> i64 {
+        if let Some(id) = uid.and_then(|u| self.original.get(u).copied())
+            && self.used.insert(id)
+        {
+            return id;
+        }
+        if let Some(id) = uid
+            .and_then(|u| u.strip_prefix("sienna:"))
+            .and_then(|s| s.rsplit(':').next())
+            .and_then(|s| s.parse().ok())
+            && self.used.insert(id)
+        {
+            return id;
+        }
+        loop {
+            self.next += 1;
+            if !self.reserved.contains(&self.next) && self.used.insert(self.next) {
+                return self.next;
+            }
+        }
+    }
+}
+fn push(doc: &mut Value, kind: &str, row: Value) {
+    doc["components"]
+        .as_object_mut()
+        .expect("constructed object")
+        .entry(kind)
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .expect("constructed array")
+        .push(row);
+}
+fn minmax(lo: f64, hi: f64) -> Value {
+    json!({"min":lo,"max":hi})
+}
+
+#[allow(clippy::too_many_lines, clippy::float_cmp)] // One block for each emitted component table.
+pub(super) fn write(
+    net: &BalancedNetwork,
+    requested: u8,
+    original: Option<&Value>,
+) -> Result<TextEmission> {
+    net.check_base_mva()?;
+    net.check_references(FMT)?;
+    let selected = if requested == 0 {
+        original.map(version).transpose()?.unwrap_or(4)
+    } else {
+        requested
+    };
+    if !(1..=4).contains(&selected) {
+        return Err(error("unsupported Sienna output version"));
+    }
+    let mut warnings = Diagnostics::new();
+    let mut ids = Ids::default();
+    let mut bus_ids = BTreeMap::new();
+    for u in net
+        .buses()
+        .iter()
+        .filter_map(|x| x.uid.as_deref())
+        .chain(net.branches().iter().filter_map(|x| x.uid.as_deref()))
+        .chain(net.loads().iter().filter_map(|x| x.uid.as_deref()))
+        .chain(net.generators().iter().filter_map(|x| x.uid.as_deref()))
+        .chain(net.shunts().iter().filter_map(|x| x.uid.as_deref()))
+        .chain(net.storage().iter().filter_map(|x| x.uid.as_deref()))
+        .chain(net.hvdc().iter().filter_map(|x| x.uid.as_deref()))
+    {
+        if let Some(id) = u
+            .strip_prefix("sienna:")
+            .and_then(|s| s.rsplit(':').next())
+            .and_then(|s| s.parse().ok())
+        {
+            ids.reserved.insert(id);
+        }
+    }
+    if let Some(c) = original.and_then(|o| o["components"].as_object()) {
+        for list in c.values() {
+            if let Some(rows) = list.as_array() {
+                for r in rows {
+                    if let Some(id) = r["id"].as_i64() {
+                        ids.reserved.insert(id);
+                        if let Some(name) = original.and_then(|o| {
+                            o["ext"][id.to_string()]["org.eigenergy.powerio"]["uid"].as_str()
+                        }) {
+                            ids.original.insert(name.into(), id);
+                        }
+                        for key in [
+                            "arc",
+                            "star_bus",
+                            "primary_circuit",
+                            "secondary_circuit",
+                            "tertiary_circuit",
+                        ] {
+                            if let Some(target) = r[key].as_i64() {
+                                ids.related.insert((key.into(), id), target);
+                            }
+                        }
+                        if let Some(circuit) = r["circuit"].as_i64() {
+                            ids.related.insert(("two_winding".into(), circuit), id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut doc = json!({"name":net.name(),"frequency":net.base_frequency(),"components":{},"supplemental_attributes":[],"supplemental_attribute_associations":[],"plant_associations":[],"combined_cycle_associations":[],"service_associations":[],"time_series_associations":[],"time_series_storage_file":null});
+    if selected != 1 {
+        doc["schema_version"] = json!(format!("0.{selected}.0"));
+    }
+    let [area_ids, zone_ids] = areas::write(net, &mut doc, &mut ids, &mut warnings, selected)?;
+    for b in net.buses() {
+        let id = ids.get(b.uid.as_deref());
+        bus_ids.insert(b.id, id);
+        metadata::record(&mut doc, id, b, &["uid", "name"])?;
+        push(
+            &mut doc,
+            "ACBus",
+            json!({"id":id,"number":b.id.0,"name":b.name.clone().unwrap_or_else(||b.id.0.to_string()),"available":b.kind!=BusType::Isolated,"area":area_ids[&b.area],"load_zone":zone_ids[&b.zone],"bustype":match b.kind {BusType::Pq=>"PQ",BusType::Pv=>"PV",BusType::Ref=>"REF",BusType::Isolated=>"ISOLATED"},"base_voltage":b.base_kv,"angle":b.va.to_radians(),"magnitude":b.vm,"voltage_limits":minmax(b.vmin,b.vmax)}),
+        );
+    }
+    for b in net.branches() {
+        let id = ids.get(b.uid.as_deref());
+        metadata::record(&mut doc, id, b, &["uid", "name"])?;
+        let arc = ids.related("arc", id);
+        push(
+            &mut doc,
+            "Arc",
+            json!({"id":arc,"from_id":bus_ids[&b.from],"to_id":bus_ids[&b.to]}),
+        );
+        let ch = b
+            .charging
+            .unwrap_or_else(|| BranchCharging::from_total_b(b.b));
+        let mut row = json!({"id":id,"name":b.name.clone().unwrap_or_else(||format!("branch_{id}")),"available":b.in_service,"arc":arc,"r":b.r,"x":b.x,"base_power":net.base_mva(),"power_units":"NATURAL_UNITS","parameter_units":"COMPONENT_BASE","rating":b.rate_a,"rating_b":b.rate_b,"rating_c":b.rate_c,"active_power_flow":b.solution.as_ref().map_or(0.0,|s|s.pf),"reactive_power_flow":b.solution.as_ref().map_or(0.0,|s|s.qf)});
+        if b.is_transformer() {
+            row.as_object_mut().expect("object").remove("name");
+            row["tap"] = json!(b.calc_effective_tap());
+            row["alpha"] = json!(b.shift.to_radians());
+            push(&mut doc, "TransformerCircuit", row);
+            let tr = ids.related("two_winding", id);
+            push(
+                &mut doc,
+                "TwoWindingTransformer",
+                json!({"id":tr,"name":b.name.clone().unwrap_or_else(||format!("transformer_{tr}")),"circuit":id,"admittance_units":"COMPONENT_BASE","magnetizing_shunt":{"real":ch.g_fr,"imag":ch.b_fr},"shunt_location":"PRIMARY"}),
+            );
+            if ch.g_to != 0.0 || ch.b_to != 0.0 {
+                let sh = ids.get(None);
+                push(
+                    &mut doc,
+                    "FixedAdmittance",
+                    json!({"id":sh,"name":format!("transformer_{tr}_secondary_shunt"),"available":b.in_service,"bus":bus_ids[&b.to],"Y":{"real":ch.g_to*net.base_mva(),"imag":ch.b_to*net.base_mva()},"base_power":net.base_mva(),"admittance_units":"COMPONENT_MVAR"}),
+                );
+            }
+            if b.angmin != -360.0 || b.angmax != 360.0 {
+                warnings.push(&codes::EMIT_SIENNA.field_dropped,format!("transformer {id}: terminal angle difference limits have no TransformerCircuit field"));
+            }
+        } else {
+            row["b"] = json!({"from":ch.b_fr,"to":ch.b_to});
+            row["g"] = json!({"from":ch.g_fr,"to":ch.g_to});
+            row["angle_limits"] = minmax(b.angmin.to_radians(), b.angmax.to_radians());
+            push(&mut doc, "Line", row);
+        }
+    }
+    for l in net.loads() {
+        let id = ids.get(l.uid.as_deref());
+        metadata::record(&mut doc, id, l, &["uid"])?;
+        let mut row = json!({"id":id,"name":format!("load_{id}"),"available":l.in_service,"bus":bus_ids[&l.bus],"base_power":net.base_mva(),"power_units":"NATURAL_UNITS"});
+        if let Some(LoadVoltageModel::Zip {
+            p_constant_power,
+            q_constant_power,
+            p_constant_current,
+            q_constant_current,
+            p_constant_impedance,
+            q_constant_impedance,
+            ..
+        }) = l.voltage_model
+        {
+            for (k, v) in [
+                ("constant_active_power", p_constant_power),
+                ("constant_reactive_power", q_constant_power),
+                ("current_active_power", p_constant_current),
+                ("current_reactive_power", q_constant_current),
+                ("impedance_active_power", p_constant_impedance),
+                ("impedance_reactive_power", q_constant_impedance),
+            ] {
+                row[k] = json!(v);
+                row[format!("max_{k}")] = json!(v);
+            }
+            push(&mut doc, "StandardLoad", row);
+        } else {
+            row["active_power"] = json!(l.p);
+            row["reactive_power"] = json!(l.q);
+            row["max_active_power"] = json!(l.p);
+            row["max_reactive_power"] = json!(l.q);
+            push(&mut doc, "PowerLoad", row);
+            if l.voltage_model.is_some() {
+                warnings.push(
+                    &codes::EMIT_SIENNA.field_dropped,
+                    format!("load {id}: voltage model has no PowerLoad mapping"),
+                );
+            }
+        }
+    }
+    for s in net.shunts() {
+        let id = ids.get(s.uid.as_deref());
+        metadata::record(&mut doc, id, s, &["uid"])?;
+        push(
+            &mut doc,
+            "FixedAdmittance",
+            json!({"id":id,"name":format!("shunt_{id}"),"available":s.in_service,"bus":bus_ids[&s.bus],"Y":{"real":s.g,"imag":s.b},"base_power":net.base_mva(),"admittance_units":"COMPONENT_MVAR"}),
+        );
+    }
+    for g in net.generators() {
+        let id = ids.get(g.uid.as_deref());
+        metadata::record(&mut doc, id, g, &["uid", "vg", "caps"])?;
+        if (g.vg
+            - net
+                .buses()
+                .iter()
+                .find(|b| b.id == g.bus)
+                .expect("validated bus")
+                .vm)
+            .abs()
+            > 1e-12
+            || g.caps.iter().flatten().any(|x| *x != 0.0)
+        {
+            warnings.push(&codes::EMIT_SIENNA.field_dropped, format!("generator {id}: voltage setpoint and capability columns without native fields are retained in ext; a Sienna consumer must explicitly handle those extension keys"));
+        }
+        let cost = cost_json(g.cost.as_ref(), &mut warnings);
+        push(
+            &mut doc,
+            "ThermalStandard",
+            json!({"id":id,"name":format!("generator_{id}"),"available":g.in_service,"status":if g.in_service {"ONLINE"}else{"OFFLINE"},"bus":bus_ids[&g.bus],"active_power":g.pg,"reactive_power":g.qg,"rating":g.mbase.max(g.pmax.abs()).max(g.pg.abs()),"active_power_limits":minmax(g.pmin,g.pmax),"reactive_power_limits":minmax(g.qmin,g.qmax),"base_power":if g.mbase>0.0 {g.mbase}else{net.base_mva()},"power_units":"NATURAL_UNITS","operation_cost":cost}),
+        );
+    }
+    for s in net.storage() {
+        let id = ids.get(s.uid.as_deref());
+        metadata::record(&mut doc, id, s, &["uid"])?;
+        push(
+            &mut doc,
+            "EnergyReservoirStorage",
+            json!({"id":id,"name":format!("storage_{id}"),"available":s.in_service,"bus":bus_ids[&s.bus],"prime_mover_type":"BA","storage_technology_type":"OTHER_CHEM","storage_capacity":s.energy_rating,"energy_units":"MWH","storage_level_limits":minmax(0.0,1.0),"initial_storage_capacity_level":if s.energy_rating>0.0 {s.energy/s.energy_rating}else{0.0},"rating":s.thermal_rating,"active_power":-s.ps,"reactive_power":-s.qs,"input_active_power_limits":minmax(0.0,s.charge_rating),"output_active_power_limits":minmax(0.0,s.discharge_rating),"efficiency":{"in":s.charge_efficiency,"out":s.discharge_efficiency},"reactive_power_limits":minmax(-s.qmax,-s.qmin),"base_power":net.base_mva(),"power_units":"NATURAL_UNITS","operation_cost":{"cost_type":"STORAGE","fixed":0.0,"start_up":0.0,"shut_down":0.0}}),
+        );
+    }
+    hvdc::write_hvdc(net, &mut doc, &mut ids, &bus_ids, selected, &mut warnings);
+    three_winding::write(net, &mut doc, &mut ids, &bus_ids)?;
+    for (kind, n) in [
+        ("switches", net.switches().len()),
+        (
+            "static var compensators",
+            net.static_var_compensators().len(),
+        ),
+    ] {
+        if n > 0 {
+            warnings.push(
+                &codes::EMIT_SIENNA.record_dropped,
+                format!("{n} {kind} have no implemented Sienna electrical mapping"),
+            );
+        }
+    }
+    if let Some(source) = original {
+        if version(source)? == selected {
+            preserve_unmapped(&mut doc, source);
+        } else {
+            warnings.push(&codes::EMIT_SIENNA.extras_dropped,"cross-version write retains the typed electrical value; source-only fields require a version-specific migration");
+        }
+    }
+    // The nullable companion reference is part of SystemDocument, not a
+    // nonfinite numeric sentinel. Validate generated numeric fields before
+    // merging permitted source nulls.
+    let text = serde_json::to_string_pretty(&doc).map_err(|e| error(e.to_string()))?;
+    Ok(TextEmission::new(text, warnings))
+}
+
+fn preserve_unmapped(doc: &mut Value, original: &Value) {
+    let Some(source) = original.as_object() else {
+        return;
+    };
+    for (key, value) in source {
+        if !matches!(
+            key.as_str(),
+            "components" | "schema_version" | "name" | "frequency" | "ext"
+        ) {
+            doc[key] = value.clone();
+        }
+    }
+    if let Some(old) = original["ext"].as_object() {
+        for (id, fields) in old {
+            if let Some(fields) = fields.as_object() {
+                for (key, value) in fields {
+                    if doc["ext"][id].get(key).is_none() {
+                        doc["ext"][id][key] = value.clone();
+                    }
+                }
+            }
+        }
+    }
+    if let Some(components) = original["components"].as_object() {
+        for (kind, rows) in components {
+            if doc["components"].get(kind).is_none() {
+                if !ELECTRICAL_KINDS.contains(&kind.as_str()) {
+                    doc["components"][kind] = rows.clone();
+                }
+                continue;
+            }
+            if let (Some(old), Some(new)) =
+                (rows.as_array(), doc["components"][kind].as_array_mut())
+            {
+                for row in new {
+                    if let Some(previous) = old.iter().find(|r| r["id"] == row["id"]) {
+                        let mut merged = previous.clone();
+                        if let Some(o) = row.as_object() {
+                            for (k, v) in o {
+                                merged[k] = v.clone();
+                            }
+                        }
+                        *row = merged;
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub(super) fn retain_document(
+    module: &mut powerio_core::PioModule<BalancedNetwork>,
+) -> std::result::Result<(), powerio_core::Error> {
+    if module.value().source_format() == SourceFormat::SiennaJson
+        && let Some(source) = module.source()
+    {
+        let buffer = super::primary(source).map_err(super::core_error)?;
+        let text = super::source_text(&buffer).map_err(super::core_error)?;
+        let document = serde_json::from_str::<Value>(text)
+            .map_err(|e| super::core_error(error(e.to_string())))?;
+        module.insert_extension(EXTENSION, document)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)]
+mod tests {
+    use super::*;
+    fn document() -> Value {
+        json!({"schema_version":"0.4.0","name":"units","frequency":50.0,"components":{"ACBus":[{"id":91,"number":7,"name":"source","available":true,"bustype":"REF","angle":0.2,"magnitude":1.02,"base_voltage":100.0,"voltage_limits":{"min":0.9,"max":1.1}},{"id":92,"number":43,"name":"sink","available":true,"bustype":"PQ","angle":-0.1,"magnitude":0.99,"base_voltage":100.0,"voltage_limits":{"min":0.9,"max":1.1}}],"Arc":[{"id":10,"from_id":91,"to_id":92}],"Line":[{"id":11,"name":"link","available":true,"arc":10,"r":0.01,"x":0.1,"base_power":50.0,"power_units":"COMPONENT_BASE","parameter_units":"COMPONENT_BASE","b":{"from":0.02,"to":0.03},"g":{"from":0.001,"to":0.002},"rating":2.0,"active_power_flow":0.0,"reactive_power_flow":0.0,"angle_limits":{"min":-0.4,"max":0.4}}]},"supplemental_attributes":[],"supplemental_attribute_associations":[],"plant_associations":[],"combined_cycle_associations":[],"service_associations":[],"time_series_associations":[],"time_series_storage_file":null})
+    }
+    fn decode(v: &Value) -> BalancedNetwork {
+        read(&v.to_string(), None, 0, &mut Diagnostics::new()).unwrap()
+    }
+    #[test]
+    fn component_bases_and_natural_units_agree() {
+        let mut doc = document();
+        let a = decode(&doc);
+        let b = &a.branches()[0];
+        assert_eq!((b.from, b.to), (BusId(7), BusId(43)));
+        assert!((b.r - 0.02).abs() < 1e-14);
+        assert!((b.x - 0.2).abs() < 1e-14);
+        assert_eq!(b.rate_a, 100.0);
+        let ch = b.charging.unwrap();
+        assert!((ch.b_fr - 0.01).abs() < 1e-14);
+        assert!((ch.b_to - 0.015).abs() < 1e-14);
+        assert!((a.buses()[0].va - 0.2_f64.to_degrees()).abs() < 1e-12);
+        let line = &mut doc["components"]["Line"][0];
+        line["parameter_units"] = json!("NATURAL_UNITS");
+        line["r"] = json!(2.0);
+        line["x"] = json!(20.0);
+        line["b"] = json!({"from":0.0001,"to":0.00015});
+        line["g"] = json!({"from":0.000_005,"to":0.00001});
+        let natural = decode(&doc);
+        let n = &natural.branches()[0];
+        assert!((n.r - b.r).abs() < 1e-14);
+        assert!((n.x - b.x).abs() < 1e-14);
+        assert!((n.charging.unwrap().b_fr - ch.b_fr).abs() < 1e-14);
+    }
+    #[test]
+    fn every_release_writes_fresh_and_reads_with_matching_version() {
+        let net = decode(&document());
+        for version in 1..=4 {
+            let out = write(&net, version, None).unwrap();
+            let mut warnings = Diagnostics::new();
+            let reread = read(&out.text, None, version, &mut warnings).unwrap();
+            assert_eq!(reread.buses().len(), 2);
+            assert_eq!(reread.branches().len(), 1);
+            assert!((reread.branches()[0].x - net.branches()[0].x).abs() < 1e-12);
+            let j: Value = serde_json::from_str(&out.text).unwrap();
+            assert_eq!(j.get("schema_version").is_none(), version == 1);
+        }
+    }
+    #[test]
+    fn rejects_duplicate_ids_dangling_references_and_unsupported_versions() {
+        let mut doc = document();
+        doc["schema_version"] = json!("0.5.0");
+        assert!(read(&doc.to_string(), None, 0, &mut Diagnostics::new()).is_err());
+        doc = document();
+        doc["components"]["ACBus"][1]["id"] = json!(91);
+        assert!(read(&doc.to_string(), None, 0, &mut Diagnostics::new()).is_err());
+        doc = document();
+        doc["components"]["Arc"][0]["to_id"] = json!(43);
+        assert!(read(&doc.to_string(), None, 0, &mut Diagnostics::new()).is_err());
+        assert!(read(&document().to_string(), None, 2, &mut Diagnostics::new()).is_err());
+    }
+    #[test]
+    fn edited_fields_override_retained_fields() {
+        let doc = document();
+        let mut net = decode(&doc);
+        std::sync::Arc::make_mut(&mut net.tables_mut().branches)[0].x = 0.3;
+        let out = write(&net, 0, Some(&doc)).unwrap();
+        let reread = read(&out.text, None, 0, &mut Diagnostics::new()).unwrap();
+        assert!((reread.branches()[0].x - 0.3).abs() < 1e-12);
+    }
+}

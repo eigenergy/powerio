@@ -177,6 +177,7 @@ pub mod codes {
     emit_family!(EMIT_POWERWORLD, "POWERWORLD", "PowerWorld .aux");
     emit_family!(EMIT_POWERMODELS, "POWERMODELS", "PowerModels JSON");
     emit_family!(EMIT_EGRET, "EGRET", "egret JSON");
+    emit_family!(EMIT_SIENNA, "SIENNA", "SiennaSchemas JSON");
     emit_family!(EMIT_SURGE, "SURGE", "Surge JSON");
     emit_family!(EMIT_RAVENS, "RAVENS", "MG-RAVENS JSON");
     emit_family!(EMIT_XIIDM, "XIIDM", "XIIDM 1.17 XML");
@@ -325,6 +326,10 @@ pub mod codes {
         READ_XIIDM_VERSION_COMPATIBILITY = "READ.XIIDM.VERSION_COMPATIBILITY", Remark,
             "an older XIIDM input version was read; fresh XIIDM output uses 1.17";
 
+        READ_SIENNA_VALUE_DEFAULTED = "READ.SIENNA.VALUE_DEFAULTED", Warning,
+            "a missing Sienna electrical value was assigned a documented default";
+        READ_SIENNA_RETAINED_SOURCE_ONLY = "READ.SIENNA.RETAINED_SOURCE_ONLY", Warning,
+            "Sienna data is retained in a module extension but has no typed electrical interpretation";
         READ_SURGE_RETAINED_SOURCE_ONLY = "READ.SURGE.RETAINED_SOURCE_ONLY", Warning,
             "a Surge section survives in the retained source only";
 
@@ -552,7 +557,7 @@ pub mod codes {
 
     /// Every write target's family, in the order [`super::registry`] reports
     /// them.
-    pub const EMIT_FAMILIES: [&EmitFamily; 15] = [
+    pub const EMIT_FAMILIES: [&EmitFamily; 16] = [
         &EMIT_MATPOWER,
         &EMIT_PSSE,
         &EMIT_PSLF,
@@ -562,6 +567,7 @@ pub mod codes {
         &EMIT_POWERMODELS,
         &EMIT_EGRET,
         &EMIT_SURGE,
+        &EMIT_SIENNA,
         &EMIT_RAVENS,
         &EMIT_XIIDM,
         &EMIT_JIIDM,
@@ -594,6 +600,7 @@ impl TargetFormat {
             TargetFormat::PowerModelsJson => &codes::EMIT_POWERMODELS,
             TargetFormat::EgretJson => &codes::EMIT_EGRET,
             TargetFormat::SurgeJson => &codes::EMIT_SURGE,
+            TargetFormat::SiennaJson { .. } => &codes::EMIT_SIENNA,
             TargetFormat::RavensJson => &codes::EMIT_RAVENS,
             TargetFormat::Xiidm => &codes::EMIT_XIIDM,
             TargetFormat::Jiidm => &codes::EMIT_JIIDM,
