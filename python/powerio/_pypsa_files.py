@@ -111,10 +111,14 @@ def _sanitized_hdf(path: Path, destination: Path) -> Path:
         attributes("", store)
         store.visititems(attributes)
         for key in ("meta", "crs"):
-            dataset = store.get(f"{key}/values")
-            if dataset is None:
+            node = store.get(key)
+            if node is None:
                 continue
-            if dataset.size != 1:
+            # The attribute scan skips this subtree because it is deleted below.
+            # Without a `values` dataset nothing would be deleted, and its
+            # attributes would reach pandas unscanned.
+            dataset = node.get("values") if isinstance(node, h5py.Group) else None
+            if not isinstance(dataset, h5py.Dataset) or dataset.size != 1:
                 raise ValueError(f"Unexpected PyPSA {key} metadata layout")
             raw = bytes(dataset[0])
             if len(raw) > MAX_BYTES:
