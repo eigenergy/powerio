@@ -1810,3 +1810,6 @@ mod tests {
         assert_value_type(&module, "powerio.BalancedNetwork");
     }
 }
+
+#[cfg(feature = "schema")]
+mod schema_units;

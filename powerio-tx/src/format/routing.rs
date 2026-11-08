@@ -64,6 +64,12 @@ pub enum TransmissionFormat {
     SincalBalanced,
     /// MG-RAVENS JSON, the LANL CIM-derived interchange schema, balanced profile.
     RavensJson,
+    /// Version selected from the SystemDocument on input, latest on fresh output.
+    SiennaJson,
+    Sienna01Json,
+    Sienna02Json,
+    Sienna03Json,
+    Sienna04Json,
 }
 
 impl TransmissionFormat {
@@ -85,6 +91,12 @@ impl TransmissionFormat {
             Self::Gridfm => "gridfm",
             Self::Goc3Json => "goc3-json",
             Self::SurgeJson => "surge-json",
+            Self::SiennaJson => "sienna-json",
+            Self::Sienna01Json => "sienna-0-1-json",
+            Self::Sienna02Json => "sienna-0-2-json",
+            Self::Sienna03Json => "sienna-0-3-json",
+            Self::Sienna04Json => "sienna-0-4-json",
+
             Self::RavensJson => "ravens-json",
             Self::DeepMindOpfDataJson => "opfdata-json",
             Self::Xiidm => "xiidm",
@@ -187,6 +199,12 @@ pub fn parse_transmission_format(name: &str) -> Option<TransmissionFormat> {
         "gridfm" => Some(TransmissionFormat::Gridfm),
         "goc3" | "goc3json" | "go3" | "gochallenge3" | "c3" => Some(TransmissionFormat::Goc3Json),
         "surge" | "surgejson" => Some(TransmissionFormat::SurgeJson),
+        "sienna" | "siennajson" => Some(TransmissionFormat::SiennaJson),
+        "sienna01json" | "sienna0.1json" | "sienna0.1.0" => Some(TransmissionFormat::Sienna01Json),
+        "sienna02json" | "sienna0.2json" | "sienna0.2.0" => Some(TransmissionFormat::Sienna02Json),
+        "sienna03json" | "sienna0.3json" | "sienna0.3.0" => Some(TransmissionFormat::Sienna03Json),
+        "sienna04json" | "sienna0.4json" | "sienna0.4.0" => Some(TransmissionFormat::Sienna04Json),
+
         "ravens" | "ravensjson" | "mgravens" | "mgravensjson" => {
             Some(TransmissionFormat::RavensJson)
         }
@@ -474,6 +492,10 @@ struct JsonHeader {
     format: Option<String>,
     #[serde(default, deserialize_with = "present")]
     schema_version: bool,
+    #[serde(default, deserialize_with = "present")]
+    components: bool,
+    #[serde(default, deserialize_with = "present")]
+    time_series_storage_file: bool,
     #[serde(default, deserialize_with = "maybe_object")]
     grid: Option<GridHeader>,
     #[serde(default, deserialize_with = "maybe_object")]
@@ -538,6 +560,7 @@ impl JsonHeader {
                     || self.network.header.ac_line
                     || self.network.header.two_winding_transformer));
         let is_rawx = self.network.header.caseid;
+        let is_sienna = self.components && self.time_series_storage_file;
         let is_surge = self.format.as_deref() == Some("surge-json")
             && self.schema_version
             && self.network.present;
@@ -570,6 +593,7 @@ impl JsonHeader {
             || is_goc3
             || is_rawx
             || is_surge
+            || is_sienna
             || (is_ravens && !is_ravens_multiconductor)
             || is_opfdata
             || is_power_models;
@@ -594,6 +618,8 @@ impl JsonHeader {
                     TransmissionFormat::PsseRawx
                 } else if is_goc3 {
                     TransmissionFormat::Goc3Json
+                } else if is_sienna {
+                    TransmissionFormat::SiennaJson
                 } else if is_surge {
                     TransmissionFormat::SurgeJson
                 } else if is_ravens {

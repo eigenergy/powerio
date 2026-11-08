@@ -1030,7 +1030,7 @@ const fn read_only(
 /// Every 0.11 transmission format. The writable ones are both source rows and
 /// target columns, in this order; the read only ones are source rows only and
 /// come last, so a target column index indexes this array directly.
-const TRANSMISSION_FORMATS: [TransmissionFormat; 20] = [
+const TRANSMISSION_FORMATS: [TransmissionFormat; 24] = [
     transmission("MATPOWER .m", "matpower", Emission::Document, Family::Case),
     transmission(
         "PowerModels JSON",
@@ -1059,6 +1059,30 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 20] = [
         Family::Case,
     ),
     transmission("Surge JSON", "surge-json", Emission::Document, Family::Case),
+    transmission(
+        "SiennaSchemas 0.1",
+        "sienna-0-1-json",
+        Emission::Document,
+        Family::Case,
+    ),
+    transmission(
+        "SiennaSchemas 0.2",
+        "sienna-0-2-json",
+        Emission::Document,
+        Family::Case,
+    ),
+    transmission(
+        "SiennaSchemas 0.3",
+        "sienna-0-3-json",
+        Emission::Document,
+        Family::Case,
+    ),
+    transmission(
+        "SiennaSchemas 0.4",
+        "sienna-0-4-json",
+        Emission::Document,
+        Family::Case,
+    ),
     transmission(
         "MG-RAVENS JSON (balanced)",
         "ravens-json",

@@ -685,6 +685,18 @@ enum FormatArg {
     /// Surge native JSON network document.
     #[value(name = "surge-json", alias = "surge")]
     SurgeJson,
+    /// SiennaSchemas SystemDocument (preserve source version, otherwise 0.4).
+    #[value(name = "sienna-json", alias = "sienna")]
+    SiennaJson,
+    #[value(name = "sienna-0-1-json")]
+    Sienna01Json,
+    #[value(name = "sienna-0-2-json")]
+    Sienna02Json,
+    #[value(name = "sienna-0-3-json")]
+    Sienna03Json,
+    #[value(name = "sienna-0-4-json")]
+    Sienna04Json,
+
     /// JSON document from a DeepMind OPFData release (parse only).
     #[value(
         name = "opfdata-json",
@@ -760,6 +772,12 @@ impl FormatArg {
             FormatArg::Pslf => TargetFormat::Pslf,
             FormatArg::Goc3Json => TargetFormat::Goc3Json,
             FormatArg::SurgeJson => TargetFormat::SurgeJson,
+            FormatArg::SiennaJson => TargetFormat::SiennaJson { version: 0 },
+            FormatArg::Sienna01Json => TargetFormat::SiennaJson { version: 1 },
+            FormatArg::Sienna02Json => TargetFormat::SiennaJson { version: 2 },
+            FormatArg::Sienna03Json => TargetFormat::SiennaJson { version: 3 },
+            FormatArg::Sienna04Json => TargetFormat::SiennaJson { version: 4 },
+
             FormatArg::DeepMindOpfDataJson => TargetFormat::DeepMindOpfDataJson,
             FormatArg::RavensJson => TargetFormat::RavensJson,
             // PypsaCsv is a transmission format, but it writes a directory, not a
@@ -830,6 +848,11 @@ impl FormatArg {
             | FormatArg::Pslf
             | FormatArg::Goc3Json
             | FormatArg::SurgeJson
+            | FormatArg::SiennaJson
+            | FormatArg::Sienna01Json
+            | FormatArg::Sienna02Json
+            | FormatArg::Sienna03Json
+            | FormatArg::Sienna04Json
             | FormatArg::DeepMindOpfDataJson
             | FormatArg::Gridfm
             | FormatArg::Pwb
@@ -863,6 +886,12 @@ impl FormatArg {
             FormatArg::Pslf => "pslf",
             FormatArg::Goc3Json => "goc3-json",
             FormatArg::SurgeJson => "surge-json",
+            FormatArg::SiennaJson => "sienna-json",
+            FormatArg::Sienna01Json => "sienna-0-1-json",
+            FormatArg::Sienna02Json => "sienna-0-2-json",
+            FormatArg::Sienna03Json => "sienna-0-3-json",
+            FormatArg::Sienna04Json => "sienna-0-4-json",
+
             FormatArg::DeepMindOpfDataJson => "opfdata-json",
             FormatArg::RavensJson => "ravens-json",
             FormatArg::Gridfm => "gridfm",

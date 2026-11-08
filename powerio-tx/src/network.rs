@@ -1438,6 +1438,9 @@ pub enum SourceFormat {
     /// schema), balanced subset.
     #[serde(rename = "ravens-json")]
     RavensJson,
+    /// SiennaSchemas SystemDocument.
+    #[serde(rename = "sienna-json")]
+    SiennaJson,
 }
 
 impl SourceFormat {
@@ -1464,6 +1467,7 @@ impl SourceFormat {
             SourceFormat::PypsaCsv => "pypsa-csv",
             SourceFormat::Goc3Json => "goc3-json",
             SourceFormat::SurgeJson => "surge-json",
+            SourceFormat::SiennaJson => "sienna-json",
             SourceFormat::RavensJson => "ravens-json",
             SourceFormat::DeepMindOpfDataJson => "opfdata-json",
             SourceFormat::Xiidm => "xiidm",
@@ -6118,6 +6122,7 @@ mod tests {
                 | SourceFormat::PypsaCsv
                 | SourceFormat::Goc3Json
                 | SourceFormat::SurgeJson
+                | SourceFormat::SiennaJson
                 | SourceFormat::RavensJson
                 | SourceFormat::DeepMindOpfDataJson
                 | SourceFormat::Xiidm

@@ -67,6 +67,7 @@ mod pypsa;
 mod ravens;
 mod rawx;
 pub mod routing;
+mod sienna;
 mod surge;
 
 mod ucte;
@@ -142,6 +143,8 @@ pub enum TargetFormat {
     /// MG-RAVENS JSON, the LANL CIM-derived interchange schema
     /// (<https://github.com/lanl-ansi/MG-RAVENS>), balanced subset.
     RavensJson,
+    /// SiennaSchemas 0.1 through 0.4; zero uses the source version or latest.
+    SiennaJson { version: u8 },
 }
 
 impl TargetFormat {
@@ -154,6 +157,7 @@ impl TargetFormat {
             | TargetFormat::PandapowerJson
             | TargetFormat::Goc3Json
             | TargetFormat::SurgeJson
+            | TargetFormat::SiennaJson { .. }
             | TargetFormat::RavensJson
             | TargetFormat::DeepMindOpfDataJson => "json",
             TargetFormat::Psse { .. } => "raw",
@@ -182,6 +186,7 @@ impl TargetFormat {
             TargetFormat::Pslf => "PSLF .epc",
             TargetFormat::Goc3Json => "GO Challenge 3 JSON",
             TargetFormat::SurgeJson => "Surge JSON",
+            TargetFormat::SiennaJson { .. } => "SiennaSchemas JSON",
             TargetFormat::RavensJson => "MG-RAVENS JSON",
             TargetFormat::DeepMindOpfDataJson => "DeepMind OPFData JSON",
             TargetFormat::Xiidm => "XIIDM 1.17 XML",
@@ -207,6 +212,7 @@ impl TargetFormat {
             TargetFormat::Pslf => "pslf",
             TargetFormat::Goc3Json => "goc3-json",
             TargetFormat::SurgeJson => "surge-json",
+            TargetFormat::SiennaJson { version } => sienna::token(version),
             TargetFormat::RavensJson => "ravens-json",
             TargetFormat::DeepMindOpfDataJson => "opfdata-json",
             TargetFormat::Xiidm => "xiidm",
@@ -266,6 +272,12 @@ pub fn parse_target_format(name: &str) -> Option<TargetFormat> {
         TransmissionFormat::Pslf => TargetFormat::Pslf,
         TransmissionFormat::Goc3Json => TargetFormat::Goc3Json,
         TransmissionFormat::SurgeJson => TargetFormat::SurgeJson,
+        TransmissionFormat::SiennaJson => TargetFormat::SiennaJson { version: 0 },
+        TransmissionFormat::Sienna01Json => TargetFormat::SiennaJson { version: 1 },
+        TransmissionFormat::Sienna02Json => TargetFormat::SiennaJson { version: 2 },
+        TransmissionFormat::Sienna03Json => TargetFormat::SiennaJson { version: 3 },
+        TransmissionFormat::Sienna04Json => TargetFormat::SiennaJson { version: 4 },
+
         TransmissionFormat::RavensJson => TargetFormat::RavensJson,
         TransmissionFormat::DeepMindOpfDataJson => TargetFormat::DeepMindOpfDataJson,
         TransmissionFormat::Xiidm => TargetFormat::Xiidm,
@@ -484,7 +496,9 @@ pub fn parse_with_json_class(
                     Err(_) => source,
                 }
             };
-            PioModule::parsed(network, source, warnings.into_records())
+            let mut module = PioModule::parsed(network, source, warnings.into_records())?;
+            sienna::retain_document(&mut module)?;
+            Ok(module)
         }
         Err(error) => {
             // A reader that failed on a located record leaves that record's
@@ -756,6 +770,7 @@ fn read_source(
             ));
         }
         TargetFormat::SurgeJson => surge::parse_surge_source(text, name_hint, warnings),
+        TargetFormat::SiennaJson { version } => sienna::read(text, name_hint, version, warnings),
         TargetFormat::RavensJson => ravens::parse_ravens_source(text, name_hint, warnings),
         TargetFormat::DeepMindOpfDataJson => {
             opfdata::parse_opfdata_source(text, name_hint, warnings)
@@ -985,6 +1000,12 @@ fn transmission_json_target(format: TransmissionFormat) -> Result<TargetFormat> 
         TransmissionFormat::PandapowerJson => Ok(TargetFormat::PandapowerJson),
         TransmissionFormat::Goc3Json => Ok(TargetFormat::Goc3Json),
         TransmissionFormat::SurgeJson => Ok(TargetFormat::SurgeJson),
+        TransmissionFormat::SiennaJson => Ok(TargetFormat::SiennaJson { version: 0 }),
+        TransmissionFormat::Sienna01Json => Ok(TargetFormat::SiennaJson { version: 1 }),
+        TransmissionFormat::Sienna02Json => Ok(TargetFormat::SiennaJson { version: 2 }),
+        TransmissionFormat::Sienna03Json => Ok(TargetFormat::SiennaJson { version: 3 }),
+        TransmissionFormat::Sienna04Json => Ok(TargetFormat::SiennaJson { version: 4 }),
+
         TransmissionFormat::DeepMindOpfDataJson => Ok(TargetFormat::DeepMindOpfDataJson),
         TransmissionFormat::PsseRawx => Ok(TargetFormat::PsseRawx),
         TransmissionFormat::Jiidm => Ok(TargetFormat::Jiidm),
@@ -1068,7 +1089,18 @@ fn emit_text(
     if let Some(text) = echo_text(module, format) {
         return Ok(TextEmission::faithful(text));
     }
-    let mut conv = emit_value_text(module.value(), format).map_err(core_error)?;
+    let mut conv = if let TargetFormat::SiennaJson { version } = format {
+        let mut emission = sienna::write(
+            module.value(),
+            version,
+            module.extensions().get(sienna::EXTENSION),
+        )
+        .map_err(core_error)?;
+        finish_emission(module.value(), format, &mut emission);
+        emission
+    } else {
+        emit_value_text(module.value(), format).map_err(core_error)?
+    };
     warn_psse_downgrade(module, format, &mut conv);
     Ok(conv)
 }
@@ -1092,6 +1124,12 @@ fn echo_text(module: &PioModule<BalancedNetwork>, target: TargetFormat) -> Optio
         return None;
     }
     let text = std::str::from_utf8(buffer.bytes()).ok()?;
+    if let TargetFormat::SiennaJson { version } = target
+        && version != 0
+        && sienna::document_version(text).ok()? != version
+    {
+        return None;
+    }
     // A PSS/E source echoes only when the requested revision equals the
     // source's own; any other revision goes through write_psse_rev so the
     // caller gets the layout it asked for instead of the original bytes.
@@ -1165,6 +1203,7 @@ pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Re
         TargetFormat::Matpower => matpower::write_matpower_conversion(net),
         TargetFormat::Pslf => write_pslf(net),
         TargetFormat::SurgeJson => write_surge_json(net),
+        TargetFormat::SiennaJson { version } => sienna::write(net, version, None)?,
         TargetFormat::RavensJson => write_ravens_json(net),
         TargetFormat::Goc3Json => {
             return Err(Error::WriteUnsupported {
@@ -1183,14 +1222,18 @@ pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Re
         }
         TargetFormat::Ucte => ucte::write_ucte(net)?,
     };
-    conv.diagnostics.extend(sincal_source_omitted(net));
-    warn_normalized_tap(net, format, &mut conv);
-    warn_missing_reference(net, format, &mut conv);
-    warn_dropped_frequency(net, format, &mut conv);
-    warn_dropped_locations(net, format, &mut conv);
-    warn_dropped_transformer_charging(net, format, &mut conv);
-    warn_dropped_exchange_context(net, format, &mut conv);
+    finish_emission(net, format, &mut conv);
     Ok(conv)
+}
+
+fn finish_emission(net: &BalancedNetwork, format: TargetFormat, conv: &mut TextEmission) {
+    conv.diagnostics.extend(sincal_source_omitted(net));
+    warn_normalized_tap(net, format, conv);
+    warn_missing_reference(net, format, conv);
+    warn_dropped_frequency(net, format, conv);
+    warn_dropped_locations(net, format, conv);
+    warn_dropped_transformer_charging(net, format, conv);
+    warn_dropped_exchange_context(net, format, conv);
 }
 
 /// Emit a parsed module to `format` through a destination: the one output
@@ -1397,7 +1440,18 @@ fn emit_text_with_options(
     }
     let (working, policy_warnings) =
         apply_emit_cost_policy(module.value(), options).map_err(core_error)?;
-    let mut conv = emit_value_text(&working, format).map_err(core_error)?;
+    let mut conv = if let TargetFormat::SiennaJson { version } = format {
+        let mut out = sienna::write(
+            &working,
+            version,
+            module.extensions().get(sienna::EXTENSION),
+        )
+        .map_err(core_error)?;
+        finish_emission(&working, format, &mut out);
+        out
+    } else {
+        emit_value_text(&working, format).map_err(core_error)?
+    };
     conv.prepend(policy_warnings);
     Ok(conv)
 }
@@ -1517,6 +1571,7 @@ fn warn_dropped_frequency(net: &BalancedNetwork, format: TargetFormat, conv: &mu
             | TargetFormat::PandapowerJson
             | TargetFormat::PowerModelsJson
             | TargetFormat::EgretJson
+            | TargetFormat::SiennaJson { .. }
     );
     if carries_frequency {
         return;
@@ -1627,6 +1682,7 @@ fn warn_dropped_exchange_context(
             | TargetFormat::PandapowerJson
             | TargetFormat::Pslf
             | TargetFormat::SurgeJson
+            | TargetFormat::SiennaJson { .. }
             | TargetFormat::RavensJson
             | TargetFormat::Ucte
     ) {
@@ -1635,7 +1691,7 @@ fn warn_dropped_exchange_context(
     let message = match format {
         // MG-RAVENS carries stable component identities as mRIDs, but not
         // the source-neutral topology hierarchy or case/solver metadata.
-        TargetFormat::RavensJson => {
+        TargetFormat::RavensJson | TargetFormat::SiennaJson { .. } => {
             exchange_context_loss_carrying(net, format.label(), CarriedContext::Identities)
         }
         // PowerModels JSON and egret JSON rows carry a source identity as
@@ -2083,6 +2139,7 @@ fn warn_missing_reference(net: &BalancedNetwork, format: TargetFormat, conv: &mu
             | TargetFormat::PandapowerJson
             | TargetFormat::Pslf
             | TargetFormat::SurgeJson
+            | TargetFormat::SiennaJson { .. }
     );
     if needs_ref && let Some(message) = missing_reference_warning(net) {
         conv.push(&format.emit_family().reference_missing, message);
@@ -2227,6 +2284,10 @@ fn same_target_format(requested: TargetFormat, source: TargetFormat) -> bool {
         || matches!(
             (requested, source),
             (TargetFormat::Psse { .. }, TargetFormat::Psse { .. })
+                | (
+                    TargetFormat::SiennaJson { .. },
+                    TargetFormat::SiennaJson { .. }
+                )
         )
 }
 

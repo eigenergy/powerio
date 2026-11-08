@@ -2160,6 +2160,14 @@ def parse(
     or an explicitly selected ``acquisition_root``. Memory sources use only
     ``named_buffers`` and never acquire companions from the filesystem.
     """
+    from . import _pypsa_files
+    binary_format = _pypsa_files.detect(source, format)
+    if binary_format is not None:
+        if named_buffers is not None or acquisition_root is not None or sincal_balanced is not None or sincal_multiconductor is not None:
+            raise ValueError("PyPSA binary containers are standalone sources")
+        if name is not None and _path_from_source(source) is not None:
+            raise ValueError("name is only valid for memory and file object sources")
+        return _pypsa_files.parse(source, binary_format, name=name)
     balanced_selection = None
     if sincal_balanced is not None:
         if not isinstance(sincal_balanced, SincalBalancedReadOptions):
@@ -2253,6 +2261,11 @@ def _emit_to_destination(
 @_guard
 def emit(module: PioModule, format: str, destination: Optional[Any] = None) -> EmitResult:
     """Emit a module as one grid exchange format."""
+    from . import _pypsa_files
+    if format in _pypsa_files.FORMATS:
+        if not isinstance(module, PioModule):
+            raise TypeError("module must be a PioModule")
+        return _pypsa_files.emit(module, format, destination)
     return _emit_to_destination(
         module,
         destination,

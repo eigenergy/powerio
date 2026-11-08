@@ -27,7 +27,9 @@ pub fn serialize_diagnostics(diagnostics: &[Diagnostic]) -> Result<String, Error
 #[cfg(feature = "schema")]
 #[must_use]
 pub fn generate_ir_schema() -> schemars::Schema {
-    schemars::schema_for!(crate::stored::StoredModule)
+    let mut schema = schemars::schema_for!(crate::stored::StoredModule);
+    crate::schema_units::annotate(&mut schema);
+    schema
 }
 
 /// Serialize a dynamic module as PowerIO IR.

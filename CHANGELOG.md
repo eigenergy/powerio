@@ -11,6 +11,16 @@ the LinDist3Flow coefficients and the GridLAB-D quantities). See
 [From 0.11 to 0.12](docs/src/migration-0.12.md) for every change that needs
 action.
 
+**Interoperability**
+
+- Read and write SiennaSchemas SystemDocument 0.1 through 0.4 through the
+  shared module API, CLI, and bindings. Preserve source identifiers and report
+  fields outside the electrical mapping.
+- Add optional Python PyPSA NetCDF/HDF5 transports and TransitionZero source
+  and sink entry points.
+- Annotate the current PowerIO IR schema with physical units, per-unit bases,
+  and sign conventions.
+
 **Breaking changes**
 
 - PowerIO IR documents state the release whose schema they follow: the
