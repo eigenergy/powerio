@@ -55,7 +55,15 @@ must stay within the acquisition root; memory input supplies them through
 arrays, and object counts. External HDF5 links and object arrays are rejected.
 An existing output directory is never replaced. The electrical value interprets
 components; retained forecast arrays keep the meaning declared by the Sienna
-association records. Tests reopen emitted arrays with InfraStore 0.14.1.
+association records. Tests reopen emitted arrays with InfraStore 0.14.1 and validate association
+records against every released schema. Bundle writes migrate the common time-series
+associations across releases when their component owners remain in the target.
+The explicit `zoneless` declaration keeps its wall-clock meaning: 0.4 writes an
+offset-free timestamp, while older releases use InfraStore's legacy `Z` spelling.
+The TransitionZero adapter selects 0.2 before handing associations to its pinned
+InfraStore consumer. Per-unit load series retain their declared device base; other device-base edits
+that need array rebasing are rejected. Other source-only records still require
+separate migration.
 
 ## PowerSystems.jl serialized systems
 
@@ -110,7 +118,9 @@ stages transformers and shunt impedances alongside the other component tables.
 component families that the pipeline's staging helper cannot handle.
 
 The sink accepts PyPSA electrical time series and a single-file target. Sienna
-temporal staging accepts a `sienna-bundle` source with `tables: sienna`.
+temporal staging accepts scalar SingleTimeSeries from any released `sienna-bundle`
+version with `tables: sienna`, converting component bases to the pipeline's
+capacity-based series. Forecast arrays remain available in bundles and IR.
 The Sienna sink preserves its time-series association rows and HDF5 arrays in
 `pio-ir` output. A `pio-ir` sink
 retains pipeline extension records and their companion columns in the module's

@@ -6,6 +6,7 @@ and planning semantics remain stated by the original Sienna associations.
 """
 from __future__ import annotations
 
+import copy
 import io
 import json
 import os
@@ -191,6 +192,48 @@ def parse(source: Any, format: str, *, name=None, acquisition_root=None, named_b
     return module
 
 
+def _temporal_document(document, original):
+    """Migrate the common association records without changing their time meaning."""
+    if original and original.get("schema_version", "0.1.0") != document.get("schema_version", "0.1.0"):
+        associations = original.get("time_series_associations", [])
+        owners = {(kind, row["id"]) for kind, rows in document["components"].items() for row in rows}
+        for row in associations:
+            if row.get("owner_category") != "Component" or (row["owner_type"], row["owner_id"]) not in owners:
+                raise ValueError("Cross-version Sienna time series require an owner retained in the target electrical document")
+        document["time_series_associations"] = copy.deepcopy(associations)
+        document["time_series_storage_file"] = original.get("time_series_storage_file")
+    old_owners = {(kind, row["id"]): row for kind, rows in (original or {}).get("components", {}).items() for row in rows}
+    new_owners = {(kind, row["id"]): row for kind, rows in document["components"].items() for row in rows}
+    modern = document.get("schema_version", "0.1.0") == "0.4.0"
+    for row in document.get("time_series_associations", []):
+        if row.get("unit_system") == "COMPONENT_BASE":
+            key = (row["owner_type"], row["owner_id"])
+            old, new = old_owners.get(key), new_owners.get(key)
+            if old is None or new is None:
+                raise ValueError("Per-unit Sienna time series require a retained component owner")
+            if old.get("base_power") != new.get("base_power"):
+                if key[0] in {"PowerLoad", "InterruptiblePowerLoad", "StandardLoad", "ExponentialLoad"} and new.get("power_units") == "NATURAL_UNITS":
+                    # Balanced loads have no device base. Their native power fields
+                    # are in MW, so the declared series base remains independent.
+                    new["base_power"] = old["base_power"]
+                else:
+                    raise ValueError("Changed Sienna component base requires rebasing its companion arrays before emission")
+        timestamp = row.get("initial_timestamp")
+        if row.get("time_reference") != "zoneless" or not isinstance(timestamp, str):
+            continue
+        # InfraStore 0.14 spells a zoneless clock with Z in the older schemas.
+        # 0.4 requires the local spelling. The explicit declaration remains.
+        if timestamp.endswith("Z"):
+            local = timestamp[:-1]
+        elif timestamp.endswith("+00:00"):
+            local = timestamp[:-6]
+        elif "+" in timestamp[10:] or "-" in timestamp[10:]:
+            raise ValueError("A zoneless Sienna timestamp cannot declare a nonzero UTC offset")
+        else:
+            local = timestamp
+        row["initial_timestamp"] = local if modern else local + "Z"
+
+
 def emit(module, format: str, destination=None):
     import powerio as pio
     saved = _json(module)
@@ -199,6 +242,7 @@ def emit(module, format: str, destination=None):
     if result.text is None:
         raise ValueError("Expected Sienna document text")
     document = json.loads(result.text)
+    _temporal_document(document, saved.get("extensions", {}).get("org.eigenergy.powerio.sienna"))
     files = {}
     if document.get("time_series_storage_file"):
         if extension is None:
