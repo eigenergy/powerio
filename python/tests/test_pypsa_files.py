@@ -29,9 +29,10 @@ def test_binary_roundtrip_and_destination(format, suffix, tmp_path):
 
 
 def test_hdf_metadata_is_not_executed(tmp_path):
+    import pickle
+
     import h5py
     import numpy as np
-    import pickle
     from powerio._pypsa_files import _sanitized_hdf
     class Payload:
         def __reduce__(self):
@@ -43,3 +44,29 @@ def test_hdf_metadata_is_not_executed(tmp_path):
     with pytest.raises(ValueError, match="exactly one JSON object"):
         _sanitized_hdf(path, tmp_path / "safe.h5")
     assert not (tmp_path / "executed").exists()
+
+
+@pytest.mark.parametrize("format,suffix", [("pypsa-netcdf", ".nc"), ("pypsa-hdf5", ".h5")])
+def test_temporal_binary_roundtrip(format, suffix, tmp_path):
+    import pandas as pd
+    import pypsa
+    network = pypsa.Network()
+    network.set_snapshots(pd.date_range("2026-01-01", periods=3, freq="h"))
+    network.add("Bus", "a", v_nom=110.0)
+    network.add("Generator", "g", bus="a", p_nom=100.0, p_set=[10.0, 20.0, 30.0])
+    network.add("Load", "d", bus="a", p_set=[10.0, 20.0, 30.0], q_set=[1.0, 2.0, 3.0])
+    source = tmp_path / ("sequence" + suffix)
+    if format == "pypsa-netcdf":
+        network.export_to_netcdf(source)
+    else:
+        network.export_to_hdf5(source)
+    module = pio.parse(source)
+    assert "TimeSeries" in module.type_name
+    assert len(module.value) == 3
+    emitted = pio.emit(module.sever_source(), format)
+    recovered = pio.parse(emitted.artifacts[0].data, format=format)
+    assert len(recovered.value) == 3
+    for index, expected in enumerate([10.0, 20.0, 30.0]):
+        point = recovered.value[index]
+        network_value = point.network if hasattr(point, "network") else point
+        assert network_value.loads[0]["p"] == pytest.approx(expected)

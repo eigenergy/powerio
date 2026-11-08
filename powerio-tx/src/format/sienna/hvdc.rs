@@ -26,14 +26,25 @@ pub(super) fn read_hvdc(
         if let Some(limits) = row.get("operational_flow_limit") {
             let forward_min = number(limits, "from_to_min")? * scale;
             let reverse_min = number(limits, "to_from_min")? * scale;
-            if forward_min != 0.0 || reverse_min != 0.0 {
+            let forward_max = number(limits, "from_to_max")? * scale;
+            let reverse_max = number(limits, "to_from_max")? * scale;
+            if forward_max > 0.0 && reverse_max > 0.0 && (forward_min != 0.0 || reverse_min != 0.0)
+            {
                 retained(
                     warnings,
                     "HVDC directional minimum flows are retained outside the continuous power interval",
                 );
             }
-            dc.pmin = -number(limits, "to_from_max")? * scale;
-            dc.pmax = number(limits, "from_to_max")? * scale;
+            dc.pmin = if reverse_max > 0.0 {
+                -reverse_max
+            } else {
+                forward_min
+            };
+            dc.pmax = if forward_max > 0.0 {
+                forward_max
+            } else {
+                -reverse_min
+            };
         }
         let (lo, hi) = limits(row, "reactive_power_limits_from", (0.0, 0.0))?;
         dc.qminf = lo * scale;
@@ -60,6 +71,7 @@ pub(super) fn read_hvdc(
             dc.loss1 = number(data, "proportional_term")?;
         }
         dc.pt = Hvdc::calc_delivered_power(dc.pf, dc.loss0, dc.loss1);
+        super::metadata::restore(root, row, &mut dc, &["uid", "cost", "vf", "vt", "qf", "qt"])?;
         links.push(dc);
     }
     Ok(links)
@@ -72,10 +84,11 @@ pub(super) fn write_hvdc(
     buses: &BTreeMap<BusId, i64>,
     version: u8,
     warnings: &mut Diagnostics,
-) {
+) -> Result<()> {
     for dc in net.hvdc() {
         let id = ids.get(dc.uid.as_deref());
-        let arc = ids.get(None);
+        super::metadata::record(doc, id, dc, &["uid", "cost", "vf", "vt", "qf", "qt"])?;
+        let arc = ids.related("arc", id);
         push(
             doc,
             "Arc",
@@ -103,4 +116,5 @@ pub(super) fn write_hvdc(
         }
         push(doc, "TwoTerminalGenericHVDCLine", row);
     }
+    Ok(())
 }

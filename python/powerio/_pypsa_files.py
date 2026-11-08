@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import pickletools
 import shutil
-import os
-from pathlib import Path
 import tempfile
+from pathlib import Path
 from typing import Any
 
 FORMATS = {"pypsa-netcdf": ".nc", "pypsa-hdf5": ".h5"}
@@ -110,7 +110,7 @@ def _sanitized_hdf(path: Path, destination: Path) -> Path:
             for op, argument, _ in pickletools.genops(raw):
                 if op.name in {"UNICODE", "BINUNICODE", "SHORT_BINUNICODE", "BINUNICODE8"}:
                     try:
-                        value = json.loads(argument)
+                        value = json.loads(str(argument))
                     except (ValueError, TypeError):
                         continue
                     if isinstance(value, dict):
@@ -152,7 +152,7 @@ def parse(source: Any, format: str, *, name: str | None = None):
             network.import_from_hdf5(_sanitized_hdf(path, directory / "safe.h5"))
         folder = directory / "csv"
         network.export_to_csv_folder(folder)
-        files = {}
+        files: dict[str, bytes] = {}
         total = 0
         for entry in sorted(folder.iterdir()):
             total += entry.stat().st_size
@@ -171,23 +171,10 @@ def parse(source: Any, format: str, *, name: str | None = None):
 
 def emit(module, format: str, destination: Any = None):
     import powerio as pio
-    pypsa = _dependencies()
-    csv = pio.emit(module, "pypsa-csv")
+    _dependencies()
     with tempfile.TemporaryDirectory(prefix="powerio-pypsa-") as temporary:
         directory = Path(temporary)
-        folder = directory / "csv"
-        folder.mkdir()
-        common = Path(csv.artifacts[0].name).parent
-        for artifact in csv.artifacts:
-            if artifact.data is None:
-                raise ValueError("Expected in-memory CSV artifacts")
-            relative = Path(artifact.name).relative_to(common)
-            path = folder / relative
-            if path.parent != folder or relative.is_absolute() or ".." in relative.parts:
-                raise ValueError("Unexpected nested PyPSA CSV artifact")
-            path.write_bytes(artifact.data)
-        network = pypsa.Network()
-        network.import_from_csv_folder(folder)
+        network, diagnostics = _network(module, directory)
         output = directory / ("network" + FORMATS[format])
         if format == "pypsa-netcdf":
             network.export_to_netcdf(output)
@@ -214,4 +201,83 @@ def emit(module, format: str, destination: Any = None):
         if isinstance(destination, io.TextIOBase):
             raise TypeError("PyPSA NetCDF/HDF5 requires a binary destination")
         destination.write(data)
-    return pio.EmitResult(artifacts=(artifact,), layout="file", fidelity="canonical", diagnostics=csv.diagnostics)
+    return pio.EmitResult(artifacts=(artifact,), layout="file", fidelity="canonical", diagnostics=diagnostics)
+
+
+
+def _static_network(module, directory: Path):
+    import powerio as pio
+    csv = pio.emit(module, "pypsa-csv")
+    if directory.exists():
+        shutil.rmtree(directory)
+    directory.mkdir(parents=True)
+    common = Path(csv.artifacts[0].name).parent
+    for artifact in csv.artifacts:
+        if artifact.data is None:
+            raise ValueError("Expected in-memory CSV artifacts")
+        relative = Path(artifact.name).relative_to(common)
+        path = directory / relative
+        if path.parent != directory or relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("Unexpected nested PyPSA CSV artifact")
+        path.write_bytes(artifact.data)
+    network = _dependencies().Network()
+    network.import_from_csv_folder(directory)
+    return network, list(csv.diagnostics)
+
+
+def _network(module, directory: Path):
+    import pandas as pd
+
+    import powerio as pio
+    if not isinstance(module.value, pio.TimeSeries):
+        return _static_network(module, directory / "csv")
+    series = module.value
+    if not len(series):
+        raise ValueError("A PyPSA time series needs at least one snapshot")
+    if len(series) > MAX_FILES:
+        raise ValueError("PyPSA export exceeds the bounded snapshot limit")
+    labels = [point.label for point in series.time_points]
+    if len(set(labels)) != len(labels):
+        raise ValueError("PyPSA snapshots require unique labels")
+    try:
+        snapshots = pd.DatetimeIndex(pd.to_datetime(labels, format="ISO8601"))
+    except ValueError:
+        snapshots = pd.Index(labels, name="snapshot")
+    network = None
+    diagnostics = []
+    dynamic: dict[tuple[str, str], list[Any]] = {}
+    expanded_bytes = 0
+    for point in series:
+        current, findings = _static_network(pio.PioModule.from_value(point), directory / "csv")
+        diagnostics.extend(findings)
+        if network is None:
+            network = current
+            network.set_snapshots(snapshots)
+        for name, component in network.components.items():
+            first = component.static
+            following = current.components[name].static
+            if not first.index.equals(following.index) or not first.columns.equals(following.columns):
+                raise ValueError(f"PyPSA temporal export requires a fixed component inventory: {name}")
+            for column in first.columns:
+                varying = column in component.defaults.index and bool(component.defaults.loc[column, "varying"])
+                if varying:
+                    values = following[column].to_numpy(copy=True)
+                    expanded_bytes += values.nbytes
+                    if expanded_bytes > MAX_BYTES:
+                        raise ValueError("PyPSA temporal arrays exceed the 64 MiB acquisition limit")
+                    dynamic.setdefault((name, column), []).append(values)
+                elif not first[column].equals(following[column]):
+                    raise ValueError(f"PyPSA cannot vary static attribute {name}.{column} across snapshots")
+    assert network is not None
+    for (name, column), values in dynamic.items():
+        component = network.components[name]
+        # Store only an explicitly changing series. Static dispatch remains a
+        # scalar; a consumer still sees the complete declared snapshot axis.
+        frame = pd.DataFrame(values, index=snapshots, columns=component.static.index)
+        equal = frame.eq(frame.iloc[0]) | (frame.isna() & frame.iloc[0].isna())
+        if not equal.all().all():
+            component.dynamic[column] = frame
+    for index, point in enumerate(series.time_points):
+        if point.duration_seconds is not None:
+            network.snapshot_weightings.iloc[index, :] = point.duration_seconds / 3600.0
+    return network, diagnostics

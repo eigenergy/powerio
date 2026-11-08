@@ -70,11 +70,18 @@ fn three_winding_connections_and_pair_bases_survive() {
         t.magnetizing_connection = placement;
         t.windings[0].tap = 1.08;
         t.windings[1].shift = 12.0;
+        let mut control = powerio_tx::network::TransformerControl::new(
+            powerio_tx::network::TransformerControlMode::Voltage,
+        );
+        control.controlled_bus = Some(BusId(3));
+        control.mva_base = 100.0;
+        t.windings[0].control = Some(control);
         t.star_vm = 0.98;
         t.star_va = -3.0;
         net.transformers_3w_mut().push(t.clone());
         for version in 1..=4 {
             let out = emit_value(&net, TargetFormat::SiennaJson { version }).unwrap();
+            save_output(version, &format!("three_winding_{placement:?}"), &out.text);
             let recovered =
                 powerio_tx::parse(Source::from_memory("case.json", out.text.into_bytes()).unwrap())
                     .unwrap();
@@ -82,8 +89,8 @@ fn three_winding_connections_and_pair_bases_survive() {
             assert_eq!(actual.magnetizing_connection, placement);
             for (a, b) in actual.windings.iter().zip(&t.windings) {
                 assert_eq!(a.bus, b.bus);
-                assert!((a.tap-b.tap).abs() < 1e-12);
-                assert!((a.shift-b.shift).abs() < 1e-12);
+                assert!((a.tap - b.tap).abs() < 1e-12);
+                assert!((a.shift - b.shift).abs() < 1e-12);
                 assert_eq!(a.control, b.control);
             }
             assert!((actual.mag_g - t.mag_g).abs() < 1e-12);
@@ -93,6 +100,89 @@ fn three_winding_connections_and_pair_bases_survive() {
                 assert!((a.r - b.r).abs() < 1e-12);
                 assert!((a.x - b.x).abs() < 1e-12);
                 assert!((a.base_mva - b.base_mva).abs() < 1e-12);
+            }
+        }
+    }
+}
+
+fn save_output(version: u8, name: &str, text: &str) {
+    if let Some(dir) = std::env::var_os("POWERIO_SIENNA_OUTPUT_DIR") {
+        let dir = std::path::PathBuf::from(dir).join(format!("0.{version}.0"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{name}.json")), text).unwrap();
+    }
+}
+
+#[test]
+fn transformer_control_modes_and_generation_types() {
+    use powerio_tx::network::{
+        GeneratorEnergySource as Energy, TransformerControl, TransformerControlMode as Mode,
+    };
+    let source = Source::open(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case14.m"),
+    )
+    .unwrap();
+    let module = powerio_tx::parse(source).unwrap();
+    for mode in [
+        Mode::Fixed,
+        Mode::Voltage,
+        Mode::ReactiveFlow,
+        Mode::ActiveFlow,
+        Mode::DcLineQuantity,
+        Mode::AsymmetricActiveFlow,
+    ] {
+        for enabled in [false, true] {
+            if mode == Mode::Fixed && enabled {
+                continue;
+            }
+            let mut net = module.value().clone();
+            let branch = net
+                .branches_mut()
+                .iter_mut()
+                .find(|b| b.is_transformer())
+                .unwrap();
+            let mut control = TransformerControl::new(mode);
+            control.enabled = enabled;
+            control.mva_base = 100.0;
+            control.controlled_bus = Some(powerio_tx::network::BusId(4));
+            control.controlled_bus_on_winding_side = true;
+            control.ntp = 17;
+            branch.control = Some(control.clone());
+            net.generators_mut()[0].energy_source = Energy::Wind;
+            net.generators_mut()[1].energy_source = Energy::Solar;
+            net.generators_mut()[2].energy_source = Energy::Hydro;
+            net.generators_mut()[3].energy_source = Energy::Nuclear;
+            for version in 1..=4 {
+                let out = emit_value(&net, TargetFormat::SiennaJson { version }).unwrap();
+                save_output(version, &format!("control_{mode:?}_{enabled}"), &out.text);
+                let recovered = powerio_tx::parse(
+                    Source::from_memory("case.json", out.text.into_bytes()).unwrap(),
+                )
+                .unwrap();
+                let actual = recovered
+                    .value()
+                    .branches()
+                    .iter()
+                    .find_map(|b| b.control.as_ref())
+                    .unwrap();
+                assert_eq!(actual.mode, control.mode);
+                assert_eq!(actual.enabled, control.enabled);
+                assert_eq!(actual.controlled_bus, control.controlled_bus);
+                assert_eq!(
+                    actual.controlled_bus_on_winding_side,
+                    control.controlled_bus_on_winding_side
+                );
+                assert!((actual.tap_min - control.tap_min).abs() < 1e-12);
+                assert!((actual.band_max - control.band_max).abs() < 1e-12);
+                let energies: Vec<_> = recovered
+                    .value()
+                    .generators()
+                    .iter()
+                    .map(|g| g.energy_source)
+                    .collect();
+                for energy in [Energy::Wind, Energy::Solar, Energy::Hydro, Energy::Nuclear] {
+                    assert!(energies.contains(&energy));
+                }
             }
         }
     }

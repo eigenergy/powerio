@@ -16,7 +16,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) const EXTENSION: &str = "org.eigenergy.powerio.sienna";
 mod areas;
+mod control;
+mod generators;
 mod hvdc;
+mod merge;
 mod metadata;
 mod three_winding;
 const BASE: f64 = 100.0;
@@ -256,7 +259,7 @@ pub(super) fn read(
             }
         }
         ids.insert(id, bus.id);
-        metadata::restore(&root, row, &mut bus, &["uid", "name"])?;
+        metadata::restore(&root, row, &mut bus, &["uid", "name", "extras"])?;
         buses.push(bus);
     }
     let by_bus: BTreeMap<BusId, &Bus> = buses.iter().map(|b| (b.id, b)).collect();
@@ -273,7 +276,17 @@ pub(super) fn read(
             let (from, to) = *arcs
                 .get(&integer(row, "arc")?)
                 .ok_or_else(|| error("branch references missing Arc"))?;
-            let z = parameter_scale(row, by_bus[&from].base_kv)?;
+            let kv_from = by_bus[&from].base_kv;
+            let mut z = parameter_scale(row, kv_from)?;
+            let primary_kv = optional(row, "base_voltage_primary", kv_from)?;
+            if kind == "TransformerCircuit"
+                && row["parameter_units"].as_str() != Some("NATURAL_UNITS")
+                && row.get("base_voltage_primary").is_some()
+            {
+                z *= (positive(primary_kv, "base_voltage_primary")?
+                    / positive(kv_from, "bus base_voltage")?)
+                .powi(2);
+            }
             let p = power_scale(row)?;
             let mut branch = Branch::new(
                 from,
@@ -307,10 +320,28 @@ pub(super) fn read(
                 branch.angmax = hi.to_degrees();
             } else {
                 branch.tap = optional(row, "tap", 1.0)?;
+                if row.get("base_voltage_primary").is_some()
+                    && row.get("base_voltage_secondary").is_some()
+                {
+                    let secondary_kv = positive(
+                        number(row, "base_voltage_secondary")?,
+                        "base_voltage_secondary",
+                    )?;
+                    branch.tap *= primary_kv / secondary_kv
+                        * positive(by_bus[&to].base_kv, "bus base_voltage")?
+                        / positive(kv_from, "bus base_voltage")?;
+                }
                 positive(branch.tap, "tap")?;
                 branch.shift = optional(row, "alpha", 0.0)?.to_degrees();
+                branch.control = control::read(row, actual)?;
             }
-            metadata::restore(&root, row, &mut branch, &["uid", "name"])?;
+            metadata::restore(
+                &root,
+                row,
+                &mut branch,
+                &["uid", "name", "extras", "rating_sets"],
+            )?;
+            metadata::restore_branch_solution(&root, row, &mut branch, warnings)?;
             branches.push(branch);
         }
     }
@@ -337,7 +368,18 @@ pub(super) fn read(
                 .and_then(Value::as_str)
                 .unwrap_or("COMPONENT_BASE")
             {
-                "COMPONENT_BASE" => base(circuit)? / BASE,
+                "COMPONENT_BASE" => {
+                    let ratio = if circuit.get("base_voltage_primary").is_some() {
+                        positive(by_bus[&b.from].base_kv, "bus base_voltage")?
+                            / positive(
+                                number(circuit, "base_voltage_primary")?,
+                                "base_voltage_primary",
+                            )?
+                    } else {
+                        1.0
+                    };
+                    base(circuit)? / BASE * ratio.powi(2)
+                }
                 "COMPONENT_MVAR" => 1.0 / BASE,
                 "NATURAL_UNITS" => {
                     positive(by_bus[&b.from].base_kv, "base_voltage")?.powi(2) / BASE
@@ -351,11 +393,22 @@ pub(super) fn read(
                 .and_then(Value::as_str)
                 .unwrap_or("PRIMARY");
             b.charging = Some(match loc {
-                "PRIMARY" => BranchCharging::new(g, susceptance, 0.0, 0.0),
+                "PRIMARY" => BranchCharging::new(
+                    g * b.calc_effective_tap().powi(2),
+                    susceptance * b.calc_effective_tap().powi(2),
+                    0.0,
+                    0.0,
+                ),
                 "SECONDARY" => BranchCharging::new(0.0, 0.0, g, susceptance),
+                "SPLIT" => BranchCharging::new(
+                    g * b.calc_effective_tap().powi(2),
+                    susceptance * b.calc_effective_tap().powi(2),
+                    g,
+                    susceptance,
+                ),
                 other => return Err(error(format!("unsupported shunt_location {other}"))),
             });
-            b.b = susceptance;
+            b.b = b.charging.expect("set above").calc_total_b();
         }
     }
     let mut loads = Vec::new();
@@ -397,7 +450,7 @@ pub(super) fn read(
             };
             load.in_service = available(row)?;
             load.uid = uid(kind, row)?;
-            metadata::restore(&root, row, &mut load, &["uid"])?;
+            metadata::restore(&root, row, &mut load, &["uid", "extras"])?;
             loads.push(load);
         }
     }
@@ -438,8 +491,12 @@ pub(super) fn read(
             let bus = bus_ref(row, "bus", &ids)?;
             let mut g = Generator::new(bus);
             g.uid = uid(kind, row)?;
-            g.pg = number(row, "active_power")? * p;
-            g.qg = number(row, "reactive_power")? * p;
+            g.pg = if kind == "SynchronousCondenser" {
+                -optional(row, "active_power_losses", 0.0)? * p
+            } else {
+                optional(row, "active_power", 0.0)? * p
+            };
+            g.qg = optional(row, "reactive_power", 0.0)? * p;
             let (lo, hi) = limits(
                 row,
                 "active_power_limits",
@@ -447,7 +504,17 @@ pub(super) fn read(
             )?;
             g.pmin = lo * p;
             g.pmax = hi * p;
-            let (lo, hi) = limits(row, "reactive_power_limits", (0.0, 0.0))?;
+            if kind == "SynchronousCondenser" {
+                g.pmin = g.pg;
+                g.pmax = g.pg;
+            }
+            g.energy_source = generators::energy_source(kind, row);
+            let q_default = if kind == "Source" {
+                (0.0, 0.0)
+            } else {
+                (f64::NEG_INFINITY, f64::INFINITY)
+            };
+            let (lo, hi) = limits(row, "reactive_power_limits", q_default)?;
             g.qmin = lo * p;
             g.qmax = hi * p;
             g.mbase = base(row)?;
@@ -461,6 +528,14 @@ pub(super) fn read(
                 g.cost = read_cost(c, g.mbase, warnings)?;
             }
             metadata::restore(&root, row, &mut g, &["uid", "vg", "caps"])?;
+            if root["ext"][integer(row, "id")?.to_string()]["org.eigenergy.powerio"]["operation_cost_absent"]
+                == true
+                && g.cost.as_ref().is_some_and(|c| {
+                    c.startup == 0.0 && c.shutdown == 0.0 && c.coeffs.iter().all(|v| *v == 0.0)
+                })
+            {
+                g.cost = None;
+            }
             generators.push(g);
         }
     }
@@ -620,7 +695,15 @@ fn read_cost(cost: &Value, base: f64, warnings: &mut Diagnostics) -> Result<Opti
             return Ok(None);
         }
     };
-    out.startup = optional(cost, "start_up", 0.0)?;
+    out.startup = if cost.get("start_up").is_some_and(Value::is_object) {
+        retained(
+            warnings,
+            "staged startup costs are retained outside the scalar startup cost",
+        );
+        0.0
+    } else {
+        optional(cost, "start_up", 0.0)?
+    };
     out.shutdown = optional(cost, "shut_down", 0.0)?;
     if let Some(vom) = c.get("vom_cost")
         && (vom["function_data"]["proportional_term"]
@@ -791,7 +874,7 @@ pub(super) fn write(
     for b in net.buses() {
         let id = ids.get(b.uid.as_deref());
         bus_ids.insert(b.id, id);
-        metadata::record(&mut doc, id, b, &["uid", "name"])?;
+        metadata::record(&mut doc, id, b, &["uid", "name", "extras"])?;
         push(
             &mut doc,
             "ACBus",
@@ -800,7 +883,8 @@ pub(super) fn write(
     }
     for b in net.branches() {
         let id = ids.get(b.uid.as_deref());
-        metadata::record(&mut doc, id, b, &["uid", "name"])?;
+        metadata::record(&mut doc, id, b, &["uid", "name", "extras", "rating_sets"])?;
+        metadata::record_branch_solution(&mut doc, id, b, &mut warnings);
         let arc = ids.related("arc", id);
         push(
             &mut doc,
@@ -815,12 +899,31 @@ pub(super) fn write(
             row.as_object_mut().expect("object").remove("name");
             row["tap"] = json!(b.calc_effective_tap());
             row["alpha"] = json!(b.shift.to_radians());
+            let from_kv = net
+                .buses()
+                .iter()
+                .find(|bus| bus.id == b.from)
+                .expect("validated bus")
+                .base_kv;
+            let to_kv = net
+                .buses()
+                .iter()
+                .find(|bus| bus.id == b.to)
+                .expect("validated bus")
+                .base_kv;
+            if from_kv > 0.0 && to_kv > 0.0 {
+                row["base_voltage_primary"] = json!(from_kv);
+                row["base_voltage_secondary"] = json!(to_kv);
+            }
+            if let Some(c) = &b.control {
+                control::write(&mut row, c, selected)?;
+            }
             push(&mut doc, "TransformerCircuit", row);
             let tr = ids.related("two_winding", id);
             push(
                 &mut doc,
                 "TwoWindingTransformer",
-                json!({"id":tr,"name":b.name.clone().unwrap_or_else(||format!("transformer_{tr}")),"circuit":id,"admittance_units":"COMPONENT_BASE","magnetizing_shunt":{"real":ch.g_fr,"imag":ch.b_fr},"shunt_location":"PRIMARY"}),
+                json!({"id":tr,"name":b.name.clone().unwrap_or_else(||format!("transformer_{tr}")),"circuit":id,"admittance_units":"COMPONENT_BASE","magnetizing_shunt":{"real":ch.g_fr/b.calc_effective_tap().powi(2),"imag":ch.b_fr/b.calc_effective_tap().powi(2)},"shunt_location":"PRIMARY"}),
             );
             if ch.g_to != 0.0 || ch.b_to != 0.0 {
                 let sh = ids.get(None);
@@ -842,7 +945,7 @@ pub(super) fn write(
     }
     for l in net.loads() {
         let id = ids.get(l.uid.as_deref());
-        metadata::record(&mut doc, id, l, &["uid"])?;
+        metadata::record(&mut doc, id, l, &["uid", "extras"])?;
         let mut row = json!({"id":id,"name":format!("load_{id}"),"available":l.in_service,"bus":bus_ids[&l.bus],"base_power":net.base_mva(),"power_units":"NATURAL_UNITS"});
         if let Some(LoadVoltageModel::Zip {
             p_constant_power,
@@ -906,11 +1009,25 @@ pub(super) fn write(
             warnings.push(&codes::EMIT_SIENNA.field_dropped, format!("generator {id}: voltage setpoint and capability columns without native fields are retained in ext; a Sienna consumer must explicitly handle those extension keys"));
         }
         let cost = cost_json(g.cost.as_ref(), &mut warnings);
-        push(
-            &mut doc,
-            "ThermalStandard",
-            json!({"id":id,"name":format!("generator_{id}"),"available":g.in_service,"status":if g.in_service {"ONLINE"}else{"OFFLINE"},"bus":bus_ids[&g.bus],"active_power":g.pg,"reactive_power":g.qg,"rating":g.mbase.max(g.pmax.abs()).max(g.pg.abs()),"active_power_limits":minmax(g.pmin,g.pmax),"reactive_power_limits":minmax(g.qmin,g.qmax),"base_power":if g.mbase>0.0 {g.mbase}else{net.base_mva()},"power_units":"NATURAL_UNITS","operation_cost":cost}),
-        );
+        let mut row = json!({"id":id,"name":format!("generator_{id}"),"available":g.in_service,"status":if g.in_service {"ONLINE"}else{"OFFLINE"},"bus":bus_ids[&g.bus],"active_power":g.pg,"reactive_power":g.qg,"rating":g.mbase.max(g.pmax.abs()).max(g.pg.abs()),"active_power_limits":minmax(g.pmin,g.pmax),"reactive_power_limits":minmax(g.qmin,g.qmax),"base_power":if g.mbase>0.0 {g.mbase}else{net.base_mva()},"power_units":"NATURAL_UNITS","operation_cost":cost});
+        if g.qmin.is_nan() || g.qmax.is_nan() {
+            return Err(error("generator reactive bounds contain NaN"));
+        }
+        if !g.qmin.is_finite() || !g.qmax.is_finite() {
+            row.as_object_mut()
+                .expect("constructed object")
+                .remove("reactive_power_limits");
+            if g.qmin.is_finite() || g.qmax.is_finite() {
+                warnings.push(&codes::EMIT_SIENNA.field_dropped, format!("generator {id}: one-sided reactive bounds have no finite MinMax representation"));
+            }
+        }
+        if g.cost.is_none() {
+            doc["ext"][id.to_string()]["org.eigenergy.powerio"]["operation_cost_absent"] =
+                json!(true);
+            warnings.push(&codes::EMIT_SIENNA.value_defaulted, format!("generator {id}: required operation_cost defaults to zero because the source has no cost"));
+        }
+        let kind = generators::prepare(&mut row, g, original, id, &mut warnings);
+        push(&mut doc, kind, row);
     }
     for s in net.storage() {
         let id = ids.get(s.uid.as_deref());
@@ -921,8 +1038,23 @@ pub(super) fn write(
             json!({"id":id,"name":format!("storage_{id}"),"available":s.in_service,"bus":bus_ids[&s.bus],"prime_mover_type":"BA","storage_technology_type":"OTHER_CHEM","storage_capacity":s.energy_rating,"energy_units":"MWH","storage_level_limits":minmax(0.0,1.0),"initial_storage_capacity_level":if s.energy_rating>0.0 {s.energy/s.energy_rating}else{0.0},"rating":s.thermal_rating,"active_power":-s.ps,"reactive_power":-s.qs,"input_active_power_limits":minmax(0.0,s.charge_rating),"output_active_power_limits":minmax(0.0,s.discharge_rating),"efficiency":{"in":s.charge_efficiency,"out":s.discharge_efficiency},"reactive_power_limits":minmax(-s.qmax,-s.qmin),"base_power":net.base_mva(),"power_units":"NATURAL_UNITS","operation_cost":{"cost_type":"STORAGE","fixed":0.0,"start_up":0.0,"shut_down":0.0}}),
         );
     }
-    hvdc::write_hvdc(net, &mut doc, &mut ids, &bus_ids, selected, &mut warnings);
-    three_winding::write(net, &mut doc, &mut ids, &bus_ids)?;
+    hvdc::write_hvdc(net, &mut doc, &mut ids, &bus_ids, selected, &mut warnings)?;
+    three_winding::write(net, &mut doc, &mut ids, &bus_ids, selected)?;
+    for b in net.branches() {
+        if !b.rating_sets.is_empty() {
+            warnings.push(&codes::EMIT_SIENNA.field_dropped, "named branch rating sets are retained in ext without native Sienna constraint semantics");
+        }
+    }
+    let extras = net.buses().iter().filter(|b| !b.extras.is_empty()).count()
+        + net
+            .branches()
+            .iter()
+            .filter(|b| !b.extras.is_empty())
+            .count()
+        + net.loads().iter().filter(|l| !l.extras.is_empty()).count();
+    if extras > 0 {
+        warnings.push(&codes::EMIT_SIENNA.extras_dropped, format!("{extras} component extras are retained in ext and require explicit consumer handling"));
+    }
     for (kind, n) in [
         ("switches", net.switches().len()),
         (
@@ -937,9 +1069,21 @@ pub(super) fn write(
             );
         }
     }
+    for (kind, list) in doc["components"].as_object().expect("constructed object") {
+        for (index, row) in list
+            .as_array()
+            .expect("constructed array")
+            .iter()
+            .enumerate()
+        {
+            if let Some(path) = null_path(row, &format!("components.{kind}[{index}]")) {
+                return Err(error(format!("nonfinite numeric output at {path}")));
+            }
+        }
+    }
     if let Some(source) = original {
         if version(source)? == selected {
-            preserve_unmapped(&mut doc, source);
+            merge::preserve_unmapped(&mut doc, source, &mut warnings)?;
         } else {
             warnings.push(&codes::EMIT_SIENNA.extras_dropped,"cross-version write retains the typed electrical value; source-only fields require a version-specific migration");
         }
@@ -951,53 +1095,17 @@ pub(super) fn write(
     Ok(TextEmission::new(text, warnings))
 }
 
-fn preserve_unmapped(doc: &mut Value, original: &Value) {
-    let Some(source) = original.as_object() else {
-        return;
-    };
-    for (key, value) in source {
-        if !matches!(
-            key.as_str(),
-            "components" | "schema_version" | "name" | "frequency" | "ext"
-        ) {
-            doc[key] = value.clone();
-        }
-    }
-    if let Some(old) = original["ext"].as_object() {
-        for (id, fields) in old {
-            if let Some(fields) = fields.as_object() {
-                for (key, value) in fields {
-                    if doc["ext"][id].get(key).is_none() {
-                        doc["ext"][id][key] = value.clone();
-                    }
-                }
-            }
-        }
-    }
-    if let Some(components) = original["components"].as_object() {
-        for (kind, rows) in components {
-            if doc["components"].get(kind).is_none() {
-                if !ELECTRICAL_KINDS.contains(&kind.as_str()) {
-                    doc["components"][kind] = rows.clone();
-                }
-                continue;
-            }
-            if let (Some(old), Some(new)) =
-                (rows.as_array(), doc["components"][kind].as_array_mut())
-            {
-                for row in new {
-                    if let Some(previous) = old.iter().find(|r| r["id"] == row["id"]) {
-                        let mut merged = previous.clone();
-                        if let Some(o) = row.as_object() {
-                            for (k, v) in o {
-                                merged[k] = v.clone();
-                            }
-                        }
-                        *row = merged;
-                    }
-                }
-            }
-        }
+fn null_path(v: &Value, path: &str) -> Option<String> {
+    match v {
+        Value::Null => Some(path.into()),
+        Value::Object(o) => o
+            .iter()
+            .find_map(|(k, v)| null_path(v, &format!("{path}.{k}"))),
+        Value::Array(a) => a
+            .iter()
+            .enumerate()
+            .find_map(|(i, v)| null_path(v, &format!("{path}[{i}]"))),
+        _ => None,
     }
 }
 
@@ -1051,6 +1159,39 @@ mod tests {
         assert!((n.x - b.x).abs() < 1e-14);
         assert!((n.charging.unwrap().b_fr - ch.b_fr).abs() < 1e-14);
     }
+    #[test]
+    fn transformer_voltage_bases_and_terminal_shunts() {
+        let mut doc = document();
+        doc["components"]["ACBus"][1]["base_voltage"] = json!(10.0);
+        doc["components"].as_object_mut().unwrap().remove("Line");
+        doc["components"]["TransformerCircuit"] = json!([{"id":11,"available":true,"arc":10,"r":0.01,"x":0.1,"base_power":50.0,"power_units":"NATURAL_UNITS","parameter_units":"COMPONENT_BASE","base_voltage_primary":120.0,"base_voltage_secondary":12.0,"rating":80.0,"tap":1.1}]);
+        doc["components"]["TwoWindingTransformer"] = json!([{"id":12,"name":"transformer","circuit":11,"admittance_units":"COMPONENT_BASE","magnetizing_shunt":{"real":0.01,"imag":-0.02},"shunt_location":"SPLIT"}]);
+        let net = decode(&doc);
+        let b = &net.branches()[0];
+        assert!((b.r - 0.0288).abs() < 1e-12);
+        assert!((b.tap - 1.1).abs() < 1e-12);
+        let y = 0.01 * 0.5 / 1.44;
+        let ch = b.charging.unwrap();
+        assert!((ch.g_fr / b.tap.powi(2) - y).abs() < 1e-12);
+        assert!((ch.g_to - y).abs() < 1e-12);
+    }
+
+    #[test]
+    fn nan_values_are_rejected_but_unbounded_q_is_omitted() {
+        let mut net = decode(&document());
+        let mut g = Generator::new(BusId(7));
+        g.mbase = 100.0;
+        g.qmin = f64::NEG_INFINITY;
+        g.qmax = f64::INFINITY;
+        net.generators_mut().push(g);
+        let output = write(&net, 4, None).unwrap();
+        let recovered = decode(&serde_json::from_str(&output.text).unwrap());
+        assert_eq!(recovered.generators()[0].qmin, f64::NEG_INFINITY);
+        assert_eq!(recovered.generators()[0].qmax, f64::INFINITY);
+        net.branches_mut()[0].r = f64::NAN;
+        assert!(write(&net, 4, None).is_err());
+    }
+
     #[test]
     fn every_release_writes_fresh_and_reads_with_matching_version() {
         let net = decode(&document());

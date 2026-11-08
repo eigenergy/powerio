@@ -952,7 +952,8 @@
             }
           ],
           "default": 60.0,
-          "description": "System base frequency in hertz (50 or 60). Threaded through the formats\nthat record it (PSS/E `BASFRQ`, pandapower `f_hz`) and defaulted to\n[`DEFAULT_BASE_FREQUENCY`] for the rest. Load-bearing for any\nreactance↔henry conversion (pandapower line charging) and reported as a\nfidelity loss when a non-default value writes to a format with no\nfrequency field."
+          "description": "System base frequency in hertz (50 or 60). Threaded through the formats\nthat record it (PSS/E `BASFRQ`, pandapower `f_hz`) and defaulted to\n[`DEFAULT_BASE_FREQUENCY`] for the rest. Load-bearing for any\nreactance↔henry conversion (pandapower line charging) and reported as a\nfidelity loss when a non-default value writes to a format with no\nfrequency field.",
+          "x-unit": "Hz"
         },
         "base_mva": {
           "anyOf": [
@@ -968,7 +969,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MVA"
         },
         "branches": {
           "items": {
@@ -1388,7 +1390,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "deg"
         },
         "angmin": {
           "anyOf": [
@@ -1404,7 +1407,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "deg"
         },
         "b": {
           "anyOf": [
@@ -1421,7 +1425,13 @@
               "type": "string"
             }
           ],
-          "description": "MATPOWER compatible total line charging susceptance (p.u.). This is the\nlegacy total projection; when [`charging`](Branch::charging) is present,\nper terminal admittance is canonical and this field is compatibility data."
+          "description": "MATPOWER compatible total line charging susceptance (p.u.). This is the\nlegacy total projection; when [`charging`](Branch::charging) is present,\nper terminal admittance is canonical and this field is compatibility data.",
+          "x-sign-convention": "total charging susceptance; charging overrides its terminal split",
+          "x-unit": "pu",
+          "x-unit-base": {
+            "power": "network.base_mva",
+            "voltage": "network.buses[from].base_kv"
+          }
         },
         "charging": {
           "anyOf": [
@@ -1491,7 +1501,12 @@
               "type": "string"
             }
           ],
-          "description": "Series resistance (p.u.)."
+          "description": "Series resistance (p.u.).",
+          "x-unit": "pu",
+          "x-unit-base": {
+            "power": "network.base_mva",
+            "voltage": "network.buses[from].base_kv"
+          }
         },
         "rate_a": {
           "anyOf": [
@@ -1507,7 +1522,9 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MVA",
+          "x-zero-means": "unlimited"
         },
         "rate_b": {
           "anyOf": [
@@ -1523,7 +1540,9 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MVA",
+          "x-zero-means": "unlimited"
         },
         "rate_c": {
           "anyOf": [
@@ -1539,7 +1558,9 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MVA",
+          "x-zero-means": "unlimited"
         },
         "rating_sets": {
           "default": [],
@@ -1574,7 +1595,8 @@
               "type": "string"
             }
           ],
-          "description": "Phase shift (degrees)."
+          "description": "Phase shift (degrees).",
+          "x-unit": "deg"
         },
         "solution": {
           "anyOf": [
@@ -1603,7 +1625,9 @@
               "type": "string"
             }
           ],
-          "description": "Tap ratio, MATPOWER convention: 0 means \"no tap\" (a line), treated as 1."
+          "description": "Tap ratio, MATPOWER convention: 0 means \"no tap\" (a line), treated as 1.",
+          "x-unit": "1",
+          "x-zero-means": 1.0
         },
         "to": {
           "$ref": "#/$defs/BusId"
@@ -1630,7 +1654,12 @@
               "type": "string"
             }
           ],
-          "description": "Series reactance (p.u.)."
+          "description": "Series reactance (p.u.).",
+          "x-unit": "pu",
+          "x-unit-base": {
+            "power": "network.base_mva",
+            "voltage": "network.buses[from].base_kv"
+          }
         }
       },
       "required": [
@@ -1668,7 +1697,12 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "pu",
+          "x-unit-base": {
+            "power": "network.base_mva",
+            "voltage": "network.buses[from].base_kv"
+          }
         },
         "b_to": {
           "anyOf": [
@@ -1684,7 +1718,12 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "pu",
+          "x-unit-base": {
+            "power": "network.base_mva",
+            "voltage": "network.buses[from].base_kv"
+          }
         },
         "g_fr": {
           "anyOf": [
@@ -1700,7 +1739,12 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "pu",
+          "x-unit-base": {
+            "power": "network.base_mva",
+            "voltage": "network.buses[from].base_kv"
+          }
         },
         "g_to": {
           "anyOf": [
@@ -1716,7 +1760,12 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "pu",
+          "x-unit-base": {
+            "power": "network.base_mva",
+            "voltage": "network.buses[from].base_kv"
+          }
         }
       },
       "required": [
@@ -1937,7 +1986,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MW"
         },
         "pt": {
           "anyOf": [
@@ -1953,7 +2003,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MW"
         },
         "qf": {
           "anyOf": [
@@ -1969,7 +2020,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MVAr"
         },
         "qt": {
           "anyOf": [
@@ -1985,7 +2037,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MVAr"
         }
       },
       "required": [
@@ -2038,7 +2091,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "kV"
         },
         "evhi": {
           "anyOf": [
@@ -2059,7 +2113,11 @@
             }
           ],
           "default": null,
-          "description": "Emergency (short-term) voltage band, set only when the source states one\ndistinct from the normal [`vmax`](Bus::vmax)/[`vmin`](Bus::vmin) band (PSS/E\n`EVHI`/`EVLO`). `None` means the emergency band equals the normal band, so\nread `evhi.unwrap_or(vmax)` / `evlo.unwrap_or(vmin)`. `#[serde(default)]` so\nJSON written before the fields existed still deserializes."
+          "description": "Emergency (short-term) voltage band, set only when the source states one\ndistinct from the normal [`vmax`](Bus::vmax)/[`vmin`](Bus::vmin) band (PSS/E\n`EVHI`/`EVLO`). `None` means the emergency band equals the normal band, so\nread `evhi.unwrap_or(vmax)` / `evlo.unwrap_or(vmin)`. `#[serde(default)]` so\nJSON written before the fields existed still deserializes.",
+          "x-unit": "pu",
+          "x-unit-base": {
+            "voltage": "base_kv"
+          }
         },
         "evlo": {
           "anyOf": [
@@ -2079,7 +2137,11 @@
               "type": "string"
             }
           ],
-          "default": null
+          "default": null,
+          "x-unit": "pu",
+          "x-unit-base": {
+            "voltage": "base_kv"
+          }
         },
         "extras": {
           "additionalProperties": true,
@@ -2131,7 +2193,8 @@
               "type": "string"
             }
           ],
-          "description": "Voltage angle (degrees)."
+          "description": "Voltage angle (degrees).",
+          "x-unit": "deg"
         },
         "vm": {
           "anyOf": [
@@ -2148,7 +2211,11 @@
               "type": "string"
             }
           ],
-          "description": "Voltage magnitude (p.u.)."
+          "description": "Voltage magnitude (p.u.).",
+          "x-unit": "pu",
+          "x-unit-base": {
+            "voltage": "base_kv"
+          }
         },
         "vmax": {
           "anyOf": [
@@ -2164,7 +2231,11 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "pu",
+          "x-unit-base": {
+            "voltage": "base_kv"
+          }
         },
         "vmin": {
           "anyOf": [
@@ -2180,7 +2251,11 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "pu",
+          "x-unit-base": {
+            "voltage": "base_kv"
+          }
         },
         "zone": {
           "format": "uint",
@@ -7271,7 +7346,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MVA"
         },
         "pg": {
           "anyOf": [
@@ -7288,7 +7364,9 @@
               "type": "string"
             }
           ],
-          "description": "Real power set point (MW)."
+          "description": "Real power set point (MW).",
+          "x-sign-convention": "positive injection into the network",
+          "x-unit": "MW"
         },
         "pmax": {
           "anyOf": [
@@ -7304,7 +7382,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MW"
         },
         "pmin": {
           "anyOf": [
@@ -7320,7 +7399,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MW"
         },
         "qg": {
           "anyOf": [
@@ -7337,7 +7417,9 @@
               "type": "string"
             }
           ],
-          "description": "Reactive power set point (MVAr)."
+          "description": "Reactive power set point (MVAr).",
+          "x-sign-convention": "positive injection into the network",
+          "x-unit": "MVAr"
         },
         "qmax": {
           "anyOf": [
@@ -7353,7 +7435,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MVAr"
         },
         "qmin": {
           "anyOf": [
@@ -7369,7 +7452,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MVAr"
         },
         "regulated_bus": {
           "anyOf": [
@@ -7416,7 +7500,12 @@
               "type": "string"
             }
           ],
-          "description": "Voltage set point (p.u.)."
+          "description": "Voltage set point (p.u.).",
+          "x-unit": "pu",
+          "x-unit-base": {
+            "power": "network.base_mva",
+            "voltage": "network.buses[bus].base_kv"
+          }
         },
         "voltage_regulation_on": {
           "default": true,
@@ -9359,7 +9448,9 @@
               "type": "string"
             }
           ],
-          "description": "Active demand (MW)."
+          "description": "Active demand (MW).",
+          "x-sign-convention": "positive consumption from the network",
+          "x-unit": "MW"
         },
         "q": {
           "anyOf": [
@@ -9376,7 +9467,9 @@
               "type": "string"
             }
           ],
-          "description": "Reactive demand (MVAr)."
+          "description": "Reactive demand (MVAr).",
+          "x-sign-convention": "positive consumption from the network",
+          "x-unit": "MVAr"
         },
         "uid": {
           "description": "Stable row identity; see [`Bus::uid`].",
@@ -13857,7 +13950,9 @@
               "type": "string"
             }
           ],
-          "description": "Shunt susceptance (MVAr at V = 1 p.u.). For a switched shunt this is the\ninitial steady state value within the [`control`](Shunt::control) blocks."
+          "description": "Shunt susceptance (MVAr at V = 1 p.u.). For a switched shunt this is the\ninitial steady state value within the [`control`](Shunt::control) blocks.",
+          "x-sign-convention": "reactive injection at unit voltage magnitude",
+          "x-unit": "MVAr"
         },
         "bus": {
           "$ref": "#/$defs/BusId"
@@ -13893,7 +13988,9 @@
               "type": "string"
             }
           ],
-          "description": "Shunt conductance (MW at V = 1 p.u.)."
+          "description": "Shunt conductance (MW at V = 1 p.u.).",
+          "x-sign-convention": "active consumption at unit voltage magnitude",
+          "x-unit": "MW"
         },
         "in_service": {
           "type": "boolean"
@@ -14381,6 +14478,11 @@
           "const": "ravens-json",
           "description": "Read from an MG-RAVENS JSON document (the LANL CIM-derived interchange\nschema), balanced subset.",
           "type": "string"
+        },
+        {
+          "const": "sienna-json",
+          "description": "SiennaSchemas SystemDocument.",
+          "type": "string"
         }
       ]
     },
@@ -14633,7 +14735,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "1"
         },
         "charge_rating": {
           "anyOf": [
@@ -14649,7 +14752,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MW"
         },
         "current_rating": {
           "anyOf": [
@@ -14685,7 +14789,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "1"
         },
         "discharge_rating": {
           "anyOf": [
@@ -14701,7 +14806,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MW"
         },
         "energy": {
           "anyOf": [
@@ -14717,7 +14823,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MWh"
         },
         "energy_rating": {
           "anyOf": [
@@ -14733,7 +14840,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MWh"
         },
         "extras": {
           "additionalProperties": true,
@@ -14756,7 +14864,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MW"
         },
         "ps": {
           "anyOf": [
@@ -14772,7 +14881,9 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-sign-convention": "positive charging consumption from the network",
+          "x-unit": "MW"
         },
         "q_loss": {
           "anyOf": [
@@ -14788,7 +14899,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MVAr"
         },
         "qmax": {
           "anyOf": [
@@ -14804,7 +14916,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MVAr"
         },
         "qmin": {
           "anyOf": [
@@ -14820,7 +14933,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MVAr"
         },
         "qs": {
           "anyOf": [
@@ -14836,7 +14950,9 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-sign-convention": "positive consumption from the network",
+          "x-unit": "MVAr"
         },
         "r": {
           "anyOf": [
@@ -14852,7 +14968,12 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "pu",
+          "x-unit-base": {
+            "power": "network.base_mva",
+            "voltage": "network.buses[bus].base_kv"
+          }
         },
         "thermal_rating": {
           "anyOf": [
@@ -14868,7 +14989,8 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "MVA"
         },
         "uid": {
           "description": "Stable row identity; see [`Bus::uid`].",
@@ -14891,7 +15013,12 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-unit": "pu",
+          "x-unit-base": {
+            "power": "network.base_mva",
+            "voltage": "network.buses[bus].base_kv"
+          }
         }
       },
       "required": [

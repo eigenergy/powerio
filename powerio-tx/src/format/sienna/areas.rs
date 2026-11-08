@@ -22,7 +22,14 @@ pub(super) fn read(root: &Value) -> Result<AreaTables> {
                 root,
                 row,
                 &mut area,
-                &["number", "uid", "slack_bus", "tolerance", "area_type"],
+                &[
+                    "number",
+                    "uid",
+                    "name",
+                    "slack_bus",
+                    "tolerance",
+                    "area_type",
+                ],
             )?;
             mappings[index].insert(id, area.number);
             if index == 0
@@ -68,19 +75,26 @@ pub(super) fn write(
                 doc,
                 id,
                 area,
-                &["number", "uid", "slack_bus", "tolerance", "area_type"],
+                &[
+                    "number",
+                    "uid",
+                    "name",
+                    "slack_bus",
+                    "tolerance",
+                    "area_type",
+                ],
             )?;
             doc["ext"][id.to_string()]["org.eigenergy.powerio"]["implicit"] =
                 json!(source.is_none());
             let mut row = json!({"id":id,"name":area.name.clone().unwrap_or_else(||format!("{kind}_{number}")),"base_power":net.base_mva(),"power_units":"NATURAL_UNITS","peak_active_power":0.0,"peak_reactive_power":0.0});
-            if index == 0 && version >= 2 {
+            if index == 0 && version >= 3 {
                 row["scheduled_net_interchange"] = json!(area.net_interchange);
             }
             if area.slack_bus.is_some()
                 || area.tolerance != 0.0
-                || (version == 1 && area.net_interchange != 0.0)
+                || (version < 3 && area.net_interchange != 0.0)
             {
-                warnings.push(&super::codes::EMIT_SIENNA.field_dropped, format!("area {number}: slack bus and interchange tolerance require ext; 0.1 has no scheduled interchange field"));
+                warnings.push(&super::codes::EMIT_SIENNA.field_dropped, format!("area {number}: slack bus and interchange tolerance require ext; 0.1/0.2 have no scheduled interchange field"));
             }
             push(doc, kind, row);
         }
