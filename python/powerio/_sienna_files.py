@@ -1,0 +1,235 @@
+"""Bounded Sienna document/HDF5 bundles with durable structured array retention.
+
+The electrical value owns supported component fields. The module extension
+keeps companion arrays and their format metadata through PowerIO IR; forecast
+and planning semantics remain stated by the original Sienna associations.
+"""
+from __future__ import annotations
+
+import io
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+KEY = "org.eigenergy.powerio.sienna.arrays"
+MAX_BYTES = 64 << 20
+MAX_ITEMS = 4096
+FORMATS = {"sienna-bundle": "sienna-json", **{f"sienna-0-{i}-bundle": f"sienna-0-{i}-json" for i in range(1, 5)}}
+
+
+def _name(value: str) -> str:
+    if not isinstance(value, str) or not value or value in {".", ".."} or any(c in value for c in ("/", "\\", "\x00", ":")):
+        raise ValueError("Sienna companion must be a single relative filename")
+    return value
+
+
+def _json(module):
+    import powerio as pio
+    text = pio.serialize(module).text
+    if text is None:
+        raise ValueError("Expected PowerIO IR text")
+    return json.loads(text)
+
+
+def _array(value):
+    import numpy as np
+    array = np.asarray(value)
+    if array.dtype.kind not in "biufSU":
+        raise ValueError(f"Unsupported HDF5 value type {array.dtype}")
+    if array.nbytes > MAX_BYTES:
+        raise ValueError("HDF5 array exceeds the 64 MiB limit")
+    values = array.reshape(-1).tolist()
+    if array.dtype.kind == "f":
+        values = [v if np.isfinite(v) else str(v) for v in values]
+    if array.dtype.kind == "S":
+        # Attribute strings and fixed-width hash values are explicit text.
+        values = [v.decode("utf-8") for v in values]
+    return {"dtype": array.dtype.str, "shape": list(array.shape), "values": values}
+
+
+def _decode(value):
+    import numpy as np
+    dtype = np.dtype(value["dtype"])
+    shape = value["shape"]
+    if dtype.kind not in "biufSU" or len(shape) > 8 or any(not isinstance(n, int) or n < 0 for n in shape):
+        raise ValueError("Invalid HDF5 array metadata")
+    count = 1
+    for n in shape:
+        count *= n
+        if count * max(dtype.itemsize, 1) > MAX_BYTES:
+            raise ValueError("HDF5 array exceeds the 64 MiB limit")
+    if count != len(value["values"]):
+        raise ValueError("HDF5 array shape does not match values")
+    return np.asarray(value["values"], dtype=dtype).reshape(shape)
+
+
+def _read_hdf(data: bytes):
+    import h5py
+    total = 0
+    records = []
+    with h5py.File(io.BytesIO(data), "r") as store:
+        seen = set()
+        def visit(group, path):
+            nonlocal total
+            address = h5py.h5o.get_info(group.id).addr
+            if address in seen:
+                raise ValueError("HDF5 aliases and cycles are unsupported")
+            seen.add(address)
+            attrs = {key: _array(value) for key, value in group.attrs.items()}
+            total += sum(_decode(v).nbytes for v in attrs.values())
+            record = {"path": path, "attributes": attrs}
+            if isinstance(group, h5py.Dataset):
+                if group.is_virtual or group.external:
+                    raise ValueError("External HDF5 data is unsupported")
+                total += group.size * max(group.dtype.itemsize, 1)
+                if total > MAX_BYTES:
+                    raise ValueError("Expanded HDF5 arrays exceed the 64 MiB limit")
+                record["array"] = _array(group[()])
+            records.append(record)
+            if len(records) > MAX_ITEMS or total > MAX_BYTES:
+                raise ValueError("Sienna companion exceeds acquisition limits")
+            if isinstance(group, h5py.Group):
+                for name in group:
+                    _name(name)
+                    if not isinstance(group.get(name, getlink=True), h5py.HardLink):
+                        raise ValueError("HDF5 external and soft links are unsupported")
+                    visit(group[name], f"{path}/{name}" if path else name)
+        visit(store, "")
+    if len(json.dumps(records).encode()) > MAX_BYTES:
+        raise ValueError("Structured HDF5 arrays exceed the 64 MiB limit")
+    return records
+
+
+def _write_hdf(records):
+    import h5py
+    if not isinstance(records, list) or len(records) > MAX_ITEMS:
+        raise ValueError("Invalid Sienna array records")
+    buffer = io.BytesIO()
+    total = 0
+    seen = set()
+    with h5py.File(buffer, "w") as store:
+        for record in records:
+            path = record["path"]
+            if path in seen:
+                raise ValueError("Duplicate HDF5 path")
+            seen.add(path)
+            for part in path.split("/") if path else []:
+                _name(part)
+            if "array" in record:
+                array = _decode(record["array"])
+                total += array.nbytes
+                if total > MAX_BYTES:
+                    raise ValueError("Expanded HDF5 arrays exceed the 64 MiB limit")
+                obj = store.create_dataset(path, data=array)
+            else:
+                obj = store.require_group(path) if path else store
+            for key, value in record["attributes"].items():
+                array = _decode(value)
+                total += array.nbytes
+                if total > MAX_BYTES:
+                    raise ValueError("HDF5 attributes exceed the 64 MiB limit")
+                obj.attrs[key] = array.item() if array.shape == () else array
+    data = buffer.getvalue()
+    if len(data) > MAX_BYTES:
+        raise ValueError("HDF5 output exceeds the 64 MiB limit")
+    return data
+
+
+def parse(source: Any, format: str, *, name=None, acquisition_root=None, named_buffers=None):
+    import powerio as pio
+    if isinstance(source, (str, os.PathLike)):
+        if name is not None or named_buffers is not None:
+            raise ValueError("Path input cannot also supply name or named_buffers")
+        path = Path(source)
+        root = Path(acquisition_root).resolve() if acquisition_root is not None else path.parent.resolve()
+        if not path.resolve().is_relative_to(root):
+            raise ValueError("Sienna document is outside acquisition_root")
+        if path.stat().st_size > MAX_BYTES:
+            raise ValueError("Sienna document exceeds the 64 MiB limit")
+        data = path.read_bytes()
+        source_name = path.name
+    else:
+        if acquisition_root is not None:
+            raise ValueError("Memory input uses named_buffers for companions")
+        data = bytes(source) if isinstance(source, (bytes, bytearray, memoryview)) else source.read(MAX_BYTES + 1)
+        source_name = name or "system.json"
+        root = None
+        path = None
+    if isinstance(data, str):
+        data = data.encode()
+    if len(data) > MAX_BYTES:
+        raise ValueError("Sienna document exceeds the 64 MiB limit")
+    document = json.loads(data)
+    filename = document.get("time_series_storage_file")
+    associations = document.get("time_series_associations", [])
+    if associations and not filename:
+        raise ValueError("Sienna time-series associations require a companion")
+    extension = None
+    if filename:
+        filename = _name(filename)
+        if path is not None:
+            assert root is not None
+            companion = path.parent / filename
+            if not companion.resolve().is_relative_to(root):
+                raise ValueError("Sienna companion is outside acquisition_root")
+            if companion.stat().st_size + len(data) > MAX_BYTES:
+                raise ValueError("Sienna bundle exceeds the 64 MiB limit")
+            companion_data = companion.read_bytes()
+        else:
+            if named_buffers is None or filename not in named_buffers:
+                raise ValueError(f"Missing Sienna companion {filename}")
+            companion_data = bytes(named_buffers[filename])
+        if len(companion_data) + len(data) > MAX_BYTES:
+            raise ValueError("Sienna bundle exceeds the 64 MiB limit")
+        extension = {"filename": filename, "arrays": _read_hdf(companion_data)}
+    module = pio.parse(data, format=FORMATS[format], name=source_name)
+    if extension is not None:
+        saved = _json(module)
+        saved.setdefault("extensions", {})[KEY] = extension
+        module = pio.deserialize(json.dumps(saved).encode())
+    return module
+
+
+def emit(module, format: str, destination=None):
+    import powerio as pio
+    saved = _json(module)
+    extension = saved.get("extensions", {}).get(KEY)
+    result = pio.emit(module, FORMATS[format])
+    if result.text is None:
+        raise ValueError("Expected Sienna document text")
+    document = json.loads(result.text)
+    files = {}
+    if document.get("time_series_storage_file"):
+        if extension is None:
+            raise ValueError("Sienna companion arrays are missing from this module")
+        filename = _name(document["time_series_storage_file"])
+        if filename == "system.json":
+            raise ValueError("Companion name collides with system.json")
+        files[filename] = _write_hdf(extension["arrays"])
+    elif document.get("time_series_associations"):
+        raise ValueError("Sienna associations have no companion filename")
+    files["system.json"] = json.dumps(document, indent=2).encode() + b"\n"
+    if sum(map(len, files.values())) > MAX_BYTES:
+        raise ValueError("Sienna output bundle exceeds the 64 MiB limit")
+    artifacts = tuple(pio.Artifact(name=k, data=v, path=None) for k, v in files.items())
+    if destination is not None:
+        if not isinstance(destination, (str, os.PathLike)):
+            raise TypeError("Sienna bundles require a directory destination")
+        target = Path(destination)
+        # Reserve the destination before creating files; never overwrite it.
+        target.mkdir()
+        written = []
+        try:
+            for filename, data in files.items():
+                output = target / filename
+                with output.open("xb") as stream:
+                    stream.write(data)
+                written.append(output)
+        except BaseException:
+            for output in written:
+                output.unlink(missing_ok=True)
+            target.rmdir()
+            raise
+        artifacts = tuple(pio.Artifact(name=k, data=None, path=os.fspath(target / k)) for k in files)
+    return pio.EmitResult(artifacts=artifacts, layout="directory", fidelity="canonical", diagnostics=result.diagnostics)

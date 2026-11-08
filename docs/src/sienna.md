@@ -19,7 +19,7 @@ angles and phase shifts change between Sienna radians and PowerIO degrees.
 Storage dispatch changes between injection and consumption sign conventions.
 
 The adapter maps AC buses, area membership, lines, transformer circuits,
-two- and three-winding transformers, fixed admittances, constant-power and ZIP
+two- and three-winding transformers, fixed and switched admittances, constant-power and ZIP
 loads, static generators, reservoir storage, and generic HVDC lines. Optional
 source data remains in the module extension `org.eigenergy.powerio.sienna`,
 which survives PowerIO IR serialization. Diagnostics identify data that has no
@@ -35,7 +35,27 @@ solver semantics; emission reports electrical constraints that need this handlin
 
 Time-series associations and dynamics records remain available in the retained
 document. The standalone electrical reader does not acquire a referenced HDF5
-companion. Keep the companion with the document when moving a bundle.
+companion.
+
+## Document and HDF5 bundles
+
+Install `powerio[sienna-files]` for the Python `sienna-bundle` transport, or
+select `sienna-0-1-bundle` through `sienna-0-4-bundle` explicitly.
+
+```python
+module = pio.parse("system.json", format="sienna-bundle")
+pio.serialize(module, "system.pio.json")
+pio.emit(module, "sienna-bundle", "exported-system")
+```
+
+A bundle contains `system.json` and the named HDF5 companion. Input companions
+must stay within the acquisition root; memory input supplies them through
+`named_buffers`. Numeric HDF5 arrays, shapes, and attributes survive IR in
+`org.eigenergy.powerio.sienna.arrays`. Bounds cover acquired bytes, expanded
+arrays, and object counts. External HDF5 links and object arrays are rejected.
+An existing output directory is never replaced. The electrical value interprets
+components; retained forecast arrays keep the meaning declared by the Sienna
+association records. Tests reopen emitted arrays with InfraStore 0.14.1.
 
 ## PowerSystems.jl serialized systems
 
@@ -83,7 +103,9 @@ stages transformers and shunt impedances alongside the other component tables.
 component families that the pipeline's staging helper cannot handle.
 
 The sink accepts PyPSA electrical time series and a single-file target. Sienna
-temporal staging still requires its JSON/HDF5 bundle source. A `pio-ir` sink
+temporal staging accepts a `sienna-bundle` source with `tables: sienna`.
+The Sienna sink preserves its time-series association rows and HDF5 arrays in
+`pio-ir` output. A `pio-ir` sink
 retains pipeline extension records and their companion columns in the module's
 `org.eigenergy.powerio.transitionzero` extension, including timestamp units and
 timezones. They return to the pipeline when `powerio_source` reads that IR.

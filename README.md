@@ -132,6 +132,8 @@ After deserialization, `emit` writes fresh output from the stored value.
 | Egret JSON | `egret-json` | yes | yes |
 | pandapower JSON | `pandapower-json` | yes | yes |
 | PyPSA CSV directory | `pypsa-csv` | yes | yes |
+| SiennaSchemas SystemDocument | `sienna-json`, `sienna-0-{1,2,3,4}-json` | 0.1.0 through 0.4.0 | 0.1.0 through 0.4.0 |
+| PowerSystems.jl serialized System | `powersystems-json` | data formats 4, 5 | data format 5 |
 | Surge JSON | `surge-json` | yes | yes |
 | MG-RAVENS JSON, balanced and multiconductor profiles | `ravens-json` | yes | yes |
 | GridFM Parquet directory, `gridfm` feature | `gridfm` | yes | yes |
@@ -144,6 +146,9 @@ After deserialization, `emit` writes fresh output from the stored value.
 | Distribution CIM, CIM100 RDF/XML | `cim-dist` | cim17v40, one document or a directory | cim17v40, one document |
 | PSS SINCAL project, `sincal` feature | `sincal-balanced`, `sincal-multiconductor` | yes, with an explicit profile | an unchanged source byte for byte; an experimental fresh writer in Rust |
 | Geographic layer `.geo.json` | `geo-json` | yes | yes |
+
+Python also provides optional Sienna JSON/HDF5 bundles and PyPSA NetCDF/HDF5
+transports. See [Sienna exchange and pipeline integration](docs/src/sienna.md).
 
 The balanced transmission formats parse to `BalancedNetwork`, and OpenDSS,
 PMD, BMOPF, and distribution CIM parse to `MulticonductorNetwork`. SINCAL

@@ -287,6 +287,16 @@ pub(in crate::format) fn to_schema(root: &Value) -> Result<Value> {
             .expect("object")
             .remove("ext")
             .unwrap_or(json!({}));
+        if doc["ext"][id.to_string()].is_null() {
+            doc["ext"][id.to_string()] = json!({});
+        }
+        if !doc["ext"][id.to_string()].is_object()
+            || doc["ext"][id.to_string()]
+                .get("org.eigenergy.powerio")
+                .is_some_and(|v| !v.is_object())
+        {
+            return Err(error("PowerSystems component ext must contain objects"));
+        }
         if doc["ext"][id.to_string()]["org.eigenergy.powerio"]
             .get("uid")
             .is_none()
@@ -342,6 +352,43 @@ pub(in crate::format) fn to_schema(root: &Value) -> Result<Value> {
                 let curve = row["loss"].clone();
                 row["loss"] = json!({"power_units":"COMPONENT_BASE","value_curve":curve});
             }
+            "MonitoredLine" => {
+                doc["ext"][id.to_string()]["org.eigenergy.powerio"]["native_kind"] =
+                    json!("MonitoredLine");
+                kind = "Line".into();
+            }
+            "SwitchedAdmittance" => {
+                scale(&mut row["Y"], system_base);
+                let y = row["Y"].clone();
+                row["solved_admittance"] = y["imag"].clone();
+                doc["ext"][id.to_string()]["org.eigenergy.powerio"]["solved_conductance"] =
+                    y["real"].clone();
+                if let Some(values) = row["Y_increase"].as_array_mut() {
+                    for y in values {
+                        scale(y, system_base);
+                    }
+                }
+                let n = row["number_of_steps"].as_array().map_or(0, Vec::len);
+                row["number_engaged"] = json!(vec![0; n]);
+                row["admittance_units"] = json!("COMPONENT_MVAR");
+                let key = if matches!(
+                    row["control_mode"].as_str(),
+                    Some(
+                        "DISCRETE_REACTIVE_PLANT"
+                            | "DISCRETE_REACTIVE_VSC"
+                            | "DISCRETE_ADMITTANCE_REMOTE"
+                            | "DISCRETE_REACTIVE_FACTS"
+                    )
+                ) {
+                    "reactive_power_range_limits"
+                } else {
+                    "voltage_limits"
+                };
+                row[key] = row
+                    .get("admittance_limits")
+                    .cloned()
+                    .unwrap_or_else(|| minmax(1.0, 1.0));
+            }
             "FixedAdmittance" => {
                 scale(&mut row["Y"], system_base);
                 row["admittance_units"] = json!("COMPONENT_MVAR");
@@ -353,7 +400,8 @@ pub(in crate::format) fn to_schema(root: &Value) -> Result<Value> {
                     .remove("primary_shunt")
                     .unwrap_or(json!({"real":0.0,"imag":0.0}));
                 if let Some(susceptance) = shunt.as_f64() {
-                    shunt = json!({"real":0.0,"imag":susceptance});
+                    // Native 4.x stores positive inductive shunt susceptance.
+                    shunt = json!({"real":0.0,"imag":-susceptance});
                 }
                 let name = row["name"].clone();
                 rename(&mut row, "α", "alpha");
@@ -394,6 +442,8 @@ pub(in crate::format) fn to_schema(root: &Value) -> Result<Value> {
                 kind = "ThreeWindingTransformer".into();
             }
             "EnergyReservoirStorage" => {
+                let capacity = number(&row, "storage_capacity")? * base(&row)?;
+                row["storage_capacity"] = json!(capacity);
                 row["energy_units"] = json!("MWH");
             }
             _ => {}
@@ -411,6 +461,15 @@ pub(in crate::format) fn read(
     let root: Value = serde_json::from_str(text).map_err(|e| error(e.to_string()))?;
     let doc = to_schema(&root)?;
     let mut net = super::read(&doc.to_string(), name, 4, warnings)?;
+    if rows(&doc, "Line")?
+        .iter()
+        .any(|r| r.get("flow_limits").is_some())
+    {
+        retained(
+            warnings,
+            "MonitoredLine directional flow limits remain in the native extension; the electrical branch retains its thermal rating",
+        );
+    }
     net.tables_mut().source_format = SourceFormat::PowerSystemsJson;
     if root["data"].get("time_series_storage_file").is_some()
         || root["data"]["masked_components"]
@@ -497,6 +556,32 @@ pub(in crate::format) fn write(
                 if let Some(value) = row.get_mut(*key) {
                     scale(value, factor);
                 }
+            }
+            if kind == "Line"
+                && doc["ext"][id.to_string()]["org.eigenergy.powerio"]["native_kind"]
+                    == "MonitoredLine"
+                && row.get("flow_limits").is_some()
+            {
+                native_kind = "MonitoredLine";
+            }
+            if kind == "SwitchedAdmittance" {
+                row["Y"] = json!({"real":optional(&doc["ext"][id.to_string()]["org.eigenergy.powerio"],"solved_conductance",0.0)?/net.base_mva(),"imag":number(&row,"solved_admittance")?/net.base_mva()});
+                if let Some(values) = row["Y_increase"].as_array_mut() {
+                    for y in values {
+                        scale(y, 1.0 / net.base_mva());
+                    }
+                }
+                let n = row["number_of_steps"].as_array().map_or(0, Vec::len);
+                row["initial_status"] = json!(vec![0; n]);
+                row["admittance_limits"] = row
+                    .get("voltage_limits")
+                    .or_else(|| row.get("reactive_power_range_limits"))
+                    .cloned()
+                    .unwrap_or_else(|| minmax(1.0, 1.0));
+                output.push(&codes::EMIT_SIENNA.field_dropped,"PowerSystems carries switched-shunt controls; the consumer must include the shunt's initial injection separately when its Ybus excludes switched admittances");
+            }
+            if kind == "EnergyReservoirStorage" {
+                scale(&mut row["storage_capacity"], 1.0 / component_base);
             }
             if kind == "FixedAdmittance" {
                 scale(&mut row["Y"], 1.0 / net.base_mva());

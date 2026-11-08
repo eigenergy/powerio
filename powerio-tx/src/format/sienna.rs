@@ -23,6 +23,7 @@ mod merge;
 mod metadata;
 pub(super) mod powersystems;
 mod powersystems_three_winding;
+mod shunts;
 mod three_winding;
 const BASE: f64 = 100.0;
 const FMT: &str = "SiennaSchemas JSON";
@@ -40,6 +41,7 @@ const ELECTRICAL_KINDS: &[&str] = &[
     "InterruptiblePowerLoad",
     "InterruptibleStandardLoad",
     "FixedAdmittance",
+    "SwitchedAdmittance",
     "ThermalStandard",
     "ThermalMultiStart",
     "RenewableDispatch",
@@ -486,6 +488,9 @@ pub(super) fn read(
         )?;
         shunts.push(sh);
     }
+    for row in rows(&root, "SwitchedAdmittance")? {
+        shunts.push(shunts::read(&root, row, &ids, &by_bus, actual)?);
+    }
     let mut generators = Vec::new();
     for kind in [
         "ThermalStandard",
@@ -563,7 +568,12 @@ pub(super) fn read(
             "MWMIN" => 1.0 / 60.0,
             other => return Err(error(format!("unsupported energy_units {other}"))),
         };
-        s.energy_rating = number(row, "storage_capacity")? * e;
+        s.energy_rating = number(row, "storage_capacity")?
+            * e
+            * positive(
+                optional(row, "conversion_factor", 1.0)?,
+                "storage conversion_factor",
+            )?;
         s.energy = number(row, "initial_storage_capacity_level")? * s.energy_rating;
         s.ps = -number(row, "active_power")? * p;
         s.qs = -number(row, "reactive_power")? * p;
@@ -654,22 +664,37 @@ pub(super) fn read(
     Ok(net)
 }
 
+#[allow(clippy::too_many_lines)] // Normalize supported curve families and their cost additions together.
 fn read_cost(cost: &Value, base: f64, warnings: &mut Diagnostics) -> Result<Option<GenCost>> {
     let c = &cost["variable_operation_cost"];
-    if c["variable_cost_type"] != "COST" || c["value_curve"]["curve_type"] != "INPUT_OUTPUT" {
+    if !matches!(c["variable_cost_type"].as_str(), Some("COST" | "FUEL"))
+        || c["value_curve"]["curve_type"] != "INPUT_OUTPUT"
+    {
         retained(
             warnings,
-            "operation_cost outside input-output CostCurve is retained without a typed generator cost",
+            "operation_cost outside input-output cost/fuel curves is retained without a typed generator cost",
         );
         return Ok(None);
     }
+    let multiplier = if c["variable_cost_type"] == "FUEL" {
+        if c["fuel_cost_time_series"].is_number() || !c["fuel_cost"].is_number() {
+            retained(
+                warnings,
+                "time-varying fuel prices require a temporal calculation and remain in the retained document",
+            );
+            return Ok(None);
+        }
+        number(c, "fuel_cost")?
+    } else {
+        1.0
+    };
     let scale = match c["power_units"].as_str() {
         Some("COMPONENT_BASE") => base,
         Some("NATURAL_UNITS") => 1.0,
         _ => return Err(error("invalid cost power_units")),
     };
     let f = &c["value_curve"]["function_data"];
-    let fixed = optional(cost, "fixed", 0.0)?;
+    let fixed = 0.0;
     let mut out = match string(f, "function_type")? {
         "LINEAR" => GenCost::new(
             2,
@@ -715,19 +740,45 @@ fn read_cost(cost: &Value, base: f64, warnings: &mut Diagnostics) -> Result<Opti
         optional(cost, "start_up", 0.0)?
     };
     out.shutdown = optional(cost, "shut_down", 0.0)?;
-    if let Some(vom) = c.get("vom_cost")
-        && (vom["function_data"]["proportional_term"]
-            .as_f64()
-            .unwrap_or(0.0)
-            != 0.0
-            || vom["function_data"]["constant_term"]
-                .as_f64()
-                .unwrap_or(0.0)
-                != 0.0)
-    {
+    let fixed = optional(cost, "fixed", 0.0)?;
+    let vom = &c["vom_cost"]["function_data"];
+    let (slope, constant) = if vom.is_null() {
+        (0.0, 0.0)
+    } else if vom["function_type"] == "LINEAR" {
+        (
+            number(vom, "proportional_term")? / scale,
+            number(vom, "constant_term")?,
+        )
+    } else {
         retained(
             warnings,
-            "nonzero vom_cost is retained outside the typed generator cost",
+            "nonlinear variable operation and maintenance cost remains outside the typed generator cost",
+        );
+        (0.0, 0.0)
+    };
+    if out.model == 1 {
+        for point in out.coeffs.as_chunks_mut::<2>().0 {
+            point[1] = point[1] * multiplier + fixed + slope * point[0] + constant;
+        }
+    } else {
+        for coefficient in &mut out.coeffs {
+            *coefficient *= multiplier;
+        }
+        let n = out.coeffs.len();
+        out.coeffs[n - 1] += fixed + constant;
+        out.coeffs[n - 2] += slope;
+    }
+    if c.get("startup_fuel_offtake").is_some_and(|v| {
+        v["function_data"]["proportional_term"]
+            .as_f64()
+            .is_some_and(|n| n != 0.0)
+            || v["function_data"]["constant_term"]
+                .as_f64()
+                .is_some_and(|n| n != 0.0)
+    }) {
+        retained(
+            warnings,
+            "startup fuel offtake remains outside the scalar startup cost",
         );
     }
     Ok(Some(out))
@@ -738,8 +789,8 @@ fn cost_json(cost: Option<&GenCost>, warnings: &mut Diagnostics) -> Value {
     let mut function =
         json!({"function_type":"LINEAR","constant_term":0.0,"proportional_term":0.0});
     if let Some(c) = cost {
-        if let Some((c2, c1, c0)) = c.calc_quadratic_with_constant_tol(0.0) {
-            function = json!({"function_type":"QUADRATIC","constant_term":c0,"proportional_term":c1,"quadratic_term":c2});
+        if let Some((hessian, c1, c0)) = c.calc_quadratic_with_constant_tol(0.0) {
+            function = json!({"function_type":"QUADRATIC","constant_term":c0,"proportional_term":c1,"quadratic_term":hessian / 2.0});
         } else if c.model == 1 && c.coeffs.len() % 2 == 0 {
             function = json!({"function_type":"PIECEWISE_LINEAR","points":c.coeffs.as_chunks::<2>().0.iter().map(|p|json!({"x":p[0],"y":p[1]})).collect::<Vec<_>>()});
         } else {
@@ -915,6 +966,10 @@ pub(super) fn write(
         if let Some(solution) = &b.solution {
             row["active_power_flow"] = json!(solution.pf);
             row["reactive_power_flow"] = json!(solution.qf);
+        } else if !b.is_transformer() {
+            row["active_power_flow"] = json!(0.0);
+            row["reactive_power_flow"] = json!(0.0);
+            doc["ext"][id.to_string()]["org.eigenergy.powerio"]["branch_flow_absent"] = json!(true);
         }
         if b.is_transformer() {
             row.as_object_mut().expect("object").remove("name");
@@ -1006,6 +1061,11 @@ pub(super) fn write(
     }
     for s in net.shunts() {
         let id = ids.get(s.uid.as_deref());
+        if s.control.is_some() {
+            let row = shunts::write(&mut doc, id, bus_ids[&s.bus], s, selected, &mut warnings)?;
+            push(&mut doc, "SwitchedAdmittance", row);
+            continue;
+        }
         metadata::record(
             &mut doc,
             id,
@@ -1066,11 +1126,18 @@ pub(super) fn write(
         push(
             &mut doc,
             "EnergyReservoirStorage",
-            json!({"id":id,"name":format!("storage_{id}"),"available":s.in_service,"bus":bus_ids[&s.bus],"prime_mover_type":"BA","storage_technology_type":"OTHER_CHEM","storage_capacity":s.energy_rating,"energy_units":"MWH","storage_level_limits":minmax(0.0,1.0),"initial_storage_capacity_level":if s.energy_rating>0.0 {s.energy/s.energy_rating}else{0.0},"rating":s.thermal_rating,"active_power":-s.ps,"reactive_power":-s.qs,"input_active_power_limits":minmax(0.0,s.charge_rating),"output_active_power_limits":minmax(0.0,s.discharge_rating),"efficiency":{"in":s.charge_efficiency,"out":s.discharge_efficiency},"reactive_power_limits":minmax(-s.qmax,-s.qmin),"base_power":net.base_mva(),"power_units":"NATURAL_UNITS","operation_cost":{"cost_type":"STORAGE","fixed":0.0,"start_up":0.0,"shut_down":0.0}}),
+            json!({"id":id,"name":format!("storage_{id}"),"available":s.in_service,"bus":bus_ids[&s.bus],"prime_mover_type":"BA","storage_technology_type":"OTHER_CHEM","storage_capacity":s.energy_rating,"conversion_factor":1.0,"energy_units":"MWH","storage_level_limits":minmax(0.0,1.0),"initial_storage_capacity_level":if s.energy_rating>0.0 {s.energy/s.energy_rating}else{0.0},"rating":s.thermal_rating,"active_power":-s.ps,"reactive_power":-s.qs,"input_active_power_limits":minmax(0.0,s.charge_rating),"output_active_power_limits":minmax(0.0,s.discharge_rating),"efficiency":{"in":s.charge_efficiency,"out":s.discharge_efficiency},"reactive_power_limits":minmax(-s.qmax,-s.qmin),"base_power":net.base_mva(),"power_units":"NATURAL_UNITS","operation_cost":{"cost_type":"STORAGE","fixed":0.0,"start_up":0.0,"shut_down":0.0}}),
         );
     }
     hvdc::write_hvdc(net, &mut doc, &mut ids, &bus_ids, selected, &mut warnings)?;
     three_winding::write(net, &mut doc, &mut ids, &bus_ids, selected)?;
+    if net
+        .branches()
+        .iter()
+        .any(|b| !b.is_transformer() && b.solution.is_none())
+    {
+        warnings.push(&codes::EMIT_SIENNA.value_defaulted,"required Line sending-terminal flow fields use zero when no solved flow is supplied; ext marks those values as unavailable");
+    }
     for b in net.branches() {
         if !b.rating_sets.is_empty() {
             warnings.push(&codes::EMIT_SIENNA.field_dropped, "named branch rating sets are retained in ext without native Sienna constraint semantics");
@@ -1305,5 +1372,19 @@ mod tests {
                 .iter()
                 .any(|d| d.code().ends_with("RECORD_DROPPED"))
         );
+    }
+    #[test]
+    fn fuel_price_and_maintenance_cost_use_the_declared_power_base() {
+        let cost = json!({"fixed":2.0,"start_up":7.0,"shut_down":8.0,"variable_operation_cost":{
+            "variable_cost_type":"FUEL","fuel_cost":3.0,"power_units":"COMPONENT_BASE",
+            "value_curve":{"curve_type":"INPUT_OUTPUT","function_data":{"function_type":"QUADRATIC","quadratic_term":1100.0,"proportional_term":500.0,"constant_term":150.0}},
+            "vom_cost":{"curve_type":"INPUT_OUTPUT","function_data":{"function_type":"LINEAR","proportional_term":300.0,"constant_term":4.0}}}});
+        let mut warnings = Diagnostics::new();
+        let cost = read_cost(&cost, 100.0, &mut warnings).unwrap().unwrap();
+        for (a, e) in cost.coeffs.iter().zip([0.33, 18.0, 456.0]) {
+            assert!((a - e).abs() < 1e-12);
+        }
+        assert!(warnings.is_empty());
+        assert!((cost.startup - 7.0).abs() < 1e-12);
     }
 }
