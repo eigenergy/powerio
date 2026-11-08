@@ -18,6 +18,9 @@ action.
   fields outside the electrical mapping.
 - Read native PowerSystems.jl data formats 4 and 5, and write format 5.
   Resolve UUID references and device units independently of display settings.
+- Retain bounded Sienna JSON/HDF5 bundles through PowerIO IR, including
+  association records, array shapes, and stored values. Map switched-shunt
+  blocks and voltage or reactive control bands in each schema release.
 - Add optional Python PyPSA NetCDF/HDF5 transports and TransitionZero source
   and sink entry points, with electrical time series and IR retention of
   pipeline extension records and companion series.

@@ -27,3 +27,12 @@ bus-level power against the reference network. The 5.x consumers also load
 PowerIO's freshly generated documents, whose admittance must match the original
 MATPOWER network. Native imports use the native matrix as their oracle because
 PowerSystems versions interpret some MATPOWER transformer charging differently.
+
+Native generator costs are evaluated independently through PowerSystems getters
+at 0, 25, and 100 MW, using each curve's declared power units. The MATPOWER
+importer in the tested native releases labels its unchanged cost coefficients as
+DEVICE_BASE; its resulting curve therefore differs from the original MATPOWER
+curve. Imports are compared with that native curve. PowerIO exports are compared
+with the original MATPOWER costs. PowerNetworkMatrices releases may use either
+Float32 or Float64 internally, so admittance tolerances follow the oracle's
+reported element precision.

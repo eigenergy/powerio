@@ -59,7 +59,19 @@ class PowerIOSource(StagedSource):
             data = stream.read(MAX_BYTES + 1)
         if len(data) > MAX_BYTES:
             raise ValueError("PowerIO source exceeds the 64 MiB acquisition limit")
-        module = pio.deserialize(data) if params.format == "pio-ir" else pio.parse(data, format=params.format, name=str(params.input_path))
+        from . import _sienna_files
+        companions = None
+        if params.format in _sienna_files.FORMATS:
+            filename = json.loads(data).get("time_series_storage_file")
+            if filename:
+                filename = _sienna_files._name(filename)
+                with self._fs.open_read(self._fs.resolve(params.input_path, filename)) as stream:
+                    companion = stream.read(MAX_BYTES + 1)
+                companions = {filename: companion}
+        module = pio.deserialize(data) if params.format == "pio-ir" else pio.parse(data, format=params.format, name=str(params.input_path), named_buffers=companions)
+        has_arrays = _sienna_files.KEY in ir_document(module).get("extensions", {})
+        if has_arrays and params.tables == "pypsa":
+            raise ValueError("Choose tables='sienna' to stage Sienna companion time series before applying the pipeline's temporal translation steps")
         if params.tables == "pypsa":
             from interop.core.extensions import ExtensionKind, append_extensions
             from interop.plugins.sources.stage_pypsa_network_file import stage_network
@@ -82,7 +94,7 @@ class PowerIOSource(StagedSource):
         if text is None:
             raise ValueError("Expected a Sienna JSON document")
         document = json.loads(text)
-        if document["time_series_associations"] or document["time_series_storage_file"]:
+        if (document["time_series_associations"] or document["time_series_storage_file"]) and not has_arrays:
             raise ValueError("Use a Sienna bundle source for documents with time-series companions")
         supported = {"Area", "LoadZone", "ACBus", "Arc", "Line", "MonitoredLine", "ThermalStandard", "RenewableDispatch", "RenewableNonDispatch", "HydroDispatch", "EnergyReservoirStorage", "PowerLoad", "InterruptiblePowerLoad", "TwoTerminalGenericHVDCLine"}
         skipped = [kind for kind, rows in document["components"].items() if rows and kind not in supported]
@@ -102,7 +114,16 @@ class PowerIOSource(StagedSource):
         from interop.plugins.shared.sienna_pypsa_translations.constants import (
             pypsa_carrier,
         )
-        state = State(staging_dir=staging_dir, source_topology=stage_topology(document, staging_dir))
+        if has_arrays:
+            from interop.plugins.sources.stage_sienna_system_json import stage_system
+            bundle = pio.emit(module, "sienna-0-2-bundle")
+            companion = next(a.data for a in bundle.artifacts if a.name == document["time_series_storage_file"])
+            if companion is None:
+                raise ValueError("Expected in-memory Sienna companion")
+            staged_system = stage_system(document, io.BytesIO(companion), staging_dir)
+            state = State(staging_dir=staging_dir, source_topology=staged_system.topology, source_time_series=staged_system.time_series)
+        else:
+            state = State(staging_dir=staging_dir, source_topology=stage_topology(document, staging_dir))
         for kind in ("ThermalStandard", "RenewableDispatch", "RenewableNonDispatch"):
             for row in document["components"].get(kind, []):
                 try:
@@ -133,8 +154,6 @@ class PowerIOSink:
     def write(self, state: State, params: BaseModel | None) -> None:
         if not isinstance(params, PowerIOSinkParams):
             raise TypeError("powerio_sink requires PowerIOSinkParams")
-        if params.tables == "sienna" and (state.destination_time_series or state.destination_tables.get("time_series_metadata") is not None):
-            raise ValueError("Sienna temporal output requires a document and HDF5 companion")
         has_extensions = any(record.has_any_value() for records in state.destination_extensions.values() for record in records) or bool(state.destination_extension_series)
         if has_extensions and params.format != "pio-ir":
             raise ValueError("Use pio-ir to retain pipeline extensions, or emit the pipeline's extension sidecar before projecting to an electrical file")
@@ -146,12 +165,23 @@ class PowerIOSink:
                 module = pio.parse(path, format="pypsa-netcdf")
         else:
             supported = {"Area", "ACBus", "Arc", "PowerLoad", "InterruptiblePowerLoad", "ThermalStandard", "RenewableDispatch", "RenewableNonDispatch", "HydroDispatch", "EnergyReservoirStorage", "Line", "TwoTerminalGenericHVDCLine"}
-            unknown = set(state.destination_tables) - supported
+            unknown = set(state.destination_tables) - supported - {"TimeSeriesAssociation"}
             if unknown:
                 raise ValueError(f"Unrecognized Sienna destination tables: {sorted(unknown)}")
             payload = EmitSiennaSystemJson.build_payload(state)
             document = {"schema_version": "0.2.0", "components": payload["components"], "supplemental_attributes": [], "supplemental_attribute_associations": [], "plant_associations": [], "combined_cycle_associations": [], "service_associations": [], "time_series_associations": [], "time_series_storage_file": None}
-            module = pio.parse(json.dumps(document).encode(), format="sienna-0-2-json")
+            if state.destination_tables.get("TimeSeriesAssociation") is not None:
+                from interop.plugins.sinks.emit_sienna_h5_sidecar import (
+                    EmitSiennaH5Sidecar,
+                )
+                buffer = io.BytesIO()
+                document["time_series_associations"] = EmitSiennaH5Sidecar.write_h5(state, buffer)
+                document["time_series_storage_file"] = "time_series.h5"
+                module = pio.parse(json.dumps(document).encode(), format="sienna-0-2-bundle", named_buffers={"time_series.h5": buffer.getvalue()})
+            else:
+                if state.destination_time_series:
+                    raise ValueError("Sienna time series require time_series_association rows")
+                module = pio.parse(json.dumps(document).encode(), format="sienna-0-2-json")
         if has_extensions:
             module = preserve_extensions(module, state)
             self._recorder.append(TranslationEvent(kind=EventKind.NOT_MAPPED, note="Pipeline extensions remain in the PowerIO module; the electrical value does not interpret their planning or scheduling semantics"))

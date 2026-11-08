@@ -93,3 +93,31 @@ def test_ir_keeps_pipeline_extensions_and_series(tmp_path):
     recovered = source.load_into_state(PowerIOSourceParams(input_path=path, format="pio-ir"), tmp_path / "recovered")
     assert recovered.source_extensions[ExtensionKind.GENERATOR] == state.destination_extensions[ExtensionKind.GENERATOR]
     assert recovered.source_extension_series[ExtensionKind.GENERATOR].collect().equals(series)
+
+
+def test_sienna_pipeline_sink_retains_temporal_bundle(tmp_path):
+    import pandas as pd
+    import pypsa
+    from interop.plugins.shared.pypsa_sienna_user_mappings import CarrierMappings
+    from interop.plugins.steps.pypsa_to_sienna_map_components import (
+        PypsaToSiennaMapComponents,
+    )
+    from interop.plugins.steps.sienna_relate_components import SiennaRelateComponents
+    network = pypsa.Network()
+    network.set_snapshots(pd.date_range("2030-01-01",periods=2,freq="h"))
+    network.add("Bus","a",v_nom=110.0)
+    network.add("Load","load",bus="a",p_set=[15.,19.])
+    path = tmp_path / "input.nc"
+    network.export_to_netcdf(path)
+    recorder = ScopedRecorder(EventLog())
+    state = PowerIOSource(LocalFilesystem(),recorder).load_into_state(PowerIOSourceParams(input_path=path,format="pypsa-netcdf"),tmp_path / "source")
+    state = PypsaToSiennaMapComponents(recorder,CarrierMappings()).run(state,None)
+    state = SiennaRelateComponents(recorder).run(state,None)
+    output = tmp_path / "temporal.pio.json"
+    PowerIOSink(LocalFilesystem(),recorder).write(state,PowerIOSinkParams(output_path=output,tables="sienna"))
+    module = pio.deserialize(output.read_bytes())
+    bundle = pio.emit(module,"sienna-0-2-bundle")
+    assert {a.name for a in bundle.artifacts} == {"system.json","time_series.h5"}
+    recovered = PowerIOSource(LocalFilesystem(),recorder).load_into_state(PowerIOSourceParams(input_path=output,format="pio-ir",tables="sienna"),tmp_path / "recovered")
+    assert len(recovered.source_time_series) == 1
+    assert next(iter(recovered.source_time_series.values())).collect().height == 2

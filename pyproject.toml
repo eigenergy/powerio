@@ -30,6 +30,7 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+sienna-files = ["h5py>=3.16", "numpy>=1.21"]
 pypsa-files = ["pypsa>=1.4,<2", "netCDF4>=1.7.5", "h5py>=3.16", "tables>=3.11"]
 # The matrix methods assemble scipy.sparse from the COO triplets the extension
 # returns; the graph helper builds a networkx graph. Install only what you use.

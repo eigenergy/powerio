@@ -53,6 +53,21 @@ def _check_size(path: Path) -> None:
         return
     total = 0
     with h5py.File(path, "r") as store:
+        seen = set()
+        def check_links(group):
+            address = h5py.h5o.get_info(group.id).addr
+            if address in seen:
+                raise ValueError("HDF5 aliases and cycles are unsupported")
+            seen.add(address)
+            if isinstance(group, h5py.Dataset):
+                if group.is_virtual or group.external:
+                    raise ValueError("External HDF5 data is unsupported")
+                return
+            for key in group:
+                if not isinstance(group.get(key, getlink=True), h5py.HardLink):
+                    raise ValueError("External and soft HDF5 links are unsupported")
+                check_links(group[key])
+        check_links(store)
         def visit(_name, obj):
             nonlocal total
             if isinstance(obj, h5py.Dataset):

@@ -117,6 +117,12 @@ pub(super) fn restore_branch_solution(
     warnings: &mut super::Diagnostics,
 ) -> Result<()> {
     let id = integer(row, "id")?;
+    if root["ext"][id.to_string()][KEY]["branch_flow_absent"] == true
+        && row["active_power_flow"] == 0.0
+        && row["reactive_power_flow"] == 0.0
+    {
+        return Ok(());
+    }
     if let Some(power) = root["ext"][id.to_string()][KEY].get("to_terminal_power") {
         let scale = super::power_scale(row)?;
         branch.solution = Some(crate::network::BranchSolution {

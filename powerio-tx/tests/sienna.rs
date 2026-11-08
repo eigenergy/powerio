@@ -249,3 +249,85 @@ fn powersystems_native_reference_cases() {
         }
     }
 }
+
+#[test]
+fn switched_shunt_controls_and_native_edits_survive() {
+    use powerio_tx::network::{BusId, Shunt, ShuntBlock, SwitchedShuntControl, SwitchedShuntMode};
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case9.m");
+    let module = powerio_tx::parse(Source::open(root).unwrap()).unwrap();
+    let mut net = module.value().clone();
+    let mut shunt = Shunt::new(BusId(4), 0.0, 12.5);
+    let mut control = SwitchedShuntControl::new(
+        SwitchedShuntMode::Discrete,
+        1.04,
+        0.97,
+        vec![ShuntBlock::new(3, 5.0), ShuntBlock::new(2, -2.5)],
+    );
+    control.control_bus = Some(BusId(5));
+    shunt.control = Some(control.clone());
+    net.shunts_mut().push(shunt);
+    for version in 0..=4 {
+        let format = if version == 0 {
+            TargetFormat::PowerSystemsJson
+        } else {
+            TargetFormat::SiennaJson { version }
+        };
+        let out = emit_value(&net, format).unwrap();
+        save_output(version, "switched_shunt", &out.text);
+        let actual = powerio_tx::parse(
+            Source::from_memory("shunt.json", out.text.as_bytes().to_vec()).unwrap(),
+        )
+        .unwrap();
+        let sh = actual.value().shunts().last().unwrap();
+        assert_eq!(sh.control.as_ref().unwrap(), &control);
+        assert!((sh.b - 12.5).abs() < 1e-12);
+        if version > 0 {
+            let mut edited: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+            edited["components"]["SwitchedAdmittance"][0]["solved_admittance"] =
+                serde_json::json!(17.5);
+            let read = powerio_tx::parse(
+                Source::from_memory("edited.json", edited.to_string().into_bytes()).unwrap(),
+            )
+            .unwrap();
+            assert!((read.value().shunts().last().unwrap().b - 17.5).abs() < 1e-12);
+        }
+    }
+}
+
+#[test]
+fn storage_energy_and_cost_coefficients_keep_their_units() {
+    use powerio_tx::network::{BusId, Storage};
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case9.m");
+    let module = powerio_tx::parse(Source::open(path).unwrap()).unwrap();
+    let mut net = module.value().clone();
+    let mut storage = Storage::new(BusId(4));
+    storage.energy_rating = 300.0;
+    storage.energy = 75.0;
+    storage.ps = 30.0;
+    storage.qs = -4.0;
+    storage.thermal_rating = 60.0;
+    storage.charge_rating = 50.0;
+    storage.discharge_rating = 55.0;
+    storage.charge_efficiency = 0.9;
+    storage.discharge_efficiency = 0.92;
+    net.storage_mut().push(storage);
+    for version in 0..=4 {
+        let format = if version == 0 {
+            TargetFormat::PowerSystemsJson
+        } else {
+            TargetFormat::SiennaJson { version }
+        };
+        let out = emit_value(&net, format).unwrap();
+        save_output(version, "storage_costs", &out.text);
+        let read =
+            powerio_tx::parse(Source::from_memory("storage.json", out.text.into_bytes()).unwrap())
+                .unwrap();
+        let actual = &read.value().storage()[0];
+        assert!((actual.energy_rating - 300.0).abs() < 1e-12);
+        assert!((actual.energy - 75.0).abs() < 1e-12);
+        assert!((actual.ps - 30.0).abs() < 1e-12);
+        for (a, e) in read.value().generators().iter().zip(net.generators()) {
+            assert_eq!(a.cost, e.cost);
+        }
+    }
+}

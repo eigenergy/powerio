@@ -20,9 +20,11 @@ fn powersystems_serialized_networks_keep_admittance_and_dispatch() {
         };
         assert_eq!(actual.buses().len(), expected.buses().len());
         compare_ybus(actual, &input.join(format!("{case}.ybus.json")));
+        compare_costs(actual, &input.join(format!("{case}.costs.json")));
         let exported = input.join(format!("{case}.export-ybus.json"));
         if exported.exists() {
             compare_ybus(expected, &exported);
+            compare_costs(expected, &input.join(format!("{case}.export-costs.json")));
         }
         for bus in expected.buses() {
             let a: f64 = actual
@@ -56,9 +58,14 @@ fn powersystems_serialized_networks_keep_admittance_and_dispatch() {
 }
 
 fn compare_ybus(net: &powerio::BalancedNetwork, path: &std::path::Path) {
-    let native: Vec<(usize, usize, f64, f64)> =
-        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    let native: std::collections::BTreeMap<_, _> = native
+    #[derive(serde::Deserialize)]
+    struct Oracle {
+        entries: Vec<(usize, usize, f64, f64)>,
+        epsilon: f64,
+    }
+    let oracle: Oracle = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let native: std::collections::BTreeMap<_, _> = oracle
+        .entries
         .into_iter()
         .map(|(a, b, g, bi)| ((a, b), (g, bi)))
         .collect();
@@ -75,7 +82,7 @@ fn compare_ybus(net: &powerio::BalancedNetwork, path: &std::path::Path) {
             for (m, e) in [(&matrix.g, expected.0), (&matrix.b, expected.1)] {
                 let a = m.get(i, j).copied().unwrap_or(0.0);
                 assert!(
-                    (a - e).abs() < 1e-8,
+                    (a - e).abs() < 1e-8 + 8.0 * oracle.epsilon * e.abs().max(1.0),
                     "{}: admittance {}->{}: {a} vs {e}",
                     path.display(),
                     from.id.0,
@@ -83,5 +90,31 @@ fn compare_ybus(net: &powerio::BalancedNetwork, path: &std::path::Path) {
                 );
             }
         }
+    }
+}
+
+fn compare_costs(net: &powerio::BalancedNetwork, path: &std::path::Path) {
+    let costs: Vec<(usize, f64, f64)> =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    for (bus, power, expected) in costs {
+        let actual: f64 = net
+            .generators()
+            .iter()
+            .filter(|g| g.bus.0 == bus)
+            .map(|g| {
+                let (q, c, c0) = g
+                    .cost
+                    .as_ref()
+                    .expect("reference generator cost")
+                    .calc_quadratic_with_constant_tol(0.0)
+                    .expect("reference quadratic cost");
+                0.5 * q * power * power + c * power + c0
+            })
+            .sum();
+        assert!(
+            (actual - expected).abs() < 1e-8,
+            "{}: generation cost on {bus} at {power} MW: {actual} vs {expected}",
+            path.display()
+        );
     }
 }

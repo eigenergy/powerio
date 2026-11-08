@@ -2160,6 +2160,11 @@ def parse(
     or an explicitly selected ``acquisition_root``. Memory sources use only
     ``named_buffers`` and never acquire companions from the filesystem.
     """
+    from . import _sienna_files
+    if format is not None and format in _sienna_files.FORMATS:
+        if sincal_balanced is not None or sincal_multiconductor is not None:
+            raise ValueError("SINCAL options do not apply to Sienna bundles")
+        return _sienna_files.parse(source, format, name=name, acquisition_root=acquisition_root, named_buffers=named_buffers)
     from . import _pypsa_files
     binary_format = _pypsa_files.detect(source, format)
     if binary_format is not None:
@@ -2261,6 +2266,9 @@ def _emit_to_destination(
 @_guard
 def emit(module: PioModule, format: str, destination: Optional[Any] = None) -> EmitResult:
     """Emit a module as one grid exchange format."""
+    from . import _sienna_files
+    if format is not None and format in _sienna_files.FORMATS:
+        return _sienna_files.emit(module, format, destination)
     from . import _pypsa_files
     if format in _pypsa_files.FORMATS:
         if not isinstance(module, PioModule):
