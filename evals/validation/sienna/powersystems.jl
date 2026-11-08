@@ -74,6 +74,13 @@ if pkgversion(PowerSystems).major >= 5
     set_units_base_system!(shunts, "SYSTEM_BASE")
     @test imag(get_Y(shunt)) ≈ 0.125
     @test get_number_of_steps(shunt) == [3, 2]
+    if isdefined(PowerSystems, :get_control_mode) && applicable(PowerSystems.get_control_mode, shunt)
+        @test string(get_control_mode(shunt)) == "DISCRETE_VOLTAGE"
+        @test get_regulated_bus_number(shunt) == 5
+    else
+        @test get_ext(shunt)["org.eigenergy.powerio"]["switched_control_fields"]["regulated_bus_number"] == 5
+    end
+    to_json(shunts, joinpath(inputs, "switched_shunt.json"); force=true)
 end
 
 if pkgversion(PowerSystems).major >= 5

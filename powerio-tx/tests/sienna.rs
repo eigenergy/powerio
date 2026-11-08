@@ -281,7 +281,53 @@ fn switched_shunt_controls_and_native_edits_survive() {
         let sh = actual.value().shunts().last().unwrap();
         assert_eq!(sh.control.as_ref().unwrap(), &control);
         assert!((sh.b - 12.5).abs() < 1e-12);
-        if version > 0 {
+        if version == 0 {
+            let mut legacy: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+            let row = legacy["data"]["components"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|r| r["__metadata__"]["type"] == "SwitchedAdmittance")
+                .unwrap();
+            row.as_object_mut().unwrap().remove("control_mode");
+            row.as_object_mut().unwrap().remove("regulated_bus_number");
+            let read = powerio_tx::parse(
+                Source::from_memory("legacy.json", legacy.to_string().into_bytes()).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                read.value()
+                    .shunts()
+                    .last()
+                    .unwrap()
+                    .control
+                    .as_ref()
+                    .unwrap(),
+                &control
+            );
+            let row = legacy["data"]["components"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|r| r["__metadata__"]["type"] == "SwitchedAdmittance")
+                .unwrap();
+            row["control_mode"] = serde_json::json!("FIXED");
+            row["regulated_bus_number"] = serde_json::json!(6);
+            let read = powerio_tx::parse(
+                Source::from_memory("edited.json", legacy.to_string().into_bytes()).unwrap(),
+            )
+            .unwrap();
+            let actual = read
+                .value()
+                .shunts()
+                .last()
+                .unwrap()
+                .control
+                .as_ref()
+                .unwrap();
+            assert_eq!(actual.mode, SwitchedShuntMode::Locked);
+            assert_eq!(actual.control_bus, Some(BusId(6)));
+        } else {
             let mut edited: serde_json::Value = serde_json::from_str(&out.text).unwrap();
             edited["components"]["SwitchedAdmittance"][0]["solved_admittance"] =
                 serde_json::json!(17.5);

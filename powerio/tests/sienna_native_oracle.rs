@@ -8,6 +8,21 @@ fn powersystems_serialized_networks_keep_admittance_and_dispatch() {
         return;
     };
     let input = std::path::PathBuf::from(input);
+    let shunt_path = input.join("switched_shunt.json");
+    if shunt_path.exists() {
+        let module = parse(Source::open(shunt_path).unwrap()).unwrap();
+        let PioValue::BalancedNetwork(net) = module.value() else {
+            panic!("network");
+        };
+        let shunt = net.shunts().iter().find(|s| s.control.is_some()).unwrap();
+        let control = shunt.control.as_ref().unwrap();
+        assert_eq!(
+            control.mode,
+            powerio_tx::network::SwitchedShuntMode::Discrete
+        );
+        assert_eq!(control.control_bus.unwrap().0, 5);
+        assert!((shunt.b - 12.5).abs() < 1e-12);
+    }
     let cases = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data");
     for case in ["case9", "case14", "case30", "case57", "case118"] {
         let native = parse(Source::open(input.join(format!("{case}.json"))).unwrap()).unwrap();

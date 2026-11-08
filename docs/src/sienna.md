@@ -70,6 +70,13 @@ pio.emit(module, "powersystems-json", "system.json")
 
 The generated file loads with `PowerSystems.System("system.json")`.
 Compatibility checks cover PowerSystems 4.6.2 inputs and 5.9.0/5.12.5 consumers.
+PowerSystems 5.9 predates native switched-shunt control mode and remote-bus
+fields. A PowerIO extension preserves these through that runtime; native
+fields take precedence in newer consumers. The 5.12.5 check verifies those
+controls directly. PowerNetworkMatrices versions that omit switched admittances
+from Ybus require the initial injection to be handled separately, as emission
+diagnostics state.
+
 The native adapter shares the electrical mapping above, including explicit star
 circuits for three-winding equipment. Parallel devices share their native arc.
 PowerSystems companion time-series files and masked components remain outside
