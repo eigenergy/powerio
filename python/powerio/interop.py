@@ -87,10 +87,10 @@ class PowerIOSource(StagedSource):
                 append_extensions(state.source_extensions, ExtensionKind.NETWORK, [staged.network])
             restore_extensions(module, state)
             return state
-        output = pio.emit(module, "sienna-0-2-json")
+        output = pio.emit(module, "sienna-0-2-bundle" if has_arrays else "sienna-0-2-json")
         report(self._recorder, module.diagnostics)
         report(self._recorder, output.diagnostics)
-        text = output.text
+        text = next((a.data for a in output.artifacts if a.name == "system.json"), None) if has_arrays else output.text
         if text is None:
             raise ValueError("Expected a Sienna JSON document")
         document = json.loads(text)
@@ -116,11 +116,17 @@ class PowerIOSource(StagedSource):
         )
         if has_arrays:
             from interop.plugins.sources.stage_sienna_system_json import stage_system
-            bundle = pio.emit(module, "sienna-0-2-bundle")
-            companion = next(a.data for a in bundle.artifacts if a.name == document["time_series_storage_file"])
+            companion = next(a.data for a in output.artifacts if a.name == document["time_series_storage_file"])
             if companion is None:
                 raise ValueError("Expected in-memory Sienna companion")
+            factors = sienna_series_factors(document)
             staged_system = stage_system(document, io.BytesIO(companion), staging_dir)
+            if factors:
+                import polars as pl
+                for key, by_name in factors.items():
+                    frame = staged_system.time_series.get(key)
+                    if frame is not None:
+                        staged_system.time_series[key] = frame.with_columns((pl.col("value") * pl.col("component").replace_strict(by_name, default=1.0, return_dtype=pl.Float64)).alias("value"))
             state = State(staging_dir=staging_dir, source_topology=staged_system.topology, source_time_series=staged_system.time_series)
         else:
             state = State(staging_dir=staging_dir, source_topology=stage_topology(document, staging_dir))
@@ -236,6 +242,30 @@ def build_pypsa_network(state: State):
             if not supplied.empty:
                 current.loc[supplied.index, column] = supplied
     return network
+
+
+def sienna_series_factors(document: dict) -> dict[tuple[str, str], dict[str, float]]:
+    """Translate declared device bases to the pipeline's capacity-based series."""
+    from interop.plugins.shared.sienna_time_series import (
+        build_capacity_by_owner,
+        has_series_capacity,
+    )
+    owners = {(kind, row["id"]): row for kind, rows in document["components"].items() for row in rows}
+    factors: dict[tuple[str, str], dict[str, float]] = {}
+    for association in document.get("time_series_associations", []):
+        key = (association["owner_type"], association["owner_id"])
+        owner = owners.get(key)
+        if association["time_series_type"] != "SingleTimeSeries" or association.get("element_shape"):
+            raise ValueError("TransitionZero staging requires scalar SingleTimeSeries; retain forecast arrays in a Sienna bundle or PowerIO IR")
+        if owner is None or not owner.get("name") or not has_series_capacity(key[0]):
+            raise ValueError("TransitionZero cannot stage time series for this Sienna owner")
+        capacity = build_capacity_by_owner([key], document["components"])[key]
+        if capacity <= 0:
+            raise ValueError("TransitionZero temporal staging requires a positive owner capacity")
+        if association.get("unit_system") == "COMPONENT_BASE":
+            factor = owner["base_power"] / capacity
+            factors.setdefault((key[0], association["name"]), {})[owner["name"]] = factor
+    return factors
 
 
 def normalize_sienna_staging_units(document: dict) -> None:

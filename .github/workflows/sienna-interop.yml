@@ -63,6 +63,7 @@ jobs:
       - name: Exercise Python transports and pipeline plugins
         env:
           PYTHONPATH: tz-interop-oracle
+          POWERIO_SIENNA_BUNDLES: ${{ github.workspace }}/target/sienna-bundles
         run: .venv-interop/bin/python -m pytest python/tests/test_pypsa_files.py python/tests/test_interop.py python/tests/test_sienna_files.py -q
       - name: Upload emitted documents
         if: always()
