@@ -1,7 +1,8 @@
 //! Only fields without a Sienna schema counterpart belong in `ext`.
 //! Electrical fields with a native counterpart always come from that field.
 use super::{Result, Value, error, integer};
-use serde::{Serialize, de::DeserializeOwned};
+use crate::network::{Area, Branch, Bus, Generator, Hvdc, Load, Shunt, Storage, Transformer3W};
+use serde::Serialize;
 
 const KEY: &str = "org.eigenergy.powerio";
 
@@ -30,7 +31,7 @@ pub(super) fn record<T: Serialize>(
     Ok(())
 }
 
-pub(super) fn restore<T: Serialize + DeserializeOwned>(
+pub(super) fn restore<T: Restore>(
     root: &Value,
     row: &Value,
     value: &mut T,
@@ -40,16 +41,95 @@ pub(super) fn restore<T: Serialize + DeserializeOwned>(
     let Some(extra) = root["ext"][id.to_string()][KEY].as_object() else {
         return Ok(());
     };
-    let mut object = serde_json::to_value(&*value).map_err(|e| error(e.to_string()))?;
     for key in fields {
         if let Some(v) = extra.get(*key) {
             if *key == "name" && !v.is_null() {
                 return Err(error("ext must not override a native Sienna name"));
             }
-            object[key] = v.clone();
+            value
+                .restore_field(key, v.clone())
+                .map_err(|e| error(format!("invalid PowerIO metadata on component {id}: {e}")))?;
         }
     }
-    *value = serde_json::from_value(object)
-        .map_err(|e| error(format!("invalid PowerIO metadata on component {id}: {e}")))?;
+    Ok(())
+}
+
+// Deserialize only extension fields. Serializing the complete electrical value
+// here would turn valid unbounded limits into JSON nulls.
+pub(super) trait Restore {
+    fn restore_field(&mut self, key: &str, value: Value) -> serde_json::Result<()>;
+}
+macro_rules! fields {
+    ($ty:ty, $($field:ident),+ $(,)?) => {
+        impl Restore for $ty {
+            fn restore_field(&mut self, key: &str, value: Value) -> serde_json::Result<()> {
+                match key {
+                    $(stringify!($field) => self.$field = serde_json::from_value(value)?,)+
+                    _ => unreachable!("extension field is not in the allowlist"),
+                }
+                Ok(())
+            }
+        }
+    };
+}
+fields!(Bus, uid, name, extras);
+fields!(Branch, uid, name, extras, rating_sets);
+fields!(Load, uid, extras);
+fields!(Shunt, uid);
+fields!(Storage, uid);
+fields!(Transformer3W, uid, name);
+fields!(Area, number, uid, name, slack_bus, tolerance, area_type);
+fields!(Hvdc, uid, cost, vf, vt, qf, qt);
+impl Restore for Generator {
+    fn restore_field(&mut self, key: &str, value: Value) -> serde_json::Result<()> {
+        match key {
+            "uid" => self.uid = serde_json::from_value(value)?,
+            "vg" => self.vg = serde_json::from_value(value)?,
+            "caps" => {
+                // GenCaps uses the network's named-column serde representation.
+                let mut shell = serde_json::to_value(Generator::new(self.bus))?;
+                shell["caps"] = value;
+                self.caps = serde_json::from_value::<Generator>(shell)?.caps;
+            }
+            _ => unreachable!("extension field is not in the allowlist"),
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn record_branch_solution(
+    doc: &mut Value,
+    id: i64,
+    branch: &Branch,
+    warnings: &mut super::Diagnostics,
+) {
+    if let Some(solution) = &branch.solution {
+        doc["ext"][id.to_string()][KEY]["to_terminal_power"] =
+            serde_json::json!({"active":solution.pt, "reactive":solution.qt});
+        warnings.push(&super::codes::EMIT_SIENNA.field_dropped, "branch receiving-terminal results are retained in ext; native fields carry sending-terminal results");
+    }
+}
+
+pub(super) fn restore_branch_solution(
+    root: &Value,
+    row: &Value,
+    branch: &mut Branch,
+    warnings: &mut super::Diagnostics,
+) -> Result<()> {
+    let id = integer(row, "id")?;
+    if let Some(power) = root["ext"][id.to_string()][KEY].get("to_terminal_power") {
+        let scale = super::power_scale(row)?;
+        branch.solution = Some(crate::network::BranchSolution {
+            pf: super::number(row, "active_power_flow")? * scale,
+            qf: super::number(row, "reactive_power_flow")? * scale,
+            pt: super::number(power, "active")?,
+            qt: super::number(power, "reactive")?,
+        });
+    } else if row.get("active_power_flow").is_some() || row.get("reactive_power_flow").is_some() {
+        super::retained(
+            warnings,
+            "branch sending-terminal results are retained without a complete two-terminal solution",
+        );
+    }
     Ok(())
 }

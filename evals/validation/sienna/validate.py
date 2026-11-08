@@ -15,7 +15,7 @@ import warnings
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", DeprecationWarning)
-    from jsonschema import Draft202012Validator, RefResolver
+    from jsonschema import Draft202012Validator, Draft7Validator, RefResolver
 
 RELEASES = {
     "0.1.0": "9de1405a8574dd6939da5c156015ed9398014252",
@@ -24,7 +24,7 @@ RELEASES = {
     "0.4.0": "53cbffec27376b23a9ced996131e0fcf8f1ee1f9",
 }
 
-def validate(checkout: Path, outputs: Path) -> int:
+def validate(checkout: Path, outputs: Path, strict: Path | None = None) -> int:
     checked = 0
     for version, commit in RELEASES.items():
         paths = subprocess.check_output(["git", "-C", str(checkout), "ls-tree", "-r", "--name-only", commit], text=True).splitlines()
@@ -48,6 +48,9 @@ def validate(checkout: Path, outputs: Path) -> int:
                         raise ValueError(f"{output}: unknown component type {kind}")
                     for row in rows:
                         check(schemas[kind], row, f"{output.name}/{kind}/{row.get('id')}")
+                if strict is not None:
+                    schema = json.loads((strict / version / "SystemDocument.json").read_text())
+                    Draft7Validator(schema).validate(document)
                 checked += 1
     return checked
 
@@ -62,5 +65,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("schemas", type=Path)
     parser.add_argument("outputs", type=Path)
+    parser.add_argument("--strict-bundles", type=Path)
     args = parser.parse_args()
-    print(f"Validated {validate(args.schemas, args.outputs)} documents and all component records.")
+    print(f"Validated {validate(args.schemas, args.outputs, args.strict_bundles)} documents and all component records.")

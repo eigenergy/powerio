@@ -117,6 +117,7 @@ pub(super) fn write(
     doc: &mut Value,
     ids: &mut Ids,
     buses: &BTreeMap<BusId, i64>,
+    version: u8,
 ) -> Result<()> {
     let mut number = net.buses().iter().map(|b| b.id.0).max().unwrap_or(0);
     for t in net.transformers_3w() {
@@ -133,21 +134,31 @@ pub(super) fn write(
         );
         let mut circuits = [0; 3];
         for (i, (w, (r, x))) in t.windings.iter().zip(t.calc_star_impedances()).enumerate() {
-            let arc = ids.get(None);
             circuits[i] = ids.related(
                 ["primary_circuit", "secondary_circuit", "tertiary_circuit"][i],
                 id,
             );
+            let arc = ids.related("arc", circuits[i]);
             push(
                 doc,
                 "Arc",
                 json!({"id":arc,"from_id":buses[&w.bus],"to_id":star}),
             );
-            push(
-                doc,
-                "TransformerCircuit",
-                json!({"id":circuits[i],"available":t.in_service && t.winding_in_service()[i],"arc":arc,"r":r,"x":x,"tap":w.tap,"alpha":w.shift.to_radians(),"base_power":net.base_mva(),"power_units":"NATURAL_UNITS","parameter_units":"COMPONENT_BASE","rating":w.rate_a,"rating_b":w.rate_b,"rating_c":w.rate_c}),
-            );
+            let terminal_kv = net
+                .buses()
+                .iter()
+                .find(|b| b.id == w.bus)
+                .expect("validated bus")
+                .base_kv;
+            let mut circuit = json!({"id":circuits[i],"available":t.in_service && t.winding_in_service()[i],"arc":arc,"r":r,"x":x,"tap":w.tap,"alpha":w.shift.to_radians(),"base_power":net.base_mva(),"power_units":"NATURAL_UNITS","parameter_units":"COMPONENT_BASE","rating":w.rate_a,"rating_b":w.rate_b,"rating_c":w.rate_c});
+            if terminal_kv > 0.0 {
+                circuit["base_voltage_primary"] = json!(terminal_kv);
+                circuit["base_voltage_secondary"] = json!(1.0);
+            }
+            if let Some(control) = &w.control {
+                super::control::write(&mut circuit, control, version)?;
+            }
+            push(doc, "TransformerCircuit", circuit);
         }
         let mut row = json!({"id":id,"name":t.name.clone().unwrap_or_else(||format!("transformer_{id}")),"primary_circuit":circuits[0],"secondary_circuit":circuits[1],"tertiary_circuit":circuits[2],"star_bus":star,"admittance_units":"COMPONENT_BASE","magnetizing_shunt":{"real":t.mag_g,"imag":t.mag_b},"shunt_location":match t.magnetizing_connection {MagnetizingConnection::StarPoint=>"STAR",MagnetizingConnection::Winding1Terminal=>"PRIMARY"},"parameter_units":"COMPONENT_BASE"});
         for (i, suffix) in ["12", "23", "31"].into_iter().enumerate() {

@@ -58,9 +58,9 @@ and the PyPSA file extra in the same environment. The source accepts `input_path
 and an optional PowerIO `format`; the sink accepts `output_path` and `format`
 (default `pio-ir`).
 
-Both default to `tables: pypsa`, matching the PyPSA table contract. The source
+Both default to `tables: pypsa`, matching the PyPSA table layout. The source
 stages transformers and shunt impedances alongside the other component tables.
-`tables: sienna` selects the SiennaSchemas 0.2 contract. A Sienna source refuses
+`tables: sienna` selects the SiennaSchemas 0.2 tables. A Sienna source refuses
 component families that the pipeline's staging helper cannot handle.
 
 The sink currently requires a static destination state and a single-file target.

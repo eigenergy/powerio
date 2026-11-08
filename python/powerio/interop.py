@@ -1,23 +1,23 @@
 """Optional source and sink plugins for TransitionZero's interop pipeline.
 
-The entry points support PyPSA staging and the SiennaSchemas 0.2 table contract. External pipeline
+The entry points support PyPSA staging and the SiennaSchemas 0.2 table layout. External pipeline
 packages are imported only when this module is explicitly loaded by interop.
 """
 from __future__ import annotations
 
-import json
 import io
+import json
 import tempfile
 from pathlib import Path
 from typing import ClassVar, Literal
 
-from pydantic import BaseModel
 from interop.core.pipeline import StagedSource, State
 from interop.core.reporting import ScopedRecorder
-from interop.plugins.sources.stage_sienna_system_json import stage_topology
 from interop.plugins.sinks.emit_sienna_system_json import EmitSiennaSystemJson
+from interop.plugins.sources.stage_sienna_system_json import stage_topology
 from interop.ports.outbound.filesystem import FilesystemPort, Location
 from interop.ports.outbound.reporting import EventKind, TranslationEvent
+from pydantic import BaseModel
 
 import powerio as pio
 
@@ -60,12 +60,15 @@ class PowerIOSource(StagedSource):
             raise ValueError("PowerIO source exceeds the 64 MiB acquisition limit")
         module = pio.deserialize(data) if params.format == "pio-ir" else pio.parse(data, format=params.format, name=str(params.input_path))
         if params.tables == "pypsa":
-            from interop.plugins.sources.stage_pypsa_network_file import stage_network
             from interop.core.extensions import ExtensionKind, append_extensions
+            from interop.plugins.sources.stage_pypsa_network_file import stage_network
             output = pio.emit(module, "pypsa-netcdf")
             report(self._recorder, module.diagnostics)
             report(self._recorder, output.diagnostics)
-            staged = stage_network(io.BytesIO(output.artifacts[0].data), staging_dir)
+            data = output.artifacts[0].data
+            if data is None:
+                raise ValueError("Expected an in-memory PyPSA output")
+            staged = stage_network(io.BytesIO(data), staging_dir)
             state = State(staging_dir=staging_dir, source_topology=staged.topology, source_time_series=staged.time_series)
             if staged.network is not None:
                 append_extensions(state.source_extensions, ExtensionKind.NETWORK, [staged.network])
@@ -73,7 +76,10 @@ class PowerIOSource(StagedSource):
         output = pio.emit(module, "sienna-0-2-json")
         report(self._recorder, module.diagnostics)
         report(self._recorder, output.diagnostics)
-        document = json.loads(output.text)
+        text = output.text
+        if text is None:
+            raise ValueError("Expected a Sienna JSON document")
+        document = json.loads(text)
         if document["time_series_associations"] or document["time_series_storage_file"]:
             raise ValueError("Use a Sienna bundle source for documents with time-series companions")
         supported = {"Area", "LoadZone", "ACBus", "Arc", "Line", "MonitoredLine", "ThermalStandard", "RenewableDispatch", "RenewableNonDispatch", "HydroDispatch", "EnergyReservoirStorage", "PowerLoad", "InterruptiblePowerLoad", "TwoTerminalGenericHVDCLine"}
@@ -101,18 +107,12 @@ class PowerIOSink:
     def write(self, state: State, params: BaseModel | None) -> None:
         if not isinstance(params, PowerIOSinkParams):
             raise TypeError("powerio_sink requires PowerIOSinkParams")
-        if state.source_time_series or state.destination_time_series or state.destination_tables.get("time_series_metadata") is not None:
-            raise ValueError("PowerIO electrical sink requires a static state; temporal data must be emitted as a bundle")
+        if params.tables == "sienna" and (state.destination_time_series or state.destination_tables.get("time_series_metadata") is not None):
+            raise ValueError("Sienna temporal output requires a document and HDF5 companion")
         if state.destination_extensions or state.destination_extension_series:
             raise ValueError("Emit the pipeline's extension sidecar before projecting to an electrical file")
         if params.tables == "pypsa":
-            from interop.plugins.sinks.emit_pypsa_network import build_network
-            network = build_network(state, None)
-            for table, component in (("transformers", "Transformer"), ("shunt_impedances", "ShuntImpedance"), ("stores", "Store")):
-                frame = state.destination_tables.get(table)
-                if frame is not None and frame.height:
-                    data = frame.to_pandas().set_index("name")
-                    network.add(component, data.index, **{column: data[column] for column in data.columns})
+            network = build_pypsa_network(state)
             with tempfile.TemporaryDirectory(prefix="powerio-interop-") as directory:
                 path = Path(directory) / "network.nc"
                 network.export_to_netcdf(path)
@@ -127,3 +127,48 @@ class PowerIOSink:
         if len(result.artifacts) != 1 or result.layout != "file":
             raise ValueError("powerio_sink requires a single-file destination format")
         self._fs.write_bytes(params.output_path, result.artifacts[0].data)
+
+
+def build_pypsa_network(state: State):
+    """Apply native PyPSA tables without rounding electrical parameters.
+
+    The pipeline's existing temporal assembler resolves its UUID-based series
+    metadata. Static tables may also come directly from a PyPSA staging step.
+    """
+    import pypsa
+    metadata = state.destination_tables.get("time_series_metadata")
+    if metadata is not None and metadata.height:
+        from interop.plugins.sinks.emit_pypsa_network import build_network
+        network = build_network(state, None)
+    else:
+        if state.destination_time_series:
+            raise ValueError("Destination time series require time_series_metadata")
+        network = pypsa.Network()
+    components = {
+        "carriers": "Carrier", "buses": "Bus", "generators": "Generator",
+        "loads": "Load", "lines": "Line", "transformers": "Transformer",
+        "shunt_impedances": "ShuntImpedance", "storage_units": "StorageUnit",
+        "stores": "Store", "links": "Link", "global_constraints": "GlobalConstraint",
+    }
+    unknown = set(state.destination_tables) - components.keys() - {"time_series_metadata"}
+    if unknown:
+        raise ValueError(f"Unrecognized PyPSA destination tables: {sorted(unknown)}")
+    for table, component in components.items():
+        frame = state.destination_tables.get(table)
+        if frame is None or not frame.height:
+            continue
+        data = frame.to_pandas().set_index("name")
+        if data.index.has_duplicates:
+            raise ValueError(f"Duplicate names in {table}")
+        current = network.components[component].static
+        missing = data.index.difference(current.index)
+        if len(missing):
+            attributes = {column: data.loc[missing, column] for column in data.columns}
+            network.add(component, missing, **attributes)
+        current = network.components[component].static
+        for column in data.columns:
+            # A null in a mapped optional field means the consumer's default.
+            supplied = data[column].dropna()
+            if not supplied.empty:
+                current.loc[supplied.index, column] = supplied
+    return network
