@@ -46,6 +46,27 @@ def test_hdf_metadata_is_not_executed(tmp_path):
     assert not (tmp_path / "executed").exists()
 
 
+@pytest.mark.parametrize("key", ["meta", "crs"])
+def test_hdf_metadata_group_without_values_is_refused(key, tmp_path):
+    # The attribute scan skips the metadata subtrees because the sanitizer
+    # deletes them; one without `values` was kept, and PyTables unpickled its
+    # attributes once pandas opened the copy.
+    import pickle
+
+    import h5py
+    import numpy as np
+    from powerio._pypsa_files import _sanitized_hdf
+    class Payload:
+        def __reduce__(self):
+            return (eval, ("__import__('pathlib').Path(%r).touch()" % str(tmp_path / "executed"),))
+    path = tmp_path / "bad.h5"
+    with h5py.File(path, "w") as store:
+        store.create_group(key).attrs["pandas_type"] = np.bytes_(pickle.dumps(Payload(), protocol=0))
+    with pytest.raises(ValueError, match=f"Unexpected PyPSA {key} metadata layout"):
+        _sanitized_hdf(path, tmp_path / "safe.h5")
+    assert not (tmp_path / "executed").exists()
+
+
 @pytest.mark.parametrize("format,suffix", [("pypsa-netcdf", ".nc"), ("pypsa-hdf5", ".h5")])
 def test_temporal_binary_roundtrip(format, suffix, tmp_path):
     import pandas as pd
