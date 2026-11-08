@@ -358,6 +358,15 @@ pub(in crate::format) fn to_schema(root: &Value) -> Result<Value> {
                 kind = "Line".into();
             }
             "SwitchedAdmittance" => {
+                // Older format-5 runtimes omit these fields on serialization.
+                // Explicit native fields always take precedence over the fallback.
+                for field in ["control_mode", "regulated_bus_number"] {
+                    if row.get(field).is_none()
+                        && let Some(value) = doc["ext"][id.to_string()]["org.eigenergy.powerio"]["switched_control_fields"].get(field)
+                    {
+                        row[field] = value.clone();
+                    }
+                }
                 scale(&mut row["Y"], system_base);
                 let y = row["Y"].clone();
                 row["solved_admittance"] = y["imag"].clone();
@@ -460,6 +469,24 @@ pub(in crate::format) fn read(
 ) -> Result<BalancedNetwork> {
     let root: Value = serde_json::from_str(text).map_err(|e| error(e.to_string()))?;
     let doc = to_schema(&root)?;
+    if root["data"]["components"].as_array().is_some_and(|rows| {
+        rows.iter().any(|row| {
+            row["__metadata__"]["type"] == "SwitchedAdmittance"
+                && ["control_mode", "regulated_bus_number"]
+                    .iter()
+                    .any(|field| {
+                        row.get(*field).is_none()
+                            && row["ext"]["org.eigenergy.powerio"]["switched_control_fields"]
+                                .get(*field)
+                                .is_some()
+                    })
+        })
+    }) {
+        retained(
+            warnings,
+            "switched-shunt controls restored from ext; the native consumer did not serialize these control fields",
+        );
+    }
     let mut net = super::read(&doc.to_string(), name, 4, warnings)?;
     if rows(&doc, "Line")?
         .iter()
@@ -578,7 +605,7 @@ pub(in crate::format) fn write(
                     .or_else(|| row.get("reactive_power_range_limits"))
                     .cloned()
                     .unwrap_or_else(|| minmax(1.0, 1.0));
-                output.push(&codes::EMIT_SIENNA.field_dropped,"PowerSystems carries switched-shunt controls; the consumer must include the shunt's initial injection separately when its Ybus excludes switched admittances");
+                output.push(&codes::EMIT_SIENNA.field_dropped,"PowerSystems 5.9 omits switched-shunt control mode and remote regulation; ext retains those fields. Consumers whose Ybus excludes switched admittances must include the initial injection separately");
             }
             if kind == "EnergyReservoirStorage" {
                 scale(&mut row["storage_capacity"], 1.0 / component_base);
@@ -702,6 +729,12 @@ pub(in crate::format) fn write(
                 && source.get("reactive_power_flow").is_none()
             {
                 row["ext"]["org.eigenergy.powerio"]["branch_flow_absent"] = json!(true);
+            }
+            if kind == "SwitchedAdmittance" {
+                row["ext"]["org.eigenergy.powerio"]["switched_control_fields"] = json!({
+                    "control_mode": row["control_mode"],
+                    "regulated_bus_number": row["regulated_bus_number"]
+                });
             }
             if kind == "TransformerCircuit" {
                 if let Some(band) = source.get("controlled_voltage_limits") {
