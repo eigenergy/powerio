@@ -18,3 +18,12 @@ admittance. A parse followed by unchanged same-format emission is byte exact.
 Optional Python tests use PyPSA's binary readers and writers and TransitionZero's
 staging API. Install `powerio[pypsa-files]` and tz-oss-interop in the test environment,
 then run `pytest python/tests/test_pypsa_files.py python/tests/test_interop.py`.
+
+Native Julia serialization is checked independently of the schema documents.
+The `native` CI matrix runs PowerSystems 4.6.2, 5.9.0, and 5.12.5 against
+`powersystems.jl`. Each runtime produces input fixtures from MATPOWER; Rust
+compares their admittance matrices against PowerNetworkMatrices and checks
+bus-level power against the reference network. The 5.x consumers also load
+PowerIO's freshly generated documents, whose admittance must match the original
+MATPOWER network. Native imports use the native matrix as their oracle because
+PowerSystems versions interpret some MATPOWER transformer charging differently.

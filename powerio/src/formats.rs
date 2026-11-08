@@ -71,6 +71,7 @@ pub fn grid_formats() -> impl Iterator<Item = GridFormatInfo> {
         ("jiidm", "PowSybl JIIDM", Transmission, true),
         ("cgmes", "CIM CGMES", Transmission, true),
         ("ucte", "UCTE-DEF", Transmission, true),
+        ("powersystems-json", "PowerSystems JSON", Transmission, true),
         ("sienna-json", "SiennaSchemas JSON", Transmission, true),
         ("sienna-0-1-json", "SiennaSchemas 0.1", Transmission, true),
         ("sienna-0-2-json", "SiennaSchemas 0.2", Transmission, true),

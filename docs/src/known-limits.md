@@ -4,8 +4,9 @@
 
 - Format profiles are bounded. PyPSA support covers the CSV electrical
   profile; multi carrier components, investment periods, and stochastic data
-  are retained and reported rather than typed, and PyPSA NetCDF does not
-  parse. Egret support is the scalar network profile with time series, with
+  are retained and reported rather than typed. Optional Python NetCDF/HDF5
+  transports use this same profile; see [Sienna and pipeline exchange](sienna.md).
+  Egret support is the scalar network profile with time series, with
   unit commitment fields outside it. OpenDSS support is the static circuit;
   load shapes and solve instructions are retained and reported. Distribution
   CIM support is the CIM100 node breaker profile with per phase equipment and

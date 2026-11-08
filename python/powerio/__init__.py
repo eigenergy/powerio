@@ -17,8 +17,8 @@ and whose ``diagnostics`` record what the parser found::
 
 A PyPSA CSV directory parses to a network or a time series, depending on its
 declared snapshots and supported series files. A time series keeps its
-snapshot axis even when the values are identical. NetCDF and HDF5 are tracked
-in https://github.com/eigenergy/powerio/issues/107.
+snapshot axis even when the values are identical. Optional ``powerio[pypsa-files]``
+transports carry this electrical profile through PyPSA NetCDF and HDF5 files.
 
 A source that defines a calculation parses to that calculation's typed value.
 Use ``isinstance(module.value, ...)`` to branch on the result type.

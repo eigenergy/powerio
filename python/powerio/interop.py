@@ -9,7 +9,7 @@ import io
 import json
 import tempfile
 from pathlib import Path
-from typing import ClassVar, Literal
+from typing import Any, ClassVar, Literal
 
 from interop.core.pipeline import StagedSource, State
 from interop.core.reporting import ScopedRecorder
@@ -22,6 +22,7 @@ from pydantic import BaseModel
 import powerio as pio
 
 MAX_BYTES = 64 << 20
+EXTENSION_KEY = "org.eigenergy.powerio.transitionzero"
 
 
 def report(recorder: ScopedRecorder, diagnostics) -> None:
@@ -72,6 +73,7 @@ class PowerIOSource(StagedSource):
             state = State(staging_dir=staging_dir, source_topology=staged.topology, source_time_series=staged.time_series)
             if staged.network is not None:
                 append_extensions(state.source_extensions, ExtensionKind.NETWORK, [staged.network])
+            restore_extensions(module, state)
             return state
         output = pio.emit(module, "sienna-0-2-json")
         report(self._recorder, module.diagnostics)
@@ -86,7 +88,31 @@ class PowerIOSource(StagedSource):
         skipped = [kind for kind, rows in document["components"].items() if rows and kind not in supported]
         if skipped:
             raise ValueError(f"TransitionZero's Sienna staging does not handle {skipped}; use tables='pypsa' to stage these electrical components")
-        return State(staging_dir=staging_dir, source_topology=stage_topology(document, staging_dir))
+        normalize_sienna_staging_units(document)
+        from interop.core.extensions import (
+            ExtensionKind,
+            GeneratorExtension,
+            append_extensions,
+        )
+        from interop.plugins.shared.sienna_constants import (
+            PrimeMover,
+            SiennaComponent,
+            ThermalFuel,
+        )
+        from interop.plugins.shared.sienna_pypsa_translations.constants import (
+            pypsa_carrier,
+        )
+        state = State(staging_dir=staging_dir, source_topology=stage_topology(document, staging_dir))
+        for kind in ("ThermalStandard", "RenewableDispatch", "RenewableNonDispatch"):
+            for row in document["components"].get(kind, []):
+                try:
+                    pypsa_carrier(SiennaComponent(kind), PrimeMover(row["prime_mover_type"]), ThermalFuel(row["fuel"]) if kind == "ThermalStandard" else None)
+                except KeyError:
+                    # An unspecified technology remains unspecified in PyPSA.
+                    append_extensions(state.source_extensions, ExtensionKind.GENERATOR, [GeneratorExtension(name=row["name"], carrier="other")])
+                    self._recorder.append(TranslationEvent(kind=EventKind.NOT_MAPPED, note=f"{row['name']}: upstream carrier mapping has no entry for this technology; using other"))
+        restore_extensions(module, state)
+        return state
 
 
 class PowerIOSinkParams(BaseModel):
@@ -109,8 +135,9 @@ class PowerIOSink:
             raise TypeError("powerio_sink requires PowerIOSinkParams")
         if params.tables == "sienna" and (state.destination_time_series or state.destination_tables.get("time_series_metadata") is not None):
             raise ValueError("Sienna temporal output requires a document and HDF5 companion")
-        if state.destination_extensions or state.destination_extension_series:
-            raise ValueError("Emit the pipeline's extension sidecar before projecting to an electrical file")
+        has_extensions = any(record.has_any_value() for records in state.destination_extensions.values() for record in records) or bool(state.destination_extension_series)
+        if has_extensions and params.format != "pio-ir":
+            raise ValueError("Use pio-ir to retain pipeline extensions, or emit the pipeline's extension sidecar before projecting to an electrical file")
         if params.tables == "pypsa":
             network = build_pypsa_network(state)
             with tempfile.TemporaryDirectory(prefix="powerio-interop-") as directory:
@@ -118,9 +145,16 @@ class PowerIOSink:
                 network.export_to_netcdf(path)
                 module = pio.parse(path, format="pypsa-netcdf")
         else:
+            supported = {"Area", "ACBus", "Arc", "PowerLoad", "InterruptiblePowerLoad", "ThermalStandard", "RenewableDispatch", "RenewableNonDispatch", "HydroDispatch", "EnergyReservoirStorage", "Line", "TwoTerminalGenericHVDCLine"}
+            unknown = set(state.destination_tables) - supported
+            if unknown:
+                raise ValueError(f"Unrecognized Sienna destination tables: {sorted(unknown)}")
             payload = EmitSiennaSystemJson.build_payload(state)
             document = {"schema_version": "0.2.0", "components": payload["components"], "supplemental_attributes": [], "supplemental_attribute_associations": [], "plant_associations": [], "combined_cycle_associations": [], "service_associations": [], "time_series_associations": [], "time_series_storage_file": None}
             module = pio.parse(json.dumps(document).encode(), format="sienna-0-2-json")
+        if has_extensions:
+            module = preserve_extensions(module, state)
+            self._recorder.append(TranslationEvent(kind=EventKind.NOT_MAPPED, note="Pipeline extensions remain in the PowerIO module; the electrical value does not interpret their planning or scheduling semantics"))
         result = pio.serialize(module) if params.format == "pio-ir" else pio.emit(module, params.format)
         report(self._recorder, module.diagnostics)
         report(self._recorder, result.diagnostics)
@@ -172,3 +206,103 @@ def build_pypsa_network(state: State):
             if not supplied.empty:
                 current.loc[supplied.index, column] = supplied
     return network
+
+
+def normalize_sienna_staging_units(document: dict) -> None:
+    """Use the unit bases accepted by the upstream Sienna-to-PyPSA steps."""
+    from power_openapi_models.core import models as core_models
+    from power_openapi_models.operations import models
+    for kind, rows in document["components"].items():
+        model = getattr(models, kind, None) or getattr(core_models, kind)
+        document["components"][kind] = [model.model_validate(row).model_dump(mode="json", by_alias=True) for row in rows]
+    fields = {
+        "Line": ("rating", "rating_b", "rating_c", "active_power_flow", "reactive_power_flow"),
+        "MonitoredLine": ("rating", "rating_b", "rating_c", "active_power_flow", "reactive_power_flow"),
+        "EnergyReservoirStorage": ("rating", "active_power", "reactive_power", "input_active_power_limits", "output_active_power_limits", "reactive_power_limits"),
+    }
+    def scale(value, factor):
+        if isinstance(value, dict):
+            return {key: scale(item, factor) for key, item in value.items()}
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value * factor
+        return value
+    for kind, keys in fields.items():
+        for row in document["components"].get(kind, []):
+            if row["power_units"] == "NATURAL_UNITS":
+                for key in keys:
+                    if key in row:
+                        row[key] = scale(row[key], 1.0 / row["base_power"])
+                row["power_units"] = "COMPONENT_BASE"
+
+
+def preserve_extensions(module, state: State):
+    """Keep pipeline records and named companion columns through IR serialization."""
+    import polars as pl
+    from interop.core.extensions import build_extensions
+    payload = {"version": 1, "records": build_extensions(state.destination_extensions).model_dump(mode="json", exclude_none=True), "series": {}}
+    for kind, lazy in state.destination_extension_series.items():
+        frame = lazy.limit(1_000_001).collect(engine="streaming")
+        if frame.height > 1_000_000 or frame.estimated_size() > MAX_BYTES:
+            raise ValueError("Pipeline extension series exceed the bounded IR transport profile")
+        schema = {}
+        for column, dtype in frame.schema.items():
+            if isinstance(dtype, pl.Datetime):
+                schema[column] = {"type": "datetime", "unit": dtype.time_unit, "zone": dtype.time_zone}
+                frame = frame.with_columns(pl.col(column).cast(pl.Int64))
+            elif dtype == pl.String:
+                schema[column] = {"type": "string"}
+            elif dtype in (pl.Float32, pl.Float64):
+                if not frame[column].drop_nulls().is_finite().all():
+                    raise ValueError("Pipeline extension series require finite numbers")
+                schema[column] = {"type": "float"}
+            elif dtype in (pl.Int32, pl.Int64):
+                schema[column] = {"type": "integer"}
+            elif dtype == pl.Boolean:
+                schema[column] = {"type": "boolean"}
+            else:
+                raise ValueError(f"Unsupported pipeline extension column type: {column}: {dtype}")
+        payload["series"][str(kind)] = {"schema": schema, "order": frame.columns, "columns": frame.to_dict(as_series=False)}
+    text = json.dumps(payload, allow_nan=False)
+    if len(text.encode()) > MAX_BYTES:
+        raise ValueError("Pipeline extensions exceed the 64 MiB IR transport limit")
+    document = ir_document(module)
+    document.setdefault("extensions", {})[EXTENSION_KEY] = payload
+    return pio.deserialize(json.dumps(document).encode())
+
+
+def restore_extensions(module, state: State) -> None:
+    import polars as pl
+    from interop.core.extensions import (
+        ExtensionKind,
+        parse_extensions,
+        stage_extensions,
+    )
+    payload = ir_document(module).get("extensions", {}).get(EXTENSION_KEY)
+    if payload is None:
+        return
+    if payload.get("version") != 1:
+        raise ValueError("Unsupported PowerIO pipeline extension version")
+    # The retained records are authoritative for these names; unrelated network
+    # metadata produced during staging remains available.
+    for kind, records in stage_extensions(parse_extensions(payload["records"])).items():
+        names = {record.name for record in records}
+        state.source_extensions[kind] = [r for r in state.source_extensions.get(kind, []) if r.name not in names] + records
+    for kind, table in payload["series"].items():
+        schema: dict[str, Any] = {}
+        for column, dtype in table["schema"].items():
+            key = dtype["type"]
+            if key == "datetime":
+                schema[column] = pl.Datetime(dtype["unit"], dtype["zone"])
+            else:
+                types = {"string": pl.String, "float": pl.Float64, "integer": pl.Int64, "boolean": pl.Boolean}
+                if key not in types:
+                    raise ValueError(f"Unsupported retained pipeline column type: {key}")
+                schema[column] = types[key]
+        state.source_extension_series[ExtensionKind(kind)] = pl.DataFrame(table["columns"], schema=schema).select(table["order"]).lazy()
+
+
+def ir_document(module) -> dict:
+    text = pio.serialize(module).text
+    if text is None:
+        raise ValueError("Expected a serialized PowerIO JSON document")
+    return json.loads(text)

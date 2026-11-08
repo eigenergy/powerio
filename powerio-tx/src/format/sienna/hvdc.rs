@@ -71,7 +71,12 @@ pub(super) fn read_hvdc(
             dc.loss1 = number(data, "proportional_term")?;
         }
         dc.pt = Hvdc::calc_delivered_power(dc.pf, dc.loss0, dc.loss1);
-        super::metadata::restore(root, row, &mut dc, &["uid", "cost", "vf", "vt", "qf", "qt"])?;
+        super::metadata::restore(
+            root,
+            row,
+            &mut dc,
+            &["uid", "cost", "vf", "vt", "qf", "qt", "pt"],
+        )?;
         links.push(dc);
     }
     Ok(links)
@@ -87,7 +92,7 @@ pub(super) fn write_hvdc(
 ) -> Result<()> {
     for dc in net.hvdc() {
         let id = ids.get(dc.uid.as_deref());
-        super::metadata::record(doc, id, dc, &["uid", "cost", "vf", "vt", "qf", "qt"])?;
+        super::metadata::record(doc, id, dc, &["uid", "cost", "vf", "vt", "qf", "qt", "pt"])?;
         let arc = ids.related("arc", id);
         push(
             doc,

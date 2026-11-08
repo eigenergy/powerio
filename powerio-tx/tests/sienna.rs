@@ -79,22 +79,45 @@ fn three_winding_connections_and_pair_bases_survive() {
         t.star_vm = 0.98;
         t.star_va = -3.0;
         net.transformers_3w_mut().push(t.clone());
-        for version in 1..=4 {
-            let out = emit_value(&net, TargetFormat::SiennaJson { version }).unwrap();
+        for version in 0..=4 {
+            let format = if version == 0 {
+                TargetFormat::PowerSystemsJson
+            } else {
+                TargetFormat::SiennaJson { version }
+            };
+            let out = emit_value(&net, format).unwrap();
             save_output(version, &format!("three_winding_{placement:?}"), &out.text);
             let recovered =
                 powerio_tx::parse(Source::from_memory("case.json", out.text.into_bytes()).unwrap())
                     .unwrap();
             let actual = &recovered.value().transformers_3w()[0];
-            assert_eq!(actual.magnetizing_connection, placement);
+            let separate_shunt =
+                version == 0 && placement == MagnetizingConnection::Winding1Terminal;
+            assert_eq!(
+                actual.magnetizing_connection,
+                if separate_shunt {
+                    MagnetizingConnection::StarPoint
+                } else {
+                    placement
+                }
+            );
             for (a, b) in actual.windings.iter().zip(&t.windings) {
                 assert_eq!(a.bus, b.bus);
                 assert!((a.tap - b.tap).abs() < 1e-12);
                 assert!((a.shift - b.shift).abs() < 1e-12);
                 assert_eq!(a.control, b.control);
             }
-            assert!((actual.mag_g - t.mag_g).abs() < 1e-12);
-            assert!((actual.mag_b - t.mag_b).abs() < 1e-12);
+            if separate_shunt {
+                assert_eq!(actual.mag_g, 0.0);
+                assert_eq!(actual.mag_b, 0.0);
+                let shunt = recovered.value().shunts().last().unwrap();
+                assert_eq!(shunt.bus, t.windings[0].bus);
+                assert!((shunt.g - t.mag_g * net.base_mva()).abs() < 1e-12);
+                assert!((shunt.b - t.mag_b * net.base_mva()).abs() < 1e-12);
+            } else {
+                assert!((actual.mag_g - t.mag_g).abs() < 1e-12);
+                assert!((actual.mag_b - t.mag_b).abs() < 1e-12);
+            }
             assert_eq!(recovered.value().buses().len(), net.buses().len());
             for (a, b) in actual.z.iter().zip(t.z) {
                 assert!((a.r - b.r).abs() < 1e-12);
@@ -107,7 +130,11 @@ fn three_winding_connections_and_pair_bases_survive() {
 
 fn save_output(version: u8, name: &str, text: &str) {
     if let Some(dir) = std::env::var_os("POWERIO_SIENNA_OUTPUT_DIR") {
-        let dir = std::path::PathBuf::from(dir).join(format!("0.{version}.0"));
+        let dir = std::path::PathBuf::from(dir).join(if version == 0 {
+            "powersystems-5".to_owned()
+        } else {
+            format!("0.{version}.0")
+        });
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(format!("{name}.json")), text).unwrap();
     }
@@ -184,6 +211,41 @@ fn transformer_control_modes_and_generation_types() {
                     assert!(energies.contains(&energy));
                 }
             }
+        }
+    }
+}
+
+#[test]
+fn powersystems_native_reference_cases() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data");
+    for case in ["case9", "case14", "case30", "case57", "case118"] {
+        let module =
+            powerio_tx::parse(Source::open(root.join(format!("{case}.m"))).unwrap()).unwrap();
+        let out = emit_value(module.value(), TargetFormat::PowerSystemsJson).unwrap();
+        let recovered = powerio_tx::parse(
+            Source::from_memory("system.json", out.text.as_bytes().to_vec()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            recovered.value().buses().len(),
+            module.value().buses().len()
+        );
+        assert_eq!(
+            recovered.value().branches().len(),
+            module.value().branches().len()
+        );
+        assert_eq!(
+            recovered.value().generators().len(),
+            module.value().generators().len()
+        );
+        assert_eq!(
+            recovered.value().loads().len(),
+            module.value().loads().len()
+        );
+        if let Some(dir) = std::env::var_os("POWERIO_SIENNA_OUTPUT_DIR") {
+            let dir = std::path::PathBuf::from(dir).join("powersystems-5");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(format!("{case}.json")), out.text).unwrap();
         }
     }
 }

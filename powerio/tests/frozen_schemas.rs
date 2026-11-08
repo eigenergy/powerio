@@ -558,6 +558,10 @@ fn assert_reads_documents_of(earlier: &str) {
         serde_json::from_str(&read_schema_file(earlier)).unwrap();
     let mut current: serde_json::Value =
         serde_json::from_str(&read_schema_file(CURRENT_SCHEMA)).unwrap();
+    // Unit annotations do not add JSON validation constraints. Their physical
+    // meanings are checked in schema_units; compare all validation keywords here.
+    strip_unit_annotations(&mut published);
+    strip_unit_annotations(&mut current);
     let published_defs = published.as_object_mut().unwrap().remove("$defs").unwrap();
     let current_defs = current.as_object_mut().unwrap().remove("$defs").unwrap();
     // Each file has its own identifier, and the header's `version` names
@@ -1164,5 +1168,24 @@ fn a_tagged_union_may_gain_alternatives_and_nothing_else() {
             .is_err(),
             "{refused} must not pass as an addition"
         );
+    }
+}
+
+fn strip_unit_annotations(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            for key in ["x-unit", "x-unit-base", "x-sign-convention", "x-zero-means"] {
+                object.remove(key);
+            }
+            for child in object.values_mut() {
+                strip_unit_annotations(child);
+            }
+        }
+        serde_json::Value::Array(array) => {
+            for child in array {
+                strip_unit_annotations(child);
+            }
+        }
+        _ => {}
     }
 }

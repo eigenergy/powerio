@@ -151,6 +151,27 @@ pub(super) fn prepare(
         }
         _ => {}
     }
+    if let Some((old_kind, old)) = previous
+        && old_kind == kind
+        && let Some(old_cost) = old.get("operation_cost")
+        && row.get("operation_cost").is_some()
+    {
+        let projection = super::read_cost(
+            old_cost,
+            super::base(old).unwrap_or(super::BASE),
+            &mut Diagnostics::new(),
+        );
+        if projection.as_ref().is_ok_and(|cost| cost == &g.cost) && same_cost_basis(old, row) {
+            row["operation_cost"] = old_cost.clone();
+        } else if old_cost["start_up"].is_object() {
+            warnings.push(
+                &codes::EMIT_SIENNA.field_dropped,
+                format!(
+                    "generator {id}: edited scalar cost replaces retained staged startup costs"
+                ),
+            );
+        }
+    }
     // A retained curve with no balanced cost interpretation remains authoritative
     // until the caller supplies a typed replacement.
     if g.cost.is_none()
@@ -159,7 +180,23 @@ pub(super) fn prepare(
         && old.get("operation_cost").is_some()
         && row.get("operation_cost").is_some()
     {
-        row["operation_cost"] = old["operation_cost"].clone();
+        if same_cost_basis(old, row) {
+            row["operation_cost"] = old["operation_cost"].clone();
+        } else {
+            warnings.push(&codes::EMIT_SIENNA.field_dropped, format!("generator {id}: changing the component base requires a typed replacement for the retained cost curve"));
+        }
     }
     kind
+}
+
+fn same_cost_basis(old: &Value, new: &Value) -> bool {
+    fn component_basis(value: &Value) -> bool {
+        value.as_object().is_some_and(|o| {
+            o.get("power_units").is_some_and(|v| v == "COMPONENT_BASE")
+                || o.values().any(component_basis)
+        }) || value
+            .as_array()
+            .is_some_and(|a| a.iter().any(component_basis))
+    }
+    !component_basis(&old["operation_cost"]) || old["base_power"] == new["base_power"]
 }

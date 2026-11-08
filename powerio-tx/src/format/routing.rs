@@ -70,6 +70,7 @@ pub enum TransmissionFormat {
     Sienna02Json,
     Sienna03Json,
     Sienna04Json,
+    PowerSystemsJson,
 }
 
 impl TransmissionFormat {
@@ -96,6 +97,7 @@ impl TransmissionFormat {
             Self::Sienna02Json => "sienna-0-2-json",
             Self::Sienna03Json => "sienna-0-3-json",
             Self::Sienna04Json => "sienna-0-4-json",
+            Self::PowerSystemsJson => "powersystems-json",
 
             Self::RavensJson => "ravens-json",
             Self::DeepMindOpfDataJson => "opfdata-json",
@@ -199,6 +201,7 @@ pub fn parse_transmission_format(name: &str) -> Option<TransmissionFormat> {
         "gridfm" => Some(TransmissionFormat::Gridfm),
         "goc3" | "goc3json" | "go3" | "gochallenge3" | "c3" => Some(TransmissionFormat::Goc3Json),
         "surge" | "surgejson" => Some(TransmissionFormat::SurgeJson),
+        "powersystems" | "powersystemsjson" => Some(TransmissionFormat::PowerSystemsJson),
         "sienna" | "siennajson" => Some(TransmissionFormat::SiennaJson),
         "sienna01json" | "sienna0.1json" | "sienna0.1.0" => Some(TransmissionFormat::Sienna01Json),
         "sienna02json" | "sienna0.2json" | "sienna0.2.0" => Some(TransmissionFormat::Sienna02Json),
@@ -493,6 +496,8 @@ struct JsonHeader {
     #[serde(default, deserialize_with = "present")]
     schema_version: bool,
     #[serde(default, deserialize_with = "present")]
+    data_format_version: bool,
+    #[serde(default, deserialize_with = "present")]
     components: bool,
     #[serde(default, deserialize_with = "present")]
     time_series_storage_file: bool,
@@ -594,6 +599,7 @@ impl JsonHeader {
             || is_rawx
             || is_surge
             || is_sienna
+            || self.data_format_version
             || (is_ravens && !is_ravens_multiconductor)
             || is_opfdata
             || is_power_models;
@@ -618,6 +624,8 @@ impl JsonHeader {
                     TransmissionFormat::PsseRawx
                 } else if is_goc3 {
                     TransmissionFormat::Goc3Json
+                } else if self.data_format_version {
+                    TransmissionFormat::PowerSystemsJson
                 } else if is_sienna {
                     TransmissionFormat::SiennaJson
                 } else if is_surge {

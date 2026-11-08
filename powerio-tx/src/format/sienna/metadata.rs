@@ -73,13 +73,13 @@ macro_rules! fields {
     };
 }
 fields!(Bus, uid, name, extras);
-fields!(Branch, uid, name, extras, rating_sets);
+fields!(Branch, uid, name, extras, rating_sets, angmin, angmax);
 fields!(Load, uid, extras);
-fields!(Shunt, uid);
+fields!(Shunt, uid, extras, section_count, control);
 fields!(Storage, uid);
 fields!(Transformer3W, uid, name);
 fields!(Area, number, uid, name, slack_bus, tolerance, area_type);
-fields!(Hvdc, uid, cost, vf, vt, qf, qt);
+fields!(Hvdc, uid, cost, vf, vt, qf, qt, pt);
 impl Restore for Generator {
     fn restore_field(&mut self, key: &str, value: Value) -> serde_json::Result<()> {
         match key {

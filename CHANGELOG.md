@@ -16,8 +16,11 @@ action.
 - Read and write SiennaSchemas SystemDocument 0.1 through 0.4 through the
   shared module API, CLI, and bindings. Preserve source identifiers and report
   fields outside the electrical mapping.
+- Read native PowerSystems.jl data formats 4 and 5, and write format 5.
+  Resolve UUID references and device units independently of display settings.
 - Add optional Python PyPSA NetCDF/HDF5 transports and TransitionZero source
-  and sink entry points.
+  and sink entry points, with electrical time series and IR retention of
+  pipeline extension records and companion series.
 - Annotate the current PowerIO IR schema with physical units, per-unit bases,
   and sign conventions.
 

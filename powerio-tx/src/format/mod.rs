@@ -145,6 +145,8 @@ pub enum TargetFormat {
     RavensJson,
     /// SiennaSchemas 0.1 through 0.4; zero uses the source version or latest.
     SiennaJson { version: u8 },
+    /// Serialized PowerSystems.jl System, writing data format 5.0.0.
+    PowerSystemsJson,
 }
 
 impl TargetFormat {
@@ -158,6 +160,7 @@ impl TargetFormat {
             | TargetFormat::Goc3Json
             | TargetFormat::SurgeJson
             | TargetFormat::SiennaJson { .. }
+            | TargetFormat::PowerSystemsJson
             | TargetFormat::RavensJson
             | TargetFormat::DeepMindOpfDataJson => "json",
             TargetFormat::Psse { .. } => "raw",
@@ -187,6 +190,7 @@ impl TargetFormat {
             TargetFormat::Goc3Json => "GO Challenge 3 JSON",
             TargetFormat::SurgeJson => "Surge JSON",
             TargetFormat::SiennaJson { .. } => "SiennaSchemas JSON",
+            TargetFormat::PowerSystemsJson => "PowerSystems JSON",
             TargetFormat::RavensJson => "MG-RAVENS JSON",
             TargetFormat::DeepMindOpfDataJson => "DeepMind OPFData JSON",
             TargetFormat::Xiidm => "XIIDM 1.17 XML",
@@ -213,6 +217,7 @@ impl TargetFormat {
             TargetFormat::Goc3Json => "goc3-json",
             TargetFormat::SurgeJson => "surge-json",
             TargetFormat::SiennaJson { version } => sienna::token(version),
+            TargetFormat::PowerSystemsJson => "powersystems-json",
             TargetFormat::RavensJson => "ravens-json",
             TargetFormat::DeepMindOpfDataJson => "opfdata-json",
             TargetFormat::Xiidm => "xiidm",
@@ -272,6 +277,7 @@ pub fn parse_target_format(name: &str) -> Option<TargetFormat> {
         TransmissionFormat::Pslf => TargetFormat::Pslf,
         TransmissionFormat::Goc3Json => TargetFormat::Goc3Json,
         TransmissionFormat::SurgeJson => TargetFormat::SurgeJson,
+        TransmissionFormat::PowerSystemsJson => TargetFormat::PowerSystemsJson,
         TransmissionFormat::SiennaJson => TargetFormat::SiennaJson { version: 0 },
         TransmissionFormat::Sienna01Json => TargetFormat::SiennaJson { version: 1 },
         TransmissionFormat::Sienna02Json => TargetFormat::SiennaJson { version: 2 },
@@ -771,6 +777,7 @@ fn read_source(
         }
         TargetFormat::SurgeJson => surge::parse_surge_source(text, name_hint, warnings),
         TargetFormat::SiennaJson { version } => sienna::read(text, name_hint, version, warnings),
+        TargetFormat::PowerSystemsJson => sienna::powersystems::read(text, name_hint, warnings),
         TargetFormat::RavensJson => ravens::parse_ravens_source(text, name_hint, warnings),
         TargetFormat::DeepMindOpfDataJson => {
             opfdata::parse_opfdata_source(text, name_hint, warnings)
@@ -1000,6 +1007,7 @@ fn transmission_json_target(format: TransmissionFormat) -> Result<TargetFormat> 
         TransmissionFormat::PandapowerJson => Ok(TargetFormat::PandapowerJson),
         TransmissionFormat::Goc3Json => Ok(TargetFormat::Goc3Json),
         TransmissionFormat::SurgeJson => Ok(TargetFormat::SurgeJson),
+        TransmissionFormat::PowerSystemsJson => Ok(TargetFormat::PowerSystemsJson),
         TransmissionFormat::SiennaJson => Ok(TargetFormat::SiennaJson { version: 0 }),
         TransmissionFormat::Sienna01Json => Ok(TargetFormat::SiennaJson { version: 1 }),
         TransmissionFormat::Sienna02Json => Ok(TargetFormat::SiennaJson { version: 2 }),
@@ -1089,7 +1097,15 @@ fn emit_text(
     if let Some(text) = echo_text(module, format) {
         return Ok(TextEmission::faithful(text));
     }
-    let mut conv = if let TargetFormat::SiennaJson { version } = format {
+    let mut conv = if format == TargetFormat::PowerSystemsJson {
+        let mut emission = sienna::powersystems::write(
+            module.value(),
+            module.extensions().get(sienna::powersystems::EXTENSION),
+        )
+        .map_err(core_error)?;
+        finish_emission(module.value(), format, &mut emission);
+        emission
+    } else if let TargetFormat::SiennaJson { version } = format {
         let mut emission = sienna::write(
             module.value(),
             version,
@@ -1204,6 +1220,7 @@ pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Re
         TargetFormat::Pslf => write_pslf(net),
         TargetFormat::SurgeJson => write_surge_json(net),
         TargetFormat::SiennaJson { version } => sienna::write(net, version, None)?,
+        TargetFormat::PowerSystemsJson => sienna::powersystems::write(net, None)?,
         TargetFormat::RavensJson => write_ravens_json(net),
         TargetFormat::Goc3Json => {
             return Err(Error::WriteUnsupported {
@@ -1440,7 +1457,15 @@ fn emit_text_with_options(
     }
     let (working, policy_warnings) =
         apply_emit_cost_policy(module.value(), options).map_err(core_error)?;
-    let mut conv = if let TargetFormat::SiennaJson { version } = format {
+    let mut conv = if format == TargetFormat::PowerSystemsJson {
+        let mut emission = sienna::powersystems::write(
+            &working,
+            module.extensions().get(sienna::powersystems::EXTENSION),
+        )
+        .map_err(core_error)?;
+        finish_emission(&working, format, &mut emission);
+        emission
+    } else if let TargetFormat::SiennaJson { version } = format {
         let mut out = sienna::write(
             &working,
             version,
@@ -1572,6 +1597,7 @@ fn warn_dropped_frequency(net: &BalancedNetwork, format: TargetFormat, conv: &mu
             | TargetFormat::PowerModelsJson
             | TargetFormat::EgretJson
             | TargetFormat::SiennaJson { .. }
+            | TargetFormat::PowerSystemsJson
     );
     if carries_frequency {
         return;
@@ -1683,6 +1709,7 @@ fn warn_dropped_exchange_context(
             | TargetFormat::Pslf
             | TargetFormat::SurgeJson
             | TargetFormat::SiennaJson { .. }
+            | TargetFormat::PowerSystemsJson
             | TargetFormat::RavensJson
             | TargetFormat::Ucte
     ) {
@@ -1691,7 +1718,9 @@ fn warn_dropped_exchange_context(
     let message = match format {
         // MG-RAVENS carries stable component identities as mRIDs, but not
         // the source-neutral topology hierarchy or case/solver metadata.
-        TargetFormat::RavensJson | TargetFormat::SiennaJson { .. } => {
+        TargetFormat::RavensJson
+        | TargetFormat::SiennaJson { .. }
+        | TargetFormat::PowerSystemsJson => {
             exchange_context_loss_carrying(net, format.label(), CarriedContext::Identities)
         }
         // PowerModels JSON and egret JSON rows carry a source identity as
@@ -2140,6 +2169,7 @@ fn warn_missing_reference(net: &BalancedNetwork, format: TargetFormat, conv: &mu
             | TargetFormat::Pslf
             | TargetFormat::SurgeJson
             | TargetFormat::SiennaJson { .. }
+            | TargetFormat::PowerSystemsJson
     );
     if needs_ref && let Some(message) = missing_reference_warning(net) {
         conv.push(&format.emit_family().reference_missing, message);
