@@ -4229,6 +4229,33 @@ fn apply_voltage_limits(
     Ok(())
 }
 
+/// SSH states the active limit; EQ's normal value is its fallback. Both the
+/// calculation projection and retained loading limits must use the same state.
+/// See ENTSO-E's 2016 CGMES IOP report, section 6.3:
+/// <https://eepublicdownloads.entsoe.eu/clean-documents/CIM_documents/IOP/160715_CGMES_IOPreport2016.pdf>.
+fn operational_limit_value(store: &Store, id: &str, class: &str) -> Result<Option<f64>> {
+    store
+        .f(id, &format!("{class}.value"))?
+        .try_or_else(|| store.f(id, &format!("{class}.normalValue")))
+}
+
+fn warn_distinct_normal_limit(
+    store: &Store,
+    id: &str,
+    class: &str,
+    value: f64,
+    warnings: &mut CgmesDiagnostics,
+) -> Result<()> {
+    if let Some(normal) = store.f(id, &format!("{class}.normalValue"))?
+        && normal.total_cmp(&value).is_ne()
+    {
+        warnings.push_as(&codes::READ_CGMES_FIELD_UNMAPPED, format!(
+            "{class} `{id}` has {class}.normalValue={normal} and active {class}.value={value}; the typed loading limits retain the active value. The distinct normal limit survives only in retained source bytes; fresh CGMES emission writes the active value"
+        ));
+    }
+    Ok(())
+}
+
 fn loading_limits(
     store: &Store,
     set: &str,
@@ -4252,9 +4279,7 @@ fn loading_limits(
                 ));
                 continue;
             };
-            let value = store
-                .f(&object.id, &format!("{class}.normalValue"))?
-                .try_or_else(|| store.f(&object.id, &format!("{class}.value")))?;
+            let value = operational_limit_value(store, &object.id, class)?;
             let Some(value) = value.filter(|value| value.is_finite() && *value > 0.0) else {
                 warnings.push(format!(
                 "{class} `{}` has a missing, nonfinite, or nonpositive value and was not retained",
@@ -4262,6 +4287,7 @@ fn loading_limits(
             ));
                 continue;
             };
+            warn_distinct_normal_limit(store, &object.id, class, value, warnings)?;
             found = true;
             let kind = limit_kind(store, limit_type, version);
             let permanent = store
@@ -5524,9 +5550,13 @@ fn read_two_winding_transformer(
         let ends_connected = end_connected(end1) && end_connected(end2);
         branch.in_service = mapper.in_service(transformer_id)? && ends_connected;
         branch.uid = Some(transformer_id.to_string());
-        apply_limits(mapper, transformer_id, &mut branch, kv1, version)?;
-        for end in [end1, end2] {
-            apply_limits(mapper, end, &mut branch, kv1, version)?;
+        apply_limits_to_targets(store, &[transformer_id], &mut branch, kv1, version)?;
+        for (end, kv) in [(end1, kv1), (end2, kv2)] {
+            // A current limit constrains its own terminal. Transformer ends
+            // need not share a voltage or follow Terminal.sequenceNumber.
+            if let Some(terminal) = store.refv(end, "TransformerEnd.Terminal") {
+                apply_limits_to_targets(store, &[terminal, end], &mut branch, kv, version)?;
+            }
         }
         Some(branch)
     })
@@ -5857,10 +5887,7 @@ fn apply_limits_to_targets(
                 CgmesVersion::V3_0 => store.enum_value(limit_type, "eu:OperationalLimitType.kind"),
             };
             let class = store.class_of(limit).unwrap_or_default();
-            let value = store
-                .f(limit, &format!("{class}.value"))?
-                .try_or_else(|| store.f(limit, &format!("{class}.normalValue")))?
-                .unwrap_or(0.0);
+            let value = operational_limit_value(store, limit, class)?.unwrap_or(0.0);
             let mva = if class == "CurrentLimit" {
                 3f64.sqrt() * kv * value / 1000.0
             } else {
