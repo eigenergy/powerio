@@ -25,14 +25,6 @@ def _name(value: str) -> str:
     return value
 
 
-def _json(module):
-    import powerio as pio
-    text = pio.serialize(module).text
-    if text is None:
-        raise ValueError("Expected PowerIO IR text")
-    return json.loads(text)
-
-
 def _array(value):
     import numpy as np
     array = np.asarray(value)
@@ -186,9 +178,7 @@ def parse(source: Any, format: str, *, name=None, acquisition_root=None, named_b
         extension = {"filename": filename, "arrays": _read_hdf(companion_data)}
     module = pio.parse(data, format=FORMATS[format], name=source_name)
     if extension is not None:
-        saved = _json(module)
-        saved.setdefault("extensions", {})[KEY] = extension
-        module = pio.deserialize(json.dumps(saved).encode())
+        module = module.with_extension(KEY, extension)
     return module
 
 
@@ -236,13 +226,12 @@ def _temporal_document(document, original):
 
 def emit(module, format: str, destination=None):
     import powerio as pio
-    saved = _json(module)
-    extension = saved.get("extensions", {}).get(KEY)
+    extension = module.extension(KEY)
     result = pio.emit(module, FORMATS[format])
     if result.text is None:
         raise ValueError("Expected Sienna document text")
     document = json.loads(result.text)
-    _temporal_document(document, saved.get("extensions", {}).get("org.eigenergy.powerio.sienna"))
+    _temporal_document(document, module.extension("org.eigenergy.powerio.sienna"))
     files = {}
     if document.get("time_series_storage_file"):
         if extension is None:

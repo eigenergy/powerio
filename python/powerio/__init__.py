@@ -1865,6 +1865,29 @@ class PioModule:
         """The diagnostics stored on this module, in encounter order."""
         return list(self._inner.diagnostics)
 
+    @property
+    def extension_keys(self) -> list[str]:
+        """The namespaces of the extensions this module carries, sorted."""
+        return list(self._inner._extension_keys)
+
+    def extension(self, namespace: str) -> Any:
+        """The JSON value stored under ``namespace``, or ``None``.
+
+        Only that value is decoded; the module is not serialized.
+        """
+        text = self._inner._extension_json(namespace)
+        return None if text is None else _json.loads(text)
+
+    def with_extension(self, namespace: str, value: Any) -> "PioModule":
+        """A copy of this module carrying ``value`` under ``namespace``.
+
+        ``value`` must be JSON serializable. The copy keeps the typed value,
+        diagnostics, sources, and history without serializing them; an
+        extension already stored under ``namespace`` is replaced. The original
+        module is unchanged.
+        """
+        return PioModule(self._inner._with_extension_json(namespace, _json.dumps(value)))
+
     def to_balanced_report(self, base_mva: float = 100.0) -> Any:
         """Report whether a multiconductor network can become balanced."""
         return _json.loads(self._inner.lowering_readiness_json(base_mva))

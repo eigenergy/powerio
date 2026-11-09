@@ -24,6 +24,10 @@ action.
 - Add optional Python PyPSA NetCDF/HDF5 transports and TransitionZero source
   and sink entry points, with electrical time series and IR retention of
   pipeline extension records and companion series.
+- Python `PioModule.extension_keys`, `extension(namespace)`, and
+  `with_extension(namespace, value)` read and attach module extensions
+  without serializing the typed value. The Sienna bundle and TransitionZero
+  transports use them instead of round-tripping the module through IR text.
 - A two-winding transformer's secondary-terminal charging written to Sienna
   as a `FixedAdmittance` carries an `ext` marker that the reader folds back
   into the branch, so a round trip adds no bus shunt.

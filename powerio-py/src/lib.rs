@@ -4147,6 +4147,37 @@ impl PyPioModule {
         })
     }
 
+    /// The namespaces of the extensions this module carries, in key order.
+    #[getter]
+    fn _extension_keys(&self) -> PyResult<Vec<String>> {
+        Ok(self.module()?.extensions().keys().cloned().collect())
+    }
+
+    /// One extension as JSON text, or `None` when the module has none under
+    /// `namespace`. Reading a key never serializes the value or the rest of
+    /// the module.
+    fn _extension_json(&self, namespace: &str) -> PyResult<Option<String>> {
+        self.module()?
+            .extensions()
+            .get(namespace)
+            .map(|value| serde_json::to_string(value).map_err(serialize_pyerr))
+            .transpose()
+    }
+
+    /// A copy of this module with `text`, a JSON document, stored under
+    /// `namespace`, replacing an extension already there. The copy keeps the
+    /// value, diagnostics, sources, and history; the original is unchanged.
+    fn _with_extension_json(&self, namespace: &str, text: &str) -> PyResult<Self> {
+        let value: serde_json::Value = serde_json::from_str(text).map_err(serialize_pyerr)?;
+        let mut module = self.module()?.clone();
+        module
+            .insert_extension(namespace, value)
+            .map_err(|error| core_error_pyerr(&error))?;
+        Ok(Self {
+            module: Some(module),
+        })
+    }
+
     /// Construct one typed time series from owner rooted PowerIO values.
     #[staticmethod]
     fn _from_time_series(

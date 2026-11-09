@@ -1121,6 +1121,25 @@ def test_pio_module_from_value_keeps_records_and_wraps_generated_networks():
         powerio.PioModule.from_value(object())
 
 
+def test_pio_module_extensions_are_read_and_added_without_serializing():
+    parsed = powerio.parse(DATA / "case9.m")
+    key = "org.example.audit"
+    assert parsed.extension(key) is None
+    tagged = parsed.with_extension(key, {"reviewed": True, "count": 2})
+    assert key in tagged.extension_keys
+    assert tagged.extension(key) == {"reviewed": True, "count": 2}
+    assert key not in parsed.extension_keys
+    assert tagged.value.n_buses == parsed.value.n_buses
+    assert tagged.diagnostics == parsed.diagnostics
+    assert powerio.emit(tagged, "matpower").text == powerio.emit(parsed, "matpower").text
+    replaced = tagged.with_extension(key, [1, 2])
+    assert replaced.extension(key) == [1, 2]
+    recovered = powerio.deserialize(io.StringIO(powerio.serialize(tagged).text))
+    assert recovered.extension(key) == {"reviewed": True, "count": 2}
+    with pytest.raises(Exception, match="namespaced"):
+        parsed.with_extension("no-dots", {})
+
+
 def test_pio_module_emit_uses_dynamic_writer(tmp_path):
     source = DATA / "api_conformance.m"
     module = powerio.parse(source)

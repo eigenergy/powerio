@@ -94,6 +94,21 @@ dictionaries, and `powerio.diagnostic_record` turns one. Each record keeps
 `suggested_action`, `related`, `details`, and `spans` when the diagnostic
 carries them.
 
+A module also carries extensions: JSON values under namespaced keys such as
+`org.eigenergy.powerio.sienna`, which PowerIO IR serializes alongside the
+value. `module.extension_keys` lists the namespaces, `module.extension(key)`
+decodes one value (or returns `None`), and `module.with_extension(key, value)`
+returns a copy carrying `value` under `key`. None of the three serializes the
+typed value, so adding a companion record to a large network costs the record,
+not the network.
+
+```python
+tagged = module.with_extension("org.example.audit", {"reviewed": True})
+assert "org.example.audit" in tagged.extension_keys
+assert tagged.extension("org.example.audit") == {"reviewed": True}
+assert module.extension("org.example.audit") is None   # the original is unchanged
+```
+
 The value classes are `BalancedNetwork`, `dist.MulticonductorNetwork`,
 `OperatingPoint`, `TimeSeries`, `ScenarioSet`, `GeoLayer`, `ContingencySet`,
 `SubsystemSet`, `MonitoredSet`, the PF, OPF, and SCUC instances and solutions,
