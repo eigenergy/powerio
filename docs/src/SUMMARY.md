@@ -14,6 +14,7 @@
 - [Calculation instances and solutions](instances.md)
 - [Matrices and graphs](matrices.md)
 - [Formats and fidelity](format-fidelity.md)
+  - [Conversion evidence and improvement](conversion-evidence.md)
   - [SiennaSchemas exchange](sienna.md)
   - [Geographic and display data](geo-and-display.md)
   - [PSS/E contingency analysis files](contingency-files.md)
