@@ -25,6 +25,8 @@ pub(super) struct State {
     pub neutral: usize,
     pub normamps: f64,
     pub emergamps: f64,
+    /// True only when an emergency rating was declared on this LineCode.
+    pub emergamps_available: bool,
     pub(super) seq: [f64; 6], // R1, X1, R0, X0, C1, C0 (farads)
 }
 
@@ -108,6 +110,7 @@ impl State {
             neutral: 3,
             normamps: 400.0,
             emergamps: 600.0,
+            emergamps_available: false,
             seq: [0.058, 0.1206, 0.1784, 0.4047, 3.4e-9, 1.6e-9],
         };
         state.recalc();
@@ -213,7 +216,10 @@ impl State {
             "xg" => self.xg = number()?,
             "rho" => self.rho = number()?,
             "normamps" => self.normamps = number()?,
-            "emergamps" => self.emergamps = number()?,
+            "emergamps" => {
+                self.emergamps = number()?;
+                self.emergamps_available = true;
+            }
             "neutral" => {
                 let neutral = number()?;
                 if neutral < 0.0 || neutral > self.n as f64 || neutral.fract() != 0.0 {

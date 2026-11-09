@@ -20,6 +20,11 @@
   every helper `Line` names the same nodes at both ends, as PMD's Kron
   reduction requires. Phase B and C source helpers used to join node 1 to
   node 2 or 3. The circuit is electrically unchanged (#765).
+- Preserve absent OpenDSS line ampacity instead of materializing the
+  engine's 600 A default as a typed BMOPF `i_max` or PMD `cm_ub`; retain
+  explicitly declared and inherited emergency ratings (#762). PowerIO
+  intentionally treats these engine defaults as void, which differs from
+  PowerModelsDistribution's parser behaviour.
 
 ## 0.11.9
 

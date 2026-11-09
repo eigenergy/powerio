@@ -196,7 +196,9 @@ impl Reader<'_> {
                 name,
                 length,
             );
-            line.i_max = Some(vec![state.emergamps; n]);
+            if state.emergamps_available {
+                line.i_max = Some(vec![state.emergamps; n]);
+            }
             line.extras.insert("normamps".into(), state.normamps.into());
             line.extras
                 .insert("dss_switch".into(), state.is_switch.into());
@@ -340,6 +342,40 @@ fn invalid_line_never_returns_a_partial_typed_network() {
             .iter()
             .any(|d| d.code() == C::READ_DSS_LINE_UNRESOLVED.code)
     );
+}
+
+#[test]
+fn unrated_dss_line_does_not_acquire_the_default_600_amp_limit() {
+    let raw = crate::dss::raw::__parse_raw_with(
+        "New Circuit.c\nNew Line.l bus1=sourcebus.1 bus2=end.1 phases=1 r1=0.1 x1=0.2",
+        "unrated.dss",
+        &mut |_: &std::path::Path| Err(std::io::Error::other("no includes")),
+    );
+    let net = sources::staged_from_raw(&raw).unwrap();
+    let line = net.lines().iter().find(|line| line.name == "l").unwrap();
+    assert_eq!(line.i_max, None);
+}
+
+#[test]
+fn explicit_and_inherited_linecode_emergency_ratings_remain_typed() {
+    let raw = crate::dss::raw::__parse_raw_with(
+        "New Circuit.c\nNew Linecode.rated nphases=1 r1=0.1 x1=0.2 emergamps=240\nNew Line.inherited bus1=sourcebus.1 bus2=a.1 phases=1 linecode=rated\nNew Line.explicit bus1=sourcebus.1 bus2=b.1 phases=1 r1=0.1 x1=0.2 emergamps=180",
+        "rated.dss",
+        &mut |_: &std::path::Path| Err(std::io::Error::other("no includes")),
+    );
+    let net = sources::staged_from_raw(&raw).unwrap();
+    let inherited = net
+        .lines()
+        .iter()
+        .find(|line| line.name == "inherited")
+        .unwrap();
+    let explicit = net
+        .lines()
+        .iter()
+        .find(|line| line.name == "explicit")
+        .unwrap();
+    assert_eq!(inherited.i_max.as_deref(), Some(&[240.0][..]));
+    assert_eq!(explicit.i_max.as_deref(), Some(&[180.0][..]));
 }
 
 #[test]
