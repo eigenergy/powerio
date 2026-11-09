@@ -120,14 +120,19 @@ folder starts at zero layers; opening the outer transport ZIP consumes one.
 Native interpretation stays with the existing adapter, with a bounded payload
 verification pass before delegation.
 
-Cloned handles and all descendants share monotonic entry, expansion, and work
-counters. Reopening a child and reparsing a native container consume budget
-again. The byte/file caps cover the complete acquisition session, including
-opaque native members, rather than resetting in each child. `work_bytes`
-(default 256 MiB) conservatively charges scoped parser inputs and decompression;
-it is not a measure of model/Arrow memory or a replacement for parser limits.
-A failed operation can consume work. Start a new explicitly bounded collection
-for a new session, or set higher Rust `CollectionLimits` before acquisition.
+Cloned handles and all descendants share monotonic entry and expansion
+counters for the archive content admitted into the session: the acquired tree
+plus every nested child opened from it. The byte/file caps cover that content
+for the whole session rather than resetting in each child, so reopening a
+child counts again; a child that fails verification retains nothing and
+releases its reservation. `work_bytes` (default 256 MiB) bounds one operation:
+the scoped parser inputs, the decompression a native container's verification
+performs, and a nested open's container and declared expansion, charged
+conservatively. Every operation starts from zero, so parsing the same
+selection repeatedly, as a batch run or a converter session does, never fails
+because of earlier operations. It is not a measure of model/Arrow memory or a
+replacement for parser limits. Set `CollectionLimits` before acquisition to
+tighten either bound.
 
 `Cancellation` can be supplied to `from_zip_cancellable` and obtained through
 `cancellation()`. It is checked during discovery and between decompressor reads.

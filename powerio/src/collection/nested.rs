@@ -4,52 +4,65 @@ use super::{
 };
 use std::sync::Mutex;
 
+/// Counters shared by a collection, its clones, and every nested child: the
+/// archive content admitted into the session's namespaces. They grow only
+/// while a namespace is retained; a child that fails verification releases
+/// what it reserved.
 #[derive(Clone, Debug)]
 pub(super) struct Session(Arc<Mutex<Usage>>);
 #[derive(Debug)]
 struct Usage {
     entries: usize,
     expanded: u64,
-    work: u64,
 }
 impl Session {
     pub(super) fn new(entries: &[CollectionEntry]) -> Self {
         Self(Arc::new(Mutex::new(Usage {
             entries: entries.len(),
             expanded: entries.iter().map(|e| e.bytes).sum(),
-            work: 0,
         })))
     }
-    pub(super) fn charge(&self, bytes: u64, max_work: u64) -> Result<()> {
-        let mut usage = self
-            .0
-            .lock()
-            .map_err(|_| selection_error("collection budget lock poisoned"))?;
-        charge_work(&mut usage, bytes, max_work)
-    }
-    pub(super) fn initialize_archive(
-        &self,
-        entries: usize,
-        input: u64,
-        max_work: u64,
-    ) -> Result<()> {
+    /// Count the admitted ZIP's own entries, directories included.
+    pub(super) fn initialize_archive(&self, entries: usize) -> Result<()> {
         let mut usage = self
             .0
             .lock()
             .map_err(|_| selection_error("collection budget lock poisoned"))?;
         usage.entries = entries;
-        usage.work = input.saturating_add(usage.expanded);
-        if usage.work > max_work {
-            return Err(Error::new(&codes::LIMIT, "collection work limit exceeded"));
-        }
         Ok(())
+    }
+}
+
+/// The input and decompression bytes one operation touches, bounded by
+/// `CollectionLimits::work_bytes`. Every operation starts from zero: a
+/// selection parsed twice costs the same each time and never fails because
+/// of earlier operations on the collection.
+pub(super) struct Work {
+    used: u64,
+    limit: u64,
+}
+impl Work {
+    pub(super) fn new(limit: u64) -> Self {
+        Self { used: 0, limit }
+    }
+    pub(super) fn charge(&mut self, bytes: u64) -> Result<()> {
+        self.used = self.used.saturating_add(bytes);
+        if self.used > self.limit {
+            Err(Error::new(&codes::LIMIT, "collection work limit exceeded"))
+        } else {
+            Ok(())
+        }
+    }
+    fn remaining(&self) -> u64 {
+        self.limit.saturating_sub(self.used)
     }
 }
 impl Collection {
     /// Open exactly one named child ZIP. Its namespace is independent: sources
     /// cannot resolve against a parent or sibling. All descendants and clones
-    /// share monotonic count, expansion, and work budgets. Failed attempts may
-    /// consume work; repeated opens/parses count again rather than reset limits.
+    /// share the monotonic entry and expansion counters of admitted content,
+    /// so reopening a child counts again, while each open's own input and
+    /// decompression work is bounded on its own.
     pub fn open_nested(&self, member: &str) -> Result<Self> {
         self.cancel.check()?;
         if self.zip_layers >= self.limits.max_zip_layers {
@@ -64,28 +77,38 @@ impl Collection {
             .source(None, None, self.limits.tree)?
             .buffer(&path)?
             .shared_bytes();
+        let mut work = Work::new(self.limits.work_bytes);
+        work.charge(bytes.len() as u64)?;
         let mut usage = self
             .session
             .0
             .lock()
             .map_err(|_| selection_error("collection budget lock poisoned"))?;
         let limits = self.remaining_limits(&usage)?;
-        charge_work(&mut usage, bytes.len() as u64, self.limits.work_bytes)?;
         // Hold the budget lock during admission: sibling threads cannot each
-        // allocate the same remaining allowance concurrently.
-        // Reserve declared expansion before any payload read, including attempts
-        // that later fail CRC validation. Repeated corrupt children cannot reset work.
+        // allocate the same remaining allowance concurrently. The declared
+        // expansion is reserved before any payload read; a child that fails
+        // verification retains nothing, so it releases that reservation.
         let archive = powerio_archive::Archive::open(Arc::clone(&bytes), limits.archive)?;
+        let entries = archive.entries().len();
         let expanded = archive
             .entries()
             .map(powerio_archive::ArchiveEntry::size)
             .sum();
-        charge_work(&mut usage, expanded, self.limits.work_bytes)?;
-        charge_work(&mut usage, bytes.len() as u64, self.limits.work_bytes)?;
-        usage.entries += archive.entries().len();
+        work.charge(expanded)?;
+        work.charge(bytes.len() as u64)?;
+        usage.entries += entries;
         usage.expanded += expanded;
         drop(archive);
-        let mut child = Self::from_zip_cancellable(member, bytes, limits, self.cancel.clone())?;
+        let mut child = match Self::from_zip_cancellable(member, bytes, limits, self.cancel.clone())
+        {
+            Ok(child) => child,
+            Err(error) => {
+                usage.entries -= entries;
+                usage.expanded -= expanded;
+                return Err(error);
+            }
+        };
         child.session = self.session.clone();
         child.limits = self.limits;
         child.zip_layers = self.zip_layers + 1;
@@ -128,19 +151,14 @@ impl Collection {
                 bytes,
                 self.limits.archive.max_ratio(),
             )?,
-            work_bytes: self.limits.work_bytes.saturating_sub(usage.work),
             ..self.limits
         })
     }
     pub(super) fn charge_selection(&self, selected: &CollectionSelection) -> Result<()> {
-        let mut usage = self
-            .session
-            .0
-            .lock()
-            .map_err(|_| selection_error("collection budget lock poisoned"))?;
         // Charge the scoped source, conservatively including retained companions.
         // This does not estimate model/Arrow allocation or replace parser guards.
         // A separate view keeps accounting reads out of parser observations.
+        let mut work = Work::new(self.limits.work_bytes);
         let source = self.source(selected)?;
         let primary = source.primary_buffer().ok();
         let mut buffers = Vec::new();
@@ -155,7 +173,7 @@ impl Collection {
         for buffer in buffers {
             let bytes = buffer.content_bytes();
             self.cancel.check()?;
-            charge_work(&mut usage, bytes.len() as u64, self.limits.work_bytes)?;
+            work.charge(bytes.len() as u64)?;
             // Native ZIP layers are charged even for nonstandard file suffixes.
             // A signature indicates transport, never an electrical format choice.
             // Match adapter admission, including prefixed archives selected by
@@ -179,42 +197,29 @@ impl Collection {
                         "native ZIP exceeds decoding layer limit",
                     ));
                 }
-                let mut limits = self.remaining_limits(&usage)?;
-                let remaining_work = self.limits.work_bytes.saturating_sub(usage.work) / 2;
-                limits.archive = ArchiveLimits::new(
-                    limits.archive.max_input_bytes(),
-                    limits.archive.max_entries(),
-                    limits.archive.max_expanded_bytes().min(remaining_work),
-                    limits.archive.max_ratio(),
+                // Verification streams the member and retains nothing, so its
+                // expansion is this operation's work, not admitted content.
+                let allowance = work.remaining() / 2;
+                if allowance == 0 {
+                    return Err(Error::new(&codes::LIMIT, "collection work limit exceeded"));
+                }
+                let archive = ArchiveLimits::new(
+                    self.limits.archive.max_input_bytes(),
+                    self.limits.archive.max_entries(),
+                    self.limits.archive.max_expanded_bytes().min(allowance),
+                    self.limits.archive.max_ratio(),
                 )?;
                 powerio_archive::session::verify_native(
                     bytes,
-                    limits.archive,
+                    archive,
                     &self.cancel,
-                    |entries, expanded| {
-                        charge_work(
-                            &mut usage,
-                            expanded.saturating_mul(2),
-                            self.limits.work_bytes,
-                        )?;
-                        usage.entries += entries;
-                        usage.expanded += expanded;
+                    |_, expanded| {
+                        work.charge(expanded.saturating_mul(2))?;
                         Ok(())
                     },
                 )?;
             }
         }
-        Ok(())
-    }
-}
-fn charge_work(usage: &mut Usage, bytes: u64, limit: u64) -> Result<()> {
-    usage.work = usage.work.saturating_add(bytes);
-    if usage.work > limit {
-        Err(Error::new(
-            &codes::LIMIT,
-            "cumulative collection work limit exceeded",
-        ))
-    } else {
         Ok(())
     }
 }
