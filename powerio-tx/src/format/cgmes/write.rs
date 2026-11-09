@@ -6485,7 +6485,11 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         let z_base = kv * kv / net.base_mva();
         let y_base = net.base_mva() / (kv * kv);
         let charging = branch.calc_terminal_charging();
-        if !charging.is_matpower_symmetric() {
+        let emits_as_transformer =
+            branch.is_transformer() || source_branch_is_power_transformer(detailed, local_id);
+        let asymmetric_charging = (charging.g_fr - charging.g_to).abs() > f64::EPSILON
+            || (charging.b_fr - charging.b_to).abs() > f64::EPSILON;
+        if !emits_as_transformer && asymmetric_charging {
             w.warnings.push_as(
                 &codes::EMIT_CGMES.value_collapsed,
                 format!(
@@ -6517,8 +6521,6 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 .map(String::as_str)
                 == Some("SeriesCompensator")
         });
-        let emits_as_transformer =
-            branch.is_transformer() || source_branch_is_power_transformer(detailed, local_id);
         let series_compensator_has_charging = source_is_series_compensator
             && [charging.g_fr, charging.b_fr, charging.g_to, charging.b_to]
                 .into_iter()
@@ -6611,6 +6613,20 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             let rho_2 = source_ratio_2
                 .and_then(tap_step)
                 .map_or(1.0, |value| value.rho);
+            if [rho_1, rho_2]
+                .iter()
+                .any(|rho| !rho.is_finite() || *rho <= 0.0)
+            {
+                return Err(emission_error(format!(
+                    "transformer `{local_id}` active ratio tap steps must have finite positive voltage ratios; found {rho_1} and {rho_2}"
+                )));
+            }
+            let secondary_scale = rho_2 * rho_2;
+            if !secondary_scale.is_finite() || secondary_scale == 0.0 {
+                return Err(emission_error(format!(
+                    "transformer `{local_id}` secondary tap ratio {rho_2} cannot be represented on the winding voltage base"
+                )));
+            }
             let (u1, u2) = (
                 kv * branch.calc_effective_tap() * rho_2 / rho_1,
                 w.kv(branch.to)?,
@@ -6668,16 +6684,28 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 } else {
                     (charging.g_to, charging.b_to)
                 };
-                let end_z_base = u * u / net.base_mva();
-                if endno == 1 {
-                    eq.text("PowerTransformerEnd.r", branch.r * end_z_base);
-                    eq.text("PowerTransformerEnd.x", branch.x * end_z_base);
+                // The reader folds the secondary tap into the branch's
+                // impedance and terminal shunts; undo it in the winding data.
+                let end_z_base = u * u / (net.base_mva() * secondary_scale);
+                let (end_r, end_x) = if endno == 1 {
+                    (branch.r * end_z_base, branch.x * end_z_base)
                 } else {
-                    eq.text("PowerTransformerEnd.r", 0.0);
-                    eq.text("PowerTransformerEnd.x", 0.0);
+                    (0.0, 0.0)
+                };
+                let (end_g, end_b) = (terminal_g / end_z_base, terminal_b / end_z_base);
+                if end_z_base <= 0.0
+                    || [end_z_base, end_r, end_x, end_g, end_b]
+                        .iter()
+                        .any(|value| !value.is_finite())
+                {
+                    return Err(emission_error(format!(
+                        "transformer `{local_id}` winding {endno} impedance or charging overflows on the winding voltage base"
+                    )));
                 }
-                eq.text("PowerTransformerEnd.g", terminal_g / end_z_base);
-                eq.text("PowerTransformerEnd.b", terminal_b / end_z_base);
+                eq.text("PowerTransformerEnd.r", end_r);
+                eq.text("PowerTransformerEnd.x", end_x);
+                eq.text("PowerTransformerEnd.g", end_g);
+                eq.text("PowerTransformerEnd.b", end_b);
                 eq.close("PowerTransformerEnd");
             }
             if branch.shift != 0.0 && !has_source_phase {

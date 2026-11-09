@@ -5532,11 +5532,13 @@ fn read_two_winding_transformer(
 
         let (kv1, kv2) = (mapper.kv(from), mapper.kv(to));
         let mut tap = safe_div(u1, kv1) / safe_div(u2, kv2);
+        let mut secondary_ratio = safe_div(u2, kv2);
         for (end, invert) in [(end1, false), (end2, true)] {
             if let Some(ratio_tap) = ratio_tap_changer(store, end) {
                 let factor = ratio_tap_factor(mapper, ratio_tap)?;
                 if invert {
                     tap /= factor;
+                    secondary_ratio *= factor;
                 } else {
                     tap *= factor;
                 }
@@ -5546,6 +5548,7 @@ fn read_two_winding_transformer(
             }
         }
         branch.tap = tap;
+        fold_transformer_secondary_ratio(&mut branch, secondary_ratio, transformer_id)?;
         let end_connected = |end: &str| {
             store
                 .refv(end, "TransformerEnd.Terminal")
@@ -5716,28 +5719,88 @@ fn safe_div(a: f64, b: f64) -> f64 {
     if a > 0.0 && b > 0.0 { a / b } else { 1.0 }
 }
 
+/// Move the impedance and both shunts from between two winding ratios to
+/// the secondary side of the balanced branch's one ratio. This preserves
+/// all four terminal admittances when rated and bus voltages differ.
+/// See PowSyBl's two-winding transformer interpretation:
+/// <https://powsybl.readthedocs.io/projects/powsybl-core/en/stable/grid_exchange_formats/cgmes/import.html#powertransformer-with-two-powertransformerends>.
+fn fold_transformer_secondary_ratio(
+    branch: &mut Branch,
+    ratio: f64,
+    transformer: &str,
+) -> Result<()> {
+    let scale = ratio * ratio;
+    if ratio <= 0.0 || !scale.is_finite() || scale == 0.0 {
+        return Err(Error::FormatRead {
+            format: FMT,
+            message: format!(
+                "PowerTransformer `{transformer}` secondary voltage ratio {ratio} cannot be represented on the bus voltage base"
+            ),
+        });
+    }
+    branch.r *= scale;
+    branch.x *= scale;
+    branch.b /= scale;
+    if let Some(charging) = &mut branch.charging {
+        charging.g_fr /= scale;
+        charging.b_fr /= scale;
+        charging.g_to /= scale;
+        charging.b_to /= scale;
+    }
+    let charging = branch.calc_terminal_charging();
+    if [
+        branch.r,
+        branch.x,
+        branch.b,
+        charging.g_fr,
+        charging.b_fr,
+        charging.g_to,
+        charging.b_to,
+    ]
+    .iter()
+    .any(|value| !value.is_finite())
+    {
+        return Err(Error::FormatRead {
+            format: FMT,
+            message: format!(
+                "PowerTransformer `{transformer}` impedance or charging overflows on the bus voltage base"
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// The in-effect ratio factor of a ratio tap changer: SSH step, else the SV
 /// tap step, else neutral.
 fn ratio_tap_factor(mapper: &Mapper<'_>, rtc: &str) -> Result<f64> {
-    Ok({
-        let store = mapper.store;
-        let neutral = store.f(rtc, "TapChanger.neutralStep")?.unwrap_or(0.0);
-        let step = store
-            .f(rtc, "TapChanger.step")?
-            .try_or_else(|| sv_tap_step(store, rtc))?
-            .unwrap_or(neutral);
-        if let Some(steps) = table_tap_steps(store, rtc, TapChangerKind::Ratio)?
-            && let Some(value) = steps
-                .iter()
-                .find(|value| value.position == step.round() as i32)
-        {
-            return Ok(value.rho);
-        }
+    let store = mapper.store;
+    let neutral = store.f(rtc, "TapChanger.neutralStep")?.unwrap_or(0.0);
+    let step = store
+        .f(rtc, "TapChanger.step")?
+        .try_or_else(|| sv_tap_step(store, rtc))?
+        .unwrap_or(neutral);
+    let steps = table_tap_steps(store, rtc, TapChangerKind::Ratio)?;
+    let rho = if let Some(value) = steps.as_ref().and_then(|steps| {
+        steps
+            .iter()
+            .find(|value| value.position == step.round() as i32)
+    }) {
+        value.rho
+    } else {
         let increment = store
             .f(rtc, "RatioTapChanger.stepVoltageIncrement")?
             .unwrap_or(0.0);
         1.0 + (step - neutral) * increment / 100.0
-    })
+    };
+    if !rho.is_finite() || rho <= 0.0 {
+        return Err(Error::FormatRead {
+            format: FMT,
+            message: format!(
+                "RatioTapChanger `{rtc}` active step {step} must have a finite positive voltage ratio; found {rho}"
+            ),
+        });
+    }
+    Ok(rho)
 }
 
 fn sv_tap_step(store: &Store, tap_changer: &str) -> Result<Option<f64>> {
@@ -5790,20 +5853,21 @@ fn phase_shift_deg(mapper: &mut Mapper<'_>, ptc: &str, invert: bool) -> Result<f
             .f(ptc, "TapChanger.step")?
             .try_or_else(|| sv_tap_step(store, ptc))?
             .unwrap_or(neutral);
-        let degrees = match class.as_str() {
-            "PhaseTapChangerLinear" => {
+        let (degrees, rho) = match class.as_str() {
+            "PhaseTapChangerLinear" => (
                 (step - neutral)
                     * store
                         .f(ptc, "PhaseTapChangerLinear.stepPhaseShiftIncrement")?
-                        .unwrap_or(0.0)
-            }
+                        .unwrap_or(0.0),
+                1.0,
+            ),
             "PhaseTapChangerTabular" => table_tap_steps(store, ptc, TapChangerKind::Phase)?
                 .and_then(|steps| {
                     steps
                         .into_iter()
                         .find(|value| value.position == step.round() as i32)
                 })
-                .map_or(0.0, |value| value.alpha_degrees),
+                .map_or((0.0, 1.0), |value| (value.alpha_degrees, value.rho)),
             "PhaseTapChangerSymmetrical" | "PhaseTapChangerAsymmetrical" => {
                 calculated_tap_steps(store, ptc, TapChangerKind::Phase)
                     .ok()
@@ -5812,16 +5876,21 @@ fn phase_shift_deg(mapper: &mut Mapper<'_>, ptc: &str, invert: bool) -> Result<f
                             .into_iter()
                             .find(|value| value.position == step.round() as i32)
                     })
-                    .map_or(0.0, |value| value.alpha_degrees)
+                    .map_or((0.0, 1.0), |value| (value.alpha_degrees, value.rho))
             }
             other => {
                 mapper.warnings.push(format!(
                 "{other} {}: phase tap changer type is not supported in the calculation projection; using zero shift",
                 store.name(ptc)
             ));
-                0.0
+                (0.0, 1.0)
             }
         };
+        if (rho - 1.0).abs() > f64::EPSILON {
+            mapper.warnings.push_as(&codes::READ_CGMES_VALUE_APPROXIMATED, format!(
+                "{class} `{ptc}` active step {step} has voltage ratio {rho}; the calculation projection uses only its phase angle; the full step remains in detailed connectivity"
+            ));
+        }
         if invert { -degrees } else { degrees }
     })
 }
