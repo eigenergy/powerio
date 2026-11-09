@@ -546,3 +546,52 @@ tag. Then:
 
 A breaking C ABI change starts a new release series; see
 [C ABI changes](#c-abi-changes) above.
+
+### Release candidates
+
+A candidate carries a prerelease suffix in the workspace version
+(`0.12.0-rc.1`) and states its core release (`0.12.0`) wherever a release
+number is observable: the PowerIO IR schema directory and `IR_VERSION`, the
+`PIO_VERSION_*` constants and the C header, and the migration guide.
+`bash scripts/release-preflight.sh` accepts the suffix, and
+`scripts/check-release-versions.sh --release` compares by the core release.
+
+1. Merge the candidate's pull request into main with a merge commit, not a
+   squash, so the pull requests it carries, whose head commits are its
+   ancestors, are recorded as merged. Its `CHANGELOG.md` section is headed
+   exactly `## 0.12.0-rc.1` and its release notes are
+   `docs/release-notes/0.12.0-rc.1.md`.
+2. PowerIO.jl `main` must already read the candidate's C ABI: the tag
+   workflow tests PowerIO.jl `main` against the tagged library, so merge the
+   PowerIO.jl companion branch (PowerIO.jl#201 for 0.12) first.
+3. Create the annotated tag `v0.12.0-rc.1` on the merged main commit and push
+   it. The release-binaries workflow builds and tests the tarballs and stages
+   a draft release exactly as for a release.
+4. Publish the draft with **Set as a pre-release** checked. A prerelease
+   publishes nothing beyond GitHub: python.yml builds the wheels and sdist as
+   run artifacts but skips PyPI, crates.yml skips crates.io, and
+   notify-powerio-jl.yml does not start PowerIO.jl's Release workflow. The
+   candidate exists as the tag, the draft's five tarballs, and the schema
+   under `docs/schema/pio-ir/0.12.0/`.
+
+To promote the candidate once it has been exercised:
+
+1. On a branch from main, drop the suffix wherever the candidate states it
+   (`grep -rn "0.12.0-rc.1" --exclude-dir=target .`): `[workspace.package]`
+   and the workspace dependency pins in `Cargo.toml`, then
+   `cargo update --workspace` for `Cargo.lock`; the `## 0.12.0-rc.1`
+   CHANGELOG heading (keep the section, it becomes the release body, and fold
+   anything that landed as a later `rc.N` into it); the release notes file
+   name and title; the producer versions in
+   `powerio-dist/examples/bmopf/*.json`
+   (`cargo run -p powerio-dist --example regen_bmopf_examples`) and in
+   `tests/data/capi_matrix/*.json`; and the pages that mention the candidate.
+   The IR schema directory, `IR_VERSION`, `PIO_VERSION_*`, and the C header
+   already state the core release and do not change.
+2. Run `bash scripts/release-preflight.sh`, merge the bump as
+   `release: PowerIO 0.12.0`, and continue from step 2 of the release steps
+   above with the tag `v0.12.0`. Publishing that release, not as a
+   pre-release, is what reaches PyPI, crates.io, and PowerIO.jl.
+
+A further candidate (`0.12.0-rc.2`) repeats the candidate steps with its own
+CHANGELOG section and release notes.
