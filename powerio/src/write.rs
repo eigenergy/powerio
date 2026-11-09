@@ -1171,6 +1171,30 @@ fn echo_sincal(
     )
 }
 
+fn emit_egret_series(
+    module: &PioModule<PioValue>,
+    series: &crate::PioTimeSeries,
+    format: &str,
+    destination: Destination,
+) -> Result<EmitResult, Error> {
+    let mut diagnostics = Vec::new();
+    let networks = series
+        .iter()
+        .map(|(_, value)| match value {
+            PioValue::BalancedNetwork(network) => Ok(network.clone()),
+            PioValue::BalancedOperatingPoint(point) => {
+                let (network, findings) = network_with_balanced_operating_point(point, format);
+                diagnostics.extend(findings);
+                Ok(network)
+            }
+            _ => Err(unsupported_type(module, format)),
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    let typed = powerio_core::TimeSeries::new(series.time_points().to_vec(), networks)?;
+    powerio_tx::format::__emit_egret_time_series(&typed, destination)
+        .map(|result| result.__with_diagnostics(diagnostics))
+}
+
 fn emit_dynamic(
     module: &PioModule<PioValue>,
     format: &str,
@@ -1240,23 +1264,7 @@ fn emit_dynamic(
             if powerio_tx::format::parse_target_format(format)
                 == Some(powerio_tx::TargetFormat::EgretJson) =>
         {
-            let mut diagnostics = Vec::new();
-            let networks = series
-                .iter()
-                .map(|(_, value)| match value {
-                    PioValue::BalancedNetwork(network) => Ok(network.clone()),
-                    PioValue::BalancedOperatingPoint(point) => {
-                        let (network, findings) =
-                            network_with_balanced_operating_point(point, format);
-                        diagnostics.extend(findings);
-                        Ok(network)
-                    }
-                    _ => Err(unsupported_type(module, format)),
-                })
-                .collect::<Result<Vec<_>, Error>>()?;
-            let typed = powerio_core::TimeSeries::new(series.time_points().to_vec(), networks)?;
-            powerio_tx::format::__emit_egret_time_series(&typed, destination)
-                .map(|result| result.__with_diagnostics(diagnostics))
+            emit_egret_series(module, series, format, destination)
         }
         PioValue::BalancedNetwork(_)
         | PioValue::MulticonductorNetwork(_)
