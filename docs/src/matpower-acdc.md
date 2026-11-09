@@ -1,9 +1,15 @@
-# MATPOWER AC/DC equivalents
+# PowerModelsACDC MATPOWER extension
 
-PowerIO reads the baseline PowerModelsACDC/PGLib HVDC MATPOWER profile into
+PowerIO reads the MATPOWER-extension variant of PowerModelsACDC, including
+the baseline PGLib HVDC profile, into
 `BalancedNetwork::ac_dc_equivalent()`. Use automatic detection or the explicit
 `matpower-acdc` token. An explicit ordinary `matpower` request refuses an
 extended case. The parser shares the MATPOWER lexer and ordinary AC reader.
+
+The native JSON variant, based on serialization of the PowerModelsACDC IR
+(data dictionaries), is a separate future adapter. It is not implemented by
+this profile. Both source formats are distinct from PowerIO's own IR, which
+already preserves the imported typed equipment.
 
 The profile accepts `busdc`/`dcbus`, `convdc`/`dcconv`, and
 `branchdc`/`dcbranch`. It requires an explicit `dcpol` of 1 or 2 and complete
@@ -78,8 +84,18 @@ calculation is implied.
 
 ## Validation
 
-The pinned case5 fixture and `evals/validation/acdc` harness compare every
-AC/DC declaration and a fresh-written file with PowerModelsACDC's underlying
-parser. Source declarations and reference preprocessing results are saved
-separately. This establishes IO equivalence, not OPF feasibility or objective
-agreement. Tellegen's full-station ACP benchmark is separate work.
+The pinned `evals/validation/acdc` harness checks the whole electrical case,
+including AC topology, generators, costs, limits, taps and statuses, after
+PowerIO IR restoration and fresh MATPOWER-extension output. File provenance
+and previous solve duals are excluded explicitly and recorded; electrical
+input fields are not excluded. Source and effective preprocessing data are
+saved separately.
+
+The harness also solves original and reconstructed cases with the same pinned
+PowerModelsACDC ACP formulation and Ipopt settings. It checks feasibility,
+objective agreement, and each solved point against the other model's constraints
+and variable bounds. PF states, converter P/Q, DC flows and losses are compared.
+OPF state differences are recorded; multiple optima need not have identical
+dispatch. These checks qualify the importer/exporter, not a PowerIO or Tellegen
+coupled solver. The native-equation and parameter-variation work is recorded in
+`evals/validation/acdc/FOLLOW_UP.md` for mathematical-model development.

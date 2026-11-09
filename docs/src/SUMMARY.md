@@ -6,7 +6,7 @@
 - [Browser converter](converter.md)
 - [Core concepts](concepts.md)
 - [Transmission networks](transmission.md)
-  - [MATPOWER AC/DC equivalents](matpower-acdc.md)
+  - [PowerModelsACDC MATPOWER extension](matpower-acdc.md)
 - [Distribution networks](distribution.md)
   - [Electrical readiness](electrical-readiness.md)
 - [PSS SINCAL](sincal.md)

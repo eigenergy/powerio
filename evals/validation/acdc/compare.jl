@@ -1,19 +1,12 @@
-# Pinned parser/preprocessor oracle; no solver equivalence is claimed here.
+# Whole-case and native-declaration checks; solve checks are in solve.jl.
 using PowerModelsACDC, JSON, SHA
-const PM = PowerModelsACDC._PM
+include("common.jl")
+using .AcDcValidation
 PM.silence()
 source, directory = ARGS
-raw = PM.parse_file(source)
-fresh = PM.parse_file(joinpath(directory, "fresh.m"))
-function aliases!(data)
-    for (old, new) in [("dcbus", "busdc"), ("dcconv", "convdc"), ("dcbranch", "branchdc")]
-        if haskey(data, old)
-            @assert !haskey(data, new)
-            data[new] = pop!(data, old)
-        end
-    end
-end
-aliases!(raw); aliases!(fresh)
+raw = parse_case(source)
+fresh = parse_case(joinpath(directory, "fresh.m"))
+whole_case = compare_cases(raw, fresh)
 clean(row) = Dict(k => v for (k,v) in row if k ∉ ("source_id", "index"))
 for table in ["busdc", "branchdc", "convdc"]
     @assert Set(keys(raw[table])) == Set(keys(fresh[table])) table
@@ -100,14 +93,14 @@ effective = deepcopy(raw)
 PowerModelsACDC.process_additional_data!(effective)
 effective_fresh = deepcopy(fresh)
 PowerModelsACDC.process_additional_data!(effective_fresh)
-for table in ["busdc", "branchdc", "convdc"]
-    @assert Dict(k=>clean(v) for (k,v) in effective[table]) == Dict(k=>clean(v) for (k,v) in effective_fresh[table]) table
-end
+effective_comparison = compare_cases(effective, effective_fresh)
 snapshot = Dict("julia"=>string(VERSION),
         "source_sha256" => bytes2hex(sha256(read(source))),
         "fresh_sha256" => bytes2hex(sha256(read(joinpath(directory,"fresh.m")))),
         "alias_policy" => "rename PGLib aliases in parsed dictionaries before PowerModelsACDC preprocessing",
+        "whole_case" => whole_case,
+        "effective_comparison" => effective_comparison,
         "source" => raw,
         "effective" => effective)
 open(joinpath(directory,"reference.json"),"w") do io; JSON.print(io,snapshot); end
-println("PASS: every AC/DC declaration and fresh export matches the pinned parser; effective preprocessing matches after explicit alias normalization")
+println("PASS: whole-case inputs, native AC/DC declarations and effective preprocessing match")
