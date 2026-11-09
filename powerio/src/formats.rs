@@ -57,6 +57,7 @@ pub fn grid_formats() -> impl Iterator<Item = GridFormatInfo> {
     use NetworkFamily::{Distribution, Transmission};
     const FORMATS: &[(&str, &str, NetworkFamily, bool)] = &[
         ("matpower", "MATPOWER", Transmission, true),
+        ("matpower-acdc", "MATPOWER AC/DC", Transmission, true),
         ("psse", "PSS/E RAW 33", Transmission, true),
         ("psse34", "PSS/E RAW 34", Transmission, true),
         ("psse35", "PSS/E RAW 35", Transmission, true),

@@ -19,6 +19,7 @@ implemented by a release and keep their published bytes and identifiers.
 | 2 | v0.11.6 | `pio-ir`, version `2` | `pio-ir/2/0.11.6/schema.json` | yes |
 | 2 | v0.11.7 | `pio-ir`, version `2` | `pio-ir/2/0.11.7/schema.json` | yes |
 | 2 | v0.11.8 | `pio-ir`, version `2` | `pio-ir/2/0.11.8/schema.json` | yes |
+| 2 | Unreleased AC/DC extension | `pio-ir`, version `2` | `pio-ir/2/unreleased/schema.json` | ordinary values only |
 
 The current document begins:
 
@@ -120,7 +121,7 @@ historical identifiers are `pio-package/0.1`, `pio-package/0.2`,
 `pio-ir/2/0.11.5/schema.json`, `pio-ir/2/0.11.6/schema.json`, and
 `pio-ir/2/0.11.7/schema.json` beneath
 `https://powerio.dev/schema/`. The current schema uses
-`pio-ir/2/0.11.8/schema.json` under that same root.
+`pio-ir/2/unreleased/schema.json` under that same root.
 The documentation site serves the archive paths and published identifiers.
 
 ## Regenerating the current catalog
@@ -130,5 +131,5 @@ cargo run -p powerio --example generate_schemas --features schema -- docs/schema
 ```
 
 The generator writes the path named by `powerio::IR_SCHEMA_ID`, currently
-`pio-ir/2/0.11.8/schema.json`. It leaves earlier snapshots untouched. CI fails
+`pio-ir/2/unreleased/schema.json`. This development catalog entry does not select a release. It leaves earlier snapshots untouched. CI fails
 if the generated catalog differs from the committed file.

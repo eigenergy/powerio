@@ -4,7 +4,7 @@
 use std::path::Path;
 
 const SCHEMA_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/schema");
-const CURRENT_SCHEMA: &str = "pio-ir/2/0.11.8/schema.json";
+const CURRENT_SCHEMA: &str = "pio-ir/2/unreleased/schema.json";
 
 fn monitor_discriminator(value: &serde_json::Value) -> Option<(&str, &str)> {
     if value["type"] != "object" {
@@ -196,8 +196,9 @@ fn the_schema_directory_contains_the_documented_powerio_ir_history() {
             "pio-ir/2/0.11.5/schema.json",
             "pio-ir/2/0.11.6/schema.json",
             "pio-ir/2/0.11.7/schema.json",
-            CURRENT_SCHEMA,
+            "pio-ir/2/0.11.8/schema.json",
             "pio-ir/2/schema.json",
+            CURRENT_SCHEMA,
         ]
     );
 }
@@ -437,6 +438,7 @@ fn assert_tagged_union_only_adds(
 #[allow(clippy::too_many_lines)]
 fn ir_version_2_schemas_only_add() {
     for earlier in [
+        "pio-ir/2/0.11.8/schema.json",
         "pio-ir/2/0.11.7/schema.json",
         "pio-ir/2/0.11.6/schema.json",
         "pio-ir/2/0.11.5/schema.json",
@@ -453,7 +455,13 @@ fn ir_version_2_schemas_only_add() {
         let current_defs = current.as_object_mut().unwrap().remove("$defs").unwrap();
         published.as_object_mut().unwrap().remove("$id");
         current.as_object_mut().unwrap().remove("$id");
-        assert_eq!(published, current, "{earlier}: document rules changed");
+        // #819 adds precisely this refusal gate, proved against frozen readers.
+        assert_only_optional_property_added(
+            &published,
+            &current,
+            "required_capabilities",
+            &format!("{earlier}: document capability gate"),
+        );
 
         for (name, definition) in published_defs.as_object().unwrap() {
             // An unchanged definition satisfies every rule below; the rules
@@ -475,6 +483,13 @@ fn ir_version_2_schemas_only_add() {
                         "{earlier}: type {type_name} changed"
                     );
                 }
+            } else if name == "BalancedNetwork" {
+                assert_only_optional_property_added(
+                    definition,
+                    &current_defs[name],
+                    "ac_dc_equivalent",
+                    &format!("{earlier}: balanced AC/DC owner"),
+                );
             } else if name == "DistLoadVoltageModel" {
                 assert_additive_load_laws(earlier, definition, &current_defs[name]);
             } else if name == "MulticonductorNetwork" {

@@ -1,5 +1,6 @@
 //! MATPOWER `.m` case file parser. Standard MATPOWER 7.x format.
 
+pub(crate) mod acdc;
 mod conversions;
 mod locate;
 mod matlab;
@@ -86,6 +87,31 @@ fn parse_matpower_named(
         },
         warnings,
     )?;
+    acdc::read(source, &located, &mut net, warnings)?;
+    let indexed = indexed_assignment_spans(source);
+    if !indexed.is_empty()
+        && (net.ac_dc_equivalent().is_some()
+            || indexed.iter().any(|(_, _, field)| {
+                matches!(
+                    *field,
+                    "busdc"
+                        | "dcbus"
+                        | "convdc"
+                        | "dcconv"
+                        | "branchdc"
+                        | "dcbranch"
+                        | "dcpol"
+                        | "gendc"
+                        | "pfc"
+                        | "dcr"
+                        | "Pacset"
+                ) || field.ends_with("_ne")
+            }))
+    {
+        return Err(crate::acdc::invalid(
+            "indexed MATLAB modifications are unsupported for the AC/DC profile",
+        ));
+    }
     if !indexed_assignment_spans(source).is_empty()
         && !conversions::apply(source, &located, &mut net)
     {
@@ -506,6 +532,7 @@ fn build_case<'a>(
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         geo: None,
         case_metadata: crate::network::CaseMetadata::default(),
+        ac_dc_equivalent: None,
         detailed_connectivity: None,
         generated_uids: std::sync::Arc::default(),
         buses: buses.into(),

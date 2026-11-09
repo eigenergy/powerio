@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Read and fresh-write typed MATPOWER AC/DC equivalent grids and converter stations,
+  with required-capability IR protection and explicit refusal by unsupported calculations.
+
 ## 0.11.9
 
 **PSS/E**

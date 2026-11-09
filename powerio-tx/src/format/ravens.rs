@@ -1716,6 +1716,7 @@ pub(crate) fn parse_ravens_source(
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         geo: None,
         case_metadata: crate::network::CaseMetadata::default(),
+        ac_dc_equivalent: None,
         detailed_connectivity: None,
         generated_uids: std::sync::Arc::default(),
         buses: buses.into(),

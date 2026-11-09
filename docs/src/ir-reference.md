@@ -3,11 +3,13 @@
 This page lists every structural value type in the PowerIO IR, field by
 field: each field's type, unit, and sign convention, the invariant the
 deserializer or the constructors enforce, and what a reader uses when the
-field is absent. The generated schema at `docs/schema/pio-ir/2/0.11.8/schema.json`
+field is absent. The generated schema at `docs/schema/pio-ir/2/unreleased/schema.json`
 is the machine form of the same definitions. To keep the two from drifting
 apart, `powerio/tests/ir_reference.rs` reads this page and checks in both
 directions that each table lists the same fields the schema defines for its
 definition.
+
+Extended AC/DC networks require the top-level field `required_capabilities: ["balanced-acdc-equivalent-v1"]`. It applies recursively to every nested balanced network, including disabled equipment. A missing, extra, or unknown capability is rejected. Ordinary documents omit the field. Frozen 0.11.0 and 0.11.9 readers reject this field instead of discarding new electrical data.
 
 ## Reading the tables
 
@@ -117,6 +119,7 @@ Schema definition: `BalancedNetwork`.
 | `solver` | `SolverParams` or null | | | | null |
 | `case_metadata` | `CaseMetadata` | | | | every member null |
 | `geo` | `GeoMeta` or null | | | | null |
+| `ac_dc_equivalent` | `BalancedAcDcEquipment` or null | explicit source bases | passive PCC/valve/DC boundaries | valid AC/DC references, finite based declarations | null |
 | `detailed_connectivity` | `DetailedConnectivity` or null | | | | null |
 | `generated_uids` | array of string | | | subset of component `uid` values; identifies identities PowerIO assigned because the source stated none | `[]` |
 

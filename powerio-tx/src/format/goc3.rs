@@ -233,6 +233,7 @@ pub(crate) fn parse_goc3_source(
                 kind: Some(CoordsKind::Source),
             }),
         case_metadata: crate::network::CaseMetadata::default(),
+        ac_dc_equivalent: None,
         detailed_connectivity: None,
         generated_uids: std::sync::Arc::default(),
         buses: buses.into(),

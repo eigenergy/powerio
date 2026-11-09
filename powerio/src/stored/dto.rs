@@ -1569,6 +1569,13 @@ pub struct HistoryEntry {
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields, remote = "Self")]
 pub struct StoredModule {
+    /// Required electrical capabilities. Omitted for historical ordinary values.
+    #[serde(
+        default,
+        deserialize_with = "bounded_notes",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub required_capabilities: Vec<String>,
     #[cfg_attr(
         feature = "schema",
         schemars(extend("const" = crate::IR_SCHEMA_NAME))
@@ -1669,9 +1676,87 @@ pub(super) struct StoredHeader {
     pub(super) producer: Option<serde_json::Value>,
 }
 
+impl StoredValue {
+    /// Borrow every balanced network, including nested containers and solutions.
+    fn balanced_networks(&self) -> Vec<&BalancedNetwork> {
+        match self {
+            Self::BalancedNetwork(n) => vec![n],
+            Self::BalancedOperatingPoint(p) => vec![&p.network],
+            Self::BalancedNetworkTimeSeries(s) => s.values.iter().collect(),
+            Self::BalancedNetworkScenarioSet(s) => s.scenarios.iter().map(|s| &s.value).collect(),
+            Self::BalancedNetworkTimeSeriesScenarioSet(s) => s
+                .scenarios
+                .iter()
+                .flat_map(|s| s.value.values.iter())
+                .collect(),
+            Self::BalancedOperatingPointTimeSeries(s) => s.network.as_deref().into_iter().collect(),
+            Self::BalancedOperatingPointScenarioSet(s) => {
+                s.network.as_deref().into_iter().collect()
+            }
+            Self::BalancedOperatingPointTimeSeriesScenarioSet(s) => s
+                .scenarios
+                .iter()
+                .filter_map(|s| s.value.network.as_deref())
+                .collect(),
+            Self::DcPfInstance(i) => vec![&i.network],
+            Self::AcPfInstance(i) => vec![&i.network],
+            Self::DcOpfInstance(i) => vec![&i.network],
+            Self::AcOpfInstance(i) => vec![&i.network],
+            Self::AcScucInstance(i) => vec![&i.network],
+            Self::AcOtsInstance(i) => vec![&i.base.network],
+            Self::DcPfSolution(s) => vec![&s.instance.network],
+            Self::AcPfSolution(s) => vec![&s.instance.network],
+            Self::DcOpfSolution(s) => vec![&s.instance.network],
+            Self::AcOpfSolution(s) => vec![&s.instance.network],
+            Self::SocwrOpfSolution(s) => vec![&s.instance.network],
+            Self::AcScucSolution(s) => vec![&s.instance.network],
+            Self::AcOtsSolution(s) => {
+                vec![&s.instance.base.network, &s.ac_solution.instance.network]
+            }
+            Self::MulticonductorNetwork(_)
+            | Self::GeoLayer(_)
+            | Self::ContingencySet(_)
+            | Self::SubsystemSet(_)
+            | Self::MonitoredSet(_)
+            | Self::MulticonductorOperatingPoint(_)
+            | Self::MulticonductorNetworkTimeSeries(_)
+            | Self::MulticonductorOperatingPointTimeSeries(_)
+            | Self::MulticonductorNetworkScenarioSet(_)
+            | Self::MulticonductorOperatingPointScenarioSet(_)
+            | Self::MulticonductorNetworkTimeSeriesScenarioSet(_)
+            | Self::MulticonductorOperatingPointTimeSeriesScenarioSet(_)
+            | Self::McAcPfInstance(_)
+            | Self::McAcOpfInstance(_)
+            | Self::LinDist3FlowPfInstance(_)
+            | Self::LinDist3FlowOpfInstance(_)
+            | Self::McAcPfSolution(_)
+            | Self::McAcOpfSolution(_)
+            | Self::LinDist3FlowPfSolution(_)
+            | Self::LinDist3FlowOpfSolution(_) => Vec::new(),
+        }
+    }
+    pub(super) fn required_capabilities(&self) -> Result<Vec<String>, String> {
+        let mut extended = false;
+        for n in self.balanced_networks() {
+            if let Some(e) = n.ac_dc_equivalent() {
+                e.validate(n).map_err(|e| e.to_string())?;
+                extended = true;
+            }
+        }
+        Ok(if extended {
+            vec![powerio_tx::acdc::CAPABILITY.to_owned()]
+        } else {
+            Vec::new()
+        })
+    }
+}
+
 /// Structural validation of one decoded document: identities, digests,
 /// spans, pointers, relation rules, namespaced extensions, and value shapes.
 pub fn validate(module: &StoredModule) -> Result<(), String> {
+    if module.required_capabilities != module.value.required_capabilities()? {
+        return Err("unsupported or missing required_capabilities for the stored value".into());
+    }
     validate_value(&module.value)?;
     validate_records(
         &module.value,

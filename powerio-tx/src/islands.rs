@@ -342,6 +342,13 @@ impl BalancedNetwork {
         &mut self,
         policy: IslandReferencePolicy,
     ) -> IslandReferenceReport {
+        if let Err(error) = self.require_no_ac_dc_equivalent() {
+            return IslandReferenceReport {
+                partition: self.calc_islands(),
+                diagnostics: vec![Diagnostic::of(error.code(), error.to_string())],
+                ..IslandReferenceReport::default()
+            };
+        }
         let partition = self.calc_islands();
         if policy == IslandReferencePolicy::Stated {
             return IslandReferenceReport {
@@ -534,6 +541,10 @@ impl BalancedNetwork {
     ///
     /// [`assign_island_references`]: BalancedNetwork::assign_island_references
     pub fn de_energize_buses(&mut self, buses: &BTreeSet<BusId>) {
+        self.update_acdc_stations(
+            |c| c.in_service && buses.contains(&c.ac_bus),
+            |c| c.in_service = false,
+        );
         let at = |bus: BusId| buses.contains(&bus);
         if self
             .buses()

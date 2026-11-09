@@ -8,6 +8,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
+    #[error(
+        "this operation does not support balanced AC/DC equivalent equipment; select a qualified coupled model or an explicit projection"
+    )]
+    UnsupportedAcDc,
     #[error("missing required MATPOWER field `{0}`")]
     MissingField(&'static str),
 
@@ -171,6 +175,7 @@ impl Error {
     /// error here until it is coded.
     pub fn code(&self) -> &'static DiagnosticInfo {
         match self {
+            Error::UnsupportedAcDc => &codes::REQUEST_ACDC_UNSUPPORTED,
             Error::MissingField(_)
             | Error::ShortRow { .. }
             | Error::BadFloat { .. }
@@ -179,6 +184,10 @@ impl Error {
             Error::FormatRead {
                 format: "sincal", ..
             } => &codes::PARSE_SINCAL_MALFORMED,
+            Error::FormatRead {
+                format: "matpower-acdc",
+                ..
+            } => &codes::PARSE_MATPOWER_ACDC_MALFORMED,
             Error::FormatRead { .. } => &codes::PARSE_SOURCE_MALFORMED,
             Error::Emit { .. } => &codes::EMIT_FORMAT_REQUIRED_VALUE_MISSING,
             Error::Io(_) => &codes::READ_IO_FAILED,
@@ -215,7 +224,9 @@ impl Error {
             // WriteUnsupported keeps the Request category so bindings
             // surface it the same way (a ValueError, not a data error): the
             // request named a format the writer can't produce.
-            Error::UnknownFormat(_) | Error::WriteUnsupported { .. } => C::Request,
+            Error::UnsupportedAcDc | Error::UnknownFormat(_) | Error::WriteUnsupported { .. } => {
+                C::Request
+            }
             Error::Emit { .. } => C::Output,
             // Malformed or unparseable input. Only the parser/format readers
             // raise these.

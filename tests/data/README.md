@@ -44,6 +44,11 @@ From the [IEEE PES PGLib-OPF benchmark library](https://github.com/power-grid-li
 v23.07. MIT license, (c) 2017 IEEE PES Power Grid Benchmarks. Original
 headers retained.
 
+## `pglib-hvdc/`
+
+One byte-exact PGLib-HVDC case5 fixture (CC BY 4.0), with the pinned revision,
+attribution and upstream license in `pglib-hvdc/README.md` and `LICENSE`.
+
 ## `powerworld/`
 
 ACTIVSg200 exports from the TAMU Electric Grid Test Case Repository;

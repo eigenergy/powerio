@@ -47,6 +47,7 @@
 /// crates whose own version can drift from the core's.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub mod acdc;
 mod collect;
 pub mod contingency;
 pub mod dc;
