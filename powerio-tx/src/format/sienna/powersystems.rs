@@ -305,6 +305,21 @@ pub(in crate::format) fn to_schema(root: &Value) -> Result<Value> {
                 json!(format!("powersystems:{key}"));
         }
         doc["ext"][id.to_string()]["org.eigenergy.powerio"]["native_uuid"] = json!(key);
+        // A transformer's secondary-terminal shunt names its transformer by
+        // UUID in PowerSystems output; the Sienna reader expects the circuit id.
+        if let Some(uuid) = doc["ext"][id.to_string()]["org.eigenergy.powerio"]["transformer_uuid"]
+            .as_str()
+            .map(str::to_owned)
+        {
+            let circuit = *ids
+                .get(uuid.as_str())
+                .ok_or_else(|| error("secondary shunt references a missing transformer UUID"))?;
+            let extra = doc["ext"][id.to_string()]["org.eigenergy.powerio"]
+                .as_object_mut()
+                .expect("ext object");
+            extra.remove("transformer_uuid");
+            extra.insert("transformer_circuit".into(), json!(circuit));
+        }
         for field in [
             "base_voltage_primary",
             "base_voltage_secondary",
@@ -517,8 +532,8 @@ pub(in crate::format) fn write(
     original: Option<&Value>,
 ) -> Result<TextEmission> {
     let schema = original.map(to_schema).transpose()?;
-    let mut output = super::write(net, 4, schema.as_ref())?;
-    let mut doc: Value = serde_json::from_str(&output.text).map_err(|e| error(e.to_string()))?;
+    let (mut doc, warnings) = super::write_document(net, 4, schema.as_ref())?;
+    let mut output = TextEmission::new(String::new(), warnings);
     let mut winding_warnings = Diagnostics::new();
     super::powersystems_three_winding::prepare(&mut doc, net.base_mva(), &mut winding_warnings)?;
     output.diagnostics.extend(winding_warnings.into_records());
@@ -724,6 +739,21 @@ pub(in crate::format) fn write(
                 .as_object()
                 .cloned()
                 .map_or(json!({}), Value::Object);
+            // PowerSystems components have no Sienna ids: a secondary-terminal
+            // shunt names its transformer by the UUID that circuit is written with.
+            if kind == "FixedAdmittance"
+                && let Some(circuit) =
+                    row["ext"]["org.eigenergy.powerio"]["transformer_circuit"].as_i64()
+            {
+                let uuid = refs.get(&circuit).ok_or_else(|| {
+                    error("secondary shunt references a missing transformer circuit")
+                })?;
+                let extra = row["ext"]["org.eigenergy.powerio"]
+                    .as_object_mut()
+                    .expect("ext object");
+                extra.remove("transformer_circuit");
+                extra.insert("transformer_uuid".into(), json!(uuid));
+            }
             if matches!(kind.as_str(), "Line" | "TransformerCircuit")
                 && source.get("active_power_flow").is_none()
                 && source.get("reactive_power_flow").is_none()

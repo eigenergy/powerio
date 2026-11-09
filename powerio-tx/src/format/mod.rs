@@ -1097,28 +1097,35 @@ fn emit_text(
     if let Some(text) = echo_text(module, format) {
         return Ok(TextEmission::faithful(text));
     }
-    let mut conv = if format == TargetFormat::PowerSystemsJson {
-        let mut emission = sienna::powersystems::write(
-            module.value(),
-            module.extensions().get(sienna::powersystems::EXTENSION),
-        )
-        .map_err(core_error)?;
-        finish_emission(module.value(), format, &mut emission);
-        emission
-    } else if let TargetFormat::SiennaJson { version } = format {
-        let mut emission = sienna::write(
-            module.value(),
-            version,
-            module.extensions().get(sienna::EXTENSION),
-        )
-        .map_err(core_error)?;
-        finish_emission(module.value(), format, &mut emission);
-        emission
-    } else {
-        emit_value_text(module.value(), format).map_err(core_error)?
+    let mut conv = match emit_sienna_text(module.value(), module, format) {
+        Some(emission) => emission?,
+        None => emit_value_text(module.value(), format).map_err(core_error)?,
     };
     warn_psse_downgrade(module, format, &mut conv);
     Ok(conv)
+}
+
+/// Emit `net` to a Sienna-family target with the source document `module`
+/// retained for that target, or `None` when `format` is another target.
+fn emit_sienna_text(
+    net: &BalancedNetwork,
+    module: &PioModule<BalancedNetwork>,
+    format: TargetFormat,
+) -> Option<std::result::Result<TextEmission, powerio_core::Error>> {
+    let written = if format == TargetFormat::PowerSystemsJson {
+        sienna::powersystems::write(
+            net,
+            module.extensions().get(sienna::powersystems::EXTENSION),
+        )
+    } else if let TargetFormat::SiennaJson { version } = format {
+        sienna::write(net, version, module.extensions().get(sienna::EXTENSION))
+    } else {
+        return None;
+    };
+    Some(written.map_err(core_error).map(|mut emission| {
+        finish_emission(net, format, &mut emission);
+        emission
+    }))
 }
 
 /// Project a crate failure onto the common operation failure type.
@@ -1457,25 +1464,9 @@ fn emit_text_with_options(
     }
     let (working, policy_warnings) =
         apply_emit_cost_policy(module.value(), options).map_err(core_error)?;
-    let mut conv = if format == TargetFormat::PowerSystemsJson {
-        let mut emission = sienna::powersystems::write(
-            &working,
-            module.extensions().get(sienna::powersystems::EXTENSION),
-        )
-        .map_err(core_error)?;
-        finish_emission(&working, format, &mut emission);
-        emission
-    } else if let TargetFormat::SiennaJson { version } = format {
-        let mut out = sienna::write(
-            &working,
-            version,
-            module.extensions().get(sienna::EXTENSION),
-        )
-        .map_err(core_error)?;
-        finish_emission(&working, format, &mut out);
-        out
-    } else {
-        emit_value_text(&working, format).map_err(core_error)?
+    let mut conv = match emit_sienna_text(&working, module, format) {
+        Some(emission) => emission?,
+        None => emit_value_text(&working, format).map_err(core_error)?,
     };
     conv.prepend(policy_warnings);
     Ok(conv)

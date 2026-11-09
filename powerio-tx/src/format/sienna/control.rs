@@ -51,10 +51,14 @@ pub(super) fn read(row: &Value, version: u8) -> Result<Option<TransformerControl
     let mut control = TransformerControl::new(mode);
     control.enabled = enabled;
     let (actuator, target, phase) = keys(mode, version);
-    (control.tap_min, control.tap_max) = limits(row, actuator, (0.9, 1.1))?;
-    if phase {
-        control.tap_min = control.tap_min.to_degrees();
-        control.tap_max = control.tap_max.to_degrees();
+    // An absent actuator band keeps the control's own defaults, which a phase
+    // shifter states in degrees; only a stated band is in radians.
+    if row.get(actuator).is_some_and(|v| !v.is_null()) {
+        (control.tap_min, control.tap_max) = limits(row, actuator, (0.9, 1.1))?;
+        if phase {
+            control.tap_min = control.tap_min.to_degrees();
+            control.tap_max = control.tap_max.to_degrees();
+        }
     }
     (control.band_min, control.band_max) = limits(row, target, (0.9, 1.1))?;
     if version >= 2
