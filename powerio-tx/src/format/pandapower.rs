@@ -921,8 +921,10 @@ pub fn write_pandapower_json(net: &BalancedNetwork) -> TextEmission {
     // record none; a pandapower source carries its parsed f_hz back out.
     object.insert("f_hz".into(), jnum(net.base_frequency()));
     object.insert("sn_mva".into(), jnum(net.base_mva()));
-    object.insert("version".into(), Value::String("3.0.0".into()));
-    object.insert("format_version".into(), Value::String("3.0.0".into()));
+    // pandapower 3.2.1 uses data format 3.1.0 and split P/Q ZIP columns.
+    // Package and data-format versions are independent upstream.
+    object.insert("version".into(), Value::String("3.2.1".into()));
+    object.insert("format_version".into(), Value::String("3.1.0".into()));
 
     let mut root = Map::new();
     root.insert(
@@ -1085,8 +1087,6 @@ fn bus_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
 struct PandapowerLoadValues {
     p_mw: f64,
     q_mvar: f64,
-    const_z_percent: f64,
-    const_i_percent: f64,
     const_z_p_percent: f64,
     const_i_p_percent: f64,
     const_z_q_percent: f64,
@@ -1106,20 +1106,10 @@ fn load_percent(part: f64, total: f64) -> Option<f64> {
     }
 }
 
-fn aggregate_zip_percent(p_pct: f64, q_pct: f64) -> f64 {
-    if (p_pct - q_pct).abs() <= 1e-9 * p_pct.abs().max(q_pct.abs()).max(1.0) {
-        p_pct
-    } else {
-        0.0
-    }
-}
-
 fn constant_power_load_values(p_mw: f64, q_mvar: f64, scaling: f64) -> PandapowerLoadValues {
     PandapowerLoadValues {
         p_mw,
         q_mvar,
-        const_z_percent: 0.0,
-        const_i_percent: 0.0,
         const_z_p_percent: 0.0,
         const_i_p_percent: 0.0,
         const_z_q_percent: 0.0,
@@ -1218,8 +1208,6 @@ fn load_values_for_pandapower(l: &Load, warnings: &mut Diagnostics) -> Pandapowe
             out.const_i_p_percent = p_i_pct;
             out.const_z_q_percent = q_z_pct;
             out.const_i_q_percent = q_i_pct;
-            out.const_z_percent = aggregate_zip_percent(p_z_pct, q_z_pct);
-            out.const_i_percent = aggregate_zip_percent(p_i_pct, q_i_pct);
             out
         }
         LoadVoltageModel::Exponential { .. } => {
@@ -1238,11 +1226,8 @@ fn load_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
         "bus",
         "p_mw",
         "q_mvar",
-        // ZIP composition is all constant power. pandapower <= 3.1 reads the
-        // two-column names, >= 3.2 the four split P/Q names; emit both so the
-        // file imports (and makeYbus runs) on either side of the rename.
-        "const_z_percent",
-        "const_i_percent",
+        // Emit the 3.2+ split fields only. Mixing legacy aggregate names
+        // with these makes the native format migration insert duplicates.
         "const_z_p_percent",
         "const_i_p_percent",
         "const_z_q_percent",
@@ -1262,8 +1247,6 @@ fn load_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
             pp_bus(l.bus),
             jnum(values.p_mw),
             jnum(values.q_mvar),
-            jnum(values.const_z_percent),
-            jnum(values.const_i_percent),
             jnum(values.const_z_p_percent),
             jnum(values.const_i_p_percent),
             jnum(values.const_z_q_percent),
@@ -3789,6 +3772,11 @@ mod tests {
             conv.render_diagnostics()
         );
         let load = written_frame(&conv.text, "load");
+        let root: Value = serde_json::from_str(&conv.text).unwrap();
+        assert_eq!(root["_object"]["version"], "3.2.1");
+        assert_eq!(root["_object"]["format_version"], "3.1.0");
+        assert!(load.col("const_z_percent").is_none());
+        assert!(load.col("const_i_percent").is_none());
         assert_eq!(col(&load, "p_mw"), vec![json!(20.0)]);
         assert_eq!(col(&load, "q_mvar"), vec![json!(10.0)]);
         assert_eq!(col(&load, "scaling"), vec![json!(0.5)]);

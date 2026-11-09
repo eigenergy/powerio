@@ -43,6 +43,12 @@
 
 **Conversion fidelity**
 
+- Canonical pandapower JSON uses the 3.2.1 package profile and its 3.1.0 data
+  format, with only the modern split P/Q ZIP-load columns. Mixing those fields
+  with legacy aggregate columns could make native format migration fail.
+  Legacy input remains readable; default native imports preserve the ZIP
+  fractions and scaling and can run a power flow.
+
 - Preserve Egret shunt service flags and keep partial or foreign-shaped result
   fields from acquiring another format's units. Operating-point overrides clear
   inherited branch solutions instead of exporting stale flows. Time-series
