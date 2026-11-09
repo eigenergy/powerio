@@ -764,42 +764,8 @@ pub fn parse_egret_time_series(
     };
 
     let system = obj(&root, "system").ok_or_else(|| bad("missing `system` object"))?;
-    let time_keys: Vec<String> = match system.get("time_keys") {
-        Some(Value::Array(keys)) => keys
-            .iter()
-            .map(|k| match k {
-                Value::String(s) => s.clone(),
-                other => other.to_string(),
-            })
-            .collect(),
-        Some(other) => {
-            return Err(bad(format!("`system.time_keys` is not an array: {other}")));
-        }
-        None => {
-            return Err(bad(
-                "`system.time_keys` is absent; parse the document as one scalar snapshot",
-            ));
-        }
-    };
-    if time_keys
-        .iter()
-        .collect::<std::collections::BTreeSet<_>>()
-        .len()
-        != time_keys.len()
-    {
-        return Err(bad("system.time_keys contains duplicate labels"));
-    }
-    let duration = temporal::read_duration(system)?;
-    for (key, value) in system {
-        if is_time_series(value) {
-            return Err(bad(format!(
-                "time varying system.{key} is outside the supported scalar network profile"
-            )));
-        }
-    }
-    if time_keys.is_empty() {
-        return Err(bad("`system.time_keys` is empty"));
-    }
+    let time_points = temporal::read_time_points(system)?;
+    let point_count = time_points.len();
 
     // Substitute every time series attribute with its first value, recording
     // where it patches. The substituted document is then exactly the point 0
@@ -834,8 +800,7 @@ pub fn parse_egret_time_series(
                     let Some(slot) = element.get_mut(&attribute) else {
                         continue;
                     };
-                    let values =
-                        take_series_values(slot, time_keys.len(), section, key, &attribute)?;
+                    let values = take_series_values(slot, point_count, section, key, &attribute)?;
                     *slot = values[0].clone();
                     varying.push(VaryingAttribute {
                         section: section.clone(),
@@ -856,9 +821,9 @@ pub fn parse_egret_time_series(
     for attribute in &varying {
         apply_varying(&mut base, attribute, 0)?;
     }
-    let mut networks = Vec::with_capacity(time_keys.len());
+    let mut networks = Vec::with_capacity(point_count);
     networks.push(base.clone());
-    for point in 1..time_keys.len() {
+    for point in 1..point_count {
         let mut network = base.clone();
         for attribute in &varying {
             apply_varying(&mut network, attribute, point)?;
@@ -866,11 +831,6 @@ pub fn parse_egret_time_series(
         networks.push(network);
     }
 
-    let time_points = time_keys
-        .iter()
-        .map(|key| powerio_core::TimePoint::new(key.clone(), duration))
-        .collect::<std::result::Result<Vec<_>, powerio_core::Error>>()
-        .map_err(|e| bad(e.to_string()))?;
     powerio_core::TimeSeries::new(time_points, networks).map_err(|e| bad(e.to_string()))
 }
 

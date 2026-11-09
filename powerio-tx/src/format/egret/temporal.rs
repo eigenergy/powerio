@@ -27,6 +27,53 @@ pub(super) fn read_duration(system: &Map<String, Value>) -> Result<Option<Durati
     Ok(Some(duration))
 }
 
+pub(super) fn read_time_points(
+    system: &Map<String, Value>,
+) -> Result<Vec<powerio_core::TimePoint>> {
+    let time_keys: Vec<String> = match system.get("time_keys") {
+        Some(Value::Array(keys)) => keys
+            .iter()
+            .map(|k| match k {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            })
+            .collect(),
+        Some(other) => {
+            return Err(bad(format!("`system.time_keys` is not an array: {other}")));
+        }
+        None => {
+            return Err(bad(
+                "`system.time_keys` is absent; parse the document as one scalar snapshot",
+            ));
+        }
+    };
+    if time_keys
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+        != time_keys.len()
+    {
+        return Err(bad("system.time_keys contains duplicate labels"));
+    }
+    let duration = read_duration(system)?;
+    for (key, value) in system {
+        if super::is_time_series(value) {
+            return Err(bad(format!(
+                "time varying system.{key} is outside the supported scalar network profile"
+            )));
+        }
+    }
+    if time_keys.is_empty() {
+        return Err(bad("`system.time_keys` is empty"));
+    }
+
+    time_keys
+        .into_iter()
+        .map(|key| powerio_core::TimePoint::new(key, duration))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| bad(error.to_string()))
+}
+
 fn refused(message: impl Into<String>) -> Error {
     Error::Emit {
         format: FMT,
