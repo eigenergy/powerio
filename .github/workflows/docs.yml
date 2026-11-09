@@ -67,7 +67,7 @@ jobs:
         python -m pdoc powerio -o target/doc/python
     - name: Publish conversion evidence
       env:
-        POWERIO_CONVERSION_MATRIX_JSON: target/conversion-matrix.json
+        POWERIO_CONVERSION_MATRIX_JSON: ${{ github.workspace }}/target/conversion-matrix.json
         POWERIO_MATRIX_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         POWERIO_MATRIX_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
       run: |
