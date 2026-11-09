@@ -2236,6 +2236,12 @@ fn component_type(class: &str) -> &'static str {
         "ACLineSegment" | "SeriesCompensator" | "PowerTransformer" => "branch",
         "Line" => "line",
         "Terminal" => "terminal",
+        "RatioTapChanger"
+        | "PhaseTapChangerLinear"
+        | "PhaseTapChangerNonLinear"
+        | "PhaseTapChangerSymmetrical"
+        | "PhaseTapChangerAsymmetrical"
+        | "PhaseTapChangerTabular" => "tap_changer",
         "DCConverterUnit" => "dc_converter_unit",
         "DCNode" => "dc_node",
         "DCTopologicalNode" => "dc_topological_node",
