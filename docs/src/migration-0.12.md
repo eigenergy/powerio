@@ -1,9 +1,9 @@
 # From 0.11 to 0.12
 
 PowerIO 0.12 starts a new release series. From 0.12 on, the release series
-says what is compatible with what: within 0.12.x, any release reads the
-PowerIO IR documents any other 0.12 release writes, and the C ABI only gains
-symbols. This page lists what changes for code and data written against 0.11.
+says what is compatible with what: within 0.12.x, newer readers keep reading
+older PowerIO IR documents, and the C ABI only gains symbols. Older readers
+accept newer documents for supported types and refuse unknown structural types. This page lists what changes for code and data written against 0.11.
 
 ## PowerIO IR documents
 

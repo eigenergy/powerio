@@ -81,9 +81,10 @@ Unsupported target features need truthful diagnostics, not an all-green matrix.
 
 Keep one release series as the compatibility boundary. Do not introduce another
 ABI counter or restart an independent IR counter: the C interface uses the
-release series, and a schema names the release that introduced it. A patch that
-does not change the schema keeps that schema identifier; producer metadata
-records the actual writer release. Published schema snapshots remain immutable.
+release series, and each published schema names that release, even when its payload layout is
+unchanged. The release check requires the schema identifier to match the core
+release version; prerelease suffixes remain in producer metadata. Published
+snapshots remain immutable. This avoids a separately managed schema counter.
 At 1.0 the stable series becomes 1.x rather than 0.12.x. This is a path to a
 stable API, not a claim that today's outstanding decisions are already resolved.
 
@@ -96,14 +97,15 @@ and PowerIO.jl. The boundaries checked independently are:
 |---|---|---|---|
 | PowerIO release | 0.12.z | the manifests, `powerio::VERSION`, `powerio.versions()`, `pio_version` | every release |
 | C ABI | the release series, 0.12.x | `pio_version_numbers` against the header's `PIO_VERSION_*` at load | a release removes or changes a C symbol, which starts a new series |
-| PowerIO IR | the release whose schema a document follows, `"0.12.0"` | the document header, `powerio::IR_VERSION` | every release that changes the schema; a reader accepts its own series and 0.11's `2` |
+| PowerIO IR | the release whose schema a document follows, `"0.12.0"` | the document header, `powerio::IR_VERSION` | every published release; supported types read within the same series, plus 0.11's `2` |
 | Rust toolchain | 1.89 | `rust-version` in the workspace manifest, checked by CI | a dependency in the locked graph requires a newer compiler |
 | Python | 3.11 or later | `pyproject.toml` | a dependency drops a version |
 
 Within the 0.12.x series, releases are compatible: the public Rust, Python,
 and Julia APIs only gain items, the C ABI only gains symbols, and a release
-reads every PowerIO IR document the series wrote. A break waits for the next
-series. Before 1.0 a series is one minor release, as Cargo defines it.
+reads older documents in the series. An older reader can read newer documents
+of types it supports and explicitly refuses unknown structural types. A break
+to an existing type waits for the next series. Before 1.0 a series is one minor release, as Cargo defines it.
 CI checks the publishable crates against the latest release tag with
 cargo-semver-checks (`scripts/check-semver.sh`), and the C header against the
 latest release header (`scripts/check-capi-header.py`); a pull request that
