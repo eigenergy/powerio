@@ -86,6 +86,60 @@ fn generation_two_ir_preserves_phase_limits_without_source_bytes() {
     assert_eq!(value["bus"]["b"]["v_min"], json!([210.0, 212.0, 214.0]));
 }
 
+fn read_findings_case(meta: &Value, linecode: &Value) -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "meta": meta,
+        "terminal_conventions": {"phase": ["a"], "neutral": ["n"], "earth": []},
+        "bus": {"b": {"terminal_names": ["a", "n"], "perfectly_grounded_terminals": ["n"]}},
+        "linecode": linecode,
+        "voltage_source": {"s": {"bus": "b", "terminal_map": ["a", "n"],
+            "v_magnitude": [230.0, 0.0], "v_angle": [0.0, 0.0]}}
+    }))
+    .unwrap()
+}
+
+fn ir_round_trip(source: Vec<u8>) -> powerio::PioModule<PioValue> {
+    let module = powerio::parse(Source::from_memory("case.bmopf.json", source).unwrap()).unwrap();
+    let ir = powerio::serialize(&module, Destination::memory("case.pio.json").unwrap()).unwrap();
+    powerio::deserialize(Source::from_memory("case.pio.json", bytes(&ir).to_vec()).unwrap())
+        .unwrap()
+}
+
+#[test]
+fn bmopf_read_findings_serialize_to_ir() {
+    // #763: a provenance ledger entry named `length` is free-form text, so it
+    // raises no finding and the module serializes.
+    let provenance = json!({"provenance": {"powerio_source_mapping": {"by_field": {
+        "length": {"status": "unmapped", "target": "unmapped"}}}}});
+    let restored = ir_round_trip(read_findings_case(&provenance, &json!({})));
+    assert!(
+        !restored
+            .diagnostics()
+            .iter()
+            .any(|d| d.code() == "READ.BMOPF.FIELD_NOT_A_NUMBER"),
+        "{:?}",
+        restored.diagnostics()
+    );
+
+    // A genuine finding names its field in the BMOPF document, which is not a
+    // pointer into the IR network, so it rides as a detail and serializes.
+    let restored = ir_round_trip(read_findings_case(
+        &json!({}),
+        &json!({"lc": {"i_max": "x"}}),
+    ));
+    let found: Vec<_> = restored
+        .diagnostics()
+        .iter()
+        .filter(|d| d.code() == "READ.BMOPF.FIELD_NOT_A_NUMBER")
+        .collect();
+    assert_eq!(found.len(), 1, "{:?}", restored.diagnostics());
+    assert_eq!(found[0].target(), None);
+    assert_eq!(
+        found[0].details().get("source_pointer"),
+        Some(&json!("/linecode/lc/i_max"))
+    );
+}
+
 #[test]
 fn dss_four_winding_reactances_survive_ir_and_bmopf() {
     let source = b"New Circuit.test basekv=115\nNew Transformer.t phases=3 windings=4 buses=[h m l v] conns=[delta wye wye wye] kvs=[115 24.9 4.16 2.4] kvas=[30000 30000 30000 30000] xscarray=[8 9 10 6 7 4]";
