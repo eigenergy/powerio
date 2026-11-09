@@ -18,6 +18,8 @@ pub(super) fn energy_source(kind: &str, row: &Value) -> GeneratorEnergySource {
     }
 }
 
+/// Shape the generator row for its schema component. Returns the component
+/// kind and whether a retained source cost curve replaced the row's cost.
 #[allow(clippy::too_many_lines)] // Each schema component has distinct required fields.
 pub(super) fn prepare(
     row: &mut Value,
@@ -25,7 +27,8 @@ pub(super) fn prepare(
     original: Option<&Value>,
     id: i64,
     warnings: &mut Diagnostics,
-) -> &'static str {
+) -> (&'static str, bool) {
+    let mut retained_cost = false;
     let mut kind = match g.energy_source {
         GeneratorEnergySource::Wind | GeneratorEnergySource::Solar => "RenewableDispatch",
         GeneratorEnergySource::Hydro => "HydroDispatch",
@@ -163,6 +166,7 @@ pub(super) fn prepare(
         );
         if projection.as_ref().is_ok_and(|cost| cost == &g.cost) && same_cost_basis(old, row) {
             row["operation_cost"] = old_cost.clone();
+            retained_cost = g.cost.is_none();
         } else if old_cost["start_up"].is_object() {
             warnings.push(
                 &codes::EMIT_SIENNA.field_dropped,
@@ -182,11 +186,12 @@ pub(super) fn prepare(
     {
         if same_cost_basis(old, row) {
             row["operation_cost"] = old["operation_cost"].clone();
+            retained_cost = true;
         } else {
             warnings.push(&codes::EMIT_SIENNA.field_dropped, format!("generator {id}: changing the component base requires a typed replacement for the retained cost curve"));
         }
     }
-    kind
+    (kind, retained_cost)
 }
 
 fn same_cost_basis(old: &Value, new: &Value) -> bool {

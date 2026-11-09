@@ -86,6 +86,7 @@ pub(crate) fn emit_dss_text(net: &MulticonductorNetwork) -> TextEmission {
 }
 
 /// Emits canonical `.dss` text from the model with explicit options.
+#[cfg(test)]
 pub(crate) fn emit_dss_text_with_options(
     net: &MulticonductorNetwork,
     options: &DssEmitOptions,
@@ -93,20 +94,48 @@ pub(crate) fn emit_dss_text_with_options(
     emit_snapshot(net, options)
 }
 
+/// Validate the network as written, then emit it. The names dss cannot carry
+/// are replaced once; their findings go out with the emission.
+pub(crate) fn emit_validated_dss_text(
+    net: &MulticonductorNetwork,
+    options: &DssEmitOptions,
+) -> Result<TextEmission, powerio_core::Error> {
+    let mut warnings = crate::diagnostics::Diagnostics::new();
+    let net = safe_names::apply(net, &mut warnings);
+    validate_renamed(net.as_ref())?;
+    Ok(emit_renamed(net.as_ref(), warnings, options))
+}
+
+#[cfg(test)]
 pub(crate) fn validate_emission(net: &MulticonductorNetwork) -> Result<(), powerio_core::Error> {
     // Validate the network as written: with the names dss cannot carry
     // replaced, a bus id such as `Node 1` is representable. The replacement
     // findings are recorded again when the writer runs.
     let mut replacements = crate::diagnostics::Diagnostics::new();
     let net = safe_names::apply(net, &mut replacements);
-    sources::validate(net.as_ref())
+    validate_renamed(net.as_ref())
+}
+
+/// Validate a network whose names are already the ones dss will carry.
+fn validate_renamed(net: &MulticonductorNetwork) -> Result<(), powerio_core::Error> {
+    sources::validate(net)
         .map_err(|message| powerio_core::Error::new(&C::BUILD_DIST_ELECTRICAL_INCOMPLETE, message))
 }
 
+#[cfg(test)]
 fn emit_snapshot(net: &MulticonductorNetwork, options: &DssEmitOptions) -> TextEmission {
     let mut warnings = crate::diagnostics::Diagnostics::new();
     let net = safe_names::apply(net, &mut warnings);
-    let net = net.as_ref();
+    emit_renamed(net.as_ref(), warnings, options)
+}
+
+/// Emit a network whose names are already the ones dss will carry, with the
+/// findings recorded so far leading the emission's own.
+fn emit_renamed(
+    net: &MulticonductorNetwork,
+    warnings: crate::diagnostics::Diagnostics,
+    options: &DssEmitOptions,
+) -> TextEmission {
     let mut w = DssWriter {
         out: String::new(),
         sidecars: Vec::new(),

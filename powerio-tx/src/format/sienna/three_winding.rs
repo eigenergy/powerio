@@ -77,16 +77,7 @@ pub(super) fn read(
                 .find(|b| b.id == legs[0].from)
                 .expect("validated bus")
                 .base_kv;
-            let scale = match row
-                .get("admittance_units")
-                .and_then(Value::as_str)
-                .unwrap_or("COMPONENT_BASE")
-            {
-                "COMPONENT_BASE" => base(source[0])? / BASE,
-                "COMPONENT_MVAR" => 1.0 / BASE,
-                "NATURAL_UNITS" => positive(kv, "base_voltage")?.powi(2) / BASE,
-                _ => return Err(error("unsupported three-winding admittance units")),
-            };
+            let scale = magnetizing_scale(row, source[0], kv)?;
             t.mag_g = number(y, "real")? * scale;
             t.mag_b = number(y, "imag")? * scale;
         }
@@ -110,6 +101,36 @@ pub(super) fn read(
     });
     buses.retain(|b| !stars.contains(&b.id));
     Ok(transformers)
+}
+
+/// The factor from the stated magnetizing admittance units to per unit on the
+/// network base at the primary bus, whose base voltage is `kv`.
+fn magnetizing_scale(row: &Value, primary: &Value, kv: f64) -> Result<f64> {
+    Ok(
+        match row
+            .get("admittance_units")
+            .and_then(Value::as_str)
+            .unwrap_or("COMPONENT_BASE")
+        {
+            "COMPONENT_BASE" => {
+                // The primary circuit's stated voltage base rebases the admittance
+                // onto the bus base, as the two-winding path does.
+                let ratio = if primary.get("base_voltage_primary").is_some() {
+                    positive(kv, "bus base_voltage")?
+                        / positive(
+                            number(primary, "base_voltage_primary")?,
+                            "base_voltage_primary",
+                        )?
+                } else {
+                    1.0
+                };
+                base(primary)? / BASE * ratio.powi(2)
+            }
+            "COMPONENT_MVAR" => 1.0 / BASE,
+            "NATURAL_UNITS" => positive(kv, "base_voltage")?.powi(2) / BASE,
+            _ => return Err(error("unsupported three-winding admittance units")),
+        },
+    )
 }
 
 pub(super) fn write(

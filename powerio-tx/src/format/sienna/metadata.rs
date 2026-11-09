@@ -17,8 +17,11 @@ pub(super) fn record<T: Serialize>(
     for key in fields {
         if let Some(v) = object.get(key) {
             // Required Sienna names are synthesized only when the source lacks
-            // one. A supplied name is carried by the native schema field.
-            if *key != "name" || v.is_null() {
+            // one. A supplied name is carried by the native schema field. An
+            // empty collection restores the same default as an absent one.
+            let empty = v.as_object().is_some_and(serde_json::Map::is_empty)
+                || v.as_array().is_some_and(Vec::is_empty);
+            if (*key != "name" || v.is_null()) && !empty {
                 extra.insert((*key).into(), v.clone());
             }
         } else if matches!(*key, "uid" | "name") {

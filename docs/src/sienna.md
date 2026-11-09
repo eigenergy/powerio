@@ -32,6 +32,11 @@ counterpart under `org.eigenergy.powerio`, keyed by component ID. Native schema
 fields are authoritative. Consumers must handle these keys or list them in their
 explicit ignore list. A field retained only in `ext` does not acquire Sienna
 solver semantics; emission reports electrical constraints that need this handling.
+A two-winding transformer states one magnetizing shunt, so charging on its
+secondary terminal is written as a `FixedAdmittance` on the to bus whose `ext`
+names the circuit it belongs to (`transformer_circuit`, or `transformer_uuid`
+in PowerSystems output). A Sienna consumer sees an ordinary bus shunt; the
+PowerIO reader folds it back into the branch.
 
 Time-series associations and dynamics records remain available in the retained
 document. The standalone electrical reader does not acquire a referenced HDF5

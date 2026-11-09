@@ -30,6 +30,10 @@ fn export_reference_cases() {
                 module.value().generators().len(),
                 recovered.value().generators().len()
             );
+            assert_eq!(
+                module.value().shunts().len(),
+                recovered.value().shunts().len()
+            );
             assert_eq!(emit_module(&recovered, format).unwrap().text, written.text);
             if let Some(dir) = std::env::var_os("POWERIO_SIENNA_OUTPUT_DIR") {
                 let dir = std::path::PathBuf::from(dir).join(format!("0.{version}.0"));
@@ -241,6 +245,10 @@ fn powersystems_native_reference_cases() {
         assert_eq!(
             recovered.value().loads().len(),
             module.value().loads().len()
+        );
+        assert_eq!(
+            recovered.value().shunts().len(),
+            module.value().shunts().len()
         );
         if let Some(dir) = std::env::var_os("POWERIO_SIENNA_OUTPUT_DIR") {
             let dir = std::path::PathBuf::from(dir).join("powersystems-5");

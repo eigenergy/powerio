@@ -462,6 +462,7 @@ pub(super) fn read(
         }
     }
     let mut shunts = Vec::new();
+    let line_count = rows(&root, "Line")?.len();
     for row in rows(&root, "FixedAdmittance")? {
         let bus = bus_ref(row, "bus", &ids)?;
         let scale = match row
@@ -473,6 +474,33 @@ pub(super) fn read(
             "NATURAL_UNITS" => positive(by_bus[&bus].base_kv, "base_voltage")?.powi(2),
             other => return Err(error(format!("unsupported shunt admittance_units {other}"))),
         };
+        // The writer states a transformer's secondary-terminal charging as a
+        // FixedAdmittance on the to bus, since the schema carries one
+        // magnetizing shunt per two-winding transformer. The ext marker folds
+        // it back into the branch instead of adding a bus shunt the source
+        // never had.
+        if let Some(circuit) = root["ext"][integer(row, "id")?.to_string()]["org.eigenergy.powerio"]
+            ["transformer_circuit"]
+            .as_i64()
+        {
+            let missing = || error("secondary shunt references a missing transformer circuit");
+            let index = rows(&root, "TransformerCircuit")?
+                .iter()
+                .position(|r| r["id"].as_i64() == Some(circuit))
+                .ok_or_else(missing)?;
+            let branch = branches.get_mut(line_count + index).ok_or_else(missing)?;
+            if branch.to != bus {
+                return Err(error("secondary shunt is not on its transformer's to bus"));
+            }
+            let mut charging = branch
+                .charging
+                .unwrap_or_else(|| BranchCharging::from_total_b(branch.b));
+            charging.g_to += number(&row["Y"], "real")? * scale / BASE;
+            charging.b_to += number(&row["Y"], "imag")? * scale / BASE;
+            branch.charging = Some(charging);
+            branch.b = charging.calc_total_b();
+            continue;
+        }
         let mut sh = Shunt::new(
             bus,
             number(&row["Y"], "real")? * scale,
@@ -694,7 +722,6 @@ fn read_cost(cost: &Value, base: f64, warnings: &mut Diagnostics) -> Result<Opti
         _ => return Err(error("invalid cost power_units")),
     };
     let f = &c["value_curve"]["function_data"];
-    let fixed = 0.0;
     let mut out = match string(f, "function_type")? {
         "LINEAR" => GenCost::new(
             2,
@@ -702,7 +729,7 @@ fn read_cost(cost: &Value, base: f64, warnings: &mut Diagnostics) -> Result<Opti
             0.0,
             vec![
                 number(f, "proportional_term")? / scale,
-                number(f, "constant_term")? + fixed,
+                number(f, "constant_term")?,
             ],
         ),
         "QUADRATIC" => GenCost::new(
@@ -712,7 +739,7 @@ fn read_cost(cost: &Value, base: f64, warnings: &mut Diagnostics) -> Result<Opti
             vec![
                 number(f, "quadratic_term")? / scale.powi(2),
                 number(f, "proportional_term")? / scale,
-                number(f, "constant_term")? + fixed,
+                number(f, "constant_term")?,
             ],
         ),
         "PIECEWISE_LINEAR" => {
@@ -721,7 +748,7 @@ fn read_cost(cost: &Value, base: f64, warnings: &mut Diagnostics) -> Result<Opti
                 .as_array()
                 .ok_or_else(|| error("cost points must be an array"))?
             {
-                coeffs.extend([number(pt, "x")? * scale, number(pt, "y")? + fixed]);
+                coeffs.extend([number(pt, "x")? * scale, number(pt, "y")?]);
             }
             GenCost::new(1, 0.0, 0.0, coeffs)
         }
@@ -855,12 +882,23 @@ fn minmax(lo: f64, hi: f64) -> Value {
     json!({"min":lo,"max":hi})
 }
 
-#[allow(clippy::too_many_lines, clippy::float_cmp)] // One block for each emitted component table.
 pub(super) fn write(
     net: &BalancedNetwork,
     requested: u8,
     original: Option<&Value>,
 ) -> Result<TextEmission> {
+    let (doc, warnings) = write_document(net, requested, original)?;
+    let text = serde_json::to_string_pretty(&doc).map_err(|e| error(e.to_string()))?;
+    Ok(TextEmission::new(text, warnings))
+}
+
+/// The SystemDocument as a JSON value, for a writer that transforms it further.
+#[allow(clippy::too_many_lines, clippy::float_cmp)] // One block for each emitted component table.
+pub(super) fn write_document(
+    net: &BalancedNetwork,
+    requested: u8,
+    original: Option<&Value>,
+) -> Result<(Value, Diagnostics)> {
     net.check_base_mva()?;
     net.check_references(FMT)?;
     let selected = if requested == 0 {
@@ -945,6 +983,7 @@ pub(super) fn write(
             json!({"id":id,"number":b.id.0,"name":b.name.clone().unwrap_or_else(||b.id.0.to_string()),"available":b.kind!=BusType::Isolated,"area":area_ids[&b.area],"load_zone":zone_ids[&b.zone],"bustype":match b.kind {BusType::Pq=>"PQ",BusType::Pv=>"PV",BusType::Ref=>"REF",BusType::Isolated=>"ISOLATED"},"base_voltage":b.base_kv,"angle":b.va.to_radians(),"magnitude":b.vm,"voltage_limits":minmax(b.vmin,b.vmax)}),
         );
     }
+    let bus_by_id: BTreeMap<BusId, &Bus> = net.buses().iter().map(|b| (b.id, b)).collect();
     for b in net.branches() {
         let id = ids.get(b.uid.as_deref());
         metadata::record(&mut doc, id, b, &["uid", "name", "extras", "rating_sets"])?;
@@ -975,18 +1014,8 @@ pub(super) fn write(
             row.as_object_mut().expect("object").remove("name");
             row["tap"] = json!(b.calc_effective_tap());
             row["alpha"] = json!(b.shift.to_radians());
-            let from_kv = net
-                .buses()
-                .iter()
-                .find(|bus| bus.id == b.from)
-                .expect("validated bus")
-                .base_kv;
-            let to_kv = net
-                .buses()
-                .iter()
-                .find(|bus| bus.id == b.to)
-                .expect("validated bus")
-                .base_kv;
+            let from_kv = bus_by_id[&b.from].base_kv;
+            let to_kv = bus_by_id[&b.to].base_kv;
             if from_kv > 0.0 && to_kv > 0.0 {
                 row["base_voltage_primary"] = json!(from_kv);
                 row["base_voltage_secondary"] = json!(to_kv);
@@ -1008,6 +1037,9 @@ pub(super) fn write(
                     "FixedAdmittance",
                     json!({"id":sh,"name":format!("transformer_{tr}_secondary_shunt"),"available":b.in_service,"bus":bus_ids[&b.to],"Y":{"real":ch.g_to*net.base_mva(),"imag":ch.b_to*net.base_mva()},"base_power":net.base_mva(),"admittance_units":"COMPONENT_MVAR"}),
                 );
+                // The reader folds this admittance back into the branch.
+                doc["ext"][sh.to_string()]["org.eigenergy.powerio"]["transformer_circuit"] =
+                    json!(id);
             }
             if b.angmin != -360.0 || b.angmax != 360.0 {
                 warnings.push(&codes::EMIT_SIENNA.field_dropped,format!("transformer {id}: terminal angle difference limits have no TransformerCircuit field"));
@@ -1081,16 +1113,7 @@ pub(super) fn write(
     for g in net.generators() {
         let id = ids.get(g.uid.as_deref());
         metadata::record(&mut doc, id, g, &["uid", "vg", "caps"])?;
-        if (g.vg
-            - net
-                .buses()
-                .iter()
-                .find(|b| b.id == g.bus)
-                .expect("validated bus")
-                .vm)
-            .abs()
-            > 1e-12
-            || g.caps.iter().flatten().any(|x| *x != 0.0)
+        if (g.vg - bus_by_id[&g.bus].vm).abs() > 1e-12 || g.caps.iter().flatten().any(|x| *x != 0.0)
         {
             warnings.push(&codes::EMIT_SIENNA.field_dropped, format!("generator {id}: voltage setpoint and capability columns without native fields are retained in ext; a Sienna consumer must explicitly handle those extension keys"));
         }
@@ -1112,12 +1135,12 @@ pub(super) fn write(
                 warnings.push(&codes::EMIT_SIENNA.field_dropped, format!("generator {id}: one-sided reactive bounds have no finite MinMax representation"));
             }
         }
-        if g.cost.is_none() {
+        let (kind, retained_cost) = generators::prepare(&mut row, g, original, id, &mut warnings);
+        if g.cost.is_none() && !retained_cost {
             doc["ext"][id.to_string()]["org.eigenergy.powerio"]["operation_cost_absent"] =
                 json!(true);
             warnings.push(&codes::EMIT_SIENNA.value_defaulted, format!("generator {id}: required operation_cost defaults to zero because the source has no cost"));
         }
-        let kind = generators::prepare(&mut row, g, original, id, &mut warnings);
         push(&mut doc, kind, row);
     }
     for s in net.storage() {
@@ -1189,8 +1212,7 @@ pub(super) fn write(
     // The nullable companion reference is part of SystemDocument, not a
     // nonfinite numeric sentinel. Validate generated numeric fields before
     // merging permitted source nulls.
-    let text = serde_json::to_string_pretty(&doc).map_err(|e| error(e.to_string()))?;
-    Ok(TextEmission::new(text, warnings))
+    Ok((doc, warnings))
 }
 
 fn null_path(v: &Value, path: &str) -> Option<String> {
@@ -1279,6 +1301,77 @@ mod tests {
         let ch = b.charging.unwrap();
         assert!((ch.g_fr / b.tap.powi(2) - y).abs() < 1e-12);
         assert!((ch.g_to - y).abs() < 1e-12);
+    }
+
+    #[test]
+    fn transformer_secondary_charging_round_trips_without_a_bus_shunt() {
+        let mut doc = document();
+        doc["components"].as_object_mut().unwrap().remove("Line");
+        doc["components"]["TransformerCircuit"] = json!([{"id":11,"available":true,"arc":10,"r":0.01,"x":0.1,"base_power":100.0,"power_units":"NATURAL_UNITS","parameter_units":"COMPONENT_BASE","rating":80.0,"tap":1.0}]);
+        doc["components"]["TwoWindingTransformer"] = json!([{"id":12,"name":"transformer","circuit":11,"admittance_units":"COMPONENT_BASE","magnetizing_shunt":{"real":0.0,"imag":0.03},"shunt_location":"PRIMARY"}]);
+        let mut net = decode(&doc);
+        assert!(net.shunts().is_empty());
+        net.branches_mut()[0].charging = Some(BranchCharging::new(0.0, 0.03, 0.001, 0.05));
+        net.branches_mut()[0].b = 0.08;
+        let output = write(&net, 4, None).unwrap();
+        let written: Value = serde_json::from_str(&output.text).unwrap();
+        assert_eq!(
+            written["components"]["FixedAdmittance"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let recovered = decode(&written);
+        assert!(recovered.shunts().is_empty());
+        let ch = recovered.branches()[0].charging.unwrap();
+        assert!((ch.b_fr - 0.03).abs() < 1e-12);
+        assert!((ch.g_to - 0.001).abs() < 1e-12);
+        assert!((ch.b_to - 0.05).abs() < 1e-12);
+        assert!((recovered.branches()[0].b - 0.08).abs() < 1e-12);
+        let again = write(&recovered, 4, None).unwrap();
+        assert_eq!(again.text, output.text);
+    }
+
+    #[test]
+    fn an_unstated_phase_band_keeps_the_default_in_degrees() {
+        let mut doc = document();
+        doc["components"].as_object_mut().unwrap().remove("Line");
+        doc["components"]["TransformerCircuit"] = json!([{"id":11,"available":true,"arc":10,"r":0.01,"x":0.1,"base_power":100.0,"power_units":"NATURAL_UNITS","parameter_units":"COMPONENT_BASE","rating":80.0,"tap":1.0,"control_objective":"ACTIVE_POWER_FLOW"}]);
+        let control = decode(&doc).branches()[0].control.clone().unwrap();
+        assert_eq!((control.tap_min, control.tap_max), (0.9, 1.1));
+        doc["components"]["TransformerCircuit"][0]["phase_angle_limits"] =
+            json!({"min":-0.5,"max":0.5});
+        let stated = decode(&doc).branches()[0].control.clone().unwrap();
+        assert!((stated.tap_min - (-0.5_f64).to_degrees()).abs() < 1e-12);
+        assert!((stated.tap_max - 0.5_f64.to_degrees()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_retained_cost_curve_is_not_marked_absent() {
+        let mut doc = document();
+        doc["components"]["ThermalStandard"] = json!([{
+            "id":12,"name":"unit","bus":91,"available":true,"status":"ONLINE",
+            "base_power":50.0,"power_units":"COMPONENT_BASE","active_power":0.5,"reactive_power":0.0,
+            "active_power_limits":{"min":0.0,"max":1.0},
+            "operation_cost":{"cost_type":"THERMAL","fixed":3.0,"start_up":2.0,"shut_down":1.0,
+            "variable_operation_cost":{"variable_cost_type":"COST","power_units":"NATURAL_UNITS","value_curve":{"curve_type":"INPUT_OUTPUT","function_data":{"function_type":"PIECEWISE_STEP","x_coords":[0.0,50.0],"y_coords":[10.0]}}}}
+        }]);
+        let net = decode(&doc);
+        assert!(net.generators()[0].cost.is_none());
+        let output = write(&net, 4, Some(&doc)).unwrap();
+        let written: Value = serde_json::from_str(&output.text).unwrap();
+        assert_eq!(
+            written["components"]["ThermalStandard"][0]["operation_cost"],
+            doc["components"]["ThermalStandard"][0]["operation_cost"]
+        );
+        assert!(written["ext"]["12"]["org.eigenergy.powerio"]["operation_cost_absent"].is_null());
+        assert!(
+            !output
+                .diagnostics
+                .iter()
+                .any(|d| d.message().contains("operation_cost defaults to zero"))
+        );
     }
 
     #[test]
