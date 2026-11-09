@@ -40,6 +40,9 @@
 
 **Conversion fidelity**
 
+- Read CIM16 LV feeders, text enumerations, inherited wire ampacity and
+  Diagram Layout coordinates through the existing distribution model (#768).
+
 - Read and write complete native MATPOWER solved branch flow columns. Partial
   flow sets still produce an explicit loss diagnostic.
 
