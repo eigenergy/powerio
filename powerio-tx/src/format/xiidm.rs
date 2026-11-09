@@ -16295,6 +16295,113 @@ mod tests {
         assert!(error.to_string().contains("reactive limits"));
     }
 
+    /// The reduced-model station states its reactive setpoint as an
+    /// injection into the AC bus (PowSybl `vscConverterStation`), and its
+    /// limits bound that injection: a negative setpoint and asymmetric limits
+    /// read and write back with their signs.
+    #[test]
+    fn a_converter_station_reactive_setpoint_and_limits_keep_the_injection_sign() {
+        let station = r#"<iidm:vscConverterStation id="C2" lossFactor="1" voltageRegulatorOn="false" reactivePowerSetpoint="3" bus="B2" connectableBus="B2"><iidm:minMaxReactiveLimits minQ="-10" maxQ="10"/></iidm:vscConverterStation>"#;
+        let signed = station
+            .replace(
+                r#"reactivePowerSetpoint="3""#,
+                r#"reactivePowerSetpoint="-7""#,
+            )
+            .replace(r#"minQ="-10" maxQ="10""#, r#"minQ="-30" maxQ="12""#);
+        assert_eq!(EQUIPMENT_COVERAGE.matches(station).count(), 1);
+        let source = EQUIPMENT_COVERAGE.replacen(station, &signed, 1);
+        let network = parse_xiidm_source(&source, &mut Diagnostics::new()).unwrap();
+        let hvdc = &network.hvdc()[0];
+        let converter = hvdc.converter2.as_ref().unwrap();
+        assert_eq!(
+            converter.component,
+            component_id("hvdc_converter", "C2").unwrap()
+        );
+        assert_eq!(converter.reactive_power_setpoint_mvar, Some(-7.0));
+        assert_f64_close(hvdc.qt, -7.0);
+        assert_f64_close(hvdc.qmint, -30.0);
+        assert_f64_close(hvdc.qmaxt, 12.0);
+
+        let emission = write_xiidm(&network).unwrap();
+        let written = emission
+            .text
+            .lines()
+            .find(|line| line.contains("<iidm:vscConverterStation id=\"C2\""))
+            .unwrap();
+        assert!(
+            written.contains("reactivePowerSetpoint=\"-7\""),
+            "{written}"
+        );
+        assert!(emission.text.contains("minQ=\"-30\" maxQ=\"12\""));
+        let reparsed = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+        assert_eq!(reparsed.hvdc()[0].converter2, hvdc.converter2);
+        assert_f64_close(reparsed.hvdc()[0].qt, -7.0);
+    }
+
+    /// The detailed converter states its reactive setpoint in load
+    /// convention at the point of common coupling (PowSybl
+    /// `voltageSourceConverter`, as CGMES `VsConverter.targetQpcc`), and its
+    /// capability curve bounds that withdrawal: a negative setpoint and an
+    /// asymmetric curve read and write back with their signs.
+    #[test]
+    fn a_detailed_converter_reactive_setpoint_and_curve_keep_the_load_sign() {
+        let source = r#"<?xml version="1.0" encoding="UTF-8"?>
+<iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/1_17" id="converters" caseDate="2026-01-01T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="STEADY_STATE_HYPOTHESIS">
+  <iidm:dcNode id="N1" nominalV="500"/>
+  <iidm:dcNode id="N2" nominalV="500"/>
+  <iidm:substation id="S">
+    <iidm:voltageLevel id="VL" nominalV="400" topologyKind="BUS_BREAKER">
+      <iidm:busBreakerTopology><iidm:bus id="B1"/><iidm:bus id="B2"/></iidm:busBreakerTopology>
+      <iidm:voltageSourceConverter id="VSC" dcNode1="N1" dcConnected1="true" dcNode2="N2" dcConnected2="false" idleLoss="2" switchingLoss="0.2" resistiveLoss="0.000002" controlMode="P_PCC" targetP="301" bus1="B1" connectableBus1="B1" bus2="B2" connectableBus2="B2" voltageRegulatorOn="false" reactivePowerSetpoint="-7">
+        <iidm:pccTerminal id="VSC" number="ONE"/>
+        <iidm:reactiveCapabilityCurve><iidm:point p="-200" minQ="-190" maxQ="12"/><iidm:point p="200" minQ="-189" maxQ="11"/></iidm:reactiveCapabilityCurve>
+      </iidm:voltageSourceConverter>
+    </iidm:voltageLevel>
+  </iidm:substation>
+</iidm:network>"#;
+        let network = parse_xiidm_source(source, &mut Diagnostics::new()).unwrap();
+        let detailed = network.detailed_connectivity().as_ref().unwrap();
+        let vsc = &detailed.voltage_source_converters[0];
+        assert_eq!(vsc.voltage_regulator_on, Some(false));
+        assert_eq!(vsc.reactive_power_setpoint_mvar, Some(-7.0));
+        let Some(ReactiveLimits::CapabilityCurve(curve)) = &vsc.reactive_limits else {
+            panic!("expected reactive capability curve");
+        };
+        assert_eq!(
+            curve
+                .points
+                .iter()
+                .map(|point| (
+                    point.active_power_mw,
+                    point.minimum_reactive_power_mvar,
+                    point.maximum_reactive_power_mvar,
+                ))
+                .collect::<Vec<_>>(),
+            vec![(-200.0, -190.0, 12.0), (200.0, -189.0, 11.0)]
+        );
+
+        let emission = write_xiidm(&network).unwrap();
+        let written = emission
+            .text
+            .lines()
+            .find(|line| line.contains("<iidm:voltageSourceConverter id=\"VSC\""))
+            .unwrap();
+        assert!(
+            written.contains("reactivePowerSetpoint=\"-7\""),
+            "{written}"
+        );
+        assert!(emission.text.contains("minQ=\"-190\" maxQ=\"12\""));
+        let reparsed = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+        assert_eq!(
+            reparsed
+                .detailed_connectivity()
+                .as_ref()
+                .unwrap()
+                .voltage_source_converters,
+            detailed.voltage_source_converters
+        );
+    }
+
     #[test]
     fn fresh_emission_does_not_invent_calculated_bus_solution_values() {
         let source = r#"<?xml version="1.0" encoding="UTF-8"?>
