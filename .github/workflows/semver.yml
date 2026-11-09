@@ -4,14 +4,14 @@ name: Semver
 # cargo-semver-checks against the newest stable release tag at or below the
 # workspace version (scripts/check-semver.sh). A release series takes
 # compatible fixes, performance work, and additive change, and a break goes
-# into the next major release (docs/src/known-limits.md), so a pull request that
-# breaks the API without moving the workspace version to that major fails here.
+# into the next release series (docs/src/known-limits.md), so a pull request that
+# breaks the API without moving the workspace to that series fails here.
 #
 # The C header gets the same comparison against the header of that tag
 # (scripts/check-capi-header.py): within a release series the C ABI only
 # gains symbols.
 #
-# A break that is meant for the next major before the version moves carries
+# A break that is meant for the next series before the version moves carries
 # the `semver-major` label: each check still runs and lists every break, as a
 # warning. Adding or removing the label runs the checks again.
 on:

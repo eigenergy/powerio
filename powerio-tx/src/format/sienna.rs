@@ -184,13 +184,12 @@ fn retained(warnings: &mut Diagnostics, message: impl Into<String>) {
 
 #[allow(clippy::too_many_lines, clippy::float_cmp)] // Table mapping keeps exact source distinctions.
 pub(super) fn read(
-    text: &str,
+    root: &Value,
     name_hint: Option<&str>,
     requested: u8,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    let root: Value = serde_json::from_str(text).map_err(|e| error(e.to_string()))?;
-    let actual = version(&root)?;
+    let actual = version(root)?;
     if requested != 0 && requested != actual {
         return Err(error(format!(
             "requested 0.{requested}.0, document is 0.{actual}.0"
@@ -211,11 +210,11 @@ pub(super) fn read(
             }
         }
     }
-    let (areas, area_numbers, zone_numbers) = areas::read(&root)?;
+    let (areas, area_numbers, zone_numbers) = areas::read(root)?;
     let mut buses = Vec::new();
     let mut ids = BTreeMap::new();
     let mut numbers = BTreeSet::new();
-    for row in rows(&root, "ACBus")? {
+    for row in rows(root, "ACBus")? {
         let id = integer(row, "id")?;
         let n = usize::try_from(integer(row, "number")?)
             .map_err(|_| error("bus number must be nonnegative"))?;
@@ -263,12 +262,12 @@ pub(super) fn read(
             }
         }
         ids.insert(id, bus.id);
-        metadata::restore(&root, row, &mut bus, &["uid", "name", "extras"])?;
+        metadata::restore(root, row, &mut bus, &["uid", "name", "extras"])?;
         buses.push(bus);
     }
     let by_bus: BTreeMap<BusId, &Bus> = buses.iter().map(|b| (b.id, b)).collect();
     let mut arcs = BTreeMap::new();
-    for row in rows(&root, "Arc")? {
+    for row in rows(root, "Arc")? {
         arcs.insert(
             integer(row, "id")?,
             (bus_ref(row, "from_id", &ids)?, bus_ref(row, "to_id", &ids)?),
@@ -276,7 +275,7 @@ pub(super) fn read(
     }
     let mut branches = Vec::new();
     for kind in ["Line", "TransformerCircuit"] {
-        for row in rows(&root, kind)? {
+        for row in rows(root, kind)? {
             let (from, to) = *arcs
                 .get(&integer(row, "arc")?)
                 .ok_or_else(|| error("branch references missing Arc"))?;
@@ -340,20 +339,20 @@ pub(super) fn read(
                 branch.control = control::read(row, actual)?;
             }
             metadata::restore(
-                &root,
+                root,
                 row,
                 &mut branch,
                 &["uid", "name", "extras", "rating_sets"],
             )?;
             if kind == "TransformerCircuit" {
-                metadata::restore(&root, row, &mut branch, &["angmin", "angmax"])?;
+                metadata::restore(root, row, &mut branch, &["angmin", "angmax"])?;
             }
-            metadata::restore_branch_solution(&root, row, &mut branch, warnings)?;
+            metadata::restore_branch_solution(root, row, &mut branch, warnings)?;
             branches.push(branch);
         }
     }
-    let line_count = rows(&root, "Line")?.len();
-    let circuits = rows(&root, "TransformerCircuit")?;
+    let line_count = rows(root, "Line")?.len();
+    let circuits = rows(root, "TransformerCircuit")?;
     // Circuit rows by id, built once: each transformer and secondary shunt
     // finds its circuit without scanning the table per component.
     let circuit_index: BTreeMap<i64, usize> = circuits
@@ -361,7 +360,7 @@ pub(super) fn read(
         .enumerate()
         .filter_map(|(index, r)| r["id"].as_i64().map(|id| (id, index)))
         .collect();
-    for row in rows(&root, "TwoWindingTransformer")? {
+    for row in rows(root, "TwoWindingTransformer")? {
         let id = integer(row, "circuit")?;
         let index = *circuit_index
             .get(&id)
@@ -371,7 +370,7 @@ pub(super) fn read(
             .ok_or_else(|| error(format!("missing TransformerCircuit {id}")))?;
         b.name = Some(string(row, "name")?.into());
         let circuit = &circuits[index];
-        metadata::restore(&root, circuit, b, &["uid", "name"])?;
+        metadata::restore(root, circuit, b, &["uid", "name"])?;
         if let Some(y) = row.get("magnetizing_shunt") {
             let scale = match row
                 .get("admittance_units")
@@ -428,7 +427,7 @@ pub(super) fn read(
         "InterruptiblePowerLoad",
         "InterruptibleStandardLoad",
     ] {
-        for row in rows(&root, kind)? {
+        for row in rows(root, kind)? {
             let p = power_scale(row)?;
             let bus = bus_ref(row, "bus", &ids)?;
             let mut load = if kind.ends_with("StandardLoad") {
@@ -460,12 +459,12 @@ pub(super) fn read(
             };
             load.in_service = available(row)?;
             load.uid = uid(kind, row)?;
-            metadata::restore(&root, row, &mut load, &["uid", "extras"])?;
+            metadata::restore(root, row, &mut load, &["uid", "extras"])?;
             loads.push(load);
         }
     }
     let mut shunts = Vec::new();
-    for row in rows(&root, "FixedAdmittance")? {
+    for row in rows(root, "FixedAdmittance")? {
         let bus = bus_ref(row, "bus", &ids)?;
         let scale = match row
             .get("admittance_units")
@@ -514,15 +513,15 @@ pub(super) fn read(
         sh.uid = uid("FixedAdmittance", row)?;
         sh.in_service = available(row)?;
         metadata::restore(
-            &root,
+            root,
             row,
             &mut sh,
             &["uid", "extras", "section_count", "control"],
         )?;
         shunts.push(sh);
     }
-    for row in rows(&root, "SwitchedAdmittance")? {
-        shunts.push(shunts::read(&root, row, &ids, &by_bus, actual)?);
+    for row in rows(root, "SwitchedAdmittance")? {
+        shunts.push(shunts::read(root, row, &ids, &by_bus, actual)?);
     }
     let mut generators = Vec::new();
     for kind in [
@@ -534,7 +533,7 @@ pub(super) fn read(
         "Source",
         "SynchronousCondenser",
     ] {
-        for row in rows(&root, kind)? {
+        for row in rows(root, kind)? {
             let p = power_scale(row)?;
             let bus = bus_ref(row, "bus", &ids)?;
             let mut g = Generator::new(bus);
@@ -575,7 +574,7 @@ pub(super) fn read(
             if let Some(c) = row.get("operation_cost") {
                 g.cost = read_cost(c, g.mbase, warnings)?;
             }
-            metadata::restore(&root, row, &mut g, &["uid", "vg", "caps"])?;
+            metadata::restore(root, row, &mut g, &["uid", "vg", "caps"])?;
             if root["ext"][integer(row, "id")?.to_string()]["org.eigenergy.powerio"]["operation_cost_absent"]
                 == true
                 && g.cost.as_ref().is_some_and(|c| {
@@ -588,7 +587,7 @@ pub(super) fn read(
         }
     }
     let mut storage = Vec::new();
-    for row in rows(&root, "EnergyReservoirStorage")? {
+    for row in rows(root, "EnergyReservoirStorage")? {
         let p = power_scale(row)?;
         let mut s = Storage::new(bus_ref(row, "bus", &ids)?);
         s.uid = uid("EnergyReservoirStorage", row)?;
@@ -619,10 +618,10 @@ pub(super) fn read(
         s.qmin = -hi * p;
         s.qmax = -lo * p;
         s.in_service = available(row)?;
-        metadata::restore(&root, row, &mut s, &["uid"])?;
+        metadata::restore(root, row, &mut s, &["uid"])?;
         storage.push(s);
     }
-    let hvdc = hvdc::read_hvdc(&root, &arcs, &by_bus, warnings)?;
+    let hvdc = hvdc::read_hvdc(root, &arcs, &by_bus, warnings)?;
     for (kind, list) in components {
         if !ELECTRICAL_KINDS.contains(&kind.as_str())
             && list.as_array().is_some_and(|v| !v.is_empty())
@@ -663,8 +662,8 @@ pub(super) fn read(
             "time_series_storage_file requires the companion bundle; this electrical document does not decode its arrays",
         );
     }
-    let transformers_3w = three_winding::read(&root, &mut buses, &mut branches, &ids)?;
-    let frequency = optional(&root, "frequency", 60.0)?;
+    let transformers_3w = three_winding::read(root, &mut buses, &mut branches, &ids)?;
+    let frequency = optional(root, "frequency", 60.0)?;
     positive(frequency, "frequency")?;
     let net = BalancedNetwork::from_tables(BalancedNetworkTables {
         name: root
@@ -1241,28 +1240,6 @@ fn null_path(v: &Value, path: &str) -> Option<String> {
     }
 }
 
-pub(super) fn retain_document(
-    module: &mut powerio_core::PioModule<BalancedNetwork>,
-) -> std::result::Result<(), powerio_core::Error> {
-    if matches!(
-        module.value().source_format(),
-        SourceFormat::SiennaJson | SourceFormat::PowerSystemsJson
-    ) && let Some(source) = module.source()
-    {
-        let buffer = super::primary(source).map_err(super::core_error)?;
-        let text = super::source_text(&buffer).map_err(super::core_error)?;
-        let document = serde_json::from_str::<Value>(text)
-            .map_err(|e| super::core_error(error(e.to_string())))?;
-        let key = if module.value().source_format() == SourceFormat::PowerSystemsJson {
-            powersystems::EXTENSION
-        } else {
-            EXTENSION
-        };
-        module.insert_extension(key, document)?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
@@ -1271,7 +1248,7 @@ mod tests {
         json!({"schema_version":"0.4.0","name":"units","frequency":50.0,"components":{"ACBus":[{"id":91,"number":7,"name":"source","available":true,"bustype":"REF","angle":0.2,"magnitude":1.02,"base_voltage":100.0,"voltage_limits":{"min":0.9,"max":1.1}},{"id":92,"number":43,"name":"sink","available":true,"bustype":"PQ","angle":-0.1,"magnitude":0.99,"base_voltage":100.0,"voltage_limits":{"min":0.9,"max":1.1}}],"Arc":[{"id":10,"from_id":91,"to_id":92}],"Line":[{"id":11,"name":"link","available":true,"arc":10,"r":0.01,"x":0.1,"base_power":50.0,"power_units":"COMPONENT_BASE","parameter_units":"COMPONENT_BASE","b":{"from":0.02,"to":0.03},"g":{"from":0.001,"to":0.002},"rating":2.0,"active_power_flow":0.0,"reactive_power_flow":0.0,"angle_limits":{"min":-0.4,"max":0.4}}]},"supplemental_attributes":[],"supplemental_attribute_associations":[],"plant_associations":[],"combined_cycle_associations":[],"service_associations":[],"time_series_associations":[],"time_series_storage_file":null})
     }
     fn decode(v: &Value) -> BalancedNetwork {
-        read(&v.to_string(), None, 0, &mut Diagnostics::new()).unwrap()
+        read(v, None, 0, &mut Diagnostics::new()).unwrap()
     }
     #[test]
     fn component_bases_and_natural_units_agree() {
@@ -1408,7 +1385,13 @@ mod tests {
         for version in 1..=4 {
             let out = write(&net, version, None).unwrap();
             let mut warnings = Diagnostics::new();
-            let reread = read(&out.text, None, version, &mut warnings).unwrap();
+            let reread = read(
+                &serde_json::from_str(&out.text).unwrap(),
+                None,
+                version,
+                &mut warnings,
+            )
+            .unwrap();
             assert_eq!(reread.buses().len(), 2);
             assert_eq!(reread.branches().len(), 1);
             assert!((reread.branches()[0].x - net.branches()[0].x).abs() < 1e-12);
@@ -1420,14 +1403,14 @@ mod tests {
     fn rejects_duplicate_ids_dangling_references_and_unsupported_versions() {
         let mut doc = document();
         doc["schema_version"] = json!("0.5.0");
-        assert!(read(&doc.to_string(), None, 0, &mut Diagnostics::new()).is_err());
+        assert!(read(&doc, None, 0, &mut Diagnostics::new()).is_err());
         doc = document();
         doc["components"]["ACBus"][1]["id"] = json!(91);
-        assert!(read(&doc.to_string(), None, 0, &mut Diagnostics::new()).is_err());
+        assert!(read(&doc, None, 0, &mut Diagnostics::new()).is_err());
         doc = document();
         doc["components"]["Arc"][0]["to_id"] = json!(43);
-        assert!(read(&doc.to_string(), None, 0, &mut Diagnostics::new()).is_err());
-        assert!(read(&document().to_string(), None, 2, &mut Diagnostics::new()).is_err());
+        assert!(read(&doc, None, 0, &mut Diagnostics::new()).is_err());
+        assert!(read(&document(), None, 2, &mut Diagnostics::new()).is_err());
     }
     #[test]
     fn edited_fields_override_retained_fields() {
@@ -1435,7 +1418,13 @@ mod tests {
         let mut net = decode(&doc);
         std::sync::Arc::make_mut(&mut net.tables_mut().branches)[0].x = 0.3;
         let out = write(&net, 0, Some(&doc)).unwrap();
-        let reread = read(&out.text, None, 0, &mut Diagnostics::new()).unwrap();
+        let reread = read(
+            &serde_json::from_str(&out.text).unwrap(),
+            None,
+            0,
+            &mut Diagnostics::new(),
+        )
+        .unwrap();
         assert!((reread.branches()[0].x - 0.3).abs() < 1e-12);
     }
     #[test]

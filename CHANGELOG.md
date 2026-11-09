@@ -38,6 +38,9 @@ action.
   emission of an edited document indexes its retained rows and source
   generator rows by id, so parsing and re-emission stay linear in the
   component count.
+- Reuse parsed Sienna and PowerSystems documents for module retention, and
+  decode the native adapter's intermediate document directly. Full source
+  extensions and same-format fidelity are unchanged (review by @MohamedNumair).
 - Annotate the current PowerIO IR schema with physical units, per-unit bases,
   and sign conventions. The schema and the field documentation state the
   converter setpoint conventions as their sources do: a reduced-model
@@ -177,6 +180,21 @@ action.
   provenance (#763), the libsqlite3-sys advisory fix through rusqlite 0.41
   with the Rust 1.89 MSRV, and the dependency bumps (#749, #751, #752,
   #753, #754, #760, #793).
+
+**Contributor credit**
+
+- @frederikgeth authored the collection/archive stack (#775, #776,
+  #802 through #812, #814) and identified the shunt-status, scaling, typing,
+  naming, and switch-rating review follow-ups.
+- @MohamedNumair authored the CIM16/layout and OpenDSS safe-name changes
+  (#768, #770), fixed PyPSA HDF5 metadata handling, and contributed the
+  convention and retained-document reviews in #821.
+- @BurhanAbdullah authored the absent OpenDSS ampacity correction (#790).
+- @qian-harvard preserved foreign PowerModels/Egret extension-key values and
+  strengthened refusal of executable HDF5 attribute metadata in #821.
+- @samtalki integrated the release, compatibility migration, adapters, and
+  review follow-ups in #821 and #823. Original contributor commits and
+  coauthor attribution are retained.
 
 ## 0.11.10
 

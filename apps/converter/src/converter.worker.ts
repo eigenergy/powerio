@@ -4,6 +4,13 @@ import { inputLimit } from './input-limits';
 
 let conversion: Conversion | undefined;
 let collectionKey: string | undefined;
+
+function releaseCollection(): void {
+  conversion?.free();
+  conversion = undefined;
+  collectionKey = undefined;
+}
+
 self.onmessage = async ({ data }) => {
   const { id, type } = data;
   try {
@@ -25,9 +32,15 @@ self.onmessage = async ({ data }) => {
           if (!added.ok) { result = added; break; }
         }
       }
-      if (result && !result.ok) { conversion?.free(); conversion = undefined; collectionKey = undefined; }
-      if (!result && conversion) result = JSON.parse(type === 'discover' ? conversion.discover() : data.selection ? conversion.inspect_selection(JSON.stringify(data.selection)) : conversion.inspect(data.primary, data.format));
-      if (!result.ok && type === 'discover') { conversion?.free(); conversion = undefined; collectionKey = undefined; }
+      if (result && !result.ok) releaseCollection();
+      if (!result && conversion) {
+        let response: string;
+        if (type === 'discover') response = conversion.discover();
+        else if (data.selection) response = conversion.inspect_selection(JSON.stringify(data.selection));
+        else response = conversion.inspect(data.primary, data.format);
+        result = JSON.parse(response);
+      }
+      if (!result.ok && type === 'discover') releaseCollection();
     } else if (type === 'emit') {
       if (!conversion) throw new Error('Choose a case before converting.');
       result = JSON.parse(conversion.emit(data.format, data.name));
@@ -45,12 +58,12 @@ self.onmessage = async ({ data }) => {
       else { conversion?.free(); conversion = undefined; }
       result = {};
     } else if (type === 'release_collection') {
-      if (collectionKey === data.collectionKey) { conversion?.free(); conversion = undefined; collectionKey = undefined; }
+      if (collectionKey === data.collectionKey) releaseCollection();
       result = {};
     } else throw new Error('Unknown conversion operation.');
     self.postMessage({ id, result }, { transfer: transfers });
   } catch (error) {
-    conversion?.free(); conversion = undefined; collectionKey = undefined;
+    releaseCollection();
     self.postMessage({ id, error: error instanceof Error ? error.message : 'PowerIO could not finish this operation.' });
   }
 };

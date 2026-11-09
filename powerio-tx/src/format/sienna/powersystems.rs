@@ -478,12 +478,11 @@ pub(in crate::format) fn to_schema(root: &Value) -> Result<Value> {
 }
 
 pub(in crate::format) fn read(
-    text: &str,
+    root: &Value,
     name: Option<&str>,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    let root: Value = serde_json::from_str(text).map_err(|e| error(e.to_string()))?;
-    let doc = to_schema(&root)?;
+    let doc = to_schema(root)?;
     if root["data"]["components"].as_array().is_some_and(|rows| {
         rows.iter().any(|row| {
             row["__metadata__"]["type"] == "SwitchedAdmittance"
@@ -502,7 +501,7 @@ pub(in crate::format) fn read(
             "switched-shunt controls restored from ext; the native consumer did not serialize these control fields",
         );
     }
-    let mut net = super::read(&doc.to_string(), name, 4, warnings)?;
+    let mut net = super::read(&doc, name, 4, warnings)?;
     if rows(&doc, "Line")?
         .iter()
         .any(|r| r.get("flow_limits").is_some())
