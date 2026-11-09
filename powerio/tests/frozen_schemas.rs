@@ -481,6 +481,27 @@ fn with_0_11_socwr_flow_names(current: &serde_json::Value) -> serde_json::Value 
 /// is optional, and a document without it states the star point, the meaning
 /// `mag_g` and `mag_b` have in every 0.11 document; 0.12 rewords those two
 /// fields' description to point at it. Nothing else may differ.
+/// The body without the descriptions 0.12 added to state a reactive power
+/// sign convention (#700): `Hvdc::qf`/`qt`, the converter setpoints, and the
+/// detailed converter's reactive limits.
+fn without_sign_convention_descriptions(body: &serde_json::Value) -> serde_json::Value {
+    let mut body = body.clone();
+    if let Some(properties) = body["properties"].as_object_mut() {
+        for field in [
+            "qf",
+            "qt",
+            "reactive_power_setpoint_mvar",
+            "reactive_limits",
+        ] {
+            properties
+                .get_mut(field)
+                .and_then(serde_json::Value::as_object_mut)
+                .map(|property| property.remove("description"));
+        }
+    }
+    body
+}
+
 fn without_magnetizing_connection(
     body: &serde_json::Value,
     current_defs: &serde_json::Value,
@@ -630,6 +651,15 @@ fn assert_reads_documents_of(earlier: &str) {
                 without_magnetizing_connection(&current_defs[name], &current_defs, earlier),
                 without_magnetizing_connection(definition, &current_defs, earlier),
                 "{earlier}: definition {name} changed"
+            );
+        } else if name == "Hvdc" || name == "HvdcConverter" || name == "VoltageSourceConverter" {
+            // 0.12 states the reactive power sign convention of these
+            // fields in their descriptions (#700); a description adds no
+            // validation constraint, and nothing else may change.
+            assert_eq!(
+                without_sign_convention_descriptions(&current_defs[name]),
+                without_sign_convention_descriptions(definition),
+                "{earlier}: definition {name} changed beyond the sign convention descriptions"
             );
         } else if name == "DcPfInstance" || name == "AcPfInstance" {
             assert_only_optional_property_added(
