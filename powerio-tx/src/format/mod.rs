@@ -469,7 +469,10 @@ pub fn parse_with_json_class(
     }) || cgmes::looks_like_profile_set(&source);
     let mut warnings = Diagnostics::new();
     match parse_to_network(&source, &mut warnings, json_class) {
-        Ok(mut network) => {
+        Ok(ParsedNetwork {
+            mut network,
+            extension,
+        }) => {
             network.assign_missing_component_ids();
             // Record the detected format on the retained source before the
             // common constructor builds descriptors and the coarse root
@@ -503,7 +506,9 @@ pub fn parse_with_json_class(
                 }
             };
             let mut module = PioModule::parsed(network, source, warnings.into_records())?;
-            sienna::retain_document(&mut module)?;
+            if let Some((namespace, document)) = extension {
+                module.insert_extension(namespace, document)?;
+            }
             Ok(module)
         }
         Err(error) => {
@@ -521,6 +526,21 @@ pub fn parse_with_json_class(
     }
 }
 
+/// Reader output before the module takes ownership of the retained document.
+struct ParsedNetwork {
+    network: BalancedNetwork,
+    extension: Option<(&'static str, Value)>,
+}
+
+impl From<BalancedNetwork> for ParsedNetwork {
+    fn from(network: BalancedNetwork) -> Self {
+        Self {
+            network,
+            extension: None,
+        }
+    }
+}
+
 /// The format dispatch behind [`parse`]: name and content detection, then the
 /// one reader map. `json_class` is a classification the caller already
 /// computed on this source's own text ([`parse_with_json_class`]); when it is
@@ -531,7 +551,7 @@ fn parse_to_network(
     source: &powerio_core::Source,
     warnings: &mut Diagnostics,
     json_class: Option<routing::JsonClass>,
-) -> Result<BalancedNetwork> {
+) -> Result<ParsedNetwork> {
     let from = source.format().map(powerio_core::FormatId::as_str);
     let path = std::path::Path::new(source.name());
     // The file stem is the name hint for formats that don't carry their own
@@ -554,13 +574,13 @@ fn parse_to_network(
             .expect("static name is a valid artifact path");
         if from.is_some_and(is_pypsa_csv_name) || (from.is_none() && source.buffer(&marker).is_ok())
         {
-            return pypsa::read_pypsa_csv_source(source, warnings);
+            return pypsa::read_pypsa_csv_source(source, warnings).map(Into::into);
         }
         if from.is_some_and(|format| {
             routing::parse_transmission_format(format) == Some(TransmissionFormat::Cgmes)
         }) || (from.is_none() && cgmes::looks_like_profile_set(source))
         {
-            return cgmes::parse_source(source, warnings);
+            return cgmes::parse_source(source, warnings).map(Into::into);
         }
         // Any other directory has no reader; refuse it as a directory before
         // the extension logic reads ".07" off a name like `pglib-opf-23.07`.
@@ -580,7 +600,7 @@ fn parse_to_network(
         routing::parse_transmission_format(format) == Some(TransmissionFormat::Cgmes)
     }) || (from.is_none() && cgmes::looks_like_profile_set(source))
     {
-        return cgmes::parse_source(source, warnings);
+        return cgmes::parse_source(source, warnings).map(Into::into);
     }
     // PowerWorld `.pwb` is binary and read only; dispatch it before the text
     // read. `from` accepts "pwb" for files with a different extension.
@@ -597,13 +617,13 @@ fn parse_to_network(
         // Binary input: the exact bytes go to the reader, byte order mark
         // handling included, since the mark is a text concept.
         let buffer = primary(source)?;
-        return powerworld::parse_pwb_collecting(buffer.bytes(), stem, warnings);
+        return powerworld::parse_pwb_collecting(buffer.bytes(), stem, warnings).map(Into::into);
     }
     if from.is_some_and(is_pslf_name) || (from.is_none() && ext.as_deref() == Some("epc")) {
         let buffer = primary(source)?;
         let network = pslf::parse_pslf_source(source_text(&buffer)?, stem, warnings)?;
         reject_empty_case(&network, "PSLF .epc")?;
-        return Ok(network);
+        return Ok(network.into());
     }
     // An IEEE CDF case has no fixed extension: the public archives use
     // `.txt` and some tools `.cdf`, so those two are inferred from the
@@ -625,7 +645,7 @@ fn parse_to_network(
         );
         let network = ieee_cdf::parse_ieee_cdf_source(text, stem, Some(origin), warnings)?;
         reject_empty_case(&network, ieee_cdf::FMT)?;
-        return Ok(network);
+        return Ok(network.into());
     }
     if from
         .and_then(parse_source_target_format)
@@ -695,7 +715,7 @@ fn parse_to_network(
     if fmt_hint == Some(TargetFormat::Xiidm) {
         let network = xiidm::parse_xiidm_bytes(buffer.content_bytes(), warnings)?;
         reject_empty_case(&network, TargetFormat::Xiidm.label())?;
-        return Ok(network);
+        return Ok(network.into());
     }
     let text = source_text(&buffer)?;
     // Readers that locate records mark them as byte ranges of `text`; the
@@ -751,7 +771,8 @@ fn read_source(
     fmt: TargetFormat,
     name_hint: Option<&str>,
     warnings: &mut Diagnostics,
-) -> Result<BalancedNetwork> {
+) -> Result<ParsedNetwork> {
+    let mut extension = None;
     let net = match fmt {
         TargetFormat::Matpower => matpower::parse_matpower_source(text, name_hint, warnings),
         TargetFormat::PowerModelsJson => {
@@ -776,8 +797,25 @@ fn read_source(
             ));
         }
         TargetFormat::SurgeJson => surge::parse_surge_source(text, name_hint, warnings),
-        TargetFormat::SiennaJson { version } => sienna::read(text, name_hint, version, warnings),
-        TargetFormat::PowerSystemsJson => sienna::powersystems::read(text, name_hint, warnings),
+        TargetFormat::SiennaJson { .. } | TargetFormat::PowerSystemsJson => {
+            let document = serde_json::from_str(text).map_err(|e| Error::FormatRead {
+                format: "SiennaSchemas JSON",
+                message: e.to_string(),
+            })?;
+            let (network, namespace) = if let TargetFormat::SiennaJson { version } = fmt {
+                (
+                    sienna::read(&document, name_hint, version, warnings)?,
+                    sienna::EXTENSION,
+                )
+            } else {
+                (
+                    sienna::powersystems::read(&document, name_hint, warnings)?,
+                    sienna::powersystems::EXTENSION,
+                )
+            };
+            extension = Some((namespace, document));
+            Ok(network)
+        }
         TargetFormat::RavensJson => ravens::parse_ravens_source(text, name_hint, warnings),
         TargetFormat::DeepMindOpfDataJson => {
             opfdata::parse_opfdata_source(text, name_hint, warnings)
@@ -790,7 +828,10 @@ fn read_source(
         TargetFormat::Ucte => ucte::parse_ucte_source(text, name_hint, warnings),
     }?;
     reject_empty_case(&net, fmt.label())?;
-    Ok(net)
+    Ok(ParsedNetwork {
+        network: net,
+        extension,
+    })
 }
 
 /// Geographic metadata for a reader that harvested longitude/latitude

@@ -19,6 +19,10 @@ fn export_reference_cases() {
                     .with_format(FormatId::new(format.token()).unwrap());
             let recovered = powerio_tx::parse(source).unwrap();
             assert_eq!(
+                recovered.extensions()["org.eigenergy.powerio.sienna"],
+                serde_json::from_str::<serde_json::Value>(&written.text).unwrap()
+            );
+            assert_eq!(
                 module.value().buses().len(),
                 recovered.value().buses().len()
             );
@@ -230,6 +234,10 @@ fn powersystems_native_reference_cases() {
             Source::from_memory("system.json", out.text.as_bytes().to_vec()).unwrap(),
         )
         .unwrap();
+        assert_eq!(
+            recovered.extensions()["org.eigenergy.powerio.powersystems"],
+            serde_json::from_str::<serde_json::Value>(&out.text).unwrap()
+        );
         assert_eq!(
             recovered.value().buses().len(),
             module.value().buses().len()

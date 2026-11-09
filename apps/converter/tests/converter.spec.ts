@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader, ZipWriter } from '@zip.js/zip.js';
+import { inspectQueued } from './helpers';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const case9 = await readFile(`${root}tests/data/case9.m`);
@@ -594,17 +595,6 @@ for (const unsupported of [false, true]) {
       expect(warnings[2].spans[0]).toMatchObject({ start: original.length, end: source.length });
     }
   });
-}
-
-async function inspectQueued(page: import('@playwright/test').Page) {
-  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
-  await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Choose files', exact: false })).toBeEnabled();
-  while (await page.getByRole('button', { name: 'Inspect case', exact: true }).count()) {
-    await page.getByRole('button', { name: 'Inspect case', exact: true }).first().click();
-    await expect(page.getByRole('button', { name: 'Choose files', exact: false })).toBeEnabled();
-  }
-  await expect(page.getByRole('button', { name: 'Choose files', exact: false })).toBeEnabled();
 }
 
 test('shared masters and a mixed case stay unparsed until conversion', async ({ page }) => {

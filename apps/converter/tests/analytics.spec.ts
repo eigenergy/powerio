@@ -1,5 +1,6 @@
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import { inspectQueued } from './helpers';
 
 async function productionRoutes(context: BrowserContext, disabled = false) {
   const sent: any[] = [];
@@ -160,14 +161,3 @@ test('opting out clears events queued while the analytics script is loading', as
   await expect(page.locator('iframe')).toHaveCount(0);
   expect(sent).toEqual([]);
 });
-
-async function inspectQueued(page: import('@playwright/test').Page) {
-  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
-  await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Choose files', exact: false })).toBeEnabled();
-  while (await page.getByRole('button', { name: 'Inspect case', exact: true }).count()) {
-    await page.getByRole('button', { name: 'Inspect case', exact: true }).first().click();
-    await expect(page.getByRole('button', { name: 'Choose files', exact: false })).toBeEnabled();
-  }
-  await expect(page.getByRole('button', { name: 'Choose files', exact: false })).toBeEnabled();
-}
