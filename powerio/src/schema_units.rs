@@ -85,6 +85,33 @@ pub(crate) fn annotate(schema: &mut schemars::Schema) {
             "b",
             "total charging susceptance; charging overrides its terminal split",
         ),
+        ("Hvdc", "qf", "positive injection into the from bus"),
+        ("Hvdc", "qt", "positive injection into the to bus"),
+        (
+            "HvdcConverter",
+            "reactive_power_setpoint_mvar",
+            "positive injection into the AC bus (PowSybl vscConverterStation)",
+        ),
+        (
+            "VoltageSourceConverter",
+            "reactive_power_setpoint_mvar",
+            "positive withdrawal from the AC bus at the point of common coupling (load convention; PowSybl voltageSourceConverter, CGMES VsConverter.targetQpcc)",
+        ),
+        (
+            "VoltageSourceConverter",
+            "active_power_at_pcc_mw",
+            "positive withdrawal from the AC bus at the point of common coupling (load convention)",
+        ),
+        (
+            "VoltageSourceConverter",
+            "reactive_power_at_pcc_mvar",
+            "positive withdrawal from the AC bus at the point of common coupling (load convention)",
+        ),
+        (
+            "VoltageSourceConverter",
+            "target_active_power_mw",
+            "positive withdrawal from the AC bus at the point of common coupling (load convention)",
+        ),
     ] {
         definitions[kind]["properties"][field]["x-sign-convention"] = json!(meaning);
     }
@@ -107,6 +134,22 @@ mod tests {
         assert_eq!(
             schema["$defs"]["Storage"]["properties"]["energy"]["x-unit"],
             "MWh"
+        );
+        // The two converter setpoints state opposite conventions, as their
+        // PowSybl sources do.
+        assert!(
+            schema["$defs"]["HvdcConverter"]["properties"]["reactive_power_setpoint_mvar"]
+                ["x-sign-convention"]
+                .as_str()
+                .unwrap()
+                .starts_with("positive injection")
+        );
+        assert!(
+            schema["$defs"]["VoltageSourceConverter"]["properties"]["reactive_power_setpoint_mvar"]
+                ["x-sign-convention"]
+                .as_str()
+                .unwrap()
+                .starts_with("positive withdrawal")
         );
     }
 }

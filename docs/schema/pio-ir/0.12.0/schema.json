@@ -8055,7 +8055,9 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "description": "Reactive power injected into the from bus (#700); `qminf` and `qmaxf`\nbound it in the same sign.",
+          "x-sign-convention": "positive injection into the from bus"
         },
         "qmaxf": {
           "anyOf": [
@@ -8135,7 +8137,9 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "description": "Reactive power injected into the to bus (#700); `qmint` and `qmaxt`\nbound it in the same sign.",
+          "x-sign-convention": "positive injection into the to bus"
         },
         "resistance_ohm": {
           "anyOf": [
@@ -8284,7 +8288,9 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "description": "Reactive power setpoint of the reduced-model station, using generator\nsign convention: a positive value is injected into the AC bus, as\nPowSybl states a `vscConverterStation` `reactivePowerSetpoint`. The\nstation's reactive limits and [`Hvdc::qf`] and [`Hvdc::qt`] share this\ninjection sign (#700). The detailed [`VoltageSourceConverter`] uses\nthe opposite, load, convention.",
+          "x-sign-convention": "positive injection into the AC bus (PowSybl vscConverterStation)"
         },
         "regulating_terminal": {
           "anyOf": [
@@ -18338,7 +18344,8 @@
               "type": "string"
             }
           ],
-          "description": "Active power at the point of common coupling, using load sign convention."
+          "description": "Active power at the point of common coupling, using load sign convention.",
+          "x-sign-convention": "positive withdrawal from the AC bus at the point of common coupling (load convention)"
         },
         "base_apparent_power_mva": {
           "anyOf": [
@@ -18710,7 +18717,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Reactive capability at the point of common coupling, in the same load\nsign convention as [`Self::reactive_power_setpoint_mvar`]: `min_q` and\n`max_q` bound the withdrawal from the AC bus."
         },
         "reactive_power_at_pcc_mvar": {
           "anyOf": [
@@ -18730,7 +18738,8 @@
               "type": "string"
             }
           ],
-          "description": "Reactive power at the point of common coupling, using load sign convention."
+          "description": "Reactive power at the point of common coupling, using load sign convention.",
+          "x-sign-convention": "positive withdrawal from the AC bus at the point of common coupling (load convention)"
         },
         "reactive_power_setpoint_mvar": {
           "anyOf": [
@@ -18749,7 +18758,9 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "description": "Reactive power target at the point of common coupling, using load\nsign convention: a positive value is withdrawn from the AC bus. This\nis how PowSybl's detailed `voltageSourceConverter` states its\n`reactivePowerSetpoint` and how CGMES states `VsConverter.targetQpcc`,\nso both readers keep the value. The reduced-model station setpoint on\n[`HvdcConverter`] uses the opposite, injection, convention.",
+          "x-sign-convention": "positive withdrawal from the AC bus at the point of common coupling (load convention; PowSybl voltageSourceConverter, CGMES VsConverter.targetQpcc)"
         },
         "resistive_loss_ohm": {
           "anyOf": [
@@ -18807,7 +18818,8 @@
               "type": "string"
             }
           ],
-          "description": "Active power target at the point of common coupling, using load sign convention."
+          "description": "Active power target at the point of common coupling, using load sign convention.",
+          "x-sign-convention": "positive withdrawal from the AC bus at the point of common coupling (load convention)"
         },
         "target_dc_voltage_kv": {
           "anyOf": [

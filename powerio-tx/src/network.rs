@@ -755,8 +755,17 @@ pub struct VoltageSourceConverter {
     pub voltage_regulator_on: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voltage_setpoint_kv: Option<f64>,
+    /// Reactive power target at the point of common coupling, using load
+    /// sign convention: a positive value is withdrawn from the AC bus. This
+    /// is how PowSybl's detailed `voltageSourceConverter` states its
+    /// `reactivePowerSetpoint` and how CGMES states `VsConverter.targetQpcc`,
+    /// so both readers keep the value. The reduced-model station setpoint on
+    /// [`HvdcConverter`] uses the opposite, injection, convention.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reactive_power_setpoint_mvar: Option<f64>,
+    /// Reactive capability at the point of common coupling, in the same load
+    /// sign convention as [`Self::reactive_power_setpoint_mvar`]: `min_q` and
+    /// `max_q` bound the withdrawal from the AC bus.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reactive_limits: Option<ReactiveLimits>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3405,6 +3414,12 @@ pub struct HvdcConverter {
     pub voltage_regulator_on: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voltage_setpoint_kv: Option<f64>,
+    /// Reactive power setpoint of the reduced-model station, using generator
+    /// sign convention: a positive value is injected into the AC bus, as
+    /// PowSybl states a `vscConverterStation` `reactivePowerSetpoint`. The
+    /// station's reactive limits and [`Hvdc::qf`] and [`Hvdc::qt`] share this
+    /// injection sign (#700). The detailed [`VoltageSourceConverter`] uses
+    /// the opposite, load, convention.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reactive_power_setpoint_mvar: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3422,7 +3437,11 @@ pub struct Hvdc {
     pub in_service: bool,
     pub pf: f64,
     pub pt: f64,
+    /// Reactive power injected into the from bus (#700); `qminf` and `qmaxf`
+    /// bound it in the same sign.
     pub qf: f64,
+    /// Reactive power injected into the to bus (#700); `qmint` and `qmaxt`
+    /// bound it in the same sign.
     pub qt: f64,
     pub vf: f64,
     pub vt: f64,
