@@ -59,7 +59,7 @@ exact bytes, archive path, and `$id`.
 
 The 0.11 releases wrote the integer 2 in every document and published their
 schema files beneath `pio-ir/2/`; 0.11.2 reused the 0.11.1 file, and 0.11.9
-reused the 0.11.8 file. A 0.11
+and 0.11.10 reused the 0.11.8 file. A 0.11
 document states which release wrote it only in `producer`.
 
 ## Compatibility
