@@ -36,7 +36,10 @@ A two-winding transformer states one magnetizing shunt, so charging on its
 secondary terminal is written as a `FixedAdmittance` on the to bus whose `ext`
 names the circuit it belongs to (`transformer_circuit`, or `transformer_uuid`
 in PowerSystems output). A Sienna consumer sees an ordinary bus shunt; the
-PowerIO reader folds it back into the branch.
+PowerIO reader folds it back into the branch while the shunt and the
+transformer share one `available` status. A native edit that gives the shunt
+a status of its own leaves it a bus shunt with that status, so disabling the
+generated shunt removes the charging from the branch.
 
 Time-series associations and dynamics records remain available in the retained
 document. The standalone electrical reader does not acquire a referenced HDF5

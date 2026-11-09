@@ -1,5 +1,35 @@
-use super::{Diagnostics, Value, codes, json};
+use super::{BTreeMap, Diagnostics, Value, codes, json};
 use crate::network::{Generator, GeneratorEnergySource};
+
+/// The schema components a balanced generator can come from, in the order a
+/// retained row is looked up.
+const KNOWN: [&str; 7] = [
+    "ThermalStandard",
+    "ThermalMultiStart",
+    "RenewableDispatch",
+    "RenewableNonDispatch",
+    "HydroDispatch",
+    "Source",
+    "SynchronousCondenser",
+];
+
+/// The retained document's generator rows by id, built once per emission so
+/// each generator finds its source row without scanning every component.
+pub(super) fn by_id(original: Option<&Value>) -> BTreeMap<i64, (&'static str, &Value)> {
+    let mut rows = BTreeMap::new();
+    for kind in KNOWN {
+        for row in original
+            .and_then(|doc| doc["components"][kind].as_array())
+            .into_iter()
+            .flatten()
+        {
+            if let Some(id) = row["id"].as_i64() {
+                rows.entry(id).or_insert((kind, row));
+            }
+        }
+    }
+    rows
+}
 
 pub(super) fn energy_source(kind: &str, row: &Value) -> GeneratorEnergySource {
     match row["prime_mover_type"].as_str() {
@@ -18,13 +48,14 @@ pub(super) fn energy_source(kind: &str, row: &Value) -> GeneratorEnergySource {
     }
 }
 
-/// Shape the generator row for its schema component. Returns the component
-/// kind and whether a retained source cost curve replaced the row's cost.
+/// Shape the generator row for its schema component. `previous` is the
+/// retained source row from [`by_id`]. Returns the component kind and whether
+/// a retained source cost curve replaced the row's cost.
 #[allow(clippy::too_many_lines)] // Each schema component has distinct required fields.
 pub(super) fn prepare(
     row: &mut Value,
     g: &Generator,
-    original: Option<&Value>,
+    previous: Option<(&'static str, &Value)>,
     id: i64,
     warnings: &mut Diagnostics,
 ) -> (&'static str, bool) {
@@ -34,24 +65,6 @@ pub(super) fn prepare(
         GeneratorEnergySource::Hydro => "HydroDispatch",
         _ => "ThermalStandard",
     };
-    let known = [
-        "ThermalStandard",
-        "ThermalMultiStart",
-        "RenewableDispatch",
-        "RenewableNonDispatch",
-        "HydroDispatch",
-        "Source",
-        "SynchronousCondenser",
-    ];
-    let previous = original.and_then(|doc| {
-        known.into_iter().find_map(|k| {
-            doc["components"][k]
-                .as_array()?
-                .iter()
-                .find(|r| r["id"] == id)
-                .map(|r| (k, r))
-        })
-    });
     if let Some((k, old)) = previous {
         if energy_source(k, old) == g.energy_source {
             kind = k;

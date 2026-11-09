@@ -352,24 +352,27 @@ pub(super) fn read(
             branches.push(branch);
         }
     }
+    let line_count = rows(&root, "Line")?.len();
+    let circuits = rows(&root, "TransformerCircuit")?;
+    // Circuit rows by id, built once: each transformer and secondary shunt
+    // finds its circuit without scanning the table per component.
+    let circuit_index: BTreeMap<i64, usize> = circuits
+        .iter()
+        .enumerate()
+        .filter_map(|(index, r)| r["id"].as_i64().map(|id| (id, index)))
+        .collect();
     for row in rows(&root, "TwoWindingTransformer")? {
         let id = integer(row, "circuit")?;
-        let offset = rows(&root, "Line")?.len();
-        let index = rows(&root, "TransformerCircuit")?
-            .iter()
-            .position(|r| r["id"].as_i64() == Some(id))
+        let index = *circuit_index
+            .get(&id)
             .ok_or_else(|| error("missing transformer circuit"))?;
         let b = branches
-            .get_mut(offset + index)
+            .get_mut(line_count + index)
             .ok_or_else(|| error(format!("missing TransformerCircuit {id}")))?;
         b.name = Some(string(row, "name")?.into());
-        let circuit = &rows(&root, "TransformerCircuit")?[index];
+        let circuit = &circuits[index];
         metadata::restore(&root, circuit, b, &["uid", "name"])?;
         if let Some(y) = row.get("magnetizing_shunt") {
-            let circuit = rows(&root, "TransformerCircuit")?
-                .iter()
-                .find(|r| r["id"].as_i64() == Some(id))
-                .ok_or_else(|| error("missing transformer circuit"))?;
             let scale = match row
                 .get("admittance_units")
                 .and_then(Value::as_str)
@@ -462,7 +465,6 @@ pub(super) fn read(
         }
     }
     let mut shunts = Vec::new();
-    let line_count = rows(&root, "Line")?.len();
     for row in rows(&root, "FixedAdmittance")? {
         let bus = bus_ref(row, "bus", &ids)?;
         let scale = match row
@@ -484,22 +486,25 @@ pub(super) fn read(
             .as_i64()
         {
             let missing = || error("secondary shunt references a missing transformer circuit");
-            let index = rows(&root, "TransformerCircuit")?
-                .iter()
-                .position(|r| r["id"].as_i64() == Some(circuit))
-                .ok_or_else(missing)?;
+            let index = *circuit_index.get(&circuit).ok_or_else(missing)?;
             let branch = branches.get_mut(line_count + index).ok_or_else(missing)?;
             if branch.to != bus {
                 return Err(error("secondary shunt is not on its transformer's to bus"));
             }
-            let mut charging = branch
-                .charging
-                .unwrap_or_else(|| BranchCharging::from_total_b(branch.b));
-            charging.g_to += number(&row["Y"], "real")? * scale / BASE;
-            charging.b_to += number(&row["Y"], "imag")? * scale / BASE;
-            branch.charging = Some(charging);
-            branch.b = charging.calc_total_b();
-            continue;
+            // The marker folds the admittance back only while the shunt and
+            // its transformer share one status. Once a native edit switches
+            // one of them, the shunt stays a bus shunt with its own status,
+            // so a disabled secondary shunt no longer charges a live branch.
+            if available(row)? == branch.in_service {
+                let mut charging = branch
+                    .charging
+                    .unwrap_or_else(|| BranchCharging::from_total_b(branch.b));
+                charging.g_to += number(&row["Y"], "real")? * scale / BASE;
+                charging.b_to += number(&row["Y"], "imag")? * scale / BASE;
+                branch.charging = Some(charging);
+                branch.b = charging.calc_total_b();
+                continue;
+            }
         }
         let mut sh = Shunt::new(
             bus,
@@ -1110,6 +1115,7 @@ pub(super) fn write_document(
             json!({"id":id,"name":format!("shunt_{id}"),"available":s.in_service,"bus":bus_ids[&s.bus],"Y":{"real":s.g,"imag":s.b},"base_power":net.base_mva(),"admittance_units":"COMPONENT_MVAR"}),
         );
     }
+    let original_generators = generators::by_id(original);
     for g in net.generators() {
         let id = ids.get(g.uid.as_deref());
         metadata::record(&mut doc, id, g, &["uid", "vg", "caps"])?;
@@ -1135,7 +1141,13 @@ pub(super) fn write_document(
                 warnings.push(&codes::EMIT_SIENNA.field_dropped, format!("generator {id}: one-sided reactive bounds have no finite MinMax representation"));
             }
         }
-        let (kind, retained_cost) = generators::prepare(&mut row, g, original, id, &mut warnings);
+        let (kind, retained_cost) = generators::prepare(
+            &mut row,
+            g,
+            original_generators.get(&id).copied(),
+            id,
+            &mut warnings,
+        );
         if g.cost.is_none() && !retained_cost {
             doc["ext"][id.to_string()]["org.eigenergy.powerio"]["operation_cost_absent"] =
                 json!(true);
