@@ -39,6 +39,8 @@ __all__ = [
     "BalancedNetwork",
     "BusMerge",
     "CalculationUpdate",
+    "Collection",
+    "CollectionResult",
     "ComponentId",
     "ContingencySet",
     "DcOpfInstance",
