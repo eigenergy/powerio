@@ -1,4 +1,6 @@
-use super::{BTreeSet, Diagnostics, ELECTRICAL_KINDS, Result, Value, codes, json, power_scale};
+use super::{
+    BTreeMap, BTreeSet, Diagnostics, ELECTRICAL_KINDS, Result, Value, codes, json, power_scale,
+};
 
 // Power-family fields that can remain outside the balanced value. Their units
 // follow the enclosing component, including nested MinMax and ramp-rate pairs.
@@ -96,8 +98,17 @@ pub(super) fn preserve_unmapped(
             if let (Some(old), Some(new)) =
                 (rows.as_array(), doc["components"][kind].as_array_mut())
             {
+                // Retained rows by id, built once per kind, so emitting an
+                // edited document stays linear in the component count.
+                let previous_by_id: BTreeMap<i64, &Value> = old
+                    .iter()
+                    .filter_map(|r| r["id"].as_i64().map(|id| (id, r)))
+                    .collect();
                 for row in new {
-                    if let Some(previous) = old.iter().find(|r| r["id"] == row["id"]) {
+                    if let Some(previous) = row["id"]
+                        .as_i64()
+                        .and_then(|id| previous_by_id.get(&id).copied())
+                    {
                         let mut merged = previous.clone();
                         // Required/defaulted power units on old and new rows may
                         // differ. Retained ramp rates must follow the new basis.

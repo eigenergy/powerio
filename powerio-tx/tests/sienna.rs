@@ -385,3 +385,79 @@ fn storage_energy_and_cost_coefficients_keep_their_units() {
         }
     }
 }
+
+/// A transformer's secondary-terminal charging is written as a marked
+/// `FixedAdmittance`. The marker folds it back only while the shunt and the
+/// transformer share one status; a native edit that disables the generated
+/// shunt leaves a disabled bus shunt and an uncharged branch, in Sienna 0.4
+/// and in PowerSystems JSON.
+#[test]
+fn a_disabled_secondary_shunt_stops_charging_its_transformer() {
+    use powerio_tx::network::BranchCharging;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case9.m");
+    let module = powerio_tx::parse(Source::open(root).unwrap()).unwrap();
+    let mut net = module.value().clone();
+    let branch = &mut net.branches_mut()[0];
+    branch.tap = 1.02;
+    branch.charging = Some(BranchCharging::new(0.0, 0.0, 0.0, 0.02));
+    branch.b = 0.02;
+    let (from, to) = (branch.from, branch.to);
+    let shunt_count = net.shunts().len();
+    for version in [0, 4] {
+        let format = if version == 0 {
+            TargetFormat::PowerSystemsJson
+        } else {
+            TargetFormat::SiennaJson { version }
+        };
+        let out = emit_value(&net, format).unwrap();
+        let parse = |text: &str| {
+            powerio_tx::parse(Source::from_memory("edited.json", text.as_bytes().to_vec()).unwrap())
+                .unwrap()
+        };
+        let find = |net: &powerio_tx::BalancedNetwork| {
+            net.branches()
+                .iter()
+                .find(|b| b.from == from && b.to == to)
+                .unwrap()
+                .clone()
+        };
+        // Unedited, the marker folds the shunt back into the branch.
+        let same = parse(&out.text);
+        let charging = find(same.value()).charging.unwrap();
+        assert!((charging.b_to - 0.02).abs() < 1e-12);
+        assert_eq!(same.value().shunts().len(), shunt_count);
+
+        let mut edited: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+        let generated = if version == 0 {
+            edited["data"]["components"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|r| r["__metadata__"]["type"] == "FixedAdmittance")
+                .unwrap()
+        } else {
+            edited["components"]["FixedAdmittance"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|r| r["name"].as_str().unwrap().ends_with("_secondary_shunt"))
+                .unwrap()
+        };
+        assert_eq!(generated["available"], serde_json::json!(true));
+        generated["available"] = serde_json::json!(false);
+        let read = parse(&edited.to_string());
+        let branch = find(read.value());
+        assert!(branch.in_service);
+        assert_eq!(branch.charging.map_or(0.0, |c| c.b_to), 0.0);
+        assert_eq!(branch.b, 0.0);
+        let shunts = read.value().shunts();
+        assert_eq!(shunts.len(), shunt_count + 1);
+        let shunt = shunts.iter().find(|s| s.bus == to).unwrap();
+        assert!(!shunt.in_service);
+        assert!(
+            (shunt.b - 0.02 * net.base_mva()).abs() < 1e-9,
+            "{}",
+            shunt.b
+        );
+    }
+}

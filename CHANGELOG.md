@@ -30,9 +30,22 @@ action.
   transports use them instead of round-tripping the module through IR text.
 - A two-winding transformer's secondary-terminal charging written to Sienna
   as a `FixedAdmittance` carries an `ext` marker that the reader folds back
-  into the branch, so a round trip adds no bus shunt.
+  into the branch, so a round trip adds no bus shunt. The reader folds it
+  back only while the shunt and its transformer share one status; a native
+  edit that disables the generated shunt leaves a disabled bus shunt and an
+  uncharged branch, in Sienna documents and in PowerSystems JSON.
+- The Sienna reader indexes `TransformerCircuit` rows by id, and canonical
+  emission of an edited document indexes its retained rows and source
+  generator rows by id, so parsing and re-emission stay linear in the
+  component count.
 - Annotate the current PowerIO IR schema with physical units, per-unit bases,
-  and sign conventions.
+  and sign conventions. The schema and the field documentation state the
+  converter setpoint conventions as their sources do: a reduced-model
+  `HvdcConverter::reactive_power_setpoint_mvar` is injected into the AC bus
+  (PowSybl `vscConverterStation`), and the detailed
+  `VoltageSourceConverter::reactive_power_setpoint_mvar` and its reactive
+  limits use load convention at the point of common coupling (PowSybl
+  `voltageSourceConverter`, CGMES `VsConverter.targetQpcc`).
 
 **Breaking changes**
 

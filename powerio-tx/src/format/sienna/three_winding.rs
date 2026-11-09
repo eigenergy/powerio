@@ -12,6 +12,13 @@ pub(super) fn read(
 ) -> Result<Vec<Transformer3W>> {
     let circuits = rows(root, "TransformerCircuit")?;
     let offset = rows(root, "Line")?.len();
+    let circuit_index: BTreeMap<i64, usize> = circuits
+        .iter()
+        .enumerate()
+        .filter_map(|(index, r)| r["id"].as_i64().map(|id| (id, index)))
+        .collect();
+    let bus_index: BTreeMap<BusId, usize> =
+        buses.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
     let mut removed = BTreeSet::new();
     let mut stars = BTreeSet::new();
     let mut transformers = Vec::new();
@@ -26,9 +33,8 @@ pub(super) fn read(
         let mut source = Vec::new();
         for key in ["primary_circuit", "secondary_circuit", "tertiary_circuit"] {
             let id = integer(row, key)?;
-            let index = circuits
-                .iter()
-                .position(|r| r["id"].as_i64() == Some(id))
+            let index = *circuit_index
+                .get(&id)
                 .ok_or_else(|| error("missing three-winding circuit"))?;
             if !removed.insert(index + offset) {
                 return Err(error("transformers share a circuit"));
@@ -63,20 +69,16 @@ pub(super) fn read(
         let mut t = Transformer3W::new(windings, z);
         t.uid = uid("ThreeWindingTransformer", row)?;
         t.name = Some(string(row, "name")?.into());
-        let star_bus = buses
-            .iter()
-            .find(|b| b.id == star)
+        let star_bus = bus_index
+            .get(&star)
+            .map(|&i| &buses[i])
             .ok_or_else(|| error("missing star bus"))?;
         t.star_vm = star_bus.vm;
         t.star_va = star_bus.va;
         t.set_winding_in_service(std::array::from_fn(|i| legs[i].in_service));
         t.in_service = legs.iter().any(|b| b.in_service);
         if let Some(y) = row.get("magnetizing_shunt") {
-            let kv = buses
-                .iter()
-                .find(|b| b.id == legs[0].from)
-                .expect("validated bus")
-                .base_kv;
+            let kv = buses[bus_index[&legs[0].from]].base_kv;
             let scale = magnetizing_scale(row, source[0], kv)?;
             t.mag_g = number(y, "real")? * scale;
             t.mag_b = number(y, "imag")? * scale;
@@ -141,6 +143,7 @@ pub(super) fn write(
     version: u8,
 ) -> Result<()> {
     let mut number = net.buses().iter().map(|b| b.id.0).max().unwrap_or(0);
+    let bus_by_id: BTreeMap<BusId, &Bus> = net.buses().iter().map(|b| (b.id, b)).collect();
     for t in net.transformers_3w() {
         let id = ids.get(t.uid.as_deref());
         metadata::record(doc, id, t, &["uid", "name"])?;
@@ -165,12 +168,7 @@ pub(super) fn write(
                 "Arc",
                 json!({"id":arc,"from_id":buses[&w.bus],"to_id":star}),
             );
-            let terminal_kv = net
-                .buses()
-                .iter()
-                .find(|b| b.id == w.bus)
-                .expect("validated bus")
-                .base_kv;
+            let terminal_kv = bus_by_id[&w.bus].base_kv;
             let mut circuit = json!({"id":circuits[i],"available":t.in_service && t.winding_in_service()[i],"arc":arc,"r":r,"x":x,"tap":w.tap,"alpha":w.shift.to_radians(),"base_power":net.base_mva(),"power_units":"NATURAL_UNITS","parameter_units":"COMPONENT_BASE","rating":w.rate_a,"rating_b":w.rate_b,"rating_c":w.rate_c});
             if terminal_kv > 0.0 {
                 circuit["base_voltage_primary"] = json!(terminal_kv);
