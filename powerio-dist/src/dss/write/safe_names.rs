@@ -92,7 +92,6 @@ struct Renames {
     transformers: Scope,
     loads: Scope,
     generators: Scope,
-    ibrs: Scope,
     profiles: Scope,
     shunts: Scope,
     sources: Scope,
@@ -122,12 +121,17 @@ impl Renames {
             net.transformers().iter().map(|t| t.name.as_str()),
         );
         let loads = Scope::plan("load", false, net.loads().iter().map(|l| l.name.as_str()));
+        // A fixed dispatch IBR writes as a dss `Generator`, the others as
+        // `PVSystem` or `Storage`; one scope keeps a renamed IBR from taking
+        // a generator's name.
         let generators = Scope::plan(
-            "generator",
+            "generator or IBR",
             false,
-            net.generators().iter().map(|g| g.name.as_str()),
+            net.generators()
+                .iter()
+                .map(|g| g.name.as_str())
+                .chain(net.ibrs().iter().map(|i| i.name.as_str())),
         );
-        let ibrs = Scope::plan("ibr", false, net.ibrs().iter().map(|i| i.name.as_str()));
         let profiles = Scope::plan(
             "control profile",
             false,
@@ -156,7 +160,6 @@ impl Renames {
             transformers,
             loads,
             generators,
-            ibrs,
             profiles,
             shunts,
             sources,
@@ -164,7 +167,7 @@ impl Renames {
         }
     }
 
-    fn scopes(&self) -> [&Scope; 11] {
+    fn scopes(&self) -> [&Scope; 10] {
         [
             &self.buses,
             &self.line_codes,
@@ -172,7 +175,6 @@ impl Renames {
             &self.transformers,
             &self.loads,
             &self.generators,
-            &self.ibrs,
             &self.profiles,
             &self.shunts,
             &self.sources,
@@ -219,7 +221,7 @@ impl Renames {
             self.buses.apply(&mut generator.bus);
         }
         for ibr in &mut t.ibrs {
-            self.ibrs.apply(&mut ibr.name);
+            self.generators.apply(&mut ibr.name);
             self.buses.apply(&mut ibr.bus);
             if let Some(profile) = &mut ibr.control_profile {
                 self.profiles.apply(profile);
@@ -300,5 +302,37 @@ mod tests {
         assert_eq!(scope.renamed.get("a b").map(String::as_str), Some("a_b_2"));
         assert_eq!(scope.renamed.get("a,b").map(String::as_str), Some("a_b_3"));
         assert_eq!(scope.renamed.len(), 2);
+    }
+
+    #[test]
+    fn a_renamed_ibr_does_not_take_a_generators_name() {
+        use crate::model::{
+            Configuration, DistGenerator, DistIbr, IbrPrimeMover, IbrTopology,
+            MulticonductorNetworkTables,
+        };
+        let terminals = vec!["1".to_string()];
+        let net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
+            generators: vec![DistGenerator::new(
+                "a_b",
+                "b",
+                terminals.clone(),
+                Configuration::Wye,
+                vec![1.0],
+                vec![0.0],
+            )],
+            ibrs: vec![DistIbr::new(
+                "a b",
+                "b",
+                terminals,
+                IbrTopology::SinglePhase,
+                IbrPrimeMover::Generic,
+                vec![1.0],
+            )],
+            ..MulticonductorNetworkTables::default()
+        });
+        let mut warnings = crate::diagnostics::Diagnostics::new();
+        let renamed = apply(&net, &mut warnings);
+        assert_eq!(renamed.generators()[0].name, "a_b");
+        assert_eq!(renamed.ibrs()[0].name, "a_b_2");
     }
 }
