@@ -7,6 +7,8 @@ cd "$(dirname "$0")/.."
 expected=$(python3 - <<'PY'
 names = [
     "powerio.AcOpfInstance",
+    "powerio.AcDcOpfInstance",
+    "powerio.AcDcOpfSolution",
     "powerio.AcOpfSolution",
     "powerio.AcOtsInstance",
     "powerio.AcOtsSolution",

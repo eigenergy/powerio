@@ -675,6 +675,28 @@ pub struct DcOpfInstance {
     pub initial_point: Option<StoredOperatingPointAssignment>,
 }
 
+/// Coupled intent has its own structural type: legacy AC consumers cannot
+/// deserialize it as an AC-only instance, even if capabilities are stripped.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AcDcOpfInstance {
+    pub network: Box<BalancedNetwork>,
+    pub profile: powerio_prob::AcDcOpfProfile,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_point: Option<Vec<powerio_prob::AcDcValue>>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AcDcOpfSolution {
+    pub instance: AcDcOpfInstance,
+    pub point: Vec<powerio_prob::AcDcValue>,
+    pub objective: f64,
+    pub termination: powerio_prob::Termination,
+    pub producer: powerio_prob::Producer,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -1362,6 +1384,10 @@ pub enum StoredValue {
     DcOpfInstance(DcOpfInstance),
     #[serde(rename = "powerio.AcOpfInstance")]
     AcOpfInstance(AcOpfInstance),
+    #[serde(rename = "powerio.AcDcOpfInstance")]
+    AcDcOpfInstance(AcDcOpfInstance),
+    #[serde(rename = "powerio.AcDcOpfSolution")]
+    AcDcOpfSolution(Box<AcDcOpfSolution>),
     #[serde(rename = "powerio.AcOtsInstance")]
     AcOtsInstance(Box<AcOtsInstance>),
     #[serde(rename = "powerio.McAcPfInstance")]
@@ -1702,6 +1728,8 @@ impl StoredValue {
             Self::AcPfInstance(i) => vec![&i.network],
             Self::DcOpfInstance(i) => vec![&i.network],
             Self::AcOpfInstance(i) => vec![&i.network],
+            Self::AcDcOpfInstance(i) => vec![&i.network],
+            Self::AcDcOpfSolution(s) => vec![&s.instance.network],
             Self::AcScucInstance(i) => vec![&i.network],
             Self::AcOtsInstance(i) => vec![&i.base.network],
             Self::DcPfSolution(s) => vec![&s.instance.network],
@@ -2207,7 +2235,9 @@ fn validate_value(value: &StoredValue) -> Result<(), String> {
         StoredValue::BalancedNetwork(_)
         | StoredValue::MulticonductorNetwork(_)
         | StoredValue::AcScucInstance(_)
-        | StoredValue::AcScucSolution(_) => Ok(()),
+        | StoredValue::AcScucSolution(_)
+        | StoredValue::AcDcOpfInstance(_)
+        | StoredValue::AcDcOpfSolution(_) => Ok(()),
         StoredValue::GeoLayer(layer) => validate_geo_layer(layer),
         StoredValue::ContingencySet(set) => validate_contingency_set(set),
         StoredValue::SubsystemSet(set) => validate_subsystem_set(set),

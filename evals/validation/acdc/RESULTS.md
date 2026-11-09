@@ -48,3 +48,32 @@ The numerical evidence qualifies the PowerModelsACDC **MATPOWER-extension** IO
 path. It does not validate a native PowerIO/Tellegen coupled solver. Independent
 native-equation checks, parameter variations and the later PowerModelsACDC JSON
 adapter remain in [FOLLOW_UP.md](FOLLOW_UP.md).
+
+## Coupled OPF types and preparation (separate model branch)
+
+Branch `codex/819-acdc-models` starts at reader commit `49e8eacb`; it does not
+change the reader PR. It adds explicit coupled intent, identity-keyed physical
+points/results, IR 2 structural types, and numerical preparation. Tellegen's
+case5 native branch consumes these APIs and retains its independent Julia
+checks. The existing case5 source fixture is reused; no new fixture is vendored.
+
+Validation on 2026-11-09:
+
+- Default workspace `cargo test`: 3,629 passed, 0 failed, 41 ignored. The final
+  focused matrix-enabled run adds/executes five coupled tests and all eleven
+  reader tests, all passing. `cargo test -p powerio-capi`: 55 passed, 1 ignored.
+- Frozen 0.11.0 and 0.11.9 wheels reject coupled instance/result structural types
+  with and without the capability marker; raw/nested reader checks still pass.
+- Changed-library and new-test clippy, formatting, schema/type parity,
+  diagnostic parity, terminology, mdBook build/test and warnings-denied
+  all-feature workspace rustdoc pass. Only the unreleased schema is regenerated.
+- The full CI clippy matrix was attempted: C ABI no-default/release/dist and
+  Python pass. Workspace, matrix-gridfm and no-sincal fail on existing exact
+  float comparisons in unchanged tests (including PSSE, PMD math and
+  `synth_facade_parity`); this is not a claim of green full CI. No lint gate or
+  unrelated test was weakened.
+
+The result constructor checks data completeness and finiteness. Solver feasibility
+and local convergence remain the producer's responsibility. Reference compatibility
+is not a qualification of physical rebasing, directional loss models, native PF,
+LCC, wider-case native solves, or binding calculation parity.

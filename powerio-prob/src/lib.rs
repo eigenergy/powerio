@@ -74,3 +74,8 @@ pub use update::{
     ReactivePowerUnit, UpdateChange, UpdateReport, UpdatedField, apply_bus_load_active_power,
     apply_updates,
 };
+
+mod acdc;
+pub use acdc::{
+    AcDcOperatingPoint, AcDcOpfInstance, AcDcOpfProfile, AcDcOpfSolution, AcDcQuantity, AcDcValue,
+};
