@@ -255,6 +255,12 @@ action.
   equipment default that canonical output cannot retain is diagnosed.
 - Preserve imported CGMES ratio/phase tap-changer identifiers and names in
   canonical output, including modules restored from older IR documents.
+- Preserve a two-winding CGMES transformer's terminal admittance when its
+  rated winding voltages differ from bus voltages or its secondary ratio tap
+  is nonunit. Refer series impedance and both terminal shunts consistently;
+  reject invalid active ratios and arithmetic overflow. Diagnose active phase
+  tap magnitudes omitted by the calculation projection. Canonical transformers
+  no longer report collapsed charging when both terminal values are preserved.
 - Canonically emit Egret electrical time series through IR, with labels, optional
   durations and native branch results; reject unsupported variation and invalid
   time axes. C and Julia expose typed time metadata without serializing networks.
