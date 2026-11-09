@@ -516,7 +516,7 @@ tag. Then:
 3. Inspect the draft and its five binary assets, then publish the release.
    The release event fires the PyPI publish
    (python.yml) and the crates.io publish (crates.yml: powerio-core,
-   powerio-tx, powerio-dist, powerio-tnd, powerio-prob, powerio-synth,
+   powerio-archive, powerio-tx, powerio-dist, powerio-tnd, powerio-prob, powerio-synth,
    powerio-matrix, powerio, and powerio-cli, in dependency order). Both
    deploy through reviewer protected environments (`pypi` and `crates-io`;
    the protection lives in the repo settings). A rerun skips the PyPI files

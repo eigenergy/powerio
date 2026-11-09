@@ -530,7 +530,7 @@ def follow_publication(
             )
             if julia:
                 print(
-                    f"Verified: {tag} GitHub release, eight crates, PyPI, Julia General registration and Julia tag are present."
+                    f"Verified: {tag} GitHub release, {len(CRATES)} crates, PyPI, Julia General registration and Julia tag are present."
                 )
                 return 0
         wait_pause(

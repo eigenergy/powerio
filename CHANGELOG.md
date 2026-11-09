@@ -5,13 +5,20 @@
 ## 0.12.0-rc.1
 
 The release candidate for PowerIO 0.12, which starts the 0.12.x release
-series. Before 1.0, the public numerical-type contract and the outstanding
+series. Before 1.0, the public numerical types and the outstanding
 conventions and milestone work need a maintainer decision. See
 [From 0.11 to 0.12](docs/src/migration-0.12.md) for every change that needs
 action.
 
 **Interoperability**
 
+- Preserve pandapower native bus voltage magnitudes and angles through IR and
+  canonical output, indexed independently of generator voltage targets.
+  Report unavailable states and unsupported result columns without claiming
+  convergence. Canonical output uses the 3.2.1 package profile and its 3.1.0
+  data format, with modern split P/Q ZIP-load fields instead of an invalid
+  mixture of legacy and modern columns. Default native imports and power-flow
+  execution are checked by the validation suite.
 - Egret keeps shunt service flags and diagnoses omitted component identities.
   Foreign result extras cannot fill native PowerModels fields in the wrong
   units. Operating-point columns clear inherited branch results. Time-series
