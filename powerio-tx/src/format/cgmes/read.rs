@@ -23,7 +23,7 @@ use std::fmt::Write as _;
 
 use powerio_core::ComponentId;
 
-use super::xml::{CimDocument, CimObject, ModelHeader, PropValue, parse_cimxml};
+use super::xml::{CimDocument, CimName, CimObject, ModelHeader, PropValue, parse_cimxml};
 use super::{CGMES_CLASS_PROPERTY, CgmesDiagnostics, CgmesVersion};
 use crate::diagnostics::codes;
 use crate::network::{
@@ -306,7 +306,7 @@ fn typed_literal(property: &str) -> Option<TypedLiteral> {
     number.then_some(TypedLiteral::FiniteNumber)
 }
 
-fn validate_typed_literals(class: &str, id: &str, props: &[(String, PropValue)]) -> Result<()> {
+fn validate_typed_literals(class: &str, id: &str, props: &[(CimName, PropValue)]) -> Result<()> {
     for (property, value) in props {
         let Some(kind) = typed_literal(property) else {
             continue;
@@ -535,10 +535,10 @@ fn skipped_part_summary(document_name: &str, doc: &CimDocument) -> String {
 /// One object merged across the profile files.
 struct Merged {
     id: String,
-    class: String,
+    class: CimName,
     defined: bool,
     modeling_authority_set: Option<String>,
-    props: Vec<(String, PropValue)>,
+    props: Vec<(CimName, PropValue)>,
 }
 
 /// The merged object store plus the id and class indexes the mapping reads.
@@ -715,7 +715,7 @@ impl Store {
                 if let Some(positions) = by_class.get_mut(object.class.as_str()) {
                     positions.push(at);
                 } else {
-                    by_class.insert(object.class.clone(), vec![at]);
+                    by_class.insert(object.class.to_string(), vec![at]);
                 }
             }
             by_class
@@ -866,8 +866,8 @@ impl Store {
 
 fn merge_properties(
     object: &str,
-    merged: &mut Vec<(String, PropValue)>,
-    incoming: Vec<(String, PropValue)>,
+    merged: &mut Vec<(CimName, PropValue)>,
+    incoming: Vec<(CimName, PropValue)>,
 ) -> Result<()> {
     for (property, value) in incoming {
         if let Some((_, existing)) = merged.iter().find(|(name, _)| name == &property) {
@@ -2940,13 +2940,13 @@ fn build_detailed_connectivity(
                     || SWITCH_CLASSES.contains(&object.class.as_str())
                     || object.class == "ExternalNetworkInjection"
                 {
-                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
+                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.to_string());
                 }
                 if object.class == "PowerTransformer" {
-                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
+                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.to_string());
                 }
                 if object.class == "SeriesCompensator" {
-                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
+                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.to_string());
                     for property in [
                         "SeriesCompensator.r0",
                         "SeriesCompensator.x0",
@@ -2967,7 +2967,7 @@ fn build_detailed_connectivity(
                     }
                 }
                 if object.class == "PowerTransformerEnd" {
-                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
+                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.to_string());
                     if let Some(transformer) =
                         store.refv(&object.id, "PowerTransformerEnd.PowerTransformer")
                     {
@@ -3009,7 +3009,7 @@ fn build_detailed_connectivity(
                 }
                 retain_regulating_control_properties(store, &object.id, &mut properties);
                 if object.class.ends_with("GeneratingUnit") {
-                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
+                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.to_string());
                     for property in [
                         "IdentifiedObject.description",
                         "GeneratingUnit.initialP",

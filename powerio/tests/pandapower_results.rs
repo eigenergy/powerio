@@ -1,7 +1,7 @@
 use powerio::{Destination, EmittedOutput, PioModule, PioValue, Source};
 use serde_json::{Value, json};
 
-fn frame(columns: &[&str], index: Value, data: Value) -> Value {
+fn frame(columns: &[&str], index: &Value, data: &Value) -> Value {
     json!({
         "_module": "pandas.core.frame", "_class": "DataFrame", "orient": "split",
         "_object": json!({"columns": columns, "index": index, "data": data}).to_string(),
@@ -12,12 +12,12 @@ fn frame(columns: &[&str], index: Value, data: Value) -> Value {
 fn document() -> Value {
     json!({"_module": "pandapower.auxiliary", "_class": "pandapowerNet", "_object": {
         "sn_mva": 100.0, "f_hz": 50.0,
-        "bus": frame(&["vn_kv", "in_service"], json!([42, 7, 19]), json!([
+        "bus": frame(&["vn_kv", "in_service"], &json!([42, 7, 19]), &json!([
             [110.0, true], [110.0, true], [110.0, false]
         ])),
         "gen": frame(&["bus", "vm_pu", "p_mw", "max_q_mvar", "min_q_mvar"],
-            json!([4]), json!([[42, 1.05, 10.0, 50.0, -50.0]])),
-        "res_bus": frame(&["vm_pu", "va_degree"], json!([19, 7, 42]), json!([
+            &json!([4]), &json!([[42, 1.05, 10.0, 50.0, -50.0]])),
+        "res_bus": frame(&["vm_pu", "va_degree"], &json!([19, 7, 42]), &json!([
             [0.0, 0.0], [1.02, -3.5], [0.98, 2.5]
         ]))
     }})
@@ -102,8 +102,8 @@ fn unmapped_bus_result_fields_remain_diagnosed_after_ir() {
     let mut input = document();
     input["_object"]["res_bus"] = frame(
         &["vm_pu", "va_degree", "p_mw", "q_mvar"],
-        json!([42]),
-        json!([[0.98, 2.5, -10.0, 3.0]]),
+        &json!([42]),
+        &json!([[0.98, 2.5, -10.0, 3.0]]),
     );
     let module = through_ir(&parse(input.to_string().into_bytes()));
     let emitted = powerio::emit(

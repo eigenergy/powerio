@@ -12,6 +12,9 @@ action.
 
 **Interoperability**
 
+- Share repeated CGMES class and property names during parsing through a bounded
+  per-document cache, reducing temporary allocations while keeping uncommon
+  and long extension names accepted. The cache changes no public model or API.
 - Preserve pandapower native bus voltage magnitudes and angles through IR and
   canonical output, indexed independently of generator voltage targets.
   Report unavailable states and unsupported result columns without claiming
