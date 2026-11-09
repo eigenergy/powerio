@@ -51,3 +51,21 @@ for kind, data in records.items():
     else:
         raise AssertionError(f'{kind}: old reader accepted extended document')
 print(f'{powerio.__version__}: {len(records)} ordinary containers accepted; unguarded field loss reproduced; all capability-guarded containers rejected')
+
+# New coupled structural types must also refuse without the capability marker.
+for kind, data in {
+    'powerio.AcDcOpfInstance': {'network': n, 'profile': 'power_models_ac_dc0101_acp_vsc_v1'},
+    'powerio.AcDcOpfSolution': {'instance': {'network': n, 'profile': 'power_models_ac_dc0101_acp_vsc_v1'}, 'point': [], 'objective': 0.0, 'termination': {'kind': 'converged'}, 'producer': None},
+}.items():
+    for guarded in [False, True]:
+        candidate = copy.deepcopy(doc)
+        candidate['value'] = {'type': kind, 'data': data}
+        if guarded:
+            candidate['required_capabilities'] = ['balanced-acdc-equivalent-v1']
+        try:
+            powerio.deserialize(io.StringIO(json.dumps(candidate)))
+        except powerio.PowerIOError as error:
+            assert 'unknown variant' in str(error) or (guarded and 'required_capabilities' in str(error)), error
+        else:
+            raise AssertionError(f'{kind}: frozen reader accepted coupled intent/result')
+print('Coupled instance and result rejected with and without the capability marker')

@@ -53,7 +53,8 @@ loss coefficient. Those are explicit calculation preparation policies.
 ## Capability and persistence
 
 Typed Rust import, editing, IR and fresh export are supported. Coupled PF/OPF
-and the full converter station preparation are subsequent work. Existing
+solvers remain external to PowerIO; the explicit OPF interface below supplies
+full coupled preparation. Coupled PF interfaces remain subsequent work. Existing
 PF/OPF constructors, normalization and AC-only numerical preparation refuse
 nonempty equivalent equipment before generator-only supply filtering.
 Automatic island-reference assignment reports an error and leaves it unchanged.
@@ -99,3 +100,47 @@ OPF state differences are recorded; multiple optima need not have identical
 dispatch. These checks qualify the importer/exporter, not a PowerIO or Tellegen
 coupled solver. The native-equation and parameter-variation work is recorded in
 `evals/validation/acdc/FOLLOW_UP.md` for mathematical-model development.
+
+## Coupled OPF interface
+
+`AcDcOpfInstance::from_network(network, profile)` requires the explicit
+`AcDcOpfProfile::PowerModelsAcDc0101AcpVscV1` selection. It means ACP VSC,
+network generator cost, all operating limits, and free generator/converter
+OPF dispatch. Retained PF controls and targets do not constrain that dispatch.
+The source network remains immutable through the instance. The initial point
+is a numerical guess and may violate the equations.
+
+`AcDcOperatingPoint` contains a complete set of `AcDcValue` records keyed by
+`AcDcQuantity` and stable component identity. Powers use MW/MVAr, angles radians,
+voltages pu in source coordinates, and valve current pu on the station AC base.
+Powers enter equipment terminals; generator powers are production. Valve power
+enters the valve from the reactor. Constructors refuse incomplete, unknown,
+duplicate and nonfinite coordinates. Row order is not identity.
+
+`build_ac_dc_opf_preparation` in `powerio-matrix` supplies the AC arrays and all
+DC/station blocks. Consumers must assemble every block. Preparation scales
+powers to the common MVA base; source declarations stay unchanged. It records
+both declared and effective Imax, converter and PCC bases, directional loss
+coefficients, and effective bounds. The pinned reference policy uses LossCinv
+in both directions, widens Imax to the P/Q capability box radius, and applies
+its auxiliary port/voltage bounds. Loss scaling is
+`a=LossA/S`, `b=LossB/(sqrt(3)*V)`, `c=LossCinv*S/(3*V^2)` with the converter's
+AC voltage base. This is compatibility with PowerModelsACDC 0.10.1 commit
+`9ada4082ac087aed649f48fb5f977680b0fe06c7`, not physical rebasing to the PCC.
+
+`AcDcOpfSolution` shares its owning instance and contains the typed primal point,
+objective, termination and producer. Construction validates shape and finite
+values, not equation feasibility. The producer must validate its solution;
+`Converged` does not claim global optimality. Solver tapes and unqualified duals
+are absent. Serialize these through `PioValue::AcDcOpfInstance` and
+`PioValue::AcDcOpfSolution`: both are new IR 2 structural types, require the
+AC/DC capability, and reject unknown profiles/fields. Published schema snapshots
+are unchanged. Existing AC-only constructors retain their rejection guards.
+
+This initial interface excludes normalized/base-mismatched data, LCC, mixed
+physical/aggregate DC, AC self loops, storage and three-winding transformers.
+Preparation qualifies polynomial generator costs; piecewise costs need a
+separate auxiliary-coordinate qualification. General bindings, collection
+variants, native coupled PF, additional controls, physical projections and the
+natural PowerModelsACDC JSON variant remain future work. No new C ABI symbols
+or Python/Julia calculation modes are introduced.

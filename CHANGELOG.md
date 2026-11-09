@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add explicit coupled AC/DC OPF intent, typed operating points and stored primal
+  results, with PowerModelsACDC reference-compatible numerical preparation.
+
 - Read and fresh-write the PowerModelsACDC MATPOWER-extension variant as typed AC/DC equipment,
   with required-capability IR protection and explicit refusal by unsupported calculations.
 

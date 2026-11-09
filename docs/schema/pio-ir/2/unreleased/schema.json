@@ -463,6 +463,252 @@
       ],
       "type": "object"
     },
+    "AcDcOpfInstance": {
+      "additionalProperties": false,
+      "description": "Coupled intent has its own structural type: legacy AC consumers cannot\ndeserialize it as an AC-only instance, even if capabilities are stripped.",
+      "properties": {
+        "initial_point": {
+          "items": {
+            "$ref": "#/$defs/AcDcValue"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "network": {
+          "$ref": "#/$defs/BalancedNetwork"
+        },
+        "profile": {
+          "$ref": "#/$defs/AcDcOpfProfile"
+        }
+      },
+      "required": [
+        "network",
+        "profile"
+      ],
+      "type": "object"
+    },
+    "AcDcOpfProfile": {
+      "description": "An explicit, versioned reference convention; there is no implicit default.",
+      "oneOf": [
+        {
+          "const": "power_models_ac_dc0101_acp_vsc_v1",
+          "description": "PowerModelsACDC 0.10.1 at 9ada4082: source pu coordinates, inverter\nquadratic loss in both directions, repaired Imax and auxiliary bounds.",
+          "type": "string"
+        }
+      ]
+    },
+    "AcDcOpfSolution": {
+      "additionalProperties": false,
+      "properties": {
+        "instance": {
+          "$ref": "#/$defs/AcDcOpfInstance"
+        },
+        "objective": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "point": {
+          "items": {
+            "$ref": "#/$defs/AcDcValue"
+          },
+          "type": "array"
+        },
+        "producer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "termination": {
+          "$ref": "#/$defs/Termination"
+        }
+      },
+      "required": [
+        "instance",
+        "point",
+        "objective",
+        "termination"
+      ],
+      "type": "object"
+    },
+    "AcDcQuantity": {
+      "description": "Electrical quantities, independent of solver variable names and ordering.\nBus identities are decimal BusId; all other identities are persistent UIDs.\nPowers are positive into equipment terminals, except generator production.\nValve power is positive from the AC reactor into the valve; DC power enters\nthe station from the DC bus. Current pu uses the station AC voltage base.",
+      "oneOf": [
+        {
+          "const": "ac_voltage_magnitude",
+          "description": "ac_bus quantity, pu.",
+          "type": "string"
+        },
+        {
+          "const": "ac_voltage_angle",
+          "description": "ac_bus quantity, rad.",
+          "type": "string"
+        },
+        {
+          "const": "generator_active_power",
+          "description": "generator quantity, MW.",
+          "type": "string"
+        },
+        {
+          "const": "generator_reactive_power",
+          "description": "generator quantity, MVAr.",
+          "type": "string"
+        },
+        {
+          "const": "ac_branch_active_power_from",
+          "description": "ac_branch quantity, MW.",
+          "type": "string"
+        },
+        {
+          "const": "ac_branch_reactive_power_from",
+          "description": "ac_branch quantity, MVAr.",
+          "type": "string"
+        },
+        {
+          "const": "ac_branch_active_power_to",
+          "description": "ac_branch quantity, MW.",
+          "type": "string"
+        },
+        {
+          "const": "ac_branch_reactive_power_to",
+          "description": "ac_branch quantity, MVAr.",
+          "type": "string"
+        },
+        {
+          "const": "dc_voltage_magnitude",
+          "description": "dc_bus quantity, pu.",
+          "type": "string"
+        },
+        {
+          "const": "dc_branch_active_power_from",
+          "description": "dc_branch quantity, MW.",
+          "type": "string"
+        },
+        {
+          "const": "dc_branch_active_power_to",
+          "description": "dc_branch quantity, MW.",
+          "type": "string"
+        },
+        {
+          "const": "pcc_active_power",
+          "description": "station quantity, MW.",
+          "type": "string"
+        },
+        {
+          "const": "pcc_reactive_power",
+          "description": "station quantity, MVAr.",
+          "type": "string"
+        },
+        {
+          "const": "transformer_active_power_to",
+          "description": "station quantity, MW.",
+          "type": "string"
+        },
+        {
+          "const": "transformer_reactive_power_to",
+          "description": "station quantity, MVAr.",
+          "type": "string"
+        },
+        {
+          "const": "reactor_active_power_from",
+          "description": "station quantity, MW.",
+          "type": "string"
+        },
+        {
+          "const": "reactor_reactive_power_from",
+          "description": "station quantity, MVAr.",
+          "type": "string"
+        },
+        {
+          "const": "valve_active_power",
+          "description": "station quantity, MW.",
+          "type": "string"
+        },
+        {
+          "const": "valve_reactive_power",
+          "description": "station quantity, MVAr.",
+          "type": "string"
+        },
+        {
+          "const": "station_dc_active_power",
+          "description": "station quantity, MW.",
+          "type": "string"
+        },
+        {
+          "const": "valve_current_magnitude",
+          "description": "station quantity, pu.",
+          "type": "string"
+        },
+        {
+          "const": "filter_voltage_magnitude",
+          "description": "station quantity, pu.",
+          "type": "string"
+        },
+        {
+          "const": "filter_voltage_angle",
+          "description": "station quantity, rad.",
+          "type": "string"
+        },
+        {
+          "const": "valve_voltage_magnitude",
+          "description": "station quantity, pu.",
+          "type": "string"
+        },
+        {
+          "const": "valve_voltage_angle",
+          "description": "station quantity, rad.",
+          "type": "string"
+        }
+      ]
+    },
+    "AcDcValue": {
+      "additionalProperties": false,
+      "description": "One identity-keyed scalar, never a solver row or column.",
+      "properties": {
+        "identity": {
+          "type": "string"
+        },
+        "quantity": {
+          "$ref": "#/$defs/AcDcQuantity"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "quantity",
+        "identity",
+        "value"
+      ],
+      "type": "object"
+    },
     "AcOpfInstance": {
       "additionalProperties": false,
       "properties": {
@@ -16577,6 +16823,40 @@
             },
             "type": {
               "const": "powerio.AcOpfInstance",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/AcDcOpfInstance"
+            },
+            "type": {
+              "const": "powerio.AcDcOpfInstance",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/AcDcOpfSolution"
+            },
+            "type": {
+              "const": "powerio.AcDcOpfSolution",
               "type": "string"
             }
           },

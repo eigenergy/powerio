@@ -41,6 +41,8 @@ pub mod codes {
         BUILD_INSTANCE_VOLTAGE_CONTROL_CONFLICT = "BUILD.INSTANCE.VOLTAGE_CONTROL_CONFLICT", Error,
             "in service generators at one bus state conflicting voltage setpoints",
             category = Data;
+        BUILD_ACDC_PROFILE_INVALID = "BUILD.ACDC.PROFILE_INVALID", Error,
+            "the coupled AC/DC instance or point violates the selected profile", category = Data;
         BUILD_INSTANCE_SHAPE_MISMATCH = "BUILD.INSTANCE.SHAPE_MISMATCH", Error,
             "a calculation input disagrees with the network's element tables",
             category = Data;
