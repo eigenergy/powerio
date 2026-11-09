@@ -4,6 +4,7 @@ import io
 import json
 
 import pytest
+
 import powerio
 
 
