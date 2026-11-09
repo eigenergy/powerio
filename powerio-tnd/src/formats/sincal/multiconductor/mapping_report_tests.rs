@@ -3,7 +3,7 @@ use powerio_core::Source;
 
 #[test]
 fn report_uses_production_mapping_and_keeps_input_bytes_unchanged() {
-    let db = native("");
+    let mut db = native("");
     let before = db.connection.serialize("main").unwrap().to_vec();
     let report = db.mapping_report().unwrap();
     assert!(report.all_components_map());
@@ -139,7 +139,7 @@ fn known_machine_ports_allow_audit_but_never_a_partial_network() {
     ] {
         // Move the source port to its own native node so no other equipment
         // can accidentally supply the machine's phase declaration.
-        let db = native(&format!(
+        let mut db = native(&format!(
             "INSERT INTO Node SELECT * FROM Node WHERE Node_ID=10;
              UPDATE Node SET Node_ID=90 WHERE rowid=(SELECT MAX(rowid) FROM Node);
              UPDATE Element SET Type='SynchronousMachine' WHERE Element_ID=32;
