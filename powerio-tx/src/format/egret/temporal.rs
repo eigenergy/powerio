@@ -107,33 +107,40 @@ fn varying_field(section: &str, attribute: &str) -> bool {
     }
 }
 
-/// Combine complete scalar statements. Only explicitly supported element
-/// attributes may vary; changing identities, topology, or an unmodeled field
-/// is refused rather than flattened to the first point.
-fn combine(values: &[&Value], path: &mut Vec<String>) -> Result<Value> {
-    let first = values[0];
-    if values.iter().all(|value| *value == first) {
-        return Ok(first.clone());
+/// Append one scalar statement without retaining a full document per point.
+/// Static fields are checked on every point; only supported varying fields grow.
+fn append_point(
+    output: &mut Value,
+    next: &Value,
+    point: usize,
+    path: &mut Vec<String>,
+) -> Result<()> {
+    if path.len() == 4 && path[0] == "elements" && varying_field(&path[1], &path[3]) {
+        if let Some(values) = output.get_mut("values").and_then(Value::as_array_mut) {
+            values.push(next.clone());
+        } else if output != next {
+            let mut values = vec![output.clone(); point];
+            values.push(next.clone());
+            *output = json!({"data_type": "time_series", "values": values});
+        }
+        return Ok(());
+    }
+    if output == next {
+        return Ok(());
     }
     if path.len() == 4 && path[0] == "elements" {
-        if varying_field(&path[1], &path[3]) {
-            return Ok(json!({"data_type": "time_series", "values": values}));
-        }
         return Err(refused(format!(
             "{} varies outside the supported electrical time-series profile",
             path.join(".")
         )));
     }
-    let maps = values
-        .iter()
-        .map(|value| {
-            value
-                .as_object()
-                .ok_or_else(|| refused(format!("{} must remain static", path.join("."))))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let keys: BTreeSet<_> = maps.iter().flat_map(|map| map.keys()).collect();
-    let mut out = Map::new();
+    let out = output
+        .as_object_mut()
+        .ok_or_else(|| refused(format!("{} must remain static", path.join("."))))?;
+    let map = next
+        .as_object()
+        .ok_or_else(|| refused(format!("{} must remain static", path.join("."))))?;
+    let keys: BTreeSet<_> = out.keys().chain(map.keys()).cloned().collect();
     for key in keys {
         let missing_rating = path.len() == 3
             && path[0] == "elements"
@@ -143,26 +150,22 @@ fn combine(values: &[&Value], path: &mut Vec<String>) -> Result<Value> {
                 "rating_long_term" | "rating_short_term" | "rating_emergency"
             );
         let unlimited = json!(0.0);
-        let fields = maps
-            .iter()
-            .map(|map| {
-                map.get(key)
-                    .or(missing_rating.then_some(&unlimited))
-                    .ok_or_else(|| {
-                        refused(format!(
-                            "{}.{} is missing at one or more time points",
-                            path.join("."),
-                            key
-                        ))
-                    })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        path.push(key.clone());
-        let value = combine(&fields, path)?;
+        if missing_rating {
+            out.entry(key.clone()).or_insert_with(|| unlimited.clone());
+        }
+        let value = map.get(&key).or(missing_rating.then_some(&unlimited));
+        let Some((prior, value)) = out.get_mut(&key).zip(value) else {
+            return Err(refused(format!(
+                "{}.{} is missing at one or more time points",
+                path.join("."),
+                key
+            )));
+        };
+        path.push(key);
+        append_point(prior, value, point, path)?;
         path.pop();
-        out.insert(key.clone(), value);
     }
-    Ok(Value::Object(out))
+    Ok(())
 }
 
 fn write(series: &TimeSeries<BalancedNetwork>) -> Result<super::super::TextEmission> {
@@ -187,19 +190,33 @@ fn write(series: &TimeSeries<BalancedNetwork>) -> Result<super::super::TextEmiss
             "Egret's electrical profile requires one common time-period duration",
         ));
     }
-    let mut warnings = Diagnostics::new();
-    let documents = series
-        .values()
-        .iter()
-        .map(|network| {
-            network.validate()?;
-            Ok(Value::Object(write_document(network, &mut warnings)))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let mut root = combine(&documents.iter().collect::<Vec<_>>(), &mut Vec::new())?
-        .as_object()
-        .expect("scalar documents are objects")
-        .clone();
+    let mut warnings = Vec::new();
+    let mut document = None;
+    for (point, network) in series.values().iter().enumerate() {
+        network.validate()?;
+        let mut findings = Diagnostics::new();
+        let scalar = Value::Object(write_document(network, &mut findings));
+        super::super::warn_nonfinite_json(&F, &scalar, &mut findings);
+        let mut checks = super::super::TextEmission::new(String::new(), findings);
+        super::super::append_emit_warnings(
+            network,
+            super::super::TargetFormat::EgretJson,
+            &mut checks,
+        );
+        for finding in checks.diagnostics {
+            if !warnings.contains(&finding) {
+                warnings.push(finding);
+            }
+        }
+        if let Some(output) = &mut document {
+            append_point(output, &scalar, point, &mut Vec::new())?;
+        } else {
+            document = Some(scalar);
+        }
+    }
+    let Value::Object(mut root) = document.expect("series is nonempty") else {
+        unreachable!("scalar writer states an object");
+    };
     let system = root
         .get_mut("system")
         .and_then(Value::as_object_mut)
@@ -216,7 +233,7 @@ fn write(series: &TimeSeries<BalancedNetwork>) -> Result<super::super::TextEmiss
             ));
         }
     }
-    Ok(finish(&F, root, warnings))
+    Ok(finish(&F, root, warnings.into()))
 }
 
 /// Internal facade bridge for canonical Egret electrical time-series output.

@@ -6,7 +6,7 @@ name: Docs
 # crates (powerio, powerio-core, powerio-matrix, powerio-prob, powerio-dist,
 # retired crates) once they reach crates.io.
 # PRs build the docs too (so a broken intra-doc link fails review, not main),
-# but only push to main / dispatch deploys to Pages; see the `deploy` gate.
+# but only main pushes / dispatches deploy to Pages; see the `deploy` gate.
 on:
   push:
     branches: [ "main" ]
@@ -66,6 +66,8 @@ jobs:
         python -m pip install '.[all]' pdoc
         python -m pdoc powerio -o target/doc/python
     - name: Publish conversion evidence
+      # PRs already run the dedicated Conversion Matrix workflow.
+      if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
       env:
         POWERIO_CONVERSION_MATRIX_JSON: ${{ github.workspace }}/target/conversion-matrix.json
         POWERIO_MATRIX_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -252,8 +254,8 @@ jobs:
 
   deploy:
     needs: build
-    # PR runs build to catch doc breakage but never publish; only main / dispatch deploy.
-    if: github.event_name != 'pull_request'
+    # PRs and dispatches on other branches build without replacing main's docs.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

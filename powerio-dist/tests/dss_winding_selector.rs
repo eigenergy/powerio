@@ -107,3 +107,23 @@ fn arrays_follow_the_current_winding_count_after_an_edit() {
         assert_eq!(neutrals, [-1.0, -1.0, 0.0], "{class}");
     }
 }
+
+#[test]
+fn changing_winding_count_resets_the_active_selector() {
+    for class in ["transformer", "xfmrcode"] {
+        for edit in [" ".to_owned(), format!("\nedit {class}.t ")] {
+            let mut script = format!(
+                "new circuit.c\nnew {class}.t windings=3 kvs=[115 12.47 4.16]{edit}windings=2 kv=13.8\n"
+            );
+            if class == "xfmrcode" {
+                script.push_str("new transformer.t xfmrcode=t buses=[a b]\n");
+            } else {
+                script.push_str("edit transformer.t buses=[a b]\n");
+            }
+            let t = transformer(&script);
+            assert_eq!(t.windings.len(), 2);
+            assert_eq!(t.windings[0].v_ref, 13_800.0, "{class}");
+            assert_eq!(t.windings[1].v_ref, 12_470.0, "{class}");
+        }
+    }
+}

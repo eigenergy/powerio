@@ -1185,14 +1185,19 @@ pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Re
         }
         TargetFormat::Ucte => ucte::write_ucte(net)?,
     };
-    conv.diagnostics.extend(sincal_source_omitted(net));
-    warn_normalized_tap(net, format, &mut conv);
-    warn_missing_reference(net, format, &mut conv);
-    warn_dropped_frequency(net, format, &mut conv);
-    warn_dropped_locations(net, format, &mut conv);
-    warn_dropped_transformer_charging(net, format, &mut conv);
-    warn_dropped_exchange_context(net, format, &mut conv);
+    append_emit_warnings(net, format, &mut conv);
     Ok(conv)
+}
+
+/// Shared post-writer checks for scalar and time-series canonical emission.
+fn append_emit_warnings(net: &BalancedNetwork, format: TargetFormat, conv: &mut TextEmission) {
+    conv.diagnostics.extend(sincal_source_omitted(net));
+    warn_normalized_tap(net, format, conv);
+    warn_missing_reference(net, format, conv);
+    warn_dropped_frequency(net, format, conv);
+    warn_dropped_locations(net, format, conv);
+    warn_dropped_transformer_charging(net, format, conv);
+    warn_dropped_exchange_context(net, format, conv);
 }
 
 /// Emit a parsed module to `format` through a destination: the one output
@@ -1508,7 +1513,7 @@ fn warn_psse_downgrade(
 
 /// Warn when a non-default system frequency is emitted to a format with no frequency
 /// field. PSS/E (`BASFRQ`), pandapower (`f_hz`) and the PowerIO PowerModels
-/// extension (`base_frequency`) carry it; MATPOWER, egret and PowerWorld do not,
+/// and Egret extensions (`base_frequency`) carry it; MATPOWER and PowerWorld do not,
 /// so a 50 Hz case
 /// would parse again as the 60 Hz default. Report the loss instead.
 fn warn_dropped_frequency(net: &BalancedNetwork, format: TargetFormat, conv: &mut TextEmission) {
@@ -1553,8 +1558,8 @@ fn warn_dropped_frequency(net: &BalancedNetwork, format: TargetFormat, conv: &mu
 /// Warn when the case carries bus locations and the target has no geometry
 /// concept. PowerWorld aux (`Latitude:1`/`Longitude:1`) and pandapower
 /// (`geo`) carry them, and PyPSA folder emission (`x`/`y`) has its own
-/// path; MATPOWER, PSS/E, PowerModels, egret, PSLF, and Surge have nowhere to
-/// put them, matching the `base_frequency` behavior. `powerio geo extract`
+/// path. PowerModels and Egret retain PowerIO geographic extensions. MATPOWER,
+/// PSS/E, PSLF and Surge have no matching location fields. `powerio geo extract`
 /// emits the sidecar as the escape hatch.
 fn warn_dropped_locations(net: &BalancedNetwork, format: TargetFormat, conv: &mut TextEmission) {
     // PowerModels and egret JSON carry them as PowerIO extension keys.
@@ -1649,6 +1654,26 @@ fn warn_dropped_exchange_context(
         }
         _ => exchange_context_loss(net, format.label()),
     };
+    if format == TargetFormat::EgretJson {
+        let omitted_uids = net
+            .switches()
+            .iter()
+            .map(|v| v.uid.as_deref())
+            .chain(net.storage().iter().map(|v| v.uid.as_deref()))
+            .chain(net.transformers_3w().iter().map(|v| v.uid.as_deref()))
+            .chain(
+                net.static_var_compensators()
+                    .iter()
+                    .map(|v| v.uid.as_deref()),
+            )
+            .filter(|uid| uid.is_some() && !net.uid_is_generated(*uid))
+            .count();
+        if omitted_uids > 0 {
+            conv.push(&format.emit_family().field_dropped, format!(
+                "Egret omits {omitted_uids} source-assigned component identity value(s) on switches, storage, static var compensators or three-winding transformers; retained detailed connectivity may still reference these absent electrical rows"
+            ));
+        }
+    }
     if let Some(message) = message {
         conv.push(&format.emit_family().field_dropped, message);
     }
@@ -2246,19 +2271,27 @@ pub(crate) fn finish(
     mut warnings: Diagnostics,
 ) -> TextEmission {
     let value = Value::Object(root);
+    warn_nonfinite_json(family, &value, &mut warnings);
+    let text = serde_json::to_string_pretty(&value).expect("a serde_json::Value always serializes");
+    TextEmission::new(text, warnings)
+}
+
+/// Check each scalar before a temporal writer moves fields into value arrays.
+fn warn_nonfinite_json(family: &'static EmitFamily, value: &Value, warnings: &mut Diagnostics) {
     let mut nulls = BTreeSet::new();
-    collect_null_keys(&value, &mut nulls);
+    collect_null_keys(value, &mut nulls);
     if !nulls.is_empty() {
-        warnings.push(
+        let finding = Diagnostic::of(
             &family.not_a_number,
             format!(
                 "non-finite numeric values written as JSON null in field(s): {}",
                 nulls.into_iter().collect::<Vec<_>>().join(", ")
             ),
         );
+        if !warnings.records().contains(&finding) {
+            warnings.record(finding);
+        }
     }
-    let text = serde_json::to_string_pretty(&value).expect("a serde_json::Value always serializes");
-    TextEmission::new(text, warnings)
 }
 
 /// Collect the names of object keys whose value is `null`, anywhere in the tree.
