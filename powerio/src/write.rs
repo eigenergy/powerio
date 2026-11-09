@@ -1236,6 +1236,28 @@ fn emit_dynamic(
     }
 
     match &module.value() {
+        PioValue::TimeSeries(series)
+            if powerio_tx::format::parse_target_format(format)
+                == Some(powerio_tx::TargetFormat::EgretJson) =>
+        {
+            let mut diagnostics = Vec::new();
+            let networks = series
+                .iter()
+                .map(|(_, value)| match value {
+                    PioValue::BalancedNetwork(network) => Ok(network.clone()),
+                    PioValue::BalancedOperatingPoint(point) => {
+                        let (network, findings) =
+                            network_with_balanced_operating_point(point, format);
+                        diagnostics.extend(findings);
+                        Ok(network)
+                    }
+                    _ => Err(unsupported_type(module, format)),
+                })
+                .collect::<Result<Vec<_>, Error>>()?;
+            let typed = powerio_core::TimeSeries::new(series.time_points().to_vec(), networks)?;
+            powerio_tx::format::__emit_egret_time_series(&typed, destination)
+                .map(|result| result.__with_diagnostics(diagnostics))
+        }
         PioValue::BalancedNetwork(_)
         | PioValue::MulticonductorNetwork(_)
         | PioValue::BalancedOperatingPoint(_)

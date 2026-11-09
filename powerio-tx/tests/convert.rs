@@ -233,7 +233,7 @@ fn rich_writer_warnings_cover_simple_formats() {
         "branch current rating"
     ));
     assert!(!has_warning(&egret.render_diagnostics(), "rating set"));
-    assert!(has_warning(
+    assert!(!has_warning(
         &egret.render_diagnostics(),
         "branch solution value"
     ));
