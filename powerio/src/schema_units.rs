@@ -6,6 +6,54 @@
 
 use serde_json::{Value, json};
 
+/// The stored sign of each signed electrical field.
+const SIGN_CONVENTIONS: &[(&str, &str, &str)] = &[
+    ("Generator", "pg", "positive injection into the network"),
+    ("Generator", "qg", "positive injection into the network"),
+    ("Load", "p", "positive consumption from the network"),
+    ("Load", "q", "positive consumption from the network"),
+    (
+        "Storage",
+        "ps",
+        "positive charging consumption from the network",
+    ),
+    ("Storage", "qs", "positive consumption from the network"),
+    ("Shunt", "g", "active consumption at unit voltage magnitude"),
+    ("Shunt", "b", "reactive injection at unit voltage magnitude"),
+    (
+        "Branch",
+        "b",
+        "total charging susceptance; charging overrides its terminal split",
+    ),
+    ("Hvdc", "qf", "positive injection into the from bus"),
+    ("Hvdc", "qt", "positive injection into the to bus"),
+    (
+        "HvdcConverter",
+        "reactive_power_setpoint_mvar",
+        "positive injection into the AC bus (PowSybl vscConverterStation)",
+    ),
+    (
+        "VoltageSourceConverter",
+        "reactive_power_setpoint_mvar",
+        "positive withdrawal from the AC bus at the point of common coupling (load convention; PowSybl voltageSourceConverter, CGMES VsConverter.targetQpcc)",
+    ),
+    (
+        "VoltageSourceConverter",
+        "active_power_at_pcc_mw",
+        "positive withdrawal from the AC bus at the point of common coupling (load convention)",
+    ),
+    (
+        "VoltageSourceConverter",
+        "reactive_power_at_pcc_mvar",
+        "positive withdrawal from the AC bus at the point of common coupling (load convention)",
+    ),
+    (
+        "VoltageSourceConverter",
+        "target_active_power_mw",
+        "positive withdrawal from the AC bus at the point of common coupling (load convention)",
+    ),
+];
+
 pub(crate) fn annotate(schema: &mut schemars::Schema) {
     let Some(definitions) = schema
         .as_object_mut()
@@ -67,52 +115,7 @@ pub(crate) fn annotate(schema: &mut schemars::Schema) {
             }
         }
     }
-    for (kind, field, meaning) in [
-        ("Generator", "pg", "positive injection into the network"),
-        ("Generator", "qg", "positive injection into the network"),
-        ("Load", "p", "positive consumption from the network"),
-        ("Load", "q", "positive consumption from the network"),
-        (
-            "Storage",
-            "ps",
-            "positive charging consumption from the network",
-        ),
-        ("Storage", "qs", "positive consumption from the network"),
-        ("Shunt", "g", "active consumption at unit voltage magnitude"),
-        ("Shunt", "b", "reactive injection at unit voltage magnitude"),
-        (
-            "Branch",
-            "b",
-            "total charging susceptance; charging overrides its terminal split",
-        ),
-        ("Hvdc", "qf", "positive injection into the from bus"),
-        ("Hvdc", "qt", "positive injection into the to bus"),
-        (
-            "HvdcConverter",
-            "reactive_power_setpoint_mvar",
-            "positive injection into the AC bus (PowSybl vscConverterStation)",
-        ),
-        (
-            "VoltageSourceConverter",
-            "reactive_power_setpoint_mvar",
-            "positive withdrawal from the AC bus at the point of common coupling (load convention; PowSybl voltageSourceConverter, CGMES VsConverter.targetQpcc)",
-        ),
-        (
-            "VoltageSourceConverter",
-            "active_power_at_pcc_mw",
-            "positive withdrawal from the AC bus at the point of common coupling (load convention)",
-        ),
-        (
-            "VoltageSourceConverter",
-            "reactive_power_at_pcc_mvar",
-            "positive withdrawal from the AC bus at the point of common coupling (load convention)",
-        ),
-        (
-            "VoltageSourceConverter",
-            "target_active_power_mw",
-            "positive withdrawal from the AC bus at the point of common coupling (load convention)",
-        ),
-    ] {
+    for &(kind, field, meaning) in SIGN_CONVENTIONS {
         definitions[kind]["properties"][field]["x-sign-convention"] = json!(meaning);
     }
     definitions["Branch"]["properties"]["tap"]["x-zero-means"] = json!(1.0);
