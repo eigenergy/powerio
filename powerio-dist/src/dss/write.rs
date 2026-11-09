@@ -4024,8 +4024,8 @@ mod tests {
             "New Generator.gen bus1=lv.1.3.0 ",
             "New Generator.fixed_ibr bus1=lv.1.3.0 ",
             "New PVSystem.pv_ibr bus1=lv.1.3.0 ",
-            "New Line.sw1 bus1=lv.1.3.0 bus2=_pio_switch_sw1.1.2.0 phases=3 switch=y",
-            "New Line._pio_switch_sw1 bus1=_pio_switch_sw1.1.2.0 bus2=lv.1.3.0 phases=3",
+            "New Line.sw1 bus1=lv.1.3.0 bus2=_pio_switch_sw1.1.3.0 phases=3 switch=y",
+            "New Line._pio_switch_sw1 bus1=_pio_switch_sw1.1.3.0 bus2=lv.1.3.0 phases=3",
             "New Line.l1 bus1=lv.1.0.3 bus2=lv.1.0.3 phases=3 linecode=lc ",
         ] {
             assert!(
