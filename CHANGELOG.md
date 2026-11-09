@@ -43,6 +43,10 @@
 
 **Conversion fidelity**
 
+- CGMES ratings consistently prefer the active value over the equipment
+  default. Two-winding transformer current limits use the voltage of the
+  terminal carrying each limit, including the low-voltage winding. A differing
+  equipment default that canonical output cannot retain is diagnosed.
 - Canonically emit Egret electrical time series through IR, with labels, optional
   durations and native branch results; reject unsupported variation and invalid
   time axes. C and Julia expose typed time metadata without serializing networks.
