@@ -25,6 +25,13 @@
   explicitly declared and inherited emergency ratings (#762). PowerIO
   intentionally treats these engine defaults as void, which differs from
   PowerModelsDistribution's parser behaviour.
+- OpenDSS output replaces the characters OpenDSS cannot carry in a name
+  (whitespace, `,`, `=`, quotes, brackets, `!`, `//`, and a `.` in a bus
+  id) with `_` in element, line code, bus, and circuit names and in every
+  typed reference to them, and reports each replacement. A network with free
+  text names, such as one read from CIM, used to be refused when a bus id
+  held such a character and otherwise written verbatim into a deck that
+  did not parse back (#770).
 
 ## 0.11.9
 
