@@ -4673,6 +4673,12 @@ fn read_tap_changers(mapper: &mut Mapper<'_>) -> Result<Vec<TapChanger>> {
                 .unwrap_or(f64::from(low))
                 .round() as i32;
             let solved_tap_position = sv_tap_step(store, &tap)?.map(|value| value.round() as i32);
+            let active_position = if store.f(&tap, "TapChanger.step")?.is_some() {
+                tap_position
+            } else {
+                solved_tap_position.unwrap_or(neutral_tap_position.unwrap_or(0))
+            };
+            warn_active_tap_deviations(&tap, active_position, &steps, mapper.warnings);
             result.push(TapChanger {
                 component: Some(component_id("tap_changer", &tap)?),
                 transformer: component_id("branch", transformer)?,
@@ -4713,6 +4719,28 @@ fn read_tap_changers(mapper: &mut Mapper<'_>) -> Result<Vec<TapChanger>> {
         }
     }
     Ok(result)
+}
+
+fn warn_active_tap_deviations(
+    tap: &str,
+    position: i32,
+    steps: &[TapChangerStep],
+    warnings: &mut CgmesDiagnostics,
+) {
+    let Some(step) = steps.iter().find(|step| step.position == position) else {
+        return;
+    };
+    let deviations = [
+        step.resistance_deviation_percent,
+        step.reactance_deviation_percent,
+        step.conductance_deviation_percent,
+        step.susceptance_deviation_percent,
+    ];
+    if deviations.iter().any(|value| *value != 0.0) {
+        warnings.push_as(&codes::READ_CGMES_VALUE_APPROXIMATED, format!(
+            "tap changer `{tap}` active step {position} has r/x/g/b percentage deviations {deviations:?}; the flat calculation projection omits these deviations; the full step remains in detailed connectivity"
+        ));
+    }
 }
 
 fn normalized_load_coefficients(
@@ -5506,28 +5534,12 @@ fn read_two_winding_transformer(
 
         let u1 = transformer_end_rated_kv(mapper, transformer_id, end1, from)?;
         let u2 = transformer_end_rated_kv(mapper, transformer_id, end2, to)?;
-        let pu = |end: &str, key: &str, u: f64| -> Result<f64> {
-            let u = if u > 0.0 { u } else { 1.0 };
-            Ok(store.f(end, key)?.unwrap_or(0.0) / (u * u / SYSTEM_MVA))
-        };
-        let r = pu(end1, "PowerTransformerEnd.r", u1)? + pu(end2, "PowerTransformerEnd.r", u2)?;
-        let x = pu(end1, "PowerTransformerEnd.x", u1)? + pu(end2, "PowerTransformerEnd.x", u2)?;
+        let (r, x, charging) =
+            two_winding_parameters(mapper, transformer_id, (end1, end2), (u1, u2))?;
         let mut branch = Branch::new(from, to, r, x);
-        let y_pu = |end: &str, property: &str, u: f64| -> Result<f64> {
-            let u = if u > 0.0 { u } else { 1.0 };
-            Ok(store.f(end, property)?.unwrap_or(0.0) * (u * u / SYSTEM_MVA))
-        };
-        let (g1, g2) = (
-            y_pu(end1, "PowerTransformerEnd.g", u1)?,
-            y_pu(end2, "PowerTransformerEnd.g", u2)?,
-        );
-        let (b1, b2) = (
-            y_pu(end1, "PowerTransformerEnd.b", u1)?,
-            y_pu(end2, "PowerTransformerEnd.b", u2)?,
-        );
-        if g1 != 0.0 || b1 != 0.0 || g2 != 0.0 || b2 != 0.0 {
-            branch.b = b1 + b2;
-            branch.charging = Some(BranchCharging::new(g1, b1, g2, b2));
+        if charging.g_fr != 0.0 || charging.b_fr != 0.0 {
+            branch.b = charging.b_fr;
+            branch.charging = Some(charging);
         }
 
         let (kv1, kv2) = (mapper.kv(from), mapper.kv(to));
@@ -5569,6 +5581,60 @@ fn read_two_winding_transformer(
         }
         Some(branch)
     })
+}
+
+/// CGMES two-winding parameters describe one L-model on a common voltage base,
+/// with its shunt before the series impedance. The conforming base is end 1.
+/// ENTSO-E CGM Building Process Implementation Guide v2.0, section 14.19:
+/// <https://eepublicdownloads.entsoe.eu/clean-documents/CIM_documents/Grid_Model_CIM/CGM%20BUILDING%20PROCESS%20IMPLEMENTATION%20GUIDE_v2.0.pdf>.
+fn two_winding_parameters(
+    mapper: &mut Mapper<'_>,
+    transformer: &str,
+    (end1, end2): (&str, &str),
+    (u1, u2): (f64, f64),
+) -> Result<(f64, f64, BranchCharging)> {
+    let store = mapper.store;
+    let read = |end, field| -> Result<f64> { Ok(store.f(end, field)?.unwrap_or(0.0)) };
+    let (r1, r2) = (
+        read(end1, "PowerTransformerEnd.r")?,
+        read(end2, "PowerTransformerEnd.r")?,
+    );
+    let (x1, x2) = (
+        read(end1, "PowerTransformerEnd.x")?,
+        read(end2, "PowerTransformerEnd.x")?,
+    );
+    let (g1, g2) = (
+        read(end1, "PowerTransformerEnd.g")?,
+        read(end2, "PowerTransformerEnd.g")?,
+    );
+    let (b1, b2) = (
+        read(end1, "PowerTransformerEnd.b")?,
+        read(end2, "PowerTransformerEnd.b")?,
+    );
+    let end2_series_only = r1 == 0.0 && x1 == 0.0 && (r2 != 0.0 || x2 != 0.0);
+    let reference_kv = if end2_series_only { u2 } else { u1 };
+    if r2 != 0.0 || x2 != 0.0 || g2 != 0.0 || b2 != 0.0 {
+        let assumption = if end2_series_only {
+            "all series data is on end 2; assuming its rated voltage for the common parameter base"
+        } else {
+            "assuming end 1 rated voltage for the common parameter base"
+        };
+        mapper.warnings.push_as(&codes::READ_CGMES_VALUE_APPROXIMATED, format!(
+            "PowerTransformer `{transformer}` has nonzero end 2 r/x/g/b, outside the CGMES two-winding end 1 L-model convention; {assumption} ({reference_kv} kV) and combining g/b into its single shunt"
+        ));
+    }
+    let z_base = reference_kv * reference_kv / SYSTEM_MVA;
+    if !z_base.is_finite() || z_base <= 0.0 {
+        return Err(Error::FormatRead {
+            format: FMT,
+            message: format!("PowerTransformer `{transformer}` common voltage base overflows"),
+        });
+    }
+    Ok((
+        (r1 + r2) / z_base,
+        (x1 + x2) / z_base,
+        BranchCharging::new((g1 + g2) * z_base, (b1 + b2) * z_base, 0.0, 0.0),
+    ))
 }
 
 fn read_three_winding_transformer(
@@ -5752,6 +5818,7 @@ fn fold_transformer_secondary_ratio(
         branch.r,
         branch.x,
         branch.b,
+        branch.tap,
         charging.g_fr,
         charging.b_fr,
         charging.g_to,
@@ -5763,7 +5830,7 @@ fn fold_transformer_secondary_ratio(
         return Err(Error::FormatRead {
             format: FMT,
             message: format!(
-                "PowerTransformer `{transformer}` impedance or charging overflows on the bus voltage base"
+                "PowerTransformer `{transformer}` impedance, charging, or ratio overflows on the bus voltage base"
             ),
         });
     }

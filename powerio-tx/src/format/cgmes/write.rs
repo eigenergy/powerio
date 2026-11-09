@@ -6501,6 +6501,12 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 ),
             );
         }
+        if emits_as_transformer && (charging.g_to != 0.0 || charging.b_to != 0.0) {
+            w.warnings.push_as(&codes::EMIT_CGMES.value_collapsed, format!(
+                "branch {} ({}-{}): to-side charging combined into the from-side shunt of the CGMES two-winding L-model; terminal admittances change",
+                i + 1, branch.from, branch.to
+            ));
+        }
         if branch.control.is_some() {
             w.warnings.push_as(
                 &codes::EMIT_CGMES.field_dropped,
@@ -6680,9 +6686,9 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 );
                 eq.text("PowerTransformerEnd.ratedU", u);
                 let (terminal_g, terminal_b) = if endno == 1 {
-                    (charging.g_fr, charging.b_fr)
+                    (charging.calc_total_g(), charging.calc_total_b())
                 } else {
-                    (charging.g_to, charging.b_to)
+                    (0.0, 0.0)
                 };
                 // The reader folds the secondary tap into the branch's
                 // impedance and terminal shunts; undo it in the winding data.

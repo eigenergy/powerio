@@ -443,22 +443,11 @@ fn transformer_voltage_bases_preserve_the_original_two_port_circuit() {
                             "<cim:PowerTransformerEnd.x>10"
                         ),
                     )
-                    .replace(
-                        "<cim:PowerTransformerEnd.x>0.1",
-                        concat!(
-                            "<cim:PowerTransformerEnd.r>0.03</cim:PowerTransformerEnd.r>",
-                            "<cim:PowerTransformerEnd.g>0.003</cim:PowerTransformerEnd.g>",
-                            "<cim:PowerTransformerEnd.b>-0.004</cim:PowerTransformerEnd.b>",
-                            "<cim:PowerTransformerEnd.x>0.1"
-                        ),
-                    );
-                // Refer both winding impedances to a common 100 MVA base.
-                // The original circuit has a ratio on each side; do not use
-                // the reader's collapsed branch or its conversion helpers.
-                let (g, b) = inverse(
-                    (2.0 / u1.powi(2) + 0.03 / u2.powi(2)) * 100.0,
-                    (10.0 / u1.powi(2) + 0.1 / u2.powi(2)) * 100.0,
-                );
+                    .replace("End.x>0.1<", "End.x>0<");
+                // The normative L circuit has one series impedance and
+                // one from-side shunt, both referred to rated voltage 1.
+                // Compare all four entries without using reader helpers.
+                let (g, b) = inverse(2.0 / u1.powi(2) * 100.0, 10.0 / u1.powi(2) * 100.0);
                 let t1 = u1 / 220.0 * rho1;
                 let t2 = u2 / 20.0 * rho2;
                 let (sin, cos) = (11.0_f64 - -4.0).to_radians().sin_cos();
@@ -475,12 +464,15 @@ fn transformer_voltage_bases_preserve_the_original_two_port_circuit() {
                         (-g * cos - b * sin) / (t1 * t2),
                         (-b * cos + g * sin) / (t1 * t2),
                     ),
-                    (
-                        (g + 0.003 * u2.powi(2) / 100.0) / t2.powi(2),
-                        (b - 0.004 * u2.powi(2) / 100.0) / t2.powi(2),
-                    ),
+                    (g / t2.powi(2), b / t2.powi(2)),
                 ];
                 let parsed = parse_document(text);
+                assert!(
+                    !parsed
+                        .diagnostics()
+                        .iter()
+                        .any(|diagnostic| { diagnostic.message().contains("L-model convention") })
+                );
                 let fresh = canonical_round_trip(ir_round_trip(&parsed));
                 for network in [parsed.value(), fresh.value()] {
                     for (actual, expected) in terminal_admittances(&network.branches()[0])
@@ -497,12 +489,16 @@ fn transformer_voltage_bases_preserve_the_original_two_port_circuit() {
 }
 
 #[test]
-fn charging_loss_is_reported_only_when_the_cgmes_writer_combines_unequal_terminals() {
+fn charging_loss_is_reported_for_a_far_transformer_shunt_or_unequal_line_ends() {
     use powerio_tx::{Branch, BranchCharging, Bus, BusId, BusType};
     let asymmetric = BranchCharging::new(0.001, 0.002, 0.003, 0.004);
     let symmetric = BranchCharging::new(0.001, 0.002, 0.001, 0.002);
+    let l_model = BranchCharging::new(0.001, 0.002, 0.0, 0.0);
     for (transformer, charging, collapsed) in [
-        (true, asymmetric, false),
+        (true, asymmetric, true),
+        (true, symmetric, true),
+        (true, BranchCharging::new(0.0, 0.0, 1e-20, 0.0), true),
+        (true, l_model, false),
         (false, asymmetric, true),
         (false, symmetric, false),
     ] {
@@ -532,9 +528,14 @@ fn charging_loss_is_reported_only_when_the_cgmes_writer_combines_unequal_termina
                 .any(|d| d.code() == "EMIT.CGMES.VALUE_COLLAPSED"),
             collapsed
         );
+        if transformer {
+            assert_zero_secondary_parameters(&path);
+        }
         let reread = powerio_tx::parse(Source::open(path).unwrap()).unwrap();
         let actual = reread.value().branches()[0].calc_terminal_charging();
-        let expected = if collapsed {
+        let expected = if transformer {
+            BranchCharging::new(charging.calc_total_g(), charging.calc_total_b(), 0.0, 0.0)
+        } else if collapsed {
             BranchCharging::new(
                 charging.calc_total_g() / 2.0,
                 charging.calc_total_b() / 2.0,
@@ -555,6 +556,24 @@ fn charging_loss_is_reported_only_when_the_cgmes_writer_combines_unequal_termina
     }
 }
 
+fn assert_zero_secondary_parameters(path: &std::path::Path) {
+    let equipment = std::fs::read_dir(path)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.to_string_lossy().ends_with("_EQ.xml"))
+        .unwrap();
+    let xml = std::fs::read_to_string(equipment).unwrap();
+    let second = xml
+        .split("<cim:PowerTransformerEnd ")
+        .skip(1)
+        .map(|end| end.split("</cim:PowerTransformerEnd>").next().unwrap())
+        .find(|end| end.contains("<cim:TransformerEnd.endNumber>2<"))
+        .unwrap();
+    for field in ["r", "x", "g", "b"] {
+        assert!(second.contains(&format!("<cim:PowerTransformerEnd.{field}>0<")));
+    }
+}
+
 #[test]
 fn transformer_base_conversion_rejects_overflowing_impedance_and_charging() {
     use powerio_tx::{Branch, BranchCharging, Bus, BusId, BusType};
@@ -572,7 +591,9 @@ fn transformer_base_conversion_rejects_overflowing_impedance_and_charging() {
                 "<cim:PowerTransformerEnd.x>10"
             ),
         );
-    for text in [large_impedance, large_charging] {
+    let large_ratio = transformer_document(3, &ratio_tap("end-hv", 1e306))
+        .replace("ratedU>220<", "ratedU>1e154<");
+    for text in [large_impedance, large_charging, large_ratio] {
         let result = powerio_tx::parse(
             Source::from_memory("overflow.xml", text.into_bytes())
                 .unwrap()
@@ -730,6 +751,129 @@ fn active_ratio_tap_magnitudes_must_be_positive() {
                     .to_string()
                     .contains("positive voltage ratios")
             );
+        }
+    }
+}
+
+#[test]
+fn nonconforming_transformer_ends_report_the_assumed_common_parameter_base() {
+    for version in [2, 3] {
+        for (x1, x2, reference_kv, assumption) in [
+            (0.0, 0.1, 20.0, "all series data is on end 2"),
+            (10.0, 0.1, 220.0, "assuming end 1 rated voltage"),
+        ] {
+            let text = transformer_document(version, "")
+                .replace("End.x>10<", &format!("End.x>{x1}<"))
+                .replace("End.x>0.1<", &format!("End.x>{x2}<"))
+                .replace(
+                    "<cim:PowerTransformerEnd.ratedU>220",
+                    concat!(
+                        "<cim:PowerTransformerEnd.g>0.001</cim:PowerTransformerEnd.g>",
+                        "<cim:PowerTransformerEnd.b>0.002</cim:PowerTransformerEnd.b>",
+                        "<cim:PowerTransformerEnd.ratedU>220"
+                    ),
+                )
+                .replace(
+                    "<cim:PowerTransformerEnd.ratedU>20",
+                    concat!(
+                        "<cim:PowerTransformerEnd.g>0.003</cim:PowerTransformerEnd.g>",
+                        "<cim:PowerTransformerEnd.b>0.004</cim:PowerTransformerEnd.b>",
+                        "<cim:PowerTransformerEnd.ratedU>20"
+                    ),
+                );
+            let parsed = parse_document(text);
+            assert!(parsed.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code() == "READ.CGMES.VALUE_APPROXIMATED"
+                    && diagnostic.message().contains("L-model convention")
+                    && diagnostic.message().contains(assumption)
+            }));
+            let stored = ir_round_trip(&parsed);
+            let fresh = canonical_round_trip(stored.clone());
+            for network in [parsed.value(), stored.value(), fresh.value()] {
+                let branch = &network.branches()[0];
+                let z_base = reference_kv * reference_kv / 100.0;
+                assert_close(branch.x, (x1 + x2) / z_base);
+                let shunt = branch.calc_terminal_charging();
+                assert_close(shunt.g_fr, 0.004 * z_base);
+                assert_close(shunt.b_fr, 0.006 * z_base);
+                assert_close(shunt.g_to, 0.0);
+                assert_close(shunt.b_to, 0.0);
+            }
+        }
+    }
+}
+
+fn table_tap_with_deviation(class: &str, kind: &str, active: i32, field: &str) -> String {
+    let mut tap = format!(
+        r##"<cim:{class} rdf:ID="20000000-0000-4000-8000-000000000003">
+ <cim:{kind}.TransformerEnd rdf:resource="#end-hv"/>
+ <cim:TapChanger.lowStep>0</cim:TapChanger.lowStep>
+ <cim:TapChanger.highStep>1</cim:TapChanger.highStep>
+ <cim:TapChanger.neutralStep>0</cim:TapChanger.neutralStep>
+ <cim:TapChanger.step>{active}</cim:TapChanger.step>
+ <cim:{class}.{kind}Table rdf:resource="#table"/>
+</cim:{class}>
+<cim:{kind}Table rdf:ID="table"/>"##
+    );
+    for step in [0, 1] {
+        let deviation = if step == 1 { 12.5 } else { 0.0 };
+        write!(
+            tap,
+            r##"<cim:{kind}TablePoint rdf:ID="point-{step}">
+ <cim:{kind}TablePoint.{kind}Table rdf:resource="#table"/>
+ <cim:TapChangerTablePoint.step>{step}</cim:TapChangerTablePoint.step>
+ <cim:TapChangerTablePoint.ratio>1</cim:TapChangerTablePoint.ratio>
+ <cim:TapChangerTablePoint.{field}>{deviation}</cim:TapChangerTablePoint.{field}>
+</cim:{kind}TablePoint>"##
+        )
+        .unwrap();
+    }
+    tap
+}
+
+#[test]
+fn active_tap_parameter_deviations_warn_even_when_the_voltage_ratio_is_one() {
+    for version in [2, 3] {
+        for (class, kind) in [
+            ("RatioTapChanger", "RatioTapChanger"),
+            ("PhaseTapChangerTabular", "PhaseTapChanger"),
+        ] {
+            for field in ["r", "x", "g", "b"] {
+                for active in [0, 1] {
+                    let parsed = transformer(
+                        version,
+                        &table_tap_with_deviation(class, kind, active, field),
+                    );
+                    let stored = ir_round_trip(&parsed);
+                    let fresh = canonical_round_trip(stored.clone());
+                    for module in [&parsed, &stored, &fresh] {
+                        let warning = module.diagnostics().iter().find(|diagnostic| {
+                            diagnostic.code() == "READ.CGMES.VALUE_APPROXIMATED"
+                                && diagnostic.message().contains("percentage deviations")
+                        });
+                        assert_eq!(warning.is_some(), active == 1);
+                        if let Some(warning) = warning {
+                            assert!(warning.message().contains("active step 1"));
+                            assert!(warning.message().contains("12.5"));
+                        }
+                        let detail = module.value().detailed_connectivity().as_ref().unwrap();
+                        let step = detail.tap_changers[0]
+                            .steps
+                            .iter()
+                            .find(|step| step.position == 1)
+                            .unwrap();
+                        assert_close(step.rho, 1.0);
+                        let value = match field {
+                            "r" => step.resistance_deviation_percent,
+                            "x" => step.reactance_deviation_percent,
+                            "g" => step.conductance_deviation_percent,
+                            "b" => step.susceptance_deviation_percent,
+                            _ => unreachable!(),
+                        };
+                        assert_close(value, 12.5);
+                    }
+                }
+            }
         }
     }
 }
