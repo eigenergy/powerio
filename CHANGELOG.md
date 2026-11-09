@@ -24,7 +24,9 @@
   engine's 600 A default as a typed BMOPF `i_max` or PMD `cm_ub`; retain
   explicitly declared and inherited emergency ratings (#762). PowerIO
   intentionally treats these engine defaults as void, which differs from
-  PowerModelsDistribution's parser behaviour.
+  PowerModelsDistribution's parser behaviour. A `switch=yes` Line, with or
+  without an unrated LineCode, and an ideal switch written to canonical
+  OpenDSS and read again keep an unstated rating unstated.
 - OpenDSS output replaces the characters OpenDSS cannot carry in a name
   (whitespace, `,`, `=`, quotes, brackets, `!`, `//`, and a `.` in a bus
   id) with `_` in element, line code, bus, and circuit names and in every
