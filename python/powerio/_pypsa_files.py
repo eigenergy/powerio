@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import pickle
 import pickletools
 import shutil
 import tempfile
@@ -81,6 +82,36 @@ def _check_size(path: Path) -> None:
 
 
 
+class _GlobalRequested(Exception):
+    """A pickle named a global, the only way unpickling can call code."""
+
+
+class _NoGlobals(pickle.Unpickler):
+    def find_class(self, module, name):
+        raise _GlobalRequested(f"{module}.{name}")
+
+
+def _executable_pickle(value: bytes) -> bool:
+    """Whether unpickling ``value`` would reach a global.
+
+    PyTables unpickles a bytes attribute that ends in ``.``, running each
+    instruction until one fails, and retries with latin-1 when ASCII decoding
+    fails. Running the same unpickler with every global refused follows that
+    path exactly, which a separate parse of the opcodes does not: it stopped at
+    the first byte it could not read and so never saw a call placed before it.
+    Latin-1 decodes every byte, so the check reaches every instruction either
+    of PyTables' attempts would. Without globals, an instruction only builds
+    plain data, so a failure leaves nothing executed.
+    """
+    try:
+        _NoGlobals(io.BytesIO(value), encoding="latin1").load()
+    except _GlobalRequested:
+        return True
+    except Exception:
+        return False
+    return False
+
+
 def _sanitized_hdf(path: Path, destination: Path) -> Path:
     """Read JSON metadata without executing the object pickle PyPSA stores.
 
@@ -90,8 +121,6 @@ def _sanitized_hdf(path: Path, destination: Path) -> Path:
     """
     import h5py
     import pandas as pd
-    unsafe = {"GLOBAL", "STACK_GLOBAL", "REDUCE", "BUILD", "INST", "OBJ",
-              "NEWOBJ", "NEWOBJ_EX", "EXT1", "EXT2", "EXT4", "PERSID", "BINPERSID"}
     metadata = {}
     with h5py.File(path, "r") as store:
         def attributes(_name, obj):
@@ -102,11 +131,7 @@ def _sanitized_hdf(path: Path, destination: Path) -> Path:
                     continue
                 if len(value) > MAX_BYTES:
                     raise ValueError("HDF5 metadata exceeds the acquisition limit")
-                try:
-                    operations = list(pickletools.genops(value))
-                except (ValueError, UnicodeError):
-                    continue
-                if any(op.name in unsafe for op, _, _ in operations):
+                if _executable_pickle(value):
                     raise ValueError("Executable HDF5 attribute serialization is unsupported")
         attributes("", store)
         store.visititems(attributes)

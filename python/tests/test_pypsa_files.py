@@ -67,6 +67,42 @@ def test_hdf_metadata_group_without_values_is_refused(key, tmp_path):
     assert not (tmp_path / "executed").exists()
 
 
+@pytest.mark.parametrize("shape", ["cut_short", "non_ascii_prefix"])
+def test_hdf_attribute_pickle_the_scanner_cannot_parse_is_refused(shape, tmp_path):
+    # PyTables unpickles a bytes attribute ending in ".", running each
+    # instruction until one fails, and retries with latin-1 when the default
+    # ASCII decoding fails. A scan that skipped an attribute it could not parse
+    # let through a call placed before a malformed byte, or after a string
+    # that does not decode as ASCII.
+    import pickle
+
+    import h5py
+    import numpy as np
+    from powerio._pypsa_files import _sanitized_hdf
+    marker = tmp_path / "executed"
+    class Payload:
+        def __reduce__(self):
+            return (eval, ("__import__('pathlib').Path(%r).touch()" % str(marker),))
+    call = pickle.dumps(Payload(), protocol=0)
+    payload = call[:-1] + b"\xff." if shape == "cut_short" else b"S'\xe9'\n0" + call
+    path = tmp_path / "bad.h5"
+    with h5py.File(path, "w") as store:
+        store.create_group("generators").attrs["pandas_type"] = np.bytes_(payload)
+    with pytest.raises(ValueError, match="Executable HDF5 attribute"):
+        _sanitized_hdf(path, tmp_path / "safe.h5")
+    assert not marker.exists()
+
+
+def test_hdf_text_attribute_ending_in_a_period_is_kept(tmp_path):
+    import h5py
+    import numpy as np
+    from powerio._pypsa_files import _sanitized_hdf
+    path = tmp_path / "text.h5"
+    with h5py.File(path, "w") as store:
+        store.create_group("generators").attrs["TITLE"] = np.bytes_(b"Exported by PyPSA.")
+    assert _sanitized_hdf(path, tmp_path / "safe.h5") == tmp_path / "safe.h5"
+
+
 @pytest.mark.parametrize("format,suffix", [("pypsa-netcdf", ".nc"), ("pypsa-hdf5", ".h5")])
 def test_temporal_binary_roundtrip(format, suffix, tmp_path):
     import pandas as pd
