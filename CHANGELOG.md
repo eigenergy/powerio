@@ -2,14 +2,7 @@
 
 ## Unreleased
 
-**BMOPF**
-
-- BMOPF reading no longer checks free-form `meta.provenance` entries as schema
-  fields, so a provenance key such as `length` raises no
-  `READ.BMOPF.FIELD_NOT_A_NUMBER` finding. The finding's pointer into the
-  BMOPF document moves from `target`, which points into the IR network, to the
-  `source_pointer` detail, so a module carrying it serializes to PowerIO IR
-  (#763).
+## 0.11.10
 
 **OpenDSS**
 
@@ -33,7 +26,33 @@
   typed reference to them, and reports each replacement. A network with free
   text names, such as one read from CIM, used to be refused when a bus id
   held such a character and otherwise written verbatim into a deck that
-  did not parse back (#770).
+  did not parse back. A generator and an IBR that both write as a dss
+  `Generator` share one rename scope, so a renamed IBR cannot take a
+  generator's name (#770).
+
+**BMOPF**
+
+- BMOPF reading no longer checks free-form `meta.provenance` entries as schema
+  fields, so a provenance key such as `length` raises no
+  `READ.BMOPF.FIELD_NOT_A_NUMBER` finding, and the finding's pointer into the
+  BMOPF document moves to the `source_pointer` detail, so a module carrying it
+  serializes to PowerIO IR (#763).
+
+**CI and dependencies**
+
+- `rusqlite` moves to 0.41 (#752, #754), which carries `libsqlite3-sys` 0.39
+  and SQLite 3.54. `libsqlite3-sys` 0.38.2 bundled a SQLite that could return
+  uninitialized page-cache memory when a database file is opened beside a
+  crafted `-wal` file (RUSTSEC-2026-0459, CVE-2026-119375), and the advisory
+  failed the cargo-deny check on every build. `rusqlite` 0.41 declares Rust
+  1.89, so the minimum supported Rust version rises from 1.88 to 1.89, and
+  the `uuid` cap the 1.88 floor needed is lifted.
+- `arrow` and `parquet` move to 60.1, `zip` to 9.4, `uuid` to 1.29, `sha2`
+  to 0.11, and `pyo3` to 0.30, and the PowSybl harness's `pandas` to 3.1.0
+  (#749, #751, #753, #760, #793). The adapters follow: sha2 0.11 digests no
+  longer implement `LowerHex`, rusqlite 0.41 takes the connection mutably for
+  serialization and the progress handler, and pyo3 0.30 makes
+  `skip_from_py_object` the default.
 
 ## 0.11.9
 
