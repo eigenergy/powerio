@@ -94,7 +94,7 @@ action.
   `IndexedNetwork::branch_edges()` yields `(branch, from, to)` for each
   in-service branch over dense bus indices; build a graph with any library
   from it.
-- The Rust MSRV is 1.89.
+- The Rust MSRV is 1.89, as in 0.11.10.
 
 **Collections**
 
@@ -127,7 +127,6 @@ action.
 - OpenDSS Transformer and XfmrCode winding arrays now leave the last winding
   selected, matching native scalar-property replay and preserving the intended
   winding resistance and neutral grounding (#813).
-- Preserve absent OpenDSS line ampacity instead of materializing the engine's 600 A default as a typed BMOPF `i_max` or PMD `cm_ub`; retain explicitly declared and inherited emergency ratings (#762). PowerIO intentionally treats these engine defaults as void, which differs from PowerModelsDistribution's parser behaviour. A `switch=yes` Line, with or without an unrated LineCode, and an ideal switch written to canonical OpenDSS and read again keep an unstated rating unstated.
 - Reject nonzero RAVENS transformer impedance or no-load loss when its input
   voltage, rating or test power base is unusable, instead of reading it as an
   ideal transformer. Name the affected tank, winding and field in the error.
@@ -152,27 +151,6 @@ action.
   drawing first and reporting a drawing that places nothing. A CIM16 document
   set without a `BaseFrequency` reads at 50 Hz. `Circuit`, `CompositeSwitch`,
   and `PSRType` are reported as context.
-- OpenDSS written from a network whose source cannot be a native `Vsource`,
-  such as a distribution CIM or MG-RAVENS feeder, now reduces in
-  PowerModelsDistribution. The per-conductor source helpers and the ideal
-  switch equivalent number their private bus after the nodes they join, so
-  every helper `Line` names the same nodes at both ends, as PMD's Kron
-  reduction requires. Phase B and C source helpers used to join node 1 to
-  node 2 or 3. The circuit is electrically unchanged (#765).
-- OpenDSS output replaces the characters OpenDSS cannot carry in a name
-  (whitespace, `,`, `=`, quotes, brackets, `!`, `//`, and a `.` in a bus
-  id) with `_` in element, line code, bus, and circuit names and in every
-  typed reference to them, and reports each replacement. A network with free
-  text names, such as one read from CIM, used to be refused when a bus id
-  held such a character and otherwise written verbatim into a deck that
-  did not parse back.
-  A generator and an IBR that both write as a dss `Generator` share one
-  rename scope, so a renamed IBR cannot take a generator's name.
-- BMOPF reading no longer checks free-form `meta.provenance` entries as schema
-  fields, so a provenance key such as `length` raises no
-  `READ.BMOPF.FIELD_NOT_A_NUMBER` finding, and the finding's pointer into the
-  BMOPF document moves to the `source_pointer` detail, so a module carrying it
-  serializes to PowerIO IR (#763).
 
 **Conversion fidelity**
 
@@ -192,11 +170,65 @@ action.
 - With these and the format fixes above, the conversion matrix has 25 more
   lossless cells than 0.11, 26 fewer dropped ones, and no cell is worse.
 
-**Dependencies**
+**Carried from 0.11.10**
 
-- Bump arrow and parquet to 60.1, zip to 9.4, uuid to 1.29, rusqlite to
-  0.41, sha2 to 0.11, and pyo3 to 0.30, and pandas to 3.1.0 in the PowSybl
-  harness (#749, #751, #752, #753, #754, #760, #793).
+- Everything in [0.11.10](#01110): the OpenDSS helper line nodes (#765),
+  absent line ampacity (#762), names OpenDSS cannot carry (#770), BMOPF
+  provenance (#763), the libsqlite3-sys advisory fix through rusqlite 0.41
+  with the Rust 1.89 MSRV, and the dependency bumps (#749, #751, #752,
+  #753, #754, #760, #793).
+
+## 0.11.10
+
+**OpenDSS**
+
+- OpenDSS written from a network whose source cannot be a native `Vsource`,
+  such as a distribution CIM or MG-RAVENS feeder, now reduces in
+  PowerModelsDistribution. The per-conductor source helpers and the ideal
+  switch equivalent number their private bus after the nodes they join, so
+  every helper `Line` names the same nodes at both ends, as PMD's Kron
+  reduction requires. Phase B and C source helpers used to join node 1 to
+  node 2 or 3. The circuit is electrically unchanged (#765).
+- Preserve absent OpenDSS line ampacity instead of materializing the
+  engine's 600 A default as a typed BMOPF `i_max` or PMD `cm_ub`; retain
+  explicitly declared and inherited emergency ratings (#762). PowerIO
+  intentionally treats these engine defaults as void, which differs from
+  PowerModelsDistribution's parser behaviour. A `switch=yes` Line, with or
+  without an unrated LineCode, and an ideal switch written to canonical
+  OpenDSS and read again keep an unstated rating unstated.
+- OpenDSS output replaces the characters OpenDSS cannot carry in a name
+  (whitespace, `,`, `=`, quotes, brackets, `!`, `//`, and a `.` in a bus
+  id) with `_` in element, line code, bus, and circuit names and in every
+  typed reference to them, and reports each replacement. A network with free
+  text names, such as one read from CIM, used to be refused when a bus id
+  held such a character and otherwise written verbatim into a deck that
+  did not parse back. A generator and an IBR that both write as a dss
+  `Generator` share one rename scope, so a renamed IBR cannot take a
+  generator's name (#770).
+
+**BMOPF**
+
+- BMOPF reading no longer checks free-form `meta.provenance` entries as schema
+  fields, so a provenance key such as `length` raises no
+  `READ.BMOPF.FIELD_NOT_A_NUMBER` finding, and the finding's pointer into the
+  BMOPF document moves to the `source_pointer` detail, so a module carrying it
+  serializes to PowerIO IR (#763).
+
+**CI and dependencies**
+
+- `rusqlite` moves to 0.41 (#752, #754), which carries `libsqlite3-sys` 0.39
+  and SQLite 3.54. `libsqlite3-sys` 0.38.2 bundled a SQLite that could return
+  uninitialized page-cache memory when a database file is opened beside a
+  crafted `-wal` file (RUSTSEC-2026-0459, CVE-2026-119375), and the advisory
+  failed the cargo-deny check on every build. `rusqlite` 0.41 declares Rust
+  1.89, so the minimum supported Rust version rises from 1.88 to 1.89, and
+  the `uuid` cap the 1.88 floor needed is lifted.
+- `arrow` and `parquet` move to 60.1, `zip` to 9.4, `uuid` to 1.29, `sha2`
+  to 0.11, and `pyo3` to 0.30, and the PowSybl harness's `pandas` to 3.1.0
+  (#749, #751, #753, #760, #793). The adapters follow: sha2 0.11 digests no
+  longer implement `LowerHex`, rusqlite 0.41 takes the connection mutably for
+  serialization and the progress handler, and pyo3 0.30 makes
+  `skip_from_py_object` the default.
 
 ## 0.11.9
 
