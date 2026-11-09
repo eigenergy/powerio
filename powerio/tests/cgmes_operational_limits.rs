@@ -1,9 +1,11 @@
-//! CGMES operational limits describe the active state and the terminal they constrain.
+//! CGMES transformer projection preserves its circuit and active terminal limits.
+use std::fmt::Write;
+
 use powerio_core::{Destination, EmittedOutput, Fidelity, FormatId, PioModule, Source};
 use powerio_tx::{BalancedNetwork, TargetFormat};
 
 // Small synthetic transformer: terminal sequence deliberately opposes winding order.
-fn transformer(version: u8, limits: &str) -> PioModule<BalancedNetwork> {
+fn transformer_document(version: u8, limits: &str) -> String {
     let (namespace, profile, kind) = if version == 3 {
         (
             "http://iec.ch/TC57/CIM100#",
@@ -17,7 +19,7 @@ fn transformer(version: u8, limits: &str) -> PioModule<BalancedNetwork> {
             "entsoe:OperationalLimitType.limitType",
         )
     };
-    let text = format!(
+    format!(
         r##"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
  xmlns:cim="{namespace}" xmlns:eu="http://iec.ch/TC57/CIM100-European#"
  xmlns:entsoe="http://entsoe.eu/CIM/SchemaExtension/3/1#"
@@ -82,13 +84,20 @@ fn transformer(version: u8, limits: &str) -> PioModule<BalancedNetwork> {
  </cim:OperationalLimitType>
  {limits}
 </rdf:RDF>"##
-    );
+    )
+}
+
+fn parse_document(text: String) -> PioModule<BalancedNetwork> {
     powerio_tx::parse(
         Source::from_memory("limits.xml", text.into_bytes())
             .unwrap()
             .with_format(FormatId::new("cgmes").unwrap()),
     )
     .unwrap()
+}
+
+fn transformer(version: u8, limits: &str) -> PioModule<BalancedNetwork> {
+    parse_document(transformer_document(version, limits))
 }
 
 fn limit(class: &str, id: &str, target: &str, kind: &str, values: &str) -> String {
@@ -355,6 +364,372 @@ fn imported_tap_changer_identity_survives_ir_and_fresh_emission() {
                     module.value().branches()[0].shift,
                 );
             }
+        }
+    }
+}
+
+fn ratio_tap(end: &str, ratio: f64) -> String {
+    let increment = (ratio - 1.0) * 100.0;
+    format!(
+        r##"<cim:RatioTapChanger rdf:ID="tap-{end}">
+ <cim:RatioTapChanger.TransformerEnd rdf:resource="#{end}"/>
+ <cim:TapChanger.lowStep>0</cim:TapChanger.lowStep>
+ <cim:TapChanger.highStep>1</cim:TapChanger.highStep>
+ <cim:TapChanger.neutralStep>0</cim:TapChanger.neutralStep>
+ <cim:TapChanger.normalStep>0</cim:TapChanger.normalStep>
+ <cim:TapChanger.step>1</cim:TapChanger.step>
+ <cim:RatioTapChanger.stepVoltageIncrement>{increment}</cim:RatioTapChanger.stepVoltageIncrement>
+</cim:RatioTapChanger>"##
+    )
+}
+
+fn inverse(r: f64, x: f64) -> (f64, f64) {
+    let denominator = r * r + x * x;
+    (r / denominator, -x / denominator)
+}
+
+fn linear_phase_tap(end: &str, shift: f64) -> String {
+    format!(
+        r##"<cim:PhaseTapChangerLinear rdf:ID="phase-{end}">
+ <cim:PhaseTapChanger.TransformerEnd rdf:resource="#{end}"/>
+ <cim:TapChanger.lowStep>0</cim:TapChanger.lowStep>
+ <cim:TapChanger.highStep>1</cim:TapChanger.highStep>
+ <cim:TapChanger.neutralStep>0</cim:TapChanger.neutralStep>
+ <cim:TapChanger.step>1</cim:TapChanger.step>
+ <cim:PhaseTapChangerLinear.stepPhaseShiftIncrement>{shift}</cim:PhaseTapChangerLinear.stepPhaseShiftIncrement>
+</cim:PhaseTapChangerLinear>"##
+    )
+}
+
+fn terminal_admittances(branch: &powerio_tx::Branch) -> [(f64, f64); 4] {
+    let (g, b) = inverse(branch.r, branch.x);
+    let charging = branch.calc_terminal_charging();
+    let tap = branch.calc_effective_tap();
+    let (sin, cos) = branch.shift.to_radians().sin_cos();
+    [
+        (
+            (g + charging.g_fr) / (tap * tap),
+            (b + charging.b_fr) / (tap * tap),
+        ),
+        ((-g * cos + b * sin) / tap, (-b * cos - g * sin) / tap),
+        ((-g * cos - b * sin) / tap, (-b * cos + g * sin) / tap),
+        (g + charging.g_to, b + charging.b_to),
+    ]
+}
+
+#[test]
+fn transformer_voltage_bases_preserve_the_original_two_port_circuit() {
+    for version in [2, 3] {
+        for (u1, u2) in [
+            (220.0_f64, 20.0_f64),
+            (242.0, 20.0),
+            (220.0, 24.0),
+            (242.0, 24.0),
+        ] {
+            for (rho1, rho2) in [(1.0, 1.0), (1.05, 1.0), (1.0, 1.1), (1.05, 1.1)] {
+                let taps = ratio_tap("end-hv", rho1)
+                    + &ratio_tap("end-lv", rho2)
+                    + &linear_phase_tap("end-hv", 11.0)
+                    + &linear_phase_tap("end-lv", -4.0);
+                let text = transformer_document(version, &taps)
+                    .replace("ratedU>220<", &format!("ratedU>{u1}<"))
+                    .replace("ratedU>20<", &format!("ratedU>{u2}<"))
+                    .replace(
+                        "<cim:PowerTransformerEnd.x>10",
+                        concat!(
+                            "<cim:PowerTransformerEnd.r>2</cim:PowerTransformerEnd.r>",
+                            "<cim:PowerTransformerEnd.g>0.0001</cim:PowerTransformerEnd.g>",
+                            "<cim:PowerTransformerEnd.b>0.0002</cim:PowerTransformerEnd.b>",
+                            "<cim:PowerTransformerEnd.x>10"
+                        ),
+                    )
+                    .replace(
+                        "<cim:PowerTransformerEnd.x>0.1",
+                        concat!(
+                            "<cim:PowerTransformerEnd.r>0.03</cim:PowerTransformerEnd.r>",
+                            "<cim:PowerTransformerEnd.g>0.003</cim:PowerTransformerEnd.g>",
+                            "<cim:PowerTransformerEnd.b>-0.004</cim:PowerTransformerEnd.b>",
+                            "<cim:PowerTransformerEnd.x>0.1"
+                        ),
+                    );
+                // Refer both winding impedances to a common 100 MVA base.
+                // The original circuit has a ratio on each side; do not use
+                // the reader's collapsed branch or its conversion helpers.
+                let (g, b) = inverse(
+                    (2.0 / u1.powi(2) + 0.03 / u2.powi(2)) * 100.0,
+                    (10.0 / u1.powi(2) + 0.1 / u2.powi(2)) * 100.0,
+                );
+                let t1 = u1 / 220.0 * rho1;
+                let t2 = u2 / 20.0 * rho2;
+                let (sin, cos) = (11.0_f64 - -4.0).to_radians().sin_cos();
+                let expected = [
+                    (
+                        (g + 0.0001 * u1.powi(2) / 100.0) / t1.powi(2),
+                        (b + 0.0002 * u1.powi(2) / 100.0) / t1.powi(2),
+                    ),
+                    (
+                        (-g * cos + b * sin) / (t1 * t2),
+                        (-b * cos - g * sin) / (t1 * t2),
+                    ),
+                    (
+                        (-g * cos - b * sin) / (t1 * t2),
+                        (-b * cos + g * sin) / (t1 * t2),
+                    ),
+                    (
+                        (g + 0.003 * u2.powi(2) / 100.0) / t2.powi(2),
+                        (b - 0.004 * u2.powi(2) / 100.0) / t2.powi(2),
+                    ),
+                ];
+                let parsed = parse_document(text);
+                let fresh = canonical_round_trip(ir_round_trip(&parsed));
+                for network in [parsed.value(), fresh.value()] {
+                    for (actual, expected) in terminal_admittances(&network.branches()[0])
+                        .into_iter()
+                        .zip(expected)
+                    {
+                        assert_close(actual.0, expected.0);
+                        assert_close(actual.1, expected.1);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn charging_loss_is_reported_only_when_the_cgmes_writer_combines_unequal_terminals() {
+    use powerio_tx::{Branch, BranchCharging, Bus, BusId, BusType};
+    let asymmetric = BranchCharging::new(0.001, 0.002, 0.003, 0.004);
+    let symmetric = BranchCharging::new(0.001, 0.002, 0.001, 0.002);
+    for (transformer, charging, collapsed) in [
+        (true, asymmetric, false),
+        (false, asymmetric, true),
+        (false, symmetric, false),
+    ] {
+        let mut network = BalancedNetwork::new("terminal charging", 100.0);
+        network.buses_mut().extend([
+            Bus::new(BusId(1), BusType::Ref, 220.0),
+            Bus::new(BusId(2), BusType::Pq, 220.0),
+        ]);
+        let mut branch = Branch::new(BusId(1), BusId(2), 0.01, 0.1);
+        branch.tap = if transformer { 1.05 } else { 0.0 };
+        branch.b = charging.calc_total_b();
+        branch.charging = Some(charging);
+        network.branches_mut().push(branch);
+        network.assign_missing_component_ids();
+        let output = tempfile::tempdir().unwrap();
+        let path = output.path().join("cgmes");
+        let result = powerio_tx::emit(
+            &PioModule::new(network),
+            TargetFormat::Cgmes,
+            Destination::path(&path),
+        )
+        .unwrap();
+        assert_eq!(
+            result
+                .diagnostics()
+                .iter()
+                .any(|d| d.code() == "EMIT.CGMES.VALUE_COLLAPSED"),
+            collapsed
+        );
+        let reread = powerio_tx::parse(Source::open(path).unwrap()).unwrap();
+        let actual = reread.value().branches()[0].calc_terminal_charging();
+        let expected = if collapsed {
+            BranchCharging::new(
+                charging.calc_total_g() / 2.0,
+                charging.calc_total_b() / 2.0,
+                charging.calc_total_g() / 2.0,
+                charging.calc_total_b() / 2.0,
+            )
+        } else {
+            charging
+        };
+        for (actual, expected) in [
+            (actual.g_fr, expected.g_fr),
+            (actual.b_fr, expected.b_fr),
+            (actual.g_to, expected.g_to),
+            (actual.b_to, expected.b_to),
+        ] {
+            assert_close(actual, expected);
+        }
+    }
+}
+
+#[test]
+fn transformer_base_conversion_rejects_overflowing_impedance_and_charging() {
+    use powerio_tx::{Branch, BranchCharging, Bus, BusId, BusType};
+    let text = transformer_document(3, "");
+    let large_impedance = text
+        .replace("ratedU>20<", "ratedU>2000<")
+        .replace("End.x>10<", "End.x>1e308<");
+    let large_charging = text
+        .replace("ratedU>20<", "ratedU>2e-155<")
+        .replace("End.x>0.1<", "End.x>0<")
+        .replace(
+            "<cim:PowerTransformerEnd.x>10",
+            concat!(
+                "<cim:PowerTransformerEnd.g>1</cim:PowerTransformerEnd.g>",
+                "<cim:PowerTransformerEnd.x>10"
+            ),
+        );
+    for text in [large_impedance, large_charging] {
+        let result = powerio_tx::parse(
+            Source::from_memory("overflow.xml", text.into_bytes())
+                .unwrap()
+                .with_format(FormatId::new("cgmes").unwrap()),
+        );
+        assert!(result.unwrap_err().to_string().contains("overflows"));
+    }
+    for (kv, r, g) in [(220.0, 1e308, 0.001), (1e-100, 0.01, 1e308)] {
+        let mut network = BalancedNetwork::new("winding overflow", 100.0);
+        network.buses_mut().extend([
+            Bus::new(BusId(1), BusType::Ref, kv),
+            Bus::new(BusId(2), BusType::Pq, kv),
+        ]);
+        let mut branch = Branch::new(BusId(1), BusId(2), r, 0.1);
+        branch.tap = 1.0;
+        branch.charging = Some(BranchCharging::new(g, 0.0, 0.0, 0.0));
+        network.branches_mut().push(branch);
+        network.assign_missing_component_ids();
+        let result = powerio_tx::emit(
+            &PioModule::new(network),
+            TargetFormat::Cgmes,
+            Destination::memory("overflow").unwrap(),
+        );
+        assert!(result.unwrap_err().to_string().contains("overflows"));
+    }
+}
+
+#[test]
+fn only_the_active_phase_tap_ratio_warns_about_the_calculation_projection() {
+    const TAP_ID: &str = "20000000-0000-4000-8000-000000000002";
+    for version in [2, 3] {
+        for class in ["PhaseTapChangerTabular", "PhaseTapChangerAsymmetrical"] {
+            for active in [0, 1] {
+                let fields = if class == "PhaseTapChangerTabular" {
+                    r##"<cim:PhaseTapChangerTabular.PhaseTapChangerTable rdf:resource="#phase-table"/>"##
+                } else {
+                    concat!(
+                        "<cim:PhaseTapChangerNonLinear.voltageStepIncrement>20</cim:PhaseTapChangerNonLinear.voltageStepIncrement>",
+                        "<cim:PhaseTapChangerAsymmetrical.windingConnectionAngle>60</cim:PhaseTapChangerAsymmetrical.windingConnectionAngle>"
+                    )
+                };
+                let mut tap = format!(
+                    r##"<cim:{class} rdf:ID="{TAP_ID}">
+ <cim:PhaseTapChanger.TransformerEnd rdf:resource="#end-hv"/>
+ <cim:TapChanger.lowStep>0</cim:TapChanger.lowStep>
+ <cim:TapChanger.highStep>1</cim:TapChanger.highStep>
+ <cim:TapChanger.neutralStep>0</cim:TapChanger.neutralStep>
+ <cim:TapChanger.normalStep>0</cim:TapChanger.normalStep>
+ <cim:TapChanger.step>{active}</cim:TapChanger.step>
+ {fields}
+</cim:{class}>"##
+                );
+                if class == "PhaseTapChangerTabular" {
+                    tap.push_str(r#"<cim:PhaseTapChangerTable rdf:ID="phase-table"/>"#);
+                    for (step, rho, angle) in [(0, 1.0, 0.0), (1, 1.1, 5.0)] {
+                        write!(
+                            tap,
+                            r##"<cim:PhaseTapChangerTablePoint rdf:ID="point-{step}">
+ <cim:PhaseTapChangerTablePoint.PhaseTapChangerTable rdf:resource="#phase-table"/>
+ <cim:TapChangerTablePoint.step>{step}</cim:TapChangerTablePoint.step>
+ <cim:TapChangerTablePoint.ratio>{rho}</cim:TapChangerTablePoint.ratio>
+ <cim:PhaseTapChangerTablePoint.angle>{angle}</cim:PhaseTapChangerTablePoint.angle>
+</cim:PhaseTapChangerTablePoint>"##
+                        )
+                        .unwrap();
+                    }
+                }
+                let parsed = transformer(version, &tap);
+                let stored = ir_round_trip(&parsed);
+                let fresh = canonical_round_trip(stored.clone());
+                for module in [&parsed, &stored, &fresh] {
+                    let warning = module.diagnostics().iter().find(|diagnostic| {
+                        diagnostic.code() == "READ.CGMES.VALUE_APPROXIMATED"
+                            && diagnostic.message().contains(TAP_ID)
+                            && diagnostic.message().contains("voltage ratio")
+                    });
+                    assert_eq!(warning.is_some(), active == 1);
+                    if let Some(warning) = warning {
+                        assert!(warning.message().contains("active step 1"));
+                    }
+                    let detail = module.value().detailed_connectivity().as_ref().unwrap();
+                    let step = detail.tap_changers[0]
+                        .steps
+                        .iter()
+                        .find(|step| step.position == active)
+                        .unwrap();
+                    assert_close(module.value().branches()[0].shift, step.alpha_degrees);
+                    assert_close(module.value().branches()[0].tap, 1.0);
+                    assert_eq!(step.rho > 1.0, active == 1);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn active_ratio_tap_magnitudes_must_be_positive() {
+    for end in ["end-hv", "end-lv"] {
+        for rho in [0.0, -1.0] {
+            for tabular in [false, true] {
+                let mut tap = ratio_tap(end, rho);
+                if tabular {
+                    tap = tap.replace(
+                        "</cim:RatioTapChanger>",
+                        concat!(
+                            "<cim:RatioTapChanger.RatioTapChangerTable rdf:resource=\"#ratio-table\"/>",
+                            "</cim:RatioTapChanger>"
+                        ),
+                    );
+                    write!(
+                        tap,
+                        r##"<cim:RatioTapChangerTable rdf:ID="ratio-table"/>
+<cim:RatioTapChangerTablePoint rdf:ID="ratio-point">
+ <cim:RatioTapChangerTablePoint.RatioTapChangerTable rdf:resource="#ratio-table"/>
+ <cim:TapChangerTablePoint.step>1</cim:TapChangerTablePoint.step>
+ <cim:TapChangerTablePoint.ratio>{rho}</cim:TapChangerTablePoint.ratio>
+</cim:RatioTapChangerTablePoint>"##
+                    )
+                    .unwrap();
+                }
+                let result = powerio_tx::parse(
+                    Source::from_memory("ratio.xml", transformer_document(3, &tap).into_bytes())
+                        .unwrap()
+                        .with_format(FormatId::new("cgmes").unwrap()),
+                );
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("positive voltage ratio")
+                );
+            }
+            let mut module = transformer(3, &ratio_tap(end, 1.0));
+            let detail = std::sync::Arc::make_mut(
+                module
+                    .value_mut()
+                    .detailed_connectivity_mut()
+                    .as_mut()
+                    .unwrap(),
+            );
+            detail.tap_changers[0]
+                .steps
+                .iter_mut()
+                .find(|step| step.position == 1)
+                .unwrap()
+                .rho = rho;
+            let result = powerio_tx::emit(
+                &module.sever_source(),
+                TargetFormat::Cgmes,
+                Destination::memory("invalid-ratio").unwrap(),
+            );
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("positive voltage ratios")
+            );
         }
     }
 }
