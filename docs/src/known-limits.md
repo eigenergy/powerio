@@ -48,14 +48,44 @@
 - `serialize_diagnostics` returns the JSON text of a diagnostics array, where
   `serialize` returns an `EmitResult`: a diagnostics array is not a module
   document and has no artifacts or findings of its own.
-- Public `powerio-matrix` signatures return `sprs::CsMat`, and the
-  LinDist3Flow coefficient types and `powerio_dist::glm::GlmQuantity` hold
-  `num_complex::Complex64`. Both crates are before their own 1.0, which is why
-  PowerIO is too: a crate whose public API exposes a pre-1.0 dependency cannot
-  promise 1.0 stability, so moving either to an incompatible release starts a
-  new PowerIO release series. PowerIO 1.0 waits until the public API depends
-  only on stable crates, for example an owned sparse matrix type in
-  `powerio-matrix`.
+- Public `powerio-matrix` signatures return `sprs::CsMat`, and some public
+  coefficient types contain `num_complex::Complex64`. These dependencies are
+  part of PowerIO's compatibility contract. Their pre-1.0 versions do not
+  inherently prevent PowerIO 1.0, but changing their public types would break
+  consumers. Before 1.0, choose either a documented commitment to those types
+  throughout PowerIO 1.x or owned matrix/complex interfaces with explicit
+  adapters. That decision remains open; updating a lockfile alone does not
+  settle it.
+
+## Path to 1.0
+
+The 0.12 API separates source/provenance (`PioModule`) from electrical values,
+keeps balanced and conductor-resolved networks distinct, and derives matrices
+and problem instances explicitly. A new format maps to a shared model instead
+of requiring pairwise converters. Owner-rooted C/Julia handles and lazy Python
+access avoid using serialized IR as an internal binding protocol. These are
+useful stable boundaries; a 1.0 promise still needs evidence for their semantics.
+
+Before the next breaking bump, close the conventions and reference/slack
+questions ([#700](https://github.com/eigenergy/powerio/issues/700),
+[#713](https://github.com/eigenergy/powerio/issues/713)), decide the exposed
+numerical-type contract above, and review the public 1.0 milestone's remaining
+CGMES difference models, boundary assembly and DGS reader work
+([#459](https://github.com/eigenergy/powerio/issues/459),
+[#457](https://github.com/eigenergy/powerio/issues/457),
+[#150](https://github.com/eigenergy/powerio/issues/150)). A feature can be explicitly
+deferred by maintainers; it must not silently disappear from the milestone.
+Require compatibility checks against the last published series, binding parity,
+archived-schema reads, and independently validated conversion profiles.
+Unsupported target features need truthful diagnostics, not an all-green matrix.
+
+Keep one release series as the compatibility boundary. Do not introduce another
+ABI counter or restart an independent IR counter: the C interface uses the
+release series, and a schema names the release that introduced it. A patch that
+does not change the schema keeps that schema identifier; producer metadata
+records the actual writer release. Published schema snapshots remain immutable.
+At 1.0 the stable series becomes 1.x rather than 0.12.x. This is a path to a
+stable API, not a claim that today's outstanding decisions are already resolved.
 
 ## Versions
 

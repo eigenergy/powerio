@@ -63,3 +63,25 @@ nothing is transformed as a side effect of something else.
 The diagram sources are in `docs/diagrams/*.dot`.
 `scripts/check-architecture-map.py` checks the drawn crate edges against
 `cargo metadata` and, with `--render`, regenerates the images.
+
+## Why `powerio-archive` is separate
+
+The shared-collection plan [#774](https://github.com/eigenergy/powerio/issues/774)
+introduced this boundary in [#776](https://github.com/eigenergy/powerio/pull/776).
+It owns model-neutral ZIP transport: bounded metadata indexing, normalized
+entry names, overlap and descriptor checks, and size/CRC-verified entry reads.
+It never extracts files or decides which electrical model a file contains.
+The facade owns case discovery, manifests, dependency observations, and nested
+collection selection. CGMES and SINCAL also reuse the crate's bounded reading
+primitives; they do not yet use its complete collection inventory.
+
+This separation keeps ZIP dependencies out of `powerio-core`, and lets lower
+format adapters share the same transport primitives without depending on the
+facade. It also makes the hostile-input tests usable independently of network
+parsing. Moving these functions into the facade would introduce a dependency
+cycle; moving them into core would add archive concerns to every core consumer.
+A separate crate is not a requirement of the file format, but it is a useful
+boundary for the current dependency graph. Its cost is another published crate
+and release bootstrap step. An inventory is not a certificate that every
+unread entry has passed CRC validation, nor a bound on subsequent electrical
+model allocations; callers still inspect diagnostics and apply model limits.

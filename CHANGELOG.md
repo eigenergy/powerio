@@ -5,13 +5,21 @@
 ## 0.12.0-rc.1
 
 The release candidate for PowerIO 0.12, which starts the 0.12.x release
-series. PowerIO stays below 1.0 while its public Rust API exposes crates
-that are themselves before 1.0 (`sprs` in `powerio-matrix`, `num-complex` in
-the LinDist3Flow coefficients and the GridLAB-D quantities). See
+series. Before 1.0, the public numerical-type contract and the outstanding
+conventions and milestone work need a maintainer decision. See
 [From 0.11 to 0.12](docs/src/migration-0.12.md) for every change that needs
 action.
 
 **Interoperability**
+
+- Preserve native Egret branch results and canonically emit electrical time
+  series after IR round trips, including labels and optional durations.
+  Reject unsupported variation and invalid time axes. C and Julia expose
+  time metadata without serializing networks; the native Egret ModelData
+  oracle checks emitted snapshot values.
+- Publish exact-commit conversion evidence and a ranked findings backlog from
+  the same graded cells as the PR matrix. Baseline changes remain reviewed;
+  independent native-consumer evidence is stated separately.
 
 - Read and write SiennaSchemas SystemDocument 0.1 through 0.4 through the
   shared module API, CLI, and bindings. Preserve source identifiers and report

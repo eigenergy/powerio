@@ -556,6 +556,13 @@ number is observable: the PowerIO IR schema directory and `IR_VERSION`, the
 `bash scripts/release-preflight.sh` accepts the suffix, and
 `scripts/check-release-versions.sh --release` compares by the core release.
 
+Before advancing either repository to a new release series, finish any pending
+patch release in the previous series, including its PowerIO.jl artifact tests
+and registration. For 0.11.10 followed by 0.12, merge the 0.11-compatible Julia
+companion first, release PowerIO #823, and wait for the Julia 0.11.10 follow-up.
+Only then merge PowerIO.jl #201 and advance to the candidate. Merge the updated
+patch branch into the RC before its final CI run so compatible fixes are shared.
+
 1. Merge the candidate's pull request into main with a merge commit, not a
    squash, so the pull requests it carries, whose head commits are its
    ancestors, are recorded as merged. Its `CHANGELOG.md` section is headed
