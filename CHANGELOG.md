@@ -16,6 +16,12 @@ action.
   current limits use their own terminal voltage. Distinct defaults lost during
   canonical output are diagnosed. Imported ratio/phase tap-changer identities
   and names survive canonical output, including older IR metadata.
+- Preserve two-winding transformer circuits across different rated/bus voltage
+  bases and secondary ratio taps. Scale series impedance and both terminal
+  shunts consistently, reject invalid ratios and arithmetic overflow, and
+  diagnose active phase-tap magnitudes omitted by the calculation projection.
+  Transformer output preserves separate terminal charging without a false loss
+  warning; genuinely asymmetric line charging remains diagnosed.
 - Preserve native Egret branch results and canonically emit electrical time
   series after IR round trips, including labels and optional durations.
   Reject unsupported variation and invalid time axes. C and Julia expose
