@@ -180,7 +180,7 @@ impl State {
         self.units_convert = conversion(code.units, self.units);
         self.normamps = code.normamps;
         self.emergamps = code.emergamps;
-        self.emergamps_available = self.is_switch || code.emergamps_available;
+        self.emergamps_available = code.emergamps_available;
         self.resize_terminals(code.n);
         self.sequence.model = code.sequence;
         if code.sequence {
@@ -417,9 +417,8 @@ impl State {
     fn set_switch(&mut self, enabled: bool) {
         self.is_switch = enabled;
         if enabled {
-            // OpenDSS switches retain the native Line default emergency
-            // rating even when a LineCode is used only for conductor count.
-            self.emergamps_available = true;
+            // A switch changes the impedance, not the rating: an unstated
+            // emergency rating stays unstated (#762).
             self.sequence.values = [1.0, 1.0, 1.0, 1.0, 1.1e-9, 1e-9];
             self.length = 0.001;
             self.reset_units();

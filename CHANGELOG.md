@@ -114,7 +114,7 @@ action.
 - OpenDSS Transformer and XfmrCode winding arrays now leave the last winding
   selected, matching native scalar-property replay and preserving the intended
   winding resistance and neutral grounding (#813).
-- Preserve absent OpenDSS line ampacity instead of materializing the engine's 600 A default as a typed BMOPF `i_max` or PMD `cm_ub`; retain explicitly declared and inherited emergency ratings (#762). PowerIO intentionally treats these engine defaults as void, which differs from PowerModelsDistribution's parser behaviour.
+- Preserve absent OpenDSS line ampacity instead of materializing the engine's 600 A default as a typed BMOPF `i_max` or PMD `cm_ub`; retain explicitly declared and inherited emergency ratings (#762). PowerIO intentionally treats these engine defaults as void, which differs from PowerModelsDistribution's parser behaviour. A `switch=yes` Line, with or without an unrated LineCode, and an ideal switch written to canonical OpenDSS and read again keep an unstated rating unstated.
 - Reject nonzero RAVENS transformer impedance or no-load loss when its input
   voltage, rating or test power base is unusable, instead of reading it as an
   ideal transformer. Name the affected tank, winding and field in the error.
