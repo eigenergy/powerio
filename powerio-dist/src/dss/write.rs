@@ -3644,6 +3644,40 @@ mod tests {
     }
 
     #[test]
+    fn unrated_switch_round_trips_without_a_default_rating() {
+        // `switch=yes` leaves an unstated emergency rating unstated, so the
+        // canonical deck states none and the reread line has no limit (#762).
+        let src = "Clear\n\
+                   New Circuit.c1 basekv=12.47 pu=1 angle=0 phases=3 bus1=sb.1.2.3\n\
+                   New Linecode.lc nphases=3 r1=0.1 x1=0.2\n\
+                   New Line.bare bus1=sb.1.2.3 bus2=b2.1.2.3 phases=3 switch=yes\n\
+                   New Line.coded bus1=b2.1.2.3 bus2=b3.1.2.3 phases=3 switch=yes \
+                   linecode=lc\n";
+        let net = parse_dss_str(src);
+        let i_max = |net: &MulticonductorNetwork, name: &str| {
+            net.lines()
+                .iter()
+                .find(|l| l.name == name)
+                .unwrap()
+                .i_max
+                .clone()
+        };
+        assert_eq!(i_max(&net, "bare"), None);
+        assert_eq!(i_max(&net, "coded"), None);
+        let (first, second) = roundtrip(&net);
+        for name in ["bare", "coded"] {
+            let line = first
+                .lines()
+                .find(|l| l.contains(&format!("Line.{name} ")))
+                .unwrap();
+            assert!(!line.contains("emergamps="), "{line}");
+        }
+        let restored = parse_dss_str(&second);
+        assert_eq!(i_max(&restored, "bare"), None);
+        assert_eq!(i_max(&restored, "coded"), None);
+    }
+
+    #[test]
     fn unparsable_line_emergamps_refuses_partial_network_and_retains_source() {
         let src = "Clear\n\
                    New Circuit.c1 basekv=12.47 pu=1 angle=0 phases=3 bus1=sb.1.2.3\n\

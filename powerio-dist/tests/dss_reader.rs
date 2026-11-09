@@ -488,13 +488,14 @@ fn line_conductor_count_follows_linecode() {
     assert_eq!(net.lines()[0].terminal_map_to, vec!["1", "2", "3", "4"]);
 
     // A switch's linecode is ignored for impedance yet still fixes the
-    // conductor count.
+    // conductor count. The unrated linecode declares no emergency rating,
+    // and switch status does not declare one either (#762).
     let net = parse_dss_str(&format!(
         "{base}New Line.s1 bus1=src.1.2.3.4 bus2=lb.1.2.3.4 linecode=4w switch=yes\n"
     ));
     let switch_line = net.lines().iter().find(|l| l.name == "s1").unwrap();
     assert_eq!(switch_line.terminal_map_to, vec!["1", "2", "3", "4"]);
-    assert_eq!(switch_line.i_max.as_ref().unwrap().len(), 4);
+    assert_eq!(switch_line.i_max, None);
 }
 
 #[test]
