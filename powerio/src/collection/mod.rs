@@ -18,7 +18,7 @@ pub use manifest::{
     CollectionCase, CollectionManifest, CollectionOrigin, CollectionReaderOptions, SelectionOrigin,
     SourceBundle, SourceBundleScope,
 };
-use nested::Session;
+use nested::{Session, Work};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -49,7 +49,8 @@ pub struct CollectionLimits {
     pub inspection_bytes: u64,
     /// Maximum ZIP decoding layers, including native CGMES/SINCAL archives.
     pub max_zip_layers: u32,
-    /// Conservative input/decompression work charged across repeated operations.
+    /// Input and decompression bytes one operation may touch, charged
+    /// conservatively. Every operation starts from zero.
     pub work_bytes: u64,
 }
 impl Default for CollectionLimits {
@@ -286,11 +287,7 @@ impl Collection {
         let mut collection = Self::from_files(name, files, limits)?;
         collection.zip_layers = 1;
         collection.cancel = cancel;
-        collection.session.initialize_archive(
-            archive_entries,
-            bytes.len() as u64,
-            limits.work_bytes,
-        )?;
+        collection.session.initialize_archive(archive_entries)?;
         collection.original = Some(bytes);
         Ok(collection)
     }
@@ -335,10 +332,8 @@ impl Collection {
     /// Every inventory file remains explicitly selectable even if omitted here.
     pub fn inspect(&self) -> Result<Vec<CollectionCandidate>> {
         self.cancel.check()?;
-        self.session.charge(
-            self.entries().iter().map(|e| e.path.len() as u64 + 1).sum(),
-            self.limits.work_bytes,
-        )?;
+        let mut work = Work::new(self.limits.work_bytes);
+        work.charge(self.entries().iter().map(|e| e.path.len() as u64 + 1).sum())?;
         let source = self.tree.source(None, None, self.limits.tree)?;
         let mut remaining = self.limits.inspection_bytes;
         let mut candidates = Vec::new();
@@ -372,7 +367,7 @@ impl Collection {
                         status = CandidateStatus::ProbeLimit;
                         None
                     } else {
-                        self.session.charge(entry.bytes, self.limits.work_bytes)?;
+                        work.charge(entry.bytes)?;
                         remaining -= entry.bytes;
                         let bytes = source.root_buffer(&entry.path)?;
                         match classify_json_bytes(bytes.content_bytes()) {

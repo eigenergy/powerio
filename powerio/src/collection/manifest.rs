@@ -235,8 +235,7 @@ impl Collection {
                 "manifest metadata limit exceeded",
             ));
         }
-        self.session
-            .charge(bytes.len() as u64, self.limits.work_bytes)?;
+        super::nested::Work::new(self.limits.work_bytes).charge(bytes.len() as u64)?;
         let manifest: CollectionManifest =
             serde_json::from_slice(bytes).map_err(|e| selection_error(e.to_string()))?;
         manifest.validate(self.limits)?;
@@ -275,8 +274,7 @@ impl Collection {
                 "manifest metadata limit exceeded",
             ));
         }
-        self.session
-            .charge(metadata.len() as u64, self.limits.work_bytes)?;
+        super::nested::Work::new(self.limits.work_bytes).charge(metadata.len() as u64)?;
         manifest.validate(self.limits)?;
         let case = manifest
             .cases

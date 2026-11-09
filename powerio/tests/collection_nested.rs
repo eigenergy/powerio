@@ -94,24 +94,31 @@ fn siblings_clones_and_repeat_opens_share_expansion_and_entry_budgets() {
     assert!(collection.open_nested("child.zip").is_err());
 }
 #[test]
-fn work_and_cancellation_do_not_reset_per_selection() {
+fn work_is_bounded_per_operation_and_cancellation_is_sticky() {
     let bytes: Arc<[u8]> = Arc::from(&b"New Circuit.work basekv=12.47\n"[..]);
-    let limits = CollectionLimits {
-        work_bytes: bytes.len() as u64,
-        ..CollectionLimits::default()
+    let with_budget = |work_bytes| {
+        Collection::from_files(
+            "memory",
+            [(ArtifactPath::new("master.dss").unwrap(), Arc::clone(&bytes))],
+            CollectionLimits {
+                work_bytes,
+                ..CollectionLimits::default()
+            },
+        )
+        .unwrap()
     };
-    let collection = Collection::from_files(
-        "memory",
-        [(ArtifactPath::new("master.dss").unwrap(), bytes)],
-        limits,
-    )
-    .unwrap();
     let selected = CollectionSelection::file("master.dss").format("dss");
+    let collection = with_budget(bytes.len() as u64);
+    // Each parse is charged on its own: a batch run or a converter session
+    // parsing the same selection again never fails because of earlier work.
+    collection
+        .parse(&selected, &ParseOptions::default())
+        .unwrap();
     collection
         .parse(&selected, &ParseOptions::default())
         .unwrap();
     assert!(
-        collection
+        with_budget(bytes.len() as u64 - 1)
             .parse(&selected, &ParseOptions::default())
             .unwrap_err()
             .to_string()
@@ -138,7 +145,7 @@ fn work_and_cancellation_do_not_reset_per_selection() {
 }
 
 #[test]
-fn failed_crc_reads_and_repeated_inspection_consume_session_allowances() {
+fn failed_verification_releases_its_reservation_and_inspection_is_bounded_per_call() {
     let mut corrupt = zip(&[("payload.xml", b"abcdef")]).to_vec();
     corrupt[30 + "payload.xml".len()] ^= 1;
     let limits = CollectionLimits {
@@ -156,48 +163,45 @@ fn failed_crc_reads_and_repeated_inspection_consume_session_allowances() {
             limits,
         )
         .unwrap();
-        if native {
-            let selected = CollectionSelection::file("bad.zip").format("cgmes");
-            assert!(
+        // A corrupt member is refused the same way every time: nothing of it
+        // is retained, so the failed attempt holds no session allowance.
+        let attempt = || {
+            if native {
+                let selected = CollectionSelection::file("bad.zip").format("cgmes");
                 collection
                     .parse(&selected, &ParseOptions::default())
-                    .is_err()
-            );
-            assert!(
-                collection
-                    .parse(&selected, &ParseOptions::default())
-                    .unwrap_err()
-                    .to_string()
-                    .contains("budget exhausted")
-            );
-        } else {
-            assert!(collection.open_nested("bad.zip").is_err());
-            assert!(
-                collection
-                    .open_nested("bad.zip")
-                    .unwrap_err()
-                    .to_string()
-                    .contains("budget exhausted")
-            );
-        }
+                    .map(|_| ())
+            } else {
+                collection.open_nested("bad.zip").map(|_| ())
+            }
+            .unwrap_err()
+            .to_string()
+        };
+        let first = attempt();
+        let second = attempt();
+        assert_eq!(first, second);
+        assert!(!second.contains("budget exhausted"), "{second}");
     }
-    let limits = CollectionLimits {
-        work_bytes: 4,
-        ..CollectionLimits::default()
+    let with_budget = |work_bytes| {
+        Collection::from_files(
+            "memory",
+            [(
+                ArtifactPath::new("x").unwrap(),
+                Arc::<[u8]>::from(&b"a"[..]),
+            )],
+            CollectionLimits {
+                work_bytes,
+                ..CollectionLimits::default()
+            },
+        )
+        .unwrap()
     };
-    let collection = Collection::from_files(
-        "memory",
-        [(
-            ArtifactPath::new("x").unwrap(),
-            Arc::<[u8]>::from(&b"a"[..]),
-        )],
-        limits,
-    )
-    .unwrap();
+    let collection = with_budget(4);
+    collection.inspect().unwrap();
     collection.inspect().unwrap();
     collection.inspect().unwrap();
     assert!(
-        collection
+        with_budget(1)
             .inspect()
             .unwrap_err()
             .to_string()

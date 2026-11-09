@@ -193,16 +193,24 @@ fn package_rejects_portable_collisions_and_duplicates() {
 }
 
 #[test]
-fn repeated_manifest_reads_and_direct_catalogs_obey_host_budgets() {
+fn manifest_reads_are_bounded_per_call_and_direct_catalogs_obey_host_budgets() {
     let bytes = br#"{"schema":"powerio-collection","version":1,"cases":[]}"#;
-    let limits = CollectionLimits {
-        work_bytes: bytes.len() as u64,
-        ..CollectionLimits::default()
+    let with_budget = |work_bytes| {
+        Collection::from_files(
+            "empty",
+            [],
+            CollectionLimits {
+                work_bytes,
+                ..CollectionLimits::default()
+            },
+        )
+        .unwrap()
     };
-    let collection = Collection::from_files("empty", [], limits).unwrap();
+    let collection = with_budget(bytes.len() as u64);
+    collection.read_manifest(bytes).unwrap();
     collection.read_manifest(bytes).unwrap();
     assert!(
-        collection
+        with_budget(bytes.len() as u64 - 1)
             .read_manifest(bytes)
             .unwrap_err()
             .to_string()
