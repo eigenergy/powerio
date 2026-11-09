@@ -328,6 +328,17 @@ fn metadata<'a>(
     detailed
         .metadata
         .get(&(component.component_type(), component.local_id()))
+        .or_else(|| {
+            // Older IR classified tap metadata generically although the tap
+            // itself already had a typed component identity.
+            (component.component_type() == "tap_changer")
+                .then(|| {
+                    detailed
+                        .metadata
+                        .get(&("cgmes_object", component.local_id()))
+                })
+                .flatten()
+        })
         .map(|entry| entry.record)
 }
 
@@ -336,7 +347,7 @@ fn component_mrid(detailed: &DetailedIndex<'_>, component: &ComponentId) -> Stri
         .metadata
         .get(&(component.component_type(), component.local_id()))
         .map_or_else(
-            || component_mrid_from_metadata(None, component),
+            || component_mrid_from_metadata(metadata(detailed, component), component),
             |entry| {
                 entry
                     .mrid
@@ -2125,7 +2136,14 @@ fn write_source_tap_changer(
         })
         .transpose()?;
 
-    eq.named(class, &id, &format!("{kind} tap changer"));
+    let fallback_name = format!("{kind} tap changer");
+    let name = tap
+        .component
+        .as_ref()
+        .map_or(fallback_name.as_str(), |component| {
+            component_name(context.detailed, component, &fallback_name)
+        });
+    eq.named(class, &id, name);
     eq.text("TapChanger.lowStep", tap.low_tap_position);
     eq.text("TapChanger.highStep", tap_high_position(tap));
     eq.text("TapChanger.neutralStep", tap_neutral_position(tap));

@@ -291,3 +291,70 @@ fn equipment_power_limits_still_constrain_a_transformer() {
     let module = transformer(3, &limits);
     assert_close(module.value().branches()[0].rate_a, 10.0);
 }
+
+#[test]
+fn imported_tap_changer_identity_survives_ir_and_fresh_emission() {
+    const TAP_ID: &str = "20000000-0000-4000-8000-000000000001";
+    for (class, end_property, increment) in [
+        (
+            "RatioTapChanger",
+            "RatioTapChanger",
+            "RatioTapChanger.stepVoltageIncrement",
+        ),
+        (
+            "PhaseTapChangerLinear",
+            "PhaseTapChanger",
+            "PhaseTapChangerLinear.stepPhaseShiftIncrement",
+        ),
+    ] {
+        let tap = format!(
+            r##"<cim:{class} rdf:ID="{TAP_ID}">
+ <cim:IdentifiedObject.name>Imported tap</cim:IdentifiedObject.name>
+ <cim:{end_property}.TransformerEnd rdf:resource="#end-hv"/>
+ <cim:TapChanger.lowStep>-1</cim:TapChanger.lowStep>
+ <cim:TapChanger.highStep>1</cim:TapChanger.highStep>
+ <cim:TapChanger.neutralStep>0</cim:TapChanger.neutralStep>
+ <cim:TapChanger.normalStep>0</cim:TapChanger.normalStep>
+ <cim:TapChanger.step>1</cim:TapChanger.step>
+ <cim:{increment}>1.25</cim:{increment}>
+</cim:{class}>"##
+        );
+        for version in [2, 3] {
+            for legacy_metadata in [false, true] {
+                let mut module = transformer(version, &tap);
+                if legacy_metadata {
+                    // Older IR has the right CGMES identity in generic metadata.
+                    let detailed = std::sync::Arc::make_mut(
+                        module
+                            .value_mut()
+                            .detailed_connectivity_mut()
+                            .as_mut()
+                            .unwrap(),
+                    );
+                    for record in &mut detailed.component_metadata {
+                        if record.component.local_id() == TAP_ID {
+                            record.component =
+                                powerio_core::ComponentId::new("cgmes_object", TAP_ID).unwrap();
+                        }
+                    }
+                }
+                let fresh = canonical_round_trip(ir_round_trip(&module));
+                let detailed = fresh.value().detailed_connectivity().as_ref().unwrap();
+                assert_eq!(detailed.tap_changers.len(), 1);
+                let component = detailed.tap_changers[0].component.as_ref().unwrap();
+                assert_eq!(component.local_id(), TAP_ID);
+                assert!(detailed.component_metadata.iter().any(|record| {
+                    record.component == *component && record.name.as_deref() == Some("Imported tap")
+                }));
+                assert_close(
+                    fresh.value().branches()[0].tap,
+                    module.value().branches()[0].tap,
+                );
+                assert_close(
+                    fresh.value().branches()[0].shift,
+                    module.value().branches()[0].shift,
+                );
+            }
+        }
+    }
+}
