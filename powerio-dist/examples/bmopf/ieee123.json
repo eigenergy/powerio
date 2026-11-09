@@ -2840,11 +2840,6 @@
     "Sw1": {
       "bus_from": "150r",
       "bus_to": "149",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 1.0,
       "linecode": "_pio_line_Sw1",
       "terminal_map_from": [
@@ -2861,11 +2856,6 @@
     "Sw2": {
       "bus_from": "13",
       "bus_to": "152",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 1.0,
       "linecode": "_pio_line_Sw2",
       "terminal_map_from": [
@@ -2882,11 +2872,6 @@
     "Sw3": {
       "bus_from": "18",
       "bus_to": "135",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 1.0,
       "linecode": "_pio_line_Sw3",
       "terminal_map_from": [
@@ -2903,11 +2888,6 @@
     "Sw4": {
       "bus_from": "60",
       "bus_to": "160",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 1.0,
       "linecode": "_pio_line_Sw4",
       "terminal_map_from": [
@@ -2924,11 +2904,6 @@
     "Sw5": {
       "bus_from": "97",
       "bus_to": "197",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 1.0,
       "linecode": "_pio_line_Sw5",
       "terminal_map_from": [
@@ -2945,11 +2920,6 @@
     "Sw6": {
       "bus_from": "61",
       "bus_to": "61s",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 1.0,
       "linecode": "_pio_line_Sw6",
       "terminal_map_from": [
@@ -2966,11 +2936,6 @@
     "Sw7": {
       "bus_from": "151",
       "bus_to": "300_OPEN",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 1.0,
       "linecode": "_pio_line_Sw7",
       "terminal_map_from": [
@@ -2987,9 +2952,6 @@
     "Sw8": {
       "bus_from": "54",
       "bus_to": "94_OPEN",
-      "i_max": [
-        600.0
-      ],
       "length": 1.0,
       "linecode": "_pio_line_Sw8",
       "terminal_map_from": [
