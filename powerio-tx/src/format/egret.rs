@@ -7,9 +7,9 @@
 //! and a branch with a nonzero raw tap or a phase shift is typed `transformer`.
 //!
 //! The reader takes the power flow ModelData subset: numeric bus ids (as
-//! matpower- and pglib-derived files have), scalar element values. Unit
-//! commitment cases (`system.time_keys`, time-series values) are rejected. A
-//! same format writes return the retained source like every other format.
+//! matpower- and pglib-derived files have). Documents with `system.time_keys`
+//! use the explicit electrical time-series profile; this does not model unit
+//! commitment constraints. Same-format emission preserves retained bytes.
 
 use serde_json::{Map, Value};
 
@@ -23,12 +23,19 @@ use crate::network::{
 };
 use crate::{Error, Result};
 
+mod temporal;
+pub use temporal::emit_time_series;
+
 const FMT: &str = "egret JSON";
 
 #[must_use]
 pub fn write_egret_json(net: &BalancedNetwork) -> TextEmission {
     let mut warnings = Diagnostics::new();
+    let root = write_document(net, &mut warnings);
+    finish(&F, root, warnings)
+}
 
+fn write_document(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Map<String, Value> {
     let mut bus = Map::new();
     for b in net.buses() {
         bus.insert(
@@ -66,12 +73,7 @@ pub fn write_egret_json(net: &BalancedNetwork) -> TextEmission {
     for (i, g) in net.generators().iter().enumerate() {
         generator.insert(
             (i + 1).to_string(),
-            carry_row(
-                gen_obj(g, &mut warnings),
-                g.uid.as_deref(),
-                &Extras::new(),
-                net,
-            ),
+            carry_row(gen_obj(g, warnings), g.uid.as_deref(), &Extras::new(), net),
         );
     }
 
@@ -80,7 +82,7 @@ pub fn write_egret_json(net: &BalancedNetwork) -> TextEmission {
         dc_branch.insert(
             (i + 1).to_string(),
             carry_row(
-                dc_branch_obj(dc, &mut warnings),
+                dc_branch_obj(dc, warnings),
                 dc.uid.as_deref(),
                 &dc.extras,
                 net,
@@ -88,7 +90,7 @@ pub fn write_egret_json(net: &BalancedNetwork) -> TextEmission {
         );
     }
 
-    warn_egret_writer_losses(net, &mut warnings);
+    warn_egret_writer_losses(net, warnings);
 
     let mut elements = Map::new();
     elements.insert("bus".into(), Value::Object(bus));
@@ -108,13 +110,13 @@ pub fn write_egret_json(net: &BalancedNetwork) -> TextEmission {
         elements.insert("area".into(), Value::Object(areas));
     }
 
-    let system = system_section(net, &mut warnings);
+    let system = system_section(net, warnings);
 
     let mut root = Map::new();
     root.insert("elements".into(), Value::Object(elements));
     root.insert("system".into(), Value::Object(system));
 
-    finish(&F, root, warnings)
+    root
 }
 
 /// egret's `system` section, with the PowerIO extensions egret leaves alone.
@@ -213,16 +215,6 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
     if current_ratings > 0 {
         warnings.push(&F.field_dropped, format!(
             "{current_ratings} branch current rating record(s) dropped: an egret branch dictionary states its rating in MVA"
-        ));
-    }
-    let branch_solutions = net
-        .branches()
-        .iter()
-        .filter(|b| b.solution.is_some())
-        .count();
-    if branch_solutions > 0 {
-        warnings.push(&F.field_dropped, format!(
-            "{branch_solutions} branch solution value set(s) dropped: an egret branch dictionary states case data, and its flow fields belong to a solution the ModelData holds separately"
         ));
     }
 }
@@ -372,6 +364,12 @@ fn branch_obj(br: &Branch) -> Value {
             })
             .collect();
         m.insert("rating_sets".into(), Value::Array(sets));
+    }
+    if let Some(flow) = br.solution {
+        m.insert("pf".into(), jnum(flow.pf));
+        m.insert("qf".into(), jnum(flow.qf));
+        m.insert("pt".into(), jnum(flow.pt));
+        m.insert("qt".into(), jnum(flow.qt));
     }
     super::json_extension::write_branch(br, &mut m);
     Value::Object(m)
@@ -783,6 +781,22 @@ pub fn parse_egret_time_series(
             ));
         }
     };
+    if time_keys
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+        != time_keys.len()
+    {
+        return Err(bad("system.time_keys contains duplicate labels"));
+    }
+    let duration = temporal::read_duration(system)?;
+    for (key, value) in system {
+        if is_time_series(value) {
+            return Err(bad(format!(
+                "time varying system.{key} is outside the supported scalar network profile"
+            )));
+        }
+    }
     if time_keys.is_empty() {
         return Err(bad("`system.time_keys` is empty"));
     }
@@ -837,7 +851,11 @@ pub fn parse_egret_time_series(
 
     let document: Document =
         serde_json::from_value(Value::Object(root)).map_err(|e| bad(e.to_string()))?;
-    let base = build_from_document(document, name_hint)?;
+    let mut base = build_from_document(document, name_hint)?;
+    // Validate the profile even for a one-point series.
+    for attribute in &varying {
+        apply_varying(&mut base, attribute, 0)?;
+    }
     let mut networks = Vec::with_capacity(time_keys.len());
     networks.push(base.clone());
     for point in 1..time_keys.len() {
@@ -850,7 +868,7 @@ pub fn parse_egret_time_series(
 
     let time_points = time_keys
         .iter()
-        .map(|key| powerio_core::TimePoint::new(key.clone(), None))
+        .map(|key| powerio_core::TimePoint::new(key.clone(), duration))
         .collect::<std::result::Result<Vec<_>, powerio_core::Error>>()
         .map_err(|e| bad(e.to_string()))?;
     powerio_core::TimeSeries::new(time_points, networks).map_err(|e| bad(e.to_string()))
@@ -980,6 +998,16 @@ fn apply_varying(
                 "transformer_tap_ratio" => branch.tap = number()?,
                 "transformer_phase_shift" => branch.shift = number()?,
                 "in_service" => branch.in_service = boolean()?,
+                "pf" | "qf" | "pt" | "qt" => {
+                    let result = branch.solution.as_mut().ok_or_else(outside)?;
+                    let value = number()?;
+                    match varying.attribute.as_str() {
+                        "pf" => result.pf = value,
+                        "qf" => result.qf = value,
+                        "pt" => result.pt = value,
+                        _ => result.qt = value,
+                    }
+                }
                 _ => return Err(outside()),
             }
         }
@@ -988,6 +1016,8 @@ fn apply_varying(
             match varying.attribute.as_str() {
                 "vm" => bus.vm = number()?,
                 "va" => bus.va = number()?,
+                "v_min" => bus.vmin = number()?,
+                "v_max" => bus.vmax = number()?,
                 _ => return Err(outside()),
             }
         }
@@ -1256,6 +1286,7 @@ struct BranchRow {
 
 fn read_branch(row: BranchRow) -> Result<Branch> {
     let mut extras = row.extras;
+    let solution = read_branch_solution(&mut extras)?;
     let is_xf = row.branch_type.as_ref().and_then(Value::as_str) == Some("transformer");
     let mut branch = Branch {
         name: None,
@@ -1293,13 +1324,47 @@ fn read_branch(row: BranchRow) -> Result<Branch> {
         angmin: num_cell(row.angle_diff_min.as_ref(), "angle_diff_min", -360.0)?,
         angmax: num_cell(row.angle_diff_max.as_ref(), "angle_diff_max", 360.0)?,
         control: None,
-        solution: None,
+        solution,
         uid: super::json_extension::read_uid(&mut extras),
         route: None,
         extras,
     };
     super::json_extension::read_branch(&mut branch);
     Ok(branch)
+}
+
+// Egret AC OPF writes the same terminal-injection MW/MVAr fields as
+// MATPOWER. Partial result sets (for example DC-only `pf`) remain extras;
+// no absent reactive or opposite-terminal result is synthesized.
+fn read_branch_solution(extras: &mut Extras) -> Result<Option<crate::network::BranchSolution>> {
+    let keys = ["pf", "qf", "pt", "qt"];
+    // Unsolved native documents use null result placeholders. They state
+    // no value and must not become a fabricated zero flow.
+    for key in keys {
+        if extras.get(key).is_some_and(Value::is_null) {
+            extras.remove(key);
+        } else if extras
+            .get(key)
+            .is_some_and(|value| value.as_f64().is_none())
+        {
+            return Err(bad(format!("branch result `{key}` is not numeric")));
+        }
+    }
+    if !keys.iter().all(|key| extras.contains_key(*key)) {
+        return Ok(None);
+    }
+    let mut values = [0.0; 4];
+    for (slot, key) in values.iter_mut().zip(keys) {
+        *slot = extras[key]
+            .as_f64()
+            .ok_or_else(|| bad(format!("branch result `{key}` is not numeric")))?;
+    }
+    for key in keys {
+        extras.remove(key);
+    }
+    Ok(Some(crate::network::BranchSolution::new(
+        values[0], values[1], values[2], values[3],
+    )))
 }
 
 #[derive(Default, serde::Deserialize)]
