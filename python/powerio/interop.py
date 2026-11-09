@@ -69,7 +69,7 @@ class PowerIOSource(StagedSource):
                     companion = stream.read(MAX_BYTES + 1)
                 companions = {filename: companion}
         module = pio.deserialize(data) if params.format == "pio-ir" else pio.parse(data, format=params.format, name=str(params.input_path), named_buffers=companions)
-        has_arrays = _sienna_files.KEY in ir_document(module).get("extensions", {})
+        has_arrays = _sienna_files.KEY in module.extension_keys
         if has_arrays and params.tables == "pypsa":
             raise ValueError("Choose tables='sienna' to stage Sienna companion time series before applying the pipeline's temporal translation steps")
         if params.tables == "pypsa":
@@ -325,9 +325,7 @@ def preserve_extensions(module, state: State):
     text = json.dumps(payload, allow_nan=False)
     if len(text.encode()) > MAX_BYTES:
         raise ValueError("Pipeline extensions exceed the 64 MiB IR transport limit")
-    document = ir_document(module)
-    document.setdefault("extensions", {})[EXTENSION_KEY] = payload
-    return pio.deserialize(json.dumps(document).encode())
+    return module.with_extension(EXTENSION_KEY, payload)
 
 
 def restore_extensions(module, state: State) -> None:
@@ -337,7 +335,7 @@ def restore_extensions(module, state: State) -> None:
         parse_extensions,
         stage_extensions,
     )
-    payload = ir_document(module).get("extensions", {}).get(EXTENSION_KEY)
+    payload = module.extension(EXTENSION_KEY)
     if payload is None:
         return
     if payload.get("version") != 1:
@@ -361,8 +359,3 @@ def restore_extensions(module, state: State) -> None:
         state.source_extension_series[ExtensionKind(kind)] = pl.DataFrame(table["columns"], schema=schema).select(table["order"]).lazy()
 
 
-def ir_document(module) -> dict:
-    text = pio.serialize(module).text
-    if text is None:
-        raise ValueError("Expected a serialized PowerIO JSON document")
-    return json.loads(text)
