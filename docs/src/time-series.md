@@ -47,3 +47,24 @@ stochastic scenarios, and unit commitment coupling, or Egret reserve and
 contingency data, stays in the retained source, is reported as
 uninterpreted, and survives a same format emission.
 [Formats and fidelity](format-fidelity.md) says where each profile ends.
+
+## Egret electrical time series
+
+Egret `system.time_keys` and per-element `data_type: "time_series"` values
+parse into `TimeSeries<BalancedNetwork>`. Labels must be unique. A stated
+`time_period_length_minutes` must be finite and positive and is retained in
+each time point. Canonical Egret emission survives IR serialization and also
+accepts balanced operating-point series, including the supported PyPSA profile.
+It writes native branch results `pf`, `qf`, `pt`, `qt` in MW/MVAr, with each end's
+injection sign. Partial DC-only results remain partial; missing reactive values
+are not invented.
+
+The writer supports changing loads, dispatch and bounds, voltage states and
+bounds, shunts, branch ratings/taps/shifts/status, and complete branch flows.
+Topology, element identities and unsupported attributes must remain static, and
+all points must share one optional duration. Unsupported variation is refused,
+including a single-point series. This is an electrical snapshot profile, not
+Egret's unit-commitment formulation: commitment, ramping, reserve and other
+intertemporal optimization semantics are not modeled. Selecting a snapshot can
+feed any compatible static writer; arbitrary temporal export to every format
+is not promised. Retained source bytes still provide exact same-format replay.

@@ -79,6 +79,7 @@ pub use powerworld::{PwdDisplay, PwdSubstation};
 #[doc(hidden)]
 pub use egret::{
     egret_declares_time_series as __egret_declares_time_series,
+    emit_time_series as __emit_egret_time_series,
     parse_egret_time_series as __parse_egret_time_series,
 };
 #[doc(hidden)]
