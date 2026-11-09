@@ -563,14 +563,15 @@ companion first, release PowerIO #823, and wait for the Julia 0.11.10 follow-up.
 Only then merge PowerIO.jl #201 and advance to the candidate. Merge the updated
 patch branch into the RC before its final CI run so compatible fixes are shared.
 
-1. Merge the candidate's pull request into main with a merge commit, not a
-   squash, so the pull requests it carries, whose head commits are its
-   ancestors, are recorded as merged. Its `CHANGELOG.md` section is headed
-   exactly `## 0.12.0-rc.1` and its release notes are
-   `docs/release-notes/0.12.0-rc.1.md`.
-2. PowerIO.jl `main` must already read the candidate's C ABI: the tag
-   workflow tests PowerIO.jl `main` against the tagged library, so merge the
-   PowerIO.jl companion branch (PowerIO.jl#201 for 0.12) first.
+1. Merge the PowerIO.jl companion (PowerIO.jl#201 for 0.12) with a merge
+   commit. Its `main` must read the candidate's C ABI before the tag workflow
+   tests it against the tagged library.
+2. Merge the Rust candidate into `main` with a merge commit, so the pull
+   requests whose heads are its ancestors are recorded as merged. Its
+   `CHANGELOG.md` section is headed exactly `## 0.12.0-rc.1` and its release
+   notes are `docs/release-notes/0.12.0-rc.1.md`. Wait for checks on both final
+   `main` commits, including the recorded Rust/Julia pair. If Julia's first
+   source check used the older Rust `main`, rerun it after the Rust merge.
 3. Create the annotated tag `v0.12.0-rc.1` on the merged main commit and push
    it. The release-binaries workflow builds and tests the tarballs and stages
    a draft release exactly as for a release.
@@ -601,4 +602,7 @@ To promote the candidate once it has been exercised:
    pre-release, is what reaches PyPI, crates.io, and PowerIO.jl.
 
 A further candidate (`0.12.0-rc.2`) repeats the candidate steps with its own
-CHANGELOG section and release notes.
+CHANGELOG section and release notes. Keep the previous tag and assets immutable,
+and mark that prerelease as superseded. Never move an existing candidate tag or
+turn its release into a stable release: the package version still has the old
+candidate suffix. Promotion always creates a new stable version and tag.

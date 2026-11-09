@@ -12,6 +12,10 @@ action.
 
 **Interoperability**
 
+- CGMES active limits take precedence over equipment defaults, and transformer
+  current limits use their own terminal voltage. Distinct defaults lost during
+  canonical output are diagnosed. Imported ratio/phase tap-changer identities
+  and names survive canonical output, including older IR metadata.
 - Preserve native Egret branch results and canonically emit electrical time
   series after IR round trips, including labels and optional durations.
   Reject unsupported variation and invalid time axes. C and Julia expose
