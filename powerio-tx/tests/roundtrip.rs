@@ -35,19 +35,26 @@ fn cases() -> Vec<PathBuf> {
     out
 }
 
+// Both profiles use .m; preserve the detected electrical profile when emitting.
+fn matpower_profile(net: &powerio_tx::BalancedNetwork) -> powerio_tx::TargetFormat {
+    if net.ac_dc_equivalent().is_some() {
+        powerio_tx::TargetFormat::MatpowerAcDc
+    } else {
+        powerio_tx::TargetFormat::Matpower
+    }
+}
+
 fn echo_matpower_file(path: &std::path::Path) -> String {
-    let module = parse_module(path, Some("matpower")).unwrap();
-    emit_module(&module, powerio_tx::TargetFormat::Matpower)
+    let module = parse_module(path, None).unwrap();
+    emit_module(&module, matpower_profile(module.value()))
         .unwrap()
         .text
 }
 
 fn echo_matpower_str(text: &str) -> String {
-    let source = powerio_core::Source::from_memory("case.m", text.as_bytes().to_vec())
-        .unwrap()
-        .with_format(powerio_core::FormatId::new("matpower").unwrap());
+    let source = powerio_core::Source::from_memory("case.m", text.as_bytes().to_vec()).unwrap();
     let module = powerio_tx::parse(source).unwrap();
-    emit_module(&module, powerio_tx::TargetFormat::Matpower)
+    emit_module(&module, matpower_profile(module.value()))
         .unwrap()
         .text
 }
@@ -83,9 +90,13 @@ fn round_trip_is_idempotent() {
 #[allow(clippy::float_cmp)]
 fn typed_data_survives_round_trip() {
     for path in cases() {
-        let case = parse_matpower_file(&path).unwrap();
-        let written = emit_matpower(&case);
-        let reparsed = parse_matpower(&written).unwrap();
+        let module = parse_module(&path, None).unwrap();
+        let case = module.value();
+        let written = emit_value(case, matpower_profile(case)).unwrap().text;
+        let source = powerio_core::Source::from_memory("case.m", written.into_bytes()).unwrap();
+        let restored = powerio_tx::parse(source).unwrap();
+        let reparsed = restored.value();
+        assert_eq!(reparsed.ac_dc_equivalent(), case.ac_dc_equivalent());
         let where_ = path.display();
         assert_eq!(reparsed.base_mva(), case.base_mva(), "{where_}: baseMVA");
         assert_eq!(
