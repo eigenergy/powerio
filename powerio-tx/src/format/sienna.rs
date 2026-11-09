@@ -1310,7 +1310,7 @@ mod tests {
         doc["components"]["TransformerCircuit"] = json!([{"id":11,"available":true,"arc":10,"r":0.01,"x":0.1,"base_power":100.0,"power_units":"NATURAL_UNITS","parameter_units":"COMPONENT_BASE","rating":80.0,"tap":1.0}]);
         doc["components"]["TwoWindingTransformer"] = json!([{"id":12,"name":"transformer","circuit":11,"admittance_units":"COMPONENT_BASE","magnetizing_shunt":{"real":0.0,"imag":0.03},"shunt_location":"PRIMARY"}]);
         let mut net = decode(&doc);
-        assert!(net.shunts().is_empty());
+        assert_eq!(net.shunts().as_slice(), []);
         net.branches_mut()[0].charging = Some(BranchCharging::new(0.0, 0.03, 0.001, 0.05));
         net.branches_mut()[0].b = 0.08;
         let output = write(&net, 4, None).unwrap();
@@ -1323,7 +1323,7 @@ mod tests {
             1
         );
         let recovered = decode(&written);
-        assert!(recovered.shunts().is_empty());
+        assert_eq!(recovered.shunts().as_slice(), []);
         let ch = recovered.branches()[0].charging.unwrap();
         assert!((ch.b_fr - 0.03).abs() < 1e-12);
         assert!((ch.g_to - 0.001).abs() < 1e-12);
