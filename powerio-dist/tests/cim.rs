@@ -2102,7 +2102,7 @@ fn a_cim16_feeder_maps_text_enumerations_ratings_and_defaults() {
     let source = powerio_core::Source::from_memory("feeder.xml", text.as_bytes().to_vec()).unwrap();
     assert!(powerio_dist::source_looks_like_cim_dist(&source));
     let net = parse_str(&text, "cim-dist").unwrap();
-    assert_eq!(net.base_frequency(), 50.0, "{:#?}", net.warnings);
+    assert_eq!(net.base_frequency(), 60.0, "{:#?}", net.warnings);
 
     // The phase codes stated as text are read: no element defaults to ABC.
     assert!(
@@ -2144,9 +2144,7 @@ fn a_cim16_feeder_maps_text_enumerations_ratings_and_defaults() {
     // The default is a finding; the groupings are context, and the customer
     // classes the model has no table for are reported.
     assert!(
-        net.warnings
-            .iter()
-            .any(|w| w.contains("50 Hz is assumed for the CIM16 namespace")),
+        net.warnings.iter().any(|w| w.contains("60 Hz is assumed")),
         "{:#?}",
         net.warnings
     );
@@ -2191,7 +2189,7 @@ fn a_cim16_feeder_converts_to_every_distribution_format() {
         assert_ne!(back.sources().as_slice(), [], "{}", target.name());
         assert_eq!(back.loads().len(), net.loads().len(), "{}", target.name());
         assert!(
-            close(back.base_frequency(), 50.0),
+            close(back.base_frequency(), 60.0),
             "{}: {} Hz",
             target.name(),
             back.base_frequency()
@@ -2207,6 +2205,34 @@ fn a_cim16_feeder_converts_to_every_distribution_format() {
         emit_value(&back, DistTargetFormat::CimDist).text,
         first.text
     );
+}
+
+#[test]
+fn namespace_does_not_select_distribution_frequency() {
+    for namespace in [
+        "http://iec.ch/TC57/2013/CIM-schema-cim16#",
+        "http://iec.ch/TC57/CIM100#",
+    ] {
+        let text = cim16_feeder().replace("http://iec.ch/TC57/2013/CIM-schema-cim16#", namespace);
+        let defaulted = parse_str(&text, "cim-dist").unwrap();
+        assert!(close(defaulted.base_frequency(), 60.0), "{namespace}");
+        let stated = text.replace(
+            "</rdf:RDF>",
+            concat!(
+                "<cim:BaseFrequency rdf:ID=\"_explicit_frequency\">",
+                "<cim:BaseFrequency.frequency>50</cim:BaseFrequency.frequency>",
+                "</cim:BaseFrequency></rdf:RDF>"
+            ),
+        );
+        let explicit = parse_str(&stated, "cim-dist").unwrap();
+        assert!(close(explicit.base_frequency(), 50.0), "{namespace}");
+        assert!(
+            !explicit
+                .warnings
+                .iter()
+                .any(|w| w.contains("Hz is assumed"))
+        );
+    }
 }
 
 #[test]

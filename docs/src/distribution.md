@@ -301,9 +301,10 @@ code. A diagram without a code is a drawing. PowerIO does not reproject: the
 network's `geo` metadata names the CRS, and a geographic layer applied with
 `apply_geo_layer` replaces the coordinates with reprojected ones.
 
-Without a `BaseFrequency`, a CIM16 document set reads at 50 Hz, the ENTSO-E
-default the CGMES reader also assumes, while CIM100 keeps 60 Hz. Either
-default is a `READ.CIM_DIST.VALUE_DEFAULTED` finding.
+Without a `BaseFrequency`, distribution CIM reads at 60 Hz in both CIM16 and
+CIM100, with a `READ.CIM_DIST.VALUE_DEFAULTED` finding. The namespace identifies
+the schema, not the grid's operating frequency; state `BaseFrequency` for 50 Hz
+or another frequency.
 `Circuit`, `CompositeSwitch`, and `PSRType` are context
 (`READ.CIM_DIST.CONTEXT_UNMAPPED`). The IEC 61968 customer classes route a
 document here but are not mapped yet, so `ServiceLocation` and `UsagePoint`

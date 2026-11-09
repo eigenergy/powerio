@@ -121,6 +121,7 @@ impl State {
             "phases" => self.phases = n,
             "windings" if n >= 2 => {
                 self.windings = vec![Winding::default(); n];
+                self.active = 0;
                 self.xsc.resize(n * (n - 1) / 2, 30.0);
             }
             "wdg" if n <= self.windings.len() => self.active = n - 1,

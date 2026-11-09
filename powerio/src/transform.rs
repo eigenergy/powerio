@@ -366,7 +366,9 @@ pub fn neutral_kron_with_options(
 /// The balanced network an operating point states: the point's network with
 /// the point's bus voltages, generator dispatch and setpoints, load powers,
 /// service flags, taps, phase shifts, and switch positions applied. The
-/// collection's shared network is not changed. Net bus injection columns have
+/// collection's shared network is not changed. When the point supplies electrical
+/// columns, inherited branch solutions are cleared: new voltages or dispatch do
+/// not establish solved branch flows. Net bus injection columns have
 /// no network field and are not applied; `emit` reports that omission.
 #[must_use]
 pub fn network_with_operating_point(

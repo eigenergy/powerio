@@ -338,63 +338,76 @@ pub(crate) fn network_with_balanced_operating_point(
     format: &str,
 ) -> (BalancedNetwork, Vec<Diagnostic>) {
     let mut network = point.network().clone();
+    let mut overrides_electrical_state = false;
 
     if let Some(values) = point.values(BalancedOperatingPointQuantity::BusVoltageMagnitude) {
+        overrides_electrical_state = true;
         for (bus, (_, value)) in network.buses_mut().iter_mut().zip(values) {
             bus.vm = value;
         }
     }
     if let Some(values) = point.values(BalancedOperatingPointQuantity::BusVoltageAngle) {
+        overrides_electrical_state = true;
         for (bus, (_, value)) in network.buses_mut().iter_mut().zip(values) {
             bus.va = value.to_degrees();
         }
     }
     if let Some(values) = point.values(BalancedOperatingPointQuantity::GeneratorActivePower) {
+        overrides_electrical_state = true;
         for (generator, (_, value)) in network.generators_mut().iter_mut().zip(values) {
             generator.pg = value;
         }
     }
     if let Some(values) = point.values(BalancedOperatingPointQuantity::GeneratorReactivePower) {
+        overrides_electrical_state = true;
         for (generator, (_, value)) in network.generators_mut().iter_mut().zip(values) {
             generator.qg = value;
         }
     }
     if let Some(values) = point.values(BalancedOperatingPointQuantity::GeneratorVoltageSetpoint) {
+        overrides_electrical_state = true;
         for (generator, (_, value)) in network.generators_mut().iter_mut().zip(values) {
             generator.vg = value;
         }
     }
     if let Some(flags) = point.flags(BalancedOperatingPointFlag::GeneratorInService) {
+        overrides_electrical_state = true;
         for (generator, (_, value)) in network.generators_mut().iter_mut().zip(flags) {
             generator.in_service = value;
         }
     }
     if let Some(values) = point.values(BalancedOperatingPointQuantity::LoadActivePower) {
+        overrides_electrical_state = true;
         for (load, (_, value)) in network.loads_mut().iter_mut().zip(values) {
             load.p = value;
         }
     }
     if let Some(values) = point.values(BalancedOperatingPointQuantity::LoadReactivePower) {
+        overrides_electrical_state = true;
         for (load, (_, value)) in network.loads_mut().iter_mut().zip(values) {
             load.q = value;
         }
     }
     if let Some(flags) = point.flags(BalancedOperatingPointFlag::BranchInService) {
+        overrides_electrical_state = true;
         for (branch, (_, value)) in network.branches_mut().iter_mut().zip(flags) {
             branch.in_service = value;
         }
     }
     if let Some(values) = point.values(BalancedOperatingPointQuantity::BranchTapRatio) {
+        overrides_electrical_state = true;
         for (branch, (_, value)) in network.branches_mut().iter_mut().zip(values) {
             branch.tap = value;
         }
     }
     if let Some(values) = point.values(BalancedOperatingPointQuantity::BranchPhaseShift) {
+        overrides_electrical_state = true;
         for (branch, (_, value)) in network.branches_mut().iter_mut().zip(values) {
             branch.shift = value;
         }
     }
     if let Some(flags) = point.flags(BalancedOperatingPointFlag::SwitchClosed) {
+        overrides_electrical_state = true;
         for (switch, (_, value)) in network.switches_mut().iter_mut().zip(flags) {
             switch.closed = value;
         }
@@ -406,10 +419,28 @@ pub(crate) fn network_with_balanced_operating_point(
         || point
             .values(BalancedOperatingPointQuantity::BusReactiveInjection)
             .is_some();
-    let diagnostics = has_unrepresented_injections
+    let mut diagnostics: Vec<_> = has_unrepresented_injections
         .then(|| operating_point_data_omitted(format))
         .into_iter()
         .collect();
+    // An operating-point column describes a new state, not a solved branch
+    // result. Even an unchanged first point of a series must not inherit flows
+    // that later points cannot supply. A point with no overrides keeps them.
+    if overrides_electrical_state || has_unrepresented_injections {
+        let mut cleared = false;
+        for branch in network.branches_mut() {
+            cleared |= branch.solution.take().is_some();
+            for key in ["pf", "qf", "pt", "qt"] {
+                cleared |= branch.extras.remove(key).is_some();
+            }
+        }
+        if cleared {
+            diagnostics.push(Diagnostic::of(
+                &codes::EMIT_OPERATING_POINT_DATA_OMITTED,
+                format!("{format}: base-network branch results were cleared because operating-point columns supply a new electrical state without branch results"),
+            ));
+        }
+    }
     (network, diagnostics)
 }
 
@@ -1184,7 +1215,11 @@ fn emit_egret_series(
             PioValue::BalancedNetwork(network) => Ok(network.clone()),
             PioValue::BalancedOperatingPoint(point) => {
                 let (network, findings) = network_with_balanced_operating_point(point, format);
-                diagnostics.extend(findings);
+                for finding in findings {
+                    if !diagnostics.contains(&finding) {
+                        diagnostics.push(finding);
+                    }
+                }
                 Ok(network)
             }
             _ => Err(unsupported_type(module, format)),
