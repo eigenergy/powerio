@@ -43,6 +43,12 @@
 
 **Conversion fidelity**
 
+- Canonically emit Egret electrical time series through IR, with labels, optional
+  durations and native branch results; reject unsupported variation and invalid
+  time axes. C and Julia expose typed time metadata without serializing networks.
+- Export exact-commit conversion evidence, coverage deltas and a ranked repair
+  backlog; require actual Julia binding execution for a green compatibility gate.
+
 - Read CIM16 LV feeders, text enumerations, inherited wire ampacity and
   Diagram Layout coordinates through the existing distribution model (#768).
 
@@ -64,7 +70,7 @@
   failed the cargo-deny check on every build. `rusqlite` 0.41 declares Rust
   1.89, so the minimum supported Rust version rises from 1.88 to 1.89, and
   the `uuid` cap the 1.88 floor needed is lifted.
-- `arrow` and `parquet` move to 60.1, `zip` to 9.4, `uuid` to 1.29, `sha2`
+- `arrow` and `parquet` move to 60.1, `zip` to 9.5.0, `uuid` to 1.29, `sha2`
   to 0.11, and `pyo3` to 0.30, and the PowSybl harness's `pandas` to 3.1.0
   (#749, #751, #753, #760, #793). The adapters follow: sha2 0.11 digests no
   longer implement `LowerHex`, rusqlite 0.41 takes the connection mutably for

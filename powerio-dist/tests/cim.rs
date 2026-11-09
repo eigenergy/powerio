@@ -1837,27 +1837,6 @@ fn free_text_feeder() -> String {
     <cim:ACDCTerminal.sequenceNumber>1</cim:ACDCTerminal.sequenceNumber>
   </cim:Terminal>
 </rdf:RDF>
-// ---------------------------------------------------------------------------
-// CIM16 LV feeders
-// ---------------------------------------------------------------------------
-//
-// A synthetic CIM16 feeder in the form some distribution exports take:
-// sequence impedances, enumerations written as text, single phase fuses
-// grouped by a composite switch, customer classes, and a Diagram Layout.
-
-const CIM16_OPEN: &str = r#"<?xml version="1.0" encoding="utf-8"?>
-<rdf:RDF xmlns:cim="http://iec.ch/TC57/2013/CIM-schema-cim16#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-"#;
-
-/// A terminal with its phase code written as text.
-fn cim16_terminal(id: &str, equipment: &str, node: &str, phases: &str, sequence: u8) -> String {
-    format!(
-        r##"  <cim:Terminal rdf:ID="_{id}">
-    <cim:Terminal.ConductingEquipment rdf:resource="#_{equipment}" />
-    <cim:Terminal.ConnectivityNode rdf:resource="#_{node}" />
-    <cim:Terminal.phases>{phases}</cim:Terminal.phases>
-    <cim:ACDCTerminal.sequenceNumber>{sequence}</cim:ACDCTerminal.sequenceNumber>
-  </cim:Terminal>
 "##
     )
 }
@@ -1937,6 +1916,31 @@ fn free_text_names_write_a_dss_deck_that_reads_back() {
         second.warnings
     );
 }
+// ---------------------------------------------------------------------------
+// CIM16 LV feeders
+// ---------------------------------------------------------------------------
+//
+// A synthetic CIM16 feeder in the form some distribution exports take:
+// sequence impedances, enumerations written as text, single phase fuses
+// grouped by a composite switch, customer classes, and a Diagram Layout.
+
+const CIM16_OPEN: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<rdf:RDF xmlns:cim="http://iec.ch/TC57/2013/CIM-schema-cim16#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+"#;
+
+/// A terminal with its phase code written as text.
+fn cim16_terminal(id: &str, equipment: &str, node: &str, phases: &str, sequence: u8) -> String {
+    format!(
+        r##"  <cim:Terminal rdf:ID="_{id}">
+    <cim:Terminal.ConductingEquipment rdf:resource="#_{equipment}" />
+    <cim:Terminal.ConnectivityNode rdf:resource="#_{node}" />
+    <cim:Terminal.phases>{phases}</cim:Terminal.phases>
+    <cim:ACDCTerminal.sequenceNumber>{sequence}</cim:ACDCTerminal.sequenceNumber>
+  </cim:Terminal>
+"##
+    )
+}
+
 /// A single phase fuse between two nodes, optionally in a composite switch.
 fn cim16_fuse(id: &str, from: &str, to: &str, phase: &str, composite: Option<&str>) -> String {
     let composite = composite.map_or_else(String::new, |cs| {
