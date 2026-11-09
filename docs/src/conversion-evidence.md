@@ -19,7 +19,7 @@ exact tested commit, which can be GitHub's synthetic merge commit; `head_commit`
 and `base_commit` identify the PR inputs separately. Local evidence also states
 whether the working tree was dirty. Missing provenance is unknown, not success.
 
-The JSON contract is `schema: "powerio-conversion-matrix"`, `schema_version: 1`.
+The JSON evidence format is `schema: "powerio-conversion-matrix"`, `schema_version: 1`.
 It includes `provenance`, `passed`, `failures`, grade `counts`, and unique `cells`.
 Each cell identifies its source, target (null for source parsing), fixture
 `cases`, grade, findings, model differences, baseline, and check failures.
