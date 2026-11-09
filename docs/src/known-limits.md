@@ -50,7 +50,7 @@
   document and has no artifacts or findings of its own.
 - Public `powerio-matrix` signatures return `sprs::CsMat`, and some public
   coefficient types contain `num_complex::Complex64`. These dependencies are
-  part of PowerIO's compatibility contract. Their pre-1.0 versions do not
+  part of PowerIO's compatibility guarantees. Their pre-1.0 versions do not
   inherently prevent PowerIO 1.0, but changing their public types would break
   consumers. Before 1.0, choose either a documented commitment to those types
   throughout PowerIO 1.x or owned matrix/complex interfaces with explicit
@@ -69,7 +69,7 @@ useful stable boundaries; a 1.0 promise still needs evidence for their semantics
 Before the next breaking bump, close the conventions and reference/slack
 questions ([#700](https://github.com/eigenergy/powerio/issues/700),
 [#713](https://github.com/eigenergy/powerio/issues/713)), decide the exposed
-numerical-type contract above, and review the public 1.0 milestone's remaining
+guarantees for numerical types above, and review the public 1.0 milestone's remaining
 CGMES difference models, boundary assembly and DGS reader work
 ([#459](https://github.com/eigenergy/powerio/issues/459),
 [#457](https://github.com/eigenergy/powerio/issues/457),
