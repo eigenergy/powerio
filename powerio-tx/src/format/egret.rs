@@ -14,6 +14,7 @@
 use serde_json::{Map, Value};
 
 use super::decode::lenient_table;
+use super::json_extension::carry_row;
 use super::{TextEmission, finish, jnum};
 use crate::diagnostics::Diagnostics;
 use crate::diagnostics::codes::EMIT_EGRET as F;
@@ -155,6 +156,22 @@ fn system_section(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Map<Stri
 }
 
 fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
+    if !net.static_var_compensators().is_empty() {
+        warnings.push(&F.record_dropped, format!(
+            "{} static VAR compensator(s) dropped: the egret writer emits no native SVC records",
+            net.static_var_compensators().len()
+        ));
+    }
+    if !net.switches().is_empty() {
+        warnings.push(
+            &F.record_dropped,
+            format!(
+                "{} switch(es) dropped: the egret writer emits no native switch records",
+                net.switches().len()
+            ),
+        );
+    }
+
     if !net.transformers_3w().is_empty() {
         warnings.push(
             &F.record_dropped,
@@ -178,7 +195,7 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
         warnings.push(
             &F.record_dropped,
             format!(
-                "{} storage unit(s) dropped: an egret storage dictionary states an energy capacity and charge and discharge efficiencies, which the balanced storage record does not state",
+                "{} storage unit(s) dropped: the egret writer emits no native storage records",
                 net.storage().len()
             ),
         );
@@ -219,22 +236,6 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
     }
 }
 
-/// Add a source-assigned identity as `uid` and the element's fields no typed
-/// slot holds to an egret element; the reader reads both back. An egret
-/// field always wins a key collision.
-fn carry_row(mut row: Value, uid: Option<&str>, extras: &Extras, net: &BalancedNetwork) -> Value {
-    if let Value::Object(map) = &mut row {
-        if let Some(uid) = uid.filter(|uid| !net.uid_is_generated(Some(uid))) {
-            map.entry("uid")
-                .or_insert_with(|| Value::String(uid.to_owned()));
-        }
-        for (key, value) in extras {
-            map.entry(key.clone()).or_insert_with(|| value.clone());
-        }
-    }
-    row
-}
-
 /// One `area` element: the area record's attributes beyond its number, with
 /// interchange in MW.
 fn area_obj(area: &crate::network::Area) -> Value {
@@ -242,21 +243,7 @@ fn area_obj(area: &crate::network::Area) -> Value {
     if let Some(bus) = area.slack_bus {
         m.insert("slack_bus".into(), Value::String(bus.to_string()));
     }
-    if area.net_interchange != 0.0 {
-        m.insert("net_interchange_mw".into(), jnum(area.net_interchange));
-    }
-    if area.tolerance != 0.0 {
-        m.insert("tolerance_mw".into(), jnum(area.tolerance));
-    }
-    if let Some(name) = &area.name {
-        m.insert("name".into(), Value::String(name.clone()));
-    }
-    if let Some(uid) = &area.uid {
-        m.insert("uid".into(), Value::String(uid.clone()));
-    }
-    if let Some(area_type) = &area.area_type {
-        m.insert("area_type".into(), Value::String(area_type.clone()));
-    }
+    super::json_extension::write_area(area, &mut m);
     Value::Object(m)
 }
 
@@ -314,6 +301,7 @@ fn shunt_obj(s: &Shunt) -> Value {
     m.insert("shunt_type".into(), Value::String("fixed".into()));
     m.insert("gs".into(), jnum(s.g));
     m.insert("bs".into(), jnum(s.b));
+    m.insert("in_service".into(), Value::Bool(s.in_service));
     super::json_extension::write_shunt(s, &mut m);
     Value::Object(m)
 }
@@ -350,20 +338,6 @@ fn branch_obj(br: &Branch) -> Value {
     }
     if br.rate_c != 0.0 {
         m.insert("rating_emergency".into(), jnum(br.rate_c));
-    }
-    // Rating sets beyond these three: a PowerIO extension, in MVA.
-    if !br.rating_sets.is_empty() {
-        let sets = br
-            .rating_sets
-            .iter()
-            .map(|set| {
-                let mut set_row = Map::new();
-                set_row.insert("name".into(), Value::String(set.name.clone()));
-                set_row.insert("rate_mva".into(), jnum(set.rate_mva));
-                Value::Object(set_row)
-            })
-            .collect();
-        m.insert("rating_sets".into(), Value::Array(sets));
     }
     if let Some(flow) = br.solution {
         m.insert("pf".into(), jnum(flow.pf));
@@ -1246,7 +1220,7 @@ struct BranchRow {
 
 fn read_branch(row: BranchRow) -> Result<Branch> {
     let mut extras = row.extras;
-    let solution = read_branch_solution(&mut extras)?;
+    let solution = read_branch_solution(&mut extras);
     let is_xf = row.branch_type.as_ref().and_then(Value::as_str) == Some("transformer");
     let mut branch = Branch {
         name: None,
@@ -1296,35 +1270,25 @@ fn read_branch(row: BranchRow) -> Result<Branch> {
 // Egret AC OPF writes the same terminal-injection MW/MVAr fields as
 // MATPOWER. Partial result sets (for example DC-only `pf`) remain extras;
 // no absent reactive or opposite-terminal result is synthesized.
-fn read_branch_solution(extras: &mut Extras) -> Result<Option<crate::network::BranchSolution>> {
+fn read_branch_solution(extras: &mut Extras) -> Option<crate::network::BranchSolution> {
     let keys = ["pf", "qf", "pt", "qt"];
-    // Unsolved native documents use null result placeholders. They state
-    // no value and must not become a fabricated zero flow.
+    // Nulls are unsolved placeholders. Other shapes stay in extras for
+    // compatibility with documents whose result keys use another encoding.
     for key in keys {
         if extras.get(key).is_some_and(Value::is_null) {
             extras.remove(key);
-        } else if extras
-            .get(key)
-            .is_some_and(|value| value.as_f64().is_none())
-        {
-            return Err(bad(format!("branch result `{key}` is not numeric")));
         }
-    }
-    if !keys.iter().all(|key| extras.contains_key(*key)) {
-        return Ok(None);
     }
     let mut values = [0.0; 4];
     for (slot, key) in values.iter_mut().zip(keys) {
-        *slot = extras[key]
-            .as_f64()
-            .ok_or_else(|| bad(format!("branch result `{key}` is not numeric")))?;
+        *slot = extras.get(key)?.as_f64()?;
     }
     for key in keys {
         extras.remove(key);
     }
-    Ok(Some(crate::network::BranchSolution::new(
+    Some(crate::network::BranchSolution::new(
         values[0], values[1], values[2], values[3],
-    )))
+    ))
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -1441,20 +1405,17 @@ struct DcBranchRow {
 fn read_dc_branch(row: DcBranchRow) -> Result<Hvdc> {
     // PowerIO states a dcline's cost as the cost curve a generator states.
     let mut extras = row.extras;
-    let cost = match extras.remove("p_cost").filter(|value| !value.is_null()) {
-        None => None,
-        Some(p_cost) => {
-            let mut amount = |key: &str| -> Result<f64> {
-                extras
-                    .remove(key)
-                    .map_or(Ok(0.0), |value| num_cell(Some(&value), key, 0.0))
-            };
-            let (startup, shutdown) = (amount("startup_cost")?, amount("shutdown_cost")?);
-            Some(read_cost(&p_cost, startup, shutdown).ok_or_else(|| {
-                bad("dc_branch `p_cost` is present but has an unrecognized or malformed cost_curve")
-            })?)
+    // Only consume the extension when the complete cost has a recognized
+    // shape. Foreign-shaped curves and amounts remain readable as extras.
+    let cost = extras.get("p_cost").and_then(|p_cost| {
+        let amount = |key| num_cell(extras.get(key), key, 0.0).ok();
+        read_cost(p_cost, amount("startup_cost")?, amount("shutdown_cost")?)
+    });
+    if cost.is_some() {
+        for key in ["p_cost", "startup_cost", "shutdown_cost"] {
+            extras.remove(key);
         }
-    };
+    }
     let mut hvdc = Hvdc {
         from: id_cell(row.from_bus.as_ref(), "from_bus")?,
         to: id_cell(row.to_bus.as_ref(), "to_bus")?,

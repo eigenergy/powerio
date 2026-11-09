@@ -636,7 +636,6 @@ fn read_documents(
             namespaces.into_iter().collect::<Vec<_>>().join(", ")
         )));
     }
-    let cim16 = namespaces.iter().all(|n| n.contains("CIM-schema-cim16"));
     store.seal();
     if store.count_of("ConnectivityNode") == 0 {
         let message = if store.count_of("TopologicalNode") > 0 {
@@ -690,7 +689,7 @@ fn read_documents(
         locate_buses(&mut buses, &layout);
         layout.meta
     });
-    let base_frequency = mapper.base_frequency(cim16);
+    let base_frequency = mapper.base_frequency();
     let name = description
         .or_else(|| mapper.feeder_name())
         .or_else(|| name_hint.map(str::to_owned));
@@ -1081,31 +1080,20 @@ impl<'a> Mapper<'a> {
         out
     }
 
-    /// The stated base frequency. Without one, a CIM16 document set takes
-    /// 50 Hz: CIM16 is the CGMES 2.4.15 release, and the CGMES reader
-    /// assumes the same ENTSO-E default. CIM100, the GridAPPS-D and CIMHub release, takes 60 Hz.
-    fn base_frequency(&mut self, cim16: bool) -> f64 {
+    /// The stated base frequency, or the distribution reader's 60 Hz default.
+    /// A CIM namespace identifies a schema, not the grid's operating frequency.
+    fn base_frequency(&mut self) -> f64 {
         let frequencies = self.store.ids_of("BaseFrequency");
         let stated = frequencies
             .iter()
             .find_map(|f| self.store.f(f, "BaseFrequency.frequency"))
             .filter(|f| *f > 0.0);
         stated.unwrap_or_else(|| {
-            let (frequency, message) = if cim16 {
-                (
-                    50.0,
-                    "no BaseFrequency states a frequency; 50 Hz is assumed for the CIM16 \
-                     namespace, the ENTSO-E default",
-                )
-            } else {
-                (
-                    60.0,
-                    "no BaseFrequency states a frequency; 60 Hz is assumed",
-                )
-            };
-            self.diags
-                .record(Diagnostic::of(&C::READ_CIM_DIST_VALUE_DEFAULTED, message));
-            frequency
+            self.diags.record(Diagnostic::of(
+                &C::READ_CIM_DIST_VALUE_DEFAULTED,
+                "no BaseFrequency states a frequency; 60 Hz is assumed",
+            ));
+            60.0
         })
     }
 

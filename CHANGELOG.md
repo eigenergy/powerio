@@ -12,6 +12,13 @@ action.
 
 **Interoperability**
 
+- Egret keeps shunt service flags and diagnoses omitted component identities.
+  Foreign result extras cannot fill native PowerModels fields in the wrong
+  units. Operating-point columns clear inherited branch results. Time-series
+  emission accumulates varying fields incrementally, applies scalar loss checks
+  and deduplicates identical findings. Nested non-finite extension values remain
+  diagnosed. The reviewed CIM frequency and XfmrCode selector fixes from 0.11.10
+  are included.
 - CGMES active limits take precedence over equipment defaults, and transformer
   current limits use their own terminal voltage. Distinct defaults lost during
   canonical output are diagnosed. Imported ratio/phase tap-changer identities
@@ -254,6 +261,17 @@ action.
   serializes to PowerIO IR (#763).
 
 **Conversion fidelity**
+
+- Preserve Egret shunt service flags and keep partial or foreign-shaped result
+  fields from acquiring another format's units. Operating-point overrides clear
+  inherited branch solutions instead of exporting stale flows. Time-series
+  output checks scalar losses, deduplicates identical findings and accumulates
+  varying fields without holding every full JSON document in memory.
+- Retain the distribution CIM default of 60 Hz when frequency is absent,
+  independent of namespace version; explicit frequencies still take precedence.
+  Reset XfmrCode winding selection after changing the winding count.
+- Report nested non-finite extension values instead of silently deleting them,
+  and report identities on component tables Egret does not write.
 
 - CGMES ratings consistently prefer the active value over the equipment
   default. Two-winding transformer current limits use the voltage of the

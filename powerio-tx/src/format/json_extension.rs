@@ -12,27 +12,82 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
 use crate::network::{
-    Branch, BranchRatingSet, Bus, Extras, Generator, GeneratorEnergySource, Hvdc, Shunt, Storage,
+    Area, BalancedNetwork, Branch, BranchRatingSet, Bus, Extras, Generator, GeneratorEnergySource,
+    Hvdc, Shunt, Storage,
 };
+
+/// Preserve source-assigned identities and untyped fields without replacing
+/// fields already written in the target's native units. Callers filter out
+/// any absent native fields that must not be filled from foreign extras.
+pub(super) fn carry_row<'a>(
+    mut row: Value,
+    uid: Option<&str>,
+    extras: impl IntoIterator<Item = (&'a String, &'a Value)>,
+    net: &BalancedNetwork,
+) -> Value {
+    if let Value::Object(map) = &mut row {
+        if let Some(uid) = uid.filter(|uid| !net.uid_is_generated(Some(uid))) {
+            map.entry("uid")
+                .or_insert_with(|| Value::String(uid.to_owned()));
+        }
+        for (key, value) in extras {
+            map.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+    }
+    row
+}
+
+/// Area attributes shared by both JSON extensions, with powers in MW.
+pub(super) fn write_area(area: &Area, row: &mut Map<String, Value>) {
+    if area.net_interchange != 0.0 {
+        row.insert(
+            "net_interchange_mw".into(),
+            super::jnum(area.net_interchange),
+        );
+    }
+    if area.tolerance != 0.0 {
+        row.insert("tolerance_mw".into(), super::jnum(area.tolerance));
+    }
+    put(row, "name", area.name.as_ref());
+    put(row, "uid", area.uid.as_ref());
+    put(row, "area_type", area.area_type.as_ref());
+}
 
 /// State `value` under `key`. A `None` inside it is left out rather than
 /// written as `null`, which the writers report as a non-finite number; a
 /// missing optional field reads back as `None`.
 fn put<T: Serialize>(row: &mut Map<String, Value>, key: &str, value: Option<&T>) {
     if let Some(value) = value {
-        let mut value = serde_json::to_value(value).expect("PowerIO typed fields are plain data");
-        drop_nulls(&mut value);
-        row.insert(key.to_owned(), value);
+        let mut json = serde_json::to_value(value).expect("PowerIO typed fields are plain data");
+        // The shared typed serializer distinguishes an absent Option from a
+        // non-finite float. Keep the latter's JSON null so finish() reports it.
+        let typed = value
+            .serialize(powerio_core::__implementation::nonfinite::NonFiniteSer(
+                serde_json::value::Serializer,
+            ))
+            .expect("PowerIO typed fields are plain data");
+        drop_nulls(&mut json, &typed);
+        row.insert(key.to_owned(), json);
     }
 }
 
-fn drop_nulls(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            map.retain(|_, field| !field.is_null());
-            map.values_mut().for_each(drop_nulls);
+fn drop_nulls(value: &mut Value, typed: &Value) {
+    match (value, typed) {
+        (Value::Object(map), Value::Object(types)) => {
+            map.retain(|key, field| {
+                !field.is_null() || types.get(key).is_some_and(|value| !value.is_null())
+            });
+            for (key, field) in map {
+                if let Some(typed) = types.get(key) {
+                    drop_nulls(field, typed);
+                }
+            }
         }
-        Value::Array(items) => items.iter_mut().for_each(drop_nulls),
+        (Value::Array(items), Value::Array(types)) => {
+            for (field, typed) in items.iter_mut().zip(types) {
+                drop_nulls(field, typed);
+            }
+        }
         _ => {}
     }
 }
@@ -82,6 +137,9 @@ pub(super) fn write_branch(branch: &Branch, row: &mut Map<String, Value>) {
     }
     put(row, "control", branch.control.as_ref());
     put(row, "route", branch.route.as_ref());
+    if !branch.rating_sets.is_empty() {
+        put(row, "rating_sets", Some(&branch.rating_sets));
+    }
 }
 
 pub(super) fn read_branch(branch: &mut Branch) {
@@ -325,5 +383,51 @@ mod tests {
             Some(&Value::String("another tool's".into()))
         );
         assert!(!shunt.extras.contains_key("section_count"));
+    }
+
+    #[test]
+    fn nested_nonfinite_extension_numbers_reach_the_writer_diagnostic() {
+        for nonfinite in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut net = network_with_typed_fields();
+            net.shunts_mut()[0].control.as_mut().unwrap().vhigh = nonfinite;
+            for target in [
+                crate::format::TargetFormat::PowerModelsJson,
+                crate::format::TargetFormat::EgretJson,
+            ] {
+                let written = crate::format::emit_value_text(&net, target).unwrap();
+                assert!(
+                    written.diagnostics.iter().any(|diagnostic| {
+                        diagnostic.code().ends_with("NOT_A_NUMBER")
+                            && diagnostic.message().contains("vhigh")
+                    }),
+                    "{target:?}: {:?}",
+                    written.render_diagnostics()
+                );
+                assert!(written.text.contains("\"vhigh\": null"));
+            }
+        }
+    }
+
+    #[test]
+    fn optional_nulls_and_literal_nonfinite_strings_are_not_numeric_findings() {
+        #[derive(Serialize)]
+        struct Nested {
+            absent: Option<f64>,
+            invalid: Option<f64>,
+            label: &'static str,
+        }
+        let mut row = Map::new();
+        put(
+            &mut row,
+            "nested",
+            Some(&Nested {
+                absent: None,
+                invalid: Some(f64::NAN),
+                label: "NaN",
+            }),
+        );
+        assert!(row["nested"].get("absent").is_none());
+        assert_eq!(row["nested"]["invalid"], Value::Null);
+        assert_eq!(row["nested"]["label"], "NaN");
     }
 }
