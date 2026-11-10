@@ -44,6 +44,20 @@
   transformer shunt read back with a different shunt. Report and reproduction
   by Mohamed Numair (#829).
 
+**OpenDSS**
+
+- An OpenDSS deck supplied from memory, as a file tree
+  (`Source::from_memory_tree`) or as a primary buffer with named companions
+  (`Source::with_named_buffer`, Python's named buffers, and C's
+  `pio_source_from_memory_with_buffers`), now resolves a `Redirect`,
+  `Compile`, or `Buscoords` name that differs from a supplied path only in
+  ASCII case, as Windows-authored decks often do (`linecodes.dss` against
+  `LineCodes.DSS`). Such an include used to fail with
+  `READ.DSS.INCLUDE_LOAD_FAILED` and leave an incomplete network. An exact
+  name still wins, a name matching several supplied paths is refused rather
+  than guessed, the dependency keeps its supplied path as its id, and
+  filesystem sources are unchanged (#812).
+
 ## 0.11.10
 
 **OpenDSS**
