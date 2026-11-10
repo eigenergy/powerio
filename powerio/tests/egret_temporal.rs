@@ -135,9 +135,7 @@ fn every_rating_preserves_unlimited_points_through_ir_and_export() {
 }
 
 #[test]
-fn native_zero_thermal_limits_still_read_as_unlimited_in_scalar_and_every_series_position() {
-    // 0.11.x keeps reading a native Egret numeric zero as PowerIO's unlimited
-    // rating, as 0.11.10 did; refusing it is planned for 0.12 (#828).
+fn native_zero_thermal_limits_are_refused_in_scalar_and_every_series_position() {
     for field in ["rating_long_term", "rating_short_term", "rating_emergency"] {
         for zero in [0.0, -0.0] {
             for values in [json!(zero), json!([zero, 150.0]), json!([150.0, zero])] {
@@ -147,38 +145,19 @@ fn native_zero_thermal_limits_still_read_as_unlimited_in_scalar_and_every_series
                 if values.is_array() {
                     branch[field] = json!({"data_type": "time_series", "values": values});
                 } else {
-                    branch[field] = values.clone();
+                    branch[field] = values;
                     for flow in ["pf", "qf", "pt", "qt"] {
                         branch.as_object_mut().unwrap().remove(flow);
                     }
                     input["system"].as_object_mut().unwrap().remove("time_keys");
                     input["elements"]["load"]["load_1"]["p_load"] = json!(10.0);
                 }
-                let module = parse(&input);
-                let networks: Vec<_> = match module.value() {
-                    PioValue::TimeSeries(series) => (0..series.len())
-                        .map(|point| match series.get(point).unwrap() {
-                            PioValue::BalancedNetwork(network) => network.clone(),
-                            _ => panic!("network"),
-                        })
-                        .collect(),
-                    PioValue::BalancedNetwork(network) => vec![network.clone()],
-                    _ => panic!("network or series"),
-                };
-                let expected: Vec<f64> = match values.as_array() {
-                    Some(points) => points.iter().map(|v| v.as_f64().unwrap()).collect(),
-                    None => vec![zero],
-                };
-                assert_eq!(networks.len(), expected.len());
-                for (network, expected) in networks.iter().zip(expected) {
-                    let branch = &network.branches()[0];
-                    let rating = match field {
-                        "rating_long_term" => branch.rate_a,
-                        "rating_short_term" => branch.rate_b,
-                        _ => branch.rate_c,
-                    };
-                    assert_eq!(rating, expected, "{field} {values}");
-                }
+                let error = powerio::parse(
+                    Source::from_memory("case.egret.json", input.to_string().into_bytes()).unwrap(),
+                )
+                .unwrap_err();
+                assert!(error.to_string().contains(field), "{error}");
+                assert!(error.to_string().contains("zero thermal limit"), "{error}");
             }
         }
     }
