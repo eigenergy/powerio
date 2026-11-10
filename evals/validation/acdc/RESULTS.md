@@ -77,3 +77,28 @@ The result constructor checks data completeness and finiteness. Solver feasibili
 and local convergence remain the producer's responsibility. Reference compatibility
 is not a qualification of physical rebasing, directional loss models, native PF,
 LCC, wider-case native solves, or binding calculation parity.
+
+## Numerical angle-reference policy — 2026-11-10
+
+The coupled model branch adds an explicit `AcDcAngleReferencePolicy` on intent,
+with `Declared` preserving the previous default/refusal and
+`LowestBusIdPerIsland` adding zero-angle numerical anchors only on uncovered
+active AC islands. Preparation records all declared/added anchors and component
+source bus IDs; source bus roles, PF dispatch, and ordinary AC-only guards stay
+unchanged. Row reordering and DC connectivity do not change anchor selection.
+The policy survives typed instance/result IR; the default field is omitted for
+old-shape compatibility and unknown policies refuse. Only the unreleased schema
+changed. The IR reference tables now also document both coupled structural types.
+
+Validation: the complete default workspace test run had one failure in the
+previously missing coupled IR-reference field tables; that documentation was
+fixed and its test rerun successfully. All other workspace tests passed. The
+seven focused coupled tests (including matrix preparation) pass, as do changed
+library and focused-test clippy checks. The full seven-way CI clippy matrix was
+run: C ABI variants and Python pass; workspace/no-SINCAL/matrix-gridfm still
+hit the previously recorded unchanged exact-float tests in `psse.rs` and
+`synth_facade_parity.rs`. These baseline warnings are not relaxed here.
+
+Case67 native validation and independent phase alignment are performed on the
+existing Tellegen native-validation branch. Reader PR #822 and its commit
+49e8eacb are unchanged; this extends only the separate model branch.

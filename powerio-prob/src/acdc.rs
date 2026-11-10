@@ -20,6 +20,28 @@ pub enum AcDcOpfProfile {
     PowerModelsAcDc0101AcpVscV1,
 }
 
+/// Numerical angle constraints for coupled OPF, independent of source bus roles.
+/// This does not choose PF voltage or generation controls.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AcDcAngleReferencePolicy {
+    /// Preserve all declared references; preparation refuses uncovered islands.
+    #[default]
+    Declared,
+    /// Preserve declared references. In each active AC island without one,
+    /// fix the lowest source bus ID's angle to zero. DC links do not join islands.
+    LowestBusIdPerIsland,
+}
+impl AcDcAngleReferencePolicy {
+    /// Whether serialization may omit this backward-compatible default.
+    #[must_use]
+    pub const fn is_declared(&self) -> bool {
+        matches!(self, Self::Declared)
+    }
+}
+
 /// Electrical quantities, independent of solver variable names and ordering.
 /// Bus identities are decimal BusId; all other identities are persistent UIDs.
 /// Powers are positive into equipment terminals, except generator production.
@@ -160,6 +182,7 @@ impl AcDcOperatingPoint {
 pub struct AcDcOpfInstance {
     network: BalancedNetwork,
     profile: AcDcOpfProfile,
+    angle_reference_policy: AcDcAngleReferencePolicy,
     initial_point: Option<AcDcOperatingPoint>,
 }
 impl AcDcOpfInstance {
@@ -262,6 +285,7 @@ impl AcDcOpfInstance {
         Ok(Self {
             network,
             profile,
+            angle_reference_policy: AcDcAngleReferencePolicy::Declared,
             initial_point: None,
         })
     }
@@ -272,6 +296,16 @@ impl AcDcOpfInstance {
     #[must_use]
     pub const fn profile(&self) -> AcDcOpfProfile {
         self.profile
+    }
+    /// Select numerical angle references without changing any source bus kind.
+    #[must_use]
+    pub const fn with_angle_reference_policy(mut self, policy: AcDcAngleReferencePolicy) -> Self {
+        self.angle_reference_policy = policy;
+        self
+    }
+    #[must_use]
+    pub const fn angle_reference_policy(&self) -> AcDcAngleReferencePolicy {
+        self.angle_reference_policy
     }
     #[must_use]
     pub const fn initial_point(&self) -> Option<&AcDcOperatingPoint> {
