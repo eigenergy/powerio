@@ -57,6 +57,10 @@ and emergency ratings. A native Egret numeric zero imposes a zero thermal
 limit. PowerIO refuses that input because its branch rating fields reserve
 zero for unlimited flow; the same check applies at every time point.
 
+PowerIO 0.11.10 and earlier reject `null` inside rating time series. Upgrade
+those readers before reimporting corrected canonical output. Native Egret
+accepts these unlimited points.
+
 Earlier PowerIO output could put numeric zero in mixed rating series.
 Regenerate those files from the original model. Change zero to `null` in an
 existing Egret file only after confirming that the source intended unlimited
