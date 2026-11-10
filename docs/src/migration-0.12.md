@@ -186,6 +186,31 @@ repeated, or whose header decodes but places nothing, with
 file. The display's save stamp, an undocumented header number the reader uses
 to recognize drawing records, is not part of the `GeoLayer`.
 
+## Egret branch ratings
+
+Egret states an unlimited branch rating as `null` or as an absent field, and
+enforces a numeric `0` as a zero thermal limit. PowerIO's `rate_a`, `rate_b`,
+and `rate_c` use zero to mean unlimited, so a branch cannot hold a zero limit.
+0.11 read a native Egret `0` as unlimited, which relaxed the constraint
+without saying so. 0.12 refuses it (#828).
+
+- The Egret reader refuses a numeric `0` or `-0.0` in `rating_long_term`,
+  `rating_short_term`, or `rating_emergency`, whether a scalar or at any point
+  of a time series, with `PARSE.SOURCE.MALFORMED`. The message names the field
+  and, in a time series, the time point.
+- `null` and an absent field still read as unlimited, and the writer emits
+  unlimited points as `null`, as 0.11.11 does.
+- If the source meant unlimited flow, change the `0` to `null` or remove the
+  field. If it meant a real zero limit, take the branch out of service at
+  those points (`in_service: false`) or keep the case in Egret, since PowerIO
+  cannot carry a zero limit.
+- Egret files that PowerIO 0.11.10 or earlier wrote may have a `0` in a mixed
+  rating series where the model meant unlimited. Regenerate them from the
+  original model with 0.11.11 or later, which writes `null` there.
+- A 0.11 PowerIO IR document made from such an Egret file already holds
+  unlimited and still reads. Regenerate it from the original Egret input if
+  the zero limit matters.
+
 ## Conversion output
 
 No action is needed unless a consumer compares output byte for byte or
