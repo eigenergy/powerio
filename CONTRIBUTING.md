@@ -364,16 +364,20 @@ this repository (`git fetch --tags`, or from `upstream` on a fork) before
 
 ### PowerIO IR changes
 
-The DTOs in `powerio/src/stored/dto.rs` define the IR document layout. A new
-type, field, or allowed name keeps IR version 2, and changing the meaning or
-layout of an existing type waits for a new IR version. A published schema
-snapshot under `docs/schema/pio-ir/2/` never changes. If `IR_SCHEMA_ID` in
-`powerio/src/lib.rs` still names a published snapshot, the first layout
-change after a release points it at the next release's directory and adds the
-published one to the history in `powerio/tests/frozen_schemas.rs`; commit
-71d3ed2 shows every file that moves with it. Regenerate the snapshot with
-`cargo run -p powerio --example generate_schemas --features schema -- docs/schema`.
-The [schema README](docs/schema/README.md) covers the rest.
+The DTOs in `powerio/src/stored/dto.rs` define the IR document layout. Follow
+the [schema compatibility rules](docs/schema/README.md#compatibility): the
+document version and schema catalog identify the release, and published
+snapshots keep their exact bytes. Within a release series, new structural
+types, allowed names, and distinctly tagged alternatives can be added;
+existing record layouts cannot gain arbitrary fields. Older readers refuse
+types or names they do not implement.
+
+The [schema update procedure](docs/schema/README.md#regenerating-the-current-schema)
+lists the version constants and test paths to update. Regenerate the current
+snapshot with
+`cargo run -p powerio --example generate_schemas --features schema -- docs/schema`,
+then run the frozen-schema and IR compatibility checks. Integer-version-2
+documents from 0.11 remain readable; new 0.12 documents use a release string.
 
 ### C ABI changes
 

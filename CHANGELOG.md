@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Correct the contributor IR compatibility guidance and canonical HVDC format
+  descriptions. Clarify that disconnecting an Egret branch does not preserve
+  an energized branch's zero thermal limit.
+
 ## 0.12.0-rc.1
 
 The release candidate for PowerIO 0.12, which starts the 0.12.x release
