@@ -76,6 +76,10 @@ impl PartialEq<&str> for CimName {
 struct NamePool {
     names: HashSet<Rc<str>>,
     bytes: usize,
+    // A document usually repeats one CIM URI on every class and property.
+    // Cache its raw bytes only after classification and namespace recording.
+    // At most 512 bytes; longer URIs keep the ordinary acceptance path.
+    cim_namespace: Option<Box<[u8]>>,
 }
 
 impl NamePool {
@@ -165,10 +169,16 @@ fn prefixed_name(
     let local = String::from_utf8_lossy(local);
     match resolve {
         ResolveResult::Bound(ns) => {
+            if names.cim_namespace.as_deref() == Some(ns.as_ref()) {
+                return names.intern(&local);
+            }
             let uri = String::from_utf8_lossy(ns.as_ref());
             if uri.contains("CIM-schema-cim") || uri.contains("CIM100#") {
                 if !cim_namespaces.contains(uri.as_ref()) {
                     cim_namespaces.insert(uri.into_owned());
+                }
+                if ns.as_ref().len() <= 512 {
+                    names.cim_namespace = Some(ns.as_ref().into());
                 }
                 names.intern(&local)
             } else if uri == MD_NS {
@@ -506,6 +516,57 @@ mod tests {
         assert_eq!(second.props[0].1.as_str(), "two");
         assert_eq!(second.props[1].0, "entsoe:IdentifiedObject.name");
         assert!(!Rc::ptr_eq(&second.props[0].0.0, &second.props[1].0.0));
+    }
+
+    #[test]
+    fn repeated_cim_uris_preserve_rebinding_and_unicode_names() {
+        let doc = parse_cimxml(r#"<rdf:RDF
+            xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+            xmlns:c="http://iec.ch/TC57/CIM100#">
+            <c:BaseVoltage rdf:ID="_one">
+                <c:IdentifiedObject.name>one</c:IdentifiedObject.name>
+                <c:étiquette>énergie</c:étiquette>
+                <c:IdentifiedObject.name xmlns:c="https://example.test/vendor#">vendor</c:IdentifiedObject.name>
+                <c:BaseVoltage.nominalVoltage>110</c:BaseVoltage.nominalVoltage>
+            </c:BaseVoltage>
+            <c:BaseVoltage xmlns:c="https://example.test/CIM100#" rdf:ID="_two"/>
+            <c:BaseVoltage rdf:ID="_three"/>
+        </rdf:RDF>"#).unwrap();
+        assert_eq!(doc.objects.len(), 3);
+        assert!(doc.objects.iter().all(|o| o.class == "BaseVoltage"));
+        assert_eq!(doc.objects[0].props[1].0, "étiquette");
+        assert_eq!(doc.objects[0].props[1].1.as_str(), "énergie");
+        assert_eq!(doc.objects[0].props[2].0, "vendor:IdentifiedObject.name");
+        assert_eq!(doc.objects[0].props[3].0, "BaseVoltage.nominalVoltage");
+        assert_eq!(
+            doc.cim_namespaces,
+            BTreeSet::from([
+                "http://iec.ch/TC57/CIM100#".to_owned(),
+                "https://example.test/CIM100#".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn long_cim_namespace_is_recorded_without_growing_the_cache() {
+        let mut names = NamePool::default();
+        let mut namespaces = BTreeSet::new();
+        let short = b"http://iec.ch/TC57/CIM100#";
+        let long = format!("https://example.test/{}/CIM100#", "x".repeat(513));
+        for uri in [short.as_slice(), long.as_bytes(), short.as_slice()] {
+            assert_eq!(
+                prefixed_name(
+                    &ResolveResult::Bound(quick_xml::name::Namespace(uri)),
+                    b"BaseVoltage",
+                    &mut namespaces,
+                    &mut names,
+                ),
+                "BaseVoltage"
+            );
+            assert_eq!(names.cim_namespace.as_deref(), Some(short.as_slice()));
+        }
+        assert!(namespaces.contains(long.as_str()));
+        assert_eq!(namespaces.len(), 2);
     }
 
     #[test]

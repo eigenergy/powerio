@@ -5,6 +5,9 @@
 - Correct the contributor IR compatibility guidance and canonical HVDC format
   descriptions. Clarify that disconnecting an Egret branch does not preserve
   an energized branch's zero thermal limit.
+- Reuse a recognized CIM namespace during CGMES parsing with a bounded
+  per-document cache, preserving namespace rebinding, mixed-version checks,
+  and acceptance of long namespace URIs.
 
 ## 0.12.0-rc.1
 
