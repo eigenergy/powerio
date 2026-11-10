@@ -514,6 +514,12 @@ tag. Then:
    re-run the failed run. "Run workflow" builds and checks the tarballs but
    stages no draft.
 3. Inspect the draft and its five binary assets, then publish the release.
+   For API edits, address the draft by its release ID and include the exact
+   `tag_name` and tested commit SHA as `target_commitish`, even when changing
+   only the notes. A draft's `untagged-*` URL is not its release tag. Read back
+   the same release ID, verify its `tag_name`, and confirm the annotated tag
+   still resolves to the tested commit before publishing. The publication
+   request must preserve these explicit tag and commit fields too.
    The release event fires the PyPI publish
    (python.yml) and the crates.io publish (crates.yml: powerio-core,
    powerio-archive, powerio-tx, powerio-dist, powerio-tnd, powerio-prob, powerio-synth,
@@ -576,6 +582,8 @@ patch branch into the RC before its final CI run so compatible fixes are shared.
    it. The release-binaries workflow builds and tests the tarballs and stages
    a draft release exactly as for a release.
 4. Publish the draft with **Set as a pre-release** checked. A prerelease
+   uses the same release-ID, tag and commit readback checks described above;
+   preserve the complete `v0.12.0-rc.1` tag when editing its metadata. It
    publishes nothing beyond GitHub: python.yml builds the wheels and sdist as
    run artifacts but skips PyPI, crates.yml skips crates.io, and
    notify-powerio-jl.yml does not start PowerIO.jl's Release workflow. The
