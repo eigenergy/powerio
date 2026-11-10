@@ -1,7 +1,7 @@
 //! Windows-authored DSS decks in portable, case-sensitive memory inventories.
 use std::sync::Arc;
 
-use powerio_core::{ArtifactPath, SourceTree, SourceTreeLimits};
+use powerio_core::{ArtifactPath, Source, SourceTree, SourceTreeLimits};
 
 fn parse(
     primary: &str,
@@ -118,4 +118,23 @@ fn case_fallback_cannot_read_outside_selected_tree_root() {
             .iter()
             .any(|d| d.code() == "READ.DSS.INCLUDE_LOAD_FAILED")
     );
+}
+
+#[test]
+fn named_companion_buffers_resolve_unique_case_variants() {
+    // The Python and C entry points supply companions this way.
+    let source = Source::from_memory(
+        "Master.DSS",
+        b"new circuit.c\nredirect loads.dss\n".to_vec(),
+    )
+    .unwrap()
+    .with_named_buffer(
+        "Loads.DSS",
+        b"new load.a bus1=sourcebus.1 phases=1 kv=1 kw=1\n".to_vec(),
+    )
+    .unwrap();
+    let module = powerio_dist::parse(source).unwrap();
+    assert_eq!(module.value().loads().len(), 1);
+    let names: Vec<_> = module.sources().iter().map(|s| s.id().as_str()).collect();
+    assert!(names.contains(&"Loads.DSS"), "{names:?}");
 }

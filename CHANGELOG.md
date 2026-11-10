@@ -227,6 +227,23 @@ action.
   with the Rust 1.89 MSRV, and the dependency bumps (#749, #751, #752,
   #753, #754, #760, #793).
 
+**Carried from 0.11.11**
+
+- Everything in [0.11.11](#01111): XIIDM terminals for static var
+  compensators and for equipment without a stated terminal in partial
+  substation data (#831, #832), Egret `null` points for unlimited branch
+  ratings (#828), the winding reactance base of a generated CGMES phase tap
+  changer (#829), letter-case fallback for OpenDSS companions supplied as
+  named buffers (#812), absolute include detection on every platform for
+  GridLAB-D and OpenDSS, the Python classifier cleanup, and the Windows
+  architecture map check (#833, #834).
+- Unlike 0.11.11, which still reads a native Egret numeric `0` rating as
+  unlimited, 0.12 refuses a numeric zero in `rating_long_term`,
+  `rating_short_term`, or `rating_emergency` with `PARSE.SOURCE.MALFORMED`,
+  since PowerIO cannot hold a zero thermal limit. See
+  [Egret branch ratings](docs/src/migration-0.12.md#egret-branch-ratings)
+  (#828).
+
 **Contributor credit**
 
 - @frederikgeth authored the collection/archive stack (#775, #776,
@@ -241,6 +258,86 @@ action.
 - @samtalki integrated the release, compatibility migration, adapters, and
   review follow-ups in #821 and #823. Original contributor commits and
   coauthor attribution are retained.
+
+## 0.11.11
+
+**XIIDM**
+
+- XIIDM written from a network without stored substation data gives each
+  static var compensator a terminal on its bus. PowerIO used to reject its own
+  output when a compensator came from a PSS/E FACTS record (#831, #832).
+- XIIDM written from a network with partial substation data, such as PSS/E
+  substation data that names only some equipment terminals, gives each load,
+  generator, battery, shunt, static var compensator, line, and transformer
+  without a stated terminal a terminal on its bus, and reports each one as
+  `EMIT.XIIDM.VALUE_DEFAULTED`. In a node breaker voltage level the terminal
+  is a new node joined to the bus's node by an internal connection. Equipment
+  that still has no bus or node, such as equipment at a bus outside every
+  stated voltage level, is left out and reported as
+  `EMIT.XIIDM.RECORD_DROPPED`. Such equipment used to be written without a
+  terminal, which PowerIO and PowSybl reject, or, for a load, generator,
+  battery, shunt, or compensator outside every voltage level, left out
+  without a report (#832).
+- XIIDM output reports `EMIT.XIIDM.FIELD_DROPPED` when a static var
+  compensator read from PSS/E controls the voltage of a remote bus that has no
+  terminal to name. The compensator then controls the voltage at its own
+  terminal, to the remote bus's setpoint (#832).
+
+**Egret**
+
+- Egret time-series output writes `null` for an unlimited branch rating
+  instead of `0`, which Egret enforces as a zero thermal limit, and the reader
+  accepts `null` rating points. PowerIO 0.11.10 and earlier reject `null`
+  rating points, so read such output with 0.11.11 or newer. A numeric zero in
+  a native Egret file still reads as unlimited, as before; refusing it is
+  planned for 0.12 (#828).
+
+**CGMES**
+
+- A phase shift that PowerIO writes as a new phase tap changer states the
+  changer's reactance on end 1's base, the base of end 1's own reactance.
+  Reading such a file back no longer reports a false tap-step reactance
+  deviation when the transformer's tap ratio is not one. No branch value
+  changes. Files written by 0.11.0 through 0.11.10 still state the old
+  reactance and still read back with the deviation; regenerate them from the
+  original network to remove it. The 0.11.10 release notes now also state
+  that CGMES files written by 0.11.0 through 0.11.9 with a nonzero to-side
+  transformer shunt read back with a different shunt (#829).
+
+**OpenDSS**
+
+- An OpenDSS deck supplied from memory, as a file tree
+  (`Source::from_memory_tree`) or as a primary buffer with named companions
+  (`Source::with_named_buffer`, Python's named buffers, and C's
+  `pio_source_from_memory_with_buffers`), resolves a `Redirect`, `Compile`,
+  or `Buscoords` name that differs from a supplied path only in letter case,
+  as decks written on Windows often do (`linecodes.dss` against
+  `LineCodes.DSS`). Such an include used to fail with
+  `READ.DSS.INCLUDE_LOAD_FAILED` and leave an incomplete network. An exact
+  name still wins, a name that matches several supplied paths is refused
+  rather than guessed, the dependency keeps its supplied path as its id, and
+  files read from disk are unchanged (#812).
+
+**GridLAB-D and OpenDSS**
+
+- An include path in a GridLAB-D or OpenDSS case counts as absolute on every
+  platform when it starts with `/` or `\` (including a network share such as
+  `\\server\share`) or with a drive letter and a separator (`C:\` or `C:/`),
+  since a case written on one system can be read on another. GridLAB-D used
+  to recognize only a leading `/`, so on Windows a project with an include
+  such as `C:\feeder\load.glm` was relocated when it should have been refused,
+  and OpenDSS missed `C:\` paths on Linux and macOS and `/` paths on Windows
+  (#832).
+
+**Python**
+
+- The package metadata no longer lists Python 3.9 and 3.10, which the
+  package has not supported since it began requiring Python 3.11.
+
+**CI**
+
+- The architecture map check recognizes the `tests/` workspace members on
+  Windows, where cargo reports paths with backslashes (#833, #834).
 
 ## 0.11.10
 

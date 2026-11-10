@@ -1342,7 +1342,7 @@ impl<L: Loader> Executor<'_, L> {
         file_arg: &str,
         ctx: &dyn Fn(String) -> String,
     ) -> Option<PathBuf> {
-        self.raw.absolute_dependency |= Path::new(&file_arg.replace('\\', "/")).is_absolute();
+        self.raw.absolute_dependency |= crate::portable_path::is_portable_absolute(file_arg);
         let resolved = self.resolve(file_arg);
         if resolved.is_none() {
             let message = ctx(format!(

@@ -417,6 +417,101 @@ fn terminal_admittances(branch: &powerio_tx::Branch) -> [(f64, f64); 4] {
     ]
 }
 
+// Reproduction from Mohamed Numair in #829, extended to signed shifts,
+// unequal voltage levels, and retained ratio changers on either winding.
+#[test]
+fn generated_phase_taps_use_the_end_one_reactance_base() {
+    for version in [2, 3] {
+        for tap in [0.9, 1.0, 1.05, 1.2] {
+            for shift in [-10.0, 10.0, 25.0] {
+                for (rho1, rho2) in [(1.0, 1.0), (1.05, 1.0), (1.0, 1.1), (1.05, 1.1)] {
+                    let taps = ratio_tap("end-hv", rho1) + &ratio_tap("end-lv", rho2);
+                    let text =
+                        transformer_document(version, &taps).replace("End.x>0.1<", "End.x>0<");
+                    let mut source = parse_document(text).sever_source();
+                    let branch = &mut source.value_mut().branches_mut()[0];
+                    branch.r = 0.01;
+                    branch.x = 0.1;
+                    branch.tap = tap;
+                    branch.shift = shift;
+                    let expected = branch.clone();
+                    let output = tempfile::tempdir().unwrap();
+                    let path = output.path().join("cgmes");
+                    powerio_tx::emit(&source, TargetFormat::Cgmes, Destination::path(&path))
+                        .unwrap();
+                    let equipment = std::fs::read_dir(&path)
+                        .unwrap()
+                        .map(|entry| entry.unwrap().path())
+                        .find(|path| path.to_string_lossy().ends_with("_EQ.xml"))
+                        .unwrap();
+                    let xml = std::fs::read_to_string(equipment).unwrap();
+                    let first = xml
+                        .split("<cim:PowerTransformerEnd ")
+                        .skip(1)
+                        .map(|end| end.split("</cim:PowerTransformerEnd>").next().unwrap())
+                        .find(|end| end.contains("<cim:TransformerEnd.endNumber>1<"))
+                        .unwrap();
+                    let number = |text: &str, field: &str| -> f64 {
+                        text.split(&format!("<cim:{field}>"))
+                            .nth(1)
+                            .unwrap()
+                            .split('<')
+                            .next()
+                            .unwrap()
+                            .parse()
+                            .unwrap()
+                    };
+                    let end_x = number(first, "PowerTransformerEnd.x");
+                    let u1 = 220.0 * tap * rho2 / rho1;
+                    assert_close(end_x, 0.1 * u1 * u1 / (100.0 * rho2 * rho2));
+                    assert_close(number(&xml, "PhaseTapChangerLinear.xMin"), end_x);
+                    assert_close(number(&xml, "PhaseTapChangerLinear.xMax"), end_x);
+                    let reread = powerio_tx::parse(Source::open(&path).unwrap()).unwrap();
+                    let stored = ir_round_trip(&reread);
+                    let second = canonical_round_trip(stored.clone());
+                    for module in [&reread, &stored, &second] {
+                        let branch = &module.value().branches()[0];
+                        for (actual, expected) in [
+                            (branch.r, expected.r),
+                            (branch.x, expected.x),
+                            (branch.tap, expected.tap),
+                            (branch.shift, expected.shift),
+                        ] {
+                            assert_close(actual, expected);
+                        }
+                        for (actual, expected) in terminal_admittances(branch)
+                            .into_iter()
+                            .zip(terminal_admittances(&expected))
+                        {
+                            assert_close(actual.0, expected.0);
+                            assert_close(actual.1, expected.1);
+                        }
+                        let phase = module
+                            .value()
+                            .detailed_connectivity()
+                            .as_ref()
+                            .unwrap()
+                            .tap_changers
+                            .iter()
+                            .find(|tap| tap.kind == powerio_tx::TapChangerKind::Phase)
+                            .unwrap();
+                        assert_eq!(phase.steps.len(), 3);
+                        for step in &phase.steps {
+                            assert_close(step.reactance_deviation_percent, 0.0);
+                        }
+                        assert!(
+                            !module
+                                .diagnostics()
+                                .iter()
+                                .any(|d| d.message().contains("percentage deviations"))
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn transformer_voltage_bases_preserve_the_original_two_port_circuit() {
     for version in [2, 3] {
