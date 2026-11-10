@@ -874,3 +874,34 @@ fn dc_droop_pf_checks_selected_slopes_deadbands_and_local_dc_authority() {
     n.set_ac_dc_equivalent(Some(e)).unwrap();
     assert!(AcDcPfInstance::from_network(n, profile).is_ok());
 }
+
+#[test]
+fn physical_pf_coordinates_are_explicit_and_roundtrip_without_editing_declarations() {
+    let profile = AcDcPfProfile::PhysicalCoordinatesDcDroopSharedVoltageEqualIncrementV1;
+    let net = instance().network().clone();
+    let original = serde_json::to_value(&net).unwrap();
+    assert_eq!(
+        profile.coordinate_policy(),
+        AcDcCoordinatePolicy::PhysicalLocalBases
+    );
+    assert_eq!(
+        PF_PROFILE.coordinate_policy(),
+        AcDcCoordinatePolicy::SourcePerUnit
+    );
+    assert!(profile.allows_dc_power_droop() && profile.shares_voltage_reactive_increments());
+    let i = AcDcPfInstance::from_network(net.clone(), profile).unwrap();
+    let electrical =
+        AcDcOpfInstance::from_network(net.clone(), AcDcOpfProfile::PhysicalCoordinatesAcpVscV1)
+            .unwrap();
+    let p = AcDcOperatingPoint::for_pf(&i, point(&electrical).values().to_vec()).unwrap();
+    let i = i.with_initial_point(p.clone()).unwrap();
+    let r = AcDcPfSolution::new(Arc::new(i.clone()), p, Termination::Converged, None).unwrap();
+    for value in [PioValue::from(i), PioValue::from(r)] {
+        let doc = stored(value);
+        assert_eq!(stored(read(&doc).unwrap().value().clone()), doc);
+    }
+    assert_eq!(serde_json::to_value(net.clone()).unwrap(), original);
+    let mut invalid = net;
+    invalid.buses_mut()[0].base_kv = 0.;
+    assert!(AcDcPfInstance::from_network(invalid, profile).is_err());
+}

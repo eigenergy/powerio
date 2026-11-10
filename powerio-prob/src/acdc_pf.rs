@@ -1,7 +1,7 @@
 //! Explicit coupled PF intent, distinct from OPF dispatch and operating limits.
 use crate::{
-    AcDcOperatingPoint, AcDcOpfInstance, AcDcOpfProfile, AcDcQuantity, AcDcValue, Producer,
-    Termination,
+    AcDcCoordinatePolicy, AcDcOperatingPoint, AcDcOpfInstance, AcDcOpfProfile, AcDcQuantity,
+    AcDcValue, Producer, Termination,
 };
 use powerio_core::Error;
 use powerio_tx::{
@@ -41,6 +41,14 @@ pub enum AcDcPfProfile {
     /// valve-power droop is unsupported. Limits are reported without saturation
     /// or control switching; inactive and unused declarations remain retained.
     PowerModelsAcDc0101AcpVscDcDroopSharedVoltageEqualIncrementV1,
+    /// Physical local voltage/impedance bases, Cinv losses and declared current
+    /// ratings, with DC-power droop and shared reactive injection increments.
+    /// PCC voltage uses the AC bus base, filter/valve voltage the station base,
+    /// and DC voltage its local per-pole base. Droop k = R*S/Vdc_base, where
+    /// R is per-pole kV per total station MW; Vdcset is on that DC bus base.
+    /// This explicitly interprets declarations; it does not automatically rebase
+    /// source data. Limits remain post-solve reports without saturation.
+    PhysicalCoordinatesDcDroopSharedVoltageEqualIncrementV1,
 }
 
 impl AcDcPfProfile {
@@ -50,6 +58,7 @@ impl AcDcPfProfile {
             self,
             Self::PowerModelsAcDc0101AcpVscSharedVoltageEqualIncrementV1
                 | Self::PowerModelsAcDc0101AcpVscDcDroopSharedVoltageEqualIncrementV1
+                | Self::PhysicalCoordinatesDcDroopSharedVoltageEqualIncrementV1
         )
     }
     #[must_use]
@@ -57,7 +66,17 @@ impl AcDcPfProfile {
         matches!(
             self,
             Self::PowerModelsAcDc0101AcpVscDcDroopSharedVoltageEqualIncrementV1
+                | Self::PhysicalCoordinatesDcDroopSharedVoltageEqualIncrementV1
         )
+    }
+    #[must_use]
+    pub const fn coordinate_policy(self) -> AcDcCoordinatePolicy {
+        match self {
+            Self::PhysicalCoordinatesDcDroopSharedVoltageEqualIncrementV1 => {
+                AcDcCoordinatePolicy::PhysicalLocalBases
+            }
+            _ => AcDcCoordinatePolicy::SourcePerUnit,
+        }
     }
 }
 
@@ -70,8 +89,11 @@ pub struct AcDcPfInstance {
 }
 impl AcDcPfInstance {
     pub fn from_network(network: BalancedNetwork, profile: AcDcPfProfile) -> Result<Self, Error> {
-        let electrical =
-            AcDcOpfInstance::from_network(network, AcDcOpfProfile::PowerModelsAcDc0101AcpVscV1)?;
+        let electrical_profile = match profile.coordinate_policy() {
+            AcDcCoordinatePolicy::PhysicalLocalBases => AcDcOpfProfile::PhysicalCoordinatesAcpVscV1,
+            AcDcCoordinatePolicy::SourcePerUnit => AcDcOpfProfile::PowerModelsAcDc0101AcpVscV1,
+        };
+        let electrical = AcDcOpfInstance::from_network(network, electrical_profile)?;
         validate_controls(electrical.network(), profile)?;
         Ok(Self {
             electrical,
