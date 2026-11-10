@@ -149,7 +149,9 @@ fn append_point(
                 key.as_str(),
                 "rating_long_term" | "rating_short_term" | "rating_emergency"
             );
-        let unlimited = json!(0.0);
+        // Egret skips a thermal constraint only for None (JSON null).
+        // A numeric zero would enforce zero flow at this time point.
+        let unlimited = Value::Null;
         if missing_rating {
             out.entry(key.clone()).or_insert_with(|| unlimited.clone());
         }

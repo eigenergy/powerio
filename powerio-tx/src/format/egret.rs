@@ -329,7 +329,8 @@ fn branch_obj(br: &Branch) -> Value {
     } else {
         m.insert("branch_type".into(), Value::String("line".into()));
     }
-    // egret treats a zero rating as "unset"; emit only nonzero limits.
+    // PowerIO reserves zero for unlimited; Egret uses absent/null ratings.
+    // A numeric zero in Egret is an enforced zero thermal limit.
     if br.rate_a != 0.0 {
         m.insert("rating_long_term".into(), jnum(br.rate_a));
     }
@@ -890,6 +891,12 @@ fn apply_varying(
         ))),
     };
     let row = varying.row;
+    // Egret states an unlimited rating point as null. PowerIO's branch model
+    // reserves zero for unlimited, so a native numeric zero also reads as
+    // unlimited here (issue #828; refusing it is planned for 0.12).
+    let rating = || {
+        if value.is_null() { Ok(0.0) } else { number() }
+    };
     match varying.section.as_str() {
         "load" => {
             let load = &mut network.loads_mut()[row];
@@ -926,9 +933,9 @@ fn apply_varying(
         "branch" => {
             let branch = &mut network.branches_mut()[row];
             match varying.attribute.as_str() {
-                "rating_long_term" => branch.rate_a = number()?,
-                "rating_short_term" => branch.rate_b = number()?,
-                "rating_emergency" => branch.rate_c = number()?,
+                "rating_long_term" => branch.rate_a = rating()?,
+                "rating_short_term" => branch.rate_b = rating()?,
+                "rating_emergency" => branch.rate_c = rating()?,
                 "transformer_tap_ratio" => branch.tap = number()?,
                 "transformer_phase_shift" => branch.shift = number()?,
                 "in_service" => branch.in_service = boolean()?,
