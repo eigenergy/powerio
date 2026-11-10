@@ -12,7 +12,7 @@ pub(super) const MARKER: &[u8] = b"[Main]\nAppVersion=PSS SINCAL\nNetworkType=El
 // Deliberately minimal topology only. This is not a claim that SINCAL accepts
 // the synthetic database as a complete electrical project.
 pub(super) fn database(edit: &str) -> Vec<u8> {
-    let connection = Connection::open_in_memory().unwrap();
+    let mut connection = Connection::open_in_memory().unwrap();
     connection
         .execute_batch(
             "

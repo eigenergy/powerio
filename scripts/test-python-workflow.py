@@ -171,7 +171,7 @@ for name in ("build", "julia-tarballs"):
     )
     assert macos_runners == ["macos-15", "macos-15"], (name, macos_runners)
 
-# Docs are built on pull requests but publication is strictly non-PR.
+# Docs are built on pull requests; evidence generation and publication use main.
 DOCS_WORKFLOW = (ROOT / ".github/workflows/docs.yml").read_text()
 
 
@@ -189,7 +189,11 @@ docs_build = docs_job("build")
 docs_deploy = docs_job("deploy")
 assert "actions/deploy-pages@" not in docs_build
 assert "actions/deploy-pages@" in docs_deploy
-assert re.search(r"^    if: github.event_name != 'pull_request'$", docs_deploy, re.M)
+docs_main_only = "github.event_name != 'pull_request' && github.ref == 'refs/heads/main'"
+assert re.search(rf"^    if: {re.escape(docs_main_only)}$", docs_deploy, re.M)
+evidence_step = docs_build.split("    - name: Publish conversion evidence\n", 1)[1]
+evidence_step = re.split(r"^    - ", evidence_step, maxsplit=1, flags=re.M)[0]
+assert re.search(rf"^      if: {re.escape(docs_main_only)}$", evidence_step, re.M)
 assert "-p powerio-tnd" in docs_build, "retain the current main rustdoc package set"
 
 # Keep the release workflow independent of the retired paired-release hook.

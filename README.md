@@ -6,7 +6,7 @@
 [![crates.io](https://img.shields.io/crates/v/powerio)](https://crates.io/crates/powerio)
 [![docs.rs](https://docs.rs/powerio/badge.svg)](https://docs.rs/powerio)
 [![PyPI](https://img.shields.io/pypi/v/powerio)](https://pypi.org/project/powerio/)
-[![MSRV 1.88](https://img.shields.io/badge/MSRV-1.88-blue.svg)](https://github.com/eigenergy/powerio/blob/main/Cargo.toml)
+[![MSRV 1.89](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://github.com/eigenergy/powerio/blob/main/Cargo.toml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/eigenergy/powerio/blob/main/LICENSE-MIT)
 
 <p align="center">

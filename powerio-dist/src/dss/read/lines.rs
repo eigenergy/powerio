@@ -196,7 +196,9 @@ impl Reader<'_> {
                 name,
                 length,
             );
-            line.i_max = Some(vec![state.emergamps; n]);
+            if state.emergamps_available {
+                line.i_max = Some(vec![state.emergamps; n]);
+            }
             line.extras.insert("normamps".into(), state.normamps.into());
             line.extras
                 .insert("dss_switch".into(), state.is_switch.into());
@@ -340,6 +342,65 @@ fn invalid_line_never_returns_a_partial_typed_network() {
             .iter()
             .any(|d| d.code() == C::READ_DSS_LINE_UNRESOLVED.code)
     );
+}
+
+#[test]
+fn unrated_dss_line_does_not_acquire_the_default_600_amp_limit() {
+    let raw = crate::dss::raw::__parse_raw_with(
+        "New Circuit.c\nNew Line.l bus1=sourcebus.1 bus2=end.1 phases=1 r1=0.1 x1=0.2",
+        "unrated.dss",
+        &mut |_: &std::path::Path| Err(std::io::Error::other("no includes")),
+    );
+    let net = sources::staged_from_raw(&raw).unwrap();
+    let line = net.lines().iter().find(|line| line.name == "l").unwrap();
+    assert_eq!(line.i_max, None);
+}
+
+#[test]
+fn switch_status_does_not_declare_the_default_600_amp_limit() {
+    // A `switch=yes` Line keeps its constructor default emergency rating
+    // unstated: the switch replaces the impedance, not the rating (#762).
+    let raw = crate::dss::raw::__parse_raw_with(
+        "New Circuit.c\nNew Linecode.lc nphases=1 r1=0.1 x1=0.2\nNew Linecode.rated nphases=1 r1=0.1 x1=0.2 emergamps=240\nNew Line.bare bus1=sourcebus.1 bus2=a.1 phases=1 switch=yes\nNew Line.coded bus1=sourcebus.1 bus2=b.1 phases=1 switch=yes linecode=lc\nNew Line.reverted bus1=sourcebus.1 bus2=c.1 phases=1 switch=yes switch=no r1=0.1 x1=0.2\nNew Line.rated bus1=sourcebus.1 bus2=d.1 phases=1 switch=yes linecode=rated\nNew Line.stated bus1=sourcebus.1 bus2=e.1 phases=1 switch=yes emergamps=400",
+        "switches.dss",
+        &mut |_: &std::path::Path| Err(std::io::Error::other("no includes")),
+    );
+    let net = sources::staged_from_raw(&raw).unwrap();
+    let i_max = |name: &str| {
+        net.lines()
+            .iter()
+            .find(|line| line.name == name)
+            .unwrap()
+            .i_max
+            .clone()
+    };
+    assert_eq!(i_max("bare"), None);
+    assert_eq!(i_max("coded"), None);
+    assert_eq!(i_max("reverted"), None);
+    assert_eq!(i_max("rated").as_deref(), Some(&[240.0][..]));
+    assert_eq!(i_max("stated").as_deref(), Some(&[400.0][..]));
+}
+
+#[test]
+fn explicit_and_inherited_linecode_emergency_ratings_remain_typed() {
+    let raw = crate::dss::raw::__parse_raw_with(
+        "New Circuit.c\nNew Linecode.rated nphases=1 r1=0.1 x1=0.2 emergamps=240\nNew Line.inherited bus1=sourcebus.1 bus2=a.1 phases=1 linecode=rated\nNew Line.explicit bus1=sourcebus.1 bus2=b.1 phases=1 r1=0.1 x1=0.2 emergamps=180",
+        "rated.dss",
+        &mut |_: &std::path::Path| Err(std::io::Error::other("no includes")),
+    );
+    let net = sources::staged_from_raw(&raw).unwrap();
+    let inherited = net
+        .lines()
+        .iter()
+        .find(|line| line.name == "inherited")
+        .unwrap();
+    let explicit = net
+        .lines()
+        .iter()
+        .find(|line| line.name == "explicit")
+        .unwrap();
+    assert_eq!(inherited.i_max.as_deref(), Some(&[240.0][..]));
+    assert_eq!(explicit.i_max.as_deref(), Some(&[180.0][..]));
 }
 
 #[test]

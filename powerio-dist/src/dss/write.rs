@@ -35,6 +35,7 @@ mod current_form;
 mod ideal_switches;
 mod ideal_transformers;
 mod loads;
+mod safe_names;
 mod sources;
 mod storage;
 mod terminal_voltage;
@@ -85,6 +86,7 @@ pub(crate) fn emit_dss_text(net: &MulticonductorNetwork) -> TextEmission {
 }
 
 /// Emits canonical `.dss` text from the model with explicit options.
+#[cfg(test)]
 pub(crate) fn emit_dss_text_with_options(
     net: &MulticonductorNetwork,
     options: &DssEmitOptions,
@@ -92,16 +94,52 @@ pub(crate) fn emit_dss_text_with_options(
     emit_snapshot(net, options)
 }
 
+/// Validate the network as written, then emit it. The names dss cannot carry
+/// are replaced once; their findings go out with the emission.
+pub(crate) fn emit_validated_dss_text(
+    net: &MulticonductorNetwork,
+    options: &DssEmitOptions,
+) -> Result<TextEmission, powerio_core::Error> {
+    let mut warnings = crate::diagnostics::Diagnostics::new();
+    let net = safe_names::apply(net, &mut warnings);
+    validate_renamed(net.as_ref())?;
+    Ok(emit_renamed(net.as_ref(), warnings, options))
+}
+
+#[cfg(test)]
 pub(crate) fn validate_emission(net: &MulticonductorNetwork) -> Result<(), powerio_core::Error> {
+    // Validate the network as written: with the names dss cannot carry
+    // replaced, a bus id such as `Node 1` is representable. The replacement
+    // findings are recorded again when the writer runs.
+    let mut replacements = crate::diagnostics::Diagnostics::new();
+    let net = safe_names::apply(net, &mut replacements);
+    validate_renamed(net.as_ref())
+}
+
+/// Validate a network whose names are already the ones dss will carry.
+fn validate_renamed(net: &MulticonductorNetwork) -> Result<(), powerio_core::Error> {
     sources::validate(net)
         .map_err(|message| powerio_core::Error::new(&C::BUILD_DIST_ELECTRICAL_INCOMPLETE, message))
 }
 
+#[cfg(test)]
 fn emit_snapshot(net: &MulticonductorNetwork, options: &DssEmitOptions) -> TextEmission {
+    let mut warnings = crate::diagnostics::Diagnostics::new();
+    let net = safe_names::apply(net, &mut warnings);
+    emit_renamed(net.as_ref(), warnings, options)
+}
+
+/// Emit a network whose names are already the ones dss will carry, with the
+/// findings recorded so far leading the emission's own.
+fn emit_renamed(
+    net: &MulticonductorNetwork,
+    warnings: crate::diagnostics::Diagnostics,
+    options: &DssEmitOptions,
+) -> TextEmission {
     let mut w = DssWriter {
         out: String::new(),
         sidecars: Vec::new(),
-        warnings: crate::diagnostics::Diagnostics::new(),
+        warnings,
         options: options.clone(),
         grounded: net
             .buses()
@@ -3437,11 +3475,11 @@ mod tests {
     }
 
     #[test]
-    fn unrepresentable_names_are_reported() {
+    fn unrepresentable_names_are_replaced_and_reported() {
         let (b, vs) = three_phase_source(2400.0);
         let mut load = load_on("sb", &["1", "2", "3", "4"], Configuration::Wye);
         load.name = "load 1".into();
-        let net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
+        let mut net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
             name: Some("my circuit".into()),
             base_frequency: 60.0,
             buses: vec![b, bus("a=b", &["1"], &[])],
@@ -3449,17 +3487,7 @@ mod tests {
             loads: vec![load],
             ..MulticonductorNetworkTables::default()
         });
-        let out = emit_dss_text(&net);
-        let hits = |needle: &str| {
-            out.render_diagnostics()
-                .iter()
-                .any(|w| w.contains(needle) && w.contains("cannot represent"))
-        };
-        assert!(hits("load 1"), "{:?}", out.render_diagnostics());
-        assert!(hits("my circuit"), "{:?}", out.render_diagnostics());
-        // The bad bus id warns at its bus_ref emission site.
-        let mut net2 = net.clone();
-        net2.lines_mut().push(DistLine {
+        net.lines_mut().push(DistLine {
             name: "l1".into(),
             bus_from: "sb".into(),
             bus_to: "a=b".into(),
@@ -3472,14 +3500,28 @@ mod tests {
             s_max: None,
             extras: Extras::new(),
         });
-        let out2 = emit_dss_text(&net2);
+        let out = emit_dss_text(&net);
+        let rendered = out.render_diagnostics();
+        for (old, new) in [
+            ("load 1", "load_1"),
+            ("my circuit", "my_circuit"),
+            ("a=b", "a_b"),
+        ] {
+            assert!(
+                rendered.iter().any(|w| w.contains(&format!("`{old}`"))
+                    && w.contains(&format!("written as `{new}`"))),
+                "{old}: {rendered:?}"
+            );
+        }
         assert!(
-            out2.render_diagnostics()
-                .iter()
-                .any(|w| w.contains("a=b") && w.contains("cannot represent")),
-            "{:?}",
-            out2.render_diagnostics()
+            !rendered.iter().any(|w| w.contains("cannot represent")),
+            "{rendered:?}"
         );
+        // Every reference uses the replacement.
+        assert!(out.text.contains("New Circuit.my_circuit "), "{}", out.text);
+        assert!(out.text.contains("New Load.load_1 "), "{}", out.text);
+        assert!(out.text.contains("bus2=a_b.1 "), "{}", out.text);
+        assert!(!out.text.contains("a=b"), "{}", out.text);
     }
 
     #[test]
@@ -3599,6 +3641,40 @@ mod tests {
                 .i_max,
             l2.i_max
         );
+    }
+
+    #[test]
+    fn unrated_switch_round_trips_without_a_default_rating() {
+        // `switch=yes` leaves an unstated emergency rating unstated, so the
+        // canonical deck states none and the reread line has no limit (#762).
+        let src = "Clear\n\
+                   New Circuit.c1 basekv=12.47 pu=1 angle=0 phases=3 bus1=sb.1.2.3\n\
+                   New Linecode.lc nphases=3 r1=0.1 x1=0.2\n\
+                   New Line.bare bus1=sb.1.2.3 bus2=b2.1.2.3 phases=3 switch=yes\n\
+                   New Line.coded bus1=b2.1.2.3 bus2=b3.1.2.3 phases=3 switch=yes \
+                   linecode=lc\n";
+        let net = parse_dss_str(src);
+        let i_max = |net: &MulticonductorNetwork, name: &str| {
+            net.lines()
+                .iter()
+                .find(|l| l.name == name)
+                .unwrap()
+                .i_max
+                .clone()
+        };
+        assert_eq!(i_max(&net, "bare"), None);
+        assert_eq!(i_max(&net, "coded"), None);
+        let (first, second) = roundtrip(&net);
+        for name in ["bare", "coded"] {
+            let line = first
+                .lines()
+                .find(|l| l.contains(&format!("Line.{name} ")))
+                .unwrap();
+            assert!(!line.contains("emergamps="), "{line}");
+        }
+        let restored = parse_dss_str(&second);
+        assert_eq!(i_max(&restored, "bare"), None);
+        assert_eq!(i_max(&restored, "coded"), None);
     }
 
     #[test]
@@ -4024,8 +4100,8 @@ mod tests {
             "New Generator.gen bus1=lv.1.3.0 ",
             "New Generator.fixed_ibr bus1=lv.1.3.0 ",
             "New PVSystem.pv_ibr bus1=lv.1.3.0 ",
-            "New Line.sw1 bus1=lv.1.3.0 bus2=_pio_switch_sw1.1.2.0 phases=3 switch=y",
-            "New Line._pio_switch_sw1 bus1=_pio_switch_sw1.1.2.0 bus2=lv.1.3.0 phases=3",
+            "New Line.sw1 bus1=lv.1.3.0 bus2=_pio_switch_sw1.1.3.0 phases=3 switch=y",
+            "New Line._pio_switch_sw1 bus1=_pio_switch_sw1.1.3.0 bus2=lv.1.3.0 phases=3",
             "New Line.l1 bus1=lv.1.0.3 bus2=lv.1.0.3 phases=3 linecode=lc ",
         ] {
             assert!(

@@ -414,3 +414,36 @@ fn leakage_impedance_follows_the_mg_ravens_tools() {
         .unwrap();
     assert!((read.xsc_pct[0] - sp.xsc_pct[0]).abs() < 1e-9);
 }
+
+/// The `New Line` statements whose two ends name different node lists.
+/// PMD's Kron reduction (`transform_data_model`) refuses a line whose
+/// `f_connections` differ from its `t_connections`.
+fn lines_with_mismatched_nodes(dss: &str) -> Vec<&str> {
+    fn nodes<'a>(statement: &'a str, key: &str) -> Option<&'a str> {
+        statement
+            .split_whitespace()
+            .find_map(|token| token.strip_prefix(key))
+            .map(|bus| bus.split_once('.').map_or("", |(_, nodes)| nodes))
+    }
+    dss.lines()
+        .filter(|statement| statement.starts_with("New Line."))
+        .filter(|statement| nodes(statement, "bus1=") != nodes(statement, "bus2="))
+        .collect()
+}
+
+#[test]
+fn dss_helper_lines_name_the_same_nodes_at_both_ends() {
+    // #765: a RAVENS or CIM source has a grounded neutral, so the OpenDSS
+    // writer states it as one single phase source per conductor behind a
+    // helper line. That line joined node 1 of its private bus to phase B or
+    // C of the source bus.
+    let ravens =
+        helpers::parse_file(case("ravens/case3_balanced.json"), Some("ravens-json")).unwrap();
+    let (_, cim) = to_cim(&ravens);
+    for (what, net) in [("ravens", &ravens), ("cim", &cim)] {
+        let dss = net.emit_value(DistTargetFormat::Dss).text;
+        assert!(dss.contains("_pio_ideal_"), "{what}: {dss}");
+        let mismatched = lines_with_mismatched_nodes(&dss);
+        assert!(mismatched.is_empty(), "{what}: {mismatched:#?}");
+    }
+}

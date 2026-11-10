@@ -6,8 +6,8 @@
 //! demand and shunts onto the bus row; the hub keeps them first-class).
 
 use crate::network::{
-    Area, Branch, Bus, BusId, BusType, Extras, GEN_EXTRA_KEYS, GenCaps, GenCost, Generator,
-    GeneratorEnergySource, Hvdc, Load, Shunt, Storage,
+    Area, Branch, BranchSolution, Bus, BusId, BusType, Extras, GEN_EXTRA_KEYS, GenCaps, GenCost,
+    Generator, GeneratorEnergySource, Hvdc, Load, Shunt, Storage,
 };
 use crate::{Error, Result};
 
@@ -52,6 +52,11 @@ mod branch_col {
     pub const ANGMIN: usize = 11;
     pub const ANGMAX: usize = 12;
     pub const REQUIRED: usize = 13;
+    /// A solved case's flows, in MW and MVAr at each end.
+    pub const PF: usize = 13;
+    pub const QF: usize = 14;
+    pub const PT: usize = 15;
+    pub const QT: usize = 16;
 }
 
 /// DC line matrix column indices (MATPOWER 17-column layout).
@@ -218,7 +223,13 @@ pub(super) fn branch_row(row: &[f64], i: usize) -> Result<Branch> {
         angmin: row[branch_col::ANGMIN],
         angmax: row[branch_col::ANGMAX],
         control: None,
-        solution: None,
+        // A solved case (`runpf`, `savecase`) states the flows after ANGMAX.
+        solution: (row.len() > branch_col::QT).then(|| BranchSolution {
+            pf: row[branch_col::PF],
+            qf: row[branch_col::QF],
+            pt: row[branch_col::PT],
+            qt: row[branch_col::QT],
+        }),
         uid: None,
         route: None,
         extras: Extras::new(),

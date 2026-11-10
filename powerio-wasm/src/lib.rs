@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn explicit_reader_profiles_report_their_family_without_enabling_sincal_writing() {
-        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
         connection
             .execute_batch(include_str!(
                 "../../tests/data/sincal/synthetic-multiconductor.sql"

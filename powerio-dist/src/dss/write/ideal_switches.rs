@@ -40,6 +40,13 @@ impl DssWriter {
         let to = self.bus_ref(&sw.bus_to, &sw.terminal_map_to);
         let from_ground = self.grounded.get(&sw.bus_from.to_ascii_lowercase());
         let to_ground = self.grounded.get(&sw.bus_to.to_ascii_lowercase());
+        // The internal bus repeats the node numbers of the ends it joins, so
+        // both added lines keep the same node list at each end, as PMD's Kron
+        // reduction requires (#765). A conductor grounded at only one end
+        // takes the other end's node, or the next free one.
+        let from_nodes = node_numbers(&from, &sw.bus_from);
+        let to_nodes = node_numbers(&to, &sw.bus_to);
+        let mut taken = BTreeSet::new();
         let nodes = sw
             .terminal_map_from
             .iter()
@@ -49,10 +56,23 @@ impl DssWriter {
                 if from_ground.is_some_and(|g| g.contains(a))
                     && to_ground.is_some_and(|g| g.contains(b))
                 {
-                    "0".into()
-                } else {
-                    (i + 1).to_string()
+                    return "0".to_string();
                 }
+                let mut node = [from_nodes.get(i), to_nodes.get(i)]
+                    .into_iter()
+                    .flatten()
+                    .find(|n| *n != "0" && !taken.contains(*n))
+                    .cloned()
+                    .unwrap_or_default();
+                if node.is_empty() {
+                    // At most `count - 1` nodes are taken, so one is free.
+                    node = (1..=count)
+                        .map(|n| n.to_string())
+                        .find(|n| !taken.contains(n))
+                        .unwrap_or_default();
+                }
+                taken.insert(node.clone());
+                node
             })
             .collect::<Vec<String>>();
         let internal = format!("{name}.{}", nodes.join("."));
@@ -81,4 +101,13 @@ impl DssWriter {
         self.warn(&C::EMIT_DSS_IDEAL_SWITCH_EQUIVALENT,format!("switch {}: closed ideal contacts use one-ohm resistances cancelled by Line.{name}; external to-port powers and total losses include that line",sw.name));
         true
     }
+}
+
+/// The node numbers of a `bus.n1.n2` reference the writer built for `bus`.
+pub(super) fn node_numbers(reference: &str, bus: &str) -> Vec<String> {
+    reference
+        .strip_prefix(bus)
+        .and_then(|rest| rest.strip_prefix('.'))
+        .map(|nodes| nodes.split('.').map(str::to_string).collect())
+        .unwrap_or_default()
 }

@@ -64,6 +64,16 @@ returns using exact equivalent circuits. Reimport can introduce auxiliary
 components, so canonical output is electrically equivalent rather than a text
 fixed point. Unchanged source replay remains byte exact.
 
+Names from other formats can be free text (a CIM `IdentifiedObject.name`
+such as `Cable type A`), but OpenDSS splits a token on whitespace, `,`, `=`,
+quotes, and brackets, reads `!` and `//` as comment openers, and reads a `.`
+in a bus reference as the node separator. Canonical DSS output replaces each
+such character with `_` in the element, line code, bus, and circuit name and
+in every typed reference to it, adds a numeric suffix when the result is
+already taken in the same OpenDSS class, and reports each replacement
+(`EMIT.DSS.VALUE_SUBSTITUTED`). The written deck reads back with every
+element connected; the model keeps the original names.
+
 Direct `Open`/`Close` commands and explicit `SwtControl.State` on lines
 preserve their fixed terminal states through equivalent circuits. Other device
 classes remain unresolved. Active `Action`/`Normal` control execution is
@@ -254,7 +264,8 @@ CIM16 and CIM100. Input is one document, or a directory whose top level `.xml`
 documents read as one case, with `rdf:about` records extending the ones
 another document defines. Files in subdirectories are not part of the case,
 and ZIP archives are not read yet. A `.xml` document, a nameless source, or a
-directory routes here when it carries per phase classes and no CGMES
+directory routes here when it carries per phase classes or the IEC 61968
+customer classes (`ServiceLocation`, `UsagePoint`) and no CGMES
 `md:FullModel` header.
 
 | CIM | Model |
@@ -271,10 +282,33 @@ directory routes here when it carries per phase classes and no CGMES
 | `ShortCircuitTest` | short circuit reactances between winding pairs, and winding resistances when no end info states one |
 | `NoLoadTest`, `TransformerCoreAdmittance` | the `%noloadloss` and `%imag` extras |
 | `EnergySource` | voltage sources, with the series impedance in `rs`/`xs` extras |
+| `WireInfo.ratedCurrent` of a segment's `PowerSystemResource.AssetDatasheet` | the segment's ampacity, `i_max` on each conductor |
+| `Diagram` with its `DiagramObject`s and `DiagramObjectPoint`s | coordinates: a segment's points, in `sequenceNumber` order, are its route, the first at terminal 1. A connectivity node takes its own drawing, else that of a terminal there: one point is a stated bus location, and the centroid of several is derived. Without either, its bus takes the end of the first segment there, else the point of other equipment at it or of the composite switch that holds a switch; these are derived. A drawing that places nothing is reported unmapped with its points |
 
 `SinglePhaseKind` A, B, C, and N map to terminals 1, 2, 3, and 4, and the
 split phase s1 and s2 to 1 and 2. A conductor beyond those four has no CIM
-phase, so the writer reports it.
+phase, so the writer reports it. An enumeration written as text
+(`<cim:Terminal.phases>A</cim:Terminal.phases>`), as some CIM16 exports
+state it, reads like the reference form.
+
+One `Diagram` gives the coordinates: the first whose name or description
+names an `EPSG:` code, else the first. A code known to be geographic
+(EPSG:4326, EPSG:4258, and other widely used ones) reads as x = longitude and
+y = latitude. Any other code is projected when a coordinate lies outside the
+range of degrees. Otherwise the coordinates fit either reading, so the space
+stays undeclared with a `READ.CIM_DIST.VALUE_UNSUPPORTED` finding naming the
+code. A diagram without a code is a drawing. PowerIO does not reproject: the
+network's `geo` metadata names the CRS, and a geographic layer applied with
+`apply_geo_layer` replaces the coordinates with reprojected ones.
+
+Without a `BaseFrequency`, distribution CIM reads at 60 Hz in both CIM16 and
+CIM100, with a `READ.CIM_DIST.VALUE_DEFAULTED` finding. The namespace identifies
+the schema, not the grid's operating frequency; state `BaseFrequency` for 50 Hz
+or another frequency.
+`Circuit`, `CompositeSwitch`, and `PSRType` are context
+(`READ.CIM_DIST.CONTEXT_UNMAPPED`). The IEC 61968 customer classes route a
+document here but are not mapped yet, so `ServiceLocation` and `UsagePoint`
+are reported as unmapped classes.
 
 A tank end's terminals follow from its `TransformerTankEnd.phases`, in the
 form the dss reader gives the equivalent OpenDSS transformer: a line to
@@ -311,7 +345,8 @@ its `cim_power_transformer` extra names, with tanks of identical catalog data
 sharing one `TransformerTankInfo`; every other transformer, including those
 from other formats, takes the `PowerTransformerEnd` form.
 
-Regulator controls, distributed energy resources, machines, wire and cable geometry, operational limits,
+Regulator controls, distributed energy resources
+(`PowerElectronicsConnection`), machines, wire and cable geometry, operational limits,
 `LoadResponseCharacteristic`, and `TopologicalNode` only documents are not
 mapped yet, and the reader reports each of them: a class with no mapping is
 counted per class (`READ.CIM_DIST.CLASS_UNMAPPED`), a property no mapping reads

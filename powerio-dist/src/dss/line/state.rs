@@ -41,6 +41,9 @@ pub(in crate::dss) struct State {
     geometry: Option<usize>,
     spacing: Option<Binding>,
     ratings_specified: bool,
+    // True only when emergamps comes from an explicit rating or a rated
+    // LineCode/geometry conductor, never from the Line constructor default.
+    pub(in crate::dss) emergamps_available: bool,
     geometry_frequency: Option<f64>,
     // Native Zinv survives MakeLike and LineCode assignment while geometry
     // remains bound; those operations copy Z/Yc without copying Zinv.
@@ -95,6 +98,7 @@ impl State {
             geometry: None,
             spacing: None,
             ratings_specified: false,
+            emergamps_available: false,
             geometry_frequency: None,
             geometry_impedance: None,
             earth_model: EarthModel::Deri,
@@ -176,6 +180,7 @@ impl State {
         self.units_convert = conversion(code.units, self.units);
         self.normamps = code.normamps;
         self.emergamps = code.emergamps;
+        self.emergamps_available = code.emergamps_available;
         self.resize_terminals(code.n);
         self.sequence.model = code.sequence;
         if code.sequence {
@@ -284,6 +289,7 @@ impl State {
         self.enabled = true;
         self.normamps = source.normamps;
         self.emergamps = source.emergamps;
+        self.emergamps_available = source.emergamps_available;
         self.sequence.values = source.sequence.values;
         self.matrices = source.matrices.clone();
         self.length = source.length;
@@ -296,6 +302,19 @@ impl State {
         self.units_convert = 1.0;
         self.units = 0;
         self.code_units = None;
+    }
+
+    fn apply_rating(&mut self, key: &str, value: f64) -> Result<(), String> {
+        if key == "normamps" {
+            self.normamps = value;
+        } else if key == "emergamps" {
+            self.emergamps = value;
+            self.emergamps_available = true;
+        } else {
+            return Err(format!("unqualified Line rating property {key}"));
+        }
+        self.ratings_specified = true;
+        Ok(())
     }
 
     pub fn apply(&mut self, prop: &RawProp, raw: &RawDss) -> Result<(), String> {
@@ -385,14 +404,7 @@ impl State {
             "earthmodel" => self.earth_model = EarthModel::parse(&prop.value.text)?,
             "enabled" => self.enabled = yes(&prop.value.text),
             "switch" => self.set_switch(yes(&prop.value.text)),
-            "normamps" | "emergamps" => {
-                if key == "normamps" {
-                    self.normamps = number()?;
-                } else {
-                    self.emergamps = number()?;
-                }
-                self.ratings_specified = true;
-            }
+            "normamps" | "emergamps" => self.apply_rating(key, number()?)?,
             "seasons" | "ratings" => self.ratings_specified = true,
             // These fields do not alter an ordinary matrix/sequence primitive.
             "faultrate" | "pctperm" | "repair" | "linetype" => {}
@@ -405,6 +417,8 @@ impl State {
     fn set_switch(&mut self, enabled: bool) {
         self.is_switch = enabled;
         if enabled {
+            // A switch changes the impedance, not the rating: an unstated
+            // emergency rating stays unstated (#762).
             self.sequence.values = [1.0, 1.0, 1.0, 1.0, 1.1e-9, 1e-9];
             self.length = 0.001;
             self.reset_units();
@@ -488,6 +502,7 @@ impl State {
         self.sequence.model = false;
         self.sequence.changed = false;
         self.ratings_specified = false;
+        self.emergamps_available = false;
         self.dirty = true;
         Ok(())
     }
@@ -521,6 +536,7 @@ impl State {
                 let state = context.conductor(*object)?;
                 self.normamps = state.normamps;
                 self.emergamps = state.emergamps;
+                self.emergamps_available = state.emergamps > 0.0;
             }
         }
         if cable {
@@ -552,6 +568,7 @@ impl State {
         self.resize_terminals(n);
         self.normamps = definition.normamps;
         self.emergamps = definition.emergamps;
+        self.emergamps_available = definition.emergamps_available;
         self.sequence.model = false;
         self.sequence.changed = false;
         self.dirty = true;
@@ -603,6 +620,7 @@ impl State {
                 if !self.ratings_specified {
                     self.normamps = normamps;
                     self.emergamps = emergamps;
+                    self.emergamps_available = emergamps > 0.0;
                 }
                 matrix
             };

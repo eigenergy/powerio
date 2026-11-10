@@ -43,6 +43,36 @@ defaults to 60 Hz, while `null`, strings and invalid numbers are rejected. Fresh
 PowerIO output includes the field. Formats without frequency support, including
 MATPOWER, still report the loss of a non-default frequency.
 
+PowerModels JSON and egret JSON documents are open dictionaries: PowerModels.jl
+and egret keep keys they do not know. PowerIO writes these extension keys
+there, and reads them back, for data the standard fields cannot hold:
+
+| Data | PowerModels JSON | egret JSON |
+|---|---|---|
+| area records | top-level `areas` table: `area_i`, `price_ref_bus`, and `name`, `net_interchange_mw`, `tolerance_mw`, `area_type`, `uid` | one `elements.area` entry per area number: `slack_bus`, `net_interchange_mw`, `tolerance_mw`, `name`, `area_type`, `uid` |
+| case metadata from a grid exchange format | top-level `case_metadata` | `system.case_metadata` |
+| system frequency | top-level `base_frequency` | `system.base_frequency` |
+| a source-assigned element identity | `uid` in the element row | `uid` in the element entry |
+| branch rating sets beyond the three ratings | `rating_sets` (`name`, `rate_mva`) | `rating_sets` (`name`, `rate_mva`) |
+| fields no typed slot holds (`extras`) | the element row's own keys | the element entry's own keys |
+| MATPOWER generator capability and ramp columns | standard PowerModels fields | the MATPOWER column names |
+| a dcline cost | standard PowerModels fields | `p_cost`, as a generator states it |
+| detailed connectivity (substations, voltage levels, node breaker topology) | top-level `detailed_connectivity` | `system.detailed_connectivity` |
+| the coordinate reference of locations and routes | top-level `geo` | `system.geo` |
+| bus location; branch name, route, and transformer `control`; switched shunt `section_count` and `control` | the element row, under the PowerIO IR name | the element entry, under the PowerIO IR name |
+| generator `energy_source`, `voltage_regulation_on`, `regulating_terminal`, `regulated_bus`, `active_power_control` | the generator row | the generator entry |
+| HVDC `resistance_ohm`, `nominal_voltage_kv`, `converters_mode`, `converter1`, `converter2` | the dcline row | the `dc_branch` entry |
+| storage `active_power_control` | the storage row | egret states no storage |
+
+The typed values use the PowerIO IR's field names and units, as the
+[PowerIO IR reference](ir-reference.md) gives them, and leave out an absent
+optional field. A standard field always wins a key collision with an extra. A
+key whose value does not have the PowerIO shape is kept as an extra, so a
+document another tool wrote with a key of the same name still reads.
+PowerModels and egret compute with their own fields only: a transformer or
+switched shunt control, a remote regulated bus, and an HVDC converter's detail
+ride along for PowerIO and do not change what either tool solves.
+
 ## Validation
 
 The harness script `evals/validation/run_validation.sh` checks powerio against
@@ -167,8 +197,9 @@ extension namespace `http://entsoe.eu/CIM/SchemaExtension/3/1#` (IEC TS
 IEC 61970-552 CIMXML instance syntax, in which `rdf:ID` defines a record,
 `rdf:about` extends one, and `md:FullModel` heads each profile document. A
 CIM100 document with no `md:FullModel` header and with per phase distribution
-classes (`ACLineSegmentPhase`, `EnergyConsumerPhase`, …) is distribution CIM
-and routes to `cim-dist` instead; see
+classes (`ACLineSegmentPhase`, `EnergyConsumerPhase`, …), or a header-less
+document with the IEC 61968 customer classes (`ServiceLocation`,
+`UsagePoint`), is distribution CIM and routes to `cim-dist` instead; see
 [Distribution networks](distribution.md#distribution-cim). EQ is
 required, and SSH, SV, and boundary profile data are used when present. SSH
 assignments take precedence over SV observations, so an SV shunt section count
@@ -486,6 +517,12 @@ lowers each one as a star into \\(Y_{\mathrm{bus}}\\)/connectivity. Unsupported
 sections stay in the retained source text and produce diagnostics.
 
 ### MATPOWER
+
+A solved case's branch matrix states the flows `PF`, `QF`, `PT`, and `QT`
+(MW and MVAr, columns 14 to 17 of `idx_brch`) after `ANGMAX`. The reader reads
+them as the branch solution, and the writer states them when every branch
+has one; a matrix states the columns for every row or none, so a partial set
+is dropped and reported.
 
 The reader applies a bounded, straight-line unit-conversion profile after the
 numeric literals. This covers MATPOWER's `case33bw.m`: demand columns `PD`/`QD`

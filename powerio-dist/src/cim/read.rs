@@ -23,6 +23,7 @@ use super::{
     wrap_angle, z_base,
 };
 use crate::diagnostics::{Diagnostic, DiagnosticInfo, codes as C};
+use crate::geo::{CoordinateSpace, DistCoordsKind, DistGeoMeta, DistLocation};
 use crate::model::{
     ConductorMatrix, Configuration, DistBus, DistLine, DistLineCode, DistLoad, DistShunt,
     DistSourceFormat, DistSwitch, DistTransformer, DistWinding, DistWindingConn,
@@ -87,8 +88,9 @@ const MULTI_VALUED: [&str; 2] = [
 
 /// Containment, naming, version, and base voltage classes: context the
 /// multiconductor model has no table for. They are reported at `Remark`
-/// severity, since they carry no electrical data the network loses.
-const CONTEXT_CLASSES: [&str; 18] = [
+/// severity, since they carry no electrical data the network loses. A
+/// `CompositeSwitch` only groups switches the mapping reads one by one.
+const CONTEXT_CLASSES: [&str; 21] = [
     "BaseVoltage",
     "GeographicalRegion",
     "SubGeographicalRegion",
@@ -96,7 +98,10 @@ const CONTEXT_CLASSES: [&str; 18] = [
     "VoltageLevel",
     "Bay",
     "Feeder",
+    "Circuit",
     "Line",
+    "CompositeSwitch",
+    "PSRType",
     "Name",
     "NameType",
     "NameTypeAuthority",
@@ -110,9 +115,9 @@ const CONTEXT_CLASSES: [&str; 18] = [
 ];
 
 /// Properties of mapped objects that only carry context (descriptions,
-/// containment, catalog and location links). Reported at `Remark` severity
-/// when present, like [`CONTEXT_CLASSES`].
-const CONTEXT_PROPERTIES: [&str; 8] = [
+/// containment, grouping, catalog and location links). Reported at `Remark`
+/// severity when present, like [`CONTEXT_CLASSES`].
+const CONTEXT_PROPERTIES: [&str; 9] = [
     "IdentifiedObject.description",
     "IdentifiedObject.aliasName",
     "IdentifiedObject.Names",
@@ -121,6 +126,17 @@ const CONTEXT_PROPERTIES: [&str; 8] = [
     "ConnectivityNode.ConnectivityNodeContainer",
     "PowerSystemResource.Location",
     "PowerSystemResource.PSRType",
+    "Switch.CompositeSwitch",
+];
+
+/// The wire and cable catalog classes whose `WireInfo.ratedCurrent` a
+/// segment's `PowerSystemResource.AssetDatasheet` can name.
+const WIRE_INFO_CLASSES: [&str; 5] = [
+    "WireInfo",
+    "OverheadWireInfo",
+    "CableInfo",
+    "ConcentricNeutralCableInfo",
+    "TapeShieldCableInfo",
 ];
 
 // ---------------------------------------------------------------------------
@@ -406,9 +422,15 @@ impl Store {
         }
     }
 
-    /// The `value` tail of an `EnumClass.value` reference.
+    /// The value of an enumeration property: the `value` tail of an
+    /// `EnumClass.value` reference, or the literal an export writes as text
+    /// instead (`<cim:Terminal.phases>ABC</cim:Terminal.phases>`), as some
+    /// CIM16 exports do.
     fn enum_value(&self, id: &str, key: &str) -> Option<&str> {
-        self.refv(id, key)?.rsplit('.').next()
+        match self.prop(id, key)? {
+            PropValue::Ref(target) => target.rsplit('.').next(),
+            PropValue::Text(text) => text.trim().rsplit('.').next().filter(|v| !v.is_empty()),
+        }
     }
 
     /// The object's name, when it states a nonempty one.
@@ -495,6 +517,89 @@ fn three_phases() -> Vec<String> {
     vec!["1".to_owned(), "2".to_owned(), "3".to_owned()]
 }
 
+/// One diagram object: its record, the records of its usable points, and
+/// those points in order.
+struct Drawing {
+    object: String,
+    point_ids: Vec<String>,
+    path: Vec<(f64, f64)>,
+}
+
+/// The drawing of each element, by the element's mRID.
+type Shapes = HashMap<String, Drawing>;
+
+/// A diagram point as stated: sequence number, document order, x, y, record.
+type StatedPoint = (f64, usize, f64, f64, String);
+
+/// EPSG codes of widely used geographic 2D coordinate reference systems. A
+/// projected CRS needs no entry: its coordinates give it away (see
+/// [`Mapper::coordinate_space`]).
+const GEOGRAPHIC_EPSG: [&str; 22] = [
+    "EPSG:4148",
+    "EPSG:4167",
+    "EPSG:4171",
+    "EPSG:4230",
+    "EPSG:4258",
+    "EPSG:4267",
+    "EPSG:4269",
+    "EPSG:4277",
+    "EPSG:4283",
+    "EPSG:4289",
+    "EPSG:4313",
+    "EPSG:4314",
+    "EPSG:4322",
+    "EPSG:4326",
+    "EPSG:4490",
+    "EPSG:4612",
+    "EPSG:4617",
+    "EPSG:4674",
+    "EPSG:4765",
+    "EPSG:6318",
+    "EPSG:6668",
+    "EPSG:7844",
+];
+
+/// What the Diagram Layout places: the network's coordinate metadata and a
+/// location for each connectivity node it reaches, by node mRID.
+struct Layout {
+    meta: DistGeoMeta,
+    at_node: HashMap<String, DistLocation>,
+}
+
+/// The `EPSG:<code>` token in a text (`EPSG:4326`, or the `EPSG::4326` of a
+/// URN), as `EPSG:<code>`.
+fn epsg_code(text: &str) -> Option<String> {
+    let upper = text.to_ascii_uppercase();
+    let at = upper.find("EPSG:")?;
+    let digits: String = upper[at + 5..]
+        .trim_start_matches(':')
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    (!digits.is_empty()).then(|| format!("EPSG:{digits}"))
+}
+
+/// The location a node or terminal drawing states: its point, or the
+/// centroid of a shape of several points, which is derived.
+fn drawn_location(path: &[(f64, f64)]) -> Option<DistLocation> {
+    match path {
+        [] => None,
+        &[(x, y)] => Some(DistLocation {
+            x,
+            y,
+            kind: Some(DistCoordsKind::Source),
+        }),
+        _ => {
+            let n = path.len() as f64;
+            Some(DistLocation {
+                x: path.iter().map(|p| p.0).sum::<f64>() / n,
+                y: path.iter().map(|p| p.1).sum::<f64>() / n,
+                kind: Some(DistCoordsKind::Derived),
+            })
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Reader
 // ---------------------------------------------------------------------------
@@ -544,12 +649,13 @@ fn read_documents(
 
     let mut mapper = Mapper::new(&store, diags);
     mapper.validate_electrical_state()?;
-    let (line_codes, lines) = mapper.lines();
+    let (line_codes, mut lines) = mapper.lines();
     let loads = mapper.loads();
     let shunts = mapper.shunts()?;
     let switches = mapper.switches();
     let transformers = mapper.transformers()?;
     let sources = mapper.sources();
+    let layout = mapper.layout(&mut lines);
 
     // Each bus presents the terminals its elements connect.
     let mut used: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -578,7 +684,11 @@ fn read_documents(
     for source in &sources {
         connect(&source.bus, &source.terminal_map);
     }
-    let buses = derive_buses(&mapper.nodes, &used);
+    let mut buses = derive_buses(&mapper.nodes, &used);
+    let geo = layout.map(|layout| {
+        locate_buses(&mut buses, &layout);
+        layout.meta
+    });
     let base_frequency = mapper.base_frequency();
     let name = description
         .or_else(|| mapper.feeder_name())
@@ -589,6 +699,7 @@ fn read_documents(
         name,
         source_format: Some(DistSourceFormat::CimDist),
         base_frequency,
+        geo,
         buses,
         line_codes,
         lines,
@@ -696,7 +807,8 @@ struct Mapper<'a> {
     /// again as unmapped.
     dropped: HashSet<String>,
     /// Objects of an otherwise unmapped class the mapping read (the feeder
-    /// that names the network, the catalog entries tanks link).
+    /// that names the network, the catalog entries tanks and segment ratings
+    /// come from, the diagram the layout reads).
     consumed: HashSet<String>,
     /// Transformer catalog entries read so far, by `TransformerTankInfo`
     /// mRID; `None` for one without end infos.
@@ -968,6 +1080,8 @@ impl<'a> Mapper<'a> {
         out
     }
 
+    /// The stated base frequency, or the distribution reader's 60 Hz default.
+    /// A CIM namespace identifies a schema, not the grid's operating frequency.
     fn base_frequency(&mut self) -> f64 {
         let frequencies = self.store.ids_of("BaseFrequency");
         let stated = frequencies
@@ -1062,7 +1176,11 @@ impl<'a> Mapper<'a> {
                 &mut line_codes,
                 &mut seen,
             );
+            let conductors = map.len();
             let mut line = DistLine::new(name, from, to, map.clone(), map, code, length);
+            if let Some(rated) = self.wire_rating(&id) {
+                line.i_max = Some(vec![rated; conductors]);
+            }
             line.extras.insert("cim_mrid".into(), id.clone().into());
             if !resolved {
                 // Conversion refuses the segment: its zero placeholder
@@ -1251,6 +1369,50 @@ impl<'a> Mapper<'a> {
         );
         line_codes.push(code);
         (name, resolved)
+    }
+
+    /// The ampacity of a segment's conductors, amps: the `ratedCurrent` of
+    /// the wire or cable catalog entry its `PowerSystemResource.AssetDatasheet`
+    /// names. A stated value that is no ampacity gets a finding, once per
+    /// catalog entry, and reads as absent.
+    fn wire_rating(&mut self, line: &str) -> Option<f64> {
+        let info = self.target("ACLineSegment", line, "PowerSystemResource.AssetDatasheet")?;
+        let class = self.store.class_of(&info)?.to_owned();
+        if !WIRE_INFO_CLASSES.contains(&class.as_str()) {
+            let label = self.label(line);
+            let datasheet = self.label(&info);
+            self.note(
+                &C::READ_CIM_DIST_VALUE_UNSUPPORTED,
+                "ACLineSegment",
+                line,
+                format!(
+                    "ACLineSegment {label}: its AssetDatasheet {datasheet} is a {class}, not a \
+                     wire or cable catalog entry; no ampacity is read"
+                ),
+            );
+            return None;
+        }
+        let first_read = self.consumed.insert(info.clone());
+        let store = self.store;
+        let stated = store.text(&info, "WireInfo.ratedCurrent")?;
+        let rated = stated
+            .trim()
+            .parse()
+            .ok()
+            .filter(|rated: &f64| rated.is_finite() && *rated > 0.0);
+        if rated.is_none() && first_read {
+            let label = self.label(&info);
+            self.note(
+                &C::READ_CIM_DIST_VALUE_UNSUPPORTED,
+                &class,
+                &info,
+                format!(
+                    "{class} {label}: WireInfo.ratedCurrent {stated:?} is not a positive finite \
+                     current; no ampacity is read"
+                ),
+            );
+        }
+        rated
     }
 
     /// A line code name no earlier line code holds.
@@ -3333,6 +3495,271 @@ impl<'a> Mapper<'a> {
         sources
     }
 
+    // -- layout ------------------------------------------------------------
+
+    /// The coordinate reference system a diagram names: an `EPSG:<code>`
+    /// token in its name or description, as a GIS export states it.
+    fn diagram_crs(&self, diagram: &str) -> Option<String> {
+        ["IdentifiedObject.name", "IdentifiedObject.description"]
+            .iter()
+            .filter_map(|key| self.store.text(diagram, key))
+            .find_map(epsg_code)
+    }
+
+    /// Coordinates from the Diagram Layout. A segment's points are its
+    /// route, the first at terminal 1. A connectivity node takes its own
+    /// drawing, else the drawing of a terminal there. Without either, it
+    /// takes the end of the first segment there (segment ends meet at the
+    /// nodes they share), else the point of other equipment at it or of the
+    /// composite switch that holds a switch; these node locations are
+    /// derived. A drawing that places nothing stays unread and is reported
+    /// with its points. `None` when the layout places nothing.
+    fn layout(&mut self, lines: &mut [DistLine]) -> Option<Layout> {
+        let (diagram, crs, shape_of) = self.diagram_shapes()?;
+        let mut carried: HashSet<&str> = HashSet::new();
+        for line in lines.iter_mut() {
+            let drawn = line
+                .extras
+                .get("cim_mrid")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|id| shape_of.get_key_value(id))
+                .filter(|(_, drawing)| drawing.path.len() >= 2);
+            if let Some((id, drawing)) = drawn {
+                line.route = Some(
+                    drawing
+                        .path
+                        .iter()
+                        .map(|&(x, y)| DistLocation { x, y, kind: None })
+                        .collect(),
+                );
+                carried.insert(id);
+            }
+        }
+
+        let mut at_node = HashMap::new();
+        let buses: HashSet<&str> = self.nodes.iter().map(|(_, node)| node.as_str()).collect();
+        for (_, node) in &self.nodes {
+            if let Some((id, drawing)) = shape_of.get_key_value(node)
+                && let Some(location) = drawn_location(&drawing.path)
+            {
+                at_node.insert(node.clone(), location);
+                carried.insert(id);
+            }
+        }
+        for terminal in self.store.ids_of("Terminal") {
+            if let Some((id, drawing)) = shape_of.get_key_value(&terminal)
+                && let Some(node) = self.wiring.node_of.get(&terminal)
+                && buses.contains(node.as_str())
+                && let Some(location) = drawn_location(&drawing.path)
+            {
+                at_node.entry(node.clone()).or_insert(location);
+                carried.insert(id);
+            }
+        }
+        for segment in self.store.ids_of("ACLineSegment") {
+            if let Some((id, drawing)) = shape_of.get_key_value(&segment)
+                && self.place_terminals(&segment, &drawing.path, &mut at_node)
+            {
+                carried.insert(id);
+            }
+        }
+        let mut equipment = Vec::new();
+        let mut seen = HashSet::new();
+        for terminal in self.store.ids_of("Terminal") {
+            if let Some(owner) = self.store.refv(&terminal, "Terminal.ConductingEquipment")
+                && self.store.class_of(owner) != Some("ACLineSegment")
+                && seen.insert(owner.to_owned())
+            {
+                equipment.push(owner.to_owned());
+            }
+        }
+        for owner in equipment {
+            let drawn = shape_of.get_key_value(&owner).or_else(|| {
+                self.store
+                    .refv(&owner, "Switch.CompositeSwitch")
+                    .and_then(|composite| shape_of.get_key_value(composite))
+            });
+            if let Some((id, drawing)) = drawn
+                && self.place_terminals(&owner, &drawing.path, &mut at_node)
+            {
+                carried.insert(id);
+            }
+        }
+        if carried.is_empty() {
+            return None;
+        }
+        for id in &carried {
+            let drawing = &shape_of[*id];
+            self.consumed.insert(drawing.object.clone());
+            self.consumed.extend(drawing.point_ids.iter().cloned());
+        }
+        self.consumed.insert(diagram.clone());
+        let space = self.coordinate_space(&diagram, crs, &shape_of);
+        Some(Layout {
+            meta: DistGeoMeta {
+                space,
+                kind: Some(DistCoordsKind::Source),
+            },
+            at_node,
+        })
+    }
+
+    /// The coordinate space a diagram's named CRS gives its drawings. A code
+    /// known to be geographic reads as longitude and latitude. A code the
+    /// reader does not know is planar when a coordinate lies outside the
+    /// range of degrees. Otherwise the coordinates fit either reading, so
+    /// the space stays undeclared and a finding names the code. A diagram
+    /// without a CRS is a drawing.
+    fn coordinate_space(
+        &mut self,
+        diagram: &str,
+        crs: Option<String>,
+        shape_of: &Shapes,
+    ) -> CoordinateSpace {
+        let Some(crs) = crs else {
+            return CoordinateSpace::Diagram { canvas: None };
+        };
+        if GEOGRAPHIC_EPSG.contains(&crs.as_str()) {
+            return CoordinateSpace::Geographic { crs: Some(crs) };
+        }
+        let fits_degrees = shape_of
+            .values()
+            .flat_map(|drawing| &drawing.path)
+            .all(|(x, y)| x.abs() <= 180.0 && y.abs() <= 90.0);
+        if !fits_degrees {
+            return CoordinateSpace::Projected { crs: Some(crs) };
+        }
+        let label = self.label(diagram);
+        self.note(
+            &C::READ_CIM_DIST_VALUE_UNSUPPORTED,
+            "Diagram",
+            diagram,
+            format!(
+                "Diagram {label}: {crs} is not a CRS the reader knows as geographic and its \
+                 coordinates also fit degrees, so the coordinate space is left undeclared"
+            ),
+        );
+        CoordinateSpace::Unknown
+    }
+
+    /// One `Diagram` (the first that names an `EPSG:` coordinate reference
+    /// system, else the first), that CRS, and the drawing of each element
+    /// its `DiagramObject`s draw: their `DiagramObjectPoint`s in
+    /// `sequenceNumber` order. The records stay unconsumed until [`layout`]
+    /// carries a drawing's coordinates.
+    ///
+    /// [`layout`]: Mapper::layout
+    fn diagram_shapes(&mut self) -> Option<(String, Option<String>, Shapes)> {
+        let diagrams = self.store.ids_of("Diagram");
+        let named: Vec<Option<String>> = diagrams.iter().map(|d| self.diagram_crs(d)).collect();
+        let at = named.iter().position(Option::is_some).unwrap_or(0);
+        let diagram = diagrams.get(at)?.clone();
+        let crs = named[at].clone();
+
+        // The diagram's objects by the element they draw, the first per
+        // element. An object that names no diagram belongs to the only one.
+        let only = diagrams.len() == 1;
+        let mut drawn: HashMap<String, String> = HashMap::new();
+        for object in self.store.ids_of("DiagramObject") {
+            let ours = self
+                .store
+                .refv(&object, "DiagramObject.Diagram")
+                .map_or(only, |d| d == diagram);
+            if !ours {
+                continue;
+            }
+            if let Some(element) =
+                self.target("DiagramObject", &object, "DiagramObject.IdentifiedObject")
+            {
+                drawn.entry(element).or_insert(object);
+            }
+        }
+        let objects: HashSet<String> = drawn.values().cloned().collect();
+        let mut points: HashMap<String, Vec<StatedPoint>> = HashMap::new();
+        for (order, point) in self
+            .store
+            .ids_of("DiagramObjectPoint")
+            .into_iter()
+            .enumerate()
+        {
+            let Some(object) = self
+                .store
+                .refv(&point, "DiagramObjectPoint.DiagramObject")
+                .filter(|object| objects.contains(*object))
+                .map(str::to_owned)
+            else {
+                continue;
+            };
+            let x = self.store.f(&point, "DiagramObjectPoint.xPosition");
+            let y = self.store.f(&point, "DiagramObjectPoint.yPosition");
+            let sequence = self
+                .store
+                .f(&point, "DiagramObjectPoint.sequenceNumber")
+                .unwrap_or(f64::MAX);
+            let (Some(x), Some(y)) = (x, y) else {
+                self.consumed.insert(point.clone());
+                self.drop_record(
+                    "DiagramObjectPoint",
+                    &point,
+                    "it states no finite xPosition and yPosition",
+                );
+                continue;
+            };
+            points
+                .entry(object)
+                .or_default()
+                .push((sequence, order, x, y, point));
+        }
+        let mut shape_of = Shapes::new();
+        for (element, object) in drawn {
+            if let Some(mut path) = points.remove(&object) {
+                path.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+                let mut drawing = Drawing {
+                    object,
+                    point_ids: Vec::with_capacity(path.len()),
+                    path: Vec::with_capacity(path.len()),
+                };
+                for (_, _, x, y, point) in path {
+                    drawing.point_ids.push(point);
+                    drawing.path.push((x, y));
+                }
+                shape_of.insert(element, drawing);
+            }
+        }
+        Some((diagram, crs, shape_of))
+    }
+
+    /// Place the nodes at an equipment's terminals from its drawn shape: the
+    /// last terminal of several at the last point, every other terminal at
+    /// the first. A node keeps the first location it gets. Whether the shape
+    /// reached a node.
+    fn place_terminals(
+        &self,
+        equipment: &str,
+        shape: &[(f64, f64)],
+        at_node: &mut HashMap<String, DistLocation>,
+    ) -> bool {
+        let (Some(&first), Some(&last)) = (shape.first(), shape.last()) else {
+            return false;
+        };
+        let mut reached = false;
+        let terminals = self.terminals(equipment);
+        let end = terminals.len().saturating_sub(1);
+        for (k, terminal) in terminals.iter().enumerate() {
+            let Some(node) = self.wiring.node_of.get(terminal) else {
+                continue;
+            };
+            let (x, y) = if k == end && k > 0 { last } else { first };
+            at_node.entry(node.clone()).or_insert(DistLocation {
+                x,
+                y,
+                kind: Some(DistCoordsKind::Derived),
+            });
+            reached = true;
+        }
+        reached
+    }
+
     // -- unmapped content --------------------------------------------------
 
     /// Report every object of a class the mapping does not read, per class,
@@ -3425,6 +3852,19 @@ impl<'a> Mapper<'a> {
             let _ = diagnostic.insert_detail("property", serde_json::Value::from(key));
             let _ = diagnostic.insert_detail("count", serde_json::Value::from(count));
             self.diags.record(diagnostic);
+        }
+    }
+}
+
+/// Each bus at the location the layout gives its connectivity node.
+fn locate_buses(buses: &mut [DistBus], layout: &Layout) {
+    for bus in buses.iter_mut() {
+        let node = bus
+            .extras
+            .get("cim_mrid")
+            .and_then(serde_json::Value::as_str);
+        if let Some(location) = node.and_then(|node| layout.at_node.get(node)) {
+            bus.location = Some(*location);
         }
     }
 }

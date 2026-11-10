@@ -209,8 +209,13 @@ fn is_numeric_field(key: &str) -> bool {
 /// removal there loses every other matrix entry on that line. Distinguishing
 /// absent from invalid per field needs the typed readers of #293.
 ///
-/// `extras` is skipped, since it round trips arbitrary consumer JSON where
-/// these names carry no schema meaning.
+/// `extras` and `meta.provenance` are skipped: the schema leaves both
+/// free-form, so these names carry no schema meaning there. BMOPFTools, for
+/// one, writes a provenance ledger entry named `length` (#763).
+///
+/// The finding names the field by its pointer into the BMOPF document. A
+/// diagnostic `target` points into the IR network instead, whose layout
+/// differs, so the pointer rides as the `source_pointer` detail.
 fn report_non_numeric_fields(doc: &Map<String, Value>, diags: &mut crate::collect::Diagnostics) {
     /// What the value holds, or `None` when the schema allows it.
     fn not_numeric(v: &Value) -> Option<&'static str> {
@@ -234,14 +239,15 @@ fn report_non_numeric_fields(doc: &Map<String, Value>, diags: &mut crate::collec
             message,
         )
         .with_suggested_action("state a number, or omit the field");
-        crate::diagnostics::attach_target(&mut diagnostic, pointer);
+        let stored = diagnostic.insert_detail("source_pointer", Value::String(pointer));
+        debug_assert!(stored.is_ok(), "a new finding has room for one detail");
         diags.record(diagnostic);
     }
     // A pointer costs an allocation, so it is built for a container the walk
     // descends into and for a field it reports, never for a sound leaf.
     fn walk(obj: &Map<String, Value>, path: &str, diags: &mut crate::collect::Diagnostics) {
         for (key, value) in obj {
-            if key == "extras" {
+            if key == "extras" || (key == "provenance" && path == "/meta") {
                 continue;
             }
             if is_numeric_field(key) {
