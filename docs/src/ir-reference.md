@@ -2254,3 +2254,34 @@ Schema definition: `HistoryEntry`.
 | `parameters` | object | | | | `{}` |
 | `assumptions` | array of string | | | | `[]` |
 | `losses` | array of string | | | | `[]` |
+
+## Coupled AC/DC OPF intent and result
+
+`powerio.AcDcOpfInstance` and `powerio.AcDcOpfSolution` are distinct structural
+values. They require `balanced-acdc-equivalent-v1`; they cannot be read as
+ordinary AC-only calculation instances. Powers in typed points are MW/MVAr,
+angles radians, voltages/current pu under the explicitly selected profile.
+
+Schema definition: `AcDcOpfInstance`.
+
+| field | meaning |
+| --- | --- |
+| `network` | Complete source balanced network, including equivalent DC equipment. |
+| `profile` | Required versioned ACP VSC equation/limit/loss convention. |
+| `angle_reference_policy` | Optional `declared` (default, omitted on write) or `lowest_bus_id_per_island`. The latter adds only numerical zero-angle anchors on uncovered AC islands; source bus roles and PF dispatch are unchanged. |
+| `initial_point` | Optional complete identity/quantity/value list; finite values, no duplicate, missing or unknown coordinates. |
+
+Schema definition: `AcDcOpfSolution`.
+
+| field | meaning |
+| --- | --- |
+| `instance` | Coupled intent, including the selected numerical angle-reference policy. |
+| `point` | Complete typed physical primal values. |
+| `objective` | Finite objective value reported by the producing solver. |
+| `termination` | Producer's termination classification. |
+| `producer` | Software provenance. |
+
+These records do not assert equation feasibility or global optimality by
+serialization alone. Numerical gauge alignment is an explicit consumer operation;
+stored supplied points are never rotated silently. Unknown policies and fields
+refuse, including in nested solution instances.

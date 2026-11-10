@@ -683,6 +683,11 @@ pub struct DcOpfInstance {
 pub struct AcDcOpfInstance {
     pub network: Box<BalancedNetwork>,
     pub profile: powerio_prob::AcDcOpfProfile,
+    #[serde(
+        default,
+        skip_serializing_if = "powerio_prob::AcDcAngleReferencePolicy::is_declared"
+    )]
+    pub angle_reference_policy: powerio_prob::AcDcAngleReferencePolicy,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_point: Option<Vec<powerio_prob::AcDcValue>>,
 }

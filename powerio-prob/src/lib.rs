@@ -77,5 +77,6 @@ pub use update::{
 
 mod acdc;
 pub use acdc::{
-    AcDcOperatingPoint, AcDcOpfInstance, AcDcOpfProfile, AcDcOpfSolution, AcDcQuantity, AcDcValue,
+    AcDcAngleReferencePolicy, AcDcOperatingPoint, AcDcOpfInstance, AcDcOpfProfile, AcDcOpfSolution,
+    AcDcQuantity, AcDcValue,
 };

@@ -243,6 +243,21 @@
       ],
       "type": "object"
     },
+    "AcDcAngleReferencePolicy": {
+      "description": "Numerical angle constraints for coupled OPF, independent of source bus roles.\nThis does not choose PF voltage or generation controls.",
+      "oneOf": [
+        {
+          "const": "declared",
+          "description": "Preserve all declared references; preparation refuses uncovered islands.",
+          "type": "string"
+        },
+        {
+          "const": "lowest_bus_id_per_island",
+          "description": "Preserve declared references. In each active AC island without one,\nfix the lowest source bus ID's angle to zero. DC links do not join islands.",
+          "type": "string"
+        }
+      ]
+    },
     "AcDcConverterControlMode": {
       "description": "Control quantity assigned to an AC/DC converter.",
       "oneOf": [
@@ -467,6 +482,9 @@
       "additionalProperties": false,
       "description": "Coupled intent has its own structural type: legacy AC consumers cannot\ndeserialize it as an AC-only instance, even if capabilities are stripped.",
       "properties": {
+        "angle_reference_policy": {
+          "$ref": "#/$defs/AcDcAngleReferencePolicy"
+        },
         "initial_point": {
           "items": {
             "$ref": "#/$defs/AcDcValue"

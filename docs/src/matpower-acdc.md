@@ -144,3 +144,23 @@ separate auxiliary-coordinate qualification. General bindings, collection
 variants, native coupled PF, additional controls, physical projections and the
 natural PowerModelsACDC JSON variant remain future work. No new C ABI symbols
 or Python/Julia calculation modes are introduced.
+
+### Numerical OPF angle references
+
+Coupled intent defaults to `AcDcAngleReferencePolicy::Declared`, retaining the
+reference-coverage requirement. Opt into `LowestBusIdPerIsland` with
+`with_angle_reference_policy` to add zero-radian numerical anchors only to active
+AC islands without a declared reference. The lowest source bus ID is selected;
+in-service AC branches and closed switches define connectivity, not DC links.
+Every declared reference is retained. Generator availability does not determine
+this numerical choice or add PF dispatch/voltage controls.
+
+`AcDcOpfPreparation::angle_references` records each anchor, its sorted component
+bus IDs, and whether it was declared. The private AC assembly projection uses
+that reference set; the input network and source bus roles are unchanged.
+Ordinary AC-only constructors/preparation retain their existing guards.
+The policy persists with coupled instances/results; old records without the
+field retain the strict default. The unreleased schema documents the new field.
+Consumers must explicitly align reference points by shifting all bus and
+converter filter/valve angles in the island together and checking finite angle
+bounds. Preparation does not silently rotate stored operating points.

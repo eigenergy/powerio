@@ -2,7 +2,7 @@
 //! equivalent owners; the private projection here accompanies the full DC and
 //! station data and never mutates source declarations.
 use crate::{AcOpfAssemblyOptions, AcOpfPreparation, Result, build_ac_opf_preparation};
-use powerio_prob::{AcDcOpfInstance, AcDcQuantity, AcOpfInstance};
+use powerio_prob::{AcDcAngleReferencePolicy, AcDcOpfInstance, AcDcQuantity, AcOpfInstance};
 use powerio_tx::acdc::{AcDcConverterStation, AcDcLimits, DcEquivalentBranch, DcEquivalentBus};
 use serde::Serialize;
 
@@ -86,17 +86,78 @@ pub struct AcDcBranchPreparation {
     /// Zero is a zero limit, not the AC unlimited sentinel.
     pub active_power_limit_pu: f64,
 }
+/// A zero-radian numerical constraint with source-identity provenance.
+/// A numerical anchor never promotes the source bus to a PF reference role.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AcDcAngleReference {
+    /// Bus whose AC voltage angle is fixed to zero.
+    pub bus: powerio_tx::BusId,
+    /// Active AC component, sorted by source bus ID; DC edges are excluded.
+    pub island_buses: Vec<powerio_tx::BusId>,
+    /// True only for a reference present in the source network.
+    pub declared: bool,
+}
+
 /// Full coupled assembly: AC arrays and all equivalent DC equipment. A consumer
 /// must assemble all three blocks. No solver tape or solved values live here.
 #[derive(Clone, Debug)]
 pub struct AcDcOpfPreparation {
     pub ac: AcOpfPreparation,
+    /// All declared and added numerical angle references.
+    pub angle_references: Vec<AcDcAngleReference>,
     pub base_mva: f64,
     pub pole_count: u8,
     pub dc_buses: Vec<AcDcBusPreparation>,
     pub dc_branches: Vec<AcDcBranchPreparation>,
     pub stations: Vec<AcDcStationPreparation>,
 }
+fn prepare_angle_references(
+    instance: &AcDcOpfInstance,
+    projection: &mut powerio_tx::BalancedNetwork,
+) -> Result<Vec<AcDcAngleReference>> {
+    let net = instance.network();
+    let mut angle_references = Vec::new();
+    for island in net.calc_islands().islands {
+        let (references, declared) = if island.references.is_empty() {
+            match instance.angle_reference_policy() {
+                AcDcAngleReferencePolicy::Declared => (Vec::new(), false),
+                AcDcAngleReferencePolicy::LowestBusIdPerIsland => {
+                    (island.buses.first().copied().into_iter().collect(), false)
+                }
+                _ => {
+                    return Err(crate::Error::UnsupportedOpfObjective {
+                        reason: "unsupported coupled angle-reference policy".into(),
+                    });
+                }
+            }
+        } else {
+            (island.references, true)
+        };
+        for bus in references {
+            angle_references.push(AcDcAngleReference {
+                bus,
+                island_buses: island.buses.clone(),
+                declared,
+            });
+            if !declared {
+                // Private AC OPF projection only: its compiler represents angle
+                // constraints through the reference set. No source/PF role changes.
+                projection
+                    .buses_mut()
+                    .iter_mut()
+                    .find(|b| b.id == bus)
+                    .ok_or_else(|| crate::Error::UnsupportedOpfObjective {
+                        reason: "angle-reference bus missing".into(),
+                    })?
+                    .kind = powerio_tx::BusType::Ref;
+            }
+        }
+    }
+    angle_references.sort_by_key(|r| r.bus);
+
+    Ok(angle_references)
+}
+
 /// Apply the explicitly selected reference profile, preserving the input owner.
 /// AC powers are pu and angle bounds use the standard PowerModels correction.
 /// The profile uses LossCinv in both directions and widens Imax to the P/Q box
@@ -108,6 +169,7 @@ pub fn build_ac_dc_opf_preparation(instance: &AcDcOpfInstance) -> Result<AcDcOpf
     let owner = net.ac_dc_equivalent().expect("validated instance owner");
     let mut projection = net.clone();
     projection.set_ac_dc_equivalent(None)?;
+    let angle_references = prepare_angle_references(instance, &mut projection)?;
     let ac_instance = AcOpfInstance::from_network(projection)?
         .with_objective(powerio_prob::Objective::network_generator_cost());
     let mut ac = build_ac_opf_preparation(&ac_instance, &AcOpfAssemblyOptions::default())?;
@@ -162,6 +224,7 @@ pub fn build_ac_dc_opf_preparation(instance: &AcDcOpfInstance) -> Result<AcDcOpf
     }
     let prepared = AcDcOpfPreparation {
         ac,
+        angle_references,
         base_mva: owner.base_mva,
         pole_count: owner.pole_count,
         dc_buses: owner

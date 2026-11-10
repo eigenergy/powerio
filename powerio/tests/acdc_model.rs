@@ -188,3 +188,80 @@ fn malformed_result_and_duplicate_source_identities_refuse() {
     n.generators_mut()[1].uid = n.generators()[0].uid.clone();
     assert!(AcDcOpfInstance::from_network(n, i.profile()).is_err());
 }
+
+#[cfg(feature = "matrix")]
+#[test]
+fn numerical_angle_references_are_opt_in_stable_and_preserve_roles() {
+    let i = instance();
+    let mut net = i.network().clone();
+    // Bus 2 becomes an AC island even though its DC-connected converter remains.
+    for branch in net.branches_mut() {
+        if branch.from.0 == 2 || branch.to.0 == 2 {
+            branch.in_service = false;
+        }
+    }
+    let original = serde_json::to_value(&net).unwrap();
+    let declared = AcDcOpfInstance::from_network(net.clone(), i.profile()).unwrap();
+    assert!(build_ac_dc_opf_preparation(&declared).is_err());
+    let selected =
+        declared.with_angle_reference_policy(AcDcAngleReferencePolicy::LowestBusIdPerIsland);
+    let prepared = build_ac_dc_opf_preparation(&selected).unwrap();
+    let added: Vec<_> = prepared
+        .angle_references
+        .iter()
+        .filter(|r| !r.declared)
+        .collect();
+    assert_eq!(added.len(), 1);
+    assert_eq!(added[0].bus, BusId(2));
+    assert_eq!(added[0].island_buses, vec![BusId(2)]);
+    assert_eq!(original, serde_json::to_value(selected.network()).unwrap());
+    let mut ac_only = net.clone();
+    ac_only.set_ac_dc_equivalent(None).unwrap();
+    let ac_only = AcOpfInstance::from_network(ac_only).unwrap();
+    assert!(
+        matrix::build_ac_opf_preparation(&ac_only, &matrix::AcOpfAssemblyOptions::default())
+            .is_err()
+    );
+    net.buses_mut().reverse();
+    net.branches_mut().reverse();
+    let reordered = AcDcOpfInstance::from_network(net, i.profile())
+        .unwrap()
+        .with_angle_reference_policy(AcDcAngleReferencePolicy::LowestBusIdPerIsland);
+    assert_eq!(
+        prepared.angle_references,
+        build_ac_dc_opf_preparation(&reordered)
+            .unwrap()
+            .angle_references
+    );
+}
+
+#[test]
+fn angle_reference_policy_roundtrips_and_unknown_policy_refuses() {
+    let i = instance();
+    let old_shape = stored(i.clone().into());
+    assert!(
+        old_shape["value"]["data"]
+            .get("angle_reference_policy")
+            .is_none()
+    );
+    let selected = i.with_angle_reference_policy(AcDcAngleReferencePolicy::LowestBusIdPerIsland);
+    let p = point(&selected);
+    let selected = selected.with_initial_point(p.clone()).unwrap();
+    let solution = AcDcOpfSolution::new(
+        Arc::new(selected.clone()),
+        p,
+        0.0,
+        Termination::Converged,
+        None,
+    )
+    .unwrap();
+    for value in [PioValue::from(selected), PioValue::from(solution)] {
+        let doc = stored(value);
+        assert_eq!(stored(read(&doc).unwrap().value().clone()), doc);
+    }
+    let mut bad = old_shape;
+    bad["value"]["data"]["angle_reference_policy"] = serde_json::json!("automatic_slack_dispatch");
+    assert!(read(&bad).is_err());
+    bad["value"]["data"]["angle_reference_policy"] = serde_json::Value::Null;
+    assert!(read(&bad).is_err());
+}
