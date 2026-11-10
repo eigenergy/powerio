@@ -63,6 +63,37 @@ fn internal(id: &str) -> Value {
 fn uuid(kind: &str, id: &str) -> String {
     deterministic_mrid("https://powerio.org/powersystems", kind, id)
 }
+
+fn component_refs(doc: &Value) -> Result<BTreeMap<i64, String>> {
+    let mut refs = BTreeMap::new();
+    let mut used = super::BTreeSet::new();
+    let mut fresh = Vec::new();
+    for rows in doc["components"].as_object().expect("components").values() {
+        for row in rows.as_array().expect("rows") {
+            let id = integer(row, "id")?;
+            if let Some(identity) =
+                doc["ext"][id.to_string()]["org.eigenergy.powerio"]["native_uuid"].as_str()
+            {
+                if !used.insert(identity.to_owned()) {
+                    return Err(error("duplicate retained native component UUID"));
+                }
+                refs.insert(id, identity.to_owned());
+            } else {
+                fresh.push(id);
+            }
+        }
+    }
+    for id in fresh {
+        let mut identity = uuid("component", &id.to_string());
+        let mut attempt = 0;
+        while !used.insert(identity.clone()) {
+            attempt += 1;
+            identity = uuid("component", &format!("{id}:{attempt}"));
+        }
+        refs.insert(id, identity);
+    }
+    Ok(refs)
+}
 fn metadata(v: &mut Value, kind: &str, module: &str) {
     v["__metadata__"] = json!({"type":kind,"module":module});
 }
@@ -310,16 +341,16 @@ pub(in crate::format) fn to_schema(root: &Value) -> Result<Value> {
         if let Some(uuid) = doc["ext"][id.to_string()]["org.eigenergy.powerio"]["transformer_uuid"]
             .as_str()
             .map(str::to_owned)
+            && let Some(circuit) = ids.get(uuid.as_str())
         {
-            let circuit = *ids
-                .get(uuid.as_str())
-                .ok_or_else(|| error("secondary shunt references a missing transformer UUID"))?;
             let extra = doc["ext"][id.to_string()]["org.eigenergy.powerio"]
                 .as_object_mut()
                 .expect("ext object");
             extra.remove("transformer_uuid");
             extra.insert("transformer_circuit".into(), json!(circuit));
         }
+        // An unresolved extension marker is diagnosed by the shared reader;
+        // the native shunt and its valid bus reference remain authoritative.
         for field in [
             "base_voltage_primary",
             "base_voltage_secondary",
@@ -366,6 +397,12 @@ pub(in crate::format) fn to_schema(root: &Value) -> Result<Value> {
                 row["operational_flow_limit"] = json!({"from_to_min":lo.max(0.0),"from_to_max":hi.max(0.0),"to_from_min":(-hi).max(0.0),"to_from_max":(-lo).max(0.0)});
                 let curve = row["loss"].clone();
                 row["loss"] = json!({"power_units":"COMPONENT_BASE","value_curve":curve});
+            }
+            "Line" => {
+                doc["ext"][id.to_string()]["org.eigenergy.powerio"]
+                    .as_object_mut()
+                    .expect("validated extension object")
+                    .remove("native_kind");
             }
             "MonitoredLine" => {
                 doc["ext"][id.to_string()]["org.eigenergy.powerio"]["native_kind"] =
@@ -538,18 +575,7 @@ pub(in crate::format) fn write(
     output.diagnostics.extend(winding_warnings.into_records());
     deduplicate_arcs(&mut doc)?;
     let mut components = Vec::new();
-    let mut refs = BTreeMap::new();
-    for rows in doc["components"].as_object().expect("components").values() {
-        for row in rows.as_array().expect("rows") {
-            let id = integer(row, "id")?;
-            let identity =
-                doc["ext"][id.to_string()]["org.eigenergy.powerio"]["native_uuid"].as_str();
-            refs.insert(
-                id,
-                identity.map_or_else(|| uuid("component", &id.to_string()), str::to_owned),
-            );
-        }
-    }
+    let refs = component_refs(&doc)?;
     let parents: BTreeMap<_, _> = rows(&doc, "TwoWindingTransformer")?
         .iter()
         .map(|r| Ok((integer(r, "circuit")?, r)))
@@ -870,4 +896,28 @@ pub(super) fn clock_angle(row: &Value, field: &str) -> Result<f64> {
         .filter(|n| *n <= 12)
         .ok_or_else(|| error("invalid winding clock group"))?;
     Ok(-f64::from(clock) * std::f64::consts::PI / 6.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fresh_component_uuid_does_not_collide_with_a_retained_uuid() {
+        let retained = uuid("component", "1");
+        let doc = json!({"components":{"ACBus":[{"id":1},{"id":2}]},
+            "ext":{"2":{"org.eigenergy.powerio":{"native_uuid":retained}}}});
+        let refs = component_refs(&doc).unwrap();
+        assert_eq!(refs[&2], retained);
+        assert_ne!(refs[&1], refs[&2]);
+        assert_eq!(refs, component_refs(&doc).unwrap());
+    }
+
+    #[test]
+    fn duplicate_retained_uuids_are_rejected() {
+        let doc = json!({"components":{"ACBus":[{"id":1},{"id":2}]},
+            "ext":{"1":{"org.eigenergy.powerio":{"native_uuid":"same"}},
+                "2":{"org.eigenergy.powerio":{"native_uuid":"same"}}}});
+        assert!(component_refs(&doc).is_err());
+    }
 }
