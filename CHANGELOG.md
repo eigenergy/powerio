@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+**XIIDM**
+
+- XIIDM output from a network without stored substation data now gives each
+  static var compensator a terminal on its bus. PowerIO used to reject its
+  own output when a compensator came from a PSS/E FACTS record (#831).
+
 ## 0.11.10
 
 **OpenDSS**

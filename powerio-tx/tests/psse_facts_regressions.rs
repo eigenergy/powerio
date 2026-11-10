@@ -374,3 +374,44 @@ fn retained_rawx_bytes_stay_exact_despite_typed_projection_diagnostics() {
     let emitted = helpers::emit_module(&parsed.module, TargetFormat::PsseRawx).unwrap();
     assert_eq!(emitted.text, source);
 }
+
+#[test]
+fn facts_shunt_without_substation_data_rereads_from_xiidm() {
+    let raw = "0,100,35,0,1,60 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'HV',230,3,1,1,1,1,0
+2,'LV',115,1,1,1,1,1,0
+0 / END OF BUS DATA, BEGIN FACTS DEVICE DATA
+'F1',1,0,1,0,0,1.02,100,9999,0.9,1.1,1,0,0.05,100,1,0,0,0,0,0,''
+0 / END OF FACTS DEVICE DATA
+Q
+";
+    let p = helpers::parse_str(raw, "psse").unwrap();
+    let out = helpers::emit_value(&p.network, TargetFormat::Xiidm).unwrap();
+    let svc = out
+        .text
+        .lines()
+        .find(|line| line.contains("<iidm:staticVarCompensator "))
+        .unwrap();
+    assert!(svc.contains(" bus=\"B1\""), "SVC has no terminal: {svc}");
+    assert!(
+        svc.contains(" connectableBus=\"B1\""),
+        "SVC has no terminal: {svc}"
+    );
+    let back = helpers::parse_str(&out.text, "xiidm").unwrap();
+    let svcs = back.network.static_var_compensators();
+    assert_eq!(svcs.len(), 1);
+    assert_eq!(svcs[0].bus, BusId(1));
+}
+
+#[test]
+fn svc_without_uid_gets_a_derived_xiidm_terminal() {
+    let mut network = parse(&source()).network;
+    *network.detailed_connectivity_mut() = None;
+    network.static_var_compensators_mut()[0].uid = None;
+    let out = helpers::emit_value(&network, TargetFormat::Xiidm).unwrap();
+    let back = helpers::parse_str(&out.text, "xiidm").unwrap();
+    assert_eq!(back.network.static_var_compensators()[0].bus, BusId(1));
+}
