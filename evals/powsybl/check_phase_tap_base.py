@@ -7,12 +7,12 @@ This checks imported parameters and tap steps; it does not run a power flow.
 
 import io
 import math
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
+from pathlib import Path
 
 import pypowsybl as pp
 
