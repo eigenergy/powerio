@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+**GridLAB-D and OpenDSS**
+
+- An include path in a GridLAB-D or OpenDSS case now counts as absolute on
+  every platform when it starts with `/` or `\` (including a UNC path such as
+  `\\server\share`) or with a drive letter and a separator (`C:\` or `C:/`),
+  since a case written on one system can be read on another. Before, GridLAB-D
+  detected only a leading `/`, so on Windows a project with an include such as
+  `C:\feeder\load.glm` was not refused when written as a relocated project,
+  and OpenDSS missed `C:\` paths on Unix and `/` paths on Windows. Reported by
+  stkotum in #832.
+
 ## 0.11.10
 
 **OpenDSS**
