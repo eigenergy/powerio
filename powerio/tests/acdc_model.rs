@@ -776,3 +776,101 @@ fn shared_voltage_pf_profile_is_explicit_and_preserves_old_refusals() {
     net.set_ac_dc_equivalent(Some(owner)).unwrap();
     assert!(AcDcPfInstance::from_network(net, profile).is_err()); // sharing does not invent DC authority
 }
+
+#[test]
+fn dc_droop_pf_profile_preserves_settings_and_roundtrips_instances_and_results() {
+    use powerio_tx::acdc::DcConverterControl;
+    let profile = AcDcPfProfile::PowerModelsAcDc0101AcpVscDcDroopSharedVoltageEqualIncrementV1;
+    let mut net = instance().network().clone();
+    let mut owner = net.ac_dc_equivalent().unwrap().clone();
+    owner.stations[0].dc_control = DcConverterControl::DcPowerDroop;
+    owner.stations[0].settings.droop = 0.005;
+    net.set_ac_dc_equivalent(Some(owner)).unwrap();
+    let source = serde_json::to_value(&net).unwrap();
+    for old in [
+        PF_PROFILE,
+        AcDcPfProfile::PowerModelsAcDc0101AcpVscSharedVoltageEqualIncrementV1,
+    ] {
+        assert!(!old.allows_dc_power_droop());
+        assert!(AcDcPfInstance::from_network(net.clone(), old).is_err());
+    }
+    assert!(profile.allows_dc_power_droop() && profile.shares_voltage_reactive_increments());
+    let i = AcDcPfInstance::from_network(net.clone(), profile).unwrap();
+    let electrical =
+        AcDcOpfInstance::from_network(net.clone(), AcDcOpfProfile::PowerModelsAcDc0101AcpVscV1)
+            .unwrap();
+    let p = AcDcOperatingPoint::for_pf(&i, point(&electrical).values().to_vec()).unwrap();
+    let i = i.with_initial_point(p.clone()).unwrap();
+    let result = AcDcPfSolution::new(Arc::new(i.clone()), p, Termination::Converged, None).unwrap();
+    for value in [PioValue::from(i), PioValue::from(result)] {
+        let doc = stored(value);
+        assert_eq!(stored(read(&doc).unwrap().value().clone()), doc);
+    }
+    let mut doc = stored(
+        AcDcPfInstance::from_network(net.clone(), profile)
+            .unwrap()
+            .into(),
+    );
+    doc["value"]["data"]["profile"] = serde_json::to_value(PF_PROFILE).unwrap();
+    assert!(read(&doc).is_err());
+    assert_eq!(serde_json::to_value(net).unwrap(), source);
+}
+
+#[test]
+fn dc_droop_pf_checks_selected_slopes_deadbands_and_local_dc_authority() {
+    use powerio_tx::acdc::DcConverterControl;
+    let profile = AcDcPfProfile::PowerModelsAcDc0101AcpVscDcDroopSharedVoltageEqualIncrementV1;
+    let net = instance().network().clone();
+    for mutation in 0..10 {
+        let mut n = net.clone();
+        let mut e = n.ac_dc_equivalent().unwrap().clone();
+        for s in &mut e.stations {
+            s.dc_control = DcConverterControl::ActivePowerAtPcc;
+        }
+        e.stations[0].dc_control = DcConverterControl::DcPowerDroop;
+        e.stations[0].settings.droop = 0.005;
+        match mutation {
+            0 => e.stations[0].settings.droop = 0.,
+            1 => e.stations[0].settings.droop = -0.005,
+            2 => e.stations[0].settings.droop = 1e-320,
+            3 => e.stations[0].settings.dc_voltage_target_pu = 0.,
+            4 => e.stations[0].settings.dc_voltage_deadband_pu = 0.001,
+            5 => e.stations[0].dc_control = DcConverterControl::ValveAcPowerDroop,
+            6 => e.stations[0].in_service = false,
+            7 => {
+                for b in &mut e.branches {
+                    b.in_service = false;
+                }
+            }
+            8 => {
+                e.stations[1].dc_control = DcConverterControl::DcVoltage;
+                e.stations[2].dc_control = DcConverterControl::DcVoltage;
+            }
+            9 => {
+                e.stations[0].dc_control = DcConverterControl::ActivePowerAtPcc;
+            }
+            _ => unreachable!(),
+        }
+        n.set_ac_dc_equivalent(Some(e)).unwrap();
+        assert!(
+            AcDcPfInstance::from_network(n, profile).is_err(),
+            "mutation {mutation}"
+        );
+    }
+    // A connected grid can be anchored by droop alone; retained zero slope on
+    // an unselected/inactive controller must not be interpreted as active droop.
+    let mut n = net;
+    let mut e = n.ac_dc_equivalent().unwrap().clone();
+    for s in &mut e.stations {
+        s.dc_control = DcConverterControl::ActivePowerAtPcc;
+        s.settings.droop = 0.;
+    }
+    e.stations[0].dc_control = DcConverterControl::DcPowerDroop;
+    e.stations[0].settings.droop = 0.005;
+    n.set_ac_dc_equivalent(Some(e.clone())).unwrap();
+    assert!(AcDcPfInstance::from_network(n.clone(), profile).is_ok());
+    e.stations[1].dc_control = DcConverterControl::DcPowerDroop;
+    e.stations[1].in_service = false;
+    n.set_ac_dc_equivalent(Some(e)).unwrap();
+    assert!(AcDcPfInstance::from_network(n, profile).is_ok());
+}

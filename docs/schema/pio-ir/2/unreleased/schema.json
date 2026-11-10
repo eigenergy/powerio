@@ -621,6 +621,11 @@
           "const": "power_models_ac_dc0101_acp_vsc_shared_voltage_equal_increment_v1",
           "description": "Same electrical/P-reference semantics, allowing shared AC voltage authority.\nEvery active generator and VoltageAtPcc converter at a bus shares equal\nreactive INJECTION increments from declarations: delta Qg = -delta Qpcc.\nAll participants use one bus Vm target. Converter-only participants share\nequal withdrawal increments. ReactivePowerAtPcc converters do not participate.\nNo rating-based weights, saturation, source-control edits or PV/PQ switching.",
           "type": "string"
+        },
+        {
+          "const": "power_models_ac_dc0101_acp_vsc_dc_droop_shared_voltage_equal_increment_v1",
+          "description": "Shared AC-voltage allocation with explicit DC-power droop (type 3).\nWithdrawal-positive Pdc/base = Pdcset/base - (Vdc - Vdcset)/droop.\nActive droop slopes and targets must be positive, with a finite reciprocal\nslope and zero deadband. Each DC island needs at least one fixed-voltage\nor droop controller, and at most one fixed-voltage controller. Type-4\nvalve-power droop is unsupported. Limits are reported without saturation\nor control switching; inactive and unused declarations remain retained.",
+          "type": "string"
         }
       ]
     },

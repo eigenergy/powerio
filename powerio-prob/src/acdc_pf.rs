@@ -33,6 +33,14 @@ pub enum AcDcPfProfile {
     /// equal withdrawal increments. ReactivePowerAtPcc converters do not participate.
     /// No rating-based weights, saturation, source-control edits or PV/PQ switching.
     PowerModelsAcDc0101AcpVscSharedVoltageEqualIncrementV1,
+    /// Shared AC-voltage allocation with explicit DC-power droop (type 3).
+    /// Withdrawal-positive Pdc/base = Pdcset/base - (Vdc - Vdcset)/droop.
+    /// Active droop slopes and targets must be positive, with a finite reciprocal
+    /// slope and zero deadband. Each DC island needs at least one fixed-voltage
+    /// or droop controller, and at most one fixed-voltage controller. Type-4
+    /// valve-power droop is unsupported. Limits are reported without saturation
+    /// or control switching; inactive and unused declarations remain retained.
+    PowerModelsAcDc0101AcpVscDcDroopSharedVoltageEqualIncrementV1,
 }
 
 impl AcDcPfProfile {
@@ -41,6 +49,14 @@ impl AcDcPfProfile {
         matches!(
             self,
             Self::PowerModelsAcDc0101AcpVscSharedVoltageEqualIncrementV1
+                | Self::PowerModelsAcDc0101AcpVscDcDroopSharedVoltageEqualIncrementV1
+        )
+    }
+    #[must_use]
+    pub const fn allows_dc_power_droop(self) -> bool {
+        matches!(
+            self,
+            Self::PowerModelsAcDc0101AcpVscDcDroopSharedVoltageEqualIncrementV1
         )
     }
 }
@@ -168,14 +184,29 @@ fn validate_controls(net: &BalancedNetwork, profile: AcDcPfProfile) -> Result<()
     }
     let mut voltage_buses = gen_buses;
     for s in owner.stations.iter().filter(|s| s.in_service) {
+        let droop =
+            s.dc_control == DcConverterControl::DcPowerDroop && profile.allows_dc_power_droop();
         if !matches!(
             s.dc_control,
             DcConverterControl::ActivePowerAtPcc | DcConverterControl::DcVoltage
-        ) {
+        ) && !droop
+        {
             return Err(invalid("PF droop controls are unqualified"));
         }
-        if s.dc_control == DcConverterControl::DcVoltage && s.settings.dc_voltage_target_pu <= 0. {
+        if (s.dc_control == DcConverterControl::DcVoltage || droop)
+            && s.settings.dc_voltage_target_pu <= 0.
+        {
             return Err(invalid("PF DC voltage target must be positive"));
+        }
+        if droop {
+            if s.settings.droop <= 0. || !s.settings.droop.recip().is_finite() {
+                return Err(invalid(
+                    "PF DC droop slope must be positive with finite reciprocal",
+                ));
+            }
+            if s.settings.dc_voltage_deadband_pu != 0. {
+                return Err(invalid("PF DC droop deadband is unqualified"));
+            }
         }
         if s.ac_control == AcConverterControl::VoltageAtPcc {
             if !voltage_buses.insert(s.ac_bus) && !profile.shares_voltage_reactive_increments() {
@@ -188,6 +219,12 @@ fn validate_controls(net: &BalancedNetwork, profile: AcDcPfProfile) -> Result<()
             }
         }
     }
+    validate_dc_authority(owner, profile)
+}
+fn validate_dc_authority(
+    owner: &powerio_tx::acdc::BalancedAcDcEquipment,
+    profile: AcDcPfProfile,
+) -> Result<(), Error> {
     let edges: Vec<_> = owner
         .branches
         .iter()
@@ -202,17 +239,26 @@ fn validate_controls(net: &BalancedNetwork, profile: AcDcPfProfile) -> Result<()
             .collect(),
         &edges,
     ) {
-        if owner
+        let stations: Vec<_> = owner
             .stations
             .iter()
-            .filter(|s| {
-                s.in_service
-                    && s.dc_control == DcConverterControl::DcVoltage
-                    && island.contains(&s.dc_bus.to_string())
-            })
-            .count()
-            != 1
-        {
+            .filter(|s| s.in_service && island.contains(&s.dc_bus.to_string()))
+            .collect();
+        let fixed = stations
+            .iter()
+            .filter(|s| s.dc_control == DcConverterControl::DcVoltage)
+            .count();
+        if profile.allows_dc_power_droop() {
+            let droop = stations
+                .iter()
+                .filter(|s| s.dc_control == DcConverterControl::DcPowerDroop)
+                .count();
+            if fixed > 1 || fixed + droop == 0 {
+                return Err(invalid(
+                    "PF DC island needs at least one fixed-voltage or positive-droop controller and at most one fixed-voltage controller",
+                ));
+            }
+        } else if fixed != 1 {
             return Err(invalid(
                 "PF requires exactly one declared DC voltage controller per DC island",
             ));
