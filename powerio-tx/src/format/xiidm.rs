@@ -7831,11 +7831,31 @@ fn complete_stated_terminals(
         .iter()
         .map(|terminal| (&terminal.equipment, terminal.terminal))
         .collect::<HashSet<_>>();
-    let covered = detailed
-        .voltage_levels
-        .iter()
-        .flat_map(|level| level.buses.iter().copied())
-        .collect::<HashSet<_>>();
+    // The first voltage level, configured bus, and connectivity node stated
+    // for each bus, looked up once per missing terminal; a linear search per
+    // terminal is quadratic on a large partial hierarchy.
+    let mut level_by_bus: HashMap<BusId, &VoltageLevel> = HashMap::new();
+    for level in &detailed.voltage_levels {
+        for bus in &level.buses {
+            level_by_bus.entry(*bus).or_insert(level);
+        }
+    }
+    let mut configured_by_bus: HashMap<(&ComponentId, BusId), &BusBreakerBus> = HashMap::new();
+    for value in &detailed.bus_breaker_buses {
+        if let Some(bus) = value.calculated_bus {
+            configured_by_bus
+                .entry((&value.voltage_level, bus))
+                .or_insert(value);
+        }
+    }
+    let mut node_by_bus: HashMap<(&ComponentId, BusId), &ConnectivityNode> = HashMap::new();
+    for value in &detailed.connectivity_nodes {
+        if let Some(bus) = value.calculated_bus {
+            node_by_bus
+                .entry((&value.voltage_level, bus))
+                .or_insert(value);
+        }
+    }
     // Tie line and boundary line calculation records are written through
     // their tie or boundary line, which states its own terminal.
     let calculation_records = detailed
@@ -7865,7 +7885,10 @@ fn complete_stated_terminals(
             .iter()
             .filter(|(side, _, _)| !stated.contains(&(&component, *side)))
             .collect::<Vec<_>>();
-        if lacking.iter().all(|(_, bus, _)| covered.contains(bus)) {
+        if lacking
+            .iter()
+            .all(|(_, bus, _)| level_by_bus.contains_key(bus))
+        {
             missing.extend(
                 lacking
                     .into_iter()
@@ -7948,18 +7971,12 @@ fn complete_stated_terminals(
     let mut attached = Vec::new();
     let mut connected_anyway = Vec::new();
     for (equipment, side, bus, connected) in missing {
-        let Some(level) = detailed
-            .voltage_levels
-            .iter()
-            .find(|level| level.buses.contains(&bus))
-        else {
+        let Some(&level) = level_by_bus.get(&bus) else {
             continue;
         };
         let terminal = match level.topology_kind {
             TopologyKind::BusBreaker => {
-                let Some(configured) = detailed.bus_breaker_buses.iter().find(|value| {
-                    value.voltage_level == level.component && value.calculated_bus == Some(bus)
-                }) else {
+                let Some(configured) = configured_by_bus.get(&(&level.component, bus)) else {
                     continue;
                 };
                 Terminal {
@@ -7976,9 +7993,7 @@ fn complete_stated_terminals(
                 }
             }
             TopologyKind::NodeBreaker => {
-                let Some(existing) = detailed.connectivity_nodes.iter().find(|value| {
-                    value.voltage_level == level.component && value.calculated_bus == Some(bus)
-                }) else {
+                let Some(existing) = node_by_bus.get(&(&level.component, bus)) else {
                     continue;
                 };
                 let Ok(node) = ComponentId::new(
