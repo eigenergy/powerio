@@ -596,6 +596,15 @@
             "null"
           ]
         },
+        "loss_modes": {
+          "items": {
+            "$ref": "#/$defs/AcDcStationLossMode"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "network": {
           "$ref": "#/$defs/BalancedNetwork"
         },
@@ -630,6 +639,11 @@
         {
           "const": "physical_coordinates_dc_droop_shared_voltage_equal_increment_v1",
           "description": "Physical local voltage/impedance bases, Cinv losses and declared current\nratings, with DC-power droop and shared reactive injection increments.\nPCC voltage uses the AC bus base, filter/valve voltage the station base,\nand DC voltage its local per-pole base. Droop k = R*S/Vdc_base, where\nR is per-pole kV per total station MW; Vdcset is on that DC bus base.\nThis explicitly interprets declarations; it does not automatically rebase\nsource data. Limits remain post-solve reports without saturation.",
+          "type": "string"
+        },
+        {
+          "const": "fixed_mode_physical_dc_droop_shared_voltage_equal_increment_v1",
+          "description": "Physical-coordinate droop/shared-voltage PF with one explicit loss mode\nper active station. Rectifier/inverter select Crec/Cinv and require valve\nAC withdrawal P >= 0 / <= 0. Zero P retains the selected curve. Mode sign\nis a model-domain requirement; operating ratings remain post-solve reports.\nNo automatic reversal, saturation or control switching.",
           "type": "string"
         }
       ]

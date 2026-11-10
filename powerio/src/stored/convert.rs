@@ -1164,12 +1164,27 @@ fn encode_ac_dc_pf_instance(i: &powerio_prob::AcDcPfInstance) -> dto::AcDcPfInst
     dto::AcDcPfInstance {
         network: Box::new(i.network().clone()),
         profile: i.profile(),
+        loss_modes: (i.profile()
+            == powerio_prob::AcDcPfProfile::FixedModePhysicalDcDroopSharedVoltageEqualIncrementV1)
+            .then(|| i.loss_modes().to_vec()),
         initial_point: i.initial_point().map(|p| p.values().to_vec()),
     }
 }
 fn decode_ac_dc_pf_instance(i: dto::AcDcPfInstance) -> Result<powerio_prob::AcDcPfInstance> {
-    let mut instance = powerio_prob::AcDcPfInstance::from_network(*i.network, i.profile)
-        .map_err(|e| invalid(e.to_string()))?;
+    if i.loss_modes.is_some()
+        && i.profile
+            != powerio_prob::AcDcPfProfile::FixedModePhysicalDcDroopSharedVoltageEqualIncrementV1
+    {
+        return Err(invalid(
+            "loss_modes is not a field of the selected PF profile",
+        ));
+    }
+    let mut instance = powerio_prob::AcDcPfInstance::from_network_with_loss_modes(
+        *i.network,
+        i.profile,
+        i.loss_modes.unwrap_or_default(),
+    )
+    .map_err(|e| invalid(e.to_string()))?;
     if let Some(values) = i.initial_point {
         let point = powerio_prob::AcDcOperatingPoint::for_pf(&instance, values)
             .map_err(|e| invalid(e.to_string()))?;

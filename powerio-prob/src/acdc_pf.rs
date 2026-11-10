@@ -1,7 +1,7 @@
 //! Explicit coupled PF intent, distinct from OPF dispatch and operating limits.
 use crate::{
     AcDcCoordinatePolicy, AcDcOperatingPoint, AcDcOpfInstance, AcDcOpfProfile, AcDcQuantity,
-    AcDcValue, Producer, Termination,
+    AcDcStationLossMode, AcDcValue, Producer, Termination,
 };
 use powerio_core::Error;
 use powerio_tx::{
@@ -49,6 +49,12 @@ pub enum AcDcPfProfile {
     /// This explicitly interprets declarations; it does not automatically rebase
     /// source data. Limits remain post-solve reports without saturation.
     PhysicalCoordinatesDcDroopSharedVoltageEqualIncrementV1,
+    /// Physical-coordinate droop/shared-voltage PF with one explicit loss mode
+    /// per active station. Rectifier/inverter select Crec/Cinv and require valve
+    /// AC withdrawal P >= 0 / <= 0. Zero P retains the selected curve. Mode sign
+    /// is a model-domain requirement; operating ratings remain post-solve reports.
+    /// No automatic reversal, saturation or control switching.
+    FixedModePhysicalDcDroopSharedVoltageEqualIncrementV1,
 }
 
 impl AcDcPfProfile {
@@ -59,6 +65,7 @@ impl AcDcPfProfile {
             Self::PowerModelsAcDc0101AcpVscSharedVoltageEqualIncrementV1
                 | Self::PowerModelsAcDc0101AcpVscDcDroopSharedVoltageEqualIncrementV1
                 | Self::PhysicalCoordinatesDcDroopSharedVoltageEqualIncrementV1
+                | Self::FixedModePhysicalDcDroopSharedVoltageEqualIncrementV1
         )
     }
     #[must_use]
@@ -67,12 +74,14 @@ impl AcDcPfProfile {
             self,
             Self::PowerModelsAcDc0101AcpVscDcDroopSharedVoltageEqualIncrementV1
                 | Self::PhysicalCoordinatesDcDroopSharedVoltageEqualIncrementV1
+                | Self::FixedModePhysicalDcDroopSharedVoltageEqualIncrementV1
         )
     }
     #[must_use]
     pub const fn coordinate_policy(self) -> AcDcCoordinatePolicy {
         match self {
-            Self::PhysicalCoordinatesDcDroopSharedVoltageEqualIncrementV1 => {
+            Self::PhysicalCoordinatesDcDroopSharedVoltageEqualIncrementV1
+            | Self::FixedModePhysicalDcDroopSharedVoltageEqualIncrementV1 => {
                 AcDcCoordinatePolicy::PhysicalLocalBases
             }
             _ => AcDcCoordinatePolicy::SourcePerUnit,
@@ -89,11 +98,30 @@ pub struct AcDcPfInstance {
 }
 impl AcDcPfInstance {
     pub fn from_network(network: BalancedNetwork, profile: AcDcPfProfile) -> Result<Self, Error> {
-        let electrical_profile = match profile.coordinate_policy() {
-            AcDcCoordinatePolicy::PhysicalLocalBases => AcDcOpfProfile::PhysicalCoordinatesAcpVscV1,
-            AcDcCoordinatePolicy::SourcePerUnit => AcDcOpfProfile::PowerModelsAcDc0101AcpVscV1,
+        Self::from_network_with_loss_modes(network, profile, Vec::new())
+    }
+    /// Complete active-station loss modes are required only by fixed-mode PF.
+    /// Existing profiles reject nonempty modes. Missing, duplicate, inactive,
+    /// unknown or sign/rating-incompatible selections refuse before solving.
+    pub fn from_network_with_loss_modes(
+        network: BalancedNetwork,
+        profile: AcDcPfProfile,
+        loss_modes: Vec<AcDcStationLossMode>,
+    ) -> Result<Self, Error> {
+        let electrical_profile = if profile
+            == AcDcPfProfile::FixedModePhysicalDcDroopSharedVoltageEqualIncrementV1
+        {
+            AcDcOpfProfile::FixedModePhysicalAcpVscV1
+        } else {
+            match profile.coordinate_policy() {
+                AcDcCoordinatePolicy::PhysicalLocalBases => {
+                    AcDcOpfProfile::PhysicalCoordinatesAcpVscV1
+                }
+                AcDcCoordinatePolicy::SourcePerUnit => AcDcOpfProfile::PowerModelsAcDc0101AcpVscV1,
+            }
         };
-        let electrical = AcDcOpfInstance::from_network(network, electrical_profile)?;
+        let electrical =
+            AcDcOpfInstance::from_network_with_loss_modes(network, electrical_profile, loss_modes)?;
         validate_controls(electrical.network(), profile)?;
         Ok(Self {
             electrical,
@@ -107,6 +135,10 @@ impl AcDcPfInstance {
     #[must_use]
     pub const fn profile(&self) -> AcDcPfProfile {
         self.profile
+    }
+    #[must_use]
+    pub fn loss_modes(&self) -> &[AcDcStationLossMode] {
+        self.electrical.loss_modes()
     }
     #[must_use]
     pub fn coordinates(&self) -> BTreeSet<(AcDcQuantity, String)> {

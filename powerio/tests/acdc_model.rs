@@ -905,3 +905,106 @@ fn physical_pf_coordinates_are_explicit_and_roundtrip_without_editing_declaratio
     invalid.buses_mut()[0].base_kv = 0.;
     assert!(AcDcPfInstance::from_network(invalid, profile).is_err());
 }
+
+#[test]
+fn fixed_mode_pf_roundtrips_and_preserves_existing_wire_shapes() {
+    let net = instance().network().clone();
+    let profile = AcDcPfProfile::FixedModePhysicalDcDroopSharedVoltageEqualIncrementV1;
+    let modes = fixed_modes(&net);
+    assert!(AcDcPfInstance::from_network(net.clone(), profile).is_err());
+    let i =
+        AcDcPfInstance::from_network_with_loss_modes(net.clone(), profile, modes.clone()).unwrap();
+    let mut reversed = modes.clone();
+    reversed.reverse();
+    assert_eq!(
+        i.loss_modes(),
+        AcDcPfInstance::from_network_with_loss_modes(net.clone(), profile, reversed)
+            .unwrap()
+            .loss_modes()
+    );
+    let p = AcDcOperatingPoint::for_pf(&i, point(&instance()).values().to_vec()).unwrap();
+    let result =
+        AcDcPfSolution::new(Arc::new(i.clone()), p.clone(), Termination::Converged, None).unwrap();
+    for value in [
+        PioValue::from(i.clone().with_initial_point(p).unwrap()),
+        PioValue::from(result),
+    ] {
+        let doc = stored(value);
+        assert_eq!(stored(read(&doc).unwrap().value().clone()), doc);
+    }
+    for old in [
+        PF_PROFILE,
+        AcDcPfProfile::PowerModelsAcDc0101AcpVscSharedVoltageEqualIncrementV1,
+        AcDcPfProfile::PowerModelsAcDc0101AcpVscDcDroopSharedVoltageEqualIncrementV1,
+        AcDcPfProfile::PhysicalCoordinatesDcDroopSharedVoltageEqualIncrementV1,
+    ] {
+        assert!(
+            AcDcPfInstance::from_network_with_loss_modes(net.clone(), old, modes.clone()).is_err()
+        );
+        assert!(
+            stored(
+                AcDcPfInstance::from_network(net.clone(), old)
+                    .unwrap()
+                    .into()
+            )["value"]["data"]
+                .get("loss_modes")
+                .is_none()
+        );
+    }
+    let doc = stored(i.into());
+    for mode in [serde_json::json!("automatic"), serde_json::Value::Null] {
+        let mut bad = doc.clone();
+        bad["value"]["data"]["loss_modes"][0]["mode"] = mode;
+        assert!(read(&bad).is_err());
+    }
+    let mut bad = doc.clone();
+    bad["value"]["data"]
+        .as_object_mut()
+        .unwrap()
+        .remove("loss_modes");
+    assert!(read(&bad).is_err());
+    let mut bad = doc;
+    bad["value"]["data"]["profile"] =
+        serde_json::json!("physical_coordinates_dc_droop_shared_voltage_equal_increment_v1");
+    assert!(read(&bad).is_err());
+}
+#[test]
+fn fixed_mode_pf_refuses_incomplete_inactive_unknown_and_conflicting_selections() {
+    let net = instance().network().clone();
+    let modes = fixed_modes(&net);
+    let profile = AcDcPfProfile::FixedModePhysicalDcDroopSharedVoltageEqualIncrementV1;
+    for bad in [
+        vec![],
+        modes[..modes.len() - 1].to_vec(),
+        vec![modes[0].clone(); modes.len()],
+        {
+            let mut m = modes.clone();
+            m[0].component = "ac_dc_converter_station/missing".into();
+            m
+        },
+    ] {
+        assert!(AcDcPfInstance::from_network_with_loss_modes(net.clone(), profile, bad).is_err());
+    }
+    let mut inactive = net.clone();
+    let mut o = inactive.ac_dc_equivalent().unwrap().clone();
+    o.stations[0].in_service = false;
+    inactive.set_ac_dc_equivalent(Some(o)).unwrap();
+    assert!(
+        AcDcPfInstance::from_network_with_loss_modes(inactive, profile, modes.clone()).is_err()
+    );
+    let mut conflict = net;
+    let mut o = conflict.ac_dc_equivalent().unwrap().clone();
+    let m = modes
+        .iter()
+        .find(|m| m.component == o.stations[0].component.to_string())
+        .unwrap();
+    o.stations[0].valve_active_mw = match m.mode {
+        AcDcValveLossMode::Rectifier => powerio_tx::acdc::AcDcLimits {
+            min: -50.,
+            max: -1.,
+        },
+        _ => powerio_tx::acdc::AcDcLimits { min: 1., max: 50. },
+    };
+    conflict.set_ac_dc_equivalent(Some(o)).unwrap();
+    assert!(AcDcPfInstance::from_network_with_loss_modes(conflict, profile, modes).is_err());
+}
