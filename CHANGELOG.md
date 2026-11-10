@@ -31,6 +31,19 @@
   unlimited, as before; refusing it is tracked for 0.12. Report and
   reproduction by Mohamed Numair (#828).
 
+**CGMES**
+
+- A phase shift that PowerIO writes as a new phase tap changer now
+  states the changer's reactance on end 1's base, the base of end 1's own
+  reactance. Reading such a file back no longer reports a false tap-step
+  reactance deviation when the transformer's tap ratio is not one. No branch
+  value changes. Files written by 0.11.0 through 0.11.10 still state the old
+  reactance and still read back with the deviation; regenerate them from the
+  original network to remove it. The 0.11.10 release notes now also state
+  that CGMES files written by 0.11.0 through 0.11.9 with a nonzero to-side
+  transformer shunt read back with a different shunt. Report and reproduction
+  by Mohamed Numair (#829).
+
 ## 0.11.10
 
 **OpenDSS**
