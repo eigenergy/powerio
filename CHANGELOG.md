@@ -4,7 +4,8 @@
 
 - Add explicit coupled AC/DC OPF intent, typed operating points and stored primal
   results, with PowerModelsACDC reference-compatible numerical preparation and
-  a separately selected declared-current profile that preserves physical limits.
+  separately selected declared-current and physical local-coordinate profiles,
+  with explicit AC port/impedance bases and DC resistance reference side.
 
 - Read and fresh-write the PowerModelsACDC MATPOWER-extension variant as typed AC/DC equipment,
   with required-capability IR protection and explicit refusal by unsupported calculations.

@@ -134,3 +134,28 @@ branch. The reference modification restores only source Imax after preprocessing
 it is not a claim of unmodified PowerModelsACDC equivalence. Generic rebasing,
 unequal-base bypasses, physical pole/return topology and native coupled PF remain
 separate gates. Reader PR #822 remains unchanged and draft.
+
+## Physical local-coordinate contract — 2026-11-10
+
+`PhysicalCoordinatesAcpVscV1` is a separate required profile, deriving declared
+current limits and `PhysicalLocalBases`. Preparation records PCC/filter/valve
+and converter-side impedance bases, physical transformer turns, the from-node
+DC resistance reference side and endpoint voltage ratios. Missing active AC
+voltage bases and nonrepresentable ratios refuse. Existing source-coordinate
+profiles retain their equations and policies; no generic rebase is enabled.
+
+Twelve coupled tests include profile/point/result IR persistence, source
+preservation, explicit bases, ignored bypass tap, invalid-base refusal and
+unknown override/profile rejection. The frozen 896fef02 decoder accepts both
+old profiles and rejects the new token. Only the unreleased schema changes.
+All 472 problem/matrix and 24 focused facade/schema/reference tests pass.
+Changed-library and coupled-test Clippy checks pass. All seven CI Clippy
+configurations were run: three C ABI configurations and Python pass; the three
+broad configurations retain unchanged float-comparison warnings in psse.rs,
+pmd_math.rs and synth_facade_parity.rs. No warning is relaxed here.
+
+Weighted bypass/DC equations and independent SI-equation qualification belong
+to Tellegen's existing `codex/acdc-native-case5` branch. The new profile retains
+LossCinv in both directions and reference auxiliary bounds. General physical
+rebasing, physical pole/return topology, native coupled PF and directional loss
+selection remain separate gates. Reader PR #822 is unchanged and draft.

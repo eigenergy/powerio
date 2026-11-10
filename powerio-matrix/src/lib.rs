@@ -158,6 +158,7 @@ pub use io::gridfm::{
 
 mod acdc;
 pub use acdc::{
-    AcDcAngleReference, AcDcBranchPreparation, AcDcBusPreparation, AcDcOpfPreparation,
-    AcDcStationPolicy, AcDcStationPreparation, build_ac_dc_opf_preparation,
+    AcDcAngleReference, AcDcBranchPolicy, AcDcBranchPreparation, AcDcBusPreparation,
+    AcDcOpfPreparation, AcDcStationPhysicalBases, AcDcStationPolicy, AcDcStationPreparation,
+    build_ac_dc_opf_preparation,
 };

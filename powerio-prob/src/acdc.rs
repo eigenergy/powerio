@@ -1,6 +1,6 @@
 //! Coupled balanced AC/DC OPF intent and identity-keyed electrical results.
-//! This profile selects source-coordinate ACP VSC equations, network generator
-//! cost and all operating limits, with free OPF dispatch (no PF setpoints).
+//! Explicit profiles select ACP VSC coordinates, network generator cost and
+//! operating limits, with free OPF dispatch (no PF setpoints).
 use crate::diagnostics::codes;
 use crate::{Producer, Termination};
 use powerio_core::Error;
@@ -22,6 +22,26 @@ pub enum AcDcOpfProfile {
     /// enforce declared valve-current limits without the nominal-1-pu repair.
     /// This qualifies current-limit semantics, not arbitrary physical rebasing.
     DeclaredCurrentAcpVscV1,
+    /// Local physical voltage bases: PCC on its AC bus base; filter/valve and
+    /// converter-side station impedances on ac_base_kv; DC resistance on the
+    /// from-bus base. Tap = physical turns ratio * converter_base / PCC_base.
+    /// Weighted ideal bypass/DC equations; declared current limits, inverter
+    /// losses and existing auxiliary bounds. Explicit interpretation, not an
+    /// automatic conversion of arbitrary imported source coordinates.
+    PhysicalCoordinatesAcpVscV1,
+}
+
+/// Voltage/impedance interpretation fixed by the selected OPF profile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AcDcCoordinatePolicy {
+    /// Original source per-unit equations; bases do not reweight bypass/DC rows.
+    SourcePerUnit,
+    /// AC line-to-line and per-pole DC local bases; station impedance referred
+    /// to converter side; DC resistance uses from-bus voltage base and owner MVA.
+    PhysicalLocalBases,
 }
 
 /// Valve-current bound semantics fixed by the selected OPF profile.
@@ -38,10 +58,21 @@ pub enum AcDcCurrentLimitPolicy {
 }
 impl AcDcOpfProfile {
     #[must_use]
+    pub const fn coordinate_policy(self) -> AcDcCoordinatePolicy {
+        match self {
+            Self::PowerModelsAcDc0101AcpVscV1 | Self::DeclaredCurrentAcpVscV1 => {
+                AcDcCoordinatePolicy::SourcePerUnit
+            }
+            Self::PhysicalCoordinatesAcpVscV1 => AcDcCoordinatePolicy::PhysicalLocalBases,
+        }
+    }
+    #[must_use]
     pub const fn current_limit_policy(self) -> AcDcCurrentLimitPolicy {
         match self {
             Self::PowerModelsAcDc0101AcpVscV1 => AcDcCurrentLimitPolicy::PowerModelsAcDc0101Repair,
-            Self::DeclaredCurrentAcpVscV1 => AcDcCurrentLimitPolicy::Declared,
+            Self::DeclaredCurrentAcpVscV1 | Self::PhysicalCoordinatesAcpVscV1 => {
+                AcDcCurrentLimitPolicy::Declared
+            }
         }
     }
 }
@@ -211,6 +242,23 @@ pub struct AcDcOpfInstance {
     angle_reference_policy: AcDcAngleReferencePolicy,
     initial_point: Option<AcDcOperatingPoint>,
 }
+fn validate_coordinate_bases(
+    network: &BalancedNetwork,
+    policy: AcDcCoordinatePolicy,
+) -> Result<(), Error> {
+    if policy == AcDcCoordinatePolicy::PhysicalLocalBases
+        && network
+            .buses()
+            .iter()
+            .any(|b| b.kind != BusType::Isolated && (!b.base_kv.is_finite() || b.base_kv <= 0.0))
+    {
+        return Err(invalid(
+            "physical AC bus voltage base must be finite and positive",
+        ));
+    }
+    Ok(())
+}
+
 impl AcDcOpfInstance {
     /// Select the profile explicitly. Unsupported equipment is refused rather
     /// than converted into an AC-only optimization.
@@ -308,6 +356,7 @@ impl AcDcOpfInstance {
                 }
             }
         }
+        validate_coordinate_bases(&network, profile.coordinate_policy())?;
         Ok(Self {
             network,
             profile,

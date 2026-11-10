@@ -519,6 +519,11 @@
           "const": "declared_current_acp_vsc_v1",
           "description": "The same ACP VSC equations, inverter losses and auxiliary bounds, but\nenforce declared valve-current limits without the nominal-1-pu repair.\nThis qualifies current-limit semantics, not arbitrary physical rebasing.",
           "type": "string"
+        },
+        {
+          "const": "physical_coordinates_acp_vsc_v1",
+          "description": "Local physical voltage bases: PCC on its AC bus base; filter/valve and\nconverter-side station impedances on ac_base_kv; DC resistance on the\nfrom-bus base. Tap = physical turns ratio * converter_base / PCC_base.\nWeighted ideal bypass/DC equations; declared current limits, inverter\nlosses and existing auxiliary bounds. Explicit interpretation, not an\nautomatic conversion of arbitrary imported source coordinates.",
+          "type": "string"
         }
       ]
     },

@@ -360,3 +360,124 @@ fn declared_current_bounds_never_increase_and_preserve_other_preparation() {
         assert!(AcOpfInstance::from_network(declared.network().clone()).is_err());
     }
 }
+
+#[test]
+fn physical_coordinate_profile_roundtrips_and_cannot_override_source_profiles() {
+    let old = instance();
+    for p in [old.profile(), AcDcOpfProfile::DeclaredCurrentAcpVscV1] {
+        assert_eq!(p.coordinate_policy(), AcDcCoordinatePolicy::SourcePerUnit);
+    }
+    let selected = AcDcOpfInstance::from_network(
+        old.network().clone(),
+        AcDcOpfProfile::PhysicalCoordinatesAcpVscV1,
+    )
+    .unwrap();
+    assert_eq!(
+        selected.profile().coordinate_policy(),
+        AcDcCoordinatePolicy::PhysicalLocalBases
+    );
+    assert_eq!(
+        selected.profile().current_limit_policy(),
+        AcDcCurrentLimitPolicy::Declared
+    );
+    let point = point(&selected);
+    let selected = selected.with_initial_point(point.clone()).unwrap();
+    let solution = AcDcOpfSolution::new(
+        Arc::new(selected.clone()),
+        point,
+        0.0,
+        Termination::Converged,
+        None,
+    )
+    .unwrap();
+    for value in [PioValue::from(selected), PioValue::from(solution)] {
+        let doc = stored(value);
+        assert_eq!(stored(read(&doc).unwrap().value().clone()), doc);
+    }
+    let mut bad = stored(old.into());
+    bad["value"]["data"]["coordinate_policy"] = serde_json::json!("physical_local_bases");
+    assert!(read(&bad).is_err());
+    bad["value"]["data"]
+        .as_object_mut()
+        .unwrap()
+        .remove("coordinate_policy");
+    bad["value"]["data"]["profile"] = serde_json::json!("physical_coordinates_acp_vsc_v2");
+    assert!(read(&bad).is_err());
+}
+
+#[cfg(feature = "matrix")]
+#[test]
+fn physical_preparation_records_explicit_port_and_impedance_bases() {
+    let mut net = instance().network().clone();
+    let mut owner = net.ac_dc_equivalent().unwrap().clone();
+    owner.stations[0].transformer.enabled = false;
+    owner.stations[0].transformer_tap_ratio = 0.73; // retained, not an ideal-transformer ratio
+    for (i, b) in owner.buses.iter_mut().enumerate() {
+        b.base_kv = 200.0 + 100.0 * i as f64;
+    }
+    net.set_ac_dc_equivalent(Some(owner)).unwrap();
+    let before = serde_json::to_value(&net).unwrap();
+    let source =
+        AcDcOpfInstance::from_network(net.clone(), AcDcOpfProfile::DeclaredCurrentAcpVscV1)
+            .unwrap();
+    let physical =
+        AcDcOpfInstance::from_network(net, AcDcOpfProfile::PhysicalCoordinatesAcpVscV1).unwrap();
+    let a = build_ac_dc_opf_preparation(&source).unwrap();
+    let b = build_ac_dc_opf_preparation(&physical).unwrap();
+    for (s, p) in a.stations.iter().zip(&b.stations) {
+        assert!(s.policy.physical_bases.is_none());
+        assert_eq!(s.policy.transformer_bypass_voltage_ratio, 1.0);
+        let bases = p.policy.physical_bases.as_ref().unwrap();
+        assert_eq!(bases.pcc_kv, 230.0);
+        assert_eq!(bases.filter_kv, 345.0);
+        assert_eq!(bases.valve_kv, 345.0);
+        assert_eq!(bases.series_impedance_kv, 345.0);
+        assert_eq!(p.policy.transformer_bypass_voltage_ratio, 230.0 / 345.0);
+        assert_eq!(
+            bases.transformer_turns_ratio,
+            p.source
+                .transformer
+                .enabled
+                .then_some(p.source.transformer_tap_ratio * 230.0 / 345.0)
+        );
+        assert_eq!(s.policy.loss_coefficients_pu, p.policy.loss_coefficients_pu);
+        assert_eq!(
+            s.policy.effective_current_limit_pu,
+            p.policy.effective_current_limit_pu
+        );
+    }
+    for (s, p) in a.dc_branches.iter().zip(&b.dc_branches) {
+        assert_eq!(s.policy.to_voltage_scale, 1.0);
+        assert!(s.policy.resistance_base_kv.is_none());
+        assert_eq!(p.policy.resistance_base_kv, Some(p.policy.from_base_kv));
+        assert_eq!(
+            p.policy.to_voltage_scale,
+            p.policy.to_base_kv / p.policy.from_base_kv
+        );
+        assert_eq!(s.conductance_pu, p.conductance_pu);
+    }
+    assert_eq!(before, serde_json::to_value(physical.network()).unwrap());
+    assert!(physical.network().to_normalized().is_err());
+}
+
+#[cfg(feature = "matrix")]
+#[test]
+fn physical_profile_rejects_missing_or_unrepresentable_bases() {
+    let mut net = instance().network().clone();
+    net.buses_mut()[0].base_kv = 0.0;
+    assert!(
+        AcDcOpfInstance::from_network(net, AcDcOpfProfile::PhysicalCoordinatesAcpVscV1).is_err()
+    );
+    let mut net = instance().network().clone();
+    let mut owner = net.ac_dc_equivalent().unwrap().clone();
+    owner.buses[0].base_kv = 1e-150;
+    owner.buses[1].base_kv = 1e150;
+    net.set_ac_dc_equivalent(Some(owner)).unwrap();
+    let source =
+        AcDcOpfInstance::from_network(net.clone(), AcDcOpfProfile::DeclaredCurrentAcpVscV1)
+            .unwrap();
+    assert!(build_ac_dc_opf_preparation(&source).is_ok());
+    let physical =
+        AcDcOpfInstance::from_network(net, AcDcOpfProfile::PhysicalCoordinatesAcpVscV1).unwrap();
+    assert!(build_ac_dc_opf_preparation(&physical).is_err());
+}

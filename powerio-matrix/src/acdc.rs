@@ -3,14 +3,31 @@
 //! station data and never mutates source declarations.
 use crate::{AcOpfAssemblyOptions, AcOpfPreparation, Result, build_ac_opf_preparation};
 use powerio_prob::{
-    AcDcAngleReferencePolicy, AcDcCurrentLimitPolicy, AcDcOpfInstance, AcDcQuantity, AcOpfInstance,
+    AcDcAngleReferencePolicy, AcDcCoordinatePolicy, AcDcCurrentLimitPolicy, AcDcOpfInstance,
+    AcDcQuantity, AcOpfInstance,
 };
 use powerio_tx::acdc::{AcDcConverterStation, AcDcLimits, DcEquivalentBranch, DcEquivalentBus};
 use serde::Serialize;
 
+/// Explicit physical AC port and impedance bases, present only for the physical
+/// profile. Voltages are line-to-line kV; impedances use owner MVA and converter side.
+#[derive(Clone, Debug, Serialize)]
+pub struct AcDcStationPhysicalBases {
+    pub pcc_kv: f64,
+    pub filter_kv: f64,
+    pub valve_kv: f64,
+    pub series_impedance_kv: f64,
+    /// None for an ideal bypass, which ignores retained tap data.
+    pub transformer_turns_ratio: Option<f64>,
+}
+
 /// Declared versus effective station parameters under the selected profile.
 #[derive(Clone, Debug, Serialize)]
 pub struct AcDcStationPolicy {
+    pub coordinate_policy: AcDcCoordinatePolicy,
+    pub physical_bases: Option<AcDcStationPhysicalBases>,
+    /// Multiplies PCC pu voltage in the bypass equality, yielding converter pu.
+    pub transformer_bypass_voltage_ratio: f64,
     pub current_limit_policy: AcDcCurrentLimitPolicy,
     pub component: String,
     pub converter_base_kv: f64,
@@ -81,9 +98,23 @@ pub struct AcDcBusPreparation {
     pub source: DcEquivalentBus,
     pub withdrawal_pu: f64,
 }
+/// Branch coordinate provenance; DC voltage bases are per-pole kV.
+#[derive(Clone, Debug, Serialize)]
+pub struct AcDcBranchPolicy {
+    pub component: String,
+    pub coordinate_policy: AcDcCoordinatePolicy,
+    pub from_base_kv: f64,
+    pub to_base_kv: f64,
+    /// Explicit physical resistance reference side; absent for source equations.
+    pub resistance_base_kv: Option<f64>,
+    /// Converts to-end pu voltage onto the from-end base (one for source profiles).
+    pub to_voltage_scale: f64,
+}
+
 /// DC branch declaration, endpoint power limit and pole-scaled conductance.
 #[derive(Clone, Debug)]
 pub struct AcDcBranchPreparation {
+    pub policy: AcDcBranchPolicy,
     pub source: DcEquivalentBranch,
     pub conductance_pu: f64,
     /// Zero is a zero limit, not the AC unlimited sentinel.
@@ -163,13 +194,23 @@ fn prepare_angle_references(
 
 /// Apply the explicitly selected reference profile, preserving the input owner.
 /// AC powers are pu and angle bounds use the standard PowerModels correction.
-/// Both profiles use LossCinv in both directions. Only the compatibility
+/// All profiles use LossCinv in both directions. Only the compatibility
 /// profile widens Imax to the P/Q box radius; the declared-current profile
 /// retains the source limit. Declarations and effective values are recorded.
 // The instance keeps its validated network private; these lookups cannot fail.
 #[allow(clippy::missing_panics_doc)]
 pub fn build_ac_dc_opf_preparation(instance: &AcDcOpfInstance) -> Result<AcDcOpfPreparation> {
     let net = instance.network();
+    let coordinate_policy = instance.profile().coordinate_policy();
+    let physical = match coordinate_policy {
+        AcDcCoordinatePolicy::SourcePerUnit => false,
+        AcDcCoordinatePolicy::PhysicalLocalBases => true,
+        _ => {
+            return Err(crate::Error::UnsupportedOpfObjective {
+                reason: "unsupported coupled coordinate policy".into(),
+            });
+        }
+    };
     let owner = net.ac_dc_equivalent().expect("validated instance owner");
     let mut projection = net.clone();
     projection.set_ac_dc_equivalent(None)?;
@@ -183,6 +224,79 @@ pub fn build_ac_dc_opf_preparation(instance: &AcDcOpfInstance) -> Result<AcDcOpf
             reason: "coupled reference profile currently qualifies polynomial costs only".into(),
         });
     }
+    let stations = prepare_stations(instance, coordinate_policy, physical)?;
+    let mut dc_branches = Vec::new();
+    for b in owner.branches.iter().filter(|b| b.in_service) {
+        let from = owner
+            .buses
+            .iter()
+            .find(|v| v.component == b.from)
+            .expect("validated from endpoint");
+        let to = owner
+            .buses
+            .iter()
+            .find(|v| v.component == b.to)
+            .expect("validated to endpoint");
+        let scale = if physical {
+            to.base_kv / from.base_kv
+        } else {
+            1.0
+        };
+        let conductance = f64::from(owner.pole_count) / b.resistance_pu;
+        if physical
+            && (!scale.is_finite()
+                || scale <= 0.0
+                || !scale.powi(2).is_finite()
+                || scale.powi(2) <= 0.0
+                || ![conductance * scale, conductance * scale.powi(2)]
+                    .iter()
+                    .all(|v| v.is_finite() && *v > 0.0))
+        {
+            return Err(crate::Error::UnsupportedOpfObjective {
+                reason: "unrepresentable physical DC base ratio".into(),
+            });
+        }
+        dc_branches.push(AcDcBranchPreparation {
+            source: b.clone(),
+            conductance_pu: conductance,
+            active_power_limit_pu: b.ratings_mw[0] / owner.base_mva,
+            policy: AcDcBranchPolicy {
+                component: b.component.to_string(),
+                coordinate_policy,
+                from_base_kv: from.base_kv,
+                to_base_kv: to.base_kv,
+                resistance_base_kv: physical.then_some(from.base_kv),
+                to_voltage_scale: scale,
+            },
+        });
+    }
+    let prepared = AcDcOpfPreparation {
+        ac,
+        angle_references,
+        base_mva: owner.base_mva,
+        pole_count: owner.pole_count,
+        dc_buses: owner
+            .buses
+            .iter()
+            .map(|b| AcDcBusPreparation {
+                source: b.clone(),
+                withdrawal_pu: b.withdrawal_mw / owner.base_mva,
+            })
+            .collect(),
+        dc_branches,
+        stations,
+    };
+    validate_dc_parameters(&prepared)?;
+    Ok(prepared)
+}
+
+fn prepare_stations(
+    instance: &AcDcOpfInstance,
+    coordinate_policy: AcDcCoordinatePolicy,
+    physical: bool,
+) -> Result<Vec<AcDcStationPreparation>> {
+    let net = instance.network();
+    let owner = net.ac_dc_equivalent().expect("validated instance owner");
     let mut stations = Vec::new();
     for s in owner.stations.iter().filter(|s| s.in_service) {
         let pcc = net
@@ -209,7 +323,32 @@ pub fn build_ac_dc_opf_preparation(instance: &AcDcOpfInstance) -> Result<AcDcOpf
                 });
             }
         };
+        let bypass_ratio = if physical {
+            pcc.base_kv / s.ac_base_kv
+        } else {
+            1.0
+        };
+        let turns = physical
+            .then_some(s.transformer_tap_ratio * bypass_ratio)
+            .filter(|_| s.transformer.enabled);
+        if !bypass_ratio.is_finite()
+            || bypass_ratio <= 0.0
+            || turns.is_some_and(|v| !v.is_finite() || v <= 0.0)
+        {
+            return Err(crate::Error::UnsupportedOpfObjective {
+                reason: "unrepresentable physical station base ratio".into(),
+            });
+        }
         let policy = AcDcStationPolicy {
+            coordinate_policy,
+            transformer_bypass_voltage_ratio: bypass_ratio,
+            physical_bases: physical.then_some(AcDcStationPhysicalBases {
+                pcc_kv: pcc.base_kv,
+                filter_kv: s.ac_base_kv,
+                valve_kv: s.ac_base_kv,
+                series_impedance_kv: s.ac_base_kv,
+                transformer_turns_ratio: turns,
+            }),
             current_limit_policy,
             component: s.component.to_string(),
             converter_base_kv: s.ac_base_kv,
@@ -239,33 +378,7 @@ pub fn build_ac_dc_opf_preparation(instance: &AcDcOpfInstance) -> Result<AcDcOpf
             base_mva: owner.base_mva,
         });
     }
-    let prepared = AcDcOpfPreparation {
-        ac,
-        angle_references,
-        base_mva: owner.base_mva,
-        pole_count: owner.pole_count,
-        dc_buses: owner
-            .buses
-            .iter()
-            .map(|b| AcDcBusPreparation {
-                source: b.clone(),
-                withdrawal_pu: b.withdrawal_mw / owner.base_mva,
-            })
-            .collect(),
-        dc_branches: owner
-            .branches
-            .iter()
-            .filter(|b| b.in_service)
-            .map(|b| AcDcBranchPreparation {
-                source: b.clone(),
-                conductance_pu: f64::from(owner.pole_count) / b.resistance_pu,
-                active_power_limit_pu: b.ratings_mw[0] / owner.base_mva,
-            })
-            .collect(),
-        stations,
-    };
-    validate_dc_parameters(&prepared)?;
-    Ok(prepared)
+    Ok(stations)
 }
 
 fn apply_initial_point(instance: &AcDcOpfInstance, ac: &mut AcOpfPreparation) {

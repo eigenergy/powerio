@@ -104,7 +104,7 @@ coupled solver. The native-equation and parameter-variation work is recorded in
 ## Coupled OPF interface
 
 `AcDcOpfInstance::from_network(network, profile)` requires the explicit
-`AcDcOpfProfile::PowerModelsAcDc0101AcpVscV1` selection. It means ACP VSC,
+profile selection. `PowerModelsAcDc0101AcpVscV1` means ACP VSC,
 network generator cost, all operating limits, and free generator/converter
 OPF dispatch. Retained PF controls and targets do not constrain that dispatch.
 The source network remains immutable through the instance. The initial point
@@ -164,3 +164,31 @@ field retain the strict default. The unreleased schema documents the new field.
 Consumers must explicitly align reference points by shifting all bus and
 converter filter/valve angles in the island together and checking finite angle
 bounds. Preparation does not silently rotate stored operating points.
+
+### Physical local-coordinate profile
+
+`PhysicalCoordinatesAcpVscV1` derives `PhysicalLocalBases` coordinate policy
+and the declared-current policy. Both existing profiles retain their source
+per-unit equations and current policies. This third selection is an explicit
+interpretation of the supplied owner, not a general rebase or import conversion.
+All active AC buses must declare finite positive voltage bases.
+
+The PCC uses its AC bus line-to-line kV base; filter, valve, transformer and
+reactor impedance bases use the station's `ac_base_kv`. Series impedances use
+`Zbase = V_converter²/S`. An enabled transformer tap is the physical voltage
+turns ratio times `V_converter/V_PCC`. A disabled transformer ignores retained
+tap and impedance data and requires `V_PCC * vm_PCC = V_converter * vm_filter`.
+The filter susceptance and declared RMS current remain on the converter base.
+
+DC node bases are per-pole kV. Each branch's per-unit resistance uses its
+**from-node** base: `R_ohm = r_pu * V_from_base²/S`. With
+`k = V_to_base/V_from_base`, its terminal injections are
+`pf = n/r * vf*(vf-k*vt)` and `pt = n/r * (k*vt)*(k*vt-vf)`.
+Reversing branch orientation therefore also requires converting resistance to
+the new from base. Preparation records port/impedance bases, physical turns,
+resistance reference side and voltage ratios; nonrepresentable ratios refuse.
+
+LossCinv in both directions and the reference auxiliary bounds remain explicit
+limitations. No profile infers a physical pole/return topology. The new required
+profile token survives instance/result IR; older decoders reject it. Consumers
+must implement the recorded coordinate policy across every equipment block.

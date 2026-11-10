@@ -1230,14 +1230,15 @@ fn family_of_token(token: &str) -> RoutedFamily {
 }
 
 pub use powerio_prob::{
-    AcDcAngleReferencePolicy, AcDcCurrentLimitPolicy, AcDcOperatingPoint, AcDcOpfInstance,
-    AcDcOpfProfile, AcDcOpfSolution, AcDcQuantity, AcDcValue,
+    AcDcAngleReferencePolicy, AcDcCoordinatePolicy, AcDcCurrentLimitPolicy, AcDcOperatingPoint,
+    AcDcOpfInstance, AcDcOpfProfile, AcDcOpfSolution, AcDcQuantity, AcDcValue,
 };
 
 #[cfg(feature = "matrix")]
 pub use powerio_matrix::{
-    AcDcAngleReference, AcDcBranchPreparation, AcDcBusPreparation, AcDcOpfPreparation,
-    AcDcStationPolicy, AcDcStationPreparation, build_ac_dc_opf_preparation,
+    AcDcAngleReference, AcDcBranchPolicy, AcDcBranchPreparation, AcDcBusPreparation,
+    AcDcOpfPreparation, AcDcStationPhysicalBases, AcDcStationPolicy, AcDcStationPreparation,
+    build_ac_dc_opf_preparation,
 };
 
 #[cfg(test)]
