@@ -891,13 +891,11 @@ fn apply_varying(
         ))),
     };
     let row = varying.row;
+    // Egret states an unlimited rating point as null. PowerIO's branch model
+    // reserves zero for unlimited, so a native numeric zero also reads as
+    // unlimited here (issue #828; refusing it is planned for 0.12).
     let rating = || {
-        rating_cell(Some(value), &varying.attribute).map_err(|error| {
-            bad(format!(
-                "{} {} at point {point}: {error}",
-                varying.section, varying.element
-            ))
-        })
+        if value.is_null() { Ok(0.0) } else { number() }
     };
     match varying.section.as_str() {
         "load" => {
@@ -1066,22 +1064,6 @@ fn num_cell(slot: Option<&Value>, key: &str, default: f64) -> Result<f64> {
             .as_f64()
             .ok_or_else(|| bad(format!("`{key}` is not a number: {x}"))),
     }
-}
-
-/// Egret's missing/null rating is unlimited; its numeric zero is a real
-/// thermal constraint. The stable branch model reserves zero for unlimited,
-/// so refuse the unsupported constraint before it can be silently relaxed.
-fn rating_cell(slot: Option<&Value>, key: &str) -> Result<f64> {
-    if slot.is_none_or(Value::is_null) {
-        return Ok(0.0);
-    }
-    let rating = num_cell(slot, key, 0.0)?;
-    if rating == 0.0 {
-        return Err(bad(format!(
-            "`{key}` states a zero thermal limit, which PowerIO's branch model cannot represent: its zero rating means unlimited; use null only when unlimited flow is intended"
-        )));
-    }
-    Ok(rating)
 }
 
 fn bool_cell(slot: Option<&Value>, key: &str, default: bool) -> Result<bool> {
@@ -1259,9 +1241,9 @@ fn read_branch(row: BranchRow) -> Result<Branch> {
             0.0,
         )?,
         charging: None,
-        rate_a: rating_cell(row.rating_long_term.as_ref(), "rating_long_term")?,
-        rate_b: rating_cell(row.rating_short_term.as_ref(), "rating_short_term")?,
-        rate_c: rating_cell(row.rating_emergency.as_ref(), "rating_emergency")?,
+        rate_a: num_cell(row.rating_long_term.as_ref(), "rating_long_term", 0.0)?,
+        rate_b: num_cell(row.rating_short_term.as_ref(), "rating_short_term", 0.0)?,
+        rate_c: num_cell(row.rating_emergency.as_ref(), "rating_emergency", 0.0)?,
         // `json_extension::read_branch` reads the rating sets PowerIO wrote.
         rating_sets: Vec::new(),
         current_ratings: None,

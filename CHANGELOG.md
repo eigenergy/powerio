@@ -2,9 +2,11 @@
 
 ## Unreleased
 
-- Egret time-series output uses `null` for unlimited branch ratings; imports
-  refuse genuine numeric zero limits that the branch model cannot represent.
-  Report and reproduction by Mohamed Numair (#828).
+- Egret time-series output uses `null` for unlimited branch ratings instead of
+  `0`, which Egret enforces as a zero thermal limit, and the reader accepts
+  `null` rating points. A native Egret numeric zero limit is still read as
+  unlimited, as before; refusing it is tracked for 0.12. Report and
+  reproduction by Mohamed Numair (#828).
 
 ## 0.11.10
 
