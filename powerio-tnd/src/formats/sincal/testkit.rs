@@ -51,7 +51,7 @@ pub fn grown_authentic_feeder(lines: usize) -> Vec<u8> {
     let bytes = super::storage::database_bytes(archive).unwrap();
     let file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(file.path(), &bytes).unwrap();
-    let connection = rusqlite::Connection::open(file.path()).unwrap();
+    let mut connection = rusqlite::Connection::open(file.path()).unwrap();
     connection
         .execute_batch(&format!(
             "CREATE TEMP TABLE seq (k INTEGER);

@@ -54,6 +54,7 @@ mod decode;
 mod egret;
 pub(crate) mod goc3;
 mod ieee_cdf;
+mod json_extension;
 mod matpower;
 mod opfdata;
 mod pandapower;
@@ -78,6 +79,7 @@ pub use powerworld::{PwdDisplay, PwdSubstation};
 #[doc(hidden)]
 pub use egret::{
     egret_declares_time_series as __egret_declares_time_series,
+    emit_time_series as __emit_egret_time_series,
     parse_egret_time_series as __parse_egret_time_series,
 };
 #[doc(hidden)]
@@ -1183,14 +1185,19 @@ pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Re
         }
         TargetFormat::Ucte => ucte::write_ucte(net)?,
     };
-    conv.diagnostics.extend(sincal_source_omitted(net));
-    warn_normalized_tap(net, format, &mut conv);
-    warn_missing_reference(net, format, &mut conv);
-    warn_dropped_frequency(net, format, &mut conv);
-    warn_dropped_locations(net, format, &mut conv);
-    warn_dropped_transformer_charging(net, format, &mut conv);
-    warn_dropped_exchange_context(net, format, &mut conv);
+    append_emit_warnings(net, format, &mut conv);
     Ok(conv)
+}
+
+/// Shared post-writer checks for scalar and time-series canonical emission.
+fn append_emit_warnings(net: &BalancedNetwork, format: TargetFormat, conv: &mut TextEmission) {
+    conv.diagnostics.extend(sincal_source_omitted(net));
+    warn_normalized_tap(net, format, conv);
+    warn_missing_reference(net, format, conv);
+    warn_dropped_frequency(net, format, conv);
+    warn_dropped_locations(net, format, conv);
+    warn_dropped_transformer_charging(net, format, conv);
+    warn_dropped_exchange_context(net, format, conv);
 }
 
 /// Emit a parsed module to `format` through a destination: the one output
@@ -1506,7 +1513,7 @@ fn warn_psse_downgrade(
 
 /// Warn when a non-default system frequency is emitted to a format with no frequency
 /// field. PSS/E (`BASFRQ`), pandapower (`f_hz`) and the PowerIO PowerModels
-/// extension (`base_frequency`) carry it; MATPOWER, egret and PowerWorld do not,
+/// and Egret extensions (`base_frequency`) carry it; MATPOWER and PowerWorld do not,
 /// so a 50 Hz case
 /// would parse again as the 60 Hz default. Report the loss instead.
 fn warn_dropped_frequency(net: &BalancedNetwork, format: TargetFormat, conv: &mut TextEmission) {
@@ -1516,6 +1523,7 @@ fn warn_dropped_frequency(net: &BalancedNetwork, format: TargetFormat, conv: &mu
             | TargetFormat::PsseRawx
             | TargetFormat::PandapowerJson
             | TargetFormat::PowerModelsJson
+            | TargetFormat::EgretJson
     );
     if carries_frequency {
         return;
@@ -1550,13 +1558,17 @@ fn warn_dropped_frequency(net: &BalancedNetwork, format: TargetFormat, conv: &mu
 /// Warn when the case carries bus locations and the target has no geometry
 /// concept. PowerWorld aux (`Latitude:1`/`Longitude:1`) and pandapower
 /// (`geo`) carry them, and PyPSA folder emission (`x`/`y`) has its own
-/// path; MATPOWER, PSS/E, PowerModels, egret, PSLF, and Surge have nowhere to
-/// put them, matching the `base_frequency` behavior. `powerio geo extract`
+/// path. PowerModels and Egret retain PowerIO geographic extensions. MATPOWER,
+/// PSS/E, PSLF and Surge have no matching location fields. `powerio geo extract`
 /// emits the sidecar as the escape hatch.
 fn warn_dropped_locations(net: &BalancedNetwork, format: TargetFormat, conv: &mut TextEmission) {
+    // PowerModels and egret JSON carry them as PowerIO extension keys.
     let carries_locations = matches!(
         format,
-        TargetFormat::PowerWorld | TargetFormat::PandapowerJson
+        TargetFormat::PowerWorld
+            | TargetFormat::PandapowerJson
+            | TargetFormat::PowerModelsJson
+            | TargetFormat::EgretJson
     );
     if carries_locations {
         return;
@@ -1627,13 +1639,41 @@ fn warn_dropped_exchange_context(
     ) {
         return;
     }
-    let message = if format == TargetFormat::RavensJson {
+    let message = match format {
         // MG-RAVENS carries stable component identities as mRIDs, but not
         // the source-neutral topology hierarchy or case/solver metadata.
-        exchange_context_loss_with_identity_policy(net, format.label(), true)
-    } else {
-        exchange_context_loss(net, format.label())
+        TargetFormat::RavensJson => {
+            exchange_context_loss_carrying(net, format.label(), CarriedContext::Identities)
+        }
+        // PowerModels JSON and egret JSON rows carry a source identity as
+        // `uid`, and the document carries the case metadata, the detailed
+        // connectivity hierarchy, and the coordinate reference, as keys those
+        // tools leave alone.
+        TargetFormat::PowerModelsJson | TargetFormat::EgretJson => {
+            exchange_context_loss_carrying(net, format.label(), CarriedContext::AllButSolver)
+        }
+        _ => exchange_context_loss(net, format.label()),
     };
+    if format == TargetFormat::EgretJson {
+        let omitted_uids = net
+            .switches()
+            .iter()
+            .map(|v| v.uid.as_deref())
+            .chain(net.storage().iter().map(|v| v.uid.as_deref()))
+            .chain(net.transformers_3w().iter().map(|v| v.uid.as_deref()))
+            .chain(
+                net.static_var_compensators()
+                    .iter()
+                    .map(|v| v.uid.as_deref()),
+            )
+            .filter(|uid| uid.is_some() && !net.uid_is_generated(*uid))
+            .count();
+        if omitted_uids > 0 {
+            conv.push(&format.emit_family().field_dropped, format!(
+                "Egret omits {omitted_uids} source-assigned component identity value(s) on switches, storage, static var compensators or three-winding transformers; retained detailed connectivity may still reference these absent electrical rows"
+            ));
+        }
+    }
     if let Some(message) = message {
         conv.push(&format.emit_family().field_dropped, message);
     }
@@ -1643,17 +1683,82 @@ fn warn_dropped_exchange_context(
 /// One diagnostic represents one format boundary even when the detailed model
 /// contains many CIM or IIDM objects.
 pub(super) fn exchange_context_loss(net: &BalancedNetwork, target: &str) -> Option<String> {
-    exchange_context_loss_with_identity_policy(net, target, false)
+    exchange_context_loss_carrying(net, target, CarriedContext::Nothing)
+}
+
+/// How much of the grid exchange context a target format carries, as its
+/// own fields or as PowerIO extension keys its tools leave alone.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CarriedContext {
+    Nothing,
+    /// Stable component identities, as MG-RAVENS mRIDs.
+    Identities,
+    /// Identities, case metadata, the detailed connectivity hierarchy, and
+    /// the coordinate reference: everything but solver metadata.
+    AllButSolver,
+}
+
+/// How many records a detailed connectivity hierarchy holds.
+fn detailed_connectivity_records(detailed: &crate::network::DetailedConnectivity) -> usize {
+    [
+        detailed.omitted_fields.len(),
+        detailed.component_metadata.len(),
+        detailed.subnetworks.len(),
+        detailed.substations.len(),
+        detailed.voltage_levels.len(),
+        detailed.bus_breaker_buses.len(),
+        detailed.calculated_buses.len(),
+        detailed.connectivity_nodes.len(),
+        detailed.busbar_sections.len(),
+        detailed.junctions.len(),
+        detailed.terminals.len(),
+        detailed.switches.len(),
+        detailed.internal_connections.len(),
+        detailed.operational_limit_groups.len(),
+        detailed.tap_changers.len(),
+        detailed.equipment_reactive_limits.len(),
+        detailed.boundary_lines.len(),
+        detailed.tie_lines.len(),
+        detailed.dc_converter_units.len(),
+        detailed.dc_topological_nodes.len(),
+        detailed.dc_nodes.len(),
+        detailed.dc_grounds.len(),
+        detailed.dc_busbars.len(),
+        detailed.dc_lines.len(),
+        detailed.dc_series_devices.len(),
+        detailed.dc_switches.len(),
+        detailed.voltage_source_converters.len(),
+        detailed.line_commutated_converters.len(),
+    ]
+    .into_iter()
+    .sum()
+}
+
+/// The detailed connectivity hierarchy as the PowerIO extension value the
+/// PowerModels and egret JSON writers state, when it holds any record. Its
+/// references name buses by number and equipment by the `uid` those rows
+/// carry, so the reader restores it beside the rows it describes.
+pub(super) fn carried_detailed_connectivity(net: &BalancedNetwork) -> Option<serde_json::Value> {
+    let detailed = net.detailed_connectivity().as_deref()?;
+    (detailed_connectivity_records(detailed) > 0).then(|| {
+        serde_json::to_value(detailed).expect("the detailed connectivity hierarchy is plain data")
+    })
 }
 
 #[allow(clippy::too_many_lines)] // one inventory counts every exchange-context family
-fn exchange_context_loss_with_identity_policy(
+fn exchange_context_loss_carrying(
     net: &BalancedNetwork,
     target: &str,
-    preserves_identities: bool,
+    carried: CarriedContext,
 ) -> Option<String> {
     let mut dropped = Vec::new();
-    let metadata = net.case_metadata();
+    let default_metadata = crate::network::CaseMetadata::default();
+    let carries_all = carried == CarriedContext::AllButSolver;
+    let metadata = if carries_all {
+        &default_metadata
+    } else {
+        net.case_metadata()
+    };
     let mut metadata_fields = Vec::new();
     if metadata.case_date.is_some() {
         metadata_fields.push("case_date");
@@ -1674,39 +1779,12 @@ fn exchange_context_loss_with_identity_policy(
         ));
     }
 
-    if let Some(detailed) = net.detailed_connectivity().as_deref() {
-        let records = [
-            detailed.omitted_fields.len(),
-            detailed.component_metadata.len(),
-            detailed.subnetworks.len(),
-            detailed.substations.len(),
-            detailed.voltage_levels.len(),
-            detailed.bus_breaker_buses.len(),
-            detailed.calculated_buses.len(),
-            detailed.connectivity_nodes.len(),
-            detailed.busbar_sections.len(),
-            detailed.junctions.len(),
-            detailed.terminals.len(),
-            detailed.switches.len(),
-            detailed.internal_connections.len(),
-            detailed.operational_limit_groups.len(),
-            detailed.tap_changers.len(),
-            detailed.equipment_reactive_limits.len(),
-            detailed.boundary_lines.len(),
-            detailed.tie_lines.len(),
-            detailed.dc_converter_units.len(),
-            detailed.dc_topological_nodes.len(),
-            detailed.dc_nodes.len(),
-            detailed.dc_grounds.len(),
-            detailed.dc_busbars.len(),
-            detailed.dc_lines.len(),
-            detailed.dc_series_devices.len(),
-            detailed.dc_switches.len(),
-            detailed.voltage_source_converters.len(),
-            detailed.line_commutated_converters.len(),
-        ]
-        .into_iter()
-        .sum::<usize>();
+    if let Some(detailed) = net
+        .detailed_connectivity()
+        .as_deref()
+        .filter(|_| !carries_all)
+    {
+        let records = detailed_connectivity_records(detailed);
         if records > 0 {
             dropped.push(format!(
                 "the `detailed_connectivity` hierarchy and topology ({records} record(s))"
@@ -1769,12 +1847,12 @@ fn exchange_context_loss_with_identity_policy(
             .iter()
             .filter(|value| value.uid.is_some())
             .count();
-    if source_uids > 0 && !preserves_identities {
+    if source_uids > 0 && carried == CarriedContext::Nothing {
         dropped.push(format!(
             "{source_uids} source-assigned stable component identity value(s)"
         ));
     }
-    if net.geo().is_some() {
+    if net.geo().is_some() && !carries_all {
         dropped.push("geographic coordinate reference metadata".to_owned());
     }
     if net.solver().is_some() {
@@ -2193,19 +2271,27 @@ pub(crate) fn finish(
     mut warnings: Diagnostics,
 ) -> TextEmission {
     let value = Value::Object(root);
+    warn_nonfinite_json(family, &value, &mut warnings);
+    let text = serde_json::to_string_pretty(&value).expect("a serde_json::Value always serializes");
+    TextEmission::new(text, warnings)
+}
+
+/// Check each scalar before a temporal writer moves fields into value arrays.
+fn warn_nonfinite_json(family: &'static EmitFamily, value: &Value, warnings: &mut Diagnostics) {
     let mut nulls = BTreeSet::new();
-    collect_null_keys(&value, &mut nulls);
+    collect_null_keys(value, &mut nulls);
     if !nulls.is_empty() {
-        warnings.push(
+        let finding = Diagnostic::of(
             &family.not_a_number,
             format!(
                 "non-finite numeric values written as JSON null in field(s): {}",
                 nulls.into_iter().collect::<Vec<_>>().join(", ")
             ),
         );
+        if !warnings.records().contains(&finding) {
+            warnings.record(finding);
+        }
     }
-    let text = serde_json::to_string_pretty(&value).expect("a serde_json::Value always serializes");
-    TextEmission::new(text, warnings)
 }
 
 /// Collect the names of object keys whose value is `null`, anywhere in the tree.
@@ -2521,7 +2607,7 @@ mpc.branch = [
     }
 
     #[test]
-    fn bus_branch_formats_report_dropped_exchange_context_once() {
+    fn bus_branch_formats_report_dropped_exchange_context_once_or_carry_it() {
         let case = "function mpc = t\n\
                     mpc.version = '2';\n\
                     mpc.baseMVA = 100;\n\
@@ -2553,11 +2639,21 @@ mpc.branch = [
                     && diagnostic.message().contains("grid exchange context")
             })
             .collect::<Vec<_>>();
-        assert_eq!(context.len(), 1, "{:?}", emitted.render_diagnostics());
-        let message = context[0].message();
-        assert!(message.contains("case_date"), "{message}");
-        assert!(message.contains("detailed_connectivity"), "{message}");
-        assert!(message.contains("1 source-assigned"), "{message}");
+        // PowerModels JSON carries the case metadata, a source identity, and
+        // the hierarchy as keys PowerModels ignores, so it loses none of them.
+        assert!(context.is_empty(), "{:?}", emitted.render_diagnostics());
+        let reparsed = parse_str(&emitted.text, "powermodels-json")
+            .unwrap()
+            .network;
+        assert_eq!(
+            reparsed.case_metadata().case_date.as_deref(),
+            Some("2025-01-02T03:04:05Z")
+        );
+        assert_eq!(reparsed.buses()[0].uid.as_deref(), Some("source-bus"));
+        assert_eq!(
+            reparsed.detailed_connectivity(),
+            net.detailed_connectivity()
+        );
 
         let ravens = emit_value_text(&net, TargetFormat::RavensJson).unwrap();
         let context = ravens

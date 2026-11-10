@@ -2,6 +2,111 @@
 
 ## Unreleased
 
+## 0.11.10
+
+**OpenDSS**
+
+- Preserve the last winding selected by native DSS array setters, so later
+  scalar winding properties apply to the intended winding.
+
+- OpenDSS written from a network whose source cannot be a native `Vsource`,
+  such as a distribution CIM or MG-RAVENS feeder, now reduces in
+  PowerModelsDistribution. The per-conductor source helpers and the ideal
+  switch equivalent number their private bus after the nodes they join, so
+  every helper `Line` names the same nodes at both ends, as PMD's Kron
+  reduction requires. Phase B and C source helpers used to join node 1 to
+  node 2 or 3. The circuit is electrically unchanged (#765).
+- Preserve absent OpenDSS line ampacity instead of materializing the
+  engine's 600 A default as a typed BMOPF `i_max` or PMD `cm_ub`; retain
+  explicitly declared and inherited emergency ratings (#762). PowerIO
+  intentionally treats these engine defaults as void, which differs from
+  PowerModelsDistribution's parser behaviour. A `switch=yes` Line, with or
+  without an unrated LineCode, and an ideal switch written to canonical
+  OpenDSS and read again keep an unstated rating unstated.
+- OpenDSS output replaces the characters OpenDSS cannot carry in a name
+  (whitespace, `,`, `=`, quotes, brackets, `!`, `//`, and a `.` in a bus
+  id) with `_` in element, line code, bus, and circuit names and in every
+  typed reference to them, and reports each replacement. A network with free
+  text names, such as one read from CIM, used to be refused when a bus id
+  held such a character and otherwise written verbatim into a deck that
+  did not parse back. A generator and an IBR that both write as a dss
+  `Generator` share one rename scope, so a renamed IBR cannot take a
+  generator's name (#770).
+
+**BMOPF**
+
+- BMOPF reading no longer checks free-form `meta.provenance` entries as schema
+  fields, so a provenance key such as `length` raises no
+  `READ.BMOPF.FIELD_NOT_A_NUMBER` finding, and the finding's pointer into the
+  BMOPF document moves to the `source_pointer` detail, so a module carrying it
+  serializes to PowerIO IR (#763).
+
+**Conversion fidelity**
+
+- Canonical pandapower JSON uses the 3.2.1 package profile and its 3.1.0 data
+  format, with only the modern split P/Q ZIP-load columns. Mixing those fields
+  with legacy aggregate columns could make native format migration fail.
+  Legacy input remains readable; default native imports preserve the ZIP
+  fractions and scaling and can run a power flow.
+
+- Preserve Egret shunt service flags and keep partial or foreign-shaped result
+  fields from acquiring another format's units. Operating-point overrides clear
+  inherited branch solutions instead of exporting stale flows. Time-series
+  output checks scalar losses, deduplicates identical findings and accumulates
+  varying fields without holding every full JSON document in memory.
+- Retain the distribution CIM default of 60 Hz when frequency is absent,
+  independent of namespace version; explicit frequencies still take precedence.
+  Reset XfmrCode winding selection after changing the winding count.
+- Report nested non-finite extension values instead of silently deleting them,
+  and report identities on component tables Egret does not write.
+
+- CGMES ratings consistently prefer the active value over the equipment
+  default. Two-winding transformer current limits use the voltage of the
+  terminal carrying each limit, including the low-voltage winding. A differing
+  equipment default that canonical output cannot retain is diagnosed.
+- Preserve imported CGMES ratio/phase tap-changer identifiers and names in
+  canonical output, including modules restored from older IR documents.
+- Preserve a two-winding CGMES transformer's terminal admittance when its
+  rated winding voltages differ from bus voltages or its secondary ratio tap
+  is nonunit. Follow the common parameter base and primary-shunt L model;
+  diagnose nonconforming source conventions and secondary-shunt projection
+  loss. Reject invalid active ratios and arithmetic overflow. Diagnose active
+  phase magnitudes and tap-step impedance/admittance deviations omitted by the
+  calculation projection while retaining their detailed records.
+- Canonically emit Egret electrical time series through IR, with labels, optional
+  durations and native branch results; reject unsupported variation and invalid
+  time axes. C and Julia expose typed time metadata without serializing networks.
+- Export exact-commit conversion evidence, coverage deltas and a ranked repair
+  backlog; require actual Julia binding execution for a green compatibility gate.
+
+- Read CIM16 LV feeders, text enumerations, inherited wire ampacity and
+  Diagram Layout coordinates through the existing distribution model (#768).
+
+- Read and write complete native MATPOWER solved branch flow columns. Partial
+  flow sets still produce an explicit loss diagnostic.
+
+- Backport PowerModels and Egret retention of areas, metadata, source identities,
+  rating sets, extras, detailed connectivity, locations/routes, controls and
+  generator/HVDC detail. These extension fields are retained data; they do not
+  imply that the native tools solve every retained feature.
+- Preserve a stated PMD generator control mode during emission.
+
+**CI and dependencies**
+
+- `rusqlite` moves to 0.41 (#752, #754), which carries `libsqlite3-sys` 0.39
+  and SQLite 3.54. `libsqlite3-sys` 0.38.2 bundled a SQLite that could return
+  uninitialized page-cache memory when a database file is opened beside a
+  crafted `-wal` file (RUSTSEC-2026-0459, CVE-2026-119375), and the advisory
+  failed the cargo-deny check on every build. `rusqlite` 0.41 declares Rust
+  1.89, so the minimum supported Rust version rises from 1.88 to 1.89, and
+  the `uuid` cap the 1.88 floor needed is lifted.
+- `arrow` and `parquet` move to 60.1, `zip` to 9.5.0, `uuid` to 1.29, `sha2`
+  to 0.11, and `pyo3` to 0.30, and the PowSybl harness's `pandas` to 3.1.0
+  (#749, #751, #753, #760, #793). The adapters follow: sha2 0.11 digests no
+  longer implement `LowerHex`, rusqlite 0.41 takes the connection mutably for
+  serialization and the progress handler, and pyo3 0.30 makes
+  `skip_from_py_object` the default.
+
 ## 0.11.9
 
 **PSS/E**

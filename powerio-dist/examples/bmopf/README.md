@@ -7,9 +7,9 @@ rather than editing by hand.
 
 | Case | Source `.dss` | Size | Write diagnostics |
 |---|---|---|---|
-| IEEE 34 | `tests/data/dist/opendss/ieee34/ieee34Mod1.dss` (vendored) | 51,834 bytes | 104 |
-| IEEE 123 | `tests/data/dist/opendss/ieee123/IEEE123Master.dss` (vendored) | 118,786 bytes | 143 |
-| 4 bus delta wye | `4Bus-DY-Bal/4Bus-DY-Bal.DSS` from the OpenDSS distribution | 17,652 bytes | 0 |
+| IEEE 34 | `tests/data/dist/opendss/ieee34/ieee34Mod1.dss` (vendored) | 49,836 bytes | 104 |
+| IEEE 123 | `tests/data/dist/opendss/ieee123/IEEE123Master.dss` (vendored) | 111,693 bytes | 143 |
+| 4 bus delta wye | `4Bus-DY-Bal/4Bus-DY-Bal.DSS` from the OpenDSS distribution | 17,654 bytes | 0 |
 
 34 and 123 are recognizable feeders. The Kersting 4 bus case isolates a single
 delta to wye service transformer, the four wire winding that the BMOPF schema's
