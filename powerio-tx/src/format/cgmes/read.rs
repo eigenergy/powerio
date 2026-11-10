@@ -863,8 +863,9 @@ impl Store {
     }
 }
 
-/// Retain the first occurrence of scalar properties in their original order,
-/// reusing the XML parser's allocation for a newly encountered object.
+/// Retain the first occurrence of each scalar property and each distinct
+/// repeatable value in their original order, reusing the XML parser's
+/// allocation for a newly encountered object.
 fn deduplicate_properties(object: &str, props: &mut Vec<(CimName, PropValue)>) -> Result<()> {
     let mut retained = 0;
     for incoming in 0..props.len() {
@@ -897,14 +898,20 @@ fn property_is_new(
     property: &CimName,
     value: &PropValue,
 ) -> Result<bool> {
-    let Some((_, existing)) = merged.iter().find(|(name, _)| name == property) else {
+    let mut stated = merged
+        .iter()
+        .filter(|(name, _)| name == property)
+        .map(|(_, value)| value);
+    let Some(existing) = stated.next() else {
         return Ok(true);
     };
     if existing == value {
         return Ok(false);
     }
     if repeatable_property(property) {
-        return Ok(true);
+        // A repeatable property is a set of RDF statements: an identical
+        // statement collapses wherever it appeared before.
+        return Ok(!stated.any(|stated| stated == value));
     }
     Err(Error::FormatRead {
         format: FMT,
@@ -6546,7 +6553,7 @@ mod tests {
     }
 
     #[test]
-    fn first_profile_duplicate_properties_preserve_order_and_repeatable_values() {
+    fn first_profile_duplicate_properties_preserve_order_and_distinct_repeatable_values() {
         let mut document = document_with_property(true, PropValue::Text("10".into()));
         let props = &mut document.objects[0].props;
         for (name, value) in [
@@ -6592,12 +6599,25 @@ mod tests {
                 ("Extension.second", "two"),
                 ("TopologicalIsland.TopologicalNodes", "a"),
                 ("TopologicalIsland.TopologicalNodes", "b"),
-                ("TopologicalIsland.TopologicalNodes", "b"),
             ]
         );
-        store
-            .merge(document_with_property(false, PropValue::Text("10".into())))
-            .unwrap();
+        // A later profile restating a member adds nothing; a new member is
+        // appended. Identical RDF statements collapse whatever their position.
+        let mut later = document_with_property(false, PropValue::Text("10".into()));
+        for node in ["b", "c"] {
+            later.objects[0].props.push((
+                "TopologicalIsland.TopologicalNodes".into(),
+                PropValue::Ref(node.into()),
+            ));
+        }
+        store.merge(later).unwrap();
+        let nodes = store.objects[0]
+            .props
+            .iter()
+            .filter(|(name, _)| name.as_str() == "TopologicalIsland.TopologicalNodes")
+            .map(|(_, value)| value.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(nodes, ["a", "b", "c"]);
         assert_eq!(store.objects[0].props.len(), 6);
     }
 
