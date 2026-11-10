@@ -675,6 +675,14 @@ pub struct DcOpfInstance {
     pub initial_point: Option<StoredOperatingPointAssignment>,
 }
 
+// Distinguish absent modes from every explicit field, including null. Older
+// profiles keep their strict field refusal; fixed modes always contain an array.
+fn present_pf_loss_modes<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<Vec<powerio_prob::AcDcStationLossMode>>, D::Error> {
+    Vec::deserialize(deserializer).map(Some)
+}
+
 /// Coupled intent has its own structural type: legacy AC consumers cannot
 /// deserialize it as an AC-only instance, even if capabilities are stripped.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -683,7 +691,15 @@ pub struct DcOpfInstance {
 pub struct AcDcPfInstance {
     pub network: Box<BalancedNetwork>,
     pub profile: powerio_prob::AcDcPfProfile,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_pf_loss_modes"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Vec<powerio_prob::AcDcStationLossMode>")
+    )]
     pub loss_modes: Option<Vec<powerio_prob::AcDcStationLossMode>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_point: Option<Vec<powerio_prob::AcDcValue>>,

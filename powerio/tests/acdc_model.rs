@@ -702,6 +702,8 @@ fn coupled_pf_ir_is_distinct_complete_and_preserves_source_controls() {
     let mut extra = doc;
     extra["value"]["data"]["loss_modes"] = serde_json::json!([]);
     assert!(read(&extra).is_err());
+    extra["value"]["data"]["loss_modes"] = serde_json::Value::Null;
+    assert!(read(&extra).is_err());
     assert_eq!(serde_json::to_value(old.network()).unwrap(), source);
 }
 #[test]
