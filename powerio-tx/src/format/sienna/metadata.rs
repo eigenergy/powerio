@@ -4,7 +4,45 @@ use super::{Result, Value, error, integer};
 use crate::network::{Area, Branch, Bus, Generator, Hvdc, Load, Shunt, Storage, Transformer3W};
 use serde::Serialize;
 
-const KEY: &str = "org.eigenergy.powerio";
+pub(super) const KEY: &str = "org.eigenergy.powerio";
+
+// These describe the current typed value or generated equipment. Never restore
+// an old value merely because the current writer deliberately omitted it.
+pub(super) const WRITTEN_FIELDS: &[&str] = &[
+    "uid",
+    "name",
+    "extras",
+    "rating_sets",
+    "angmin",
+    "angmax",
+    "section_count",
+    "control",
+    "vg",
+    "caps",
+    "number",
+    "slack_bus",
+    "tolerance",
+    "area_type",
+    "cost",
+    "vf",
+    "vt",
+    "qf",
+    "qt",
+    "pt",
+    "operation_cost_absent",
+    "branch_flow_absent",
+    "to_terminal_power",
+    "transformer_circuit",
+    "transformer_uuid",
+    "implicit",
+    "rmpct",
+    "regulating_terminal",
+    "solved_conductance",
+    "switched_control_fields",
+    "voltage_band_offsets",
+    "control_fields",
+    "winding_control_fields",
+];
 
 pub(super) fn record<T: Serialize>(
     doc: &mut Value,

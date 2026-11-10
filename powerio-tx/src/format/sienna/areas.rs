@@ -69,7 +69,11 @@ pub(super) fn write(
             };
             let implicit = Area::new(number);
             let area = source.unwrap_or(&implicit);
-            let id = ids.get(area.uid.as_deref());
+            let original = ids
+                .area_numbers
+                .get(&(kind.into(), number))
+                .map(|id| format!("sienna:{kind}:{id}"));
+            let id = ids.get(area.uid.as_deref().or(original.as_deref()));
             mappings[index].insert(number, id);
             metadata::record(
                 doc,

@@ -15,7 +15,7 @@ const KNOWN: [&str; 7] = [
 
 /// The retained document's generator rows by id, built once per emission so
 /// each generator finds its source row without scanning every component.
-pub(super) fn by_id(original: Option<&Value>) -> BTreeMap<i64, (&'static str, &Value)> {
+pub(super) fn by_id(original: Option<&Value>) -> BTreeMap<i64, (&'static str, &Value, bool)> {
     let mut rows = BTreeMap::new();
     for kind in KNOWN {
         for row in original
@@ -24,11 +24,33 @@ pub(super) fn by_id(original: Option<&Value>) -> BTreeMap<i64, (&'static str, &V
             .flatten()
         {
             if let Some(id) = row["id"].as_i64() {
-                rows.entry(id).or_insert((kind, row));
+                let absent = original.is_some_and(|doc| {
+                    doc["ext"][id.to_string()]["org.eigenergy.powerio"]["operation_cost_absent"]
+                        == true
+                        && {
+                            let mut findings = Diagnostics::new();
+                            super::read_cost(
+                                &row["operation_cost"],
+                                super::base(row).unwrap_or(super::BASE),
+                                &mut findings,
+                            )
+                            .is_ok_and(|cost| {
+                                absent_placeholder(cost.as_ref(), findings.is_empty())
+                            })
+                        }
+                });
+                rows.entry(id).or_insert((kind, row, absent));
             }
         }
     }
     rows
+}
+
+pub(super) fn absent_placeholder(cost: Option<&crate::network::GenCost>, complete: bool) -> bool {
+    complete
+        && cost.is_some_and(|cost| {
+            cost.startup == 0.0 && cost.shutdown == 0.0 && cost.coeffs.iter().all(|v| *v == 0.0)
+        })
 }
 
 pub(super) fn energy_source(kind: &str, row: &Value) -> GeneratorEnergySource {
@@ -55,7 +77,7 @@ pub(super) fn energy_source(kind: &str, row: &Value) -> GeneratorEnergySource {
 pub(super) fn prepare(
     row: &mut Value,
     g: &Generator,
-    previous: Option<(&'static str, &Value)>,
+    previous: Option<(&'static str, &Value, bool)>,
     id: i64,
     warnings: &mut Diagnostics,
 ) -> (&'static str, bool) {
@@ -65,7 +87,7 @@ pub(super) fn prepare(
         GeneratorEnergySource::Hydro => "HydroDispatch",
         _ => "ThermalStandard",
     };
-    if let Some((k, old)) = previous {
+    if let Some((k, old, _)) = previous {
         if energy_source(k, old) == g.energy_source {
             kind = k;
         } else {
@@ -89,7 +111,7 @@ pub(super) fn prepare(
     }
     if matches!(kind, "RenewableDispatch" | "RenewableNonDispatch") {
         row["prime_mover_type"] =
-            previous.map_or(json!("OT"), |(_, old)| old["prime_mover_type"].clone());
+            previous.map_or(json!("OT"), |(_, old, _)| old["prime_mover_type"].clone());
         if row["prime_mover_type"].is_null() || previous.is_none() {
             row["prime_mover_type"] = json!(match g.energy_source {
                 GeneratorEnergySource::Wind => "WT",
@@ -98,7 +120,8 @@ pub(super) fn prepare(
             });
         }
         row["rating"] = json!(g.pmax);
-        row["power_factor"] = previous.map_or(json!(1.0), |(_, old)| old["power_factor"].clone());
+        row["power_factor"] =
+            previous.map_or(json!(1.0), |(_, old, _)| old["power_factor"].clone());
         let object = row.as_object_mut().expect("generated object");
         object.remove("active_power_limits");
         object.remove("status");
@@ -158,7 +181,7 @@ pub(super) fn prepare(
             let object = row.as_object_mut().expect("object");
             object.remove("status");
             object.remove("rating");
-            if let Some((_, old)) = previous {
+            if let Some((_, old, false)) = previous {
                 object.insert("operation_cost".into(), old["operation_cost"].clone());
             }
             if g.cost.is_some() {
@@ -167,7 +190,7 @@ pub(super) fn prepare(
         }
         _ => {}
     }
-    if let Some((old_kind, old)) = previous
+    if let Some((old_kind, old, false)) = previous
         && old_kind == kind
         && let Some(old_cost) = old.get("operation_cost")
         && row.get("operation_cost").is_some()
@@ -177,31 +200,24 @@ pub(super) fn prepare(
             super::base(old).unwrap_or(super::BASE),
             &mut Diagnostics::new(),
         );
-        if projection.as_ref().is_ok_and(|cost| cost == &g.cost) && same_cost_basis(old, row) {
+        let unchanged = projection.as_ref().is_ok_and(|cost| cost == &g.cost);
+        // An unprojectable curve survives until the caller supplies a
+        // replacement. Removing a projected cost must not restore it.
+        if unchanged && same_cost_basis(old, row) {
             row["operation_cost"] = old_cost.clone();
             retained_cost = g.cost.is_none();
-        } else if old_cost["start_up"].is_object() {
-            warnings.push(
-                &codes::EMIT_SIENNA.field_dropped,
-                format!(
-                    "generator {id}: edited scalar cost replaces retained staged startup costs"
-                ),
-            );
-        }
-    }
-    // A retained curve with no balanced cost interpretation remains authoritative
-    // until the caller supplies a typed replacement.
-    if g.cost.is_none()
-        && let Some((old_kind, old)) = previous
-        && old_kind == kind
-        && old.get("operation_cost").is_some()
-        && row.get("operation_cost").is_some()
-    {
-        if same_cost_basis(old, row) {
-            row["operation_cost"] = old["operation_cost"].clone();
-            retained_cost = true;
         } else {
-            warnings.push(&codes::EMIT_SIENNA.field_dropped, format!("generator {id}: changing the component base requires a typed replacement for the retained cost curve"));
+            if unchanged && g.cost.is_none() {
+                warnings.push(&codes::EMIT_SIENNA.field_dropped, format!("generator {id}: changing the component base requires a typed replacement for the retained cost curve"));
+            }
+            if old_cost["start_up"].is_object() {
+                warnings.push(
+                    &codes::EMIT_SIENNA.field_dropped,
+                    format!(
+                        "generator {id}: edited scalar cost replaces retained staged startup costs"
+                    ),
+                );
+            }
         }
     }
     (kind, retained_cost)

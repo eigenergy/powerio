@@ -68,23 +68,13 @@ pub(super) fn preserve_unmapped(
     let Some(source) = original.as_object() else {
         return Ok(());
     };
+    let regenerated = live_ids(doc);
     for (key, value) in source {
         if !matches!(
             key.as_str(),
             "components" | "schema_version" | "name" | "frequency" | "ext"
         ) {
             doc[key] = value.clone();
-        }
-    }
-    if let Some(old) = original["ext"].as_object() {
-        for (id, fields) in old {
-            if let Some(fields) = fields.as_object() {
-                for (key, value) in fields {
-                    if doc["ext"][id].get(key).is_none() {
-                        doc["ext"][id][key] = value.clone();
-                    }
-                }
-            }
         }
     }
     if let Some(components) = original["components"].as_object() {
@@ -158,34 +148,81 @@ pub(super) fn preserve_unmapped(
         }
     }
     prune_references(doc, warnings);
+    preserve_extensions(doc, original, &regenerated, warnings);
     Ok(())
+}
+
+fn live_ids(doc: &Value) -> BTreeSet<i64> {
+    doc["components"]
+        .as_object()
+        .into_iter()
+        .flat_map(|m| m.values())
+        .flat_map(|rows| rows.as_array().into_iter().flatten())
+        .chain(
+            doc["supplemental_attributes"]
+                .as_array()
+                .into_iter()
+                .flatten(),
+        )
+        .filter_map(|row| row["id"].as_i64())
+        .collect()
+}
+
+fn preserve_extensions(
+    doc: &mut Value,
+    original: &Value,
+    regenerated: &BTreeSet<i64>,
+    warnings: &mut Diagnostics,
+) {
+    let live = live_ids(doc);
+    let mut removed = BTreeSet::new();
+    if let Some(current) = doc["ext"].as_object_mut() {
+        current.retain(|id, _| {
+            let keep = id.parse().is_ok_and(|id| live.contains(&id));
+            if !keep {
+                removed.insert(id.clone());
+            }
+            keep
+        });
+    }
+    for (id, fields) in original["ext"].as_object().into_iter().flatten() {
+        if !id.parse().is_ok_and(|id| live.contains(&id)) {
+            removed.insert(id.clone());
+            continue;
+        }
+        for (namespace, value) in fields.as_object().into_iter().flatten() {
+            if namespace == super::metadata::KEY {
+                // Native UUID/type and unknown extension keys survive for live
+                // identities. Typed fields and semantic markers are regenerated.
+                for (key, value) in value.as_object().into_iter().flatten() {
+                    if (!id.parse().is_ok_and(|id| regenerated.contains(&id))
+                        || !super::metadata::WRITTEN_FIELDS.contains(&key.as_str()))
+                        && doc["ext"][id][namespace].get(key).is_none()
+                    {
+                        doc["ext"][id][namespace][key] = value.clone();
+                    }
+                }
+            } else if doc["ext"][id].get(namespace).is_none() {
+                doc["ext"][id][namespace] = value.clone();
+            }
+        }
+    }
+    if !removed.is_empty() {
+        warnings.push(
+            &codes::EMIT_SIENNA.field_dropped,
+            format!(
+                "{} extension entries for removed components or attributes were omitted",
+                removed.len()
+            ),
+        );
+    }
 }
 
 fn prune_references(doc: &mut Value, warnings: &mut Diagnostics) {
     // Deleting a typed component also invalidates its memberships and opaque
     // dependents. Remove them transitively with explicit loss diagnostics.
     loop {
-        let mut ids = BTreeSet::new();
-        for rows in doc["components"]
-            .as_object()
-            .into_iter()
-            .flat_map(|m| m.values())
-        {
-            for row in rows.as_array().into_iter().flatten() {
-                if let Some(id) = row["id"].as_i64() {
-                    ids.insert(id);
-                }
-            }
-        }
-        for row in doc["supplemental_attributes"]
-            .as_array()
-            .into_iter()
-            .flatten()
-        {
-            if let Some(id) = row["id"].as_i64() {
-                ids.insert(id);
-            }
-        }
+        let ids = live_ids(doc);
         let missing = |row: &Value| {
             REFERENCES.iter().any(|key| {
                 row.get(*key)

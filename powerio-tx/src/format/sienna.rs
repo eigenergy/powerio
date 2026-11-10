@@ -480,21 +480,23 @@ pub(super) fn read(
         // magnetizing shunt per two-winding transformer. The ext marker folds
         // it back into the branch instead of adding a bus shunt the source
         // never had.
-        if let Some(circuit) = root["ext"][integer(row, "id")?.to_string()]["org.eigenergy.powerio"]
-            ["transformer_circuit"]
-            .as_i64()
+        let id = integer(row, "id")?;
+        let extra = &root["ext"][id.to_string()]["org.eigenergy.powerio"];
+        if let Some(marker) = extra
+            .get("transformer_circuit")
+            .or_else(|| extra.get("transformer_uuid"))
         {
-            let missing = || error("secondary shunt references a missing transformer circuit");
-            let index = *circuit_index.get(&circuit).ok_or_else(missing)?;
-            let branch = branches.get_mut(line_count + index).ok_or_else(missing)?;
-            if branch.to != bus {
-                return Err(error("secondary shunt is not on its transformer's to bus"));
-            }
             // The marker folds the admittance back only while the shunt and
             // its transformer share one status. Once a native edit switches
             // one of them, the shunt stays a bus shunt with its own status,
             // so a disabled secondary shunt no longer charges a live branch.
-            if available(row)? == branch.in_service {
+            if let Some(branch) = marker
+                .as_i64()
+                .and_then(|circuit| circuit_index.get(&circuit))
+                .and_then(|index| branches.get_mut(line_count + index))
+                && branch.to == bus
+                && available(row)? == branch.in_service
+            {
                 let mut charging = branch
                     .charging
                     .unwrap_or_else(|| BranchCharging::from_total_b(branch.b));
@@ -504,6 +506,12 @@ pub(super) fn read(
                 branch.b = charging.calc_total_b();
                 continue;
             }
+            retained(
+                warnings,
+                format!(
+                    "FixedAdmittance {id}: secondary-shunt marker does not match a live transformer at the same bus and service state; preserved as an ordinary bus shunt"
+                ),
+            );
         }
         let mut sh = Shunt::new(
             bus,
@@ -571,15 +579,14 @@ pub(super) fn read(
                     .get("status")
                     .and_then(Value::as_str)
                     .is_none_or(|s| s == "ONLINE");
+            let cost_findings = warnings.len();
             if let Some(c) = row.get("operation_cost") {
                 g.cost = read_cost(c, g.mbase, warnings)?;
             }
             metadata::restore(root, row, &mut g, &["uid", "vg", "caps"])?;
             if root["ext"][integer(row, "id")?.to_string()]["org.eigenergy.powerio"]["operation_cost_absent"]
                 == true
-                && g.cost.as_ref().is_some_and(|c| {
-                    c.startup == 0.0 && c.shutdown == 0.0 && c.coeffs.iter().all(|v| *v == 0.0)
-                })
+                && generators::absent_placeholder(g.cost.as_ref(), warnings.len() == cost_findings)
             {
                 g.cost = None;
             }
@@ -841,8 +848,51 @@ struct Ids {
     next: i64,
     original: BTreeMap<String, i64>,
     related: BTreeMap<(String, i64), i64>,
+    area_numbers: BTreeMap<(String, usize), i64>,
 }
 impl Ids {
+    fn original_id(&self, uid: &str) -> Option<i64> {
+        self.original.get(uid).copied().or_else(|| {
+            uid.strip_prefix("sienna:")?
+                .rsplit(':')
+                .next()?
+                .parse()
+                .ok()
+        })
+    }
+
+    fn secondary_shunts(&mut self, original: &Value, net: &BalancedNetwork) -> Result<()> {
+        let independent: BTreeSet<_> = net
+            .shunts()
+            .iter()
+            .filter_map(|shunt| shunt.uid.as_deref().and_then(|uid| self.original_id(uid)))
+            .collect();
+        let arcs: BTreeMap<_, _> = rows(original, "Arc")?
+            .iter()
+            .map(|row| Ok((integer(row, "id")?, integer(row, "to_id")?)))
+            .collect::<Result<_>>()?;
+        let circuits: BTreeMap<_, _> = rows(original, "TransformerCircuit")?
+            .iter()
+            .map(|row| Ok((integer(row, "id")?, row)))
+            .collect::<Result<_>>()?;
+        for row in rows(original, "FixedAdmittance")? {
+            let id = integer(row, "id")?;
+            if !independent.contains(&id)
+                && let Some(circuit) =
+                    original["ext"][id.to_string()]["org.eigenergy.powerio"]["transformer_circuit"]
+                        .as_i64()
+                && let Some(owner) = circuits.get(&circuit)
+                && arcs.get(&integer(owner, "arc")?) == Some(&integer(row, "bus")?)
+                && available(row)? == available(owner)?
+            {
+                self.related
+                    .entry(("secondary_shunt".into(), circuit))
+                    .or_insert(id);
+            }
+        }
+        Ok(())
+    }
+
     fn related(&mut self, field: &str, owner: i64) -> i64 {
         let known = self
             .related
@@ -851,15 +901,7 @@ impl Ids {
         self.get(known.as_deref())
     }
     fn get(&mut self, uid: Option<&str>) -> i64 {
-        if let Some(id) = uid.and_then(|u| self.original.get(u).copied())
-            && self.used.insert(id)
-        {
-            return id;
-        }
-        if let Some(id) = uid
-            .and_then(|u| u.strip_prefix("sienna:"))
-            .and_then(|s| s.rsplit(':').next())
-            .and_then(|s| s.parse().ok())
+        if let Some(id) = uid.and_then(|u| self.original_id(u))
             && self.used.insert(id)
         {
             return id;
@@ -972,6 +1014,21 @@ pub(super) fn write_document(
             }
         }
     }
+    if let Some(original) = original {
+        ids.secondary_shunts(original, net)?;
+        for kind in ["Area", "LoadZone"] {
+            for row in rows(original, kind)? {
+                let id = integer(row, "id")?;
+                let number = original["ext"][id.to_string()][metadata::KEY]["number"]
+                    .as_u64()
+                    .and_then(|n| usize::try_from(n).ok())
+                    .or_else(|| usize::try_from(id).ok());
+                if let Some(number) = number {
+                    ids.area_numbers.entry((kind.into(), number)).or_insert(id);
+                }
+            }
+        }
+    }
     let mut doc = json!({"name":net.name(),"frequency":net.base_frequency(),"components":{},"supplemental_attributes":[],"supplemental_attribute_associations":[],"plant_associations":[],"combined_cycle_associations":[],"service_associations":[],"time_series_associations":[],"time_series_storage_file":null});
     if selected != 1 {
         doc["schema_version"] = json!(format!("0.{selected}.0"));
@@ -1035,7 +1092,7 @@ pub(super) fn write_document(
                 json!({"id":tr,"name":b.name.clone().unwrap_or_else(||format!("transformer_{tr}")),"circuit":id,"admittance_units":"COMPONENT_BASE","magnetizing_shunt":{"real":ch.g_fr/b.calc_effective_tap().powi(2),"imag":ch.b_fr/b.calc_effective_tap().powi(2)},"shunt_location":"PRIMARY"}),
             );
             if ch.g_to != 0.0 || ch.b_to != 0.0 {
-                let sh = ids.get(None);
+                let sh = ids.related("secondary_shunt", id);
                 push(
                     &mut doc,
                     "FixedAdmittance",
