@@ -11,10 +11,10 @@
 //! - exact: the diagonal only; the parsed module re-emits its retained source
 //!   byte for byte, and the fresh write is lossless.
 //! - lossless: no warning and no change to the typed model.
-//! - restated: the target required a value the source does not state, and the
-//!   writer supplied it (a default, a remapped name or rating set, a
-//!   relabeled element). Any remark lands here too.
-//! - approximate: a stated value was changed to fit the target.
+//! - restated: a representation change, synthesized default, remapped name
+//!   or rating set, or relabeled element. Any remark lands here too.
+//! - approximate: an adjustment is reported, or an electrical comparison
+//!   is explicitly incomplete. These reasons remain distinct in the evidence.
 //! - dropped: source data has no target field.
 //! - failed: an error, a write or read failure, an invariant failure, or a
 //!   change against the baseline.
@@ -112,11 +112,13 @@ const DETAILS_MARKER: &str = "<!-- powerio-conversion-matrix-details -->";
 const BASELINE_FILE: &str = "tests/conversion_matrix.baseline";
 static DSS_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-const LEGEND: [&str; 4] = [
-    "Each cell writes the source as the target and reads it back. The symbol is the worst finding.",
-    "⚪ exact  🟢 lossless  🔵 restated: only values the target requires were synthesized",
-    "🟡 approximate: values changed to fit  🟠 dropped: source data has no target field",
-    "🔴 failed: error, invariant, or baseline change",
+const LEGEND: [&str; 6] = [
+    "Each cell writes the source as the target and reads it back. Its symbol shows the most serious finding, not a percentage of data preserved. Source parsing is graded separately in the Source column.",
+    "🟢 **Preserved**: no reported loss or typed-model change in tested coverage (combines the original `lossless` and `exact` grades). `exact` additionally checks byte-for-byte retained-source replay and a lossless fresh write.",
+    "🔵 **Representation / defaults** (`restated`): a representation change, generated default, relabeled identifier, or informational remark. For example, inline PMD impedances become reusable line-code records and are written inline again.",
+    "🟡 **Adjusted / partly checked** (`approximate`): an adjustment is reported, or part of the electrical comparison remains unverified. See the detailed findings and verification limitations for the reason.",
+    "🟠 **Data omitted** (`dropped`): at least one piece of source data has no target field; this does not mean the whole case was lost. 🔴 **Failed checks** (`failed`): an error, invariant failure, or baseline mismatch.",
+    "The original grades, findings, fixture coverage and acceptance rules are unchanged. Preserved does not establish native-consumer acceptance; see the linked evidence and detailed findings.",
 ];
 
 /// How faithfully a conversion kept what the source stated, best first.
@@ -133,8 +135,7 @@ enum Level {
 impl Level {
     fn symbol(self) -> &'static str {
         match self {
-            Self::Exact => "⚪",
-            Self::Lossless => "🟢",
+            Self::Exact | Self::Lossless => "🟢",
             Self::Restated => "🔵",
             Self::Approximate => "🟡",
             Self::Dropped => "🟠",

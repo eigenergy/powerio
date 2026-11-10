@@ -16,6 +16,7 @@ mod collection;
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -359,21 +360,25 @@ fn build_options(
 /// (pure Python) wraps this: the IO getters and topology methods delegate
 /// straight to it, and the matrix methods turn its COO tuples into scipy.
 ///
-/// The derived [`IndexCore`] is built once and cached alongside `inner`, so the
-/// matrix calculations and topology getters reuse it instead of rebuilding the
-/// bus-id map per call.
+/// The derived [`IndexCore`] is built on the first matrix or topology query and
+/// cached alongside the immutable network. Metadata and table queries do not
+/// allocate the bus-id map or per-bus analysis vectors.
 #[pyclass(name = "_BalancedNetwork", module = "powerio._powerio")]
 pub struct PyBalancedNetwork {
     /// The parsed module: the typed network plus retained source and the
     /// reader's findings. Same format writes echo the retained bytes exactly;
     /// a handle built from a bare network writes canonically.
     module: powerio_core::PioModule<BalancedNetwork>,
-    core: IndexCore,
+    core: OnceLock<IndexCore>,
 }
 
 impl PyBalancedNetwork {
     fn inner(&self) -> &BalancedNetwork {
         self.module.value()
+    }
+
+    fn core(&self) -> &IndexCore {
+        self.core.get_or_init(|| IndexCore::build(self.inner()))
     }
 
     fn diagnostics(&self) -> &[powerio_core::Diagnostic] {
@@ -471,11 +476,13 @@ fn ensure_line_classification(network: &BalancedNetwork) -> PyResult<()> {
     Ok(())
 }
 
-/// Wrap a parsed module as a `PyBalancedNetwork`, building the index core once
-/// and keeping the reader's findings on the handle.
+/// Wrap a parsed module as a `PyBalancedNetwork`, retaining the reader's findings
+/// and deferring the derived analysis index until a query needs it.
 fn case_from_module(module: powerio_core::PioModule<BalancedNetwork>) -> PyBalancedNetwork {
-    let core = IndexCore::build(module.value());
-    PyBalancedNetwork { core, module }
+    PyBalancedNetwork {
+        core: OnceLock::new(),
+        module,
+    }
 }
 
 /// Wrap a bare network with findings: derived handles carry no retained
@@ -708,20 +715,20 @@ impl PyBalancedNetwork {
 
     #[getter]
     fn is_radial(&self) -> bool {
-        IndexedNetwork::with_core(self.inner(), &self.core).is_radial()
+        IndexedNetwork::with_core(self.inner(), self.core()).is_radial()
     }
 
     /// The number of connected components, in power system terminology.
     #[getter]
     fn n_islands(&self) -> usize {
-        IndexedNetwork::with_core(self.inner(), &self.core).calc_island_count()
+        IndexedNetwork::with_core(self.inner(), self.core()).calc_island_count()
     }
 
     /// Dense `[0, n)` index of the single reference bus. Raises if not exactly
     /// one reference bus is present; for the multi-reference case use
     /// :meth:`reference_bus_indices`.
     fn reference_bus_index(&self) -> PyResult<usize> {
-        IndexedNetwork::with_core(self.inner(), &self.core)
+        IndexedNetwork::with_core(self.inner(), self.core())
             .reference_bus_index()
             .map_err(core_pyerr)
     }
@@ -730,7 +737,7 @@ impl PyBalancedNetwork {
     /// empty (no reference) or hold several (a slack per island, or a normalized
     /// case that kept the file's multiple references).
     fn reference_bus_indices(&self) -> Vec<usize> {
-        IndexedNetwork::with_core(self.inner(), &self.core).reference_bus_indices()
+        IndexedNetwork::with_core(self.inner(), self.core()).reference_bus_indices()
     }
 
     // --- tables (the format-neutral BalancedNetwork, as dict rows) --------------
@@ -942,7 +949,7 @@ impl PyBalancedNetwork {
     }
 
     fn calc_connectivity_report<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let r = IndexedNetwork::with_core(self.inner(), &self.core).calc_connectivity_report();
+        let r = IndexedNetwork::with_core(self.inner(), self.core()).calc_connectivity_report();
         let d = PyDict::new(py);
         d.set_item("n_buses", r.n_buses)?;
         d.set_item("n_branches_in_service", r.n_branches_in_service)?;
@@ -1211,7 +1218,7 @@ impl PyBalancedNetwork {
             skip_zero_impedance,
             ..BuildOptions::default()
         };
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), self.core());
         let m = calc_bprime_matrix(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
@@ -1336,7 +1343,7 @@ impl PyBalancedNetwork {
         zero_resistance: bool,
         skip_zero_impedance: bool,
     ) -> PyResult<Bound<'py, PyDict>> {
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), self.core());
         let mut skipped = Vec::new();
         let mut branch_ids = Vec::new();
         for (row, branch) in view.in_service_branches() {
@@ -1413,7 +1420,7 @@ impl PyBalancedNetwork {
             skip_zero_impedance,
             ..BuildOptions::default()
         };
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), self.core());
         let m = calc_bdoubleprime_matrix(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
@@ -1433,13 +1440,13 @@ impl PyBalancedNetwork {
             include_shifts,
             skip_zero_impedance,
         );
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), self.core());
         let m = calc_lacpf_matrix(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
 
     fn adjacency<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), self.core());
         let m = calc_adjacency_matrix(&view).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
@@ -1460,7 +1467,7 @@ impl PyBalancedNetwork {
             include_shifts,
             skip_zero_impedance,
         );
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), self.core());
         let yb = calc_admittance_matrix(&view, &opts).map_err(to_pyerr)?;
         let g = coo_triplets(py, &yb.g)?;
         let b = coo_triplets(py, &yb.b)?;
@@ -1475,7 +1482,7 @@ impl PyBalancedNetwork {
         solver: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let opts = sensitivity_options(formula, solver)?;
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), self.core());
         let m = calc_ptdf_lodf_with_options(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m.ptdf)
     }
@@ -1488,7 +1495,7 @@ impl PyBalancedNetwork {
         solver: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let opts = sensitivity_options(formula, solver)?;
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), self.core());
         let m = calc_ptdf_lodf_with_options(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m.lodf)
     }
@@ -5427,6 +5434,121 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::module_with_records;
+
+    fn balanced_handle(bytes: &[u8], name: &str, format: &str) -> super::PyBalancedNetwork {
+        super::PyPioModule::_parse_memory(bytes, name, Some(format), None, None, None)
+            .unwrap()
+            .as_balanced_network()
+            .unwrap()
+    }
+
+    #[test]
+    fn balanced_metadata_defers_the_analysis_index() {
+        let network = balanced_handle(
+            include_bytes!("../../tests/data/case14.m"),
+            "case.m",
+            "matpower",
+        );
+        assert!(network.core.get().is_none());
+        assert_eq!(network.n_buses(), 14);
+        assert_eq!(network.n_branches(), 20);
+        assert_eq!(network.n_lines().unwrap(), 17);
+        assert_eq!(network.n_generators(), 5);
+        assert_eq!(network.n_loads(), 11);
+        assert_eq!(network.n_substations(), 0);
+        assert!(network.core.get().is_none());
+
+        // The source module has already been dropped; the owned handle keeps
+        // its tables alive and builds its analysis data only when requested.
+        assert_eq!(network.n_islands(), 1);
+        assert!(network.core.get().is_some());
+        assert!(std::ptr::eq(network.core(), network.core()));
+    }
+
+    #[test]
+    fn lazy_balanced_index_matches_fresh_matrix_and_topology_views() {
+        use super::{
+            BuildOptions, IndexedNetwork, Scheme, calc_admittance_matrix, calc_bprime_matrix,
+        };
+        for (bytes, name, format) in [
+            (
+                include_bytes!("../../tests/data/case14.m").as_slice(),
+                "case.m",
+                "matpower",
+            ),
+            (
+                include_bytes!("../../tests/data/psse/case3_3w_v33.raw").as_slice(),
+                "case.raw",
+                "psse",
+            ),
+        ] {
+            let network = balanced_handle(bytes, name, format);
+            assert!(network.core.get().is_none());
+            let fresh = IndexedNetwork::new(network.inner());
+            for scheme in [Scheme::Bx, Scheme::Xb] {
+                let options = BuildOptions {
+                    scheme,
+                    ..BuildOptions::default()
+                };
+                let lazy = IndexedNetwork::with_core(network.inner(), network.core());
+                assert_eq!(
+                    calc_bprime_matrix(&lazy, &options).unwrap(),
+                    calc_bprime_matrix(&fresh, &options).unwrap()
+                );
+                let actual = calc_admittance_matrix(&lazy, &options).unwrap();
+                let expected = calc_admittance_matrix(&fresh, &options).unwrap();
+                assert_eq!(actual.g, expected.g);
+                assert_eq!(actual.b, expected.b);
+                assert_eq!(network.n_islands(), fresh.calc_island_count());
+                assert_eq!(
+                    network.reference_bus_indices(),
+                    fresh.reference_bus_indices()
+                );
+            }
+            assert!(std::ptr::eq(network.core(), network.core()));
+        }
+    }
+
+    #[test]
+    fn replaced_and_derived_networks_do_not_reuse_an_old_index() {
+        let network = balanced_handle(
+            include_bytes!("../../tests/data/case14.m"),
+            "case.m",
+            "matpower",
+        );
+        assert_eq!(network.n_islands(), 1);
+        let mut changed = network.inner().clone();
+        for branch in changed.branches_mut() {
+            branch.in_service = false;
+        }
+        let changed = super::case_from_parts(changed, Vec::new());
+        assert!(changed.core.get().is_none());
+        assert_eq!(
+            changed.n_lines().unwrap(),
+            17,
+            "counts include out-of-service rows"
+        );
+        assert_eq!(changed.n_islands(), 14);
+        assert_eq!(network.n_islands(), 1);
+
+        let normalized = network.to_normalized().unwrap();
+        assert!(normalized.core.get().is_none());
+        assert!(normalized.n_lines().is_err());
+        assert!(
+            normalized.core.get().is_none(),
+            "a refused count does not build analysis data"
+        );
+        assert_eq!(normalized.n_islands(), 1);
+
+        let merge = network
+            .merge_buses(true, Some("exact"), None, "fold")
+            .unwrap();
+        assert!(merge.network().core.get().is_none());
+        assert_eq!(merge.network.n_islands(), 1);
+        let cloned = merge.network();
+        assert!(cloned.core.get().is_some());
+        assert_eq!(cloned.n_islands(), 1);
+    }
 
     #[test]
     fn sincal_multiconductor_reaches_the_existing_python_module_type() {

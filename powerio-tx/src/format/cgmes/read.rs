@@ -619,7 +619,7 @@ impl Store {
             class,
             id,
             definition,
-            props,
+            mut props,
         } in doc.objects
         {
             if id.is_empty() {
@@ -664,8 +664,7 @@ impl Store {
                 merge_properties(&id, &mut self.objects[at].props, props)?;
             } else {
                 self.by_id.insert(id.clone(), self.objects.len());
-                let mut merged_props = Vec::new();
-                merge_properties(&id, &mut merged_props, props)?;
+                deduplicate_properties(&id, &mut props)?;
                 self.objects.push(Merged {
                     id,
                     class,
@@ -675,7 +674,7 @@ impl Store {
                     } else {
                         None
                     },
-                    props: merged_props,
+                    props,
                 });
             }
         }
@@ -864,30 +863,57 @@ impl Store {
     }
 }
 
+/// Retain the first occurrence of scalar properties in their original order,
+/// reusing the XML parser's allocation for a newly encountered object.
+fn deduplicate_properties(object: &str, props: &mut Vec<(CimName, PropValue)>) -> Result<()> {
+    let mut retained = 0;
+    for incoming in 0..props.len() {
+        let (property, value) = &props[incoming];
+        if property_is_new(object, &props[..retained], property, value)? {
+            props.swap(retained, incoming);
+            retained += 1;
+        }
+    }
+    props.truncate(retained);
+    Ok(())
+}
+
 fn merge_properties(
     object: &str,
     merged: &mut Vec<(CimName, PropValue)>,
     incoming: Vec<(CimName, PropValue)>,
 ) -> Result<()> {
     for (property, value) in incoming {
-        if let Some((_, existing)) = merged.iter().find(|(name, _)| name == &property) {
-            if existing != &value && repeatable_property(&property) {
-                merged.push((property, value));
-            } else if existing != &value {
-                return Err(Error::FormatRead {
-                    format: FMT,
-                    message: format!(
-                        "RDF object `{object}` assigns conflicting `{property}` values: {} and {}",
-                        describe_property_value(existing),
-                        describe_property_value(&value),
-                    ),
-                });
-            }
-        } else {
+        if property_is_new(object, merged, &property, &value)? {
             merged.push((property, value));
         }
     }
     Ok(())
+}
+
+fn property_is_new(
+    object: &str,
+    merged: &[(CimName, PropValue)],
+    property: &CimName,
+    value: &PropValue,
+) -> Result<bool> {
+    let Some((_, existing)) = merged.iter().find(|(name, _)| name == property) else {
+        return Ok(true);
+    };
+    if existing == value {
+        return Ok(false);
+    }
+    if repeatable_property(property) {
+        return Ok(true);
+    }
+    Err(Error::FormatRead {
+        format: FMT,
+        message: format!(
+            "RDF object `{object}` assigns conflicting `{property}` values: {} and {}",
+            describe_property_value(existing),
+            describe_property_value(value),
+        ),
+    })
 }
 
 fn repeatable_property(property: &str) -> bool {
@@ -1178,6 +1204,7 @@ pub(crate) fn read_cgmes_documents_into(
 
     for (name, text) in documents {
         let doc = parse_cimxml(&text)?;
+        drop(text);
         for ns in &doc.cim_namespaces {
             if let Some(version) = CgmesVersion::from_namespace(ns)
                 && !versions.contains(&version)
@@ -1233,6 +1260,13 @@ pub(crate) fn read_cgmes_documents_into(
         }
         store.merge(doc)?;
     }
+
+    // The store is complete: release growth capacity before the typed network
+    // and its detailed connectivity are constructed alongside it.
+    for object in &mut store.objects {
+        object.props.shrink_to_fit();
+    }
+    store.objects.shrink_to_fit();
 
     let version = match versions.as_slice() {
         [] => {
@@ -6509,6 +6543,89 @@ mod tests {
         )
         .unwrap();
         assert_eq!(island.len(), 2);
+    }
+
+    #[test]
+    fn first_profile_duplicate_properties_preserve_order_and_repeatable_values() {
+        let mut document = document_with_property(true, PropValue::Text("10".into()));
+        let props = &mut document.objects[0].props;
+        for (name, value) in [
+            ("Extension.first", PropValue::Text("one".into())),
+            ("EnergyConsumer.p", PropValue::Text("10".into())),
+            ("Extension.second", PropValue::Text("two".into())),
+            ("Extension.first", PropValue::Text("one".into())),
+            (
+                "TopologicalIsland.TopologicalNodes",
+                PropValue::Ref("a".into()),
+            ),
+            (
+                "TopologicalIsland.TopologicalNodes",
+                PropValue::Ref("a".into()),
+            ),
+            (
+                "TopologicalIsland.TopologicalNodes",
+                PropValue::Ref("b".into()),
+            ),
+            (
+                "TopologicalIsland.TopologicalNodes",
+                PropValue::Ref("b".into()),
+            ),
+            (
+                "TopologicalIsland.TopologicalNodes",
+                PropValue::Ref("a".into()),
+            ),
+        ] {
+            props.push((name.into(), value));
+        }
+        let mut store = Store::default();
+        store.merge(document).unwrap();
+        let values = store.objects[0]
+            .props
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            vec![
+                ("EnergyConsumer.p", "10"),
+                ("Extension.first", "one"),
+                ("Extension.second", "two"),
+                ("TopologicalIsland.TopologicalNodes", "a"),
+                ("TopologicalIsland.TopologicalNodes", "b"),
+                ("TopologicalIsland.TopologicalNodes", "b"),
+            ]
+        );
+        store
+            .merge(document_with_property(false, PropValue::Text("10".into())))
+            .unwrap();
+        assert_eq!(store.objects[0].props.len(), 6);
+    }
+
+    #[test]
+    fn first_profile_conflicts_keep_first_value_and_kind_in_error() {
+        for conflicting in [
+            PropValue::Text("changed".into()),
+            PropValue::Ref("first".into()),
+        ] {
+            let mut document = document_with_property(true, PropValue::Text("10".into()));
+            document.objects[0].props.extend([
+                ("Extension.value".into(), PropValue::Text("first".into())),
+                ("EnergyConsumer.p".into(), PropValue::Text("10".into())),
+                (
+                    "Extension.other".into(),
+                    PropValue::Text("untouched".into()),
+                ),
+                ("Extension.value".into(), conflicting.clone()),
+            ]);
+            let error = Store::default().merge(document).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "CGMES read error: RDF object `load` assigns conflicting `Extension.value` values: text `first` and {}",
+                    describe_property_value(&conflicting),
+                )
+            );
+        }
     }
 
     #[test]
