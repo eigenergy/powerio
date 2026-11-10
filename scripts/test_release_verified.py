@@ -1,11 +1,12 @@
 """Offline release-helper safety tests. These never call GitHub or publish."""
 
 import base64
+import copy
 import importlib.util
 import io
 import subprocess
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -378,6 +379,142 @@ class ReleaseSafety(unittest.TestCase):
     def test_timeout_does_not_invent_success(self):
         with self.assertRaises(helper.ReleaseError):
             helper.wait_pause(0, "pending gate")
+
+
+class PublicationTransaction(unittest.TestCase):
+    VERSION = "0.11.10"
+    TAG = "v0.11.10"
+    JULIA_SHA = "b" * 40
+    RELEASE_ID = 7
+
+    def run_helper(self):
+        return helper.main([
+            "--candidate", SHA, "--julia-candidate", self.JULIA_SHA,
+            "--version", self.VERSION, "--timeout", "60",
+        ])
+
+    @contextmanager
+    def transaction(self, *, tag=TAG, draft=True, readback=None):
+        release = {
+            "id": self.RELEASE_ID, "tag_name": tag, "target_commitish": "main",
+            "draft": draft, "prerelease": False, "body": "Reviewed notes",
+            "published_at": None if draft else "2026-01-01T00:00:00Z",
+            "html_url": f"https://github.com/{helper.REPO}/releases/tag/{tag}",
+            "assets": [
+                {"name": f"libpowerio_capi.{p}.tar.gz", "state": "uploaded", "size": 1}
+                for p in helper.PLATFORMS
+            ],
+        }
+        run = source_run(
+            "release-binaries.yml", id=99, run_attempt=1, head_branch=self.TAG,
+        )
+        writes = []
+
+        def collection(path, key=None):
+            if path == f"repos/{helper.REPO}/releases":
+                return [copy.deepcopy(release)]
+            if "/actions/workflows/release-binaries.yml/runs?" in path:
+                return [run]
+            if path == f"repos/{helper.REPO}/actions/runs?event=push&head_sha={SHA}":
+                return [source_run(name) for name in helper.MAIN_WORKFLOWS]
+            raise AssertionError(f"Unexpected collection: {path}")
+
+        def jobs(selected):
+            if selected["id"] != run["id"]:
+                return converter_jobs()
+            names = {
+                "PowerIO.jl main against this tag",
+                "PowerIO.jl pins the packaged tarballs",
+                "attach draft release assets", *helper.PLATFORMS,
+                *(f"PowerIO.jl on {p}" for p in helper.PLATFORMS),
+            }
+            return [{"name": name, "conclusion": "success"} for name in names]
+
+        def contents(repo, path, ref):
+            self.assertEqual((repo, ref), (helper.REPO, SHA))
+            return {
+                "Cargo.toml": f'[workspace.package]\nversion = "{self.VERSION}"\n',
+                "CHANGELOG.md": f"# Changelog\n\n## {self.VERSION}\n",
+                f"docs/release-notes/{self.VERSION}.md":
+                    f"# PowerIO {self.VERSION} release notes\n",
+            }[path]
+
+        def api(path, method="GET", data=None, missing_ok=False):
+            release_path = f"repos/{helper.REPO}/releases/{self.RELEASE_ID}"
+            if method == "PATCH" and path == release_path:
+                writes.append((path, method))
+                release.update(data)
+                # Draft updates may substitute the draft URL's placeholder if
+                # tag_name is omitted; an unpinned target follows mutable main.
+                release["tag_name"] = data.get("tag_name", "untagged-fixture")
+                release["target_commitish"] = data.get("target_commitish", "main")
+                release["published_at"] = "2026-01-01T00:00:00Z"
+                return copy.deepcopy(release)
+            self.assertEqual(method, "GET", f"Unexpected write: {path}")
+            if path == release_path:
+                return dict(copy.deepcopy(release), **(readback or {}))
+            return {
+                "user": {"type": "User", "login": "samtalki"},
+                f"repos/{helper.REPO}": {"full_name": helper.REPO},
+                f"repos/{helper.JULIA_REPO}/branches/main":
+                    {"commit": {"sha": self.JULIA_SHA}},
+                f"repos/{helper.REPO}/actions/runs/{run['id']}": run,
+            }[path]
+
+        with (
+            patch.object(helper.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)),
+            patch.object(helper, "contents", side_effect=contents),
+            patch.object(helper, "collection", side_effect=collection),
+            patch.object(helper, "report_jobs", side_effect=jobs),
+            patch.object(helper, "api", side_effect=api),
+            patch.object(helper, "tag_commit", return_value=SHA),
+            patch.object(helper, "public_json", return_value={
+                "users": [{"login": helper.CRATE_OWNER}], "crate": {},
+            }),
+            patch.object(helper, "follow_publication", return_value=0) as follow,
+            redirect_stdout(io.StringIO()),
+        ):
+            yield release, writes, follow
+
+    def test_verified_publication_keeps_exact_tag_commit_and_release_identity(self):
+        with self.transaction() as (release, writes, follow):
+            assets = copy.deepcopy(release["assets"])
+            self.assertEqual(self.run_helper(), 0)
+            self.assertEqual(release["id"], self.RELEASE_ID)
+            self.assertEqual(release["tag_name"], self.TAG)
+            self.assertEqual(release["target_commitish"], SHA)
+            self.assertFalse(release["draft"])
+            self.assertTrue(release["published_at"])
+            self.assertEqual(release["body"], "Reviewed notes")
+            self.assertEqual(release["assets"], assets)
+            self.assertEqual(writes, [(f"repos/{helper.REPO}/releases/{self.RELEASE_ID}", "PATCH")])
+            follow.assert_called_once()
+            self.assertEqual(follow.call_args.args[:4], (SHA, self.JULIA_SHA, self.VERSION, self.TAG))
+
+    def test_wrong_tag_draft_is_not_repaired_or_published_implicitly(self):
+        with self.transaction(tag="untagged-fixture") as (release, writes, follow):
+            with self.assertRaisesRegex(helper.ReleaseError, "no v0.11.10 release exists"):
+                self.run_helper()
+            self.assertTrue(release["draft"])
+            self.assertEqual(writes, [])
+            follow.assert_not_called()
+
+    def test_publication_readback_must_confirm_the_same_release_and_tag(self):
+        for change in (
+            {"tag_name": "untagged-fixture"}, {"id": self.RELEASE_ID + 1},
+            {"draft": True}, {"published_at": None},
+        ):
+            with self.subTest(change=change), self.transaction(readback=change) as (_, writes, follow):
+                with self.assertRaises(helper.ReleaseError):
+                    self.run_helper()
+                self.assertEqual(len(writes), 1)
+                follow.assert_not_called()
+
+    def test_resume_of_published_release_does_not_patch_again(self):
+        with self.transaction(draft=False) as (_, writes, follow):
+            self.assertEqual(self.run_helper(), 0)
+            self.assertEqual(writes, [])
+            follow.assert_called_once()
 
 
 class FirstPublication(unittest.TestCase):
