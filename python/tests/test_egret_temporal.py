@@ -75,6 +75,9 @@ def test_canonical_ratings_build_the_intended_native_egret_thermal_constraints()
         branch_library.declare_ineq_s_branch_thermal_limit(
             model, ["1"], {"1": branch}, {"1": rating}
         )
+        branch_library.declare_ineq_p_branch_thermal_lbub(
+            model, ["1"], {"1": branch}, {"1": rating}
+        )
         return model
 
     for index in range(2):
@@ -93,6 +96,12 @@ def test_canonical_ratings_build_the_intended_native_egret_thermal_constraints()
                     constraint = constraints["1"]
                     assert pe.value(constraint.upper) == rating ** 2
                     assert pe.value(constraint.body) <= pe.value(constraint.upper)
+            if rating is None:
+                assert len(model.ineq_pf_branch_thermal_lb) == 0
+                assert len(model.ineq_pf_branch_thermal_ub) == 0
+            else:
+                assert pe.value(model.ineq_pf_branch_thermal_lb["1"].lower) == -rating
+                assert pe.value(model.ineq_pf_branch_thermal_ub["1"].upper) == rating
 
         # Negative control: the old numeric zero output creates constraints
         # at both terminals and rejects the fixture's nonzero branch flows.
@@ -101,6 +110,9 @@ def test_canonical_ratings_build_the_intended_native_egret_thermal_constraints()
                             zero_model.ineq_st_branch_thermal_limit):
             assert pe.value(constraints["1"].upper) == 0.0
             assert pe.value(constraints["1"].body) > 0.0
+        assert pe.value(zero_model.ineq_pf_branch_thermal_lb["1"].lower) == 0.0
+        assert pe.value(zero_model.ineq_pf_branch_thermal_ub["1"].upper) == 0.0
+        assert pe.value(zero_model.pf["1"]) != 0.0
 
 
 @pytest.mark.parametrize("ratings", [(0, 150), (150, 0)])
