@@ -616,6 +616,11 @@
           "const": "power_models_ac_dc0101_acp_vsc_equal_increment_v1",
           "description": "PMACDC 0.10.1 source-pu/Cinv equations and bus-role repair. Generator\nvoltage targets use bus Vm. Non-reference generators retain Pg; PV and\nreference generators share changes from declared Qg equally. Reference\ngenerators also share changes from declared Pg equally. Exactly one AC\nreference per AC island and one DC voltage controller per DC island.\nConverter P/Q controls use PCC withdrawals; AC voltage uses bus Vm and\nDC voltage uses converter Vdcset. Overlapping AC voltage controls refuse.\nLimits are reported after PF, without clipping or PV/PQ switching.",
           "type": "string"
+        },
+        {
+          "const": "power_models_ac_dc0101_acp_vsc_shared_voltage_equal_increment_v1",
+          "description": "Same electrical/P-reference semantics, allowing shared AC voltage authority.\nEvery active generator and VoltageAtPcc converter at a bus shares equal\nreactive INJECTION increments from declarations: delta Qg = -delta Qpcc.\nAll participants use one bus Vm target. Converter-only participants share\nequal withdrawal increments. ReactivePowerAtPcc converters do not participate.\nNo rating-based weights, saturation, source-control edits or PV/PQ switching.",
+          "type": "string"
         }
       ]
     },

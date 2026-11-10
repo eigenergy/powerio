@@ -26,6 +26,23 @@ pub enum AcDcPfProfile {
     /// DC voltage uses converter Vdcset. Overlapping AC voltage controls refuse.
     /// Limits are reported after PF, without clipping or PV/PQ switching.
     PowerModelsAcDc0101AcpVscEqualIncrementV1,
+    /// Same electrical/P-reference semantics, allowing shared AC voltage authority.
+    /// Every active generator and VoltageAtPcc converter at a bus shares equal
+    /// reactive INJECTION increments from declarations: delta Qg = -delta Qpcc.
+    /// All participants use one bus Vm target. Converter-only participants share
+    /// equal withdrawal increments. ReactivePowerAtPcc converters do not participate.
+    /// No rating-based weights, saturation, source-control edits or PV/PQ switching.
+    PowerModelsAcDc0101AcpVscSharedVoltageEqualIncrementV1,
+}
+
+impl AcDcPfProfile {
+    #[must_use]
+    pub const fn shares_voltage_reactive_increments(self) -> bool {
+        matches!(
+            self,
+            Self::PowerModelsAcDc0101AcpVscSharedVoltageEqualIncrementV1
+        )
+    }
 }
 
 /// Source equipment and explicit PF semantics. Shared electrical validation
@@ -39,7 +56,7 @@ impl AcDcPfInstance {
     pub fn from_network(network: BalancedNetwork, profile: AcDcPfProfile) -> Result<Self, Error> {
         let electrical =
             AcDcOpfInstance::from_network(network, AcDcOpfProfile::PowerModelsAcDc0101AcpVscV1)?;
-        validate_controls(electrical.network())?;
+        validate_controls(electrical.network(), profile)?;
         Ok(Self {
             electrical,
             profile,
@@ -102,7 +119,7 @@ fn components(mut nodes: BTreeSet<String>, edges: &[(String, String)]) -> Vec<BT
     }
     result
 }
-fn validate_controls(net: &BalancedNetwork) -> Result<(), Error> {
+fn validate_controls(net: &BalancedNetwork, profile: AcDcPfProfile) -> Result<(), Error> {
     let owner = net
         .ac_dc_equivalent()
         .ok_or_else(|| invalid("AC/DC owner missing"))?;
@@ -161,7 +178,7 @@ fn validate_controls(net: &BalancedNetwork) -> Result<(), Error> {
             return Err(invalid("PF DC voltage target must be positive"));
         }
         if s.ac_control == AcConverterControl::VoltageAtPcc {
-            if !voltage_buses.insert(s.ac_bus) {
+            if !voltage_buses.insert(s.ac_bus) && !profile.shares_voltage_reactive_increments() {
                 return Err(invalid(
                     "PF overlapping AC voltage controllers require an explicit sharing model",
                 ));

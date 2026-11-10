@@ -243,3 +243,22 @@ Initial and solved points use the same typed `AcDcOperatingPoint` quantities;
 source network, settings, required profile and initial point persist in IR.
 A PF solution has no optimization objective. Unsupported old structural decoders
 reject both new types, while existing OPF documents retain their layout.
+
+
+### Opt-in shared voltage PF allocation
+
+`PowerModelsAcDc0101AcpVscSharedVoltageEqualIncrementV1` extends the explicit PF
+contract to overlapping AC voltage controllers without editing their source
+controls. All active generators and `VoltageAtPcc` converters at a bus share
+**equal changes in reactive injection** from declarations. Thus
+`Qg - Qg_decl = -(Qpcc_withdrawal - Qpcc_withdrawal_decl)`; converter-only groups
+share equal withdrawal changes. One source bus Vm target controls the group;
+retained Vtar/Vg values do not override it. Fixed-Q converters do not participate.
+There are no rating weights, limit saturation or automatic controller switching.
+P-reference allocation and DC-control qualification remain unchanged.
+
+The original `PowerModelsAcDc0101AcpVscEqualIncrementV1` continues to refuse
+voltage overlap. The new required profile token round-trips in instance/result
+IR; the frozen `e5a7c8b8` decoder rejects it while accepting old PF documents.
+Only the unreleased schema adds the token. Numerical qualification lives in
+Tellegen's shared-voltage PF validation harness.

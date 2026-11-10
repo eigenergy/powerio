@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an opt-in coupled PF profile for equal reactive-injection increments across shared generator/converter voltage controls; preserve existing PF semantics.
+
 - Add explicit coupled PF intent/results, reference control validation and equal
   generator-increment allocation, with distinct required-profile IR types.
 

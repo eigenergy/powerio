@@ -203,3 +203,16 @@ Validation: 16 coupled model tests, 11 reader tests, 146 matrix library tests an
 seven CI Clippy targets were attempted: C ABI variants and Python pass; existing
 PSS/E/PMD/synthetic-parity float comparisons still block the other targets.
 Numerical PF qualification is recorded in Tellegen's independent reference gate.
+
+
+### Shared-voltage PF intent (2026-11-10)
+
+Adds the opt-in equal reactive-injection increment profile for generator/converter
+and converter-only AC voltage groups. Source controls remain unchanged; old
+profiles retain their refusals. Full frozen e5a7c8b8 decoder accepts old PF IR and
+rejects the new profile in both PF instances and results. Current round trips,
+source retention and profile downgrade refusal pass. Only the unreleased schema
+changes. 220 affected tests (17 model, 11 reader, 146 matrix, 46 problem) and
+changed-library Clippy pass. All seven CI Clippy targets were attempted; C ABI and
+Python pass, with prior PSS/E/PMD/synthetic-parity float-comparison failures in
+workspace/no-SINCAL/matrix-gridfm. Tellegen qualifies the numerical allocation.

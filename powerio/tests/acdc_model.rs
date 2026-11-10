@@ -741,3 +741,38 @@ fn coupled_pf_refuses_missing_or_overlapping_control_authority() {
     n.set_ac_dc_equivalent(Some(e)).unwrap();
     assert!(AcDcPfInstance::from_network(n, PF_PROFILE).is_ok()); // unique PQ-bus controller
 }
+
+#[test]
+fn shared_voltage_pf_profile_is_explicit_and_preserves_old_refusals() {
+    use powerio_tx::acdc::{AcConverterControl, DcConverterControl};
+    let profile = AcDcPfProfile::PowerModelsAcDc0101AcpVscSharedVoltageEqualIncrementV1;
+    let mut net = instance().network().clone();
+    let mut owner = net.ac_dc_equivalent().unwrap().clone();
+    owner.stations[1].ac_control = AcConverterControl::VoltageAtPcc;
+    net.set_ac_dc_equivalent(Some(owner.clone())).unwrap();
+    let source = serde_json::to_value(&net).unwrap();
+    assert!(AcDcPfInstance::from_network(net.clone(), PF_PROFILE).is_err());
+    let i = AcDcPfInstance::from_network(net.clone(), profile).unwrap();
+    assert!(profile.shares_voltage_reactive_increments());
+    assert!(!PF_PROFILE.shares_voltage_reactive_increments());
+    let electrical =
+        AcDcOpfInstance::from_network(net.clone(), AcDcOpfProfile::PowerModelsAcDc0101AcpVscV1)
+            .unwrap();
+    let p = AcDcOperatingPoint::for_pf(&i, point(&electrical).values().to_vec()).unwrap();
+    let result = AcDcPfSolution::new(Arc::new(i.clone()), p, Termination::Converged, None).unwrap();
+    for v in [PioValue::from(i), PioValue::from(result)] {
+        let doc = stored(v);
+        assert_eq!(stored(read(&doc).unwrap().value().clone()), doc);
+    }
+    let mut doc = stored(
+        AcDcPfInstance::from_network(net.clone(), profile)
+            .unwrap()
+            .into(),
+    );
+    doc["value"]["data"]["profile"] = serde_json::to_value(PF_PROFILE).unwrap();
+    assert!(read(&doc).is_err());
+    assert_eq!(serde_json::to_value(&net).unwrap(), source);
+    owner.stations[1].dc_control = DcConverterControl::ActivePowerAtPcc;
+    net.set_ac_dc_equivalent(Some(owner)).unwrap();
+    assert!(AcDcPfInstance::from_network(net, profile).is_err()); // sharing does not invent DC authority
+}
