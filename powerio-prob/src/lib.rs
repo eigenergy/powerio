@@ -81,3 +81,6 @@ pub use acdc::{
     AcDcOpfInstance, AcDcOpfProfile, AcDcOpfSolution, AcDcQuantity, AcDcStationLossMode, AcDcValue,
     AcDcValveLossMode,
 };
+
+mod acdc_pf;
+pub use acdc_pf::{AcDcPfInstance, AcDcPfProfile, AcDcPfSolution};

@@ -480,7 +480,6 @@
     },
     "AcDcOpfInstance": {
       "additionalProperties": false,
-      "description": "Coupled intent has its own structural type: legacy AC consumers cannot\ndeserialize it as an AC-only instance, even if capabilities are stripped.",
       "properties": {
         "angle_reference_policy": {
           "$ref": "#/$defs/AcDcAngleReferencePolicy"
@@ -580,6 +579,71 @@
         "instance",
         "point",
         "objective",
+        "termination"
+      ],
+      "type": "object"
+    },
+    "AcDcPfInstance": {
+      "additionalProperties": false,
+      "description": "Coupled intent has its own structural type: legacy AC consumers cannot\ndeserialize it as an AC-only instance, even if capabilities are stripped.",
+      "properties": {
+        "initial_point": {
+          "items": {
+            "$ref": "#/$defs/AcDcValue"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "network": {
+          "$ref": "#/$defs/BalancedNetwork"
+        },
+        "profile": {
+          "$ref": "#/$defs/AcDcPfProfile"
+        }
+      },
+      "required": [
+        "network",
+        "profile"
+      ],
+      "type": "object"
+    },
+    "AcDcPfProfile": {
+      "description": "A versioned PF control and allocation contract; never inferred from OPF.",
+      "oneOf": [
+        {
+          "const": "power_models_ac_dc0101_acp_vsc_equal_increment_v1",
+          "description": "PMACDC 0.10.1 source-pu/Cinv equations and bus-role repair. Generator\nvoltage targets use bus Vm. Non-reference generators retain Pg; PV and\nreference generators share changes from declared Qg equally. Reference\ngenerators also share changes from declared Pg equally. Exactly one AC\nreference per AC island and one DC voltage controller per DC island.\nConverter P/Q controls use PCC withdrawals; AC voltage uses bus Vm and\nDC voltage uses converter Vdcset. Overlapping AC voltage controls refuse.\nLimits are reported after PF, without clipping or PV/PQ switching.",
+          "type": "string"
+        }
+      ]
+    },
+    "AcDcPfSolution": {
+      "additionalProperties": false,
+      "properties": {
+        "instance": {
+          "$ref": "#/$defs/AcDcPfInstance"
+        },
+        "point": {
+          "items": {
+            "$ref": "#/$defs/AcDcValue"
+          },
+          "type": "array"
+        },
+        "producer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "termination": {
+          "$ref": "#/$defs/Termination"
+        }
+      },
+      "required": [
+        "instance",
+        "point",
         "termination"
       ],
       "type": "object"
@@ -16894,6 +16958,40 @@
             },
             "type": {
               "const": "powerio.AcOpfInstance",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/AcDcPfInstance"
+            },
+            "type": {
+              "const": "powerio.AcDcPfInstance",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/AcDcPfSolution"
+            },
+            "type": {
+              "const": "powerio.AcDcPfSolution",
               "type": "string"
             }
           },

@@ -307,6 +307,8 @@ pub enum PioValue {
     AcOpfInstance(powerio_prob::AcOpfInstance),
     AcDcOpfSolution(powerio_prob::AcDcOpfSolution),
     AcDcOpfInstance(powerio_prob::AcDcOpfInstance),
+    AcDcPfInstance(powerio_prob::AcDcPfInstance),
+    AcDcPfSolution(powerio_prob::AcDcPfSolution),
     AcOtsInstance(powerio_prob::AcOtsInstance),
     McAcPfInstance(powerio_prob::McAcPfInstance),
     McAcOpfInstance(powerio_prob::McAcOpfInstance),
@@ -349,6 +351,8 @@ impl PioValue {
             Self::AcOpfInstance(_) => "powerio.AcOpfInstance",
             Self::AcDcOpfSolution(_) => "powerio.AcDcOpfSolution",
             Self::AcDcOpfInstance(_) => "powerio.AcDcOpfInstance",
+            Self::AcDcPfInstance(_) => "powerio.AcDcPfInstance",
+            Self::AcDcPfSolution(_) => "powerio.AcDcPfSolution",
             Self::AcOtsInstance(_) => "powerio.AcOtsInstance",
             Self::McAcPfInstance(_) => "powerio.McAcPfInstance",
             Self::McAcOpfInstance(_) => "powerio.McAcOpfInstance",
@@ -400,6 +404,8 @@ value_conversion!(powerio_prob::DcPfInstance, DcPfInstance);
 value_conversion!(powerio_prob::AcPfInstance, AcPfInstance);
 value_conversion!(powerio_prob::DcOpfInstance, DcOpfInstance);
 value_conversion!(powerio_prob::AcOpfInstance, AcOpfInstance);
+value_conversion!(powerio_prob::AcDcPfInstance, AcDcPfInstance);
+value_conversion!(powerio_prob::AcDcPfSolution, AcDcPfSolution);
 value_conversion!(powerio_prob::AcDcOpfInstance, AcDcOpfInstance);
 value_conversion!(powerio_prob::AcOtsInstance, AcOtsInstance);
 value_conversion!(powerio_prob::McAcPfInstance, McAcPfInstance);

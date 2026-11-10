@@ -1229,6 +1229,8 @@ fn family_of_token(token: &str) -> RoutedFamily {
     }
 }
 
+pub use powerio_prob::{AcDcPfInstance, AcDcPfProfile, AcDcPfSolution};
+
 pub use powerio_prob::{
     AcDcAngleReferencePolicy, AcDcCoordinatePolicy, AcDcCurrentLimitPolicy, AcDcOperatingPoint,
     AcDcOpfInstance, AcDcOpfProfile, AcDcOpfSolution, AcDcQuantity, AcDcStationLossMode, AcDcValue,

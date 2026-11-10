@@ -648,3 +648,96 @@ fn fixed_loss_preparation_selects_coefficients_and_intersects_valve_bounds() {
         );
     }
 }
+
+const PF_PROFILE: AcDcPfProfile = AcDcPfProfile::PowerModelsAcDc0101AcpVscEqualIncrementV1;
+#[test]
+fn coupled_pf_ir_is_distinct_complete_and_preserves_source_controls() {
+    let old = instance();
+    let source = serde_json::to_value(old.network()).unwrap();
+    let i = AcDcPfInstance::from_network(old.network().clone(), PF_PROFILE).unwrap();
+    assert_eq!(i.coordinates(), old.coordinates());
+    let p = AcDcOperatingPoint::for_pf(&i, point(&old).values().to_vec()).unwrap();
+    assert!(AcDcOperatingPoint::for_pf(&i, p.values()[1..].to_vec()).is_err());
+    let i = i.with_initial_point(p.clone()).unwrap();
+    let result = AcDcPfSolution::new(
+        Arc::new(i.clone()),
+        p,
+        Termination::Converged,
+        Some("test".into()),
+    )
+    .unwrap();
+    for v in [PioValue::from(i), PioValue::from(result)] {
+        let doc = stored(v);
+        assert_eq!(stored(read(&doc).unwrap().value().clone()), doc);
+        assert!(doc["value"]["type"].as_str().unwrap().contains("AcDcPf"));
+        assert_eq!(
+            doc["required_capabilities"],
+            serde_json::json!(["balanced-acdc-equivalent-v1"])
+        );
+        assert!(doc["value"]["data"].get("objective").is_none());
+    }
+    let doc = stored(
+        AcDcPfInstance::from_network(old.network().clone(), PF_PROFILE)
+            .unwrap()
+            .into(),
+    );
+    assert_eq!(
+        doc["value"]["data"]["network"],
+        stored(old.clone().into())["value"]["data"]["network"]
+    );
+    for profile in [
+        serde_json::Value::Null,
+        serde_json::json!("physical_coordinates_acp_vsc_v1"),
+    ] {
+        let mut bad = doc.clone();
+        bad["value"]["data"]["profile"] = profile;
+        assert!(read(&bad).is_err());
+    }
+    let mut missing = doc.clone();
+    missing["value"]["data"]
+        .as_object_mut()
+        .unwrap()
+        .remove("profile");
+    assert!(read(&missing).is_err());
+    let mut extra = doc;
+    extra["value"]["data"]["loss_modes"] = serde_json::json!([]);
+    assert!(read(&extra).is_err());
+    assert_eq!(serde_json::to_value(old.network()).unwrap(), source);
+}
+#[test]
+fn coupled_pf_refuses_missing_or_overlapping_control_authority() {
+    use powerio_tx::acdc::{AcConverterControl, DcConverterControl};
+    let net = instance().network().clone();
+    for mutation in 0..7 {
+        let mut n = net.clone();
+        let mut e = n.ac_dc_equivalent().unwrap().clone();
+        match mutation {
+            0 => e.stations[1].dc_control = DcConverterControl::ActivePowerAtPcc,
+            1 => e.stations[0].dc_control = DcConverterControl::DcVoltage,
+            2 => e.stations[1].settings.dc_voltage_target_pu = 0.,
+            3 => e.stations[1].ac_control = AcConverterControl::VoltageAtPcc,
+            4 => {
+                n.buses_mut()
+                    .iter_mut()
+                    .find(|b| b.kind == BusType::Ref)
+                    .unwrap()
+                    .kind = BusType::Pv
+            }
+            5 => n.buses_mut()[0].kind = BusType::Ref,
+            _ => {
+                e.branches[0].in_service = false;
+                e.branches[2].in_service = false;
+            }
+        }
+        n.set_ac_dc_equivalent(Some(e)).unwrap();
+        assert!(
+            AcDcPfInstance::from_network(n, PF_PROFILE).is_err(),
+            "mutation {mutation}"
+        );
+    }
+    let mut n = net.clone();
+    let mut e = n.ac_dc_equivalent().unwrap().clone();
+    e.stations[0].ac_control = AcConverterControl::VoltageAtPcc;
+    n.set_ac_dc_equivalent(Some(e)).unwrap();
+    assert!(AcDcPfInstance::from_network(n, PF_PROFILE).is_ok()); // unique PQ-bus controller
+}

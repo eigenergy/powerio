@@ -182,3 +182,24 @@ is rejected. Extracted enum SHA256:
 This is a profile-token refusal check; current full instance and solution IR
 round trips also test missing/unknown/null modes and downgrade refusal.
 Numerical branch qualification belongs to the Tellegen validation harness.
+
+### Coupled PF intent and control gate (2026-11-10)
+
+`AcDcPfInstance` / `AcDcPfSolution` add an explicit required PF profile for the
+pinned source-pu/Cinv equations and reference controls. Equal increments from
+declared generator outputs make per-generator allocation explicit; controls
+require one AC reference per AC island and one DC voltage controller per DC
+island. Duplicate AC voltage authority and unsupported droop refuse. PF has no
+objective or implicit dispatch/rating constraints.
+
+The full frozen `27aae3b3` PowerIO decoder was compiled and run on current
+case5 IR: the existing OPF instance is accepted; both new PF instance and PF
+solution are rejected as unknown structural variants. Current full IR round trips,
+required capability, source preservation, point shape, unknown/missing profile
+and unsupported control combinations pass. Only the unreleased schema changed.
+
+Validation: 16 coupled model tests, 11 reader tests, 146 matrix library tests and
+46 problem library tests pass (219 total). Changed-library Clippy passes. All
+seven CI Clippy targets were attempted: C ABI variants and Python pass; existing
+PSS/E/PMD/synthetic-parity float comparisons still block the other targets.
+Numerical PF qualification is recorded in Tellegen's independent reference gate.

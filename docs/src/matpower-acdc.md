@@ -214,3 +214,32 @@ by identity. Missing, duplicate, unknown and inactive station assignments refuse
 The new required profile token prevents an old decoder from silently applying
 Cinv; existing profiles reject mode overrides and omit the empty field from IR.
 Their tokens, equations, bounds and serialized defaults are unchanged.
+
+### Explicit coupled PF intent
+
+`AcDcPfInstance` and `AcDcPfSolution` are distinct structural IR types, with
+required `AcDcPfProfile::PowerModelsAcDc0101AcpVscEqualIncrementV1` selection.
+The profile uses source-pu/Cinv station equations and the pinned reference's
+bus-role repair. Active generation makes a non-reference bus PV; a PV bus with
+no active generation becomes PQ. Source roles remain unchanged in the owner.
+
+Each active AC island requires exactly one declared reference with generation;
+each DC island requires exactly one active converter controlling DC voltage.
+Converter controls are PCC active withdrawal or DC voltage, paired with PCC
+reactive withdrawal or AC voltage. AC voltage uses the bus Vm, not generator Vg
+or converter Vtar, matching the pinned reference. DC voltage uses converter
+Vdcset. Droop and overlapping AC voltage controllers are refused.
+
+Non-reference generator Pg remains declared. At a reference bus, generators
+share changes from declared Pg equally. At PV/reference buses they share changes
+from declared Qg equally. This explicit allocation resolves the reference's
+otherwise underdetermined individual outputs; it does not infer participation
+from ratings or source row order. Equipment limits are checked after solving,
+without clipping, automatic PV/PQ switching or OPF dispatch. Costs are not PF
+controls. Physical-coordinate/fixed-loss-mode PF profiles remain future work.
+
+Initial and solved points use the same typed `AcDcOperatingPoint` quantities;
+`AcDcOperatingPoint::for_pf` checks complete identity/quantity coverage. The
+source network, settings, required profile and initial point persist in IR.
+A PF solution has no optimization objective. Unsupported old structural decoders
+reject both new types, while existing OPF documents retain their layout.

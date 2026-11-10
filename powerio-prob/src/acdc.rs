@@ -259,6 +259,9 @@ impl AcDcOperatingPoint {
     pub fn values(&self) -> &[AcDcValue] {
         &self.values
     }
+    pub(crate) fn into_values(self) -> Vec<AcDcValue> {
+        self.values
+    }
 }
 
 /// Matrix-free coupled OPF intent. The versioned profile fixes objective,

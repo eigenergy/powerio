@@ -201,17 +201,17 @@ fn encode_value(value: &PioValue) -> Result<dto::StoredValue> {
         PioValue::DcOpfInstance(instance) => {
             dto::StoredValue::DcOpfInstance(encode_dc_opf_instance(instance)?)
         }
+        PioValue::AcDcPfInstance(i) => {
+            dto::StoredValue::AcDcPfInstance(encode_ac_dc_pf_instance(i))
+        }
+        PioValue::AcDcPfSolution(s) => {
+            dto::StoredValue::AcDcPfSolution(Box::new(encode_ac_dc_pf_solution(s)))
+        }
         PioValue::AcDcOpfInstance(i) => {
             dto::StoredValue::AcDcOpfInstance(encode_ac_dc_opf_instance(i))
         }
         PioValue::AcDcOpfSolution(s) => {
-            dto::StoredValue::AcDcOpfSolution(Box::new(dto::AcDcOpfSolution {
-                instance: encode_ac_dc_opf_instance(s.instance()),
-                point: s.point().values().to_vec(),
-                objective: s.objective(),
-                termination: s.termination().clone(),
-                producer: s.producer().clone(),
-            }))
+            dto::StoredValue::AcDcOpfSolution(Box::new(encode_ac_dc_opf_solution(s)))
         }
         PioValue::AcOpfInstance(instance) => {
             dto::StoredValue::AcOpfInstance(encode_ac_opf_instance(instance)?)
@@ -1142,6 +1142,44 @@ fn encode_dc_opf_instance(instance: &powerio_prob::DcOpfInstance) -> Result<dto:
     })
 }
 
+fn encode_ac_dc_pf_solution(s: &powerio_prob::AcDcPfSolution) -> dto::AcDcPfSolution {
+    dto::AcDcPfSolution {
+        instance: encode_ac_dc_pf_instance(s.instance()),
+        point: s.point().values().to_vec(),
+        termination: s.termination().clone(),
+        producer: s.producer().clone(),
+    }
+}
+fn encode_ac_dc_opf_solution(s: &powerio_prob::AcDcOpfSolution) -> dto::AcDcOpfSolution {
+    dto::AcDcOpfSolution {
+        instance: encode_ac_dc_opf_instance(s.instance()),
+        point: s.point().values().to_vec(),
+        objective: s.objective(),
+        termination: s.termination().clone(),
+        producer: s.producer().clone(),
+    }
+}
+
+fn encode_ac_dc_pf_instance(i: &powerio_prob::AcDcPfInstance) -> dto::AcDcPfInstance {
+    dto::AcDcPfInstance {
+        network: Box::new(i.network().clone()),
+        profile: i.profile(),
+        initial_point: i.initial_point().map(|p| p.values().to_vec()),
+    }
+}
+fn decode_ac_dc_pf_instance(i: dto::AcDcPfInstance) -> Result<powerio_prob::AcDcPfInstance> {
+    let mut instance = powerio_prob::AcDcPfInstance::from_network(*i.network, i.profile)
+        .map_err(|e| invalid(e.to_string()))?;
+    if let Some(values) = i.initial_point {
+        let point = powerio_prob::AcDcOperatingPoint::for_pf(&instance, values)
+            .map_err(|e| invalid(e.to_string()))?;
+        instance = instance
+            .with_initial_point(point)
+            .map_err(|e| invalid(e.to_string()))?;
+    }
+    Ok(instance)
+}
+
 fn encode_ac_dc_opf_instance(i: &powerio_prob::AcDcOpfInstance) -> dto::AcDcOpfInstance {
     dto::AcDcOpfInstance {
         network: Box::new(i.network().clone()),
@@ -1967,6 +2005,8 @@ fn validate_decoded_networks(value: &PioValue) -> Result<()> {
         PioValue::DcOpfInstance(instance) => balanced(instance.network()),
         PioValue::AcOpfInstance(instance) => balanced(instance.network()),
         PioValue::AcDcOpfInstance(i) => balanced(i.network()),
+        PioValue::AcDcPfInstance(i) => balanced(i.network()),
+        PioValue::AcDcPfSolution(s) => balanced(s.network()),
         PioValue::AcDcOpfSolution(s) => balanced(s.network()),
         PioValue::AcOtsInstance(instance) => balanced(instance.network()),
         PioValue::AcScucInstance(instance) => balanced(instance.network()),
@@ -2312,6 +2352,18 @@ fn decode_value(value: dto::StoredValue) -> Result<PioValue> {
         }
         dto::StoredValue::DcOpfInstance(instance) => {
             PioValue::DcOpfInstance(decode_dc_opf_instance(instance)?)
+        }
+        dto::StoredValue::AcDcPfInstance(i) => {
+            PioValue::AcDcPfInstance(decode_ac_dc_pf_instance(i)?)
+        }
+        dto::StoredValue::AcDcPfSolution(s) => {
+            let instance = std::sync::Arc::new(decode_ac_dc_pf_instance(s.instance)?);
+            let point = powerio_prob::AcDcOperatingPoint::for_pf(&instance, s.point)
+                .map_err(|e| invalid(e.to_string()))?;
+            PioValue::AcDcPfSolution(
+                powerio_prob::AcDcPfSolution::new(instance, point, s.termination, s.producer)
+                    .map_err(|e| invalid(e.to_string()))?,
+            )
         }
         dto::StoredValue::AcDcOpfInstance(i) => {
             PioValue::AcDcOpfInstance(decode_ac_dc_opf_instance(i)?)

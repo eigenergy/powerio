@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add explicit coupled PF intent/results, reference control validation and equal
+  generator-increment allocation, with distinct required-profile IR types.
+
 - Add an explicit fixed-mode physical AC/DC OPF profile with identity-keyed
   rectifier/inverter loss selection and matching valve active-power sign bounds.
   Existing profiles and serialized defaults retain their semantics.
