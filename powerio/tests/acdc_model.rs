@@ -723,7 +723,7 @@ fn coupled_pf_refuses_missing_or_overlapping_control_authority() {
                     .iter_mut()
                     .find(|b| b.kind == BusType::Ref)
                     .unwrap()
-                    .kind = BusType::Pv
+                    .kind = BusType::Pv;
             }
             5 => n.buses_mut()[0].kind = BusType::Ref,
             _ => {

@@ -138,7 +138,7 @@ are absent. Serialize these through `PioValue::AcDcOpfInstance` and
 AC/DC capability, and reject unknown profiles/fields. Published schema snapshots
 are unchanged. Existing AC-only constructors retain their rejection guards.
 
-This initial interface excludes normalized/base-mismatched data, LCC, mixed
+The coupled OPF interface excludes normalized/base-mismatched data, LCC, mixed
 physical/aggregate DC, AC self loops, storage and three-winding transformers.
 Preparation qualifies polynomial generator costs; piecewise costs need a
 separate auxiliary-coordinate qualification. General bindings, collection
@@ -165,6 +165,14 @@ field retain the strict default. The unreleased schema documents the new field.
 Consumers must explicitly align reference points by shifting all bus and
 converter filter/valve angles in the island together and checking finite angle
 bounds. Preparation does not silently rotate stored operating points.
+
+### Declared current in source coordinates
+
+`DeclaredCurrentAcpVscV1` retains source-pu equations, Cinv selection and reference
+auxiliary bounds, but uses declared Imax without repair. Its AC RMS current base
+is `S/(sqrt(3)*V_converter)` kA. P/Q ratings do not authorize increasing that
+current limit. This profile does not imply physical voltage/impedance rebasing;
+an infeasible declaration remains infeasible.
 
 ### Physical local-coordinate profile
 
