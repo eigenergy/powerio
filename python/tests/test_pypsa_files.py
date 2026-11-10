@@ -93,6 +93,28 @@ def test_hdf_attribute_pickle_the_scanner_cannot_parse_is_refused(shape, tmp_pat
     assert not marker.exists()
 
 
+def test_hdf_variable_length_string_attribute_pickle_is_refused(tmp_path):
+    # h5py returns a variable-length ASCII string attribute as `str`, which the
+    # scan skipped, while PyTables reads the same attribute as bytes and
+    # unpickles it once pandas opens the copy.
+    import pickle
+
+    import h5py
+    from powerio._pypsa_files import _sanitized_hdf
+    marker = tmp_path / "executed"
+    class Payload:
+        def __reduce__(self):
+            return (eval, ("__import__('pathlib').Path(%r).touch()" % str(marker),))
+    payload = pickle.dumps(Payload(), protocol=0).decode("ascii")
+    path = tmp_path / "bad.h5"
+    with h5py.File(path, "w") as store:
+        store.create_group("generators").attrs.create(
+            "pandas_type", payload, dtype=h5py.string_dtype("ascii"))
+    with pytest.raises(ValueError, match="Executable HDF5 attribute"):
+        _sanitized_hdf(path, tmp_path / "safe.h5")
+    assert not marker.exists()
+
+
 def test_hdf_text_attribute_ending_in_a_period_is_kept(tmp_path):
     import h5py
     import numpy as np
