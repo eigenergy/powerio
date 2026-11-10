@@ -179,7 +179,10 @@ fn every_documented_field_exists_and_every_schema_field_is_documented() {
                 ));
             }
         }
-        if !PAGE.contains(&format!("`{type_name}`")) {
+        // A quoted IR wire tag is distinct from a Python attribute of that name.
+        if !PAGE.contains(&format!("`{type_name}`"))
+            && !PAGE.contains(&format!("`\"{type_name}\"`"))
+        {
             problems.push(format!("`{type_name}` is not named on the page"));
         }
     }

@@ -2257,8 +2257,9 @@ Schema definition: `HistoryEntry`.
 
 ## Coupled AC/DC OPF intent and result
 
-`powerio.AcDcOpfInstance` and `powerio.AcDcOpfSolution` are distinct structural
-values. They require `balanced-acdc-equivalent-v1`; they cannot be read as
+`"powerio.AcDcOpfInstance"` and `"powerio.AcDcOpfSolution"` are distinct IR
+structural type tags, not Python attributes. These values require
+`balanced-acdc-equivalent-v1`; they cannot be read as
 ordinary AC-only calculation instances. Powers in typed points are MW/MVAr,
 angles radians, voltages/current pu under the explicitly selected profile.
 
