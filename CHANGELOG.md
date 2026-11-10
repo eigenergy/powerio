@@ -15,6 +15,17 @@ action.
 - Share repeated CGMES class and property names during parsing through a bounded
   per-document cache, reducing temporary allocations while keeping uncommon
   and long extension names accepted. The cache changes no public model or API.
+- Reuse parsed CGMES property buffers, preserve duplicate-property ordering and
+  conflict errors, and release temporary growth capacity before constructing
+  the electrical network. Source replay, diagnostics and canonical output are
+  unchanged.
+- Build the Python balanced network's derived analysis index on its first
+  topology or matrix query. Counts and metadata no longer allocate that index;
+  subsequent analysis queries reuse it. Updated and derived handles retain
+  their own immutable network and index state.
+- Combine Exact and Lossless as Preserved in the conversion-matrix overview,
+  explain representation changes, adjustments, omitted data and incomplete
+  checks, and retain the original JSON grades and byte-replay evidence.
 - Preserve pandapower native bus voltage magnitudes and angles through IR and
   canonical output, indexed independently of generator voltage targets.
   Report unavailable states and unsupported result columns without claiming

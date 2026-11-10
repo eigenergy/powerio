@@ -12,8 +12,8 @@
 //! The derived core is one `HashMap`, six `Vec<f64>`, and the HVDC injection
 //! record. One-shot callers use
 //! [`IndexedNetwork::new`], which builds and owns a throwaway core. A long-lived
-//! handle (the Python and C ABI wrappers) builds an [`IndexCore`] once at parse
-//! time and rebinds a borrowing view per query with
+//! handle (the Python and C ABI wrappers) builds an [`IndexCore`] once and
+//! rebinds a borrowing view per query with
 //! [`IndexedNetwork::with_core`], so repeated queries never re-fold the loads
 //! and shunts.
 
