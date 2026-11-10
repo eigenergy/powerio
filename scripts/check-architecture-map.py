@@ -30,7 +30,7 @@ def cargo_workspace() -> tuple[set[str], set[tuple[str, str]]]:
     members = {
         p["name"]
         for p in meta["packages"]
-        if "/tests/" not in p["manifest_path"]
+        if "/tests/" not in Path(p["manifest_path"]).as_posix()
     }
     edges = set()
     for package in meta["packages"]:
