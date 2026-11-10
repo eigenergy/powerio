@@ -265,3 +265,98 @@ fn angle_reference_policy_roundtrips_and_unknown_policy_refuses() {
     bad["value"]["data"]["angle_reference_policy"] = serde_json::Value::Null;
     assert!(read(&bad).is_err());
 }
+
+#[test]
+fn declared_current_profile_roundtrips_without_changing_compatibility_selection() {
+    let old = instance();
+    assert_eq!(
+        old.profile().current_limit_policy(),
+        AcDcCurrentLimitPolicy::PowerModelsAcDc0101Repair
+    );
+    let selected = AcDcOpfInstance::from_network(
+        old.network().clone(),
+        AcDcOpfProfile::DeclaredCurrentAcpVscV1,
+    )
+    .unwrap();
+    assert_eq!(
+        selected.profile().current_limit_policy(),
+        AcDcCurrentLimitPolicy::Declared
+    );
+    let p = point(&selected);
+    let selected = selected.with_initial_point(p.clone()).unwrap();
+    let solution = AcDcOpfSolution::new(
+        Arc::new(selected.clone()),
+        p,
+        0.0,
+        Termination::Converged,
+        None,
+    )
+    .unwrap();
+    for value in [PioValue::from(selected), PioValue::from(solution)] {
+        let doc = stored(value);
+        assert_eq!(stored(read(&doc).unwrap().value().clone()), doc);
+    }
+    let doc = stored(old.into());
+    assert_eq!(
+        doc["value"]["data"]["profile"],
+        "power_models_ac_dc0101_acp_vsc_v1"
+    );
+    // Bound semantics cannot be overridden beneath the compatibility profile.
+    let mut bad = doc.clone();
+    bad["value"]["data"]["current_limit_policy"] = serde_json::json!("declared");
+    assert!(read(&bad).is_err());
+    let mut bad = doc;
+    bad["value"]["data"]["profile"] = serde_json::json!("declared_current_acp_vsc_v2");
+    assert!(read(&bad).is_err());
+}
+
+#[cfg(feature = "matrix")]
+#[test]
+fn declared_current_bounds_never_increase_and_preserve_other_preparation() {
+    let old = instance();
+    for limit in [0.0, 0.05, 1.1, 5.0] {
+        let mut net = old.network().clone();
+        let mut owner = net.ac_dc_equivalent().unwrap().clone();
+        for s in &mut owner.stations {
+            s.valve_current_limit_pu = limit;
+        }
+        net.set_ac_dc_equivalent(Some(owner)).unwrap();
+        let before = serde_json::to_value(&net).unwrap();
+        let compatibility = AcDcOpfInstance::from_network(net.clone(), old.profile()).unwrap();
+        let declared =
+            AcDcOpfInstance::from_network(net, AcDcOpfProfile::DeclaredCurrentAcpVscV1).unwrap();
+        let a = build_ac_dc_opf_preparation(&compatibility).unwrap();
+        let b = build_ac_dc_opf_preparation(&declared).unwrap();
+        for (a, b) in a.stations.iter().zip(&b.stations) {
+            assert_eq!(
+                a.policy.current_limit_policy,
+                AcDcCurrentLimitPolicy::PowerModelsAcDc0101Repair
+            );
+            assert_eq!(
+                b.policy.current_limit_policy,
+                AcDcCurrentLimitPolicy::Declared
+            );
+            assert_eq!(
+                a.policy.effective_current_limit_pu,
+                limit.max(1.25_f64.sqrt())
+            );
+            assert_eq!(
+                b.bounds(AcDcQuantity::ValveCurrentMagnitude).unwrap().max,
+                limit
+            );
+            assert_eq!(b.policy.declared_current_limit_pu, limit);
+            assert_eq!(a.policy.loss_coefficients_pu, b.policy.loss_coefficients_pu);
+            for q in [
+                AcDcQuantity::PccActivePower,
+                AcDcQuantity::ValveReactivePower,
+                AcDcQuantity::StationDcActivePower,
+                AcDcQuantity::FilterVoltageMagnitude,
+            ] {
+                assert_eq!(a.bounds(q), b.bounds(q));
+            }
+        }
+        assert_eq!(before, serde_json::to_value(declared.network()).unwrap());
+        assert!(declared.network().to_normalized().is_err());
+        assert!(AcOpfInstance::from_network(declared.network().clone()).is_err());
+    }
+}

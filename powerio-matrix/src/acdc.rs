@@ -2,13 +2,16 @@
 //! equivalent owners; the private projection here accompanies the full DC and
 //! station data and never mutates source declarations.
 use crate::{AcOpfAssemblyOptions, AcOpfPreparation, Result, build_ac_opf_preparation};
-use powerio_prob::{AcDcAngleReferencePolicy, AcDcOpfInstance, AcDcQuantity, AcOpfInstance};
+use powerio_prob::{
+    AcDcAngleReferencePolicy, AcDcCurrentLimitPolicy, AcDcOpfInstance, AcDcQuantity, AcOpfInstance,
+};
 use powerio_tx::acdc::{AcDcConverterStation, AcDcLimits, DcEquivalentBranch, DcEquivalentBus};
 use serde::Serialize;
 
-/// Declared versus effective station parameters under the pinned reference.
+/// Declared versus effective station parameters under the selected profile.
 #[derive(Clone, Debug, Serialize)]
 pub struct AcDcStationPolicy {
+    pub current_limit_policy: AcDcCurrentLimitPolicy,
     pub component: String,
     pub converter_base_kv: f64,
     pub pcc_base_kv: f64,
@@ -160,8 +163,9 @@ fn prepare_angle_references(
 
 /// Apply the explicitly selected reference profile, preserving the input owner.
 /// AC powers are pu and angle bounds use the standard PowerModels correction.
-/// The profile uses LossCinv in both directions and widens Imax to the P/Q box
-/// radius, recording both declarations and effective values.
+/// Both profiles use LossCinv in both directions. Only the compatibility
+/// profile widens Imax to the P/Q box radius; the declared-current profile
+/// retains the source limit. Declarations and effective values are recorded.
 // The instance keeps its validated network private; these lookups cannot fail.
 #[allow(clippy::missing_panics_doc)]
 pub fn build_ac_dc_opf_preparation(instance: &AcDcOpfInstance) -> Result<AcDcOpfPreparation> {
@@ -193,12 +197,25 @@ pub fn build_ac_dc_opf_preparation(instance: &AcDcOpfInstance) -> Result<AcDcOpf
             .abs()
             .max(s.valve_reactive_mvar.max.abs())
             / owner.base_mva;
+        let current_limit_policy = instance.profile().current_limit_policy();
+        let effective_current_limit_pu = match current_limit_policy {
+            AcDcCurrentLimitPolicy::PowerModelsAcDc0101Repair => {
+                s.valve_current_limit_pu.max(p.hypot(q))
+            }
+            AcDcCurrentLimitPolicy::Declared => s.valve_current_limit_pu,
+            _ => {
+                return Err(crate::Error::UnsupportedOpfObjective {
+                    reason: "unsupported coupled current-limit policy".into(),
+                });
+            }
+        };
         let policy = AcDcStationPolicy {
+            current_limit_policy,
             component: s.component.to_string(),
             converter_base_kv: s.ac_base_kv,
             pcc_base_kv: pcc.base_kv,
             declared_current_limit_pu: s.valve_current_limit_pu,
-            effective_current_limit_pu: s.valve_current_limit_pu.max(p.hypot(q)),
+            effective_current_limit_pu,
             loss_coefficients_pu: [
                 s.losses.constant_mw / owner.base_mva,
                 s.losses.linear_kv / (3.0_f64.sqrt() * s.ac_base_kv),

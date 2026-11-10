@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-/// An explicit, versioned reference convention; there is no implicit default.
+/// An explicit, versioned equation and bound convention; no implicit default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -18,6 +18,32 @@ pub enum AcDcOpfProfile {
     /// PowerModelsACDC 0.10.1 at 9ada4082: source pu coordinates, inverter
     /// quadratic loss in both directions, repaired Imax and auxiliary bounds.
     PowerModelsAcDc0101AcpVscV1,
+    /// The same ACP VSC equations, inverter losses and auxiliary bounds, but
+    /// enforce declared valve-current limits without the nominal-1-pu repair.
+    /// This qualifies current-limit semantics, not arbitrary physical rebasing.
+    DeclaredCurrentAcpVscV1,
+}
+
+/// Valve-current bound semantics fixed by the selected OPF profile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AcDcCurrentLimitPolicy {
+    /// Raise Imax_pu to at least the P/Q rating-box radius on a nominal 1-pu voltage.
+    PowerModelsAcDc0101Repair,
+    /// Honour the declared AC RMS current bound on S/(sqrt(3)*V_converter).
+    /// P/Q ratings do not authorize an increase; infeasibility is retained.
+    Declared,
+}
+impl AcDcOpfProfile {
+    #[must_use]
+    pub const fn current_limit_policy(self) -> AcDcCurrentLimitPolicy {
+        match self {
+            Self::PowerModelsAcDc0101AcpVscV1 => AcDcCurrentLimitPolicy::PowerModelsAcDc0101Repair,
+            Self::DeclaredCurrentAcpVscV1 => AcDcCurrentLimitPolicy::Declared,
+        }
+    }
 }
 
 /// Numerical angle constraints for coupled OPF, independent of source bus roles.

@@ -102,3 +102,35 @@ hit the previously recorded unchanged exact-float tests in `psse.rs` and
 Case67 native validation and independent phase alignment are performed on the
 existing Tellegen native-validation branch. Reader PR #822 and its commit
 49e8eacb are unchanged; this extends only the separate model branch.
+
+## Declared physical-current bound — 2026-11-10
+
+`DeclaredCurrentAcpVscV1` is a separate required profile token. It keeps the
+existing ACP VSC equations, inverter loss coefficient and auxiliary bounds,
+but honours the declared AC RMS valve-current limit on
+`S/(sqrt(3)*V_converter)` kA. The compatibility profile and its nominal-1-pu
+current repair are unchanged. `AcDcCurrentLimitPolicy` is derived from the
+profile and recorded with each station's declared/effective values; there is
+no policy override underneath the compatibility token.
+
+Zero, undersized and generous declared limits remain exact. Nine coupled tests
+cover preparation, source preservation, explicit policy selection, instance and
+nested-solution IR round trips, unknown-profile/override refusal and legacy
+guards. Only the unreleased schema gains the new enum alternative; published
+schemas and existing compatibility document layouts remain unchanged. A frozen
+552fc413 profile decoder was also run: it accepts the compatibility token and
+rejects `declared_current_acp_vsc_v1` as an unknown variant.
+
+Validation: 472 problem/matrix tests plus 21 focused facade, schema and IR-reference
+tests pass. Changed libraries and coupled-test Clippy checks pass. All seven
+CI Clippy configurations were attempted: the four C ABI/Python configurations
+pass; workspace, matrix-gridfm and no-SINCAL encounter the previously documented
+unchanged float-comparison warnings in psse.rs, synth_facade_parity.rs and
+pmd_math.rs. No warnings were suppressed to make those configurations pass.
+
+Analytical feasible/binding/violating base-conversion cases and explicitly
+modified Julia checks are maintained on Tellegen's `codex/acdc-native-case5`
+branch. The reference modification restores only source Imax after preprocessing;
+it is not a claim of unmodified PowerModelsACDC equivalence. Generic rebasing,
+unequal-base bypasses, physical pole/return topology and native coupled PF remain
+separate gates. Reader PR #822 remains unchanged and draft.

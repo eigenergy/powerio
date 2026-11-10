@@ -1230,8 +1230,8 @@ fn family_of_token(token: &str) -> RoutedFamily {
 }
 
 pub use powerio_prob::{
-    AcDcAngleReferencePolicy, AcDcOperatingPoint, AcDcOpfInstance, AcDcOpfProfile, AcDcOpfSolution,
-    AcDcQuantity, AcDcValue,
+    AcDcAngleReferencePolicy, AcDcCurrentLimitPolicy, AcDcOperatingPoint, AcDcOpfInstance,
+    AcDcOpfProfile, AcDcOpfSolution, AcDcQuantity, AcDcValue,
 };
 
 #[cfg(feature = "matrix")]

@@ -508,11 +508,16 @@
       "type": "object"
     },
     "AcDcOpfProfile": {
-      "description": "An explicit, versioned reference convention; there is no implicit default.",
+      "description": "An explicit, versioned equation and bound convention; no implicit default.",
       "oneOf": [
         {
           "const": "power_models_ac_dc0101_acp_vsc_v1",
           "description": "PowerModelsACDC 0.10.1 at 9ada4082: source pu coordinates, inverter\nquadratic loss in both directions, repaired Imax and auxiliary bounds.",
+          "type": "string"
+        },
+        {
+          "const": "declared_current_acp_vsc_v1",
+          "description": "The same ACP VSC equations, inverter losses and auxiliary bounds, but\nenforce declared valve-current limits without the nominal-1-pu repair.\nThis qualifies current-limit semantics, not arbitrary physical rebasing.",
           "type": "string"
         }
       ]

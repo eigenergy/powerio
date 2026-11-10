@@ -2285,3 +2285,15 @@ These records do not assert equation feasibility or global optimality by
 serialization alone. Numerical gauge alignment is an explicit consumer operation;
 stored supplied points are never rotated silently. Unknown policies and fields
 refuse, including in nested solution instances.
+
+The required profile token `power_models_ac_dc0101_acp_vsc_v1` retains the pinned
+reference current repair. The separate `declared_current_acp_vsc_v1` profile
+honours `valve_current_limit_pu` on the station AC RMS base
+`base_mva/(sqrt(3)*ac_base_kv)` kA, without raising it to meet P/Q ratings.
+All other equations, inverter-loss selection and auxiliary bounds remain the
+same. The policy is derived from the required profile, not an override beneath
+the compatibility profile. Readers that do not know the new enum variant refuse
+it, including in nested solutions. Existing compatibility documents keep their
+shape. A declared limit may be infeasible; serialization/preparation does not
+repair it or certify a feasible point. This does not enable generic rebasing or
+claim a complete physically invariant equipment profile.
