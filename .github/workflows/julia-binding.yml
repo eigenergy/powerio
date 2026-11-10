@@ -26,8 +26,8 @@ name: Julia binding
 # reruns the compatibility suite.
 on:
   push:
+    # Every main head can be a release candidate and needs its own binding check.
     branches: [ "main" ]
-    paths: [ "Cargo.toml", "Cargo.lock", "powerio/**", "powerio-archive/**", "powerio-core/**", "powerio-tnd/**", "powerio-tx/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml", ".github/powerio-jl-companion.json", "scripts/*julia-companion.py" ]
   # No branch filter: stacked PRs must run this too (see rust.yml).
   pull_request:
     paths: [ "Cargo.toml", "Cargo.lock", "powerio/**", "powerio-archive/**", "powerio-core/**", "powerio-tnd/**", "powerio-tx/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml", ".github/powerio-jl-companion.json", "scripts/*julia-companion.py" ]
