@@ -564,10 +564,12 @@ number is observable: the PowerIO IR schema directory and `IR_VERSION`, the
 
 Before advancing either repository to a new release series, finish any pending
 patch release in the previous series, including its PowerIO.jl artifact tests
-and registration. For 0.11.10 followed by 0.12, merge the 0.11-compatible Julia
-companion first, release PowerIO #823, and wait for the Julia 0.11.10 follow-up.
-Only then merge PowerIO.jl #201 and advance to the candidate. Merge the updated
-patch branch into the RC before its final CI run so compatible fixes are shared.
+and registration. For a 0.11 patch release followed by 0.12, merge the
+ABI-7-compatible Julia patch companion first, release the 0.11 patch, and wait
+for its Julia follow-up. Only then merge PowerIO.jl #201 and advance to the
+candidate. Merge the updated patch branch into the RC before its final CI run
+so compatible fixes are shared. Preserve folded PR ancestry with merge commits
+so GitHub records indirect merges and individual attribution.
 
 1. Merge the PowerIO.jl companion (PowerIO.jl#201 for 0.12) with a merge
    commit. Its `main` must read the candidate's C ABI before the tag workflow
