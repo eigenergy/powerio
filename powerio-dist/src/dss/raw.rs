@@ -1342,7 +1342,7 @@ impl<L: Loader> Executor<'_, L> {
         file_arg: &str,
         ctx: &dyn Fn(String) -> String,
     ) -> Option<PathBuf> {
-        self.raw.absolute_dependency |= Path::new(&file_arg.replace('\\', "/")).is_absolute();
+        self.raw.absolute_dependency |= crate::portable_path::is_portable_absolute(file_arg);
         let resolved = self.resolve(file_arg);
         if resolved.is_none() {
             let message = ctx(format!(
@@ -2283,6 +2283,8 @@ struct SourceLoader<'a> {
     source: &'a powerio_core::Source,
     lexical_root: PathBuf,
     dependencies: std::collections::BTreeSet<powerio_core::SourceId>,
+    // Only the DSS adapter folds case. The shared source tree remains exact.
+    folded_names: Option<BTreeMap<String, Option<String>>>,
 }
 
 fn source_include_loader(source: &powerio_core::Source, lexical_root: PathBuf) -> SourceLoader<'_> {
@@ -2290,6 +2292,53 @@ fn source_include_loader(source: &powerio_core::Source, lexical_root: PathBuf) -
         source,
         lexical_root,
         dependencies: std::collections::BTreeSet::new(),
+        folded_names: None,
+    }
+}
+
+impl SourceLoader<'_> {
+    fn buffer(&mut self, name: &str) -> std::io::Result<powerio_core::SourceBuffer> {
+        let original = match self.source.root_buffer(name) {
+            Ok(buffer) => return Ok(buffer),
+            Err(error) => error,
+        };
+        // Never retry a containment, byte-budget, or filesystem refusal. Only
+        // supplied memory/tree inventories admit this Windows-deck fallback.
+        if !original
+            .diagnostics()
+            .iter()
+            .any(|d| d.code() == "REQUEST.SOURCE.UNKNOWN_BUFFER")
+        {
+            return Err(include_acquisition_error(&original));
+        }
+        if self.folded_names.is_none() {
+            let mut names = BTreeMap::new();
+            for path in self
+                .source
+                .entry_names()
+                .map_err(|e| include_acquisition_error(&e))?
+            {
+                names
+                    .entry(path.as_str().to_ascii_lowercase())
+                    .and_modify(|existing| *existing = None)
+                    .or_insert_with(|| Some(path.as_str().to_owned()));
+            }
+            self.folded_names = Some(names);
+        }
+        match self
+            .folded_names
+            .as_ref()
+            .and_then(|names| names.get(&name.to_ascii_lowercase()))
+        {
+            Some(Some(canonical)) => self
+                .source
+                .root_buffer(canonical)
+                .map_err(|e| include_acquisition_error(&e)),
+            Some(None) => Err(std::io::Error::other(format!(
+                "DSS include `{name}` matches multiple supplied paths differing only in case"
+            ))),
+            None => Err(include_acquisition_error(&original)),
+        }
     }
 }
 
@@ -2317,10 +2366,7 @@ impl Loader for SourceLoader<'_> {
             .map(|c| c.as_os_str().to_string_lossy())
             .collect::<Vec<_>>()
             .join("/");
-        let buffer = self
-            .source
-            .root_buffer(&name)
-            .map_err(|error| include_acquisition_error(&error))?;
+        let buffer = self.buffer(&name)?;
         self.dependencies.insert(buffer.id().clone());
         Ok(buffer.bytes().to_vec())
     }

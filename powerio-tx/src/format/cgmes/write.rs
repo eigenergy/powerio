@@ -6637,6 +6637,9 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 kv * branch.calc_effective_tap() * rho_2 / rho_1,
                 w.kv(branch.to)?,
             );
+            // A generated linear phase tap has constant reactance on its
+            // owning winding's base, exactly as stated on end 1 below.
+            let primary_x = branch.x * (u1 * u1 / (net.base_mva() * secondary_scale));
             let source_phase_1 = source_tap_changer(detailed, local_id, 1, TapChangerKind::Phase);
             let source_phase_2 = source_tap_changer(detailed, local_id, 2, TapChangerKind::Phase);
             let source_shift = source_phase_1
@@ -6694,7 +6697,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 // impedance and terminal shunts; undo it in the winding data.
                 let end_z_base = u * u / (net.base_mva() * secondary_scale);
                 let (end_r, end_x) = if endno == 1 {
-                    (branch.r * end_z_base, branch.x * end_z_base)
+                    (branch.r * end_z_base, primary_x)
                 } else {
                     (0.0, 0.0)
                 };
@@ -6735,8 +6738,8 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     "PhaseTapChangerLinear.stepPhaseShiftIncrement",
                     branch.shift,
                 );
-                eq.text("PhaseTapChangerLinear.xMin", branch.x * z_base);
-                eq.text("PhaseTapChangerLinear.xMax", branch.x * z_base);
+                eq.text("PhaseTapChangerLinear.xMin", primary_x);
+                eq.text("PhaseTapChangerLinear.xMax", primary_x);
                 eq.close("PhaseTapChangerLinear");
                 ssh.open("PhaseTapChangerLinear", &ptc, true);
                 ssh.text("TapChanger.step", 1);

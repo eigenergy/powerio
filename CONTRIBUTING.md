@@ -538,9 +538,10 @@ A breaking C ABI change bumps `PIO_ABI_VERSION` first; see
 
 ### Patch before the next release series
 
-For 0.11.10 followed by the 0.12 candidate, merge the ABI-7-compatible Julia
-patch companion first. Complete the 0.11.10 Rust release and Julia artifact
-testing/registration before merging the 0.12 Julia companion. The RC tag tests
+For a 0.11 patch release followed by the 0.12 candidate, merge the
+ABI-7-compatible Julia patch companion first. Complete the 0.11 patch's Rust
+release and Julia artifact testing/registration before merging the 0.12 Julia
+companion. The RC tag tests
 Julia main, so that companion must then land before tagging the candidate.
 Merge compatible patch fixes into the RC and re-run final checks. Preserve
 folded PR ancestry with merge commits so GitHub records indirect merges and
