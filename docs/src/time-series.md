@@ -50,6 +50,20 @@ uninterpreted, and survives a same format emission.
 
 ## Egret electrical time series
 
+Egret branch ratings use `null` (or an absent scalar field) for unlimited
+flow. Canonical output writes, for example, `[null, 150.0]` when PowerIO's
+`rate_a` values are `[0.0, 150.0]`. This applies to long-term, short-term,
+and emergency ratings. A native Egret numeric zero imposes a zero thermal
+limit. PowerIO refuses that input because its branch rating fields reserve
+zero for unlimited flow; the same check applies at every time point.
+
+Earlier PowerIO output could put numeric zero in mixed rating series.
+Regenerate those files from the original model. Change zero to `null` in an
+existing Egret file only after confirming that the source intended unlimited
+flow. An older PowerIO IR document that already converted a native Egret zero
+to unlimited has lost that distinction and must be regenerated from its
+original Egret input. The PowerIO IR layout and branch convention are unchanged.
+
 Egret `system.time_keys` and per-element `data_type: "time_series"` values
 parse into `TimeSeries<BalancedNetwork>`. Labels must be unique. A stated
 `time_period_length_minutes` must be finite and positive and is retained in

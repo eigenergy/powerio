@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Egret time-series output uses `null` for unlimited branch ratings; imports
+  refuse genuine numeric zero limits that the branch model cannot represent.
+  Report and reproduction by Mohamed Numair (#828).
+
 ## 0.11.10
 
 **OpenDSS**

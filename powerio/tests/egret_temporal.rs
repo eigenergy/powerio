@@ -13,7 +13,7 @@ fn document() -> Value {
                 "qf": {"data_type": "time_series", "values": [-2.0, 1.0]},
                 "pt": {"data_type": "time_series", "values": [-9.8, 3.1]},
                 "qt": {"data_type": "time_series", "values": [2.2, -0.8]},
-                "rating_long_term": {"data_type": "time_series", "values": [0.0, 80.0]}
+                "rating_long_term": {"data_type": "time_series", "values": [null, 80.0]}
             }}
         }
     })
@@ -59,6 +59,10 @@ fn electrical_time_series_survives_ir_and_canonical_egret_emission() {
         native["elements"]["branch"]["1"]["pf"]["values"],
         json!([10.0, -3.0])
     );
+    assert_eq!(
+        native["elements"]["branch"]["1"]["rating_long_term"]["values"],
+        json!([null, 80.0])
+    );
     let reread = powerio::parse(Source::from_memory("case.json", output).unwrap()).unwrap();
     let PioValue::TimeSeries(series) = reread.value() else {
         panic!("time series")
@@ -73,6 +77,111 @@ fn electrical_time_series_survives_ir_and_canonical_egret_emission() {
         Some(powerio::BranchSolution::new(-3.0, 1.0, 3.1, -0.8))
     );
     assert_eq!(network.branches()[0].rate_a, 80.0);
+}
+
+#[test]
+fn every_rating_preserves_unlimited_points_through_ir_and_export() {
+    for field in ["rating_long_term", "rating_short_term", "rating_emergency"] {
+        for values in [
+            json!([null, 150.0]),
+            json!([150.0, null]),
+            json!([null, null]),
+        ] {
+            let mut input = document();
+            input["elements"]["branch"]["1"]
+                .as_object_mut()
+                .unwrap()
+                .remove("rating_long_term");
+            input["elements"]["branch"]["1"][field] =
+                json!({"data_type": "time_series", "values": values});
+            let module = parse(&input);
+            let ir = bytes(
+                powerio::serialize(&module, Destination::memory("case.pio.json").unwrap()).unwrap(),
+            );
+            let restored =
+                powerio::deserialize(Source::from_memory("case.pio.json", ir).unwrap()).unwrap();
+            let output = bytes(
+                powerio::emit(
+                    &restored,
+                    "egret-json",
+                    Destination::memory("case.json").unwrap(),
+                )
+                .unwrap(),
+            );
+            let native: Value = serde_json::from_slice(&output).unwrap();
+            if values == json!([null, null]) {
+                assert!(native["elements"]["branch"]["1"].get(field).is_none());
+            } else {
+                assert_eq!(native["elements"]["branch"]["1"][field]["values"], values);
+            }
+            let reread = parse(&native);
+            let PioValue::TimeSeries(series) = reread.value() else {
+                panic!("series")
+            };
+            for (point, expected) in values.as_array().unwrap().iter().enumerate() {
+                let PioValue::BalancedNetwork(network) = series.get(point).unwrap() else {
+                    panic!("network")
+                };
+                let branch = &network.branches()[0];
+                let rating = match field {
+                    "rating_long_term" => branch.rate_a,
+                    "rating_short_term" => branch.rate_b,
+                    _ => branch.rate_c,
+                };
+                assert_eq!(rating, expected.as_f64().unwrap_or(0.0));
+            }
+        }
+    }
+}
+
+#[test]
+fn native_zero_thermal_limits_are_refused_in_scalar_and_every_series_position() {
+    for field in ["rating_long_term", "rating_short_term", "rating_emergency"] {
+        for zero in [0.0, -0.0] {
+            for values in [json!(zero), json!([zero, 150.0]), json!([150.0, zero])] {
+                let mut input = document();
+                let branch = &mut input["elements"]["branch"]["1"];
+                branch.as_object_mut().unwrap().remove("rating_long_term");
+                if values.is_array() {
+                    branch[field] = json!({"data_type": "time_series", "values": values});
+                } else {
+                    branch[field] = values;
+                    for flow in ["pf", "qf", "pt", "qt"] {
+                        branch.as_object_mut().unwrap().remove(flow);
+                    }
+                    input["system"].as_object_mut().unwrap().remove("time_keys");
+                    input["elements"]["load"]["load_1"]["p_load"] = json!(10.0);
+                }
+                let error = powerio::parse(
+                    Source::from_memory("case.egret.json", input.to_string().into_bytes()).unwrap(),
+                )
+                .unwrap_err();
+                assert!(error.to_string().contains(field), "{error}");
+                assert!(error.to_string().contains("zero thermal limit"), "{error}");
+            }
+        }
+    }
+}
+
+#[test]
+fn scalar_absent_and_null_ratings_export_as_unlimited() {
+    for field in ["rating_long_term", "rating_short_term", "rating_emergency"] {
+        for stated_null in [false, true] {
+            let mut input = json!({"system": {"baseMVA": 100}, "elements": {
+                "bus": {"1": {"matpower_bustype": "ref"}, "2": {}},
+                "branch": {"1": {"from_bus": "1", "to_bus": "2", "reactance": 0.1}}
+            }});
+            if stated_null {
+                input["elements"]["branch"]["1"][field] = Value::Null;
+            }
+            let module = parse(&input).sever_source();
+            let output = bytes(
+                powerio::emit(&module, "egret-json", Destination::memory("case").unwrap()).unwrap(),
+            );
+            let native: Value = serde_json::from_slice(&output).unwrap();
+            assert!(native["elements"]["branch"]["1"].get(field).is_none());
+        }
+    }
 }
 
 #[test]
