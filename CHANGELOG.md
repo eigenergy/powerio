@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Python table getters read only the requested table. Distribution tables
+  remain accessible when a network carries component coordinates; the tagged
+  IR wrapper no longer causes a missing-field error.
+
 ## 0.11.11
 
 **XIIDM**

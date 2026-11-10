@@ -186,6 +186,19 @@ def test_preferred_balanced_names_and_complete_tables():
         assert len(rows) == getattr(net, count)
 
 
+def test_hvdc_table_preserves_nonfinite_limits_and_independent_rows():
+    module = powerio.parse(DATA / "t_case9_dcline.m")
+    stored = json.loads(_emit_module(module))
+    expected = stored["value"]["data"]["hvdc"]
+    expected[0]["qminf"] = "-Infinity"
+    expected[0]["qmaxf"] = "Infinity"
+    value = _parse_module(json.dumps(stored)).value
+    assert value.hvdc == expected
+    rows = value.hvdc
+    rows[0]["qminf"] = 0
+    assert value.hvdc == expected
+
+
 def test_xiidm_balanced_equipment_is_available(tmp_path):
     source = tmp_path / "svc.xiidm"
     source.write_text(

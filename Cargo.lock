@@ -2569,6 +2569,7 @@ dependencies = [
  "powerio-tx",
  "pyo3",
  "rusqlite",
+ "serde",
  "serde_json",
  "sprs",
 ]
