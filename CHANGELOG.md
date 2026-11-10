@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+**XIIDM**
+
+- XIIDM output from a network without stored substation data now gives each
+  static var compensator a terminal on its bus. PowerIO used to reject its
+  own output when a compensator came from a PSS/E FACTS record (#831).
+- XIIDM output from a network with partial substation data, such as PSS/E
+  substation data that names only some equipment terminals, now gives each
+  load, generator, battery, shunt, static var compensator, line, and
+  transformer without a stated terminal a terminal on its bus in that
+  hierarchy, reported as `EMIT.XIIDM.VALUE_DEFAULTED`. In a node breaker
+  voltage level the terminal takes a new node joined to the bus's node by an
+  internal connection. Equipment that still has no bus or node, including an
+  injection or branch at a bus outside every stated voltage level, is left
+  out and reported as `EMIT.XIIDM.RECORD_DROPPED`. Such equipment used to be
+  written without a terminal, which PowerIO and PowSybl reject, or, for an
+  injection outside every voltage level, left out without a diagnostic.
+- XIIDM output reports `EMIT.XIIDM.FIELD_DROPPED` when a static var
+  compensator read from PSS/E regulates a remote bus that has no regulating
+  terminal. The compensator then regulates its own terminal at the remote
+  bus setpoint.
+
 ## 0.11.10
 
 **OpenDSS**
