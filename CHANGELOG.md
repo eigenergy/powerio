@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**pandapower**
+
+- Piecewise costs read from `pwl_cost` start at the first power times the
+  first marginal slope, matching pandapower's native objective. Previously
+  PowerIO started every curve at zero, shifting costs whose first power was
+  nonzero. Emission now diagnoses an objective shift by comparing with that
+  native anchor, rather than assuming every nonzero first cost is lost.
+
 ## 0.11.11
 
 **XIIDM**

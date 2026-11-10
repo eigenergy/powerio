@@ -1778,9 +1778,10 @@ fn poly_cost_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
 }
 
 /// The `pwl_cost` frame for piecewise (model 1) generator costs. A MATPOWER
-/// breakpoint curve `(p_i, f_i)` converts exactly to pandapower's per range
-/// `[p_from, p_to, slope]` points; the absolute cost level `f_1` has no
-/// pandapower field, so a nonzero level is declared as a shifted objective.
+/// breakpoint curve `(p_i, f_i)` supplies pandapower's per range
+/// `[p_from, p_to, slope]` points. Its native objective anchors the first
+/// breakpoint at `p_1 * slope_1`, so a different absolute level is declared
+/// as a shifted objective.
 fn pwl_cost_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Option<Value> {
     let columns = ["power_type", "element", "et", "points"];
     let mut index = Vec::new();
@@ -1805,7 +1806,11 @@ fn pwl_cost_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Option<V
             malformed += 1;
             continue;
         }
-        if pairs[0].1 != 0.0 {
+        let first_slope = (pairs[1].1 - pairs[0].1) / (pairs[1].0 - pairs[0].0);
+        let anchor = pairs[0].0 * first_slope;
+        // Reconstructing a slope from floating-point breakpoints can round.
+        let rounding = 4.0 * f64::EPSILON * pairs[0].1.abs().max(anchor.abs()).max(1.0);
+        if (pairs[0].1 - anchor).abs() > rounding {
             shifted += 1;
         }
         let points: Vec<Value> = pairs
@@ -1825,7 +1830,7 @@ fn pwl_cost_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Option<V
     }
     if shifted > 0 {
         warnings.push(&F.field_dropped, format!(
-            "{shifted} piecewise cost curves start at a nonzero cost; pandapower pwl_cost stores marginal cost per range only, so the absolute objective shifts by that constant"
+            "{shifted} piecewise cost curves differ from pandapower's first-power times first-slope cost anchor; pwl_cost has no independent constant, so the absolute objective shifts"
         ));
     }
     if malformed > 0 {
@@ -2235,8 +2240,8 @@ fn read_poly_costs(
 
 /// Read `pwl_cost` piecewise curves into MATPOWER breakpoint (model 1)
 /// curves. pandapower states per range `[p_from, p_to, slope]` marginal
-/// costs with no absolute level, so the breakpoint costs start at zero at
-/// the first breakpoint and the unstated constant is declared.
+/// costs. The native `costs_from_areas` objective anchors the first cost at
+/// the first power times the first slope, then integrates each range.
 // The row scan, range validation, and breakpoint accumulation read as one
 // sequence.
 #[allow(clippy::too_many_lines)]
@@ -2316,7 +2321,7 @@ fn read_pwl_costs(
             continue;
         }
         let mut coeffs = Vec::with_capacity((ranges.len() + 1) * 2);
-        let mut level = 0.0;
+        let mut level = ranges[0].0 * ranges[0].2;
         coeffs.extend([ranges[0].0, level]);
         for (from, to, slope) in &ranges {
             level += slope * (to - from);
@@ -4021,6 +4026,106 @@ mod tests {
                 conv.render_diagnostics()
             );
         }
+    }
+
+    #[test]
+    fn pwl_cost_nonzero_start_matches_native_objective() {
+        for (start, expected) in [
+            (10.0, vec![10.0, 50.0, 20.0, 100.0, 30.0, 180.0]),
+            (-10.0, vec![-10.0, -50.0, 0.0, 0.0, 10.0, 80.0]),
+        ] {
+            let parsed = parse_pandapower_json(&pp_net(vec![
+                bus_table(json!([0])),
+                (
+                    "gen",
+                    pp_frame(
+                        &["bus", "p_mw", "slack"],
+                        json!([0]),
+                        json!([[0, 10.0, true]]),
+                    ),
+                ),
+                (
+                    "pwl_cost",
+                    pp_frame(
+                        &["power_type", "element", "et", "points"],
+                        json!([0]),
+                        json!([[
+                            "p",
+                            0,
+                            "gen",
+                            [
+                                [start, start + 10.0, 5.0],
+                                [start + 10.0, start + 20.0, 8.0]
+                            ]
+                        ]]),
+                    ),
+                ),
+            ]))
+            .unwrap();
+            assert_eq!(
+                parsed.network.generators()[0].cost.as_ref().unwrap().coeffs,
+                expected
+            );
+            let out = write_pandapower_json(&parsed.network);
+            assert!(
+                !out.diagnostics
+                    .iter()
+                    .any(|d| d.message().contains("absolute objective shifts"))
+            );
+            let again = parse_pandapower_json(&out.text).unwrap();
+            assert_eq!(
+                again.network.generators()[0].cost,
+                parsed.network.generators()[0].cost
+            );
+        }
+    }
+
+    #[test]
+    fn pwl_cost_anchor_rounding_is_not_a_lost_constant() {
+        let mut net = test_net(vec![test_bus(1, BusType::Ref)]);
+        let level = 0.1 * 0.9;
+        net.generators_mut().push(test_gen(
+            1,
+            Some(GenCost {
+                model: 1,
+                startup: 0.0,
+                shutdown: 0.0,
+                ncost: 2,
+                coeffs: vec![0.1, level, 0.4, level + (0.4 - 0.1) * 0.9],
+            }),
+        ));
+        let out = write_pandapower_json(&net);
+        assert!(
+            !out.diagnostics
+                .iter()
+                .any(|d| d.message().contains("absolute objective shifts"))
+        );
+    }
+
+    #[test]
+    fn pwl_cost_zero_first_cost_can_shift_native_objective() {
+        let mut net = test_net(vec![test_bus(1, BusType::Ref)]);
+        net.generators_mut().push(test_gen(
+            1,
+            Some(GenCost {
+                model: 1,
+                startup: 0.0,
+                shutdown: 0.0,
+                ncost: 2,
+                coeffs: vec![10.0, 0.0, 20.0, 50.0],
+            }),
+        ));
+        let out = write_pandapower_json(&net);
+        assert!(
+            out.diagnostics
+                .iter()
+                .any(|d| d.message().contains("absolute objective shifts"))
+        );
+        let again = parse_pandapower_json(&out.text).unwrap();
+        assert_eq!(
+            again.network.generators()[0].cost.as_ref().unwrap().coeffs,
+            vec![10.0, 50.0, 20.0, 100.0]
+        );
     }
 
     #[test]
