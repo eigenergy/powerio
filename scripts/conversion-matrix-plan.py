@@ -18,8 +18,12 @@ def load(path):
     if len({cell["key"] for cell in cells}) != len(cells):
         raise ValueError("duplicate matrix cell keys")
     for cell in cells:
-        if cell["grade"] not in LEVELS or not isinstance(cell["cases"], list) or not cell["cases"] or not all(isinstance(case, str) for case in cell["cases"]):
-            raise ValueError("invalid grade or empty coverage")
+        cases = cell["cases"]
+        if cell["grade"] not in LEVELS or not isinstance(cases, list) or not all(isinstance(case, str) for case in cases):
+            raise ValueError("invalid grade or coverage")
+        # Failed source acquisition leaves both source and conversion cells empty.
+        if not cases and not (cell["grade"] == "failed" and cell.get("passed") is False and report.get("passed") is False):
+            raise ValueError("empty coverage requires a failed cell and suite")
     return report, hashlib.sha256(raw).hexdigest()
 
 
