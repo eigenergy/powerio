@@ -683,6 +683,8 @@ pub struct DcOpfInstance {
 pub struct AcDcOpfInstance {
     pub network: Box<BalancedNetwork>,
     pub profile: powerio_prob::AcDcOpfProfile,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub loss_modes: Vec<powerio_prob::AcDcStationLossMode>,
     #[serde(
         default,
         skip_serializing_if = "powerio_prob::AcDcAngleReferencePolicy::is_declared"

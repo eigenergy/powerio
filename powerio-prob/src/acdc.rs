@@ -29,6 +29,32 @@ pub enum AcDcOpfProfile {
     /// losses and existing auxiliary bounds. Explicit interpretation, not an
     /// automatic conversion of arbitrary imported source coordinates.
     PhysicalCoordinatesAcpVscV1,
+    /// Physical local bases and declared current limits, with an explicit
+    /// loss mode for every active station. Rectifier/inverter select their
+    /// named quadratic coefficient and require valve AC P >= 0 / <= 0.
+    /// At zero P the declared mode still selects the curve; no automatic switch.
+    FixedModePhysicalAcpVscV1,
+}
+
+/// Fixed valve-side loss branch, independent of PCC/DC power signs and PF controls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AcDcValveLossMode {
+    /// Select rectifier loss coefficient; valve AC withdrawal is nonnegative.
+    Rectifier,
+    /// Select inverter loss coefficient; valve AC withdrawal is nonpositive.
+    Inverter,
+}
+
+/// One explicit loss mode keyed by the active station's persistent component ID.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AcDcStationLossMode {
+    pub component: String,
+    pub mode: AcDcValveLossMode,
 }
 
 /// Voltage/impedance interpretation fixed by the selected OPF profile.
@@ -63,16 +89,18 @@ impl AcDcOpfProfile {
             Self::PowerModelsAcDc0101AcpVscV1 | Self::DeclaredCurrentAcpVscV1 => {
                 AcDcCoordinatePolicy::SourcePerUnit
             }
-            Self::PhysicalCoordinatesAcpVscV1 => AcDcCoordinatePolicy::PhysicalLocalBases,
+            Self::PhysicalCoordinatesAcpVscV1 | Self::FixedModePhysicalAcpVscV1 => {
+                AcDcCoordinatePolicy::PhysicalLocalBases
+            }
         }
     }
     #[must_use]
     pub const fn current_limit_policy(self) -> AcDcCurrentLimitPolicy {
         match self {
             Self::PowerModelsAcDc0101AcpVscV1 => AcDcCurrentLimitPolicy::PowerModelsAcDc0101Repair,
-            Self::DeclaredCurrentAcpVscV1 | Self::PhysicalCoordinatesAcpVscV1 => {
-                AcDcCurrentLimitPolicy::Declared
-            }
+            Self::DeclaredCurrentAcpVscV1
+            | Self::PhysicalCoordinatesAcpVscV1
+            | Self::FixedModePhysicalAcpVscV1 => AcDcCurrentLimitPolicy::Declared,
         }
     }
 }
@@ -241,6 +269,7 @@ pub struct AcDcOpfInstance {
     profile: AcDcOpfProfile,
     angle_reference_policy: AcDcAngleReferencePolicy,
     initial_point: Option<AcDcOperatingPoint>,
+    loss_modes: Vec<AcDcStationLossMode>,
 }
 fn validate_coordinate_bases(
     network: &BalancedNetwork,
@@ -259,14 +288,65 @@ fn validate_coordinate_bases(
     Ok(())
 }
 
+fn validate_loss_modes(
+    owner: &powerio_tx::acdc::BalancedAcDcEquipment,
+    profile: AcDcOpfProfile,
+    loss_modes: &mut [AcDcStationLossMode],
+) -> Result<(), Error> {
+    if profile == AcDcOpfProfile::FixedModePhysicalAcpVscV1 {
+        let active: BTreeSet<_> = owner
+            .stations
+            .iter()
+            .filter(|s| s.in_service)
+            .map(|s| s.component.to_string())
+            .collect();
+        let selected: BTreeSet<_> = loss_modes.iter().map(|m| m.component.clone()).collect();
+        if selected != active || selected.len() != loss_modes.len() {
+            return Err(invalid(
+                "fixed loss modes must identify every active station exactly once",
+            ));
+        }
+        for station in owner.stations.iter().filter(|s| s.in_service) {
+            let mode = loss_modes
+                .iter()
+                .find(|m| m.component == station.component.to_string())
+                .ok_or_else(|| invalid("station loss mode missing"))?
+                .mode;
+            let incompatible = match mode {
+                AcDcValveLossMode::Rectifier => station.valve_active_mw.max < 0.0,
+                AcDcValveLossMode::Inverter => station.valve_active_mw.min > 0.0,
+            };
+            if incompatible {
+                return Err(invalid(
+                    "fixed loss mode conflicts with declared valve active-power bounds",
+                ));
+            }
+        }
+        loss_modes.sort_by(|a, b| a.component.cmp(&b.component));
+    } else if !loss_modes.is_empty() {
+        return Err(invalid(
+            "loss modes require the fixed-mode physical profile",
+        ));
+    }
+    Ok(())
+}
+
 impl AcDcOpfInstance {
     /// Select the profile explicitly. Unsupported equipment is refused rather
     /// than converted into an AC-only optimization.
     // Base identity is exact: a tolerance would silently rebase source coordinates.
     #[allow(clippy::float_cmp)]
-    pub fn from_network(
+    pub fn from_network(network: BalancedNetwork, profile: AcDcOpfProfile) -> Result<Self, Error> {
+        Self::from_network_with_loss_modes(network, profile, Vec::new())
+    }
+    /// Construct with complete active-station loss modes. Existing profiles
+    /// reject nonempty modes; fixed-mode profiles reject missing, duplicate,
+    /// inactive or unknown stations and empty sign/declared-limit intersections.
+    #[allow(clippy::float_cmp)]
+    pub fn from_network_with_loss_modes(
         mut network: BalancedNetwork,
         profile: AcDcOpfProfile,
+        mut loss_modes: Vec<AcDcStationLossMode>,
     ) -> Result<Self, Error> {
         network.assign_missing_component_ids();
         network.validate().map_err(|e| invalid(e.to_string()))?;
@@ -357,11 +437,13 @@ impl AcDcOpfInstance {
             }
         }
         validate_coordinate_bases(&network, profile.coordinate_policy())?;
+        validate_loss_modes(owner, profile, &mut loss_modes)?;
         Ok(Self {
             network,
             profile,
             angle_reference_policy: AcDcAngleReferencePolicy::Declared,
             initial_point: None,
+            loss_modes,
         })
     }
     #[must_use]
@@ -371,6 +453,11 @@ impl AcDcOpfInstance {
     #[must_use]
     pub const fn profile(&self) -> AcDcOpfProfile {
         self.profile
+    }
+    /// Canonically sorted active-station modes; empty under existing profiles.
+    #[must_use]
+    pub fn loss_modes(&self) -> &[AcDcStationLossMode] {
+        &self.loss_modes
     }
     /// Select numerical angle references without changing any source bus kind.
     #[must_use]

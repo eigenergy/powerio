@@ -159,3 +159,26 @@ to Tellegen's existing `codex/acdc-native-case5` branch. The new profile retains
 LossCinv in both directions and reference auxiliary bounds. General physical
 rebasing, physical pole/return topology, native coupled PF and directional loss
 selection remain separate gates. Reader PR #822 is unchanged and draft.
+
+### Fixed valve-loss modes (2026-11-10)
+
+The separately selected `FixedModePhysicalAcpVscV1` stores a complete,
+identity-keyed mode list. Rectifier selects Crec and valve AC withdrawal P >= 0;
+inverter selects Cinv and P <= 0. At P = 0 the declared branch remains selected.
+Existing profiles retain their curves, limits, tokens and omitted-field IR shape.
+Only the unreleased IR schema changed; published snapshots are byte-identical.
+
+Validation: 14 coupled model/IR tests, 11 MATPOWER-extension tests, 146 matrix
+library tests and 46 problem library tests pass. Changed library Clippy with
+`schema,matrix` passes. All seven CI Clippy targets were run: all C ABI variants
+and Python pass; workspace/no-SINCAL remain blocked by existing `float_cmp`
+findings in PSS/E/PMD tests, and matrix-gridfm by `synth_facade_parity.rs`.
+No suppressions were added to these unrelated tests.
+
+The exact profile enum extracted from frozen `ba1f9fc9` was compiled with its
+Serde snake-case decoder: all three existing tokens decode, and the new token
+is rejected. Extracted enum SHA256:
+`d20d020207594ecf56c33f8ac493539e19d952357a04866f0cf84b90a038499a`.
+This is a profile-token refusal check; current full instance and solution IR
+round trips also test missing/unknown/null modes and downgrade refusal.
+Numerical branch qualification belongs to the Tellegen validation harness.

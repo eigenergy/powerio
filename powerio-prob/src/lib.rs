@@ -78,5 +78,6 @@ pub use update::{
 mod acdc;
 pub use acdc::{
     AcDcAngleReferencePolicy, AcDcCoordinatePolicy, AcDcCurrentLimitPolicy, AcDcOperatingPoint,
-    AcDcOpfInstance, AcDcOpfProfile, AcDcOpfSolution, AcDcQuantity, AcDcValue,
+    AcDcOpfInstance, AcDcOpfProfile, AcDcOpfSolution, AcDcQuantity, AcDcStationLossMode, AcDcValue,
+    AcDcValveLossMode,
 };

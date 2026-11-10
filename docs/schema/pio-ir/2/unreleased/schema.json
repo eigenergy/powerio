@@ -494,6 +494,12 @@
             "null"
           ]
         },
+        "loss_modes": {
+          "items": {
+            "$ref": "#/$defs/AcDcStationLossMode"
+          },
+          "type": "array"
+        },
         "network": {
           "$ref": "#/$defs/BalancedNetwork"
         },
@@ -523,6 +529,11 @@
         {
           "const": "physical_coordinates_acp_vsc_v1",
           "description": "Local physical voltage bases: PCC on its AC bus base; filter/valve and\nconverter-side station impedances on ac_base_kv; DC resistance on the\nfrom-bus base. Tap = physical turns ratio * converter_base / PCC_base.\nWeighted ideal bypass/DC equations; declared current limits, inverter\nlosses and existing auxiliary bounds. Explicit interpretation, not an\nautomatic conversion of arbitrary imported source coordinates.",
+          "type": "string"
+        },
+        {
+          "const": "fixed_mode_physical_acp_vsc_v1",
+          "description": "Physical local bases and declared current limits, with an explicit\nloss mode for every active station. Rectifier/inverter select their\nnamed quadratic coefficient and require valve AC P >= 0 / <= 0.\nAt zero P the declared mode still selects the curve; no automatic switch.",
           "type": "string"
         }
       ]
@@ -703,6 +714,23 @@
         }
       ]
     },
+    "AcDcStationLossMode": {
+      "additionalProperties": false,
+      "description": "One explicit loss mode keyed by the active station's persistent component ID.",
+      "properties": {
+        "component": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/AcDcValveLossMode"
+        }
+      },
+      "required": [
+        "component",
+        "mode"
+      ],
+      "type": "object"
+    },
     "AcDcValue": {
       "additionalProperties": false,
       "description": "One identity-keyed scalar, never a solver row or column.",
@@ -736,6 +764,21 @@
         "value"
       ],
       "type": "object"
+    },
+    "AcDcValveLossMode": {
+      "description": "Fixed valve-side loss branch, independent of PCC/DC power signs and PF controls.",
+      "oneOf": [
+        {
+          "const": "rectifier",
+          "description": "Select rectifier loss coefficient; valve AC withdrawal is nonnegative.",
+          "type": "string"
+        },
+        {
+          "const": "inverter",
+          "description": "Select inverter loss coefficient; valve AC withdrawal is nonpositive.",
+          "type": "string"
+        }
+      ]
     },
     "AcOpfInstance": {
       "additionalProperties": false,

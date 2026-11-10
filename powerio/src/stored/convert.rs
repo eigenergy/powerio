@@ -1146,14 +1146,19 @@ fn encode_ac_dc_opf_instance(i: &powerio_prob::AcDcOpfInstance) -> dto::AcDcOpfI
     dto::AcDcOpfInstance {
         network: Box::new(i.network().clone()),
         profile: i.profile(),
+        loss_modes: i.loss_modes().to_vec(),
         angle_reference_policy: i.angle_reference_policy(),
         initial_point: i.initial_point().map(|p| p.values().to_vec()),
     }
 }
 fn decode_ac_dc_opf_instance(i: dto::AcDcOpfInstance) -> Result<powerio_prob::AcDcOpfInstance> {
-    let mut instance = powerio_prob::AcDcOpfInstance::from_network(*i.network, i.profile)
-        .map_err(|e| invalid(e.to_string()))?
-        .with_angle_reference_policy(i.angle_reference_policy);
+    let mut instance = powerio_prob::AcDcOpfInstance::from_network_with_loss_modes(
+        *i.network,
+        i.profile,
+        i.loss_modes,
+    )
+    .map_err(|e| invalid(e.to_string()))?
+    .with_angle_reference_policy(i.angle_reference_policy);
     if let Some(values) = i.initial_point {
         let point = powerio_prob::AcDcOperatingPoint::new(&instance, values)
             .map_err(|e| invalid(e.to_string()))?;

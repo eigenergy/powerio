@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add an explicit fixed-mode physical AC/DC OPF profile with identity-keyed
+  rectifier/inverter loss selection and matching valve active-power sign bounds.
+  Existing profiles and serialized defaults retain their semantics.
+
 - Add explicit coupled AC/DC OPF intent, typed operating points and stored primal
   results, with PowerModelsACDC reference-compatible numerical preparation and
   separately selected declared-current and physical local-coordinate profiles,

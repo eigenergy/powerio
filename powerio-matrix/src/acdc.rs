@@ -4,7 +4,7 @@
 use crate::{AcOpfAssemblyOptions, AcOpfPreparation, Result, build_ac_opf_preparation};
 use powerio_prob::{
     AcDcAngleReferencePolicy, AcDcCoordinatePolicy, AcDcCurrentLimitPolicy, AcDcOpfInstance,
-    AcDcQuantity, AcOpfInstance,
+    AcDcQuantity, AcDcValveLossMode, AcOpfInstance,
 };
 use powerio_tx::acdc::{AcDcConverterStation, AcDcLimits, DcEquivalentBranch, DcEquivalentBus};
 use serde::Serialize;
@@ -34,6 +34,9 @@ pub struct AcDcStationPolicy {
     pub pcc_base_kv: f64,
     pub declared_current_limit_pu: f64,
     pub effective_current_limit_pu: f64,
+    /// Explicit branch selection; omitted for unchanged inverter-only profiles.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loss_mode: Option<AcDcValveLossMode>,
     pub loss_coefficients_pu: [f64; 3],
     pub declared_rectifier_quadratic_ohm: f64,
     pub declared_inverter_quadratic_ohm: f64,
@@ -72,10 +75,17 @@ impl AcDcStationPreparation {
             PccReactivePower | TransformerReactivePowerTo | ReactorReactivePowerFrom => {
                 (-2.0 * q, 2.0 * q)
             }
-            ValveActivePower => (
-                s.valve_active_mw.min / self.base_mva,
-                s.valve_active_mw.max / self.base_mva,
-            ),
+            ValveActivePower => {
+                let mut lo = s.valve_active_mw.min / self.base_mva;
+                let mut hi = s.valve_active_mw.max / self.base_mva;
+                match self.policy.loss_mode {
+                    Some(AcDcValveLossMode::Rectifier) => lo = lo.max(0.0),
+                    Some(AcDcValveLossMode::Inverter) => hi = hi.min(0.0),
+                    None => {}
+                    _ => return None, // preparation rejects unsupported modes
+                }
+                (lo, hi)
+            }
             ValveReactivePower => (
                 s.valve_reactive_mvar.min / self.base_mva,
                 s.valve_reactive_mvar.max / self.base_mva,
@@ -339,6 +349,20 @@ fn prepare_stations(
                 reason: "unrepresentable physical station base ratio".into(),
             });
         }
+        let loss_mode = instance
+            .loss_modes()
+            .iter()
+            .find(|m| m.component == s.component.to_string())
+            .map(|m| m.mode);
+        let quadratic = match loss_mode {
+            Some(AcDcValveLossMode::Rectifier) => s.losses.rectifier_quadratic_ohm,
+            Some(AcDcValveLossMode::Inverter) | None => s.losses.inverter_quadratic_ohm,
+            _ => {
+                return Err(crate::Error::UnsupportedOpfObjective {
+                    reason: "unsupported valve loss mode".into(),
+                });
+            }
+        };
         let policy = AcDcStationPolicy {
             coordinate_policy,
             transformer_bypass_voltage_ratio: bypass_ratio,
@@ -355,10 +379,11 @@ fn prepare_stations(
             pcc_base_kv: pcc.base_kv,
             declared_current_limit_pu: s.valve_current_limit_pu,
             effective_current_limit_pu,
+            loss_mode,
             loss_coefficients_pu: [
                 s.losses.constant_mw / owner.base_mva,
                 s.losses.linear_kv / (3.0_f64.sqrt() * s.ac_base_kv),
-                s.losses.inverter_quadratic_ohm * owner.base_mva / (3.0 * s.ac_base_kv.powi(2)),
+                quadratic * owner.base_mva / (3.0 * s.ac_base_kv.powi(2)),
             ],
             declared_rectifier_quadratic_ohm: s.losses.rectifier_quadratic_ohm,
             declared_inverter_quadratic_ohm: s.losses.inverter_quadratic_ohm,

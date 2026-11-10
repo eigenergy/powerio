@@ -192,3 +192,25 @@ LossCinv in both directions and the reference auxiliary bounds remain explicit
 limitations. No profile infers a physical pole/return topology. The new required
 profile token survives instance/result IR; older decoders reject it. Consumers
 must implement the recorded coordinate policy across every equipment block.
+
+### Explicit valve-loss modes
+
+`FixedModePhysicalAcpVscV1` retains the physical local-coordinate and declared
+current policies, and requires `from_network_with_loss_modes` with exactly one
+`AcDcStationLossMode` per active station, keyed by persistent component ID.
+`Rectifier` selects `rectifier_quadratic_ohm` and intersects the declared valve
+active-power bounds with P >= 0; `Inverter` selects `inverter_quadratic_ohm` and
+intersects them with P <= 0. P is AC withdrawal at the valve, not PCC power or
+DC injection. An empty bound intersection is refused.
+
+At P = 0 the declared mode still selects its curve, including when reactive
+current is nonzero. Zero current retains the constant loss. This is a fixed
+operating-mode OPF, not an automatic directional switch or a PF control.
+The caller must select modes before solving; economic reversal between branches
+requires a separately designed discrete or complementarity model.
+
+Intent, initial points, and solutions retain the mode list, canonically sorted
+by identity. Missing, duplicate, unknown and inactive station assignments refuse.
+The new required profile token prevents an old decoder from silently applying
+Cinv; existing profiles reject mode overrides and omit the empty field from IR.
+Their tokens, equations, bounds and serialized defaults are unchanged.

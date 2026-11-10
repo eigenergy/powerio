@@ -481,3 +481,170 @@ fn physical_profile_rejects_missing_or_unrepresentable_bases() {
         AcDcOpfInstance::from_network(net, AcDcOpfProfile::PhysicalCoordinatesAcpVscV1).unwrap();
     assert!(build_ac_dc_opf_preparation(&physical).is_err());
 }
+
+fn fixed_modes(net: &BalancedNetwork) -> Vec<AcDcStationLossMode> {
+    net.ac_dc_equivalent()
+        .unwrap()
+        .stations
+        .iter()
+        .filter(|s| s.in_service)
+        .enumerate()
+        .map(|(i, s)| AcDcStationLossMode {
+            component: s.component.to_string(),
+            mode: if i % 2 == 0 {
+                AcDcValveLossMode::Rectifier
+            } else {
+                AcDcValveLossMode::Inverter
+            },
+        })
+        .collect()
+}
+#[test]
+fn fixed_loss_mode_is_explicit_complete_and_canonically_serialized() {
+    let old = instance();
+    let net = old.network().clone();
+    let modes = fixed_modes(&net);
+    let profile = AcDcOpfProfile::FixedModePhysicalAcpVscV1;
+    assert!(AcDcOpfInstance::from_network(net.clone(), profile).is_err());
+    for bad in [
+        vec![],
+        modes[..modes.len() - 1].to_vec(),
+        vec![modes[0].clone(); modes.len()],
+        {
+            let mut m = modes.clone();
+            m[0].component = "ac_dc_converter_station/missing".into();
+            m
+        },
+    ] {
+        assert!(AcDcOpfInstance::from_network_with_loss_modes(net.clone(), profile, bad).is_err());
+    }
+    for p in [
+        old.profile(),
+        AcDcOpfProfile::DeclaredCurrentAcpVscV1,
+        AcDcOpfProfile::PhysicalCoordinatesAcpVscV1,
+    ] {
+        assert!(
+            AcDcOpfInstance::from_network_with_loss_modes(net.clone(), p, modes.clone()).is_err()
+        );
+        assert!(
+            stored(
+                AcDcOpfInstance::from_network(net.clone(), p)
+                    .unwrap()
+                    .into()
+            )["value"]["data"]
+                .get("loss_modes")
+                .is_none()
+        );
+    }
+    let selected =
+        AcDcOpfInstance::from_network_with_loss_modes(net.clone(), profile, modes.clone()).unwrap();
+    let mut reversed = modes;
+    reversed.reverse();
+    let reordered =
+        AcDcOpfInstance::from_network_with_loss_modes(net.clone(), profile, reversed).unwrap();
+    assert_eq!(selected.loss_modes(), reordered.loss_modes());
+    let point = point(&selected);
+    let sol = AcDcOpfSolution::new(
+        Arc::new(selected.clone()),
+        point.clone(),
+        42.0,
+        Termination::Converged,
+        Some("test".into()),
+    )
+    .unwrap();
+    for v in [
+        PioValue::from(selected.clone().with_initial_point(point).unwrap()),
+        PioValue::from(sol),
+    ] {
+        let doc = stored(v);
+        assert_eq!(stored(read(&doc).unwrap().value().clone()), doc);
+    }
+    let doc = stored(selected.into());
+    assert_eq!(
+        doc["value"]["data"]["profile"],
+        "fixed_mode_physical_acp_vsc_v1"
+    );
+    for value in [serde_json::json!("automatic"), serde_json::Value::Null] {
+        let mut bad = doc.clone();
+        bad["value"]["data"]["loss_modes"][0]["mode"] = value;
+        assert!(read(&bad).is_err());
+    }
+    let mut bad = doc.clone();
+    bad["value"]["data"]
+        .as_object_mut()
+        .unwrap()
+        .remove("loss_modes");
+    assert!(read(&bad).is_err());
+    let mut bad = doc;
+    bad["value"]["data"]["profile"] = serde_json::json!("physical_coordinates_acp_vsc_v1");
+    assert!(read(&bad).is_err());
+    let mut inactive = net.clone();
+    let mut owner = inactive.ac_dc_equivalent().unwrap().clone();
+    owner.stations[0].in_service = false;
+    inactive.set_ac_dc_equivalent(Some(owner)).unwrap();
+    assert!(
+        AcDcOpfInstance::from_network_with_loss_modes(inactive.clone(), profile, fixed_modes(&net))
+            .is_err()
+    );
+    assert!(
+        AcDcOpfInstance::from_network_with_loss_modes(
+            inactive.clone(),
+            profile,
+            fixed_modes(&inactive)
+        )
+        .is_ok()
+    );
+}
+#[test]
+#[cfg(feature = "matrix")]
+fn fixed_loss_preparation_selects_coefficients_and_intersects_valve_bounds() {
+    let profile = AcDcOpfProfile::FixedModePhysicalAcpVscV1;
+    for mode in [AcDcValveLossMode::Rectifier, AcDcValveLossMode::Inverter] {
+        let mut net = instance().network().clone();
+        let mut owner = net.ac_dc_equivalent().unwrap().clone();
+        for s in &mut owner.stations {
+            s.losses.rectifier_quadratic_ohm = 0.3;
+            s.losses.inverter_quadratic_ohm = 1.3;
+            s.valve_active_mw.min = -25.;
+            s.valve_active_mw.max = 50.;
+        }
+        net.set_ac_dc_equivalent(Some(owner)).unwrap();
+        let modes = fixed_modes(&net)
+            .into_iter()
+            .map(|m| AcDcStationLossMode { mode, ..m })
+            .collect();
+        let i = AcDcOpfInstance::from_network_with_loss_modes(net.clone(), profile, modes).unwrap();
+        let prepared = build_ac_dc_opf_preparation(&i).unwrap();
+        for s in &prepared.stations {
+            assert_eq!(s.policy.loss_mode, Some(mode));
+            let c = if mode == AcDcValveLossMode::Rectifier {
+                0.3
+            } else {
+                1.3
+            };
+            let expected = c * net.base_mva() / (3. * s.source.ac_base_kv.powi(2));
+            assert_eq!(s.policy.loss_coefficients_pu[2], expected);
+            let bounds = s.bounds(AcDcQuantity::ValveActivePower).unwrap();
+            assert_eq!(
+                (bounds.min, bounds.max),
+                if mode == AcDcValveLossMode::Rectifier {
+                    (0., 50. / net.base_mva())
+                } else {
+                    (-25. / net.base_mva(), 0.)
+                }
+            );
+        }
+        let mut owner = net.ac_dc_equivalent().unwrap().clone();
+        let s = &mut owner.stations[0];
+        if mode == AcDcValveLossMode::Rectifier {
+            s.valve_active_mw.max = -1.;
+        } else {
+            s.valve_active_mw.min = 1.;
+        }
+        net.set_ac_dc_equivalent(Some(owner)).unwrap();
+        assert!(
+            AcDcOpfInstance::from_network_with_loss_modes(net, profile, i.loss_modes().to_vec())
+                .is_err()
+        );
+    }
+}
