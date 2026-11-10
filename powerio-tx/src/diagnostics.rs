@@ -186,6 +186,10 @@ pub mod codes {
     emit_family!(EMIT_UNSUPPORTED, "UNSUPPORTED", "a read only format");
 
     powerio_core::diagnostic_codes! {
+        REQUEST_ACDC_UNSUPPORTED = "REQUEST.ACDC.UNSUPPORTED", Error,
+            "the operation has no qualified balanced AC/DC model", category = Request;
+        PARSE_MATPOWER_ACDC_MALFORMED = "PARSE.MATPOWER_ACDC.MALFORMED", Error,
+            "invalid or unsupported MATPOWER AC/DC declarations", category = Parse;
         REQUEST_SINCAL_PROFILE_REQUIRED = "REQUEST.SINCAL.PROFILE_REQUIRED", Error,
             "SINCAL requires an explicit electrical profile", category = Request;
         REQUEST_SINCAL_FEATURE_DISABLED = "REQUEST.SINCAL.FEATURE_DISABLED", Error,
@@ -586,7 +590,7 @@ impl TargetFormat {
     #[must_use]
     pub fn emit_family(self) -> &'static EmitFamily {
         match self {
-            TargetFormat::Matpower => &codes::EMIT_MATPOWER,
+            TargetFormat::Matpower | TargetFormat::MatpowerAcDc => &codes::EMIT_MATPOWER,
             TargetFormat::Psse { .. } | TargetFormat::PsseRawx => &codes::EMIT_PSSE,
             TargetFormat::Pslf => &codes::EMIT_PSLF,
             TargetFormat::PandapowerJson => &codes::EMIT_PANDAPOWER,

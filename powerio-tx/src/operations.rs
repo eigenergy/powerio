@@ -116,6 +116,10 @@ impl Selector {
 impl BalancedNetwork {
     /// Carve out the sub-network whose buses match `sel`.
     ///
+    /// For AC/DC equivalents this is an explicit AC-terminal projection: the
+    /// DC grid is retained, and converter stations outside the kept AC buses
+    /// are removed. This does not establish feasibility of the remaining grid.
+    ///
     /// In-scope buses keep their loads, shunts, generators, and storage; a branch,
     /// HVDC line, or 3-winding transformer is kept when every bus it touches is
     /// kept. With `keep_boundary`, a branch or HVDC line straddling the selection
@@ -304,6 +308,11 @@ impl BalancedNetwork {
             base_frequency: self.base_frequency(),
             geo: self.geo().clone(),
             case_metadata: self.case_metadata().clone(),
+            ac_dc_equivalent: self.ac_dc_equivalent().map(|e| {
+                let mut e = e.clone();
+                e.stations.retain(|c| kept.contains(&c.ac_bus));
+                std::sync::Arc::new(e)
+            }),
             detailed_connectivity: self.detailed_connectivity().clone(),
             generated_uids: self.generated_uids().clone(),
             buses: buses.into(),
@@ -403,6 +412,7 @@ impl BalancedNetwork {
                 *bus = map(*bus);
             }
         };
+        self.update_acdc_stations(|c| moved(c.ac_bus), |c| set(&mut c.ac_bus));
         let tables = self.tables_mut();
         remap_table(&mut tables.loads, |l| moved(l.bus), |l| set(&mut l.bus));
         remap_table(
@@ -575,6 +585,12 @@ impl BalancedNetwork {
         let Some(bus) = self.buses().iter().find(|b| b.id == m) else {
             return false;
         };
+        if self
+            .ac_dc_equivalent()
+            .is_some_and(|e| e.stations.iter().any(|c| c.ac_bus == m))
+        {
+            return false;
+        }
         if bus.kind == BusType::Ref {
             return false;
         }
@@ -813,7 +829,13 @@ impl BalancedNetwork {
     /// on in-service equipment only, so opening the last branch into a bus makes it
     /// eligible.
     pub fn retype_isolated_buses(&mut self) -> usize {
-        let mut connected: HashSet<BusId> = HashSet::new();
+        let mut connected: HashSet<BusId> = self
+            .ac_dc_equivalent()
+            .into_iter()
+            .flat_map(|e| e.stations.iter())
+            .filter(|c| c.in_service)
+            .map(|c| c.ac_bus)
+            .collect();
         for br in self.branches().iter().filter(|b| b.in_service) {
             connected.insert(br.from);
             connected.insert(br.to);

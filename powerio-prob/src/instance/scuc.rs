@@ -41,6 +41,9 @@ impl AcScucInstance {
     /// A referenced component is absent, an identity is repeated, or a time
     /// varying record disagrees with the horizon.
     pub fn new(network: BalancedNetwork, inputs: ScucInputs) -> Result<Self, Error> {
+        network
+            .require_no_ac_dc_equivalent()
+            .map_err(|e| Error::new(e.code(), e.to_string()))?;
         validate_inputs(&network, &inputs)?;
         Ok(Self { network, inputs })
     }

@@ -64,6 +64,7 @@ pub enum TransmissionFormat {
     SincalBalanced,
     /// MG-RAVENS JSON, the LANL CIM-derived interchange schema, balanced profile.
     RavensJson,
+    MatpowerAcDc,
 }
 
 impl TransmissionFormat {
@@ -71,6 +72,7 @@ impl TransmissionFormat {
         match self {
             Self::SincalBalanced => "sincal-balanced",
             Self::Matpower => "matpower",
+            Self::MatpowerAcDc => "matpower-acdc",
             Self::PowerModelsJson => "powermodels-json",
             Self::EgretJson => "egret-json",
             Self::Psse => "psse",
@@ -172,6 +174,7 @@ pub fn parse_transmission_format(name: &str) -> Option<TransmissionFormat> {
     let key = canonical_key(name);
     match key.as_str() {
         "sincalbalanced" => Some(TransmissionFormat::SincalBalanced),
+        "matpoweracdc" => Some(TransmissionFormat::MatpowerAcDc),
         "matpower" | "m" => Some(TransmissionFormat::Matpower),
         "powermodelsjson" | "powermodels" | "pm" => Some(TransmissionFormat::PowerModelsJson),
         "egretjson" | "egret" => Some(TransmissionFormat::EgretJson),

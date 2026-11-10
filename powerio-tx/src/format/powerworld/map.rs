@@ -166,6 +166,7 @@ pub(in crate::format) fn parse_powerworld_source(
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         geo: super::super::geographic_meta(&buses),
         case_metadata: crate::network::CaseMetadata::default(),
+        ac_dc_equivalent: None,
         detailed_connectivity: None,
         generated_uids: std::sync::Arc::default(),
         buses: buses.into(),

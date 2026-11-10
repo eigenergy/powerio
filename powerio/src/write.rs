@@ -265,6 +265,18 @@ where
     T: Clone + Into<PioValue>,
 {
     let module = module.clone().map_value(Into::into);
+    let extended = match module.value() {
+        PioValue::BalancedNetwork(n) => n.ac_dc_equivalent().is_some(),
+        PioValue::BalancedOperatingPoint(p) => p.network().ac_dc_equivalent().is_some(),
+        _ => false,
+    };
+    if extended
+        && powerio_tx::format::parse_target_format(format)
+            != Some(powerio_tx::TargetFormat::MatpowerAcDc)
+    {
+        let e = powerio_tx::Error::UnsupportedAcDc;
+        return Err(Error::new(e.code(), e.to_string()));
+    }
     let destination = output.into_destination()?;
     #[cfg(feature = "sincal")]
     if let Some(options) = &options.sincal_experimental {

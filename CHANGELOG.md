@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Read and fresh-write the PowerModelsACDC MATPOWER-extension variant as typed AC/DC equipment,
+  with required-capability IR protection and explicit refusal by unsupported calculations.
+
 ## 0.11.10
 
 **OpenDSS**

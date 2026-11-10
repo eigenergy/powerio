@@ -679,6 +679,7 @@ fn build_from_document(document: Document, name_hint: Option<&str>) -> Result<Ba
         geo,
         case_metadata,
         detailed_connectivity,
+        ac_dc_equivalent: None,
         generated_uids: std::sync::Arc::default(),
         buses: buses.into(),
         loads: loads.into(),

@@ -437,6 +437,7 @@ fn generator_identity_matches(
 }
 
 fn validate_snapshot_inputs(net: &BalancedNetwork, scenario: i64) -> Result<()> {
+    net.require_no_ac_dc_equivalent()?;
     if net.is_normalized() {
         return Err(Error::NormalizedGridfmSnapshot { scenario });
     }

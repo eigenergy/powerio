@@ -98,6 +98,9 @@ impl DcPfInstance {
         mut network: BalancedNetwork,
         hvdc_treatment: HvdcTreatment,
     ) -> Result<Self, Error> {
+        network
+            .require_no_ac_dc_equivalent()
+            .map_err(|e| Error::new(e.code(), e.to_string()))?;
         network.assign_missing_component_ids();
         require_reference(&network)?;
         let totals = aggregate_bus_elements(&network, hvdc_treatment);
@@ -145,6 +148,9 @@ impl DcPfInstance {
     /// The replacement has no reference bus or changes an identity layout used
     /// by the initial point.
     pub fn with_network(mut self, mut network: BalancedNetwork) -> Result<Self, Error> {
+        network
+            .require_no_ac_dc_equivalent()
+            .map_err(|e| Error::new(e.code(), e.to_string()))?;
         network.assign_missing_component_ids();
         let mut replacement = Self::from_network_with_hvdc(network.clone(), self.hvdc_treatment)?
             .with_branch_susceptance_formula(self.branch_susceptance_formula);
@@ -235,6 +241,9 @@ impl AcPfInstance {
         specifications: Vec<AcBusSpecification>,
         hvdc_treatment: HvdcTreatment,
     ) -> Result<Self, Error> {
+        network
+            .require_no_ac_dc_equivalent()
+            .map_err(|e| Error::new(e.code(), e.to_string()))?;
         network.assign_missing_component_ids();
         if specifications.len() != network.buses().len() {
             return Err(Error::new(
@@ -290,6 +299,9 @@ impl AcPfInstance {
         mut network: BalancedNetwork,
         hvdc_treatment: HvdcTreatment,
     ) -> Result<Self, Error> {
+        network
+            .require_no_ac_dc_equivalent()
+            .map_err(|e| Error::new(e.code(), e.to_string()))?;
         network.assign_missing_component_ids();
         require_reference(&network)?;
         let totals = aggregate_bus_elements(&network, hvdc_treatment);
@@ -333,6 +345,9 @@ impl AcPfInstance {
     /// The replacement has no reference bus, has conflicting voltage
     /// controllers, or changes an identity layout used by the initial point.
     pub fn with_network(mut self, mut network: BalancedNetwork) -> Result<Self, Error> {
+        network
+            .require_no_ac_dc_equivalent()
+            .map_err(|e| Error::new(e.code(), e.to_string()))?;
         network.assign_missing_component_ids();
         let mut replacement = Self::from_network_with_hvdc(network.clone(), self.hvdc_treatment)?;
         if let Some(initial) = self.initial_point.take() {
@@ -433,6 +448,9 @@ impl DcOpfInstance {
     /// A network with no reference bus or no in service generator attached to
     /// a non-isolated bus.
     pub fn from_network(mut network: BalancedNetwork) -> Result<Self, Error> {
+        network
+            .require_no_ac_dc_equivalent()
+            .map_err(|e| Error::new(e.code(), e.to_string()))?;
         network.assign_missing_component_ids();
         require_reference(&network)?;
         require_dispatchable(&network)?;
@@ -492,6 +510,9 @@ impl DcOpfInstance {
     /// The replacement has no reference bus or dispatchable generator, or it
     /// changes an identity layout used by the initial point.
     pub fn with_network(mut self, mut network: BalancedNetwork) -> Result<Self, Error> {
+        network
+            .require_no_ac_dc_equivalent()
+            .map_err(|e| Error::new(e.code(), e.to_string()))?;
         network.assign_missing_component_ids();
         require_reference(&network)?;
         require_dispatchable(&network)?;
@@ -573,6 +594,9 @@ impl AcOpfInstance {
     /// A network with no reference bus or no in service generator attached to
     /// a non-isolated bus.
     pub fn from_network(mut network: BalancedNetwork) -> Result<Self, Error> {
+        network
+            .require_no_ac_dc_equivalent()
+            .map_err(|e| Error::new(e.code(), e.to_string()))?;
         network.assign_missing_component_ids();
         require_reference(&network)?;
         require_dispatchable(&network)?;
@@ -621,6 +645,9 @@ impl AcOpfInstance {
     /// The replacement has no reference bus or dispatchable generator, or it
     /// changes an identity layout used by the initial point.
     pub fn with_network(mut self, mut network: BalancedNetwork) -> Result<Self, Error> {
+        network
+            .require_no_ac_dc_equivalent()
+            .map_err(|e| Error::new(e.code(), e.to_string()))?;
         network.assign_missing_component_ids();
         require_reference(&network)?;
         require_dispatchable(&network)?;

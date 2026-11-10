@@ -1212,6 +1212,7 @@ pub(crate) fn parse_ieee_cdf_source(
             case_date: title.case_date,
             ..CaseMetadata::default()
         },
+        ac_dc_equivalent: None,
         detailed_connectivity: None,
         generated_uids: std::sync::Arc::default(),
         buses: tables.buses.into(),

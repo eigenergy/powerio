@@ -47,14 +47,16 @@ fn with_component_ids(mut network: crate::BalancedNetwork) -> crate::BalancedNet
 /// # Errors
 /// A value whose stored form cannot be produced, or a serialization failure.
 pub fn emit_module(module: &PioModule<PioValue>) -> Result<String> {
+    let value = encode_value(module.value())?;
     let stored = StoredModule {
+        required_capabilities: value.required_capabilities().map_err(invalid)?,
         schema: crate::IR_SCHEMA_NAME.to_string(),
         version: crate::IR_VERSION,
         producer: dto::Producer {
             name: module.producer().name().to_string(),
             version: module.producer().version().to_string(),
         },
-        value: encode_value(module.value())?,
+        value,
         sources: module.sources().iter().map(encode_source).collect(),
         source_map: module
             .source_map()

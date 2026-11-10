@@ -867,6 +867,7 @@ impl BalancedNetwork {
     /// removed branch's equivalent cannot be represented finitely.
     #[allow(clippy::too_many_lines)] // one stanza per stage, in order
     pub fn merge_buses(&self, rule: &BusMergeRule) -> Result<BusMerge> {
+        self.require_no_ac_dc_equivalent()?;
         rule.check()?;
         let buses = self.buses();
         let index_of: HashMap<BusId, usize> = buses

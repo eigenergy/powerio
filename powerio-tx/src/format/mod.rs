@@ -144,6 +144,8 @@ pub enum TargetFormat {
     /// MG-RAVENS JSON, the LANL CIM-derived interchange schema
     /// (<https://github.com/lanl-ansi/MG-RAVENS>), balanced subset.
     RavensJson,
+    /// MATPOWER syntax with typed balanced DC equivalents and converter stations.
+    MatpowerAcDc,
 }
 
 impl TargetFormat {
@@ -161,7 +163,7 @@ impl TargetFormat {
             TargetFormat::Psse { .. } => "raw",
             TargetFormat::PsseRawx => "rawx",
             TargetFormat::PowerWorld => "aux",
-            TargetFormat::Matpower => "m",
+            TargetFormat::Matpower | TargetFormat::MatpowerAcDc => "m",
             TargetFormat::Pslf => "epc",
             TargetFormat::Xiidm => "xiidm",
             TargetFormat::Jiidm => "jiidm",
@@ -181,6 +183,7 @@ impl TargetFormat {
             TargetFormat::PowerWorld => "PowerWorld .aux",
             TargetFormat::PandapowerJson => "pandapower JSON",
             TargetFormat::Matpower => "MATPOWER .m",
+            TargetFormat::MatpowerAcDc => "MATPOWER AC/DC .m",
             TargetFormat::Pslf => "PSLF .epc",
             TargetFormat::Goc3Json => "GO Challenge 3 JSON",
             TargetFormat::SurgeJson => "Surge JSON",
@@ -206,6 +209,7 @@ impl TargetFormat {
             TargetFormat::PowerWorld => "powerworld",
             TargetFormat::PandapowerJson => "pandapower-json",
             TargetFormat::Matpower => "matpower",
+            TargetFormat::MatpowerAcDc => "matpower-acdc",
             TargetFormat::Pslf => "pslf",
             TargetFormat::Goc3Json => "goc3-json",
             TargetFormat::SurgeJson => "surge-json",
@@ -257,6 +261,7 @@ pub fn parse_target_format(name: &str) -> Option<TargetFormat> {
     }
     Some(match routing::parse_transmission_format(name)? {
         TransmissionFormat::Matpower => TargetFormat::Matpower,
+        TransmissionFormat::MatpowerAcDc => TargetFormat::MatpowerAcDc,
         TransmissionFormat::PowerModelsJson => TargetFormat::PowerModelsJson,
         TransmissionFormat::EgretJson => TargetFormat::EgretJson,
         TransmissionFormat::Psse => TargetFormat::Psse { rev: 33 },
@@ -458,7 +463,11 @@ pub fn parse_with_json_class(
             // Record the detected format on the retained source before the
             // common constructor builds descriptors and the coarse root
             // source map. RAWX aliases normalize to the one public token.
-            let source = if is_rawx {
+            let source = if network.ac_dc_equivalent().is_some() {
+                source.with_format(
+                    powerio_core::FormatId::new("matpower-acdc").expect("static format"),
+                )
+            } else if is_rawx {
                 source.with_format(
                     powerio_core::FormatId::new("psse-rawx")
                         .expect("the canonical RAWX token is valid"),
@@ -702,7 +711,16 @@ fn parse_to_network(
         // through `cgmes::parse_source`, and keeps the same byte limit.
         cgmes::check_text_budget(source, text)?;
     }
-    read_source(text, fmt, stem, warnings)
+    let net = read_source(text, fmt, stem, warnings)?;
+    if from.is_some_and(|f| {
+        routing::parse_transmission_format(f) == Some(TransmissionFormat::Matpower)
+    }) && net.require_no_ac_dc_equivalent().is_err()
+    {
+        return Err(crate::acdc::invalid(
+            "extended MATPOWER input requires matpower-acdc or automatic detection",
+        ));
+    }
+    Ok(net)
 }
 
 /// The primary buffer of a file or memory source.
@@ -735,7 +753,9 @@ fn read_source(
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
     let net = match fmt {
-        TargetFormat::Matpower => matpower::parse_matpower_source(text, name_hint, warnings),
+        TargetFormat::Matpower | TargetFormat::MatpowerAcDc => {
+            matpower::parse_matpower_source(text, name_hint, warnings)
+        }
         TargetFormat::PowerModelsJson => {
             powermodels::parse_powermodels_json_source(text, name_hint, warnings)
         }
@@ -1085,6 +1105,9 @@ pub(crate) fn core_error(error: Error) -> powerio_core::Error {
 /// the echo that reproduces the input byte for byte. `None` sends the emission
 /// down the semantic serialization path.
 fn echo_text(module: &PioModule<BalancedNetwork>, target: TargetFormat) -> Option<String> {
+    if module.value().ac_dc_equivalent().is_some() && target != TargetFormat::MatpowerAcDc {
+        return None;
+    }
     let source = module.source()?;
     let buffer = source.primary_buffer().ok()?;
     let source_format = source
@@ -1140,6 +1163,11 @@ fn sincal_source_omitted(net: &BalancedNetwork) -> Option<Diagnostic> {
 
 /// Serialize a typed network to `format` with no source echo.
 pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Result<TextEmission> {
+    if net.ac_dc_equivalent().is_some() && format != TargetFormat::MatpowerAcDc {
+        return Err(crate::acdc::invalid(
+            "target cannot represent AC/DC equipment; an explicit qualified projection is required",
+        ));
+    }
     let mut conv = match format {
         TargetFormat::PowerModelsJson => write_powermodels_json(net),
         TargetFormat::EgretJson => write_egret_json(net),
@@ -1165,6 +1193,7 @@ pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Re
         // the folded model, which itemizes what it can't carry (HVDC, gen caps,
         // extras, a partial-cost case).
         TargetFormat::Matpower => matpower::write_matpower_conversion(net),
+        TargetFormat::MatpowerAcDc => matpower::acdc::write(net)?,
         TargetFormat::Pslf => write_pslf(net),
         TargetFormat::SurgeJson => write_surge_json(net),
         TargetFormat::RavensJson => write_ravens_json(net),
@@ -1233,6 +1262,9 @@ pub fn emit_with_options(
     options: &EmitOptions,
     destination: powerio_core::Destination,
 ) -> std::result::Result<powerio_core::EmitResult, powerio_core::Error> {
+    if module.value().ac_dc_equivalent().is_some() && format != TargetFormat::MatpowerAcDc {
+        return Err(core_error(Error::UnsupportedAcDc));
+    }
     if format == TargetFormat::Cgmes
         && options.is_default()
         && let Some(source) = module.source()
@@ -1357,6 +1389,9 @@ pub fn __emit_pypsa_csv_with_options(
     options: &EmitOptions,
     destination: powerio_core::Destination,
 ) -> std::result::Result<powerio_core::EmitResult, powerio_core::Error> {
+    if module.value().ac_dc_equivalent().is_some() {
+        return Err(core_error(Error::UnsupportedAcDc));
+    }
     let (working, mut diagnostics) = if options.is_default() {
         (None, Vec::new())
     } else {
@@ -1628,6 +1663,7 @@ fn warn_dropped_exchange_context(
     if !matches!(
         format,
         TargetFormat::Matpower
+            | TargetFormat::MatpowerAcDc
             | TargetFormat::PowerModelsJson
             | TargetFormat::EgretJson
             | TargetFormat::PowerWorld
@@ -2104,6 +2140,7 @@ fn warn_missing_reference(net: &BalancedNetwork, format: TargetFormat, conv: &mu
     let needs_ref = matches!(
         format,
         TargetFormat::Matpower
+            | TargetFormat::MatpowerAcDc
             | TargetFormat::Psse { .. }
             | TargetFormat::PsseRawx
             | TargetFormat::PowerModelsJson
@@ -2139,7 +2176,7 @@ pub(super) fn missing_reference_warning(net: &BalancedNetwork) -> Option<String>
 // `0.0 * DEG_TO_RAD` (exactly `0.0`), so an epsilon compare would be wrong here.
 #[allow(clippy::float_cmp)]
 fn warn_normalized_tap(net: &BalancedNetwork, format: TargetFormat, conv: &mut TextEmission) {
-    if matches!(format, TargetFormat::Matpower) {
+    if matches!(format, TargetFormat::Matpower | TargetFormat::MatpowerAcDc) {
         return;
     }
     if let Some(message) = normalized_tap_warning(net) {

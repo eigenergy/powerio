@@ -649,6 +649,7 @@ pub(crate) fn parse_powermodels_json_source(
         geo,
         case_metadata: case_metadata.unwrap_or_default(),
         detailed_connectivity: detailed_connectivity.map(std::sync::Arc::new),
+        ac_dc_equivalent: None,
         generated_uids: std::sync::Arc::default(),
         buses: sorted_rows(document.bus, |row| row.index)
             .into_iter()

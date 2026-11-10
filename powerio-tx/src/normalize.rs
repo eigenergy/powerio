@@ -1240,6 +1240,7 @@ impl BalancedNetwork {
         &self,
         settings: &NormalizeSettings,
     ) -> Result<(NormalizedNetwork, NormalizeSourceRows, NormalizeReport)> {
+        self.require_no_ac_dc_equivalent()?;
         let options = &settings.options;
         validate_normalize_options(options)?;
         let (kept, left) = self.closed_switch_rows();
@@ -1445,6 +1446,7 @@ impl BalancedNetwork {
             base_frequency: self.base_frequency(),
             geo: self.geo().clone(),
             case_metadata: self.case_metadata().clone(),
+            ac_dc_equivalent: self.ac_dc_equivalent().cloned().map(std::sync::Arc::new),
             detailed_connectivity: self.detailed_connectivity().clone(),
             generated_uids: self.generated_uids().clone(),
             buses: buses.into(),

@@ -631,6 +631,7 @@ enum FormatArg {
     SincalBalanced,
     #[value(name = "matpower", alias = "m")]
     Matpower,
+    MatpowerAcdc,
     #[value(name = "powermodels-json", alias = "powermodels", alias = "pm")]
     PowerModelsJson,
     #[value(name = "egret-json", alias = "egret")]
@@ -739,6 +740,7 @@ impl FormatArg {
         use powerio_tx::TargetFormat;
         Some(match self {
             FormatArg::Matpower => TargetFormat::Matpower,
+            FormatArg::MatpowerAcdc => TargetFormat::MatpowerAcDc,
             FormatArg::PowerModelsJson => TargetFormat::PowerModelsJson,
             FormatArg::EgretJson => TargetFormat::EgretJson,
             FormatArg::Psse => TargetFormat::Psse { rev: 33 },
@@ -806,6 +808,7 @@ impl FormatArg {
             }
             FormatArg::CimDist => Some(DistTargetFormat::CimDist),
             FormatArg::Matpower
+            | FormatArg::MatpowerAcdc
             | FormatArg::PowerModelsJson
             | FormatArg::EgretJson
             | FormatArg::Psse
@@ -839,6 +842,7 @@ impl FormatArg {
             FormatArg::SincalMulticonductor => "sincal-multiconductor",
             FormatArg::SincalBalanced => "sincal-balanced",
             FormatArg::Matpower => "matpower",
+            FormatArg::MatpowerAcdc => "matpower-acdc",
             FormatArg::PowerModelsJson => "powermodels-json",
             FormatArg::EgretJson => "egret-json",
             FormatArg::Psse => "psse",

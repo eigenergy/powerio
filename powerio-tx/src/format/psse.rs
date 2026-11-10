@@ -3793,6 +3793,7 @@ fn parse_psse_source_inner(
         base_frequency,
         geo: None,
         case_metadata: crate::network::CaseMetadata::default(),
+        ac_dc_equivalent: None,
         detailed_connectivity: None,
         generated_uids: std::sync::Arc::default(),
         buses: buses.into(),

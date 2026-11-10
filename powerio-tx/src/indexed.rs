@@ -378,7 +378,9 @@ impl<'n> IndexedNetwork<'n> {
     /// # Errors
     /// [`Error::ClosedSwitch`] naming the first closed switch and the count,
     /// with the calls that merge them.
+    /// Also refuses AC/DC equivalent equipment before legacy AC calculations.
     pub fn check_closed_switches(&self) -> Result<()> {
+        self.network().require_no_ac_dc_equivalent()?;
         match self.closed_switches().next() {
             Some((row, switch)) => Err(Error::ClosedSwitch {
                 row,
