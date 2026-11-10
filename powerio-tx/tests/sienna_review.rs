@@ -3,7 +3,7 @@ mod helpers;
 use helpers::{emit_module, emit_value};
 use powerio_core::{FormatId, PioModule, Source};
 use powerio_tx::TargetFormat;
-use powerio_tx::network::{BalancedNetwork, BranchCharging, GenCost};
+use powerio_tx::network::{BalancedNetwork, BranchCharging, GenCost, GeneratorEnergySource};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -561,5 +561,49 @@ fn partial_zero_cost_projections_do_not_hide_native_cost_edits() {
             expected
         );
         assert!(extra(&out, 4, "ThermalStandard", 0)["operation_cost_absent"].is_null());
+    }
+}
+
+#[test]
+fn an_energy_source_edit_between_renewables_replaces_the_retained_prime_mover() {
+    // Solar to wind keeps the RenewableDispatch component, but the prime
+    // mover and power factor belong to the old source; retaining them would
+    // read the generator back as solar.
+    for version in 0..=4 {
+        let mut net = network();
+        net.generators_mut()[0].energy_source = GeneratorEnergySource::Solar;
+        let mut doc = document(&net, version);
+        row_mut(&mut doc, version, "RenewableDispatch", 0)["power_factor"] = json!(0.9);
+        let mut module = parse(&doc, version);
+        let generator = module
+            .value_mut()
+            .generators_mut()
+            .iter_mut()
+            .find(|g| g.energy_source == GeneratorEnergySource::Solar)
+            .unwrap();
+        generator.energy_source = GeneratorEnergySource::Wind;
+        let (out, diagnostics) = edited(&mut module, version);
+        let row = rows(&out, version, "RenewableDispatch")[0];
+        assert_eq!(row["prime_mover_type"], "WT", "version {version}");
+        assert_eq!(row["power_factor"], 1.0, "version {version}");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message().contains("changed energy source"))
+        );
+        let sources: Vec<_> = parse(&out, version)
+            .value()
+            .generators()
+            .iter()
+            .map(|g| g.energy_source)
+            .collect();
+        assert!(
+            sources.contains(&GeneratorEnergySource::Wind),
+            "{sources:?}"
+        );
+        assert!(
+            !sources.contains(&GeneratorEnergySource::Solar),
+            "{sources:?}"
+        );
     }
 }
