@@ -140,7 +140,11 @@ fn legacy_calculations_refuse_before_normalization_or_supply_filtering() {
     let mut copy = n.clone();
     let before = serde_json::to_value(&copy).unwrap();
     let r = copy.assign_island_references(powerio_tx::IslandReferencePolicy::Stated);
-    assert!(!r.diagnostics.is_empty());
+    assert!(
+        r.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code() == "REQUEST.ACDC.UNSUPPORTED")
+    );
     assert_eq!(serde_json::to_value(&copy).unwrap(), before);
     let mut e = n.ac_dc_equivalent().unwrap().clone();
     e.stations[0].settings.pcc_withdrawal_mvar = 13.0;
