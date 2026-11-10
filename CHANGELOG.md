@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Reuse a recognized CIM namespace during CGMES parsing with a bounded
+  per-document cache, preserving namespace rebinding, mixed-version checks,
+  and acceptance of long namespace URIs.
+
 ## 0.12.0-rc.1
 
 The release candidate for PowerIO 0.12, which starts the 0.12.x release
