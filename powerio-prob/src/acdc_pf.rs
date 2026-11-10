@@ -11,7 +11,7 @@ use powerio_tx::{
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, sync::Arc};
 
-/// A versioned PF control and allocation contract; never inferred from OPF.
+/// A versioned PF control and allocation policy; never inferred from OPF.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]

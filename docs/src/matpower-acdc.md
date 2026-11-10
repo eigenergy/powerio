@@ -54,7 +54,8 @@ loss coefficient. Those are explicit calculation preparation policies.
 
 Typed Rust import, editing, IR and fresh export are supported. Coupled PF/OPF
 solvers remain external to PowerIO; the explicit OPF interface below supplies
-full coupled preparation. Coupled PF interfaces remain subsequent work. Existing
+full coupled preparation, while the PF interface records explicit controls and
+allocation semantics for a consuming solver. Existing
 PF/OPF constructors, normalization and AC-only numerical preparation refuse
 nonempty equivalent equipment before generator-only supply filtering.
 Automatic island-reference assignment reports an error and leaves it unchanged.
@@ -112,7 +113,7 @@ is a numerical guess and may violate the equations.
 
 `AcDcOperatingPoint` contains a complete set of `AcDcValue` records keyed by
 `AcDcQuantity` and stable component identity. Powers use MW/MVAr, angles radians,
-voltages pu in source coordinates, and valve current pu on the station AC base.
+voltages pu under the selected profile, and valve current pu on the station AC base.
 Powers enter equipment terminals; generator powers are production. Valve power
 enters the valve from the reactor. Constructors refuse incomplete, unknown,
 duplicate and nonfinite coordinates. Row order is not identity.
@@ -141,7 +142,7 @@ This initial interface excludes normalized/base-mismatched data, LCC, mixed
 physical/aggregate DC, AC self loops, storage and three-winding transformers.
 Preparation qualifies polynomial generator costs; piecewise costs need a
 separate auxiliary-coordinate qualification. General bindings, collection
-variants, native coupled PF, additional controls, physical projections and the
+variants, additional controls, general physical projections and the
 natural PowerModelsACDC JSON variant remain future work. No new C ABI symbols
 or Python/Julia calculation modes are introduced.
 
@@ -218,8 +219,9 @@ Their tokens, equations, bounds and serialized defaults are unchanged.
 ### Explicit coupled PF intent
 
 `AcDcPfInstance` and `AcDcPfSolution` are distinct structural IR types, with
-required `AcDcPfProfile::PowerModelsAcDc0101AcpVscEqualIncrementV1` selection.
-The profile uses source-pu/Cinv station equations and the pinned reference's
+required `AcDcPfProfile` selection. The original
+`PowerModelsAcDc0101AcpVscEqualIncrementV1` uses source-pu/Cinv station equations
+and the pinned reference's
 bus-role repair. Active generation makes a non-reference bus PV; a PV bus with
 no active generation becomes PQ. Source roles remain unchanged in the owner.
 
@@ -236,7 +238,8 @@ from declared Qg equally. This explicit allocation resolves the reference's
 otherwise underdetermined individual outputs; it does not infer participation
 from ratings or source row order. Equipment limits are checked after solving,
 without clipping, automatic PV/PQ switching or OPF dispatch. Costs are not PF
-controls. Physical-coordinate/fixed-loss-mode PF profiles remain future work.
+controls. The opt-in profiles below add sharing, droop, physical coordinates and
+fixed loss modes without changing this original selection.
 
 Initial and solved points use the same typed `AcDcOperatingPoint` quantities;
 `AcDcOperatingPoint::for_pf` checks complete identity/quantity coverage. The
@@ -248,7 +251,7 @@ reject both new types, while existing OPF documents retain their layout.
 ### Opt-in shared voltage PF allocation
 
 `PowerModelsAcDc0101AcpVscSharedVoltageEqualIncrementV1` extends the explicit PF
-contract to overlapping AC voltage controllers without editing their source
+policy to overlapping AC voltage controllers without editing their source
 controls. All active generators and `VoltageAtPcc` converters at a bus share
 **equal changes in reactive injection** from declarations. Thus
 `Qg - Qg_decl = -(Qpcc_withdrawal - Qpcc_withdrawal_decl)`; converter-only groups
@@ -262,3 +265,58 @@ voltage overlap. The new required profile token round-trips in instance/result
 IR; the frozen `e5a7c8b8` decoder rejects it while accepting old PF documents.
 Only the unreleased schema adds the token. Numerical qualification lives in
 Tellegen's shared-voltage PF validation harness.
+
+### DC-power droop and physical PF
+
+`PowerModelsAcDc0101AcpVscDcDroopSharedVoltageEqualIncrementV1` adds DC-power
+voltage droop to the shared-voltage profile. Each DC island requires at least
+one active fixed-voltage or droop controller, with at most one fixed-voltage
+controller. Every AC island still needs exactly one declared reference with
+active generation; numerical OPF anchors do not supply PF controls. Droop must
+be finite and positive with a finite reciprocal and positive voltage target.
+Nonzero deadbands and valve-power/type-4 droop remain unsupported.
+
+`PhysicalCoordinatesDcDroopSharedVoltageEqualIncrementV1` uses the same control
+and allocation policy with physical local coordinates, declared current limits
+and Cinv in both directions. Port/impedance and branch resistance bases follow
+the physical OPF description above. A physical droop slope R in kV per pole per
+total MW is represented as `k_pu = R * S_base / V_dc_base`; no extra pole-count
+factor is applied to total power. This is an explicit interpretation of the
+supplied equipment, not automatic network rebasing.
+
+`FixedModePhysicalDcDroopSharedVoltageEqualIncrementV1` additionally requires
+one `AcDcStationLossMode` for every active station through
+`AcDcPfInstance::from_network_with_loss_modes`. Rectifier selects Crec and valve
+AC withdrawal P >= 0; inverter selects Cinv and P <= 0. Zero valve P retains the
+selected curve, including at nonzero reactive current. Missing, duplicate,
+inactive, unknown and sign/rating-incompatible assignments refuse at construction.
+The selected mode's sign is a model-domain condition for accepting the final PF
+root. Ordinary current and P/Q ratings remain post-solve checks, with no clipping,
+saturation, redistribution or automatic switching. A local solve failure is not
+a proof that no root exists.
+
+All five PF profiles retain complete typed initial/result points and immutable
+source declarations. In IR, the first four omit `loss_modes` and reject its
+explicit presence, including empty arrays and null. Fixed-mode PF requires a
+complete array, sorted by persistent component identity on output. Older
+readers reject unknown profiles. MATPOWER-extension export retains both source
+loss coefficients but does not encode this solver-intent mode list.
+
+### Available calculation surfaces
+
+| Surface | Implemented scope |
+| --- | --- |
+| Rust source IO | MATPOWER-extension reader, same-source echo, fresh export, typed equipment and guarded PowerIO IR. |
+| Rust OPF intent/preparation | Four explicit profiles: compatibility, declared-current, physical local coordinates and fixed-mode physical. Complete AC/DC/station preparation; source declarations remain immutable. |
+| Rust PF intent/results | Five explicit profiles described above; controls, allocation, points and persistence. PowerIO does not provide a numerical PF solver or a public PF matrix builder. |
+| Native Tellegen consumer | Full-station VSC PF/OPF through the optional `acopf` feature on the development model branch; independent validation is recorded there. |
+| C/Python/Julia and application adapters | Existing parse/IR transport remains available. No new typed coupled-solver or equipment-access API is claimed here. |
+
+The compatibility profiles retain source-pu equations and Cinv in both directions.
+Compatibility OPF applies reference Imax repair and reference auxiliary bounds;
+PF reports declared ratings after solving. Selecting declared-current OPF
+alone changes Imax policy, not voltage coordinates. Physical profiles select
+local bases and declared current; auxiliary bounds and fixed operating modes
+remain explicit limitations. None implements LCC equations, physical pole/return
+wiring, generic rebasing, saturation or automatic mode reversal. The natural
+PowerModelsACDC JSON adapter is still separate future work.

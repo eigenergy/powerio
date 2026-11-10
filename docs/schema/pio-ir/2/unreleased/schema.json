@@ -616,7 +616,7 @@
       "type": "object"
     },
     "AcDcPfProfile": {
-      "description": "A versioned PF control and allocation contract; never inferred from OPF.",
+      "description": "A versioned PF control and allocation policy; never inferred from OPF.",
       "oneOf": [
         {
           "const": "power_models_ac_dc0101_acp_vsc_equal_increment_v1",

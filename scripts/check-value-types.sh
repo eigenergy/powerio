@@ -9,6 +9,8 @@ names = [
     "powerio.AcOpfInstance",
     "powerio.AcDcOpfInstance",
     "powerio.AcDcOpfSolution",
+    "powerio.AcDcPfInstance",
+    "powerio.AcDcPfSolution",
     "powerio.AcOpfSolution",
     "powerio.AcOtsInstance",
     "powerio.AcOtsSolution",

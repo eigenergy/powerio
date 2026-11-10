@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add explicit coupled PF profiles for DC-power droop, physical local bases and
+  fixed rectifier/inverter loss modes. Retain earlier profile meanings and wire
+  encodings; require mode assignments only for the fixed-mode profile.
+
 - Add an opt-in coupled PF profile for equal reactive-injection increments across shared generator/converter voltage controls; preserve existing PF semantics.
 
 - Add explicit coupled PF intent/results, reference control validation and equal

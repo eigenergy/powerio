@@ -2255,10 +2255,12 @@ Schema definition: `HistoryEntry`.
 | `assumptions` | array of string | | | | `[]` |
 | `losses` | array of string | | | | `[]` |
 
-## Coupled AC/DC OPF intent and result
+## Coupled AC/DC PF and OPF intent and results
 
-`powerio.AcDcOpfInstance` and `powerio.AcDcOpfSolution` are distinct structural
-values. They require `balanced-acdc-equivalent-v1`; they cannot be read as
+`"powerio.AcDcOpfInstance"`, `"powerio.AcDcOpfSolution"`,
+`"powerio.AcDcPfInstance"` and `"powerio.AcDcPfSolution"` are distinct IR
+structural type tags, not Python attributes. These values require
+`balanced-acdc-equivalent-v1`; they cannot be read as
 ordinary AC-only calculation instances. Powers in typed points are MW/MVAr,
 angles radians, voltages/current pu under the explicitly selected profile.
 
@@ -2268,6 +2270,7 @@ Schema definition: `AcDcOpfInstance`.
 | --- | --- |
 | `network` | Complete source balanced network, including equivalent DC equipment. |
 | `profile` | Required versioned ACP VSC equation/limit/loss convention. |
+| `loss_modes` | Identity-keyed active-station modes, required and complete for fixed-mode physical OPF. Other profiles reject nonempty modes and omit the empty list on write. |
 | `angle_reference_policy` | Optional `declared` (default, omitted on write) or `lowest_bus_id_per_island`. The latter adds only numerical zero-angle anchors on uncovered AC islands; source bus roles and PF dispatch are unchanged. |
 | `initial_point` | Optional complete identity/quantity/value list; finite values, no duplicate, missing or unknown coordinates. |
 
@@ -2280,6 +2283,27 @@ Schema definition: `AcDcOpfSolution`.
 | `objective` | Finite objective value reported by the producing solver. |
 | `termination` | Producer's termination classification. |
 | `producer` | Software provenance. |
+
+Schema definition: `AcDcPfInstance`.
+
+| field | meaning |
+| --- | --- |
+| `network` | Complete immutable source balanced network, including equivalent DC equipment and retained control declarations. |
+| `profile` | Required versioned PF electrical/control/allocation policy; independent of OPF selection. |
+| `loss_modes` | Complete identity-keyed active-station modes for fixed-mode physical PF. Must be absent for other PF profiles; explicit empty arrays and null refuse. |
+| `initial_point` | Optional complete identity/quantity/value list; finite values, no duplicate, missing or unknown coordinates. A numerical guess, not a feasibility certificate. |
+
+Schema definition: `AcDcPfSolution`.
+
+| field | meaning |
+| --- | --- |
+| `instance` | Canonical PF intent, including the selected profile and any fixed modes. |
+| `point` | Complete typed primal values. |
+| `termination` | Producer's termination classification; does not itself certify electrical or operating-limit feasibility. |
+| `producer` | Software provenance. |
+
+PF results have no optimization objective. The [AC/DC guide](matpower-acdc.md)
+lists the four OPF and five PF profiles, their units, controls and limits.
 
 These records do not assert equation feasibility or global optimality by
 serialization alone. Numerical gauge alignment is an explicit consumer operation;
