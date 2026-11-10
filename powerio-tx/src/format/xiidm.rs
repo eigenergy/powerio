@@ -7442,6 +7442,10 @@ fn has_missing_component_ids(network: &BalancedNetwork) -> bool {
         || network.storage().iter().any(|value| value.uid.is_none())
         || network.hvdc().iter().any(|value| value.uid.is_none())
         || network
+            .static_var_compensators()
+            .iter()
+            .any(|value| value.uid.is_none())
+        || network
             .transformers_3w()
             .iter()
             .any(|value| value.uid.is_none())
@@ -7689,6 +7693,20 @@ fn derive_detailed_connectivity(
             1,
             shunt.bus,
             shunt.in_service,
+        );
+    }
+    for svc in network.static_var_compensators() {
+        push_derived_terminal(
+            &mut detailed,
+            &bus_connections,
+            component_id(
+                "static_var_compensator",
+                svc.uid.as_deref().expect("prepared identity"),
+            )
+            .expect("valid stored identity"),
+            1,
+            svc.bus,
+            svc.in_service,
         );
     }
     for branch in network.branches() {
