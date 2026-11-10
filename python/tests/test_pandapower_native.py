@@ -51,10 +51,10 @@ def test_native_default_import_preserves_split_zip_load_columns():
 @pytest.mark.parametrize("element_type", ["gen", "ext_grid"])
 def test_native_piecewise_objective_preserves_nonzero_first_power(start, element_type):
     pp = pytest.importorskip("pandapower")
+    import numpy as np
     from pandapower.converter import to_ppc
     from pandapower.pypower.idx_cost import NCOST
     from pandapower.pypower.totcost import totcost
-    import numpy as np
 
     source = native_network(pp)
     if element_type == "gen":
