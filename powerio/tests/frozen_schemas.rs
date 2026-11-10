@@ -477,10 +477,6 @@ fn with_0_11_socwr_flow_names(current: &serde_json::Value) -> serde_json::Value 
     definition
 }
 
-/// A transformer body without the one field 0.12 adds to it. `magnetizing_connection`
-/// is optional, and a document without it states the star point, the meaning
-/// `mag_g` and `mag_b` have in every 0.11 document; 0.12 rewords those two
-/// fields' description to point at it. Nothing else may differ.
 /// The body without the descriptions 0.12 added to state a reactive power
 /// sign convention (#700): `Hvdc::qf`/`qt`, the converter setpoints, and the
 /// detailed converter's reactive limits.
@@ -502,6 +498,10 @@ fn without_sign_convention_descriptions(body: &serde_json::Value) -> serde_json:
     body
 }
 
+/// A transformer body without the one field 0.12 adds to it. `magnetizing_connection`
+/// is optional, and a document without it states the star point, the meaning
+/// `mag_g` and `mag_b` have in every 0.11 document; 0.12 rewords those two
+/// fields' description to point at it. Nothing else may differ.
 fn without_magnetizing_connection(
     body: &serde_json::Value,
     current_defs: &serde_json::Value,
