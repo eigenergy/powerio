@@ -127,11 +127,18 @@ def _sanitized_hdf(path: Path, destination: Path) -> Path:
             if _name.split("/", 1)[0] in {"meta", "crs"}:
                 return
             for value in obj.attrs.values():
-                if not isinstance(value, bytes):
+                # h5py returns a variable-length string attribute as `str`,
+                # while PyTables reads the same attribute as bytes and may
+                # unpickle it, so both are checked.
+                if isinstance(value, str):
+                    raw = value.encode("utf-8", "surrogateescape")
+                elif isinstance(value, bytes):
+                    raw = value
+                else:
                     continue
-                if len(value) > MAX_BYTES:
+                if len(raw) > MAX_BYTES:
                     raise ValueError("HDF5 metadata exceeds the acquisition limit")
-                if _executable_pickle(value):
+                if _executable_pickle(raw):
                     raise ValueError("Executable HDF5 attribute serialization is unsupported")
         attributes("", store)
         store.visititems(attributes)
