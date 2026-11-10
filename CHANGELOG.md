@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- CGMES generated phase taps use end 1's reactance base, removing false
+  tap-step deviations at nonunity ratios. Clarify the 0.11.9 transformer-shunt
+  file compatibility impact. Report and reproduction by Mohamed Numair (#829).
+
 ## 0.11.10
 
 **OpenDSS**
