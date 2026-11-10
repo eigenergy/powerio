@@ -87,8 +87,11 @@ pub(super) fn prepare(
         GeneratorEnergySource::Hydro => "HydroDispatch",
         _ => "ThermalStandard",
     };
+    // Type-specific fields of the retained row still describe this generator
+    // only while its energy source is unchanged.
+    let retained = previous.filter(|(k, old, _)| energy_source(k, old) == g.energy_source);
     if let Some((k, old, _)) = previous {
-        if energy_source(k, old) == g.energy_source {
+        if retained.is_some() {
             kind = k;
         } else {
             warnings.push(&codes::EMIT_SIENNA.field_dropped, format!("generator {id}: changed energy source requires a new component type; original type-specific fields are omitted"));
@@ -110,18 +113,19 @@ pub(super) fn prepare(
         row["fuel"] = json!("NUCLEAR");
     }
     if matches!(kind, "RenewableDispatch" | "RenewableNonDispatch") {
-        row["prime_mover_type"] =
-            previous.map_or(json!("OT"), |(_, old, _)| old["prime_mover_type"].clone());
-        if row["prime_mover_type"].is_null() || previous.is_none() {
-            row["prime_mover_type"] = json!(match g.energy_source {
-                GeneratorEnergySource::Wind => "WT",
-                GeneratorEnergySource::Solar => "PVe",
-                _ => "OT",
+        row["prime_mover_type"] = retained
+            .map(|(_, old, _)| old["prime_mover_type"].clone())
+            .filter(|value| !value.is_null())
+            .unwrap_or_else(|| {
+                json!(match g.energy_source {
+                    GeneratorEnergySource::Wind => "WT",
+                    GeneratorEnergySource::Solar => "PVe",
+                    _ => "OT",
+                })
             });
-        }
         row["rating"] = json!(g.pmax);
         row["power_factor"] =
-            previous.map_or(json!(1.0), |(_, old, _)| old["power_factor"].clone());
+            retained.map_or(json!(1.0), |(_, old, _)| old["power_factor"].clone());
         let object = row.as_object_mut().expect("generated object");
         object.remove("active_power_limits");
         object.remove("status");
