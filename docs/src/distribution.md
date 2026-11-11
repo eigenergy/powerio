@@ -1081,8 +1081,8 @@ circuit, core shunts and tap-control decisions. Malformed winding maps and
 invalid ratios fail instead of producing an incomplete matrix.
 
 The BMOPF proposal schema is pinned to
-[`86fe813`](https://github.com/distribution-system-opt/dsopt-schema/commit/86fe813f3553b89542b6eead2a75fca0bbdb3acd),
-with SHA-256 `8ebdf07daf383c9bcca7b97e6b312f05976d1a2da4b00c74af1faac7932438b1`,
+[`9bca0cc`](https://github.com/distribution-system-opt/dsopt-schema/commit/9bca0ccb8fbee93eb2adcca7ec32954a05940631),
+with SHA-256 `5735cca16e95c24e94a1f92d6f383a8698ab138985b7088467c42e3f6d6f50f0`,
 the revision that reconciled the proposal with schema 0.1.1 (`vpg_*` bounds,
 typed geometry, one identifier) and applied the Task Force review answers
 (`vng_max`, geometry for every located element). The pin moves to the `schema-v0.2.0` tag once

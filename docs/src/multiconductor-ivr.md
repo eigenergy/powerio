@@ -23,9 +23,11 @@ does not by itself change its terminal role. WYE and SINGLE_PHASE return
 connections retain their existing semantics.
 
 Fixed inverter PF uses `McOpfCoil::power_factor_coefficients`: bounded `[a,b]`
-for `a*P + b*Q = 0`, with `a = sqrt((1 - |pf|) * (1 + |pf|))` and `b = pf`.
-The signed input domain remains `0 < |pf| <= 1`; even subnormal inputs keep a
-finite row. Solvers should use these coefficients, not the legacy
+for `a*P + b*Q = 0`, with `a = sqrt((1 - |pf|) * (1 + |pf|))` and `b = -pf`.
+The sign follows OpenDSS PVSystem and Storage and BMOPF 0.2.0: `pf > 0` gives
+`Q/P = +tan(acos |pf|)`, Q with the same sign as P, and `pf < 0` the opposite
+sign. PowerIO 0.11 used `b = pf`, the reverse. The signed input domain remains
+`0 < |pf| <= 1`; even subnormal inputs keep a finite row. Solvers should use these coefficients, not the legacy
 `reactive_slope` ratio. That ratio is computed without trigonometric
 cancellation when representable and is `None` if division would overflow;
 `None` therefore does not imply absence of PF control when bounded coefficients
@@ -93,7 +95,10 @@ project them and record a `load_approximated` preparation action.
 Supported devices include WYE/DELTA/two-terminal P/I/Z/ZIP/exponential loads,
 generator capability and linear dispatch cost, single-phase/center-tapped/Yd/Dy
 and fixed n-winding transformers, type-A/B regulators, and supported open-delta
-banks. Winding descriptors preserve neutral/core paths and physical current/VA
+banks. A regulator's `tap_ratio` is the regulated over source voltage ratio,
+`V_to/V_from`, for both ANSI types, as BMOPF 0.2.0 defines it;
+`regulator_type` records the A/B hardware and does not change the ratio.
+PowerIO 0.11 read a type-A ratio as `V_from/V_to`. Winding descriptors preserve neutral/core paths and physical current/VA
 port limits. Ordinary two-sided transformer and regulator taps can be continuous;
 arbitrary n-winding optimized taps are outside this profile.
 
@@ -131,7 +136,7 @@ or a stable serialized solver model; reconstruct them from the canonical instanc
 
 Transformer rows are `equations[k] + t * tap_equations[k] = 0`, with nominal
 multiplier `t = 1`. The physical tap is `tap_nominal * t`, or `tap_nominal / t`
-for the inverse regulator convention. Fixed taps have no multiplier rows.
+for a regulator (`tap_inverse`). Fixed taps have no multiplier rows.
 Initial voltage seeds are suggestions; a free common mode in a seed is not a
 physical reference imposed on the optimization problem. With transformers
 present, the seeds come from a sparse solve of the no-load voltage equations

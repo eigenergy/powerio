@@ -830,6 +830,12 @@ impl Reader<'_> {
                     extras.insert(key.clone(), value.clone());
                 }
             }
+            // Schema 0.2.0 prices an inverter with `energy_cost_rate` only;
+            // the earlier `cost` spelling reads as it.
+            if let Some(cost) = extras.remove("cost") {
+                self.note_legacy_spelling("ibr.cost");
+                extras.entry("energy_cost_rate".to_owned()).or_insert(cost);
+            }
             self.net.ibrs_mut().push(DistIbr {
                 name: name.clone(),
                 bus: string(o.get("bus")),
@@ -1067,10 +1073,20 @@ impl Reader<'_> {
         legacy: &'static str,
     ) -> Option<&'v Value> {
         let old = o.get(legacy);
-        if old.is_some() && self.schema_version.is_some() {
-            *self.legacy_spellings.entry(legacy).or_default() += 1;
+        if old.is_some() {
+            self.note_legacy_spelling(legacy);
         }
         o.get(current).or(old)
+    }
+
+    /// Notes a field spelled the way an earlier schema version spells it,
+    /// for the one `READ.BMOPF.SCHEMA_LEGACY` finding of a document that
+    /// states 0.2.0; a document stating an earlier version, or none, already
+    /// has its one schema finding.
+    fn note_legacy_spelling(&mut self, field: &'static str) {
+        if self.schema_version.is_some() {
+            *self.legacy_spellings.entry(field).or_default() += 1;
+        }
     }
 
     /// One `READ.BMOPF.SCHEMA_LEGACY` finding for a document that states the
@@ -1517,6 +1533,11 @@ impl Reader<'_> {
                 "cost",
                 "geo",
             ];
+            // Schema 0.2.0 prices a source with `energy_cost_rate` only; the
+            // earlier `cost` spelling reads as it.
+            if o.contains_key("cost") {
+                self.note_legacy_spelling("voltage_source.cost");
+            }
             let energy_cost_rate = floats(o.get("energy_cost_rate").or_else(|| o.get("cost")));
             self.net.sources_mut().push(VoltageSource {
                 reference_terminal: None,

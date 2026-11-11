@@ -8,7 +8,7 @@ what is written here, one of the two has a defect.
 Schema versions come from the [`dsopt-schema`](https://github.com/distribution-system-opt/dsopt-schema)
 repository. PowerIO writes one version, `0.2.0`, as proposed in
 [dsopt-schema#2](https://github.com/distribution-system-opt/dsopt-schema/pull/2)
-at commit `86fe813`: schema `0.1.1` plus the element classes the IEEE PES Task
+at commit `9bca0cc`: schema `0.1.1` plus the element classes the IEEE PES Task
 Force on Benchmarking Multiconductor OPF draft carried, with nothing renamed.
 The pin moves to the `schema-v0.2.0` tag once the Task Force ratifies it.
 
@@ -78,7 +78,7 @@ parameter field is zero. A field with no typed slot lands in the element's
 | `line.terminal_map_from`, `line.terminal_map_to` | `terminal_map_from`, `terminal_map_to` | Position `i` of the from map fixes matrix index `i`. |
 | `line.linecode` | `linecode` | |
 | `line.length` | `length`, m | |
-| `line.R_series_i_j`, `line.X_series_i_j` | a synthesized `DistLineCode` named after the line, ohm per metre | The inline branch states absolute ohms, so the reader divides by `length` to store per metre and keeps the line's own length. `READ.BMOPF.VALUE_INFERRED` names the synthesis. |
+| `line.R_series_i_j`, `line.X_series_i_j` | a synthesized `DistLineCode` named after the line, ohm per metre at unit length | The inline branch states the absolute ohms of the whole line, and its `length` is descriptive. The reader keeps those ohms unscaled in the synthesized line code and sets the line's length to 1 m, so length times the per metre value is the stated impedance; a stated `length` other than 1 raises `READ.BMOPF.VALUE_DEFAULTED`. `READ.BMOPF.VALUE_INFERRED` names the synthesis. A line that names a `linecode` takes no inline key. |
 | `line.G_from_i_j`, `line.B_from_i_j`, `line.G_to_i_j`, `line.B_to_i_j` | the same synthesized line code's `g_from`, `b_from`, `g_to`, `b_to` | |
 | `line.i_max`, `line.s_max` | `i_max`, `s_max` | Per conductor; override the line code's. |
 | `line.geo` | `route` | A GeoJSON LineString from `bus_from` through any bends to `bus_to`, in the system `meta.crs` names; descriptive, `length` stays the electrical length. Written for every line with a route of two or more finite vertices. |
@@ -152,7 +152,7 @@ configuration the specification supports.
 | `p_min`, `p_max`, `q_min`, `q_max` | the same names, W and var | When a bound pair is equal the dispatch is pinned, and the reader states the same values as `p_nom` and `q_nom` so a power flow target has a setpoint. |
 | `s_max` | `s_max`, VA | Bounds the sum of squares of that phase's active and reactive power. |
 | `i_max` | `i_max`, A | Per phase, with an optional trailing entry bounding the neutral return current. |
-| `cost` | `cost`, currency per kWh | Kept exactly as stated: one entry per phase. A bare scalar reads as a one-entry statement. |
+| `energy_cost_rate`, or the deprecated `cost` | `cost`, currency per kWh | Kept exactly as stated: one entry per phase. A bare scalar reads as a one-entry statement. Written as `energy_cost_rate`. |
 
 ## voltage_source
 
@@ -163,8 +163,8 @@ configuration the specification supports.
 | `bus`, `terminal_map` | the same names | |
 | `v_magnitude` | `v_magnitude`, V | Per terminal, phase to ground; a grounded terminal states zero. |
 | `v_angle` | `v_angle`, rad | Per terminal. |
-| `cost` | `extras["cost"]` | A 0.2.0 field; retained and re-emitted, not typed. |
-| `p_min`, `p_max`, `q_min`, `q_max` | `extras` | The same standing as `cost`. |
+| `energy_cost_rate` | `energy_cost_rate`, currency per kWh | One entry per phase conductor; neutral terminals have no entry. Schema 0.2.0 removed `cost` here; a document that still states it reads it as `energy_cost_rate` (with one `READ.BMOPF.SCHEMA_LEGACY` when it states 0.2.0), and a write never states `cost`. |
+| `p_min`, `p_max`, `q_min`, `q_max` | `extras` | Retained and re-emitted, not typed. |
 
 ## shunt and capacitor
 
@@ -202,9 +202,9 @@ as two secondary windings.
 | `r_neutral_to`, `x_neutral_to` | `windings[1].r_neutral`, `x_neutral` | |
 | `g_no_load`, `b_no_load` | `extras` | The magnetising branch has no typed slot. |
 | `i_max_from`, `i_max_to` | `extras` | Per winding conductor of that side, in that side's own amperes. |
-| `n_winding.windings[]` | one `DistWinding` each | `bus`, `terminal_map`, `v_nom`, `configuration`, `r_winding`, `delta_roll`, `i_max`. |
+| `n_winding.windings[]` | one `DistWinding` each | `bus`, `terminal_map`, `v_nom`, `configuration` (`WYE` or `DELTA`), `r_winding`, `delta_roll`, `i_max`, `r_neutral`, `x_neutral`. Both neutral fields are nonnegative; a write drops a negative or nonfinite one with `EMIT.BMOPF.TRANSFORMER_NEUTRAL_DROPPED`, as the two-winding subtypes do. |
 | `n_winding.x_sc` | `xsc_pct`, ordered `12, 13, ..., 1n, 23, ..., (n-1)n` | Keyed `i_j` with `i < j` in BMOPF, all referred to winding 1. |
-| `single_phase_autotransformer`, `open_delta_regulator` | windings plus `extras["bmopf_subtype"]` | The regulator ratio, its bounds, the ANSI type and the open delta connection ride in `extras`. |
+| `single_phase_autotransformer`, `open_delta_regulator` | windings plus `extras["bmopf_subtype"]` | `tap_ratio` is the regulated over source voltage ratio, `V_to/V_from`, for both ANSI types: `windings[1].tap / windings[0].tap`. Its bounds, `regulator_type` and the open delta connection ride in `extras`; `regulator_type` records the A/B hardware and does not change the ratio. |
 
 The two-winding subtypes declare the tap ratio and its bounds, the four
 winding neutral fields, and the two no-load fields in place, spelling the
@@ -235,7 +235,7 @@ tables. A document written against an earlier version may carry them under
 | `p_min`, `p_max`, `q_min`, `q_max` | the same names, per phase | |
 | `control_profile` | `control_profile`, an id | |
 | `voltage_aggregation` | `voltage_aggregation`: `PER_PHASE`, `AVERAGE` | |
-| `energy_cost_rate`, or `cost` | `extras` under the stated name | Retained, not typed; written as `energy_cost_rate`. |
+| `energy_cost_rate`; read also as `cost` | `extras["energy_cost_rate"]` | Retained, not typed. Schema 0.2.0 removed `ibr.cost`; the reader moves a stated `cost` to `energy_cost_rate` (with one `READ.BMOPF.SCHEMA_LEGACY` when the document states 0.2.0), a write states only `energy_cost_rate`, and the IVR objective prices the inverter from it. |
 | `dc_bus`, `dc_terminal_map`, `dc_control`, `dc_v_set`, `dc_p_ref`, `dc_droop`, `dc_deadband`, `dc_link_coupled`, `p_dc_min`, `p_dc_max` | `extras` | The DC coupling fields; retained, not typed. |
 | `r_filter`, `x_filter`, `b_filter_shunt`, `grid_forming`, `v_ref_internal` | `extras` | Retained, not typed. |
 | `control_profile.power_factor.pf` | `PowerFactorControl` | |
@@ -272,8 +272,11 @@ dispatchable element and every phase of that phase's cost rate against the
 active power the element injects into the network. A positive cost minimises
 the element's injection and a negative cost maximises it, and that holds the
 same way for a generator, the voltage source, and an IBR. The rate comes from
-the element's own per phase `cost` array: a generator reads it from
-`DistGenerator::cost`, and a voltage source or IBR from its `extras["cost"]`.
+the element's own per phase rate: a generator reads it from
+`DistGenerator::cost` (BMOPF `energy_cost_rate`, or its deprecated alias
+`cost`), a voltage source from `VoltageSource::energy_cost_rate`, and an IBR
+from its `extras["energy_cost_rate"]` (the earlier `cost` spelling when only
+that is stated).
 `ObjectiveTerm::NetworkGeneratorCost` is the term for a balanced network and
 is not part of a BMOPF instance.
 

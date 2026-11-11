@@ -989,9 +989,10 @@ fn inverter_control_laws_intersect_selected_reactive_capability() {
                 assert_eq!(coil.q_min, selected.then_some(-bound / 1000.));
                 assert_eq!(coil.q_max, selected.then_some(bound / 1000.));
                 if fixed_pf {
-                    // At P=100 W this law demands Q=-75 var, outside even the
-                    // nonzero box. Keep both constraints so infeasibility is visible.
-                    assert!((coil.reactive_slope.unwrap() + 0.75).abs() < 1e-12);
+                    // pf=0.8 > 0 puts Q on the same side as P: at P=100 W this
+                    // law demands Q=+75 var, outside even the nonzero box. Keep
+                    // both constraints so infeasibility is visible.
+                    assert!((coil.reactive_slope.unwrap() - 0.75).abs() < 1e-12);
                 } else {
                     assert_eq!(
                         coil.volt_var.as_ref().unwrap().values,
@@ -1382,11 +1383,13 @@ fn fixed_pf_coefficients_are_bounded_at_unity_and_near_zero() {
                 .unwrap()
                 .coils[0];
             let [a, b] = coil.power_factor_coefficients.unwrap();
-            assert_eq!(b.to_bits(), pf.to_bits());
+            assert_eq!(b.to_bits(), (-pf).to_bits());
             assert!(a.is_finite() && (0.0..=1.0).contains(&a));
             assert!((a.hypot(b) - 1.).abs() < 2e-16);
-            // Choose an analytic unit-power point without dividing by PF.
-            assert!((a * magnitude + b * (-sign * a)).abs() < 2e-16);
+            // Choose an analytic unit-power point without dividing by PF: with
+            // P = |pf| the law holds at Q = sign(pf) * a, the same sign as P
+            // when pf > 0.
+            assert!((a * magnitude + b * (sign * a)).abs() < 2e-16);
             if magnitude < 1e-15 {
                 assert_eq!(a.to_bits(), 1.0_f64.to_bits());
             }
@@ -1395,9 +1398,10 @@ fn fixed_pf_coefficients_are_bounded_at_unity_and_near_zero() {
             }
             if let Some(slope) = coil.reactive_slope {
                 assert!(slope.is_finite());
-                assert!((slope * pf + a).abs() < 2e-16);
+                assert!((slope * pf - a).abs() < 2e-16);
+                assert_eq!(slope.is_sign_positive(), pf.is_sign_positive());
             } else {
-                assert!((-a / pf).is_infinite());
+                assert!((a / pf).is_infinite());
             }
             // Even the smallest positive subnormal PF yields serializable data.
             let decoded: powerio_matrix::McAcOpfPreparation =
@@ -1412,8 +1416,204 @@ fn fixed_pf_coefficients_are_bounded_at_unity_and_near_zero() {
                     .power_factor_coefficients
                     .unwrap()[1]
                     .to_bits(),
-                pf.to_bits()
+                (-pf).to_bits()
             );
         }
     }
+}
+
+/// An OpenDSS PVSystem `pf` keeps its OpenDSS meaning in the IVR rows: `pf > 0`
+/// puts Q on the same side as P, and `pf < 0` on the opposite side. The
+/// PVSystem and its pf control come from an OpenDSS deck; the IVR rows come
+/// from the inverter placed on this test's network, since the deck's source
+/// keeps OpenDSS fields the IVR profile does not interpret.
+#[test]
+fn opendss_pvsystem_pf_sign_carries_into_the_ivr_rows() {
+    for pf in [0.9, -0.9] {
+        let deck = format!(
+            "Clear\nNew Circuit.pv basekv=0.416 phases=3 bus1=sourcebus\n\
+             New PVSystem.pv1 bus1=sourcebus.1 phases=1 kv=0.24 kVA=10 Pmpp=8 pf={pf}\n"
+        );
+        let source = powerio_core::Source::from_memory("pv.dss", deck.into_bytes()).unwrap();
+        let module = powerio_dist::parse(source).unwrap();
+        let parsed = module.value();
+        let mut ibr = parsed.ibrs()[0].clone();
+        let profile = parsed
+            .control_profiles()
+            .iter()
+            .find(|p| Some(&p.name) == ibr.control_profile.as_ref())
+            .unwrap()
+            .clone();
+        // OpenDSS's own convention carries over unchanged.
+        assert_eq!(
+            profile.power_factor.as_ref().unwrap().pf.to_bits(),
+            f64::to_bits(pf)
+        );
+        ibr.bus = "load".into();
+        ibr.terminal_map = names(&["a", "n"]);
+        ibr.extras.clear();
+        let mut net = network();
+        net.ibrs_mut().push(ibr);
+        net.control_profiles_mut().push(profile);
+        let prep = prepare(net);
+        let coil = &prep
+            .devices
+            .iter()
+            .find(|d| d.kind == McOpfDeviceKind::Ibr)
+            .unwrap()
+            .coils[0];
+        let [a, b] = coil.power_factor_coefficients.unwrap();
+        // Solve the row a*P + b*Q = 0 at an exporting P = 1.
+        let q = -a / b;
+        assert!(q.is_finite());
+        assert_eq!(q > 0.0, pf > 0.0, "pf={pf}: Q={q} for P=1");
+        assert!((q.abs() - (1.0_f64 - pf * pf).sqrt() / f64::abs(pf)).abs() < 1e-12);
+    }
+}
+
+/// Volt-Watt `p_limits` is `[p_low, p_high]` ordered by value: the prepared
+/// limit is `p_high` at U5 and `p_low` at U6, as a fraction of the `p_ref`
+/// base (S_MAX when absent). OpenDSS curves map to the same order.
+#[test]
+fn volt_watt_limits_are_low_then_high_and_scale_by_s_max() {
+    use powerio_dist::{DistControlProfile, DistIbr, IbrPrimeMover, IbrTopology};
+    let mut net = network();
+    let mut inv = DistIbr::new(
+        "inv",
+        "load",
+        names(&["a", "n"]),
+        IbrTopology::SinglePhase,
+        IbrPrimeMover::Pv,
+        vec![1000.],
+    );
+    inv.control_profile = Some("vw".into());
+    net.ibrs_mut().push(inv);
+    let mut profile = DistControlProfile::new("vw");
+    profile.volt_watt = Some(
+        serde_json::from_value(serde_json::json!({
+            "breakpoints": [240.0, 250.0],
+            "p_limits": [0.2, 1.0]
+        }))
+        .unwrap(),
+    );
+    net.control_profiles_mut().push(profile);
+    let prep = prepare(net);
+    let coil = &prep
+        .devices
+        .iter()
+        .find(|d| d.identity == "inv")
+        .unwrap()
+        .coils[0];
+    let droop = coil.volt_watt.as_ref().unwrap();
+    // S_MAX is 1000 VA on a 1000 VA per-coil base: p_high = 1.0 at U5, p_low
+    // = 0.2 at U6.
+    assert_eq!(droop.values.len(), 2);
+    assert!((droop.values[0] - 1.0).abs() < 1e-12, "{:?}", droop.values);
+    assert!((droop.values[1] - 0.2).abs() < 1e-12, "{:?}", droop.values);
+
+    // An OpenDSS volt-watt curve states the limit at U5 first; it reads in
+    // the same value order.
+    let base = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../tests/data/dist/micro/ibr_pv_control.dss"
+    ))
+    .unwrap();
+    let text = base
+        .lines()
+        .map(|line| {
+            if line.starts_with("New XYcurve") {
+                "New XYcurve.vw_pv1 npts=2 Xarray=[1.06 1.10] Yarray=[1.0 0.2]".to_owned()
+            } else if line.starts_with("New InvControl") {
+                "New InvControl.ivc_pv1 DERList=[PVSystem.pv1] mode=VOLTWATT voltwatt_curve=vw_pv1 VoltwattYAxis=PMPPPU voltage_curvex_ref=rated".to_owned()
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = powerio_core::Source::from_memory("vw.dss", text.into_bytes()).unwrap();
+    let module = powerio_dist::parse(source).unwrap();
+    let vw = module.value().control_profiles()[0]
+        .volt_watt
+        .clone()
+        .expect("a volt-watt profile");
+    assert_eq!(vw.p_limits, vec![0.2, 1.0]);
+}
+
+/// An inverter's `energy_cost_rate` prices its injection, as a voltage
+/// source's does; the earlier `cost` spelling still does when it is the only
+/// one stated.
+#[test]
+fn inverter_energy_cost_rate_prices_its_injection() {
+    use powerio_dist::{DistIbr, IbrPrimeMover, IbrTopology};
+    for key in ["energy_cost_rate", "cost"] {
+        let mut net = network();
+        let mut inv = DistIbr::new(
+            "inv",
+            "load",
+            names(&["a", "n"]),
+            IbrTopology::SinglePhase,
+            IbrPrimeMover::Pv,
+            vec![1000.],
+        );
+        inv.extras.insert(key.into(), serde_json::json!([0.3]));
+        net.ibrs_mut().push(inv);
+        let prep = prepare(net);
+        let coil = &prep
+            .devices
+            .iter()
+            .find(|d| d.identity == "inv")
+            .unwrap()
+            .coils[0];
+        // $/kWh on a 1000 VA base: 0.3 $/kWh is 0.3 per unit.
+        assert!((coil.cost - 0.3).abs() < 1e-12, "{key}: {}", coil.cost);
+    }
+}
+
+/// A regulator's `tap_ratio` is the regulated over source voltage ratio for
+/// both ANSI types; `regulator_type` records the hardware only, so type A and
+/// type B prepare the same transformer rows and tap mapping.
+#[test]
+fn regulator_types_a_and_b_share_the_regulated_over_source_ratio() {
+    let prepared = |regulator_type: &str| {
+        let text = serde_json::json!({
+            "bus": {
+                "s": {"terminal_names": ["1", "n"], "perfectly_grounded_terminals": ["n"]},
+                "r": {"terminal_names": ["1", "n"], "perfectly_grounded_terminals": ["n"]}
+            },
+            "voltage_source": {"src": {"bus": "s", "terminal_map": ["1", "n"],
+                "v_magnitude": [2400.0, 0.0], "v_angle": [0.0, 0.0]}},
+            "transformer": {"single_phase_autotransformer": {"svr": {
+                "bus_from": "s", "bus_to": "r",
+                "terminal_map_from": ["1", "n"], "terminal_map_to": ["1", "n"],
+                "s_rating": 1_666_000.0,
+                "r_series_from": 0.001, "x_series_from": 0.002,
+                "r_series_to": 0.001, "x_series_to": 0.0,
+                "tap_ratio": 1.05, "tap_ratio_min": 0.9, "tap_ratio_max": 1.1,
+                "regulator_type": regulator_type
+            }}},
+            "load": {"l": {"bus": "r", "terminal_map": ["1", "n"],
+                "configuration": "SINGLE_PHASE", "p_nom": [1000.0], "q_nom": [0.0]}}
+        })
+        .to_string();
+        let source = powerio_core::Source::from_memory("svr.json", text.into_bytes()).unwrap();
+        let module = powerio_dist::parse(source).unwrap();
+        let prep = prepare(module.value().clone());
+        let tx = prep
+            .transformers
+            .iter()
+            .find(|t| t.identity == "svr")
+            .unwrap()
+            .clone();
+        serde_json::to_value(&tx).unwrap()
+    };
+    let a = prepared("A");
+    let b = prepared("B");
+    assert_eq!(a, b);
+    assert_eq!(a["tap_inverse"], true);
+    let nominal = a["tap_nominal"].as_f64().unwrap();
+    let bounds = a["tap_bounds"].as_array().unwrap();
+    // The physical tap is tap_nominal / t, so t spans [nominal/1.1, nominal/0.9].
+    assert!((bounds[0].as_f64().unwrap() - nominal / 1.1).abs() < 1e-12);
+    assert!((bounds[1].as_f64().unwrap() - nominal / 0.9).abs() < 1e-12);
 }

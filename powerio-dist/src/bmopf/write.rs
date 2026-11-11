@@ -1375,6 +1375,19 @@ impl Writer {
                 ));
             }
         }
+        // Schema 0.2.0 requires `dc_terminal_map` beside `dc_bus`: without it
+        // the DC coupling names no DC terminals, so it cannot be written.
+        if o.contains_key("dc_bus") && !o.contains_key("dc_terminal_map") {
+            o.remove("dc_bus");
+            self.warn(
+                &C::EMIT_BMOPF_FIELD_DROPPED,
+                format!(
+                    "ibr {}: `dc_bus` states no `dc_terminal_map`, which the BMOPF schema \
+                     requires beside it; `dc_bus` dropped from the output",
+                    ibr.name
+                ),
+            );
+        }
         Value::Object(o)
     }
 
@@ -2264,8 +2277,27 @@ impl Writer {
                 if w.r_neutral.is_some_and(|r| r < 0.0) {
                     self.warn(&C::EMIT_BMOPF_FIELD_DROPPED, format!("transformer {} winding {idx}: open OpenDSS neutral has no internal impedance branch; neutral impedance fields omitted", t.name));
                 } else {
+                    // Schema 0.2.0 takes nonnegative winding neutral fields,
+                    // as the two-winding subtypes do.
                     for (key, value) in [("r_neutral", w.r_neutral), ("x_neutral", w.x_neutral)] {
-                        if let Some(value) = value { wj.insert(key.into(), self.num(value, key)); }
+                        let Some(value) = value else { continue };
+                        if value.is_finite() && value >= 0.0 {
+                            wj.insert(key.into(), json!(value));
+                        } else {
+                            let mut details = Map::new();
+                            details.insert("field".into(), json!(key));
+                            details.insert("winding".into(), json!(idx));
+                            details.insert("value".into(), json!(value));
+                            self.transformer_diagnostic(
+                                t,
+                                &C::EMIT_BMOPF_TRANSFORMER_NEUTRAL_DROPPED,
+                                format!(
+                                    "transformer {} winding {idx}: {key}={value} is not a nonnegative finite BMOPF neutral impedance; dropped",
+                                    t.name
+                                ),
+                                details,
+                            );
+                        }
                     }
                 }
                 if let Some(metadata) = t.extras.get("bmopf_winding_metadata").and_then(|v| v.get(idx.to_string())).and_then(Value::as_object) {

@@ -5163,3 +5163,135 @@ fn component_geo_line_strings_and_projected_points() {
         projected.diagnostics
     );
 }
+
+/// Schema 0.2.0 removed `voltage_source.cost` and `ibr.cost`. A document that
+/// still states them reads them as `energy_cost_rate`, under the one
+/// `READ.BMOPF.SCHEMA_LEGACY` finding when it states 0.2.0, and a write
+/// states only `energy_cost_rate`, which validates.
+#[test]
+fn source_and_inverter_cost_read_as_energy_cost_rate_and_never_write() {
+    let text = serde_json::json!({
+        "meta": {"$schema": BmopfSchemaVersion::Bmopf020.schema_id(), "schema_version": "0.2.0"},
+        "bus": {"b": {"terminal_names": ["a", "n"], "perfectly_grounded_terminals": ["n"]}},
+        "voltage_source": {"s": {"bus": "b", "terminal_map": ["a", "n"],
+            "v_magnitude": [230.0, 0.0], "v_angle": [0.0, 0.0], "cost": [0.1]}},
+        "ibr": {"pv": {"bus": "b", "terminal_map": ["a", "n"], "topology": "SINGLE_PHASE",
+            "prime_mover": "PV", "s_max": [5000.0], "cost": [0.02]}}
+    })
+    .to_string();
+    let net = parse_bmopf_str(&text).unwrap();
+    assert_eq!(net.sources()[0].energy_cost_rate, Some(vec![0.1]));
+    assert_eq!(
+        net.ibrs()[0].extras.get("energy_cost_rate"),
+        Some(&serde_json::json!([0.02]))
+    );
+    assert!(!net.ibrs()[0].extras.contains_key("cost"));
+    let legacy: Vec<_> = net
+        .diagnostics
+        .iter()
+        .filter(|d| d.code() == "READ.BMOPF.SCHEMA_LEGACY")
+        .collect();
+    assert_eq!(legacy.len(), 1, "{:?}", net.diagnostics);
+    assert!(
+        legacy[0].message().contains("`voltage_source.cost` (1)")
+            && legacy[0].message().contains("`ibr.cost` (1)"),
+        "{legacy:?}"
+    );
+
+    // An inverter built with the earlier key still writes only the new one.
+    let mut net = (*net).clone();
+    net.ibrs_mut()[0].extras.clear();
+    net.ibrs_mut()[0]
+        .extras
+        .insert("cost".into(), serde_json::json!([0.03]));
+    let out = emit_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(
+        doc["voltage_source"]["s"]["energy_cost_rate"],
+        serde_json::json!([0.1])
+    );
+    assert!(doc["voltage_source"]["s"].get("cost").is_none());
+    assert_eq!(
+        doc["ibr"]["pv"]["energy_cost_rate"],
+        serde_json::json!([0.03])
+    );
+    assert!(doc["ibr"]["pv"].get("cost").is_none());
+}
+
+/// Schema 0.2.0 takes nonnegative n-winding neutral fields: a negative or
+/// nonfinite `x_neutral` is dropped with the diagnostic the two-winding
+/// subtypes use, not written.
+#[test]
+fn n_winding_negative_neutral_reactance_is_dropped_not_written() {
+    let input = serde_json::json!({
+        "bus": {"p": {"terminal_names": ["a", "n"]}, "s": {"terminal_names": ["a", "n"]}},
+        "transformer": {"n_winding": {"t": {
+            "s_rating": 10000.0,
+            "windings": [
+                {"bus": "p", "terminal_map": ["a", "n"], "configuration": "WYE", "v_nom": 1000.0,
+                 "s_rating": 9000.0, "r_winding": 2.0, "r_neutral": 5.0, "x_neutral": 1.0},
+                {"bus": "s", "terminal_map": ["a", "n"], "configuration": "WYE", "v_nom": 100.0,
+                 "s_rating": 8000.0, "r_winding": 0.03}
+            ], "x_sc": {"1_2": 1.5}
+        }}}
+    });
+    let parsed = parse_bmopf_str(&input.to_string()).unwrap();
+    let mut net = (*parsed).clone();
+    net.transformers_mut()[0].windings[0].x_neutral = Some(-1.0);
+    net.transformers_mut()[0].windings[1].x_neutral = Some(f64::NAN);
+    let out = emit_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let windings = &doc["transformer"]["n_winding"]["t"]["windings"];
+    assert_eq!(windings[0]["r_neutral"], 5.0);
+    assert!(windings[0].get("x_neutral").is_none(), "{windings}");
+    assert!(windings[1].get("x_neutral").is_none(), "{windings}");
+    assert_eq!(
+        out.warnings
+            .iter()
+            .filter(|w| w.contains("TRANSFORMER_NEUTRAL_DROPPED") && w.contains("x_neutral"))
+            .count(),
+        2,
+        "{:?}",
+        out.warnings
+    );
+}
+
+/// Schema 0.2.0 requires `dc_terminal_map` beside an inverter's `dc_bus`. The
+/// semantic check names the missing map instead of comparing the AC terminal
+/// map with the DC bus, and the writer reports the field it cannot write.
+#[test]
+fn inverter_dc_bus_requires_dc_terminal_map() {
+    let text = serde_json::json!({
+        "bus": {"b": {"terminal_names": ["a", "n"], "perfectly_grounded_terminals": ["n"]}},
+        "voltage_source": {"s": {"bus": "b", "terminal_map": ["a", "n"],
+            "v_magnitude": [230.0, 0.0], "v_angle": [0.0, 0.0]}},
+        "dc_bus": {"d": {"terminal_names": ["p", "r"]}},
+        "ibr": {"pv": {"bus": "b", "terminal_map": ["a", "n"], "topology": "SINGLE_PHASE",
+            "prime_mover": "PV", "s_max": [5000.0], "dc_bus": "d"}}
+    })
+    .to_string();
+    let net = parse_bmopf_str(&text).unwrap();
+    let semantic: Vec<_> = net
+        .diagnostics
+        .iter()
+        .filter(|d| d.code() == "READ.BMOPF.SEMANTIC_INVALID")
+        .collect();
+    assert_eq!(semantic.len(), 1, "{:?}", net.diagnostics);
+    assert!(
+        semantic[0].message().contains("requires `dc_terminal_map`"),
+        "{semantic:?}"
+    );
+    let out = emit_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(doc["ibr"]["pv"].get("dc_bus").is_none(), "{doc}");
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("ibr pv") && w.contains("dc_terminal_map")),
+        "{:?}",
+        out.warnings
+    );
+}

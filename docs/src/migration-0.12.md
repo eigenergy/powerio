@@ -231,6 +231,13 @@ Its pin moves to the `schema-v0.2.0` tag once the Task Force ratifies it.
 | bus neutral to ground cap written as `vn_max` | written as `vng_max` |
 | `meta.$schema` stating a PowerIO archive URL | the schema's canonical `$id` |
 
+Multiconductor IVR preparation changes three results. A fixed inverter power
+factor follows the OpenDSS sign convention, `pf > 0` putting Q on the same
+side as P, so `McOpfCoil::power_factor_coefficients` is `[a, -pf]` where it
+was `[a, pf]`, and `reactive_slope` changes sign. A type-A regulator prepares
+with the regulated over source ratio and `tap_inverse = true`, as type B
+does. An inverter's `energy_cost_rate` sets its dispatch cost.
+
 0.1.0, 0.1.1, and PowerIO 0.11 documents still read, as 0.2.0, with one
 `READ.BMOPF.SCHEMA_LEGACY` warning naming the version each stated. A consumer
 that still needs a 0.1.0 document has to keep its source file: writing such a

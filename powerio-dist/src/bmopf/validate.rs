@@ -247,22 +247,29 @@ impl Check<'_> {
                 );
             }
         }
+        // An inverter's DC coupling names its DC terminals in
+        // `dc_terminal_map`, which schema 0.2.0 requires beside `dc_bus`; its
+        // `terminal_map` names AC terminals, so it cannot stand in.
+        let inverter = path.starts_with("ibr.");
+        if inverter && record.contains_key("dc_bus") && !record.contains_key("dc_terminal_map") {
+            self.error(
+                &format!("{path}.dc_terminal_map"),
+                "an inverter with `dc_bus` requires `dc_terminal_map`",
+            );
+        }
         for (bus, map) in [
             ("dc_bus", "terminal_map"),
             ("dc_bus_from", "terminal_map_from"),
             ("dc_bus_to", "terminal_map_to"),
         ] {
-            self.map_table(
-                value,
-                "dc_bus",
-                bus,
-                if record.contains_key("dc_terminal_map") {
-                    "dc_terminal_map"
-                } else {
-                    map
-                },
-                path,
-            );
+            let map = if record.contains_key("dc_terminal_map") {
+                "dc_terminal_map"
+            } else if inverter && bus == "dc_bus" {
+                continue;
+            } else {
+                map
+            };
+            self.map_table(value, "dc_bus", bus, map, path);
         }
         if path.starts_with("dc_grounding.") {
             self.map_table(value, "dc_bus", "dc_bus", "terminal", path);

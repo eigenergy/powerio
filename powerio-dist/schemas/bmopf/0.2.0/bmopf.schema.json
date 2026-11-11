@@ -17,7 +17,7 @@
         "$schema": {
           "type": "string",
           "const": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json",
-          "description": "The schema's canonical identifier, exactly its `$id`. A consumer recognises the document by this value; where it fetched the schema from is a separate matter. Retrieval permalinks (a raw GitHub commit URL) and the schema digest belong in `meta.provenance`. One identifier per version ends the proliferation of per-producer archive URLs that consumers had to allow-list (BMOPFTools issue 487)."
+          "description": "The schema's canonical identifier, exactly its `$id`. A consumer recognises the document by this value; where it fetched the schema from is a separate matter. Retrieval permalinks (a raw GitHub commit URL) and the schema digest belong in `meta.provenance`."
         },
         "schema_version": {
           "type": "string",
@@ -208,7 +208,7 @@
           },
           "geo": {
             "$ref": "#/$defs/geojson_point",
-            "description": "Where the bus is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Descriptive only: no calculation reads it; electrical length comes from `line.length` and impedance from the linecode. Proposed from BMOPFTools PR 258 and the PowerIO reference implementation, which reads this field and previously had to carry it in `extras.geojson` because no typed slot existed."
+            "description": "Where the bus is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Descriptive only: no calculation reads it; electrical length comes from `line.length` and impedance from the linecode."
           }
         },
         "required": [
@@ -305,10 +305,10 @@
               "linecode",
               "length"
             ],
-            "not": {
-              "required": [
-                "R_series_1_1"
-              ]
+            "propertyNames": {
+              "not": {
+                "pattern": "^(R_series|X_series|G_from|G_to|B_from|B_to)_\\d+_\\d+$"
+              }
             }
           },
           {
@@ -355,14 +355,6 @@
           "time_series": {
             "$ref": "#/$defs/time_series_ref"
           },
-          "cost": {
-            "type": "array",
-            "items": {
-              "type": "number"
-            },
-            "description": "Linear active-power cost [$/kWh] of each phase conductor of the source, one entry per phase conductor in `terminal_map` order. The source is not special in the objective: a positive injection is an import, so a positive entry is the import price and an export is credited at the same price. A scalar is rejected. Absent, the source carries no objective term. Legacy spelling accepted for compatibility with earlier drafts. Fresh output uses energy_cost_rate.",
-            "deprecated": true
-          },
           "p_min": {
             "type": "array",
             "items": {
@@ -382,7 +374,7 @@
             "items": {
               "type": "number"
             },
-            "description": "Energy cost rate [$/kWh], one entry per phase conductor in terminal_map order. Neutral terminals have no price entry."
+            "description": "Energy cost rate [$/kWh] of each phase conductor of the source, one entry per phase conductor in `terminal_map` order; a neutral has no entry. The source is not special in the objective: a positive injection is an import, so a positive entry is the import price and an export is credited at the same price. Absent, the source carries no objective term."
           },
           "geo": {
             "$ref": "#/$defs/geojson_point",
@@ -652,7 +644,7 @@
             "items": {
               "type": "number"
             },
-            "description": "Linear active-power generating cost [$/kWh] of each phase conductor, one entry per phase conductor in `terminal_map` order. A scalar is rejected. Legacy spelling accepted for compatibility with earlier drafts. Fresh output uses energy_cost_rate.",
+            "description": "Deprecated 0.1.x spelling of `energy_cost_rate`, with the same meaning and dimensions. When both are present they must agree. New documents use `energy_cost_rate`.",
             "deprecated": true
           },
           "bus": {
@@ -672,7 +664,7 @@
             "items": {
               "type": "number"
             },
-            "description": "Energy cost rate [$/kWh], one entry per phase conductor in terminal_map order. Neutral terminals have no price entry."
+            "description": "Energy cost rate [$/kWh] of each phase conductor, one entry per phase conductor in `terminal_map` order; a neutral has no entry. The objective sums this rate against the active power the phase injects into the network, so a positive entry penalises generation."
           },
           "geo": {
             "$ref": "#/$defs/geojson_point",
@@ -881,7 +873,7 @@
         },
         "single_phase_autotransformer": {
           "$ref": "#/$defs/single_phase_autotransformer",
-          "description": "Single-phase step voltage regulator modelled as an autotransformer (series + common winding sharing a node). The ratio is the fixed tap_ratio; regulator_type selects ANSI Type A or B."
+          "description": "Single-phase step voltage regulator modelled as an autotransformer (series and shunt winding sharing a node). `tap_ratio` is the regulated over source voltage ratio; `regulator_type` records the ANSI arrangement."
         },
         "open_delta_regulator": {
           "$ref": "#/$defs/open_delta_regulator",
@@ -889,7 +881,7 @@
         },
         "n_winding": {
           "$ref": "#/$defs/n_winding_transformer",
-          "description": "General n-winding (3+) transformer as a winding-indexed list with pairwise short-circuit reactances. Winding 1 is the reference; the OPF/Ybus build a star/T-equivalent. WYE and DELTA windings are supported (a DELTA winding's v_nom is its line-to-line coil voltage; delta_roll selects the vector-group rotation)."
+          "description": "General transformer with two or more windings (the form for three or more windings, and for two-winding arrangements no dedicated subtype names, such as wye-wye), as a winding-indexed list with pairwise short-circuit reactances. Winding 1 is the reference; the OPF/Ybus build a star/T-equivalent. WYE and DELTA windings are supported (a DELTA winding's v_nom is its line-to-line coil voltage; delta_roll selects the vector-group rotation)."
         }
       },
       "additionalProperties": false,
@@ -944,7 +936,7 @@
           },
           "s_max": {
             "type": "array",
-            "description": "Per-phase apparent-power nameplate ratings [VA]; one entry per phase conductor (length = terminal_map - 1)",
+            "description": "Per-phase apparent-power nameplate ratings [VA]; one entry per phase conductor in `terminal_map` order (a neutral has no entry)",
             "items": {
               "$ref": "#/$defs/nonnegative_number"
             }
@@ -962,14 +954,14 @@
           },
           "p_min": {
             "type": "array",
-            "description": "Per-phase minimum active power [W]; one entry per phase conductor (length = terminal_map - 1). Negative indicates absorption (battery charging)",
+            "description": "Per-phase minimum active power [W]; one entry per phase conductor in `terminal_map` order (a neutral has no entry). Negative indicates absorption (battery charging)",
             "items": {
               "type": "number"
             }
           },
           "p_max": {
             "type": "array",
-            "description": "Per-phase maximum active power [W]; one entry per phase conductor (length = terminal_map - 1)",
+            "description": "Per-phase maximum active power [W]; one entry per phase conductor in `terminal_map` order (a neutral has no entry)",
             "items": {
               "type": "number"
             }
@@ -1016,14 +1008,14 @@
           },
           "q_min": {
             "type": "array",
-            "description": "Per-phase minimum reactive power [var]; one entry per phase conductor (length = terminal_map - 1). Negative indicates absorption (default -s_max)",
+            "description": "Per-phase minimum reactive power [var]; one entry per phase conductor in `terminal_map` order (a neutral has no entry). Negative indicates absorption (default -s_max)",
             "items": {
               "type": "number"
             }
           },
           "q_max": {
             "type": "array",
-            "description": "Per-phase maximum reactive power [var]; one entry per phase conductor (length = terminal_map - 1) (default s_max)",
+            "description": "Per-phase maximum reactive power [var]; one entry per phase conductor in `terminal_map` order (a neutral has no entry) (default s_max)",
             "items": {
               "type": "number"
             }
@@ -1054,14 +1046,6 @@
             "$ref": "#/$defs/nonnegative_number",
             "description": "Internal voltage magnitude setpoint [V]; grid-forming only"
           },
-          "cost": {
-            "type": "array",
-            "items": {
-              "type": "number"
-            },
-            "description": "Linear active-power dispatch cost [$/kWh] of each phase conductor, one entry per phase conductor in `terminal_map` order. The objective sums this rate against the active power the phase injects into the network, so a positive entry minimises injection and a negative entry maximises it. A scalar is rejected. Legacy spelling accepted for compatibility with earlier drafts. Fresh output uses energy_cost_rate.",
-            "deprecated": true
-          },
           "control_profile": {
             "type": "string",
             "description": "Reference to a control_profile id encoding smart-IBR control laws"
@@ -1082,7 +1066,7 @@
             "items": {
               "type": "number"
             },
-            "description": "Energy cost rate [$/kWh], one entry per phase conductor in terminal_map order. Neutral terminals have no price entry."
+            "description": "Energy cost rate [$/kWh] of each phase conductor, one entry per phase conductor in `terminal_map` order; a neutral has no entry. The objective sums this rate against the active power the phase injects into the network, so a positive entry penalises injection and a negative entry rewards it."
           },
           "geo": {
             "$ref": "#/$defs/geojson_point",
@@ -1095,7 +1079,12 @@
           "topology",
           "prime_mover",
           "s_max"
-        ]
+        ],
+        "dependentRequired": {
+          "dc_bus": [
+            "dc_terminal_map"
+          ]
+        }
       }
     },
     "control_profile": {
@@ -1166,7 +1155,7 @@
                 "items": {
                   "$ref": "#/$defs/nonnegative_number"
                 },
-                "description": "The two voltage breakpoints [U5, U6] [V] of the active-power limit, non-decreasing. At or below U5 the limit is `p_limits[0]`, at or above U6 it is `p_limits[1]`, and it interpolates linearly between them.",
+                "description": "The two voltage breakpoints [U5, U6] [V] of the active-power limit, non-decreasing. At or below U5 the limit is the higher value `p_limits[1]`, at or above U6 it is the lower value `p_limits[0]`, and it interpolates linearly between them.",
                 "minItems": 2,
                 "maxItems": 2
               },
@@ -1175,7 +1164,7 @@
                 "items": {
                   "$ref": "#/$defs/nonnegative_number"
                 },
-                "description": "The two active-power limits [p_low, p_high] reached at U5 and U6, in watts or as a fraction of the `p_ref` base as `p_unit` states.",
+                "description": "The two active-power limits [p_low, p_high], p_low not above p_high: p_high applies at or below U5 and p_low at or above U6. Like `q_limits`, the array is ordered by value. In watts, or as a fraction of the base `p_ref` names, as `p_unit` states.",
                 "minItems": 2,
                 "maxItems": 2
               },
@@ -1199,9 +1188,17 @@
             "properties": {
               "pf": {
                 "type": "number",
-                "minimum": -1,
-                "maximum": 1,
-                "description": "Power factor; positive = lagging (Q absorption), negative = leading (Q injection)"
+                "description": "Signed power factor, 0 < |pf| <= 1, with |pf| = |P| / sqrt(P^2 + Q^2) and P, Q positive when injected into the network. pf > 0: Q has the same sign as P (an inverter exporting active power also exports reactive power, as a generator at lagging power factor does). pf < 0: Q has the opposite sign to P. This is the OpenDSS PVSystem and Storage `pf` convention (\"negative when kW and kvar have opposite signs\"), so an OpenDSS value carries over unchanged.",
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "maximum": 1
+                  },
+                  {
+                    "minimum": -1,
+                    "exclusiveMaximum": 0
+                  }
+                ]
               }
             },
             "required": [
@@ -1229,7 +1226,7 @@
           },
           "r_dc": {
             "$ref": "#/$defs/nonnegative_number",
-            "description": "DC resistance per unit length at temperature_ref [Ohm/m]. At least one of r_dc/r_ac is required (checked in the Julia layer); the other defaults via r_ac = 1.02 r_dc"
+            "description": "DC resistance per unit length at temperature_ref [Ohm/m]. At least one of r_dc/r_ac is required (a consumer checks this); the other defaults via r_ac = 1.02 r_dc"
           },
           "r_ac": {
             "$ref": "#/$defs/nonnegative_number",
@@ -2039,7 +2036,7 @@
     },
     "p_ref_type": {
       "type": "string",
-      "description": "Active-power normalisation base for Volt-Watt: P_AVAILABLE, P_MAX, or S_MAX",
+      "description": "Base of a VA_FRACTION active-power limit: S_MAX (the inverter's per-phase `s_max`, the default), P_MAX (its per-phase `p_max`), or P_AVAILABLE (its `p_avail` shared equally across its phases).",
       "enum": [
         "P_AVAILABLE",
         "P_MAX",
@@ -2056,7 +2053,7 @@
     },
     "p_unit_type": {
       "type": "string",
-      "description": "Unit for active-power limit values: VA_FRACTION (fraction of s_max) or W (absolute)",
+      "description": "Unit of the active-power limits: W (absolute watts per phase) or VA_FRACTION (a fraction of the base `p_ref` names; the name is historical, and the base is not always a VA rating).",
       "enum": [
         "VA_FRACTION",
         "W"
@@ -2064,7 +2061,7 @@
     },
     "regulator_type": {
       "type": "string",
-      "description": "ANSI step-voltage-regulator connection: A (series winding on the regulated/output side; n_eff = 1/tap_ratio) or B (series winding on the source side, standard SVR; n_eff = tap_ratio)",
+      "description": "ANSI C57.15 step-voltage-regulator arrangement. A: the shunt winding is across the source side, so core excitation follows the source voltage and the series winding sits on the regulated side. B (the usual arrangement): the shunt winding is across the regulated side, so excitation is constant and the series winding sits on the source side. It records the hardware, which affects how a physical tap position maps to a ratio. It does not change what `tap_ratio` means: for both, `tap_ratio` is the regulated over source voltage ratio.",
       "enum": [
         "A",
         "B"
@@ -2098,7 +2095,11 @@
         },
         "configuration": {
           "$ref": "#/$defs/configuration_type",
-          "description": "Winding configuration (WYE or DELTA)"
+          "enum": [
+            "WYE",
+            "DELTA"
+          ],
+          "description": "Winding configuration, WYE or DELTA"
         },
         "r_winding": {
           "$ref": "#/$defs/nonnegative_number",
@@ -2142,8 +2143,8 @@
           "description": "Winding-neutral-to-earth resistance [Ohm]. Absence of both neutral impedance fields adds no internal grounding branch; explicitly zero impedance gives solid grounding."
         },
         "x_neutral": {
-          "type": "number",
-          "description": "Winding-neutral-to-earth reactance [Ohm]; see r_neutral."
+          "$ref": "#/$defs/nonnegative_number",
+          "description": "Winding-neutral-to-earth reactance [Ohm], non-negative; see r_neutral."
         }
       },
       "required": [
@@ -2211,7 +2212,7 @@
           },
           "tap_ratio": {
             "$ref": "#/$defs/nonnegative_number",
-            "description": "Regulation ratio (regulated/source), e.g. in [0.9, 1.1]. Default 1.0. Start value when free."
+            "description": "Regulation ratio, regulated-side voltage over source-side voltage (`bus_to` over `bus_from`) of the ideal regulator, e.g. in [0.9, 1.1]; above 1 raises the voltage. The meaning does not depend on `regulator_type`. Default 1.0, and the start value when the ratio is a free variable."
           },
           "tap_ratio_min": {
             "$ref": "#/$defs/nonnegative_number",
@@ -2334,7 +2335,7 @@
             "items": {
               "$ref": "#/$defs/nonnegative_number"
             },
-            "description": "Per-regulator regulation ratios [a1, a2] (length 2). Start values when free.",
+            "description": "Regulation ratios [a1, a2] of the two regulators (length 2), each the regulated-side voltage over the source-side voltage of its leg, as in `single_phase_autotransformer.tap_ratio`. Start values when free.",
             "minItems": 2,
             "maxItems": 2
           },
@@ -2422,7 +2423,7 @@
         "properties": {
           "windings": {
             "type": "array",
-            "description": "Ordered list of windings; winding 1 is the reference. Length >= 2.",
+            "description": "Ordered list of two or more windings; winding 1 is the reference.",
             "minItems": 2,
             "items": {
               "$ref": "#/$defs/transformer_winding"

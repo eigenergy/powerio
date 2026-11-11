@@ -419,10 +419,28 @@ action.
 - PowerIO writes one BMOPF version, 0.2.0, as proposed in
   [dsopt-schema#2](https://github.com/distribution-system-opt/dsopt-schema/pull/2).
   The vendored schema is dsopt-schema
-  [`86fe813`](https://github.com/distribution-system-opt/dsopt-schema/commit/86fe813f3553b89542b6eead2a75fca0bbdb3acd),
-  the proposal reconciled with schema 0.1.1 and the Task Force review answers
-  (`vng_max`, geometry for every located element); the pin moves to the
-  `schema-v0.2.0` tag once the Task Force ratifies it (#844).
+  [`9bca0cc`](https://github.com/distribution-system-opt/dsopt-schema/commit/9bca0ccb8fbee93eb2adcca7ec32954a05940631),
+  the proposal reconciled with schema 0.1.1, the Task Force review answers
+  (`vng_max`, geometry for every located element) and the review fixes to
+  dsopt-schema#2; the pin moves to the `schema-v0.2.0` tag once the Task Force
+  ratifies it (#844).
+- Multiconductor IVR preparation follows the schema's inverter power factor
+  sign, the OpenDSS PVSystem and Storage convention: `pf > 0` puts Q on the
+  same side as P. Preparation used the opposite sign, so an OpenDSS `pf=0.9`
+  inverter absorbed reactive power where OpenDSS injects it; the coefficient
+  row is now `a*P - pf*Q = 0`.
+- A type-A regulator's `tap_ratio` is the regulated over source voltage ratio,
+  as for type B; `regulator_type` records the hardware only. IVR preparation
+  read a type-A ratio inverted.
+- IVR preparation prices an inverter from its `energy_cost_rate`. It priced
+  only from `cost` and refused `energy_cost_rate` as an uninterpreted field,
+  so an inverter price read from BMOPF 0.2.0 was never honoured.
+- Schema 0.2.0 removed `voltage_source.cost` and `ibr.cost`. A document that
+  still states them reads them as `energy_cost_rate`, and a write states only
+  `energy_cost_rate`. A writer drops a negative or nonfinite n-winding neutral
+  field with `EMIT.BMOPF.TRANSFORMER_NEUTRAL_DROPPED`, and drops an inverter
+  `dc_bus` that states no `dc_terminal_map`, which the schema requires beside
+  it; the semantic check names the missing map.
 - Output names the bus phase to ground bounds `vpg_min`/`vpg_max` and the
   neutral to ground cap `vng_max` (earlier `vn_max`), and writes geometry in
   the schema's typed slots, `bus.*.geo`, `line.*.geo` and

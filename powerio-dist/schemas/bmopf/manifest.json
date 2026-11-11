@@ -5,10 +5,10 @@
       "version": "0.2.0",
       "path": "0.2.0/bmopf.schema.json",
       "status": "proposal",
-      "sha256": "8ebdf07daf383c9bcca7b97e6b312f05976d1a2da4b00c74af1faac7932438b1",
+      "sha256": "5735cca16e95c24e94a1f92d6f383a8698ab138985b7088467c42e3f6d6f50f0",
       "schema_id": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json",
       "upstream_repository": "distribution-system-opt/dsopt-schema",
-      "upstream_commit": "86fe813f3553b89542b6eead2a75fca0bbdb3acd",
+      "upstream_commit": "9bca0ccb8fbee93eb2adcca7ec32954a05940631",
       "upstream_path": "schema/bmopf/0.2.0/bmopf.schema.json",
       "review_url": "https://github.com/distribution-system-opt/dsopt-schema/pull/2",
       "license": "CC-BY-4.0"
