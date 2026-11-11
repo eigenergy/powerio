@@ -143,6 +143,60 @@ def test_hdf_variable_length_string_attribute_pickle_is_refused(tmp_path):
     assert not marker.exists()
 
 
+def test_hdf_attribute_pickle_after_a_nul_is_refused(tmp_path):
+    # PyTables writes null terminated string attributes and reads every stored
+    # byte. h5py's attribute reader stopped such a string at its first NUL, so
+    # the scan saw a truncated pickle while PyTables unpickled the call after
+    # the NUL once pandas opened the copy.
+    import pickle
+
+    import h5py
+    import numpy as np
+    from powerio._pypsa_files import _sanitized_hdf
+    marker = tmp_path / "executed"
+    class Payload:
+        def __reduce__(self):
+            return (eval, ("__import__('pathlib').Path(%r).touch()" % str(marker),))
+    # BININT1 0 places a NUL third and POP discards it.
+    payload = b"\x80\x02K\x000" + pickle.dumps(Payload(), protocol=0)
+    path = tmp_path / "bad.h5"
+    with h5py.File(path, "w") as store:
+        group = store.create_group("network")
+        stored = h5py.h5t.C_S1.copy()
+        stored.set_size(len(payload))
+        stored.set_strpad(h5py.h5t.STR_NULLTERM)
+        attribute = h5py.h5a.create(group.id, b"pandas_type", stored, h5py.h5s.create(h5py.h5s.SCALAR))
+        attribute.write(np.array(payload, dtype=f"S{len(payload)}"), mtype=stored)
+    with pytest.raises(ValueError, match="Executable HDF5 attribute"):
+        _sanitized_hdf(path, tmp_path / "safe.h5")
+    assert not marker.exists()
+
+
+def test_hdf_legacy_filters_attribute_is_refused(tmp_path):
+    # For a file declaring a PyTables format below 2.0, PyTables rewrites a
+    # FILTERS pickle before unpickling it. Lengthening `tables.Leaf` turned a
+    # stop instruction the scan honored into an argument, so the call after
+    # it ran.
+    import pickle
+
+    import h5py
+    import numpy as np
+    from powerio._pypsa_files import _sanitized_hdf
+    marker = tmp_path / "executed"
+    class Payload:
+        def __reduce__(self):
+            return (eval, ("__import__('pathlib').Path(%r).touch()" % str(marker),))
+    leaf = b"(ctables.Leaf\n"
+    payload = b"U" + bytes([len(leaf)]) + leaf + b".." + pickle.dumps(Payload(), protocol=0)
+    path = tmp_path / "bad.h5"
+    with h5py.File(path, "w") as store:
+        store.attrs["PYTABLES_FORMAT_VERSION"] = np.bytes_(b"1.6")
+        store.create_group("network").attrs["FILTERS"] = np.bytes_(payload)
+    with pytest.raises(ValueError, match="PyTables 1.x FILTERS"):
+        _sanitized_hdf(path, tmp_path / "safe.h5")
+    assert not marker.exists()
+
+
 def test_hdf_text_attribute_ending_in_a_period_is_kept(tmp_path):
     import h5py
     import numpy as np

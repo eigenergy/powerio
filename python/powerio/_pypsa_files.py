@@ -100,21 +100,54 @@ def _executable_pickle(value: bytes) -> bool:
     """Whether unpickling ``value`` would reach a global.
 
     PyTables unpickles a bytes attribute that ends in ``.``, running each
-    instruction until one fails, and retries with latin-1 when ASCII decoding
-    fails. Running the same unpickler with every global refused follows that
-    path exactly, which a separate parse of the opcodes does not: it stopped at
-    the first byte it could not read and so never saw a call placed before it.
-    Latin-1 decodes every byte, so the check reaches every instruction either
-    of PyTables' attempts would. Without globals, an instruction only builds
-    plain data, so a failure leaves nothing executed.
+    instruction until one fails. It decodes as ASCII first, retries with
+    latin-1 when ASCII decoding fails, and retries with ``bytes`` when latin-1
+    raises a TypeError. Running the same unpickler with every global refused
+    follows those paths exactly, which a separate parse of the opcodes does
+    not: it stopped at the first byte it could not read and so never saw a call
+    placed before it. Latin-1 decodes every byte, so that run reaches every
+    instruction the ASCII attempt would; the ``bytes`` run covers the last
+    attempt. Without globals, an instruction only builds plain data, so a
+    failure leaves nothing executed.
     """
-    try:
-        _no_globals()(io.BytesIO(value), encoding="latin1").load()
-    except _GlobalRequested:
-        return True
-    except Exception:
-        return False
+    for encoding in ("latin1", "bytes"):
+        try:
+            _no_globals()(io.BytesIO(value), encoding=encoding).load()
+        except _GlobalRequested:
+            return True
+        except Exception:
+            continue
     return False
+
+
+def _string_attributes(obj):
+    """Yield each string attribute on ``obj`` with its values as PyTables reads them.
+
+    h5py's attribute reader converts a fixed-length string to a null padded
+    copy, and HDF5 stops copying a null terminated string at its first NUL.
+    PyTables reads the stored type and keeps every byte, so a pickle placed
+    after a NUL reached ``pickle.loads`` unscanned. Reading with the stored
+    type as the memory type keeps those bytes. A variable-length string
+    reaches both readers as a C string, so both end it at its first NUL.
+    """
+    import h5py
+    import numpy as np
+
+    for index in range(h5py.h5a.get_num_attrs(obj.id)):
+        attribute = h5py.h5a.open(obj.id, index=index)
+        stored = attribute.get_type()
+        if stored.get_class() != h5py.h5t.STRING:
+            continue
+        # PyTables reads a string attribute with an empty dataspace as b"".
+        if attribute.get_space().get_simple_extent_type() == h5py.h5s.NULL:
+            continue
+        if stored.is_variable_str():
+            values = np.empty(attribute.shape, dtype=h5py.special_dtype(vlen=bytes))
+            attribute.read(values, mtype=h5py.h5t.py_create(values.dtype))
+        else:
+            values = np.empty(attribute.shape, dtype=f"S{stored.get_size()}")
+            attribute.read(values, mtype=stored)
+        yield attribute.get_name(), [bytes(value) for value in values.ravel()]
 
 
 def _sanitized_hdf(path: Path, destination: Path) -> Path:
@@ -134,21 +167,19 @@ def _sanitized_hdf(path: Path, destination: Path) -> Path:
         def attributes(_name, obj):
             if _name.split("/", 1)[0] in {"meta", "crs"}:
                 return
-            for value in obj.attrs.values():
-                # h5py returns a variable-length string attribute as `str`,
-                # while PyTables reads the same attribute as bytes and may
-                # unpickle it, so both are checked.
-                if isinstance(value, str):
-                    raw = value.encode("utf-8", "surrogateescape")
-                elif isinstance(value, bytes):
-                    raw = value
-                else:
-                    continue
-                if len(raw) > MAX_BYTES:
-                    raise ValueError("HDF5 metadata exceeds the acquisition limit")
-                if _executable_pickle(raw):
-                    raise ValueError("Executable HDF5 attribute serialization is unsupported")
-        attributes("", store)
+            for name, values in _string_attributes(obj):
+                # PyTables 1.x stored FILTERS as a pickle. When a file declares
+                # a format below 2.0, PyTables rewrites those bytes before
+                # unpickling them, so checking the stored bytes does not check
+                # what runs. PyTables 2.0 and later store FILTERS as an integer.
+                if name == b"FILTERS":
+                    raise ValueError("PyTables 1.x FILTERS attributes are unsupported")
+                for raw in values:
+                    if len(raw) > MAX_BYTES:
+                        raise ValueError("HDF5 metadata exceeds the acquisition limit")
+                    if _executable_pickle(raw):
+                        raise ValueError("Executable HDF5 attribute serialization is unsupported")
+        attributes("", store["/"])
         store.visititems(attributes)
         for key in ("meta", "crs"):
             node = store.get(key)

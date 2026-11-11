@@ -115,7 +115,10 @@ The optional `powerio[pypsa-files]` extra enables `pypsa-netcdf` and `pypsa-hdf5
 through PyPSA's own container readers and writers. These transports use PowerIO's
 existing CSV electrical and temporal mapping, so the same diagnostics apply.
 The Python package imports the optional dependencies only when a binary
-transport is used. Input and expanded arrays are bounded to 64 MiB.
+transport is used. Input and expanded arrays are bounded to 64 MiB. PyPSA reads
+HDF5 through pandas and PyTables, which unpickle some attributes, so the reader
+refuses a file with an attribute whose pickle would call code, and a file with a
+PyTables 1.x `FILTERS` attribute, which PyTables rewrites before unpickling.
 
 ```python
 pio.emit(module, "pypsa-netcdf", "network.nc")
