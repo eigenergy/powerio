@@ -1282,11 +1282,10 @@ pub(super) fn write_document(
             );
         }
     }
-    // SiennaSchemas 0.1–0.4 require a numeric Line.rating and allow
-    // the other branch ratings to be absent, which reads as unlimited.
-    // PowerSystems 5.x also requires a numeric primary Line rating. An
-    // unlimited one is PowerSystems' INFINITE_BOUND on the row's base, never
-    // zero, which is a real bound.
+    // SiennaSchemas 0.1–0.4 and PowerSystems 5.x require a numeric
+    // primary rating on both Line and TransformerCircuit. An unlimited
+    // primary rating is PowerSystems' INFINITE_BOUND on the row's base,
+    // never zero, which is a real bound. Secondary ratings may be absent.
     for kind in ["Line", "TransformerCircuit"] {
         if let Some(rows) = doc["components"]
             .get_mut(kind)
@@ -1295,7 +1294,7 @@ pub(super) fn write_document(
             for row in rows {
                 for key in ["rating", "rating_b", "rating_c"] {
                     if row.get(key).is_some_and(Value::is_null) {
-                        if kind == "Line" && key == "rating" {
+                        if key == "rating" {
                             row[key] = json!(INFINITE_BOUND * base(row)?);
                         } else {
                             row.as_object_mut().expect("branch row").remove(key);
