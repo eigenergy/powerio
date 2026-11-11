@@ -325,7 +325,8 @@ def preserve_extensions(module, state: State):
     text = json.dumps(payload, allow_nan=False)
     if len(text.encode()) > MAX_BYTES:
         raise ValueError("Pipeline extensions exceed the 64 MiB IR transport limit")
-    return module.with_extension(EXTENSION_KEY, payload)
+    # The checked text is what with_extension would serialize; attach it directly.
+    return pio.PioModule(module._inner._with_extension_json(EXTENSION_KEY, text))
 
 
 def restore_extensions(module, state: State) -> None:

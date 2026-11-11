@@ -32,10 +32,7 @@ pub(super) fn read(root: &Value) -> Result<AreaTables> {
                 ],
             )?;
             mappings[index].insert(id, area.number);
-            if index == 0
-                && root["ext"][id.to_string()]["org.eigenergy.powerio"]["implicit"].as_bool()
-                    != Some(true)
-            {
+            if index == 0 && super::metadata::ext(root, id)["implicit"].as_bool() != Some(true) {
                 areas.push(area);
             }
         }
@@ -88,8 +85,7 @@ pub(super) fn write(
                     "area_type",
                 ],
             )?;
-            doc["ext"][id.to_string()]["org.eigenergy.powerio"]["implicit"] =
-                json!(source.is_none());
+            super::metadata::ext_mut(doc, id)["implicit"] = json!(source.is_none());
             let mut row = json!({"id":id,"name":area.name.clone().unwrap_or_else(||format!("{kind}_{number}")),"base_power":net.base_mva(),"power_units":"NATURAL_UNITS","peak_active_power":0.0,"peak_reactive_power":0.0});
             if index == 0 && version >= 3 {
                 row["scheduled_net_interchange"] = json!(area.net_interchange);

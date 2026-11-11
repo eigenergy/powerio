@@ -21,10 +21,20 @@ impl PyCollection {
 }
 fn limits(max_bytes: u64, max_files: usize) -> PyResult<powerio::CollectionLimits> {
     Ok(powerio::CollectionLimits {
-        tree: powerio::SourceTreeLimits::new(max_files, max_bytes, 64)
-            .map_err(|e| core_error_pyerr(&e))?,
-        archive: powerio::collection::ArchiveLimits::new(max_bytes, max_files, max_bytes, 200)
-            .map_err(|e| core_error_pyerr(&e))?,
+        // The caller sets the totals; depth and ratio keep the facade defaults.
+        tree: powerio::SourceTreeLimits::new(
+            max_files,
+            max_bytes,
+            powerio::SourceTreeLimits::default().max_depth(),
+        )
+        .map_err(|e| core_error_pyerr(&e))?,
+        archive: powerio::collection::ArchiveLimits::new(
+            max_bytes,
+            max_files,
+            max_bytes,
+            powerio::collection::ArchiveLimits::default().max_ratio(),
+        )
+        .map_err(|e| core_error_pyerr(&e))?,
         ..powerio::CollectionLimits::default()
     })
 }

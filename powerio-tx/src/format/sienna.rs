@@ -500,22 +500,14 @@ pub(super) fn read(
     let mut shunts = Vec::new();
     for row in rows(root, "FixedAdmittance")? {
         let bus = bus_ref(row, "bus", &ids)?;
-        let scale = match row
-            .get("admittance_units")
-            .and_then(Value::as_str)
-            .unwrap_or("COMPONENT_MVAR")
-        {
-            "COMPONENT_MVAR" => 1.0,
-            "NATURAL_UNITS" => positive(by_bus[&bus].base_kv, "base_voltage")?.powi(2),
-            other => return Err(error(format!("unsupported shunt admittance_units {other}"))),
-        };
+        let scale = shunts::scale(row, by_bus[&bus].base_kv)?;
         // The writer states a transformer's secondary-terminal charging as a
         // FixedAdmittance on the to bus, since the schema carries one
         // magnetizing shunt per two-winding transformer. The ext marker folds
         // it back into the branch instead of adding a bus shunt the source
         // never had.
         let id = integer(row, "id")?;
-        let extra = &root["ext"][id.to_string()]["org.eigenergy.powerio"];
+        let extra = metadata::ext(root, id);
         if let Some(marker) = extra
             .get("transformer_circuit")
             .or_else(|| extra.get("transformer_uuid"))
@@ -566,15 +558,7 @@ pub(super) fn read(
         shunts.push(shunts::read(root, row, &ids, &by_bus, actual)?);
     }
     let mut generators = Vec::new();
-    for kind in [
-        "ThermalStandard",
-        "ThermalMultiStart",
-        "RenewableDispatch",
-        "RenewableNonDispatch",
-        "HydroDispatch",
-        "Source",
-        "SynchronousCondenser",
-    ] {
+    for kind in generators::KNOWN {
         for row in rows(root, kind)? {
             let p = power_scale(row)?;
             let bus = bus_ref(row, "bus", &ids)?;
@@ -618,8 +602,7 @@ pub(super) fn read(
                 g.cost = read_cost(c, g.mbase, warnings)?;
             }
             metadata::restore(root, row, &mut g, &["uid", "vg", "caps"])?;
-            if root["ext"][integer(row, "id")?.to_string()]["org.eigenergy.powerio"]["operation_cost_absent"]
-                == true
+            if metadata::ext(root, integer(row, "id")?)["operation_cost_absent"] == true
                 && generators::absent_placeholder(g.cost.as_ref(), warnings.len() == cost_findings)
             {
                 g.cost = None;
@@ -881,18 +864,12 @@ struct Ids {
     reserved: BTreeSet<i64>,
     next: i64,
     original: BTreeMap<String, i64>,
-    related: BTreeMap<(String, i64), i64>,
+    related: BTreeMap<(&'static str, i64), i64>,
     area_numbers: BTreeMap<(String, usize), i64>,
 }
 impl Ids {
     fn original_id(&self, uid: &str) -> Option<i64> {
-        self.original.get(uid).copied().or_else(|| {
-            uid.strip_prefix("sienna:")?
-                .rsplit(':')
-                .next()?
-                .parse()
-                .ok()
-        })
+        self.original.get(uid).copied().or_else(|| sienna_id(uid))
     }
 
     fn secondary_shunts(&mut self, original: &Value, net: &BalancedNetwork) -> Result<()> {
@@ -912,30 +889,30 @@ impl Ids {
         for row in rows(original, "FixedAdmittance")? {
             let id = integer(row, "id")?;
             if !independent.contains(&id)
-                && let Some(circuit) =
-                    original["ext"][id.to_string()]["org.eigenergy.powerio"]["transformer_circuit"]
-                        .as_i64()
+                && let Some(circuit) = metadata::ext(original, id)["transformer_circuit"].as_i64()
                 && let Some(owner) = circuits.get(&circuit)
                 && arcs.get(&integer(owner, "arc")?) == Some(&integer(row, "bus")?)
                 && available(row)? == available(owner)?
             {
                 self.related
-                    .entry(("secondary_shunt".into(), circuit))
+                    .entry(("secondary_shunt", circuit))
                     .or_insert(id);
             }
         }
         Ok(())
     }
 
-    fn related(&mut self, field: &str, owner: i64) -> i64 {
-        let known = self
-            .related
-            .get(&(field.to_owned(), owner))
-            .map(|id| format!("sienna:{field}:{id}"));
-        self.get(known.as_deref())
+    fn related(&mut self, field: &'static str, owner: i64) -> i64 {
+        let known = self.related.get(&(field, owner)).copied();
+        self.claim(known)
     }
     fn get(&mut self, uid: Option<&str>) -> i64 {
-        if let Some(id) = uid.and_then(|u| self.original_id(u))
+        let known = uid.and_then(|u| self.original_id(u));
+        self.claim(known)
+    }
+    /// A known id while it is still free, otherwise the next unreserved one.
+    fn claim(&mut self, known: Option<i64>) -> i64 {
+        if let Some(id) = known
             && self.used.insert(id)
         {
             return id;
@@ -947,6 +924,14 @@ impl Ids {
             }
         }
     }
+}
+/// The Sienna id a PowerIO uid of the form `sienna:<kind>:<id>` names.
+fn sienna_id(uid: &str) -> Option<i64> {
+    uid.strip_prefix("sienna:")?
+        .rsplit(':')
+        .next()?
+        .parse()
+        .ok()
 }
 fn push(doc: &mut Value, kind: &str, row: Value) {
     doc["components"]
@@ -1003,11 +988,7 @@ pub(super) fn write_document(
         .chain(net.storage().iter().filter_map(|x| x.uid.as_deref()))
         .chain(net.hvdc().iter().filter_map(|x| x.uid.as_deref()))
     {
-        if let Some(id) = u
-            .strip_prefix("sienna:")
-            .and_then(|s| s.rsplit(':').next())
-            .and_then(|s| s.parse().ok())
-        {
+        if let Some(id) = sienna_id(u) {
             ids.reserved.insert(id);
         }
     }
@@ -1024,9 +1005,9 @@ pub(super) fn write_document(
                 for r in rows {
                     if let Some(id) = r["id"].as_i64() {
                         ids.reserved.insert(id);
-                        if let Some(name) = original.and_then(|o| {
-                            o["ext"][id.to_string()]["org.eigenergy.powerio"]["uid"].as_str()
-                        }) {
+                        if let Some(name) =
+                            original.and_then(|o| metadata::ext(o, id)["uid"].as_str())
+                        {
                             ids.original.insert(name.into(), id);
                         }
                         for key in [
@@ -1037,11 +1018,11 @@ pub(super) fn write_document(
                             "tertiary_circuit",
                         ] {
                             if let Some(target) = r[key].as_i64() {
-                                ids.related.insert((key.into(), id), target);
+                                ids.related.insert((key, id), target);
                             }
                         }
                         if let Some(circuit) = r["circuit"].as_i64() {
-                            ids.related.insert(("two_winding".into(), circuit), id);
+                            ids.related.insert(("two_winding", circuit), id);
                         }
                     }
                 }
@@ -1083,8 +1064,8 @@ pub(super) fn write_document(
         let id = ids.get(b.uid.as_deref());
         metadata::record(&mut doc, id, b, &["uid", "name", "extras", "rating_sets"])?;
         if b.is_transformer() {
-            doc["ext"][id.to_string()]["org.eigenergy.powerio"]["angmin"] = json!(b.angmin);
-            doc["ext"][id.to_string()]["org.eigenergy.powerio"]["angmax"] = json!(b.angmax);
+            metadata::ext_mut(&mut doc, id)["angmin"] = json!(b.angmin);
+            metadata::ext_mut(&mut doc, id)["angmax"] = json!(b.angmax);
         }
         metadata::record_branch_solution(&mut doc, id, b, &mut warnings);
         let arc = ids.related("arc", id);
@@ -1103,7 +1084,7 @@ pub(super) fn write_document(
         } else if !b.is_transformer() {
             row["active_power_flow"] = json!(0.0);
             row["reactive_power_flow"] = json!(0.0);
-            doc["ext"][id.to_string()]["org.eigenergy.powerio"]["branch_flow_absent"] = json!(true);
+            metadata::ext_mut(&mut doc, id)["branch_flow_absent"] = json!(true);
         }
         if b.is_transformer() {
             row.as_object_mut().expect("object").remove("name");
@@ -1133,8 +1114,7 @@ pub(super) fn write_document(
                     json!({"id":sh,"name":format!("transformer_{tr}_secondary_shunt"),"available":b.in_service,"bus":bus_ids[&b.to],"Y":{"real":ch.g_to*net.base_mva(),"imag":ch.b_to*net.base_mva()},"base_power":net.base_mva(),"admittance_units":"COMPONENT_MVAR"}),
                 );
                 // The reader folds this admittance back into the branch.
-                doc["ext"][sh.to_string()]["org.eigenergy.powerio"]["transformer_circuit"] =
-                    json!(id);
+                metadata::ext_mut(&mut doc, sh)["transformer_circuit"] = json!(id);
             }
             if b.angmin != -360.0 || b.angmax != 360.0 {
                 warnings.push(&codes::EMIT_SIENNA.field_dropped,format!("transformer {id}: terminal angle difference limits have no TransformerCircuit field"));
@@ -1239,8 +1219,7 @@ pub(super) fn write_document(
             &mut warnings,
         );
         if g.cost.is_none() && !retained_cost {
-            doc["ext"][id.to_string()]["org.eigenergy.powerio"]["operation_cost_absent"] =
-                json!(true);
+            metadata::ext_mut(&mut doc, id)["operation_cost_absent"] = json!(true);
             warnings.push(&codes::EMIT_SIENNA.value_defaulted, format!("generator {id}: required operation_cost defaults to zero because the source has no cost"));
         }
         push(&mut doc, kind, row);
@@ -1353,17 +1332,27 @@ pub(super) fn write_document(
     Ok((doc, warnings))
 }
 
+/// The path to the first null in `v`, built only once one is found: the walk
+/// covers every emitted row, and almost none holds a null.
 fn null_path(v: &Value, path: &str) -> Option<String> {
     match v {
         Value::Null => Some(path.into()),
         Value::Object(o) => o
             .iter()
-            .find_map(|(k, v)| null_path(v, &format!("{path}.{k}"))),
+            .find_map(|(k, v)| has_null(v).then(|| null_path(v, &format!("{path}.{k}")))?),
         Value::Array(a) => a
             .iter()
             .enumerate()
-            .find_map(|(i, v)| null_path(v, &format!("{path}[{i}]"))),
+            .find_map(|(i, v)| has_null(v).then(|| null_path(v, &format!("{path}[{i}]")))?),
         _ => None,
+    }
+}
+fn has_null(v: &Value) -> bool {
+    match v {
+        Value::Null => true,
+        Value::Object(o) => o.values().any(has_null),
+        Value::Array(a) => a.iter().any(has_null),
+        _ => false,
     }
 }
 

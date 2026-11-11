@@ -98,7 +98,6 @@ impl TransmissionFormat {
             Self::Sienna03Json => "sienna-0-3-json",
             Self::Sienna04Json => "sienna-0-4-json",
             Self::PowerSystemsJson => "powersystems-json",
-
             Self::RavensJson => "ravens-json",
             Self::DeepMindOpfDataJson => "opfdata-json",
             Self::Xiidm => "xiidm",
@@ -207,7 +206,6 @@ pub fn parse_transmission_format(name: &str) -> Option<TransmissionFormat> {
         "sienna02json" | "sienna0.2json" | "sienna0.2.0" => Some(TransmissionFormat::Sienna02Json),
         "sienna03json" | "sienna0.3json" | "sienna0.3.0" => Some(TransmissionFormat::Sienna03Json),
         "sienna04json" | "sienna0.4json" | "sienna0.4.0" => Some(TransmissionFormat::Sienna04Json),
-
         "ravens" | "ravensjson" | "mgravens" | "mgravensjson" => {
             Some(TransmissionFormat::RavensJson)
         }

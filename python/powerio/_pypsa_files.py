@@ -6,13 +6,10 @@ Imports are lazy so the base PowerIO package has no Python dependencies.
 """
 from __future__ import annotations
 
+import functools
 import io
 import json
 import os
-import pickle
-import pickletools
-import shutil
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -86,9 +83,17 @@ class _GlobalRequested(Exception):
     """A pickle named a global, the only way unpickling can call code."""
 
 
-class _NoGlobals(pickle.Unpickler):
-    def find_class(self, module, name):
-        raise _GlobalRequested(f"{module}.{name}")
+@functools.lru_cache(maxsize=None)
+def _no_globals():
+    # pickle, like the other container helpers' imports, loads only when a
+    # PyPSA binary source is read, so dispatching other formats stays cheap.
+    import pickle
+
+    class _NoGlobals(pickle.Unpickler):
+        def find_class(self, module, name):
+            raise _GlobalRequested(f"{module}.{name}")
+
+    return _NoGlobals
 
 
 def _executable_pickle(value: bytes) -> bool:
@@ -104,7 +109,7 @@ def _executable_pickle(value: bytes) -> bool:
     plain data, so a failure leaves nothing executed.
     """
     try:
-        _NoGlobals(io.BytesIO(value), encoding="latin1").load()
+        _no_globals()(io.BytesIO(value), encoding="latin1").load()
     except _GlobalRequested:
         return True
     except Exception:
@@ -119,6 +124,9 @@ def _sanitized_hdf(path: Path, destination: Path) -> Path:
     with JSON metadata rewritten as tables and attributes checked for executable
     pickle instructions.
     """
+    import pickletools
+    import shutil
+
     import h5py
     import pandas as pd
     metadata = {}
@@ -179,6 +187,8 @@ def _sanitized_hdf(path: Path, destination: Path) -> Path:
     return destination
 
 def parse(source: Any, format: str, *, name: str | None = None):
+    import tempfile
+
     import powerio as pio
     pypsa = _dependencies()
     with tempfile.TemporaryDirectory(prefix="powerio-pypsa-") as temporary:
@@ -221,6 +231,8 @@ def parse(source: Any, format: str, *, name: str | None = None):
 
 
 def emit(module, format: str, destination: Any = None):
+    import tempfile
+
     import powerio as pio
     _dependencies()
     with tempfile.TemporaryDirectory(prefix="powerio-pypsa-") as temporary:
@@ -257,6 +269,8 @@ def emit(module, format: str, destination: Any = None):
 
 
 def _static_network(module, directory: Path):
+    import shutil
+
     import powerio as pio
     csv = pio.emit(module, "pypsa-csv")
     if directory.exists():

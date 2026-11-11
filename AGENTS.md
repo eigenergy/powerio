@@ -275,8 +275,9 @@ docs/                         the mdBook guide, the schema archive, release note
   combinations and the PyO3 extension. Run `bash scripts/ci-clippy.sh` before
   pushing Rust, C ABI, matrix, feature, or Python extension changes.
 - **SINCAL is the `sincal` feature.** The facade enables `powerio-tnd/sincal`
-  by default. The tx and dist crates depend only on core within the workspace;
-  they own neither SINCAL adapters nor SQLite. The tnd crate is format neutral
+  by default. Within the workspace, the dist crate depends only on core and
+  the tx crate on core and `powerio-archive` (for CGMES ZIPs); they own
+  neither SINCAL adapters nor SQLite. The tnd crate is format neutral
   by default. Keep the no-default-features and wasm32 checks green.
 - **One Python wheel (maturin mixed layout).** `powerio-py/` compiles to the
   native module `powerio._powerio`; `python/powerio/` is the pure Python

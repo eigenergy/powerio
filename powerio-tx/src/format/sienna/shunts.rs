@@ -4,7 +4,7 @@ use super::{
 };
 use crate::network::{ShuntBlock, SwitchedShuntControl, SwitchedShuntMode};
 
-fn scale(row: &Value, kv: f64) -> Result<f64> {
+pub(super) fn scale(row: &Value, kv: f64) -> Result<f64> {
     match row["admittance_units"].as_str().unwrap_or("COMPONENT_MVAR") {
         "COMPONENT_MVAR" => Ok(1.0),
         "NATURAL_UNITS" => Ok(positive(kv, "base_voltage")?.powi(2)),
@@ -94,7 +94,7 @@ pub(super) fn read(
         }
         control.control_bus = Some(id);
     }
-    let extra = &root["ext"][integer(row, "id")?.to_string()]["org.eigenergy.powerio"];
+    let extra = super::metadata::ext(root, integer(row, "id")?);
     control.rmpct = optional(extra, "rmpct", 100.0)?;
     if let Some(value) = extra.get("regulating_terminal") {
         control.regulating_terminal =
@@ -139,7 +139,7 @@ pub(super) fn write(
         "DISCRETE_REACTIVE_FACTS",
     ][usize::try_from(code).expect("control code")];
     metadata::record(doc, id, shunt, &["uid", "extras", "section_count"])?;
-    let extra = &mut doc["ext"][id.to_string()]["org.eigenergy.powerio"];
+    let extra = super::metadata::ext_mut(doc, id);
     extra["rmpct"] = json!(control.rmpct);
     extra["regulating_terminal"] =
         serde_json::to_value(&control.regulating_terminal).map_err(|e| error(e.to_string()))?;

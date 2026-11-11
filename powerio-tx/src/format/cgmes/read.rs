@@ -867,10 +867,12 @@ impl Store {
 /// repeatable value in their original order, reusing the XML parser's
 /// allocation for a newly encountered object.
 fn deduplicate_properties(object: &str, props: &mut Vec<(CimName, PropValue)>) -> Result<()> {
+    let mut repeated = RepeatedStatements::default();
     let mut retained = 0;
     for incoming in 0..props.len() {
         let (property, value) = &props[incoming];
-        if property_is_new(object, &props[..retained], property, value)? {
+        if property_is_new(object, &props[..retained], &mut repeated, property, value)? {
+            repeated.record(property, value);
             props.swap(retained, incoming);
             retained += 1;
         }
@@ -884,25 +886,69 @@ fn merge_properties(
     merged: &mut Vec<(CimName, PropValue)>,
     incoming: Vec<(CimName, PropValue)>,
 ) -> Result<()> {
+    let mut repeated = RepeatedStatements::default();
     for (property, value) in incoming {
-        if property_is_new(object, merged, &property, &value)? {
+        if property_is_new(object, merged, &mut repeated, &property, &value)? {
+            repeated.record(&property, &value);
             merged.push((property, value));
         }
     }
     Ok(())
 }
 
+/// The distinct statements of each repeatable property an object already
+/// holds. It is built on the object's first repeated statement, so a long
+/// membership list (an island's nodes) is checked in constant time per value
+/// while an ordinary object allocates nothing.
+#[derive(Default)]
+struct RepeatedStatements(Option<HashMap<CimName, HashSet<PropValue>>>);
+
+impl RepeatedStatements {
+    fn contains(
+        &mut self,
+        retained: &[(CimName, PropValue)],
+        property: &CimName,
+        value: &PropValue,
+    ) -> bool {
+        self.0
+            .get_or_insert_with(|| {
+                let mut statements: HashMap<CimName, HashSet<PropValue>> = HashMap::new();
+                for (name, value) in retained {
+                    if repeatable_property(name) {
+                        statements
+                            .entry(name.clone())
+                            .or_default()
+                            .insert(value.clone());
+                    }
+                }
+                statements
+            })
+            .get(property)
+            .is_some_and(|values| values.contains(value))
+    }
+
+    /// Note a newly retained statement once the index exists; before then,
+    /// building the index reads it from the retained properties.
+    fn record(&mut self, property: &CimName, value: &PropValue) {
+        if let Some(statements) = &mut self.0
+            && repeatable_property(property)
+        {
+            statements
+                .entry(property.clone())
+                .or_default()
+                .insert(value.clone());
+        }
+    }
+}
+
 fn property_is_new(
     object: &str,
     merged: &[(CimName, PropValue)],
+    repeated: &mut RepeatedStatements,
     property: &CimName,
     value: &PropValue,
 ) -> Result<bool> {
-    let mut stated = merged
-        .iter()
-        .filter(|(name, _)| name == property)
-        .map(|(_, value)| value);
-    let Some(existing) = stated.next() else {
+    let Some((_, existing)) = merged.iter().find(|(name, _)| name == property) else {
         return Ok(true);
     };
     if existing == value {
@@ -911,7 +957,7 @@ fn property_is_new(
     if repeatable_property(property) {
         // A repeatable property is a set of RDF statements: an identical
         // statement collapses wherever it appeared before.
-        return Ok(!stated.any(|stated| stated == value));
+        return Ok(!repeated.contains(merged, property, value));
     }
     Err(Error::FormatRead {
         format: FMT,

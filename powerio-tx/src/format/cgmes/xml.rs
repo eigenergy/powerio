@@ -98,7 +98,7 @@ impl NamePool {
 
 /// A property value: literal text, or the normalized target of an
 /// `rdf:resource` (an object id, or an `EnumClass.value` fragment).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum PropValue {
     Text(String),
     Ref(String),

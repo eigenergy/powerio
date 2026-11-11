@@ -279,12 +279,11 @@ pub fn parse_target_format(name: &str) -> Option<TargetFormat> {
         TransmissionFormat::Goc3Json => TargetFormat::Goc3Json,
         TransmissionFormat::SurgeJson => TargetFormat::SurgeJson,
         TransmissionFormat::PowerSystemsJson => TargetFormat::PowerSystemsJson,
-        TransmissionFormat::SiennaJson => TargetFormat::SiennaJson { version: 0 },
-        TransmissionFormat::Sienna01Json => TargetFormat::SiennaJson { version: 1 },
-        TransmissionFormat::Sienna02Json => TargetFormat::SiennaJson { version: 2 },
-        TransmissionFormat::Sienna03Json => TargetFormat::SiennaJson { version: 3 },
-        TransmissionFormat::Sienna04Json => TargetFormat::SiennaJson { version: 4 },
-
+        sienna @ (TransmissionFormat::SiennaJson
+        | TransmissionFormat::Sienna01Json
+        | TransmissionFormat::Sienna02Json
+        | TransmissionFormat::Sienna03Json
+        | TransmissionFormat::Sienna04Json) => sienna_target(sienna)?,
         TransmissionFormat::RavensJson => TargetFormat::RavensJson,
         TransmissionFormat::DeepMindOpfDataJson => TargetFormat::DeepMindOpfDataJson,
         TransmissionFormat::Xiidm => TargetFormat::Xiidm,
@@ -799,10 +798,7 @@ fn read_source(
         }
         TargetFormat::SurgeJson => surge::parse_surge_source(text, name_hint, warnings),
         TargetFormat::SiennaJson { .. } | TargetFormat::PowerSystemsJson => {
-            let document = serde_json::from_str(text).map_err(|e| Error::FormatRead {
-                format: "SiennaSchemas JSON",
-                message: e.to_string(),
-            })?;
+            let document = serde_json::from_str(text).map_err(|e| sienna::error(e.to_string()))?;
             let (network, namespace) = if let TargetFormat::SiennaJson { version } = fmt {
                 (
                     sienna::read(&document, name_hint, version, warnings)?,
@@ -1042,7 +1038,24 @@ fn json_target_from_class(class: JsonClass) -> Result<TargetFormat> {
     }
 }
 
+/// The Sienna target a Sienna transmission token selects; version 0 keeps the
+/// version the document states.
+fn sienna_target(format: TransmissionFormat) -> Option<TargetFormat> {
+    let version = match format {
+        TransmissionFormat::SiennaJson => 0,
+        TransmissionFormat::Sienna01Json => 1,
+        TransmissionFormat::Sienna02Json => 2,
+        TransmissionFormat::Sienna03Json => 3,
+        TransmissionFormat::Sienna04Json => 4,
+        _ => return None,
+    };
+    Some(TargetFormat::SiennaJson { version })
+}
+
 fn transmission_json_target(format: TransmissionFormat) -> Result<TargetFormat> {
+    if let Some(target) = sienna_target(format) {
+        return Ok(target);
+    }
     match format {
         TransmissionFormat::PowerModelsJson => Ok(TargetFormat::PowerModelsJson),
         TransmissionFormat::EgretJson => Ok(TargetFormat::EgretJson),
@@ -1050,12 +1063,6 @@ fn transmission_json_target(format: TransmissionFormat) -> Result<TargetFormat> 
         TransmissionFormat::Goc3Json => Ok(TargetFormat::Goc3Json),
         TransmissionFormat::SurgeJson => Ok(TargetFormat::SurgeJson),
         TransmissionFormat::PowerSystemsJson => Ok(TargetFormat::PowerSystemsJson),
-        TransmissionFormat::SiennaJson => Ok(TargetFormat::SiennaJson { version: 0 }),
-        TransmissionFormat::Sienna01Json => Ok(TargetFormat::SiennaJson { version: 1 }),
-        TransmissionFormat::Sienna02Json => Ok(TargetFormat::SiennaJson { version: 2 }),
-        TransmissionFormat::Sienna03Json => Ok(TargetFormat::SiennaJson { version: 3 }),
-        TransmissionFormat::Sienna04Json => Ok(TargetFormat::SiennaJson { version: 4 }),
-
         TransmissionFormat::DeepMindOpfDataJson => Ok(TargetFormat::DeepMindOpfDataJson),
         TransmissionFormat::PsseRawx => Ok(TargetFormat::PsseRawx),
         TransmissionFormat::Jiidm => Ok(TargetFormat::Jiidm),

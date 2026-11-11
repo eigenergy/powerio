@@ -136,9 +136,10 @@ pub(super) fn preserve_unmapped(
                                 }
                             }
                         }
-                        if let Some(o) = row.as_object() {
+                        // The generated row is replaced, so its fields move.
+                        if let Value::Object(o) = std::mem::take(row) {
                             for (k, v) in o {
-                                merged[k] = v.clone();
+                                merged[k] = v;
                             }
                         }
                         *row = merged;

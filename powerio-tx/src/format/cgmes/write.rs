@@ -6883,9 +6883,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
     for (i, transformer) in net.transformers_3w().iter().enumerate() {
         let fallback = format!("transformer3w-{i}");
         let local_id = transformer.uid.as_deref().unwrap_or(&fallback);
-        if transformer.magnetizing_connection != crate::network::MagnetizingConnection::StarPoint
-            && (transformer.mag_g != 0.0 || transformer.mag_b != 0.0)
-        {
+        if transformer.magnetizing_differs_from(crate::network::MagnetizingConnection::StarPoint) {
             w.warnings.push_as(
                 &codes::EMIT_CGMES.value_substituted,
                 format!(

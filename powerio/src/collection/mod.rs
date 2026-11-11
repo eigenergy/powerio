@@ -98,6 +98,11 @@ pub struct CollectionSelection {
     #[serde(default)]
     pub operation: CollectionOperation,
 }
+/// A format name in its registered spelling, or as given when unregistered.
+fn canonical_token(name: &str) -> &str {
+    crate::resolve_format(name).map_or(name, |format| format.token)
+}
+
 impl CollectionSelection {
     #[must_use]
     pub fn file(primary: impl Into<String>) -> Self {
@@ -107,9 +112,7 @@ impl CollectionSelection {
         }
     }
     pub(super) fn format_token(&self) -> Option<&str> {
-        self.format
-            .as_deref()
-            .map(|name| crate::resolve_format(name).map_or(name, |format| format.token))
+        self.format.as_deref().map(canonical_token)
     }
 
     pub(super) fn has_companions(&self) -> bool {
@@ -417,15 +420,10 @@ impl Collection {
         if selection.members.is_some() {
             return self.group_source(selection, root.as_ref());
         }
-        if selection.primary.is_none() {
+        let Some(primary) = selection.primary.as_deref() else {
             return self.dataset_source(selection, root.as_ref());
-        }
-        let primary = selection
-            .primary
-            .as_deref()
-            .map(ArtifactPath::new)
-            .transpose()?
-            .ok_or_else(|| selection_error("select an explicit primary file"))?;
+        };
+        let primary = ArtifactPath::new(primary)?;
         let scoped = self
             .tree
             .source(root.as_ref(), Some(&primary), self.limits.tree)?;
@@ -461,12 +459,10 @@ impl Collection {
                 "collection sources cannot acquire host files",
             ));
         }
-        if options.format.is_some()
-            && options
-                .format
-                .as_ref()
-                .map(|f| crate::resolve_format(f.as_str()).map_or(f.as_str(), |f| f.token))
-                != selection.format_token()
+        if options
+            .format
+            .as_ref()
+            .is_some_and(|f| Some(canonical_token(f.as_str())) != selection.format_token())
         {
             return Err(selection_error(
                 "set the format on the collection selection",
@@ -484,12 +480,14 @@ impl Collection {
                 crate::deserialize(&source)?
             }
         };
-        let incomplete = module.diagnostics().iter().any(|d| {
-            matches!(
-                d.code(),
-                "READ.DSS.INCLUDE_LOAD_FAILED" | "READ.DSS.INCLUDE_DEPTH_LIMIT"
-            )
-        });
+        let unresolved = [
+            &powerio_dist::diagnostics::codes::READ_DSS_INCLUDE_LOAD_FAILED,
+            &powerio_dist::diagnostics::codes::READ_DSS_INCLUDE_DEPTH_LIMIT,
+        ];
+        let incomplete = module
+            .diagnostics()
+            .iter()
+            .any(|d| unresolved.iter().any(|info| d.code() == info.code));
         Ok(CollectionResult {
             module,
             dependencies: source

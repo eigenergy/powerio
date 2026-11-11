@@ -345,10 +345,10 @@ fn validate_path(
     };
     let path =
         ArtifactPath::new(name).map_err(|_| unsafe_archive("ZIP member has an unsafe path"))?;
-    if name.split('/').count() > 64 {
+    let parts: Vec<_> = name.split('/').collect();
+    if parts.len() > 64 {
         return Err(limit("ZIP member path depth exceeded"));
     }
-    let parts: Vec<_> = name.split('/').collect();
     let mut parent = 0;
     for (index, part) in parts.iter().enumerate() {
         let stem = part

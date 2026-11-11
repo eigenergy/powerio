@@ -7,6 +7,16 @@ use serde::{Deserialize, Serialize};
 
 pub(super) const KEY: &str = "org.eigenergy.powerio";
 
+/// A component's PowerIO namespace in a document's `ext` map, or null.
+pub(super) fn ext(doc: &Value, id: impl std::fmt::Display) -> &Value {
+    &doc["ext"][id.to_string()][KEY]
+}
+
+/// A component's PowerIO namespace for writing, created on first use.
+pub(super) fn ext_mut(doc: &mut Value, id: impl std::fmt::Display) -> &mut Value {
+    &mut doc["ext"][id.to_string()][KEY]
+}
+
 // These describe the current typed value or generated equipment. Never restore
 // an old value merely because the current writer deliberately omitted it.
 pub(super) const WRITTEN_FIELDS: &[&str] = &[
