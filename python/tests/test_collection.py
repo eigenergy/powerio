@@ -2,9 +2,9 @@ import io
 import zipfile
 
 import pytest
+from powerio.dist import SincalReadOptions
 
 import powerio as pio
-from powerio.dist import SincalReadOptions
 
 
 def files():
