@@ -117,9 +117,14 @@ fn unlimited_transformer_primary_rating_is_numeric_and_round_trips() {
         .expect("case9 fixture contains a transformer");
     transformer.rate_a = f64::INFINITY;
 
-    for version in [0, 4] {
+    for version in [0, 1, 2, 3, 4] {
         let doc = document(&net, version);
-        let row = rows(&doc, version, "TransformerCircuit")
+        let kind = if version == 0 {
+            "TapTransformer"
+        } else {
+            "TransformerCircuit"
+        };
+        let row = rows(&doc, version, kind)
             .into_iter()
             .next()
             .expect("transformer circuit is emitted");
@@ -135,7 +140,11 @@ fn unlimited_transformer_primary_rating_is_numeric_and_round_trips() {
             .iter()
             .find(|branch| branch.is_transformer())
             .expect("transformer is restored");
-        assert!(restored.rate_a.is_infinite(), "version {version}: {}", restored.rate_a);
+        assert!(
+            restored.rate_a.is_infinite(),
+            "version {version}: {}",
+            restored.rate_a
+        );
     }
 }
 
