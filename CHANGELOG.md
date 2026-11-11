@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Parse explicitly selected SINCAL MDB inputs with acquired-table companions
+  through collections, preserving root confinement and work budgets.
+- Clarify that taking a branch out of service is not an equivalent substitute
+  for a finite zero thermal limit in the 0.12 migration guide.
+
 ## 0.12.0-rc.1
 
 The release candidate for PowerIO 0.12, which starts the 0.12.x release
