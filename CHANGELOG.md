@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Forward `powerio-prob/schema` to the distribution model so standalone schema
+  builds include the LinDist3Flow preparation policy.
+
 ## 0.12.0-rc.1
 
 The release candidate for PowerIO 0.12, which starts the 0.12.x release
