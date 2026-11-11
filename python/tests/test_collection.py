@@ -4,6 +4,7 @@ import zipfile
 import pytest
 
 import powerio as pio
+from powerio.dist import SincalReadOptions
 
 
 def files():
@@ -57,7 +58,7 @@ def test_selection_metadata_is_bounded():
             "sincal_multiconductor must be dist.SincalReadOptions",
         ),
         (
-            {"sincal_balanced": __import__("powerio.dist", fromlist=["SincalReadOptions"]).SincalReadOptions()},
+            {"sincal_balanced": SincalReadOptions()},
             "sincal_balanced must be SincalBalancedReadOptions",
         ),
         (
