@@ -7,9 +7,9 @@ rather than editing by hand.
 
 | Case | Source `.dss` | Size | Write diagnostics |
 |---|---|---|---|
-| IEEE 34 | `tests/data/dist/opendss/ieee34/ieee34Mod1.dss` (vendored) | 49,844 bytes | 104 |
-| IEEE 123 | `tests/data/dist/opendss/ieee123/IEEE123Master.dss` (vendored) | 111,701 bytes | 143 |
-| 4 bus delta wye | `4Bus-DY-Bal/4Bus-DY-Bal.DSS` from the OpenDSS distribution | 17,662 bytes | 0 |
+| IEEE 34 | `tests/data/dist/opendss/ieee34/ieee34Mod1.dss` (vendored) | 49,818 bytes | 104 |
+| IEEE 123 | `tests/data/dist/opendss/ieee123/IEEE123Master.dss` (vendored) | 111,675 bytes | 143 |
+| 4 bus delta wye | `4Bus-DY-Bal/4Bus-DY-Bal.DSS` from the OpenDSS distribution | 18,479 bytes | 0 |
 
 34 and 123 are recognizable feeders. The Kersting 4 bus case isolates a single
 delta to wye service transformer, the four wire winding that the BMOPF schema's
@@ -31,9 +31,9 @@ emitted in the same format in which that module was parsed.
 
 
 Each document carries a top level `meta` block. `meta.case_study_generator`
-names the writing tool and version. `meta.$schema` gives a PowerIO archive commit
-retrieval URL, while `meta.provenance.powerio_bmopf` records its canonical
-identity, commit, schema digest and proposal status.
+names the writing tool and version. `meta.$schema` is the schema's canonical
+`$id`, while `meta.provenance.powerio_bmopf` records the proposal commit, the
+schema digest, the retrieval permalink of those bytes and the proposal status.
 The block is deterministic (no timestamp) so output stays byte stable. Generator `energy_cost_rate` is a per-phase array in $/kWh.
 
 ## Source provenance

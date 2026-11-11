@@ -256,6 +256,11 @@ pub mod codes {
             "a BMOPF field outside the schema survives in extras or untyped";
         READ_BMOPF_SOURCE_MALFORMED = "READ.BMOPF.SOURCE_MALFORMED", Warning,
             "a BMOPF value is not the shape its key declares";
+        /// A field spelled the way an earlier schema version spells it, in a
+        /// document stating a version that rejects that spelling: the bus
+        /// bounds `v_min`/`v_max`, which schema 0.1.1 renamed `vpg_*`.
+        READ_BMOPF_FIELD_LEGACY = "READ.BMOPF.FIELD_LEGACY", Warning,
+            "a BMOPF field uses a spelling the document's schema version rejects";
         /// The document states no `meta.$schema`, so the schema version it was
         /// written against is unknown and the reader accepts both versions.
         READ_BMOPF_SCHEMA_ABSENT = "READ.BMOPF.SCHEMA_ABSENT", Warning,

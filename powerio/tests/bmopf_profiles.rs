@@ -49,7 +49,14 @@ fn explicit_schema_version_reencodes_and_plain_format_echoes() {
                 .unwrap()
                 .contains(profile)
         );
-        assert_eq!(output["bus"]["b"]["v_min"], json!([210.0, 212.0, 214.0]));
+        // Schema 0.1.1 renamed the phase to ground bounds `vpg_*`; 0.2.0
+        // rejects the 0.1.0 spelling, which 0.1.0 output keeps.
+        let bound = if profile == "0.1.0" {
+            "v_min"
+        } else {
+            "vpg_min"
+        };
+        assert_eq!(output["bus"]["b"][bound], json!([210.0, 212.0, 214.0]));
         assert_eq!(output["meta"]["provenance"]["research"]["revision"], 3);
     }
     assert!(
@@ -83,7 +90,7 @@ fn powerio_ir_preserves_phase_limits_without_source_bytes() {
     )
     .unwrap();
     let value: Value = serde_json::from_slice(bytes(&output)).unwrap();
-    assert_eq!(value["bus"]["b"]["v_min"], json!([210.0, 212.0, 214.0]));
+    assert_eq!(value["bus"]["b"]["vpg_min"], json!([210.0, 212.0, 214.0]));
 }
 
 fn read_findings_case(meta: &Value, linecode: &Value) -> Vec<u8> {
@@ -390,11 +397,22 @@ fn geojson_bus_and_line_edits_survive_ir_and_explicit_bmopf_output() {
         )
         .unwrap();
         let doc: Value = serde_json::from_slice(bytes(&out)).unwrap();
-        assert!(doc["bus"]["b"].get("geo").is_none());
-        assert_eq!(
-            doc["extras"]["geojson"]["features"][0]["geometry"]["coordinates"],
-            json!([-83.72, 42.3])
-        );
+        // Schema 0.2.0 carries the geometry in its typed slots; 0.1.0 has
+        // none and carries the legacy `extras.geojson` layer.
+        if version == "0.2.0" {
+            assert_eq!(doc["bus"]["b"]["geo"]["coordinates"], json!([-83.72, 42.3]));
+            assert_eq!(
+                doc["line"]["bc"]["geo"]["coordinates"][1],
+                json!([-83.68, 42.37])
+            );
+            assert!(doc.pointer("/extras/geojson").is_none(), "{doc}");
+        } else {
+            assert!(doc["bus"]["b"].get("geo").is_none());
+            assert_eq!(
+                doc["extras"]["geojson"]["features"][0]["geometry"]["coordinates"],
+                json!([-83.72, 42.3])
+            );
+        }
         let again =
             powerio::parse(Source::from_memory("case.bmopf.json", bytes(&out).to_vec()).unwrap())
                 .unwrap();

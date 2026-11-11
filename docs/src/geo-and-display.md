@@ -93,7 +93,7 @@ removes the raw keys from `extras`. Writers read `location`.
 | PyPSA | `buses.csv` `x`/`y` | geographic |
 | DOE GO Challenge 3 | bus `longitude`/`latitude` | geographic |
 | OpenDSS | `Buscoords` | unknown; a diagnostic identifies values within longitude and latitude bounds |
-| BMOPF JSON | BMOPFTools `bus[id].geo` Point and `line[id].geo` LineString; legacy `longitude`/`latitude`; canonical `extras.geojson` | declared CRS, geographic when omitted |
+| BMOPF JSON | schema 0.2.0 `bus[id].geo` Point and `line[id].geo` LineString with `meta.crs`; the 0.1.0 and pre-0.12 `extras.geojson` FeatureCollection; pre-schema `longitude`/`latitude` | declared CRS, geographic when omitted |
 
 MATPOWER, PSS/E, PowerModels, egret, PSLF, and Surge have no place for
 geometry. Emitting a located case to one of them reports the dropped locations,
@@ -206,25 +206,40 @@ Python has `parse_geo`, and both network types have `to_geo_layer()` and
 
 ## BMOPF geometry and schema validity
 
-PowerIO reads the geometry proposed in
-[BMOPFTools #258](https://github.com/frederikgeth/BMOPFTools.jl/pull/258):
-`bus[id].geo` contains a Point, `line[id].geo` contains a LineString, and
-`meta.crs` names the coordinate reference system. An absent CRS means WGS84.
-Coordinates appear in longitude/latitude order for WGS84. A malformed vertex
-invalidates its entire path; PowerIO does not connect the remaining vertices.
+BMOPF schema 0.2.0 declares typed geometry, following
+[BMOPFTools #258](https://github.com/frederikgeth/BMOPFTools.jl/pull/258) and
+the shape PowerIO 0.11 already read: `bus[id].geo` is a GeoJSON Point,
+`line[id].geo` a GeoJSON LineString from `bus_from` through any bends to
+`bus_to`, and `meta.crs` the authority code of the one coordinate reference
+system every `geo` field uses. An absent `crs` means `EPSG:4326`, longitude
+then latitude. Geometry is descriptive: `length` stays the electrical length.
+A malformed vertex invalidates its entire path; PowerIO does not connect the
+remaining vertices.
 
-The schema currently identified as draft BMOPF 0.2 does not declare these
-per-equipment `geo` fields. Explicit BMOPF output therefore stores a
-FeatureCollection in the permitted `extras.geojson` location. Its features use
-`kind`, `id`, `bus_from`, and `bus_to`. The `powerio_geo` member preserves
-coordinate-space metadata for drawings and coordinates with no declared CRS.
-This keeps output valid against its stated schema while retaining geometry.
-Task Force review determines the eventual standard location.
+Explicit 0.2.0 output writes these slots. A projected system writes its code
+to `meta.crs`; WGS84 omits it. A space the schema cannot name (an OpenDSS
+`Buscoords` file declares none, a drawing has no earth referent, a projection
+may lack a code) or coordinates not taken from the source data also write
+PowerIO's coordinate metadata as `extras.powerio_geo`, which the reader
+prefers over `meta.crs`, so a read gets the same `MulticonductorNetwork::geo`
+back and does not take unknown-space coordinates for WGS84.
+
+Schema 0.1.0 has no geometry slot, so 0.1.0 output stores a FeatureCollection
+in the permitted `extras.geojson` location, as every PowerIO 0.11 BMOPF
+document did. Its features use `kind`, `id`, `bus_from`, and `bus_to`, and its
+`powerio_geo` member carries the coordinate metadata. The reader accepts that
+layer under every version, but only when no bus or line carries a typed `geo`
+field: when both are present the typed slots win and the layer is not merged
+in. Either form is typed into bus locations and line routes on read and
+re-emitted from the model, never copied through, so an edit cannot leave a
+stale copy behind.
 
 Same-type source emission preserves the input bytes. Editing or explicitly
 selecting a schema version writes the typed coordinates, so a retained source
-cannot override updated positions. Both values of the compatibility setting
-`BmopfEmitOptions::sideload_coordinates` preserve geometry in `extras.geojson`.
+cannot override updated positions. `BmopfEmitOptions::sideload_coordinates` is
+a legacy toggle: set, 0.2.0 output adds the `extras.geojson` layer beside the
+typed slots for a consumer that reads only that layer. It changes nothing in
+0.1.0 output, which always carries the layer.
 PowerIO IR also retains typed bus locations, line paths, and coordinate metadata.
 
 A RAW revision 33 file does not contain the New England PWB bus-location

@@ -1,11 +1,23 @@
-//! BMOPFTools element geometry and schema-valid GeoJSON storage.
+//! BMOPF element geometry: the typed `bus.*.geo` Point, `line.*.geo`
+//! LineString and `meta.crs` slots of schema 0.2.0, and the GeoJSON
+//! FeatureCollection under `extras.geojson` that schema 0.1.0 output and
+//! pre-0.12 PowerIO output carry.
 use crate::geo::{CoordinateSpace, DistCoordsKind, DistGeoMeta, DistLocation};
 use crate::model::MulticonductorNetwork;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
+
+/// Coordinate reference system names that mean WGS84 longitude/latitude, the
+/// system an absent `meta.crs` means.
+fn is_wgs84(crs: &str) -> bool {
+    matches!(
+        crs.to_ascii_uppercase().as_str(),
+        "EPSG:4326" | "OGC:CRS84" | "WGS84" | "URN:OGC:DEF:CRS:OGC:1.3:CRS84"
+    )
+}
 
 fn point(value: &Value) -> Option<DistLocation> {
     let p = value.as_array()?;
-    if p.len() != 2 {
+    if p.len() != 2 && p.len() != 3 {
         return None;
     }
     let (x, y) = (p[0].as_f64()?, p[1].as_f64()?);
@@ -16,8 +28,15 @@ fn point(value: &Value) -> Option<DistLocation> {
     })
 }
 
-fn read_meta(meta: &Value, collection: &Value) -> Result<DistGeoMeta, String> {
-    if let Some(declared) = collection.get("powerio_geo") {
+/// The network's coordinate metadata, from the first of: PowerIO's own
+/// `extras.powerio_geo` record, the `powerio_geo` member of a legacy
+/// `extras.geojson` collection, `meta.crs`, or the legacy collection's `crs`
+/// member. Absent everywhere means WGS84, as the schema states.
+fn read_meta(meta: &Value, extras: &Value, collection: &Value) -> Result<DistGeoMeta, String> {
+    if let Some(declared) = extras
+        .get("powerio_geo")
+        .or_else(|| collection.get("powerio_geo"))
+    {
         return serde_json::from_value(declared.clone())
             .map_err(|error| format!("invalid powerio_geo metadata: {error}"));
     }
@@ -30,11 +49,7 @@ fn read_meta(meta: &Value, collection: &Value) -> Result<DistGeoMeta, String> {
             .filter(|name| !name.trim().is_empty())
             .ok_or_else(|| "invalid geometry coordinate reference system".to_owned())?,
     };
-    let wgs84 = matches!(
-        crs.to_ascii_uppercase().as_str(),
-        "EPSG:4326" | "OGC:CRS84" | "WGS84" | "URN:OGC:DEF:CRS:OGC:1.3:CRS84"
-    );
-    let fallback_space = if wgs84 {
+    let fallback_space = if is_wgs84(crs) {
         CoordinateSpace::Geographic {
             crs: Some(crs.into()),
         }
@@ -49,33 +64,60 @@ fn read_meta(meta: &Value, collection: &Value) -> Result<DistGeoMeta, String> {
     })
 }
 
+/// Keeps an unusable `extras.geojson` layer verbatim on the network, so a
+/// write re-emits what the reader could not type.
+fn retain_collection(net: &mut MulticonductorNetwork, collection: &Value) {
+    if collection.is_null() {
+        return;
+    }
+    let stash = net
+        .extras_mut()
+        .entry("bmopf_extras".to_owned())
+        .or_insert_with(|| Value::Object(Map::new()));
+    if let Value::Object(stash) = stash {
+        stash.insert("geojson".into(), collection.clone());
+    }
+}
+
+/// Whether any bus or line of the document carries a typed `geo` field.
+fn has_embedded_geometry(doc: &Map<String, Value>) -> bool {
+    ["bus", "line"].iter().any(|kind| {
+        doc.get(*kind)
+            .and_then(Value::as_object)
+            .is_some_and(|items| items.values().any(|element| element.get("geo").is_some()))
+    })
+}
+
 pub(super) fn read(
-    doc: &serde_json::Map<String, Value>,
+    doc: &Map<String, Value>,
     net: &mut MulticonductorNetwork,
     diagnostics: &mut crate::collect::Diagnostics,
 ) {
-    let collection = doc
-        .get("extras")
-        .and_then(|v| v.get("geojson"))
-        .unwrap_or(&Value::Null);
-    let geo_meta = match read_meta(doc.get("meta").unwrap_or(&Value::Null), collection) {
+    let extras = doc.get("extras").unwrap_or(&Value::Null);
+    let collection = extras.get("geojson").unwrap_or(&Value::Null);
+    let geo_meta = match read_meta(doc.get("meta").unwrap_or(&Value::Null), extras, collection) {
         Ok(meta) => meta,
         Err(reason) => {
             diagnostics.push(
                 &crate::diagnostics::codes::READ_BMOPF_RETAINED_SOURCE_ONLY,
                 format!("{reason}; geometry retained without assigning coordinates"),
             );
+            retain_collection(net, collection);
             return;
         }
     };
-    if !collection.is_null()
-        && (collection["type"] != "FeatureCollection" || !collection["features"].is_array())
-    {
+    let collection_valid =
+        collection["type"] == "FeatureCollection" && collection["features"].is_array();
+    if !collection.is_null() && !collection_valid {
         diagnostics.push(
             &crate::diagnostics::codes::READ_BMOPF_RETAINED_SOURCE_ONLY,
             "invalid GeoJSON feature collection; retained without assigning its coordinates",
         );
+        retain_collection(net, collection);
     }
+    // The typed `geo` fields are the schema 0.2.0 form and win; the
+    // `extras.geojson` layer is read only when no element carries one.
+    let embedded = has_embedded_geometry(doc);
     let geographic = matches!(geo_meta.space, CoordinateSpace::Geographic { .. });
     let buses: std::collections::HashMap<_, _> = net
         .buses()
@@ -124,14 +166,21 @@ pub(super) fn read(
         if valid {
             changed = true;
         } else {
-            diagnostics.push(&crate::diagnostics::codes::READ_BMOPF_RETAINED_SOURCE_ONLY,format!("{kind} {id}: geometry is invalid or names no matching element; retained without assigning coordinates"));
+            diagnostics.push(&crate::diagnostics::codes::READ_BMOPF_RETAINED_SOURCE_ONLY,format!("{kind} {id}: geometry is invalid or names no matching element; not assigned as coordinates"));
         }
     };
-    if let Some(features) = collection["features"]
-        .as_array()
-        .filter(|_| collection["type"] == "FeatureCollection")
-    {
-        for f in features {
+    if embedded {
+        for kind in ["bus", "line"] {
+            if let Some(items) = doc.get(kind).and_then(Value::as_object) {
+                for (id, element) in items {
+                    if let Some(geo) = element.get("geo") {
+                        apply(kind, id, geo);
+                    }
+                }
+            }
+        }
+    } else if collection_valid {
+        for f in collection["features"].as_array().into_iter().flatten() {
             if let (Some(kind), Some(id)) = (
                 f["properties"]["kind"].as_str(),
                 f["properties"]["id"].as_str(),
@@ -142,26 +191,94 @@ pub(super) fn read(
             }
         }
     }
-    for kind in ["bus", "line"] {
-        if let Some(items) = doc.get(kind).and_then(Value::as_object) {
-            for (id, element) in items {
-                if let Some(geo) = element.get("geo") {
-                    apply(kind, id, geo);
-                }
-            }
-        }
-    }
     if changed {
         *net.geo_mut() = Some(geo_meta);
     }
 }
 
-pub(super) fn collection(net: &MulticonductorNetwork) -> Option<Value> {
-    let default_meta = DistGeoMeta {
+/// A GeoJSON Point geometry object, built as a `Value` directly (the BMOPF
+/// writer assembles the whole document as `serde_json::Value` maps, so there
+/// is no separate serializer to stream into).
+fn point_value(p: &DistLocation) -> Value {
+    let mut object = Map::with_capacity(2);
+    object.insert("type".into(), Value::String("Point".into()));
+    object.insert(
+        "coordinates".into(),
+        Value::Array(vec![Value::from(p.x), Value::from(p.y)]),
+    );
+    Value::Object(object)
+}
+
+/// A GeoJSON LineString geometry object over the route's vertices.
+fn line_string_value(route: &[DistLocation]) -> Value {
+    let mut object = Map::with_capacity(2);
+    object.insert("type".into(), Value::String("LineString".into()));
+    object.insert(
+        "coordinates".into(),
+        Value::Array(
+            route
+                .iter()
+                .map(|p| Value::Array(vec![Value::from(p.x), Value::from(p.y)]))
+                .collect(),
+        ),
+    );
+    Value::Object(object)
+}
+
+/// The bus's `geo` Point, when it has a finite location.
+pub(super) fn bus_geo(bus: &crate::model::DistBus) -> Option<Value> {
+    bus.location
+        .filter(|p| p.x.is_finite() && p.y.is_finite())
+        .map(|p| point_value(&p))
+}
+
+/// The line's `geo` LineString, when it has a route of two or more finite vertices.
+pub(super) fn line_geo(line: &crate::model::DistLine) -> Option<Value> {
+    line.route
+        .as_ref()
+        .filter(|r| r.len() >= 2 && r.iter().all(|p| p.x.is_finite() && p.y.is_finite()))
+        .map(|r| line_string_value(r))
+}
+
+/// The value `meta.crs` takes for this coordinate space: the authority code
+/// of a projected or non-WGS84 geographic system, and nothing for WGS84 (the
+/// schema's default for an absent `crs`) or for a space that names no system.
+pub(super) fn declared_crs(meta: &DistGeoMeta) -> Option<&str> {
+    match &meta.space {
+        CoordinateSpace::Geographic { crs } | CoordinateSpace::Projected { crs } => {
+            crs.as_deref().filter(|crs| !is_wgs84(crs))
+        }
+        _ => None,
+    }
+}
+
+/// Whether reading `meta.crs` back would not reproduce this metadata, so the
+/// writer must also record it as `extras.powerio_geo`: a space the schema
+/// cannot name (unknown, diagram, a projected system without a code, or a
+/// geographic system other than WGS84, which a reader would take for a
+/// projected one), or coordinates whose origin is not the source data.
+pub(super) fn needs_declared_meta(meta: &DistGeoMeta) -> bool {
+    let space_recoverable = match &meta.space {
+        CoordinateSpace::Geographic { crs } => crs.as_deref().is_none_or(is_wgs84),
+        CoordinateSpace::Projected { crs } => crs.is_some(),
+        _ => false,
+    };
+    !space_recoverable || !matches!(meta.kind, None | Some(DistCoordsKind::Source))
+}
+
+/// The network's coordinate metadata, or an unknown space with no stated
+/// origin when the network states none but carries locations.
+pub(super) fn meta_or_default(net: &MulticonductorNetwork) -> DistGeoMeta {
+    net.geo().clone().unwrap_or(DistGeoMeta {
         space: CoordinateSpace::Unknown,
         kind: None,
-    };
-    let meta = net.geo().as_ref().unwrap_or(&default_meta);
+    })
+}
+
+/// The legacy `extras.geojson` FeatureCollection over every located bus and
+/// routed line, with PowerIO's `powerio_geo` metadata member.
+pub(super) fn collection(net: &MulticonductorNetwork) -> Option<Value> {
+    let meta = meta_or_default(net);
     let crs = match &meta.space {
         CoordinateSpace::Geographic { crs } => Some(crs.as_deref().unwrap_or("EPSG:4326")),
         CoordinateSpace::Projected { crs } => crs.as_deref(),
@@ -169,17 +286,13 @@ pub(super) fn collection(net: &MulticonductorNetwork) -> Option<Value> {
     };
     let mut features = Vec::new();
     for bus in net.buses() {
-        if let Some(p) = bus.location.filter(|p| p.x.is_finite() && p.y.is_finite()) {
-            features.push(json!({"type":"Feature","properties":{"kind":"bus","id":bus.id},"geometry":{"type":"Point","coordinates":[p.x,p.y]}}));
+        if let Some(geometry) = bus_geo(bus) {
+            features.push(json!({"type":"Feature","properties":{"kind":"bus","id":bus.id},"geometry":geometry}));
         }
     }
     for line in net.lines() {
-        if let Some(route) = line
-            .route
-            .as_ref()
-            .filter(|r| r.len() >= 2 && r.iter().all(|p| p.x.is_finite() && p.y.is_finite()))
-        {
-            features.push(json!({"type":"Feature","properties":{"kind":"line","id":line.name,"bus_from":line.bus_from,"bus_to":line.bus_to},"geometry":{"type":"LineString","coordinates":route.iter().map(|p|[p.x,p.y]).collect::<Vec<_>>()}}));
+        if let Some(geometry) = line_geo(line) {
+            features.push(json!({"type":"Feature","properties":{"kind":"line","id":line.name,"bus_from":line.bus_from,"bus_to":line.bus_to},"geometry":geometry}));
         }
     }
     if features.is_empty() {

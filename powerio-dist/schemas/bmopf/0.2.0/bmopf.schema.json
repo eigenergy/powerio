@@ -16,7 +16,13 @@
       "properties": {
         "$schema": {
           "type": "string",
-          "description": "Schema retrieval URI or documented canonical identifier. A pinned proposal uses an immutable commit URL. Its resolved version must agree with meta.schema_version when both are supplied."
+          "const": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json",
+          "description": "The schema's canonical identifier, exactly its `$id`. A consumer recognises the document by this value; where it fetched the schema from is a separate matter. Retrieval permalinks (a raw GitHub commit URL) and the schema digest belong in `meta.provenance`. One identifier per version ends the proliferation of per-producer archive URLs that consumers had to allow-list (BMOPFTools issue 487)."
+        },
+        "schema_version": {
+          "type": "string",
+          "const": "0.2.0",
+          "description": "The version of the schema document, fixed by that document. Distinct from `meta.version`, which versions the dataset."
         },
         "version": {
           "type": "string",
@@ -42,6 +48,10 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "description": "Nominal system frequency [Hz]. A line geometry's `frequency` and a linecode's `derivation.frequency` are checked against it. It defaults nothing and rescales nothing."
+        },
+        "crs": {
+          "type": "string",
+          "description": "Coordinate reference system of every `geo` field in the document, as an authority code such as `EPSG:4326` or `EPSG:32617`. Absent means `EPSG:4326` (WGS84), under which every `geo` member is strictly conformant GeoJSON; a projected system keeps the structure but the coordinates are easting and northing. One system per document."
         },
         "authors": {
           "type": "array",
@@ -102,11 +112,6 @@
         "provenance": {
           "type": "object",
           "description": "Free-form conversion/audit provenance written by tooling (e.g. a fidelity-loss inventory, migration notes, or earth-terminal routing)."
-        },
-        "schema_version": {
-          "type": "string",
-          "const": "0.2.0",
-          "description": "The version of the schema document, fixed by that document. Distinct from `meta.version`, which versions the dataset."
         }
       },
       "additionalProperties": false
@@ -136,19 +141,19 @@
             },
             "description": "Array of terminal names which are perfectly grounded"
           },
-          "v_min": {
+          "vpg_min": {
             "type": "array",
             "items": {
               "$ref": "#/$defs/nonnegative_number"
             },
-            "description": "Minimum voltage magnitude [V] of each phase terminal of the bus, phase to ground, one entry per name in `terminal_names` that `terminal_conventions` classifies as a phase, in `terminal_names` order. The neutral bounds through `vn_max`, so this array carries no entry for it."
+            "description": "Minimum phase-to-ground voltage magnitude [V] of each phase terminal of the bus, one entry per name in `terminal_names` that `terminal_conventions` classifies as a phase, in `terminal_names` order. The neutral bounds through `vn_max`, so this array carries no entry for it. Named `vpg_*` since schema 0.1.1 (specification issue #51): `v_*` was ambiguous between phase-to-ground and phase-to-neutral."
           },
-          "v_max": {
+          "vpg_max": {
             "type": "array",
             "items": {
               "$ref": "#/$defs/nonnegative_number"
             },
-            "description": "Maximum voltage magnitude [V] of each phase terminal of the bus, phase to ground, one entry per name in `terminal_names` that `terminal_conventions` classifies as a phase, in `terminal_names` order. The neutral bounds through `vn_max`, so this array carries no entry for it."
+            "description": "Maximum phase-to-ground voltage magnitude [V] of each phase terminal of the bus, one entry per name in `terminal_names` that `terminal_conventions` classifies as a phase, in `terminal_names` order. The neutral bounds through `vn_max`, so this array carries no entry for it. Named `vpg_*` since schema 0.1.1 (specification issue #51)."
           },
           "vn_max": {
             "$ref": "#/$defs/nonnegative_number",
@@ -200,6 +205,10 @@
           },
           "time_series": {
             "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the bus is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Descriptive only: no calculation reads it; electrical length comes from `line.length` and impedance from the linecode. Proposed from BMOPFTools PR 258 and the PowerIO reference implementation, which reads this field and previously had to carry it in `extras.geojson` because no typed slot existed."
           }
         },
         "required": [
@@ -252,6 +261,10 @@
           },
           "time_series": {
             "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_line_string",
+            "description": "The line's route as a GeoJSON LineString from `bus_from` through any bends to `bus_to`, in the coordinate reference system `meta.crs` names (WGS84 when absent). Descriptive only; `length` remains the electrical length, so a route's geodesic length need not equal it (an underground cable's trench, a rear-lot span)."
           }
         },
         "patternProperties": {
@@ -2433,6 +2446,53 @@
         "g",
         "b"
       ]
+    },
+    "geojson_position": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 3,
+      "items": {
+        "type": "number"
+      },
+      "description": "A GeoJSON position (RFC 7946 section 3.1.1): `[x, y]` or `[x, y, z]`. In the WGS84 default `x` is longitude and `y` is latitude, in decimal degrees; a projected `meta.crs` makes them easting and northing in that system's units."
+    },
+    "geojson_point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "coordinates"
+      ],
+      "properties": {
+        "type": {
+          "const": "Point"
+        },
+        "coordinates": {
+          "$ref": "#/$defs/geojson_position"
+        }
+      },
+      "description": "A GeoJSON Point geometry object (RFC 7946 section 3.1.2)."
+    },
+    "geojson_line_string": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "coordinates"
+      ],
+      "properties": {
+        "type": {
+          "const": "LineString"
+        },
+        "coordinates": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/$defs/geojson_position"
+          }
+        }
+      },
+      "description": "A GeoJSON LineString geometry object (RFC 7946 section 3.1.4): the route from `bus_from` through any bends to `bus_to`."
     }
   },
   "description": "Proposed BMOPF 0.2.0 network data contract, subject to Task Force review. An immutable retrieval URL identifies a particular proposal snapshot."

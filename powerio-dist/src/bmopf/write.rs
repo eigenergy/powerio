@@ -23,8 +23,9 @@ use crate::model::{
     open_delta_connection, open_delta_pairable, pair_keys, winding_phase_pair,
 };
 
-/// Canonical identity of the default schema. Fresh proposal output uses
-/// [`BmopfSchemaVersion::retrieval_url`] in `meta.$schema`.
+/// Canonical identity of the default schema, the value the writer stamps into
+/// `meta.$schema` (schema 0.2.0 fixes it with `const`). The retrieval
+/// permalink and digest of the vendored schema go in `meta.provenance`.
 pub const BMOPF_SCHEMA_ID: &str = BmopfSchemaVersion::Bmopf020.schema_id();
 
 /// The version of the schema the writer targets by default, and the value it
@@ -170,8 +171,14 @@ pub struct BmopfEmitOptions {
     /// accepts, which moves the classes it has no table for under `extras`
     /// and reports each move.
     pub schema_version: BmopfSchemaVersion,
-    /// Compatibility setting; coordinates always use schema-valid `extras.geojson`.
-    /// Both values retain supported bus locations and line paths.
+    /// Legacy toggle: also write the geometry as a GeoJSON FeatureCollection
+    /// under `extras.geojson`, the layer PowerIO 0.11 wrote because schema
+    /// 0.2.0 had no typed slot. Schema 0.2.0 output writes bus locations as
+    /// `bus.*.geo`, line routes as `line.*.geo` and the system as `meta.crs`
+    /// whatever this says; `true` adds the legacy layer beside them for a
+    /// consumer that reads only that. Schema 0.1.0 output always writes the
+    /// legacy layer, since that schema has no typed slot, so the toggle
+    /// changes nothing there.
     pub sideload_coordinates: bool,
 }
 
@@ -218,6 +225,7 @@ pub(crate) fn emit_bmopf_json_text_with_options(
         transformer_overflow: Map::new(),
         dropped_extras: BTreeMap::new(),
         time_series_profiles: BTreeMap::new(),
+        geometry_embedded: false,
     };
     let doc = w.document(net);
     w.flush_dropped_extras();
@@ -242,6 +250,10 @@ struct Writer {
     dropped_extras: BTreeMap<String, Vec<String>>,
     /// Normalized, schema-compatible profiles prepared once for this emission.
     time_series_profiles: BTreeMap<String, (Value, Option<Value>)>,
+    /// Whether a bus or line of this emission carries a typed `geo` field, so
+    /// `meta.crs` (and, when the schema cannot name the space, the
+    /// `extras.powerio_geo` record) must describe its coordinate system.
+    geometry_embedded: bool,
 }
 
 impl Writer {
@@ -428,12 +440,14 @@ impl Writer {
     /// provenance. Deterministic and round-trip stable — no generated
     /// timestamp, and nothing that depends on the immediate source format
     /// (which a round trip would change) — so canonical output is idempotent.
-    /// The selected schema is identified by its retrieval URI and provenance.
+    /// `meta.$schema` is the selected schema's canonical `$id`, the one
+    /// identifier a consumer recognises the version by; where the exact bytes
+    /// were retrieved from, and their digest, is the provenance record's job.
     fn meta(&mut self, net: &MulticonductorNetwork) -> Value {
         let mut m = Map::new();
         m.insert(
             "$schema".into(),
-            json!(self.options.schema_version.retrieval_url()),
+            json!(self.options.schema_version.schema_id()),
         );
         // Schema 0.1.0 has no `schema_version` field, and its `meta` rejects
         // what it does not declare, so only 0.2.0 states the version twice.
@@ -524,14 +538,45 @@ impl Writer {
             extras.insert("transformer".into(), Value::Object(overflow));
         }
         self.cost_version(&mut doc, &mut extras);
-        if let Some(geometry) = super::geo::collection(net) {
-            extras.insert("geojson".into(), geometry);
-        }
+        self.geometry(net, &mut doc, &mut extras);
         if !extras.is_empty() {
             doc.insert("extras".into(), Value::Object(extras));
         }
         self.warn_unemitted_untyped(net);
         Value::Object(doc)
+    }
+
+    /// The document level geometry record. Schema 0.2.0 carries the geometry
+    /// in the typed `bus.*.geo` and `line.*.geo` slots the element writers
+    /// filled, and names their coordinate system in `meta.crs` (absent means
+    /// WGS84); a space the schema cannot name, or coordinates not from the
+    /// source data, are also recorded as `extras.powerio_geo` so a read gets
+    /// the same metadata back. The legacy `extras.geojson` FeatureCollection
+    /// is the schema 0.1.0 form, and 0.2.0 output adds it only on request
+    /// ([`BmopfEmitOptions::sideload_coordinates`]).
+    fn geometry(
+        &mut self,
+        net: &MulticonductorNetwork,
+        doc: &mut Map<String, Value>,
+        extras: &mut Map<String, Value>,
+    ) {
+        let embedded = self.options.schema_version == BmopfSchemaVersion::Bmopf020;
+        if embedded && self.geometry_embedded {
+            let meta = super::geo::meta_or_default(net);
+            if let Some(crs) = super::geo::declared_crs(&meta)
+                && let Some(Value::Object(m)) = doc.get_mut("meta")
+            {
+                m.insert("crs".into(), json!(crs));
+            }
+            if super::geo::needs_declared_meta(&meta) {
+                extras.insert("powerio_geo".into(), json!(meta));
+            }
+        }
+        if (!embedded || self.options.sideload_coordinates)
+            && let Some(geometry) = super::geo::collection(net)
+        {
+            extras.insert("geojson".into(), geometry);
+        }
     }
 
     fn cost_version(&mut self, doc: &mut Map<String, Value>, extras: &mut Map<String, Value>) {
@@ -587,9 +632,15 @@ impl Writer {
             if !b.grounded.is_empty() {
                 o.insert("perfectly_grounded_terminals".into(), json!(b.grounded));
             }
+            // Phase to ground bounds: `vpg_min`/`vpg_max` since schema 0.1.1,
+            // so 0.2.0 names them that way and rejects the 0.1.0 `v_*`.
+            let (vpg_min, vpg_max) = match self.options.schema_version {
+                BmopfSchemaVersion::Bmopf010 => ("v_min", "v_max"),
+                BmopfSchemaVersion::Bmopf020 => ("vpg_min", "vpg_max"),
+            };
             for (key, scalar, phases) in [
-                ("v_min", b.v_min, &b.v_min_phase),
-                ("v_max", b.v_max, &b.v_max_phase),
+                (vpg_min, b.v_min, &b.v_min_phase),
+                (vpg_max, b.v_max, &b.v_max_phase),
             ] {
                 if let Some(v) = scalar {
                     o.insert(
@@ -625,6 +676,12 @@ impl Writer {
                 }
             }
             self.bus_location(b);
+            if self.options.schema_version == BmopfSchemaVersion::Bmopf020
+                && let Some(geo) = super::geo::bus_geo(b)
+            {
+                o.insert("geo".into(), geo);
+                self.geometry_embedded = true;
+            }
             // Other extras have no bus fields in the schema.
             self.extras_dropped(&b.extras, &format!("bus {}", b.id));
             buses.insert(b.id.clone(), Value::Object(o));
@@ -1038,6 +1095,12 @@ impl Writer {
                     && let Some(v) = self.bounds(s_max, &format!("{what} s_max"))
                 {
                     o.insert("s_max".into(), v);
+                }
+                if self.options.schema_version == BmopfSchemaVersion::Bmopf020
+                    && let Some(geo) = super::geo::line_geo(l)
+                {
+                    o.insert("geo".into(), geo);
+                    self.geometry_embedded = true;
                 }
                 self.extras_dropped(&l.extras, &what);
                 lines.insert(l.name.clone(), Value::Object(o));
@@ -3454,15 +3517,20 @@ fn bmopf_delta_roll(t: &DistTransformer, idx: usize, w: &DistWinding) -> Option<
 /// The phase and neutral label lists, from the bus terminal names. The rule
 /// is the one the schema prescribes for an absent `terminal_conventions`
 /// block: an `n` or `N` label is neutral, every other label is a phase.
-/// Add deterministic producer provenance without replacing source metadata.
+/// Add deterministic producer provenance without replacing source metadata:
+/// the proposal commit, the SHA-256 of the exact schema bytes, and the
+/// immutable permalink they were retrieved from (`schema_retrieval_url`;
+/// `schema_upstream_url` is the same permalink, kept for readers of 0.11
+/// output), beside the canonical identity `meta.$schema` carries.
 fn proposal_provenance(meta: &mut Map<String, Value>) {
+    let proposal = BmopfSchemaVersion::Bmopf020;
     let record = json!({
         "producer": "powerio", "producer_version": env!("CARGO_PKG_VERSION"),
-        "schema_status": "proposal", "schema_version": "0.2.0",
-        "schema_commit": super::BMOPF_PROPOSAL_COMMIT,
-        "schema_sha256": super::BMOPF_PROPOSAL_SHA256,
-        "schema_id": BmopfSchemaVersion::Bmopf020.schema_id(),
-        "schema_retrieval_url": BmopfSchemaVersion::Bmopf020.retrieval_url(),
+        "schema_status": "proposal", "schema_version": proposal.version(),
+        "schema_commit": proposal.upstream_commit(),
+        "schema_sha256": proposal.sha256(),
+        "schema_id": proposal.schema_id(),
+        "schema_retrieval_url": proposal.retrieval_url(),
         "schema_upstream_url": super::BMOPF_PROPOSAL_URL
     });
     let provenance = meta.entry("provenance").or_insert_with(|| json!({}));
@@ -3744,6 +3812,7 @@ mod tests {
             transformer_overflow: Map::new(),
             dropped_extras: BTreeMap::new(),
             time_series_profiles: BTreeMap::new(),
+            geometry_embedded: false,
         };
 
         // A non-object control_profile extra and an ibr extra outside the

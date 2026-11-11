@@ -505,8 +505,12 @@ def test_source_energy_prices_and_draft_schema_digest_survive_ir():
     assert provenance["schema_sha256"] == hashlib.sha256(schema).hexdigest()
     assert provenance["schema_status"] == "proposal"
     assert provenance["schema_commit"] in provenance["schema_upstream_url"]
-    assert output["meta"]["$schema"] == provenance["schema_retrieval_url"]
-    assert "raw.githubusercontent.com/eigenergy/powerio/" in output["meta"]["$schema"]
+    assert provenance["schema_commit"] in provenance["schema_retrieval_url"]
+    # `meta.$schema` is the canonical `$id` the schema fixes with `const`;
+    # the retrieval permalink lives in provenance.
+    assert output["meta"]["$schema"] == provenance["schema_id"]
+    assert output["meta"]["$schema"].endswith("/main/schema/bmopf/0.2.0/bmopf.schema.json")
+    assert "eigenergy/powerio" not in output["meta"]["$schema"]
     legacy = json.loads(powerio.emit(restored, "bmopf-json@0.1.0").text)
     assert "energy_cost_rate" not in legacy["voltage_source"]["s"]
     assert legacy["extras"]["voltage_source"]["s"]["energy_cost_rate"] == [0.1]

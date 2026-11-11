@@ -416,6 +416,18 @@ action.
   `READ.BMOPF.FIELD_NOT_A_NUMBER` finding, and the finding's pointer into the
   BMOPF document moves to the `source_pointer` detail, so a module carrying it
   serializes to PowerIO IR (#763).
+- The vendored 0.2.0 proposal schema is dsopt-schema
+  [`655aad4`](https://github.com/distribution-system-opt/dsopt-schema/commit/655aad45aa345071a69f4a41a88b324f9d0678ac),
+  reconciled with schema 0.1.1: 0.2.0 output names the bus phase to ground
+  bounds `vpg_min`/`vpg_max` (0.1.0 output keeps `v_*`); the reader accepts
+  either spelling and reports `READ.BMOPF.FIELD_LEGACY` for `v_*` in a 0.2.0 document.
+- 0.2.0 output writes geometry in the schema's typed slots, `bus.*.geo`,
+  `line.*.geo` and `meta.crs`, instead of the `extras.geojson` layer, which
+  0.1.0 output keeps and `BmopfEmitOptions::sideload_coordinates` adds back.
+- `meta.$schema` is the target schema's canonical `$id` rather than a PowerIO
+  archive URL ([BMOPFTools #487](https://github.com/frederikgeth/BMOPFTools.jl/issues/487));
+  the commit, digest and retrieval permalink stay in `meta.provenance`, and the
+  0.11 archive URLs still read as their versions.
 
 **Conversion fidelity**
 

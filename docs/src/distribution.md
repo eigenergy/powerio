@@ -1041,8 +1041,18 @@ and preserves winding ratings, taps, neutral impedances and current-limit data.
 Unequal bus phase bounds remain individual values through parsing, PowerIO IR,
 and explicit BMOPF output. Uniform values use `v_min`/`v_max`; unequal values
 use `v_min_phase`/`v_max_phase` in the typed Rust model. A present scalar takes
-precedence over the corresponding vector. PMD voltage arrays instead follow
+precedence over the corresponding vector. In the document the phase to ground
+bound is `vpg_min`/`vpg_max` since schema 0.1.1, and 0.2.0 rejects the 0.1.0
+spelling `v_min`/`v_max`: 0.2.0 output writes `vpg_*`, 0.1.0 output `v_*`, and
+the reader takes either under every version, reporting `READ.BMOPF.FIELD_LEGACY`
+when a 0.2.0 document uses the old names. PMD voltage arrays instead follow
 terminal order and use engineering voltage units.
+
+Schema 0.2.0 also declares geometry: `bus.*.geo` (GeoJSON Point), `line.*.geo`
+(GeoJSON LineString) and `meta.crs`. 0.2.0 output writes bus locations and
+line routes there; 0.1.0 output keeps them in the `extras.geojson`
+FeatureCollection, which reads under either version. See
+[Geo and display](geo-and-display.md#bmopf-geometry-and-schema-validity).
 
 The C and Julia bus views expose unequal limits as
 `phase_to_ground_voltage_min_v` and `phase_to_ground_voltage_max_v`, while
@@ -1064,13 +1074,19 @@ circuit, core shunts and tap-control decisions. Malformed winding maps and
 invalid ratios fail instead of producing an incomplete matrix.
 
 The BMOPF proposal schema is pinned to
-[`664b494`](https://github.com/distribution-system-opt/dsopt-schema/commit/664b494f2ee31ee76f8f78e7852cdb1f1c9a8e7d),
-with SHA-256 `74d6c6de3637d52e42a26c4cb0584f51df70d69f360b236cf5e23afaf7669462`.
-Fresh output places a PowerIO archive commit URL in `meta.$schema`. Proposal output
-records the canonical identity, proposal status, digest and revision under
-`meta.provenance.powerio_bmopf`. Existing provenance is preserved; a name
-collision uses a numbered producer entry. Reading the former canonical or
-version-directory identifiers remains supported without fetching remote data.
+[`655aad4`](https://github.com/distribution-system-opt/dsopt-schema/commit/655aad45aa345071a69f4a41a88b324f9d0678ac),
+with SHA-256 `01d022c038e0518e3a54c5fbf7378522fd4120b5ba8a5308b3a70a31af774ae4`,
+the revision that reconciled the proposal with schema 0.1.1 (`vpg_*` bounds,
+typed geometry, one identifier). Output stamps the schema's canonical `$id`
+into `meta.$schema`, the value 0.2.0 fixes with `const`, so a consumer
+recognises a document by one identifier per version instead of allow-listing
+producer archive URLs ([BMOPFTools #487](https://github.com/frederikgeth/BMOPFTools.jl/issues/487)).
+Proposal output records the proposal commit, the schema digest, and the
+retrieval permalink of the exact bytes under `meta.provenance.powerio_bmopf`.
+Existing provenance is preserved; a name collision uses a numbered producer
+entry. Reading the PowerIO archive URLs that 0.11 stamped, the dsopt-schema
+commit permalinks, and the version-directory identifiers remains supported
+without fetching remote data.
 
 The supported schemas ship in the Rust crate at `schemas/bmopf/`, in the
 Python package at `powerio/schemas/bmopf/`, and in each C/Julia library archive

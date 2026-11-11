@@ -36,8 +36,9 @@ parameter field is zero. A field with no typed slot lands in the element's
 | BMOPF | PowerIO | Note |
 | --- | --- | --- |
 | `name` | `PioModule` value name | |
-| `meta.$schema` | resolved by `BmopfSchemaVersion::from_schema_id` | Absent raises `READ.BMOPF.SCHEMA_ABSENT`; a value naming no version raises `READ.BMOPF.SCHEMA_UNKNOWN`. Both parse, and both versions are accepted. |
-| `meta.schema_version` | explicit schema version | The reader checks agreement with `meta.$schema`. Fresh proposal output pins a retrieval URL and records proposal status and schema digest in provenance. |
+| `meta.$schema` | resolved by `BmopfSchemaVersion::from_schema_id` | Written as the target schema's canonical `$id` (`BmopfSchemaVersion::schema_id`), which schema 0.2.0 fixes with `const`. Read, the canonical `$id`, the dsopt-schema commit permalinks, and the PowerIO archive URLs that 0.11 stamped all resolve to their version. Absent raises `READ.BMOPF.SCHEMA_ABSENT`; a value naming no version raises `READ.BMOPF.SCHEMA_UNKNOWN`. Both parse, and both versions are accepted. |
+| `meta.schema_version` | explicit schema version | The reader checks agreement with `meta.$schema`. Proposal (0.2.0) output records the proposal commit, the schema digest, and the retrieval permalink under `meta.provenance.powerio_bmopf`. |
+| `meta.crs` | `MulticonductorNetwork::geo` coordinate space | 0.2.0 only. The authority code of every `geo` field's system; absent means `EPSG:4326`. Written for a projected or non-WGS84 system, omitted for WGS84. A space the schema cannot name (unknown, diagram, a code-less projection) or coordinates not from the source also travel as `extras.powerio_geo`, which the reader prefers. |
 | `meta.frequency` | `MulticonductorNetwork::base_frequency`, Hz | Absent defaults to 60 with `READ.BMOPF.VALUE_DEFAULTED`. |
 | `meta.*` (the rest) | `MulticonductorNetwork::extras["bmopf_meta"]` | Re-emitted, except the three the writer owns. |
 | `terminal_conventions` | `MulticonductorNetwork::extras["bmopf_terminal_conventions"]` | Re-emitted verbatim; authored from the terminal names when the source states none. |
@@ -51,13 +52,14 @@ parameter field is zero. A field with no typed slot lands in the element's
 | --- | --- | --- |
 | `terminal_names` | `terminals` | Ordered; fixes every per-terminal order on this bus. |
 | `perfectly_grounded_terminals` | `grounded` | |
-| `v_min`, `v_max` | `v_min_phase`, `v_max_phase` and scalar `v_min`, `v_max` | Unequal bounds remain ordered phase vectors through IR and bindings. A scalar edit explicitly overrides the vector; balanced lowering rejects unequal phase bounds. |
+| `vpg_min`, `vpg_max` (0.1.1 and 0.2.0); `v_min`, `v_max` (0.1.0) | `v_min_phase`, `v_max_phase` and scalar `v_min`, `v_max` | Phase to ground, one entry per phase terminal. Both spellings read under every version, the current one first; a 0.2.0 document using `v_*` raises `READ.BMOPF.FIELD_LEGACY`, since that schema rejects it, and both spellings disagreeing raises `READ.BMOPF.SEMANTIC_INVALID`. 0.2.0 output writes `vpg_*`, 0.1.0 output `v_*`. Unequal bounds remain ordered phase vectors through IR and bindings. A scalar edit explicitly overrides the vector; balanced lowering rejects unequal phase bounds. |
 | `vpn_min`, `vpn_max` | `vpn_min`, `vpn_max` | Per phase terminal, kept as arrays. |
 | `vpp_min`, `vpp_max` | `vpp_min`, `vpp_max` | Per ordered phase pair. |
 | `vpos_min`, `vpos_max` | `vpos_min`, `vpos_max` | Scalars. |
 | `vneg_max`, `vzero_max` | `vneg_max`, `vzero_max` | Magnitude caps; the lower bound is always zero. |
 | `vn_max` | `vn_max` | Neutral to ground cap. |
-| `longitude`, `latitude` | `location` and `MulticonductorNetwork::geo` | The BMOPFTools coordinate fields, outside both schema versions. Read into the coordinate space; written back only with `BmopfEmitOptions::sideload_coordinates`. |
+| `geo` | `location` and `MulticonductorNetwork::geo` | 0.2.0: a GeoJSON Point in the system `meta.crs` names. Written for every bus with a finite location. 0.1.0 has no slot, so that version's output carries the location in the `extras.geojson` FeatureCollection, which the reader accepts under every version when no element carries a `geo` field. |
+| `longitude`, `latitude` | `location` and `MulticonductorNetwork::geo` | The pre-schema BMOPFTools coordinate fields, outside both schema versions. Read into the coordinate space as WGS84; never written back. |
 
 ## line and linecode
 
@@ -72,6 +74,7 @@ parameter field is zero. A field with no typed slot lands in the element's
 | `line.R_series_i_j`, `line.X_series_i_j` | a synthesized `DistLineCode` named after the line, ohm per metre | The inline branch states absolute ohms, so the reader divides by `length` to store per metre and keeps the line's own length. `READ.BMOPF.VALUE_INFERRED` names the synthesis. |
 | `line.G_from_i_j`, `line.B_from_i_j`, `line.G_to_i_j`, `line.B_to_i_j` | the same synthesized line code's `g_from`, `b_from`, `g_to`, `b_to` | |
 | `line.i_max`, `line.s_max` | `i_max`, `s_max` | Per conductor; override the line code's. |
+| `line.geo` | `route` | 0.2.0: a GeoJSON LineString from `bus_from` through any bends to `bus_to`, in the system `meta.crs` names; descriptive, `length` stays the electrical length. Written for every line with a route of two or more finite vertices; 0.1.0 output carries routes in `extras.geojson`. |
 | `linecode.R_series_i_j`, `linecode.X_series_i_j` | `r_series`, `x_series`, ohm per metre | |
 | `linecode.G_from_i_j`, `linecode.B_from_i_j`, `linecode.G_to_i_j`, `linecode.B_to_i_j` | `g_from`, `b_from`, `g_to`, `b_to`, siemens per metre | Half the total shunt at each end. |
 | `linecode.i_max`, `linecode.s_max` | `i_max`, `s_max` | Per conductor, applied at both ends. |
@@ -248,7 +251,7 @@ that constraints are active for the elements present.
 
 | Family | The BMOPF fields it activates |
 | --- | --- |
-| `terminal_voltage_bounds` | `bus.v_min`, `v_max`, `vpn_min`, `vpn_max`, `vpp_min`, `vpp_max`, `vpos_min`, `vpos_max`, `vneg_max`, `vzero_max`, `vn_max` |
+| `terminal_voltage_bounds` | `bus.vpg_min`, `vpg_max` (`v_min`, `v_max` in 0.1.0), `vpn_min`, `vpn_max`, `vpp_min`, `vpp_max`, `vpos_min`, `vpos_max`, `vneg_max`, `vzero_max`, `vn_max` |
 | `conductor_limits` | `line.i_max`, `line.s_max`, `linecode.i_max`, `linecode.s_max`, `switch.i_max`, `transformer.i_max_from`, `transformer.i_max_to` |
 | `generator_capability` | `generator.p_min`, `p_max`, `q_min`, `q_max`, `s_max`, `i_max`, and the same bounds on an IBR |
 

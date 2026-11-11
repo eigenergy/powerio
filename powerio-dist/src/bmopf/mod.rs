@@ -26,6 +26,23 @@
 //! The writer targets one version, 0.2.0 by default. Writing 0.2.0 keeps supported proposal fields in place. Writing 0.1.0 relocates what that version has no slot for, listed
 //! below, and reports each move.
 //!
+//! Two bus and geometry details differ by version. The phase to ground
+//! bounds are `vpg_min`/`vpg_max` since schema 0.1.1, and 0.2.0 rejects the
+//! 0.1.0 spelling `v_min`/`v_max`: 0.2.0 output writes `vpg_*`, 0.1.0 output
+//! `v_*`, and the reader takes either under every version, reporting
+//! `READ.BMOPF.FIELD_LEGACY` when a 0.2.0 document uses the old names.
+//! Schema 0.2.0 declares geometry as `bus.*.geo` (a GeoJSON Point),
+//! `line.*.geo` (a GeoJSON LineString) and `meta.crs`; 0.1.0 has no slot, so
+//! that version's output carries the same geometry as a FeatureCollection
+//! under `extras.geojson`. The reader takes the typed slots first and the
+//! layer only when no element carries one.
+//!
+//! `meta.$schema` is the target schema's canonical `$id`
+//! ([`BmopfSchemaVersion::schema_id`]), which 0.2.0 fixes with `const`.
+//! Where the exact schema bytes were retrieved from, and their digest, is
+//! recorded under `meta.provenance.powerio_bmopf` for 0.2.0 output
+//! ([`BmopfSchemaVersion::retrieval_url`], [`BMOPF_PROPOSAL_SHA256`]).
+//!
 //! # What a 0.1.0 write parks under `extras`
 //!
 //! Some data has a physical meaning schema 0.1.0 cannot express in place but

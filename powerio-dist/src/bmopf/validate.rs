@@ -41,13 +41,26 @@ pub(super) fn report(doc: &Map<String, Value>, diagnostics: &mut Diagnostics) {
                 }
             }
             let phases = phase_count(&names, doc.get("terminal_conventions"));
-            for key in ["v_min", "v_max", "vpn_min", "vpn_max"] {
+            // `vpg_*` is the phase to ground bound since schema 0.1.1 and the
+            // only spelling 0.2.0 accepts; `v_*` is the 0.1.0 spelling.
+            for key in ["vpg_min", "vpg_max", "v_min", "v_max", "vpn_min", "vpn_max"] {
                 check.dimension(bus, key, &[phases], &path);
             }
             for key in ["vpp_min", "vpp_max"] {
                 check.dimension(bus, key, &[phases * phases.saturating_sub(1) / 2], &path);
             }
+            for (current, legacy) in [("vpg_min", "v_min"), ("vpg_max", "v_max")] {
+                if let (Some(a), Some(b)) = (bus.get(current), bus.get(legacy))
+                    && a != b
+                {
+                    check.error(
+                        &path,
+                        &format!("{current} and {legacy} both state the bound and disagree"),
+                    );
+                }
+            }
             for (lo, hi) in [
+                ("vpg_min", "vpg_max"),
                 ("v_min", "v_max"),
                 ("vpn_min", "vpn_max"),
                 ("vpp_min", "vpp_max"),

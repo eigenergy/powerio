@@ -47,13 +47,14 @@ fn nonuniform_phase_bounds_survive_value_serialization_and_emission() {
     let output = emit_bmopf_json(&restored);
     let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
     assert_eq!(
-        doc["bus"]["b"]["v_min"],
+        doc["bus"]["b"]["vpg_min"],
         serde_json::json!([210.0, 215.0, 220.0])
     );
     assert_eq!(
-        doc["bus"]["b"]["v_max"],
+        doc["bus"]["b"]["vpg_max"],
         serde_json::json!([240.0, 245.0, 250.0])
     );
+    assert!(doc["bus"]["b"].get("v_min").is_none());
     assert!(schema_validator().is_valid(&doc));
 }
 
@@ -1148,9 +1149,23 @@ fn bmopf_coordinates_keep_schema_valid_geometry_after_mutation() {
         let encoded = emit_bmopf_json_with_options(&net, options);
         let doc: serde_json::Value = serde_json::from_str(&encoded.text).unwrap();
         assert!(doc["bus"]["sourcebus"].get("longitude").is_none());
+        // Schema 0.2.0 output carries the location in the typed slot; the
+        // legacy `extras.geojson` layer only rides along on request.
         assert_eq!(
-            doc["extras"]["geojson"]["features"][0]["geometry"]["coordinates"],
-            serde_json::json!([-80.0, 35.0])
+            doc["bus"]["sourcebus"]["geo"],
+            serde_json::json!({"type": "Point", "coordinates": [-80.0, 35.0]})
+        );
+        assert!(doc["meta"].get("crs").is_none(), "WGS84 is the default");
+        assert_eq!(doc.pointer("/extras/geojson").is_some(), sideload);
+        if sideload {
+            assert_eq!(
+                doc["extras"]["geojson"]["features"][0]["geometry"]["coordinates"],
+                serde_json::json!([-80.0, 35.0])
+            );
+        }
+        assert_eq!(
+            errors(&schema_validator(), &encoded.text),
+            Vec::<String>::new()
         );
         assert!(
             !encoded
@@ -3874,7 +3889,8 @@ fn the_written_schema_version_reads_back_as_the_version_written() {
             profile.version()
         );
         let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-        assert_eq!(doc["meta"]["$schema"], profile.retrieval_url());
+        // The stamp is the canonical `$id`, which 0.2.0 fixes with `const`.
+        assert_eq!(doc["meta"]["$schema"], profile.schema_id());
         assert_eq!(
             BmopfSchemaVersion::from_schema_id(doc["meta"]["$schema"].as_str().unwrap()),
             Some(profile)
@@ -4047,7 +4063,7 @@ fn proposal_provenance_is_pinned_and_preserves_existing_keys() {
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     assert_eq!(
         doc["meta"]["$schema"],
-        BmopfSchemaVersion::Bmopf020.retrieval_url()
+        BmopfSchemaVersion::Bmopf020.schema_id()
     );
     let provenance = &doc["meta"]["provenance"];
     assert_eq!(provenance["powerio_bmopf"]["note"], "keep");
@@ -4059,6 +4075,20 @@ fn proposal_provenance_is_pinned_and_preserves_existing_keys() {
     assert_eq!(
         provenance["powerio_bmopf_1"]["schema_commit"],
         BMOPF_PROPOSAL_COMMIT
+    );
+    assert_eq!(
+        provenance["powerio_bmopf_1"]["schema_retrieval_url"],
+        BmopfSchemaVersion::Bmopf020.retrieval_url()
+    );
+    assert!(
+        provenance["powerio_bmopf_1"]["schema_retrieval_url"]
+            .as_str()
+            .unwrap()
+            .contains(BMOPF_PROPOSAL_COMMIT)
+    );
+    assert_eq!(
+        provenance["powerio_bmopf_1"]["schema_id"],
+        doc["meta"]["$schema"]
     );
     assert_eq!(
         emit_bmopf_json(&parse_bmopf_str(&out.text).unwrap()).text,
@@ -4689,5 +4719,361 @@ fn referenced_profiles_must_share_one_bmopf_time_axis() {
         }
         assert_eq!(doc["extras"]["time_series"], source["time_series"]);
         assert!(schema_validator().is_valid(&doc), "{doc}");
+    }
+}
+
+/// A located, routed network in a projected system: what a GIS backed feeder
+/// model carries.
+fn routed_network() -> MulticonductorNetwork {
+    let text = r#"{"bus":{"a":{"terminal_names":["1","2","3","4"]},"b":{"terminal_names":["1","2","3","4"]}},"linecode":{"c":{"R_series_1_1":0.1,"X_series_1_1":0.1}},"line":{"ab":{"bus_from":"a","bus_to":"b","terminal_map_from":["1"],"terminal_map_to":["1"],"linecode":"c","length":12}},"voltage_source":{"s":{"bus":"a","terminal_map":["1","2","3","4"],"v_magnitude":[230,230,230,0],"v_angle":[0,-2.094,2.094,0]}}}"#;
+    let mut net = (*parse_bmopf_str(text).unwrap()).clone();
+    *net.geo_mut() = Some(DistGeoMeta {
+        space: CoordinateSpace::Projected {
+            crs: Some("EPSG:32617".into()),
+        },
+        kind: Some(DistCoordsKind::Source),
+    });
+    let at = |x: f64, y: f64| DistLocation { x, y, kind: None };
+    net.buses_mut()[0].location = Some(at(276_500.0, 4_686_200.0));
+    net.buses_mut()[1].location = Some(at(276_512.0, 4_686_207.0));
+    net.lines_mut()[0].route = Some(vec![
+        at(276_500.0, 4_686_200.0),
+        at(276_505.0, 4_686_209.0),
+        at(276_512.0, 4_686_207.0),
+    ]);
+    net
+}
+
+/// Schema 0.2.0 output: `vpg_*` bounds, geometry in the typed `geo` slots
+/// with the system in `meta.crs`, the canonical `$id` as the stamp, and no
+/// legacy `extras.geojson` layer. The document validates against the vendored
+/// schema, which rejects the 0.1.0 spellings and knows the typed slots.
+#[test]
+fn schema_020_output_embeds_geometry_and_names_the_vpg_bounds() {
+    let mut net = routed_network();
+    net.buses_mut()[0].v_min = Some(207.0);
+    net.buses_mut()[0].v_max = Some(253.0);
+    let out = emit_bmopf_json(&net);
+    assert_eq!(
+        errors(
+            &schema_validator_for(BmopfSchemaVersion::Bmopf020),
+            &out.text
+        ),
+        Vec::<String>::new()
+    );
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(
+        doc["meta"]["$schema"],
+        BmopfSchemaVersion::Bmopf020.schema_id()
+    );
+    assert_eq!(doc["meta"]["schema_version"], "0.2.0");
+    assert_eq!(doc["meta"]["crs"], "EPSG:32617");
+    assert_eq!(
+        doc["bus"]["a"]["vpg_min"],
+        serde_json::json!([207.0, 207.0, 207.0])
+    );
+    assert!(doc["bus"]["a"].get("v_min").is_none());
+    assert_eq!(
+        doc["bus"]["a"]["geo"],
+        serde_json::json!({"type": "Point", "coordinates": [276_500.0, 4_686_200.0]})
+    );
+    assert_eq!(
+        doc["line"]["ab"]["geo"],
+        serde_json::json!({"type": "LineString", "coordinates": [
+            [276_500.0, 4_686_200.0], [276_505.0, 4_686_209.0], [276_512.0, 4_686_207.0]
+        ]})
+    );
+    assert!(doc.pointer("/extras/geojson").is_none(), "{doc}");
+    assert!(
+        doc.pointer("/extras/powerio_geo").is_none(),
+        "a named projected system reads back from meta.crs alone: {doc}"
+    );
+    let provenance = &doc["meta"]["provenance"]["powerio_bmopf"];
+    assert_eq!(provenance["schema_status"], "proposal");
+    assert_eq!(
+        provenance["schema_retrieval_url"],
+        BmopfSchemaVersion::Bmopf020.retrieval_url()
+    );
+    assert_eq!(
+        provenance["schema_sha256"],
+        BmopfSchemaVersion::Bmopf020.sha256()
+    );
+    assert_eq!(
+        provenance["schema_commit"],
+        BmopfSchemaVersion::Bmopf020.upstream_commit()
+    );
+}
+
+/// Schema 0.1.0 output keeps its form: `v_*` bounds, no typed `geo` slots
+/// (the schema has none), the geometry as the `extras.geojson` layer, and the
+/// canonical 0.1.0 `$id` as the stamp.
+#[test]
+fn schema_010_output_keeps_the_v_bounds_and_the_extras_geojson_layer() {
+    let mut net = routed_network();
+    net.buses_mut()[0].v_min = Some(207.0);
+    net.buses_mut()[0].v_max = Some(253.0);
+    let out = emit_bmopf_json_with_options(
+        &net,
+        BmopfEmitOptions::default().with_schema_version(BmopfSchemaVersion::Bmopf010),
+    );
+    assert_eq!(
+        errors(
+            &schema_validator_for(BmopfSchemaVersion::Bmopf010),
+            &out.text
+        ),
+        Vec::<String>::new()
+    );
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(
+        doc["meta"]["$schema"],
+        BmopfSchemaVersion::Bmopf010.schema_id()
+    );
+    assert!(doc["meta"].get("schema_version").is_none());
+    assert!(doc["meta"].get("crs").is_none());
+    assert_eq!(
+        doc["bus"]["a"]["v_min"],
+        serde_json::json!([207.0, 207.0, 207.0])
+    );
+    assert!(doc["bus"]["a"].get("vpg_min").is_none());
+    assert!(doc["bus"]["a"].get("geo").is_none());
+    assert!(doc["line"]["ab"].get("geo").is_none());
+    let collection = &doc["extras"]["geojson"];
+    assert_eq!(collection["type"], "FeatureCollection");
+    assert_eq!(collection["crs"], "EPSG:32617");
+    assert_eq!(collection["features"].as_array().unwrap().len(), 3);
+    let again = parse_bmopf_str(&out.text).unwrap();
+    assert_eq!(again.geo(), net.geo());
+    assert_eq!(
+        vertices(again.lines()[0].route.as_deref()),
+        vertices(net.lines()[0].route.as_deref())
+    );
+}
+
+/// The vertices of a route as bit patterns, without the per point origin
+/// marker the reader stamps.
+fn vertices(route: Option<&[DistLocation]>) -> Option<Vec<(u64, u64)>> {
+    route.map(|r| r.iter().map(|p| (p.x.to_bits(), p.y.to_bits())).collect())
+}
+
+/// The legacy spelling reads under every version; a document that states
+/// schema 0.2.0 and uses it gets the finding, since that schema rejects it.
+#[test]
+fn legacy_v_bounds_read_and_are_diagnosed_only_in_a_020_document() {
+    let body = r#""bus":{"b":{"terminal_names":["a","b","c","n"],"v_min":[210,215,220],"v_max":[240,245,250]}},"voltage_source":{"s":{"bus":"b","terminal_map":["a","b","c","n"],"v_magnitude":[230,230,230,0],"v_angle":[0,-2.094,2.094,0]}}"#;
+    for (meta, diagnosed) in [
+        (String::new(), false),
+        (
+            format!(
+                r#""meta":{{"$schema":"{}"}},"#,
+                BmopfSchemaVersion::Bmopf010.schema_id()
+            ),
+            false,
+        ),
+        (
+            format!(
+                r#""meta":{{"$schema":"{}","schema_version":"0.2.0"}},"#,
+                BmopfSchemaVersion::Bmopf020.schema_id()
+            ),
+            true,
+        ),
+    ] {
+        let net = parse_bmopf_str(&format!("{{{meta}{body}}}")).unwrap();
+        assert_eq!(
+            net.buses()[0].v_min_phase.as_deref(),
+            Some([210.0, 215.0, 220.0].as_slice()),
+            "{meta}"
+        );
+        let legacy: Vec<_> = net
+            .diagnostics
+            .iter()
+            .filter(|d| d.code() == "READ.BMOPF.FIELD_LEGACY")
+            .collect();
+        assert_eq!(
+            legacy.len(),
+            if diagnosed { 2 } else { 0 },
+            "{meta}: {legacy:?}"
+        );
+        if diagnosed {
+            assert!(legacy[0].message().contains("vpg_min"), "{:?}", legacy[0]);
+        }
+    }
+    // The current spelling reads the same values without a finding.
+    let current = parse_bmopf_str(
+        r#"{"bus":{"b":{"terminal_names":["a","b","c","n"],"vpg_min":[210,215,220],"vpg_max":[240,245,250]}}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        current.buses()[0].v_max_phase.as_deref(),
+        Some([240.0, 245.0, 250.0].as_slice())
+    );
+    assert!(
+        !current
+            .diagnostics
+            .iter()
+            .any(|d| d.code() == "READ.BMOPF.FIELD_LEGACY")
+    );
+    // Both spellings stating different bounds is a contradiction.
+    let both = parse_bmopf_str(
+        r#"{"bus":{"b":{"terminal_names":["a","n"],"vpg_min":[210],"v_min":[200]}}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        both.buses()[0].v_min,
+        Some(210.0),
+        "the current spelling wins"
+    );
+    assert!(
+        both.diagnostics
+            .iter()
+            .any(|d| d.code() == "READ.BMOPF.SEMANTIC_INVALID"
+                && d.message().contains("vpg_min and v_min")),
+        "{:?}",
+        both.diagnostics
+    );
+}
+
+/// The typed `geo` slots read with `meta.crs`; the legacy `extras.geojson`
+/// layer reads when no element carries a typed slot; when both are present
+/// the typed slots win and the legacy layer is not merged in.
+#[test]
+fn embedded_geometry_wins_over_the_legacy_extras_geojson_layer() {
+    let embedded = r#"{"meta":{"crs":"EPSG:32617"},"bus":{"a":{"terminal_names":["1"],"geo":{"type":"Point","coordinates":[276500,4686200]}},"b":{"terminal_names":["1"]}},"line":{"ab":{"bus_from":"a","bus_to":"b","terminal_map_from":["1"],"terminal_map_to":["1"],"R_series_1_1":1,"X_series_1_1":1,"geo":{"type":"LineString","coordinates":[[276500,4686200],[276512,4686207]]}}}}"#;
+    let net = parse_bmopf_str(embedded).unwrap();
+    assert!((net.buses()[0].location.unwrap().x - 276_500.0).abs() < 1e-9);
+    assert_eq!(net.lines()[0].route.as_ref().unwrap().len(), 2);
+    assert!(matches!(&net.geo().as_ref().unwrap().space,
+        CoordinateSpace::Projected { crs: Some(crs) } if crs == "EPSG:32617"));
+    assert!(
+        !net.warnings
+            .iter()
+            .any(|w| w.contains("`geo` is outside the schema")),
+        "{:?}",
+        net.warnings
+    );
+
+    let legacy = r#"{"bus":{"a":{"terminal_names":["1"]},"b":{"terminal_names":["1"]}},"line":{"ab":{"bus_from":"a","bus_to":"b","terminal_map_from":["1"],"terminal_map_to":["1"],"R_series_1_1":1,"X_series_1_1":1}},"extras":{"geojson":{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"kind":"bus","id":"a"},"geometry":{"type":"Point","coordinates":[-83.7,42.3]}},{"type":"Feature","properties":{"kind":"line","id":"ab"},"geometry":{"type":"LineString","coordinates":[[-83.7,42.3],[-83.6,42.4]]}}]}}}"#;
+    let net = parse_bmopf_str(legacy).unwrap();
+    assert!((net.buses()[0].location.unwrap().x + 83.7).abs() < 1e-9);
+    assert!((net.lines()[0].route.as_ref().unwrap()[1].y - 42.4).abs() < 1e-9);
+    assert!(matches!(
+        &net.geo().as_ref().unwrap().space,
+        CoordinateSpace::Geographic { .. }
+    ));
+    // The layer is typed into the model, not stashed: a re-emission writes
+    // the model's geometry once, in the target version's form.
+    let out = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(doc.pointer("/extras/geojson").is_none(), "{doc}");
+    assert_eq!(
+        doc["bus"]["a"]["geo"]["coordinates"],
+        serde_json::json!([-83.7, 42.3])
+    );
+
+    let both = r#"{"bus":{"a":{"terminal_names":["1"],"geo":{"type":"Point","coordinates":[-83.7,42.3]}},"b":{"terminal_names":["1"]}},"extras":{"geojson":{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"kind":"bus","id":"a"},"geometry":{"type":"Point","coordinates":[-80,35]}},{"type":"Feature","properties":{"kind":"bus","id":"b"},"geometry":{"type":"Point","coordinates":[-80,36]}}]}}}"#;
+    let net = parse_bmopf_str(both).unwrap();
+    assert!(
+        (net.buses()[0].location.unwrap().x + 83.7).abs() < 1e-9,
+        "typed slot wins"
+    );
+    assert!(
+        net.buses()[1].location.is_none(),
+        "the legacy layer is not merged in beside typed slots"
+    );
+}
+
+/// A space the schema cannot name travels as `extras.powerio_geo` beside the
+/// typed slots, so a read gets the same metadata back and does not take the
+/// coordinates for WGS84.
+#[test]
+fn an_unnamed_coordinate_space_rides_beside_embedded_geometry() {
+    let mut net = routed_network();
+    *net.geo_mut() = Some(DistGeoMeta {
+        space: CoordinateSpace::Unknown,
+        kind: Some(DistCoordsKind::Source),
+    });
+    let out = emit_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(doc["meta"].get("crs").is_none());
+    assert!(doc["bus"]["a"].get("geo").is_some());
+    assert_eq!(doc["extras"]["powerio_geo"]["space"], "unknown");
+    assert!(doc.pointer("/extras/geojson").is_none());
+    let again = parse_bmopf_str(&out.text).unwrap();
+    assert_eq!(again.geo(), net.geo());
+    assert_eq!(
+        again.buses()[0].location,
+        net.buses()[0].location.map(|p| DistLocation {
+            kind: Some(DistCoordsKind::Source),
+            ..p
+        })
+    );
+    assert_eq!(again.lines()[0].route.as_ref().unwrap().len(), 3);
+
+    // Synthetic coordinates keep their origin too.
+    let mut net = routed_network();
+    net.geo_mut().as_mut().unwrap().kind = Some(DistCoordsKind::Synthetic);
+    let out = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(doc["meta"]["crs"], "EPSG:32617");
+    assert_eq!(doc["extras"]["powerio_geo"]["kind"], "synthetic");
+    let again = parse_bmopf_str(&out.text).unwrap();
+    assert_eq!(again.geo(), net.geo());
+}
+
+/// OpenDSS bus coordinates survive a conversion to schema 0.2.0 and a trip
+/// through the serialized network: the same locations, routes and
+/// coordinate metadata on both sides.
+#[test]
+fn opendss_coordinates_round_trip_through_schema_020_and_the_serialized_network() {
+    let source = parse_dss_file(fixture("opendss/ieee13/IEEE13Nodeckt.dss")).unwrap();
+    let located = source
+        .buses()
+        .iter()
+        .filter(|b| b.location.is_some())
+        .count();
+    assert!(located > 10, "the IEEE 13 fixture carries Buscoords");
+    let out = emit_bmopf_json(&source);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(doc.pointer("/extras/geojson").is_none(), "{doc}");
+    assert_eq!(
+        doc["bus"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter(|b| b.get("geo").is_some())
+            .count(),
+        located
+    );
+    let converted = parse_bmopf_str(&out.text).unwrap();
+    let encoded = serde_json::to_string(&*converted).unwrap();
+    let restored: MulticonductorNetwork = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(restored.geo(), source.geo());
+    // The BMOPF bus table is keyed, so the order differs; match by id.
+    assert_eq!(source.buses().len(), restored.buses().len());
+    for a in source.buses() {
+        let b = restored
+            .bus(&a.id)
+            .unwrap_or_else(|| panic!("bus {}", a.id));
+        assert_eq!(
+            a.location.map(|p| (p.x.to_bits(), p.y.to_bits())),
+            b.location.map(|p| (p.x.to_bits(), p.y.to_bits())),
+            "bus {}",
+            a.id
+        );
+    }
+    assert_eq!(source.lines().len(), restored.lines().len());
+    for a in source.lines() {
+        let b = restored
+            .lines()
+            .iter()
+            .find(|l| l.name == a.name)
+            .unwrap_or_else(|| panic!("line {}", a.name));
+        assert_eq!(
+            vertices(a.route.as_deref()),
+            vertices(b.route.as_deref()),
+            "line {}",
+            a.name
+        );
     }
 }
