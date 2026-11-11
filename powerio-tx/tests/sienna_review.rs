@@ -108,6 +108,38 @@ fn edited(
 }
 
 #[test]
+fn unlimited_transformer_primary_rating_is_numeric_and_round_trips() {
+    let mut net = network();
+    let transformer = net
+        .branches_mut()
+        .iter_mut()
+        .find(|branch| branch.is_transformer())
+        .expect("case9 fixture contains a transformer");
+    transformer.rate_a = f64::INFINITY;
+
+    for version in [0, 4] {
+        let doc = document(&net, version);
+        let row = rows(&doc, version, "TransformerCircuit")
+            .into_iter()
+            .next()
+            .expect("transformer circuit is emitted");
+        let rating = row["rating"]
+            .as_f64()
+            .expect("required primary rating is numeric");
+        assert!(rating.is_finite() && rating > 0.0, "version {version}: {rating}");
+
+        let recovered = parse(&doc, version);
+        let restored = recovered
+            .value()
+            .branches()
+            .iter()
+            .find(|branch| branch.is_transformer())
+            .expect("transformer is restored");
+        assert!(restored.rate_a.is_infinite(), "version {version}: {}", restored.rate_a);
+    }
+}
+
+#[test]
 fn absent_cost_survives_retained_edits_but_a_real_zero_cost_clears_the_marker() {
     for version in 0..=4 {
         let mut net = network();
