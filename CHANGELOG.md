@@ -5,6 +5,9 @@
 - Add explicit tap-adjusted series-susceptance and PowerModels DCP conventions
   across DC matrices, instances and bindings; preserve the existing default.
 
+- Retain purely resistive branches as zero-weight rows in DC OPF preparation
+  for series-admittance conventions, matching the DC operator builders.
+
 ## 0.11.11
 
 **XIIDM**
