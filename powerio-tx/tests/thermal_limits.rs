@@ -197,7 +197,7 @@ fn invalid_numeric_ratings_are_refused_before_output() {
 }
 
 #[test]
-fn sienna_winding_limits_preserve_zero_and_refuse_unrepresentable_native_infinity() {
+fn sienna_winding_limits_preserve_zero_and_the_unbounded_marker() {
     let mut net = helpers::parse_matpower_file(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case9.m"),
     )
@@ -255,12 +255,16 @@ fn sienna_winding_limits_preserve_zero_and_refuse_unrepresentable_native_infinit
             assert_eq!(actual.rate_c, expected.rate_c);
         }
     }
-    assert!(
-        helpers::emit_value(&net, TargetFormat::PowerSystemsJson)
-            .unwrap_err()
-            .to_string()
-            .contains("unlimited winding rating")
-    );
+    // PowerSystems requires each winding rating; an unlimited one is its
+    // INFINITE_BOUND, which reads back as unlimited.
+    let output = helpers::emit_value(&net, TargetFormat::PowerSystemsJson).unwrap();
+    let back = powerio_tx::parse(
+        powerio_core::Source::from_memory("limits.json", output.text.into_bytes()).unwrap(),
+    )
+    .unwrap();
+    let windings = &back.value().transformers_3w()[0].windings;
+    assert_eq!(windings[0].rate_a, 0.0);
+    assert_eq!(windings[2].rate_a, f64::INFINITY);
     net.transformers_3w_mut()[0].windings[2].rate_a = 125.0;
     let output = helpers::emit_value(&net, TargetFormat::PowerSystemsJson).unwrap();
     assert!(output.diagnostics.iter().any(|d| {
