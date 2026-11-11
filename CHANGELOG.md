@@ -26,6 +26,9 @@
   PowerIO started every curve at zero, shifting costs whose first power was
   nonzero. Emission now diagnoses an objective shift by comparing with that
   native anchor, rather than assuming every nonzero first cost is lost.
+- Python table getters read only the requested table. Distribution tables
+  remain accessible when a network carries component coordinates; the tagged
+  IR wrapper no longer causes a missing-field error.
 
 ## 0.12.0-rc.1
 
