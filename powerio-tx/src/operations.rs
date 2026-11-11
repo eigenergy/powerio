@@ -58,13 +58,15 @@ fn other_end(b: &Branch, m: BusId) -> BusId {
     if b.from == m { b.to } else { b.from }
 }
 
-/// The series pair is constrained by the smaller rating, including zero.
+/// The series pair is constrained by the smaller rating, including zero. An
+/// invalid rating (NaN or negative) stays invalid in the equivalent branch, so
+/// validation refuses the folded network as it would have refused the section.
 fn combine_rate(a: f64, b: f64) -> f64 {
-    // is_passthrough validates the two sections before any network mutation.
-    debug_assert!(
-        crate::thermal_limit::validate(a).is_ok() && crate::thermal_limit::validate(b).is_ok()
-    );
-    a.min(b)
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.min(b)
+    }
 }
 
 /// What [`reduce_zero_impedance_with_report`](BalancedNetwork::reduce_zero_impedance_with_report)
@@ -549,8 +551,9 @@ impl BalancedNetwork {
     /// branches (never transformers) that are both in service and run to two
     /// distinct other buses. The equivalent branch sums the series impedance and
     /// line charging, takes the more limiting thermal rating of the two sections,
-    /// and intersects their angle limits. Chains of dummy buses collapse fully, one
-    /// bus per step.
+    /// and intersects their angle limits. An invalid section rating (NaN or
+    /// negative) carries into the equivalent branch, where validation refuses it.
+    /// Chains of dummy buses collapse fully, one bus per step.
     pub fn reduce_passthrough_buses(&mut self) -> usize {
         let mut collapsed = 0;
         // Re-scan after each fold: the equivalent branch becomes a section for the
@@ -629,15 +632,7 @@ impl BalancedNetwork {
         }
         let a = other_end(incident[0], m);
         let c = other_end(incident[1], m);
-        incident.iter().all(|b| {
-            !b.is_transformer()
-                && b.in_service
-                && [b.rate_a, b.rate_b, b.rate_c]
-                    .iter()
-                    .all(|limit| crate::thermal_limit::validate(*limit).is_ok())
-        }) && a != m
-            && c != m
-            && a != c
+        incident.iter().all(|b| !b.is_transformer() && b.in_service) && a != m && c != m && a != c
     }
 
     /// Fold the two line sections at passthrough bus `m` into one equivalent branch
@@ -1175,6 +1170,27 @@ mod tests {
             "the more limiting finite rating wins"
         );
         net.validate().unwrap();
+    }
+
+    #[test]
+    fn reduce_passthrough_carries_an_invalid_rating_into_the_equivalent() {
+        // Skipping the fold hid the invalid rating; the folded branch keeps it
+        // where validation reports it.
+        for invalid in [f64::NAN, -1.0] {
+            let mut s1 = line(1, 2);
+            s1.rate_c = invalid;
+            let mut net = BalancedNetwork::in_memory(
+                "net",
+                100.0,
+                vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
+                vec![s1, line(2, 3)],
+            );
+            assert!(net.validate().is_err());
+            assert_eq!(net.reduce_passthrough_buses(), 1, "{invalid}");
+            let rate_c = net.branches()[0].rate_c;
+            assert!(rate_c.is_nan() || rate_c < 0.0, "{invalid}: {rate_c}");
+            assert!(net.validate().is_err(), "{invalid}");
+        }
     }
 
     #[test]
