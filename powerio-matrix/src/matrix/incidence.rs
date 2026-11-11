@@ -88,9 +88,8 @@ pub(crate) fn build_incidence(
             }
             continue;
         }
-        // Only `TapAdjustedReactance` divides by the tap, so only it can be
-        // bounded or rejected by one (#324); the other formulas never read
-        // the value.
+        // Only the two tap-reading formulas divide by the tap, so only they
+        // can be bounded or rejected by one (#324).
         let tap = if formula.reads_tap() {
             br.calc_divisible_tap(idx)?
         } else {

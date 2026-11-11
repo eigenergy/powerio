@@ -243,8 +243,11 @@ between produces none of these findings.
   \\(b = -1/x\\) when the branch has no resistance.
 
   `SeriesSusceptanceNoPhaseShift` uses the same series coefficient but drops
-  phase shifts as well as taps, matching PowerModels DCP. The unchanged default
-  is therefore not identical to DCP on phase-shifting branches.
+  phase shifts as well as taps, matching PowerModels DCP on the same branch
+  orientation and impedance reference side. PowerModels' parsing can reverse
+  antiparallel transformers and rescale their impedances, changing this
+  tap-ignoring coefficient; see the [orientation caveat](instances.md#explicit-dc-conventions).
+  The unchanged default is also not identical to DCP on phase-shifting branches.
 
   `TapAdjustedSeriesSusceptance` divides that series coefficient by the effective
   transformer tap and includes phase shifts. It is the ignore-conductance

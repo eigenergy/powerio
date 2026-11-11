@@ -61,7 +61,12 @@ pub enum BranchSusceptanceFormula {
     SeriesSusceptance,
     /// `b = -x/((r² + x²) tau)` with phase shift injections (ignore conductance).
     TapAdjustedSeriesSusceptance,
-    /// Series susceptance, ignoring taps and phase shifts, matching PowerModels DCP.
+    /// Series susceptance, ignoring taps and phase shifts, matching PowerModels
+    /// DCP on the same branch orientation and impedance reference side.
+    /// PowerModels may reverse antiparallel transformers during parsing, scaling
+    /// their impedance by the original tap squared; this tap-ignoring coefficient
+    /// then changes. The two tap-adjusted conventions are invariant under that
+    /// complete reversal transformation.
     SeriesSusceptanceNoPhaseShift,
 }
 

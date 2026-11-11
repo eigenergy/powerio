@@ -120,6 +120,20 @@ From-end active power is:
 | `tap_adjusted_series_susceptance` (ignore conductance) | `k(θf−θt−φ)/τ` |
 | `reactance_only` | `(θf−θt)/x` |
 
+PowerModels DCP parity assumes the same branch orientation and impedance
+reference side. Its parser can reverse an antiparallel transformer, multiplying
+`r` and `x` by `τ²`, replacing `τ` by `1/τ`, and negating `φ`. The two
+tap-adjusted coefficients are invariant under this transformation; the three
+tap-ignoring coefficients change by `1/τ²`. PowerIO keeps the source orientation.
+Consequently, selecting the DCP token alone does not guarantee parity with a
+PowerModels-parsed file containing reversed off-nominal transformers.
+
+The nodal balance in per unit is
+`p_g,i − p_d,i − g_s,i = Σ_from(e)=i f_e − Σ_to(e)=i f_e`, where each `f_e`
+includes its convention's phase-shift term and `g_s,i` is the active shunt
+withdrawal at unit voltage. When fixed HVDC injections are present, add their
+net injection to the left-hand side.
+
 The selected coefficient also scales the nodal phase injection. Thermal ratings
 keep their original units and values. These are lossless, cold-start models;
 none guarantees the closest AC result on every network. Matching an OPF

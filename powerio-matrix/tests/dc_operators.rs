@@ -870,7 +870,7 @@ fn three_winding_tap_is_applied_once_by_the_selected_dc_formula() {
 }
 
 #[test]
-fn tap_adjusted_series_matches_the_complex_ac_flat_angle_slope() {
+fn tap_adjusted_series_matches_the_unit_voltage_phase_compensated_ac_slope() {
     use num_complex::Complex64;
     for (r, x, tap, shift) in [
         (0.03, 0.1, 1.2, 0.2),
@@ -885,6 +885,8 @@ fn tap_adjusted_series_matches_the_complex_ac_flat_angle_slope() {
             (vf * current.conj()).re
         };
         let eps = 1e-6;
+        // Unit voltage, with theta_from - theta_to = shift, not equal bus
+        // angles. At other angles the derivative also reads g and the angle.
         let derivative = (power(shift + eps) - power(shift - eps)) / (2.0 * eps);
         let coefficient = BranchSusceptanceFormula::TapAdjustedSeriesSusceptance
             .calc_solver_edge_weight(r, x, tap);
@@ -939,5 +941,116 @@ fn source_zero_tap_is_unity_for_every_dc_variant() {
         {
             assert!((a - b).abs() < 1e-12);
         }
+    }
+}
+
+#[test]
+fn tap_adjusted_models_preserve_the_network_under_transformer_reversal() {
+    let mut net = BalancedNetwork::in_memory(
+        "reversal",
+        100.0,
+        vec![
+            Bus::new(BusId(1), BusType::Ref, 230.0),
+            Bus::new(BusId(2), BusType::Pq, 230.0),
+            Bus::new(BusId(3), BusType::Pq, 230.0),
+        ],
+        vec![
+            Branch::new(BusId(1), BusId(2), 0.03, 0.1),
+            Branch::new(BusId(2), BusId(3), 0.02, 0.2),
+            Branch::new(BusId(3), BusId(1), 0.01, 0.15),
+        ],
+    );
+    net.generators_mut()
+        .push(powerio_tx::Generator::new(BusId(1)));
+    let branch = &mut net.branches_mut()[0];
+    branch.tap = 1.2;
+    branch.shift = 7.0;
+    branch.angmin = -25.0;
+    branch.angmax = 40.0;
+    let mut reversed = net.clone();
+    let branch = &mut reversed.branches_mut()[0];
+    // PowerModels correct_branch_directions!: move the impedance reference
+    // side as well as swapping endpoints. There are no shunts in this fixture.
+    std::mem::swap(&mut branch.from, &mut branch.to);
+    branch.r *= branch.tap.powi(2);
+    branch.x *= branch.tap.powi(2);
+    branch.tap = 1.0 / branch.tap;
+    branch.shift = -branch.shift;
+    (branch.angmin, branch.angmax) = (-branch.angmax, -branch.angmin);
+    for formula in [
+        BranchSusceptanceFormula::TapAdjustedReactance,
+        BranchSusceptanceFormula::TapAdjustedSeriesSusceptance,
+    ] {
+        let build = |net| {
+            DcOperators::build(
+                &DcPfInstance::from_network(net)
+                    .unwrap()
+                    .with_branch_susceptance_formula(formula),
+            )
+            .unwrap()
+        };
+        let original = build(net.clone());
+        let matrix = dense(&original.calc_bus_susceptance_matrix());
+        let solve = |op: &DcOperators| {
+            let system = op.calc_reference_constrained_system().unwrap();
+            let solution = solve_dense(&dense(&system.matrix), &system.rhs);
+            let mut angles = vec![0.0; 3];
+            for (row, value) in system.retained_rows.iter().zip(solution) {
+                angles[*row] = value;
+            }
+            angles
+        };
+        let angles = solve(&original);
+        let flows = original.calc_branch_flow_dc(&angles).unwrap();
+        assert!(flows[0].abs() > 1e-3, "phase shift must drive a loop flow");
+        for candidate in [reversed.clone(), reversed.to_normalized().unwrap()] {
+            let op = build(candidate);
+            for (a, b) in matrix.iter().zip(dense(&op.calc_bus_susceptance_matrix())) {
+                assert_reversal_close(a, &b);
+            }
+            assert_reversal_close(
+                &original.calc_bus_phase_shift_injection(),
+                &op.calc_bus_phase_shift_injection(),
+            );
+            let reversed_angles = solve(&op);
+            assert_reversal_close(&angles, &reversed_angles);
+            assert_reversal_close(
+                &[-flows[0], flows[1], flows[2]],
+                &op.calc_branch_flow_dc(&reversed_angles).unwrap(),
+            );
+            let angle_difference = angles[0] - angles[1];
+            let a = &net.branches()[0];
+            let b = &reversed.branches()[0];
+            assert_reversal_close(
+                &[
+                    angle_difference - a.angmin.to_radians(),
+                    a.angmax.to_radians() - angle_difference,
+                ],
+                &[
+                    b.angmax.to_radians() + angle_difference,
+                    -angle_difference - b.angmin.to_radians(),
+                ],
+            );
+        }
+        let normalized = build(net.to_normalized().unwrap());
+        assert_reversal_close(&angles, &solve(&normalized));
+        assert_reversal_close(&flows, &normalized.calc_branch_flow_dc(&angles).unwrap());
+    }
+    for formula in [
+        BranchSusceptanceFormula::SeriesSusceptance,
+        BranchSusceptanceFormula::SeriesSusceptanceNoPhaseShift,
+        BranchSusceptanceFormula::ReactanceOnly,
+    ] {
+        let a = &net.branches()[0];
+        let b = &reversed.branches()[0];
+        let weight = |b: &Branch| formula.calc_solver_edge_weight(b.r, b.x, b.tap);
+        assert_reversal_close(&[weight(b)], &[weight(a) / a.tap.powi(2)]);
+    }
+}
+
+fn assert_reversal_close(a: &[f64], b: &[f64]) {
+    assert_eq!(a.len(), b.len());
+    for (a, b) in a.iter().zip(b) {
+        assert!((a - b).abs() < 1e-11, "{a} != {b}");
     }
 }
