@@ -28,6 +28,17 @@ fn network() -> BalancedNetwork {
     .into_value()
 }
 
+fn transformer_network() -> BalancedNetwork {
+    powerio_tx::parse(
+        Source::open(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case14.m"),
+        )
+        .unwrap(),
+    )
+    .unwrap()
+    .into_value()
+}
+
 fn parse(doc: &Value, version: u8) -> PioModule<BalancedNetwork> {
     powerio_tx::parse(
         Source::from_memory("case.json", serde_json::to_vec(doc).unwrap())
@@ -105,6 +116,51 @@ fn edited(
     module.value_mut().buses_mut()[0].vm += 0.001;
     let out = emit_module(module, format(version)).unwrap();
     (serde_json::from_str(&out.text).unwrap(), out.diagnostics)
+}
+
+#[test]
+fn unlimited_transformer_primary_rating_is_numeric_and_round_trips() {
+    // case9.m has no transformer; case14.m includes transformer branches.
+    let mut net = transformer_network();
+    let transformer = net
+        .branches_mut()
+        .iter_mut()
+        .find(|branch| branch.is_transformer())
+        .expect("case9 fixture contains a transformer");
+    transformer.rate_a = f64::INFINITY;
+
+    for version in [0, 1, 2, 3, 4] {
+        let doc = document(&net, version);
+        let kind = if version == 0 {
+            "TapTransformer"
+        } else {
+            "TransformerCircuit"
+        };
+        let row = rows(&doc, version, kind)
+            .into_iter()
+            .next()
+            .expect("transformer circuit is emitted");
+        let rating = row["rating"]
+            .as_f64()
+            .expect("required primary rating is numeric");
+        assert!(
+            rating.is_finite() && rating > 0.0,
+            "version {version}: {rating}"
+        );
+
+        let recovered = parse(&doc, version);
+        let restored = recovered
+            .value()
+            .branches()
+            .iter()
+            .find(|branch| branch.is_transformer())
+            .expect("transformer is restored");
+        assert!(
+            restored.rate_a.is_infinite(),
+            "version {version}: {}",
+            restored.rate_a
+        );
+    }
 }
 
 #[test]

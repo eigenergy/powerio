@@ -6,7 +6,6 @@ Imports are lazy so the base PowerIO package has no Python dependencies.
 """
 from __future__ import annotations
 
-import functools
 import io
 import json
 import os
@@ -83,17 +82,22 @@ class _GlobalRequested(Exception):
     """A pickle named a global, the only way unpickling can call code."""
 
 
-@functools.lru_cache(maxsize=None)
-def _no_globals():
-    # pickle, like the other container helpers' imports, loads only when a
-    # PyPSA binary source is read, so dispatching other formats stays cheap.
-    import pickle
+class _NoGlobalsCache:
+    unpickler: type | None = None
 
-    class _NoGlobals(pickle.Unpickler):
-        def find_class(self, module, name):
-            raise _GlobalRequested(f"{module}.{name}")
 
-    return _NoGlobals
+def _no_globals() -> type:
+    if _NoGlobalsCache.unpickler is None:
+        # pickle, like the other container helpers' imports, loads only when a
+        # PyPSA binary source is read, so dispatching other formats stays cheap.
+        import pickle
+
+        class _NoGlobals(pickle.Unpickler):
+            def find_class(self, module, name):
+                raise _GlobalRequested(f"{module}.{name}")
+
+        _NoGlobalsCache.unpickler = _NoGlobals
+    return _NoGlobalsCache.unpickler
 
 
 def _executable_pickle(value: bytes) -> bool:

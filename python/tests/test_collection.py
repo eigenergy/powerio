@@ -2,6 +2,7 @@ import io
 import zipfile
 
 import pytest
+from powerio.dist import SincalReadOptions
 
 import powerio as pio
 
@@ -48,3 +49,31 @@ def test_selection_metadata_is_bounded():
     with pio.Collection.from_files({"case.dss": b"New Circuit.case basekv=12.47\n"}) as collection:
         with pytest.raises(ValueError, match="selection metadata exceeds 1 MiB"):
             collection.parse({"primary": "x" * (1 << 20)})
+
+
+@pytest.mark.parametrize(
+    "kwargs, message",
+    [
+        (
+            {"sincal_multiconductor": pio.SincalBalancedReadOptions()},
+            "sincal_multiconductor must be dist.SincalReadOptions",
+        ),
+        (
+            {"sincal_balanced": SincalReadOptions()},
+            "sincal_balanced must be SincalBalancedReadOptions",
+        ),
+        (
+            {"sincal_multiconductor": object()},
+            "sincal_multiconductor must be dist.SincalReadOptions",
+        ),
+        (
+            {"sincal_balanced": object()},
+            "sincal_balanced must be SincalBalancedReadOptions",
+        ),
+    ],
+)
+def test_collection_rejects_wrong_sincal_option_types(kwargs, message):
+    collection = pio.Collection(object())
+    with pytest.raises(TypeError, match=message):
+        collection.parse({}, **kwargs)
+

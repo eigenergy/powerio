@@ -13,6 +13,11 @@
   the smaller rating, and an invalid one stays invalid, so validation still
   refuses it after the fold.
 
+- Python `Collection.parse` raises `TypeError` when `sincal_multiconductor` or
+  `sincal_balanced` is given the wrong options type, instead of reading the
+  wrong family's options or failing with an `AttributeError` (#845, by
+  @BurhanAbdullah).
+
 - Forward `powerio-prob/schema` to the distribution model so standalone schema builds include the LinDist3Flow preparation policy.
 
 - Correct the contributor IR compatibility guidance and canonical HVDC format
