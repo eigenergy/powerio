@@ -1,5 +1,12 @@
 # PowSybl interoperability check
 
+`check_phase_tap_base.py POWERIO_BINARY` checks generated CGMES phase taps
+using native PowSyBl (tested with pypowsybl 1.16.1). Its 24 synthetic cases
+vary winding voltage, tap ratio and signed phase shift. It checks all three
+tap steps and the winding impedance, and recreates the old writer's base
+mismatch as a negative control. `run.sh` includes this parameter check;
+the script does not run a power flow.
+
 The [CGMES contribution audit](cgmes-contribution-audit.md) compares the final
 implementation with Mohamed Numair's original CGMES reader and writer commits.
 

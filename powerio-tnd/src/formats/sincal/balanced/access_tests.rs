@@ -33,7 +33,7 @@ fn selected_load(net: &BalancedNetwork) -> &powerio_tx::network::Load {
 
 #[test]
 fn legacy_absolute_snapshots_keep_units_factors_and_cyclic_interpolation() {
-    let db = legacy("");
+    let mut db = legacy("");
     let before = db.connection.serialize("main").unwrap().to_vec();
     assert!(
         read_balanced_snapshot(&db, "no-time")

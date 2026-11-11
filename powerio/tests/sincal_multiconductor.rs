@@ -4,7 +4,7 @@ mod helpers;
 use powerio::{Destination, EmittedOutput, Fidelity, FormatId, ParseOptions, PioValue, Source};
 
 fn source(edit: &str) -> Source {
-    let connection = rusqlite::Connection::open_in_memory().unwrap();
+    let mut connection = rusqlite::Connection::open_in_memory().unwrap();
     connection
         .execute_batch(include_str!(
             "../../tests/data/sincal/synthetic-multiconductor.sql"

@@ -62,7 +62,7 @@ and PowerIO.jl. The boundaries checked independently are:
 | PowerIO release | 0.11.x | the manifests, `powerio::VERSION`, `powerio.versions()`, `pio_version` | every release |
 | C ABI | 7 | the `pio_abi_version` handshake at load | an existing C signature or documented behavior changes |
 | PowerIO IR version | 2, unchanged | the document header, `powerio::IR_VERSION`, `powerio::IR_MIN_VERSION` | an existing representation changes incompatibly |
-| Rust toolchain | 1.88 | `rust-version` in the workspace manifest, checked by CI | a dependency in the locked graph requires a newer compiler |
+| Rust toolchain | 1.89 | `rust-version` in the workspace manifest, checked by CI | a dependency in the locked graph requires a newer compiler |
 | Python | 3.9 or later; the `mcp` extra needs 3.10, the `bench` extra 3.11 | `pyproject.toml` | a dependency drops a version |
 
 The release version is what you install. ABI 7 is what a compiled consumer

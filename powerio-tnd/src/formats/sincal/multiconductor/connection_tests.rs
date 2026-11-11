@@ -28,7 +28,7 @@ fn buses() -> BTreeMap<i64, DistBus> {
 
 #[test]
 fn steady_state_connection_is_an_exact_switch_not_a_small_impedance_line() {
-    let db= mapping_tests::native("UPDATE Line SET Flag_LineTyp=3,r=999,x=999,c=999,r0=NULL,x0=NULL,c0=NULL,Flag_Z0_Input=NULL;
+    let mut db= mapping_tests::native("UPDATE Line SET Flag_LineTyp=3,r=999,x=999,c=999,r0=NULL,x0=NULL,c0=NULL,Flag_Z0_Input=NULL;
         UPDATE Element SET Flag_Input=2 WHERE Element_ID=30;");
     let before = db.connection.serialize("main").unwrap().to_vec();
     let net = db.network().unwrap();

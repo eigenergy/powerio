@@ -991,6 +991,9 @@ impl Reader<'_> {
                             &mut self.diags,
                         );
                         apply_winding_strings(&mut windings, name, &items);
+                        // Native array setters visit every winding, including
+                        // omitted entries, and leave the final one selected.
+                        active = n_windings - 1;
                     }
                     "kvs" | "kvas" | "taps" | "%rs" => match v.to_vector(Some(self.vars)) {
                         Ok(items) => {
@@ -1002,6 +1005,7 @@ impl Reader<'_> {
                                 &mut self.diags,
                             );
                             apply_winding_numbers(&mut windings, name, &items);
+                            active = n_windings - 1;
                         }
                         Err(e) => self.warn(
                             &C::READ_DSS_VALUE_DEFAULTED,

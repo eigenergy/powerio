@@ -1959,13 +1959,7 @@ fn json_map_to_py<'py>(
 /// `powerio_core::SourceSpan`. `source` is the source ID string, not the
 /// bytes themselves; a caller resolves it against the owning module's
 /// sources.
-#[pyclass(
-    name = "SourceSpan",
-    module = "powerio._powerio",
-    frozen,
-    eq,
-    skip_from_py_object
-)]
+#[pyclass(name = "SourceSpan", module = "powerio._powerio", frozen, eq)]
 #[derive(Clone, PartialEq)]
 struct PySourceSpan {
     source: String,
@@ -2347,14 +2341,7 @@ fn powerio_dist_bmopf_schema() -> &'static str {
     powerio_dist::BMOPF_SCHEMA_VERSION
 }
 
-#[pyclass(
-    name = "ComponentId",
-    module = "powerio._powerio",
-    frozen,
-    eq,
-    hash,
-    skip_from_py_object
-)]
+#[pyclass(name = "ComponentId", module = "powerio._powerio", frozen, eq, hash)]
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct PyComponentId {
     inner: powerio_core::ComponentId,
@@ -2397,8 +2384,7 @@ macro_rules! scuc_scalar_record {
         #[pyclass(
             name = $python_name,
             module = "powerio._powerio",
-            frozen,
-            skip_from_py_object
+            frozen
         )]
         #[derive(Clone)]
         struct $py_type {
@@ -2503,12 +2489,7 @@ scuc_scalar_record!(
     }
 );
 
-#[pyclass(
-    name = "ScucReactiveCapability",
-    module = "powerio._powerio",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "ScucReactiveCapability", module = "powerio._powerio", frozen)]
 #[derive(Clone)]
 struct PyScucReactiveCapability {
     kind: &'static str,
@@ -2614,12 +2595,7 @@ impl From<&powerio_prob::ScucReactiveCapability> for PyScucReactiveCapability {
     }
 }
 
-#[pyclass(
-    name = "ScucDevicePeriod",
-    module = "powerio._powerio",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "ScucDevicePeriod", module = "powerio._powerio", frozen)]
 #[derive(Clone)]
 struct PyScucDevicePeriod {
     inner: powerio_prob::ScucDevicePeriod,
@@ -2682,12 +2658,7 @@ impl From<&powerio_prob::ScucDevicePeriod> for PyScucDevicePeriod {
     }
 }
 
-#[pyclass(
-    name = "ScucDevice",
-    module = "powerio._powerio",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "ScucDevice", module = "powerio._powerio", frozen)]
 #[derive(Clone)]
 struct PyScucDevice {
     inner: powerio_prob::ScucDevice,
@@ -2819,12 +2790,7 @@ impl From<&powerio_prob::ScucDevice> for PyScucDevice {
     }
 }
 
-#[pyclass(
-    name = "ScucShunt",
-    module = "powerio._powerio",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "ScucShunt", module = "powerio._powerio", frozen)]
 #[derive(Clone)]
 struct PyScucShunt {
     inner: powerio_prob::ScucShunt,
@@ -2873,12 +2839,7 @@ impl From<&powerio_prob::ScucShunt> for PyScucShunt {
     }
 }
 
-#[pyclass(
-    name = "ScucBranchSwitchingCost",
-    module = "powerio._powerio",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "ScucBranchSwitchingCost", module = "powerio._powerio", frozen)]
 #[derive(Clone)]
 struct PyScucBranchSwitchingCost {
     inner: powerio_prob::ScucBranchSwitchingCost,
@@ -2912,12 +2873,7 @@ impl From<&powerio_prob::ScucBranchSwitchingCost> for PyScucBranchSwitchingCost 
     }
 }
 
-#[pyclass(
-    name = "ScucTransformerControl",
-    module = "powerio._powerio",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "ScucTransformerControl", module = "powerio._powerio", frozen)]
 #[derive(Clone)]
 struct PyScucTransformerControl {
     inner: powerio_prob::ScucTransformerControl,
@@ -2996,12 +2952,7 @@ fn nested_bool_tuple<'py>(py: Python<'py>, values: &[Vec<bool>]) -> PyResult<Bou
     PyTuple::new(py, rows)
 }
 
-#[pyclass(
-    name = "ScucActiveReserveZone",
-    module = "powerio._powerio",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "ScucActiveReserveZone", module = "powerio._powerio", frozen)]
 #[derive(Clone)]
 struct PyScucActiveReserveZone {
     inner: powerio_prob::ScucActiveReserveZone,
@@ -3090,12 +3041,7 @@ impl From<&powerio_prob::ScucActiveReserveZone> for PyScucActiveReserveZone {
     }
 }
 
-#[pyclass(
-    name = "ScucReactiveReserveZone",
-    module = "powerio._powerio",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "ScucReactiveReserveZone", module = "powerio._powerio", frozen)]
 #[derive(Clone)]
 struct PyScucReactiveReserveZone {
     inner: powerio_prob::ScucReactiveReserveZone,
@@ -3144,12 +3090,7 @@ impl From<&powerio_prob::ScucReactiveReserveZone> for PyScucReactiveReserveZone 
     }
 }
 
-#[pyclass(
-    name = "ScucContingency",
-    module = "powerio._powerio",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "ScucContingency", module = "powerio._powerio", frozen)]
 #[derive(Clone)]
 struct PyScucContingency {
     inner: powerio_prob::ScucContingency,
@@ -3178,12 +3119,7 @@ impl From<&powerio_prob::ScucContingency> for PyScucContingency {
     }
 }
 
-#[pyclass(
-    name = "ScucInputs",
-    module = "powerio._powerio",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "ScucInputs", module = "powerio._powerio", frozen)]
 #[derive(Clone)]
 struct PyScucInputs {
     inner: powerio_prob::ScucInputs,
@@ -3264,12 +3200,7 @@ impl PyScucInputs {
     }
 }
 
-#[pyclass(
-    name = "Residuals",
-    module = "powerio._powerio",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "Residuals", module = "powerio._powerio", frozen)]
 #[derive(Clone, Copy)]
 struct PyResiduals {
     inner: powerio_prob::Residuals,
@@ -3288,12 +3219,7 @@ impl PyResiduals {
     }
 }
 
-#[pyclass(
-    name = "ScucNetworkOutputs",
-    module = "powerio._powerio",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "ScucNetworkOutputs", module = "powerio._powerio", frozen)]
 #[derive(Clone)]
 struct PyScucNetworkOutputs {
     inner: powerio_prob::ScucNetworkOutputs,
@@ -3327,12 +3253,7 @@ nested_output_methods!(
     dc_line_qdc_to => nested_f64_tuple,
 );
 
-#[pyclass(
-    name = "ScucDeviceOutputs",
-    module = "powerio._powerio",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "ScucDeviceOutputs", module = "powerio._powerio", frozen)]
 #[derive(Clone)]
 struct PyScucDeviceOutputs {
     inner: powerio_prob::ScucDeviceOutputs,
@@ -3357,12 +3278,7 @@ nested_output_methods!(
     q_res_down => nested_f64_tuple,
 );
 
-#[pyclass(
-    name = "ActivePower",
-    module = "powerio._powerio",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "ActivePower", module = "powerio._powerio", frozen)]
 #[derive(Clone, Copy)]
 struct PyActivePower {
     inner: powerio_prob::ActivePower,
@@ -3403,12 +3319,7 @@ impl PyActivePower {
     }
 }
 
-#[pyclass(
-    name = "ReactivePower",
-    module = "powerio._powerio",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "ReactivePower", module = "powerio._powerio", frozen)]
 #[derive(Clone, Copy)]
 struct PyReactivePower {
     inner: powerio_prob::ReactivePower,
@@ -3449,12 +3360,7 @@ impl PyReactivePower {
     }
 }
 
-#[pyclass(
-    name = "ApparentPower",
-    module = "powerio._powerio",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "ApparentPower", module = "powerio._powerio", frozen)]
 #[derive(Clone, Copy)]
 struct PyApparentPower {
     inner: powerio_prob::ApparentPower,
@@ -3512,12 +3418,7 @@ fn operating_update_field(update: &powerio_prob::OperatingPointUpdate) -> &'stat
     }
 }
 
-#[pyclass(
-    name = "OperatingPointUpdate",
-    module = "powerio._powerio",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "OperatingPointUpdate", module = "powerio._powerio", frozen)]
 #[derive(Clone)]
 struct PyOperatingPointUpdate {
     inner: powerio_prob::OperatingPointUpdate,
@@ -3659,12 +3560,7 @@ impl PyOperatingPointUpdate {
     }
 }
 
-#[pyclass(
-    name = "NetworkUpdate",
-    module = "powerio._powerio",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "NetworkUpdate", module = "powerio._powerio", frozen)]
 #[derive(Clone)]
 struct PyNetworkUpdate {
     inner: powerio_prob::NetworkUpdate,
@@ -3701,12 +3597,7 @@ impl PyNetworkUpdate {
     }
 }
 
-#[pyclass(
-    name = "CalculationUpdate",
-    module = "powerio._powerio",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "CalculationUpdate", module = "powerio._powerio", frozen)]
 #[derive(Clone)]
 struct PyCalculationUpdate {
     inner: powerio_prob::CalculationUpdate,
@@ -3763,12 +3654,7 @@ fn updated_field_name(field: powerio_prob::UpdatedField) -> &'static str {
     }
 }
 
-#[pyclass(
-    name = "UpdateChange",
-    module = "powerio._powerio",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "UpdateChange", module = "powerio._powerio", frozen)]
 #[derive(Clone)]
 struct PyUpdateChange {
     component_id: powerio_core::ComponentId,
@@ -5555,7 +5441,7 @@ mod tests {
 
     #[test]
     fn sincal_multiconductor_reaches_the_existing_python_module_type() {
-        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
         connection
             .execute_batch(include_str!(
                 "../../tests/data/sincal/synthetic-multiconductor.sql"

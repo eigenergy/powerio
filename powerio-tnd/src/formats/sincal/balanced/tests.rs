@@ -9,7 +9,7 @@ pub(super) fn native(edit: &str) -> DatabaseSnapshot {
     }
     let file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(file.path(), &bytes).unwrap();
-    let connection = rusqlite::Connection::open(file.path()).unwrap();
+    let mut connection = rusqlite::Connection::open(file.path()).unwrap();
     connection.execute_batch(edit).unwrap();
     let changed = connection.serialize("main").unwrap();
     DatabaseSnapshot::decode(&changed, None).unwrap()
@@ -171,7 +171,7 @@ fn errors_identify_required_input_instead_of_returning_partial_networks() {
     ] {
         // Re-decode structural identity changes; the mapper never mutates a
         // validated snapshot in production.
-        let db = native(sql);
+        let mut db = native(sql);
         let bytes = db.connection.serialize("main").unwrap();
         let db = DatabaseSnapshot::decode(&bytes, None).unwrap();
         let message = read_balanced_snapshot(&db, "invalid")

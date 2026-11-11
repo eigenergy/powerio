@@ -83,11 +83,7 @@ fn dropped_frequency_warns_for_formats_without_a_field() {
         0 / END OF BUS DATA, BEGIN LOAD DATA\nQ\n";
     let net = parse_psse(raw).unwrap();
 
-    for target in [
-        TargetFormat::Matpower,
-        TargetFormat::EgretJson,
-        TargetFormat::PowerWorld,
-    ] {
+    for target in [TargetFormat::Matpower, TargetFormat::PowerWorld] {
         let conv = emit_value(&net, target).unwrap();
         assert!(
             conv.render_diagnostics()
@@ -102,6 +98,7 @@ fn dropped_frequency_warns_for_formats_without_a_field() {
         TargetFormat::Psse { rev: 33 },
         TargetFormat::PandapowerJson,
         TargetFormat::PowerModelsJson,
+        TargetFormat::EgretJson,
     ] {
         let conv = emit_value(&net, target).unwrap();
         assert!(

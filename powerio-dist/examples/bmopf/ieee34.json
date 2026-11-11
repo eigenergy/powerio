@@ -383,11 +383,6 @@
     "L1": {
       "bus_from": "800",
       "bus_to": "802",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 786.384,
       "linecode": "300",
       "terminal_map_from": [
@@ -404,9 +399,6 @@
     "L10": {
       "bus_from": "818",
       "bus_to": "820",
-      "i_max": [
-        600.0
-      ],
       "length": 14676.12,
       "linecode": "302",
       "terminal_map_from": [
@@ -419,9 +411,6 @@
     "L11": {
       "bus_from": "820",
       "bus_to": "822",
-      "i_max": [
-        600.0
-      ],
       "length": 4187.952,
       "linecode": "302",
       "terminal_map_from": [
@@ -434,9 +423,6 @@
     "L12": {
       "bus_from": "824",
       "bus_to": "826",
-      "i_max": [
-        600.0
-      ],
       "length": 923.544,
       "linecode": "303",
       "terminal_map_from": [
@@ -449,11 +435,6 @@
     "L13": {
       "bus_from": "824",
       "bus_to": "828",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 256.032,
       "linecode": "301",
       "terminal_map_from": [
@@ -470,11 +451,6 @@
     "L14": {
       "bus_from": "828",
       "bus_to": "830",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 6230.112000000001,
       "linecode": "301",
       "terminal_map_from": [
@@ -491,11 +467,6 @@
     "L15": {
       "bus_from": "830",
       "bus_to": "854",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 158.496,
       "linecode": "301",
       "terminal_map_from": [
@@ -512,11 +483,6 @@
     "L16": {
       "bus_from": "832",
       "bus_to": "858",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 1493.5200000000002,
       "linecode": "301",
       "terminal_map_from": [
@@ -533,11 +499,6 @@
     "L17": {
       "bus_from": "834",
       "bus_to": "860",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 615.696,
       "linecode": "301",
       "terminal_map_from": [
@@ -554,11 +515,6 @@
     "L18": {
       "bus_from": "834",
       "bus_to": "842",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 85.34400000000001,
       "linecode": "301",
       "terminal_map_from": [
@@ -575,11 +531,6 @@
     "L19": {
       "bus_from": "836",
       "bus_to": "840",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 262.128,
       "linecode": "301",
       "terminal_map_from": [
@@ -596,11 +547,6 @@
     "L2": {
       "bus_from": "802",
       "bus_to": "806",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 527.304,
       "linecode": "300",
       "terminal_map_from": [
@@ -617,11 +563,6 @@
     "L20": {
       "bus_from": "836",
       "bus_to": "862",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 85.34400000000001,
       "linecode": "301",
       "terminal_map_from": [
@@ -638,11 +579,6 @@
     "L21": {
       "bus_from": "842",
       "bus_to": "844",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 411.48,
       "linecode": "301",
       "terminal_map_from": [
@@ -659,11 +595,6 @@
     "L22": {
       "bus_from": "844",
       "bus_to": "846",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 1109.472,
       "linecode": "301",
       "terminal_map_from": [
@@ -680,11 +611,6 @@
     "L23": {
       "bus_from": "846",
       "bus_to": "848",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 161.544,
       "linecode": "301",
       "terminal_map_from": [
@@ -701,11 +627,6 @@
     "L24": {
       "bus_from": "850",
       "bus_to": "816",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 94.488,
       "linecode": "301",
       "terminal_map_from": [
@@ -722,11 +643,6 @@
     "L25": {
       "bus_from": "852r",
       "bus_to": "832",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 3.048,
       "linecode": "301",
       "terminal_map_from": [
@@ -743,9 +659,6 @@
     "L26": {
       "bus_from": "854",
       "bus_to": "856",
-      "i_max": [
-        600.0
-      ],
       "length": 7110.9839999999995,
       "linecode": "303",
       "terminal_map_from": [
@@ -758,11 +671,6 @@
     "L27": {
       "bus_from": "854",
       "bus_to": "852",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 11225.784,
       "linecode": "301",
       "terminal_map_from": [
@@ -779,9 +687,6 @@
     "L28": {
       "bus_from": "858",
       "bus_to": "864",
-      "i_max": [
-        600.0
-      ],
       "length": 493.77600000000007,
       "linecode": "303",
       "terminal_map_from": [
@@ -794,11 +699,6 @@
     "L29": {
       "bus_from": "858",
       "bus_to": "834",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 1776.9840000000002,
       "linecode": "301",
       "terminal_map_from": [
@@ -815,11 +715,6 @@
     "L3": {
       "bus_from": "806",
       "bus_to": "808",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 9823.704,
       "linecode": "300",
       "terminal_map_from": [
@@ -836,11 +731,6 @@
     "L30": {
       "bus_from": "860",
       "bus_to": "836",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 816.864,
       "linecode": "301",
       "terminal_map_from": [
@@ -857,9 +747,6 @@
     "L31": {
       "bus_from": "862",
       "bus_to": "838",
-      "i_max": [
-        600.0
-      ],
       "length": 1481.3280000000002,
       "linecode": "304",
       "terminal_map_from": [
@@ -872,11 +759,6 @@
     "L32": {
       "bus_from": "888",
       "bus_to": "890",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 3218.688,
       "linecode": "300",
       "terminal_map_from": [
@@ -893,9 +775,6 @@
     "L4": {
       "bus_from": "808",
       "bus_to": "810",
-      "i_max": [
-        600.0
-      ],
       "length": 1769.0592000000001,
       "linecode": "303",
       "terminal_map_from": [
@@ -908,11 +787,6 @@
     "L5": {
       "bus_from": "808",
       "bus_to": "812",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 11430.0,
       "linecode": "300",
       "terminal_map_from": [
@@ -929,11 +803,6 @@
     "L6": {
       "bus_from": "812",
       "bus_to": "814",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 9061.704,
       "linecode": "300",
       "terminal_map_from": [
@@ -950,11 +819,6 @@
     "L7": {
       "bus_from": "814r",
       "bus_to": "850",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 3.048,
       "linecode": "301",
       "terminal_map_from": [
@@ -971,9 +835,6 @@
     "L8": {
       "bus_from": "816",
       "bus_to": "818",
-      "i_max": [
-        600.0
-      ],
       "length": 521.208,
       "linecode": "302",
       "terminal_map_from": [
@@ -986,11 +847,6 @@
     "L9": {
       "bus_from": "816",
       "bus_to": "824",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 3112.0080000000003,
       "linecode": "301",
       "terminal_map_from": [
@@ -2501,13 +2357,13 @@
     "$schema": "https://raw.githubusercontent.com/eigenergy/powerio/5234df55cd13ad31455697cffbdc16ca50662667/powerio-dist/schemas/bmopf/0.2.0/bmopf.schema.json",
     "case_study_generator": {
       "tool": "powerio",
-      "version": "0.11.9"
+      "version": "0.11.11"
     },
     "frequency": 60.0,
     "provenance": {
       "powerio_bmopf": {
         "producer": "powerio",
-        "producer_version": "0.11.9",
+        "producer_version": "0.11.11",
         "schema_commit": "664b494f2ee31ee76f8f78e7852cdb1f1c9a8e7d",
         "schema_id": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json",
         "schema_retrieval_url": "https://raw.githubusercontent.com/eigenergy/powerio/5234df55cd13ad31455697cffbdc16ca50662667/powerio-dist/schemas/bmopf/0.2.0/bmopf.schema.json",

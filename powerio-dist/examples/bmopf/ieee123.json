@@ -1178,9 +1178,6 @@
     "L1": {
       "bus_from": "1",
       "bus_to": "2",
-      "i_max": [
-        600.0
-      ],
       "length": 53.339999999999996,
       "linecode": "10",
       "terminal_map_from": [
@@ -1193,11 +1190,6 @@
     "L10": {
       "bus_from": "8",
       "bus_to": "13",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 91.44,
       "linecode": "1",
       "terminal_map_from": [
@@ -1214,9 +1206,6 @@
     "L100": {
       "bus_from": "101",
       "bus_to": "102",
-      "i_max": [
-        600.0
-      ],
       "length": 68.58,
       "linecode": "11",
       "terminal_map_from": [
@@ -1229,11 +1218,6 @@
     "L101": {
       "bus_from": "101",
       "bus_to": "105",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 83.82000000000001,
       "linecode": "3",
       "terminal_map_from": [
@@ -1250,9 +1234,6 @@
     "L102": {
       "bus_from": "102",
       "bus_to": "103",
-      "i_max": [
-        600.0
-      ],
       "length": 99.06,
       "linecode": "11",
       "terminal_map_from": [
@@ -1265,9 +1246,6 @@
     "L103": {
       "bus_from": "103",
       "bus_to": "104",
-      "i_max": [
-        600.0
-      ],
       "length": 213.35999999999999,
       "linecode": "11",
       "terminal_map_from": [
@@ -1280,9 +1258,6 @@
     "L104": {
       "bus_from": "105",
       "bus_to": "106",
-      "i_max": [
-        600.0
-      ],
       "length": 68.58,
       "linecode": "10",
       "terminal_map_from": [
@@ -1295,11 +1270,6 @@
     "L105": {
       "bus_from": "105",
       "bus_to": "108",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 99.06,
       "linecode": "3",
       "terminal_map_from": [
@@ -1316,9 +1286,6 @@
     "L106": {
       "bus_from": "106",
       "bus_to": "107",
-      "i_max": [
-        600.0
-      ],
       "length": 175.26,
       "linecode": "10",
       "terminal_map_from": [
@@ -1331,9 +1298,6 @@
     "L107": {
       "bus_from": "108",
       "bus_to": "109",
-      "i_max": [
-        600.0
-      ],
       "length": 137.16,
       "linecode": "9",
       "terminal_map_from": [
@@ -1346,11 +1310,6 @@
     "L108": {
       "bus_from": "108",
       "bus_to": "300",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 304.8,
       "linecode": "3",
       "terminal_map_from": [
@@ -1367,9 +1326,6 @@
     "L109": {
       "bus_from": "109",
       "bus_to": "110",
-      "i_max": [
-        600.0
-      ],
       "length": 91.44,
       "linecode": "9",
       "terminal_map_from": [
@@ -1382,9 +1338,6 @@
     "L11": {
       "bus_from": "9r",
       "bus_to": "14",
-      "i_max": [
-        600.0
-      ],
       "length": 129.54,
       "linecode": "9",
       "terminal_map_from": [
@@ -1397,9 +1350,6 @@
     "L110": {
       "bus_from": "110",
       "bus_to": "111",
-      "i_max": [
-        600.0
-      ],
       "length": 175.26,
       "linecode": "9",
       "terminal_map_from": [
@@ -1412,9 +1362,6 @@
     "L111": {
       "bus_from": "110",
       "bus_to": "112",
-      "i_max": [
-        600.0
-      ],
       "length": 38.1,
       "linecode": "9",
       "terminal_map_from": [
@@ -1427,9 +1374,6 @@
     "L112": {
       "bus_from": "112",
       "bus_to": "113",
-      "i_max": [
-        600.0
-      ],
       "length": 160.02,
       "linecode": "9",
       "terminal_map_from": [
@@ -1442,9 +1386,6 @@
     "L113": {
       "bus_from": "113",
       "bus_to": "114",
-      "i_max": [
-        600.0
-      ],
       "length": 99.06,
       "linecode": "9",
       "terminal_map_from": [
@@ -1457,11 +1398,6 @@
     "L114": {
       "bus_from": "135",
       "bus_to": "35",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 114.30000000000001,
       "linecode": "4",
       "terminal_map_from": [
@@ -1478,11 +1414,6 @@
     "L115": {
       "bus_from": "149",
       "bus_to": "1",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 121.92000000000002,
       "linecode": "1",
       "terminal_map_from": [
@@ -1499,11 +1430,6 @@
     "L116": {
       "bus_from": "152",
       "bus_to": "52",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 121.92000000000002,
       "linecode": "1",
       "terminal_map_from": [
@@ -1520,11 +1446,6 @@
     "L117": {
       "bus_from": "160r",
       "bus_to": "67",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 106.67999999999999,
       "linecode": "6",
       "terminal_map_from": [
@@ -1541,11 +1462,6 @@
     "L118": {
       "bus_from": "197",
       "bus_to": "101",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 76.2,
       "linecode": "3",
       "terminal_map_from": [
@@ -1562,9 +1478,6 @@
     "L12": {
       "bus_from": "13",
       "bus_to": "34",
-      "i_max": [
-        600.0
-      ],
       "length": 45.72,
       "linecode": "11",
       "terminal_map_from": [
@@ -1577,11 +1490,6 @@
     "L13": {
       "bus_from": "13",
       "bus_to": "18",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 251.46,
       "linecode": "2",
       "terminal_map_from": [
@@ -1598,9 +1506,6 @@
     "L14": {
       "bus_from": "14",
       "bus_to": "11",
-      "i_max": [
-        600.0
-      ],
       "length": 76.2,
       "linecode": "9",
       "terminal_map_from": [
@@ -1613,9 +1518,6 @@
     "L15": {
       "bus_from": "14",
       "bus_to": "10",
-      "i_max": [
-        600.0
-      ],
       "length": 76.2,
       "linecode": "9",
       "terminal_map_from": [
@@ -1628,9 +1530,6 @@
     "L16": {
       "bus_from": "15",
       "bus_to": "16",
-      "i_max": [
-        600.0
-      ],
       "length": 114.30000000000001,
       "linecode": "11",
       "terminal_map_from": [
@@ -1643,9 +1542,6 @@
     "L17": {
       "bus_from": "15",
       "bus_to": "17",
-      "i_max": [
-        600.0
-      ],
       "length": 106.67999999999999,
       "linecode": "11",
       "terminal_map_from": [
@@ -1658,9 +1554,6 @@
     "L18": {
       "bus_from": "18",
       "bus_to": "19",
-      "i_max": [
-        600.0
-      ],
       "length": 76.2,
       "linecode": "9",
       "terminal_map_from": [
@@ -1673,11 +1566,6 @@
     "L19": {
       "bus_from": "18",
       "bus_to": "21",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 91.44,
       "linecode": "2",
       "terminal_map_from": [
@@ -1694,9 +1582,6 @@
     "L2": {
       "bus_from": "1",
       "bus_to": "3",
-      "i_max": [
-        600.0
-      ],
       "length": 76.2,
       "linecode": "11",
       "terminal_map_from": [
@@ -1709,9 +1594,6 @@
     "L20": {
       "bus_from": "19",
       "bus_to": "20",
-      "i_max": [
-        600.0
-      ],
       "length": 99.06,
       "linecode": "9",
       "terminal_map_from": [
@@ -1724,9 +1606,6 @@
     "L21": {
       "bus_from": "21",
       "bus_to": "22",
-      "i_max": [
-        600.0
-      ],
       "length": 160.02,
       "linecode": "10",
       "terminal_map_from": [
@@ -1739,11 +1618,6 @@
     "L22": {
       "bus_from": "21",
       "bus_to": "23",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 76.2,
       "linecode": "2",
       "terminal_map_from": [
@@ -1760,9 +1634,6 @@
     "L23": {
       "bus_from": "23",
       "bus_to": "24",
-      "i_max": [
-        600.0
-      ],
       "length": 167.64000000000001,
       "linecode": "11",
       "terminal_map_from": [
@@ -1775,11 +1646,6 @@
     "L24": {
       "bus_from": "23",
       "bus_to": "25",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 83.82000000000001,
       "linecode": "2",
       "terminal_map_from": [
@@ -1796,10 +1662,6 @@
     "L25": {
       "bus_from": "25r",
       "bus_to": "26",
-      "i_max": [
-        600.0,
-        600.0
-      ],
       "length": 106.67999999999999,
       "linecode": "7",
       "terminal_map_from": [
@@ -1814,11 +1676,6 @@
     "L26": {
       "bus_from": "25",
       "bus_to": "28",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 60.96000000000001,
       "linecode": "2",
       "terminal_map_from": [
@@ -1835,10 +1692,6 @@
     "L27": {
       "bus_from": "26",
       "bus_to": "27",
-      "i_max": [
-        600.0,
-        600.0
-      ],
       "length": 83.82000000000001,
       "linecode": "7",
       "terminal_map_from": [
@@ -1853,9 +1706,6 @@
     "L28": {
       "bus_from": "26",
       "bus_to": "31",
-      "i_max": [
-        600.0
-      ],
       "length": 68.58,
       "linecode": "11",
       "terminal_map_from": [
@@ -1868,9 +1718,6 @@
     "L29": {
       "bus_from": "27",
       "bus_to": "33",
-      "i_max": [
-        600.0
-      ],
       "length": 152.4,
       "linecode": "9",
       "terminal_map_from": [
@@ -1883,11 +1730,6 @@
     "L3": {
       "bus_from": "1",
       "bus_to": "7",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 91.44,
       "linecode": "1",
       "terminal_map_from": [
@@ -1904,11 +1746,6 @@
     "L30": {
       "bus_from": "28",
       "bus_to": "29",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 91.44,
       "linecode": "2",
       "terminal_map_from": [
@@ -1925,11 +1762,6 @@
     "L31": {
       "bus_from": "29",
       "bus_to": "30",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 106.67999999999999,
       "linecode": "2",
       "terminal_map_from": [
@@ -1946,11 +1778,6 @@
     "L32": {
       "bus_from": "30",
       "bus_to": "250",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 60.96000000000001,
       "linecode": "2",
       "terminal_map_from": [
@@ -1967,9 +1794,6 @@
     "L33": {
       "bus_from": "31",
       "bus_to": "32",
-      "i_max": [
-        600.0
-      ],
       "length": 91.44,
       "linecode": "11",
       "terminal_map_from": [
@@ -1982,9 +1806,6 @@
     "L34": {
       "bus_from": "34",
       "bus_to": "15",
-      "i_max": [
-        600.0
-      ],
       "length": 30.480000000000004,
       "linecode": "11",
       "terminal_map_from": [
@@ -1997,10 +1818,6 @@
     "L35": {
       "bus_from": "35",
       "bus_to": "36",
-      "i_max": [
-        600.0,
-        600.0
-      ],
       "length": 198.12,
       "linecode": "8",
       "terminal_map_from": [
@@ -2015,11 +1832,6 @@
     "L36": {
       "bus_from": "35",
       "bus_to": "40",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 76.2,
       "linecode": "1",
       "terminal_map_from": [
@@ -2036,9 +1848,6 @@
     "L37": {
       "bus_from": "36",
       "bus_to": "37",
-      "i_max": [
-        600.0
-      ],
       "length": 91.44,
       "linecode": "9",
       "terminal_map_from": [
@@ -2051,9 +1860,6 @@
     "L38": {
       "bus_from": "36",
       "bus_to": "38",
-      "i_max": [
-        600.0
-      ],
       "length": 76.2,
       "linecode": "10",
       "terminal_map_from": [
@@ -2066,9 +1872,6 @@
     "L39": {
       "bus_from": "38",
       "bus_to": "39",
-      "i_max": [
-        600.0
-      ],
       "length": 99.06,
       "linecode": "10",
       "terminal_map_from": [
@@ -2081,9 +1884,6 @@
     "L4": {
       "bus_from": "3",
       "bus_to": "4",
-      "i_max": [
-        600.0
-      ],
       "length": 60.96000000000001,
       "linecode": "11",
       "terminal_map_from": [
@@ -2096,9 +1896,6 @@
     "L40": {
       "bus_from": "40",
       "bus_to": "41",
-      "i_max": [
-        600.0
-      ],
       "length": 99.06,
       "linecode": "11",
       "terminal_map_from": [
@@ -2111,11 +1908,6 @@
     "L41": {
       "bus_from": "40",
       "bus_to": "42",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 76.2,
       "linecode": "1",
       "terminal_map_from": [
@@ -2132,9 +1924,6 @@
     "L42": {
       "bus_from": "42",
       "bus_to": "43",
-      "i_max": [
-        600.0
-      ],
       "length": 152.4,
       "linecode": "10",
       "terminal_map_from": [
@@ -2147,11 +1936,6 @@
     "L43": {
       "bus_from": "42",
       "bus_to": "44",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 60.96000000000001,
       "linecode": "1",
       "terminal_map_from": [
@@ -2168,9 +1952,6 @@
     "L44": {
       "bus_from": "44",
       "bus_to": "45",
-      "i_max": [
-        600.0
-      ],
       "length": 60.96000000000001,
       "linecode": "9",
       "terminal_map_from": [
@@ -2183,11 +1964,6 @@
     "L45": {
       "bus_from": "44",
       "bus_to": "47",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 76.2,
       "linecode": "1",
       "terminal_map_from": [
@@ -2204,9 +1980,6 @@
     "L46": {
       "bus_from": "45",
       "bus_to": "46",
-      "i_max": [
-        600.0
-      ],
       "length": 91.44,
       "linecode": "9",
       "terminal_map_from": [
@@ -2219,11 +1992,6 @@
     "L47": {
       "bus_from": "47",
       "bus_to": "48",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 45.72,
       "linecode": "4",
       "terminal_map_from": [
@@ -2240,11 +2008,6 @@
     "L48": {
       "bus_from": "47",
       "bus_to": "49",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 76.2,
       "linecode": "4",
       "terminal_map_from": [
@@ -2261,11 +2024,6 @@
     "L49": {
       "bus_from": "49",
       "bus_to": "50",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 76.2,
       "linecode": "4",
       "terminal_map_from": [
@@ -2282,9 +2040,6 @@
     "L5": {
       "bus_from": "3",
       "bus_to": "5",
-      "i_max": [
-        600.0
-      ],
       "length": 99.06,
       "linecode": "11",
       "terminal_map_from": [
@@ -2297,11 +2052,6 @@
     "L50": {
       "bus_from": "50",
       "bus_to": "51",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 76.2,
       "linecode": "4",
       "terminal_map_from": [
@@ -2318,11 +2068,6 @@
     "L51": {
       "bus_from": "51",
       "bus_to": "151",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 152.4,
       "linecode": "4",
       "terminal_map_from": [
@@ -2339,11 +2084,6 @@
     "L52": {
       "bus_from": "52",
       "bus_to": "53",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 60.96000000000001,
       "linecode": "1",
       "terminal_map_from": [
@@ -2360,11 +2100,6 @@
     "L53": {
       "bus_from": "53",
       "bus_to": "54",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 38.1,
       "linecode": "1",
       "terminal_map_from": [
@@ -2381,11 +2116,6 @@
     "L54": {
       "bus_from": "54",
       "bus_to": "55",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 83.82000000000001,
       "linecode": "1",
       "terminal_map_from": [
@@ -2402,11 +2132,6 @@
     "L55": {
       "bus_from": "54",
       "bus_to": "57",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 106.67999999999999,
       "linecode": "3",
       "terminal_map_from": [
@@ -2423,11 +2148,6 @@
     "L56": {
       "bus_from": "55",
       "bus_to": "56",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 83.82000000000001,
       "linecode": "1",
       "terminal_map_from": [
@@ -2444,9 +2164,6 @@
     "L57": {
       "bus_from": "57",
       "bus_to": "58",
-      "i_max": [
-        600.0
-      ],
       "length": 76.2,
       "linecode": "10",
       "terminal_map_from": [
@@ -2459,11 +2176,6 @@
     "L58": {
       "bus_from": "57",
       "bus_to": "60",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 228.60000000000002,
       "linecode": "3",
       "terminal_map_from": [
@@ -2480,9 +2192,6 @@
     "L59": {
       "bus_from": "58",
       "bus_to": "59",
-      "i_max": [
-        600.0
-      ],
       "length": 76.2,
       "linecode": "10",
       "terminal_map_from": [
@@ -2495,9 +2204,6 @@
     "L6": {
       "bus_from": "5",
       "bus_to": "6",
-      "i_max": [
-        600.0
-      ],
       "length": 76.2,
       "linecode": "11",
       "terminal_map_from": [
@@ -2510,11 +2216,6 @@
     "L60": {
       "bus_from": "60",
       "bus_to": "61",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 167.64000000000001,
       "linecode": "5",
       "terminal_map_from": [
@@ -2531,11 +2232,6 @@
     "L61": {
       "bus_from": "60",
       "bus_to": "62",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 76.2,
       "linecode": "12",
       "terminal_map_from": [
@@ -2552,11 +2248,6 @@
     "L62": {
       "bus_from": "62",
       "bus_to": "63",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 53.339999999999996,
       "linecode": "12",
       "terminal_map_from": [
@@ -2573,11 +2264,6 @@
     "L63": {
       "bus_from": "63",
       "bus_to": "64",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 106.67999999999999,
       "linecode": "12",
       "terminal_map_from": [
@@ -2594,11 +2280,6 @@
     "L64": {
       "bus_from": "64",
       "bus_to": "65",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 129.54,
       "linecode": "12",
       "terminal_map_from": [
@@ -2615,11 +2296,6 @@
     "L65": {
       "bus_from": "65",
       "bus_to": "66",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 99.06,
       "linecode": "12",
       "terminal_map_from": [
@@ -2636,9 +2312,6 @@
     "L66": {
       "bus_from": "67",
       "bus_to": "68",
-      "i_max": [
-        600.0
-      ],
       "length": 60.96000000000001,
       "linecode": "9",
       "terminal_map_from": [
@@ -2651,11 +2324,6 @@
     "L67": {
       "bus_from": "67",
       "bus_to": "72",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 83.82000000000001,
       "linecode": "3",
       "terminal_map_from": [
@@ -2672,11 +2340,6 @@
     "L68": {
       "bus_from": "67",
       "bus_to": "97",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 76.2,
       "linecode": "3",
       "terminal_map_from": [
@@ -2693,9 +2356,6 @@
     "L69": {
       "bus_from": "68",
       "bus_to": "69",
-      "i_max": [
-        600.0
-      ],
       "length": 83.82000000000001,
       "linecode": "9",
       "terminal_map_from": [
@@ -2708,11 +2368,6 @@
     "L7": {
       "bus_from": "7",
       "bus_to": "8",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 60.96000000000001,
       "linecode": "1",
       "terminal_map_from": [
@@ -2729,9 +2384,6 @@
     "L70": {
       "bus_from": "69",
       "bus_to": "70",
-      "i_max": [
-        600.0
-      ],
       "length": 99.06,
       "linecode": "9",
       "terminal_map_from": [
@@ -2744,9 +2396,6 @@
     "L71": {
       "bus_from": "70",
       "bus_to": "71",
-      "i_max": [
-        600.0
-      ],
       "length": 83.82000000000001,
       "linecode": "9",
       "terminal_map_from": [
@@ -2759,9 +2408,6 @@
     "L72": {
       "bus_from": "72",
       "bus_to": "73",
-      "i_max": [
-        600.0
-      ],
       "length": 83.82000000000001,
       "linecode": "11",
       "terminal_map_from": [
@@ -2774,11 +2420,6 @@
     "L73": {
       "bus_from": "72",
       "bus_to": "76",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 60.96000000000001,
       "linecode": "3",
       "terminal_map_from": [
@@ -2795,9 +2436,6 @@
     "L74": {
       "bus_from": "73",
       "bus_to": "74",
-      "i_max": [
-        600.0
-      ],
       "length": 106.67999999999999,
       "linecode": "11",
       "terminal_map_from": [
@@ -2810,9 +2448,6 @@
     "L75": {
       "bus_from": "74",
       "bus_to": "75",
-      "i_max": [
-        600.0
-      ],
       "length": 121.92000000000002,
       "linecode": "11",
       "terminal_map_from": [
@@ -2825,11 +2460,6 @@
     "L76": {
       "bus_from": "76",
       "bus_to": "77",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 121.92000000000002,
       "linecode": "6",
       "terminal_map_from": [
@@ -2846,11 +2476,6 @@
     "L77": {
       "bus_from": "76",
       "bus_to": "86",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 213.35999999999999,
       "linecode": "3",
       "terminal_map_from": [
@@ -2867,11 +2492,6 @@
     "L78": {
       "bus_from": "77",
       "bus_to": "78",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 30.480000000000004,
       "linecode": "6",
       "terminal_map_from": [
@@ -2888,11 +2508,6 @@
     "L79": {
       "bus_from": "78",
       "bus_to": "79",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 68.58,
       "linecode": "6",
       "terminal_map_from": [
@@ -2909,9 +2524,6 @@
     "L8": {
       "bus_from": "8",
       "bus_to": "12",
-      "i_max": [
-        600.0
-      ],
       "length": 68.58,
       "linecode": "10",
       "terminal_map_from": [
@@ -2924,11 +2536,6 @@
     "L80": {
       "bus_from": "78",
       "bus_to": "80",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 144.78,
       "linecode": "6",
       "terminal_map_from": [
@@ -2945,11 +2552,6 @@
     "L81": {
       "bus_from": "80",
       "bus_to": "81",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 53.339999999999996,
       "linecode": "6",
       "terminal_map_from": [
@@ -2966,11 +2568,6 @@
     "L82": {
       "bus_from": "81",
       "bus_to": "82",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 76.2,
       "linecode": "6",
       "terminal_map_from": [
@@ -2987,9 +2584,6 @@
     "L83": {
       "bus_from": "81",
       "bus_to": "84",
-      "i_max": [
-        600.0
-      ],
       "length": 205.74,
       "linecode": "11",
       "terminal_map_from": [
@@ -3002,11 +2596,6 @@
     "L84": {
       "bus_from": "82",
       "bus_to": "83",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 76.2,
       "linecode": "6",
       "terminal_map_from": [
@@ -3023,9 +2612,6 @@
     "L85": {
       "bus_from": "84",
       "bus_to": "85",
-      "i_max": [
-        600.0
-      ],
       "length": 144.78,
       "linecode": "11",
       "terminal_map_from": [
@@ -3038,11 +2624,6 @@
     "L86": {
       "bus_from": "86",
       "bus_to": "87",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 137.16,
       "linecode": "6",
       "terminal_map_from": [
@@ -3059,9 +2640,6 @@
     "L87": {
       "bus_from": "87",
       "bus_to": "88",
-      "i_max": [
-        600.0
-      ],
       "length": 53.339999999999996,
       "linecode": "9",
       "terminal_map_from": [
@@ -3074,11 +2652,6 @@
     "L88": {
       "bus_from": "87",
       "bus_to": "89",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 83.82000000000001,
       "linecode": "6",
       "terminal_map_from": [
@@ -3095,9 +2668,6 @@
     "L89": {
       "bus_from": "89",
       "bus_to": "90",
-      "i_max": [
-        600.0
-      ],
       "length": 76.2,
       "linecode": "10",
       "terminal_map_from": [
@@ -3110,9 +2680,6 @@
     "L9": {
       "bus_from": "8",
       "bus_to": "9",
-      "i_max": [
-        600.0
-      ],
       "length": 68.58,
       "linecode": "9",
       "terminal_map_from": [
@@ -3125,11 +2692,6 @@
     "L90": {
       "bus_from": "89",
       "bus_to": "91",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 68.58,
       "linecode": "6",
       "terminal_map_from": [
@@ -3146,9 +2708,6 @@
     "L91": {
       "bus_from": "91",
       "bus_to": "92",
-      "i_max": [
-        600.0
-      ],
       "length": 91.44,
       "linecode": "11",
       "terminal_map_from": [
@@ -3161,11 +2720,6 @@
     "L92": {
       "bus_from": "91",
       "bus_to": "93",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 68.58,
       "linecode": "6",
       "terminal_map_from": [
@@ -3182,9 +2736,6 @@
     "L93": {
       "bus_from": "93",
       "bus_to": "94",
-      "i_max": [
-        600.0
-      ],
       "length": 83.82000000000001,
       "linecode": "9",
       "terminal_map_from": [
@@ -3197,11 +2748,6 @@
     "L94": {
       "bus_from": "93",
       "bus_to": "95",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 91.44,
       "linecode": "6",
       "terminal_map_from": [
@@ -3218,9 +2764,6 @@
     "L95": {
       "bus_from": "95",
       "bus_to": "96",
-      "i_max": [
-        600.0
-      ],
       "length": 60.96000000000001,
       "linecode": "10",
       "terminal_map_from": [
@@ -3233,11 +2776,6 @@
     "L96": {
       "bus_from": "97",
       "bus_to": "98",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 83.82000000000001,
       "linecode": "3",
       "terminal_map_from": [
@@ -3254,11 +2792,6 @@
     "L97": {
       "bus_from": "98",
       "bus_to": "99",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 167.64000000000001,
       "linecode": "3",
       "terminal_map_from": [
@@ -3275,11 +2808,6 @@
     "L98": {
       "bus_from": "99",
       "bus_to": "100",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 91.44,
       "linecode": "3",
       "terminal_map_from": [
@@ -3296,11 +2824,6 @@
     "L99": {
       "bus_from": "100",
       "bus_to": "450",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 243.84000000000003,
       "linecode": "3",
       "terminal_map_from": [
@@ -3317,11 +2840,6 @@
     "Sw1": {
       "bus_from": "150r",
       "bus_to": "149",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 1.0,
       "linecode": "_pio_line_Sw1",
       "terminal_map_from": [
@@ -3338,11 +2856,6 @@
     "Sw2": {
       "bus_from": "13",
       "bus_to": "152",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 1.0,
       "linecode": "_pio_line_Sw2",
       "terminal_map_from": [
@@ -3359,11 +2872,6 @@
     "Sw3": {
       "bus_from": "18",
       "bus_to": "135",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 1.0,
       "linecode": "_pio_line_Sw3",
       "terminal_map_from": [
@@ -3380,11 +2888,6 @@
     "Sw4": {
       "bus_from": "60",
       "bus_to": "160",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 1.0,
       "linecode": "_pio_line_Sw4",
       "terminal_map_from": [
@@ -3401,11 +2904,6 @@
     "Sw5": {
       "bus_from": "97",
       "bus_to": "197",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 1.0,
       "linecode": "_pio_line_Sw5",
       "terminal_map_from": [
@@ -3422,11 +2920,6 @@
     "Sw6": {
       "bus_from": "61",
       "bus_to": "61s",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 1.0,
       "linecode": "_pio_line_Sw6",
       "terminal_map_from": [
@@ -3443,11 +2936,6 @@
     "Sw7": {
       "bus_from": "151",
       "bus_to": "300_OPEN",
-      "i_max": [
-        600.0,
-        600.0,
-        600.0
-      ],
       "length": 1.0,
       "linecode": "_pio_line_Sw7",
       "terminal_map_from": [
@@ -3464,9 +2952,6 @@
     "Sw8": {
       "bus_from": "54",
       "bus_to": "94_OPEN",
-      "i_max": [
-        600.0
-      ],
       "length": 1.0,
       "linecode": "_pio_line_Sw8",
       "terminal_map_from": [
@@ -6100,13 +5585,13 @@
     "$schema": "https://raw.githubusercontent.com/eigenergy/powerio/5234df55cd13ad31455697cffbdc16ca50662667/powerio-dist/schemas/bmopf/0.2.0/bmopf.schema.json",
     "case_study_generator": {
       "tool": "powerio",
-      "version": "0.11.9"
+      "version": "0.11.11"
     },
     "frequency": 60.0,
     "provenance": {
       "powerio_bmopf": {
         "producer": "powerio",
-        "producer_version": "0.11.9",
+        "producer_version": "0.11.11",
         "schema_commit": "664b494f2ee31ee76f8f78e7852cdb1f1c9a8e7d",
         "schema_id": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json",
         "schema_retrieval_url": "https://raw.githubusercontent.com/eigenergy/powerio/5234df55cd13ad31455697cffbdc16ca50662667/powerio-dist/schemas/bmopf/0.2.0/bmopf.schema.json",

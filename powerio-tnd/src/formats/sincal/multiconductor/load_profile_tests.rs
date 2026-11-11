@@ -41,7 +41,7 @@ fn relative_daily_profiles_preserve_unequal_wye_and_delta_branch_powers() {
         (14, powerio_dist::Configuration::Delta),
     ] {
         for model in [1, 2, 3] {
-            let db = relative_unequal(mode, model, "");
+            let mut db = relative_unequal(mode, model, "");
             let before = db.connection.serialize("main").unwrap().to_vec();
             assert!(db.network().is_err());
             for (hours, factor) in [
@@ -388,7 +388,7 @@ fn materialized_load_manipulators_never_multiply_static_inputs_twice() {
             }
         };
         let edit = "UPDATE Load SET Mpl_ID=7,fP=0.28,fQ=0.5;";
-        let db = make(edit);
+        let mut db = make(edit);
         let source_before = db.connection.serialize("main").unwrap().to_vec();
         let actual = db.network().unwrap();
         let expected = make("UPDATE Load SET fP=0.28,fQ=0.5;").network().unwrap();
@@ -533,7 +533,6 @@ fn export_relative_daily_profiles() {
 #[test]
 fn public_relative_snapshot_retains_original_source_and_conductor_family() {
     use powerio_core::Source;
-    use sha2::{Digest, Sha256};
     let original =
         b"\0\x01\0\0Standard Jet DB\0original synthetic source for relative-profile test";
     let mut records = super::legacy_tests::acquired_records(
@@ -544,7 +543,8 @@ fn public_relative_snapshot_retains_original_source_and_conductor_family() {
         11.5,
     );
     records["source"]["bytes"] = serde_json::json!(original.len());
-    records["source"]["sha256"] = serde_json::json!(format!("{:x}", Sha256::digest(original)));
+    records["source"]["sha256"] =
+        serde_json::json!(crate::formats::sincal::storage::sha256_hex(original));
     let source = Source::from_memory("relative.mdb", original.to_vec())
         .unwrap()
         .with_named_buffer("records.json", serde_json::to_vec(&records).unwrap())

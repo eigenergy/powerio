@@ -144,8 +144,6 @@ fn formats_without_geometry_report_dropped_locations() {
     for format in [
         TargetFormat::Matpower,
         TargetFormat::Psse { rev: 33 },
-        TargetFormat::PowerModelsJson,
-        TargetFormat::EgretJson,
         TargetFormat::Pslf,
         TargetFormat::SurgeJson,
     ] {
@@ -162,6 +160,9 @@ fn formats_without_geometry_report_dropped_locations() {
     for (format, token) in [
         (TargetFormat::PowerWorld, "powerworld"),
         (TargetFormat::PandapowerJson, "pandapower-json"),
+        // As PowerIO extension keys those tools leave alone.
+        (TargetFormat::PowerModelsJson, "powermodels-json"),
+        (TargetFormat::EgretJson, "egret-json"),
     ] {
         let conv = emit_value(&net, format).unwrap();
         assert!(

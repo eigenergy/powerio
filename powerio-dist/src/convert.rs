@@ -671,10 +671,7 @@ pub(crate) fn emit_value_text_with_options(
         DistTargetFormat::Gridlabd | DistTargetFormat::GridlabdArras => {
             return crate::glm::emit_glm_text(net);
         }
-        DistTargetFormat::Dss => {
-            crate::dss::validate_emission(net)?;
-            crate::dss::emit_dss_text_with_options(net, &options.dss)
-        }
+        DistTargetFormat::Dss => crate::dss::emit_validated_dss_text(net, &options.dss)?,
         DistTargetFormat::BmopfJson => {
             crate::bmopf::emit_bmopf_json_text_with_options(net, options.bmopf)
         }

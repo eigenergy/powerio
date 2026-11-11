@@ -12,6 +12,17 @@ use serde::Deserialize;
 use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use sha2::{Digest, Sha256};
 
+/// Lowercase hexadecimal SHA-256 of `bytes`.
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let digest = Sha256::digest(bytes);
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
 use crate::formats::sincal::storage::{MAX_BYTES, Result, format_error};
 
 const MAX_TABLES: usize = 512;
@@ -362,7 +373,7 @@ impl TableRecords {
     pub fn verify_source(&self, bytes: &[u8]) -> Result<()> {
         if !bytes.starts_with(b"\0\x01\0\0Standard Jet DB\0")
             || bytes.len() as u64 != self.source.bytes
-            || !format!("{:x}", Sha256::digest(bytes)).eq_ignore_ascii_case(&self.source.sha256)
+            || !sha256_hex(bytes).eq_ignore_ascii_case(&self.source.sha256)
         {
             return Err(format_error(
                 "acquired tables do not match the original Access MDB bytes",
@@ -587,7 +598,7 @@ mod tests {
         let mut source = b"\0\x01\0\0Standard Jet DB\0synthetic origin".to_vec();
         let mut doc = document();
         doc["source"]["bytes"] = serde_json::json!(source.len());
-        doc["source"]["sha256"] = serde_json::json!(format!("{:x}", Sha256::digest(&source)));
+        doc["source"]["sha256"] = serde_json::json!(sha256_hex(&source));
         let records = TableRecords::decode(&serde_json::to_vec(&doc).unwrap()).unwrap();
         records.verify_source(&source).unwrap();
         source[20] ^= 1;
@@ -596,7 +607,7 @@ mod tests {
         assert!(records.verify_source(&source).is_err());
         doc["source"]["bytes"] = serde_json::json!(source.len());
         source[0] = 1;
-        doc["source"]["sha256"] = serde_json::json!(format!("{:x}", Sha256::digest(&source)));
+        doc["source"]["sha256"] = serde_json::json!(sha256_hex(&source));
         assert!(
             TableRecords::decode(&serde_json::to_vec(&doc).unwrap())
                 .unwrap()
@@ -617,7 +628,7 @@ mod tests {
                 {"name": "Variant_ID", "native_type": "INTEGER"},
                 {"name": "r", "native_type": "REAL"}], "rows": rows
         }]);
-        let connection = TableRecords::decode(&serde_json::to_vec(&d).unwrap())
+        let mut connection = TableRecords::decode(&serde_json::to_vec(&d).unwrap())
             .unwrap()
             .into_connection()
             .unwrap();

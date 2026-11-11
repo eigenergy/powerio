@@ -4623,6 +4623,9 @@ fn apply_psse_area_properties(
 }
 /// The IIDM property that states a PSS/E bus owner.
 const PSSE_OWNER_PROPERTY: &str = "psse_owner";
+/// The remote bus a PSS/E FACTS device regulates, which the PSS/E reader
+/// retains when it has no regulating terminal for it.
+const PSSE_FACTS_REGULATED_BUS_EXTRA: &str = "psse_fcreg";
 
 /// The PSS/E bus fields IIDM has no field for, as IIDM properties: the zone
 /// when it is not PSS/E's default 1, and the owner a PSS/E source stated.
@@ -7442,6 +7445,10 @@ fn has_missing_component_ids(network: &BalancedNetwork) -> bool {
         || network.storage().iter().any(|value| value.uid.is_none())
         || network.hvdc().iter().any(|value| value.uid.is_none())
         || network
+            .static_var_compensators()
+            .iter()
+            .any(|value| value.uid.is_none())
+        || network
             .transformers_3w()
             .iter()
             .any(|value| value.uid.is_none())
@@ -7691,6 +7698,20 @@ fn derive_detailed_connectivity(
             shunt.in_service,
         );
     }
+    for svc in network.static_var_compensators() {
+        push_derived_terminal(
+            &mut detailed,
+            &bus_connections,
+            component_id(
+                "static_var_compensator",
+                svc.uid.as_deref().expect("prepared identity"),
+            )
+            .expect("valid stored identity"),
+            1,
+            svc.bus,
+            svc.in_service,
+        );
+    }
     for branch in network.branches() {
         let component = component_id("branch", branch.uid.as_deref().expect("prepared identity"))
             .expect("valid stored identity");
@@ -7786,6 +7807,257 @@ fn derive_detailed_connectivity(
         }
     }
     Ok(detailed)
+}
+
+/// Attach each equipment terminal the stated hierarchy leaves out to its bus
+/// in that hierarchy, so the equipment is written with a terminal.
+///
+/// A source can state a hierarchy for part of a network, as PSS/E substation
+/// data does when it names only some equipment terminals. The writer groups
+/// injections by bus, so an injection without a stated terminal still lands
+/// in its bus's voltage level and needs a terminal there. A bus breaker level
+/// takes the terminal on the bus's configured bus. A node breaker level takes
+/// it on a new node, joined to the bus's node by an internal connection,
+/// because an XIIDM node holds at most one equipment terminal. An injection at
+/// a bus that no voltage level contains is not written; the diagnostics name
+/// both outcomes. Returns `None` when nothing changes.
+fn complete_stated_terminals(
+    network: &BalancedNetwork,
+    detailed: &DetailedConnectivity,
+    diagnostics: &mut Diagnostics,
+) -> Option<DetailedConnectivity> {
+    let stated = detailed
+        .terminals
+        .iter()
+        .map(|terminal| (&terminal.equipment, terminal.terminal))
+        .collect::<HashSet<_>>();
+    // The first voltage level, configured bus, and connectivity node stated
+    // for each bus, looked up once per missing terminal; a linear search per
+    // terminal is quadratic on a large partial hierarchy.
+    let mut level_by_bus: HashMap<BusId, &VoltageLevel> = HashMap::new();
+    for level in &detailed.voltage_levels {
+        for bus in &level.buses {
+            level_by_bus.entry(*bus).or_insert(level);
+        }
+    }
+    let mut configured_by_bus: HashMap<(&ComponentId, BusId), &BusBreakerBus> = HashMap::new();
+    for value in &detailed.bus_breaker_buses {
+        if let Some(bus) = value.calculated_bus {
+            configured_by_bus
+                .entry((&value.voltage_level, bus))
+                .or_insert(value);
+        }
+    }
+    let mut node_by_bus: HashMap<(&ComponentId, BusId), &ConnectivityNode> = HashMap::new();
+    for value in &detailed.connectivity_nodes {
+        if let Some(bus) = value.calculated_bus {
+            node_by_bus
+                .entry((&value.voltage_level, bus))
+                .or_insert(value);
+        }
+    }
+    // Tie line and boundary line calculation records are written through
+    // their tie or boundary line, which states its own terminal.
+    let calculation_records = detailed
+        .tie_lines
+        .iter()
+        .filter_map(|value| value.calculation_branch.as_ref())
+        .chain(detailed.boundary_lines.iter().flat_map(|value| {
+            value
+                .calculation_load
+                .iter()
+                .chain(value.calculation_generator.iter())
+        }))
+        .collect::<HashSet<_>>();
+    let mut missing = Vec::new();
+    let mut unplaced_injections = Vec::new();
+    // Each side is (terminal, bus, connected). A branch gains terminals only
+    // when every side it lacks can be placed; the writer reports one it
+    // cannot place whole.
+    let mut want = |kind: &str, uid: Option<&str>, sides: &[(u8, BusId, bool)]| {
+        let Some(component) = uid.and_then(|uid| ComponentId::new(kind, uid).ok()) else {
+            return;
+        };
+        if calculation_records.contains(&component) {
+            return;
+        }
+        let lacking = sides
+            .iter()
+            .filter(|(side, _, _)| !stated.contains(&(&component, *side)))
+            .collect::<Vec<_>>();
+        if lacking
+            .iter()
+            .all(|(_, bus, _)| level_by_bus.contains_key(bus))
+        {
+            missing.extend(
+                lacking
+                    .into_iter()
+                    .map(|&(side, bus, connected)| (component.clone(), side, bus, connected)),
+            );
+        } else if sides.len() == 1 {
+            unplaced_injections.push(format!("`{component}` at bus {}", sides[0].1));
+        }
+    };
+    for value in network.loads() {
+        want(
+            "load",
+            value.uid.as_deref(),
+            &[(1, value.bus, value.in_service)],
+        );
+    }
+    for value in network.generators() {
+        want(
+            "generator",
+            value.uid.as_deref(),
+            &[(1, value.bus, value.in_service)],
+        );
+    }
+    for value in network.storage() {
+        want(
+            "storage",
+            value.uid.as_deref(),
+            &[(1, value.bus, value.in_service)],
+        );
+    }
+    for value in network.shunts() {
+        want(
+            "shunt",
+            value.uid.as_deref(),
+            &[(1, value.bus, value.in_service)],
+        );
+    }
+    for value in network.static_var_compensators() {
+        want(
+            "static_var_compensator",
+            value.uid.as_deref(),
+            &[(1, value.bus, value.in_service)],
+        );
+    }
+    for value in network.branches() {
+        want(
+            "branch",
+            value.uid.as_deref(),
+            &[
+                (1, value.from, value.in_service),
+                (2, value.to, value.in_service),
+            ],
+        );
+    }
+    for value in network.transformers_3w() {
+        let winding_in_service = value.winding_in_service();
+        let sides = std::array::from_fn::<_, 3, _>(|index| {
+            (
+                u8::try_from(index + 1).expect("three windings"),
+                value.windings[index].bus,
+                value.in_service && winding_in_service[index],
+            )
+        });
+        want("transformer_3w", value.uid.as_deref(), &sides);
+    }
+    if !unplaced_injections.is_empty() {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.record_dropped,
+            format!(
+                "{} injection(s) sit at buses that no voltage level of the stated hierarchy contains and were not written: {}",
+                unplaced_injections.len(),
+                unplaced_injections.join(", "),
+            ),
+        );
+    }
+    if missing.is_empty() {
+        return None;
+    }
+    let mut completed = detailed.clone();
+    let mut attached = Vec::new();
+    let mut connected_anyway = Vec::new();
+    for (equipment, side, bus, connected) in missing {
+        let Some(&level) = level_by_bus.get(&bus) else {
+            continue;
+        };
+        let terminal = match level.topology_kind {
+            TopologyKind::BusBreaker => {
+                let Some(configured) = configured_by_bus.get(&(&level.component, bus)) else {
+                    continue;
+                };
+                Terminal {
+                    component: None,
+                    equipment: equipment.clone(),
+                    terminal: side,
+                    voltage_level: level.component.clone(),
+                    bus: connected.then(|| configured.component.clone()),
+                    connectable_bus: Some(configured.component.clone()),
+                    node: None,
+                    connected,
+                    active_power_mw: None,
+                    reactive_power_mvar: None,
+                }
+            }
+            TopologyKind::NodeBreaker => {
+                let Some(existing) = node_by_bus.get(&(&level.component, bus)) else {
+                    continue;
+                };
+                let Ok(node) = ComponentId::new(
+                    "connectivity_node",
+                    format!("powerio-terminal/{equipment}/{side}"),
+                ) else {
+                    continue;
+                };
+                completed.connectivity_nodes.push(ConnectivityNode {
+                    component: node.clone(),
+                    voltage_level: level.component.clone(),
+                    node_number: None,
+                    calculated_bus: Some(bus),
+                });
+                completed.internal_connections.push(InternalConnection {
+                    voltage_level: level.component.clone(),
+                    node1: existing.component.clone(),
+                    node2: node.clone(),
+                });
+                if !connected {
+                    connected_anyway.push(format!("`{equipment}` terminal {side}"));
+                }
+                Terminal {
+                    component: None,
+                    equipment: equipment.clone(),
+                    terminal: side,
+                    voltage_level: level.component.clone(),
+                    bus: None,
+                    connectable_bus: None,
+                    node: Some(node),
+                    connected: true,
+                    active_power_mw: None,
+                    reactive_power_mvar: None,
+                }
+            }
+        };
+        attached.push(format!(
+            "`{equipment}` terminal {side} in `{}`",
+            level.component.local_id()
+        ));
+        completed.terminals.push(terminal);
+    }
+    if attached.is_empty() {
+        return None;
+    }
+    diagnostics.push(
+        &codes::EMIT_XIIDM.value_defaulted,
+        format!(
+            "{} equipment terminal(s) the stated hierarchy leaves out were attached to their bus in it: {}",
+            attached.len(),
+            attached.join(", "),
+        ),
+    );
+    if !connected_anyway.is_empty() {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.field_dropped,
+            format!(
+                "{} out of service terminal(s) were attached to a node breaker voltage level through an internal connection and were emitted connected: {}",
+                connected_anyway.len(),
+                connected_anyway.join(", "),
+            ),
+        );
+    }
+    Some(completed)
 }
 
 /// Lookup tables used only while writing XIIDM. The parsed model keeps source
@@ -8511,6 +8783,8 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
         diagnose_xiidm_projection(detailed, &mut diagnostics)?;
         let projected = collapse_cross_substation_transformers(network, detailed, &mut diagnostics);
         let detailed = projected.as_ref().unwrap_or(detailed);
+        let completed = complete_stated_terminals(network, detailed, &mut diagnostics);
+        let detailed = completed.as_ref().unwrap_or(detailed);
         validate_xiidm_tap_changers(detailed)?;
         validate_xiidm_reactive_limits(detailed)?;
         validate_xiidm_dc_emission(detailed)?;
@@ -11666,7 +11940,7 @@ fn write_detailed_voltage_level(
                 )
         })
     {
-        write_load(index, load, output);
+        write_load(index, load, output, diagnostics);
     }
     for generator in index
         .generators_by_level
@@ -11715,7 +11989,7 @@ fn write_detailed_voltage_level(
             component_is_included(included, "static_var_compensator", value.uid.as_deref())
         })
     {
-        write_static_var_compensator(index, svc, output);
+        write_static_var_compensator(index, svc, output, diagnostics);
     }
     write_hvdc_converter_stations(index, level, included, output, diagnostics);
     write_ac_dc_converters(index, level, included, output, diagnostics);
@@ -11823,9 +12097,17 @@ fn write_boundary_line(
     output.push_str("      </iidm:boundaryLine>\n");
 }
 
-fn write_load(index: &XiidmWriteIndex<'_>, load: &Load, output: &mut String) {
+fn write_load(
+    index: &XiidmWriteIndex<'_>,
+    load: &Load,
+    output: &mut String,
+    diagnostics: &mut Diagnostics,
+) {
     let id = load.uid.as_deref().unwrap_or("load");
     let component = component_id("load", id).expect("valid stored identity");
+    if !equipment_terminals_connect(index, &component, 1, diagnostics) {
+        return;
+    }
     let terminal = terminal_attributes(index, &component, 1, false, load.in_service);
     let metadata = index.metadata(&component);
     let active_power = assignment_attribute(
@@ -11899,6 +12181,9 @@ fn write_generator(
 ) {
     let id = generator.uid.as_deref().unwrap_or("generator");
     let component = component_id("generator", id).expect("valid stored identity");
+    if !equipment_terminals_connect(index, &component, 1, diagnostics) {
+        return;
+    }
     let terminal = terminal_attributes(index, &component, 1, false, generator.in_service);
     let metadata = index.metadata(&component);
     let target_base_kv = generator
@@ -11984,6 +12269,9 @@ fn write_storage(
 ) {
     let id = storage.uid.as_deref().unwrap_or("battery");
     let component = component_id("storage", id).expect("valid stored identity");
+    if !equipment_terminals_connect(index, &component, 1, diagnostics) {
+        return;
+    }
     let terminal = terminal_attributes(index, &component, 1, false, storage.in_service);
     let metadata = index.metadata(&component);
     let target_active_power = assignment_attribute(
@@ -12033,6 +12321,9 @@ fn write_shunt(
 ) {
     let id = shunt.uid.as_deref().unwrap_or("shunt");
     let component = component_id("shunt", id).expect("valid stored identity");
+    if !equipment_terminals_connect(index, &component, 1, diagnostics) {
+        return;
+    }
     let terminal = terminal_attributes(index, &component, 1, false, shunt.in_service);
     let metadata = index.metadata(&component);
     let conductance_omitted =
@@ -12215,9 +12506,13 @@ fn write_static_var_compensator(
     index: &XiidmWriteIndex<'_>,
     svc: &StaticVarCompensator,
     output: &mut String,
+    diagnostics: &mut Diagnostics,
 ) {
     let id = svc.uid.as_deref().unwrap_or("static-var-compensator");
     let component = component_id("static_var_compensator", id).expect("valid stored identity");
+    if !equipment_terminals_connect(index, &component, 1, diagnostics) {
+        return;
+    }
     let terminal = terminal_attributes(index, &component, 1, false, svc.in_service);
     let metadata = index.metadata(&component);
     let solution = injection_solution_attributes(index, &component, svc.p, svc.q);
@@ -12242,6 +12537,19 @@ fn write_static_var_compensator(
             reference,
             8,
         ));
+    } else if let Some(regulated) = svc
+        .extras
+        .get(PSSE_FACTS_REGULATED_BUS_EXTRA)
+        .and_then(serde_json::Value::as_u64)
+        .filter(|bus| usize::try_from(*bus).ok() != Some(svc.bus.0))
+    {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.field_dropped,
+            format!(
+                "static var compensator `{id}` regulates bus {regulated} without an exact regulating terminal; XIIDM output regulates the compensator terminal at the {} kV setpoint",
+                number(svc.voltage_setpoint_kv),
+            ),
+        );
     }
     output.push_str("      </iidm:staticVarCompensator>\n");
 }
@@ -12373,6 +12681,9 @@ fn write_three_winding_transformer(
 ) {
     let id = transformer.uid.as_deref().unwrap_or("transformer");
     let component = component_id("transformer_3w", id).expect("valid stored identity");
+    if !equipment_terminals_connect(index, &component, 3, diagnostics) {
+        return;
+    }
     let buses: [&Bus; 3] = std::array::from_fn(|side| {
         let winding = &transformer.windings[side];
         index.bus(winding.bus)
@@ -12808,6 +13119,9 @@ fn write_line(
 ) {
     let id = branch.uid.as_deref().unwrap_or("line");
     let component = component_id("branch", id).expect("valid stored identity");
+    if !equipment_terminals_connect(index, &component, 2, diagnostics) {
+        return;
+    }
     let metadata = index.metadata(&component);
     let from = index.bus(branch.from);
     let to = index.bus(branch.to);
@@ -12857,6 +13171,9 @@ fn write_transformer(
 ) {
     let id = branch.uid.as_deref().unwrap_or("transformer");
     let component = component_id("branch", id).expect("valid stored identity");
+    if !equipment_terminals_connect(index, &component, 2, diagnostics) {
+        return;
+    }
     let metadata = index.metadata(&component);
     let from = index.bus(branch.from);
     let to = index.bus(branch.to);
@@ -13396,6 +13713,45 @@ fn transformer_control_mode_name(mode: TransformerControlMode) -> &'static str {
         TransformerControlMode::DcLineQuantity => "DC line quantity control",
         TransformerControlMode::AsymmetricActiveFlow => "asymmetric active power flow control",
     }
+}
+
+/// Whether the equipment terminal is written with a `bus`, `connectableBus`,
+/// or `node`, which XIIDM requires of every terminal. The condition matches
+/// the attributes [`terminal_attributes`] writes.
+fn terminal_connects(index: &XiidmWriteIndex<'_>, equipment: &ComponentId, side: u8) -> bool {
+    index.terminal(equipment, side).is_some_and(|terminal| {
+        terminal
+            .node
+            .as_ref()
+            .is_some_and(|node| index.node_number(node).is_some())
+            || terminal.connectable_bus.is_some()
+            || (terminal.bus.is_some() && terminal.connected)
+    })
+}
+
+/// Report equipment the writer leaves out because one of its terminals has
+/// no place in the hierarchy. Returns `true` when every side connects.
+fn equipment_terminals_connect(
+    index: &XiidmWriteIndex<'_>,
+    equipment: &ComponentId,
+    sides: u8,
+    diagnostics: &mut Diagnostics,
+) -> bool {
+    let unplaced = (1..=sides)
+        .filter(|side| !terminal_connects(index, equipment, *side))
+        .map(|side| side.to_string())
+        .collect::<Vec<_>>();
+    if unplaced.is_empty() {
+        return true;
+    }
+    diagnostics.push(
+        &codes::EMIT_XIIDM.record_dropped,
+        format!(
+            "`{equipment}` has no bus or node in the XIIDM hierarchy for terminal(s) {}; the equipment was not written",
+            unplaced.join(", "),
+        ),
+    );
+    false
 }
 
 fn terminal_attributes(

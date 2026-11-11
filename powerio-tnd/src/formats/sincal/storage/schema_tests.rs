@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::formats::sincal::storage::{DatabaseSnapshot, require_table};
 
 fn snapshot(edit: &str) -> Vec<u8> {
-    let connection = Connection::open_in_memory().unwrap();
+    let mut connection = Connection::open_in_memory().unwrap();
     connection
         .execute_batch(
             "CREATE TABLE Version (Version_ID INTEGER, Version_No REAL, Calc_Type INTEGER);
@@ -108,7 +108,7 @@ fn schema_and_identity_failures_do_not_admit_partial_snapshots() {
 
 #[test]
 fn a_spent_query_budget_says_the_project_is_too_large() {
-    let connection = Connection::open_in_memory().unwrap();
+    let mut connection = Connection::open_in_memory().unwrap();
     connection.progress_handler(1, Some(|| true)).unwrap();
     let interrupted = connection
         .query_row("SELECT 1", [], |row| row.get::<_, i64>(0))

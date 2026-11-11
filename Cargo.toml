@@ -41,9 +41,9 @@ resolver = "2"
 # via `key.workspace = true`, so a release bump touches this version and the
 # workspace dependency pins below.
 [workspace.package]
-version = "0.11.9"
+version = "0.11.11"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eigenergy/powerio"
 homepage = "https://eigenergy.github.io/powerio/"
@@ -51,15 +51,15 @@ homepage = "https://eigenergy.github.io/powerio/"
 [workspace.dependencies]
 # The intra-workspace deps carry the version pin `cargo publish` needs; keeping
 # them here means the pin moves with the [workspace.package] version.
-powerio = { path = "powerio", version = "0.11.9" }
+powerio = { path = "powerio", version = "0.11.11" }
 # Model crates remain independent; the facade enables optional format adapters.
-powerio-tx = { path = "powerio-tx", version = "0.11.9", default-features = false }
-powerio-core = { path = "powerio-core", version = "0.11.9" }
-powerio-matrix = { path = "powerio-matrix", version = "0.11.9" }
-powerio-synth = { path = "powerio-synth", version = "0.11.9" }
-powerio-prob = { path = "powerio-prob", version = "0.11.9" }
-powerio-dist = { path = "powerio-dist", version = "0.11.9", default-features = false }
-powerio-tnd = { path = "powerio-tnd", version = "0.11.9", default-features = false }
+powerio-tx = { path = "powerio-tx", version = "0.11.11", default-features = false }
+powerio-core = { path = "powerio-core", version = "0.11.11" }
+powerio-matrix = { path = "powerio-matrix", version = "0.11.11" }
+powerio-synth = { path = "powerio-synth", version = "0.11.11" }
+powerio-prob = { path = "powerio-prob", version = "0.11.11" }
+powerio-dist = { path = "powerio-dist", version = "0.11.11", default-features = false }
+powerio-tnd = { path = "powerio-tnd", version = "0.11.11", default-features = false }
 # Cross-crate type identity: `CsMat<f64>` (sprs) and the Arrow types cross crate
 # boundaries, so every crate must build against the same major.
 sprs = { version = "0.11", default-features = false }
@@ -73,9 +73,8 @@ zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2
 # The browser backend preserves the existing wasm32 component build.
 # Shared SINCAL snapshot queries expose rusqlite row/connection types to the
 # family adapters; keep both their version and safety features consistent.
-rusqlite = { version = "0.40.2", default-features = false, features = ["bundled", "serialize", "hooks", "limits", "ffi-sqlite-wasm-rs"] }
-# uuid 1.27 and later require Rust 1.89; preserve the workspace's Rust 1.88 MSRV.
-uuid = { version = ">=1, <1.27", default-features = false, features = ["v5"] }
+rusqlite = { version = "0.41.1", default-features = false, features = ["bundled", "serialize", "hooks", "limits", "ffi-sqlite-wasm-rs"] }
+uuid = { version = "1", default-features = false, features = ["v5"] }
 schemars = { version = "1", features = ["derive"] }
 
 [workspace.lints.clippy]

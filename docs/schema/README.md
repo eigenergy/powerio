@@ -5,7 +5,7 @@ changes to existing record layouts or meanings. A release can add structural
 types without changing the IR version. Schema snapshots list the types
 implemented by a release and keep their published bytes and identifiers.
 
-| IR version | First release | Document identity | Schema snapshot | Read by 0.11.9 |
+| IR version | First release | Document identity | Schema snapshot | Read by 0.11.11 |
 |---|---|---|---|---|
 | none | v0.6.1 | `pio-package` lineage `0.1` | `pio-ir/0.1/schema.json` | no |
 | none | v0.8.0 | `pio-package` lineage `0.2` | `pio-ir/0.2/schema.json` | no |
@@ -26,13 +26,13 @@ The current document begins:
 {
   "schema": "pio-ir",
   "version": 2,
-  "producer": { "name": "powerio", "version": "0.11.9" }
+  "producer": { "name": "powerio", "version": "0.11.11" }
 }
 ```
 
 ## Compatibility
 
-PowerIO 0.11.9 keeps IR version 2 and every existing record layout. The
+PowerIO 0.11.11 keeps IR version 2 and every existing record layout. The
 LinDist3Flow OPF instance and solution types added in 0.11.1, the three PSS/E
 contingency analysis files added in 0.11.3, the fixed-dispatch LinDist3Flow
 instance and solution types added in 0.11.4, and the AC optimal transmission
@@ -57,7 +57,7 @@ and an earlier reader rejects a `fixed_injection` document as an unknown field
 rather than read it under a different HVDC treatment.
 
 `powerio::IR_VERSION` is the IR version a build writes and
-`powerio::IR_MIN_VERSION` the oldest it reads. Both remain 2 in 0.11.9.
+`powerio::IR_MIN_VERSION` the oldest it reads. Both remain 2 in 0.11.11.
 `producer.version` records the producing release for diagnostics; it does not
 determine whether a document can be read. The C ABI remains independently
 versioned at 7. [The PowerIO IR chapter](../src/pio-json-schema.md) sets this

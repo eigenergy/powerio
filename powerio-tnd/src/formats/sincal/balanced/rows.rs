@@ -138,11 +138,7 @@ pub(super) fn table(
         .connection
         .prepare(&format!("SELECT * FROM \"{name}\" WHERE Variant_ID=?1"))
         .map_err(error)?;
-    let cols = stmt
-        .column_names()
-        .into_iter()
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
+    let cols = stmt.column_names().map(str::to_owned).collect::<Vec<_>>();
     let mut rows = stmt.query([db.variant]).map_err(error)?;
     let mut result = BTreeMap::new();
     while let Some(row) = rows.next().map_err(error)? {

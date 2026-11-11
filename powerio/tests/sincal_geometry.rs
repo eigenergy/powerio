@@ -19,7 +19,7 @@ INSERT INTO GraphicAreaTile VALUES(1,1,2,100,200,100,1);
 ";
 
 fn dist(edit: &str) -> powerio::PioModule<PioValue> {
-    let db = rusqlite::Connection::open_in_memory().unwrap();
+    let mut db = rusqlite::Connection::open_in_memory().unwrap();
     db.execute_batch(include_str!(
         "../../tests/data/sincal/synthetic-multiconductor.sql"
     ))

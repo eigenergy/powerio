@@ -4,8 +4,8 @@ name: Julia binding
 # A change to the pio_* surface or the Network JSON schema then fails in the repo
 # that caused it. The probe step checks out eigenergy/PowerIO.jl anonymously when
 # it is public; while it is private, add a token with read access to it as the
-# POWERIO_JL_REPO_TOKEN secret. With neither, the job prints a skip notice and
-# passes, so missing external access never blocks a PR.
+# POWERIO_JL_REPO_TOKEN secret. Missing access fails the compatibility gate;
+# a green result must mean that the binding suite actually ran.
 #
 # Explicit fork companions: PRs may pin a reviewed commit in
 # .github/powerio-jl-companion.json. This takes precedence over branch discovery,
@@ -26,8 +26,8 @@ name: Julia binding
 # reruns the compatibility suite.
 on:
   push:
+    # Every main head can be a release candidate and needs its own binding check.
     branches: [ "main" ]
-    paths: [ "Cargo.toml", "Cargo.lock", "powerio/**", "powerio-core/**", "powerio-tnd/**", "powerio-tx/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml", ".github/powerio-jl-companion.json", "scripts/*julia-companion.py" ]
   # No branch filter: stacked PRs must run this too (see rust.yml).
   pull_request:
     paths: [ "Cargo.toml", "Cargo.lock", "powerio/**", "powerio-core/**", "powerio-tnd/**", "powerio-tx/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-prob/**", ".github/workflows/julia-binding.yml", ".github/powerio-jl-companion.json", "scripts/*julia-companion.py" ]
@@ -72,7 +72,8 @@ jobs:
           echo "available=true" >> "$GITHUB_OUTPUT"
         else
           echo "available=false" >> "$GITHUB_OUTPUT"
-          echo "eigenergy/PowerIO.jl is unreachable (no POWERIO_JL_REPO_TOKEN secret, and the repo is not public); skipping the compatibility test."
+          echo "::error::PowerIO.jl is unreachable; compatibility tests have not run."
+          exit 1
         fi
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       if: steps.powerio-jl.outputs.available == 'true'
@@ -210,6 +211,27 @@ jobs:
         POWERIO_CAPI: ${{ github.workspace }}/target/release/libpowerio_capi.so
         POWERIO_HEADER: ${{ github.workspace }}/powerio-capi/include/powerio.h
       run: julia --project=PowerIO.jl -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+    - name: Record tested binding commits
+      if: steps.powerio-jl.outputs.available == 'true'
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, pathlib, subprocess
+        def head(path):
+            return subprocess.check_output(["git", "-C", path, "rev-parse", "HEAD"], text=True).strip()
+        report = {"schema": "powerio-binding-evidence", "schema_version": 1,
+                  "rust_commit": head("."), "julia_commit": head("PowerIO.jl"),
+                  "suite": "PowerIO.jl Pkg.test()", "passed": True,
+                  "run_id": os.environ["GITHUB_RUN_ID"], "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"]}
+        pathlib.Path("target/binding-evidence.json").write_text(json.dumps(report, indent=2) + "\n")
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+            summary.write("Julia suite passed for Rust `" + report["rust_commit"] + "` and Julia `" + report["julia_commit"] + "`.\n")
+        PYTHON
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      if: steps.powerio-jl.outputs.available == 'true'
+      with:
+        name: binding-evidence
+        path: target/binding-evidence.json
+
     - name: Probe PowerIO.jl against a library without prob
       if: steps.powerio-jl.outputs.available == 'true'
       run: |

@@ -1783,3 +1783,694 @@ fn dss_center_tap_writes_and_rereads() {
         assert!(close(*xa, *xb));
     }
 }
+
+/// A feeder whose bus, line, line code, load, and source names hold
+/// characters the OpenDSS tokenizer splits on.
+fn free_text_feeder() -> String {
+    format!(
+        r##"{RDF_OPEN}
+  <cim:BaseFrequency rdf:ID="_f"><cim:BaseFrequency.frequency>50</cim:BaseFrequency.frequency></cim:BaseFrequency>
+  <cim:ConnectivityNode rdf:ID="_n1"><cim:IdentifiedObject.name>Node 1</cim:IdentifiedObject.name></cim:ConnectivityNode>
+  <cim:ConnectivityNode rdf:ID="_n2"><cim:IdentifiedObject.name>Node.2</cim:IdentifiedObject.name></cim:ConnectivityNode>
+  <cim:EnergySource rdf:ID="_src">
+    <cim:IdentifiedObject.name>grid source</cim:IdentifiedObject.name>
+    <cim:EnergySource.voltageMagnitude>400</cim:EnergySource.voltageMagnitude>
+  </cim:EnergySource>
+  <cim:Terminal rdf:ID="_src_t1">
+    <cim:Terminal.ConductingEquipment rdf:resource="#_src"/>
+    <cim:Terminal.ConnectivityNode rdf:resource="#_n1"/>
+    <cim:Terminal.phases rdf:resource="http://iec.ch/TC57/CIM100#PhaseCode.ABC"/>
+    <cim:ACDCTerminal.sequenceNumber>1</cim:ACDCTerminal.sequenceNumber>
+  </cim:Terminal>
+  <cim:PerLengthSequenceImpedance rdf:ID="_pli">
+    <cim:IdentifiedObject.name>Cable type A, 4x70</cim:IdentifiedObject.name>
+    <cim:PerLengthSequenceImpedance.r>0.0004</cim:PerLengthSequenceImpedance.r>
+    <cim:PerLengthSequenceImpedance.x>0.00008</cim:PerLengthSequenceImpedance.x>
+  </cim:PerLengthSequenceImpedance>
+  <cim:ACLineSegment rdf:ID="_l1">
+    <cim:IdentifiedObject.name>Cable 1 (main)</cim:IdentifiedObject.name>
+    <cim:Conductor.length>50</cim:Conductor.length>
+    <cim:ACLineSegment.PerLengthImpedance rdf:resource="#_pli"/>
+  </cim:ACLineSegment>
+  <cim:Terminal rdf:ID="_l1_t1">
+    <cim:Terminal.ConductingEquipment rdf:resource="#_l1"/>
+    <cim:Terminal.ConnectivityNode rdf:resource="#_n1"/>
+    <cim:Terminal.phases rdf:resource="http://iec.ch/TC57/CIM100#PhaseCode.ABC"/>
+    <cim:ACDCTerminal.sequenceNumber>1</cim:ACDCTerminal.sequenceNumber>
+  </cim:Terminal>
+  <cim:Terminal rdf:ID="_l1_t2">
+    <cim:Terminal.ConductingEquipment rdf:resource="#_l1"/>
+    <cim:Terminal.ConnectivityNode rdf:resource="#_n2"/>
+    <cim:Terminal.phases rdf:resource="http://iec.ch/TC57/CIM100#PhaseCode.ABC"/>
+    <cim:ACDCTerminal.sequenceNumber>2</cim:ACDCTerminal.sequenceNumber>
+  </cim:Terminal>
+  <cim:EnergyConsumer rdf:ID="_ld">
+    <cim:IdentifiedObject.name>House 1 = flat!</cim:IdentifiedObject.name>
+    <cim:EnergyConsumer.p>3000</cim:EnergyConsumer.p>
+    <cim:EnergyConsumer.q>300</cim:EnergyConsumer.q>
+    <cim:EnergyConsumer.phaseConnection rdf:resource="http://iec.ch/TC57/CIM100#PhaseShuntConnectionKind.Y"/>
+  </cim:EnergyConsumer>
+  <cim:Terminal rdf:ID="_ld_t1">
+    <cim:Terminal.ConductingEquipment rdf:resource="#_ld"/>
+    <cim:Terminal.ConnectivityNode rdf:resource="#_n2"/>
+    <cim:Terminal.phases rdf:resource="http://iec.ch/TC57/CIM100#PhaseCode.ABCN"/>
+    <cim:ACDCTerminal.sequenceNumber>1</cim:ACDCTerminal.sequenceNumber>
+  </cim:Terminal>
+</rdf:RDF>
+"##
+    )
+}
+
+#[test]
+fn free_text_names_write_a_dss_deck_that_reads_back() {
+    // CIM names are free text. OpenDSS output replaces what its tokenizer
+    // cannot carry, consistently in every reference, and reports each
+    // replacement, so the deck reads back with every element connected.
+    let text = free_text_feeder();
+    let net = parse_str(&text, "cim-dist").unwrap();
+    assert_eq!(net.lines()[0].linecode, "Cable type A, 4x70");
+
+    let first = emit_value(&net, DistTargetFormat::Dss);
+    for (old, new) in [
+        ("Node 1", "Node_1"),
+        ("Node.2", "Node_2"),
+        ("Cable type A, 4x70", "Cable_type_A__4x70"),
+        ("Cable 1 (main)", "Cable_1__main_"),
+        ("House 1 = flat!", "House_1___flat_"),
+        ("grid source", "grid_source"),
+    ] {
+        assert!(
+            findings(&first.warnings, "EMIT.DSS.VALUE_SUBSTITUTED")
+                .iter()
+                .any(|w| w.contains(&format!("`{}`", old.to_ascii_lowercase()))
+                    && w.contains(&format!("written as `{new}`"))),
+            "{old}: {:#?}",
+            first.warnings
+        );
+    }
+    assert!(
+        !first
+            .warnings
+            .iter()
+            .any(|w| w.contains("will not reparse")),
+        "{:#?}",
+        first.warnings
+    );
+
+    let back = parse_str(&first.text, "dss").unwrap_or_else(|e| panic!("{e}\n{}", first.text));
+    // The OpenDSS reader adds its ideal source equivalents; the cable is the
+    // line under its replaced name.
+    let line = back
+        .lines()
+        .iter()
+        .find(|l| l.name == "Cable_1__main_")
+        .unwrap_or_else(|| panic!("{:#?}\n{}", back.lines(), first.text));
+    assert!(
+        first.text.contains("New Linecode.Cable_type_A__4x70 ")
+            && first.text.contains("linecode=Cable_type_A__4x70 "),
+        "{}",
+        first.text
+    );
+    assert_eq!(
+        (line.bus_from.as_str(), line.bus_to.as_str()),
+        ("Node_1", "Node_2")
+    );
+    let [load] = back.loads().as_slice() else {
+        panic!("{:#?}", back.loads())
+    };
+    assert_eq!(
+        (load.name.as_str(), load.bus.as_str()),
+        ("House_1___flat_", "Node_2")
+    );
+
+    // The written names are safe, so a second write renames nothing and
+    // repeats the deck.
+    let second = emit_value(&back, DistTargetFormat::Dss);
+    assert_eq!(
+        findings(&second.warnings, "EMIT.DSS.VALUE_SUBSTITUTED")
+            .iter()
+            .filter(|w| w.contains("written as"))
+            .count(),
+        0,
+        "{:#?}",
+        second.warnings
+    );
+}
+// ---------------------------------------------------------------------------
+// CIM16 LV feeders
+// ---------------------------------------------------------------------------
+//
+// A synthetic CIM16 feeder in the form some distribution exports take:
+// sequence impedances, enumerations written as text, single phase fuses
+// grouped by a composite switch, customer classes, and a Diagram Layout.
+
+const CIM16_OPEN: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<rdf:RDF xmlns:cim="http://iec.ch/TC57/2013/CIM-schema-cim16#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+"#;
+
+/// A terminal with its phase code written as text.
+fn cim16_terminal(id: &str, equipment: &str, node: &str, phases: &str, sequence: u8) -> String {
+    format!(
+        r##"  <cim:Terminal rdf:ID="_{id}">
+    <cim:Terminal.ConductingEquipment rdf:resource="#_{equipment}" />
+    <cim:Terminal.ConnectivityNode rdf:resource="#_{node}" />
+    <cim:Terminal.phases>{phases}</cim:Terminal.phases>
+    <cim:ACDCTerminal.sequenceNumber>{sequence}</cim:ACDCTerminal.sequenceNumber>
+  </cim:Terminal>
+"##
+    )
+}
+
+/// A single phase fuse between two nodes, optionally in a composite switch.
+fn cim16_fuse(id: &str, from: &str, to: &str, phase: &str, composite: Option<&str>) -> String {
+    let composite = composite.map_or_else(String::new, |cs| {
+        format!("    <cim:Switch.CompositeSwitch rdf:resource=\"#_{cs}\" />\n")
+    });
+    format!(
+        r#"  <cim:Fuse rdf:ID="_{id}">
+    <cim:Switch.ratedCurrent>25.0</cim:Switch.ratedCurrent>
+    <cim:Switch.normalOpen>false</cim:Switch.normalOpen>
+{composite}    <cim:IdentifiedObject.name>{id}</cim:IdentifiedObject.name>
+  </cim:Fuse>
+{}{}"#,
+        cim16_terminal(&format!("{id}_t1"), id, from, phase, 1),
+        cim16_terminal(&format!("{id}_t2"), id, to, phase, 2),
+    )
+}
+
+/// An energy consumer at `node` with its connection and powers as text.
+fn cim16_consumer(id: &str, node: &str, phases: &str, connection: &str, p: f64, q: f64) -> String {
+    format!(
+        r#"  <cim:EnergyConsumer rdf:ID="_{id}">
+    <cim:EnergyConsumer.phaseConnection>{connection}</cim:EnergyConsumer.phaseConnection>
+    <cim:EnergyConsumer.p>{p}</cim:EnergyConsumer.p>
+    <cim:EnergyConsumer.q>{q}</cim:EnergyConsumer.q>
+    <cim:IdentifiedObject.name>{id}</cim:IdentifiedObject.name>
+  </cim:EnergyConsumer>
+{}"#,
+        cim16_terminal(&format!("{id}_t1"), id, node, phases, 1),
+    )
+}
+
+/// A diagram object of the GIS diagram drawing `element`, with its points as
+/// (sequence number, x, y).
+fn cim16_drawing(element: &str, points: &[(u32, f64, f64)]) -> String {
+    let mut text = format!(
+        r##"  <cim:DiagramObject rdf:ID="_DO_{element}">
+    <cim:DiagramObject.rotation>0</cim:DiagramObject.rotation>
+    <cim:DiagramObject.IdentifiedObject rdf:resource="#_{element}" />
+    <cim:DiagramObject.Diagram rdf:resource="#_GIS" />
+  </cim:DiagramObject>
+"##
+    );
+    for (sequence, x, y) in points {
+        let _ = write!(
+            text,
+            r##"  <cim:DiagramObjectPoint rdf:ID="_DOP_{element}_{sequence}">
+    <cim:DiagramObjectPoint.DiagramObject rdf:resource="#_DO_{element}" />
+    <cim:DiagramObjectPoint.sequenceNumber>{sequence}</cim:DiagramObjectPoint.sequenceNumber>
+    <cim:DiagramObjectPoint.xPosition>{x}</cim:DiagramObjectPoint.xPosition>
+    <cim:DiagramObjectPoint.yPosition>{y}</cim:DiagramObjectPoint.yPosition>
+  </cim:DiagramObjectPoint>
+"##
+        );
+    }
+    text
+}
+
+/// The layout of [`cim16_feeder`] in made up projected coordinates, the
+/// segment's points listed out of sequence.
+fn cim16_layout() -> String {
+    let mut text = r#"  <cim:Diagram rdf:ID="_GIS">
+    <cim:IdentifiedObject.name>EPSG:3857</cim:IdentifiedObject.name>
+  </cim:Diagram>
+"#
+    .to_owned();
+    text.push_str(&cim16_drawing(
+        "AC1",
+        &[
+            (2, 1_010.0, 2_005.0),
+            (1, 1_000.0, 2_000.0),
+            (3, 1_020.0, 2_000.0),
+        ],
+    ));
+    text.push_str(&cim16_drawing("CS1", &[(1, 1_021.0, 2_000.5)]));
+    text.push_str(&cim16_drawing("FU4", &[(1, 1_022.0, 1_999.0)]));
+    text
+}
+
+/// [`cim16_feeder`] with more drawings in its diagram.
+fn cim16_feeder_with(drawings: &str) -> String {
+    cim16_feeder().replace("</rdf:RDF>", &format!("{drawings}</rdf:RDF>"))
+}
+
+/// A source at the head, a cable to a cabinet, three single phase fuses in a
+/// composite switch to a house, one fuse on phase B to a flat, a consumer at
+/// each, and the customer classes for the house.
+fn cim16_feeder() -> String {
+    let mut text = CIM16_OPEN.to_owned();
+    text.push_str(
+        r##"  <cim:Circuit rdf:ID="_FEEDER_1"><cim:IdentifiedObject.name>Feeder 1</cim:IdentifiedObject.name></cim:Circuit>
+  <cim:PSRType rdf:ID="_PSR"><cim:IdentifiedObject.name>cable</cim:IdentifiedObject.name></cim:PSRType>
+  <cim:ConnectivityNode rdf:ID="_CN_HEAD"><cim:IdentifiedObject.name>CN_HEAD</cim:IdentifiedObject.name></cim:ConnectivityNode>
+  <cim:ConnectivityNode rdf:ID="_CN_CABINET"><cim:IdentifiedObject.name>CN_CABINET</cim:IdentifiedObject.name></cim:ConnectivityNode>
+  <cim:ConnectivityNode rdf:ID="_CN_HOUSE"><cim:IdentifiedObject.name>CN_HOUSE</cim:IdentifiedObject.name></cim:ConnectivityNode>
+  <cim:ConnectivityNode rdf:ID="_CN_FLAT"><cim:IdentifiedObject.name>CN_FLAT</cim:IdentifiedObject.name></cim:ConnectivityNode>
+  <cim:EnergySource rdf:ID="_SRC">
+    <cim:EnergySource.nominalVoltage>400.0</cim:EnergySource.nominalVoltage>
+    <cim:IdentifiedObject.name>grid</cim:IdentifiedObject.name>
+  </cim:EnergySource>
+  <cim:WireInfo rdf:ID="_WI">
+    <cim:WireInfo.ratedCurrent>140.0</cim:WireInfo.ratedCurrent>
+    <cim:IdentifiedObject.name>Cable type A</cim:IdentifiedObject.name>
+  </cim:WireInfo>
+  <cim:PerLengthSequenceImpedance rdf:ID="_PLI">
+    <cim:PerLengthSequenceImpedance.r>0.0004</cim:PerLengthSequenceImpedance.r>
+    <cim:PerLengthSequenceImpedance.x>0.00008</cim:PerLengthSequenceImpedance.x>
+    <cim:PerLengthSequenceImpedance.r0>0.0012</cim:PerLengthSequenceImpedance.r0>
+    <cim:PerLengthSequenceImpedance.x0>0.0003</cim:PerLengthSequenceImpedance.x0>
+    <cim:IdentifiedObject.name>LV_cable_4x70</cim:IdentifiedObject.name>
+  </cim:PerLengthSequenceImpedance>
+  <cim:ACLineSegment rdf:ID="_AC1">
+    <cim:ACLineSegment.PerLengthImpedance rdf:resource="#_PLI" />
+    <cim:Conductor.length>50.0</cim:Conductor.length>
+    <cim:PowerSystemResource.AssetDatasheet rdf:resource="#_WI" />
+    <cim:PowerSystemResource.PSRType rdf:resource="#_PSR" />
+    <cim:IdentifiedObject.name>AC1</cim:IdentifiedObject.name>
+  </cim:ACLineSegment>
+  <cim:CompositeSwitch rdf:ID="_CS1"><cim:IdentifiedObject.name>CS1</cim:IdentifiedObject.name></cim:CompositeSwitch>
+  <cim:ServiceLocation rdf:ID="_SL_HOUSE"><cim:IdentifiedObject.name>SL_HOUSE</cim:IdentifiedObject.name></cim:ServiceLocation>
+  <cim:UsagePoint rdf:ID="_UP_HOUSE">
+    <cim:UsagePoint.ServiceLocation rdf:resource="#_SL_HOUSE" />
+    <cim:IdentifiedObject.name>UP_HOUSE</cim:IdentifiedObject.name>
+  </cim:UsagePoint>
+"##,
+    );
+    text.push_str(&cim16_terminal("SRC_t1", "SRC", "CN_HEAD", "ABC", 1));
+    text.push_str(&cim16_terminal("AC1_t1", "AC1", "CN_HEAD", "ABC", 1));
+    text.push_str(&cim16_terminal("AC1_t2", "AC1", "CN_CABINET", "ABC", 2));
+    for (fuse, phase) in [("FU1", "A"), ("FU2", "B"), ("FU3", "C")] {
+        text.push_str(&cim16_fuse(
+            fuse,
+            "CN_CABINET",
+            "CN_HOUSE",
+            phase,
+            Some("CS1"),
+        ));
+    }
+    text.push_str(&cim16_fuse("FU4", "CN_CABINET", "CN_FLAT", "B", None));
+    text.push_str(&cim16_consumer(
+        "HOUSE", "CN_HOUSE", "ABCN", "Y", 3000.0, 300.0,
+    ));
+    text.push_str(&cim16_consumer("FLAT", "CN_FLAT", "BN", "Y", 1000.0, 100.0));
+    text.push_str(&cim16_layout());
+    text.push_str("</rdf:RDF>\n");
+    text
+}
+
+fn strings(names: &[&str]) -> Vec<String> {
+    names.iter().map(|n| (*n).to_owned()).collect()
+}
+
+#[test]
+#[allow(clippy::float_cmp)] // exact literals and exact even splits are the assertion
+fn a_cim16_feeder_maps_text_enumerations_ratings_and_defaults() {
+    let text = cim16_feeder();
+    // Routed from the content: the customer classes mark distribution CIM
+    // in a document with no per phase class.
+    assert!(powerio_dist::looks_like_cim_dist(text.as_bytes()));
+    let source = powerio_core::Source::from_memory("feeder.xml", text.as_bytes().to_vec()).unwrap();
+    assert!(powerio_dist::source_looks_like_cim_dist(&source));
+    let net = parse_str(&text, "cim-dist").unwrap();
+    assert_eq!(net.base_frequency(), 60.0, "{:#?}", net.warnings);
+
+    // The phase codes stated as text are read: no element defaults to ABC.
+    assert!(
+        !net.warnings
+            .iter()
+            .any(|w| w.contains("no phases are stated")),
+        "{:#?}",
+        net.warnings
+    );
+    let switch = |name: &str| net.switches().iter().find(|s| s.name == name).unwrap();
+    for (fuse, phase) in [("FU1", "1"), ("FU2", "2"), ("FU3", "3"), ("FU4", "2")] {
+        let fuse = switch(fuse);
+        assert_eq!(fuse.terminal_map_from, strings(&[phase]));
+        assert_eq!(fuse.terminal_map_to, strings(&[phase]));
+        assert!(!fuse.open);
+    }
+
+    // The segment: its sequence impedance as a line code, and the ampacity
+    // of its wire catalog entry.
+    let line = &net.lines()[0];
+    assert_eq!(line.linecode, "LV_cable_4x70");
+    assert_eq!(line.i_max, Some(vec![140.0; 3]));
+
+    // A connection stated as text: the house is a wye load, the flat a
+    // single phase load on phase B.
+    let load = |name: &str| net.loads().iter().find(|l| l.name == name).unwrap();
+    let house = load("HOUSE");
+    assert_eq!(house.configuration, Configuration::Wye);
+    assert_eq!(house.terminal_map, strings(&["1", "2", "3", "4"]));
+    assert_eq!(house.p_nom, vec![1000.0; 3]);
+    let flat = load("FLAT");
+    assert_eq!(flat.configuration, Configuration::SinglePhase);
+    assert_eq!(flat.terminal_map, strings(&["2", "4"]));
+    let [grid] = net.sources().as_slice() else {
+        panic!("{:?}", net.sources())
+    };
+    assert!(close(grid.v_magnitude[0], 400.0 / 3f64.sqrt()));
+
+    // The default is a finding; the groupings are context, and the customer
+    // classes the model has no table for are reported.
+    assert!(
+        net.warnings.iter().any(|w| w.contains("60 Hz is assumed")),
+        "{:#?}",
+        net.warnings
+    );
+    for class in ["CompositeSwitch", "Circuit", "PSRType"] {
+        assert!(
+            net.warnings
+                .iter()
+                .any(|w| w.starts_with("READ.CIM_DIST.CONTEXT_UNMAPPED") && w.contains(class)),
+            "{class}: {:#?}",
+            net.warnings
+        );
+    }
+    let unmapped = findings(&net.warnings, "READ.CIM_DIST.CLASS_UNMAPPED");
+    for class in ["ServiceLocation", "UsagePoint"] {
+        assert!(
+            unmapped.iter().any(|w| w.contains(class)),
+            "{class}: {unmapped:#?}"
+        );
+    }
+    assert!(
+        !unmapped.iter().any(|w| w.contains("WireInfo")),
+        "{unmapped:#?}"
+    );
+}
+
+#[test]
+fn a_cim16_feeder_converts_to_every_distribution_format() {
+    // Once in the multiconductor model, the feeder writes as every
+    // distribution format through the shared writers.
+    let net = parse_str(&cim16_feeder(), "cim-dist").unwrap();
+    for (target, token) in [
+        (DistTargetFormat::Dss, "dss"),
+        (DistTargetFormat::PmdJson, "pmd-json"),
+        (DistTargetFormat::BmopfJson, "bmopf-json"),
+        (DistTargetFormat::CimDist, "cim-dist"),
+    ] {
+        let out = emit_value(&net, target);
+        let back = parse_str(&out.text, token)
+            .unwrap_or_else(|e| panic!("{}: {e}\n{}", target.name(), out.text));
+        // OpenDSS states an ideal source per phase, so only its presence
+        // is format neutral.
+        assert_ne!(back.sources().as_slice(), [], "{}", target.name());
+        assert_eq!(back.loads().len(), net.loads().len(), "{}", target.name());
+        assert!(
+            close(back.base_frequency(), 60.0),
+            "{}: {} Hz",
+            target.name(),
+            back.base_frequency()
+        );
+    }
+
+    // The canonical CIM100 rewrite resolves every reference, and a second
+    // write is byte identical.
+    let first = emit_value(&net, DistTargetFormat::CimDist);
+    assert_references_resolve(&first.text, std::path::Path::new("cim16 feeder"));
+    let back = parse_str(&first.text, "cim-dist").unwrap();
+    assert_eq!(
+        emit_value(&back, DistTargetFormat::CimDist).text,
+        first.text
+    );
+}
+
+#[test]
+fn namespace_does_not_select_distribution_frequency() {
+    for namespace in [
+        "http://iec.ch/TC57/2013/CIM-schema-cim16#",
+        "http://iec.ch/TC57/CIM100#",
+    ] {
+        let text = cim16_feeder().replace("http://iec.ch/TC57/2013/CIM-schema-cim16#", namespace);
+        let defaulted = parse_str(&text, "cim-dist").unwrap();
+        assert!(close(defaulted.base_frequency(), 60.0), "{namespace}");
+        let stated = text.replace(
+            "</rdf:RDF>",
+            concat!(
+                "<cim:BaseFrequency rdf:ID=\"_explicit_frequency\">",
+                "<cim:BaseFrequency.frequency>50</cim:BaseFrequency.frequency>",
+                "</cim:BaseFrequency></rdf:RDF>"
+            ),
+        );
+        let explicit = parse_str(&stated, "cim-dist").unwrap();
+        assert!(close(explicit.base_frequency(), 50.0), "{namespace}");
+        assert!(
+            !explicit
+                .warnings
+                .iter()
+                .any(|w| w.contains("Hz is assumed"))
+        );
+    }
+}
+
+#[test]
+fn an_invalid_wire_ampacity_is_reported_not_silently_dropped() {
+    let stated = |value: &str| {
+        let text = cim16_feeder().replace(
+            "<cim:WireInfo.ratedCurrent>140.0</cim:WireInfo.ratedCurrent>",
+            value,
+        );
+        parse_str(&text, "cim-dist").unwrap()
+    };
+    let invalid = |warnings: &[String]| {
+        warnings
+            .iter()
+            .filter(|w| {
+                w.starts_with("READ.CIM_DIST.VALUE_UNSUPPORTED")
+                    && w.contains("WireInfo.ratedCurrent")
+            })
+            .count()
+    };
+    for value in ["-140", "0", "NaN", "inf", "not a number"] {
+        let net = stated(&format!(
+            "<cim:WireInfo.ratedCurrent>{value}</cim:WireInfo.ratedCurrent>"
+        ));
+        assert_eq!(net.lines()[0].i_max, None, "{value}");
+        assert_eq!(invalid(&net.warnings), 1, "{value}: {:#?}", net.warnings);
+    }
+    // An absent rating is optional and draws no finding.
+    let net = stated("");
+    assert_eq!(net.lines()[0].i_max, None);
+    assert_eq!(invalid(&net.warnings), 0, "{:#?}", net.warnings);
+}
+
+#[test]
+fn a_named_geographic_crs_reads_as_longitude_and_latitude() {
+    use powerio_dist::CoordinateSpace;
+
+    let net = parse_str(
+        &cim16_feeder().replace("EPSG:3857", "EPSG:4258"),
+        "cim-dist",
+    )
+    .unwrap();
+    assert_eq!(
+        net.geo().clone().unwrap().space,
+        CoordinateSpace::Geographic {
+            crs: Some("EPSG:4258".into())
+        }
+    );
+    let pmd: serde_json::Value =
+        serde_json::from_str(&emit_value(&net, DistTargetFormat::PmdJson).text).unwrap();
+    assert!(
+        pmd["bus"]
+            .as_object()
+            .unwrap()
+            .values()
+            .any(|bus| bus.get("lon").is_some()),
+        "PMD carries the coordinates: {pmd:#}"
+    );
+}
+
+#[test]
+fn an_unrecognized_crs_is_not_assumed_to_be_projected() {
+    use powerio_dist::CoordinateSpace;
+
+    // Metres cannot be degrees, so an unknown code with them is planar.
+    let planar = parse_str(
+        &cim16_feeder().replace("EPSG:3857", "EPSG:99999"),
+        "cim-dist",
+    )
+    .unwrap();
+    assert_eq!(
+        planar.geo().clone().unwrap().space,
+        CoordinateSpace::Projected {
+            crs: Some("EPSG:99999".into())
+        }
+    );
+
+    // Coordinates that fit degrees leave an unknown code undecided.
+    let mut text = cim16_feeder().replace("EPSG:3857", "EPSG:99999");
+    for (metres, degrees) in [
+        (">1000<", ">14.1<"),
+        (">1010<", ">14.2<"),
+        (">1020<", ">14.3<"),
+        (">1021<", ">14.4<"),
+        (">1022<", ">14.5<"),
+        (">2000<", ">45.1<"),
+        (">2005<", ">45.2<"),
+        (">2000.5<", ">45.3<"),
+        (">1999<", ">45.4<"),
+    ] {
+        text = text.replace(metres, degrees);
+    }
+    let net = parse_str(&text, "cim-dist").unwrap();
+    assert_eq!(net.geo().clone().unwrap().space, CoordinateSpace::Unknown);
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.starts_with("READ.CIM_DIST.VALUE_UNSUPPORTED") && w.contains("EPSG:99999")),
+        "{:#?}",
+        net.warnings
+    );
+}
+
+#[test]
+#[allow(clippy::float_cmp)] // the source coordinates are the assertion
+fn node_and_terminal_drawings_state_bus_locations() {
+    use powerio_dist::DistCoordsKind;
+
+    // The cabinet node's own drawing outranks the segment end there. The
+    // house takes the drawing of a terminal there, and the flat a node
+    // drawing of several points, whose centroid is derived.
+    let mut drawings = cim16_drawing("CN_CABINET", &[(1, 1_500.0, 2_500.0)]);
+    drawings.push_str(&cim16_drawing("FU1_t2", &[(1, 1_600.0, 2_600.0)]));
+    drawings.push_str(&cim16_drawing(
+        "CN_FLAT",
+        &[(1, 1_700.0, 2_700.0), (2, 1_710.0, 2_710.0)],
+    ));
+    let net = parse_str(&cim16_feeder_with(&drawings), "cim-dist").unwrap();
+    let at = |id: &str| {
+        let bus = net.buses().iter().find(|b| b.id == id).unwrap();
+        let location = bus.location.unwrap();
+        (location.x, location.y, location.kind)
+    };
+    assert_eq!(
+        at("CN_CABINET"),
+        (1_500.0, 2_500.0, Some(DistCoordsKind::Source))
+    );
+    assert_eq!(
+        at("CN_HOUSE"),
+        (1_600.0, 2_600.0, Some(DistCoordsKind::Source))
+    );
+    assert_eq!(
+        at("CN_FLAT"),
+        (1_705.0, 2_705.0, Some(DistCoordsKind::Derived))
+    );
+    assert!(
+        !net.warnings
+            .iter()
+            .any(|w| w.starts_with("READ.CIM_DIST.CLASS_UNMAPPED") && w.contains(" DiagramObject")),
+        "{:#?}",
+        net.warnings
+    );
+}
+
+#[test]
+fn a_drawing_that_places_nothing_is_reported() {
+    // A drawing of the circuit and a second object for the segment reach no
+    // coordinate of the network.
+    let mut drawings = cim16_drawing("FEEDER_1", &[(1, 1_500.0, 2_500.0)]);
+    drawings.push_str(
+        &cim16_drawing("AC1", &[(1, 1_600.0, 2_600.0), (2, 1_610.0, 2_610.0)])
+            .replace("_DO_AC1", "_DO_AC1_AGAIN")
+            .replace("_DOP_AC1", "_DOP_AC1_AGAIN"),
+    );
+    let net = parse_str(&cim16_feeder_with(&drawings), "cim-dist").unwrap();
+    let unmapped = |class: &str, count: usize| {
+        net.warnings.iter().any(|w| {
+            w.starts_with("READ.CIM_DIST.CLASS_UNMAPPED")
+                && w.contains(&format!("{count} {class} object"))
+        })
+    };
+    assert!(unmapped("DiagramObject", 2), "{:#?}", net.warnings);
+    assert!(unmapped("DiagramObjectPoint", 3), "{:#?}", net.warnings);
+}
+
+#[test]
+fn a_layout_that_places_nothing_leaves_no_coordinates() {
+    let text = cim16_feeder();
+    let start = text.find(r#"  <cim:Diagram rdf:ID="_GIS">"#).unwrap();
+    let end = text.find("</rdf:RDF>").unwrap();
+    let layout = format!(
+        "{}{}",
+        r#"  <cim:Diagram rdf:ID="_GIS"><cim:IdentifiedObject.name>EPSG:3857</cim:IdentifiedObject.name></cim:Diagram>
+"#,
+        cim16_drawing("FEEDER_1", &[(1, 1_500.0, 2_500.0)])
+    );
+    let text = format!("{}{layout}{}", &text[..start], &text[end..]);
+    let net = parse_str(&text, "cim-dist").unwrap();
+    assert!(net.geo().is_none());
+    for class in ["Diagram", "DiagramObject", "DiagramObjectPoint"] {
+        assert!(
+            net.warnings.iter().any(|w| {
+                w.starts_with("READ.CIM_DIST.CLASS_UNMAPPED")
+                    && w.contains(&format!("1 {class} object"))
+            }),
+            "{class}: {:#?}",
+            net.warnings
+        );
+    }
+}
+
+#[test]
+#[allow(clippy::float_cmp)] // the source coordinates are the assertion
+fn a_cim16_layout_locates_buses_and_routes_segments() {
+    use powerio_dist::{CoordinateSpace, DistCoordsKind};
+
+    let net = parse_str(&cim16_feeder(), "cim-dist").unwrap();
+    let geo = net.geo().clone().expect("the diagram gives coordinates");
+    assert_eq!(
+        geo.space,
+        CoordinateSpace::Projected {
+            crs: Some("EPSG:3857".into())
+        }
+    );
+    // The segment's route in sequence order, terminal 1 first.
+    let route: Vec<(f64, f64)> = net.lines()[0]
+        .route
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|p| (p.x, p.y))
+        .collect();
+    assert_eq!(
+        route,
+        [(1_000.0, 2_000.0), (1_010.0, 2_005.0), (1_020.0, 2_000.0)]
+    );
+    let at = |id: &str| {
+        let bus = net.buses().iter().find(|b| b.id == id).unwrap();
+        let location = bus
+            .location
+            .unwrap_or_else(|| panic!("{id} has no location"));
+        assert_eq!(location.kind, Some(DistCoordsKind::Derived), "{id}");
+        (location.x, location.y)
+    };
+    // Segment ends place the nodes they reach; the customer side of the
+    // cabinet takes its composite switch, and the flat its own fuse.
+    assert_eq!(at("CN_HEAD"), (1_000.0, 2_000.0));
+    assert_eq!(at("CN_CABINET"), (1_020.0, 2_000.0));
+    assert_eq!(at("CN_HOUSE"), (1_021.0, 2_000.5));
+    assert_eq!(at("CN_FLAT"), (1_022.0, 1_999.0));
+    for class in ["Diagram", "DiagramObject", "DiagramObjectPoint"] {
+        assert!(
+            !net.warnings
+                .iter()
+                .any(|w| w.starts_with("READ.CIM_DIST.CLASS_UNMAPPED")
+                    && w.contains(&format!(" {class} object"))),
+            "{class}: {:#?}",
+            net.warnings
+        );
+    }
+}

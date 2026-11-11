@@ -208,7 +208,7 @@ impl InputDatabase {
     ///
     /// # Errors
     /// Rejects malformed identities/references, variants and oversized output.
-    pub fn finish(self) -> Result<Vec<u8>> {
+    pub fn finish(mut self) -> Result<Vec<u8>> {
         let integrity: String = self
             .connection
             .query_row("PRAGMA integrity_check", [], |r| r.get(0))

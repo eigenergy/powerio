@@ -3,7 +3,7 @@ use crate::formats::sincal::storage::DatabaseSnapshot;
 use rusqlite::Connection;
 
 fn database(edit: &str) -> DatabaseSnapshot {
-    let c = Connection::open_in_memory().unwrap();
+    let mut c = Connection::open_in_memory().unwrap();
     c.execute_batch("CREATE TABLE Version(Version_ID,Version_No,Calc_Type); INSERT INTO Version VALUES(1,14.8,1);
         CREATE TABLE Variant(Variant_ID,ParentVariant_ID,Flag_Variant); INSERT INTO Variant VALUES(1,0,1),(2,0,1);
         CREATE TABLE Node(Node_ID,Variant_ID); INSERT INTO Node VALUES(100,1),(200,1);

@@ -28,7 +28,6 @@ pub(super) fn acquired_records(edit: &str, version: f64) -> Value {
             .unwrap();
         let columns: Vec<_> = statement
             .column_names()
-            .iter()
             .map(|n| json!({"name": n, "native_type": "synthetic"}))
             .collect();
         let count = columns.len();

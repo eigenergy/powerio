@@ -2236,6 +2236,12 @@ fn component_type(class: &str) -> &'static str {
         "ACLineSegment" | "SeriesCompensator" | "PowerTransformer" => "branch",
         "Line" => "line",
         "Terminal" => "terminal",
+        "RatioTapChanger"
+        | "PhaseTapChangerLinear"
+        | "PhaseTapChangerNonLinear"
+        | "PhaseTapChangerSymmetrical"
+        | "PhaseTapChangerAsymmetrical"
+        | "PhaseTapChangerTabular" => "tap_changer",
         "DCConverterUnit" => "dc_converter_unit",
         "DCNode" => "dc_node",
         "DCTopologicalNode" => "dc_topological_node",
@@ -4229,6 +4235,33 @@ fn apply_voltage_limits(
     Ok(())
 }
 
+/// SSH states the active limit; EQ's normal value is its fallback. Both the
+/// calculation projection and retained loading limits must use the same state.
+/// See ENTSO-E's 2016 CGMES IOP report, section 6.3:
+/// <https://eepublicdownloads.entsoe.eu/clean-documents/CIM_documents/IOP/160715_CGMES_IOPreport2016.pdf>.
+fn operational_limit_value(store: &Store, id: &str, class: &str) -> Result<Option<f64>> {
+    store
+        .f(id, &format!("{class}.value"))?
+        .try_or_else(|| store.f(id, &format!("{class}.normalValue")))
+}
+
+fn warn_distinct_normal_limit(
+    store: &Store,
+    id: &str,
+    class: &str,
+    value: f64,
+    warnings: &mut CgmesDiagnostics,
+) -> Result<()> {
+    if let Some(normal) = store.f(id, &format!("{class}.normalValue"))?
+        && normal.total_cmp(&value).is_ne()
+    {
+        warnings.push_as(&codes::READ_CGMES_FIELD_UNMAPPED, format!(
+            "{class} `{id}` has {class}.normalValue={normal} and active {class}.value={value}; the typed loading limits retain the active value. The distinct normal limit survives only in retained source bytes; fresh CGMES emission writes the active value"
+        ));
+    }
+    Ok(())
+}
+
 fn loading_limits(
     store: &Store,
     set: &str,
@@ -4252,9 +4285,7 @@ fn loading_limits(
                 ));
                 continue;
             };
-            let value = store
-                .f(&object.id, &format!("{class}.normalValue"))?
-                .try_or_else(|| store.f(&object.id, &format!("{class}.value")))?;
+            let value = operational_limit_value(store, &object.id, class)?;
             let Some(value) = value.filter(|value| value.is_finite() && *value > 0.0) else {
                 warnings.push(format!(
                 "{class} `{}` has a missing, nonfinite, or nonpositive value and was not retained",
@@ -4262,6 +4293,7 @@ fn loading_limits(
             ));
                 continue;
             };
+            warn_distinct_normal_limit(store, &object.id, class, value, warnings)?;
             found = true;
             let kind = limit_kind(store, limit_type, version);
             let permanent = store
@@ -4641,6 +4673,12 @@ fn read_tap_changers(mapper: &mut Mapper<'_>) -> Result<Vec<TapChanger>> {
                 .unwrap_or(f64::from(low))
                 .round() as i32;
             let solved_tap_position = sv_tap_step(store, &tap)?.map(|value| value.round() as i32);
+            let active_position = if store.f(&tap, "TapChanger.step")?.is_some() {
+                tap_position
+            } else {
+                solved_tap_position.unwrap_or(neutral_tap_position.unwrap_or(0))
+            };
+            warn_active_tap_deviations(&tap, active_position, &steps, mapper.warnings);
             result.push(TapChanger {
                 component: Some(component_id("tap_changer", &tap)?),
                 transformer: component_id("branch", transformer)?,
@@ -4681,6 +4719,28 @@ fn read_tap_changers(mapper: &mut Mapper<'_>) -> Result<Vec<TapChanger>> {
         }
     }
     Ok(result)
+}
+
+fn warn_active_tap_deviations(
+    tap: &str,
+    position: i32,
+    steps: &[TapChangerStep],
+    warnings: &mut CgmesDiagnostics,
+) {
+    let Some(step) = steps.iter().find(|step| step.position == position) else {
+        return;
+    };
+    let deviations = [
+        step.resistance_deviation_percent,
+        step.reactance_deviation_percent,
+        step.conductance_deviation_percent,
+        step.susceptance_deviation_percent,
+    ];
+    if deviations.iter().any(|value| *value != 0.0) {
+        warnings.push_as(&codes::READ_CGMES_VALUE_APPROXIMATED, format!(
+            "tap changer `{tap}` active step {position} has r/x/g/b percentage deviations {deviations:?}; the flat calculation projection omits these deviations; the full step remains in detailed connectivity"
+        ));
+    }
 }
 
 fn normalized_load_coefficients(
@@ -5474,37 +5534,23 @@ fn read_two_winding_transformer(
 
         let u1 = transformer_end_rated_kv(mapper, transformer_id, end1, from)?;
         let u2 = transformer_end_rated_kv(mapper, transformer_id, end2, to)?;
-        let pu = |end: &str, key: &str, u: f64| -> Result<f64> {
-            let u = if u > 0.0 { u } else { 1.0 };
-            Ok(store.f(end, key)?.unwrap_or(0.0) / (u * u / SYSTEM_MVA))
-        };
-        let r = pu(end1, "PowerTransformerEnd.r", u1)? + pu(end2, "PowerTransformerEnd.r", u2)?;
-        let x = pu(end1, "PowerTransformerEnd.x", u1)? + pu(end2, "PowerTransformerEnd.x", u2)?;
+        let (r, x, charging) =
+            two_winding_parameters(mapper, transformer_id, (end1, end2), (u1, u2))?;
         let mut branch = Branch::new(from, to, r, x);
-        let y_pu = |end: &str, property: &str, u: f64| -> Result<f64> {
-            let u = if u > 0.0 { u } else { 1.0 };
-            Ok(store.f(end, property)?.unwrap_or(0.0) * (u * u / SYSTEM_MVA))
-        };
-        let (g1, g2) = (
-            y_pu(end1, "PowerTransformerEnd.g", u1)?,
-            y_pu(end2, "PowerTransformerEnd.g", u2)?,
-        );
-        let (b1, b2) = (
-            y_pu(end1, "PowerTransformerEnd.b", u1)?,
-            y_pu(end2, "PowerTransformerEnd.b", u2)?,
-        );
-        if g1 != 0.0 || b1 != 0.0 || g2 != 0.0 || b2 != 0.0 {
-            branch.b = b1 + b2;
-            branch.charging = Some(BranchCharging::new(g1, b1, g2, b2));
+        if charging.g_fr != 0.0 || charging.b_fr != 0.0 {
+            branch.b = charging.b_fr;
+            branch.charging = Some(charging);
         }
 
         let (kv1, kv2) = (mapper.kv(from), mapper.kv(to));
         let mut tap = safe_div(u1, kv1) / safe_div(u2, kv2);
+        let mut secondary_ratio = safe_div(u2, kv2);
         for (end, invert) in [(end1, false), (end2, true)] {
             if let Some(ratio_tap) = ratio_tap_changer(store, end) {
                 let factor = ratio_tap_factor(mapper, ratio_tap)?;
                 if invert {
                     tap /= factor;
+                    secondary_ratio *= factor;
                 } else {
                     tap *= factor;
                 }
@@ -5514,6 +5560,7 @@ fn read_two_winding_transformer(
             }
         }
         branch.tap = tap;
+        fold_transformer_secondary_ratio(&mut branch, secondary_ratio, transformer_id)?;
         let end_connected = |end: &str| {
             store
                 .refv(end, "TransformerEnd.Terminal")
@@ -5524,12 +5571,70 @@ fn read_two_winding_transformer(
         let ends_connected = end_connected(end1) && end_connected(end2);
         branch.in_service = mapper.in_service(transformer_id)? && ends_connected;
         branch.uid = Some(transformer_id.to_string());
-        apply_limits(mapper, transformer_id, &mut branch, kv1, version)?;
-        for end in [end1, end2] {
-            apply_limits(mapper, end, &mut branch, kv1, version)?;
+        apply_limits_to_targets(store, &[transformer_id], &mut branch, kv1, version)?;
+        for (end, kv) in [(end1, kv1), (end2, kv2)] {
+            // A current limit constrains its own terminal. Transformer ends
+            // need not share a voltage or follow Terminal.sequenceNumber.
+            if let Some(terminal) = store.refv(end, "TransformerEnd.Terminal") {
+                apply_limits_to_targets(store, &[terminal, end], &mut branch, kv, version)?;
+            }
         }
         Some(branch)
     })
+}
+
+/// CGMES two-winding parameters describe one L-model on a common voltage base,
+/// with its shunt before the series impedance. The conforming base is end 1.
+/// ENTSO-E CGM Building Process Implementation Guide v2.0, section 14.19:
+/// <https://eepublicdownloads.entsoe.eu/clean-documents/CIM_documents/Grid_Model_CIM/CGM%20BUILDING%20PROCESS%20IMPLEMENTATION%20GUIDE_v2.0.pdf>.
+fn two_winding_parameters(
+    mapper: &mut Mapper<'_>,
+    transformer: &str,
+    (end1, end2): (&str, &str),
+    (u1, u2): (f64, f64),
+) -> Result<(f64, f64, BranchCharging)> {
+    let store = mapper.store;
+    let read = |end, field| -> Result<f64> { Ok(store.f(end, field)?.unwrap_or(0.0)) };
+    let (r1, r2) = (
+        read(end1, "PowerTransformerEnd.r")?,
+        read(end2, "PowerTransformerEnd.r")?,
+    );
+    let (x1, x2) = (
+        read(end1, "PowerTransformerEnd.x")?,
+        read(end2, "PowerTransformerEnd.x")?,
+    );
+    let (g1, g2) = (
+        read(end1, "PowerTransformerEnd.g")?,
+        read(end2, "PowerTransformerEnd.g")?,
+    );
+    let (b1, b2) = (
+        read(end1, "PowerTransformerEnd.b")?,
+        read(end2, "PowerTransformerEnd.b")?,
+    );
+    let end2_series_only = r1 == 0.0 && x1 == 0.0 && (r2 != 0.0 || x2 != 0.0);
+    let reference_kv = if end2_series_only { u2 } else { u1 };
+    if r2 != 0.0 || x2 != 0.0 || g2 != 0.0 || b2 != 0.0 {
+        let assumption = if end2_series_only {
+            "all series data is on end 2; assuming its rated voltage for the common parameter base"
+        } else {
+            "assuming end 1 rated voltage for the common parameter base"
+        };
+        mapper.warnings.push_as(&codes::READ_CGMES_VALUE_APPROXIMATED, format!(
+            "PowerTransformer `{transformer}` has nonzero end 2 r/x/g/b, outside the CGMES two-winding end 1 L-model convention; {assumption} ({reference_kv} kV) and combining g/b into its single shunt"
+        ));
+    }
+    let z_base = reference_kv * reference_kv / SYSTEM_MVA;
+    if !z_base.is_finite() || z_base <= 0.0 {
+        return Err(Error::FormatRead {
+            format: FMT,
+            message: format!("PowerTransformer `{transformer}` common voltage base overflows"),
+        });
+    }
+    Ok((
+        (r1 + r2) / z_base,
+        (x1 + x2) / z_base,
+        BranchCharging::new((g1 + g2) * z_base, (b1 + b2) * z_base, 0.0, 0.0),
+    ))
 }
 
 fn read_three_winding_transformer(
@@ -5680,28 +5785,89 @@ fn safe_div(a: f64, b: f64) -> f64 {
     if a > 0.0 && b > 0.0 { a / b } else { 1.0 }
 }
 
+/// Move the impedance and both shunts from between two winding ratios to
+/// the secondary side of the balanced branch's one ratio. This preserves
+/// all four terminal admittances when rated and bus voltages differ.
+/// See PowSyBl's two-winding transformer interpretation:
+/// <https://powsybl.readthedocs.io/projects/powsybl-core/en/stable/grid_exchange_formats/cgmes/import.html#powertransformer-with-two-powertransformerends>.
+fn fold_transformer_secondary_ratio(
+    branch: &mut Branch,
+    ratio: f64,
+    transformer: &str,
+) -> Result<()> {
+    let scale = ratio * ratio;
+    if ratio <= 0.0 || !scale.is_finite() || scale == 0.0 {
+        return Err(Error::FormatRead {
+            format: FMT,
+            message: format!(
+                "PowerTransformer `{transformer}` secondary voltage ratio {ratio} cannot be represented on the bus voltage base"
+            ),
+        });
+    }
+    branch.r *= scale;
+    branch.x *= scale;
+    branch.b /= scale;
+    if let Some(charging) = &mut branch.charging {
+        charging.g_fr /= scale;
+        charging.b_fr /= scale;
+        charging.g_to /= scale;
+        charging.b_to /= scale;
+    }
+    let charging = branch.calc_terminal_charging();
+    if [
+        branch.r,
+        branch.x,
+        branch.b,
+        branch.tap,
+        charging.g_fr,
+        charging.b_fr,
+        charging.g_to,
+        charging.b_to,
+    ]
+    .iter()
+    .any(|value| !value.is_finite())
+    {
+        return Err(Error::FormatRead {
+            format: FMT,
+            message: format!(
+                "PowerTransformer `{transformer}` impedance, charging, or ratio overflows on the bus voltage base"
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// The in-effect ratio factor of a ratio tap changer: SSH step, else the SV
 /// tap step, else neutral.
 fn ratio_tap_factor(mapper: &Mapper<'_>, rtc: &str) -> Result<f64> {
-    Ok({
-        let store = mapper.store;
-        let neutral = store.f(rtc, "TapChanger.neutralStep")?.unwrap_or(0.0);
-        let step = store
-            .f(rtc, "TapChanger.step")?
-            .try_or_else(|| sv_tap_step(store, rtc))?
-            .unwrap_or(neutral);
-        if let Some(steps) = table_tap_steps(store, rtc, TapChangerKind::Ratio)?
-            && let Some(value) = steps
-                .iter()
-                .find(|value| value.position == step.round() as i32)
-        {
-            return Ok(value.rho);
-        }
+    let store = mapper.store;
+    let neutral = store.f(rtc, "TapChanger.neutralStep")?.unwrap_or(0.0);
+    let step = store
+        .f(rtc, "TapChanger.step")?
+        .try_or_else(|| sv_tap_step(store, rtc))?
+        .unwrap_or(neutral);
+    let steps = table_tap_steps(store, rtc, TapChangerKind::Ratio)?;
+    let rho = if let Some(value) = steps.as_ref().and_then(|steps| {
+        steps
+            .iter()
+            .find(|value| value.position == step.round() as i32)
+    }) {
+        value.rho
+    } else {
         let increment = store
             .f(rtc, "RatioTapChanger.stepVoltageIncrement")?
             .unwrap_or(0.0);
         1.0 + (step - neutral) * increment / 100.0
-    })
+    };
+    if !rho.is_finite() || rho <= 0.0 {
+        return Err(Error::FormatRead {
+            format: FMT,
+            message: format!(
+                "RatioTapChanger `{rtc}` active step {step} must have a finite positive voltage ratio; found {rho}"
+            ),
+        });
+    }
+    Ok(rho)
 }
 
 fn sv_tap_step(store: &Store, tap_changer: &str) -> Result<Option<f64>> {
@@ -5754,20 +5920,21 @@ fn phase_shift_deg(mapper: &mut Mapper<'_>, ptc: &str, invert: bool) -> Result<f
             .f(ptc, "TapChanger.step")?
             .try_or_else(|| sv_tap_step(store, ptc))?
             .unwrap_or(neutral);
-        let degrees = match class.as_str() {
-            "PhaseTapChangerLinear" => {
+        let (degrees, rho) = match class.as_str() {
+            "PhaseTapChangerLinear" => (
                 (step - neutral)
                     * store
                         .f(ptc, "PhaseTapChangerLinear.stepPhaseShiftIncrement")?
-                        .unwrap_or(0.0)
-            }
+                        .unwrap_or(0.0),
+                1.0,
+            ),
             "PhaseTapChangerTabular" => table_tap_steps(store, ptc, TapChangerKind::Phase)?
                 .and_then(|steps| {
                     steps
                         .into_iter()
                         .find(|value| value.position == step.round() as i32)
                 })
-                .map_or(0.0, |value| value.alpha_degrees),
+                .map_or((0.0, 1.0), |value| (value.alpha_degrees, value.rho)),
             "PhaseTapChangerSymmetrical" | "PhaseTapChangerAsymmetrical" => {
                 calculated_tap_steps(store, ptc, TapChangerKind::Phase)
                     .ok()
@@ -5776,16 +5943,21 @@ fn phase_shift_deg(mapper: &mut Mapper<'_>, ptc: &str, invert: bool) -> Result<f
                             .into_iter()
                             .find(|value| value.position == step.round() as i32)
                     })
-                    .map_or(0.0, |value| value.alpha_degrees)
+                    .map_or((0.0, 1.0), |value| (value.alpha_degrees, value.rho))
             }
             other => {
                 mapper.warnings.push(format!(
                 "{other} {}: phase tap changer type is not supported in the calculation projection; using zero shift",
                 store.name(ptc)
             ));
-                0.0
+                (0.0, 1.0)
             }
         };
+        if (rho - 1.0).abs() > f64::EPSILON {
+            mapper.warnings.push_as(&codes::READ_CGMES_VALUE_APPROXIMATED, format!(
+                "{class} `{ptc}` active step {step} has voltage ratio {rho}; the calculation projection uses only its phase angle; the full step remains in detailed connectivity"
+            ));
+        }
         if invert { -degrees } else { degrees }
     })
 }
@@ -5857,10 +6029,7 @@ fn apply_limits_to_targets(
                 CgmesVersion::V3_0 => store.enum_value(limit_type, "eu:OperationalLimitType.kind"),
             };
             let class = store.class_of(limit).unwrap_or_default();
-            let value = store
-                .f(limit, &format!("{class}.value"))?
-                .try_or_else(|| store.f(limit, &format!("{class}.normalValue")))?
-                .unwrap_or(0.0);
+            let value = operational_limit_value(store, limit, class)?.unwrap_or(0.0);
             let mva = if class == "CurrentLimit" {
                 3f64.sqrt() * kv * value / 1000.0
             } else {

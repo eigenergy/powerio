@@ -1,5 +1,5 @@
 pypowsybl==1.16.1
-pandas==3.0.6
+pandas==3.1.0
 numpy==2.5.4
 networkx==3.7
 prettytable==3.18.0

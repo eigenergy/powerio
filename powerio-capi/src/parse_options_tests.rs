@@ -43,7 +43,6 @@ fn records() -> Vec<u8> {
             let mut statement = db.prepare(&format!("SELECT * FROM {name}")).unwrap();
             let columns: Vec<_> = statement
                 .column_names()
-                .iter()
                 .map(|name| serde_json::json!({"name": name, "native_type": "synthetic"}))
                 .collect();
             let rows: Vec<Vec<serde_json::Value>> = statement
@@ -72,7 +71,7 @@ fn records() -> Vec<u8> {
         .collect();
     serde_json::to_vec(&serde_json::json!({
         "format": "powerio-sincal-tables", "version": 1, "transport": "access-mdbtools",
-        "source": {"name": "synthetic.mdb", "bytes": ORIGINAL.len(), "sha256": format!("{:x}", Sha256::digest(ORIGINAL))},
+        "source": {"name": "synthetic.mdb", "bytes": ORIGINAL.len(), "sha256": Sha256::digest(ORIGINAL).iter().map(|b| format!("{b:02x}")).collect::<String>()},
         "tools": {"mdb-json": "synthetic", "mdb-schema": "synthetic", "mdb-tables": "synthetic"},
         "tables": tables, "excluded_tables": [], "absent_requested_tables": [],
     })).unwrap()

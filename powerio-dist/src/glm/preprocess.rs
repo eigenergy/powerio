@@ -534,7 +534,7 @@ impl Context<'_> {
                             e.with_span(span(buffer, range.clone()))
                         }
                     })?;
-                self.absolute_include |= path.starts_with('/');
+                self.absolute_include |= crate::portable_path::is_portable_absolute(path);
                 self.file(&included, depth + 1)?;
                 if !self.boundary.ready() {
                     return Err(error(

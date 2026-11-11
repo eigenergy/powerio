@@ -102,6 +102,10 @@ mod source_equivalents;
 
 const REPORT_ENV: &str = "POWERIO_CONVERSION_MATRIX_REPORT";
 const DETAILS_ENV: &str = "POWERIO_CONVERSION_MATRIX_DETAILS";
+const JSON_ENV: &str = "POWERIO_CONVERSION_MATRIX_JSON";
+
+#[path = "conversion_matrix/evidence.rs"]
+mod evidence;
 const BLESS_ENV: &str = "POWERIO_MATRIX_BLESS";
 const REPORT_MARKER: &str = "<!-- powerio-conversion-matrix-report -->";
 const DETAILS_MARKER: &str = "<!-- powerio-conversion-matrix-details -->";
@@ -540,6 +544,11 @@ fn conversion_matrix_report_matches_baseline() {
     assert_no_report_path_leaks(&details);
     write_env_report(REPORT_ENV, &report);
     write_env_report(DETAILS_ENV, &details);
+    let evidence =
+        serde_json::to_string_pretty(&evidence::render(&matrices, &judged, &expected, &failures))
+            .unwrap();
+    assert_no_report_path_leaks(&evidence);
+    write_env_report(JSON_ENV, &evidence);
     println!("{report}");
     assert_eq!(
         failures,

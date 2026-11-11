@@ -6,7 +6,7 @@ name: Docs
 # crates (powerio, powerio-core, powerio-matrix, powerio-prob, powerio-dist,
 # retired crates) once they reach crates.io.
 # PRs build the docs too (so a broken intra-doc link fails review, not main),
-# but only push to main / dispatch deploys to Pages; see the `deploy` gate.
+# but only main pushes / dispatches deploy to Pages; see the `deploy` gate.
 on:
   push:
     branches: [ "main" ]
@@ -65,6 +65,17 @@ jobs:
         python -m pip install --upgrade pip
         python -m pip install '.[all]' pdoc
         python -m pdoc powerio -o target/doc/python
+    - name: Publish conversion evidence
+      # PRs already run the dedicated Conversion Matrix workflow.
+      if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      env:
+        POWERIO_CONVERSION_MATRIX_JSON: ${{ github.workspace }}/target/conversion-matrix.json
+        POWERIO_MATRIX_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        POWERIO_MATRIX_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+      run: |
+        cargo test -p powerio-cli --test conversion_matrix_report
+        python3 scripts/conversion-matrix-plan.py target/conversion-matrix.json --output target/conversion-backlog.json
+        cp target/conversion-matrix.json target/conversion-backlog.json docs/src/assets/
     - name: Build book
       run: mdbook build docs --dest-dir target/doc/guide
     # CONTRIBUTING.md requires `mdbook test docs`; without this step a broken
@@ -212,14 +223,13 @@ jobs:
         }
         # Every schema in the archive is served, so a release adds its
         # directory and nothing here.
-        shopt -s globstar
-        for schema in docs/schema/pio-ir/**/schema.json; do
+        while IFS= read -r -d '' schema; do
           redirect_schema_page "$(dirname "${schema#docs/schema/}")"
-        done
+        done < <(find docs/schema/pio-ir -type f -name schema.json -print0)
         # A historical document keeps the `$id` its release published, which
         # names a path on this site. Serve that path too, so a document that
         # quotes the identifier still resolves.
-        for schema in docs/schema/pio-ir/**/schema.json; do
+        while IFS= read -r -d '' schema; do
           archive="$(dirname "${schema#docs/schema/}")"
           id="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("$id", ""))' "$schema")"
           served="${id#https://powerio.dev/schema/}"
@@ -227,7 +237,7 @@ jobs:
           if [ -n "$served" ] && [ "$served" != "$id" ] && [ "$served" != "$archive" ]; then
             redirect_schema_page "$archive" "$served"
           fi
-        done
+        done < <(find docs/schema/pio-ir -type f -name schema.json -print0)
     - uses: actions/download-artifact@v8
       with:
         name: powerio-converter-site
@@ -244,8 +254,8 @@ jobs:
 
   deploy:
     needs: build
-    # PR runs build to catch doc breakage but never publish; only main / dispatch deploy.
-    if: github.event_name != 'pull_request'
+    # PRs and dispatches on other branches build without replacing main's docs.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

@@ -32,10 +32,25 @@ def source_run(name, **overrides):
     return value
 
 
+def converter_jobs():
+    # The actual reusable-workflow job names returned by GitHub under Docs.
+    return [
+        {"name": name, "status": "completed", "conclusion": "success"}
+        for name in (
+            "converter / Converter changes",
+            "converter / Browser conversion engine",
+            "converter / Converter (chromium)",
+            "converter / Converter (firefox)",
+            "converter / Converter (webkit)",
+        )
+    ]
+
+
 class ReleaseSafety(unittest.TestCase):
     def test_source_workflows_require_exact_head_and_success(self):
         runs = [source_run(name) for name in helper.MAIN_WORKFLOWS]
-        helper.validate_source_runs(runs, SHA)
+        with patch.object(helper, "report_jobs", return_value=converter_jobs()):
+            helper.validate_source_runs(runs, SHA)
         for change in (
             {"head_sha": "b" * 40},
             {"event": "pull_request"},
@@ -50,6 +65,60 @@ class ReleaseSafety(unittest.TestCase):
         runs.append(dict(runs[0], id=2, conclusion="failure"))
         with self.assertRaises(helper.ReleaseError):
             helper.validate_source_runs(runs, SHA)
+
+    def test_converter_success_is_checked_in_the_docs_caller(self):
+        names = {"rust.yml", "python.yml", "docs.yml", "julia-binding.yml", "powsybl.yml"}
+        runs = [source_run(name, id=index) for index, name in enumerate(sorted(names))]
+        docs = next(run for run in runs if run["path"].endswith("/docs.yml"))
+        with patch.object(helper, "report_jobs", return_value=converter_jobs()) as jobs:
+            helper.validate_source_runs(runs, SHA)
+        jobs.assert_called_once_with(docs)
+        for index, run in enumerate(runs):
+            with self.subTest(missing=run["path"]), self.assertRaises(helper.ReleaseError):
+                helper.validate_source_runs(runs[:index] + runs[index + 1 :], SHA)
+            with self.subTest(failed=run["path"]), self.assertRaises(helper.ReleaseError):
+                helper.validate_source_runs(
+                    runs[:index] + [dict(run, conclusion="failure")] + runs[index + 1 :], SHA
+                )
+
+    def test_successful_docs_cannot_hide_missing_or_unsuccessful_converter_jobs(self):
+        runs = [source_run(name) for name in helper.MAIN_WORKFLOWS]
+        jobs = converter_jobs()
+        for index, job in enumerate(jobs):
+            replacements = [None]
+            replacements.extend(dict(job, conclusion=value) for value in ("failure", "cancelled", "skipped"))
+            replacements.append(dict(job, status="in_progress"))
+            for replacement in replacements:
+                incomplete = jobs[:index] + ([] if replacement is None else [replacement]) + jobs[index + 1 :]
+                with (
+                    self.subTest(job=job["name"], replacement=replacement),
+                    patch.object(helper, "report_jobs", return_value=incomplete),
+                    self.assertRaises(helper.ReleaseError),
+                ):
+                    helper.validate_source_runs(runs, SHA)
+
+    def test_docs_children_come_only_from_latest_exact_candidate_main_push(self):
+        runs = [source_run(name) for name in helper.MAIN_WORKFLOWS if name != "docs.yml"]
+        docs = source_run("docs.yml", id=10)
+        for change in (
+            {"head_sha": "b" * 40},
+            {"event": "pull_request"},
+            {"event": "workflow_dispatch"},
+            {"head_branch": "release/0.11.10"},
+        ):
+            other = dict(docs, id=20, **change)
+            with self.subTest(change=change):
+                with patch.object(helper, "report_jobs", return_value=converter_jobs()) as jobs:
+                    helper.validate_source_runs(runs + [docs, other], SHA)
+                jobs.assert_called_once_with(docs)
+                with patch.object(helper, "report_jobs") as jobs:
+                    with self.assertRaises(helper.ReleaseError):
+                        helper.validate_source_runs(runs + [other], SHA)
+                jobs.assert_not_called()
+        newest = dict(docs, id=30)
+        with patch.object(helper, "report_jobs", return_value=converter_jobs()) as jobs:
+            helper.validate_source_runs(runs + [newest, docs], SHA)
+        jobs.assert_called_once_with(newest)
 
     def test_every_packaged_platform_and_binding_gate_is_required(self):
         names = {
@@ -274,6 +343,37 @@ class ReleaseSafety(unittest.TestCase):
             helper.report("job:1", "Build: queued | https://github.com/example")
             helper.report("job:1", "Build: success | https://github.com/example")
             self.assertEqual(output.call_count, 2)
+
+    def test_publication_completion_counts_the_verified_crates(self):
+        def runs(endpoint, key):
+            crates = "crates.yml" in endpoint
+            return [source_run(
+                "crates.yml" if crates else "python.yml",
+                event="release",
+                display_title=f"PowerIO {'crates.io' if crates else 'Python'} v0.11.6",
+            )]
+
+        document = {
+            "info": {"version": "0.11.6"},
+            "version": {"num": "0.11.6", "yanked": False},
+            "urls": [
+                {"packagetype": "bdist_wheel", "yanked": False},
+                {"packagetype": "sdist", "yanked": False},
+            ],
+        }
+        output = io.StringIO()
+        with (
+            patch.object(helper, "CRATES", ("powerio-core", "powerio")),
+            patch.object(helper, "collection", side_effect=runs),
+            patch.object(helper, "report_jobs", return_value=[]),
+            patch.object(helper, "api", return_value=[]),
+            patch.object(helper, "public_json", return_value=document) as registry,
+            patch.object(helper, "julia_registered_release", return_value=True),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(helper.follow_publication(SHA, "b" * 40, "0.11.6", "v0.11.6", 0), 0)
+        self.assertEqual(registry.call_count, 3)
+        self.assertIn("GitHub release, 2 crates, PyPI", output.getvalue())
 
     def test_timeout_does_not_invent_success(self):
         with self.assertRaises(helper.ReleaseError):

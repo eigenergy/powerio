@@ -812,3 +812,52 @@ fn case33bw_applies_post_literal_unit_conversions() {
     assert!((net.branches()[0].x - 0.0470 / zbase).abs() < 1e-14);
     assert!(warnings.is_empty());
 }
+
+#[test]
+fn a_solved_branch_matrix_states_its_flows() {
+    let src = "mpc.baseMVA = 100;\n\
+               mpc.bus = [\n\t1 3 0 0 0 0 1 1.0 0 345 1 1.1 0.9;\n\t2 1 10 5 0 0 1 1.0 0 345 1 1.1 0.9;\n\t3 1 0 0 0 0 1 1.0 0 345 1 1.1 0.9;\n];\n\
+               mpc.gen = [\n\t1 10 5 100 -100 1.0 100 1 200 0;\n];\n\
+               mpc.branch = [\n\t1 2 0.01 0.1 0 0 0 0 0 0 1 -360 360 10.1 5.2 -10 -5.1;\n\t2 3 0.01 0.1 0 0 0 0 0 0 1 -360 360 0 0 0 0;\n];\n";
+    let net = parse_mpc(src).unwrap();
+    assert_eq!(
+        net.branches()[0].solution,
+        Some(crate::network::BranchSolution::new(10.1, 5.2, -10.0, -5.1))
+    );
+
+    // The writer states the flow columns for every row, so they read back.
+    let written = super::writer::write_matpower_conversion(&net);
+    assert!(
+        written
+            .render_diagnostics()
+            .iter()
+            .all(|w| !w.contains("branch solution")),
+        "{:?}",
+        written.render_diagnostics()
+    );
+    let back = parse_mpc(&written.text).unwrap();
+    for (a, b) in net.branches().iter().zip(back.branches()) {
+        assert_eq!(b.solution, a.solution);
+    }
+
+    // A matrix states the columns for every row or none, so a partial
+    // solution set is dropped and reported.
+    let mut partial = net.clone();
+    partial.branches_mut()[1].solution = None;
+    let written = super::writer::write_matpower_conversion(&partial);
+    assert!(
+        written
+            .render_diagnostics()
+            .iter()
+            .any(|w| w.contains("1 of 2 branch solution value set(s) dropped")),
+        "{:?}",
+        written.render_diagnostics()
+    );
+    assert!(
+        parse_mpc(&written.text)
+            .unwrap()
+            .branches()
+            .iter()
+            .all(|b| b.solution.is_none())
+    );
+}

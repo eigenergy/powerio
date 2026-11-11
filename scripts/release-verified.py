@@ -30,8 +30,16 @@ MAIN_WORKFLOWS = {
     "python.yml",
     "docs.yml",
     "julia-binding.yml",
-    "converter.yml",
     "powsybl.yml",
+}
+# Converter is a reusable workflow called by Docs, not a separate main push
+# run. Its browser jobs must run on main even when a PR could skip them.
+DOCS_CONVERTER_JOBS = {
+    "converter / Converter changes",
+    "converter / Browser conversion engine",
+    "converter / Converter (chromium)",
+    "converter / Converter (firefox)",
+    "converter / Converter (webkit)",
 }
 # The account that owns every published PowerIO crate. A crate name that
 # exists under another owner was claimed by someone else.
@@ -185,6 +193,21 @@ def validate_source_runs(runs, candidate):
         require(
             run["status"] == "completed" and run["conclusion"] == "success",
             f"Final-main {name} is not successful: {run['html_url']}",
+        )
+    validate_docs_converter_jobs(report_jobs(latest["docs.yml"]))
+
+
+def validate_docs_converter_jobs(jobs):
+    by_name = {job["name"]: job for job in jobs}
+    require(
+        DOCS_CONVERTER_JOBS <= by_name.keys(),
+        "Final-main Docs run lacks a required converter child job.",
+    )
+    for name in sorted(DOCS_CONVERTER_JOBS):
+        require(
+            by_name[name]["status"] == "completed"
+            and by_name[name]["conclusion"] == "success",
+            f"Final-main Docs converter gate did not pass: {name}",
         )
 
 
@@ -529,7 +552,7 @@ def follow_publication(
             )
             if julia:
                 print(
-                    f"Verified: {tag} GitHub release, eight crates, PyPI, Julia General registration and Julia tag are present."
+                    f"Verified: {tag} GitHub release, {len(CRATES)} crates, PyPI, Julia General registration and Julia tag are present."
                 )
                 return 0
         wait_pause(

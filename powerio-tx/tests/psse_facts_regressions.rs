@@ -374,3 +374,212 @@ fn retained_rawx_bytes_stay_exact_despite_typed_projection_diagnostics() {
     let emitted = helpers::emit_module(&parsed.module, TargetFormat::PsseRawx).unwrap();
     assert_eq!(emitted.text, source);
 }
+
+#[test]
+fn facts_shunt_without_substation_data_rereads_from_xiidm() {
+    let raw = "0,100,35,0,1,60 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'HV',230,3,1,1,1,1,0
+2,'LV',115,1,1,1,1,1,0
+0 / END OF BUS DATA, BEGIN FACTS DEVICE DATA
+'F1',1,0,1,0,0,1.02,100,9999,0.9,1.1,1,0,0.05,100,1,0,0,0,0,0,''
+0 / END OF FACTS DEVICE DATA
+Q
+";
+    let p = helpers::parse_str(raw, "psse").unwrap();
+    let out = helpers::emit_value(&p.network, TargetFormat::Xiidm).unwrap();
+    let svc = out
+        .text
+        .lines()
+        .find(|line| line.contains("<iidm:staticVarCompensator "))
+        .unwrap();
+    assert!(svc.contains(" bus=\"B1\""), "SVC has no terminal: {svc}");
+    assert!(
+        svc.contains(" connectableBus=\"B1\""),
+        "SVC has no terminal: {svc}"
+    );
+    let back = helpers::parse_str(&out.text, "xiidm").unwrap();
+    let svcs = back.network.static_var_compensators();
+    assert_eq!(svcs.len(), 1);
+    assert_eq!(svcs[0].bus, BusId(1));
+}
+
+#[test]
+fn svc_without_uid_gets_a_derived_xiidm_terminal() {
+    let mut network = parse(&source()).network;
+    *network.detailed_connectivity_mut() = None;
+    network.static_var_compensators_mut()[0].uid = None;
+    let out = helpers::emit_value(&network, TargetFormat::Xiidm).unwrap();
+    let back = helpers::parse_str(&out.text, "xiidm").unwrap();
+    assert_eq!(back.network.static_var_compensators()[0].bus, BusId(1));
+}
+
+/// Substation data that names the terminal of load `L1` alone: load `L2` and
+/// FACTS device `F1` at the same bus have no stated terminal.
+const PARTIAL_SUBSTATION_DATA: &str = "0,100,35,0,1,60 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'HV',115,3,1,1,1,1,0
+2,'LV',115,1,1,1,1,1,0
+0 / END OF BUS DATA, BEGIN LOAD DATA
+2,'L1',1,1,1,0,0
+2,'L2',1,1,1,0,0
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+1,'1',10,0,10,-10,1,0,100
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+1,2,'1',0.01,0.1,0,0,0,0,0,0,0,1,1,0,1
+0 / END OF BRANCH DATA, BEGIN FACTS DEVICE DATA
+'F1',2,0,1,0,0,1.02,100,9999,0.9,1.1,1,0,0.05,100,1,0,0,0,0,0,''
+0 / END OF FACTS DEVICE DATA, BEGIN SUBSTATION DATA
+1,'SUB',0,0,0
+1,'N1',2,1,1,0
+0 / END OF SUBSTATION NODE DATA
+0 / END OF SUBSTATION SWITCHING DEVICE DATA
+2,1,'L','L1'
+0 / END OF SUBSTATION EQUIPMENT TERMINAL DATA
+0 / END OF SUBSTATION DATA
+Q
+";
+
+fn xiidm_element<'a>(text: &'a str, element: &str, id: &str) -> &'a str {
+    text.lines()
+        .find(|line| line.contains(&format!("<iidm:{element} id=\"{id}\"")))
+        .unwrap_or_else(|| panic!("no {element} `{id}` in\n{text}"))
+}
+
+#[test]
+fn injections_without_a_stated_substation_terminal_get_their_own_xiidm_node() {
+    let p = helpers::parse_str(PARTIAL_SUBSTATION_DATA, "psse").unwrap();
+    let out = helpers::emit_value(&p.network, TargetFormat::Xiidm).unwrap();
+    let node = |element: &str, id: &str| {
+        let line = xiidm_element(&out.text, element, id);
+        let at = line
+            .find(" node=\"")
+            .unwrap_or_else(|| panic!("no node: {line}"))
+            + 7;
+        line[at..line[at..].find('"').unwrap() + at].to_owned()
+    };
+    let l1 = node("load", "bus-2");
+    let l2 = node("load", "bus-2-2");
+    let svc = node("staticVarCompensator", "bus-2-3");
+    // An XIIDM node holds one equipment terminal; each added node joins the
+    // stated one through an internal connection.
+    assert_ne!(l1, l2);
+    assert_ne!(l1, svc);
+    assert_ne!(l2, svc);
+    for added in [&l2, &svc] {
+        assert!(
+            out.text.contains(&format!(
+                "<iidm:internalConnection node1=\"{l1}\" node2=\"{added}\"/>"
+            )),
+            "{}",
+            out.text
+        );
+    }
+    assert!(
+        out.render_diagnostics()
+            .iter()
+            .any(|line| line.starts_with("EMIT.XIIDM.VALUE_DEFAULTED")
+                && line.contains("`load/bus-2-2` terminal 1")
+                && line.contains("`static_var_compensator/bus-2-3` terminal 1")),
+        "{:#?}",
+        out.render_diagnostics()
+    );
+    let back = helpers::parse_str(&out.text, "xiidm").unwrap();
+    assert_eq!(back.network.loads().len(), 2);
+    assert_eq!(back.network.static_var_compensators().len(), 1);
+    // The internal connections keep all three on one calculated bus.
+    let bus = back.network.loads()[0].bus;
+    assert_eq!(back.network.loads()[1].bus, bus);
+    assert_eq!(back.network.static_var_compensators()[0].bus, bus);
+}
+
+#[test]
+fn equipment_at_a_bus_outside_the_stated_hierarchy_is_reported_not_written_bare() {
+    // Bus 1 belongs to no substation, so neither the generator there nor the
+    // line to it has a voltage level to be written in.
+    let p = helpers::parse_str(PARTIAL_SUBSTATION_DATA, "psse").unwrap();
+    let out = helpers::emit_value(&p.network, TargetFormat::Xiidm).unwrap();
+    let diagnostics = out.render_diagnostics();
+    assert!(
+        diagnostics
+            .iter()
+            .any(|line| line.starts_with("EMIT.XIIDM.RECORD_DROPPED")
+                && line.contains("`generator/bus-1` at bus 1")),
+        "{diagnostics:#?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|line| line.starts_with("EMIT.XIIDM.RECORD_DROPPED")
+                && line.contains("`branch/1-2`")
+                && line.contains("terminal(s) 1")),
+        "{diagnostics:#?}"
+    );
+    assert!(!out.text.contains("<iidm:line "), "{}", out.text);
+    let back = helpers::parse_str(&out.text, "xiidm").unwrap();
+    assert_eq!(back.network.branches().len(), 0);
+    assert_eq!(back.network.generators().len(), 0);
+}
+
+#[test]
+fn a_stated_terminal_with_no_bus_or_node_drops_its_equipment_with_a_diagnostic() {
+    let mut p = helpers::parse_str(PARTIAL_SUBSTATION_DATA, "psse").unwrap();
+    let detailed = p.network.detailed_connectivity_mut().as_mut().unwrap();
+    let detailed = std::sync::Arc::make_mut(detailed);
+    let terminal = detailed
+        .terminals
+        .iter_mut()
+        .find(|terminal| terminal.equipment.local_id() == "bus-2")
+        .unwrap();
+    terminal.node = None;
+    let out = helpers::emit_value(&p.network, TargetFormat::Xiidm).unwrap();
+    assert!(
+        !out.text.contains("<iidm:load id=\"bus-2\""),
+        "{}",
+        out.text
+    );
+    assert!(
+        out.render_diagnostics()
+            .iter()
+            .any(|line| line.starts_with("EMIT.XIIDM.RECORD_DROPPED")
+                && line.contains("`load/bus-2` has no bus or node")),
+        "{:#?}",
+        out.render_diagnostics()
+    );
+    helpers::parse_str(&out.text, "xiidm").unwrap();
+}
+
+#[test]
+fn remote_facts_regulation_without_a_terminal_is_reported_in_xiidm() {
+    let raw = "0,100,35,0,1,60 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'HV',230,3,1,1,1,1,0
+2,'LV',115,1,1,1,1,1,0
+0 / END OF BUS DATA, BEGIN FACTS DEVICE DATA
+'F1',1,0,1,0,0,1.02,100,9999,0.9,1.1,1,0,0.05,100,1,0,0,0,2,0,''
+0 / END OF FACTS DEVICE DATA
+Q
+";
+    let p = helpers::parse_str(raw, "psse").unwrap();
+    assert!(
+        p.network.static_var_compensators()[0]
+            .regulating_terminal
+            .is_none()
+    );
+    let out = helpers::emit_value(&p.network, TargetFormat::Xiidm).unwrap();
+    assert!(
+        out.render_diagnostics()
+            .iter()
+            .any(|line| line.starts_with("EMIT.XIIDM.FIELD_DROPPED")
+                && line.contains("static var compensator `bus-1` regulates bus 2")),
+        "{:#?}",
+        out.render_diagnostics()
+    );
+}

@@ -904,6 +904,16 @@ typedef struct {
 } PioScucContingencyComponentView;
 
 /**
+ * A borrowed time label and optional duration in seconds. The label remains
+ * valid while the time-series handle is live and unmodified.
+ */
+typedef struct {
+    PioStringView label;
+    double duration_seconds;
+    bool has_duration;
+} PioTimePointView;
+
+/**
  * Coordinate metadata for a balanced network.
  */
 typedef struct {
@@ -4678,6 +4688,18 @@ void pio_value_release(PioValueHandle *value);
  * Pointers and handles must satisfy the crate-level safety requirements.
  */
 size_t pio_time_series_len(const PioTimeSeriesHandle *series);
+
+/**
+ * Read time metadata at a zero-based position without serializing the value.
+ * Returns false and reports an error for an invalid handle, index or output.
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+bool pio_time_series_time_point(const PioTimeSeriesHandle *series,
+                                size_t index,
+                                PioTimePointView *out,
+                                PioError **error);
 
 /**
  *

@@ -114,7 +114,11 @@ fn dss_parse_agrees_with_the_pmd_parse() {
             assert!(close(a.b_from[i][j], b.b_from[i][j]));
         }
     }
-    assert_eq!(line.i_max, b.i_max);
+    // OpenDSS leaves mtx601 emergency ampacity at its constructor default;
+    // unlike PMD's materialized reference, this is not a declared thermal
+    // rating and must not become a typed BMOPF current limit.
+    assert_eq!(line.i_max, None);
+    assert_eq!(b.i_max, Some(vec![600.0; 3]));
 
     // Loads agree in power, configuration, and connection.
     for l in ours.loads() {
@@ -133,7 +137,10 @@ fn dss_parse_agrees_with_the_pmd_parse() {
     let switch_line = ours.lines().iter().find(|l| l.name == "671692").unwrap();
     assert_eq!(ours.switches().as_slice(), []);
     assert!(!pmd.switches()[0].open);
-    assert_eq!(switch_line.i_max, pmd.switches()[0].i_max);
+    // The switch states no emergency rating; PMD's materialized reference
+    // carries the engine default, which is not a declared limit (#762).
+    assert_eq!(switch_line.i_max, None);
+    assert!(pmd.switches()[0].i_max.is_some());
     assert_eq!(switch_line.bus_from, pmd.switches()[0].bus_from);
     assert_eq!(switch_line.bus_to, pmd.switches()[0].bus_to);
 

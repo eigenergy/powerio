@@ -10304,6 +10304,16 @@ pub unsafe extern "C" fn pio_value_release(value: *mut PioValueHandle) {
 
 // ---- collections -----------------------------------------------------------
 
+/// A borrowed time label and optional duration in seconds. The label remains
+/// valid while the time-series handle is live and unmodified.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioTimePointView {
+    pub label: PioStringView,
+    pub duration_seconds: f64,
+    pub has_duration: bool,
+}
+
 fn time_series(value: &ValueInner) -> Option<&PioTimeSeries> {
     match value.value()? {
         PioValue::TimeSeries(series) => Some(series),
@@ -10326,6 +10336,52 @@ pub unsafe extern "C" fn pio_time_series_len(series: *const PioTimeSeriesHandle)
     unsafe { PioTimeSeriesHandle::get(series) }
         .and_then(time_series)
         .map_or(0, PioTimeSeries::len)
+}
+
+/// Read time metadata at a zero-based position without serializing the value.
+/// Returns false and reports an error for an invalid handle, index or output.
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_time_series_time_point(
+    series: *const PioTimeSeriesHandle,
+    index: usize,
+    out: *mut PioTimePointView,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        entry(error, false, || {
+            if out.is_null() {
+                return Err(boundary_error(
+                    &codes::BIND_CAPI_NULL_ARGUMENT,
+                    "out must not be NULL",
+                ));
+            }
+            let values = PioTimeSeriesHandle::get(series)
+                .and_then(time_series)
+                .ok_or_else(|| {
+                    boundary_error(
+                        &codes::BIND_CAPI_NULL_HANDLE,
+                        "a live time-series handle is required",
+                    )
+                })?;
+            let point = values.time_points().get(index).ok_or_else(|| {
+                boundary_error(
+                    &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                    format!("time series index {index} is out of range"),
+                )
+            })?;
+            out.write(PioTimePointView {
+                label: PioStringView::new(point.label()),
+                duration_seconds: point
+                    .duration()
+                    .map_or(0.0, |duration| duration.as_secs_f64()),
+                has_duration: point.duration().is_some(),
+            });
+            Ok(true)
+        })
+    }
 }
 
 ///
@@ -25227,7 +25283,7 @@ mod tests {
 
     #[test]
     fn sincal_multiconductor_uses_existing_owner_rooted_handles_and_echo() {
-        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
         connection
             .execute_batch(include_str!(
                 "../../tests/data/sincal/synthetic-multiconductor.sql"
@@ -25851,6 +25907,52 @@ mod tests {
 
             pio_calculation_solution_release(solution);
             pio_module_release(module);
+        }
+    }
+
+    #[test]
+    fn temporal_metadata_outlives_its_parent_and_checks_bounds() {
+        unsafe {
+            let text = br#"{"system":{"baseMVA":100,"time_keys":["morning","evening"],"time_period_length_minutes":15},"elements":{"bus":{"7":{"matpower_bustype":"ref"}},"load":{"1":{"bus":"7","p_load":{"data_type":"time_series","values":[10,20]}}}}}"#;
+            let parsed =
+                powerio::parse(Source::from_memory("case.egret.json", text.to_vec()).unwrap())
+                    .unwrap();
+            let module = module_handle(parsed);
+            let value = pio_module_value(module);
+            let mut error = std::ptr::null_mut();
+            let series = pio_value_time_series(value, &mut error);
+            assert!(!series.is_null(), "{}", error_text(error));
+            pio_value_release(value);
+            pio_module_release(module);
+            let mut view = std::mem::MaybeUninit::<PioTimePointView>::uninit();
+            assert!(pio_time_series_time_point(
+                series,
+                1,
+                view.as_mut_ptr(),
+                &mut error
+            ));
+            let view = view.assume_init();
+            assert_eq!(view_text(view.label), "evening");
+            assert!(view.has_duration);
+            assert_eq!(view.duration_seconds, 900.0);
+            let mut out = std::mem::MaybeUninit::<PioTimePointView>::uninit();
+            assert!(!pio_time_series_time_point(
+                series,
+                2,
+                out.as_mut_ptr(),
+                &mut error
+            ));
+            assert!(!error.is_null());
+            pio_error_release(error);
+            assert!(!pio_time_series_time_point(
+                series,
+                0,
+                std::ptr::null_mut(),
+                &mut error
+            ));
+            assert!(!error.is_null());
+            pio_error_release(error);
+            pio_time_series_release(series);
         }
     }
 

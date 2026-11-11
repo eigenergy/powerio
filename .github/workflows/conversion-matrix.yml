@@ -2,6 +2,9 @@ name: Conversion Matrix
 
 on:
   pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 # One run per workflow per branch. A force push to a stacked pull request
 # otherwise leaves the superseded run going: it finishes, it fails or it
@@ -27,6 +30,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  POWERIO_CONVERSION_MATRIX_JSON: ${{ github.workspace }}/target/conversion-matrix.json
+  POWERIO_MATRIX_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  POWERIO_MATRIX_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
   POWERIO_CONVERSION_MATRIX_REPORT: ${{ github.workspace }}/target/conversion-matrix-report.md
   POWERIO_CONVERSION_MATRIX_DETAILS: ${{ github.workspace }}/target/conversion-matrix-warning-details.md
 
@@ -41,15 +47,23 @@ jobs:
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
     - name: Generate conversion matrix
       run: cargo test -p powerio-cli --test conversion_matrix_report -- --nocapture
+    - name: Validate and rank matrix evidence
+      if: always() && hashFiles('target/conversion-matrix.json') != ''
+      run: |
+        python3 scripts/test-conversion-matrix-plan.py
+        python3 scripts/conversion-matrix-plan.py target/conversion-matrix.json --output target/conversion-backlog.json
     - name: Upload warning details
       if: always()
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: conversion-matrix-warning-details
-        path: ${{ env.POWERIO_CONVERSION_MATRIX_DETAILS }}
+        path: |
+          ${{ env.POWERIO_CONVERSION_MATRIX_DETAILS }}
+          ${{ env.POWERIO_CONVERSION_MATRIX_JSON }}
+          target/conversion-backlog.json
         if-no-files-found: ignore
     - name: Comment on PR
-      if: always() && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'
+      if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       with:
         script: |
@@ -81,7 +95,7 @@ jobs:
             if (detailsArtifact) {
               detailsUrl = `${runUrl}/artifacts/${detailsArtifact.id}`;
             }
-            body += `\n\nFull warning details: [download \`conversion-matrix-warning-details\`](${detailsUrl}) for this workflow run.`;
+            body += `\n\nMachine-readable evidence, ranked findings, and full warning details: [download \`conversion-matrix-warning-details\`](${detailsUrl}) for this workflow run.`;
           }
           const comments = await github.paginate(github.rest.issues.listComments, {
             owner,

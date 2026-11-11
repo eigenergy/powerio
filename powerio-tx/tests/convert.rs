@@ -193,10 +193,14 @@ fn rich_writer_warnings_cover_simple_formats() {
         &matpower.render_diagnostics(),
         "branch 1 (1 to 2) rating set RATE4=125"
     ));
-    assert!(has_warning(
+    // Every branch states a solution, so the branch matrix takes MATPOWER's
+    // solved flow columns.
+    assert!(!has_warning(
         &matpower.render_diagnostics(),
         "branch solution value"
     ));
+    let back = parse_str(&matpower.text, "matpower").unwrap().network;
+    assert_eq!(back.branches()[0].solution, net.branches()[0].solution);
     assert!(has_warning(
         &matpower.render_diagnostics(),
         "voltage dependent load model"
@@ -211,10 +215,9 @@ fn rich_writer_warnings_cover_simple_formats() {
         &pm.render_diagnostics(),
         "branch current rating"
     ));
-    assert!(has_warning(
-        &pm.render_diagnostics(),
-        "rating set RATE4=125"
-    ));
+    // PowerModels carries the named rating sets as the PowerIO `rating_sets`
+    // extension key.
+    assert!(!has_warning(&pm.render_diagnostics(), "rating set"));
     assert!(!has_warning(
         &pm.render_diagnostics(),
         "branch solution value"
@@ -229,11 +232,8 @@ fn rich_writer_warnings_cover_simple_formats() {
         &egret.render_diagnostics(),
         "branch current rating"
     ));
-    assert!(has_warning(
-        &egret.render_diagnostics(),
-        "rating set RATE4=125"
-    ));
-    assert!(has_warning(
+    assert!(!has_warning(&egret.render_diagnostics(), "rating set"));
+    assert!(!has_warning(
         &egret.render_diagnostics(),
         "branch solution value"
     ));
@@ -1298,23 +1298,24 @@ fn hvdc_converts_and_round_trips() {
     let back = parse_powermodels_json(&pm.text).unwrap();
     assert_hvdc_survives(&net, &back, "PowerModels JSON");
 
-    // egret `dc_branch` states the same fields the MATPOWER dcline row does, and
-    // the egret reader already read them. Only the usage cost (from
-    // `mpc.dclinecost`, stated on dcline 5 -> 9 alone) has no egret slot.
+    // egret `dc_branch` states the same fields the MATPOWER dcline row does.
+    // The usage cost (from `mpc.dclinecost`, stated on dcline 5 -> 9 alone)
+    // rides along as the PowerIO `p_cost` extension key, which egret ignores.
     let egret = emit_egret_json(&net);
-    assert_eq!(
-        egret
-            .diagnostics
+    assert!(
+        !egret
+            .render_diagnostics()
             .iter()
-            .filter(|d| d.message().contains("dcline"))
-            .map(powerio_tx::Diagnostic::message)
-            .collect::<Vec<_>>(),
-        ["dcline 5 -> 9 cost curve dropped: egret dc_branch records carry no cost"],
-        "egret dc_branch carries every dcline field but the cost: {:?}",
+            .any(|w| w.contains("dcline")),
+        "egret dc_branch carries every dcline field: {:?}",
         egret.render_diagnostics()
     );
     let from_egret = parse_str(&egret.text, "egret-json").unwrap().network;
     assert_hvdc_survives(&net, &from_egret, "egret JSON");
+    assert!(net.hvdc().iter().any(|dc| dc.cost.is_some()));
+    for (a, b) in net.hvdc().iter().zip(from_egret.hvdc()) {
+        assert_eq!(b.cost, a.cost, "egret JSON dcline cost");
+    }
 
     // PSS/E writes the dclines as two-terminal DC records; the endpoints and
     // power setpoint survive a re-read, with the converter detail defaulted.
