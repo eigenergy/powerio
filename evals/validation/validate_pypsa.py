@@ -108,11 +108,11 @@ def check_case(path: Path) -> str:
                 xf_tap,
                 [b["tap"] if b["tap"] != 0.0 else 1.0 for b in xf_branches],
             )
-            # An unlimited rate_a is +Inf in PowerIO, while the PyPSA
-            # writer uses base_mva as a positive impedance base and sets
-            # s_max_pu=+Inf. Compare s_nom only for finite thermal limits.
+            # The writer uses base_mva as a positive impedance base for
+            # zero and unlimited limits; s_max_pu carries the actual bound.
+            # Compare s_nom only for finite, positive thermal ratings.
             for (_, row), b in zip(net.transformers.iterrows(), xf_branches):
-                if math.isfinite(b["rate_a"]):
+                if math.isfinite(b["rate_a"]) and b["rate_a"] > 0.0:
                     check_close(
                         problems, "transformer.s_nom", float(row.s_nom), b["rate_a"]
                     )
