@@ -96,3 +96,7 @@ powerio._powerio.SourceSpan
 # Optional pipeline plugin imports tz-oss-interop only when discovered by that
 # application. Its entry points and runtime API are tested in sienna-interop.yml.
 powerio.interop
+
+# A functools.lru_cache wrapper reports *args and **kwargs at runtime, while
+# the source states the cached function's own signature.
+powerio._pypsa_files._no_globals
