@@ -1478,9 +1478,9 @@ pub fn write_pslf(net: &BalancedNetwork) -> TextEmission {
                 num(br.r),
                 num(br.x),
                 num(br.calc_total_charging_b()),
-                num(crate::thermal_limit::as_option(br.rate_a).unwrap_or(0.0)),
-                num(crate::thermal_limit::as_option(br.rate_b).unwrap_or(0.0)),
-                num(crate::thermal_limit::as_option(br.rate_c).unwrap_or(0.0)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_a)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_b)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_c)),
             );
         }
     }
@@ -1521,9 +1521,9 @@ pub fn write_pslf(net: &BalancedNetwork) -> TextEmission {
             );
             // Second physical line: ratings at 6-8, phase shift at 10, tap at 16.
             let mut line2 = vec!["0".to_string(); 17];
-            line2[6] = num(crate::thermal_limit::as_option(br.rate_a).unwrap_or(0.0));
-            line2[7] = num(crate::thermal_limit::as_option(br.rate_b).unwrap_or(0.0));
-            line2[8] = num(crate::thermal_limit::as_option(br.rate_c).unwrap_or(0.0));
+            line2[6] = num(crate::thermal_limit::to_zero_unlimited(br.rate_a));
+            line2[7] = num(crate::thermal_limit::to_zero_unlimited(br.rate_b));
+            line2[8] = num(crate::thermal_limit::to_zero_unlimited(br.rate_c));
             line2[10] = num(br.shift);
             line2[16] = num(br.calc_effective_tap());
             let _ = writeln!(s, "{}", line2.join(" "));
@@ -1559,9 +1559,15 @@ pub fn write_pslf(net: &BalancedNetwork) -> TextEmission {
             );
             // Only the primary winding's ratio/ratings have a column here.
             let mut line2 = vec!["0".to_string(); 17];
-            line2[6] = num(crate::thermal_limit::as_option(tr.windings[0].rate_a).unwrap_or(0.0));
-            line2[7] = num(crate::thermal_limit::as_option(tr.windings[0].rate_b).unwrap_or(0.0));
-            line2[8] = num(crate::thermal_limit::as_option(tr.windings[0].rate_c).unwrap_or(0.0));
+            line2[6] = num(crate::thermal_limit::to_zero_unlimited(
+                tr.windings[0].rate_a,
+            ));
+            line2[7] = num(crate::thermal_limit::to_zero_unlimited(
+                tr.windings[0].rate_b,
+            ));
+            line2[8] = num(crate::thermal_limit::to_zero_unlimited(
+                tr.windings[0].rate_c,
+            ));
             line2[10] = num(tr.windings[0].shift);
             line2[16] = num(tr.windings[0].tap);
             let _ = writeln!(s, "{}", line2.join(" "));

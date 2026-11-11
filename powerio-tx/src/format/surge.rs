@@ -252,15 +252,15 @@ fn branch_obj((_i, branch): (usize, &Branch)) -> Value {
     obj.insert("phase_shift_rad".into(), jnum(branch.shift.to_radians()));
     obj.insert(
         "rating_a_mva".into(),
-        jnum(crate::thermal_limit::as_option(branch.rate_a).unwrap_or(0.0)),
+        jnum(crate::thermal_limit::to_zero_unlimited(branch.rate_a)),
     );
     obj.insert(
         "rating_b_mva".into(),
-        jnum(crate::thermal_limit::as_option(branch.rate_b).unwrap_or(0.0)),
+        jnum(crate::thermal_limit::to_zero_unlimited(branch.rate_b)),
     );
     obj.insert(
         "rating_c_mva".into(),
-        jnum(crate::thermal_limit::as_option(branch.rate_c).unwrap_or(0.0)),
+        jnum(crate::thermal_limit::to_zero_unlimited(branch.rate_c)),
     );
     if let Some(ratings) = branch.current_ratings {
         obj.insert("current_rating_a".into(), jnum(ratings.c_rating_a));

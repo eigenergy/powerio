@@ -68,7 +68,7 @@ pub(super) fn error(message: impl Into<String>) -> Error {
         message: message.into(),
     }
 }
-fn version(root: &Value) -> Result<u8> {
+pub(super) fn version(root: &Value) -> Result<u8> {
     match root.get("schema_version") {
         None => Ok(1),
         Some(Value::String(s)) => match s.as_str() {
@@ -124,8 +124,26 @@ pub(super) fn is_infinite_bound(per_unit: f64) -> bool {
     (per_unit - INFINITE_BOUND).abs() <= INFINITE_BOUND * 1e-12
 }
 
+/// Writes a branch's MVA ratings on a row whose base is `base_mva`.
+/// SiennaSchemas 0.1–0.4 and PowerSystems 5.x require a numeric primary
+/// `rating` and allow `rating_b` and `rating_c` to be absent, which reads as
+/// unlimited. An unlimited primary rating is PowerSystems' `INFINITE_BOUND`
+/// on the row's base, never zero, which is a real bound.
+pub(super) fn put_ratings(row: &mut Value, [a, b, c]: [f64; 3], base_mva: f64) {
+    row["rating"] = json!(if a.is_finite() {
+        a
+    } else {
+        INFINITE_BOUND * base_mva
+    });
+    for (key, rating) in [("rating_b", b), ("rating_c", c)] {
+        if rating.is_finite() {
+            row[key] = json!(rating);
+        }
+    }
+}
+
 /// A branch rating in MVA: absent, null, or the unbounded marker is unlimited.
-fn branch_rating(row: &Value, k: &str, scale: f64) -> Result<f64> {
+pub(super) fn branch_rating(row: &Value, k: &str, scale: f64) -> Result<f64> {
     let rating = thermal_limit(row, k, scale)?;
     Ok(
         if rating.is_finite() && is_infinite_bound(rating / base(row)?) {
@@ -138,9 +156,7 @@ fn branch_rating(row: &Value, k: &str, scale: f64) -> Result<f64> {
 fn thermal_limit(v: &Value, k: &str, scale: f64) -> Result<f64> {
     match v.get(k) {
         None | Some(Value::Null) => Ok(f64::INFINITY),
-        Some(_) => {
-            crate::thermal_limit::scaled(crate::thermal_limit::finite(number(v, k)?)?, scale)
-        }
+        Some(_) => crate::thermal_limit::scaled(number(v, k)?, scale),
     }
 }
 fn string<'a>(v: &'a Value, k: &str) -> Result<&'a str> {
@@ -1077,7 +1093,8 @@ pub(super) fn write_document(
         let ch = b
             .charging
             .unwrap_or_else(|| BranchCharging::from_total_b(b.b));
-        let mut row = json!({"id":id,"name":b.name.clone().unwrap_or_else(||format!("branch_{id}")),"available":b.in_service,"arc":arc,"r":b.r,"x":b.x,"base_power":net.base_mva(),"power_units":"NATURAL_UNITS","parameter_units":"COMPONENT_BASE","rating":b.rate_a,"rating_b":b.rate_b,"rating_c":b.rate_c});
+        let mut row = json!({"id":id,"name":b.name.clone().unwrap_or_else(||format!("branch_{id}")),"available":b.in_service,"arc":arc,"r":b.r,"x":b.x,"base_power":net.base_mva(),"power_units":"NATURAL_UNITS","parameter_units":"COMPONENT_BASE",});
+        put_ratings(&mut row, [b.rate_a, b.rate_b, b.rate_c], net.base_mva());
         if let Some(solution) = &b.solution {
             row["active_power_flow"] = json!(solution.pf);
             row["reactive_power_flow"] = json!(solution.qf);
@@ -1282,30 +1299,6 @@ pub(super) fn write_document(
             );
         }
     }
-    // SiennaSchemas 0.1–0.4 require a numeric Line.rating and
-    // TransformerCircuit.rating and allow the other branch ratings to be
-    // absent, which reads as unlimited. PowerSystems 5.x also requires the
-    // primary rating of a line or transformer. An unlimited one is
-    // PowerSystems' INFINITE_BOUND on the row's base, never zero, which is a
-    // real bound.
-    for kind in ["Line", "TransformerCircuit"] {
-        if let Some(rows) = doc["components"]
-            .get_mut(kind)
-            .and_then(Value::as_array_mut)
-        {
-            for row in rows {
-                for key in ["rating", "rating_b", "rating_c"] {
-                    if row.get(key).is_some_and(Value::is_null) {
-                        if key == "rating" {
-                            row[key] = json!(INFINITE_BOUND * base(row)?);
-                        } else {
-                            row.as_object_mut().expect("branch row").remove(key);
-                        }
-                    }
-                }
-            }
-        }
-    }
     for (kind, list) in doc["components"].as_object().expect("constructed object") {
         for (index, row) in list
             .as_array()
@@ -1313,9 +1306,9 @@ pub(super) fn write_document(
             .iter()
             .enumerate()
         {
-            let root = format!("components.{kind}[{index}]");
-            let bad_path = null_path(row, &root);
-            if let Some(path) = bad_path {
+            if has_null(row)
+                && let Some(path) = null_path(row, &format!("components.{kind}[{index}]"))
+            {
                 return Err(error(format!("nonfinite numeric output at {path}")));
             }
         }
@@ -1327,9 +1320,6 @@ pub(super) fn write_document(
             warnings.push(&codes::EMIT_SIENNA.extras_dropped,"cross-version write retains the typed electrical value; source-only fields require a version-specific migration");
         }
     }
-    // The nullable companion reference is part of SystemDocument, not a
-    // nonfinite numeric sentinel. Validate generated numeric fields before
-    // merging permitted source nulls.
     Ok((doc, warnings))
 }
 

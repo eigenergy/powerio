@@ -1161,22 +1161,16 @@ fn emit_sienna_text(
     module: &PioModule<BalancedNetwork>,
     format: TargetFormat,
 ) -> Option<std::result::Result<TextEmission, powerio_core::Error>> {
-    if matches!(
-        format,
-        TargetFormat::PowerSystemsJson | TargetFormat::SiennaJson { .. }
-    ) && let Err(error) = net.check_thermal_limits()
-    {
-        return Some(Err(core_error(error)));
-    }
-    let written = if format == TargetFormat::PowerSystemsJson {
-        sienna::powersystems::write(
+    // Both writers validate the thermal limits in `write_document`.
+    let written = match format {
+        TargetFormat::PowerSystemsJson => sienna::powersystems::write(
             net,
             module.extensions().get(sienna::powersystems::EXTENSION),
-        )
-    } else if let TargetFormat::SiennaJson { version } = format {
-        sienna::write(net, version, module.extensions().get(sienna::EXTENSION))
-    } else {
-        return None;
+        ),
+        TargetFormat::SiennaJson { version } => {
+            sienna::write(net, version, module.extensions().get(sienna::EXTENSION))
+        }
+        _ => return None,
     };
     Some(written.map_err(core_error).map(|mut emission| {
         append_emit_warnings(net, format, &mut emission);
@@ -1205,7 +1199,13 @@ fn echo_text(module: &PioModule<BalancedNetwork>, target: TargetFormat) -> Optio
     let text = std::str::from_utf8(buffer.bytes()).ok()?;
     if let TargetFormat::SiennaJson { version } = target
         && version != 0
-        && sienna::document_version(text).ok()? != version
+        // The parse retained the document, so its version needs no second parse.
+        && match module.extensions().get(sienna::EXTENSION) {
+            Some(document) => sienna::version(document),
+            None => sienna::document_version(text),
+        }
+        .ok()?
+            != version
     {
         return None;
     }

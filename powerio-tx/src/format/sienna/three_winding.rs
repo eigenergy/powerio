@@ -169,7 +169,8 @@ pub(super) fn write(
                 json!({"id":arc,"from_id":buses[&w.bus],"to_id":star}),
             );
             let terminal_kv = bus_by_id[&w.bus].base_kv;
-            let mut circuit = json!({"id":circuits[i],"available":t.in_service && t.winding_in_service()[i],"arc":arc,"r":r,"x":x,"tap":w.tap,"alpha":w.shift.to_radians(),"base_power":net.base_mva(),"power_units":"NATURAL_UNITS","parameter_units":"COMPONENT_BASE","rating":w.rate_a,"rating_b":w.rate_b,"rating_c":w.rate_c});
+            let mut circuit = json!({"id":circuits[i],"available":t.in_service && t.winding_in_service()[i],"arc":arc,"r":r,"x":x,"tap":w.tap,"alpha":w.shift.to_radians(),"base_power":net.base_mva(),"power_units":"NATURAL_UNITS","parameter_units":"COMPONENT_BASE",});
+            super::put_ratings(&mut circuit, [w.rate_a, w.rate_b, w.rate_c], net.base_mva());
             if terminal_kv > 0.0 {
                 circuit["base_voltage_primary"] = json!(terminal_kv);
                 circuit["base_voltage_secondary"] = json!(1.0);

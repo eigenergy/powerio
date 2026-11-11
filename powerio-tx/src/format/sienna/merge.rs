@@ -117,10 +117,10 @@ pub(super) fn preserve_unmapped(
                             if row.get("reactive_power_limits").is_none() {
                                 o.remove("reactive_power_limits");
                             }
-                            // The writer omits a rating that imposes no bound,
+                            // The writer omits a secondary rating that imposes no bound,
                             // so a retained finite rating must not return.
                             if matches!(kind.as_str(), "Line" | "TransformerCircuit") {
-                                for key in ["rating", "rating_b", "rating_c"] {
+                                for key in ["rating_b", "rating_c"] {
                                     if row.get(key).is_none() {
                                         o.remove(key);
                                     }

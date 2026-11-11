@@ -6000,24 +6000,17 @@ fn apply_branch_operational_limits(
             crate::thermal_limit::finite(value)?,
         ));
     }
-    branch.rate_a = apparent_by_side
-        .iter()
-        .filter_map(|limits| limits.permanent)
-        .reduce(f64::min)
-        .map(crate::thermal_limit::finite)
-        .transpose()?
-        .unwrap_or(f64::INFINITY);
+    branch.rate_a = crate::thermal_limit::from_option(
+        apparent_by_side
+            .iter()
+            .filter_map(|limits| limits.permanent)
+            .reduce(f64::min),
+    )?;
     let apparent_temporary = combined_temporary_limits(&apparent_by_side);
-    branch.rate_b = apparent_temporary
-        .first()
-        .map(|(_, value)| crate::thermal_limit::finite(*value))
-        .transpose()?
-        .unwrap_or(f64::INFINITY);
-    branch.rate_c = apparent_temporary
-        .get(1)
-        .map(|(_, value)| crate::thermal_limit::finite(*value))
-        .transpose()?
-        .unwrap_or(f64::INFINITY);
+    branch.rate_b =
+        crate::thermal_limit::from_option(apparent_temporary.first().map(|(_, value)| *value))?;
+    branch.rate_c =
+        crate::thermal_limit::from_option(apparent_temporary.get(1).map(|(_, value)| *value))?;
 
     if !current_by_side.is_empty() {
         let permanent = current_by_side
@@ -6178,32 +6171,12 @@ fn read_three_winding_transformer(
             let factor = super::powsybl_psse::current_limit_mva(1.0, level.nominal_v);
             (current, factor)
         };
-        windings[side].rate_a = crate::thermal_limit::scaled(
-            ratings
-                .permanent
-                .map(crate::thermal_limit::finite)
-                .transpose()?
-                .unwrap_or(f64::INFINITY),
-            factor,
-        )?;
-        windings[side].rate_b = crate::thermal_limit::scaled(
-            ratings
-                .temporary
-                .first()
-                .map(|(_, _, value)| crate::thermal_limit::finite(*value))
-                .transpose()?
-                .unwrap_or(f64::INFINITY),
-            factor,
-        )?;
-        windings[side].rate_c = crate::thermal_limit::scaled(
-            ratings
-                .temporary
-                .get(1)
-                .map(|(_, _, value)| crate::thermal_limit::finite(*value))
-                .transpose()?
-                .unwrap_or(f64::INFINITY),
-            factor,
-        )?;
+        let stated = |value: Option<f64>| {
+            crate::thermal_limit::scaled(crate::thermal_limit::from_option(value)?, factor)
+        };
+        windings[side].rate_a = stated(ratings.permanent)?;
+        windings[side].rate_b = stated(ratings.temporary.first().map(|(_, _, value)| *value))?;
+        windings[side].rate_c = stated(ratings.temporary.get(1).map(|(_, _, value)| *value))?;
         // Unselected groups are the winding's further rating sets, as they
         // are a branch's.
         let mut named = BTreeMap::new();
@@ -8152,10 +8125,16 @@ struct XiidmWriteIndex<'a> {
     // Track only connectables named by extensions. A terminal in the input
     // is insufficient: its equipment or containing hierarchy may be omitted.
     extension_targets: HashMap<ComponentId, Cell<bool>>,
+    /// The SlackTerminal candidates, computed once per write.
+    slack_terminal: Vec<TerminalReference>,
 }
 
 impl<'a> XiidmWriteIndex<'a> {
-    fn new(network: &'a BalancedNetwork, detailed: &'a DetailedConnectivity) -> Result<Self> {
+    fn new(
+        network: &'a BalancedNetwork,
+        detailed: &'a DetailedConnectivity,
+        slack_terminal: &[TerminalReference],
+    ) -> Result<Self> {
         let metadata = detailed
             .component_metadata
             .iter()
@@ -8288,6 +8267,7 @@ impl<'a> XiidmWriteIndex<'a> {
             boundary_calculation_loads: HashSet::new(),
             boundary_calculation_generators: HashSet::new(),
             extension_targets: HashMap::new(),
+            slack_terminal: slack_terminal.to_vec(),
         };
 
         for generator in network.generators() {
@@ -8306,10 +8286,10 @@ impl<'a> XiidmWriteIndex<'a> {
                     .insert(component_id("storage", id)?, Cell::new(false));
             }
         }
-        for reference in slack_terminal_candidates(network) {
+        for reference in slack_terminal {
             index
                 .extension_targets
-                .insert(reference.equipment, Cell::new(false));
+                .insert(reference.equipment.clone(), Cell::new(false));
         }
 
         for value in &detailed.bus_breaker_buses {
@@ -8861,7 +8841,7 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
         validate_xiidm_tap_changers(detailed)?;
         validate_xiidm_reactive_limits(detailed)?;
         validate_xiidm_dc_emission(detailed)?;
-        let index = XiidmWriteIndex::new(network, detailed)?;
+        let index = XiidmWriteIndex::new(network, detailed, &slack_terminal)?;
         let network_component = component_id("balanced_network", network.name())?;
         write_identifiable_children_at(index.metadata(&network_component), 2, &mut output);
         let mut contained = HashSet::new();
@@ -8947,7 +8927,7 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
     validate_xiidm_tap_changers(&detailed)?;
     validate_xiidm_reactive_limits(&detailed)?;
     validate_xiidm_dc_emission(&detailed)?;
-    let index = XiidmWriteIndex::new(network, &detailed)?;
+    let index = XiidmWriteIndex::new(network, &detailed, &slack_terminal)?;
     write_detailed_body(
         network,
         &detailed,
@@ -10022,7 +10002,7 @@ fn write_subnetwork(
         diagnostics,
     )?;
     write_slack_terminal_extension(
-        &slack_terminal_candidates(network),
+        &index.slack_terminal,
         index,
         &|component| members.contains(component),
         4,
@@ -10096,25 +10076,19 @@ fn write_active_power_control_extensions(
     Ok(())
 }
 
-/// The equipment whose terminal XIIDM states as the network's power flow
-/// reference.
-///
-/// IIDM has no bus type, so `BusType::Ref` rides PowSybl's SlackTerminal
-/// extension, which names one terminal per voltage level. PowSybl's load flow
-/// resolves that terminal's bus, so any connectable at the reference bus states
-/// the same fact; an in-service injection is preferred, and generators come
-/// first because a reference bus regulates through one.
-/// The terminal that states the network's reference bus as a SlackTerminal.
-///
-/// An injection at the reference bus is preferred, then a branch or three
-/// winding transformer terminal there, in service before out of service. A
-/// reference bus that hosts only branches still names one of their terminals,
-/// as PowSybl's PSS/E importer attaches the slack terminal to any terminal
-/// connected at the swing bus (psse-converter `SlackConverter.create`), so the
-/// reference does not move to another bus on readback.
 /// Every equipment terminal at the reference bus, in the order the
 /// SlackTerminal extension prefers them. The writer references the first one
 /// it actually wrote.
+///
+/// IIDM has no bus type, so `BusType::Ref` rides PowSybl's SlackTerminal
+/// extension. PowSybl's load flow resolves that terminal's bus, so any
+/// connectable at the reference bus states the same fact. An injection is
+/// preferred (generators first, because a reference bus regulates through
+/// one), then a branch or three winding transformer terminal, in service
+/// before out of service. A reference bus that hosts only branches still names
+/// one of their terminals, as PowSybl's PSS/E importer attaches the slack
+/// terminal to any terminal connected at the swing bus (psse-converter
+/// `SlackConverter.create`), so the reference does not move on readback.
 fn slack_terminal_candidates(network: &BalancedNetwork) -> Vec<TerminalReference> {
     let Some(reference) = network
         .buses()
@@ -10124,10 +10098,10 @@ fn slack_terminal_candidates(network: &BalancedNetwork) -> Vec<TerminalReference
     else {
         return Vec::new();
     };
-    let (mut in_service, out_of_service): (Vec<_>, Vec<_>) =
-        terminals_at_bus(network, reference).partition(|(_, in_service)| *in_service);
-    in_service.extend(out_of_service);
-    in_service
+    let mut terminals: Vec<_> = terminals_at_bus(network, reference).collect();
+    // A stable sort keeps the equipment order within each service state.
+    terminals.sort_by_key(|(_, in_service)| !*in_service);
+    terminals
         .into_iter()
         .map(|(terminal, _)| terminal)
         .collect()
@@ -10136,24 +10110,21 @@ fn slack_terminal_candidates(network: &BalancedNetwork) -> Vec<TerminalReference
 /// An equipment terminal at `reference`: an injection before a branch or
 /// three winding transformer terminal, in service before out of service.
 fn terminal_at_bus(network: &BalancedNetwork, reference: BusId) -> Option<TerminalReference> {
-    let mut out_of_service = None;
-    for (terminal, in_service) in terminals_at_bus(network, reference) {
-        if in_service {
-            return Some(terminal);
-        }
-        out_of_service = out_of_service.or(Some(terminal));
-    }
-    out_of_service
+    // `min_by_key` keeps the first of equal keys, so this is the first in
+    // service terminal, else the first out of service one.
+    terminals_at_bus(network, reference)
+        .min_by_key(|(_, in_service)| !*in_service)
+        .map(|(terminal, _)| terminal)
 }
 
 /// The equipment terminals at `reference`, injections before branch and
 /// three winding transformer terminals, each with its service status.
-fn terminals_at_bus(
-    network: &BalancedNetwork,
+fn terminals_at_bus<'a>(
+    network: &'a BalancedNetwork,
     reference: BusId,
-) -> impl Iterator<Item = (TerminalReference, bool)> + '_ {
-    let one = |kind: &'static str, uid: Option<&str>, bus: BusId, in_service: bool| {
-        (kind, uid.map(str::to_owned), 1_u8, bus, in_service)
+) -> impl Iterator<Item = (TerminalReference, bool)> + 'a {
+    let one = |kind: &'static str, uid: Option<&'a str>, bus: BusId, in_service: bool| {
+        (kind, uid, 1_u8, bus, in_service)
     };
     let generators = network.generators().iter().map(move |value| {
         one(
@@ -10177,7 +10148,7 @@ fn terminals_at_bus(
         .map(move |value| one("shunt", value.uid.as_deref(), value.bus, value.in_service));
     let branches = network.branches().iter().flat_map(|value| {
         [(1, value.from), (2, value.to)]
-            .map(|(side, bus)| ("branch", value.uid.clone(), side, bus, value.in_service))
+            .map(|(side, bus)| ("branch", value.uid.as_deref(), side, bus, value.in_service))
     });
     let transformers = network.transformers_3w().iter().flat_map(|value| {
         let in_service = value.in_service;
@@ -10187,7 +10158,15 @@ fn terminals_at_bus(
             .map(|winding| winding.bus)
             .into_iter()
             .zip(1_u8..)
-            .map(move |(bus, side)| ("transformer_3w", value.uid.clone(), side, bus, in_service))
+            .map(move |(bus, side)| {
+                (
+                    "transformer_3w",
+                    value.uid.as_deref(),
+                    side,
+                    bus,
+                    in_service,
+                )
+            })
     });
     generators
         .chain(storage)
@@ -10196,8 +10175,9 @@ fn terminals_at_bus(
         .chain(branches)
         .chain(transformers)
         .filter_map(move |(kind, uid, terminal, bus, in_service)| {
+            // Filter by bus before the identifier is allocated.
             let uid = uid.filter(|_| bus == reference)?;
-            let equipment = component_id(kind, &uid).ok()?;
+            let equipment = component_id(kind, uid).ok()?;
             Some((
                 TerminalReference {
                     equipment,
@@ -12919,9 +12899,7 @@ fn write_three_winding_transformer(
     });
     let limits_attributes = selected_operational_limits_attributes(index, &component, 3, |side| {
         let winding = &transformer.windings[usize::from(side - 1)];
-        !winding.rate_a.is_infinite()
-            || !winding.rate_b.is_infinite()
-            || !winding.rate_c.is_infinite()
+        states_a_limit([winding.rate_a, winding.rate_b, winding.rate_c])
     });
     output.push_str(&format!(
         "    <iidm:threeWindingsTransformer id=\"{}\"{} ratedU0=\"{}\" r1=\"{}\" x1=\"{}\" g1=\"{}\" b1=\"{}\" ratedU1=\"{}\" r2=\"{}\" x2=\"{}\" g2=\"0\" b2=\"0\" ratedU2=\"{}\" r3=\"{}\" x3=\"{}\" g3=\"0\" b3=\"0\" ratedU3=\"{}\"{}{}{}{}>\n",
@@ -12993,10 +12971,7 @@ fn write_three_winding_transformer(
         write_exact_operational_limit_groups(index, &component, output, diagnostics);
     } else {
         for (side, winding) in transformer.windings.iter().enumerate() {
-            if !winding.rate_a.is_infinite()
-                || !winding.rate_b.is_infinite()
-                || !winding.rate_c.is_infinite()
-            {
+            if states_a_limit([winding.rate_a, winding.rate_b, winding.rate_c]) {
                 output.push_str(&format!(
                     "      <iidm:operationalLimitsGroup{} id=\"powerio\">\n",
                     side + 1
@@ -13020,13 +12995,10 @@ fn write_three_winding_transformer(
                 .into_iter()
                 .partition(|rating| rating.rate_mva.is_infinite());
             for rating in unlimited {
-                diagnostics.push(
-                    &codes::EMIT_XIIDM.rating_set_dropped,
-                    format!(
-                        "three winding transformer `{id}` winding {} rating set {} states no limit and was not written: an XIIDM limits group needs a finite permanent limit",
-                        side + 1,
-                        rating.name
-                    ),
+                report_unlimited_rating_set(
+                    &format!("three winding transformer `{id}` winding {}", side + 1),
+                    &rating.name,
+                    diagnostics,
                 );
             }
             for (index, rating) in limited.into_iter().enumerate() {
@@ -13548,10 +13520,24 @@ fn tap_changer_from_control(
     })
 }
 
+/// Whether any of a, b, and c ratings bounds the flow.
+fn states_a_limit(ratings: [f64; 3]) -> bool {
+    ratings.iter().any(|rating| !rating.is_infinite())
+}
+
+/// An XIIDM limits group needs a finite permanent limit, so a rating set that
+/// imposes no bound is reported rather than written.
+fn report_unlimited_rating_set(owner: &str, name: &str, diagnostics: &mut Diagnostics) {
+    diagnostics.push(
+        &codes::EMIT_XIIDM.rating_set_dropped,
+        format!(
+            "{owner} rating set {name} states no limit and was not written: an XIIDM limits group needs a finite permanent limit"
+        ),
+    );
+}
+
 fn has_branch_operational_limits(branch: &Branch) -> bool {
-    !branch.rate_a.is_infinite()
-        || !branch.rate_b.is_infinite()
-        || !branch.rate_c.is_infinite()
+    states_a_limit([branch.rate_a, branch.rate_b, branch.rate_c])
         || branch.current_ratings.is_some()
         || branch
             .rating_sets
@@ -13650,13 +13636,7 @@ fn write_branch_operational_limits(
         .iter()
         .filter(|rating| rating.rate_mva.is_infinite())
     {
-        diagnostics.push(
-            &codes::EMIT_XIIDM.rating_set_dropped,
-            format!(
-                "branch `{equipment}` rating set {} states no limit and was not written: an XIIDM limits group needs a finite permanent limit",
-                rating.name
-            ),
-        );
+        report_unlimited_rating_set(&format!("branch `{equipment}`"), &rating.name, diagnostics);
     }
     if !has_branch_operational_limits(branch) {
         return;

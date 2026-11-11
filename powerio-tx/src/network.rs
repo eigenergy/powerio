@@ -3763,8 +3763,12 @@ impl Transformer3W {
     /// True when the lowering adds a magnetizing shunt at the star bus: a
     /// nonzero admittance that connects at the star point.
     pub(crate) fn has_star_magnetizing_shunt(&self) -> bool {
-        self.magnetizing_connection == MagnetizingConnection::StarPoint
-            && (self.mag_g != 0.0 || self.mag_b != 0.0)
+        self.magnetizing_at(MagnetizingConnection::StarPoint)
+    }
+
+    /// True when a nonzero magnetizing admittance connects at `place`.
+    fn magnetizing_at(&self, place: MagnetizingConnection) -> bool {
+        self.magnetizing_connection == place && (self.mag_g != 0.0 || self.mag_b != 0.0)
     }
 
     /// True when a nonzero magnetizing admittance connects somewhere other
@@ -3854,36 +3858,34 @@ impl Transformer3W {
         }
     }
 
+    fn decode_winding_rating_sets(
+        &self,
+    ) -> Option<std::result::Result<[Vec<BranchRatingSet>; 3], serde_json::Error>> {
+        self.extras.get(WINDING_RATING_SETS_EXTRA).map(|value| {
+            <[Vec<BranchRatingSet>; 3]>::deserialize(
+                powerio_core::__implementation::nonfinite::NonFiniteDe(value),
+            )
+        })
+    }
+
     fn stored_winding_rating_sets(&self) -> [Vec<BranchRatingSet>; 3] {
-        self.extras
-            .get(WINDING_RATING_SETS_EXTRA)
-            .and_then(|value| {
-                <[Vec<BranchRatingSet>; 3]>::deserialize(
-                    powerio_core::__implementation::nonfinite::NonFiniteDe(value),
-                )
-                .ok()
-            })
+        self.decode_winding_rating_sets()
+            .and_then(std::result::Result::ok)
             .unwrap_or_default()
     }
 
     fn checked_winding_rating_sets(&self) -> Result<[Vec<BranchRatingSet>; 3]> {
-        self.extras
-            .get(WINDING_RATING_SETS_EXTRA)
-            .map(|value| {
-                let sets = <[Vec<BranchRatingSet>; 3]>::deserialize(
-                    powerio_core::__implementation::nonfinite::NonFiniteDe(value),
-                )
-                .map_err(|error| Error::FormatRead {
-                    format: "network",
-                    message: format!("invalid winding rating sets: {error}"),
-                })?;
-                for rating in sets.iter().flatten() {
-                    crate::thermal_limit::validate(rating.rate_mva)?;
-                }
-                Ok(sets)
-            })
-            .transpose()
-            .map(Option::unwrap_or_default)
+        let Some(decoded) = self.decode_winding_rating_sets() else {
+            return Ok(Default::default());
+        };
+        let sets = decoded.map_err(|error| Error::FormatRead {
+            format: "network",
+            message: format!("invalid winding rating sets: {error}"),
+        })?;
+        for rating in sets.iter().flatten() {
+            crate::thermal_limit::validate(rating.rate_mva)?;
+        }
+        Ok(sets)
     }
 
     /// The sole adjustable winding for PSS/E bus-to-bus correction. The
@@ -4018,9 +4020,7 @@ impl Transformer3W {
             branch(&self.windings[1], zs[1]),
             branch(&self.windings[2], zs[2]),
         ];
-        if self.magnetizing_connection == MagnetizingConnection::Winding1Terminal
-            && (self.mag_g != 0.0 || self.mag_b != 0.0)
-        {
+        if self.magnetizing_at(MagnetizingConnection::Winding1Terminal) {
             let tap = branches[0].calc_effective_tap();
             let referral = tap * tap;
             let (g, b) = (self.mag_g * referral, self.mag_b * referral);
@@ -4541,14 +4541,9 @@ impl BalancedNetwork {
                 })
             }
         };
+        self.check_thermal_limits()?;
         // Format the context only on the error path, not once per branch.
         for (i, br) in self.branches().iter().enumerate() {
-            for limit in [br.rate_a, br.rate_b, br.rate_c] {
-                crate::thermal_limit::validate(limit)?;
-            }
-            for set in &br.rating_sets {
-                crate::thermal_limit::validate(set.rate_mva)?;
-            }
             for bus in [br.from, br.to] {
                 if !ids.contains(&bus) {
                     return Err(Error::FormatRead {
@@ -4614,11 +4609,7 @@ impl BalancedNetwork {
             }
         }
         for t in self.transformers_3w() {
-            t.checked_winding_rating_sets()?;
             for w in &t.windings {
-                for limit in [w.rate_a, w.rate_b, w.rate_c] {
-                    crate::thermal_limit::validate(limit)?;
-                }
                 check(w.bus, "3-winding transformer")?;
                 if let Some(control) = w.control.as_ref() {
                     if control.controlled_bus_on_winding_side

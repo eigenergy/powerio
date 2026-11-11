@@ -1053,14 +1053,14 @@ fn write_branch(
             "ActivePowerLimit",
             &format!("{set_name}_rate_a"),
             None,
-            crate::thermal_limit::as_option(branch.rate_a).unwrap_or(0.0) * WATT,
+            crate::thermal_limit::to_zero_unlimited(branch.rate_a) * WATT,
             TYPE_HIGH_CONT,
         ),
         limit_value(
             "ActivePowerLimit",
             &format!("{set_name}_rate_b"),
             None,
-            crate::thermal_limit::as_option(branch.rate_b).unwrap_or(0.0) * WATT,
+            crate::thermal_limit::to_zero_unlimited(branch.rate_b) * WATT,
             TYPE_HIGH_EMER,
         ),
         limit_value(

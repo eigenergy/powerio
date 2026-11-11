@@ -6133,12 +6133,7 @@ fn apply_limits_to_targets(
             else {
                 continue;
             };
-            let kind = match version {
-                CgmesVersion::V2_4_15 => {
-                    store.enum_value(limit_type, "entsoe:OperationalLimitType.limitType")
-                }
-                CgmesVersion::V3_0 => store.enum_value(limit_type, "eu:OperationalLimitType.kind"),
-            };
+            let kind = limit_kind(store, limit_type, version);
             let class = store.class_of(limit).unwrap_or_default();
             let Some(value) = operational_limit_value(store, limit, class)? else {
                 continue;
@@ -6180,11 +6175,8 @@ fn apply_limits_to_targets(
             };
             if let Some(slot) = slot {
                 // Several sets can constrain one branch; the binding limit
-                // is the smallest.
-                let limit = crate::thermal_limit::finite(mva)?;
-                if crate::thermal_limit::as_option(*slot).is_none_or(|existing| mva < existing) {
-                    *slot = limit;
-                }
+                // is the smallest, and an unset slot is infinite.
+                *slot = slot.min(crate::thermal_limit::finite(mva)?);
             }
         }
     }

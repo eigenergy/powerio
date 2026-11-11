@@ -23,9 +23,21 @@ pub(crate) fn as_option(value: f64) -> Option<f64> {
     value.is_finite().then_some(value)
 }
 
+/// The inverse of [`as_option`]: an absent rating imposes no bound.
+pub(crate) fn from_option(value: Option<f64>) -> Result<f64> {
+    value.map_or(Ok(f64::INFINITY), finite)
+}
+
 /// Formats such as MATPOWER use zero to mean no bound.
 pub(crate) fn from_zero_unlimited(value: f64) -> Result<f64> {
     validate(value).map(|value| if value == 0.0 { f64::INFINITY } else { value })
+}
+
+/// The inverse of [`from_zero_unlimited`]: an unlimited rating is written as
+/// zero. A zero bound becomes indistinguishable from no bound, which
+/// `append_emit_warnings` reports for these formats.
+pub(crate) fn to_zero_unlimited(value: f64) -> f64 {
+    as_option(value).unwrap_or(0.0)
 }
 
 pub(crate) fn scaled(value: f64, factor: f64) -> Result<f64> {

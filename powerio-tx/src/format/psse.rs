@@ -108,7 +108,7 @@ fn psse_extra_rating_slots(
         if let Some(slot) = psse_extra_rating_slot(&rating.name)
             && !used[slot]
         {
-            values[slot] = crate::thermal_limit::as_option(rating.rate_mva).unwrap_or(0.0);
+            values[slot] = crate::thermal_limit::to_zero_unlimited(rating.rate_mva);
             used[slot] = true;
             continue;
         }
@@ -118,7 +118,7 @@ fn psse_extra_rating_slots(
     for rating in deferred {
         let slot = used.iter().position(|is_used| !*is_used);
         if let Some(slot) = slot {
-            values[slot] = crate::thermal_limit::as_option(rating.rate_mva).unwrap_or(0.0);
+            values[slot] = crate::thermal_limit::to_zero_unlimited(rating.rate_mva);
             used[slot] = true;
         }
         report(rating, slot);
@@ -1402,9 +1402,9 @@ fn write_psse_rev_inner(
                 num(br.x),
                 num(b_total),
                 name,
-                num(crate::thermal_limit::as_option(br.rate_a).unwrap_or(0.0)),
-                num(crate::thermal_limit::as_option(br.rate_b).unwrap_or(0.0)),
-                num(crate::thermal_limit::as_option(br.rate_c).unwrap_or(0.0)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_a)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_b)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_c)),
                 num(extra_ratings[0]),
                 num(extra_ratings[1]),
                 num(extra_ratings[2]),
@@ -1439,9 +1439,9 @@ fn write_psse_rev_inner(
                 num(br.r),
                 num(br.x),
                 num(b_total),
-                num(crate::thermal_limit::as_option(br.rate_a).unwrap_or(0.0)),
-                num(crate::thermal_limit::as_option(br.rate_b).unwrap_or(0.0)),
-                num(crate::thermal_limit::as_option(br.rate_c).unwrap_or(0.0)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_a)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_b)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_c)),
                 num(charging.g_fr),
                 num(bi),
                 num(charging.g_to),
@@ -1675,9 +1675,9 @@ fn write_psse_rev_inner(
                 "{}, 0, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {control}",
                 num(br.calc_effective_tap() * ratio2),
                 num(br.shift),
-                num(crate::thermal_limit::as_option(br.rate_a).unwrap_or(0.0)),
-                num(crate::thermal_limit::as_option(br.rate_b).unwrap_or(0.0)),
-                num(crate::thermal_limit::as_option(br.rate_c).unwrap_or(0.0)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_a)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_b)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_c)),
                 num(extra_ratings[0]),
                 num(extra_ratings[1]),
                 num(extra_ratings[2]),
@@ -1694,9 +1694,9 @@ fn write_psse_rev_inner(
                 "{}, 0, {}, {}, {}, {}, {control}",
                 num(br.calc_effective_tap() * ratio2),
                 num(br.shift),
-                num(crate::thermal_limit::as_option(br.rate_a).unwrap_or(0.0)),
-                num(crate::thermal_limit::as_option(br.rate_b).unwrap_or(0.0)),
-                num(crate::thermal_limit::as_option(br.rate_c).unwrap_or(0.0)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_a)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_b)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_c)),
             );
         }
         let _ = writeln!(s, "{}, 0", num(ratio2));
@@ -1891,9 +1891,9 @@ fn write_psse_rev_inner(
                     num(w.tap),
                     num(w.nominal_kv),
                     num(w.shift),
-                    num(crate::thermal_limit::as_option(w.rate_a).unwrap_or(0.0)),
-                    num(crate::thermal_limit::as_option(w.rate_b).unwrap_or(0.0)),
-                    num(crate::thermal_limit::as_option(w.rate_c).unwrap_or(0.0)),
+                    num(crate::thermal_limit::to_zero_unlimited(w.rate_a)),
+                    num(crate::thermal_limit::to_zero_unlimited(w.rate_b)),
+                    num(crate::thermal_limit::to_zero_unlimited(w.rate_c)),
                     num(extra_ratings[0]),
                     num(extra_ratings[1]),
                     num(extra_ratings[2]),
@@ -1911,9 +1911,9 @@ fn write_psse_rev_inner(
                     num(w.tap),
                     num(w.nominal_kv),
                     num(w.shift),
-                    num(crate::thermal_limit::as_option(w.rate_a).unwrap_or(0.0)),
-                    num(crate::thermal_limit::as_option(w.rate_b).unwrap_or(0.0)),
-                    num(crate::thermal_limit::as_option(w.rate_c).unwrap_or(0.0)),
+                    num(crate::thermal_limit::to_zero_unlimited(w.rate_a)),
+                    num(crate::thermal_limit::to_zero_unlimited(w.rate_b)),
+                    num(crate::thermal_limit::to_zero_unlimited(w.rate_c)),
                 );
             }
         }

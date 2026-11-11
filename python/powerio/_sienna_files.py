@@ -231,7 +231,6 @@ def _temporal_document(document, original):
 
 def emit(module, format: str, destination=None):
     import powerio as pio
-    extension = module.extension(KEY)
     result = pio.emit(module, FORMATS[format])
     if result.text is None:
         raise ValueError("Expected Sienna document text")
@@ -239,6 +238,8 @@ def emit(module, format: str, destination=None):
     _temporal_document(document, module.extension("org.eigenergy.powerio.sienna"))
     files = {}
     if document.get("time_series_storage_file"):
+        # Decode the companion arrays only when a companion is written.
+        extension = module.extension(KEY)
         if extension is None:
             raise ValueError("Sienna companion arrays are missing from this module")
         filename = _name(document["time_series_storage_file"])

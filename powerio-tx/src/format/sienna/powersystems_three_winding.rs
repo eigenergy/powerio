@@ -75,13 +75,21 @@ pub(super) fn decode(row: &mut Value, doc: &mut Value, next: &mut i64, base: f64
 #[allow(clippy::too_many_lines)] // A parent and its three circuits are converted together.
 pub(super) fn prepare(doc: &mut Value, base: f64, warnings: &mut Diagnostics) -> Result<()> {
     let parents = rows(doc, "ThreeWindingTransformer")?.to_vec();
+    if parents.is_empty() {
+        doc["components"]
+            .as_object_mut()
+            .expect("components")
+            .remove("ThreeWindingTransformer");
+        return Ok(());
+    }
     let circuits: BTreeMap<_, _> = rows(doc, "TransformerCircuit")?
         .iter()
         .map(|r| Ok((integer(r, "id")?, r.clone())))
         .collect::<Result<_>>()?;
-    let arcs: BTreeMap<_, _> = rows(doc, "Arc")?
+    // Only a primary-terminal magnetizing shunt reads an arc, for its bus.
+    let arc_from: BTreeMap<_, _> = rows(doc, "Arc")?
         .iter()
-        .map(|r| Ok((integer(r, "id")?, r.clone())))
+        .map(|r| Ok((integer(r, "id")?, r["from_id"].clone())))
         .collect::<Result<_>>()?;
     let mut removed = BTreeSet::new();
     let mut next = doc["components"]
@@ -117,13 +125,9 @@ pub(super) fn prepare(doc: &mut Value, base: f64, warnings: &mut Diagnostics) ->
             // aggregate rating. An unlimited circuit, stated by absence or by
             // the marker on the circuit's own base, is PowerSystems' unbounded
             // marker, never a finite zero bound.
-            let rating = super::thermal_limit(c, "rating", 1.0 / basis)?;
-            let marked = match c.get("rating").and_then(Value::as_f64) {
-                Some(mva) => super::is_infinite_bound(mva / super::base(c)?),
-                None => false,
-            };
-            row[format!("rating_{side}")] = json!(if rating.is_finite() && !marked {
-                rating
+            let rating = super::branch_rating(c, "rating", 1.0)?;
+            row[format!("rating_{side}")] = json!(if rating.is_finite() {
+                crate::thermal_limit::scaled(rating, 1.0 / basis)?
             } else {
                 super::INFINITE_BOUND
             });
@@ -163,14 +167,14 @@ pub(super) fn prepare(doc: &mut Value, base: f64, warnings: &mut Diagnostics) ->
         row["rating"] = Value::Null;
         if row["shunt_location"] == "PRIMARY" {
             let c = &circuits[&integer(&row, "primary_circuit")?];
-            let arc = &arcs[&integer(c, "arc")?];
+            let from_id = &arc_from[&integer(c, "arc")?];
             let mut y = row["magnetizing_shunt"].clone();
             scale(&mut y, base);
             if y["real"] != 0.0 || y["imag"] != 0.0 {
                 push(
                     doc,
                     "FixedAdmittance",
-                    json!({"id":next,"name":format!("{}_magnetizing",row["name"].as_str().unwrap_or("transformer")),"available":any_available,"bus":arc["from_id"],"Y":y,"base_power":base,"admittance_units":"COMPONENT_MVAR","power_units":"NATURAL_UNITS"}),
+                    json!({"id":next,"name":format!("{}_magnetizing",row["name"].as_str().unwrap_or("transformer")),"available":any_available,"bus":from_id,"Y":y,"base_power":base,"admittance_units":"COMPONENT_MVAR","power_units":"NATURAL_UNITS"}),
                 );
                 next += 1;
                 warnings.push(&codes::EMIT_SIENNA.field_dropped,"PowerSystems represents primary-terminal magnetizing admittance as a separate fixed shunt");

@@ -1438,18 +1438,25 @@ pub fn parse_pypsa_csv_time_series(source: &powerio_core::Source) -> Result<Pyps
         .collect();
     let load_rows = name_rows("loads.csv")?;
     let generator_rows = name_rows("generators.csv")?;
-    let line_rows = name_rows("lines.csv")?;
-    let transformer_rows = name_rows("transformers.csv")?;
     // The static reader appends transformers after all lines. Each table has
     // its own name space, so a line and transformer may share a source name.
+    // One parse of each table gives both its name index and its ratings.
+    let mut line_rows = HashMap::new();
+    let mut transformer_rows = HashMap::new();
     let mut branch_nominal_ratings = Vec::new();
     let mut line_count = 0;
-    for file in ["lines.csv", "transformers.csv"] {
+    for (file, rows) in [
+        ("lines.csv", &mut line_rows),
+        ("transformers.csv", &mut transformer_rows),
+    ] {
         if let Some(table) = folder.optional(file)? {
             if file == "lines.csv" {
                 line_count = table.rows.len();
             }
-            for row in &table.rows {
+            for (i, row) in table.rows.iter().enumerate() {
+                if let Some(name) = row.get("name") {
+                    rows.insert(name.clone(), i);
+                }
                 branch_nominal_ratings.push(thermal_nominal(row)?);
             }
         }
