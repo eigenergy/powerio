@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The validation oracles and the `bench` extra use pandapower 3.5.6 instead
+  of 3.2.2.
 - XIIDM and JIIDM output omit an `activePowerControl` or `slackTerminal`
   extension when its target equipment cannot be written, and report
   the format's `FIELD_DROPPED` diagnostic alongside the equipment's existing
