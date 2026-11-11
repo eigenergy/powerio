@@ -274,11 +274,13 @@ The standard case solver property fixture lives at
 margin, zero impedance skips, row sum checks, SPD checks, and a condition
 estimate when the solver input is SPD.
 
-`IndexedNetwork::branch_edges` yields the in-service topology as undirected
+`IndexedNetwork::branch_edges` yields in-service branches as undirected
 edges `(branch, from, to)`, with `branch` an index into the branch table and
-`from` and `to` dense bus indices. Parallel branches stay separate edges. Build
-a graph with any library from it: add `view.n()` nodes, so a bus with no
-in-service branch is a node too, then one edge per item. The connectivity
-report and the radial check work on the same edges.
+`from` and `to` dense bus indices. Parallel branches stay separate edges.
+The iterator does not include closed switches. The connectivity report and
+radial check also account for closed switches from
+`IndexedNetwork::closed_switches`. To build an equivalent graph, add those
+switch edges after mapping their bus IDs through `bus_index`, or merge closed
+switches before building the graph.
 
 `calc_ptdf_by_island` returns one sparse PTDF per connected component. It uses the same single factorization and global solve as the ordinary PTDF builder, then scatters stored entries into component-local matrices in one pass. Each result carries dense source bus indices and source branch indices so callers can relate local matrix rows and columns back to the network. Closed switches must be merged before this call; the DC incidence matrix models branches, not unmerged switch connections.
