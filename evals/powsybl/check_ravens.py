@@ -50,6 +50,13 @@ def data(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))["value"]["data"]
 
 
+def is_unlimited_rating(value: object) -> bool:
+    # The JSON IR encodes non-finite floats as strings.
+    return value == "Infinity" or (
+        isinstance(value, (int, float)) and math.isinf(value)
+    )
+
+
 def assert_diagnosed_losses(
     original: dict, restored: dict, diagnostics: list[dict]
 ) -> None:
@@ -57,7 +64,7 @@ def assert_diagnosed_losses(
         abs(gen["vg"] - 1.0) > 1e-12 for gen in original["generators"]
     )
     expected_rating_losses = sum(
-        math.isfinite(branch["rate_c"]) for branch in original["branches"]
+        not is_unlimited_rating(branch["rate_c"]) for branch in original["branches"]
     )
     messages = [
         entry["message"]
@@ -78,12 +85,9 @@ def assert_diagnosed_losses(
     # any value in the two fields excluded from direct-native equality.
     if any(gen["vg"] != 1.0 for gen in restored["generators"]):
         raise AssertionError("review the declared RAVENS generator setpoint recovery")
-    def is_unlimited(value: object) -> bool:
-        return value == "Infinity" or (
-            isinstance(value, (int, float)) and math.isinf(value)
-        )
-
-    if any(not is_unlimited(branch["rate_c"]) for branch in restored["branches"]):
+    if any(
+        not is_unlimited_rating(branch["rate_c"]) for branch in restored["branches"]
+    ):
         raise AssertionError(
             "RAVENS has no rate_c slot; the recovered limit must be unlimited"
         )
