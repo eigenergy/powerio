@@ -226,8 +226,7 @@ impl ApparentPower {
         } else {
             1.0
         };
-        let value = convert_power(self.value, factor, "apparent power rating")?;
-        require_nonnegative(value, "apparent power rating")
+        scale_rating(self.value, factor)
     }
 
     fn megavolt_amperes_value(self) -> Result<f64, Error> {
@@ -236,9 +235,22 @@ impl ApparentPower {
         } else {
             1.0
         };
-        let value = convert_power(self.value, factor, "apparent power rating")?;
-        require_nonnegative(value, "apparent power rating")
+        scale_rating(self.value, factor)
     }
+}
+
+fn scale_rating(value: f64, factor: f64) -> Result<f64, Error> {
+    if value == f64::INFINITY && factor.is_finite() && factor > 0.0 {
+        return Ok(value);
+    }
+    let converted = convert_power(value, factor, "apparent power rating")?;
+    if value > 0.0 && converted == 0.0 {
+        return Err(Error::new(
+            &codes::VALIDATE_UPDATE_VALUE_INVALID,
+            "apparent power rating underflows its target unit",
+        ));
+    }
+    require_nonnegative(converted, "apparent power rating")
 }
 
 fn convert_power(value: f64, factor: f64, field: &str) -> Result<f64, Error> {
@@ -1262,6 +1274,11 @@ fn apply_balanced_network_update(
         } => {
             require_no_terminal(terminal.as_deref(), "branch thermal rating")?;
             let replacement = rating.megavolt_amperes_value()?;
+            let replacement = if network.is_normalized() {
+                scale_rating(replacement, 1.0 / network.base_mva())?
+            } else {
+                replacement
+            };
             let index =
                 resolve_persisted_index(network.branches(), branch, BRANCH, "branches", |row| {
                     row.uid.as_deref()
@@ -2771,6 +2788,57 @@ mod tests {
             report.changes()[0].field(),
             UpdatedField::BranchThermalRating
         );
+    }
+
+    #[test]
+    fn thermal_updates_keep_zero_and_infinity_in_both_units() {
+        for normalized in [false, true] {
+            let physical = balanced_network();
+            let mut network = if normalized {
+                physical.to_normalized().unwrap()
+            } else {
+                physical
+            };
+            let before = network.branches()[1].clone();
+            for (quantity, expected) in [
+                (ApparentPower::from_volt_amperes(0.0), 0.0),
+                (
+                    ApparentPower::from_megavolt_amperes(f64::INFINITY),
+                    f64::INFINITY,
+                ),
+                (
+                    ApparentPower::from_megavolt_amperes(25.0),
+                    if normalized {
+                        25.0 / network.base_mva()
+                    } else {
+                        25.0
+                    },
+                ),
+            ] {
+                let report = apply_updates(
+                    &mut network,
+                    &[NetworkUpdate::BranchThermalRating {
+                        branch: component(BRANCH, "branch-1"),
+                        terminal: None,
+                        rating: quantity,
+                    }],
+                )
+                .unwrap();
+                assert!(!report.connectivity_changed());
+                let branch = &network.branches()[1];
+                assert_eq!(branch.rate_a, expected);
+                assert_eq!(branch.in_service, before.in_service);
+                assert_eq!(branch.r, before.r);
+                assert_eq!(branch.x, before.x);
+            }
+        }
+        for value in [f64::NAN, f64::NEG_INFINITY, -1.0, f64::from_bits(1)] {
+            assert!(
+                ApparentPower::from_volt_amperes(value)
+                    .megavolt_amperes_value()
+                    .is_err()
+            );
+        }
     }
 
     #[test]

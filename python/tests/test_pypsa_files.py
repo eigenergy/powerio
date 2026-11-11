@@ -11,6 +11,34 @@ import powerio as pio
 CASE = Path(__file__).resolve().parents[2] / "tests/data/case14.m"
 
 
+def test_native_time_varying_branch_limits(tmp_path):
+    import pandas as pd
+    import pypsa
+    network = pypsa.Network()
+    network.set_snapshots(pd.date_range("2026-01-01", periods=3, freq="h"))
+    network.add("Bus", "a", v_nom=110.0)
+    network.add("Bus", "b", v_nom=110.0)
+    network.add("Line", "varied", bus0="a", bus1="b", x=0.1, s_nom=100.0,
+                s_max_pu=[0.0, float("inf"), 0.75])
+    network.add("Line", "fixed", bus0="a", bus1="b", x=0.2, s_nom=20.0, s_max_pu=0.5)
+    network.add("Transformer", "varied", bus0="a", bus1="b", x=0.1, s_nom=50.0,
+                s_max_pu=[float("inf"), 0.0, 0.5])
+    source = tmp_path / "limits"
+    network.export_to_csv_folder(source)
+    module = pio.parse(source)
+    assert module.type_name == "powerio.TimeSeries<powerio.BalancedNetwork>"
+    native_limits = [
+        network.get_switchable_as_dense(kind, "s_max_pu").mul(network.components[kind].static.s_nom)
+        for kind in ["Line", "Transformer"]
+    ]
+    restored = pio.deserialize(pio.serialize(module).artifacts[0].data)
+    for index in range(3):
+        expected = [*native_limits[0].iloc[index], *native_limits[1].iloc[index]]
+        assert [b["rate_a"] for b in module.value[index].branches] == expected
+        assert [b["rate_a"] for b in restored.value[index].branches] == expected
+        assert all(b["in_service"] for b in restored.value[index].branches)
+
+
 @pytest.mark.parametrize("format,suffix", [("pypsa-netcdf", ".nc"), ("pypsa-hdf5", ".h5")])
 def test_binary_roundtrip_and_destination(format, suffix, tmp_path):
     source = pio.parse(CASE)

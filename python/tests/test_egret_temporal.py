@@ -119,5 +119,10 @@ def test_canonical_ratings_build_the_intended_native_egret_thermal_constraints()
 def test_native_egret_zero_limit_cannot_become_an_unlimited_powerio_branch(ratings):
     data = document()
     data["elements"]["branch"]["1"]["rating_long_term"]["values"] = list(ratings)
-    with pytest.raises(powerio.PowerIOError, match="zero thermal limit"):
-        powerio.parse(io.StringIO(json.dumps(data)), format="egret-json")
+    module = powerio.parse(io.StringIO(json.dumps(data)), format="egret-json")
+    restored = powerio.deserialize(powerio.serialize(module).text.encode())
+    for index, rating in enumerate(ratings):
+        assert restored.value[index].branches[0]["rate_a"] == rating
+        assert restored.value[index].branches[0]["in_service"] is True
+    output = json.loads(powerio.emit(restored, "egret-json").text)
+    assert output["elements"]["branch"]["1"]["rating_long_term"]["values"] == list(ratings)

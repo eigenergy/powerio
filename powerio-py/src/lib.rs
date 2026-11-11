@@ -1872,7 +1872,25 @@ fn balanced_field_to_py<'py>(
             }
         }
     }
-    serialized_value_field_to_py(py, value, field)
+    let result = serialized_value_field_to_py(py, value, field)?;
+    if field == "transformers_3w" {
+        for (index, transformer) in model.transformers_3w().iter().enumerate() {
+            let row = result.get_item(index)?;
+            let windings = row.get_item("windings")?;
+            for (index, winding) in transformer.windings.iter().enumerate() {
+                let winding_row = windings.get_item(index)?;
+                for (key, rating) in [
+                    ("rate_a", winding.rate_a),
+                    ("rate_b", winding.rate_b),
+                    ("rate_c", winding.rate_c),
+                ] {
+                    // Pass numeric fields directly: JSON would turn infinity into null.
+                    winding_row.set_item(key, rating)?;
+                }
+            }
+        }
+    }
+    Ok(result)
 }
 
 /// Return one multiconductor model field through that model's own serde

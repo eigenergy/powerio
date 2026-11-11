@@ -355,7 +355,9 @@ fn current_limit_amps(branch: &Branch, kv: f64) -> Option<i64> {
         .current_ratings
         .map(|ratings| ratings.c_rating_a)
         .filter(|amps| *amps > 0.0)
-        .or_else(|| (branch.rate_a > 0.0).then(|| branch.rate_a * 1000.0 / (SQRT_3 * kv)))?;
+        .or_else(|| {
+            crate::thermal_limit::as_option(branch.rate_a).map(|mva| mva * 1000.0 / (SQRT_3 * kv))
+        })?;
     Some(amps.round() as i64)
 }
 
@@ -675,8 +677,8 @@ pub(crate) fn write_ucte(net: &BalancedNetwork) -> Result<TextEmission> {
                 numbers.losses.charging_conductance += 1;
             }
         }
-        if crate::format::nonzero_differs(branch.rate_b, branch.rate_a)
-            || crate::format::nonzero_differs(branch.rate_c, branch.rate_a)
+        if crate::format::thermal_limit_differs(branch.rate_b, branch.rate_a)
+            || crate::format::thermal_limit_differs(branch.rate_c, branch.rate_a)
         {
             numbers.losses.rate_b_c += 1;
         }

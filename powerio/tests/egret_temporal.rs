@@ -76,7 +76,7 @@ fn electrical_time_series_survives_ir_and_canonical_egret_emission() {
         network.branches()[0].solution,
         Some(powerio::BranchSolution::new(-3.0, 1.0, 3.1, -0.8))
     );
-    assert_eq!(network.branches()[0].rate_a, 80.0);
+    assert_eq!(network.branches()[0].rate_a, (80.0));
 }
 
 #[test]
@@ -128,14 +128,14 @@ fn every_rating_preserves_unlimited_points_through_ir_and_export() {
                     "rating_short_term" => branch.rate_b,
                     _ => branch.rate_c,
                 };
-                assert_eq!(rating, expected.as_f64().unwrap_or(0.0));
+                assert_eq!(rating.is_finite().then_some(rating), expected.as_f64());
             }
         }
     }
 }
 
 #[test]
-fn native_zero_thermal_limits_are_refused_in_scalar_and_every_series_position() {
+fn native_zero_thermal_limits_survive_scalar_and_every_series_position() {
     for field in ["rating_long_term", "rating_short_term", "rating_emergency"] {
         for zero in [0.0, -0.0] {
             for values in [json!(zero), json!([zero, 150.0]), json!([150.0, zero])] {
@@ -145,19 +145,67 @@ fn native_zero_thermal_limits_are_refused_in_scalar_and_every_series_position() 
                 if values.is_array() {
                     branch[field] = json!({"data_type": "time_series", "values": values});
                 } else {
-                    branch[field] = values;
+                    branch[field] = values.clone();
                     for flow in ["pf", "qf", "pt", "qt"] {
                         branch.as_object_mut().unwrap().remove(flow);
                     }
                     input["system"].as_object_mut().unwrap().remove("time_keys");
                     input["elements"]["load"]["load_1"]["p_load"] = json!(10.0);
                 }
-                let error = powerio::parse(
-                    Source::from_memory("case.egret.json", input.to_string().into_bytes()).unwrap(),
-                )
-                .unwrap_err();
-                assert!(error.to_string().contains(field), "{error}");
-                assert!(error.to_string().contains("zero thermal limit"), "{error}");
+                let module = parse(&input);
+                let ir = bytes(
+                    powerio::serialize(&module, Destination::memory("zero.pio.json").unwrap())
+                        .unwrap(),
+                );
+                let restored =
+                    powerio::deserialize(Source::from_memory("zero.pio.json", ir).unwrap())
+                        .unwrap();
+                let networks: Vec<_> = match restored.value() {
+                    PioValue::BalancedNetwork(network) => vec![network],
+                    PioValue::TimeSeries(series) => (0..series.len())
+                        .map(|index| {
+                            let PioValue::BalancedNetwork(network) = series.get(index).unwrap()
+                            else {
+                                panic!("network")
+                            };
+                            network
+                        })
+                        .collect(),
+                    _ => panic!("network or series"),
+                };
+                for (index, network) in networks.iter().enumerate() {
+                    let branch = &network.branches()[0];
+                    let rating = match field {
+                        "rating_long_term" => branch.rate_a,
+                        "rating_short_term" => branch.rate_b,
+                        _ => branch.rate_c,
+                    };
+                    let expected = values
+                        .as_array()
+                        .map_or(&values, |items| &items[index])
+                        .as_f64()
+                        .unwrap();
+                    assert_eq!(rating, (expected));
+                    assert!(branch.in_service);
+                }
+                let output: Value = serde_json::from_slice(&bytes(
+                    powerio::emit(
+                        &restored,
+                        "egret-json",
+                        Destination::memory("zero.json").unwrap(),
+                    )
+                    .unwrap(),
+                ))
+                .unwrap();
+                let written = &output["elements"]["branch"]["1"][field];
+                assert_eq!(
+                    if values.is_array() {
+                        &written["values"]
+                    } else {
+                        written
+                    },
+                    &values
+                );
             }
         }
     }

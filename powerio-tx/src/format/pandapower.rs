@@ -399,12 +399,15 @@ pub(crate) fn parse_pandapower_source(
                     b_to: b / 2.0,
                 }),
                 rate_a: if max_i_ka >= MAX_I_KA {
-                    0.0
+                    f64::INFINITY
                 } else {
-                    max_i_ka * v_from * 3.0_f64.sqrt() * par
+                    crate::thermal_limit::scaled(
+                        crate::thermal_limit::from_zero_unlimited(max_i_ka)?,
+                        v_from * 3.0_f64.sqrt() * par,
+                    )?
                 },
-                rate_b: 0.0,
-                rate_c: 0.0,
+                rate_b: f64::INFINITY,
+                rate_c: f64::INFINITY,
                 rating_sets: Vec::new(),
                 // The line states one rating: `max_i_ka`, carried as `rate_a`
                 // through the file's own vn_kv (the writer inverts the same
@@ -567,9 +570,12 @@ pub(crate) fn parse_pandapower_source(
                     g_to: 0.0,
                     b_to: 0.0,
                 }),
-                rate_a: sn * par,
-                rate_b: 0.0,
-                rate_c: 0.0,
+                rate_a: crate::thermal_limit::scaled(
+                    crate::thermal_limit::from_zero_unlimited(sn)?,
+                    par,
+                )?,
+                rate_b: f64::INFINITY,
+                rate_c: f64::INFINITY,
                 rating_sets: Vec::new(),
                 current_ratings: None,
                 tap,
@@ -1099,7 +1105,7 @@ fn warn_pandapower_branch_losses(net: &BalancedNetwork, warnings: &mut Diagnosti
         .iter()
         // These fields read back as zero even when their source values equal
         // rate_a, so equal ratings still lose their separate assignments.
-        .filter(|b| b.rate_b != 0.0 || b.rate_c != 0.0)
+        .filter(|b| !b.rate_b.is_infinite() || !b.rate_c.is_infinite())
         .count();
     if rate_bc > 0 {
         warnings.push(&F.field_dropped, format!(
@@ -1526,11 +1532,13 @@ fn branch_frames(
         // a pandapower line lives on one voltage level, so its ohmic values
         // would be rebased to the wrong vn on import.
         if br.is_transformer() || v_from != v_to {
-            let sn = if br.rate_a > 0.0 {
-                br.rate_a
+            let sn = if let Some(value) =
+                crate::thermal_limit::as_option(br.rate_a).filter(|value| *value > 0.0)
+            {
+                value
             } else {
                 warnings.push(&F.value_substituted, format!(
-                    "transformer branch {}-{} rate_a = {} replaced by sn_mva = {}: this writer uses the system base for an unrated transformer, so its unlimited rating is not preserved",
+                    "transformer branch {}-{} rate_a = {} replaced by sn_mva = {}: pandapower requires a positive impedance base; this rating is not preserved",
                     br.from, br.to, br.rate_a, net.base_mva()
                 ));
                 net.base_mva()
@@ -1615,11 +1623,10 @@ fn branch_frames(
                         * 1e9,
                 ),
                 jnum((terminal.g_fr + terminal.g_to) / zb * 1e6),
-                jnum(if br.rate_a == 0.0 {
-                    0.0
-                } else {
-                    br.rate_a / (v_from * 3.0_f64.sqrt())
-                }),
+                jnum(
+                    crate::thermal_limit::as_option(br.rate_a)
+                        .map_or(0.0, |value| value / (v_from * 3.0_f64.sqrt())),
+                ),
                 jnum(1.0),
                 Value::from(1_u64),
                 Value::Null,
@@ -3351,7 +3358,7 @@ mod tests {
         let x0 = (z0 * z0 - r0 * r0).sqrt();
         assert!((br.r - r0 / 2.0).abs() < 1e-12);
         assert!((br.x - x0 / 2.0).abs() < 1e-12);
-        assert_eq!(br.rate_a, 100.0);
+        assert_eq!(br.rate_a, (100.0));
     }
 
     #[test]
@@ -3906,9 +3913,9 @@ mod tests {
             x: 0.1,
             b: 0.0,
             charging: None,
-            rate_a: 0.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
+            rate_a: f64::INFINITY,
+            rate_b: f64::INFINITY,
+            rate_c: f64::INFINITY,
             rating_sets: Vec::new(),
             current_ratings: None,
             tap,
@@ -4147,7 +4154,7 @@ mod tests {
             finding.code() == F.value_substituted.code
                 && finding
                     .message()
-                    .contains("rate_a = 0 replaced by sn_mva = 100")
+                    .contains("rate_a = inf replaced by sn_mva = 100")
         }));
         assert!(
             !emitted
@@ -4206,7 +4213,8 @@ mod tests {
         let restored = parse_pandapower_json(&emitted.text).unwrap();
         let branch = &restored.network.branches()[0];
         assert!((branch.rate_a - 250.0).abs() < 1e-9);
-        assert!(branch.rate_b.abs() < 1e-12 && branch.rate_c.abs() < 1e-12);
+        assert_eq!(branch.rate_b, f64::INFINITY);
+        assert_eq!(branch.rate_c, f64::INFINITY);
     }
 
     #[test]

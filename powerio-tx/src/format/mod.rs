@@ -1154,6 +1154,13 @@ fn emit_sienna_text(
     module: &PioModule<BalancedNetwork>,
     format: TargetFormat,
 ) -> Option<std::result::Result<TextEmission, powerio_core::Error>> {
+    if matches!(
+        format,
+        TargetFormat::PowerSystemsJson | TargetFormat::SiennaJson { .. }
+    ) && let Err(error) = net.check_thermal_limits()
+    {
+        return Some(Err(core_error(error)));
+    }
     let written = if format == TargetFormat::PowerSystemsJson {
         sienna::powersystems::write(
             net,
@@ -1241,6 +1248,7 @@ fn sincal_source_omitted(net: &BalancedNetwork) -> Option<Diagnostic> {
 
 /// Serialize a typed network to `format` with no source echo.
 pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Result<TextEmission> {
+    net.check_thermal_limits()?;
     let mut conv = match format {
         TargetFormat::PowerModelsJson => write_powermodels_json(net),
         TargetFormat::EgretJson => write_egret_json(net),
@@ -1294,6 +1302,60 @@ pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Re
 
 /// Shared post-writer checks for scalar and time-series canonical emission.
 fn append_emit_warnings(net: &BalancedNetwork, format: TargetFormat, conv: &mut TextEmission) {
+    let legacy_family = match format {
+        TargetFormat::Matpower => Some(&codes::EMIT_MATPOWER),
+        TargetFormat::PowerModelsJson => Some(&codes::EMIT_POWERMODELS),
+        TargetFormat::Psse { .. } | TargetFormat::PsseRawx => Some(&codes::EMIT_PSSE),
+        TargetFormat::PowerWorld => Some(&codes::EMIT_POWERWORLD),
+        TargetFormat::Pslf => Some(&codes::EMIT_PSLF),
+        TargetFormat::PandapowerJson => Some(&codes::EMIT_PANDAPOWER),
+        TargetFormat::SurgeJson => Some(&codes::EMIT_SURGE),
+        TargetFormat::RavensJson => Some(&codes::EMIT_RAVENS),
+        TargetFormat::Ucte => Some(&codes::EMIT_UCTE),
+        _ => None,
+    };
+    if let Some(family) = legacy_family {
+        let mut warn = |identity: String, field: &str, limit: f64| {
+            if limit == 0.0 {
+                conv.push(&family.field_dropped, format!(
+                    "{identity} finite-zero {field} constraint is not preserved by the {format} writer's legacy rating projection"
+                ));
+            }
+        };
+        for (row, branch) in net.branches().iter().enumerate() {
+            let identity = format!("branch {} ({} to {})", row + 1, branch.from, branch.to);
+            for (field, limit) in [
+                ("rate_a", branch.rate_a),
+                ("rate_b", branch.rate_b),
+                ("rate_c", branch.rate_c),
+            ] {
+                warn(identity.clone(), field, limit);
+            }
+            for rating in &branch.rating_sets {
+                warn(identity.clone(), &rating.name, rating.rate_mva);
+            }
+        }
+        for (row, transformer) in net.transformers_3w().iter().enumerate() {
+            for (side, winding) in transformer.windings.iter().enumerate() {
+                let identity = format!(
+                    "three winding transformer {} winding {} (bus {})",
+                    row + 1,
+                    side + 1,
+                    winding.bus
+                );
+                for (field, limit) in [
+                    ("rate_a", winding.rate_a),
+                    ("rate_b", winding.rate_b),
+                    ("rate_c", winding.rate_c),
+                ] {
+                    warn(identity.clone(), field, limit);
+                }
+                for rating in transformer.winding_rating_sets(side) {
+                    warn(identity.clone(), &rating.name, rating.rate_mva);
+                }
+            }
+        }
+    }
     conv.diagnostics.extend(sincal_source_omitted(net));
     warn_normalized_tap(net, format, conv);
     warn_missing_reference(net, format, conv);
@@ -1460,6 +1522,7 @@ pub fn __emit_pypsa_csv_with_options(
     options: &EmitOptions,
     destination: powerio_core::Destination,
 ) -> std::result::Result<powerio_core::EmitResult, powerio_core::Error> {
+    module.value().check_thermal_limits().map_err(core_error)?;
     let (working, mut diagnostics) = if options.is_default() {
         (None, Vec::new())
     } else {
@@ -2289,8 +2352,11 @@ pub(super) fn normalized_tap_warning(net: &BalancedNetwork) -> Option<String> {
 /// True when `value` is set and deviates from `reference`: the shared test for
 /// "does this rating column carry information the target cannot" used by the
 /// rate_b/rate_c drop warnings.
-pub(super) fn nonzero_differs(value: f64, reference: f64) -> bool {
-    value.abs() > f64::EPSILON && (value - reference).abs() > f64::EPSILON
+/// An additional finite constraint differs from the retained one. Zero must
+/// not be skipped or confused with a missing constraint.
+#[allow(clippy::float_cmp)] // Any changed constraint warrants a loss diagnostic.
+pub(super) fn thermal_limit_differs(value: f64, reference: f64) -> bool {
+    value.is_finite() && value != reference
 }
 
 /// Set a bus's kind through the `bus_pos` index, leaving Isolated buses alone.

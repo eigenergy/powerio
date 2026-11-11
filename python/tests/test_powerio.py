@@ -2974,3 +2974,44 @@ def test_operating_point_network_applies_the_point(time_series_powerio_ir):
     assert network.loads[0]["p"] == pytest.approx(91.5)
     assert base.loads[0]["p"] != pytest.approx(91.5)
     assert series[0].network.loads[0]["p"] == pytest.approx(base.loads[0]["p"])
+
+
+def test_numeric_thermal_limits_distinguish_zero_and_infinity():
+    module = powerio.parse(DATA / "case9.m")
+    branch_id = powerio.ComponentId("branch", "1-4")
+    before = module.value.branches[0]
+    for quantity, expected in [(powerio.ApparentPower.megavolt_amperes(0.0), 0.0),
+                               (powerio.ApparentPower.megavolt_amperes(float("inf")), float("inf")),
+                               (powerio.ApparentPower.volt_amperes(100_000_000.0), 100.0)]:
+        update = powerio.NetworkUpdate.set_branch_thermal_rating(branch_id, quantity)
+        assert update.field == "branch_thermal_rating"
+        report = powerio.apply_updates(module, [update])
+        assert not report.connectivity_changed
+        row = module.value.branches[0]
+        assert row["rate_a"] == expected
+        for key in ("r", "x", "b", "in_service"):
+            assert row[key] == before[key]
+        restored = powerio.deserialize(powerio.serialize(module).text.encode())
+        assert restored.value.branches[0] == row
+        assert "WithThermalLimits" not in powerio.serialize(module).text
+
+
+def test_ppc_ratings_translate_infinity_and_refuse_real_zero():
+    pytest.importorskip("numpy")
+    module = powerio.parse(DATA / "case9.m")
+    original = module.value.to_ppc()
+    branch_id = powerio.ComponentId("branch", "1-4")
+    powerio.apply_updates(module, [powerio.NetworkUpdate.set_branch_thermal_rating(
+        branch_id, powerio.ApparentPower.megavolt_amperes(float("inf")))])
+    ppc = module.value.to_ppc()
+    assert ppc["branch"][0, 5] == 0.0
+    assert powerio.from_ppc(ppc).branches[0]["rate_a"] == float("inf")
+    assert (ppc["branch"][:, :5] == original["branch"][:, :5]).all()
+    assert (ppc["branch"][:, 8:] == original["branch"][:, 8:]).all()
+    document = json.loads(powerio.serialize(module).text)
+    for field in ("rate_a", "rate_b", "rate_c"):
+        changed = json.loads(json.dumps(document))
+        changed["value"]["data"]["branches"][0][field] = 0.0
+        zero = powerio.deserialize(json.dumps(changed).encode())
+        with pytest.raises(ValueError, match="cannot represent a zero branch rating"):
+            zero.value.to_ppc()

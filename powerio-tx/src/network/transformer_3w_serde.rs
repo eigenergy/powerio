@@ -324,6 +324,7 @@ impl schemars::JsonSchema for Transformer3W {
 mod tests {
     use super::*;
     use crate::network::{BusId, Impedance, Winding};
+    use powerio_core::__implementation::nonfinite::{NonFiniteDe, NonFiniteSer};
 
     fn transformer(connection: MagnetizingConnection) -> Transformer3W {
         let mut t = Transformer3W::new(
@@ -342,9 +343,11 @@ mod tests {
 
     #[test]
     fn a_star_point_body_keeps_the_0_11_layout() {
-        let json = serde_json::to_value(transformer(MagnetizingConnection::StarPoint)).unwrap();
+        let json = transformer(MagnetizingConnection::StarPoint)
+            .serialize(NonFiniteSer(serde_json::value::Serializer))
+            .unwrap();
         assert!(json.get("magnetizing_connection").is_none(), "{json}");
-        let back: Transformer3W = serde_json::from_value(json).unwrap();
+        let back = Transformer3W::deserialize(NonFiniteDe(json)).unwrap();
         assert_eq!(
             back.magnetizing_connection,
             MagnetizingConnection::StarPoint
@@ -354,16 +357,20 @@ mod tests {
     #[test]
     fn a_winding_1_connection_round_trips_and_reads_back() {
         let original = transformer(MagnetizingConnection::Winding1Terminal);
-        let json = serde_json::to_value(&original).unwrap();
+        let json = original
+            .serialize(NonFiniteSer(serde_json::value::Serializer))
+            .unwrap();
         assert_eq!(json["magnetizing_connection"], "winding1_terminal");
-        let back: Transformer3W = serde_json::from_value(json).unwrap();
+        let back = Transformer3W::deserialize(NonFiniteDe(json)).unwrap();
         assert_eq!(back, original);
         // The partial record carries it inside its value.
         let mut partial = original;
         partial.set_winding_in_service([true, false, true]);
-        let json = serde_json::to_value(&partial).unwrap();
+        let json = partial
+            .serialize(NonFiniteSer(serde_json::value::Serializer))
+            .unwrap();
         assert_eq!(json["value"]["magnetizing_connection"], "winding1_terminal");
-        let back: Transformer3W = serde_json::from_value(json).unwrap();
+        let back = Transformer3W::deserialize(NonFiniteDe(json)).unwrap();
         assert_eq!(back, partial);
     }
 }
