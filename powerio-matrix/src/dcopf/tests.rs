@@ -1320,7 +1320,7 @@ fn purely_resistive_branches_follow_the_selected_formula_denominator() {
                     let prep = preparation_from_view(&view, options).unwrap();
                     let op = DcOperators::build(&instance).unwrap();
                     assert_eq!(prep.n_branches(), net.branches().len());
-                    assert!(prep.branches.skipped_zero_impedance.is_empty());
+                    assert_eq!(prep.branches.skipped_zero_impedance, [] as [usize; 0]);
                     assert_close(prep.branches.susceptance_magnitude[0], 0.0);
                     assert_close(op.calc_branch_susceptances()[0], 0.0);
                     assert_eq!(op.branch_rows()[0], 0);
