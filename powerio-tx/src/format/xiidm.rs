@@ -12809,9 +12809,7 @@ fn write_three_winding_transformer(
     diagnostics: &mut Diagnostics,
 ) {
     let id = transformer.uid.as_deref().unwrap_or("transformer");
-    if transformer.magnetizing_connection != crate::network::MagnetizingConnection::StarPoint
-        && (transformer.mag_g != 0.0 || transformer.mag_b != 0.0)
-    {
+    if transformer.magnetizing_differs_from(crate::network::MagnetizingConnection::StarPoint) {
         diagnostics.push(
             &codes::EMIT_XIIDM.value_substituted,
             format!(

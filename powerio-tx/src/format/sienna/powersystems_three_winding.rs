@@ -17,12 +17,11 @@ pub(super) fn decode(row: &mut Value, doc: &mut Value, next: &mut i64, base: f64
             "r":row[format!("r_{side}")],"x":row[format!("x_{side}")],
             "tap":optional(row,&format!("{side}_turns_ratio"),1.0)?,
             "alpha":optional(row,&format!("α_{side}"),clock_angle(row,&format!("{side}_group_number"))?)?,
-            "rating":match row.get(format!("rating_{side}")) {
-                None => json!(0.0), // PowerSystems' constructor default is a finite zero.
-                Some(_) => {
-                    let rating = number(row, &format!("rating_{side}"))?;
-                    if super::is_infinite_bound(rating) { Value::Null } else { json!(rating) }
-                }
+            "rating":if row.get(format!("rating_{side}")).is_none() {
+                json!(0.0) // PowerSystems' constructor default is a finite zero.
+            } else {
+                let rating = number(row, &format!("rating_{side}"))?;
+                if super::is_infinite_bound(rating) { Value::Null } else { json!(rating) }
             },
             "active_power_flow":optional(row,&format!("active_power_flow_{side}"),0.0)?,
             "reactive_power_flow":optional(row,&format!("reactive_power_flow_{side}"),0.0)?,
@@ -30,9 +29,7 @@ pub(super) fn decode(row: &mut Value, doc: &mut Value, next: &mut i64, base: f64
             "base_power":basis,"power_units":"COMPONENT_BASE","parameter_units":"COMPONENT_BASE"
         });
         if let Some(extra) =
-            doc["ext"][row["id"].to_string()]["org.eigenergy.powerio"]["winding_control_fields"]
-                [side]
-                .as_object()
+            super::metadata::ext(doc, &row["id"])["winding_control_fields"][side].as_object()
         {
             for (field, value) in extra {
                 circuit[field] = value.clone();
@@ -40,8 +37,7 @@ pub(super) fn decode(row: &mut Value, doc: &mut Value, next: &mut i64, base: f64
         }
         // PowerSystems has one native winding rating. Additional ratings are
         // explicit metadata, expressed on this winding's component base.
-        let extra = &doc["ext"][row["id"].to_string()]["org.eigenergy.powerio"]["winding_rating_fields"]
-            [side];
+        let extra = &super::metadata::ext(doc, &row["id"])["winding_rating_fields"][side];
         for field in ["rating_b", "rating_c"] {
             if extra.get(field).is_some() {
                 circuit[field] = json!(super::thermal_limit(extra, field, 1.0)?);
@@ -129,8 +125,8 @@ pub(super) fn prepare(doc: &mut Value, base: f64, warnings: &mut Diagnostics) ->
             for field in ["rating_b", "rating_c"] {
                 let rating = super::thermal_limit(c, field, 1.0 / basis)?;
                 if !rating.is_infinite() {
-                    doc["ext"][row["id"].to_string()]["org.eigenergy.powerio"]["winding_rating_fields"]
-                        [side][field] = json!(rating);
+                    super::metadata::ext_mut(doc, &row["id"])["winding_rating_fields"][side]
+                        [field] = json!(rating);
                     warnings.push(&codes::EMIT_SIENNA.field_dropped, format!(
                         "PowerSystems {side} {field} remains in ext without native winding constraint semantics"
                     ));
@@ -152,8 +148,8 @@ pub(super) fn prepare(doc: &mut Value, base: f64, warnings: &mut Diagnostics) ->
                     "regulated_bus_number",
                 ] {
                     if let Some(value) = c.get(field) {
-                        doc["ext"][row["id"].to_string()]["org.eigenergy.powerio"]["winding_control_fields"]
-                            [side][field] = value.clone();
+                        super::metadata::ext_mut(doc, &row["id"])["winding_control_fields"][side]
+                            [field] = value.clone();
                     }
                 }
             }

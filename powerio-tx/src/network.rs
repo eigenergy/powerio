@@ -3767,6 +3767,12 @@ impl Transformer3W {
             && (self.mag_g != 0.0 || self.mag_b != 0.0)
     }
 
+    /// True when a nonzero magnetizing admittance connects somewhere other
+    /// than `native`, the one placement a target format can state.
+    pub(crate) fn magnetizing_differs_from(&self, native: MagnetizingConnection) -> bool {
+        self.magnetizing_connection != native && (self.mag_g != 0.0 || self.mag_b != 0.0)
+    }
+
     /// The per-winding star impedances `(r, x)` — winding *k* to the star point —
     /// from the pairwise values, per unit on the system base.
     ///

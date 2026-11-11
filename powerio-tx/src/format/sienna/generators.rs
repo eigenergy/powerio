@@ -3,7 +3,7 @@ use crate::network::{Generator, GeneratorEnergySource};
 
 /// The schema components a balanced generator can come from, in the order a
 /// retained row is looked up.
-const KNOWN: [&str; 7] = [
+pub(super) const KNOWN: [&str; 7] = [
     "ThermalStandard",
     "ThermalMultiStart",
     "RenewableDispatch",
@@ -25,19 +25,15 @@ pub(super) fn by_id(original: Option<&Value>) -> BTreeMap<i64, (&'static str, &V
         {
             if let Some(id) = row["id"].as_i64() {
                 let absent = original.is_some_and(|doc| {
-                    doc["ext"][id.to_string()]["org.eigenergy.powerio"]["operation_cost_absent"]
-                        == true
-                        && {
-                            let mut findings = Diagnostics::new();
-                            super::read_cost(
-                                &row["operation_cost"],
-                                super::base(row).unwrap_or(super::BASE),
-                                &mut findings,
-                            )
-                            .is_ok_and(|cost| {
-                                absent_placeholder(cost.as_ref(), findings.is_empty())
-                            })
-                        }
+                    super::metadata::ext(doc, id)["operation_cost_absent"] == true && {
+                        let mut findings = Diagnostics::new();
+                        super::read_cost(
+                            &row["operation_cost"],
+                            super::base(row).unwrap_or(super::BASE),
+                            &mut findings,
+                        )
+                        .is_ok_and(|cost| absent_placeholder(cost.as_ref(), findings.is_empty()))
+                    }
                 });
                 rows.entry(id).or_insert((kind, row, absent));
             }

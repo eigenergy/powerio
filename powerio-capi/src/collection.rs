@@ -3,10 +3,20 @@ use super::*;
 
 fn limits(max_bytes: u64, max_files: usize) -> Result<powerio::CollectionLimits, *mut PioError> {
     Ok(powerio::CollectionLimits {
-        tree: powerio::SourceTreeLimits::new(max_files, max_bytes, 64)
-            .map_err(|e| error_from_core(&e))?,
-        archive: powerio::collection::ArchiveLimits::new(max_bytes, max_files, max_bytes, 200)
-            .map_err(|e| error_from_core(&e))?,
+        // The caller sets the totals; depth and ratio keep the facade defaults.
+        tree: powerio::SourceTreeLimits::new(
+            max_files,
+            max_bytes,
+            powerio::SourceTreeLimits::default().max_depth(),
+        )
+        .map_err(|e| error_from_core(&e))?,
+        archive: powerio::collection::ArchiveLimits::new(
+            max_bytes,
+            max_files,
+            max_bytes,
+            powerio::collection::ArchiveLimits::default().max_ratio(),
+        )
+        .map_err(|e| error_from_core(&e))?,
         ..powerio::CollectionLimits::default()
     })
 }

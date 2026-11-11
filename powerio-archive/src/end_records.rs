@@ -153,18 +153,17 @@ fn zip64_entry_count(
     largest
 }
 
+// Record fields widened to the u64 the entry arithmetic uses.
 fn le_u16(bytes: &[u8], at: usize) -> u64 {
-    u64::from(u16::from_le_bytes([bytes[at], bytes[at + 1]]))
+    u64::from(crate::preflight::u16_at(bytes, at))
 }
 
 fn le_u32(bytes: &[u8], at: usize) -> u64 {
-    u64::from(u32::from_le_bytes(
-        bytes[at..at + 4].try_into().expect("four bytes"),
-    ))
+    u64::from(crate::preflight::u32_at(bytes, at))
 }
 
 fn le_u64(bytes: &[u8], at: usize) -> u64 {
-    u64::from_le_bytes(bytes[at..at + 8].try_into().expect("eight bytes"))
+    crate::preflight::u64_at(bytes, at)
 }
 
 #[cfg(test)]

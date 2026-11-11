@@ -8,6 +8,21 @@ use super::{
 use powerio_core::cim::deterministic_mrid;
 
 pub(in crate::format) const EXTENSION: &str = "org.eigenergy.powerio.powersystems";
+/// Fields that refer to another component: its UUID in PowerSystems output
+/// and its Sienna id in the schema document.
+const REFERENCE_FIELDS: &[&str] = &[
+    "bus",
+    "arc",
+    "area",
+    "load_zone",
+    "from",
+    "to",
+    "dynamic_injector",
+    "primary_star_arc",
+    "secondary_star_arc",
+    "tertiary_star_arc",
+    "star_bus",
+];
 const POWER_FIELDS: &[&str] = &[
     "active_power",
     "reactive_power",
@@ -71,9 +86,7 @@ fn component_refs(doc: &Value) -> Result<BTreeMap<i64, String>> {
     for rows in doc["components"].as_object().expect("components").values() {
         for row in rows.as_array().expect("rows") {
             let id = integer(row, "id")?;
-            if let Some(identity) =
-                doc["ext"][id.to_string()]["org.eigenergy.powerio"]["native_uuid"].as_str()
-            {
+            if let Some(identity) = super::metadata::ext(doc, id)["native_uuid"].as_str() {
                 if !used.insert(identity.to_owned()) {
                     return Err(error("duplicate retained native component UUID"));
                 }
@@ -271,19 +284,7 @@ pub(in crate::format) fn to_schema(root: &Value) -> Result<Value> {
             .expect("validated UUID");
         let id = ids[key];
         row["id"] = json!(id);
-        for field in [
-            "bus",
-            "arc",
-            "area",
-            "load_zone",
-            "from",
-            "to",
-            "dynamic_injector",
-            "primary_star_arc",
-            "secondary_star_arc",
-            "tertiary_star_arc",
-            "star_bus",
-        ] {
+        for &field in REFERENCE_FIELDS {
             if row.get(field).is_some_and(|v| !v.is_null()) {
                 let key = row[field]["value"]
                     .as_str()
@@ -328,22 +329,18 @@ pub(in crate::format) fn to_schema(root: &Value) -> Result<Value> {
         {
             return Err(error("PowerSystems component ext must contain objects"));
         }
-        if doc["ext"][id.to_string()]["org.eigenergy.powerio"]
-            .get("uid")
-            .is_none()
-        {
-            doc["ext"][id.to_string()]["org.eigenergy.powerio"]["uid"] =
-                json!(format!("powersystems:{key}"));
+        if super::metadata::ext(&doc, id).get("uid").is_none() {
+            super::metadata::ext_mut(&mut doc, id)["uid"] = json!(format!("powersystems:{key}"));
         }
-        doc["ext"][id.to_string()]["org.eigenergy.powerio"]["native_uuid"] = json!(key);
+        super::metadata::ext_mut(&mut doc, id)["native_uuid"] = json!(key);
         // A transformer's secondary-terminal shunt names its transformer by
         // UUID in PowerSystems output; the Sienna reader expects the circuit id.
-        if let Some(uuid) = doc["ext"][id.to_string()]["org.eigenergy.powerio"]["transformer_uuid"]
+        if let Some(uuid) = super::metadata::ext(&doc, id)["transformer_uuid"]
             .as_str()
             .map(str::to_owned)
             && let Some(circuit) = ids.get(uuid.as_str())
         {
-            let extra = doc["ext"][id.to_string()]["org.eigenergy.powerio"]
+            let extra = super::metadata::ext_mut(&mut doc, id)
                 .as_object_mut()
                 .expect("ext object");
             extra.remove("transformer_uuid");
@@ -360,7 +357,7 @@ pub(in crate::format) fn to_schema(root: &Value) -> Result<Value> {
                 row.as_object_mut().expect("row").remove(field);
             }
         }
-        if doc["ext"][id.to_string()]["org.eigenergy.powerio"]["branch_flow_absent"] == true
+        if super::metadata::ext(&doc, id)["branch_flow_absent"] == true
             && row["active_power_flow"] == 0.0
             && row["reactive_power_flow"] == 0.0
         {
@@ -399,14 +396,13 @@ pub(in crate::format) fn to_schema(root: &Value) -> Result<Value> {
                 row["loss"] = json!({"power_units":"COMPONENT_BASE","value_curve":curve});
             }
             "Line" => {
-                doc["ext"][id.to_string()]["org.eigenergy.powerio"]
+                super::metadata::ext_mut(&mut doc, id)
                     .as_object_mut()
                     .expect("validated extension object")
                     .remove("native_kind");
             }
             "MonitoredLine" => {
-                doc["ext"][id.to_string()]["org.eigenergy.powerio"]["native_kind"] =
-                    json!("MonitoredLine");
+                super::metadata::ext_mut(&mut doc, id)["native_kind"] = json!("MonitoredLine");
                 kind = "Line".into();
             }
             "SwitchedAdmittance" => {
@@ -414,7 +410,8 @@ pub(in crate::format) fn to_schema(root: &Value) -> Result<Value> {
                 // Explicit native fields always take precedence over the fallback.
                 for field in ["control_mode", "regulated_bus_number"] {
                     if row.get(field).is_none()
-                        && let Some(value) = doc["ext"][id.to_string()]["org.eigenergy.powerio"]["switched_control_fields"].get(field)
+                        && let Some(value) =
+                            super::metadata::ext(&doc, id)["switched_control_fields"].get(field)
                     {
                         row[field] = value.clone();
                     }
@@ -422,8 +419,7 @@ pub(in crate::format) fn to_schema(root: &Value) -> Result<Value> {
                 scale(&mut row["Y"], system_base);
                 let y = row["Y"].clone();
                 row["solved_admittance"] = y["imag"].clone();
-                doc["ext"][id.to_string()]["org.eigenergy.powerio"]["solved_conductance"] =
-                    y["real"].clone();
+                super::metadata::ext_mut(&mut doc, id)["solved_conductance"] = y["real"].clone();
                 if let Some(values) = row["Y_increase"].as_array_mut() {
                     for y in values {
                         scale(y, system_base);
@@ -471,16 +467,13 @@ pub(in crate::format) fn to_schema(root: &Value) -> Result<Value> {
                 }
                 rename(&mut row, "tap_limits", "tap_ratio_limits");
                 if let Some(setpoint) = row.get("voltage_setpoint").and_then(Value::as_f64) {
-                    let offset = &doc["ext"][id.to_string()]["org.eigenergy.powerio"]["voltage_band_offsets"];
+                    let offset = &super::metadata::ext(&doc, id)["voltage_band_offsets"];
                     row["controlled_voltage_limits"] = minmax(
                         setpoint + optional(offset, "min", 0.0)?,
                         setpoint + optional(offset, "max", 0.0)?,
                     );
                 }
-                if let Some(extra) =
-                    doc["ext"][id.to_string()]["org.eigenergy.powerio"]["control_fields"]
-                        .as_object()
-                {
+                if let Some(extra) = super::metadata::ext(&doc, id)["control_fields"].as_object() {
                     for (field, value) in extra {
                         if row.get(field).is_none() {
                             row[field] = value.clone();
@@ -527,7 +520,7 @@ pub(in crate::format) fn read(
                     .iter()
                     .any(|field| {
                         row.get(*field).is_none()
-                            && row["ext"]["org.eigenergy.powerio"]["switched_control_fields"]
+                            && row["ext"][super::metadata::KEY]["switched_control_fields"]
                                 .get(*field)
                                 .is_some()
                     })
@@ -636,14 +629,13 @@ pub(in crate::format) fn write(
                 }
             }
             if kind == "Line"
-                && doc["ext"][id.to_string()]["org.eigenergy.powerio"]["native_kind"]
-                    == "MonitoredLine"
+                && super::metadata::ext(&doc, id)["native_kind"] == "MonitoredLine"
                 && row.get("flow_limits").is_some()
             {
                 native_kind = "MonitoredLine";
             }
             if kind == "SwitchedAdmittance" {
-                row["Y"] = json!({"real":optional(&doc["ext"][id.to_string()]["org.eigenergy.powerio"],"solved_conductance",0.0)?/net.base_mva(),"imag":number(&row,"solved_admittance")?/net.base_mva()});
+                row["Y"] = json!({"real":optional(super::metadata::ext(&doc, id),"solved_conductance",0.0)?/net.base_mva(),"imag":number(&row,"solved_admittance")?/net.base_mva()});
                 if let Some(values) = row["Y_increase"].as_array_mut() {
                     for y in values {
                         scale(y, 1.0 / net.base_mva());
@@ -663,13 +655,6 @@ pub(in crate::format) fn write(
             }
             if kind == "FixedAdmittance" {
                 scale(&mut row["Y"], 1.0 / net.base_mva());
-            }
-            if matches!(kind.as_str(), "Line" | "TransformerCircuit")
-                && source.get("active_power_flow").is_none()
-                && source.get("reactive_power_flow").is_none()
-            {
-                row["active_power_flow"] = json!(0.0);
-                row["reactive_power_flow"] = json!(0.0);
             }
             if kind == "TwoTerminalGenericHVDCLine" {
                 let limit = &row["operational_flow_limit"];
@@ -753,19 +738,7 @@ pub(in crate::format) fn write(
             if let Some(loss) = row.get_mut("loss") {
                 encode_curve(loss);
             }
-            for field in [
-                "bus",
-                "arc",
-                "area",
-                "load_zone",
-                "from",
-                "to",
-                "dynamic_injector",
-                "primary_star_arc",
-                "secondary_star_arc",
-                "tertiary_star_arc",
-                "star_bus",
-            ] {
+            for &field in REFERENCE_FIELDS {
                 if let Some(target) = row.get(field).and_then(Value::as_i64) {
                     row[field] = json!({"value":refs.get(&target).ok_or_else(||error("missing PowerSystems reference"))?});
                 }
@@ -779,12 +752,12 @@ pub(in crate::format) fn write(
             // shunt names its transformer by the UUID that circuit is written with.
             if kind == "FixedAdmittance"
                 && let Some(circuit) =
-                    row["ext"]["org.eigenergy.powerio"]["transformer_circuit"].as_i64()
+                    row["ext"][super::metadata::KEY]["transformer_circuit"].as_i64()
             {
                 let uuid = refs.get(&circuit).ok_or_else(|| {
                     error("secondary shunt references a missing transformer circuit")
                 })?;
-                let extra = row["ext"]["org.eigenergy.powerio"]
+                let extra = row["ext"][super::metadata::KEY]
                     .as_object_mut()
                     .expect("ext object");
                 extra.remove("transformer_circuit");
@@ -794,10 +767,10 @@ pub(in crate::format) fn write(
                 && source.get("active_power_flow").is_none()
                 && source.get("reactive_power_flow").is_none()
             {
-                row["ext"]["org.eigenergy.powerio"]["branch_flow_absent"] = json!(true);
+                row["ext"][super::metadata::KEY]["branch_flow_absent"] = json!(true);
             }
             if kind == "SwitchedAdmittance" {
-                row["ext"]["org.eigenergy.powerio"]["switched_control_fields"] = json!({
+                row["ext"][super::metadata::KEY]["switched_control_fields"] = json!({
                     "control_mode": row["control_mode"],
                     "regulated_bus_number": row["regulated_bus_number"]
                 });
@@ -807,7 +780,7 @@ pub(in crate::format) fn write(
                     let lo = number(band, "min")?;
                     let hi = number(band, "max")?;
                     let mid = lo.midpoint(hi);
-                    row["ext"]["org.eigenergy.powerio"]["voltage_band_offsets"] =
+                    row["ext"][super::metadata::KEY]["voltage_band_offsets"] =
                         minmax(lo - mid, hi - mid);
                 }
                 let mut extra = serde_json::Map::new();
@@ -823,7 +796,7 @@ pub(in crate::format) fn write(
                         extra.insert(field.into(), value.clone());
                     }
                 }
-                row["ext"]["org.eigenergy.powerio"]["control_fields"] = Value::Object(extra);
+                row["ext"][super::metadata::KEY]["control_fields"] = Value::Object(extra);
             }
             for key in [
                 "id",

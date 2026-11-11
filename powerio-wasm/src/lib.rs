@@ -110,8 +110,7 @@ impl Conversion {
 
     #[allow(clippy::needless_pass_by_value)] // wasm-bindgen receives optional JavaScript strings as owned strings.
     pub fn inspect(&mut self, primary: Option<String>, format: Option<String>) -> String {
-        self.module = None;
-        self.artifacts.clear();
+        self.release_result();
         let source = self.source(primary.as_deref(), format.as_deref());
         let module = match source.and_then(powerio::parse) {
             Ok(module) => module,

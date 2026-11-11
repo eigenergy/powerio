@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import io
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any
@@ -33,8 +34,8 @@ def _array(value):
     if array.nbytes > MAX_BYTES:
         raise ValueError("HDF5 array exceeds the 64 MiB limit")
     values = array.reshape(-1).tolist()
-    if array.dtype.kind == "f":
-        values = [v if np.isfinite(v) else str(v) for v in values]
+    if array.dtype.kind == "f" and not np.isfinite(array).all():
+        values = [v if math.isfinite(v) else str(v) for v in values]
     if array.dtype.kind == "S":
         # Attribute strings and fixed-width hash values are explicit text.
         values = [v.decode("utf-8") for v in values]
@@ -57,7 +58,8 @@ def _decode(value):
     return np.asarray(value["values"], dtype=dtype).reshape(shape)
 
 
-def _read_hdf(data: bytes):
+def _read_hdf(data: bytes) -> str:
+    """The companion's array records as JSON text, serialized once."""
     import h5py
     total = 0
     records = []
@@ -89,9 +91,10 @@ def _read_hdf(data: bytes):
                         raise ValueError("HDF5 external and soft links are unsupported")
                     visit(group[name], f"{path}/{name}" if path else name)
         visit(store, "")
-    if len(json.dumps(records).encode()) > MAX_BYTES:
+    text = json.dumps(records)
+    if len(text.encode()) > MAX_BYTES:
         raise ValueError("Structured HDF5 arrays exceed the 64 MiB limit")
-    return records
+    return text
 
 
 def _write_hdf(records):
@@ -175,10 +178,12 @@ def parse(source: Any, format: str, *, name=None, acquisition_root=None, named_b
             companion_data = bytes(named_buffers[filename])
         if len(companion_data) + len(data) > MAX_BYTES:
             raise ValueError("Sienna bundle exceeds the 64 MiB limit")
-        extension = {"filename": filename, "arrays": _read_hdf(companion_data)}
+        # The text json.dumps({"filename": ..., "arrays": records}) would
+        # produce, without serializing the records a second time.
+        extension = '{"filename": ' + json.dumps(filename) + ', "arrays": ' + _read_hdf(companion_data) + "}"
     module = pio.parse(data, format=FORMATS[format], name=source_name)
     if extension is not None:
-        module = module.with_extension(KEY, extension)
+        module = pio.PioModule(module._inner._with_extension_json(KEY, extension))
     return module
 
 

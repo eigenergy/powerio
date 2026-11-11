@@ -1745,9 +1745,7 @@ fn write_psse_rev_inner(
             );
             0
         });
-        if t.magnetizing_connection != crate::network::MagnetizingConnection::Winding1Terminal
-            && (t.mag_g != 0.0 || t.mag_b != 0.0)
-        {
+        if t.magnetizing_differs_from(crate::network::MagnetizingConnection::Winding1Terminal) {
             warnings.push(
                 &F.value_substituted,
                 format!(
