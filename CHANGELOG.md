@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- XIIDM and JIIDM output omit an `activePowerControl` or `slackTerminal`
+  extension when its target equipment cannot be written, and report
+  the format's `FIELD_DROPPED` diagnostic alongside the equipment's existing
+  loss report.
+  Partial substation data could previously leave an extension referring to
+  absent equipment, making the output invalid (#837).
+
 ## 0.11.11
 
 **XIIDM**
