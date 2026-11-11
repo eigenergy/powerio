@@ -28,6 +28,17 @@ fn network() -> BalancedNetwork {
     .into_value()
 }
 
+fn transformer_network() -> BalancedNetwork {
+    powerio_tx::parse(
+        Source::open(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case14.m"),
+        )
+        .unwrap(),
+    )
+    .unwrap()
+    .into_value()
+}
+
 fn parse(doc: &Value, version: u8) -> PioModule<BalancedNetwork> {
     powerio_tx::parse(
         Source::from_memory("case.json", serde_json::to_vec(doc).unwrap())
@@ -109,7 +120,8 @@ fn edited(
 
 #[test]
 fn unlimited_transformer_primary_rating_is_numeric_and_round_trips() {
-    let mut net = network();
+    // case9.m has no transformer; case14.m includes transformer branches.
+    let mut net = transformer_network();
     let transformer = net
         .branches_mut()
         .iter_mut()
