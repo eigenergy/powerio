@@ -903,10 +903,10 @@ format!(
             );
             let rate = line_rate_mva(line, code, &active, base_volts).unwrap_or_else(|| {
                 self.records.dropped_fields.push(format!(
-                    "line {} thermal rating defaulted to 0 MVA",
+                    "line {} has no finite apparent-power rating; projected as unlimited",
                     line.name
                 ));
-                0.0
+                f64::INFINITY
             });
             let mut branch = Branch::new(from, to, z_ohm.re / z_base, z_ohm.im / z_base);
             branch.b = charging.calc_total_b();

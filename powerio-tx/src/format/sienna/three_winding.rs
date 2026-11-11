@@ -92,7 +92,7 @@ pub(super) fn read(
             "STAR" => MagnetizingConnection::StarPoint,
             _ => return Err(error("unsupported three-winding shunt placement")),
         };
-        metadata::restore(root, row, &mut t, &["uid", "name"])?;
+        metadata::restore(root, row, &mut t, &["uid", "name", "extras"])?;
         transformers.push(t);
     }
     let mut index = 0;
@@ -146,7 +146,7 @@ pub(super) fn write(
     let bus_by_id: BTreeMap<BusId, &Bus> = net.buses().iter().map(|b| (b.id, b)).collect();
     for t in net.transformers_3w() {
         let id = ids.get(t.uid.as_deref());
-        metadata::record(doc, id, t, &["uid", "name"])?;
+        metadata::record(doc, id, t, &["uid", "name", "extras"])?;
         number = number
             .checked_add(1)
             .ok_or_else(|| error("no unused star bus number"))?;

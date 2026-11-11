@@ -64,6 +64,7 @@ pub mod merge;
 pub mod network;
 mod normalize;
 mod operations;
+mod thermal_limit;
 mod union_find;
 #[doc(hidden)]
 pub mod version;

@@ -1523,8 +1523,10 @@
               "type": "string"
             }
           ],
+          "description": "Apparent-power limit: zero is a zero bound; positive infinity is unbounded.\nMVA in a physical network, per unit after normalization.",
+          "x-infinity-means": "no bound",
           "x-unit": "MVA",
-          "x-zero-means": "unlimited"
+          "x-zero-means": "zero bound"
         },
         "rate_b": {
           "anyOf": [
@@ -1541,8 +1543,9 @@
               "type": "string"
             }
           ],
+          "x-infinity-means": "no bound",
           "x-unit": "MVA",
-          "x-zero-means": "unlimited"
+          "x-zero-means": "zero bound"
         },
         "rate_c": {
           "anyOf": [
@@ -1559,8 +1562,9 @@
               "type": "string"
             }
           ],
+          "x-infinity-means": "no bound",
           "x-unit": "MVA",
-          "x-zero-means": "unlimited"
+          "x-zero-means": "zero bound"
         },
         "rating_sets": {
           "default": [],
@@ -1888,7 +1892,9 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-infinity-means": "no bound",
+          "x-zero-means": "zero bound"
         }
       },
       "required": [
@@ -18978,7 +18984,10 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "description": "Apparent-power limit: zero is a zero bound; positive infinity is unbounded.",
+          "x-infinity-means": "no bound",
+          "x-zero-means": "zero bound"
         },
         "rate_b": {
           "anyOf": [
@@ -18994,7 +19003,9 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-infinity-means": "no bound",
+          "x-zero-means": "zero bound"
         },
         "rate_c": {
           "anyOf": [
@@ -19010,7 +19021,9 @@
               ],
               "type": "string"
             }
-          ]
+          ],
+          "x-infinity-means": "no bound",
+          "x-zero-means": "zero bound"
         },
         "shift": {
           "anyOf": [

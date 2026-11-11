@@ -17,7 +17,10 @@ pub(super) fn decode(row: &mut Value, doc: &mut Value, next: &mut i64, base: f64
             "r":row[format!("r_{side}")],"x":row[format!("x_{side}")],
             "tap":optional(row,&format!("{side}_turns_ratio"),1.0)?,
             "alpha":optional(row,&format!("α_{side}"),clock_angle(row,&format!("{side}_group_number"))?)?,
-            "rating":optional(row,&format!("rating_{side}"),0.0)?,
+            "rating":match row.get(format!("rating_{side}")) {
+                None => 0.0, // PowerSystems' constructor default is a finite zero.
+                Some(_) => number(row, &format!("rating_{side}"))?,
+            },
             "active_power_flow":optional(row,&format!("active_power_flow_{side}"),0.0)?,
             "reactive_power_flow":optional(row,&format!("reactive_power_flow_{side}"),0.0)?,
             "control_objective":row.get(format!("control_objective_{side}")).cloned().unwrap_or(json!("UNDEFINED")),
@@ -32,12 +35,27 @@ pub(super) fn decode(row: &mut Value, doc: &mut Value, next: &mut i64, base: f64
                 circuit[field] = value.clone();
             }
         }
+        // PowerSystems has one native winding rating. Additional ratings are
+        // explicit metadata, expressed on this winding's component base.
+        let extra = &doc["ext"][row["id"].to_string()]["org.eigenergy.powerio"]["winding_rating_fields"]
+            [side];
+        for field in ["rating_b", "rating_c"] {
+            if extra.get(field).is_some() {
+                circuit[field] = json!(super::thermal_limit(extra, field, 1.0)?);
+            }
+        }
         // The circuit uses the system base so the neutral control base remains consistent.
         let factor = base / basis;
         for field in ["r", "x"] {
             scale(&mut circuit[field], factor);
         }
-        for field in ["rating", "active_power_flow", "reactive_power_flow"] {
+        for field in [
+            "rating",
+            "rating_b",
+            "rating_c",
+            "active_power_flow",
+            "reactive_power_flow",
+        ] {
             scale(&mut circuit[field], 1.0 / factor);
         }
         circuit["base_power"] = json!(base);
@@ -96,7 +114,23 @@ pub(super) fn prepare(doc: &mut Value, base: f64, warnings: &mut Diagnostics) ->
             row[format!("{side}_turns_ratio")] = c["tap"].clone();
             row[format!("available_{side}")] = c["available"].clone();
             any_available |= c["available"] == true;
-            row[format!("rating_{side}")] = json!(optional(c, "rating", 0.0)? / basis);
+            // Native winding ratings are Float64, unlike the parent's optional
+            // aggregate rating. Absence must not become a finite zero bound.
+            let rating = super::thermal_limit(c, "rating", 1.0 / basis)?;
+            let magnitude = crate::thermal_limit::as_option(rating).ok_or_else(|| error(format!(
+                "PowerSystems rating_{side} is required and numeric; an unlimited winding rating cannot be represented in this JSON profile"
+            )))?;
+            row[format!("rating_{side}")] = json!(magnitude);
+            for field in ["rating_b", "rating_c"] {
+                let rating = super::thermal_limit(c, field, 1.0 / basis)?;
+                if !rating.is_infinite() {
+                    doc["ext"][row["id"].to_string()]["org.eigenergy.powerio"]["winding_rating_fields"]
+                        [side][field] = json!(rating);
+                    warnings.push(&codes::EMIT_SIENNA.field_dropped, format!(
+                        "PowerSystems {side} {field} remains in ext without native winding constraint semantics"
+                    ));
+                }
+            }
             for field in ["active_power_flow", "reactive_power_flow"] {
                 row[format!("{field}_{side}")] = json!(optional(c, field, 0.0)? / basis);
             }

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Use numeric zero for a zero flow bound and positive infinity for no bound
+  across the balanced Rust, Python, C, and Julia APIs. Translate format-specific
+  conventions at import/export and preserve 0.11 IR meanings on read (#841).
+
 - Forward `powerio-prob/schema` to the distribution model so standalone schema builds include the LinDist3Flow preparation policy.
 
 - Correct the contributor IR compatibility guidance and canonical HVDC format
@@ -11,8 +15,6 @@
   and acceptance of long namespace URIs.
 - Parse explicitly selected SINCAL MDB inputs with acquired-table companions
   through collections, preserving root confinement and work budgets.
-- Clarify that taking a branch out of service is not an equivalent substitute
-  for a finite zero thermal limit in the 0.12 migration guide.
 
 ## 0.12.0-rc.1
 

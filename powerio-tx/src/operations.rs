@@ -58,15 +58,13 @@ fn other_end(b: &Branch, m: BusId) -> BusId {
     if b.from == m { b.to } else { b.from }
 }
 
-/// Combine two thermal ratings into the equivalent for a series pair. `0` means
-/// "no limit" in the MATPOWER convention, so it yields to a finite rating; two
-/// finite ratings give the more limiting (smaller) one.
+/// The series pair is constrained by the smaller rating, including zero.
 fn combine_rate(a: f64, b: f64) -> f64 {
-    match (a == 0.0, b == 0.0) {
-        (true, _) => b,
-        (_, true) => a,
-        _ => a.min(b),
-    }
+    // is_passthrough validates the two sections before any network mutation.
+    debug_assert!(
+        crate::thermal_limit::validate(a).is_ok() && crate::thermal_limit::validate(b).is_ok()
+    );
+    a.min(b)
 }
 
 /// What [`reduce_zero_impedance_with_report`](BalancedNetwork::reduce_zero_impedance_with_report)
@@ -631,7 +629,15 @@ impl BalancedNetwork {
         }
         let a = other_end(incident[0], m);
         let c = other_end(incident[1], m);
-        incident.iter().all(|b| !b.is_transformer() && b.in_service) && a != m && c != m && a != c
+        incident.iter().all(|b| {
+            !b.is_transformer()
+                && b.in_service
+                && [b.rate_a, b.rate_b, b.rate_c]
+                    .iter()
+                    .all(|limit| crate::thermal_limit::validate(*limit).is_ok())
+        }) && a != m
+            && c != m
+            && a != c
     }
 
     /// Fold the two line sections at passthrough bus `m` into one equivalent branch
@@ -883,9 +889,9 @@ mod tests {
             x: 0.1,
             b: 0.0,
             charging: None,
-            rate_a: 0.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
+            rate_a: f64::INFINITY,
+            rate_b: f64::INFINITY,
+            rate_c: f64::INFINITY,
             rating_sets: Vec::new(),
             current_ratings: None,
             tap: 0.0,
@@ -933,9 +939,9 @@ mod tests {
             tap: 1.0,
             shift: 0.0,
             nominal_kv: 0.0,
-            rate_a: 0.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
+            rate_a: f64::INFINITY,
+            rate_b: f64::INFINITY,
+            rate_c: f64::INFINITY,
             control: None,
         };
         let imp = Impedance {
@@ -1136,7 +1142,7 @@ mod tests {
         s1.rate_a = 100.0;
         let mut s2 = line(2, 3);
         s2.rate_a = 80.0;
-        let s3 = line(3, 4); // rate_a 0 == no limit
+        let s3 = line(3, 4); // rate_a Inf == no limit
         let mut net = BalancedNetwork::in_memory(
             "net",
             100.0,

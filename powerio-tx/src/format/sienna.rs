@@ -109,6 +109,15 @@ fn optional(v: &Value, k: &str, default: f64) -> Result<f64> {
         Ok(default)
     }
 }
+
+fn thermal_limit(v: &Value, k: &str, scale: f64) -> Result<f64> {
+    match v.get(k) {
+        None | Some(Value::Null) => Ok(f64::INFINITY),
+        Some(_) => {
+            crate::thermal_limit::scaled(crate::thermal_limit::finite(number(v, k)?)?, scale)
+        }
+    }
+}
 fn string<'a>(v: &'a Value, k: &str) -> Result<&'a str> {
     v.get(k)
         .and_then(Value::as_str)
@@ -300,9 +309,9 @@ pub(super) fn read(
             branch.uid = uid(kind, row)?;
             branch.name = row.get("name").and_then(Value::as_str).map(str::to_owned);
             branch.in_service = available(row)?;
-            branch.rate_a = number(row, "rating")? * p;
-            branch.rate_b = optional(row, "rating_b", 0.0)? * p;
-            branch.rate_c = optional(row, "rating_c", 0.0)? * p;
+            branch.rate_a = thermal_limit(row, "rating", p)?;
+            branch.rate_b = thermal_limit(row, "rating_b", p)?;
+            branch.rate_c = thermal_limit(row, "rating_c", p)?;
             if kind == "Line" {
                 let ch = BranchCharging::new(
                     end(row, "g", "from")? / z,
@@ -1234,7 +1243,18 @@ pub(super) fn write_document(
             warnings.push(&codes::EMIT_SIENNA.field_dropped, "named branch rating sets are retained in ext without native Sienna constraint semantics");
         }
     }
-    let extras = net.buses().iter().filter(|b| !b.extras.is_empty()).count()
+    for transformer in net.transformers_3w() {
+        if (0..3).any(|i| !transformer.winding_rating_sets(i).is_empty()) {
+            warnings.push(&codes::EMIT_SIENNA.field_dropped,
+                "named three-winding rating sets are retained in ext without native Sienna constraint semantics");
+        }
+    }
+    let extras = net
+        .transformers_3w()
+        .iter()
+        .filter(|t| !t.extras.is_empty())
+        .count()
+        + net.buses().iter().filter(|b| !b.extras.is_empty()).count()
         + net
             .branches()
             .iter()
@@ -1258,6 +1278,29 @@ pub(super) fn write_document(
             );
         }
     }
+    // SiennaSchemas 0.1–0.4 require a numeric Line.rating and allow
+    // the other branch ratings to be absent. PowerSystems 5.x also requires
+    // a numeric primary Line rating; its default JSON serializer cannot encode
+    // infinity. Do not invent a finite substitute or turn unlimited into zero.
+    for kind in ["Line", "TransformerCircuit"] {
+        if let Some(rows) = doc["components"]
+            .get_mut(kind)
+            .and_then(Value::as_array_mut)
+        {
+            for row in rows {
+                for key in ["rating", "rating_b", "rating_c"] {
+                    if row.get(key).is_some_and(Value::is_null) {
+                        if kind == "Line" && key == "rating" {
+                            return Err(error(
+                                "Sienna Line.rating is required and numeric; an unlimited primary line rating cannot be represented in this JSON profile",
+                            ));
+                        }
+                        row.as_object_mut().expect("branch row").remove(key);
+                    }
+                }
+            }
+        }
+    }
     for (kind, list) in doc["components"].as_object().expect("constructed object") {
         for (index, row) in list
             .as_array()
@@ -1265,7 +1308,9 @@ pub(super) fn write_document(
             .iter()
             .enumerate()
         {
-            if let Some(path) = null_path(row, &format!("components.{kind}[{index}]")) {
+            let root = format!("components.{kind}[{index}]");
+            let bad_path = null_path(row, &root);
+            if let Some(path) = bad_path {
                 return Err(error(format!("nonfinite numeric output at {path}")));
             }
         }
@@ -1315,7 +1360,7 @@ mod tests {
         assert_eq!((b.from, b.to), (BusId(7), BusId(43)));
         assert!((b.r - 0.02).abs() < 1e-14);
         assert!((b.x - 0.2).abs() < 1e-14);
-        assert_eq!(b.rate_a, 100.0);
+        assert_eq!(b.rate_a, (100.0));
         let ch = b.charging.unwrap();
         assert!((ch.b_fr - 0.01).abs() < 1e-14);
         assert!((ch.b_to - 0.015).abs() < 1e-14);
@@ -1391,6 +1436,37 @@ mod tests {
         let stated = decode(&doc).branches()[0].control.clone().unwrap();
         assert!((stated.tap_min - (-0.5_f64).to_degrees()).abs() < 1e-12);
         assert!((stated.tap_max - 0.5_f64.to_degrees()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn zero_is_native_and_unlimited_primary_line_is_a_schema_constraint() {
+        let mut net = decode(&document());
+        net.branches_mut()[0].rate_a = 0.0;
+        net.branches_mut()[0].rate_b = f64::INFINITY;
+        net.branches_mut()[0].rate_c = 0.0;
+        for version in 1..=4 {
+            let output = write(&net, version, None).unwrap();
+            let written: Value = serde_json::from_str(&output.text).unwrap();
+            let row = &written["components"]["Line"][0];
+            assert_eq!(row["rating"], 0.0);
+            assert_eq!(row["rating_c"], 0.0);
+            assert!(row.get("rating_b").is_none());
+            let back = decode(&written);
+            assert_eq!(back.branches()[0].rate_a, (0.0));
+            assert_eq!(back.branches()[0].rate_b, f64::INFINITY);
+            assert!(back.branches()[0].in_service);
+        }
+        net.branches_mut()[0].rate_a = f64::INFINITY;
+        assert!(
+            write(&net, 4, None)
+                .unwrap_err()
+                .to_string()
+                .contains("required and numeric")
+        );
+        assert!(powersystems::write(&net, None).is_err());
+        net.branches_mut()[0].rate_a = 100.0;
+        net.branches_mut()[0].r = f64::NAN;
+        assert!(write_document(&net, 4, None).is_err());
     }
 
     #[test]

@@ -2,7 +2,8 @@
 //! Electrical fields with a native counterpart always come from that field.
 use super::{Result, Value, error, integer};
 use crate::network::{Area, Branch, Bus, Generator, Hvdc, Load, Shunt, Storage, Transformer3W};
-use serde::Serialize;
+use powerio_core::__implementation::nonfinite::{NonFiniteDe, NonFiniteSer};
+use serde::{Deserialize, Serialize};
 
 pub(super) const KEY: &str = "org.eigenergy.powerio";
 
@@ -42,6 +43,7 @@ pub(super) const WRITTEN_FIELDS: &[&str] = &[
     "voltage_band_offsets",
     "control_fields",
     "winding_control_fields",
+    "winding_rating_fields",
 ];
 
 pub(super) fn record<T: Serialize>(
@@ -50,7 +52,14 @@ pub(super) fn record<T: Serialize>(
     value: &T,
     fields: &[&str],
 ) -> Result<()> {
-    let object = serde_json::to_value(value).map_err(|e| error(e.to_string()))?;
+    let serialized = value
+        .serialize(NonFiniteSer(serde_json::value::Serializer))
+        .map_err(|e| error(e.to_string()))?;
+    // Durable fail-closed wrappers are not physical component fields.
+    let object = match serialized.get("type").and_then(Value::as_str) {
+        Some("powerio.PartialTransformer3W") => &serialized["value"],
+        _ => &serialized,
+    };
     let mut extra = serde_json::Map::new();
     for key in fields {
         if let Some(v) = object.get(key) {
@@ -105,7 +114,7 @@ macro_rules! fields {
         impl Restore for $ty {
             fn restore_field(&mut self, key: &str, value: Value) -> serde_json::Result<()> {
                 match key {
-                    $(stringify!($field) => self.$field = serde_json::from_value(value)?,)+
+                    $(stringify!($field) => self.$field = Deserialize::deserialize(NonFiniteDe(value))?,)+
                     _ => unreachable!("extension field is not in the allowlist"),
                 }
                 Ok(())
@@ -118,7 +127,7 @@ fields!(Branch, uid, name, extras, rating_sets, angmin, angmax);
 fields!(Load, uid, extras);
 fields!(Shunt, uid, extras, section_count, control);
 fields!(Storage, uid);
-fields!(Transformer3W, uid, name);
+fields!(Transformer3W, uid, name, extras);
 fields!(Area, number, uid, name, slack_bus, tolerance, area_type);
 fields!(Hvdc, uid, cost, vf, vt, qf, qt, pt);
 impl Restore for Generator {

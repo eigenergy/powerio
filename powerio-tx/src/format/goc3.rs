@@ -336,6 +336,25 @@ fn read_buses(network: &Map<String, Value>) -> Result<(Vec<Bus>, Goc3BusMap)> {
     Ok((buses, Goc3BusMap { by_uid }))
 }
 
+fn branch_rating(
+    obj: &Map<String, Value>,
+    field: &str,
+    fallback: f64,
+    base_mva: f64,
+) -> Result<f64> {
+    match obj.get(field) {
+        None => Ok(fallback),
+        Some(value) => crate::thermal_limit::scaled(
+            crate::thermal_limit::finite(
+                value
+                    .as_f64()
+                    .ok_or_else(|| bad(format!("{field} must be a number")))?,
+            )?,
+            base_mva,
+        ),
+    }
+}
+
 fn read_branches(
     network: &Map<String, Value>,
     section_name: &'static str,
@@ -351,12 +370,9 @@ fn read_branches(
             let to = bus_ref(obj, "to_bus", buses)?;
             let initial = initial_status(obj);
             let b = number(obj, "b").unwrap_or(0.0);
-            let rate_a_per_unit = number(obj, "mva_ub_nom").unwrap_or(0.0);
-            let rate_b_per_unit = number(obj, "mva_ub_sht").unwrap_or(rate_a_per_unit);
-            let rate_c_per_unit = number(obj, "mva_ub_em").unwrap_or(rate_b_per_unit);
-            let rate_a = rate_a_per_unit * base_mva;
-            let rate_b = rate_b_per_unit * base_mva;
-            let rate_c = rate_c_per_unit * base_mva;
+            let rate_a = branch_rating(obj, "mva_ub_nom", f64::INFINITY, base_mva)?;
+            let rate_b = branch_rating(obj, "mva_ub_sht", rate_a, base_mva)?;
+            let rate_c = branch_rating(obj, "mva_ub_em", rate_b, base_mva)?;
             // GO Challenge 3 puts b/2 per terminal in addition to the extra
             // g_fr/b_fr/g_to/b_to shunts (PNNL-35792 eq. 149/151).
             let charging = if number(obj, "additional_shunt").unwrap_or(0.0) == 0.0 {
@@ -394,10 +410,10 @@ fn read_branches(
                 rate_b,
                 rate_c,
                 rating_sets: [
-                    number(obj, "mva_ub_sht")
-                        .map(|rating| BranchRatingSet::new("mva_ub_sht", rating * base_mva)),
-                    number(obj, "mva_ub_em")
-                        .map(|rating| BranchRatingSet::new("mva_ub_em", rating * base_mva)),
+                    obj.get("mva_ub_sht")
+                        .map(|_| BranchRatingSet::new("mva_ub_sht", rate_b)),
+                    obj.get("mva_ub_em")
+                        .map(|_| BranchRatingSet::new("mva_ub_em", rate_c)),
                 ]
                 .into_iter()
                 .flatten()
