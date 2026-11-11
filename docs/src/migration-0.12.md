@@ -197,7 +197,9 @@ converts MVA to per unit; zero and infinity keep their meaning.
 Readers and writers translate format conventions. MATPOWER uses zero for no
 bound; Egret uses null or an absent field. Egret numeric zero stays zero.
 Writers report values a target cannot represent rather than silently changing
-the constraint. NaN is not accepted as a usable thermal bound.
+the constraint. Sienna and PowerSystems JSON, which need a number, state no
+bound as PowerSystems' `INFINITE_BOUND` (see [Sienna exchange](sienna.md)).
+NaN is not accepted as a usable thermal bound.
 
 PowerIO IR uses its existing nonfinite encoding: `"Infinity"` in JSON.
 The document version distinguishes 0.11 files, where zero meant no bound,

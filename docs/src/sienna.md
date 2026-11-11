@@ -18,6 +18,16 @@ component bases and natural units into the neutral electrical model. Voltage
 angles and phase shifts change between Sienna radians and PowerIO degrees.
 Storage dispatch changes between injection and consumption sign conventions.
 
+JSON cannot state infinity, and both SiennaSchemas and PowerSystems.jl require
+a numeric `Line.rating`; PowerSystems also requires each three-winding
+winding's rating. An unlimited rating is written as PowerSystems'
+`INFINITE_BOUND`, 10⁶ per unit on the row's base, which is the value
+PowerSystems' own parsers give a zero or absent PSS/E rating. PowerIO reads
+that value back as unlimited, so the round trip is exact. When PowerSystems
+validates such a line, it replaces the bound with a rating derived from the
+line's parameters and logs a warning. A rating of zero is a real zero bound.
+Optional ratings that are unlimited are left out.
+
 The adapter maps AC buses, area membership, lines, transformer circuits,
 two- and three-winding transformers, fixed and switched admittances, constant-power and ZIP
 loads, static generators, reservoir storage, and generic HVDC lines. Optional

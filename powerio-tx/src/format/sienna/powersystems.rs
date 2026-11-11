@@ -624,6 +624,17 @@ pub(in crate::format) fn write(
                     scale(value, factor);
                 }
             }
+            // PowerSystems recognizes its unbounded marker by exact equality,
+            // so undo the rounding the base change may add.
+            if matches!(kind.as_str(), "Line" | "TransformerCircuit") {
+                for key in ["rating", "rating_b", "rating_c"] {
+                    if let Some(rating) = row.get_mut(key)
+                        && rating.as_f64().is_some_and(super::is_infinite_bound)
+                    {
+                        *rating = json!(super::INFINITE_BOUND);
+                    }
+                }
+            }
             if kind == "Line"
                 && doc["ext"][id.to_string()]["org.eigenergy.powerio"]["native_kind"]
                     == "MonitoredLine"

@@ -110,6 +110,31 @@ fn optional(v: &Value, k: &str, default: f64) -> Result<f64> {
     }
 }
 
+/// PowerSystems' `INFINITE_BOUND`: the per-unit rating its parsers state for
+/// an unbounded branch or winding (a zero or absent PSS/E rating). JSON cannot
+/// state infinity and PowerSystems requires a numeric `Line.rating` and winding
+/// ratings, so an unlimited rating is written as this bound and read back as
+/// unlimited. PowerSystems' own validation replaces it with the rate it
+/// derives from the line's parameters.
+pub(super) const INFINITE_BOUND: f64 = 1e6;
+
+/// Whether a per-unit rating is PowerSystems' unbounded marker, allowing the
+/// rounding a natural-unit value picks up through its component base.
+pub(super) fn is_infinite_bound(per_unit: f64) -> bool {
+    (per_unit - INFINITE_BOUND).abs() <= INFINITE_BOUND * 1e-12
+}
+
+/// A branch rating in MVA: absent, null, or the unbounded marker is unlimited.
+fn branch_rating(row: &Value, k: &str, scale: f64) -> Result<f64> {
+    let rating = thermal_limit(row, k, scale)?;
+    Ok(
+        if rating.is_finite() && is_infinite_bound(rating / base(row)?) {
+            f64::INFINITY
+        } else {
+            rating
+        },
+    )
+}
 fn thermal_limit(v: &Value, k: &str, scale: f64) -> Result<f64> {
     match v.get(k) {
         None | Some(Value::Null) => Ok(f64::INFINITY),
@@ -309,9 +334,9 @@ pub(super) fn read(
             branch.uid = uid(kind, row)?;
             branch.name = row.get("name").and_then(Value::as_str).map(str::to_owned);
             branch.in_service = available(row)?;
-            branch.rate_a = thermal_limit(row, "rating", p)?;
-            branch.rate_b = thermal_limit(row, "rating_b", p)?;
-            branch.rate_c = thermal_limit(row, "rating_c", p)?;
+            branch.rate_a = branch_rating(row, "rating", p)?;
+            branch.rate_b = branch_rating(row, "rating_b", p)?;
+            branch.rate_c = branch_rating(row, "rating_c", p)?;
             if kind == "Line" {
                 let ch = BranchCharging::new(
                     end(row, "g", "from")? / z,
@@ -1279,9 +1304,10 @@ pub(super) fn write_document(
         }
     }
     // SiennaSchemas 0.1–0.4 require a numeric Line.rating and allow
-    // the other branch ratings to be absent. PowerSystems 5.x also requires
-    // a numeric primary Line rating; its default JSON serializer cannot encode
-    // infinity. Do not invent a finite substitute or turn unlimited into zero.
+    // the other branch ratings to be absent, which reads as unlimited.
+    // PowerSystems 5.x also requires a numeric primary Line rating. An
+    // unlimited one is PowerSystems' INFINITE_BOUND on the row's base, never
+    // zero, which is a real bound.
     for kind in ["Line", "TransformerCircuit"] {
         if let Some(rows) = doc["components"]
             .get_mut(kind)
@@ -1291,11 +1317,10 @@ pub(super) fn write_document(
                 for key in ["rating", "rating_b", "rating_c"] {
                     if row.get(key).is_some_and(Value::is_null) {
                         if kind == "Line" && key == "rating" {
-                            return Err(error(
-                                "Sienna Line.rating is required and numeric; an unlimited primary line rating cannot be represented in this JSON profile",
-                            ));
+                            row[key] = json!(INFINITE_BOUND * base(row)?);
+                        } else {
+                            row.as_object_mut().expect("branch row").remove(key);
                         }
-                        row.as_object_mut().expect("branch row").remove(key);
                     }
                 }
             }
@@ -1439,7 +1464,7 @@ mod tests {
     }
 
     #[test]
-    fn zero_is_native_and_unlimited_primary_line_is_a_schema_constraint() {
+    fn zero_is_a_bound_and_an_unlimited_line_is_the_unbounded_marker() {
         let mut net = decode(&document());
         net.branches_mut()[0].rate_a = 0.0;
         net.branches_mut()[0].rate_b = f64::INFINITY;
@@ -1456,14 +1481,30 @@ mod tests {
             assert_eq!(back.branches()[0].rate_b, f64::INFINITY);
             assert!(back.branches()[0].in_service);
         }
+        // An unlimited required rating is PowerSystems' unbounded marker, on
+        // the row's base, and reads back as unlimited.
         net.branches_mut()[0].rate_a = f64::INFINITY;
-        assert!(
-            write(&net, 4, None)
-                .unwrap_err()
-                .to_string()
-                .contains("required and numeric")
-        );
-        assert!(powersystems::write(&net, None).is_err());
+        for version in 1..=4 {
+            let written: Value =
+                serde_json::from_str(&write(&net, version, None).unwrap().text).unwrap();
+            let row = &written["components"]["Line"][0];
+            assert_eq!(
+                row["rating"],
+                INFINITE_BOUND * number(row, "base_power").unwrap()
+            );
+            assert_eq!(decode(&written).branches()[0].rate_a, f64::INFINITY);
+        }
+        let native: Value =
+            serde_json::from_str(&powersystems::write(&net, None).unwrap().text).unwrap();
+        let line = native["data"]["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["__metadata__"]["type"] == "Line")
+            .unwrap();
+        assert_eq!(line["rating"], INFINITE_BOUND);
+        let back = powersystems::read(&native, None, &mut Diagnostics::new()).unwrap();
+        assert_eq!(back.branches()[0].rate_a, f64::INFINITY);
         net.branches_mut()[0].rate_a = 100.0;
         net.branches_mut()[0].r = f64::NAN;
         assert!(write_document(&net, 4, None).is_err());
