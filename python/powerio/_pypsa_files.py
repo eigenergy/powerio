@@ -82,12 +82,12 @@ class _GlobalRequested(Exception):
     """A pickle named a global, the only way unpickling can call code."""
 
 
-_NO_GLOBALS_CLASS: type | None = None
+class _NoGlobalsCache:
+    unpickler: type | None = None
 
 
 def _no_globals() -> type:
-    global _NO_GLOBALS_CLASS
-    if _NO_GLOBALS_CLASS is None:
+    if _NoGlobalsCache.unpickler is None:
         # pickle, like the other container helpers' imports, loads only when a
         # PyPSA binary source is read, so dispatching other formats stays cheap.
         import pickle
@@ -96,8 +96,8 @@ def _no_globals() -> type:
             def find_class(self, module, name):
                 raise _GlobalRequested(f"{module}.{name}")
 
-        _NO_GLOBALS_CLASS = _NoGlobals
-    return _NO_GLOBALS_CLASS
+        _NoGlobalsCache.unpickler = _NoGlobals
+    return _NoGlobalsCache.unpickler
 
 
 def _executable_pickle(value: bytes) -> bool:
