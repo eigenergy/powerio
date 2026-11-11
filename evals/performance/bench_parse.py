@@ -136,7 +136,7 @@ def bench_case(path: Path):
         print(f"pandapower from_mpc skipped above {FROM_MPC_MAX_BUSES} buses.")
     else:
         try:
-            from pandapower.converter import from_mpc
+            from pandapower.converter.matpower import from_mpc
 
             rows.append(("pandapower: from_mpc", timed(lambda: from_mpc(str(path)))))
         except ImportError as exc:
@@ -144,7 +144,7 @@ def bench_case(path: Path):
                 "pandapower is required for the published Python benchmark; "
                 "install evals/validation/requirements.txt into the same venv"
             ) from exc
-        except Exception as exc:  # noqa: BLE001 - from_mpc raises on some cases (pp 3.2.2)
+        except Exception as exc:  # noqa: BLE001 - from_mpc raises on some cases
             print(f"pandapower from_mpc failed on this case: {type(exc).__name__}: {exc}")
 
     width = max(len(name) for name, _ in rows)

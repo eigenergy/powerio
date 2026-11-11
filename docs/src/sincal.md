@@ -315,7 +315,7 @@ The reader maps all 15 nodes and 32 equipment records of the small licensed
 SimBench native case. Rust tests cover malformed/unsupported input, service
 states, open terminals, typed routing, binary echo and IR behavior. The
 `evals/sincal/check_balanced_simbench.py` harness checks actual Rust output
-against paired publisher CSV inputs and a fresh pandapower 3.2.2 calculation,
+against paired publisher CSV inputs and a fresh pandapower 3.5.6 calculation,
 including derived nonzero taps on either winding. Stored native results are
 separate evidence; no SINCAL desktop execution has been performed.
 
