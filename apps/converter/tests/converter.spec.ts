@@ -288,7 +288,8 @@ test('all six distribution outputs download and re-import, with BMOPF written as
       if (dataModel) expect(JSON.parse(bytes.toString()).data_model).toBe(dataModel);
       if (schemaVersion) {
         const meta = JSON.parse(bytes.toString()).meta;
-        expect(meta.$schema).toContain(`/bmopf/${schemaVersion}/bmopf.schema.json`);
+        // 0.2.x names its release in `schema_version` and no schema URL.
+        expect(meta.$schema).toBeUndefined();
         expect(meta.schema_version).toBe(schemaVersion);
       }
       const newPage = await page.context().newPage();

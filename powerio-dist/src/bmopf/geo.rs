@@ -61,7 +61,8 @@ fn read_meta(meta: &Value, extras: &Value, collection: &Value) -> Result<DistGeo
     }
     let crs = meta.get("crs").or_else(|| collection.get("crs"));
     let crs = match crs {
-        None => "EPSG:4326",
+        // Absent means OGC:CRS84, WGS84 longitude then latitude.
+        None => "OGC:CRS84",
         Some(value) => value
             .as_str()
             .or_else(|| value.pointer("/properties/name").and_then(Value::as_str))

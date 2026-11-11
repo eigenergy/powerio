@@ -229,7 +229,12 @@ Its pin moves to the `schema-v0.2.0` tag once the Task Force ratifies it.
 | `BmopfEmitOptions::sideload_coordinates` | removed; geometry is in the typed `bus.*.geo`, `line.*.geo` and `meta.crs` slots |
 | bus bounds written as `v_min`/`v_max` | written as `vpg_min`/`vpg_max` |
 | bus neutral to ground cap written as `vn_max` | written as `vng_max` |
-| `meta.$schema` stating a PowerIO archive URL | the schema's canonical `$id` |
+| `meta.$schema` stating a PowerIO archive URL | no `meta.$schema`; `meta.schema_version: "0.2.0"` is the one identifier, and the schema's `$id` is in `meta.provenance` |
+| bus `vn_max` | `vng_max` |
+| regulator `tap_ratio`, `tap_ratio_min`, `tap_ratio_max` | `voltage_ratio`, `voltage_ratio_min`, `voltage_ratio_max` |
+| `prime_mover: "DSTATCOM"`, `p_unit`/`q_unit` `VA_FRACTION`, `dc_control: "droop"` | `STATCOM`, `PU`, `DROOP` |
+| line `s_max` per phase | one entry per conductor; a per-phase array is dropped on write |
+| an absent `meta.crs` read as `EPSG:4326` | read as `OGC:CRS84`; both are WGS84 longitude then latitude |
 
 Multiconductor IVR preparation changes three results. A fixed inverter power
 factor follows the OpenDSS sign convention, `pf > 0` putting Q on the same

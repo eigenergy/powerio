@@ -812,11 +812,12 @@ fn diagonal_byte_identity() {
         if matches!(case.fmt, Fmt::Bmopf) {
             let doc: serde_json::Value = serde_json::from_str(retained).unwrap();
             assert_eq!(
-                doc["meta"]["$schema"],
-                powerio_dist::BMOPF_SCHEMA_ID,
+                doc["meta"]["schema_version"],
+                powerio_dist::BMOPF_SCHEMA_VERSION,
                 "{}: a legacy document is written as 0.2.0",
                 case.label
             );
+            assert!(doc["meta"].get("$schema").is_none(), "{}", case.label);
             continue;
         }
         assert_eq!(*retained, original, "{}: diagonal echo", case.label);

@@ -8,16 +8,42 @@ what is written here, one of the two has a defect.
 Schema versions come from the [`dsopt-schema`](https://github.com/distribution-system-opt/dsopt-schema)
 repository. PowerIO writes one version, `0.2.0`, as proposed in
 [dsopt-schema#2](https://github.com/distribution-system-opt/dsopt-schema/pull/2)
-at commit `9bca0cc`: schema `0.1.1` plus the element classes the IEEE PES Task
-Force on Benchmarking Multiconductor OPF draft carried, with nothing renamed.
-The pin moves to the `schema-v0.2.0` tag once the Task Force ratifies it.
+at commit `6796394`: schema `0.1.1` plus the element classes the IEEE PES Task
+Force on Benchmarking Multiconductor OPF draft carried. The pin moves to the
+`schema-v0.2.0` tag once the Task Force ratifies it, and the schema's `$id` is
+already the URL of its bytes at that tag.
 
 A document written against an earlier version (`0.1.0`, `0.1.1`, the
 `bmopf-report` drafts, or the `0.2.0` draft PowerIO 0.11 wrote) is read as
 `0.2.0`: the reader also accepts the older spellings and layouts listed on
 this page, and reports `READ.BMOPF.SCHEMA_LEGACY` once, naming the version
 the document stated. Writing it produces a `0.2.0` document; the source bytes
-are echoed only for a document that states `0.2.0`.
+are echoed only for a document that states a 0.2.x `meta.schema_version` and
+no `meta.$schema`.
+
+Schema 0.2.0 renamed some tokens. The reader takes the earlier spellings, and
+a document stating 0.2.x that uses them gets the same single
+`READ.BMOPF.SCHEMA_LEGACY`; a write states the 0.2.0 names:
+
+| Earlier spelling | 0.2.0 | Model value |
+| --- | --- | --- |
+| `meta.$schema` | `meta.schema_version` only | none; the `$id` goes in provenance |
+| bus `v_min`, `v_max`, `vn_max` | `vpg_min`, `vpg_max`, `vng_max` | `v_min_phase`, `v_max_phase`, `vn_max` |
+| regulator `tap_ratio`, `tap_ratio_min`, `tap_ratio_max` (and `time_series` keys) | `voltage_ratio`, `voltage_ratio_min`, `voltage_ratio_max` | `windings[1].tap / windings[0].tap`, `extras["tap_ratio_min"]`, `extras["tap_ratio_max"]` |
+| `voltage_source.cost`, `ibr.cost` | `energy_cost_rate` | `VoltageSource::energy_cost_rate`, `extras["energy_cost_rate"]` |
+| `prime_mover` `DSTATCOM` | `STATCOM` | `IbrPrimeMover::Statcom` (a model `Dstatcom` writes as `STATCOM`, reported) |
+| `q_unit`, `p_unit` `VA_FRACTION` | `PU` | `VaFraction` |
+| `dc_control` `droop` | `DROOP` | the string in `extras` |
+| `wire_data.kind` `overhead`, `cn_cable`, `ts_cable`; `line_geometry.earth_model` `modified_carson`, `full_carson`, `deri` | UPPER_SNAKE | retained source data |
+
+The writer never states a value schema 0.2.0 rejects. A field outside its
+constraint (a tap or ratio that is not strictly positive, a control law of the
+wrong shape, a bus bound the bus cannot carry, a limit array of the wrong
+length) is dropped with `EMIT.BMOPF.FIELD_DROPPED`; a record whose required
+rating or nominal voltage is not strictly positive is dropped whole with
+`EMIT.BMOPF.RECORD_DROPPED`. A network with no voltage source still writes an
+empty `voltage_source` table, which the schema rejects; `EMIT.BMOPF.SOURCE_COUNT`
+reports it.
 
 ## Conventions
 
@@ -43,9 +69,9 @@ parameter field is zero. A field with no typed slot lands in the element's
 | BMOPF | PowerIO | Note |
 | --- | --- | --- |
 | `name` | `PioModule` value name | |
-| `meta.$schema` | resolved by `BmopfSchemaVersion::from_schema_id` | Written as the schema's canonical `$id` (`BmopfSchemaVersion::schema_id`), which schema 0.2.0 fixes with `const`. Read, the canonical `$id` and the dsopt-schema permalink of the pinned proposal name 0.2.0. The 0.1.0 and 0.1.1 identifiers, the `bmopf-report` draft locations, the earlier 0.2.0 draft permalinks, and the PowerIO archive URLs that 0.11 stamped raise `READ.BMOPF.SCHEMA_LEGACY`. Absent raises `READ.BMOPF.SCHEMA_ABSENT`; a value naming no version raises `READ.BMOPF.SCHEMA_UNKNOWN`. Every one parses, read as 0.2.0. |
-| `meta.schema_version` | explicit schema version | Written as `0.2.0`. The reader checks agreement with `meta.$schema` and raises `READ.BMOPF.SCHEMA_MISMATCH` when they disagree. Output records the proposal commit, the schema digest, and the retrieval permalink under `meta.provenance.powerio_bmopf`. |
-| `meta.crs` | `MulticonductorNetwork::geo` coordinate space | The authority code of every `geo` field's system; absent means `EPSG:4326`. Written for a projected or non-WGS84 system, omitted for WGS84. A space the schema cannot name (unknown, diagram, a code-less projection) or coordinates not from the source also travel as `extras.powerio_geo`, which the reader prefers. |
+| `meta.schema_version` | resolved by `BmopfSchemaVersion::from_release` | The document's one version identifier. Written as `0.2.0`; any 0.2.x release reads as the 0.2 line. `0.1.0` or `0.1.1` raises `READ.BMOPF.SCHEMA_LEGACY`, and another value `READ.BMOPF.SCHEMA_UNKNOWN`. Output records the schema's `$id` (`BmopfSchemaVersion::schema_id`), the proposal commit, the schema digest, and the retrieval permalink under `meta.provenance.powerio_bmopf`. |
+| `meta.$schema` | resolved by `BmopfSchemaVersion::from_schema_id` | Removed in 0.2.x and never written. A document without `meta.schema_version` is identified by it, as 0.1.x defined: the 0.1.0 and 0.1.1 identifiers, the `bmopf-report` draft locations, the earlier 0.2.0 draft permalinks, and the PowerIO archive URLs that 0.11 stamped raise `READ.BMOPF.SCHEMA_LEGACY`; a 0.2.0 location reads as 0.2.0 with the key counted as an earlier spelling. A 0.2.x document carrying it reads too, counted the same way. A `$schema` and a release number naming different lines raise `READ.BMOPF.SCHEMA_MISMATCH`. Neither stated raises `READ.BMOPF.SCHEMA_ABSENT`. Every one parses, read as 0.2.0. |
+| `meta.crs` | `MulticonductorNetwork::geo` coordinate space | The authority code of every `geo` field's system; absent means `OGC:CRS84`, WGS84 longitude then latitude, and coordinates are always x then y, so `EPSG:4326` reads the same way. Written for a projected or non-WGS84 system, omitted for WGS84. A space the schema cannot name (unknown, diagram, a code-less projection) or coordinates not from the source also travel as `extras.powerio_geo`, which the reader prefers. |
 | `meta.frequency` | `MulticonductorNetwork::base_frequency`, Hz | Absent defaults to 60 with `READ.BMOPF.VALUE_DEFAULTED`. |
 | `meta.*` (the rest) | `MulticonductorNetwork::extras["bmopf_meta"]` | Re-emitted, except the three the writer owns. |
 | `terminal_conventions` | `MulticonductorNetwork::extras["bmopf_terminal_conventions"]` | Re-emitted verbatim; authored from the terminal names when the source states none. |
@@ -80,13 +106,13 @@ parameter field is zero. A field with no typed slot lands in the element's
 | `line.length` | `length`, m | |
 | `line.R_series_i_j`, `line.X_series_i_j` | a synthesized `DistLineCode` named after the line, ohm per metre at unit length | The inline branch states the absolute ohms of the whole line, and its `length` is descriptive. The reader keeps those ohms unscaled in the synthesized line code and sets the line's length to 1 m, so length times the per metre value is the stated impedance; a stated `length` other than 1 raises `READ.BMOPF.VALUE_DEFAULTED`. `READ.BMOPF.VALUE_INFERRED` names the synthesis. A line that names a `linecode` takes no inline key. |
 | `line.G_from_i_j`, `line.B_from_i_j`, `line.G_to_i_j`, `line.B_to_i_j` | the same synthesized line code's `g_from`, `b_from`, `g_to`, `b_to` | |
-| `line.i_max`, `line.s_max` | `i_max`, `s_max` | Per conductor; override the line code's. |
+| `line.i_max`, `line.s_max` | `i_max`, `s_max` | One entry per conductor of `terminal_map_from`; override the line code's. Schema 0.1.1's line text said `s_max` is per phase: a document stating one entry per phase on a map with a neutral reads per conductor with the neutral unbounded (`READ.BMOPF.VALUE_INFERRED`). A write states `s_max` only when it has one finite entry per conductor, and otherwise drops it with `EMIT.BMOPF.FIELD_DROPPED` rather than inventing a limit. |
 | `line.geo` | `route` | A GeoJSON LineString from `bus_from` through any bends to `bus_to`, in the system `meta.crs` names; descriptive, `length` stays the electrical length. Written for every line with a route of two or more finite vertices. |
 | `linecode.R_series_i_j`, `linecode.X_series_i_j` | `r_series`, `x_series`, ohm per metre | |
 | `linecode.G_from_i_j`, `linecode.B_from_i_j`, `linecode.G_to_i_j`, `linecode.B_to_i_j` | `g_from`, `b_from`, `g_to`, `b_to`, siemens per metre | Half the total shunt at each end. |
-| `linecode.i_max`, `linecode.s_max` | `i_max`, `s_max` | Per conductor, applied at both ends. |
+| `linecode.i_max`, `linecode.s_max` | `i_max`, `s_max` | Per conductor, in matrix row order, applied at both ends. A write drops an `s_max` of another length. |
 | `linecode.source` | `source` | |
-| `linecode.line_geometry`, `linecode.derivation` | `extras` | 0.2.0 fields; retained, not typed. |
+| `linecode.line_geometry`, `linecode.derivation` | `extras` | 0.2.0 fields; retained on read, not typed, and not written (`EMIT.BMOPF.FIELD_DROPPED`). |
 
 A line has exactly one impedance source, and the `oneOf` in both schema
 versions enforces it: either a `linecode` with a `length`, or inline
@@ -204,7 +230,7 @@ as two secondary windings.
 | `i_max_from`, `i_max_to` | `extras` | Per winding conductor of that side, in that side's own amperes. |
 | `n_winding.windings[]` | one `DistWinding` each | `bus`, `terminal_map`, `v_nom`, `configuration` (`WYE` or `DELTA`), `r_winding`, `delta_roll`, `i_max`, `r_neutral`, `x_neutral`. Both neutral fields are nonnegative; a write drops a negative or nonfinite one with `EMIT.BMOPF.TRANSFORMER_NEUTRAL_DROPPED`, as the two-winding subtypes do. |
 | `n_winding.x_sc` | `xsc_pct`, ordered `12, 13, ..., 1n, 23, ..., (n-1)n` | Keyed `i_j` with `i < j` in BMOPF, all referred to winding 1. |
-| `single_phase_autotransformer`, `open_delta_regulator` | windings plus `extras["bmopf_subtype"]` | `tap_ratio` is the regulated over source voltage ratio, `V_to/V_from`, for both ANSI types: `windings[1].tap / windings[0].tap`. Its bounds, `regulator_type` and the open delta connection ride in `extras`; `regulator_type` records the A/B hardware and does not change the ratio. |
+| `single_phase_autotransformer`, `open_delta_regulator` | windings plus `extras["bmopf_subtype"]` | `voltage_ratio` (read also as the earlier `tap_ratio`) is the regulated over source voltage ratio, `V_to/V_from`, for both ANSI types: `windings[1].tap / windings[0].tap`. Its bounds `voltage_ratio_min`/`voltage_ratio_max`, `regulator_type` and the open delta connection ride in `extras`; `regulator_type` records the A/B hardware and does not change the ratio. |
 
 The two-winding subtypes declare the tap ratio and its bounds, the four
 winding neutral fields, and the two no-load fields in place, spelling the
@@ -228,7 +254,7 @@ tables. A document written against an earlier version may carry them under
 | --- | --- | --- |
 | `bus`, `terminal_map` | the same names | |
 | `topology` | `topology`: `SINGLE_PHASE`, `THREE_LEG`, `FOUR_LEG` | |
-| `prime_mover` | `prime_mover`: `PV`, `BATTERY`, `GENERIC`, `STATCOM`, `DSTATCOM` | |
+| `prime_mover` | `prime_mover`: `PV`, `BATTERY`, `GENERIC`, `STATCOM` | `DSTATCOM`, removed in 0.2.0, reads as `STATCOM`. |
 | `s_max` | `s_max`, VA per phase | |
 | `i_max` | `i_max`, A per conductor | |
 | `p_avail` | `p_avail`, W | |
@@ -253,7 +279,9 @@ Reading each one reports `READ.BMOPF.RETAINED_SOURCE_ONLY`.
 `dc_bus`, `dc_branch`, `dc_grounding`, `dc_load`, `dc_source`, `time_series`,
 `wire_data`, `line_geometry`, and a per-element `time_series` reference map.
 
-They pass through and re-emit unchanged. Nothing reads their values into a
+The DC classes, the time series and the reference maps pass through and
+re-emit unchanged. `wire_data` and `line_geometry` are retained on read but
+not written, each reported with `EMIT.BMOPF.RECORD_DROPPED`. Nothing reads their values into a
 calculation, so if a case's behaviour depends on them, the instance PowerIO
 builds from it does not represent that case. The reader says so per class
 rather than leaving you to discover it.

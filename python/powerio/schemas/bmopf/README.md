@@ -7,7 +7,7 @@ and associated review discussion. The file retains its upstream bytes.
 
 `0.2.0` is the version proposed in
 [dsopt-schema#2](https://github.com/distribution-system-opt/dsopt-schema/pull/2),
-vendored from its commit `9bca0cc`. Supporting it in PowerIO does not establish
+vendored from its commit `6796394`. Supporting it in PowerIO does not establish
 Task Force acceptance. Once the Task Force ratifies it, the pin moves to the
 `schema-v0.2.0` tag. Changes to the proposal require a reviewed archive update.
 

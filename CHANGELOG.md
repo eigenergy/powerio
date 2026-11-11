@@ -419,7 +419,7 @@ action.
 - PowerIO writes one BMOPF version, 0.2.0, as proposed in
   [dsopt-schema#2](https://github.com/distribution-system-opt/dsopt-schema/pull/2).
   The vendored schema is dsopt-schema
-  [`9bca0cc`](https://github.com/distribution-system-opt/dsopt-schema/commit/9bca0ccb8fbee93eb2adcca7ec32954a05940631),
+  [`6796394`](https://github.com/distribution-system-opt/dsopt-schema/commit/6796394f6a4326b61c7fcf5ab5c0d55181b67d25),
   the proposal reconciled with schema 0.1.1, the Task Force review answers
   (`vng_max`, geometry for every located element) and the review fixes to
   dsopt-schema#2; the pin moves to the `schema-v0.2.0` tag once the Task Force
@@ -450,9 +450,34 @@ action.
   a WGS84 document, and read back as component locations. A switch or
   transformer `geo` LineString reads as the midpoint of its end positions.
   BMOPF output no longer reports line routes it writes as dropped.
-- `meta.$schema` is the schema's canonical `$id` rather than a PowerIO archive
-  URL ([BMOPFTools #487](https://github.com/frederikgeth/BMOPFTools.jl/issues/487));
-  the commit, digest and retrieval permalink stay in `meta.provenance`.
+- Output states `meta.schema_version` (`0.2.0`) as the document's one
+  version identifier and no `meta.$schema`, which 0.2.x removed; a PowerIO
+  archive URL no longer appears
+  ([BMOPFTools #487](https://github.com/frederikgeth/BMOPFTools.jl/issues/487)).
+  The schema's `$id` (its URL at the `schema-v0.2.0` tag), the commit, digest
+  and retrieval permalink stay in `meta.provenance`. The reader identifies a
+  document by `meta.schema_version` (any 0.2.x) and falls back to the earlier
+  `meta.$schema` classification; a 0.2.x document still carrying `$schema`
+  reads, counted in the one legacy warning.
+- An absent `meta.crs` means `OGC:CRS84`, and coordinates are always longitude
+  then latitude; `EPSG:4326` reads the same way, and the writer leaves the CRS
+  out for WGS84.
+- Schema 0.2.0 renamed tokens, which the writer follows and the reader takes
+  in either spelling: UPPER_SNAKE `wire_data.kind`, `line_geometry.earth_model`
+  and `dc_control` (`DROOP`), `STATCOM` for `DSTATCOM`, `PU` for
+  `VA_FRACTION`, and the regulators' `voltage_ratio` (with `_min`/`_max` and
+  `time_series` keys) for `tap_ratio`.
+- Line and linecode `s_max` have one entry per conductor. A per-phase line
+  `s_max` from an earlier document reads per conductor with the neutral
+  unbounded; the writer drops an `s_max` of any other length.
+- The writer never states a value the schema rejects: a non-positive rating,
+  nominal voltage, tap or ratio, a control law of the wrong shape or without a
+  `voltage_reference`, or a bus bound the bus cannot carry is dropped with a
+  finding, and a record whose required rating or nominal voltage is not
+  positive is dropped whole. The reader checks the 0.2.x semantic rules
+  (neutral and phase-count bounds, frequency consistency, control
+  breakpoints, Volt-Watt and Volt-VAr limits, per-conductor `s_max`, wire
+  and load requirements).
 - A document written against an earlier version (0.1.0, 0.1.1, the
   `bmopf-report` drafts, or the 0.2.0 draft PowerIO 0.11 wrote) reads as
   0.2.0 and is reported once with the new `READ.BMOPF.SCHEMA_LEGACY` warning,

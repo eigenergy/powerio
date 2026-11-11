@@ -26,16 +26,16 @@ pub enum BmopfSchemaVersion {
     Bmopf020,
 }
 
-/// The `$id` of schema 0.2.0.
-const SCHEMA_ID_020: &str = "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json";
+/// The `$id` of schema 0.2.0: the URL of its bytes at the `schema-v0.2.0` tag.
+const SCHEMA_ID_020: &str = "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/schema-v0.2.0/schema/bmopf/0.2.0/bmopf.schema.json";
 
 /// Immutable revision of the proposed BMOPF 0.2.0 schema.
-pub const BMOPF_PROPOSAL_COMMIT: &str = "9bca0ccb8fbee93eb2adcca7ec32954a05940631";
+pub const BMOPF_PROPOSAL_COMMIT: &str = "6796394f6a4326b61c7fcf5ab5c0d55181b67d25";
 /// SHA-256 of the exact UTF-8 schema document at the pinned revision.
 pub const BMOPF_PROPOSAL_SHA256: &str =
-    "5735cca16e95c24e94a1f92d6f383a8698ab138985b7088467c42e3f6d6f50f0";
+    "9c9217afe0a62af77506f7d6ce6e0726d03f338f164a1621a7631cb03c638bdc";
 /// Immutable retrieval location, distinct from the schema's canonical `$id`.
-pub const BMOPF_PROPOSAL_URL: &str = "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/9bca0ccb8fbee93eb2adcca7ec32954a05940631/schema/bmopf/0.2.0/bmopf.schema.json";
+pub const BMOPF_PROPOSAL_URL: &str = "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/6796394f6a4326b61c7fcf5ab5c0d55181b67d25/schema/bmopf/0.2.0/bmopf.schema.json";
 
 /// The PowerIO commit whose vendored schema copies releases 0.11.2 and later
 /// stamped into `meta.$schema`.
@@ -97,7 +97,21 @@ impl BmopfSchemaVersion {
         }
     }
 
+    /// The line a `meta.schema_version` release number belongs to: any 0.2.x
+    /// release is 0.2.0's line. `None` for a number outside it.
+    #[must_use]
+    pub fn from_release(release: &str) -> Option<Self> {
+        let patch = release.strip_prefix("0.2.")?;
+        let canonical = patch == "0"
+            || (!patch.is_empty()
+                && !patch.starts_with('0')
+                && patch.bytes().all(|b| b.is_ascii_digit()));
+        canonical.then_some(Self::Bmopf020)
+    }
+
     /// The version a `meta.$schema` value names, or `None` when it names none.
+    /// Documents written before 0.2.0 identify themselves this way; a 0.2.x
+    /// document states `meta.schema_version` instead.
     ///
     /// A released schema document carries its version in its own `$id`, so the
     /// version is the directory the schema document sits in. A location that
@@ -137,6 +151,15 @@ impl LegacySchema {
             Self::V010 => "0.1.0",
             Self::V011 => "0.1.1",
             Self::Draft020 => "0.2.0",
+        }
+    }
+
+    /// The earlier release a `meta.schema_version` value names, if any.
+    pub(super) fn from_release(release: &str) -> Option<Self> {
+        match release {
+            "0.1.0" => Some(Self::V010),
+            "0.1.1" => Some(Self::V011),
+            _ => None,
         }
     }
 

@@ -54,8 +54,12 @@ fn a_legacy_document_is_written_as_0_2_0_and_a_0_2_0_document_echoes() {
     assert_eq!(bytes(&written), bytes(&alias));
     assert_ne!(bytes(&written), source.as_slice());
     let output: Value = serde_json::from_slice(bytes(&written)).unwrap();
-    assert_eq!(output["meta"]["$schema"], powerio::dist::BMOPF_SCHEMA_ID);
+    assert!(output["meta"].get("$schema").is_none());
     assert_eq!(output["meta"]["schema_version"], "0.2.0");
+    assert_eq!(
+        output["meta"]["provenance"]["powerio_bmopf"]["schema_id"],
+        powerio::dist::BMOPF_SCHEMA_ID
+    );
     // Schema 0.1.1 renamed the phase to ground bounds `vpg_*`; 0.2.0 rejects
     // the 0.1.0 spelling.
     assert_eq!(output["bus"]["b"]["vpg_min"], json!([210.0, 212.0, 214.0]));
@@ -249,7 +253,7 @@ fn dss_four_winding_reactances_survive_ir_and_bmopf() {
 #[test]
 fn energy_costs_keep_phase_order_through_mutation_ir_and_schema_conversion() {
     let mut input: Value = serde_json::from_slice(&case()).unwrap();
-    input["meta"]["$schema"] = json!(powerio::BmopfSchemaVersion::Bmopf020.schema_id());
+    input["meta"].as_object_mut().unwrap().remove("$schema");
     input["meta"]["schema_version"] = json!("0.2.0");
     input["voltage_source"]["s"]["energy_cost_rate"] = json!([0.10, 0.20, 0.30]);
     input["generator"] = json!({"g": {"bus":"b", "configuration":"WYE",
@@ -341,7 +345,8 @@ fn unresolved_geometry_cannot_reach_instances_matrices_or_canonical_exports() {
 #[test]
 fn inverter_energy_prices_survive_ir() {
     let mut input: Value = serde_json::from_slice(&case()).unwrap();
-    input["meta"]["$schema"] = json!(powerio::BmopfSchemaVersion::Bmopf020.schema_id());
+    input["meta"].as_object_mut().unwrap().remove("$schema");
+    input["meta"]["schema_version"] = json!("0.2.0");
     input["ibr"] = json!({"pv":{"bus":"b", "terminal_map":["a","b","c","n"],
         "topology":"FOUR_LEG", "prime_mover":"PV", "s_max":[1000,1000,1000],
         "energy_cost_rate":[0.01,0.02,0.03]}});

@@ -1589,7 +1589,7 @@ fn regulator_types_a_and_b_share_the_regulated_over_source_ratio() {
                 "s_rating": 1_666_000.0,
                 "r_series_from": 0.001, "x_series_from": 0.002,
                 "r_series_to": 0.001, "x_series_to": 0.0,
-                "tap_ratio": 1.05, "tap_ratio_min": 0.9, "tap_ratio_max": 1.1,
+                "voltage_ratio": 1.05, "voltage_ratio_min": 0.9, "voltage_ratio_max": 1.1,
                 "regulator_type": regulator_type
             }}},
             "load": {"l": {"bus": "r", "terminal_map": ["1", "n"],

@@ -211,8 +211,10 @@ BMOPF schema 0.2.0 declares typed geometry, following
 the shape PowerIO 0.11 already read: `bus[id].geo` is a GeoJSON Point,
 `line[id].geo` a GeoJSON LineString from `bus_from` through any bends to
 `bus_to`, and `meta.crs` the authority code of the one coordinate reference
-system every `geo` field uses. An absent `crs` means `EPSG:4326`, longitude
-then latitude. Geometry is descriptive: `length` stays the electrical length.
+system every `geo` field uses. An absent `crs` means `OGC:CRS84`, WGS84
+longitude then latitude, and coordinates are always x then y whatever the
+authority's own axis order, so `EPSG:4326` reads the same way. The writer
+leaves `meta.crs` out for WGS84. Geometry is descriptive: `length` stays the electrical length.
 A malformed vertex invalidates its entire path; PowerIO does not connect the
 remaining vertices.
 

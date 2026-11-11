@@ -1081,17 +1081,20 @@ circuit, core shunts and tap-control decisions. Malformed winding maps and
 invalid ratios fail instead of producing an incomplete matrix.
 
 The BMOPF proposal schema is pinned to
-[`9bca0cc`](https://github.com/distribution-system-opt/dsopt-schema/commit/9bca0ccb8fbee93eb2adcca7ec32954a05940631),
-with SHA-256 `5735cca16e95c24e94a1f92d6f383a8698ab138985b7088467c42e3f6d6f50f0`,
+[`6796394`](https://github.com/distribution-system-opt/dsopt-schema/commit/6796394f6a4326b61c7fcf5ab5c0d55181b67d25),
+with SHA-256 `9c9217afe0a62af77506f7d6ce6e0726d03f338f164a1621a7631cb03c638bdc`,
 the revision that reconciled the proposal with schema 0.1.1 (`vpg_*` bounds,
 typed geometry, one identifier) and applied the Task Force review answers
-(`vng_max`, geometry for every located element). The pin moves to the `schema-v0.2.0` tag once
-the Task Force ratifies the proposal. Output stamps the schema's canonical `$id`
-into `meta.$schema`, the value 0.2.0 fixes with `const`, so a consumer
-recognises a document by one identifier per version instead of allow-listing
-producer archive URLs ([BMOPFTools #487](https://github.com/frederikgeth/BMOPFTools.jl/issues/487)).
-Proposal output records the proposal commit, the schema digest, and the
-retrieval permalink of the exact bytes under `meta.provenance.powerio_bmopf`.
+(`vng_max`, geometry for every located element), the review fixes, and the
+identity and consistency changes. The pin moves to the `schema-v0.2.0` tag
+once the Task Force ratifies the proposal. Output states only
+`meta.schema_version`, the document's one version identifier, and no
+`meta.$schema`: a URL per release made every patch release reject every
+earlier document, and consumers had to allow-list producer archive URLs
+([BMOPFTools #487](https://github.com/frederikgeth/BMOPFTools.jl/issues/487)).
+Output records the schema's `$id` (its URL at the `schema-v0.2.0` tag), the
+proposal commit, the schema digest, and the retrieval permalink of the exact
+bytes under `meta.provenance.powerio_bmopf`.
 Existing provenance is preserved; a name collision uses a numbered producer
 entry. Reading the PowerIO archive URLs that 0.11 stamped, the dsopt-schema
 commit permalinks, and the version-directory identifiers remains supported

@@ -14,32 +14,40 @@
 //! and vendored from its commit [`BMOPF_PROPOSAL_COMMIT`]. 0.2.0 is schema
 //! 0.1.1 plus the classes the task force's draft carried (IBR, control
 //! profiles, time series, the DC network, the n-winding and regulator
-//! transformers, typed geometry), with nothing renamed. The pin moves to the
-//! `schema-v0.2.0` tag once the Task Force ratifies the proposal.
+//! transformers, typed geometry). The pin moves to the `schema-v0.2.0` tag
+//! once the Task Force ratifies the proposal.
 //!
-//! The reader reads every document as 0.2.0. A document whose `meta.$schema`
-//! names an earlier version (0.1.0, 0.1.1, the `bmopf-report` drafts, or the
-//! 0.2.0 draft PowerIO 0.11 wrote) is read through the legacy paths that
+//! A 0.2.x document names its release in `meta.schema_version`, its only
+//! version identifier; any 0.2.x release reads as the 0.2 line. A document
+//! written before 0.2.0 states no release and is identified by its
+//! `meta.$schema`, as 0.1.x defined.
+//!
+//! The reader reads every document as 0.2.0. A document that names an earlier
+//! version (0.1.0, 0.1.1, the `bmopf-report` drafts, or the 0.2.0 draft
+//! PowerIO 0.11 wrote) is read through the legacy paths that
 //! accept the older layouts, and reported once with
 //! `READ.BMOPF.SCHEMA_LEGACY`, which names the version it stated. The older
 //! layouts are: the IBR, control profile, DC, time series, and overflow
 //! transformer tables under `extras`; the transformer `tap` spelling; the
 //! `cost` spelling of `energy_cost_rate`; the bus bounds `v_min`/`v_max` and
-//! `vn_max`; and the `extras.geojson` geometry layer. A document stating 0.2.0
-//! that uses those bus bound spellings gets the same single finding, and one stating both
-//! spellings with different values is `READ.BMOPF.SEMANTIC_INVALID`. A
-//! document stating no `meta.$schema` is reported with
-//! `READ.BMOPF.SCHEMA_ABSENT`, and one naming no known version with
-//! `READ.BMOPF.SCHEMA_UNKNOWN`; both are read the same way.
+//! `vn_max`; `meta.$schema`; the regulators' `tap_ratio`; `DSTATCOM`,
+//! `VA_FRACTION` and the lowercase enum values; and the `extras.geojson`
+//! geometry layer. A document stating 0.2.x that uses those spellings gets the
+//! same single finding, and one stating both bus bound spellings with
+//! different values is `READ.BMOPF.SEMANTIC_INVALID`. A document stating no
+//! version is reported with `READ.BMOPF.SCHEMA_ABSENT`, and one naming no
+//! known version with `READ.BMOPF.SCHEMA_UNKNOWN`; both are read the same way.
 //!
 //! Output always states 0.2.0, even for an unchanged document read from an
 //! earlier version: the retained source bytes are echoed only when the
-//! source itself states 0.2.0.
+//! source itself states a 0.2.x release and no `meta.$schema`. The writer
+//! never states a value schema 0.2.0 rejects; it drops it and reports it.
 //!
 //! The phase to ground bounds are `vpg_min`/`vpg_max`, and the neutral to
 //! ground cap is `vng_max`. Geometry goes in the
 //! typed `bus.*.geo` (a GeoJSON Point) and `line.*.geo` (a GeoJSON
-//! LineString) slots, with the coordinate system in `meta.crs`; a coordinate
+//! LineString) slots, with the coordinate system in `meta.crs` (absent means
+//! OGC:CRS84, longitude then latitude, which the writer leaves implicit); a coordinate
 //! space the schema cannot name is also recorded as `extras.powerio_geo`.
 //! Component locations (`MulticonductorNetwork::component_locations`) travel
 //! as the `geo` Point of the voltage source, load, generator, IBR, shunt,
@@ -47,13 +55,14 @@
 //! switch or transformer `geo` LineString reads as the midpoint of its end
 //! positions. `ibr` and `control_profile` are top-level tables, the two-winding
 //! transformer subtypes spell the ratio `tap_ratio`, `tap_ratio_min` and
-//! `tap_ratio_max`, and costs are `energy_cost_rate`.
+//! `tap_ratio_max`, the regulators `voltage_ratio`, `voltage_ratio_min` and
+//! `voltage_ratio_max`, and costs are `energy_cost_rate`. Line and linecode
+//! `s_max` have one entry per conductor.
 //!
-//! `meta.$schema` is the schema's canonical `$id`
-//! ([`BmopfSchemaVersion::schema_id`]), which 0.2.0 fixes with `const`.
-//! Where the exact schema bytes were retrieved from, and their digest, is
-//! recorded under `meta.provenance.powerio_bmopf`
-//! ([`BmopfSchemaVersion::retrieval_url`], [`BMOPF_PROPOSAL_SHA256`]).
+//! The schema's `$id` ([`BmopfSchemaVersion::schema_id`]), where the exact
+//! schema bytes were retrieved from, and their digest are recorded under
+//! `meta.provenance.powerio_bmopf` ([`BmopfSchemaVersion::retrieval_url`],
+//! [`BMOPF_PROPOSAL_SHA256`]).
 //!
 //! # What stays under `extras`
 //!
@@ -101,10 +110,11 @@ pub use profile::{
 pub(crate) use write::emit_bmopf_json_text_with_options;
 pub use write::{BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfEmitOptions};
 
-/// Whether a BMOPF document's `meta.$schema` names the version PowerIO
-/// writes. A same-format emission echoes retained source bytes only then; a
-/// document stating an earlier version, or none, is written fresh as 0.2.0.
-/// Shared with the facade, which echoes calculation values itself.
+/// Whether a BMOPF document identifies itself as the version PowerIO
+/// writes: a `meta.schema_version` of the 0.2 line and no earlier
+/// `meta.$schema`. A same-format emission echoes retained source bytes only
+/// then; a document stating an earlier version, or none, is written fresh as
+/// 0.2.0. Shared with the facade, which echoes calculation values itself.
 #[doc(hidden)]
 #[must_use]
 pub fn __states_written_version(text: &str) -> bool {
@@ -114,15 +124,22 @@ pub fn __states_written_version(text: &str) -> bool {
     }
     #[derive(serde::Deserialize)]
     struct Meta {
+        schema_version: Option<String>,
         #[serde(rename = "$schema")]
-        schema: Option<String>,
+        schema: Option<serde::de::IgnoredAny>,
     }
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     serde_json::from_str::<Document>(text)
         .ok()
-        .and_then(|document| document.meta?.schema)
-        .and_then(|id| BmopfSchemaVersion::from_schema_id(&id))
-        == Some(BmopfSchemaVersion::default())
+        .and_then(|document| document.meta)
+        .is_some_and(|meta| {
+            meta.schema.is_none()
+                && meta
+                    .schema_version
+                    .as_deref()
+                    .and_then(BmopfSchemaVersion::from_release)
+                    == Some(BmopfSchemaVersion::default())
+        })
 }
 
 mod validate;
