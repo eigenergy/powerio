@@ -22,7 +22,8 @@ use crate::{Error, Result};
 
 const FMT: &str = "pandapower JSON";
 const F_HZ: f64 = 50.0;
-const MAX_I_KA: f64 = 99_999.0;
+/// pandapower's marker for an unlimited line current (converter from_ppc MAX_VAL).
+pub const MAX_I_KA: f64 = 99_999.0;
 
 #[allow(clippy::too_many_lines)] // direct table-to-BalancedNetwork mapper; split helpers obscure column mapping
 pub(crate) fn parse_pandapower_source(
@@ -30,27 +31,15 @@ pub(crate) fn parse_pandapower_source(
     name_hint: Option<&str>,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    let content: &str = source;
-    let root: Value = serde_json::from_str(content).map_err(|e| bad(e.to_string()))?;
-    let root = root
-        .as_object()
-        .ok_or_else(|| bad("top level is not a JSON object"))?;
-    if root.get("_class").and_then(Value::as_str) != Some("pandapowerNet") {
-        return Err(bad("top level `_class` is not `pandapowerNet`"));
+    let obj = &network_object(source)?;
+    if has_three_phase_tables(obj) {
+        return Err(bad(
+            "the network carries asymmetric_load, asymmetric_sgen or res_bus_3ph rows, so it is \
+             a three-phase (runpp_3ph) network. The balanced reader would drop the per-phase \
+             detail. powerio_tnd::formats::pandapower reads it into a MulticonductorNetwork. \
+             `powerio::parse` routes it there by content",
+        ));
     }
-    let object_from_string;
-    let obj = match root.get("_object") {
-        Some(Value::Object(obj)) => obj,
-        Some(Value::String(raw)) => {
-            object_from_string = serde_json::from_str::<Value>(raw)
-                .map_err(|e| bad(format!("top level `_object`: {e}")))?;
-            object_from_string
-                .as_object()
-                .ok_or_else(|| bad("top level `_object` string is not a network map"))?
-        }
-        Some(_) => return Err(bad("top level `_object` is not a network map")),
-        None => return Err(bad("missing `_object` network map")),
-    };
 
     // Present-but-unparseable would silently rescale the whole per unit
     // system (sn_mva) or every line charging value (f_hz), so both are errors;
@@ -2023,7 +2012,7 @@ fn dtype_for(column: &str) -> &'static str {
 }
 
 #[derive(Debug)]
-struct DataFrame {
+pub struct DataFrame {
     /// Table name, for error messages.
     name: String,
     columns: Vec<String>,
@@ -2032,7 +2021,7 @@ struct DataFrame {
 }
 
 impl DataFrame {
-    fn rows(&self) -> impl Iterator<Item = Row<'_>> {
+    pub fn rows(&self) -> impl Iterator<Item = Row<'_>> {
         (0..self.data.len()).map(|i| Row { frame: self, i })
     }
     fn col(&self, key: &str) -> Option<usize> {
@@ -2040,7 +2029,7 @@ impl DataFrame {
     }
 }
 
-struct Row<'a> {
+pub struct Row<'a> {
     frame: &'a DataFrame,
     i: usize,
 }
@@ -2050,7 +2039,7 @@ impl Row<'_> {
     /// ids live in the index, so a bad value is an error, never a default.
     /// The shared id ceiling keeps the float cast exact and lets the bus
     /// loop's `+ 1` never overflow.
-    fn index_usize(&self) -> Result<usize> {
+    pub fn index_usize(&self) -> Result<usize> {
         let v = &self.frame.index[self.i];
         value_usize(v)
             .or_else(|| {
@@ -2069,25 +2058,25 @@ impl Row<'_> {
     }
     /// Row label for error messages: the pandas index value verbatim, else the
     /// row position.
-    fn label(&self) -> String {
+    pub fn label(&self) -> String {
         match self.frame.index.get(self.i) {
             Some(Value::Number(n)) => n.to_string(),
             Some(Value::String(s)) => s.clone(),
             _ => format!("position {}", self.i),
         }
     }
-    fn get(&self, key: &str) -> Option<&Value> {
+    pub fn get(&self, key: &str) -> Option<&Value> {
         self.frame
             .col(key)
             .and_then(|c| self.frame.data.get(self.i).and_then(|r| r.get(c)))
     }
-    fn f_or(&self, key: &str, default: f64) -> f64 {
+    pub fn f_or(&self, key: &str, default: f64) -> f64 {
         self.get(key).and_then(value_f64).unwrap_or(default)
     }
     /// Required numeric column: a missing, null, or non-numeric cell is an
     /// error, never a default. For columns whose default would silently change
     /// the electrical model (`vn_kv` -> zbase 1.0 reads ohms as per unit).
-    fn req_f(&self, key: &str) -> Result<f64> {
+    pub fn req_f(&self, key: &str) -> Result<f64> {
         self.get(key).and_then(value_f64).ok_or_else(|| {
             bad(format!(
                 "`{}` row {}: required column `{key}` is missing or not numeric",
@@ -2096,16 +2085,16 @@ impl Row<'_> {
             ))
         })
     }
-    fn f_finite(&self, key: &str) -> Option<f64> {
+    pub fn f_finite(&self, key: &str) -> Option<f64> {
         self.get(key).and_then(value_f64).filter(|v| v.is_finite())
     }
     fn usize_or(&self, key: &str, default: usize) -> usize {
         self.get(key).and_then(value_usize).unwrap_or(default)
     }
-    fn bool_or(&self, key: &str, default: bool) -> bool {
+    pub fn bool_or(&self, key: &str, default: bool) -> bool {
         self.get(key).and_then(value_bool).unwrap_or(default)
     }
-    fn string(&self, key: &str) -> Option<String> {
+    pub fn string(&self, key: &str) -> Option<String> {
         self.get(key)
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
@@ -2118,7 +2107,7 @@ impl Row<'_> {
     /// behind them (`type`, `std_type`, `df`, ...), so a powerio-written file
     /// reads back extras-free. A null cell is pandas' "unset" marker, not
     /// source data, and is skipped.
-    fn extras_excluding(&self, known: &[&str]) -> Extras {
+    pub fn extras_excluding(&self, known: &[&str]) -> Extras {
         self.frame
             .columns
             .iter()
@@ -2151,7 +2140,7 @@ fn write_bus_geo(location: Option<crate::geo::Location>) -> Value {
 /// The bus `geo` cell: a GeoJSON Point, serialized as a string (pandapower 3)
 /// or carried as an object. Anything else (null, LineStrings, malformed
 /// JSON) reads as no location.
-fn read_bus_geo(cell: Option<&Value>) -> Option<crate::geo::Location> {
+pub fn read_bus_geo(cell: Option<&Value>) -> Option<crate::geo::Location> {
     let cell = cell?;
     let owned;
     let geometry = match cell {
@@ -2171,7 +2160,42 @@ fn read_bus_geo(cell: Option<&Value>) -> Option<crate::geo::Location> {
     (x.is_finite() && y.is_finite()).then_some(crate::geo::Location { x, y, kind: None })
 }
 
-fn read_frame(root: &Map<String, Value>, name: &str) -> Result<Option<DataFrame>> {
+/// The `_object` network map of a `pandapowerNet` document. pandapower
+/// writes it as a JSON object or as a JSON string holding one.
+pub fn network_object(content: &str) -> Result<Map<String, Value>> {
+    let root: Value = serde_json::from_str(content).map_err(|e| bad(e.to_string()))?;
+    let Value::Object(mut root) = root else {
+        return Err(bad("top level is not a JSON object"));
+    };
+    if root.get("_class").and_then(Value::as_str) != Some("pandapowerNet") {
+        return Err(bad("top level `_class` is not `pandapowerNet`"));
+    }
+    match root.remove("_object") {
+        Some(Value::Object(obj)) => Ok(obj),
+        Some(Value::String(raw)) => match serde_json::from_str::<Value>(&raw) {
+            Ok(Value::Object(obj)) => Ok(obj),
+            Ok(_) => Err(bad("top level `_object` string is not a network map")),
+            Err(e) => Err(bad(format!("top level `_object`: {e}"))),
+        },
+        Some(_) => Err(bad("top level `_object` is not a network map")),
+        None => Err(bad("missing `_object` network map")),
+    }
+}
+
+/// Whether a pandapower document is a three-phase (`runpp_3ph`) network: its
+/// `asymmetric_load`, `asymmetric_sgen` or `res_bus_3ph` table has rows. Text
+/// that is not a pandapower document is not one.
+pub fn is_three_phase_pandapower(content: &str) -> bool {
+    network_object(content).is_ok_and(|obj| has_three_phase_tables(&obj))
+}
+
+fn has_three_phase_tables(obj: &Map<String, Value>) -> bool {
+    ["asymmetric_load", "asymmetric_sgen", "res_bus_3ph"]
+        .iter()
+        .any(|name| matches!(read_frame(obj, name), Ok(Some(frame)) if !frame.data.is_empty()))
+}
+
+pub fn read_frame(root: &Map<String, Value>, name: &str) -> Result<Option<DataFrame>> {
     let Some(v) = root.get(name) else {
         return Ok(None);
     };
@@ -2950,6 +2974,36 @@ mod tests {
         let parsed = parse_pandapower_json(&root.to_string()).unwrap();
 
         assert_eq!(parsed.network.buses().len(), 2);
+    }
+
+    #[test]
+    fn a_three_phase_network_is_refused() {
+        for (name, column) in [
+            ("asymmetric_load", "p_a_mw"),
+            ("asymmetric_sgen", "p_a_mw"),
+            ("res_bus_3ph", "vm_a_pu"),
+        ] {
+            let full = pp_frame(&["bus", column], json!([0]), json!([[0, 0.01]]));
+            let text = pp_net(vec![bus_table(json!([0])), (name, full)]);
+            assert!(is_three_phase_pandapower(&text), "{name}");
+            let msg = err(&text);
+            assert!(
+                msg.contains("three-phase (runpp_3ph) network"),
+                "{name}: {msg}"
+            );
+
+            // A table without rows does not make the network three-phase.
+            let empty = pp_frame(&["bus", column], json!([]), json!([]));
+            let text = pp_net(vec![bus_table(json!([0])), (name, empty)]);
+            assert!(
+                !is_three_phase_pandapower(&text),
+                "empty {name} must not count"
+            );
+            assert!(
+                parse_pandapower_json(&text).is_ok(),
+                "empty {name} must parse"
+            );
+        }
     }
 
     #[test]

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Read three-phase pandapower networks, those with `asymmetric_load`,
+  `asymmetric_sgen` or `res_bus_3ph` rows, into a `MulticonductorNetwork`
+  under the `pandapower-json` token. The balanced reader refuses them (#846).
+  Writing such a network to pandapower JSON returns the retained source bytes
+  of the unchanged module. Any other multiconductor network fails with
+  `EMIT.DIST.PANDAPOWER_UNSUPPORTED`. The reader reports elements it does not
+  map through the `READ.DIST.PANDAPOWER_*` codes. A duplicate index in any
+  mapped table is refused. The 0.12.0 IR schema adds `pandapower-json` to the
+  distribution source formats. This step maps buses, lines, external grids,
+  loads and static generators. Transformers, shunts and switches are reported
+  as unsupported until their steps land.
+
 ## 0.12.0-rc.1
 
 The release candidate for PowerIO 0.12, which starts the 0.12.x release

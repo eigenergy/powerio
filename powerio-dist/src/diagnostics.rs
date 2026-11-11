@@ -40,6 +40,20 @@ pub mod codes {
             "candidate multiconductor output has no native SINCAL acceptance evidence";
         EMIT_SINCAL_MULTICONDUCTOR_LOSS = "EMIT.DIST.SINCAL_LOSS", Warning,
             "candidate multiconductor output canonicalizes topology or omits ancillary data";
+        // The pandapower three-phase (runpp_3ph) reader in powerio-tnd.
+        READ_PANDAPOWER_TABLE_UNSUPPORTED = "READ.DIST.PANDAPOWER_TABLE_UNSUPPORTED", Warning,
+            "a pandapower element table has no three-phase mapping and remains only in source";
+        READ_PANDAPOWER_ELEMENT_UNSUPPORTED = "READ.DIST.PANDAPOWER_ELEMENT_UNSUPPORTED", Warning,
+            "a pandapower element row has no three-phase mapping and remains only in source";
+        READ_PANDAPOWER_APPROXIMATED = "READ.DIST.PANDAPOWER_APPROXIMATED", Warning,
+            "a mapped pandapower element differs from the runpp_3ph model";
+        READ_PANDAPOWER_OUT_OF_SERVICE = "READ.DIST.PANDAPOWER_OUT_OF_SERVICE", Warning,
+            "an out-of-service pandapower element is kept with its status in extras";
+        READ_PANDAPOWER_RETAINED_SOURCE_ONLY = "READ.DIST.PANDAPOWER_RETAINED_SOURCE_ONLY", Remark,
+            "pandapower data runpp_3ph does not use remain in extras or the retained source";
+        EMIT_PANDAPOWER_UNSUPPORTED = "EMIT.DIST.PANDAPOWER_UNSUPPORTED", Error,
+            "pandapower JSON output exists only as the echo of an unchanged pandapower source",
+            category = Output;
         // PARSE: the source text could not be decoded as given.
         PARSE_DSS_SOURCE_MALFORMED = "PARSE.DSS.SOURCE_MALFORMED", Warning,
             "a dss command, object spec, or property assignment does not parse";

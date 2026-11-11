@@ -610,6 +610,16 @@ pub fn parse_with_options(
                 Ok(module.map_value(PioValue::from))
             }
         },
+        // A three-phase pandapower network reads as multiconductor and any
+        // other as balanced, by the tables the document fills.
+        RoutedFamily::Pandapower => match powerio_tnd::formats::pandapower::parse(source)? {
+            powerio_tnd::formats::pandapower::PandapowerModule::Balanced(module) => {
+                Ok(module.map_value(PioValue::from))
+            }
+            powerio_tnd::formats::pandapower::PandapowerModule::Multiconductor(module) => {
+                Ok(module.map_value(PioValue::from))
+            }
+        },
     }
 }
 
@@ -889,6 +899,9 @@ enum RoutedFamily {
     /// the family, follows the document; `powerio_tnd::formats::ravens`
     /// decides.
     Ravens,
+    /// A pandapower document, by token or by content. Its tables select the
+    /// family. `powerio_tnd::formats::pandapower` decides.
+    Pandapower,
     Goc3,
     OpfData,
     PypsaDirectory,
@@ -1165,6 +1178,9 @@ fn json_family(
         JsonClass::Case(Detection::Known(SourceFormat::Transmission(
             TransmissionFormat::EgretJson,
         ))) => Ok(RoutedFamily::Egret),
+        JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+            TransmissionFormat::PandapowerJson,
+        ))) => Ok(RoutedFamily::Pandapower),
         // Either MG-RAVENS classification: the header classifier sees only
         // the top level tables, and the adapter spanning both models reads
         // the profile from the whole document.
@@ -1219,6 +1235,7 @@ fn family_of_token(token: &str) -> RoutedFamily {
         Some(TargetFormat::Goc3Json) => RoutedFamily::Goc3,
         Some(TargetFormat::DeepMindOpfDataJson) => RoutedFamily::OpfData,
         Some(TargetFormat::EgretJson) => RoutedFamily::Egret,
+        Some(TargetFormat::PandapowerJson) => RoutedFamily::Pandapower,
         _ => RoutedFamily::Balanced(None),
     }
 }

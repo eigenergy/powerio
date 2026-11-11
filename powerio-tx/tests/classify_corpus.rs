@@ -35,6 +35,13 @@ const EXPECTED: &[(&str, &str, Option<&str>)] = &[
         "distribution",
         Some("bmopf-json"),
     ),
+    // A three-phase pandapower network: the header names only pandapowerNet.
+    // The facade reads its tables and parses it to a MulticonductorNetwork.
+    (
+        "dist/pandapower/tiny_3ph.json",
+        "transmission",
+        Some("pandapower-json"),
+    ),
     (
         "dist/pmd/fourwire_linecode.json",
         "distribution",

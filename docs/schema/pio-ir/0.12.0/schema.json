@@ -6786,7 +6786,8 @@
         "cim-dist",
         "sincal",
         "ravens-json",
-        "pmd-math-json"
+        "pmd-math-json",
+        "pandapower-json"
       ],
       "type": "string"
     },

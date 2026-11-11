@@ -57,7 +57,7 @@ mod ieee_cdf;
 mod json_extension;
 mod matpower;
 mod opfdata;
-mod pandapower;
+pub(crate) mod pandapower;
 mod powermodels;
 pub mod powerworld;
 mod powsybl_psse;
@@ -92,6 +92,7 @@ pub use pypsa::{
 
 pub use cgmes::CgmesVersion;
 pub(crate) use egret::write_egret_json;
+pub use pandapower::is_three_phase_pandapower;
 pub(crate) use pandapower::write_pandapower_json;
 pub(crate) use powermodels::write_powermodels_json;
 pub(crate) use powerworld::write_powerworld;

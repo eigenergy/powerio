@@ -806,21 +806,30 @@ impl FormatArg {
 
     /// Reader-family selection includes formats without a fresh writer.
     /// MG-RAVENS is excluded: its two profiles share the token, so the
-    /// facade picks the family from the document.
+    /// facade picks the family from the document. pandapower JSON is
+    /// excluded for the same reason.
     fn is_distribution_input(self) -> bool {
-        (self.distribution().is_some() && self != Self::RavensJson)
+        (self.distribution().is_some() && !self.has_content_profile())
             || self == Self::SincalMulticonductor
     }
 
-    /// The distribution target, or `None` outside that family. For every
-    /// writable format exactly one of this and [`FormatArg::transmission`]
-    /// is `Some`, so adding one without wiring its family is a compile
-    /// error; gridfm is read only and returns `None` from both. MG-RAVENS is
-    /// the one format in both: its token writes either network kind.
+    /// Whether the token reads either network kind, picked from the content.
+    fn has_content_profile(self) -> bool {
+        matches!(self, Self::RavensJson | Self::PandapowerJson)
+    }
+
+    /// The distribution target, or `None` outside that family. The match
+    /// lists every token, so adding one without wiring its family is a
+    /// compile error. Each writable format has this or
+    /// [`FormatArg::transmission`] as `Some`. gridfm is read only and returns
+    /// `None` from both. MG-RAVENS and pandapower JSON are the two formats in
+    /// both. The MG-RAVENS token writes either network kind. A
+    /// multiconductor pandapower network only echoes its retained source.
     fn distribution(self) -> Option<powerio_dist::DistTargetFormat> {
         use powerio_dist::DistTargetFormat;
         match self {
             FormatArg::RavensJson => Some(DistTargetFormat::RavensJson),
+            FormatArg::PandapowerJson => Some(DistTargetFormat::PandapowerJson),
             FormatArg::Dss => Some(DistTargetFormat::Dss),
             FormatArg::Gridlabd => Some(DistTargetFormat::Gridlabd),
             FormatArg::GridlabdArras => Some(DistTargetFormat::GridlabdArras),
@@ -842,7 +851,6 @@ impl FormatArg {
             | FormatArg::Cgmes
             | FormatArg::Ucte
             | FormatArg::PowerWorld
-            | FormatArg::PandapowerJson
             | FormatArg::PypsaCsv
             | FormatArg::Pslf
             | FormatArg::Goc3Json
@@ -3608,7 +3616,7 @@ fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<Fa
         let f = stdin_format(from)?;
         let source = module_io::declare_format(stdin_source()?, Some(f.name()))
             .context("declaring the standard input format")?;
-        if f == FormatArg::RavensJson {
+        if f.has_content_profile() {
             // Both MG-RAVENS profiles share the token; the facade reads the
             // family from the document.
             let module = powerio::parse(source).context("reading standard input")?;
@@ -3631,7 +3639,7 @@ fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<Fa
                  subcommand, not this command",
             ));
         }
-        if f == FormatArg::RavensJson {
+        if f.has_content_profile() {
             return module_family_case(
                 input,
                 load_module_with_selection(input, Some(f), &SincalCliOptions::default())?,
@@ -3675,7 +3683,8 @@ fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<Fa
 fn parse_classified_case(case: &cases::ClassifiedCase, input: &Path) -> anyhow::Result<FamilyCase> {
     match case.format {
         DetectedFormat::Transmission(
-            powerio_tx::format::routing::TransmissionFormat::RavensJson,
+            powerio_tx::format::routing::TransmissionFormat::RavensJson
+            | powerio_tx::format::routing::TransmissionFormat::PandapowerJson,
         )
         | DetectedFormat::Distribution(
             powerio_tx::format::routing::DistributionFormat::RavensJson,
@@ -4046,6 +4055,36 @@ mod tests {
                 FamilyCase::Distribution(_) => panic!("an empty asset catalog changed the family"),
             }
         }
+    }
+
+    #[test]
+    fn family_case_reads_pandapower_by_its_tables() {
+        for from in [None, Some(FormatArg::PandapowerJson)] {
+            match parse_family_case(&data("dist/pandapower/tiny_3ph.json"), from).unwrap() {
+                FamilyCase::Distribution(module) => assert_eq!(module.value().buses().len(), 5),
+                FamilyCase::Transmission(_) => panic!("a three-phase network read balanced"),
+            }
+            match parse_family_case(&data("pandapower/example.json"), from).unwrap() {
+                FamilyCase::Transmission(module) => assert_eq!(module.value().buses().len(), 7),
+                FamilyCase::Distribution(_) => panic!("a balanced network read multiconductor"),
+            }
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let output = tmp.path().join("echo.json");
+        run_convert(
+            &data("dist/pandapower/tiny_3ph.json"),
+            FormatArg::PandapowerJson,
+            Some(&output),
+            None,
+            0,
+            GenCostCliOptions::preserve(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read(&output).unwrap(),
+            std::fs::read(data("dist/pandapower/tiny_3ph.json")).unwrap()
+        );
     }
 
     #[test]

@@ -982,6 +982,41 @@ fn batch_scan_skips_unlowerable_dss_but_explicit_input_fails() {
 }
 
 #[test]
+fn batch_reads_three_phase_pandapower_multiconductor() {
+    // The balanced reader refuses a three-phase pandapower file. Batch reads
+    // it multiconductor instead. The earthed neutral then needs a Kron
+    // reduction before the balanced export, which batch reports as a warning.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let case = repo_file("tests/data/dist/pandapower/tiny_3ph.json");
+    std::fs::copy(&case, root.join("tiny_3ph.json")).unwrap();
+    std::fs::copy(repo_file("tests/data/case9.m"), root.join("case9.m")).unwrap();
+    let out_dir = root.join("out");
+
+    let out = run(&[
+        "batch",
+        "-i",
+        root.to_str().unwrap(),
+        "-o",
+        out_dir.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out_dir.join("case9_bprime.mtx").is_file(), "{stderr}");
+    assert!(out_dir.join("tiny_3ph_bprime.mtx").is_file(), "{stderr}");
+    assert!(
+        stderr.contains("KRON_REDUCTION_REQUIRED") && stderr.contains("tiny_3ph.json"),
+        "no Kron reduction warning:
+{stderr}"
+    );
+    assert!(
+        !stderr.contains("balanced reader would drop"),
+        "the balanced reader refused the file:
+{stderr}"
+    );
+}
+
+#[test]
 fn batch_scan_with_no_case_files_reports_supported_extensions() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();

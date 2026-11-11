@@ -75,6 +75,10 @@ pub enum DistTargetFormat {
     /// PowerModelsDistribution MATHEMATICAL model JSON: index based, per
     /// unit, with transformers lowered to ideal units and loss branches.
     PmdMathJson,
+    /// pandapower JSON of a three-phase network. Emission only echoes the
+    /// retained source of a module read from pandapower JSON. The reader
+    /// lives in `powerio_tnd::formats::pandapower`.
+    PandapowerJson,
 }
 
 /// Format specific policies for distribution network emission.
@@ -98,7 +102,8 @@ impl EmitOptions {
             | DistTargetFormat::CimDist
             | DistTargetFormat::Gridlabd
             | DistTargetFormat::GridlabdArras
-            | DistTargetFormat::RavensJson => true,
+            | DistTargetFormat::RavensJson
+            | DistTargetFormat::PandapowerJson => true,
         }
     }
 }
@@ -115,6 +120,7 @@ pub fn parse_dist_target_format(name: &str) -> Option<DistTargetFormat> {
         "bmopf" | "bmopfjson" => Some(DistTargetFormat::BmopfJson),
         "cimdist" => Some(DistTargetFormat::CimDist),
         "ravens" | "ravensjson" | "mgravens" | "mgravensjson" => Some(DistTargetFormat::RavensJson),
+        "pandapower" | "pandapowerjson" | "pp" => Some(DistTargetFormat::PandapowerJson),
         _ => None,
     }
 }
@@ -142,6 +148,7 @@ impl DistTargetFormat {
             DistTargetFormat::BmopfJson => "bmopf-json",
             DistTargetFormat::CimDist => "cim-dist",
             DistTargetFormat::RavensJson => "ravens-json",
+            DistTargetFormat::PandapowerJson => "pandapower-json",
         }
     }
 }
@@ -544,6 +551,9 @@ fn parse_to_network(
             let buffer = primary(source)?;
             crate::pmd::math::read::parse_pmd_math_collecting(source_text(&buffer)?, warnings)
         }
+        DistTargetFormat::PandapowerJson => Err(crate::Error::UnknownFormat(
+            "pandapower JSON is read by powerio_tnd::formats::pandapower or powerio::parse".into(),
+        )),
     }?;
     Ok((network, format))
 }
@@ -586,6 +596,10 @@ impl DistTargetFormat {
                 | (
                     DistTargetFormat::RavensJson,
                     Some(DistSourceFormat::RavensJson)
+                )
+                | (
+                    DistTargetFormat::PandapowerJson,
+                    Some(DistSourceFormat::PandapowerJson)
                 )
         )
     }
@@ -687,6 +701,13 @@ pub(crate) fn emit_value_text_with_options(
         }
         DistTargetFormat::CimDist => crate::cim::emit_cim_dist_text(net),
         DistTargetFormat::RavensJson => crate::ravens::emit_ravens_json_text(net)?,
+        DistTargetFormat::PandapowerJson => {
+            return Err(powerio_core::Error::new(
+                &crate::diagnostics::codes::EMIT_PANDAPOWER_UNSUPPORTED,
+                "pandapower JSON output only echoes the retained source of an unchanged module \
+                 read from pandapower JSON. No pandapower writer exists for other networks",
+            ));
+        }
     };
     // BMOPF writes component points and line routes as typed `geo` and
     // reports the ones it cannot write itself.
@@ -826,7 +847,8 @@ pub fn emit_with_options(
         | DistTargetFormat::PmdJson
         | DistTargetFormat::PmdMathJson
         | DistTargetFormat::CimDist
-        | DistTargetFormat::RavensJson => {
+        | DistTargetFormat::RavensJson
+        | DistTargetFormat::PandapowerJson => {
             let artifact = powerio_core::MemoryArtifact::new(
                 powerio_core::ArtifactPath::new("case")
                     .expect("static name is a valid artifact path"),
@@ -892,6 +914,30 @@ mod tests {
             classify_distribution_json("\u{feff}{\"data_model\": \"ENGINEERING\"}").unwrap(),
             DistTargetFormat::PmdJson
         );
+    }
+
+    #[test]
+    fn pandapower_json_is_an_echo_only_target() {
+        assert_eq!(
+            parse_dist_target_format("pandapower-json"),
+            Some(DistTargetFormat::PandapowerJson)
+        );
+        assert_eq!(DistTargetFormat::PandapowerJson.name(), "pandapower-json");
+        let error = emit_value_text_with_options(
+            &MulticonductorNetwork::named("fresh"),
+            DistTargetFormat::PandapowerJson,
+            &EmitOptions::default(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.info().map(|info| info.code),
+            Some("EMIT.DIST.PANDAPOWER_UNSUPPORTED")
+        );
+        // The reader lives in powerio-tnd.
+        let source = powerio_core::Source::from_memory("case.json", b"{}".to_vec())
+            .unwrap()
+            .with_format(powerio_core::FormatId::new("pandapower-json").unwrap());
+        assert!(parse(source).is_err());
     }
 
     /// A PowerModels document shares `bus`, `load`, `shunt`, `switch`, and

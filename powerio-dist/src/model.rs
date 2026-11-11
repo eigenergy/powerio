@@ -43,6 +43,8 @@ pub enum DistSourceFormat {
     RavensJson,
     // PowerModelsDistribution MATHEMATICAL model JSON.
     PmdMathJson,
+    // pandapower JSON of a three-phase (runpp_3ph) network.
+    PandapowerJson,
 }
 
 impl DistSourceFormat {
@@ -57,6 +59,7 @@ impl DistSourceFormat {
             DistSourceFormat::CimDist => "cim-dist",
             DistSourceFormat::RavensJson => "ravens-json",
             DistSourceFormat::PmdMathJson => "pmd-math-json",
+            DistSourceFormat::PandapowerJson => "pandapower-json",
         }
     }
 }

@@ -14,5 +14,9 @@ returns phase-to-earth volts; `boundary_power` returns MW + j MVAr.
 their source bytes and provenance. Coupled equation assembly and solvers are
 separate consumers of this model.
 
+`formats::pandapower` reads three-phase pandapower JSON into a
+`MulticonductorNetwork`. It hands every other pandapower document to the
+balanced reader in `powerio-tx`.
+
 See the [integration guide](https://eigenergy.github.io/powerio/tnd.html) for the
 boundary rules, migration paths, and planned native/PowerModelsITD support.
