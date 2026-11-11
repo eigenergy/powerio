@@ -15,6 +15,12 @@
   and acceptance of long namespace URIs.
 - Parse explicitly selected SINCAL MDB inputs with acquired-table companions
   through collections, preserving root confinement and work budgets.
+- XIIDM and JIIDM output omit an `activePowerControl` or `slackTerminal`
+  extension when its target equipment cannot be written, and report
+  the format's `FIELD_DROPPED` diagnostic alongside the equipment's existing
+  loss report.
+  Partial substation data could previously leave an extension referring to
+  absent equipment, making the output invalid (#837).
 
 ## 0.12.0-rc.1
 
