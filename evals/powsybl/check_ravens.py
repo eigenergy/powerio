@@ -79,7 +79,9 @@ def assert_diagnosed_losses(
     if any(gen["vg"] != 1.0 for gen in restored["generators"]):
         raise AssertionError("review the declared RAVENS generator setpoint recovery")
     if any(not math.isinf(branch["rate_c"]) for branch in restored["branches"]):
-        raise AssertionError("RAVENS has no rate_c slot; the recovered limit must be unlimited")
+        raise AssertionError(
+            "RAVENS has no rate_c slot; the recovered limit must be unlimited"
+        )
 
 
 def compare(direct, through_ravens, label: str) -> int:
