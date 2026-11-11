@@ -1973,6 +1973,9 @@ fn limit_type_name(limit: &Map<String, Value>) -> Option<String> {
 }
 
 fn read_branch_limits(doc: &Doc, obj: &Obj, branch: &mut Branch) -> Result<()> {
+    // MG-RAVENS has continuous and emergency active-power limits, but no
+    // third-rating slot. An omitted rate_c therefore means unbounded, not zero.
+    branch.rate_c = f64::INFINITY;
     let Some(set) = obj
         .props
         .get("Equipment.OperationalLimitSet")
