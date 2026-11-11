@@ -277,7 +277,8 @@ estimate when the solver input is SPD.
 `IndexedNetwork::branch_edges` yields in-service branches as undirected
 edges `(branch, from, to)`, with `branch` an index into the branch table and
 `from` and `to` dense bus indices. Parallel branches stay separate edges.
-The iterator does not include closed switches. The connectivity report and
+Build a graph by adding `view.n()` nodes, including buses with no in-service
+branch, then one edge per item. The iterator does not include closed switches. The connectivity report and
 radial check also account for closed switches from
 `IndexedNetwork::closed_switches`. To build an equivalent graph, add those
 switch edges after mapping their bus IDs through `bus_index`, or merge closed
