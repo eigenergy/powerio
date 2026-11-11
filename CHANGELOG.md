@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Forward `powerio-prob/schema` to the distribution model so standalone schema builds include the LinDist3Flow preparation policy.
+
 - Correct the contributor IR compatibility guidance and canonical HVDC format
   descriptions. Clarify that disconnecting an Egret branch does not preserve
   an energized branch's zero thermal limit.
