@@ -108,13 +108,20 @@ def check_case(path: Path) -> str:
                 xf_tap,
                 [b["tap"] if b["tap"] != 0.0 else 1.0 for b in xf_branches],
             )
-            # The writer uses base_mva as a positive impedance base for
-            # zero and unlimited limits; s_max_pu carries the actual bound.
-            # Compare s_nom only for finite, positive thermal ratings.
+            # s_nom is the positive impedance base. s_max_pu carries the
+            # actual thermal constraint, including a real zero and +Inf.
             for (_, row), b in zip(net.transformers.iterrows(), xf_branches):
-                if math.isfinite(b["rate_a"]) and b["rate_a"] > 0.0:
+                effective_limit = float(row.s_nom) * float(row.s_max_pu)
+                if math.isfinite(b["rate_a"]):
                     check_close(
-                        problems, "transformer.s_nom", float(row.s_nom), b["rate_a"]
+                        problems,
+                        "transformer.s_nom * s_max_pu",
+                        effective_limit,
+                        b["rate_a"],
+                    )
+                elif not math.isinf(effective_limit):
+                    problems.append(
+                        f"transformer.s_nom * s_max_pu: {effective_limit} != unlimited"
                     )
         else:
             problems.append(
