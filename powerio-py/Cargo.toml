@@ -44,6 +44,7 @@ mimalloc = { version = "0.1.52", features = ["local_dynamic_tls", "v2"] }
 # boundary. No numpy: the matrix methods hand back COO triplets as plain Python
 # lists, which the pure-Python layer assembles into scipy.sparse.
 sprs.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 
 # No workspace pedantic lints here: pyo3 macro-generated code trips them, and
