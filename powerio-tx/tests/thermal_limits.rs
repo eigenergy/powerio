@@ -294,3 +294,94 @@ fn sienna_winding_limits_preserve_zero_and_the_unbounded_marker() {
         assert_eq!(actual.rate_c, expected.rate_c);
     }
 }
+
+fn network_with_an_unlimited_rating_set() -> BalancedNetwork {
+    let mut net = network();
+    net.branches_mut()[0].rating_sets = vec![
+        BranchRatingSet::new("summer", 80.0),
+        BranchRatingSet::new("winter", f64::INFINITY),
+    ];
+    net
+}
+
+#[test]
+fn json_extensions_read_an_unlimited_rating_set_back() {
+    // An unlimited set's rate is JSON null; the reader refused the whole
+    // array, so the finite set became an untyped extra.
+    let net = network_with_an_unlimited_rating_set();
+    for (target, token) in [
+        (TargetFormat::PowerModelsJson, "powermodels-json"),
+        (TargetFormat::EgretJson, "egret-json"),
+    ] {
+        let emitted = helpers::emit_value(&net, target).unwrap();
+        assert!(
+            emitted
+                .diagnostics
+                .iter()
+                .all(|d| !d.code().ends_with("NOT_A_NUMBER")),
+            "{token}: {:?}",
+            emitted.render_diagnostics()
+        );
+        let back = helpers::parse_str(&emitted.text, token).unwrap().network;
+        assert_eq!(
+            back.branches()[0].rating_sets,
+            net.branches()[0].rating_sets,
+            "{token}"
+        );
+        assert!(
+            !back.branches()[0].extras.contains_key("rating_sets"),
+            "{token}"
+        );
+    }
+}
+
+#[test]
+fn xiidm_reports_an_unlimited_rating_set_instead_of_writing_nan() {
+    let net = network_with_an_unlimited_rating_set();
+    let emitted = helpers::emit_value(&net, TargetFormat::Xiidm).unwrap();
+    assert!(!emitted.text.contains("NaN"));
+    assert!(
+        emitted
+            .diagnostics
+            .iter()
+            .any(|d| d.code().ends_with("RATING_SET_DROPPED") && d.message().contains("winter")),
+        "{:?}",
+        emitted.render_diagnostics()
+    );
+    let back = helpers::parse_str(&emitted.text, "xiidm").unwrap().network;
+    // XIIDM groups branches by kind, so find the edited one by its identity.
+    let branch = back
+        .branches()
+        .iter()
+        .find(|branch| branch.uid == net.branches()[0].uid)
+        .unwrap();
+    assert_eq!(
+        branch.rating_sets,
+        vec![BranchRatingSet::new("summer", 80.0)]
+    );
+
+    let mut transformer = Transformer3W::new(
+        [
+            Winding::new(BusId(1)),
+            Winding::new(BusId(2)),
+            Winding::new(BusId(3)),
+        ],
+        [Impedance::new(0.01, 0.1, 100.0); 3],
+    );
+    transformer.set_winding_rating_sets(
+        1,
+        vec![
+            BranchRatingSet::new("summer", 80.0),
+            BranchRatingSet::new("winter", f64::INFINITY),
+        ],
+    );
+    let mut net = network();
+    net.transformers_3w_mut().push(transformer);
+    let emitted = helpers::emit_value(&net, TargetFormat::Xiidm).unwrap();
+    assert!(!emitted.text.contains("NaN"));
+    let back = helpers::parse_str(&emitted.text, "xiidm").unwrap().network;
+    assert_eq!(
+        back.transformers_3w()[0].winding_rating_sets(1),
+        [BranchRatingSet::new("summer", 80.0)]
+    );
+}

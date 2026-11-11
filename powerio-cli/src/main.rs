@@ -685,17 +685,22 @@ enum FormatArg {
     /// Surge native JSON network document.
     #[value(name = "surge-json", alias = "surge")]
     SurgeJson,
-    /// SiennaSchemas SystemDocument (preserve source version, otherwise 0.4).
+    /// PowerSystems.jl serialized System JSON (reads data formats 4.0.0 and 5.0.0, writes 5.0.0).
     #[value(name = "powersystems-json", alias = "powersystems")]
     PowerSystemsJson,
+    /// SiennaSchemas SystemDocument (preserve source version, otherwise 0.4).
     #[value(name = "sienna-json", alias = "sienna")]
     SiennaJson,
+    /// SiennaSchemas 0.1 SystemDocument.
     #[value(name = "sienna-0-1-json")]
     Sienna01Json,
+    /// SiennaSchemas 0.2 SystemDocument.
     #[value(name = "sienna-0-2-json")]
     Sienna02Json,
+    /// SiennaSchemas 0.3 SystemDocument.
     #[value(name = "sienna-0-3-json")]
     Sienna03Json,
+    /// SiennaSchemas 0.4 SystemDocument.
     #[value(name = "sienna-0-4-json")]
     Sienna04Json,
 

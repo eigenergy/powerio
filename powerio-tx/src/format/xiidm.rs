@@ -8306,7 +8306,7 @@ impl<'a> XiidmWriteIndex<'a> {
                     .insert(component_id("storage", id)?, Cell::new(false));
             }
         }
-        if let Some(reference) = slack_terminal_equipment(network) {
+        for reference in slack_terminal_candidates(network) {
             index
                 .extension_targets
                 .insert(reference.equipment, Cell::new(false));
@@ -8836,9 +8836,8 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
     let active_power_control_namespace = active_power_control_namespace.then_some(format!(
         " xmlns:apc=\"{ACTIVE_POWER_CONTROL_NAMESPACE_V1_2}\""
     ));
-    let slack_terminal = slack_terminal_equipment(network);
-    let slack_terminal_namespace = slack_terminal
-        .is_some()
+    let slack_terminal = slack_terminal_candidates(network);
+    let slack_terminal_namespace = (!slack_terminal.is_empty())
         .then_some(format!(" xmlns:slt=\"{SLACK_TERMINAL_NAMESPACE}\""));
     let mut output = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<iidm:network xmlns:iidm=\"{namespace}\"{}{} id=\"{}\" caseDate=\"{}\" forecastDistance=\"{forecast_distance}\" sourceFormat=\"{}\" minimumValidationLevel=\"{}\">\n",
@@ -8913,7 +8912,7 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
             &mut diagnostics,
         )?;
         write_slack_terminal_extension(
-            slack_terminal.as_ref(),
+            &slack_terminal,
             &index,
             &root_components,
             2,
@@ -8966,7 +8965,7 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
         &mut diagnostics,
     )?;
     write_slack_terminal_extension(
-        slack_terminal.as_ref(),
+        &slack_terminal,
         &index,
         &|_| true,
         2,
@@ -10023,7 +10022,7 @@ fn write_subnetwork(
         diagnostics,
     )?;
     write_slack_terminal_extension(
-        slack_terminal_equipment(network).as_ref(),
+        &slack_terminal_candidates(network),
         index,
         &|component| members.contains(component),
         4,
@@ -10113,22 +10112,50 @@ fn write_active_power_control_extensions(
 /// as PowSybl's PSS/E importer attaches the slack terminal to any terminal
 /// connected at the swing bus (psse-converter `SlackConverter.create`), so the
 /// reference does not move to another bus on readback.
-fn slack_terminal_equipment(network: &BalancedNetwork) -> Option<TerminalReference> {
-    let reference = network
+/// Every equipment terminal at the reference bus, in the order the
+/// SlackTerminal extension prefers them. The writer references the first one
+/// it actually wrote.
+fn slack_terminal_candidates(network: &BalancedNetwork) -> Vec<TerminalReference> {
+    let Some(reference) = network
         .buses()
         .iter()
-        .find(|bus| bus.kind == BusType::Ref)?
-        .id;
-    terminal_at_bus(network, reference)
+        .find(|bus| bus.kind == BusType::Ref)
+        .map(|bus| bus.id)
+    else {
+        return Vec::new();
+    };
+    let (mut in_service, out_of_service): (Vec<_>, Vec<_>) =
+        terminals_at_bus(network, reference).partition(|(_, in_service)| *in_service);
+    in_service.extend(out_of_service);
+    in_service
+        .into_iter()
+        .map(|(terminal, _)| terminal)
+        .collect()
 }
 
 /// An equipment terminal at `reference`: an injection before a branch or
 /// three winding transformer terminal, in service before out of service.
 fn terminal_at_bus(network: &BalancedNetwork, reference: BusId) -> Option<TerminalReference> {
+    let mut out_of_service = None;
+    for (terminal, in_service) in terminals_at_bus(network, reference) {
+        if in_service {
+            return Some(terminal);
+        }
+        out_of_service = out_of_service.or(Some(terminal));
+    }
+    out_of_service
+}
+
+/// The equipment terminals at `reference`, injections before branch and
+/// three winding transformer terminals, each with its service status.
+fn terminals_at_bus(
+    network: &BalancedNetwork,
+    reference: BusId,
+) -> impl Iterator<Item = (TerminalReference, bool)> + '_ {
     let one = |kind: &'static str, uid: Option<&str>, bus: BusId, in_service: bool| {
         (kind, uid.map(str::to_owned), 1_u8, bus, in_service)
     };
-    let generators = network.generators().iter().map(|value| {
+    let generators = network.generators().iter().map(move |value| {
         one(
             "generator",
             value.uid.as_deref(),
@@ -10139,15 +10166,15 @@ fn terminal_at_bus(network: &BalancedNetwork, reference: BusId) -> Option<Termin
     let storage = network
         .storage()
         .iter()
-        .map(|value| one("storage", value.uid.as_deref(), value.bus, value.in_service));
+        .map(move |value| one("storage", value.uid.as_deref(), value.bus, value.in_service));
     let loads = network
         .loads()
         .iter()
-        .map(|value| one("load", value.uid.as_deref(), value.bus, value.in_service));
+        .map(move |value| one("load", value.uid.as_deref(), value.bus, value.in_service));
     let shunts = network
         .shunts()
         .iter()
-        .map(|value| one("shunt", value.uid.as_deref(), value.bus, value.in_service));
+        .map(move |value| one("shunt", value.uid.as_deref(), value.bus, value.in_service));
     let branches = network.branches().iter().flat_map(|value| {
         [(1, value.from), (2, value.to)]
             .map(|(side, bus)| ("branch", value.uid.clone(), side, bus, value.in_service))
@@ -10162,46 +10189,50 @@ fn terminal_at_bus(network: &BalancedNetwork, reference: BusId) -> Option<Termin
             .zip(1_u8..)
             .map(move |(bus, side)| ("transformer_3w", value.uid.clone(), side, bus, in_service))
     });
-    let mut out_of_service = None;
-    for (kind, uid, terminal, bus, in_service) in generators
+    generators
         .chain(storage)
         .chain(loads)
         .chain(shunts)
         .chain(branches)
         .chain(transformers)
-    {
-        let Some(uid) = uid.filter(|_| bus == reference) else {
-            continue;
-        };
-        let reference = TerminalReference {
-            equipment: component_id(kind, &uid).ok()?,
-            terminal,
-        };
-        if in_service {
-            return Some(reference);
-        }
-        out_of_service = out_of_service.or(Some(reference));
-    }
-    out_of_service
+        .filter_map(move |(kind, uid, terminal, bus, in_service)| {
+            let uid = uid.filter(|_| bus == reference)?;
+            let equipment = component_id(kind, &uid).ok()?;
+            Some((
+                TerminalReference {
+                    equipment,
+                    terminal,
+                },
+                in_service,
+            ))
+        })
 }
 
 /// Write the SlackTerminal extension for the network's reference bus. Nothing
 /// is written when the reference bus hosts no emitted connectable, because the
 /// extension states a terminal.
 fn write_slack_terminal_extension(
-    slack_terminal: Option<&TerminalReference>,
+    candidates: &[TerminalReference],
     index: &XiidmWriteIndex<'_>,
     included: &dyn Fn(&ComponentId) -> bool,
     indent: usize,
     output: &mut String,
     diagnostics: &mut Diagnostics,
 ) {
-    let Some(reference) = slack_terminal.filter(|reference| included(&reference.equipment)) else {
+    let mut included_candidates = candidates
+        .iter()
+        .filter(|reference| included(&reference.equipment));
+    let Some(preferred) = included_candidates.clone().next() else {
         return;
     };
-    if !extension_target_is_emitted(index, &reference.equipment, "slackTerminal", diagnostics) {
+    // Equipment the writer omitted cannot carry the extension; another
+    // written terminal at the reference bus can.
+    let Some(reference) = included_candidates
+        .find(|reference| index.extension_target_was_emitted(&reference.equipment))
+    else {
+        extension_target_is_emitted(index, &preferred.equipment, "slackTerminal", diagnostics);
         return;
-    }
+    };
     let Some(terminal) = index.terminal(&reference.equipment, reference.terminal) else {
         return;
     };
@@ -12984,11 +13015,25 @@ fn write_three_winding_transformer(
             }
             // Further rating sets (PSS/E RATE4 to RATE12) as unselected
             // groups, as a two winding branch writes them.
-            for (index, rating) in transformer.winding_rating_sets(side).iter().enumerate() {
+            let (unlimited, limited): (Vec<_>, Vec<_>) = transformer
+                .winding_rating_sets(side)
+                .into_iter()
+                .partition(|rating| rating.rate_mva.is_infinite());
+            for rating in unlimited {
+                diagnostics.push(
+                    &codes::EMIT_XIIDM.rating_set_dropped,
+                    format!(
+                        "three winding transformer `{id}` winding {} rating set {} states no limit and was not written: an XIIDM limits group needs a finite permanent limit",
+                        side + 1,
+                        rating.name
+                    ),
+                );
+            }
+            for (index, rating) in limited.into_iter().enumerate() {
                 output.push_str(&format!(
                     "      <iidm:operationalLimitsGroup{side} id=\"rating-set-{}\">\n        <iidm:apparentPowerLimits permanentLimit=\"{}\" permanentLimitName=\"{}\"/>\n      </iidm:operationalLimitsGroup{side}>\n",
                     index + 1,
-                    number(crate::thermal_limit::as_option(rating.rate_mva).unwrap_or(f64::NAN)),
+                    number(rating.rate_mva),
                     xml(&rating.name),
                     side = side + 1,
                 ));
@@ -13508,7 +13553,10 @@ fn has_branch_operational_limits(branch: &Branch) -> bool {
         || !branch.rate_b.is_infinite()
         || !branch.rate_c.is_infinite()
         || branch.current_ratings.is_some()
-        || !branch.rating_sets.is_empty()
+        || branch
+            .rating_sets
+            .iter()
+            .any(|rating| !rating.rate_mva.is_infinite())
 }
 
 fn has_exact_operational_limit_groups(
@@ -13597,6 +13645,19 @@ fn write_branch_operational_limits(
         write_exact_operational_limit_groups(index, equipment, output, diagnostics);
         return;
     }
+    for rating in branch
+        .rating_sets
+        .iter()
+        .filter(|rating| rating.rate_mva.is_infinite())
+    {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.rating_set_dropped,
+            format!(
+                "branch `{equipment}` rating set {} states no limit and was not written: an XIIDM limits group needs a finite permanent limit",
+                rating.name
+            ),
+        );
+    }
     if !has_branch_operational_limits(branch) {
         return;
     }
@@ -13622,11 +13683,16 @@ fn write_branch_operational_limits(
         }
         output.push_str(&format!("      </iidm:operationalLimitsGroup{side}>\n"));
         if side == 1 {
-            for (index, rating) in branch.rating_sets.iter().enumerate() {
+            for (index, rating) in branch
+                .rating_sets
+                .iter()
+                .filter(|rating| !rating.rate_mva.is_infinite())
+                .enumerate()
+            {
                 output.push_str(&format!(
                     "      <iidm:operationalLimitsGroup{side} id=\"rating-set-{}\">\n        <iidm:apparentPowerLimits permanentLimit=\"{}\" permanentLimitName=\"{}\"/>\n      </iidm:operationalLimitsGroup{side}>\n",
                     index + 1,
-                    number(crate::thermal_limit::as_option(rating.rate_mva).unwrap_or(f64::NAN)),
+                    number(rating.rate_mva),
                     xml(&rating.name),
                 ));
             }
@@ -17174,6 +17240,50 @@ mod tests {
         assert_eq!(
             reparsed_detail.operational_limit_groups,
             detailed.operational_limit_groups
+        );
+    }
+
+    #[test]
+    fn the_slack_terminal_skips_equipment_the_writer_omits() {
+        // A boundary line's calculation load and generator are not written.
+        // When one came first at the reference bus, the extension was dropped
+        // even though an ordinary generator there was written.
+        let source = r#"<?xml version="1.0" encoding="UTF-8"?>
+<iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/1_17" id="slack" caseDate="2026-01-01T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="STEADY_STATE_HYPOTHESIS">
+  <iidm:substation id="S">
+    <iidm:voltageLevel id="VL1" nominalV="100" topologyKind="BUS_BREAKER">
+      <iidm:busBreakerTopology><iidm:bus id="B1"/></iidm:busBreakerTopology>
+      <iidm:generator id="G" energySource="OTHER" minP="0" maxP="200" voltageRegulatorOn="true" targetP="100" targetQ="10" targetV="100" bus="B1" connectableBus="B1">
+        <iidm:minMaxReactiveLimits minQ="-50" maxQ="50"/>
+      </iidm:generator>
+      <iidm:boundaryLine id="U" p0="5" q0="6" r="7" x="8" generationVoltageRegulationOn="true" generationMinP="0" generationMaxP="20" generationTargetP="10" generationTargetV="100" bus="B1" connectableBus="B1"/>
+    </iidm:voltageLevel>
+  </iidm:substation>
+</iidm:network>"#;
+        let mut network = parse_xiidm_source(source, &mut Diagnostics::new()).unwrap();
+        for bus in network.buses_mut() {
+            bus.kind = BusType::Ref;
+        }
+        // The calculation generator precedes the ordinary one.
+        let calculation = network
+            .generators()
+            .iter()
+            .position(|generator| generator.uid.as_deref() == Some("U"))
+            .unwrap();
+        network.generators_mut().swap(0, calculation);
+        let emission = write_xiidm(&network).unwrap();
+        assert!(
+            emission.text.contains("<slt:slackTerminal id=\"G\"/>"),
+            "{}",
+            emission.text
+        );
+        assert!(
+            !emission
+                .diagnostics
+                .iter()
+                .any(|d| d.message().contains("slackTerminal extension")),
+            "{:?}",
+            emission.render_diagnostics()
         );
     }
 

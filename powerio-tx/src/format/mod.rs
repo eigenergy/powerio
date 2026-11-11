@@ -1322,43 +1322,48 @@ fn append_emit_warnings(net: &BalancedNetwork, format: TargetFormat, conv: &mut 
         _ => None,
     };
     if let Some(family) = legacy_family {
-        let mut warn = |identity: String, field: &str, limit: f64| {
+        // Name the element only for a zero limit, so an emission without one
+        // allocates nothing per branch.
+        let mut warn = |identity: &dyn Fn() -> String, field: &str, limit: f64| {
             if limit == 0.0 {
                 conv.push(&family.field_dropped, format!(
-                    "{identity} finite-zero {field} constraint is not preserved by the {format} writer's legacy rating projection"
+                    "{} finite-zero {field} constraint is not preserved by the {format} writer's legacy rating projection",
+                    identity()
                 ));
             }
         };
         for (row, branch) in net.branches().iter().enumerate() {
-            let identity = format!("branch {} ({} to {})", row + 1, branch.from, branch.to);
+            let identity = || format!("branch {} ({} to {})", row + 1, branch.from, branch.to);
             for (field, limit) in [
                 ("rate_a", branch.rate_a),
                 ("rate_b", branch.rate_b),
                 ("rate_c", branch.rate_c),
             ] {
-                warn(identity.clone(), field, limit);
+                warn(&identity, field, limit);
             }
             for rating in &branch.rating_sets {
-                warn(identity.clone(), &rating.name, rating.rate_mva);
+                warn(&identity, &rating.name, rating.rate_mva);
             }
         }
         for (row, transformer) in net.transformers_3w().iter().enumerate() {
             for (side, winding) in transformer.windings.iter().enumerate() {
-                let identity = format!(
-                    "three winding transformer {} winding {} (bus {})",
-                    row + 1,
-                    side + 1,
-                    winding.bus
-                );
+                let identity = || {
+                    format!(
+                        "three winding transformer {} winding {} (bus {})",
+                        row + 1,
+                        side + 1,
+                        winding.bus
+                    )
+                };
                 for (field, limit) in [
                     ("rate_a", winding.rate_a),
                     ("rate_b", winding.rate_b),
                     ("rate_c", winding.rate_c),
                 ] {
-                    warn(identity.clone(), field, limit);
+                    warn(&identity, field, limit);
                 }
                 for rating in transformer.winding_rating_sets(side) {
-                    warn(identity.clone(), &rating.name, rating.rate_mva);
+                    warn(&identity, &rating.name, rating.rate_mva);
                 }
             }
         }
@@ -2356,11 +2361,9 @@ pub(super) fn normalized_tap_warning(net: &BalancedNetwork) -> Option<String> {
     })
 }
 
-/// True when `value` is set and deviates from `reference`: the shared test for
-/// "does this rating column carry information the target cannot" used by the
-/// rate_b/rate_c drop warnings.
-/// An additional finite constraint differs from the retained one. Zero must
-/// not be skipped or confused with a missing constraint.
+/// An additional finite constraint differs from the retained one: the shared
+/// test the rate_b/rate_c drop warnings use. Zero is a constraint, not a
+/// missing value, so it is never skipped.
 #[allow(clippy::float_cmp)] // Any changed constraint warrants a loss diagnostic.
 pub(super) fn thermal_limit_differs(value: f64, reference: f64) -> bool {
     value.is_finite() && value != reference
@@ -2490,6 +2493,11 @@ fn collect_null_keys(value: &Value, out: &mut BTreeSet<String>) {
     match value {
         Value::Object(map) => {
             for (key, val) in map {
+                // PowerIO's rating set extension reads a null rate as an
+                // unlimited set, so that null loses nothing.
+                if key == "rating_sets" {
+                    continue;
+                }
                 if val.is_null() {
                     out.insert(key.clone());
                 } else {
