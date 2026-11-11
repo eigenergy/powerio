@@ -9,6 +9,7 @@ mismatch fails instead of skipping the value compare. Appends
 `<stem>\tpypsa\t<mark>` to `$PIO_RESULTS_TSV` when set.
 """
 
+import math
 import os
 import shutil
 import sys
@@ -107,10 +108,11 @@ def check_case(path: Path) -> str:
                 xf_tap,
                 [b["tap"] if b["tap"] != 0.0 else 1.0 for b in xf_branches],
             )
-            # rate_a == 0 (unlimited) writes s_nom = base_mva, so only compare
-            # s_nom where the branch carries a limit.
+            # An unlimited rate_a is +Inf in PowerIO, while the PyPSA
+            # writer uses base_mva as a positive impedance base and sets
+            # s_max_pu=+Inf. Compare s_nom only for finite thermal limits.
             for (_, row), b in zip(net.transformers.iterrows(), xf_branches):
-                if b["rate_a"] > 0.0:
+                if math.isfinite(b["rate_a"]):
                     check_close(
                         problems, "transformer.s_nom", float(row.s_nom), b["rate_a"]
                     )
