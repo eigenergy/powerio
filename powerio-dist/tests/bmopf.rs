@@ -4676,7 +4676,7 @@ fn routed_network() -> MulticonductorNetwork {
     net
 }
 
-/// Output: `vpg_*` bounds, geometry in the typed `geo` slots with the system
+/// Output: `vpg_*` bounds and `vng_max`, geometry in the typed `geo` slots with the system
 /// in `meta.crs`, the canonical `$id` as the stamp, and no `extras.geojson`
 /// layer. The document validates against the vendored schema, which rejects
 /// the 0.1.0 spellings and knows the typed slots.
@@ -4685,6 +4685,7 @@ fn schema_020_output_embeds_geometry_and_names_the_vpg_bounds() {
     let mut net = routed_network();
     net.buses_mut()[0].v_min = Some(207.0);
     net.buses_mut()[0].v_max = Some(253.0);
+    net.buses_mut()[0].vn_max = Some(12.0);
     let out = emit_bmopf_json(&net);
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
@@ -4699,6 +4700,9 @@ fn schema_020_output_embeds_geometry_and_names_the_vpg_bounds() {
         serde_json::json!([207.0, 207.0, 207.0])
     );
     assert!(doc["bus"]["a"].get("v_min").is_none());
+    // The neutral to ground cap is `vng_max` since schema 0.2.0.
+    assert_eq!(doc["bus"]["a"]["vng_max"], 12.0);
+    assert!(doc["bus"]["a"].get("vn_max").is_none());
     assert_eq!(
         doc["bus"]["a"]["geo"],
         serde_json::json!({"type": "Point", "coordinates": [276_500.0, 4_686_200.0]})
@@ -4790,7 +4794,7 @@ fn vertices(route: Option<&[DistLocation]>) -> Option<Vec<(u64, u64)>> {
 /// stating none gets `READ.BMOPF.SCHEMA_ABSENT` instead.
 #[test]
 fn legacy_v_bounds_read_and_are_reported_once_per_document() {
-    let body = r#""bus":{"b":{"terminal_names":["a","b","c","n"],"v_min":[210,215,220],"v_max":[240,245,250]}},"voltage_source":{"s":{"bus":"b","terminal_map":["a","b","c","n"],"v_magnitude":[230,230,230,0],"v_angle":[0,-2.094,2.094,0]}}"#;
+    let body = r#""bus":{"b":{"terminal_names":["a","b","c","n"],"v_min":[210,215,220],"v_max":[240,245,250],"vn_max":30}},"voltage_source":{"s":{"bus":"b","terminal_map":["a","b","c","n"],"v_magnitude":[230,230,230,0],"v_angle":[0,-2.094,2.094,0]}}"#;
     for (meta, legacy_findings) in [
         (String::new(), 0),
         (
@@ -4811,6 +4815,7 @@ fn legacy_v_bounds_read_and_are_reported_once_per_document() {
             Some([210.0, 215.0, 220.0].as_slice()),
             "{meta}"
         );
+        assert_eq!(net.buses()[0].vn_max, Some(30.0), "{meta}");
         let legacy: Vec<_> = net
             .diagnostics
             .iter()
@@ -4829,18 +4834,21 @@ fn legacy_v_bounds_read_and_are_reported_once_per_document() {
         .find(|d| d.code() == "READ.BMOPF.SCHEMA_LEGACY")
         .unwrap();
     assert!(
-        finding.message().contains("`v_min` (1)") && finding.message().contains("`v_max` (1)"),
+        finding.message().contains("`v_min` (1)")
+            && finding.message().contains("`v_max` (1)")
+            && finding.message().contains("`vn_max` (1)"),
         "{finding:?}"
     );
     // The current spelling reads the same values without a finding.
     let current = parse_bmopf_str(
-        r#"{"bus":{"b":{"terminal_names":["a","b","c","n"],"vpg_min":[210,215,220],"vpg_max":[240,245,250]}}}"#,
+        r#"{"bus":{"b":{"terminal_names":["a","b","c","n"],"vpg_min":[210,215,220],"vpg_max":[240,245,250],"vng_max":30}}}"#,
     )
     .unwrap();
     assert_eq!(
         current.buses()[0].v_max_phase.as_deref(),
         Some([240.0, 245.0, 250.0].as_slice())
     );
+    assert_eq!(current.buses()[0].vn_max, Some(30.0));
     assert!(
         !current
             .diagnostics
@@ -4862,6 +4870,22 @@ fn legacy_v_bounds_read_and_are_reported_once_per_document() {
             .iter()
             .any(|d| d.code() == "READ.BMOPF.SEMANTIC_INVALID"
                 && d.message().contains("vpg_min and v_min")),
+        "{:?}",
+        both.diagnostics
+    );
+    let both =
+        parse_bmopf_str(r#"{"bus":{"b":{"terminal_names":["a","n"],"vng_max":30,"vn_max":20}}}"#)
+            .unwrap();
+    assert_eq!(
+        both.buses()[0].vn_max,
+        Some(30.0),
+        "the current spelling wins"
+    );
+    assert!(
+        both.diagnostics
+            .iter()
+            .any(|d| d.code() == "READ.BMOPF.SEMANTIC_INVALID"
+                && d.message().contains("vng_max and vn_max")),
         "{:?}",
         both.diagnostics
     );
@@ -5011,4 +5035,131 @@ fn opendss_coordinates_round_trip_through_schema_020_and_the_serialized_network(
             a.name
         );
     }
+}
+
+/// Component locations travel as the typed `geo` Point of the element each
+/// one attaches to, and read back as the same component locations: a switch,
+/// a transformer, a load and a voltage source.
+#[test]
+fn component_locations_round_trip_as_element_geo() {
+    use powerio_dist::{DistComponentLocation, DistGeographicPoint, DistLocationTarget};
+
+    // The vendored IEEE 13 example has transformers, loads and a source;
+    // add a switch beside its line.
+    let mut source: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture("bmopf/example_ieee13.json")).unwrap(),
+    )
+    .unwrap();
+    source["switch"] = serde_json::json!({"sw1": {"bus_from": "671", "bus_to": "652",
+        "terminal_map_from": ["1"], "terminal_map_to": ["1"], "open_switch": false}});
+    let mut net = parse_bmopf_str(&source.to_string()).unwrap().clone();
+    let targets = [
+        (DistLocationTarget::Switch, "sw1".to_owned(), -83.70, 42.30),
+        (
+            DistLocationTarget::Transformer,
+            "xfm1".to_owned(),
+            -83.71,
+            42.31,
+        ),
+        (
+            DistLocationTarget::Load,
+            "load_611".to_owned(),
+            -83.72,
+            42.32,
+        ),
+        (
+            DistLocationTarget::Source,
+            "source".to_owned(),
+            -83.73,
+            42.33,
+        ),
+    ];
+    for (target, name, longitude, latitude) in &targets {
+        let mut point = DistGeographicPoint::new(Some(*latitude), Some(*longitude));
+        point.datum = Some("EPSG:4326".into());
+        let mut location = DistComponentLocation::new(*target, name.clone(), point);
+        location.kind = Some(DistCoordsKind::Source);
+        net.component_locations_mut().push(location);
+    }
+    net.validate_component_locations().unwrap();
+
+    let out = emit_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    assert!(
+        !out.warnings
+            .iter()
+            .any(|w| w.contains("COMPONENT_COORDINATES_DROPPED")),
+        "{:?}",
+        out.warnings
+    );
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(
+        doc["load"][&targets[2].1]["geo"],
+        serde_json::json!({"type": "Point", "coordinates": [-83.72, 42.32]})
+    );
+    assert_eq!(
+        doc["switch"][&targets[0].1]["geo"]["coordinates"],
+        serde_json::json!([-83.70, 42.30])
+    );
+
+    let again = parse_bmopf_str(&out.text).unwrap();
+    let mut expected = net.component_locations().clone();
+    let mut actual = again.component_locations().clone();
+    let key = |l: &DistComponentLocation| (l.target, l.name.clone());
+    expected.sort_by_key(key);
+    actual.sort_by_key(key);
+    assert_eq!(actual, expected);
+    assert!(
+        !again.warnings.iter().any(|w| w.contains("`geo`")),
+        "{:?}",
+        again.warnings
+    );
+}
+
+/// A switch or transformer may state a LineString between its buses; its
+/// location is the midpoint of the two end positions, reported once. A
+/// component `geo` in a projected document has no geographic reading and is
+/// dropped with a finding.
+#[test]
+fn component_geo_line_strings_and_projected_points() {
+    let body = r#""bus":{"a":{"terminal_names":["1"]},"b":{"terminal_names":["1"]}},
+        "switch":{"s":{"bus_from":"a","bus_to":"b","terminal_map_from":["1"],"terminal_map_to":["1"],
+            "open_switch":false,"geo":{"type":"LineString","coordinates":[[-83.70,42.30],[-83.69,42.31],[-83.60,42.40]],"bbox":[-83.70,42.30,-83.60,42.40]}}},
+        "load":{"l":{"bus":"a","terminal_map":["1"],"configuration":"SINGLE_PHASE","p_nom":[1.0],"q_nom":[0.0],
+            "geo":{"type":"Point","coordinates":[-83.70,42.30]}}}"#;
+    let net = parse_bmopf_str(&format!("{{{body}}}")).unwrap();
+    let switch = net
+        .component_locations()
+        .iter()
+        .find(|l| l.name == "s")
+        .unwrap();
+    assert!((switch.point.longitude.unwrap() + 83.65).abs() < 1e-12);
+    assert!((switch.point.latitude.unwrap() - 42.35).abs() < 1e-12);
+    assert_eq!(switch.point.datum.as_deref(), Some("EPSG:4326"));
+    assert_eq!(
+        net.diagnostics
+            .iter()
+            .filter(|d| d.code() == "READ.BMOPF.VALUE_COLLAPSED")
+            .count(),
+        1,
+        "{:?}",
+        net.diagnostics
+    );
+    assert_eq!(net.component_locations().len(), 2);
+    let doc: serde_json::Value = serde_json::from_str(&emit_bmopf_json(&net).text).unwrap();
+    assert_eq!(doc["switch"]["s"]["geo"]["type"], "Point");
+
+    let projected =
+        parse_bmopf_str(&format!(r#"{{"meta":{{"crs":"EPSG:32617"}},{body}}}"#)).unwrap();
+    assert_eq!(projected.component_locations().as_slice(), []);
+    assert_eq!(
+        projected
+            .diagnostics
+            .iter()
+            .filter(|d| d.code() == "READ.BMOPF.FIELD_DROPPED" && d.message().contains("`geo`"))
+            .count(),
+        2,
+        "{:?}",
+        projected.diagnostics
+    );
 }

@@ -228,6 +228,7 @@ Its pin moves to the `schema-v0.2.0` tag once the Task Force ratifies it.
 | `BmopfSchemaVersion::Bmopf010` | removed; `Bmopf020` is the one variant |
 | `BmopfEmitOptions::sideload_coordinates` | removed; geometry is in the typed `bus.*.geo`, `line.*.geo` and `meta.crs` slots |
 | bus bounds written as `v_min`/`v_max` | written as `vpg_min`/`vpg_max` |
+| bus neutral to ground cap written as `vn_max` | written as `vng_max` |
 | `meta.$schema` stating a PowerIO archive URL | the schema's canonical `$id` |
 
 0.1.0, 0.1.1, and PowerIO 0.11 documents still read, as 0.2.0, with one

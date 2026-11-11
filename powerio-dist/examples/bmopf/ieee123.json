@@ -5592,12 +5592,12 @@
       "powerio_bmopf": {
         "producer": "powerio",
         "producer_version": "0.12.0-rc.1",
-        "schema_commit": "655aad45aa345071a69f4a41a88b324f9d0678ac",
+        "schema_commit": "86fe813f3553b89542b6eead2a75fca0bbdb3acd",
         "schema_id": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json",
-        "schema_retrieval_url": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/655aad45aa345071a69f4a41a88b324f9d0678ac/schema/bmopf/0.2.0/bmopf.schema.json",
-        "schema_sha256": "01d022c038e0518e3a54c5fbf7378522fd4120b5ba8a5308b3a70a31af774ae4",
+        "schema_retrieval_url": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/86fe813f3553b89542b6eead2a75fca0bbdb3acd/schema/bmopf/0.2.0/bmopf.schema.json",
+        "schema_sha256": "8ebdf07daf383c9bcca7b97e6b312f05976d1a2da4b00c74af1faac7932438b1",
         "schema_status": "proposal",
-        "schema_upstream_url": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/655aad45aa345071a69f4a41a88b324f9d0678ac/schema/bmopf/0.2.0/bmopf.schema.json",
+        "schema_upstream_url": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/86fe813f3553b89542b6eead2a75fca0bbdb3acd/schema/bmopf/0.2.0/bmopf.schema.json",
         "schema_version": "0.2.0"
       }
     },

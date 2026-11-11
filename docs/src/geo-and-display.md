@@ -93,7 +93,7 @@ removes the raw keys from `extras`. Writers read `location`.
 | PyPSA | `buses.csv` `x`/`y` | geographic |
 | DOE GO Challenge 3 | bus `longitude`/`latitude` | geographic |
 | OpenDSS | `Buscoords` | unknown; a diagnostic identifies values within longitude and latitude bounds |
-| BMOPF JSON | schema 0.2.0 `bus[id].geo` Point and `line[id].geo` LineString with `meta.crs`; on read also the `extras.geojson` FeatureCollection PowerIO 0.11 wrote and pre-schema `longitude`/`latitude` | declared CRS, geographic when omitted |
+| BMOPF JSON | schema 0.2.0 `bus[id].geo` Point and `line[id].geo` LineString with `meta.crs`; the `geo` of every other located element as a component location (a switch or transformer LineString reads as the midpoint of its end positions); on read also the `extras.geojson` FeatureCollection PowerIO 0.11 wrote and pre-schema `longitude`/`latitude` | declared CRS, geographic when omitted |
 
 MATPOWER, PSS/E, PowerModels, egret, PSLF, and Surge have no place for
 geometry. Emitting a located case to one of them reports the dropped locations,

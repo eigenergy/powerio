@@ -419,12 +419,19 @@ action.
 - PowerIO writes one BMOPF version, 0.2.0, as proposed in
   [dsopt-schema#2](https://github.com/distribution-system-opt/dsopt-schema/pull/2).
   The vendored schema is dsopt-schema
-  [`655aad4`](https://github.com/distribution-system-opt/dsopt-schema/commit/655aad45aa345071a69f4a41a88b324f9d0678ac),
-  the proposal reconciled with schema 0.1.1; the pin moves to the
+  [`86fe813`](https://github.com/distribution-system-opt/dsopt-schema/commit/86fe813f3553b89542b6eead2a75fca0bbdb3acd),
+  the proposal reconciled with schema 0.1.1 and the Task Force review answers
+  (`vng_max`, geometry for every located element); the pin moves to the
   `schema-v0.2.0` tag once the Task Force ratifies it (#844).
-- Output names the bus phase to ground bounds `vpg_min`/`vpg_max` and writes
-  geometry in the schema's typed slots, `bus.*.geo`, `line.*.geo` and
+- Output names the bus phase to ground bounds `vpg_min`/`vpg_max` and the
+  neutral to ground cap `vng_max` (earlier `vn_max`), and writes geometry in
+  the schema's typed slots, `bus.*.geo`, `line.*.geo` and
   `meta.crs`, instead of the `extras.geojson` layer.
+- Component locations travel as the `geo` Point of the voltage source, load,
+  generator, IBR, shunt, capacitor, switch or transformer they attach to, in
+  a WGS84 document, and read back as component locations. A switch or
+  transformer `geo` LineString reads as the midpoint of its end positions.
+  BMOPF output no longer reports line routes it writes as dropped.
 - `meta.$schema` is the schema's canonical `$id` rather than a PowerIO archive
   URL ([BMOPFTools #487](https://github.com/frederikgeth/BMOPFTools.jl/issues/487));
   the commit, digest and retrieval permalink stay in `meta.provenance`.
@@ -432,7 +439,7 @@ action.
   `bmopf-report` drafts, or the 0.2.0 draft PowerIO 0.11 wrote) reads as
   0.2.0 and is reported once with the new `READ.BMOPF.SCHEMA_LEGACY` warning,
   which names the version it stated. A document stating 0.2.0 that uses the
-  `v_min`/`v_max` spelling gets the same single warning. Writing a legacy
+  `v_min`/`v_max` or `vn_max` spelling gets the same single warning. Writing a legacy
   document produces 0.2.0; only a source that states 0.2.0 is echoed byte for
   byte.
 - Removed the `bmopf-json@0.1.0` token, `BmopfSchemaVersion::Bmopf010`, and

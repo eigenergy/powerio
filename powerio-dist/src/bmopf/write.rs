@@ -486,12 +486,88 @@ impl Writer {
         self.ibrs(net, &mut doc);
         self.untyped_bmopf_tables(net, &mut doc, &mut extras);
         rename_cost_fields(&mut doc);
+        self.component_geometry(net, &mut doc);
         self.geometry(net, &mut doc, &mut extras);
         if !extras.is_empty() {
             doc.insert("extras".into(), Value::Object(extras));
         }
         self.warn_unemitted_untyped(net);
         Value::Object(doc)
+    }
+
+    /// The component locations as the `geo` Point of the element each one
+    /// attaches to: a voltage source, load, generator, IBR, shunt, capacitor,
+    /// switch or transformer. A component location is geographic degrees, so
+    /// it is written only into a document whose geometry is WGS84 (no
+    /// `meta.crs`), with both axes stated and a WGS84 datum or none. The rest,
+    /// bus and line points included (their `geo` slots carry the bus location
+    /// and the line route), are reported as dropped. BMOPF `geo` has no datum
+    /// or origin of its own, so a point stating no datum, or an origin other
+    /// than the source data, reads back as WGS84 source coordinates, which is
+    /// reported too.
+    fn component_geometry(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
+        let locations = net.component_locations();
+        if locations.is_empty() {
+            return;
+        }
+        let document_wgs84 = !self.geometry_embedded
+            || matches!(
+                &super::geo::meta_or_default(net).space,
+                crate::geo::CoordinateSpace::Geographic { crs }
+                    if crs.as_deref().is_none_or(super::geo::is_wgs84)
+            );
+        let (mut dropped, mut restated) = (0usize, 0usize);
+        for location in locations {
+            let point = &location.point;
+            let (Some(latitude), Some(longitude)) = (point.latitude, point.longitude) else {
+                dropped += 1;
+                continue;
+            };
+            if !document_wgs84
+                || point
+                    .datum
+                    .as_deref()
+                    .is_some_and(|d| !super::geo::is_wgs84(d))
+            {
+                dropped += 1;
+                continue;
+            }
+            let Some(element) = super::geo::component_element(doc, location.target, &location.name)
+            else {
+                dropped += 1;
+                continue;
+            };
+            element.insert("geo".into(), super::geo::lon_lat_point(longitude, latitude));
+            if point.datum.is_none()
+                || !matches!(
+                    location.kind,
+                    None | Some(crate::geo::DistCoordsKind::Source)
+                )
+            {
+                restated += 1;
+            }
+        }
+        if dropped > 0 {
+            self.warn(
+                &C::EMIT_DIST_COMPONENT_COORDINATES_DROPPED,
+                format!(
+                    "{dropped} component point(s) dropped: BMOPF carries a component point as \
+                     the WGS84 `geo` Point of a located element, and these state a partial axis \
+                     or another datum, sit in a projected document, or attach to a bus, line or \
+                     element this document does not write under that name"
+                ),
+            );
+        }
+        if restated > 0 {
+            self.warn(
+                &C::EMIT_BMOPF_VALUE_SUBSTITUTED,
+                format!(
+                    "{restated} component point(s) written as `geo` read back as WGS84 source \
+                     coordinates: they state no datum, or an origin other than the source data, \
+                     which BMOPF `geo` cannot carry"
+                ),
+            );
+        }
     }
 
     /// The document level geometry record. The geometry travels in the
@@ -561,7 +637,8 @@ impl Writer {
                 ("vpos_max", b.vpos_max),
                 ("vneg_max", b.vneg_max),
                 ("vzero_max", b.vzero_max),
-                ("vn_max", b.vn_max),
+                // The neutral to ground cap, `vng_max` since schema 0.2.0.
+                ("vng_max", b.vn_max),
             ] {
                 if let Some(v) = bound {
                     o.insert(key.into(), self.num(v, &format!("bus {key}")));
@@ -979,6 +1056,14 @@ impl Writer {
                 if let Some(geo) = super::geo::line_geo(l) {
                     o.insert("geo".into(), geo);
                     self.geometry_embedded = true;
+                } else if l.route.is_some() {
+                    self.warn(
+                        &C::EMIT_MULTICONDUCTOR_ROUTE_DROPPED,
+                        format!(
+                            "{what}: the route has fewer than two finite vertices, so it has no \
+                             `geo` LineString; dropped"
+                        ),
+                    );
                 }
                 self.extras_dropped(&l.extras, &what);
                 lines.insert(l.name.clone(), Value::Object(o));

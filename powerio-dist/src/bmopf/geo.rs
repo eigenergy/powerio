@@ -1,14 +1,33 @@
 //! BMOPF element geometry: the typed `bus.*.geo` Point, `line.*.geo`
-//! LineString and `meta.crs` slots of schema 0.2.0, which PowerIO writes, and
-//! the GeoJSON FeatureCollection under `extras.geojson` that PowerIO 0.11
-//! wrote, which the reader still accepts.
-use crate::geo::{CoordinateSpace, DistCoordsKind, DistGeoMeta, DistLocation};
+//! LineString and `meta.crs` slots of schema 0.2.0, which PowerIO writes, the
+//! `geo` of every other located element, which PowerIO maps to its component
+//! locations, and the GeoJSON FeatureCollection under `extras.geojson` that
+//! PowerIO 0.11 wrote, which the reader still accepts.
+use std::collections::BTreeSet;
+
+use crate::geo::{
+    CoordinateSpace, DistComponentLocation, DistCoordsKind, DistGeoMeta, DistGeographicPoint,
+    DistLocation, DistLocationTarget,
+};
 use crate::model::MulticonductorNetwork;
 use serde_json::{Map, Value};
 
+/// The BMOPF element tables whose `geo` maps to a component location, and the
+/// location target of each. `transformer` holds one table per subtype.
+const COMPONENT_TABLES: [(&str, DistLocationTarget); 8] = [
+    ("voltage_source", DistLocationTarget::Source),
+    ("load", DistLocationTarget::Load),
+    ("generator", DistLocationTarget::Generator),
+    ("ibr", DistLocationTarget::Ibr),
+    ("shunt", DistLocationTarget::Shunt),
+    ("capacitor", DistLocationTarget::Capacitor),
+    ("switch", DistLocationTarget::Switch),
+    ("transformer", DistLocationTarget::Transformer),
+];
+
 /// Coordinate reference system names that mean WGS84 longitude/latitude, the
 /// system an absent `meta.crs` means.
-fn is_wgs84(crs: &str) -> bool {
+pub(super) fn is_wgs84(crs: &str) -> bool {
     matches!(
         crs.to_ascii_uppercase().as_str(),
         "EPSG:4326" | "OGC:CRS84" | "WGS84" | "URN:OGC:DEF:CRS:OGC:1.3:CRS84"
@@ -191,9 +210,145 @@ pub(super) fn read(
             }
         }
     }
+    read_component_geometry(doc, net, diagnostics, &geo_meta);
     if changed {
         *net.geo_mut() = Some(geo_meta);
     }
+}
+
+/// Every name a component location of `target` can attach to.
+fn component_names(net: &MulticonductorNetwork) -> BTreeSet<(DistLocationTarget, &str)> {
+    let mut names = BTreeSet::new();
+    macro_rules! add {
+        ($target:ident, $rows:expr) => {
+            names.extend(
+                $rows
+                    .iter()
+                    .map(|row| (DistLocationTarget::$target, row.name.as_str())),
+            );
+        };
+    }
+    add!(Source, net.sources());
+    add!(Load, net.loads());
+    add!(Generator, net.generators());
+    add!(Ibr, net.ibrs());
+    add!(Shunt, net.shunts());
+    add!(Capacitor, net.capacitors());
+    add!(Switch, net.switches());
+    add!(Transformer, net.transformers());
+    names
+}
+
+/// The `geo` of the located elements other than buses and lines, as component
+/// locations: geographic points with the document's datum. A Point is the
+/// element's site. A switch or transformer may state a LineString from its
+/// first bus to its last instead; its location is the midpoint of the
+/// LineString's two end positions, and a write states that Point. A `bbox` is
+/// ignored. A `geo` in a coordinate system that is not geographic has no
+/// place in a component location, which is in degrees, and is dropped.
+fn read_component_geometry(
+    doc: &Map<String, Value>,
+    net: &mut MulticonductorNetwork,
+    diagnostics: &mut crate::collect::Diagnostics,
+    geo_meta: &DistGeoMeta,
+) {
+    let datum = match &geo_meta.space {
+        CoordinateSpace::Geographic { crs } => Some(crs.clone()),
+        _ => None,
+    };
+    let mut found = Vec::new();
+    let mut collapsed = 0usize;
+    {
+        let names = component_names(net);
+        let mut seen = BTreeSet::new();
+        for (table, target) in COMPONENT_TABLES {
+            let Some(items) = doc.get(table).and_then(Value::as_object) else {
+                continue;
+            };
+            let elements: Vec<(&String, &Value)> = if target == DistLocationTarget::Transformer {
+                items
+                    .values()
+                    .filter_map(Value::as_object)
+                    .flat_map(|subtype| subtype.iter())
+                    .collect()
+            } else {
+                items.iter().collect()
+            };
+            for (name, element) in elements {
+                let Some(geo) = element.get("geo") else {
+                    continue;
+                };
+                let Some(datum) = &datum else {
+                    diagnostics.push(
+                        &crate::diagnostics::codes::READ_BMOPF_FIELD_DROPPED,
+                        format!(
+                            "{table} {name}: `geo` is not in a geographic coordinate system, \
+                             which a component location needs; dropped"
+                        ),
+                    );
+                    continue;
+                };
+                let routed = matches!(
+                    target,
+                    DistLocationTarget::Switch | DistLocationTarget::Transformer
+                );
+                let position = match geo["type"].as_str() {
+                    Some("Point") => point(&geo["coordinates"]),
+                    Some("LineString") if routed => geo["coordinates"]
+                        .as_array()
+                        .filter(|items| items.len() >= 2)
+                        .and_then(|items| {
+                            let first = point(items.first()?)?;
+                            let last = point(items.last()?)?;
+                            Some(DistLocation {
+                                x: f64::midpoint(first.x, last.x),
+                                y: f64::midpoint(first.y, last.y),
+                                kind: first.kind,
+                            })
+                        })
+                        .inspect(|_| collapsed += 1),
+                    _ => None,
+                };
+                let assigned = position.filter(|p| {
+                    (-180.0..=180.0).contains(&p.x)
+                        && (-90.0..=90.0).contains(&p.y)
+                        && names.contains(&(target, name.as_str()))
+                        && seen.insert((target, name.clone()))
+                });
+                let Some(p) = assigned else {
+                    diagnostics.push(
+                        &crate::diagnostics::codes::READ_BMOPF_RETAINED_SOURCE_ONLY,
+                        format!(
+                            "{table} {name}: geometry is invalid or names no matching element; \
+                             not assigned as coordinates"
+                        ),
+                    );
+                    continue;
+                };
+                let mut location = DistComponentLocation::new(
+                    target,
+                    name.clone(),
+                    DistGeographicPoint {
+                        latitude: Some(p.y),
+                        longitude: Some(p.x),
+                        datum: datum.clone(),
+                    },
+                );
+                location.kind = geo_meta.kind;
+                found.push(location);
+            }
+        }
+    }
+    if collapsed > 0 {
+        diagnostics.push(
+            &crate::diagnostics::codes::READ_BMOPF_VALUE_COLLAPSED,
+            format!(
+                "{collapsed} switch or transformer `geo` LineString(s) read as the midpoint of \
+                 their end positions; a write states that Point"
+            ),
+        );
+    }
+    net.component_locations_mut().extend(found);
 }
 
 /// A GeoJSON Point geometry object, built as a `Value` directly (the BMOPF
@@ -223,6 +378,39 @@ fn line_string_value(route: &[DistLocation]) -> Value {
         ),
     );
     Value::Object(object)
+}
+
+/// A GeoJSON Point at a longitude and latitude.
+pub(super) fn lon_lat_point(longitude: f64, latitude: f64) -> Value {
+    point_value(&DistLocation {
+        x: longitude,
+        y: latitude,
+        kind: None,
+    })
+}
+
+/// The element of `doc` a component location of `target` attaches to, by
+/// name: the voltage source, load, generator, IBR, shunt, capacitor or switch
+/// of that name, or the transformer of that name under any subtype.
+pub(super) fn component_element<'d>(
+    doc: &'d mut Map<String, Value>,
+    target: DistLocationTarget,
+    name: &str,
+) -> Option<&'d mut Map<String, Value>> {
+    let table = COMPONENT_TABLES
+        .iter()
+        .find(|(_, candidate)| *candidate == target)?
+        .0;
+    let items = doc.get_mut(table)?.as_object_mut()?;
+    if target == DistLocationTarget::Transformer {
+        items
+            .values_mut()
+            .filter_map(Value::as_object_mut)
+            .find_map(|subtype| subtype.get_mut(name))?
+            .as_object_mut()
+    } else {
+        items.get_mut(name)?.as_object_mut()
+    }
 }
 
 /// The bus's `geo` Point, when it has a finite location.

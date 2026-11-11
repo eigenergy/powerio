@@ -24,9 +24,9 @@
 //! `READ.BMOPF.SCHEMA_LEGACY`, which names the version it stated. The older
 //! layouts are: the IBR, control profile, DC, time series, and overflow
 //! transformer tables under `extras`; the transformer `tap` spelling; the
-//! `cost` spelling of `energy_cost_rate`; the bus bounds `v_min`/`v_max`; and
-//! the `extras.geojson` geometry layer. A document stating 0.2.0 that uses
-//! `v_min`/`v_max` gets the same single finding, and one stating both
+//! `cost` spelling of `energy_cost_rate`; the bus bounds `v_min`/`v_max` and
+//! `vn_max`; and the `extras.geojson` geometry layer. A document stating 0.2.0
+//! that uses those bus bound spellings gets the same single finding, and one stating both
 //! spellings with different values is `READ.BMOPF.SEMANTIC_INVALID`. A
 //! document stating no `meta.$schema` is reported with
 //! `READ.BMOPF.SCHEMA_ABSENT`, and one naming no known version with
@@ -36,11 +36,16 @@
 //! earlier version: the retained source bytes are echoed only when the
 //! source itself states 0.2.0.
 //!
-//! The phase to ground bounds are `vpg_min`/`vpg_max`. Geometry goes in the
+//! The phase to ground bounds are `vpg_min`/`vpg_max`, and the neutral to
+//! ground cap is `vng_max`. Geometry goes in the
 //! typed `bus.*.geo` (a GeoJSON Point) and `line.*.geo` (a GeoJSON
 //! LineString) slots, with the coordinate system in `meta.crs`; a coordinate
 //! space the schema cannot name is also recorded as `extras.powerio_geo`.
-//! `ibr` and `control_profile` are top-level tables, the two-winding
+//! Component locations (`MulticonductorNetwork::component_locations`) travel
+//! as the `geo` Point of the voltage source, load, generator, IBR, shunt,
+//! capacitor, switch or transformer they attach to, in a WGS84 document; a
+//! switch or transformer `geo` LineString reads as the midpoint of its end
+//! positions. `ibr` and `control_profile` are top-level tables, the two-winding
 //! transformer subtypes spell the ratio `tap_ratio`, `tap_ratio_min` and
 //! `tap_ratio_max`, and costs are `energy_cost_rate`.
 //!

@@ -49,7 +49,12 @@ pub(super) fn report(doc: &Map<String, Value>, diagnostics: &mut Diagnostics) {
             for key in ["vpp_min", "vpp_max"] {
                 check.dimension(bus, key, &[phases * phases.saturating_sub(1) / 2], &path);
             }
-            for (current, legacy) in [("vpg_min", "v_min"), ("vpg_max", "v_max")] {
+            // Renamed bounds: `vpg_*` since schema 0.1.1, `vng_max` since 0.2.0.
+            for (current, legacy) in [
+                ("vpg_min", "v_min"),
+                ("vpg_max", "v_max"),
+                ("vng_max", "vn_max"),
+            ] {
                 if let (Some(a), Some(b)) = (bus.get(current), bus.get(legacy))
                     && a != b
                 {

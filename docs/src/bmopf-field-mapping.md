@@ -8,7 +8,7 @@ what is written here, one of the two has a defect.
 Schema versions come from the [`dsopt-schema`](https://github.com/distribution-system-opt/dsopt-schema)
 repository. PowerIO writes one version, `0.2.0`, as proposed in
 [dsopt-schema#2](https://github.com/distribution-system-opt/dsopt-schema/pull/2)
-at commit `655aad4`: schema `0.1.1` plus the element classes the IEEE PES Task
+at commit `86fe813`: schema `0.1.1` plus the element classes the IEEE PES Task
 Force on Benchmarking Multiconductor OPF draft carried, with nothing renamed.
 The pin moves to the `schema-v0.2.0` tag once the Task Force ratifies it.
 
@@ -64,7 +64,7 @@ parameter field is zero. A field with no typed slot lands in the element's
 | `vpp_min`, `vpp_max` | `vpp_min`, `vpp_max` | Per ordered phase pair. |
 | `vpos_min`, `vpos_max` | `vpos_min`, `vpos_max` | Scalars. |
 | `vneg_max`, `vzero_max` | `vneg_max`, `vzero_max` | Magnitude caps; the lower bound is always zero. |
-| `vn_max` | `vn_max` | Neutral to ground cap. |
+| `vng_max`; read also as `vn_max` (before 0.2.0) | `vn_max` | Neutral to ground cap. Written as `vng_max`. A document stating 0.2.0 that uses `vn_max` raises the same single `READ.BMOPF.SCHEMA_LEGACY` as `v_*`, and both spellings disagreeing raises `READ.BMOPF.SEMANTIC_INVALID`. |
 | `geo` | `location` and `MulticonductorNetwork::geo` | A GeoJSON Point in the system `meta.crs` names. Written for every bus with a finite location. The reader also accepts the `extras.geojson` FeatureCollection that PowerIO 0.11 wrote, when no element carries a `geo` field; it is never written. |
 | `longitude`, `latitude` | `location` and `MulticonductorNetwork::geo` | The pre-schema BMOPFTools coordinate fields, outside every schema version. Read into the coordinate space as WGS84; never written back. |
 
@@ -91,6 +91,30 @@ parameter field is zero. A field with no typed slot lands in the element's
 A line has exactly one impedance source, and the `oneOf` in both schema
 versions enforces it: either a `linecode` with a `length`, or inline
 `R_series_1_1` and `X_series_1_1` with no `linecode`.
+
+## Element geometry
+
+Every located element other than a bus or line may carry a `geo`: a GeoJSON
+Point on `voltage_source`, `load`, `generator`, `ibr`, `shunt` and
+`capacitor`, and a Point or LineString on `switch` and every transformer
+subtype. The DC classes take one too and pass through unchanged with the rest
+of their object.
+
+| BMOPF | PowerIO | Note |
+| --- | --- | --- |
+| `<element>.geo` Point | a `DistComponentLocation` for that element (`MulticonductorNetwork::component_locations`) | Longitude and latitude in degrees, with `meta.crs` as the datum (`EPSG:4326` when absent). |
+| `switch.geo`, `transformer.<subtype>.<name>.geo` LineString | the same, at the midpoint of the LineString's two end positions | Reported once with `READ.BMOPF.VALUE_COLLAPSED`; a write states that Point. |
+| `bbox` on any `geo` | not read | Never written. |
+
+A component location is geographic, so a `geo` in a projected document reads
+nothing and raises `READ.BMOPF.FIELD_DROPPED`. The writer states a component
+location as its element's `geo` Point when the document's geometry is WGS84
+(no `meta.crs`) and the point states both axes and a WGS84 datum or none. A
+point stating no datum, or an origin other than the source data, reads back
+as WGS84 source coordinates, which `EMIT.BMOPF.VALUE_SUBSTITUTED` reports.
+The rest, including component points on buses and lines (whose `geo` carries
+the bus location and the line route), raise
+`EMIT.DIST.COMPONENT_COORDINATES_DROPPED`.
 
 ## switch
 
@@ -259,7 +283,7 @@ that constraints are active for the elements present.
 
 | Family | The BMOPF fields it activates |
 | --- | --- |
-| `terminal_voltage_bounds` | `bus.vpg_min`, `vpg_max`, `vpn_min`, `vpn_max`, `vpp_min`, `vpp_max`, `vpos_min`, `vpos_max`, `vneg_max`, `vzero_max`, `vn_max` |
+| `terminal_voltage_bounds` | `bus.vpg_min`, `vpg_max`, `vpn_min`, `vpn_max`, `vpp_min`, `vpp_max`, `vpos_min`, `vpos_max`, `vneg_max`, `vzero_max`, `vng_max` |
 | `conductor_limits` | `line.i_max`, `line.s_max`, `linecode.i_max`, `linecode.s_max`, `switch.i_max`, `transformer.i_max_from`, `transformer.i_max_to` |
 | `generator_capability` | `generator.p_min`, `p_max`, `q_min`, `q_max`, `s_max`, `i_max`, and the same bounds on an IBR |
 

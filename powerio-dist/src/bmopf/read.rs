@@ -175,6 +175,7 @@ const NUMERIC_FIELDS: &[&str] = &[
     "v_nom_to",
     "vn_max",
     "vneg_max",
+    "vng_max",
     "vpg_max",
     "vpg_min",
     "vpn_max",
@@ -305,8 +306,9 @@ struct Reader<'a> {
 
 /// The bus fields the reader types; anything else lands in the bus's extras.
 /// `vpg_*` is the phase to ground bound since schema 0.1.1, `v_*` the 0.1.0
-/// spelling, `geo` the 0.2.0 location, `longitude`/`latitude` and `vsym_*`
-/// pre-schema BMOPFTools fields.
+/// spelling, `vng_max` the neutral to ground cap since 0.2.0, `vn_max` its
+/// earlier spelling, `geo` the 0.2.0 location, `longitude`/`latitude` and
+/// `vsym_*` pre-schema BMOPFTools fields.
 const BUS_KNOWN_FIELDS: &[&str] = &[
     "terminal_names",
     "perfectly_grounded_terminals",
@@ -325,6 +327,7 @@ const BUS_KNOWN_FIELDS: &[&str] = &[
     "vpos_max",
     "vneg_max",
     "vzero_max",
+    "vng_max",
     "vn_max",
     "vsym_min",
     "vsym_max",
@@ -742,7 +745,14 @@ impl Reader<'_> {
     fn capacitors(&mut self, items: &Map<String, Value>) {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
-            let known = ["bus", "terminal_map", "configuration", "q_rated", "v_nom"];
+            let known = [
+                "bus",
+                "terminal_map",
+                "configuration",
+                "q_rated",
+                "v_nom",
+                "geo",
+            ];
             for (field, value) in [("q_rated", o.get("q_rated")), ("v_nom", o.get("v_nom"))] {
                 if value.is_none() {
                     self.diagnostics.push(
@@ -788,6 +798,7 @@ impl Reader<'_> {
             "q_max",
             "control_profile",
             "voltage_aggregation",
+            "geo",
         ];
         let mut taken: std::collections::BTreeSet<String> = self
             .net
@@ -1012,10 +1023,13 @@ impl Reader<'_> {
                     ),
                 );
             }
-            // Phase to ground bounds are `vpg_min`/`vpg_max` since schema
-            // 0.1.1; `v_min`/`v_max` is the 0.1.0 spelling, which 0.2.0
-            // rejects. Both read, the current spelling first.
-            let (vpg_min, vpg_max) = self.phase_to_ground_bounds(o);
+            // Renamed bounds read under either spelling, the current one
+            // first: the phase to ground bounds are `vpg_min`/`vpg_max` since
+            // schema 0.1.1 (0.1.0 `v_min`/`v_max`), and the neutral to ground
+            // cap is `vng_max` since 0.2.0 (earlier `vn_max`).
+            let vpg_min = self.renamed_bus_field(o, "vpg_min", "v_min");
+            let vpg_max = self.renamed_bus_field(o, "vpg_max", "v_max");
+            let vng_max = self.renamed_bus_field(o, "vng_max", "vn_max");
             self.net.buses_mut().push(DistBus {
                 id: id.clone(),
                 terminals: strings(o.get("terminal_names")),
@@ -1032,39 +1046,31 @@ impl Reader<'_> {
                 vpos_max: first_float(o.get("vpos_max")).or(legacy_vpos_max),
                 vneg_max: first_float(o.get("vneg_max")).or(legacy_vneg_max),
                 vzero_max: first_float(o.get("vzero_max")).or(legacy_vzero_max),
-                vn_max: first_float(o.get("vn_max")),
+                vn_max: first_float(vng_max),
                 location,
                 extras,
             });
         }
     }
 
-    /// The bus's phase to ground bound arrays: `vpg_min`/`vpg_max` (schema
-    /// 0.1.1 and 0.2.0) or the 0.1.0 spelling `v_min`/`v_max`. A document that
-    /// states schema 0.2.0 and spells them the old way is noted for the one
-    /// `READ.BMOPF.SCHEMA_LEGACY` finding, since that schema rejects the old
-    /// names; a document stating an earlier version, or none, already has
-    /// its one schema finding.
-    fn phase_to_ground_bounds<'v>(
+    /// A bus field schema 0.2.0 spells differently from an earlier version:
+    /// the current spelling, else the earlier one. A document that states
+    /// 0.2.0 and uses the earlier spelling is noted for the one
+    /// `READ.BMOPF.SCHEMA_LEGACY` finding, since that schema rejects it; a
+    /// document stating an earlier version, or none, already has its one
+    /// schema finding. Both spellings disagreeing is
+    /// `READ.BMOPF.SEMANTIC_INVALID` (see `validate.rs`).
+    fn renamed_bus_field<'v>(
         &mut self,
         o: &'v Map<String, Value>,
-    ) -> (Option<&'v Value>, Option<&'v Value>) {
-        let mut bounds = [None, None];
-        for (slot, (current, legacy)) in bounds
-            .iter_mut()
-            .zip([("vpg_min", "v_min"), ("vpg_max", "v_max")])
-        {
-            *slot = o.get(current);
-            if let Some(old) = o.get(legacy) {
-                if slot.is_none() {
-                    *slot = Some(old);
-                }
-                if self.schema_version.is_some() {
-                    *self.legacy_spellings.entry(legacy).or_default() += 1;
-                }
-            }
+        current: &str,
+        legacy: &'static str,
+    ) -> Option<&'v Value> {
+        let old = o.get(legacy);
+        if old.is_some() && self.schema_version.is_some() {
+            *self.legacy_spellings.entry(legacy).or_default() += 1;
         }
-        (bounds[0], bounds[1])
+        o.get(current).or(old)
     }
 
     /// One `READ.BMOPF.SCHEMA_LEGACY` finding for a document that states the
@@ -1277,6 +1283,7 @@ impl Reader<'_> {
                 "terminal_map_to",
                 "open_switch",
                 "i_max",
+                "geo",
             ];
             self.net.switches_mut().push(DistSwitch {
                 name: name.clone(),
@@ -1319,6 +1326,7 @@ impl Reader<'_> {
                 "beta_p",
                 "gamma_p",
                 "gamma_q",
+                "geo",
             ];
             let v_nom = floats(o.get("v_nom")).unwrap_or_default();
             let has_zip = [
@@ -1393,6 +1401,7 @@ impl Reader<'_> {
                 "bus",
                 "configuration",
                 "terminal_map",
+                "geo",
             ];
             let p_min = floats(o.get("p_min"));
             let p_max = floats(o.get("p_max"));
@@ -1466,7 +1475,7 @@ impl Reader<'_> {
                 b: pad_to(b, n),
                 extras: take_extras(
                     o,
-                    &["bus", "terminal_map"],
+                    &["bus", "terminal_map", "geo"],
                     &format!("shunt {name}"),
                     &mut self.diagnostics,
                     &["G", "B"],
@@ -1506,6 +1515,7 @@ impl Reader<'_> {
                 "terminal_map",
                 "energy_cost_rate",
                 "cost",
+                "geo",
             ];
             let energy_cost_rate = floats(o.get("energy_cost_rate").or_else(|| o.get("cost")));
             self.net.sources_mut().push(VoltageSource {
@@ -1605,6 +1615,7 @@ impl Reader<'_> {
             "tap_ratio",
             "tap_ratio_min",
             "tap_ratio_max",
+            "geo",
         ];
         if !matches!(
             subtype,
@@ -1908,6 +1919,7 @@ impl Reader<'_> {
             "i_max_from",
             "i_max_to",
             "connection",
+            "geo",
         ];
         let bus_from = string(o.get("bus_from"));
         let bus_to = string(o.get("bus_to"));
@@ -2025,6 +2037,7 @@ impl Reader<'_> {
             "g_no_load",
             "b_no_load",
             "no_load_shunt",
+            "geo",
         ];
         let s = o.get("s_rating").map_or(f64::NAN, f);
         let mut windings = Vec::new();

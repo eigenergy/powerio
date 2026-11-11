@@ -146,18 +146,18 @@
             "items": {
               "$ref": "#/$defs/nonnegative_number"
             },
-            "description": "Minimum phase-to-ground voltage magnitude [V] of each phase terminal of the bus, one entry per name in `terminal_names` that `terminal_conventions` classifies as a phase, in `terminal_names` order. The neutral bounds through `vn_max`, so this array carries no entry for it. Named `vpg_*` since schema 0.1.1 (specification issue #51): `v_*` was ambiguous between phase-to-ground and phase-to-neutral."
+            "description": "Minimum phase-to-ground voltage magnitude [V] of each phase terminal of the bus, one entry per name in `terminal_names` that `terminal_conventions` classifies as a phase, in `terminal_names` order. The neutral bounds through `vng_max`, so this array carries no entry for it. Named `vpg_*` since schema 0.1.1 (specification issue #51): `v_*` was ambiguous between phase-to-ground and phase-to-neutral."
           },
           "vpg_max": {
             "type": "array",
             "items": {
               "$ref": "#/$defs/nonnegative_number"
             },
-            "description": "Maximum phase-to-ground voltage magnitude [V] of each phase terminal of the bus, one entry per name in `terminal_names` that `terminal_conventions` classifies as a phase, in `terminal_names` order. The neutral bounds through `vn_max`, so this array carries no entry for it. Named `vpg_*` since schema 0.1.1 (specification issue #51)."
+            "description": "Maximum phase-to-ground voltage magnitude [V] of each phase terminal of the bus, one entry per name in `terminal_names` that `terminal_conventions` classifies as a phase, in `terminal_names` order. The neutral bounds through `vng_max`, so this array carries no entry for it. Named `vpg_*` since schema 0.1.1 (specification issue #51)."
           },
-          "vn_max": {
+          "vng_max": {
             "$ref": "#/$defs/nonnegative_number",
-            "description": "Maximum neutral-to-ground voltage magnitude [V]; only valid when the bus has a neutral terminal"
+            "description": "Maximum neutral-to-ground voltage magnitude [V]; only valid when the bus has a neutral terminal. Named `vn_max` before schema 0.2.0; `vng` names the neutral-to-ground pair the way `vpg` names phase-to-ground."
           },
           "vpn_min": {
             "type": "array",
@@ -383,6 +383,10 @@
               "type": "number"
             },
             "description": "Energy cost rate [$/kWh], one entry per phase conductor in terminal_map order. Neutral terminals have no price entry."
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the source is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it, and without it the source is drawn at its bus."
           }
         },
         "required": [
@@ -408,6 +412,10 @@
           },
           "time_series": {
             "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the shunt is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it, and without it the shunt is drawn at its bus."
           }
         },
         "patternProperties": {
@@ -454,6 +462,10 @@
           },
           "time_series": {
             "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the capacitor is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it, and without it the capacitor is drawn at its bus."
           }
         },
         "required": [
@@ -571,6 +583,10 @@
           },
           "time_series": {
             "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the load is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it, and without it the load is drawn at its bus."
           }
         },
         "required": [
@@ -657,6 +673,10 @@
               "type": "number"
             },
             "description": "Energy cost rate [$/kWh], one entry per phase conductor in terminal_map order. Neutral terminals have no price entry."
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the generator is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it, and without it the generator is drawn at its bus."
           }
         },
         "required": [
@@ -825,6 +845,10 @@
           },
           "time_series": {
             "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point_or_line_string",
+            "description": "Where the switch is, as a GeoJSON Point for its site or a LineString from its first bus to its last, in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it."
           }
         },
         "required": [
@@ -1059,6 +1083,10 @@
               "type": "number"
             },
             "description": "Energy cost rate [$/kWh], one entry per phase conductor in terminal_map order. Neutral terminals have no price entry."
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the inverter is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it, and without it the inverter is drawn at its bus."
           }
         },
         "required": [
@@ -1426,6 +1454,10 @@
           },
           "time_series": {
             "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the DC bus is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it."
           }
         },
         "required": [
@@ -1482,6 +1514,10 @@
           },
           "time_series": {
             "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point_or_line_string",
+            "description": "Where the DC branch is, as a GeoJSON Point for its site or a LineString from its first bus to its last, in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it."
           }
         },
         "required": [
@@ -1514,6 +1550,10 @@
           },
           "time_series": {
             "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the DC grounding is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it, and without it the DC grounding is drawn at its bus."
           }
         },
         "required": [
@@ -1543,6 +1583,10 @@
           },
           "time_series": {
             "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the DC load is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it, and without it the DC load is drawn at its bus."
           }
         },
         "required": [
@@ -1581,6 +1625,10 @@
           },
           "time_series": {
             "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the DC source is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it, and without it the DC source is drawn at its bus."
           }
         },
         "required": [
@@ -1760,6 +1808,10 @@
           },
           "no_load_shunt": {
             "$ref": "#/$defs/transformer_no_load_shunt"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point_or_line_string",
+            "description": "Where the transformer is, as a GeoJSON Point for its site or a LineString from its first bus to its last, in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it."
           }
         },
         "required": [
@@ -1889,6 +1941,10 @@
           },
           "no_load_shunt": {
             "$ref": "#/$defs/transformer_no_load_shunt"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point_or_line_string",
+            "description": "Where the transformer is, as a GeoJSON Point for its site or a LineString from its first bus to its last, in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it."
           }
         },
         "required": [
@@ -2187,6 +2243,10 @@
           },
           "no_load_shunt": {
             "$ref": "#/$defs/transformer_no_load_shunt"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point_or_line_string",
+            "description": "Where the transformer is, as a GeoJSON Point for its site or a LineString from its first bus to its last, in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it."
           }
         },
         "required": [
@@ -2318,6 +2378,10 @@
           },
           "no_load_shunt": {
             "$ref": "#/$defs/transformer_no_load_shunt"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point_or_line_string",
+            "description": "Where the transformer is, as a GeoJSON Point for its site or a LineString from its first bus to its last, in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it."
           }
         },
         "required": [
@@ -2391,6 +2455,10 @@
           },
           "no_load_shunt": {
             "$ref": "#/$defs/transformer_no_load_shunt"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point_or_line_string",
+            "description": "Where the transformer is, as a GeoJSON Point for its site or a LineString from its first bus to its last, in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it."
           }
         },
         "required": [
@@ -2469,6 +2537,9 @@
         },
         "coordinates": {
           "$ref": "#/$defs/geojson_position"
+        },
+        "bbox": {
+          "$ref": "#/$defs/geojson_bbox"
         }
       },
       "description": "A GeoJSON Point geometry object (RFC 7946 section 3.1.2)."
@@ -2490,9 +2561,40 @@
           "items": {
             "$ref": "#/$defs/geojson_position"
           }
+        },
+        "bbox": {
+          "$ref": "#/$defs/geojson_bbox"
         }
       },
-      "description": "A GeoJSON LineString geometry object (RFC 7946 section 3.1.4): the route from `bus_from` through any bends to `bus_to`."
+      "description": "A GeoJSON LineString geometry object (RFC 7946 section 3.1.4) with at least two positions. On a branch element it runs from the element's first bus through any bends to its last."
+    },
+    "geojson_bbox": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "anyOf": [
+        {
+          "minItems": 4,
+          "maxItems": 4
+        },
+        {
+          "minItems": 6,
+          "maxItems": 6
+        }
+      ],
+      "description": "Optional GeoJSON bounding box (RFC 7946 section 5): the lowest value on every axis, then the highest."
+    },
+    "geojson_point_or_line_string": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/geojson_point"
+        },
+        {
+          "$ref": "#/$defs/geojson_line_string"
+        }
+      ],
+      "description": "A GeoJSON Point (the element's site) or LineString (its route between its buses)."
     }
   },
   "description": "Proposed BMOPF 0.2.0 network data contract, subject to Task Force review. An immutable retrieval URL identifies a particular proposal snapshot."

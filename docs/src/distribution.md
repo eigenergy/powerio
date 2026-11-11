@@ -1026,8 +1026,8 @@ A document written against an earlier version is read as 0.2.0 and reported
 once with `READ.BMOPF.SCHEMA_LEGACY`, which names the version it stated: 0.1.0,
 0.1.1, the `bmopf-report` drafts, or the 0.2.0 draft PowerIO 0.11 wrote. The
 reader accepts the older layouts (tables and transformer fields under
-`extras`, the `tap` and `cost` spellings, `v_min`/`v_max`, the `extras.geojson`
-layer). A `bmopf-json` emission preserves an unchanged source byte for byte
+`extras`, the `tap` and `cost` spellings, `v_min`/`v_max`, `vn_max`, the
+`extras.geojson` layer). A `bmopf-json` emission preserves an unchanged source byte for byte
 only when that source states 0.2.0; an older document is written as 0.2.0:
 
 ```sh
@@ -1048,14 +1048,16 @@ and explicit BMOPF output. Uniform values use `v_min`/`v_max`; unequal values
 use `v_min_phase`/`v_max_phase` in the typed Rust model. A present scalar takes
 precedence over the corresponding vector. In the document the phase to ground
 bound is `vpg_min`/`vpg_max` since schema 0.1.1, and 0.2.0 rejects the 0.1.0
-spelling `v_min`/`v_max`. Output writes `vpg_*`; the reader takes either, and
-a document stating 0.2.0 that uses the old names gets one
+spelling `v_min`/`v_max`; the neutral to ground cap is `vng_max` since 0.2.0,
+`vn_max` before. Output writes `vpg_*` and `vng_max`; the reader takes either
+spelling, and a document stating 0.2.0 that uses an old name gets one
 `READ.BMOPF.SCHEMA_LEGACY`. PMD voltage arrays instead follow terminal order
 and use engineering voltage units.
 
 Schema 0.2.0 also declares geometry: `bus.*.geo` (GeoJSON Point), `line.*.geo`
-(GeoJSON LineString) and `meta.crs`. Output writes bus locations and line
-routes there. The `extras.geojson` FeatureCollection PowerIO 0.11 wrote still
+(GeoJSON LineString) and `meta.crs`, and a `geo` on every other located
+element. Output writes bus locations and line routes there, and component
+locations as the `geo` Point of the element they attach to. The `extras.geojson` FeatureCollection PowerIO 0.11 wrote still
 reads. See
 [Geo and display](geo-and-display.md#bmopf-geometry-and-schema-validity).
 
@@ -1079,10 +1081,11 @@ circuit, core shunts and tap-control decisions. Malformed winding maps and
 invalid ratios fail instead of producing an incomplete matrix.
 
 The BMOPF proposal schema is pinned to
-[`655aad4`](https://github.com/distribution-system-opt/dsopt-schema/commit/655aad45aa345071a69f4a41a88b324f9d0678ac),
-with SHA-256 `01d022c038e0518e3a54c5fbf7378522fd4120b5ba8a5308b3a70a31af774ae4`,
+[`86fe813`](https://github.com/distribution-system-opt/dsopt-schema/commit/86fe813f3553b89542b6eead2a75fca0bbdb3acd),
+with SHA-256 `8ebdf07daf383c9bcca7b97e6b312f05976d1a2da4b00c74af1faac7932438b1`,
 the revision that reconciled the proposal with schema 0.1.1 (`vpg_*` bounds,
-typed geometry, one identifier). The pin moves to the `schema-v0.2.0` tag once
+typed geometry, one identifier) and applied the Task Force review answers
+(`vng_max`, geometry for every located element). The pin moves to the `schema-v0.2.0` tag once
 the Task Force ratifies the proposal. Output stamps the schema's canonical `$id`
 into `meta.$schema`, the value 0.2.0 fixes with `const`, so a consumer
 recognises a document by one identifier per version instead of allow-listing
