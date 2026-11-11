@@ -1,7 +1,8 @@
 # IEEE cases in BMOPF JSON
 
-Reference encodings of IEEE distribution test cases in draft BMOPF 0.2,
-produced by `powerio-dist`. They validate against that schema and
+Reference encodings of IEEE distribution test cases in BMOPF 0.2.0, the
+proposal in dsopt-schema#2 and the one version PowerIO writes, produced by
+`powerio-dist`. They validate against that schema and
 exercise parsers and validation tools. Regenerate them
 rather than editing by hand.
 

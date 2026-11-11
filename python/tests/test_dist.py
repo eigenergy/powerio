@@ -484,7 +484,7 @@ def test_table_nonfinite_limits_keep_the_network_spelling():
     assert value.lines == expected
 
 
-def test_source_energy_prices_and_draft_schema_digest_survive_ir():
+def test_source_energy_prices_and_schema_digest_survive_ir():
     import hashlib
 
     document = {
@@ -511,6 +511,8 @@ def test_source_energy_prices_and_draft_schema_digest_survive_ir():
     assert output["meta"]["$schema"] == provenance["schema_id"]
     assert output["meta"]["$schema"].endswith("/main/schema/bmopf/0.2.0/bmopf.schema.json")
     assert "eigenergy/powerio" not in output["meta"]["$schema"]
-    legacy = json.loads(powerio.emit(restored, "bmopf-json@0.1.0").text)
-    assert "energy_cost_rate" not in legacy["voltage_source"]["s"]
-    assert legacy["extras"]["voltage_source"]["s"]["energy_cost_rate"] == [0.1]
+    assert output["voltage_source"]["s"]["energy_cost_rate"] == [0.1]
+    # PowerIO writes one BMOPF version: `@0.2.0` names it, any other refuses.
+    assert json.loads(powerio.emit(restored, "bmopf-json").text) == output
+    with pytest.raises(powerio.PowerIOError, match="only BMOPF 0.2.0"):
+        powerio.emit(restored, "bmopf-json@0.1.0")

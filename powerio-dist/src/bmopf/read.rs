@@ -12,6 +12,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
 use super::BmopfSchemaVersion;
+use super::profile::LegacySchema;
 use crate::diagnostics::codes as C;
 use crate::error::{Error, Result};
 use crate::geo::{CoordinateSpace, DistCoordsKind, DistGeoMeta, DistLocation};
@@ -53,8 +54,10 @@ pub(crate) fn parse_bmopf_collecting(
         diagnostics: crate::diagnostics::Diagnostics::new(),
         frequency_stated: false,
         schema_version,
+        legacy_spellings: std::collections::BTreeMap::new(),
     };
     rd.document(&doc);
+    rd.report_legacy_spellings();
     let found = std::mem::take(&mut rd.diagnostics);
     diags.absorb(found);
     super::geo::read(&doc, &mut net, diags);
@@ -62,54 +65,58 @@ pub(crate) fn parse_bmopf_collecting(
     Ok(net)
 }
 
-/// Report unresolved schema identities and reject contradictory version
-/// declarations. Answers the version `meta.$schema` names, or `None` when the
-/// document states none or names no known version.
+/// Report what `meta.$schema` states and reject contradictory version
+/// declarations. Every document is read as the one version PowerIO writes; a
+/// document stating an earlier version is read through the legacy paths and
+/// reported once with `READ.BMOPF.SCHEMA_LEGACY`. Answers the version
+/// `meta.$schema` names when it names the current one, and `None` otherwise.
 fn report_schema_version(
     doc: &Map<String, Value>,
     diags: &mut crate::collect::Diagnostics,
 ) -> Option<BmopfSchemaVersion> {
-    let stated = doc
-        .get("meta")
-        .and_then(Value::as_object)
-        .and_then(|m| m.get("$schema"))
-        .and_then(Value::as_str);
-    let resolved = stated.and_then(BmopfSchemaVersion::from_schema_id);
-    if let (Some(profile), Some(version)) = (
-        resolved,
-        doc.get("meta").and_then(|meta| meta.get("schema_version")),
-    ) && version.as_str() != Some(profile.version())
+    let meta = doc.get("meta").and_then(Value::as_object);
+    let stated = meta.and_then(|m| m.get("$schema")).and_then(Value::as_str);
+    let current = stated.and_then(BmopfSchemaVersion::from_schema_id);
+    let legacy = stated.and_then(LegacySchema::from_schema_id);
+    let stated_version = current
+        .map(BmopfSchemaVersion::version)
+        .or_else(|| legacy.map(LegacySchema::version));
+    if let (Some(expected), Some(version)) =
+        (stated_version, meta.and_then(|m| m.get("schema_version")))
+        && version.as_str() != Some(expected)
     {
         diags.push(
             &C::READ_BMOPF_SCHEMA_MISMATCH,
-            format!(
-                "meta.schema_version {version} disagrees with the {} schema URI",
-                profile.version()
-            ),
+            format!("meta.schema_version {version} disagrees with the {expected} schema URI"),
         );
     }
-    match stated {
-        None => diags.push(
+    let target = BmopfSchemaVersion::default().version();
+    match (stated, legacy) {
+        (None, _) => diags.push(
             &C::READ_BMOPF_SCHEMA_ABSENT,
             format!(
                 "the document states no `meta.$schema`, so the BMOPF schema version it was \
-                 written against is unknown; both {} and {} are accepted",
-                BmopfSchemaVersion::Bmopf010.version(),
-                BmopfSchemaVersion::Bmopf020.version()
+                 written against is unknown; read as {target}"
             ),
         ),
-        Some(id) if resolved.is_none() => diags.push(
+        (Some(_), Some(legacy)) => diags.push(
+            &C::READ_BMOPF_SCHEMA_LEGACY,
+            format!(
+                "`meta.$schema` names {}; the document is read as BMOPF {target}, and a BMOPF \
+                 write states {target}",
+                legacy.label()
+            ),
+        ),
+        (Some(id), None) if current.is_none() => diags.push(
             &C::READ_BMOPF_SCHEMA_UNKNOWN,
             format!(
-                "`meta.$schema` is `{id}`, which names no known BMOPF schema version; both {} \
-                 and {} are accepted",
-                BmopfSchemaVersion::Bmopf010.version(),
-                BmopfSchemaVersion::Bmopf020.version()
+                "`meta.$schema` is `{id}`, which names no known BMOPF schema version; read as \
+                 {target}"
             ),
         ),
-        Some(_) => {}
+        (Some(_), None) => {}
     }
-    resolved
+    current
 }
 
 fn uniform_bound(value: Option<&Value>) -> Option<f64> {
@@ -288,9 +295,12 @@ struct Reader<'a> {
     /// done so a helper never borrows the network the caller is writing into.
     diagnostics: crate::diagnostics::Diagnostics,
     frequency_stated: bool,
-    /// The schema version `meta.$schema` names, when it names one. Decides
-    /// whether a legacy field spelling gets a finding.
+    /// The schema version `meta.$schema` names, when it names the current
+    /// one. Decides whether a legacy field spelling gets a finding.
     schema_version: Option<BmopfSchemaVersion>,
+    /// Earlier field spellings a document stating the current version used,
+    /// with the number of records that used each; reported once.
+    legacy_spellings: std::collections::BTreeMap<&'static str, usize>,
 }
 
 /// The bus fields the reader types; anything else lands in the bus's extras.
@@ -1005,7 +1015,7 @@ impl Reader<'_> {
             // Phase to ground bounds are `vpg_min`/`vpg_max` since schema
             // 0.1.1; `v_min`/`v_max` is the 0.1.0 spelling, which 0.2.0
             // rejects. Both read, the current spelling first.
-            let (vpg_min, vpg_max) = self.phase_to_ground_bounds(id, o);
+            let (vpg_min, vpg_max) = self.phase_to_ground_bounds(o);
             self.net.buses_mut().push(DistBus {
                 id: id.clone(),
                 terminals: strings(o.get("terminal_names")),
@@ -1031,12 +1041,12 @@ impl Reader<'_> {
 
     /// The bus's phase to ground bound arrays: `vpg_min`/`vpg_max` (schema
     /// 0.1.1 and 0.2.0) or the 0.1.0 spelling `v_min`/`v_max`. A document that
-    /// states schema 0.2.0 and spells them the old way gets a finding, since
-    /// that schema rejects the old names; a 0.1.0 document or one stating no
-    /// version reads either spelling silently.
+    /// states schema 0.2.0 and spells them the old way is noted for the one
+    /// `READ.BMOPF.SCHEMA_LEGACY` finding, since that schema rejects the old
+    /// names; a document stating an earlier version, or none, already has
+    /// its one schema finding.
     fn phase_to_ground_bounds<'v>(
         &mut self,
-        id: &str,
         o: &'v Map<String, Value>,
     ) -> (Option<&'v Value>, Option<&'v Value>) {
         let mut bounds = [None, None];
@@ -1049,18 +1059,34 @@ impl Reader<'_> {
                 if slot.is_none() {
                     *slot = Some(old);
                 }
-                if self.schema_version == Some(BmopfSchemaVersion::Bmopf020) {
-                    self.diagnostics.push(
-                        &C::READ_BMOPF_FIELD_LEGACY,
-                        format!(
-                            "bus {id}: `{legacy}` is the schema 0.1.0 spelling; schema 0.2.0 \
-                             names the phase to ground bound `{current}` and rejects `{legacy}`"
-                        ),
-                    );
+                if self.schema_version.is_some() {
+                    *self.legacy_spellings.entry(legacy).or_default() += 1;
                 }
             }
         }
         (bounds[0], bounds[1])
+    }
+
+    /// One `READ.BMOPF.SCHEMA_LEGACY` finding for a document that states the
+    /// current version but uses earlier field spellings.
+    fn report_legacy_spellings(&mut self) {
+        if self.legacy_spellings.is_empty() {
+            return;
+        }
+        let version = BmopfSchemaVersion::default().version();
+        let fields = self
+            .legacy_spellings
+            .iter()
+            .map(|(field, count)| format!("`{field}` ({count})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.diagnostics.push(
+            &C::READ_BMOPF_SCHEMA_LEGACY,
+            format!(
+                "the document states BMOPF {version} but uses the earlier spellings {fields}, \
+                 which {version} rejects; read as {version}"
+            ),
+        );
     }
 
     fn line_codes(&mut self, items: &Map<String, Value>) {

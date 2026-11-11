@@ -91,8 +91,9 @@ Acquisition runs in the same cancellable queue as discovery and parsing.
 
 The portal excludes PowerIO IR, geographic-only values, GridFM/Parquet,
 and calculation operations. GO Challenge 3 writing requires a complete
-`powerio.AcScucSolution`; network inputs cannot produce one. BMOPF outputs
-use explicit 0.1.0 and 0.2.0 proposal profiles, with links to the
+`powerio.AcScucSolution`; network inputs cannot produce one. BMOPF output is
+the 0.2.0 proposal, the one version PowerIO writes; older BMOPF files read as
+0.2.0. Links point to the
 [BMOPF task force](https://github.com/distribution-system-opt).
 
 ## Privacy and analytics

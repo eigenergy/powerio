@@ -657,6 +657,11 @@ fn echo_text(
         return None;
     }
     let text = std::str::from_utf8(buffer.bytes()).ok()?;
+    // PowerIO writes one BMOPF version: a document stating an earlier one,
+    // or none, is written fresh as 0.2.0 rather than echoed.
+    if target == DistTargetFormat::BmopfJson && !crate::bmopf::__states_written_version(text) {
+        return None;
+    }
     Some(text.to_owned())
 }
 

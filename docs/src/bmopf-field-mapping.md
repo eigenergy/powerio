@@ -6,11 +6,18 @@ BMOPF converter, so if you find a field that reads or writes differently from
 what is written here, one of the two has a defect.
 
 Schema versions come from the [`dsopt-schema`](https://github.com/distribution-system-opt/dsopt-schema)
-repository. `0.1.0` is the version the IEEE PES Task Force on Benchmarking
-Multiconductor OPF accepts, and `0.2.0` is the proposal that adds the element
-classes 0.1.0 has no table for. PowerIO reads both and writes `0.2.0` by
-default; to write `0.1.0`, pass
-`BmopfEmitOptions::with_schema_version(BmopfSchemaVersion::Bmopf010)`.
+repository. PowerIO writes one version, `0.2.0`, as proposed in
+[dsopt-schema#2](https://github.com/distribution-system-opt/dsopt-schema/pull/2)
+at commit `655aad4`: schema `0.1.1` plus the element classes the IEEE PES Task
+Force on Benchmarking Multiconductor OPF draft carried, with nothing renamed.
+The pin moves to the `schema-v0.2.0` tag once the Task Force ratifies it.
+
+A document written against an earlier version (`0.1.0`, `0.1.1`, the
+`bmopf-report` drafts, or the `0.2.0` draft PowerIO 0.11 wrote) is read as
+`0.2.0`: the reader also accepts the older spellings and layouts listed on
+this page, and reports `READ.BMOPF.SCHEMA_LEGACY` once, naming the version
+the document stated. Writing it produces a `0.2.0` document; the source bytes
+are echoed only for a document that states `0.2.0`.
 
 ## Conventions
 
@@ -36,9 +43,9 @@ parameter field is zero. A field with no typed slot lands in the element's
 | BMOPF | PowerIO | Note |
 | --- | --- | --- |
 | `name` | `PioModule` value name | |
-| `meta.$schema` | resolved by `BmopfSchemaVersion::from_schema_id` | Written as the target schema's canonical `$id` (`BmopfSchemaVersion::schema_id`), which schema 0.2.0 fixes with `const`. Read, the canonical `$id`, the dsopt-schema commit permalinks, and the PowerIO archive URLs that 0.11 stamped all resolve to their version. Absent raises `READ.BMOPF.SCHEMA_ABSENT`; a value naming no version raises `READ.BMOPF.SCHEMA_UNKNOWN`. Both parse, and both versions are accepted. |
-| `meta.schema_version` | explicit schema version | The reader checks agreement with `meta.$schema`. Proposal (0.2.0) output records the proposal commit, the schema digest, and the retrieval permalink under `meta.provenance.powerio_bmopf`. |
-| `meta.crs` | `MulticonductorNetwork::geo` coordinate space | 0.2.0 only. The authority code of every `geo` field's system; absent means `EPSG:4326`. Written for a projected or non-WGS84 system, omitted for WGS84. A space the schema cannot name (unknown, diagram, a code-less projection) or coordinates not from the source also travel as `extras.powerio_geo`, which the reader prefers. |
+| `meta.$schema` | resolved by `BmopfSchemaVersion::from_schema_id` | Written as the schema's canonical `$id` (`BmopfSchemaVersion::schema_id`), which schema 0.2.0 fixes with `const`. Read, the canonical `$id` and the dsopt-schema permalink of the pinned proposal name 0.2.0. The 0.1.0 and 0.1.1 identifiers, the `bmopf-report` draft locations, the earlier 0.2.0 draft permalinks, and the PowerIO archive URLs that 0.11 stamped raise `READ.BMOPF.SCHEMA_LEGACY`. Absent raises `READ.BMOPF.SCHEMA_ABSENT`; a value naming no version raises `READ.BMOPF.SCHEMA_UNKNOWN`. Every one parses, read as 0.2.0. |
+| `meta.schema_version` | explicit schema version | Written as `0.2.0`. The reader checks agreement with `meta.$schema` and raises `READ.BMOPF.SCHEMA_MISMATCH` when they disagree. Output records the proposal commit, the schema digest, and the retrieval permalink under `meta.provenance.powerio_bmopf`. |
+| `meta.crs` | `MulticonductorNetwork::geo` coordinate space | The authority code of every `geo` field's system; absent means `EPSG:4326`. Written for a projected or non-WGS84 system, omitted for WGS84. A space the schema cannot name (unknown, diagram, a code-less projection) or coordinates not from the source also travel as `extras.powerio_geo`, which the reader prefers. |
 | `meta.frequency` | `MulticonductorNetwork::base_frequency`, Hz | Absent defaults to 60 with `READ.BMOPF.VALUE_DEFAULTED`. |
 | `meta.*` (the rest) | `MulticonductorNetwork::extras["bmopf_meta"]` | Re-emitted, except the three the writer owns. |
 | `terminal_conventions` | `MulticonductorNetwork::extras["bmopf_terminal_conventions"]` | Re-emitted verbatim; authored from the terminal names when the source states none. |
@@ -52,14 +59,14 @@ parameter field is zero. A field with no typed slot lands in the element's
 | --- | --- | --- |
 | `terminal_names` | `terminals` | Ordered; fixes every per-terminal order on this bus. |
 | `perfectly_grounded_terminals` | `grounded` | |
-| `vpg_min`, `vpg_max` (0.1.1 and 0.2.0); `v_min`, `v_max` (0.1.0) | `v_min_phase`, `v_max_phase` and scalar `v_min`, `v_max` | Phase to ground, one entry per phase terminal. Both spellings read under every version, the current one first; a 0.2.0 document using `v_*` raises `READ.BMOPF.FIELD_LEGACY`, since that schema rejects it, and both spellings disagreeing raises `READ.BMOPF.SEMANTIC_INVALID`. 0.2.0 output writes `vpg_*`, 0.1.0 output `v_*`. Unequal bounds remain ordered phase vectors through IR and bindings. A scalar edit explicitly overrides the vector; balanced lowering rejects unequal phase bounds. |
+| `vpg_min`, `vpg_max`; read also as `v_min`, `v_max` (0.1.0) | `v_min_phase`, `v_max_phase` and scalar `v_min`, `v_max` | Phase to ground, one entry per phase terminal. Written as `vpg_*`. Both spellings read, the current one first; a document stating 0.2.0 that uses `v_*` raises one `READ.BMOPF.SCHEMA_LEGACY` naming the spellings, since that schema rejects them, and both spellings disagreeing raises `READ.BMOPF.SEMANTIC_INVALID`. Unequal bounds remain ordered phase vectors through IR and bindings. A scalar edit explicitly overrides the vector; balanced lowering rejects unequal phase bounds. |
 | `vpn_min`, `vpn_max` | `vpn_min`, `vpn_max` | Per phase terminal, kept as arrays. |
 | `vpp_min`, `vpp_max` | `vpp_min`, `vpp_max` | Per ordered phase pair. |
 | `vpos_min`, `vpos_max` | `vpos_min`, `vpos_max` | Scalars. |
 | `vneg_max`, `vzero_max` | `vneg_max`, `vzero_max` | Magnitude caps; the lower bound is always zero. |
 | `vn_max` | `vn_max` | Neutral to ground cap. |
-| `geo` | `location` and `MulticonductorNetwork::geo` | 0.2.0: a GeoJSON Point in the system `meta.crs` names. Written for every bus with a finite location. 0.1.0 has no slot, so that version's output carries the location in the `extras.geojson` FeatureCollection, which the reader accepts under every version when no element carries a `geo` field. |
-| `longitude`, `latitude` | `location` and `MulticonductorNetwork::geo` | The pre-schema BMOPFTools coordinate fields, outside both schema versions. Read into the coordinate space as WGS84; never written back. |
+| `geo` | `location` and `MulticonductorNetwork::geo` | A GeoJSON Point in the system `meta.crs` names. Written for every bus with a finite location. The reader also accepts the `extras.geojson` FeatureCollection that PowerIO 0.11 wrote, when no element carries a `geo` field; it is never written. |
+| `longitude`, `latitude` | `location` and `MulticonductorNetwork::geo` | The pre-schema BMOPFTools coordinate fields, outside every schema version. Read into the coordinate space as WGS84; never written back. |
 
 ## line and linecode
 
@@ -74,7 +81,7 @@ parameter field is zero. A field with no typed slot lands in the element's
 | `line.R_series_i_j`, `line.X_series_i_j` | a synthesized `DistLineCode` named after the line, ohm per metre | The inline branch states absolute ohms, so the reader divides by `length` to store per metre and keeps the line's own length. `READ.BMOPF.VALUE_INFERRED` names the synthesis. |
 | `line.G_from_i_j`, `line.B_from_i_j`, `line.G_to_i_j`, `line.B_to_i_j` | the same synthesized line code's `g_from`, `b_from`, `g_to`, `b_to` | |
 | `line.i_max`, `line.s_max` | `i_max`, `s_max` | Per conductor; override the line code's. |
-| `line.geo` | `route` | 0.2.0: a GeoJSON LineString from `bus_from` through any bends to `bus_to`, in the system `meta.crs` names; descriptive, `length` stays the electrical length. Written for every line with a route of two or more finite vertices; 0.1.0 output carries routes in `extras.geojson`. |
+| `line.geo` | `route` | A GeoJSON LineString from `bus_from` through any bends to `bus_to`, in the system `meta.crs` names; descriptive, `length` stays the electrical length. Written for every line with a route of two or more finite vertices. |
 | `linecode.R_series_i_j`, `linecode.X_series_i_j` | `r_series`, `x_series`, ohm per metre | |
 | `linecode.G_from_i_j`, `linecode.B_from_i_j`, `linecode.G_to_i_j`, `linecode.B_to_i_j` | `g_from`, `b_from`, `g_to`, `b_to`, siemens per metre | Half the total shunt at each end. |
 | `linecode.i_max`, `linecode.s_max` | `i_max`, `s_max` | Per conductor, applied at both ends. |
@@ -165,7 +172,7 @@ as two secondary windings.
 | `r_series_from`, `r_series_to` | `windings[k].r_pct`, percent of that winding's own base | The base is `n_phases * v_ref^2 / s_rating`. |
 | `x_series_from`, `x_series_to` | `xsc_pct`, percent | The short-circuit test measures the series sum referred to one side, which is what this field is. |
 | `r_series`, `x_series` (three-phase legacy) | `windings[0].r_pct` and `xsc_pct` | The lumped wye-side spelling; the delta winding is lossless in this model. |
-| `tap_ratio` (0.2.0), `tap` (retained under 0.1.0) | `windings[0].tap / windings[1].tap` | The multiplier on the nameplate turns ratio. |
+| `tap_ratio`; read also as `tap` | `windings[0].tap / windings[1].tap` | The multiplier on the nameplate turns ratio. |
 | `tap_ratio_min`, `tap_ratio_max` | `extras` | Bounds have no typed winding slot. |
 | `r_neutral_from`, `x_neutral_from` | `windings[0].r_neutral`, `x_neutral`, ohm | The winding's own neutral to earth branch. |
 | `r_neutral_to`, `x_neutral_to` | `windings[1].r_neutral`, `x_neutral` | |
@@ -175,12 +182,13 @@ as two secondary windings.
 | `n_winding.x_sc` | `xsc_pct`, ordered `12, 13, ..., 1n, 23, ..., (n-1)n` | Keyed `i_j` with `i < j` in BMOPF, all referred to winding 1. |
 | `single_phase_autotransformer`, `open_delta_regulator` | windings plus `extras["bmopf_subtype"]` | The regulator ratio, its bounds, the ANSI type and the open delta connection ride in `extras`. |
 
-Under schema `0.1.0`, the nine fields that have no subtype slot (`tap`,
-`tap_min`, `tap_max`, the four winding neutral fields, and the two no-load
-fields) are written to `extras.transformer.<subtype>.<name>` and folded back
-on read, with each move reported under `EMIT.BMOPF.RETAINED_SOURCE_ONLY`.
-Under `0.2.0` the subtypes declare all nine, so nothing moves; only the three
-tap names change, to `tap_ratio`, `tap_ratio_min`, and `tap_ratio_max`.
+The two-winding subtypes declare the tap ratio and its bounds, the four
+winding neutral fields, and the two no-load fields in place, spelling the
+ratio `tap_ratio`, `tap_ratio_min`, and `tap_ratio_max`. A document written
+against an earlier version that carries them under
+`extras.transformer.<subtype>.<name>`, or spells the ratio `tap`, is folded
+back on read; on a key collision the field already in the subtype object
+wins.
 
 OpenDSS `Xscarray` populates every winding-pair reactance in this order.
 The reader applies scalar `XHL`/`XHT`/`XLT` updates at edit boundaries;
@@ -188,10 +196,9 @@ regenerated four-or-more-winding records use the complete `Xscarray`.
 
 ## ibr and control_profile
 
-`DistIbr` and `DistControlProfile`. Both are typed under either version.
-Because `0.1.0` has no top-level table for them, that version writes them
-under `extras`; on read they come from either place, and the top-level copy
-wins.
+`DistIbr` and `DistControlProfile`. Both are typed and written as top-level
+tables. A document written against an earlier version may carry them under
+`extras`; on read they come from either place, and the top-level copy wins.
 
 | BMOPF | PowerIO | Note |
 | --- | --- | --- |
@@ -204,7 +211,7 @@ wins.
 | `p_min`, `p_max`, `q_min`, `q_max` | the same names, per phase | |
 | `control_profile` | `control_profile`, an id | |
 | `voltage_aggregation` | `voltage_aggregation`: `PER_PHASE`, `AVERAGE` | |
-| `cost` | `extras["cost"]` | Retained and re-emitted, not typed. |
+| `energy_cost_rate`, or `cost` | `extras` under the stated name | Retained, not typed; written as `energy_cost_rate`. |
 | `dc_bus`, `dc_terminal_map`, `dc_control`, `dc_v_set`, `dc_p_ref`, `dc_droop`, `dc_deadband`, `dc_link_coupled`, `p_dc_min`, `p_dc_max` | `extras` | The DC coupling fields; retained, not typed. |
 | `r_filter`, `x_filter`, `b_filter_shunt`, `grid_forming`, `v_ref_internal` | `extras` | Retained, not typed. |
 | `control_profile.power_factor.pf` | `PowerFactorControl` | |
@@ -214,9 +221,10 @@ wins.
 ## Fields with no typed slot
 
 The classes below read into `MulticonductorNetwork::untyped()` by class and
-name, with their properties kept as text, and are written back to the table
-the target version declares: the top level under `0.2.0`, `extras` under
-`0.1.0`. Reading each one reports `READ.BMOPF.RETAINED_SOURCE_ONLY`.
+name, with their properties kept as text, and are written back to the
+top-level table schema 0.2.0 declares. A time series profile whose meaning
+BMOPF's multiplicative profiles cannot carry stays under `extras.time_series`.
+Reading each one reports `READ.BMOPF.RETAINED_SOURCE_ONLY`.
 
 `dc_bus`, `dc_branch`, `dc_grounding`, `dc_load`, `dc_source`, `time_series`,
 `wire_data`, `line_geometry`, and a per-element `time_series` reference map.
@@ -251,7 +259,7 @@ that constraints are active for the elements present.
 
 | Family | The BMOPF fields it activates |
 | --- | --- |
-| `terminal_voltage_bounds` | `bus.vpg_min`, `vpg_max` (`v_min`, `v_max` in 0.1.0), `vpn_min`, `vpn_max`, `vpp_min`, `vpp_max`, `vpos_min`, `vpos_max`, `vneg_max`, `vzero_max`, `vn_max` |
+| `terminal_voltage_bounds` | `bus.vpg_min`, `vpg_max`, `vpn_min`, `vpn_max`, `vpp_min`, `vpp_max`, `vpos_min`, `vpos_max`, `vneg_max`, `vzero_max`, `vn_max` |
 | `conductor_limits` | `line.i_max`, `line.s_max`, `linecode.i_max`, `linecode.s_max`, `switch.i_max`, `transformer.i_max_from`, `transformer.i_max_to` |
 | `generator_capability` | `generator.p_min`, `p_max`, `q_min`, `q_max`, `s_max`, `i_max`, and the same bounds on an IBR |
 

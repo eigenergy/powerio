@@ -2,14 +2,6 @@
   "format": 1,
   "schemas": [
     {
-      "archived_sha256": "221cfd98cdea69636ba236a5a5e39a75b482736aeb7579045387eb5e5f2a5567",
-      "observed_sha256": "221cfd98cdea69636ba236a5a5e39a75b482736aeb7579045387eb5e5f2a5567",
-      "review_url": "https://github.com/distribution-system-opt/dsopt-schema/pull/3",
-      "schema_status": "unchanged",
-      "status": "merged",
-      "version": "0.1.0"
-    },
-    {
       "archived_sha256": "01d022c038e0518e3a54c5fbf7378522fd4120b5ba8a5308b3a70a31af774ae4",
       "observed_sha256": "01d022c038e0518e3a54c5fbf7378522fd4120b5ba8a5308b3a70a31af774ae4",
       "review_url": "https://github.com/distribution-system-opt/dsopt-schema/pull/2",

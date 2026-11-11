@@ -741,19 +741,15 @@ enum FormatArg {
     /// PowerModelsDistribution MATHEMATICAL JSON (parse and emit).
     #[value(name = "pmd-math-json", alias = "pmd-math", alias = "mathematical")]
     PmdMathJson,
-    /// IEEE BMOPF JSON distribution case (parse and emit).
-    #[value(name = "bmopf-json", alias = "bmopf")]
+    /// IEEE BMOPF JSON distribution case (parse and emit). Output is BMOPF
+    /// 0.2.0; a document written against an earlier version reads as 0.2.0.
+    /// `bmopf-json@0.2.0` names the same version.
+    #[value(name = "bmopf-json", alias = "bmopf", alias = "bmopf-json@0.2.0")]
     BmopfJson,
     /// Distribution CIM, CIM100 RDF/XML (parse and emit; parse also reads a
     /// directory of documents).
     #[value(name = "cim-dist", alias = "cimdist")]
     CimDist,
-    /// Re-encode against the BMOPF 0.1.0 schema.
-    #[value(name = "bmopf-json@0.1.0")]
-    Bmopf010,
-    /// Re-encode against draft BMOPF 0.2.
-    #[value(name = "bmopf-json@0.2.0")]
-    Bmopf020,
 }
 
 impl FormatArg {
@@ -805,8 +801,6 @@ impl FormatArg {
             | FormatArg::PmdJson
             | FormatArg::PmdMathJson
             | FormatArg::BmopfJson
-            | FormatArg::Bmopf010
-            | FormatArg::Bmopf020
             | FormatArg::CimDist => return None,
         })
     }
@@ -833,9 +827,7 @@ impl FormatArg {
             FormatArg::GridlabdArras => Some(DistTargetFormat::GridlabdArras),
             FormatArg::PmdJson => Some(DistTargetFormat::PmdJson),
             FormatArg::PmdMathJson => Some(DistTargetFormat::PmdMathJson),
-            FormatArg::BmopfJson | FormatArg::Bmopf010 | FormatArg::Bmopf020 => {
-                Some(DistTargetFormat::BmopfJson)
-            }
+            FormatArg::BmopfJson => Some(DistTargetFormat::BmopfJson),
             FormatArg::CimDist => Some(DistTargetFormat::CimDist),
             FormatArg::Matpower
             | FormatArg::PowerModelsJson
@@ -913,8 +905,6 @@ impl FormatArg {
             FormatArg::PmdJson => "pmd-json",
             FormatArg::PmdMathJson => "pmd-math-json",
             FormatArg::BmopfJson => "bmopf-json",
-            FormatArg::Bmopf010 => "bmopf-json@0.1.0",
-            FormatArg::Bmopf020 => "bmopf-json@0.2.0",
             FormatArg::CimDist => "cim-dist",
         }
     }
@@ -2838,13 +2828,8 @@ fn convert_multiconductor_module(
             to.name()
         )
     })?;
-    let emission = if matches!(to, FormatArg::Bmopf010 | FormatArg::Bmopf020) {
-        let result = powerio::emit(module, to.name(), powerio::Destination::memory("output")?)?;
-        module_io::unpack_memory_emission(result, None)?
-    } else {
-        module_io::emit_multiconductor_module(module, target)
-            .with_context(|| format!("emitting {}", target.name()))?
-    };
+    let emission = module_io::emit_multiconductor_module(module, target)
+        .with_context(|| format!("emitting {}", target.name()))?;
     finish_memory_emission(module.diagnostics(), &emission, output)
 }
 
@@ -4318,13 +4303,10 @@ mpc.branch = [
             vec![7200.0, 0.0],
             vec![0.0, 0.0],
         ));
-        let mut options = powerio_dist::EmitOptions::default();
-        options.bmopf.sideload_coordinates = true;
         let module = powerio_core::PioModule::new(net);
-        let bmopf = crate::module_io::emit_multiconductor_module_with_options(
+        let bmopf = crate::module_io::emit_multiconductor_module(
             &module,
             powerio_dist::DistTargetFormat::BmopfJson,
-            &options,
         )
         .unwrap();
         std::fs::write(&input, bmopf.text).unwrap();

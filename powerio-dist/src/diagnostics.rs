@@ -256,13 +256,16 @@ pub mod codes {
             "a BMOPF field outside the schema survives in extras or untyped";
         READ_BMOPF_SOURCE_MALFORMED = "READ.BMOPF.SOURCE_MALFORMED", Warning,
             "a BMOPF value is not the shape its key declares";
-        /// A field spelled the way an earlier schema version spells it, in a
-        /// document stating a version that rejects that spelling: the bus
-        /// bounds `v_min`/`v_max`, which schema 0.1.1 renamed `vpg_*`.
-        READ_BMOPF_FIELD_LEGACY = "READ.BMOPF.FIELD_LEGACY", Warning,
-            "a BMOPF field uses a spelling the document's schema version rejects";
+        /// The document was written against an earlier schema version and
+        /// was read as 0.2.0, the one version PowerIO writes. Reported once
+        /// per document: when `meta.$schema` names 0.1.0, 0.1.1, the
+        /// `bmopf-report` drafts, or the 0.2.0 draft PowerIO 0.11 wrote, and
+        /// when a document stating 0.2.0 uses the earlier bus bound spelling
+        /// `v_min`/`v_max`, which schema 0.1.1 renamed `vpg_*`.
+        READ_BMOPF_SCHEMA_LEGACY = "READ.BMOPF.SCHEMA_LEGACY", Warning,
+            "a BMOPF document written against an earlier schema version was read as 0.2.0";
         /// The document states no `meta.$schema`, so the schema version it was
-        /// written against is unknown and the reader accepts both versions.
+        /// written against is unknown; it is read as 0.2.0.
         READ_BMOPF_SCHEMA_ABSENT = "READ.BMOPF.SCHEMA_ABSENT", Warning,
             "a BMOPF document states no schema, so its version is unknown";
         /// The document states a `meta.$schema` that names no known version.

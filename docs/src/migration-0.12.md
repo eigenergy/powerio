@@ -215,6 +215,26 @@ rating series where the model meant unlimited; 0.12 reads that `0` as a zero
 bound. Regenerate them from the original model with 0.11.11 or later, which
 writes `null` there.
 
+## BMOPF output
+
+PowerIO 0.12 writes one BMOPF version, the 0.2.0 proposal in
+[dsopt-schema#2](https://github.com/distribution-system-opt/dsopt-schema/pull/2).
+Its pin moves to the `schema-v0.2.0` tag once the Task Force ratifies it.
+
+| 0.11 | 0.12 |
+|---|---|
+| `--to bmopf-json@0.1.0`, `emit(module, "bmopf-json@0.1.0")` | removed; write `bmopf-json`, which is 0.2.0 |
+| `bmopf-json@0.2.0` | still accepted, an alias of `bmopf-json` |
+| `BmopfSchemaVersion::Bmopf010` | removed; `Bmopf020` is the one variant |
+| `BmopfEmitOptions::sideload_coordinates` | removed; geometry is in the typed `bus.*.geo`, `line.*.geo` and `meta.crs` slots |
+| bus bounds written as `v_min`/`v_max` | written as `vpg_min`/`vpg_max` |
+| `meta.$schema` stating a PowerIO archive URL | the schema's canonical `$id` |
+
+0.1.0, 0.1.1, and PowerIO 0.11 documents still read, as 0.2.0, with one
+`READ.BMOPF.SCHEMA_LEGACY` warning naming the version each stated. A consumer
+that still needs a 0.1.0 document has to keep its source file: writing such a
+document, even unchanged, produces 0.2.0.
+
 ## Conversion output
 
 No action is needed unless a consumer compares output byte for byte or

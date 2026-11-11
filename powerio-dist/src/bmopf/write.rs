@@ -23,21 +23,18 @@ use crate::model::{
     open_delta_connection, open_delta_pairable, pair_keys, winding_phase_pair,
 };
 
-/// Canonical identity of the default schema, the value the writer stamps into
-/// `meta.$schema` (schema 0.2.0 fixes it with `const`). The retrieval
+/// Canonical identity of the schema the writer targets, the value it stamps
+/// into `meta.$schema` (schema 0.2.0 fixes it with `const`). The retrieval
 /// permalink and digest of the vendored schema go in `meta.provenance`.
 pub const BMOPF_SCHEMA_ID: &str = BmopfSchemaVersion::Bmopf020.schema_id();
 
-/// The version of the schema the writer targets by default, and the value it
-/// stamps into `meta.schema_version`. It is
-/// [`BmopfSchemaVersion::default`]`().version()`.
+/// The version of the schema the writer targets, and the value it stamps into
+/// `meta.schema_version`. It is [`BmopfSchemaVersion::default`]`().version()`.
 pub const BMOPF_SCHEMA_VERSION: &str = BmopfSchemaVersion::Bmopf020.version();
 
-/// Untyped classes that belong to the BMOPF ecosystem. Schema 0.1.0 has no
-/// top-level table for them (`additionalProperties: false` plus the free form
-/// `extras` object), so under that version they re-emit under `extras`;
-/// schema 0.2.0 declares all but `capacitor` at the top level, and
-/// [`Writer::raw_table_at_top_level`] answers which.
+/// Untyped classes that belong to the BMOPF ecosystem. Schema 0.2.0 declares
+/// all but `capacitor` at the top level; [`Writer::raw_table_at_top_level`]
+/// answers which, and the rest re-emit under the free-form `extras` object.
 const RAW_BMOPF_EXTRAS_TABLES: &[&str] = &[
     "ibr",
     "control_profile",
@@ -48,9 +45,9 @@ const RAW_BMOPF_EXTRAS_TABLES: &[&str] = &[
     "dc_source",
     "time_series",
     // An OpenDSS capacitor the dss reader could not type (a nonpositive
-    // phase count) stays an untyped object. The typed `capacitor` table of
-    // schema 0.1.0 is strict, so the raw properties cannot go there; they
-    // re-emit under `extras`, which the schema leaves free-form.
+    // phase count) stays an untyped object. The typed `capacitor` table is
+    // strict, so the raw properties cannot go there; they re-emit under
+    // `extras`, which the schema leaves free-form.
     "capacitor",
 ];
 
@@ -163,23 +160,10 @@ fn regulator_allowed_extras() -> Vec<&'static str> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct BmopfEmitOptions {
-    /// The schema version to write against.
-    ///
-    /// The default is [`BmopfSchemaVersion::Bmopf020`], the version that states
-    /// every class the model carries, so output relocates nothing. Set
-    /// [`BmopfSchemaVersion::Bmopf010`] to write the version the task force
-    /// accepts, which moves the classes it has no table for under `extras`
-    /// and reports each move.
+    /// The schema version to write against. [`BmopfSchemaVersion::Bmopf020`]
+    /// is the only version PowerIO writes; the field exists so a later schema
+    /// version can be selected without changing this type's shape.
     pub schema_version: BmopfSchemaVersion,
-    /// Legacy toggle: also write the geometry as a GeoJSON FeatureCollection
-    /// under `extras.geojson`, the layer PowerIO 0.11 wrote because schema
-    /// 0.2.0 had no typed slot. Schema 0.2.0 output writes bus locations as
-    /// `bus.*.geo`, line routes as `line.*.geo` and the system as `meta.crs`
-    /// whatever this says; `true` adds the legacy layer beside them for a
-    /// consumer that reads only that. Schema 0.1.0 output always writes the
-    /// legacy layer, since that schema has no typed slot, so the toggle
-    /// changes nothing there.
-    pub sideload_coordinates: bool,
 }
 
 impl BmopfEmitOptions {
@@ -192,12 +176,8 @@ impl BmopfEmitOptions {
 }
 
 /// Emits the strict BMOPF document. Every field the schema cannot carry
-/// is reported in the warnings.
-///
-/// Transformer taps, neutral impedance, no load admittance, and the tables
-/// schema 0.1.0 dropped from the top level move under `extras` instead of
-/// being dropped; [the module docs](crate::bmopf) enumerate them, and state
-/// when the emitted `terminal_conventions` block stops being valid.
+/// is reported in the warnings. [The module docs](crate::bmopf) state when
+/// the emitted `terminal_conventions` block stops being valid.
 ///
 /// # Panics
 ///
@@ -208,8 +188,7 @@ pub(crate) fn emit_bmopf_json_text(net: &MulticonductorNetwork) -> TextEmission 
     emit_bmopf_json_text_with_options(net, BmopfEmitOptions::default())
 }
 
-/// Emits BMOPF JSON with explicit options. Parks the same fields under
-/// `extras` as [`emit_bmopf_json_text`].
+/// Emits BMOPF JSON with explicit options.
 ///
 /// # Panics
 ///
@@ -222,7 +201,6 @@ pub(crate) fn emit_bmopf_json_text_with_options(
     let mut w = Writer {
         options,
         warnings: crate::diagnostics::Diagnostics::new(),
-        transformer_overflow: Map::new(),
         dropped_extras: BTreeMap::new(),
         time_series_profiles: BTreeMap::new(),
         geometry_embedded: false,
@@ -239,10 +217,6 @@ pub(crate) fn emit_bmopf_json_text_with_options(
 struct Writer {
     options: BmopfEmitOptions,
     warnings: crate::diagnostics::Diagnostics,
-    /// Transformer fields with no slot in the schema 0.1.0 subtype defs
-    /// (taps, neutral impedance, no load admittance), relocated to
-    /// `extras.transformer.<subtype>.<name>` instead of dropped.
-    transformer_overflow: Map<String, Value>,
     /// Passthrough extras with no schema slot, keyed by field name with the
     /// elements that carried them, flushed as one aggregated finding per
     /// field: on a real feeder one warning per field per element buried
@@ -440,23 +414,14 @@ impl Writer {
     /// provenance. Deterministic and round-trip stable — no generated
     /// timestamp, and nothing that depends on the immediate source format
     /// (which a round trip would change) — so canonical output is idempotent.
-    /// `meta.$schema` is the selected schema's canonical `$id`, the one
+    /// `meta.$schema` is the target schema's canonical `$id`, the one
     /// identifier a consumer recognises the version by; where the exact bytes
     /// were retrieved from, and their digest, is the provenance record's job.
     fn meta(&mut self, net: &MulticonductorNetwork) -> Value {
         let mut m = Map::new();
-        m.insert(
-            "$schema".into(),
-            json!(self.options.schema_version.schema_id()),
-        );
-        // Schema 0.1.0 has no `schema_version` field, and its `meta` rejects
-        // what it does not declare, so only 0.2.0 states the version twice.
-        if self.options.schema_version == BmopfSchemaVersion::Bmopf020 {
-            m.insert(
-                "schema_version".into(),
-                json!(self.options.schema_version.version()),
-            );
-        }
+        let version = self.options.schema_version;
+        m.insert("$schema".into(), json!(version.schema_id()));
+        m.insert("schema_version".into(), json!(version.version()));
         m.insert(
             "frequency".into(),
             self.num(net.base_frequency(), "meta frequency"),
@@ -484,9 +449,7 @@ impl Writer {
                 }
             }
         }
-        if self.options.schema_version == BmopfSchemaVersion::Bmopf020 {
-            proposal_provenance(&mut m);
-        }
+        proposal_provenance(&mut m, version);
         Value::Object(m)
     }
 
@@ -515,29 +478,14 @@ impl Writer {
             doc.insert("transformer".into(), Value::Object(transformers));
         }
 
-        // Schema 0.1.0 has no top-level table for the IBR, control profile,
-        // DC, and time series classes, so under that version they emit under
-        // `extras`; schema 0.2.0 declares them, so they emit in place.
         let mut extras = Map::new();
         if let Some(Value::Object(stash)) = net.extras().get(BMOPF_EXTRAS_STASH) {
             extras.extend(stash.clone());
         }
-        match self.options.schema_version {
-            BmopfSchemaVersion::Bmopf010 => {
-                self.control_profiles(net, &mut extras);
-                self.ibrs(net, &mut extras);
-            }
-            BmopfSchemaVersion::Bmopf020 => {
-                self.control_profiles(net, &mut doc);
-                self.ibrs(net, &mut doc);
-            }
-        }
+        self.control_profiles(net, &mut doc);
+        self.ibrs(net, &mut doc);
         self.untyped_bmopf_tables(net, &mut doc, &mut extras);
-        if !self.transformer_overflow.is_empty() {
-            let overflow = std::mem::take(&mut self.transformer_overflow);
-            extras.insert("transformer".into(), Value::Object(overflow));
-        }
-        self.cost_version(&mut doc, &mut extras);
+        rename_cost_fields(&mut doc);
         self.geometry(net, &mut doc, &mut extras);
         if !extras.is_empty() {
             doc.insert("extras".into(), Value::Object(extras));
@@ -546,81 +494,29 @@ impl Writer {
         Value::Object(doc)
     }
 
-    /// The document level geometry record. Schema 0.2.0 carries the geometry
-    /// in the typed `bus.*.geo` and `line.*.geo` slots the element writers
-    /// filled, and names their coordinate system in `meta.crs` (absent means
-    /// WGS84); a space the schema cannot name, or coordinates not from the
-    /// source data, are also recorded as `extras.powerio_geo` so a read gets
-    /// the same metadata back. The legacy `extras.geojson` FeatureCollection
-    /// is the schema 0.1.0 form, and 0.2.0 output adds it only on request
-    /// ([`BmopfEmitOptions::sideload_coordinates`]).
+    /// The document level geometry record. The geometry travels in the
+    /// typed `bus.*.geo` and `line.*.geo` slots the element writers filled,
+    /// and `meta.crs` names their coordinate system (absent means WGS84); a
+    /// space the schema cannot name, or coordinates not from the source data,
+    /// are also recorded as `extras.powerio_geo` so a read gets the same
+    /// metadata back.
     fn geometry(
         &mut self,
         net: &MulticonductorNetwork,
         doc: &mut Map<String, Value>,
         extras: &mut Map<String, Value>,
     ) {
-        let embedded = self.options.schema_version == BmopfSchemaVersion::Bmopf020;
-        if embedded && self.geometry_embedded {
-            let meta = super::geo::meta_or_default(net);
-            if let Some(crs) = super::geo::declared_crs(&meta)
-                && let Some(Value::Object(m)) = doc.get_mut("meta")
-            {
-                m.insert("crs".into(), json!(crs));
-            }
-            if super::geo::needs_declared_meta(&meta) {
-                extras.insert("powerio_geo".into(), json!(meta));
-            }
+        if !self.geometry_embedded {
+            return;
         }
-        if (!embedded || self.options.sideload_coordinates)
-            && let Some(geometry) = super::geo::collection(net)
+        let meta = super::geo::meta_or_default(net);
+        if let Some(crs) = super::geo::declared_crs(&meta)
+            && let Some(Value::Object(m)) = doc.get_mut("meta")
         {
-            extras.insert("geojson".into(), geometry);
+            m.insert("crs".into(), json!(crs));
         }
-    }
-
-    fn cost_version(&mut self, doc: &mut Map<String, Value>, extras: &mut Map<String, Value>) {
-        for class in ["generator", "ibr", "voltage_source"] {
-            let Some(table) = doc.get_mut(class).and_then(Value::as_object_mut) else {
-                continue;
-            };
-            for (name, value) in table {
-                let Some(record) = value.as_object_mut() else {
-                    continue;
-                };
-                if self.options.schema_version == BmopfSchemaVersion::Bmopf020 {
-                    if let Some(cost) = record.remove("cost") {
-                        record.entry("energy_cost_rate").or_insert(cost);
-                    }
-                } else if class == "voltage_source" {
-                    for field in ["cost", "energy_cost_rate"] {
-                        if let Some(cost) = record.remove(field) {
-                            let table = extras.entry(class).or_insert_with(|| json!({}));
-                            if !table.is_object() {
-                                self.warn(
-                                    &C::EMIT_BMOPF_FIELD_DROPPED,
-                                    "voltage-source extension is not an object",
-                                );
-                                continue;
-                            }
-                            let source = table
-                                .as_object_mut()
-                                .unwrap()
-                                .entry(name)
-                                .or_insert_with(|| json!({}));
-                            if !source.is_object() {
-                                self.warn(
-                                    &C::EMIT_BMOPF_FIELD_DROPPED,
-                                    "voltage-source extension record is not an object",
-                                );
-                                continue;
-                            }
-                            source.as_object_mut().unwrap().insert(field.into(), cost);
-                            self.warn(&C::EMIT_BMOPF_RETAINED_SOURCE_ONLY, format!("voltage source {name}: {field} retained in extras.voltage_source for BMOPF 0.1.0"));
-                        }
-                    }
-                }
-            }
+        if super::geo::needs_declared_meta(&meta) {
+            extras.insert("powerio_geo".into(), json!(meta));
         }
     }
 
@@ -632,15 +528,11 @@ impl Writer {
             if !b.grounded.is_empty() {
                 o.insert("perfectly_grounded_terminals".into(), json!(b.grounded));
             }
-            // Phase to ground bounds: `vpg_min`/`vpg_max` since schema 0.1.1,
-            // so 0.2.0 names them that way and rejects the 0.1.0 `v_*`.
-            let (vpg_min, vpg_max) = match self.options.schema_version {
-                BmopfSchemaVersion::Bmopf010 => ("v_min", "v_max"),
-                BmopfSchemaVersion::Bmopf020 => ("vpg_min", "vpg_max"),
-            };
+            // Phase to ground bounds: `vpg_min`/`vpg_max` since schema 0.1.1;
+            // 0.2.0 rejects the 0.1.0 spelling `v_*`.
             for (key, scalar, phases) in [
-                (vpg_min, b.v_min, &b.v_min_phase),
-                (vpg_max, b.v_max, &b.v_max_phase),
+                ("vpg_min", b.v_min, &b.v_min_phase),
+                ("vpg_max", b.v_max, &b.v_max_phase),
             ] {
                 if let Some(v) = scalar {
                     o.insert(
@@ -676,9 +568,7 @@ impl Writer {
                 }
             }
             self.bus_location(b);
-            if self.options.schema_version == BmopfSchemaVersion::Bmopf020
-                && let Some(geo) = super::geo::bus_geo(b)
-            {
+            if let Some(geo) = super::geo::bus_geo(b) {
                 o.insert("geo".into(), geo);
                 self.geometry_embedded = true;
             }
@@ -802,15 +692,6 @@ impl Writer {
         let Some(value) = extras.get("time_series") else {
             return;
         };
-        if self.options.schema_version != BmopfSchemaVersion::Bmopf020 {
-            self.warn(
-                &C::EMIT_BMOPF_FIELD_DROPPED,
-                format!(
-                    "{what}: BMOPF schema 0.1.0 has no load.time_series reference slot; references omitted"
-                ),
-            );
-            return;
-        }
         let Some(refs) = value.as_object() else {
             self.warn(
                 &C::EMIT_BMOPF_FIELD_DROPPED,
@@ -911,8 +792,8 @@ impl Writer {
         profile
     }
 
-    /// Untyped BMOPF ecosystem objects, one pass: the tables that lost
-    /// their top-level slots in schema 0.1.0 re-emit under `extras`, while
+    /// Untyped BMOPF ecosystem objects, one pass: the classes with a
+    /// top-level table emit there, the rest re-emit under `extras`, and
     /// untyped transformer subtypes keep their place under `transformer`.
     fn untyped_bmopf_tables(
         &mut self,
@@ -951,8 +832,8 @@ impl Writer {
                 );
             }
             // A profile only gets an active BMOPF slot when its complete
-            // semantics are representable in the selected schema. Otherwise
-            // preserve the original profile under extras.time_series.
+            // semantics are representable in the schema. Otherwise preserve
+            // the original profile under extras.time_series.
             let top_level = subtype.is_none() && self.raw_object_at_top_level(u);
             let value = if u.class == "time_series" && top_level {
                 self.normalize_time_series_for_emit(&u.name, value, extras)
@@ -961,7 +842,7 @@ impl Writer {
                     self.warn(
                         &C::EMIT_BMOPF_RETAINED_SOURCE_ONLY,
                         format!(
-                            "time_series {}: profile is not representable in the selected BMOPF schema; retained verbatim under extras.time_series",
+                            "time_series {}: profile is not representable in the BMOPF schema; retained verbatim under extras.time_series",
                             u.name
                         ),
                     );
@@ -1018,22 +899,21 @@ impl Writer {
         }
     }
 
-    /// Whether this untyped BMOPF class has a top-level table in the version
-    /// being written.
+    /// Whether this untyped BMOPF class has a top-level table.
     ///
     /// Schema 0.2.0 declares every class in [`RAW_BMOPF_EXTRAS_TABLES`] except
-    /// `capacitor`, whose top-level table stays strict there, so a capacitor
-    /// too malformed to type still has no slot in it and keeps its raw
-    /// properties under `extras`.
-    fn raw_table_at_top_level(&self, class: &str) -> bool {
-        self.options.schema_version == BmopfSchemaVersion::Bmopf020 && class != "capacitor"
+    /// `capacitor`, whose top-level table is strict, so a capacitor too
+    /// malformed to type has no slot in it and keeps its raw properties under
+    /// `extras`.
+    fn raw_table_at_top_level(class: &str) -> bool {
+        class != "capacitor"
     }
 
-    /// A raw object is top-level only when the selected schema declares its
+    /// A raw object is top-level only when the schema declares its
     /// table and, for time series, the profile has BMOPF multiplicative
     /// semantics and satisfies the schema's required-values constraint.
     fn raw_object_at_top_level(&self, object: &crate::model::UntypedObject) -> bool {
-        if !self.raw_table_at_top_level(&object.class) {
+        if !Self::raw_table_at_top_level(&object.class) {
             return false;
         }
         if object.class != "time_series" {
@@ -1096,9 +976,7 @@ impl Writer {
                 {
                     o.insert("s_max".into(), v);
                 }
-                if self.options.schema_version == BmopfSchemaVersion::Bmopf020
-                    && let Some(geo) = super::geo::line_geo(l)
-                {
+                if let Some(geo) = super::geo::line_geo(l) {
                     o.insert("geo".into(), geo);
                     self.geometry_embedded = true;
                 }
@@ -1128,7 +1006,7 @@ impl Writer {
         }
     }
 
-    /// Rated capacitor banks (schema 0.1.0 `capacitor`), distinct from the
+    /// Rated capacitor banks (the schema's `capacitor`), distinct from the
     /// raw admittance `shunt` table.
     fn capacitors(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         if net.capacitors().is_empty() {
@@ -1704,93 +1582,8 @@ impl Writer {
                 }
             }
         }
-        self.split_transformer_overflow(&mut by_subtype);
+        rename_tap_fields(&mut by_subtype);
         by_subtype
-    }
-
-    /// Places the nine transformer fields schema 0.1.0 has no subtype slot
-    /// for (taps, neutral impedance, no load admittance).
-    ///
-    /// Under schema 0.2.0 the two-winding subtypes declare all nine, so the
-    /// fields stay in the subtype object and only the three tap names change:
-    /// 0.2.0 spells the ratio `tap_ratio`, `tap_ratio_min`, `tap_ratio_max`,
-    /// matching its regulator subtypes.
-    ///
-    /// Under schema 0.1.0 the subtype objects are
-    /// `additionalProperties: false`, so the nine move to
-    /// `extras.transformer.<subtype>.<name>` with one warning per
-    /// transformer. Subtypes 0.1.0 leaves undefined (`n_winding`, untyped
-    /// passthrough) are untouched under either version. The module docs
-    /// enumerate the moved set for consumers; extend both together.
-    fn split_transformer_overflow(&mut self, by_subtype: &mut Map<String, Value>) {
-        // The transformer fields the emitters still produce that have no
-        // subtype slot in schema 0.1.0. Listing the moved set (rather than
-        // an allow-list of the schema shape) keeps the failure mode loud: a
-        // future emitted field lands in the subtype object, where the schema
-        // validation tests reject it if it has no slot.
-        const MOVED_FIELDS: &[&str] = &[
-            "tap",
-            "tap_min",
-            "tap_max",
-            "r_neutral_from",
-            "x_neutral_from",
-            "r_neutral_to",
-            "x_neutral_to",
-            "g_no_load",
-            "b_no_load",
-            "no_load_shunt",
-        ];
-        if self.options.schema_version == BmopfSchemaVersion::Bmopf020 {
-            rename_tap_fields(by_subtype);
-            return;
-        }
-        for subtype in [
-            "n_winding",
-            "single_phase_autotransformer",
-            "open_delta_regulator",
-        ] {
-            if let Some(table) = by_subtype.remove(subtype) {
-                self.transformer_overflow.insert(subtype.into(), table);
-                self.warnings.push(&C::EMIT_BMOPF_RETAINED_SOURCE_ONLY,
-                    format!("transformer.{subtype} is represented under extras.transformer in schema 0.1.0"));
-            }
-        }
-        for subtype in ["single_phase", "center_tap", "wye_delta", "delta_wye"] {
-            let Some(Value::Object(table)) = by_subtype.get_mut(subtype) else {
-                continue;
-            };
-            for (name, entry) in table.iter_mut() {
-                let Value::Object(o) = entry else { continue };
-                let moved: Vec<String> = MOVED_FIELDS
-                    .iter()
-                    .filter(|k| o.contains_key(**k))
-                    .map(|k| (*k).to_string())
-                    .collect();
-                if moved.is_empty() {
-                    continue;
-                }
-                let mut overflow = Map::new();
-                for key in &moved {
-                    if let Some(v) = o.remove(key) {
-                        overflow.insert(key.clone(), v);
-                    }
-                }
-                self.warnings.push(
-                    &C::EMIT_BMOPF_RETAINED_SOURCE_ONLY,
-                    format!(
-                        "transformer {name}: {} have no {subtype} slot in BMOPF schema 0.1.0; \
-                     kept under extras.transformer",
-                        moved.join(", ")
-                    ),
-                );
-                self.transformer_overflow
-                    .entry(subtype.to_string())
-                    .or_insert_with(|| Value::Object(Map::new()))
-                    .as_object_mut()
-                    .expect("overflow subtype tables are objects")
-                    .insert(name.clone(), Value::Object(overflow));
-            }
-        }
     }
 
     fn warn_unpaired_open_delta_leg(&mut self, t: &DistTransformer) {
@@ -2294,9 +2087,9 @@ impl Writer {
         (emitted_from, 0.0)
     }
 
-    /// Both three phase subtypes use the schema 0.1.0 lumped form: one
+    /// Both three phase subtypes use the schema's lumped form: one
     /// `r_series`/`x_series` pair referred to the wye winding's base (the
-    /// split `_from`/`_to` fields lost their slots in 0.1.0).
+    /// schema has no split `_from`/`_to` fields for them).
     fn three_phase(&mut self, t: &DistTransformer, wye_idx: usize) -> Value {
         let from = &t.windings[0];
         let to = &t.windings[1];
@@ -2792,11 +2585,10 @@ impl Writer {
 
 /// Spells the two-winding tap ratio the way schema 0.2.0 names it.
 ///
-/// 0.1.0 has no slot for the ratio at all, so the emitters spell it `tap`;
-/// 0.2.0 declares `tap_ratio` on the two-winding subtypes and on both
-/// regulator subtypes, so one name covers every transformer that has a ratio.
-/// The value is unchanged: it is the multiplier on the nameplate turns ratio
-/// in both spellings.
+/// The emitters spell it `tap`; 0.2.0 declares `tap_ratio` on the two-winding
+/// subtypes and on both regulator subtypes, so one name covers every
+/// transformer that has a ratio. The value is unchanged: it is the multiplier
+/// on the nameplate turns ratio in both spellings.
 fn rename_tap_fields(by_subtype: &mut Map<String, Value>) {
     const RENAMED: [(&str, &str); 3] = [
         ("tap", "tap_ratio"),
@@ -2813,6 +2605,21 @@ fn rename_tap_fields(by_subtype: &mut Map<String, Value>) {
                 if let Some(value) = o.remove(from) {
                     o.insert(to.to_string(), value);
                 }
+            }
+        }
+    }
+}
+
+/// Spell the generator, IBR and voltage source cost `energy_cost_rate`, the
+/// name schema 0.2.0 declares; the model reads the older `cost` spelling too.
+fn rename_cost_fields(doc: &mut Map<String, Value>) {
+    for class in ["generator", "ibr", "voltage_source"] {
+        let Some(table) = doc.get_mut(class).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        for record in table.values_mut().filter_map(Value::as_object_mut) {
+            if let Some(cost) = record.remove("cost") {
+                record.entry("energy_cost_rate").or_insert(cost);
             }
         }
     }
@@ -3522,8 +3329,7 @@ fn bmopf_delta_roll(t: &DistTransformer, idx: usize, w: &DistWinding) -> Option<
 /// immutable permalink they were retrieved from (`schema_retrieval_url`;
 /// `schema_upstream_url` is the same permalink, kept for readers of 0.11
 /// output), beside the canonical identity `meta.$schema` carries.
-fn proposal_provenance(meta: &mut Map<String, Value>) {
-    let proposal = BmopfSchemaVersion::Bmopf020;
+fn proposal_provenance(meta: &mut Map<String, Value>, proposal: BmopfSchemaVersion) {
     let record = json!({
         "producer": "powerio", "producer_version": env!("CARGO_PKG_VERSION"),
         "schema_status": "proposal", "schema_version": proposal.version(),
@@ -3801,15 +3607,9 @@ mod tests {
     /// by which paths trigger each one.
     #[test]
     fn dropped_and_retained_bmopf_diagnostics_do_not_contradict_their_own_message() {
-        // Schema 0.1.0: the retained-under-extras path is the one that
-        // relocates a transformer field, and only that version relocates.
         let mut w = Writer {
-            options: BmopfEmitOptions {
-                schema_version: BmopfSchemaVersion::Bmopf010,
-                ..BmopfEmitOptions::default()
-            },
+            options: BmopfEmitOptions::default(),
             warnings: crate::diagnostics::Diagnostics::new(),
-            transformer_overflow: Map::new(),
             dropped_extras: BTreeMap::new(),
             time_series_profiles: BTreeMap::new(),
             geometry_embedded: false,
@@ -3832,10 +3632,10 @@ mod tests {
         ibr.extras.insert("not_a_schema_field".into(), json!(1));
         w.ibr(&ibr);
 
-        // A moved transformer field takes the retained-under-extras path.
-        let mut by_subtype = Map::new();
-        by_subtype.insert("single_phase".into(), json!({ "t1": { "tap": 1.05 } }));
-        w.split_transformer_overflow(&mut by_subtype);
+        // A time series profile BMOPF cannot represent takes the
+        // retained-under-extras path.
+        let mut extras = Map::new();
+        w.normalize_time_series_for_emit("ts1", json!({"values": [1.0]}), &mut extras);
 
         let records = w.warnings.records();
         let dropped: Vec<_> = records

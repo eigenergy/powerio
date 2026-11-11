@@ -807,6 +807,18 @@ fn diagonal_byte_identity() {
         } else {
             &echoed.text
         };
+        // PowerIO writes one BMOPF version. The vendored examples state
+        // 0.1.0, so a BMOPF write restates them as 0.2.0 instead of echoing.
+        if matches!(case.fmt, Fmt::Bmopf) {
+            let doc: serde_json::Value = serde_json::from_str(retained).unwrap();
+            assert_eq!(
+                doc["meta"]["$schema"],
+                powerio_dist::BMOPF_SCHEMA_ID,
+                "{}: a legacy document is written as 0.2.0",
+                case.label
+            );
+            continue;
+        }
         assert_eq!(*retained, original, "{}: diagonal echo", case.label);
         assert!(echoed.warnings.is_empty(), "{}: echo warns", case.label);
     }

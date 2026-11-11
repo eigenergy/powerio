@@ -11,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ARCHIVE = ROOT / "powerio-dist/schemas/bmopf"
+HISTORICAL_SHA256 = "a74f4d2be151e4b250a47a1730445301c093572fce8de609e9af15b76c67ef73"
 
 
 def check_package(path):
@@ -44,19 +45,20 @@ def main():
         check_package(Path(name))
     manifest = json.loads((ARCHIVE / "manifest.json").read_text())
     assert manifest["format"] == 1
-    assert {entry["version"] for entry in manifest["schemas"]} == {"0.1.0", "0.2.0"}
+    # PowerIO writes one BMOPF version and ships only its schema.
+    assert [entry["version"] for entry in manifest["schemas"]] == ["0.2.0"]
     for entry in manifest["schemas"]:
         data = (ARCHIVE / entry["path"]).read_bytes()
         assert hashlib.sha256(data).hexdigest() == entry["sha256"], entry["path"]
         assert json.loads(data)["$id"] == entry["schema_id"], entry["path"]
         assert entry["license"] == "CC-BY-4.0"
-    historical = json.loads((ROOT / "tests/data/dist/bmopf/draft_bmopf_schema.json").read_text())
-    baseline = json.loads((ARCHIVE / "0.1.0/bmopf.schema.json").read_text())
-    historical.pop("$id")
-    baseline.pop("$id")
-    assert historical == baseline, "baseline validation rules changed"
+    # The historical 0.1.0 draft schema stays beside the examples as the test
+    # oracle for legacy input; its bytes are the ones tests/data/dist/README.md
+    # records.
+    historical = (ROOT / "tests/data/dist/bmopf/draft_bmopf_schema.json").read_bytes()
+    assert hashlib.sha256(historical).hexdigest() == HISTORICAL_SHA256, "legacy oracle changed"
     assert "CC-BY-4.0" in (ARCHIVE / "LICENSE").read_text()
-    print("BMOPF schema archive: identities, hashes, license, and baseline rules verified")
+    print("BMOPF schema archive: identities, hashes, license, and legacy oracle verified")
 
 
 if __name__ == "__main__":

@@ -258,15 +258,14 @@ test('every applicable transmission writer runs in browser WASM', async ({ page 
   await expect(page.getByText("Couldn't convert", { exact: true })).toHaveCount(0);
 });
 
-test('all seven distribution outputs download and re-import with explicit BMOPF profiles', async ({ page }) => {
+test('all six distribution outputs download and re-import, with BMOPF written as 0.2.0', async ({ page }) => {
   const outputs = [
     { label: 'OpenDSS' },
     { label: 'CIM distribution (CIM100 cim17v40, GridAPPS-D profile)' },
     { label: 'PMD JSON', dataModel: 'ENGINEERING' },
     { label: 'PMD MATHEMATICAL JSON', dataModel: 'MATHEMATICAL' },
     { label: 'MG-RAVENS JSON (balanced and multiconductor profiles)' },
-    { label: 'BMOPF 0.1.0', schemaVersion: '0.1.0' },
-    { label: 'BMOPF 0.2.0 proposal', schemaVersion: '0.2.0' },
+    { label: 'BMOPF JSON (0.2.0 proposal)', schemaVersion: '0.2.0' },
   ];
   await ready(page);
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'feeder.dss', mimeType: 'text/plain', buffer: feeder });
@@ -290,8 +289,7 @@ test('all seven distribution outputs download and re-import with explicit BMOPF 
       if (schemaVersion) {
         const meta = JSON.parse(bytes.toString()).meta;
         expect(meta.$schema).toContain(`/bmopf/${schemaVersion}/bmopf.schema.json`);
-        // The 0.1.0 schema forbids a separate schema_version field.
-        expect(meta.schema_version).toBe(schemaVersion === '0.1.0' ? undefined : schemaVersion);
+        expect(meta.schema_version).toBe(schemaVersion);
       }
       const newPage = await page.context().newPage();
       try {

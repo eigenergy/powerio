@@ -1,10 +1,10 @@
 //! BMOPF element geometry: the typed `bus.*.geo` Point, `line.*.geo`
-//! LineString and `meta.crs` slots of schema 0.2.0, and the GeoJSON
-//! FeatureCollection under `extras.geojson` that schema 0.1.0 output and
-//! pre-0.12 PowerIO output carry.
+//! LineString and `meta.crs` slots of schema 0.2.0, which PowerIO writes, and
+//! the GeoJSON FeatureCollection under `extras.geojson` that PowerIO 0.11
+//! wrote, which the reader still accepts.
 use crate::geo::{CoordinateSpace, DistCoordsKind, DistGeoMeta, DistLocation};
 use crate::model::MulticonductorNetwork;
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 /// Coordinate reference system names that mean WGS84 longitude/latitude, the
 /// system an absent `meta.crs` means.
@@ -273,38 +273,4 @@ pub(super) fn meta_or_default(net: &MulticonductorNetwork) -> DistGeoMeta {
         space: CoordinateSpace::Unknown,
         kind: None,
     })
-}
-
-/// The legacy `extras.geojson` FeatureCollection over every located bus and
-/// routed line, with PowerIO's `powerio_geo` metadata member.
-pub(super) fn collection(net: &MulticonductorNetwork) -> Option<Value> {
-    let meta = meta_or_default(net);
-    let crs = match &meta.space {
-        CoordinateSpace::Geographic { crs } => Some(crs.as_deref().unwrap_or("EPSG:4326")),
-        CoordinateSpace::Projected { crs } => crs.as_deref(),
-        _ => None,
-    };
-    let mut features = Vec::new();
-    for bus in net.buses() {
-        if let Some(geometry) = bus_geo(bus) {
-            features.push(json!({"type":"Feature","properties":{"kind":"bus","id":bus.id},"geometry":geometry}));
-        }
-    }
-    for line in net.lines() {
-        if let Some(geometry) = line_geo(line) {
-            features.push(json!({"type":"Feature","properties":{"kind":"line","id":line.name,"bus_from":line.bus_from,"bus_to":line.bus_to},"geometry":geometry}));
-        }
-    }
-    if features.is_empty() {
-        return None;
-    }
-    features.sort_by(|a, b| {
-        let key = |v: &Value| format!("{}:{}", v["properties"]["kind"], v["properties"]["id"]);
-        key(a).cmp(&key(b))
-    });
-    let mut out = json!({"type":"FeatureCollection","features":features,"powerio_geo":meta});
-    if let Some(crs) = crs.filter(|value| *value != "EPSG:4326") {
-        out["crs"] = json!(crs);
-    }
-    Some(out)
 }

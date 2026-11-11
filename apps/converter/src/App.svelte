@@ -866,7 +866,8 @@
               BMOPF is developed by the <a
                 href="https://github.com/distribution-system-opt"
                 >BMOPF task force</a
-              >. The 0.2.0 profile is a proposal.
+              >. PowerIO writes the 0.2.0 proposal and reads older BMOPF files as
+              0.2.0.
             </p>{/if}
           <button
             class="text-button share-settings"

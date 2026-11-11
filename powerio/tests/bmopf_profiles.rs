@@ -1,4 +1,6 @@
-//! Explicit BMOPF schema versions and IR persistence bypass retained-source emission.
+//! PowerIO writes one BMOPF version, 0.2.0. A document stating an earlier
+//! version is read as 0.2.0 and written fresh rather than echoed, and IR
+//! persistence bypasses retained-source emission.
 
 use powerio::{Destination, EmittedOutput, PioValue, Source};
 use serde_json::{Value, json};
@@ -13,7 +15,7 @@ fn bytes(result: &powerio::EmitResult) -> &[u8] {
 
 fn case() -> Vec<u8> {
     serde_json::to_vec(&json!({
-        "meta": {"$schema": powerio::BmopfSchemaVersion::Bmopf010.schema_id(),
+        "meta": {"$schema": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.1.0/bmopf.schema.json",
             "provenance": {"research": {"id": "independent-example", "revision": 3}}},
         "bus": {"b": {"terminal_names": ["a", "b", "c", "n"],
             "v_min": [210.0, 212.0, 214.0], "v_max": [250.0, 248.0, 246.0]}},
@@ -24,48 +26,79 @@ fn case() -> Vec<u8> {
 }
 
 #[test]
-fn explicit_schema_version_reencodes_and_plain_format_echoes() {
+fn a_legacy_document_is_written_as_0_2_0_and_a_0_2_0_document_echoes() {
     let source = case();
     let module =
         powerio::parse(Source::from_memory("case.bmopf.json", source.clone()).unwrap()).unwrap();
-    let echoed = powerio::emit(
+    let legacy: Vec<_> = module
+        .diagnostics()
+        .iter()
+        .filter(|d| d.code().starts_with("READ.BMOPF.SCHEMA_"))
+        .collect();
+    assert_eq!(legacy.len(), 1, "{:?}", module.diagnostics());
+    assert_eq!(legacy[0].code(), "READ.BMOPF.SCHEMA_LEGACY");
+
+    // The plain token and the `@0.2.0` alias write the same 0.2.0 document.
+    let written = powerio::emit(
         &module,
         "bmopf-json",
         Destination::memory("case.json").unwrap(),
     )
     .unwrap();
-    assert_eq!(bytes(&echoed), source);
-    for profile in ["0.1.0", "0.2.0"] {
-        let emitted = powerio::emit(
-            &module,
-            &format!("bmopf-json@{profile}"),
-            Destination::memory("case.json").unwrap(),
-        )
-        .unwrap();
-        let output: Value = serde_json::from_slice(bytes(&emitted)).unwrap();
-        assert!(
-            output["meta"]["$schema"]
-                .as_str()
-                .unwrap()
-                .contains(profile)
-        );
-        // Schema 0.1.1 renamed the phase to ground bounds `vpg_*`; 0.2.0
-        // rejects the 0.1.0 spelling, which 0.1.0 output keeps.
-        let bound = if profile == "0.1.0" {
-            "v_min"
-        } else {
-            "vpg_min"
-        };
-        assert_eq!(output["bus"]["b"][bound], json!([210.0, 212.0, 214.0]));
-        assert_eq!(output["meta"]["provenance"]["research"]["revision"], 3);
-    }
+    let alias = powerio::emit(
+        &module,
+        "bmopf-json@0.2.0",
+        Destination::memory("case.json").unwrap(),
+    )
+    .unwrap();
+    assert_eq!(bytes(&written), bytes(&alias));
+    assert_ne!(bytes(&written), source.as_slice());
+    let output: Value = serde_json::from_slice(bytes(&written)).unwrap();
+    assert_eq!(output["meta"]["$schema"], powerio::dist::BMOPF_SCHEMA_ID);
+    assert_eq!(output["meta"]["schema_version"], "0.2.0");
+    // Schema 0.1.1 renamed the phase to ground bounds `vpg_*`; 0.2.0 rejects
+    // the 0.1.0 spelling.
+    assert_eq!(output["bus"]["b"]["vpg_min"], json!([210.0, 212.0, 214.0]));
+    assert!(output["bus"]["b"].get("v_min").is_none());
+    assert_eq!(output["meta"]["provenance"]["research"]["revision"], 3);
+
+    // A document that states 0.2.0 is echoed byte for byte.
+    let current = bytes(&written).to_vec();
+    let module =
+        powerio::parse(Source::from_memory("current.bmopf.json", current.clone()).unwrap())
+            .unwrap();
     assert!(
-        powerio::emit(
-            &module,
-            "bmopf-json@9.0.0",
-            Destination::memory("case.json").unwrap()
-        )
-        .is_err()
+        !module
+            .diagnostics()
+            .iter()
+            .any(|d| d.code().starts_with("READ.BMOPF.SCHEMA_")),
+        "{:?}",
+        module.diagnostics()
+    );
+    for format in ["bmopf-json", "bmopf-json@0.2.0"] {
+        let echoed =
+            powerio::emit(&module, format, Destination::memory("case.json").unwrap()).unwrap();
+        assert_eq!(bytes(&echoed), current.as_slice(), "{format}");
+    }
+
+    // Any other version is refused, naming the one PowerIO writes.
+    for format in ["bmopf-json@0.1.0", "bmopf-json@9.0.0"] {
+        let error =
+            powerio::emit(&module, format, Destination::memory("case.json").unwrap()).unwrap_err();
+        assert_eq!(
+            error.diagnostics()[0].code(),
+            "REQUEST.EMIT.UNKNOWN_FORMAT",
+            "{format}"
+        );
+        assert!(
+            error.to_string().contains("only BMOPF 0.2.0"),
+            "{format}: {error}"
+        );
+        assert!(powerio::resolve_format(format).is_none(), "{format}");
+    }
+    assert_eq!(
+        powerio::resolve_format("bmopf-json@0.2.0").unwrap().token,
+        "bmopf-json"
     );
 }
 
@@ -236,48 +269,32 @@ fn energy_costs_keep_phase_order_through_mutation_ir_and_schema_conversion() {
     let restored =
         powerio::deserialize(Source::from_memory("rates.pio.json", bytes(&ir).to_vec()).unwrap())
             .unwrap();
-    for version in ["0.1.0", "0.2.0"] {
-        let output = powerio::emit(
-            &restored,
-            &format!("bmopf-json@{version}"),
-            Destination::memory("rates.json").unwrap(),
-        )
+    let output = powerio::emit(
+        &restored,
+        "bmopf-json",
+        Destination::memory("rates.json").unwrap(),
+    )
+    .unwrap();
+    let emitted: Value = serde_json::from_slice(bytes(&output)).unwrap();
+    assert_eq!(
+        emitted["voltage_source"]["s"]["energy_cost_rate"],
+        json!([0.1, 0.25, 0.3])
+    );
+    assert_eq!(
+        emitted["generator"]["g"]["energy_cost_rate"],
+        json!([0.03, 0.04, 0.05])
+    );
+    assert!(emitted["generator"]["g"].get("cost").is_none());
+    let back = powerio::parse(Source::from_memory("rates.json", bytes(&output).to_vec()).unwrap())
         .unwrap();
-        let emitted: Value = serde_json::from_slice(bytes(&output)).unwrap();
-        if version == "0.2.0" {
-            assert_eq!(
-                emitted["voltage_source"]["s"]["energy_cost_rate"],
-                json!([0.1, 0.25, 0.3])
-            );
-            assert_eq!(
-                emitted["generator"]["g"]["energy_cost_rate"],
-                json!([0.03, 0.04, 0.05])
-            );
-            assert!(emitted["generator"]["g"].get("cost").is_none());
-        } else {
-            assert!(
-                emitted["voltage_source"]["s"]
-                    .get("energy_cost_rate")
-                    .is_none()
-            );
-            assert_eq!(
-                emitted["extras"]["voltage_source"]["s"]["energy_cost_rate"],
-                json!([0.1, 0.25, 0.3])
-            );
-            assert_eq!(emitted["generator"]["g"]["cost"], json!([0.03, 0.04, 0.05]));
-        }
-        let back =
-            powerio::parse(Source::from_memory("rates.json", bytes(&output).to_vec()).unwrap())
-                .unwrap();
-        let PioValue::MulticonductorNetwork(network) = back.value() else {
-            panic!("expected network")
-        };
-        assert_eq!(
-            network.sources()[0].energy_cost_rate,
-            Some(vec![0.1, 0.25, 0.3])
-        );
-        assert_eq!(network.generators()[0].cost, Some(vec![0.03, 0.04, 0.05]));
-    }
+    let PioValue::MulticonductorNetwork(network) = back.value() else {
+        panic!("expected network")
+    };
+    assert_eq!(
+        network.sources()[0].energy_cost_rate,
+        Some(vec![0.1, 0.25, 0.3])
+    );
+    assert_eq!(network.generators()[0].cost, Some(vec![0.03, 0.04, 0.05]));
 }
 
 #[test]
@@ -322,7 +339,7 @@ fn unresolved_geometry_cannot_reach_instances_matrices_or_canonical_exports() {
 }
 
 #[test]
-fn inverter_energy_prices_survive_ir_and_legacy_relocation() {
+fn inverter_energy_prices_survive_ir() {
     let mut input: Value = serde_json::from_slice(&case()).unwrap();
     input["meta"]["$schema"] = json!(powerio::BmopfSchemaVersion::Bmopf020.schema_id());
     input["ibr"] = json!({"pv":{"bus":"b", "terminal_map":["a","b","c","n"],
@@ -336,35 +353,30 @@ fn inverter_energy_prices_survive_ir_and_legacy_relocation() {
     let restored =
         powerio::deserialize(Source::from_memory("rates.pio.json", bytes(&ir).to_vec()).unwrap())
             .unwrap();
-    for version in ["0.1.0", "0.2.0"] {
-        let output = powerio::emit(
-            &restored,
-            &format!("bmopf-json@{version}"),
-            Destination::memory("rates.json").unwrap(),
-        )
+    let output = powerio::emit(
+        &restored,
+        "bmopf-json",
+        Destination::memory("rates.json").unwrap(),
+    )
+    .unwrap();
+    let doc: Value = serde_json::from_slice(bytes(&output)).unwrap();
+    assert_eq!(
+        doc["ibr"]["pv"]["energy_cost_rate"],
+        json!([0.01, 0.02, 0.03])
+    );
+    let back = powerio::parse(Source::from_memory("rates.json", bytes(&output).to_vec()).unwrap())
         .unwrap();
-        let doc: Value = serde_json::from_slice(bytes(&output)).unwrap();
-        let table = if version == "0.1.0" {
-            &doc["extras"]["ibr"]
-        } else {
-            &doc["ibr"]
-        };
-        assert_eq!(table["pv"]["energy_cost_rate"], json!([0.01, 0.02, 0.03]));
-        let back =
-            powerio::parse(Source::from_memory("rates.json", bytes(&output).to_vec()).unwrap())
-                .unwrap();
-        let PioValue::MulticonductorNetwork(network) = back.value() else {
-            panic!("expected network")
-        };
-        assert_eq!(
-            network.ibrs()[0].extras["energy_cost_rate"],
-            json!([0.01, 0.02, 0.03])
-        );
-    }
+    let PioValue::MulticonductorNetwork(network) = back.value() else {
+        panic!("expected network")
+    };
+    assert_eq!(
+        network.ibrs()[0].extras["energy_cost_rate"],
+        json!([0.01, 0.02, 0.03])
+    );
 }
 
 #[test]
-fn geojson_bus_and_line_edits_survive_ir_and_explicit_bmopf_output() {
+fn geojson_bus_and_line_edits_survive_ir_and_bmopf_output() {
     let mut data: Value = serde_json::from_slice(&case()).unwrap();
     data["bus"]["b"]["geo"] = json!({"type":"Point","coordinates":[-83.7,42.3]});
     data["bus"]["c"] = data["bus"]["b"].clone();
@@ -389,46 +401,35 @@ fn geojson_bus_and_line_edits_survive_ir_and_explicit_bmopf_output() {
     let restored =
         powerio::deserialize(Source::from_memory("case.pio.json", bytes(&ir).to_vec()).unwrap())
             .unwrap();
-    for version in ["0.1.0", "0.2.0"] {
-        let out = powerio::emit(
-            &restored,
-            &format!("bmopf-json@{version}"),
-            Destination::memory("case.json").unwrap(),
-        )
-        .unwrap();
-        let doc: Value = serde_json::from_slice(bytes(&out)).unwrap();
-        // Schema 0.2.0 carries the geometry in its typed slots; 0.1.0 has
-        // none and carries the legacy `extras.geojson` layer.
-        if version == "0.2.0" {
-            assert_eq!(doc["bus"]["b"]["geo"]["coordinates"], json!([-83.72, 42.3]));
-            assert_eq!(
-                doc["line"]["bc"]["geo"]["coordinates"][1],
-                json!([-83.68, 42.37])
-            );
-            assert!(doc.pointer("/extras/geojson").is_none(), "{doc}");
-        } else {
-            assert!(doc["bus"]["b"].get("geo").is_none());
-            assert_eq!(
-                doc["extras"]["geojson"]["features"][0]["geometry"]["coordinates"],
-                json!([-83.72, 42.3])
-            );
-        }
-        let again =
-            powerio::parse(Source::from_memory("case.bmopf.json", bytes(&out).to_vec()).unwrap())
-                .unwrap();
-        let PioValue::MulticonductorNetwork(network) = again.value() else {
-            panic!("expected network")
-        };
-        assert_eq!(
-            network.buses()[0].location.unwrap().x.to_bits(),
-            (-83.72_f64).to_bits()
-        );
-        assert_eq!(
-            network.lines()[0].route.as_ref().unwrap()[1].y.to_bits(),
-            42.37_f64.to_bits()
-        );
-        let layer = powerio::dist_geo::to_dist_geo_layer(network);
-        let round = powerio::GeoLayer::parse(&layer.to_geojson(), None).unwrap();
-        assert_eq!(round.layer.features.len(), 3);
-    }
+    let out = powerio::emit(
+        &restored,
+        "bmopf-json",
+        Destination::memory("case.json").unwrap(),
+    )
+    .unwrap();
+    let doc: Value = serde_json::from_slice(bytes(&out)).unwrap();
+    // The geometry travels in the typed slots, with no `extras.geojson` layer.
+    assert_eq!(doc["bus"]["b"]["geo"]["coordinates"], json!([-83.72, 42.3]));
+    assert_eq!(
+        doc["line"]["bc"]["geo"]["coordinates"][1],
+        json!([-83.68, 42.37])
+    );
+    assert!(doc.pointer("/extras/geojson").is_none(), "{doc}");
+    let again =
+        powerio::parse(Source::from_memory("case.bmopf.json", bytes(&out).to_vec()).unwrap())
+            .unwrap();
+    let PioValue::MulticonductorNetwork(network) = again.value() else {
+        panic!("expected network")
+    };
+    assert_eq!(
+        network.buses()[0].location.unwrap().x.to_bits(),
+        (-83.72_f64).to_bits()
+    );
+    assert_eq!(
+        network.lines()[0].route.as_ref().unwrap()[1].y.to_bits(),
+        42.37_f64.to_bits()
+    );
+    let layer = powerio::dist_geo::to_dist_geo_layer(network);
+    let round = powerio::GeoLayer::parse(&layer.to_geojson(), None).unwrap();
+    assert_eq!(round.layer.features.len(), 3);
 }
