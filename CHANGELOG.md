@@ -252,11 +252,10 @@ action.
   GridLAB-D and OpenDSS, the Python classifier cleanup, and the Windows
   architecture map check (#833, #834).
 - Unlike 0.11.11, which still reads a native Egret numeric `0` rating as
-  unlimited, 0.12 refuses a numeric zero in `rating_long_term`,
-  `rating_short_term`, or `rating_emergency` with `PARSE.SOURCE.MALFORMED`,
-  since PowerIO cannot hold a zero thermal limit. See
-  [Egret branch ratings](docs/src/migration-0.12.md#egret-branch-ratings)
-  (#828).
+  unlimited, 0.12 reads it as the zero thermal limit Egret enforces, since
+  0.12 ratings use zero for a zero bound and positive infinity for no bound.
+  See [Numeric thermal ratings](docs/src/migration-0.12.md#numeric-thermal-ratings)
+  (#828, #841).
 
 **Contributor credit**
 
