@@ -212,7 +212,7 @@ Python table rows state a nonfinite value as a float in every table, so
 carried the IR's `"Infinity"` and `"-Infinity"` strings instead; a text field
 that reads `"Infinity"` stays text.
 
-PowerIO 0.11.10 and earlier could interpret an Egret zero as no bound.
+PowerIO 0.11.11 and earlier read a native Egret zero as no bound.
 Regenerate affected data from the original Egret input; an old IR document
 cannot recover a distinction its producer discarded.
 
