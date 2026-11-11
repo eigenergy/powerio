@@ -8,6 +8,11 @@
   Sienna and PowerSystems JSON state an unlimited required rating as
   PowerSystems' `INFINITE_BOUND` and read it back as unlimited.
 
+- `reduce_passthrough_buses` keeps the sections' named rating sets on the
+  equivalent branch instead of dropping them: a set both sections state takes
+  the smaller rating, and an invalid one stays invalid, so validation still
+  refuses it after the fold.
+
 - Forward `powerio-prob/schema` to the distribution model so standalone schema builds include the LinDist3Flow preparation policy.
 
 - Correct the contributor IR compatibility guidance and canonical HVDC format
