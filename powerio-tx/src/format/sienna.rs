@@ -1453,6 +1453,36 @@ mod tests {
     }
 
     #[test]
+    fn an_edited_unlimited_rating_does_not_restore_the_retained_value() {
+        // The writer omits an unlimited optional rating; merging the source
+        // row brought its finite rating back.
+        let mut doc = document();
+        doc["components"]["Line"][0]["rating_b"] = json!(2.4);
+        let mut net = decode(&doc);
+        assert_eq!(net.branches()[0].rate_b, 120.0);
+        net.branches_mut()[0].rate_b = f64::INFINITY;
+        let written: Value =
+            serde_json::from_str(&write(&net, 4, Some(&doc)).unwrap().text).unwrap();
+        assert!(written["components"]["Line"][0].get("rating_b").is_none());
+        assert_eq!(decode(&written).branches()[0].rate_b, f64::INFINITY);
+
+        let mut doc = document();
+        doc["components"].as_object_mut().unwrap().remove("Line");
+        doc["components"]["TransformerCircuit"] = json!([{"id":11,"available":true,"arc":10,"r":0.01,"x":0.1,"base_power":100.0,"power_units":"NATURAL_UNITS","parameter_units":"COMPONENT_BASE","rating":77.0,"tap":1.0}]);
+        let mut net = decode(&doc);
+        assert_eq!(net.branches()[0].rate_a, 77.0);
+        net.branches_mut()[0].rate_a = f64::INFINITY;
+        let written: Value =
+            serde_json::from_str(&write(&net, 4, Some(&doc)).unwrap().text).unwrap();
+        assert!(
+            written["components"]["TransformerCircuit"][0]
+                .get("rating")
+                .is_none()
+        );
+        assert_eq!(decode(&written).branches()[0].rate_a, f64::INFINITY);
+    }
+
+    #[test]
     fn zero_is_a_bound_and_an_unlimited_line_is_the_unbounded_marker() {
         let mut net = decode(&document());
         net.branches_mut()[0].rate_a = 0.0;
