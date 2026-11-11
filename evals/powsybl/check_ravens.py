@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import subprocess
 import tempfile
 from pathlib import Path
@@ -56,7 +57,7 @@ def assert_diagnosed_losses(
         abs(gen["vg"] - 1.0) > 1e-12 for gen in original["generators"]
     )
     expected_rating_losses = sum(
-        branch["rate_c"] != 0.0 for branch in original["branches"]
+        math.isfinite(branch["rate_c"]) for branch in original["branches"]
     )
     messages = [
         entry["message"]
@@ -77,8 +78,8 @@ def assert_diagnosed_losses(
     # any value in the two fields excluded from direct-native equality.
     if any(gen["vg"] != 1.0 for gen in restored["generators"]):
         raise AssertionError("review the declared RAVENS generator setpoint recovery")
-    if any(branch["rate_c"] != 0.0 for branch in restored["branches"]):
-        raise AssertionError("review the declared RAVENS third-rating recovery")
+    if any(not math.isinf(branch["rate_c"]) for branch in restored["branches"]):
+        raise AssertionError("RAVENS has no rate_c slot; the recovered limit must be unlimited")
 
 
 def compare(direct, through_ravens, label: str) -> int:
