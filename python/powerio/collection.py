@@ -58,7 +58,15 @@ class Collection:
     def parse(self, selection: Mapping[str, Any], *,
               sincal_multiconductor: SincalReadOptions | None = None,
               sincal_balanced: SincalBalancedReadOptions | None = None) -> CollectionResult:
-        from . import PioModule
+        from . import PioModule, SincalBalancedReadOptions, dist
+        if sincal_multiconductor is not None and not isinstance(
+            sincal_multiconductor, dist.SincalReadOptions
+        ):
+            raise TypeError("sincal_multiconductor must be dist.SincalReadOptions")
+        if sincal_balanced is not None and not isinstance(
+            sincal_balanced, SincalBalancedReadOptions
+        ):
+            raise TypeError("sincal_balanced must be SincalBalancedReadOptions")
         mc = None if sincal_multiconductor is None else (
             sincal_multiconductor.variant, sincal_multiconductor.snapshot_hours,
             sincal_multiconductor.acquired_tables,
