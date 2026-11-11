@@ -131,7 +131,10 @@ fn unlimited_transformer_primary_rating_is_numeric_and_round_trips() {
         let rating = row["rating"]
             .as_f64()
             .expect("required primary rating is numeric");
-        assert!(rating.is_finite() && rating > 0.0, "version {version}: {rating}");
+        assert!(
+            rating.is_finite() && rating > 0.0,
+            "version {version}: {rating}"
+        );
 
         let recovered = parse(&doc, version);
         let restored = recovered
