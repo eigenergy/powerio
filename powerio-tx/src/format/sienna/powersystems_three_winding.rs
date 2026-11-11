@@ -114,10 +114,15 @@ pub(super) fn prepare(doc: &mut Value, base: f64, warnings: &mut Diagnostics) ->
             row[format!("available_{side}")] = c["available"].clone();
             any_available |= c["available"] == true;
             // Native winding ratings are Float64, unlike the parent's optional
-            // aggregate rating. Absence is PowerSystems' unbounded marker,
-            // never a finite zero bound.
+            // aggregate rating. An unlimited circuit, stated by absence or by
+            // the marker on the circuit's own base, is PowerSystems' unbounded
+            // marker, never a finite zero bound.
             let rating = super::thermal_limit(c, "rating", 1.0 / basis)?;
-            row[format!("rating_{side}")] = json!(if rating.is_finite() {
+            let marked = match c.get("rating").and_then(Value::as_f64) {
+                Some(mva) => super::is_infinite_bound(mva / super::base(c)?),
+                None => false,
+            };
+            row[format!("rating_{side}")] = json!(if rating.is_finite() && !marked {
                 rating
             } else {
                 super::INFINITE_BOUND

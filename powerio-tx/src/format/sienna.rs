@@ -1282,11 +1282,12 @@ pub(super) fn write_document(
             );
         }
     }
-    // SiennaSchemas 0.1–0.4 require a numeric Line.rating and allow
-    // the other branch ratings to be absent, which reads as unlimited.
-    // PowerSystems 5.x also requires a numeric primary Line rating. An
-    // unlimited one is PowerSystems' INFINITE_BOUND on the row's base, never
-    // zero, which is a real bound.
+    // SiennaSchemas 0.1–0.4 require a numeric Line.rating and
+    // TransformerCircuit.rating and allow the other branch ratings to be
+    // absent, which reads as unlimited. PowerSystems 5.x also requires the
+    // primary rating of a line or transformer. An unlimited one is
+    // PowerSystems' INFINITE_BOUND on the row's base, never zero, which is a
+    // real bound.
     for kind in ["Line", "TransformerCircuit"] {
         if let Some(rows) = doc["components"]
             .get_mut(kind)
@@ -1295,7 +1296,7 @@ pub(super) fn write_document(
             for row in rows {
                 for key in ["rating", "rating_b", "rating_c"] {
                     if row.get(key).is_some_and(Value::is_null) {
-                        if kind == "Line" && key == "rating" {
+                        if key == "rating" {
                             row[key] = json!(INFINITE_BOUND * base(row)?);
                         } else {
                             row.as_object_mut().expect("branch row").remove(key);
@@ -1474,12 +1475,25 @@ mod tests {
         net.branches_mut()[0].rate_a = f64::INFINITY;
         let written: Value =
             serde_json::from_str(&write(&net, 4, Some(&doc)).unwrap().text).unwrap();
-        assert!(
-            written["components"]["TransformerCircuit"][0]
-                .get("rating")
-                .is_none()
+        // The schema requires a transformer rating, so an unlimited one is the
+        // unbounded marker, as a line's is.
+        let row = &written["components"]["TransformerCircuit"][0];
+        assert_eq!(
+            row["rating"],
+            INFINITE_BOUND * number(row, "base_power").unwrap()
         );
         assert_eq!(decode(&written).branches()[0].rate_a, f64::INFINITY);
+        let native: Value =
+            serde_json::from_str(&powersystems::write(&net, None).unwrap().text).unwrap();
+        let transformer = native["data"]["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["__metadata__"]["type"] == "TapTransformer")
+            .unwrap();
+        assert_eq!(transformer["rating"], INFINITE_BOUND);
+        let back = powersystems::read(&native, None, &mut Diagnostics::new()).unwrap();
+        assert_eq!(back.branches()[0].rate_a, f64::INFINITY);
     }
 
     #[test]
